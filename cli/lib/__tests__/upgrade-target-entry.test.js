@@ -66,8 +66,11 @@ test('all upgrade entrypoints share flat and nested standalone Dashboard rejecti
   }
 });
 
-test('0.9.4 prechecks freeze package and database decisions before transaction creation', t => {
-  const input = fixture(t,'0.9.4');
+// File-only preflight coverage: the official runner isolates HOME/ZYLOS_DIR,
+// PM2_HOME and TMPDIR. No service or tmux process is started; probe/rehearsal
+// stop at injected boundaries. Rerun for source-version/database admission changes.
+for (const version of ['0.9.4','0.9.5']) test(`${version} prechecks freeze package and database decisions before transaction creation`, t => {
+  const input = fixture(t,version);
   const calls = [];
   const ctx = inspectUpgradeSource(input, {
     probe(root, target, options) {

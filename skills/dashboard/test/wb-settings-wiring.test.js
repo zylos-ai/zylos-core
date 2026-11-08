@@ -7,7 +7,8 @@ import { documentFixture, node } from './fixtures/settings-dom.js';
 
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
 
-// A page with a body: every in-page dialog (.wb-modal) that opens is recorded and answered with `page.answer`.
+// A page with a body: every in-page dialog (.wb-modal) that opens is recorded and answered with `page.answer`
+// (or, when it is a list, with its answers in order).
 function page({ answer = true } = {}) {
   const document = documentFixture(), dialogs = [];
   document.body = node(document, 'body');
@@ -20,14 +21,22 @@ function page({ answer = true } = {}) {
       const dialog = added.querySelector('.wb-modal'); if (!dialog) continue;
       dialogs.push({ title: dialog.children[0].textContent, body: dialog.children[1].textContent });
       const [no, yes] = dialog.querySelector('.wb-modal-acts').children;
-      queueMicrotask(() => (result.answer ? yes : no).dispatch('click'));
+      queueMicrotask(() => ((Array.isArray(result.answer) ? result.answer.shift() : result.answer) ? yes : no).dispatch('click'));
     }
   };
   return result;
 }
 
-// Records each key request the table sends, as method and path.
-const keyRequests = sent => (request, name) => { sent.push([request.method, request.path, name]); };
+// The page side of key requests: records each request as method and path, answers `answer`, and records what it shows.
+function keyRequests(sent, { answer = { ok: true, data: { keys: [] } }, created = null } = {}) {
+  const shown = { keys: [], created: [], status: [], busy: [] };
+  const keyPage = {
+    request: async (method, path) => { sent.push([method, path]); return typeof answer === 'function' ? answer(method, path) : answer; },
+    renderKeys: data => shown.keys.push(data), renderCreated: key => { shown.created.push(key); created = key; }, createdKey: () => created,
+    status: (text, kind) => shown.status.push([text, kind]), busy: on => shown.busy.push(on), errorText: (code, fallback) => code ?? fallback,
+  };
+  return Object.assign(keyPage, { shown });
+}
 
 const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low', 'minimal'] } });
 const defaultsValue = () => ({
@@ -42,12 +51,12 @@ function recordingRunner(sent, asked = []) {
 }
 
 function wired(p, options = {}) {
-  return wireSettingsConfirmations({ document: p.document, t, sendKeyRequest: keyRequests([]), runner: recordingRunner([]), writable: () => true, ...options });
+  return wireSettingsConfirmations({ document: p.document, t, keyPage: keyRequests([]), runner: recordingRunner([]), writable: () => true, ...options });
 }
 
 test('revoking a key opens the in-page dialog, and cancelling it sends nothing', async () => {
   const p = page({ answer: false }), sent = [];
-  const wiring = wired(p, { sendKeyRequest: keyRequests(sent) });
+  const wiring = wired(p, { keyPage: keyRequests(sent) });
   const root = node(p.document, 'div');
   wiring.renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }, { name: 'old', scope: 'read', status: 'revoked' }]);
 
@@ -65,13 +74,13 @@ test('revoking a key opens the in-page dialog, and cancelling it sends nothing',
   await root.querySelector('.api-key-revoke').dispatch('click');
   await root.querySelector('.api-key-delete').dispatch('click');
   assert.equal(p.dialogs.length, 4);
-  assert.deepEqual(sent, [['DELETE', '/api/keys/ops', 'ops'], ['DELETE', '/api/keys/old?permanent=1', 'old']],
+  assert.deepEqual(sent, [['DELETE', '/api/keys/ops'], ['DELETE', '/api/keys/old?permanent=1']],
     'confirming sends exactly the asked action: revoking keeps the key, only deleting removes it for good');
 });
 
 test('each key action sends its own request after the table confirms it', async () => {
   const p = page(), sent = [];
-  const wiring = wired(p, { sendKeyRequest: keyRequests(sent) });
+  const wiring = wired(p, { keyPage: keyRequests(sent) });
   const root = node(p.document, 'div');
   wiring.renderKeyTable(root, [{ name: 'ops/1', scope: 'admin', status: 'active' }, { name: 'old', scope: 'read', status: 'revoked' }]);
   await root.querySelector('.api-key-rotate').dispatch('click');
@@ -79,10 +88,63 @@ test('each key action sends its own request after the table confirms it', async 
   await root.querySelector('.api-key-delete').dispatch('click');
   assert.equal(p.dialogs.length, 3);
   assert.deepEqual(sent, [
-    ['POST', '/api/keys/ops%2F1/rotate', 'ops/1'],
-    ['DELETE', '/api/keys/ops%2F1', 'ops/1'],
-    ['DELETE', '/api/keys/old?permanent=1', 'old'],
+    ['POST', '/api/keys/ops%2F1/rotate'],
+    ['DELETE', '/api/keys/ops%2F1'],
+    ['DELETE', '/api/keys/old?permanent=1'],
   ]);
+});
+
+test('rotating a key shows the new key once, with the name the server gave it', async () => {
+  const p = page(), sent = [];
+  const keyPage = keyRequests(sent, { answer: { ok: true, data: { keys: [{ name: 'ops' }], key: { name: 'ops' }, plaintext_key: 'zdk_new' } } });
+  const root = node(p.document, 'div');
+  wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }]);
+  await root.querySelector('.api-key-rotate').dispatch('click');
+  assert.deepEqual(sent, [['POST', '/api/keys/ops/rotate']]);
+  assert.deepEqual(keyPage.shown.created, [{ name: 'ops', plaintext_key: 'zdk_new' }], 'the new key is shown');
+  assert.deepEqual(keyPage.shown.keys, [{ keys: [{ name: 'ops' }], key: { name: 'ops' }, plaintext_key: 'zdk_new' }], 'the list is redrawn from the answer');
+  assert.deepEqual(keyPage.shown.status.at(-1), ['fleet_manage.key_rotated_status', 'success']);
+  assert.deepEqual(keyPage.shown.busy, [true, false]);
+});
+
+test('rotating while another new key is still shown asks before replacing it; cancelling sends nothing', async () => {
+  const p = page(), sent = [];
+  const keyPage = keyRequests(sent, { created: { name: 'ci', plaintext_key: 'zdk_ci' } });
+  const root = node(p.document, 'div');
+  wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }]);
+  p.answer = [true, false]; // the table's own question: yes; replacing the shown key: no
+  await root.querySelector('.api-key-rotate').dispatch('click');
+  assert.equal(p.dialogs.length, 2, 'the table asks, then the page asks before replacing the shown key');
+  assert.match(p.dialogs[1].body, /fleet_manage\.replace_created_key_confirm:\{"name":"ci"\}/);
+  assert.deepEqual(sent, [], 'nothing is sent');
+  assert.deepEqual(keyPage.shown.created, [], 'the shown key stays');
+});
+
+test('revoking the key that is shown hides it; a refused request shows why and changes nothing', async () => {
+  const p = page(), sent = [];
+  const keyPage = keyRequests(sent, { created: { name: 'ops', plaintext_key: 'zdk_ops' } });
+  const root = node(p.document, 'div');
+  wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ops', scope: 'admin', status: 'active' }]);
+  await root.querySelector('.api-key-revoke').dispatch('click');
+  assert.deepEqual(keyPage.shown.created, [null], 'the revoked key is no longer shown');
+  const refused = keyRequests([], { answer: { ok: false, data: { error: 'must_revoke_first' } } });
+  const other = node(p.document, 'div');
+  wired(p, { keyPage: refused }).renderKeyTable(other, [{ name: 'ops', scope: 'admin', status: 'active' }]);
+  await other.querySelector('.api-key-rotate').dispatch('click');
+  assert.deepEqual(refused.shown.keys, []); assert.deepEqual(refused.shown.created, []);
+  assert.deepEqual(refused.shown.status.at(-1), ['must_revoke_first', 'error']);
+  assert.deepEqual(refused.shown.busy, [true, false]);
+});
+
+test('revoking a different key keeps the new key that is shown once', async () => {
+  const p = page(), sent = [];
+  const keyPage = keyRequests(sent, { created: { name: 'ci', plaintext_key: 'zdk_ci' } });
+  const root = node(p.document, 'div');
+  wired(p, { keyPage }).renderKeyTable(root, [{ name: 'ci', scope: 'read', status: 'active' }, { name: 'ops', scope: 'admin', status: 'active' }]);
+  await root.querySelectorAll('.api-key-revoke')[1].dispatch('click');
+  assert.deepEqual(sent, [['DELETE', '/api/keys/ops']], 'the other key is revoked');
+  assert.deepEqual(keyPage.shown.created, [], 'the shown key is not hidden');
+  assert.deepEqual(keyPage.createdKey(), { name: 'ci', plaintext_key: 'zdk_ci' });
 });
 
 test('key requests: revoking keeps the key, deleting removes it for good, rotating shows the new key once', () => {

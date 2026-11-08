@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { ORIGIN_LOCK_SELECTOR, lockOriginButtons } from '../public/js/origin-lock.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
-import { renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText } from '../public/js/wb/detail-overview.js';
+import { renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
 import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
+import { recentWindow } from '../public/js/wb/timeline-rows.js';
 
 // Direct product imports with injected DOM, fetch, clock, timers, clipboard and
 // confirmation. Run for detail rendering, request ownership or form changes;
@@ -51,7 +52,7 @@ test('historical detail resolves board rows, named search and key-only jumps wit
   assert.equal(allNodes(f.root).some(node => node.tagName === 'SCRIPT'), false);
   assert.equal(calls.some(path => path.includes('/search') || (path.startsWith('/api/timeline') && path.includes('run_id='))), false);
   const recent = calls.find(path => path.startsWith('/api/timeline'));
-  assert.equal(new URL(recent, 'http://fixture').searchParams.get('limit'), '5');
+  assert.equal(new URL(recent, 'http://fixture').searchParams.get('limit'), String(recentWindow), 'recent activity reads a window, not only the rows it shows');
   assert.equal(new URL(recent, 'http://fixture').searchParams.has('run_id'), false);
   assert.equal(f.controller.state.totalEvents, 17);
   assert.equal(f.controller.state.totalRuns, 5);
@@ -138,7 +139,7 @@ test('overview recent activity and evidence are plain in plain view and raw only
   const iso = '2026-11-06T10:20:30.000Z';
   const data = { recent: [{ timestamp: iso, event_type: 'wait_health' }, { timestamp: iso, event_type: 'reclaim_done' }] };
   const current = row('a', { state: { kind: 'idle' } });
-  renderOverview(root, current, data, { document, t, level: 'plain' });
+  renderOverview(root, current, data, { document, t, level: 'plain', currentTime: Date.parse(iso) });
   const recent = root.children[1].textContent;
   assert.match(recent, /wb\.event\.wait_health/); assert.match(recent, /wb\.event\.reclaim_done/);
   assert.doesNotMatch(recent, /wait_health ·|reclaim_done$|T10:20:30/);
@@ -152,6 +153,33 @@ test('overview recent activity and evidence are plain in plain view and raw only
   assert.match(root.children[1].textContent, /reclaim_done/);
   assert.equal(allNodes(root.children[1]).find(node => node.tagName === 'TIME').title, iso);
   assert.match(root.textContent, /wb\.detail\.evidence · no_rule/);
+});
+
+test('recent activity lists newest first, dates events from another day, and counts the same events as the timeline', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const now = Date.parse('2026-11-08T03:00:00.000Z');
+  const at = hoursAgo => new Date(now - hoursAgo * 3600e3).toISOString();
+  // Read in the order the server sent them; one event belongs to no run.
+  const data = { recent: [{ timestamp: at(30), event_type: 'session_start' }, { timestamp: at(1), event_type: 'user_prompt_submit' }, { timestamp: at(2), event_type: 'stop', run_id: null }],
+    totalEvents: 2, totalRuns: 1, unattributed: 1 };
+  renderOverview(root, row('a', { state: { kind: 'idle' } }), data, { document, t, level: 'plain', currentTime: now });
+  const times = allNodes(root.children[1]).filter(node => node.tagName === 'TIME');
+  assert.deepEqual(times.map(node => node.title), [at(1), at(2), at(30)].map(value => new Date(value).toLocaleString()), 'newest first');
+  assert.equal(times[0].textContent, new Date(at(1)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }), 'today shows the time');
+  assert.equal(times[2].textContent, new Date(at(30)).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }), 'another day shows the date too');
+  assert.match(root.children[1].textContent, /wb\.detail\.fullTimeline \{"events":3,"runs":1\}/, 'the count includes events outside a run');
+  assert.equal(groupEventCount({ totalEvents: 17, unattributed: 4 }), 21);
+  assert.equal(groupEventCount({}), 0);
+});
+
+test('the timeline tab counts events outside a run too, like the full-timeline link', async () => {
+  const runs = { runs: [], totalEvents: 17, totalRuns: 5, unattributed: 4 };
+  const f = detailFixture(async path => response(path.startsWith('/api/workbench/groups/') && path.includes('/runs') ? runs : defaultRead(path)));
+  await f.controller.open(row('telegram:a'), { rows: [row('telegram:a')], listKnown: true });
+  const tab = allNodes(f.root).find(node => node.attributes?.role === 'tab' && /wb\.detail\.timeline/.test(node.textContent));
+  assert.match(tab.textContent, / 21$/);
+  assert.match(f.root.textContent, /wb\.detail\.fullTimeline \{"events":21,"runs":5\}/);
+  f.controller.destroy();
 });
 
 test('timeline run rows, events and messages hide run ids and raw codes in plain view', () => {
@@ -606,10 +634,12 @@ test('subagent initial read paginates its typed stream and later snapshots consu
   f.controller.destroy();
 });
 
+// The filter-race cases below read in technical detail, where the unfiltered view asks for every event type
+// (no types parameter), so a read without types is the old unfiltered array.
 test('filter reload excludes refresh append until the new filtered array is authoritative', async () => {
   const oldPage = deferred(), toolsPage = deferred(), calls = [];
   let phase = 'initial';
-  const loader = createTimelineLoader({ request: async path => {
+  const loader = createTimelineLoader({ detail: () => 'technical', request: async path => {
     const url = new URL(path, 'http://fixture'); calls.push(url);
     if (url.pathname.endsWith('/runs')) return { runs: [run('r')], totalRuns: 1, totalEvents: 4 };
     if (url.pathname.endsWith('/messages')) return { messages: [] };
@@ -731,7 +761,7 @@ test('a failed tools reload discards the old unfiltered array and recovers only 
     event_type: index % 2 ? 'stop' : 'post_tool_use' }));
   const tools = all.filter(event => event.event_type === 'post_tool_use'), reads = [];
   let failReload = true;
-  const loader = createTimelineLoader({ request: async path => {
+  const loader = createTimelineLoader({ detail: () => 'technical', request: async path => {
     const url = new URL(path, 'http://fixture');
     if (url.pathname.endsWith('/runs')) return { runs: [run('r'), run('old', -1000, 0)], totalRuns: 2, totalEvents: all.length * 2 };
     if (url.pathname.endsWith('/messages')) return { messages: [] };
@@ -765,7 +795,7 @@ test('a failed tools reload discards the old unfiltered array and recovers only 
 test('a completed tools reload rejects an older all-events append that arrives afterward', async () => {
   const oldAppend = deferred();
   let phase = 'initial';
-  const loader = createTimelineLoader({ request: async path => {
+  const loader = createTimelineLoader({ detail: () => 'technical', request: async path => {
     const url = new URL(path, 'http://fixture');
     if (url.pathname.endsWith('/runs')) return { runs: [run('r')], totalRuns: 1, totalEvents: 3 };
     if (url.pathname.endsWith('/messages')) return { messages: [] };
@@ -855,6 +885,19 @@ test('switching runs aborts a hanging subagent read so the shared refresh can fi
   }
 });
 
+test('detail header gives the title its own row and keeps state and actions together for the second row', async () => {
+  const f = detailFixture(async path => response(defaultRead(path)));
+  await f.controller.open(row('a'), { rows: [], listKnown: true });
+  const top = allNodes(f.root).find(node => node.classList.contains('wb-d-top'));
+  assert.deepEqual(top.children.map(child => child.className.split(' ')[0]), ['wb-ch', 'wb-d-title-wrap', 'wb-d-sub', 'wb-icon-btn']);
+  assert.equal(top.children.at(-1).attributes['aria-label'], 'wb.close', 'closing stays on the title row');
+  const sub = top.children[2];
+  assert.ok(sub.children[0].classList.contains('wb-pill'), 'the state comes first in the second row');
+  assert.ok(sub.children[1].classList.contains('wb-d-acts'), 'the actions follow the state');
+  assert.deepEqual(allNodes(sub.children[1]).filter(node => node.dataset?.wbAction).map(node => node.dataset.wbAction), ['interrupt', 'chop-chop', 'restart']);
+  f.controller.destroy();
+});
+
 test('detail header uses icon actions whose tooltip carries any unavailable reason, and Esc leaves the name editor first', async () => {
   const f = detailFixture(async path => response(defaultRead(path)));
   await f.controller.open({ ...row('a'), live: null, presence: 'not_running' }, { rows: [], listKnown: true });
@@ -884,11 +927,11 @@ test('timeline chips combine filters: one chip uses the server filter, several f
   const document = createDocument(), root = document.createElement('div');
   const labels = () => allNodes(root).filter(node => node.classList.contains('wb-ev-t')).map(node => node.textContent);
   renderTimeline(root, loader, { document, t, level: 'technical' });
-  assert.deepEqual(labels(), ['session_start', 'wb.timeline.received', 'pre_tool_use'], 'events and messages interleave by time');
+  assert.deepEqual(labels(), ['pre_tool_use', 'wb.timeline.received', 'session_start'], 'events and messages interleave by time, newest first');
   await loader.setChips(['messages', 'lifecycle']);
   assert.equal(loader.state.filter, 'all');
   renderTimeline(root, loader, { document, t, level: 'technical' });
-  assert.deepEqual(labels(), ['session_start', 'wb.timeline.received']);
+  assert.deepEqual(labels(), ['wb.timeline.received', 'session_start']);
   await loader.setChips(['tools']);
   assert.equal(loader.state.filter, 'tools');
   renderTimeline(root, loader, { document, t, level: 'technical' });

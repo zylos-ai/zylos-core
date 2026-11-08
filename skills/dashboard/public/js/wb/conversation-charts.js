@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=94';
+import { element } from './plain-text.js?v=103';
 
 const colors = ['#4f8cf7', '#aa79e8', '#35a998', '#e1a33d', '#e06b83', '#73859f'];
 

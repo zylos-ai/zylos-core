@@ -1222,6 +1222,7 @@ async function handleApi(req, res, pathname, url) {
           data = await groupRuns(key, {
             before: url.searchParams.get('before') ?? undefined,
             limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 3,
+            types: url.searchParams.get('types')?.split(',').filter(Boolean) || undefined,
           });
           break;
         case 'messages':

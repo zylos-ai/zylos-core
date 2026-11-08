@@ -19,7 +19,7 @@ const value = {
   tz:'Asia/Singapore', buckets:['2026-11-01T16:00:00.000Z','2026-11-02T16:00:00.000Z'], bucket:'day',
   totals:{cost:5,costByRuntime:{claude:2,codex:3},messages:{in:4,out:2},tokens:999,rotations:1,tools:8},
   costByRuntime:[{runtime:'claude',at:'2026-11-01T16:00:00.000Z',value:2},{runtime:'codex',at:'2026-11-02T16:00:00.000Z',value:3}],
-  tokensByRuntime:[], messages:[{at:'2026-11-01T16:00:00.000Z',in:4,out:2}], rotations:[], tools:[{name:'Read',count:8}], projects:{items:[{name:'example',outputTokens:91}]},
+  tokensByRuntime:[], messages:[{at:'2026-11-01T16:00:00.000Z',in:4,out:2}], rotations:[{at:'2026-11-02T16:00:00.000Z',value:1}], tools:[{name:'Read',count:8}], projects:{items:[{name:'example',outputTokens:91}]},
 };
 test('usage plain view shows costs and signed messages with runtime stacks and tables', () => {
   const f=fixture(); const view=renderUsage(f.root,value,f);
@@ -42,6 +42,17 @@ test('technical usage adds tokens rotations tools and output token projects with
   const bars=allNodes(f.root).filter(n=>n.classList.contains('wb-usage-bar-row')).map(n=>n.textContent);
   assert.deepEqual(bars,['Read8','example91']);
   assert.equal(f.root.textContent.includes('quota'),false);
+});
+test('count charts use whole-number ticks, and a period without session changes says so instead of an empty chart', () => {
+  const f=fixture(); renderUsage(f.root,value,{...f,level:'technical'});
+  const byTitle = title => f.configs.find(config => config.options && config.data.datasets[0]?.label === title);
+  assert.equal(byTitle('wb.usage.rotations').options.scales.y.ticks.precision, 0, 'session changes are counted');
+  assert.equal(byTitle('wb.usage.received').options.scales.y.ticks.precision, 0, 'messages are counted');
+  assert.equal(f.configs[0].options.scales.y.ticks.precision, undefined, 'amounts keep their decimals');
+  const quiet=fixture(); renderUsage(quiet.root,{ ...value, rotations: [{ at: value.buckets[0], value: 0 }] },{...quiet,level:'technical'});
+  assert.equal(quiet.configs.length,3,'no chart is drawn for all-zero session changes');
+  assert.ok(quiet.root.textContent.includes('wb.usage.noRotations'));
+  assert.equal(allNodes(quiet.root).filter(n=>n.classList.contains('wb-usage-empty')).length,1);
 });
 test('usage page ignores closed and changed target replies and releases charts', async () => {
   const f=fixture(), pending=deferred(); let target='one',reads=0;

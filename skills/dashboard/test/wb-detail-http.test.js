@@ -213,6 +213,10 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       assert.equal(value.totalEvents, 1);
       assert.equal(value.unattributed, 0);
       assert.equal(snapshotReads, before, 'run reads must not invoke the rebuilding snapshot getter');
+      const counted = await (await request('/api/workbench/groups/origin/runs?limit=3&types=stop,idle')).json();
+      assert.deepEqual(counted.runs.map(run => [run.runId, run.n]), [[expectedRun, 0]], 'types narrow the counts, not the runs listed');
+      assert.equal(counted.totalRuns, 1);
+      assert.equal(counted.totalEvents, 0);
     }
     assert.equal(calls.length, childBefore);
   });

@@ -79,6 +79,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
       observer: { generation: 0, statusGeneration: 0, statusRequest: null }
     },
     settingsLoader: { invalidate() {} },
+    settingsPage: null,
     settingsModal: { querySelector: (selector) => settings[selector], querySelectorAll: () => buttons },
     $: (selector) => elements[selector],
     document: {
@@ -127,7 +128,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     observerEndpoint: (suffix) => `${context.state.remoteAgent ? `/fleet/${context.state.remoteAgent}` : ''}${suffix}`,
     viewedAgentName: () => context.state.remoteAgent || 'self',
     remoteIsReadOnly: () => readOnly,
-    remoteAccess: () => (readOnly ? 'read' : 'admin'),
+    viewedMachine: () => ({ viewingRemote: Boolean(context.state.remoteAgent), access: readOnly ? 'read' : 'admin' }),
     connectSse() {},
     transitionView() {},
     refreshFleet: async () => {},
@@ -810,8 +811,8 @@ test('machine cards enter remote agents in-page instead of full navigation', () 
 test('remote Actions/Settings are gated by access and routed through the viewed agent', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
-  assert.match(app, /function remoteAccess\(\)/);
-  assert.match(app, /agent\?\.access === 'admin' \? 'admin' : 'read'/);
+  // Which access the viewed machine has is decided by viewedAccess (wb-observer-page tests); the app hands it what it knows.
+  assert.match(app, /viewedAccess\(\{ remoteAgent: state\.remoteAgent, fleetAgents: state\.fleet\?\.agents \?\? \[\], pageRemoteAgent: REMOTE_AGENT, pageRemoteAccess: REMOTE_ACCESS \}\)/);
   assert.match(app, /const REMOTE_ACCESS = document\.documentElement\.dataset\.remoteAccess === 'admin' \? 'admin' : 'read';/);
   assert.match(version, /upgrade\.disabled = readOnly/);
   assert.match(version, /remote\.actions_read_only_tooltip/);
@@ -1466,7 +1467,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
   assert.match(index, /app\.js\?v=\d+/);
-  assert.match(index, /style\.css\?v=61/);
+  assert.match(index, /style\.css\?v=62/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
@@ -1554,8 +1555,9 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /fetch\(api\('\/api\/agent\/name'\), \{/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{ cache: 'no-store' \}\)/);
   assert.match(app, /fetch\(api\('\/api\/keys'\), \{/);
-  // Which request each key action makes is decided by keyActionRequest (wb-settings-wiring tests); the app sends it as built.
-  assert.match(app, /fetch\(api\(request\.path\), \{ method: request\.method \}\)/);
+  // Which request each key action makes is decided by keyActionRequest (wb-settings-wiring tests); the app sends it as built,
+  // to this machine's own keys (no agentPath).
+  assert.match(app, /request: async \(method, path\) => \{ const resp = await fetch\(api\(path\), \{ method \}\);/);
   assert.match(app, /fetch\(api\('\/api\/keys\/purge-revoked'\), \{ method: 'POST' \}\)/);
   assert.doesNotMatch(app, /agentPath\('\/api\/fleet\/agents/);
   assert.doesNotMatch(app, /agentPath\('\/api\/agent\/name/);
@@ -1574,13 +1576,13 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(app, /function setApiKeyBusy\(isBusy\)/);
   assert.match(app, /function renderCreatedApiKey\(createdKey\)/);
   assert.match(app, /fleetManageModal\._createdKey = createdKey \|\| null/);
-  assert.match(app, /function sendApiKeyRequest\(request, name\)/);
+  // What a key request sends and shows is decided in settings-wiring (wb-settings-wiring tests); the app only hands it the page.
+  assert.match(app, /renderKeys: renderApiKeys, renderCreated: renderCreatedApiKey, createdKey: \(\) => fleetManageModal\?\._createdKey \?\? null,/);
   assert.match(app, /function purgeRevokedApiKeys\(\)/);
   assert.match(app, /renderKeyTable\(fleetManageModal\.querySelector\('#api-key-list'\), keys/);
   assert.match(app, /replace_created_key_confirm/);
   // Destructive key and machine actions confirm in the dashboard's own dialog, never the browser prompt.
   assert.doesNotMatch(app, /window\.confirm/);
-  assert.match(app, /if \(fleetManageModal\?\._createdKey\?\.name === name\) renderCreatedApiKey\(null\);/);
   assert.match(app, /navigator\.clipboard\?\.writeText/);
   assert.match(app, /navigator\.clipboard\.writeText\(key\)/);
   assert.match(app, /id="api-key-admin-warning" hidden/);

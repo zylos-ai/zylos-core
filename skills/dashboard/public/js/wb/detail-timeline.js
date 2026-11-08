@@ -1,19 +1,13 @@
-import { element, icon } from './plain-text.js?v=94';
+import { element, icon } from './plain-text.js?v=103';
 import { endReasonLabel, timeValue } from './event-labels.js?v=89';
-import { eventRow, eventTime } from './detail-overview.js?v=98';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=105';
+import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=106';
 
 export { timeValue };
 
-export const timelineTypes = {
-  all: null,
-  messages: [],
-  tools: ['pre_tool_use', 'post_tool_use', 'post_tool_failure'],
-  lifecycle: ['session_start', 'session_end', 'reclaim_done', 'crash_detected', 'rotate_done', 'activate_new', 'start_always', 'activate_failed', 'activate_timeout'],
-};
-
 // Filter chips combine freely; one chip alone uses the server-side type filter.
 export const chipNames = ['messages', 'tools', 'lifecycle'];
-export const eventChip = event => timelineTypes.tools.includes(event.event_type) ? 'tools' : 'lifecycle';
+const filters = ['all', ...chipNames];
 
 export function attributeMessages(messages, runs) {
   const attributed = new Map(runs.map(run => [run.runId, []]));
@@ -30,9 +24,12 @@ export function attributeMessages(messages, runs) {
   return { attributed, between };
 }
 
-export function createTimelineLoader({ request, onChange = () => {}, onError = () => {}, active = () => true, now = Date.now }) {
+export function createTimelineLoader({ request, onChange = () => {}, onError = () => {}, active = () => true, now = Date.now,
+  detail = () => 'plain' }) {
+  const level = () => detail() === 'technical' ? 'technical' : 'plain';
   const state = { open: false, key: null, currentRunId: null, runs: [], totalEvents: 0, totalRuns: 0, unattributed: 0,
-    expanded: new Set(), events: new Map(), currentEvents: [], messages: new Map(), between: [], filter: 'all', chips: new Set(chipNames), error: null, loading: false };
+    expanded: new Set(), events: new Map(), currentEvents: [], messages: new Map(), between: [], filter: 'all', chips: new Set(chipNames),
+    level: level(), error: null, loading: false };
   let generation = 0, filterGeneration = 0, controller = null, pendingOperations = 0;
   const current = gen => gen === generation && active() && !controller?.signal.aborted;
   const publish = () => { if (active()) onChange(state); };
@@ -48,7 +45,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     let afterSeq = null;
     for (;;) {
       const query = new URLSearchParams({ session_group: state.key ?? '', run_id: runId, order: 'asc', limit: '1000' });
-      const types = timelineTypes[filter];
+      const types = eventTypesFor(filter, state.level);
       if (types?.length) query.set('types', types.join(','));
       if (afterSeq != null) query.set('after_seq', String(afterSeq));
       const value = await read('/api/timeline?' + query, gen);
@@ -91,10 +88,16 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     state.totalRuns = value.totalRuns ?? 0;
     state.unattributed = value.unattributed ?? 0;
   }
-  async function loadRuns(before, gen = generation) {
-    const query = new URLSearchParams({ limit: '3' });
+  // Run segments always span all their events; in plain view the counts cover plain events only.
+  // A read started for an earlier level (`filterGen` given and since superseded) is dropped on arrival.
+  async function loadRuns(before, gen = generation, { limit = 3, replace = false, filterGen = null } = {}) {
+    const query = new URLSearchParams({ limit: String(limit) });
     if (before != null) query.set('before', before);
+    const types = eventTypesFor('all', state.level);
+    if (types?.length) query.set('types', types.join(','));
     const value = await read(path('runs') + '?' + query, gen);
+    if (filterGen != null && filterGen !== filterGeneration) return;
+    if (replace) state.runs = [];
     updateRuns(value);
     await loadMessages(gen);
   }
@@ -106,7 +109,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     const afterSeq = loaded.at(-1)?.event_seq ?? 0;
     const query = new URLSearchParams({ session_group: state.key ?? '', run_id: runId,
       order: 'asc', limit: '1000', after_seq: String(afterSeq) });
-    const types = timelineTypes[state.filter];
+    const types = eventTypesFor(state.filter, state.level);
     if (types?.length) query.set('types', types.join(','));
     const value = await read('/api/timeline?' + query, gen);
     if (filterGen !== filterGeneration) return;
@@ -115,6 +118,19 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
     const events = [...loaded, ...(value.events ?? [])];
     state.events.set(runId, events);
     if (state.filter === 'all') state.currentEvents = events;
+  }
+  async function reload(alongside = async () => {}) {
+    const filterGen = ++filterGeneration;
+    const gen = generation;
+    // Cached event arrays belong to the previous filter or level, including collapsed
+    // segments. A failed reload must not leave those arrays available to append.
+    state.events.clear();
+    state.currentEvents = [];
+    await guarded(async () => {
+      const results = await Promise.allSettled([alongside(filterGen), ...[...state.expanded].map(runId => runEvents(runId, gen, filterGen))]);
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure) throw failure.reason;
+    });
   }
   async function guarded(operation) {
     const gen = generation;
@@ -139,6 +155,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       this.close();
       state.key = key;
       state.open = true;
+      state.level = level();
       state.currentRunId = currentRunId ?? null;
       state.expanded = new Set(currentRunId ? [currentRunId] : []);
       controller = new AbortController();
@@ -172,18 +189,14 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       else publish();
     },
     async setFilter(filter) {
-      state.filter = Object.hasOwn(timelineTypes, filter) ? filter : 'all';
-      const filterGen = ++filterGeneration;
-      const gen = generation;
-      // Cached event arrays belong to the previous filter, including collapsed
-      // segments. A failed reload must not leave those arrays available to append.
-      state.events.clear();
-      state.currentEvents = [];
-      await guarded(async () => {
-        const results = await Promise.allSettled([...state.expanded].map(runId => runEvents(runId, gen, filterGen)));
-        const failure = results.find(result => result.status === 'rejected');
-        if (failure) throw failure.reason;
-      });
+      state.filter = filters.includes(filter) ? filter : 'all';
+      await reload();
+    },
+    /** Technical detail switched: reread the expanded runs and the loaded run counts at the new level. */
+    async setLevel() {
+      if (!state.open || level() === state.level) { state.level = level(); return; }
+      state.level = level();
+      await reload(filterGen => loadRuns(null, generation, { limit: Math.min(1000, Math.max(3, state.runs.length)), replace: true, filterGen }));
     },
     close() {
       controller?.abort();
@@ -203,6 +216,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       state.expanded = new Set();
       state.filter = 'all';
       state.chips = new Set(chipNames);
+      state.level = level();
       state.totalEvents = state.totalRuns = state.unattributed = 0;
       state.error = null;
     },
@@ -235,7 +249,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
   }
   filters.append(chipRow, note);
   root.append(filters);
-  const showMessages = chips.has('messages'), showEvent = event => chips.has(eventChip(event));
+  const showMessages = chips.has('messages'), showEvent = event => showsEvent(event, { chips, chipCount: chipNames.length, level });
   const messageLabel = message => t(message.direction === 'in' ? 'wb.timeline.received' : 'wb.timeline.replied');
   const current = state.currentRunId && !state.runs.some(run => run.runId === state.currentRunId)
     ? [{ runId: state.currentRunId, endReason: 'running', n: state.events.get(state.currentRunId)?.length ?? 0 }, ...state.runs]
@@ -258,12 +272,17 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
     section.append(toggle);
     if (open) {
       const rows = [];
-      if (state.filter !== 'messages') for (const event of state.events.get(run.runId) ?? []) if (showEvent(event)) rows.push({ at: timeValue(event.timestamp), node: () => eventRow(document, event, { level, t, className: 'wb-ev wb-timeline-event' }) });
+      if (state.filter !== 'messages') for (const event of state.events.get(run.runId) ?? []) if (showEvent(event)) rows.push({ at: timeValue(event.timestamp), event });
       if (showMessages && ['all', 'messages'].includes(state.filter)) for (const message of state.messages.get(run.runId) ?? []) {
-        rows.push({ at: timeValue(message.timestamp), node: () => eventRow(document, message, { level, t, label: messageLabel(message), className: 'wb-ev wb-timeline-message' }) });
+        rows.push({ at: timeValue(message.timestamp), message });
       }
-      rows.sort((a, b) => (a.at || 0) - (b.at || 0));
-      for (const item of rows) section.append(item.node());
+      // Newest first inside a run as across runs, so "back to latest" (the top) is the latest row.
+      for (const group of mergeRepeats(newestFirst(rows))) {
+        const { event, message } = group.newest;
+        section.append(message
+          ? eventRow(document, message, { level, t, label: messageLabel(message), className: 'wb-ev wb-timeline-message' })
+          : repeatRow(document, group, { level, t, className: 'wb-ev wb-timeline-event' }));
+      }
       if (!rows.length && !state.loading) section.append(element(document, 'p', t('wb.timeline.empty'), 'wb-note'));
     }
     root.append(section);

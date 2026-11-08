@@ -1,6 +1,6 @@
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
-import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=94';
-import { settingsCard } from './settings.js?v=98';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=103';
+import { settingsCard } from './settings.js?v=104';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {
@@ -213,9 +213,9 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
     if (!meta) { cell.append(element(document, 'span', t('wb.unknown'), 'wb-note')); continue; }
     drafts[runtime] = { model: meta.current_model ?? '', effort: meta.current_effort ?? '' };
     const fields = element(document, 'div', undefined, 'wb-set-inline');
-    const model = element(document, 'select'); model.id = 'settings-model-' + runtime; model.setAttribute('aria-label', t('actions.model'));
+    const model = element(document, 'select', undefined, 'wb-input wb-select'); model.id = 'settings-model-' + runtime; model.setAttribute('aria-label', t('actions.model'));
     const custom = element(document, 'input'); custom.id = 'settings-model-custom-' + runtime; custom.placeholder = t('actions.model_placeholder'); custom.className = 'wb-input';
-    const effort = element(document, 'select'); effort.id = 'settings-effort-' + runtime; effort.setAttribute('aria-label', t('actions.effort'));
+    const effort = element(document, 'select', undefined, 'wb-input wb-select'); effort.id = 'settings-effort-' + runtime; effort.setAttribute('aria-label', t('actions.effort'));
     const dirty = element(document, 'span', t('wb.settings.unsavedOne'), 'wb-dirty');
     const options = modelOptionState(meta);
     for (const item of options.options) { const option = element(document, 'option', item.labelKey ? t(item.labelKey) : item.label); option.value = item.value; option.disabled = Boolean(item.disabled); model.append(option); }

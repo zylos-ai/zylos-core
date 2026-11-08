@@ -5,6 +5,17 @@ export function observerRecoveryReason(status) {
 }
 
 /**
+ * The machine the page is viewing: `viewingRemote` when another machine is viewed (chosen in the page, or the page
+ * itself was opened through another machine's address), and the access its key has, 'admin' or 'read'. A remote
+ * machine counts as read-only unless its key is known to be an admin key; this machine is always 'admin'.
+ */
+export function viewedAccess({ remoteAgent = null, fleetAgents = [], pageRemoteAgent = null, pageRemoteAccess = 'read' } = {}) {
+  if (remoteAgent) return { viewingRemote: true, access: fleetAgents.find(agent => agent.name === remoteAgent)?.access === 'admin' ? 'admin' : 'read' };
+  if (pageRemoteAgent) return { viewingRemote: true, access: pageRemoteAccess === 'admin' ? 'admin' : 'read' };
+  return { viewingRemote: false, access: 'admin' };
+}
+
+/**
  * Whether the observer page may show the live view: the observer is installed, enabled and healthy, and either
  * this machine is being viewed or the remote machine was reached with an admin key. The page passes what it knows
  * (`viewingRemote`, `access` as 'admin' or 'read'); when it says nothing, the view counts as remote and read-only.

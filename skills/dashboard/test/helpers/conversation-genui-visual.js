@@ -79,7 +79,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
     if(url.pathname === '/approved-prototype.html' && prototypeSource){sendHtml(res,200,prototypeSource);return true;}
     if (url.pathname === '/renderer-fallback') {
       sendHtml(res, 200, `<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:15px/1.6 system-ui;margin:24px;background:#f4f7f8;color:#17222e}body.dark{background:#11191e;color:#e6edf2}main{max-width:900px;margin:auto}.chat-message-content{padding:20px;border:1px solid #86939d;border-radius:12px;margin:16px 0}.chat-block{margin:16px 0}h1{font-size:22px}</style><main><h1>兼容展示：完整 Content 顺序与无渲染器表单</h1><div id="fallback"></div></main><script type="module">
-      import {renderChatContent} from '/_assets/js/wb/chat-blocks.js?v=102';
+      import {renderChatContent} from '/_assets/js/wb/chat-blocks.js?v=106';
       const root=document.querySelector('#fallback');
       const columns=${JSON.stringify(columnsMessage())};
       const form=${JSON.stringify(formMessage('no-renderer'))};

@@ -187,7 +187,7 @@ export function validateRuntimeFlags(target, parsed) {
   }
   if (parsed.baseUrl && !isValidBaseUrl(parsed.baseUrl)) {
     return {
-      error: `Invalid base URL: "${parsed.baseUrl}".`,
+      error: 'Invalid base URL. Use an HTTP(S) URL without credentials, query, or fragment.',
       example: target === 'codex'
         ? 'zylos runtime codex --save-base-url https://proxy.example.com/v1'
         : 'zylos runtime claude --save-base-url https://claude-proxy.example.com',

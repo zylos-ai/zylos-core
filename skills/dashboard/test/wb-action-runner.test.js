@@ -46,7 +46,6 @@ test('confirmed changes run without asking again', async () => {
   assert.equal(await run.runConfirmed('switch-model', { model: 'two' }), true);
   assert.deepEqual(asked, [], 'runConfirmed never asks');
   assert.deepEqual(sent, [{ action: 'switch-model', body: { model: 'two' } }]);
-  assert.equal(run.exec.length, 2, 'exec takes no third argument that could skip the question');
 });
 
 test('nothing runs or asks while the viewed machine was reached with a read-only key, or when the page has not said', async () => {
@@ -67,4 +66,13 @@ test('a manual restart is prepared before the question and sent as prepared', as
   await run.exec('restart-session');
   assert.deepEqual(asked, ['ask:restart-session:{"runId":"r1"}']);
   assert.deepEqual(sent, [{ action: 'restart-session', body: { runId: 'r1' } }]);
+});
+
+test('no extra argument to exec skips the question', async () => {
+  for (const extra of [true, 'confirmed', { confirmed: true }, { skipConfirm: true }, 1]) {
+    const { run, asked, sent } = runner({ answer: false });
+    assert.equal(await run.exec('upgrade-cc', {}, extra), false, JSON.stringify(extra));
+    assert.equal(asked.length, 1, JSON.stringify(extra) + ' still asks');
+    assert.deepEqual(sent, [], JSON.stringify(extra) + ' sends nothing on cancel');
+  }
 });

@@ -32,7 +32,7 @@ function makeArtifactFixture(t, { symlink = false, platform = 'darwin-arm64' } =
     artifact: {
       platform,
       version: '0.45.1',
-      url: 'https://example.invalid/zellij.tar.gz',
+      url: 'https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij.tar.gz',
       archiveSha256: sha256(archive),
       binarySha256: symlink ? sha256(Buffer.alloc(0)) : sha256(fs.readFileSync(binaryPath)),
       archiveEntry: 'zellij',
@@ -244,4 +244,244 @@ test('history installation inspection never reads binary contents or executes it
   assert.equal((await installer.verify()).state, 'failed');
   fs.unlinkSync(installer.paths.installedManifest);
   assert.equal((await installer.inspectInstallation()).state, 'not_installed');
+});
+
+const releaseApi = 'https://api.github.com/repos/zellij-org/zellij/releases/tags/v0.45.1';
+const assetApi = 'https://api.github.com/repos/zellij-org/zellij/releases/assets/123';
+const assetStore = 'https://release-assets.githubusercontent.com/pinned-archive';
+
+function fallbackFixture(t, direct, overrides = {}) {
+  const fixture = makeArtifactFixture(t);
+  const calls = [];
+  const logs = [];
+  const fetchImpl = async (url, options) => {
+    calls.push(url);
+    assert.equal(options.redirect, 'manual');
+    assert.equal(new Headers(options.headers).has('authorization'), false);
+    if (url === fixture.artifact.url) return direct(options);
+    if (url === releaseApi) {
+      assert.equal(options.headers.Accept, 'application/vnd.github+json');
+      return overrides.metadata?.() || Response.json({ assets: [
+        { name: 'other.tar.gz', url: 'https://untrusted.invalid/other' },
+        { name: 'zellij.tar.gz', url: assetApi, digest: 'sha256:untrusted' },
+      ] });
+    }
+    if (url === assetApi) {
+      assert.equal(options.headers.Accept, 'application/octet-stream');
+      return overrides.asset?.() || new Response(null, { status: 302, headers: { location: assetStore } });
+    }
+    assert.equal(url, assetStore);
+    return new Response(overrides.archive || fixture.archive);
+  };
+  const installer = installerFor(t, fixture, {
+    fetchImpl, logger: { info: (message) => logs.push(message), warn: (message) => logs.push(message) },
+  });
+  return { fixture, installer, calls, logs };
+}
+
+for (const status of [500, 502, 504]) test(`HTTP ${status} falls back once through the release API and preserves pinned digests`, async (t) => {
+  const { fixture, installer, calls, logs } = fallbackFixture(t, () => new Response('', { status }));
+  assert.equal((await installer.install()).state, 'installed');
+  assert.deepEqual(calls, [fixture.artifact.url, releaseApi, assetApi, assetStore]);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], new RegExp(`direct HTTP ${status}; API fallback download succeeded`));
+  const record = JSON.parse(fs.readFileSync(installer.paths.installedManifest));
+  assert.equal(record.archiveSha256, fixture.artifact.archiveSha256);
+});
+
+test('network failure falls back without disclosing the transport error', async (t) => {
+  const { installer, logs } = fallbackFixture(t, () => { throw new Error('private transport diagnostic'); });
+  assert.equal((await installer.install()).state, 'installed');
+  assert.match(logs[0], /direct network error; API fallback download succeeded/);
+  assert.equal(logs[0].includes('private transport diagnostic'), false);
+});
+
+test('direct timeout falls back with a fresh deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { installer, logs } = fallbackFixture(t, ({ signal }) => {
+    t.mock.timers.tick(60_001);
+    signal.throwIfAborted();
+  });
+  assert.equal((await installer.install()).state, 'installed');
+  assert.match(logs[0], /direct download timed out; API fallback download succeeded/);
+});
+
+test('partial direct stream is removed before fallback opens its archive', async (t) => {
+  const { installer } = fallbackFixture(t, () => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); },
+    pull(controller) { controller.error(new Error('network interrupted')); },
+  })));
+  assert.equal((await installer.install()).state, 'installed');
+  assert.deepEqual(fs.readdirSync(installer.paths.staging), []);
+});
+
+for (const status of [401, 403, 404, 429]) test(`direct HTTP ${status} never requests the API`, async (t) => {
+  const { fixture, installer, calls } = fallbackFixture(t, () => new Response('', { status }));
+  await assert.rejects(installer.install(), (error) => error.code === 'download_failed' && error.message.includes(`HTTP ${status}`));
+  assert.deepEqual(calls, [fixture.artifact.url]);
+});
+
+test('API rate limit failure includes both path results and stops after one fallback', async (t) => {
+  const { fixture, installer, calls, logs } = fallbackFixture(t, () => new Response('', { status: 504 }), {
+    metadata: () => new Response('rate limit', { status: 403 }),
+  });
+  await assert.rejects(installer.install(), (error) => error.code === 'download_failed' &&
+    /direct HTTP 504; API HTTP 403/.test(error.message));
+  assert.deepEqual(calls, [fixture.artifact.url, releaseApi]);
+  assert.match(logs[0], /direct HTTP 504; API HTTP 403/);
+  assert.deepEqual(fs.readdirSync(installer.paths.staging), []);
+  assert.equal(fs.existsSync(installer.paths.installedManifest), false);
+});
+
+test('API asset transport failure includes both reasons without leaking raw errors', async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => { throw new Error('private direct'); }, {
+    asset: () => { throw new Error('private API'); },
+  });
+  await assert.rejects(installer.install(), (error) => error.code === 'download_failed' &&
+    /direct network error; API network error/.test(error.message) && !error.message.includes('private'));
+  assert.equal(calls.length, 3);
+});
+
+test('API archive bytes must match the pinned manifest even when metadata claims a digest', async (t) => {
+  const { installer } = fallbackFixture(t, () => new Response('', { status: 504 }), {
+    archive: Buffer.from('not the pinned archive'),
+  });
+  await assert.rejects(installer.install(), (error) => error.code === 'archive_digest_mismatch');
+  assert.equal(fs.existsSync(installer.paths.installedManifest), false);
+});
+
+for (const location of [
+  'https://untrusted.invalid/archive', 'http://github.com/archive',
+  'https://github.com.untrusted.invalid/archive', 'https://user:password@github.com/archive',
+  'https://evilgithub.com/archive',
+  'https://release-assets.githubusercontent.com:444/archive',
+]) test(`API redirect refuses unsafe destination ${new URL(location).hostname}`, async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), {
+    asset: () => new Response(null, { status: 302, headers: { location } }),
+  });
+  await assert.rejects(installer.install(), (error) => error.code === 'unsafe_redirect' && /direct HTTP 504; API/.test(error.message));
+  assert.equal(calls.length, 3, 'unsafe destination must never be requested');
+});
+
+test('unsafe direct redirect never falls back', async (t) => {
+  const { fixture, installer, calls } = fallbackFixture(t, () => new Response(null, {
+    status: 302, headers: { location: 'https://untrusted.invalid/archive' },
+  }));
+  await assert.rejects(installer.install(), (error) => error.code === 'unsafe_redirect');
+  assert.deepEqual(calls, [fixture.artifact.url]);
+});
+
+test('metadata cannot nominate an asset API outside the pinned repository', async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), {
+    metadata: () => Response.json({ assets: [{ name: 'zellij.tar.gz', url: 'https://api.github.com/repos/other/repo/releases/assets/123' }] }),
+  });
+  await assert.rejects(installer.install(), (error) => error.code === 'unsafe_redirect');
+  assert.equal(calls.length, 2);
+});
+
+for (const [name, response, code] of [
+  ['invalid JSON', () => new Response('{'), 'invalid_release_metadata'],
+  ['missing asset', () => Response.json({ assets: [] }), 'release_asset_missing'],
+]) test(`API ${name} fails without requesting an asset`, async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), { metadata: response });
+  await assert.rejects(installer.install(), (error) => error.code === code);
+  assert.equal(calls.length, 2);
+});
+
+for (const preaborted of [true, false]) test(`external cancellation ${preaborted ? 'before' : 'during'} download never falls back`, async (t) => {
+  const controller = new AbortController();
+  if (preaborted) controller.abort();
+  const { installer, calls } = fallbackFixture(t, ({ signal }) => {
+    controller.abort();
+    signal.throwIfAborted();
+  });
+  await assert.rejects(installer.install({ signal: controller.signal }), (error) => error.code === 'download_cancelled');
+  assert.equal(calls.length, preaborted ? 0 : 1);
+});
+
+test('archive size errors never trigger network fallback', async (t) => {
+  const oversized = fallbackFixture(t, () => new Response('small', { headers: { 'content-length': String(128 * 1024 * 1024 + 1) } }));
+  await assert.rejects(oversized.installer.install(), (error) => error.code === 'archive_too_large');
+  assert.equal(oversized.calls.length, 1);
+});
+
+for (const useApi of [false, true]) test(`${useApi ? 'API' : 'direct'} progress callback errors report download_failed without retrying`, async (t) => {
+  const progress = fallbackFixture(t, () => new Response(useApi ? '' : 'bytes', { status: useApi ? 504 : 200 }));
+  await assert.rejects(progress.installer.install({ onProgress: () => { throw new Error('progress failed'); } }),
+    (error) => error.code === 'download_failed' && /local download failure/.test(error.message));
+  assert.equal(progress.calls.length, useApi ? 4 : 1);
+  assert.deepEqual(fs.readdirSync(progress.installer.paths.staging), []);
+  assert.equal(fs.existsSync(progress.installer.paths.installedManifest), false);
+});
+
+test('API timeout reports both paths and does not retry again', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), {
+    metadata: () => { t.mock.timers.tick(60_001); throw new Error('aborted transport'); },
+  });
+  await assert.rejects(installer.install(), (error) => error.code === 'download_timeout' &&
+    /direct HTTP 504; API download timed out/.test(error.message));
+  assert.equal(calls.length, 2);
+});
+
+test('API asset HTTP failure reports both paths', async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 502 }), {
+    asset: () => new Response('', { status: 503 }),
+  });
+  await assert.rejects(installer.install(), (error) => error.code === 'download_failed' &&
+    /direct HTTP 502; API HTTP 503/.test(error.message));
+  assert.equal(calls.length, 3);
+});
+
+test('external cancellation during API metadata stops the fallback', async (t) => {
+  const controller = new AbortController();
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), {
+    metadata: () => { controller.abort(); throw new Error('cancelled transport'); },
+  });
+  await assert.rejects(installer.install({ signal: controller.signal }), (error) => error.code === 'download_cancelled');
+  assert.equal(calls.length, 2);
+});
+
+for (const useApi of [false, true]) test(`${useApi ? 'API' : 'direct'} local archive conflict reports download_failed and cancels the response`, async (t) => {
+  let cancelled = false;
+  let destination;
+  const response = () => {
+    const stages = fs.readdirSync(installer.paths.staging);
+    assert.equal(stages.length, 1);
+    destination = path.join(installer.paths.staging, stages[0], 'zellij.tar.gz');
+    fs.mkdirSync(destination);
+    return new Response(new ReadableStream({
+      start() {}, cancel() { cancelled = true; },
+    }));
+  };
+  const { installer, calls } = fallbackFixture(t,
+    () => useApi ? new Response('', { status: 504 }) : response(),
+    useApi ? { asset: response } : {});
+  await assert.rejects(installer.install(), (error) => {
+    assert.equal(error.code, 'download_failed');
+    assert.match(error.message, useApi ? /direct HTTP 504; API local download failure/ : /^local download failure$/);
+    return true;
+  });
+  assert.equal(calls.length, useApi ? 3 : 1);
+  assert.equal(cancelled, true);
+  assert.equal(fs.existsSync(destination), false);
+  assert.equal(fs.existsSync(installer.paths.installedManifest), false);
+});
+
+test('throwing success logger preserves a verified API installation', async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }));
+  installer.logger.info = () => { throw new Error('logger unavailable'); };
+  assert.equal((await installer.install()).state, 'installed');
+  assert.equal((await installer.verify()).state, 'installed');
+  assert.equal(calls.length, 4);
+});
+
+test('throwing failure logger preserves the download error and both path results', async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), {
+    asset: () => new Response('', { status: 403 }),
+  });
+  installer.logger.warn = () => { throw new Error('logger unavailable'); };
+  await assert.rejects(installer.install(), (error) => error.code === 'download_failed' &&
+    /direct HTTP 504; API HTTP 403/.test(error.message));
+  assert.equal(calls.length, 3);
 });

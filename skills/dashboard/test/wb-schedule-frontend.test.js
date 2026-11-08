@@ -491,3 +491,18 @@ test('the edit button of an expired one-time task opens the re-enable form', asy
   assert.equal(allNodes(form).filter(node => node.dataset.kind).every(node => node.disabled), true);
   assert.equal(allNodes(form).find(node => node.type === 'datetime-local').value, '');
 });
+
+test('task detail header gives the title its own row and keeps state and actions together for the second row', async context => {
+  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null } : page());
+  await tick();
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
+  await tick();
+  const top = allNodes(h.root).find(node => node.classList.contains('wb-d-top') && node.children.some(child => child.classList.contains('wb-d-sub')));
+  assert.ok(top, 'the detail header has a state-and-actions group');
+  assert.deepEqual(top.children.map(child => child.className.split(' ')[0]), ['wb-ch', 'wb-d-title', 'wb-d-sub', 'wb-icon-btn']);
+  assert.ok(top.children.at(-1).classList.contains('wb-sched-close'), 'closing stays on the title row');
+  const sub = top.children[2];
+  assert.ok(sub.children[0].classList.contains('wb-sched-state'), 'the state comes first in the second row');
+  assert.ok(sub.children[1].classList.contains('wb-d-acts'), 'the actions follow the state');
+  assert.equal(allNodes(sub.children[1]).some(node => node.classList.contains('wb-icon-danger')), true, 'deleting is among those actions');
+});

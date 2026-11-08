@@ -1,10 +1,11 @@
-import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=94';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=103';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=98';
-import { renderOverview } from './detail-overview.js?v=98';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=98';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=95';
-import { renderNameEditor } from './name-edit.js?v=95';
+import { channelIcon, platformLabel, statePill } from './board.js?v=103';
+import { groupEventCount, renderOverview } from './detail-overview.js?v=105';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=105';
+import { eventTypesFor, recentWindow } from './timeline-rows.js?v=106';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=103';
+import { renderNameEditor } from './name-edit.js?v=103';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -82,12 +83,13 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm, observable = () => false, onObserve = () => {},
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
-    totalEvents: 0, totalRuns: 0, currentEvents: [], error: null, lastSuccess: null,
+    totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null, level: null,
     configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
   let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
   const getWritable = () => typeof writable === 'function' ? writable() : writable;
   const getLevel = () => typeof detail === 'function' ? detail() : detail;
+  const readLevel = () => getLevel() === 'technical' ? 'technical' : 'plain';
   const active = gen => !stopped && controller != null && !controller.signal.aborted && generation === gen && owner === identity();
   function invalidateOwner() {
     if (controller && owner !== identity()) close();
@@ -99,10 +101,11 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (!active(gen)) { invalidateOwner(); throw Object.assign(new Error('view_changed'), { name: 'AbortError' }); }
     return value;
   }
-  const timeline = createTimelineLoader({ request, now, active: () => active(generation),
+  const timeline = createTimelineLoader({ request, now, active: () => active(generation), detail: readLevel,
     onChange(value) {
       state.totalEvents = value.totalEvents;
       state.totalRuns = value.totalRuns;
+      state.unattributed = value.unattributed ?? 0;
       draw();
     },
     onError: () => {},
@@ -124,7 +127,10 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       rename.addEventListener('click', () => { state.nameOpen = true; state.nameDraft = row.name?.displayName ?? ''; draw(); });
       heading.append(rename);
     }
-    top.append(box, heading, statePill(document, row, { t, level: getLevel() }));
+    // State and actions share one wrapper: on phones it becomes the second row under the title.
+    const sub = element(document, 'div', undefined, 'wb-d-sub');
+    sub.append(statePill(document, row, { t, level: getLevel() }));
+    top.append(box, heading, sub);
     const actions = element(document, 'div', undefined, 'wb-d-acts');
     for (const item of groupActionButtons(row, getWritable())) {
       const button = element(document, 'button', undefined, 'wb-icon-btn wb-act'); button.type = 'button';
@@ -139,7 +145,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const closeButton = element(document, 'button', undefined, 'wb-icon-btn'); closeButton.type = 'button';
     closeButton.setAttribute('aria-label', t('wb.close')); closeButton.title = t('wb.closeEsc');
     closeButton.append(icon(document, 'x')); closeButton.addEventListener('click', close);
-    top.append(actions, closeButton);
+    sub.append(actions); top.append(closeButton);
     header.append(top);
     const previousScroll = root.querySelector?.('.wb-detail-timeline')?.scrollTop ?? 0;
     const uptime = row.createdAt == null ? t('wb.unknown') : Math.max(0, Math.floor((now() - row.createdAt * 1000) / 60000));
@@ -156,14 +162,14 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     tabs.setAttribute('role', 'tablist');
     for (const tab of ['overview', 'timeline']) {
       const button = element(document, 'button', t('wb.detail.' + tab));
-      if (tab === 'timeline') button.append(element(document, 'span', ` ${state.totalEvents}`, 'wb-n'));
+      if (tab === 'timeline') button.append(element(document, 'span', ` ${groupEventCount(state)}`, 'wb-n'));
       button.type = 'button'; button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(state.tab === tab));
       button.addEventListener('click', () => { void selectTab(tab); }); tabs.append(button);
     }
     const body = element(document, 'div', undefined, 'wb-detail-body');
     const observe = observable(row) ? view => onObserve(key, view) : null;
     if (state.tab === 'overview') {
-      const sections = renderOverview(body, row, state, { document, t, level: getLevel(), snapshot: state.snapshot,
+      const sections = renderOverview(body, row, state, { document, t, level: getLevel(), snapshot: state.snapshot, currentTime: now(),
         onTimeline: () => { void selectTab('timeline'); }, onMemory: () => onMemory(row.sessionGroup), onObserve: observe,
         onConfig: async () => {
           if (state.configOpen) { state.configOpen = false; draw(); return; }
@@ -284,15 +290,20 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (!controller || !active(generation) || !isVisible()) return Promise.resolve();
     if (refreshTask) return refreshTask;
     const gen = generation, key = state.row.sessionGroup ?? 'origin', runId = state.row.live?.runId;
-    const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', order: 'desc', limit: '5' });
+    // Recent activity and the event counts cover plain events only, unless technical detail is on.
+    const level = state.level = readLevel(), types = eventTypesFor('all', level);
+    // Read a window larger than the rows shown so merged repeats count every event in it.
+    const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', order: 'desc', limit: String(recentWindow) });
+    const runsQuery = new URLSearchParams({ limit: '3' });
+    if (types?.length) { query.set('types', types.join(',')); runsQuery.set('types', types.join(',')); }
     const task = (async () => {
       const values = await Promise.allSettled([
         request('/api/timeline?' + query),
         request(`/api/workbench/groups/${encodeURIComponent(key)}/backlog`),
-        request(`/api/workbench/groups/${encodeURIComponent(key)}/runs?limit=3`),
+        request(`/api/workbench/groups/${encodeURIComponent(key)}/runs?` + runsQuery),
         loadSubagents(),
       ]);
-      if (!active(gen) || state.row.live?.runId !== runId) return;
+      if (!active(gen) || state.row.live?.runId !== runId || readLevel() !== level) return;
       if (values[0].status === 'fulfilled') {
         state.recent = values[0].value.events ?? [];
       }
@@ -300,6 +311,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (values[2].status === 'fulfilled') {
         state.totalEvents = values[2].value.totalEvents;
         state.totalRuns = values[2].value.totalRuns;
+        state.unattributed = values[2].value.unattributed ?? 0;
         if (timeline.state.open) timeline.updateRuns(values[2].value);
       }
       const failure = values.find(value => value.status === 'rejected');
@@ -321,7 +333,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     resetSubagents();
     refreshTask = null;
     state.row = null; state.tab = 'overview'; state.recent = []; state.currentEvents = [];
-    state.totalEvents = state.totalRuns = 0; state.backlog = null; state.error = null;
+    state.totalEvents = state.totalRuns = state.unattributed = 0; state.backlog = null; state.error = null; state.level = null;
     state.configOpen = state.nameOpen = false;
     state.actionResult = ''; state.actionBusy = false;
     root.hidden = true; root.replaceChildren(); onClose();
@@ -358,7 +370,14 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       draw();
       await refresh();
     },
-    setViewDetail() { draw(); },
+    setViewDetail() {
+      draw();
+      // Technical detail changes which events are read: reread recent activity, counts and the timeline.
+      if (!controller || !state.row || readLevel() === state.level) return;
+      void timeline.setLevel();
+      const again = () => refresh();
+      void (refreshTask ? refreshTask.then(again, again) : again());
+    },
     destroy() { close(); stopped = true; },
   };
 }

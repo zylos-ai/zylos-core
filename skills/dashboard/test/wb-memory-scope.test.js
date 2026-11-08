@@ -431,3 +431,11 @@ test('the editor warns about background upkeep only on instances with session gr
   assert.equal(memoryUpkeepNotice({ root: tree().root, sessionGroups: [] }), false);
   assert.equal(memoryUpkeepNotice(null), false);
 });
+
+test('the shared list leads with the core files even though the server lists directories first', () => {
+  // The memory tree from the server puts directories before files at each level.
+  const value = { root: dir('', [dir('reference', [file('reference/decisions.md')]), dir('users', [dir('users/owner', [file('users/owner/profile.md')])]),
+    file('identity.md'), file('references.md'), file('state.md')]) };
+  assert.deepEqual(memoryFlatFiles(memoryScope(value).shared).map(node => node.path),
+    ['identity.md', 'references.md', 'state.md', 'reference/decisions.md', 'users/owner/profile.md']);
+});

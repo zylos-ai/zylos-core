@@ -93,6 +93,8 @@ ok "Workspace ready"
 upsert_env() {
   local key="$1" value="$2"
   [ -z "${value}" ] && return
+  # .env holds tokens: create it owner-only if zylos init did not.
+  [ -e "${ENV_FILE}" ] || (umask 077; : > "${ENV_FILE}")
   if grep -q "^${key}=" "${ENV_FILE}" 2>/dev/null; then
     # Update existing value — env vars from docker-compose take precedence
     sed -i "s|^${key}=.*|${key}=${value}|" "${ENV_FILE}" 2>/dev/null || true

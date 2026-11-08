@@ -33,6 +33,7 @@
   "observer.state_unsupported": "No supported Observer package for this environment",
   "observer.state_failed": "Installation needs attention",
   "memory.title": "Memory",
+  "memory.back": "Back to files",
   "memory.refresh": "Refresh memory tree",
   "memory.collapse_all": "Collapse all directories",
   "memory.expand_all": "Expand all directories",

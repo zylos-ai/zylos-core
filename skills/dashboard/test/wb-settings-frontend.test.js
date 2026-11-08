@@ -286,15 +286,20 @@ test('settings relabel updates navigation without replacing controls or changing
   localeControl.addEventListener('click', () => calls++);
   const page = composeSettings(root, { settings, fleet, actions, controls: [localeControl], document, t: key => locale + ':' + key });
   page.select('ui');
-  const nav = root.querySelector('nav'), buttons = nav.querySelectorAll('button');
+  const nav = root.querySelector('nav'), buttons = nav.querySelectorAll('[data-settings-section]');
+  const drawerButton = root.querySelector('.wb-set-drawer-btn'), drawerClose = nav.querySelector('.wb-set-drawer-x');
   const headings = settingsSections.map(name => page.sections[name].querySelector('h2'));
   for (const nextLocale of ['zh', 'en']) {
     locale = nextLocale;
     page.relabel();
     assert.equal(root.querySelector('nav'), nav);
     assert.equal(nav.getAttribute('aria-label'), locale + ':wb.settings');
+    // The phone drawer's title, close button and the button naming the current section follow the language too.
+    assert.equal(nav.querySelector('.wb-set-drawer-h').querySelector('b').textContent, locale + ':wb.settings.sections');
+    assert.equal(drawerClose.getAttribute('aria-label'), locale + ':wb.settings.sectionsClose');
+    assert.equal(drawerButton.textContent, locale + ':wb.settings.section.ui');
     for (const [index, name] of settingsSections.entries()) {
-      const button = nav.querySelectorAll('button')[index];
+      const button = nav.querySelectorAll('[data-settings-section]')[index];
       assert.equal(button, buttons[index]);
       assert.equal(button.textContent, locale + ':wb.settings.section.' + name);
       assert.equal(button.getAttribute('aria-current'), String(name === 'ui'));
@@ -309,6 +314,9 @@ test('settings relabel updates navigation without replacing controls or changing
   await buttons[1].dispatch('click');
   assert.equal(page.sections.pricing.hidden, false);
   assert.equal(page.sections.ui.hidden, true);
+  assert.equal(drawerButton.textContent, 'en:wb.settings.section.pricing', 'the drawer button names the section just chosen');
+  assert.equal(drawerButton.getAttribute('aria-controls'), nav.id);
+  assert.equal(drawerButton.getAttribute('aria-expanded'), 'false');
 });
 
 test('version panel reuses upgrade control, labels Codex and retains readonly reason and non-action core hint', async () => {
@@ -345,7 +353,7 @@ test('removed header entry selectors have no startup bindings and account contro
   const header = html.slice(html.indexOf('<header'), html.indexOf('</header>'));
   for (const id of ['fleet-sound-toggle', 'logout-btn', 'wb-detail-toggle']) { assert.equal(header.includes('id="' + id + '"'), false); assert.ok(html.indexOf('id="' + id + '"') > html.indexOf('id="tab-settings"')); }
   assert.equal(html.includes('id="locale-toggle"'), false, 'the language choice is built inside the settings page');
-  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=\d+/); assert.match(html, /style\.css\?v=61/);
+  assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=\d+/); assert.match(html, /style\.css\?v=62/);
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());
 });

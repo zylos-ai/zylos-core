@@ -1,4 +1,4 @@
-import { element, fallbackName, icon, platformOf } from './plain-text.js?v=94';
+import { element, fallbackName, icon, platformOf } from './plain-text.js?v=103';
 
 // Scope metadata is validated by Core's parseSessionGroup on the server.
 /**
@@ -36,12 +36,15 @@ export function memoryFileScope(tree, path) {
   return group && path.split('/').length >= 3 ? { kind: 'group', group } : { kind: 'invalid' };
 }
 
-/** Files under a directory as one flat list; dot files such as .gitkeep are not memory content. */
+/**
+ * Files under a directory as one flat list: a directory's own files come before the files in its subdirectories,
+ * so the core files at the top (identity.md, references.md, state.md) lead the list. Dot files such as .gitkeep
+ * are not memory content.
+ */
 export function memoryFlatFiles(node, files = []) {
-  for (const child of node?.children ?? []) {
-    if (child.type === 'file' && !String(child.name).startsWith('.')) files.push(child);
-    else if (child.type === 'directory') memoryFlatFiles(child, files);
-  }
+  const children = node?.children ?? [];
+  for (const child of children) if (child.type === 'file' && !String(child.name).startsWith('.')) files.push(child);
+  for (const child of children) if (child.type === 'directory') memoryFlatFiles(child, files);
   return files;
 }
 

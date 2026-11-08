@@ -1,4 +1,4 @@
-import { accountUsedPercent } from './wb/instance-strip.js?v=99';
+import { accountUsedPercent } from './wb/instance-strip.js?v=103';
 
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline', 'stuck']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);

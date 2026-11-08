@@ -1,4 +1,4 @@
-import { element, icon, runtimeName } from './plain-text.js?v=94';
+import { element, icon, runtimeName } from './plain-text.js?v=103';
 import { recoveryTime } from './cooldown.js?v=89';
 // Account quota samples are passed through as each runtime reports them: Claude uses
 // used_percentage (or utilization), Codex keeps its camelCase usedPercentage.

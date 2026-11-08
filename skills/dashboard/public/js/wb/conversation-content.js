@@ -1,8 +1,8 @@
-import { element } from './plain-text.js?v=94';
-import { renderChatContent, parseC4Content } from './chat-blocks.js?v=104';
-import { createChatAttachment } from './chat-attachments.js?v=2';
-import { applyChatView } from './chat-view.js?v=102';
-import { conversationChartResource } from './conversation-charts.js?v=102';
+import { element } from './plain-text.js?v=103';
+import { renderChatContent, parseC4Content } from './chat-blocks.js?v=106';
+import { createChatAttachment } from './chat-attachments.js?v=3';
+import { applyChatView } from './chat-view.js?v=103';
+import { conversationChartResource } from './conversation-charts.js?v=103';
 export function conversationErrorKey(code) {
   if (['chat_auth_required', 'chat_conversation_forbidden', 'insufficient_scope'].includes(code)) {
     return 'chat.error.forbidden';
