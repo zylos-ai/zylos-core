@@ -4,11 +4,11 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=114';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=103';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=103';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=115';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=116';
 import { renderVersion } from './wb/settings-version.js?v=103';
-import { mountConversationPage } from './wb/conversation-page.js?v=118';
+import { mountConversationPage } from './wb/conversation-page.js?v=119';
 import { mountChatSettings } from './wb/chat-settings.js?v=112';
-import { mountWorkbench } from './wb/shell.js?v=114';
+import { mountWorkbench } from './wb/shell.js?v=115';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=103';
 import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=114';
