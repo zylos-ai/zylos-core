@@ -6,7 +6,7 @@ import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/set
 import { keyCounts, renderCreatedKey, renderKeyTable, renderRemoteAgents } from './wb/settings-access.js?v=99';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=1';
 import { renderVersion } from './wb/settings-version.js?v=98';
-import { mountConversationPage } from './wb/conversation-page.js?v=100';
+import { mountConversationPage } from './wb/conversation-page.js?v=101';
 import { mountChatSettings } from './wb/chat-settings.js?v=98';
 import { mountWorkbench } from './wb/shell.js?v=100';
 import { watchHeader } from './wb/header-fit.js?v=94';
