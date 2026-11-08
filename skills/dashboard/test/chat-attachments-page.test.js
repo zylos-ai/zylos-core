@@ -3,6 +3,8 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 
 // Boundary: actual Dashboard attachment input (choose/paste/drop), shared user
 // and agent media, authorized APIs/private SQLite, restoration and image layout.
+// Also checks keyed tray focus through actual XHR progress/history refresh,
+// compact attachment information and history-area/read-only drop prevention.
 // Run for attachment frontend or its page/state adapter changes; skip unrelated
 // runtime work. The opt-in harness proves HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR,
 // private socket and both database paths before opening resources, and owns

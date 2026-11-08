@@ -1,6 +1,6 @@
 import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=102';
 import { element } from './plain-text.js?v=94';
-import { attachmentDisplayText } from './chat-attachments.js?v=1';
+import { attachmentDisplayText } from './chat-attachments.js?v=2';
 
 export { parseC4Content };
 export { validateAnswer } from '../../chat-schema.js?v=102';

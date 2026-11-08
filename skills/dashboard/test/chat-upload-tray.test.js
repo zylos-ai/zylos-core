@@ -11,6 +11,7 @@ class Events {
 }
 class Upload extends Events {
   upload = new Events();
+  timeout = 0;
   open(method, url) { this.method = method; this.url = url; }
   send(body) { this.body = body; }
   abort() { this.aborted = true; this.emit('abort'); }
@@ -85,6 +86,19 @@ test('upload start gives a conservative expiry when HTTP success omits expiresAt
   await f.advance(25 * 60 * 1000 - 10000);
   assert.equal(f.controller.snapshot().items[0].status, 'expired'); assert.deepEqual(f.controller.readyIDs(), []);
   assert.equal(f.controller.isSendable(), false); assert.equal(f.timers.size, 0); f.controller.destroy();
+});
+test('slow uploads keep progressing beyond two minutes without a total request deadline', async () => {
+  const f = fixture(); await f.controller.setScope(scope()); await f.controller.acceptFiles([file()]);
+  assert.equal(f.uploads[0].timeout, 0);
+  for (let part = 1; part <= 4; part += 1) {
+    await f.advance(60000);
+    f.uploads[0].upload.emit('progress', { lengthComputable: true, loaded: part, total: 5 });
+    assert.equal(f.controller.snapshot().items[0].status, 'uploading');
+    assert.equal(f.controller.snapshot().items[0].progress, part * 20);
+  }
+  f.ready(); assert.deepEqual(f.controller.readyIDs(), ['attachment-0']);
+  assert.equal(f.controller.snapshot().items[0].expiresAt, 1000 + 25 * 60 * 1000);
+  f.controller.destroy(); assert.equal(f.timers.size, 0);
 });
 test('explicit retry reuses the selected file and never retries an interrupted upload automatically', async () => {
   const f = fixture(); await f.controller.setScope(scope()); await f.controller.acceptFiles([file()]);

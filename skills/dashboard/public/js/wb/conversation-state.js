@@ -847,7 +847,7 @@ export function createConversationState({
       if (!result || ![true, false, null].includes(result.stored)) throw {
         code: 'chat_invalid_response'
       };
-      if (destroyed || sendIdentity !== openedIdentity || blocked) return;
+      if (destroyed || sendIdentity !== openedIdentity || blocked) return outcome;
       outcome = result;
       current.receipt = result;
       current.retryRequired = result.stored === null;
@@ -861,13 +861,14 @@ export function createConversationState({
           current.conversation = data.conversation;
           emit();
         }, e, current);
-        if (!valid(e) || tab !== currentTab) return;
+        if (!valid(e) || tab !== currentTab) return outcome;
         await list();
-        if (!valid(e) || tab !== currentTab) return;
+        if (!valid(e) || tab !== currentTab) return outcome;
         if (!canonical.startsWith('d:')) await syncAfterSend(current, canonical, currentTab, e);
       }
     } catch (err) {
-      if (valid(e) && err?.payload?.conversationId && err.payload.preserveInput) {
+      if (!destroyed && !blocked && sendIdentity === openedIdentity && identityValue() === openedIdentity
+        && err?.payload?.conversationId && err.payload.preserveInput) {
         outcome = err.payload;
         const canonical = err.payload.conversationId;
         current.receipt = null;

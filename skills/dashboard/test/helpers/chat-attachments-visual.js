@@ -19,10 +19,13 @@ export async function runAttachmentVisual(t, sandbox) {
   assert.ok(modulePath && fs.existsSync(modulePath)); assert.ok(executablePath && fs.existsSync(executablePath));
   const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (output) fs.mkdirSync(output, { recursive: true });
-  const prototypeSource = fs.readFileSync(process.env.ZYLOS_CHAT_PROTOTYPE_FILE, 'utf8');
-  const prototypeBytes = Buffer.from(prototypeSource);
-  assert.equal(crypto.createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${prototypeBytes.length}\0`), prototypeBytes])).digest('hex'),
-    '77d676e8735904aa4c223e8d1d98551a9e7d3f37', 'prototype is the exact approved source');
+  const prototypeFile = process.env.ZYLOS_CHAT_PROTOTYPE_FILE;
+  const prototypeSource = prototypeFile ? fs.readFileSync(prototypeFile, 'utf8') : null;
+  if (prototypeSource) {
+    const prototypeBytes = Buffer.from(prototypeSource);
+    assert.equal(crypto.createHash('sha1').update(Buffer.concat([Buffer.from(`blob ${prototypeBytes.length}\0`), prototypeBytes])).digest('hex'),
+      '77d676e8735904aa4c223e8d1d98551a9e7d3f37', 'prototype is the exact approved source');
+  }
   const isolation = sandbox.assertIsolation();
   const fixture = await createAttachmentApiFixture(t, sandbox, { prototypeSource });
   const scenes = {};
@@ -154,6 +157,14 @@ export async function runAttachmentVisual(t, sandbox) {
     assert.equal(await agent.locator('canvas').count(), 1); assert.equal(await agent.locator('[data-interrupt-id="mixed-media-interrupt"]').count(), 1);
     assert.ok((await agent.innerText()).includes('建议保留清晰的主操作区'));
     await agent.locator('.chat-attachment-image-frame[data-state="loaded"]').waitFor();
+    const historyLayout = await agent.locator('.chat-attachment').evaluateAll(cards => cards.map(card => {
+      const button = card.querySelector('[data-action="downloadAttachment"]'), parent = card.parentElement;
+      return { icon: !!card.querySelector('.wb-ico-image,.wb-ico-file'), width: card.getBoundingClientRect().width,
+        actionWidth: button?.getBoundingClientRect().width || 0, wbButton: button?.classList.contains('wb-btn'),
+        outerBorder: getComputedStyle(parent).borderTopWidth };
+    }));
+    assert.ok(historyLayout.every(card => card.icon && card.wbButton && card.actionWidth <= 120 && card.actionWidth < card.width / 2 && card.outerBorder === '0px'));
+    measurements.push({ width, theme, historyLayout });
     assert.ok((await page.locator('#wb-chat').innerText()).includes('portrait.png'));
     assert.equal((await page.locator('#wb-chat').innerText()).includes(fixture.attachments.mediaDir), false, 'no local media path leaks into visible history');
     await user.scrollIntoViewIfNeeded(); await capture(`user-attachments-${width}-${theme}`);
@@ -161,6 +172,10 @@ export async function runAttachmentVisual(t, sandbox) {
     await choose('states');
     const states = page.locator(`[data-message-id="${scenes.states.row.id}"]`);
     await states.locator('.chat-attachment-image-frame[data-state="failed"]').waitFor();
+    const failedPlaceholder = await states.locator('.chat-attachment-image-frame[data-state="failed"]').evaluate(frame => ({
+      height: frame.getBoundingClientRect().height, icon: !!frame.querySelector('.chat-attachment-placeholder .wb-ico-image') }));
+    assert.ok(failedPlaceholder.height <= 80 && failedPlaceholder.height >= 40 && failedPlaceholder.icon, 'image failure uses a short visible icon placeholder');
+    measurements.push({ width, theme, failedPlaceholder });
     assert.equal(await states.locator('.chat-attachment').filter({ hasText: '方案说明.pdf' }).locator('[data-action="downloadAttachment"]').count(), 0);
     assert.equal(await states.locator('[data-action="retryAttachment"]:visible').count(), 1);
     await states.scrollIntoViewIfNeeded(); await capture(`attachment-states-${width}-${theme}`);
@@ -182,6 +197,20 @@ export async function runAttachmentVisual(t, sandbox) {
     await chooseFiles([textFile('交互录屏.mp4')]); await heldStarted;
     assert.equal(await page.locator('#wb-chat [data-action="send"]').isDisabled(), true, 'an in-progress upload blocks ordinary sending');
     assert.equal(await itemNamed('交互录屏.mp4').locator('progress').count(), 1);
+    assert.ok((await page.locator('#wb-chat .conversation-upload-label').innerText()).includes('4'));
+    assert.ok((await itemNamed('补充说明.pdf').innerText()).includes('已准备'));
+    assert.match(await itemNamed('交互录屏.mp4').innerText(), /上传中.*\d+%/);
+    assert.ok((await composer().innerText()).includes('支持粘贴、拖入'));
+    const trayLayout = await trayItems().evaluateAll(cards => cards.map(card => {
+      const info = card.querySelector('.chat-attachment-info'), buttons = [...card.querySelectorAll('button')];
+      return { name: card.querySelector('.chat-attachment-name').textContent, infoHeight: info.getBoundingClientRect().height,
+        icon: !!info.querySelector('.wb-ico-image,.wb-ico-file'), state: card.dataset.uploadState, border: getComputedStyle(card).borderColor,
+        buttons: buttons.map(button => ({ wb: button.classList.contains('wb-btn'), width: button.getBoundingClientRect().width,
+          height: button.getBoundingClientRect().height, marginStart: getComputedStyle(button).marginInlineStart })) };
+    }));
+    assert.ok(trayLayout.every(card => card.icon && card.infoHeight <= 76 && card.buttons.every(button => button.wb && button.marginStart !== 'auto')));
+    assert.ok(trayLayout.filter(card => ['failed', 'expired'].includes(card.state)).every(card => card.border !== trayLayout.find(other => other.state === 'ready').border), 'failed/expired tray items have error borders');
+    measurements.push({ width, theme, trayLayout });
     const sizes = await composer().locator('button:visible').evaluateAll(nodes => nodes.map(node => ({ action: node.dataset.action, width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })));
     if (width === 390) assert.ok(sizes.every(box => box.width >= 40 && box.height >= 40), 'phone attachment controls have 40px targets');
     measurements.push({ width, theme, controls: sizes });
@@ -194,6 +223,7 @@ export async function runAttachmentVisual(t, sandbox) {
   // Chrome's transport throttling exercises actual XMLHttpRequest.upload
   // progress events, without substituting the page's XHR implementation.
   await page.setViewportSize({ width: 1280, height: 900 }); await choose('uploads');
+  await chooseFiles([imageFile('焦点预览.png')]); await waitReady('焦点预览.png');
   const cdp = await context.newCDPSession(page); await cdp.send('Network.enable');
   await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: 128 * 1024 });
   try {
@@ -201,6 +231,26 @@ export async function runAttachmentVisual(t, sandbox) {
     await page.waitForFunction(() => [...document.querySelectorAll('#wb-chat .conversation-upload-tray progress')].some(node => node.value > 0 && node.value < 100));
     const progress = await itemNamed('真实上传进度.bin').locator('progress').evaluate(node => node.value);
     assert.ok(progress > 0 && progress < 100); assert.equal(await page.locator('#wb-chat [data-action="send"]').isDisabled(), true);
+    await itemNamed('焦点预览.png').evaluate(node => {
+      const button = node.querySelector('[data-action="removeAttachment"]'), image = node.querySelector('img');
+      button.focus();
+      const saved = window.__trayFocus = { node, button, image, srcWrites: 0 };
+      saved.observer = new MutationObserver(records => { saved.srcWrites += records.filter(record => record.attributeName === 'src').length; });
+      if (image) saved.observer.observe(image, { attributes: true, attributeFilter: ['src'] });
+    });
+    await page.waitForFunction(value => [...document.querySelectorAll('#wb-chat .conversation-upload-tray progress')].some(node => node.value > value), progress);
+    // Poll completion uses the actual refresh action without moving keyboard focus.
+    const focusRead = page.waitForResponse(response => new URL(response.url()).pathname === scenes.uploads.route + '/messages');
+    await page.locator('#wb-chat [data-action="refreshMessages"]').evaluate(node => node.click());
+    await focusRead;
+    await bounded(page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))), 'tray refresh layout did not settle');
+    const trayFocus = await itemNamed('焦点预览.png').evaluate(node => {
+      const saved = window.__trayFocus; saved.observer.disconnect();
+      return { sameRow: node === saved.node, sameButton: node.querySelector('[data-action="removeAttachment"]') === saved.button,
+        sameImage: node.querySelector('img') === saved.image, focused: document.activeElement === saved.button, srcWrites: saved.srcWrites };
+    });
+    assert.equal(trayFocus.sameRow, true); assert.equal(trayFocus.sameButton, true); assert.equal(trayFocus.sameImage, true);
+    assert.equal(trayFocus.focused, true); assert.equal(trayFocus.srcWrites, 0); measurements.push({ trayFocus });
     measurements.push({ actualXHRProgress: progress });
     await waitReady('真实上传进度.bin'); await clearTray();
     const previousRecords = fixture.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n;
@@ -222,11 +272,16 @@ export async function runAttachmentVisual(t, sandbox) {
     node.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
   }, [...png]);
   await waitReady('粘贴截图.png');
-  await composer().evaluate(node => {
+  const uploadsBeforeHistoryDrop = uploads;
+  const historyDrop = await page.locator('#wb-chat .chat-messages').evaluate(node => {
     const transfer = new DataTransfer(); transfer.items.add(new File(['drop body'], '拖入说明.txt', { type: 'text/plain' }));
-    node.dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+    const over = new DragEvent('dragover', { dataTransfer: transfer, bubbles: true, cancelable: true });
+    const drop = new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true });
+    node.dispatchEvent(over); node.dispatchEvent(drop); return { over: over.defaultPrevented, drop: drop.defaultPrevented };
   });
+  assert.equal(historyDrop.over, true); assert.equal(historyDrop.drop, true);
   await waitReady('拖入说明.txt');
+  assert.equal(uploads, uploadsBeforeHistoryDrop + 1, 'dropping on history dispatches exactly one attachment upload');
   check('actual browser File choose, paste and drop each complete one authorized upload');
   const countA = await trayItems().count(); await choose('other'); assert.equal(await trayItems().count(), 0);
   await choose('uploads'); assert.equal(await trayItems().count(), countA, 'switching back restores only the owning conversation tray');
@@ -255,6 +310,7 @@ export async function runAttachmentVisual(t, sandbox) {
       pageHeight: document.documentElement.scrollHeight, viewport: innerHeight }));
     if (output) fs.writeFileSync(path.join(output, `twenty-item-bounds-${width}.json`), JSON.stringify(bounds, null, 2));
     assert.ok(bounds.height <= 190, 'twenty-item tray remains bounded by the approved188px limit: ' + JSON.stringify(bounds));
+    assert.ok(bounds.scrollHeight <= (width === 390 ? 1600 : 800), 'twenty file rows keep the approved compact information layout: ' + JSON.stringify(bounds));
     assert.ok(bounds.historyHeight > 0 && bounds.pageHeight <= bounds.viewport + 1, 'history remains visible while the full tray is scrollable: ' + JSON.stringify(bounds));
     await trayItems().last().locator('[data-action="removeAttachment"]').scrollIntoViewIfNeeded();
     const lastButton = await trayItems().last().locator('[data-action="removeAttachment"]').boundingBox();
@@ -432,6 +488,14 @@ export async function runAttachmentVisual(t, sandbox) {
   assert.ok((await page.locator('#wb-chat').innerText()).includes('原渠道截图.png'));
   assert.equal((await page.locator('#wb-chat').innerText()).includes('/private/original'), false);
   assert.equal(await page.locator('#wb-chat .chat-attachment [data-action="downloadAttachment"]').count(), 0);
+  const uploadsBeforeReadonlyDrop = uploads;
+  const readonlyDrop = await page.locator('#wb-chat .chat-messages').evaluate(node => {
+    const transfer = new DataTransfer(); transfer.items.add(new File(['ignored'], '只读不上传.txt', { type: 'text/plain' }));
+    const over = new DragEvent('dragover', { dataTransfer: transfer, bubbles: true, cancelable: true });
+    const drop = new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true });
+    node.dispatchEvent(over); node.dispatchEvent(drop); return { over: over.defaultPrevented, drop: drop.defaultPrevented };
+  });
+  assert.equal(readonlyDrop.over, true); assert.equal(readonlyDrop.drop, true); assert.equal(uploads, uploadsBeforeReadonlyDrop);
   fixture.setProxy(fixture); expectedHttpError = (url, status) => url.pathname.startsWith('/fleet/Remote/api/chat/') && status === 403;
   await page.goto(fixture.base + '/fleet/Remote/chat'); await page.locator('#wb-chat .conversation-blocked-notice').waitFor();
   assert.equal(await page.locator('#wb-chat [data-action="attach"]').count(), 0);
@@ -442,6 +506,7 @@ export async function runAttachmentVisual(t, sandbox) {
   assert.equal((await fixture.request(scenes.mixed.route + '/uploads/config')).status, 403);
   check('external history, closed remote page and single mode provide no upload entry; single backend config rejects writes');
   // Fresh approved-prototype captures use the required 1280/390 matrix.
+  if (prototypeSource && output) {
   const prototypePage = await context.newPage();
   prototypePage.on('pageerror', error => { if (!errors.length) errors.push('prototype: ' + error.message); });
   for (const width of [1280, 390]) for (const theme of ['light', 'dark']) for (const scene of ['attachments', 'attachment-states']) {
@@ -453,10 +518,11 @@ export async function runAttachmentVisual(t, sandbox) {
     if (output) { const filename = path.join(output, `prototype-${scene}-${width}-${theme}.png`); await prototypePage.screenshot({ path: filename }); prototypeShots.push(filename); }
   }
   await prototypePage.close();
+  }
   assert.deepEqual(errors, []);
   if (output) fs.writeFileSync(path.join(output, 'chat-attachments-browser.json'), JSON.stringify({ sourceHead: process.env.ZYLOS_CHAT_SOURCE_HEAD || null,
     sourceProductDigest: process.env.ZYLOS_CHAT_SOURCE_PRODUCT_DIGEST || null, isolation, shots, prototypeShots, checks, measurements, uploads, sends, reads, errors,
-    prototype: 'd17ffdbfb94eb094a4f80d89edc1b48bf85ca166', prototypeSourceBlob: '77d676e8735904aa4c223e8d1d98551a9e7d3f37',
+    prototype: 'd17ffdbfb94eb094a4f80d89edc1b48bf85ca166', prototypeSourceBlob: prototypeSource ? '77d676e8735904aa4c223e8d1d98551a9e7d3f37' : null,
     simulatedErrors: ['HTTP503 upload response injected for tray error screenshot', 'Network abort injected for upload interruption', 'Image request aborted to exercise shared image failure'],
     controlledTime: 'Browser clock advanced25minutes to exercise real tray expiry timer', base: fixture.base }, null, 2));
   t.diagnostic(`Attachment browser: ${shots.length} implementation screenshots, ${prototypeShots.length} approved-prototype screenshots, ${uploads} uploads, ${reads} history reads, no page errors`);

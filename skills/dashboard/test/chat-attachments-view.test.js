@@ -83,6 +83,9 @@ test('tray preview uses only caller-owned Blob URL and never an unlinked downloa
   const f = render(t, { attachment: record({ status: 'failed' }), mode: 'tray', localUrl: 'blob:local-file', onRemove() { removed++; }, onRetry() { retried++; } });
   f.mount(); assert.equal(f.sources[0], 'blob:local-file'); assert.equal(f.node.querySelector('[data-action="downloadAttachment"]'), null);
   f.node.querySelector('img').dispatch('load');
+  assert.equal(f.node.querySelector('img').hidden, true);
+  assert.equal(f.node.querySelector('.chat-attachment-image-frame').dataset.state, 'failed');
+  assert.equal(f.node.querySelector('.chat-attachment-placeholder').hidden, false);
   assert.equal(f.node.dataset.attachmentState, 'failed'); assert.match(f.node.textContent, /chat.attachment.failed/);
   f.node.querySelector('[data-action="removeAttachment"]').dispatch('click'); f.node.querySelector('[data-action="retryUpload"]').dispatch('click');
   assert.equal(removed, 1); assert.equal(retried, 1);
@@ -94,6 +97,55 @@ test('tray progress is bounded and named for assistive technology', t => {
   const f = render(t, { mode: 'tray', attachment: record({ status: 'uploading', progress: 142 }) });
   const progress = f.node.querySelector('progress'); assert.equal(progress.value, 100); assert.equal(progress.max, 100);
   assert.equal(progress.getAttribute('aria-label'), 'chat.attachment.uploading');
+});
+
+test('tray updates preserve controls focus preview and progress nodes while changing transfer state', t => {
+  let removed = 0, retried = 0;
+  const f = render(t, { attachment: record({ status: 'uploading', progress: 8 }), mode: 'tray', localUrl: 'blob:local-file',
+    onRemove() { removed++; }, onRetry() { retried++; } });
+  f.mount();
+  const remove = f.node.querySelector('[data-action="removeAttachment"]');
+  const retry = f.node.querySelector('[data-action="retryUpload"]');
+  const image = f.node.querySelector('img'), progress = f.node.querySelector('progress');
+  remove.focus();
+  f.update({ attachment: record({ status: 'uploading', progress: 42 }), localUrl: 'blob:local-file' });
+  assert.equal(f.node.querySelector('[data-action="removeAttachment"]'), remove);
+  assert.equal(f.node.querySelector('progress'), progress); assert.equal(progress.value, 42);
+  assert.equal(f.document.activeElement, remove); assert.equal(f.node.querySelector('img'), image);
+  assert.deepEqual(f.sources, ['blob:local-file'], 'progress must not reload the same preview');
+  assert.match(f.node.textContent, /chat.attachment.uploading 42%/);
+  assert.equal(retry.hidden, true);
+  f.update({ attachment: record({ status: 'failed' }), disabled: true });
+  assert.equal(retry.hidden, false); assert.equal(remove.disabled, true); assert.equal(retry.disabled, true);
+  retry.dispatch('click'); assert.equal(retried, 0);
+  f.update({ attachment: record({ status: 'expired' }), disabled: false });
+  assert.equal(image.hidden, true); assert.equal(f.node.querySelector('.chat-attachment-placeholder').hidden, false);
+  assert.equal(f.sources.length, 1);
+  assert.equal(f.node.querySelector('[data-action="retryUpload"]'), retry);
+  retry.dispatch('click'); remove.dispatch('click'); assert.equal(retried, 1); assert.equal(removed, 1);
+  f.update({ attachment: record({ status: 'ready', name: 'normalized_name.png', size: 4096 }) });
+  assert.equal(f.node.querySelector('.chat-attachment-name').textContent, 'normalized_name.png');
+  assert.equal(f.node.querySelector('.chat-attachment-name').title, 'normalized_name.png');
+  assert.match(f.node.querySelector('.chat-attachment-meta').textContent, /4.0 KB/);
+  assert.equal(remove.getAttribute('aria-label'), 'chat.attachment.remove normalized_name.png');
+  assert.equal(image.alt, 'normalized_name.png');
+  assert.equal(image.hidden, false); assert.equal(f.sources.length, 1, 'ready preview reuses its original Blob source');
+  assert.equal(progress.hidden, true); assert.equal(retry.hidden, true);
+  assert.match(f.node.textContent, /chat.attachment.ready/);
+  assert.equal(remove.classList.contains('wb-btn'), true); assert.equal(remove.classList.contains('action-btn'), false);
+});
+
+test('tray success metadata can change a local file to an image without replacing its controls', t => {
+  const f = render(t, { attachment: record({ kind: 'file', name: 'a?.png', size: 3, status: 'uploading' }), mode: 'tray', onRemove() {} });
+  const remove = f.node.querySelector('[data-action="removeAttachment"]'); remove.focus();
+  f.update({ attachment: record({ kind: 'image', name: 'a_.png', size: 12, status: 'ready' }) });
+  assert.equal(f.node.dataset.attachmentKind, 'image'); assert.equal(f.node.classList.contains('chat-attachment-image'), true);
+  assert.ok(f.node.querySelector('.wb-ico-image')); assert.ok(f.node.querySelector('.chat-attachment-placeholder'));
+  assert.equal(f.node.querySelector('.chat-attachment-name').textContent, 'a_.png');
+  assert.equal(f.node.querySelector('[data-action="removeAttachment"]'), remove); assert.equal(f.document.activeElement, remove);
+  assert.match(remove.getAttribute('aria-label'), /a_.png/);
+  f.update({ attachment: record({ kind: 'file', status: 'ready' }) });
+  assert.equal(f.node.dataset.attachmentKind, 'file'); assert.equal(f.node.querySelector('.chat-attachment-placeholder').hidden, true);
 });
 
 test('download refusal is visible and an explicit retry reads the same protected route once', async t => {

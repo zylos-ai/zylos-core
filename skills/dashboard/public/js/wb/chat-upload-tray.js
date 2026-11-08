@@ -1,5 +1,5 @@
 const SEND_WINDOW_MS = 25 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 120000;
+const CONFIG_REQUEST_TIMEOUT_MS = 120000;
 const scopeKey = scope => scope && typeof scope.instance === 'string' && scope.instance
   && ['string', 'number'].includes(typeof scope.conversationId) && String(scope.conversationId)
   ? JSON.stringify([scope.instance, String(scope.conversationId)]) : null;
@@ -90,7 +90,7 @@ export function createUploadTray({ fetch: read = globalThis.fetch,
     const version = tray.configVersion = (tray.configVersion || 0) + 1;
     const configLive = () => live(tray) && tray.configVersion === version;
     const controller = new AbortController(); tray.configAbort = controller;
-    const timeout = later(() => controller.abort(), REQUEST_TIMEOUT_MS); timeout?.unref?.(); tray.configTimer = timeout;
+    const timeout = later(() => controller.abort(), CONFIG_REQUEST_TIMEOUT_MS); timeout?.unref?.(); tray.configTimer = timeout;
     tray.configStatus = 'loading'; tray.error = null;
     tray.loading = (async () => {
       try {
@@ -161,7 +161,7 @@ export function createUploadTray({ fetch: read = globalThis.fetch,
     const exists = () => live(tray) && tray.items.includes(item) && item.revision === revision;
     const fail = error => { cleanup(); if (exists()) { item.status = 'failed'; item.error = error; notify(); } };
     try {
-      xhr = createXHR(); xhr.open('POST', tray.uploadsUrl); xhr.timeout = REQUEST_TIMEOUT_MS;
+      xhr = createXHR(); xhr.open('POST', tray.uploadsUrl);
       listen(xhr.upload, 'progress', event => {
         if (exists() && event.lengthComputable && event.total > 0) {
           item.progress = Math.max(0, Math.min(100, Math.round(event.loaded / event.total * 100))); notify();
@@ -201,6 +201,7 @@ export function createUploadTray({ fetch: read = globalThis.fetch,
     if (!config || !live(tray)) return { accepted: [], rejected: [], error: 'chat_upload_config_failed' };
     const accepted = [], rejected = [];
     for (const file of files || []) {
+      // Bound feedback for a potentially large selection, including rejected oversized files.
       if (accepted.length + rejected.length >= 21) break;
       if (tray.items.length >= config.maxAttachments) { rejected.push({ error: 'chat_attachment_too_many' }); break; }
       if (!(file instanceof Blob) || !Number.isSafeInteger(file.size)) { rejected.push({ error: 'chat_upload_invalid_file' }); break; }

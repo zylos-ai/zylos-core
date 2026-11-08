@@ -1,12 +1,12 @@
-import { createUploadTray } from './chat-upload-tray.js?v=1';
-import { createChatAttachment } from './chat-attachments.js?v=1';
+import { createUploadTray } from './chat-upload-tray.js?v=2';
+import { createChatAttachment } from './chat-attachments.js?v=2';
 import { element, icon } from './plain-text.js?v=94';
 import { asDate } from './conversation-time.js?v=99';
 import { channelIcon } from './board.js?v=98';
-import { createConversationState } from './conversation-state.js?v=103';
+import { createConversationState } from './conversation-state.js?v=104';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=102';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=103';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=104';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -329,9 +329,11 @@ export function mountConversationPage({
   const attach = action('attach', () => fileInput.click(), 'plus');
   const fileInput = node('input'); fileInput.type = 'file'; fileInput.multiple = true;
   fileInput.hidden = true; fileInput.dataset.action = 'chooseFiles'; fileInput.setAttribute('aria-label', t('chat.attach'));
+  const trayLabel = node('p', '', 'conversation-upload-label');
   const tray = node('div', undefined, 'conversation-upload-tray');
+  tray.setAttribute('aria-label', t('chat.upload.tray'));
   const uploadNotice = node('p', '', 'chat-notice conversation-upload-notice'); uploadNotice.setAttribute('role', 'status');
-  let trayResources = [];
+  const trayResources = new Map();
   const addFiles = files => {
     if (!currentSnapshot?.canWrite || currentSnapshot.sending || currentSnapshot.retryRequired && !currentSnapshot.canRetry) return;
     void uploadTray.acceptFiles(Array.from(files));
@@ -341,14 +343,17 @@ export function mountConversationPage({
     const files = Array.from(event.clipboardData?.files || []);
     if (files.length && currentSnapshot?.canWrite && !currentSnapshot.sending) { event.preventDefault(); addFiles(files); }
   });
-  composer.addEventListener('dragover', event => {
-    if (currentSnapshot?.canWrite && Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault();
+  detail.addEventListener('dragover', event => {
+    if (Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault();
   });
-  composer.addEventListener('drop', event => {
-    if (currentSnapshot?.canWrite && event.dataTransfer?.files?.length) { event.preventDefault(); addFiles(event.dataTransfer.files); }
+  detail.addEventListener('drop', event => {
+    if (event.dataTransfer?.files?.length || Array.from(event.dataTransfer?.types || []).includes('Files')) {
+      event.preventDefault();
+      addFiles(event.dataTransfer.files || []);
+    }
   });
   composeBox.append(attach, input, send, fileInput);
-  composer.append(receipt, tray, uploadNotice, composeBox, hint);
+  composer.append(receipt, trayLabel, tray, uploadNotice, composeBox, hint);
   input.addEventListener('input', () => state.setInput(input.value));
   input.addEventListener('keydown', event => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.isComposing) {
@@ -1009,24 +1014,31 @@ export function mountConversationPage({
     const upload = uploadTray.snapshot();
     const limits = upload.config ? t('chat.upload.limits').replace('{size}', String(upload.config.maxUploadBytes / (1024 * 1024))).replace('{count}', String(upload.config.maxAttachments)) : '';
     attach.title = limits;
-    text(hint, [t('chat.page.sendHint'), limits].filter(Boolean).join(' · '));
+    text(hint, [t('chat.upload.pasteDrop'), limits, t('chat.page.sendHint')].filter(Boolean).join(' · '));
     attach.hidden = !s.canWrite;
     attach.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry;
     fileInput.disabled = attach.disabled;
-    for (const resource of trayResources) resource.destroy();
-    trayResources = [];
-    tray.replaceChildren();
-    for (const item of upload.items) {
-      const resource = createChatAttachment({ document, attachment: item, t, mode: 'tray', localUrl: item.previewUrl,
-        onRemove: () => uploadTray.remove(item.localId), onRetry: () => { void uploadTray.retry(item.localId); } });
-      resource.node.dataset.uploadId = item.localId;
-      for (const control of resource.node.querySelectorAll('button')) if (s.sending || s.retryRequired && !s.canRetry) control.disabled = true;
-      tray.append(resource.node); resource.mount(); trayResources.push(resource);
+    const uploadIds = new Set(upload.items.map(item => item.localId));
+    for (const [id, resource] of trayResources) if (!uploadIds.has(id)) {
+      resource.destroy(); resource.node.remove(); trayResources.delete(id);
     }
-    tray.hidden = !upload.items.length;
+    for (const [index, item] of upload.items.entries()) {
+      let resource = trayResources.get(item.localId);
+      if (!resource) {
+        resource = createChatAttachment({ document, attachment: item, t, mode: 'tray', localUrl: item.previewUrl,
+          onRemove: () => uploadTray.remove(item.localId), onRetry: () => { void uploadTray.retry(item.localId); } });
+        resource.node.dataset.uploadId = item.localId;
+        trayResources.set(item.localId, resource);
+      }
+      resource.update({ attachment: item, localUrl: item.previewUrl, disabled: !!s.sending || s.retryRequired && !s.canRetry });
+      if (tray.children[index] !== resource.node) tray.insertBefore(resource.node, tray.children[index] || null);
+      resource.mount();
+    }
+    tray.hidden = trayLabel.hidden = !upload.items.length;
+    text(trayLabel, t('chat.upload.trayCount').replace('{count}', String(upload.items.length)));
     const uploadError = upload.error || (s.error === 'chat_attachment_unavailable' ? s.error : null);
     uploadNotice.hidden = !uploadError;
-    text(uploadNotice, uploadError ? t('chat.upload.' + uploadError) : '');
+    text(uploadNotice, uploadError ? t('chat.upload.' + uploadError).replace('{count}', String(upload.config?.maxAttachments || 20)) : '');
     send.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry || !uploadTray.isSendable(s.input);
     receipt.hidden = !showReceipt;
     receipt.dataset.deliveryState = outcome || '';
@@ -1078,7 +1090,8 @@ export function mountConversationPage({
     destroy() {
       destroyed = true;
       uploadTray.destroy();
-      for (const resource of trayResources) resource.destroy();
+      for (const resource of trayResources.values()) resource.destroy();
+      trayResources.clear();
       view?.removeEventListener('resize', scheduleFit);
       if (fitFrame !== null) {
         view?.cancelAnimationFrame(fitFrame);

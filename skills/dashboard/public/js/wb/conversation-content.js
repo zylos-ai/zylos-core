@@ -1,6 +1,6 @@
 import { element } from './plain-text.js?v=94';
-import { renderChatContent, parseC4Content } from './chat-blocks.js?v=103';
-import { createChatAttachment } from './chat-attachments.js?v=1';
+import { renderChatContent, parseC4Content } from './chat-blocks.js?v=104';
+import { createChatAttachment } from './chat-attachments.js?v=2';
 import { applyChatView } from './chat-view.js?v=102';
 import { conversationChartResource } from './conversation-charts.js?v=102';
 export function conversationErrorKey(code) {
