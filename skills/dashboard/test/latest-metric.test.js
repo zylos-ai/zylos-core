@@ -59,6 +59,7 @@ test('v13 adds indexes idempotently without changing cost totals', t => {
     DROP TABLE core_log_cursors;
     DROP INDEX idx_events_group_seq;
     DROP INDEX idx_events_group_run_seq;
+    DROP INDEX idx_events_group_type_ts;
     ALTER TABLE runtime_events DROP COLUMN session_group;
     ALTER TABLE runtime_events DROP COLUMN run_id;
     DELETE FROM schema_migrations WHERE version>=13;

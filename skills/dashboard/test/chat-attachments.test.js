@@ -67,16 +67,16 @@ function fixture(t, { now = 10_000_000, coreReader } = {}) {
 
 test('attachment schema migrates an existing database without removing custom objects', t => {
   const f = fixture(t);
-  assert.equal(TARGET_SCHEMA_VERSION, 26);
+  assert.equal(TARGET_SCHEMA_VERSION, 27);
   assert.equal(inspectDatabase(f.store.db).needsMigration, false);
   f.store.db.exec('CREATE TABLE custom_attachment_owner(value TEXT); INSERT INTO custom_attachment_owner VALUES(\'keep\')');
-  f.store.db.exec('DROP TABLE chat_attachment_messages; DROP TABLE chat_attachments; DELETE FROM schema_migrations WHERE version=26');
+  f.store.db.exec('DROP TABLE chat_attachment_messages; DROP TABLE chat_attachments; DELETE FROM schema_migrations WHERE version>=26');
   assert.equal(inspectDatabase(f.store.db).currentVersion, 25);
   migrateDatabase(f.store.db);
-  assert.equal(inspectDatabase(f.store.db).currentVersion, 26);
-  f.store.db.exec('DELETE FROM schema_migrations WHERE version=26');
+  assert.equal(inspectDatabase(f.store.db).currentVersion, 27);
+  f.store.db.exec('DELETE FROM schema_migrations WHERE version>=26');
   migrateDatabase(f.store.db);
-  assert.equal(inspectDatabase(f.store.db).currentVersion, 26);
+  assert.equal(inspectDatabase(f.store.db).currentVersion, 27);
   assert.equal(f.store.db.prepare('SELECT value FROM custom_attachment_owner').get().value, 'keep');
   f.store.db.exec('DROP INDEX idx_chat_attachments_due');
   assert.throws(() => inspectDatabase(f.store.db), /attachment lookup index/);

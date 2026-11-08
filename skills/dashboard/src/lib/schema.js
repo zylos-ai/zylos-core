@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_latest ON state_snapshots(runtime, sess
 `;
 
 // Shared by the service and the side-effect-free schema owner.
-export const TARGET_SCHEMA_VERSION = 26;
+export const TARGET_SCHEMA_VERSION = 27;
 
 export function inspectDatabase(db) {
   const hasTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
@@ -557,6 +557,15 @@ export function migrateDatabase(db) {
           );
           CREATE INDEX IF NOT EXISTS idx_chat_attachment_messages_row ON chat_attachment_messages(c4_id,attachment_id);
           INSERT OR IGNORE INTO schema_migrations(version) VALUES(26);
+        `);
+      })();
+    }
+    if (currentVersion < 27) {
+      db.transaction(() => {
+        // Conversation activity reads one group's turn boundaries and steps by type and time.
+        db.exec(`
+          CREATE INDEX IF NOT EXISTS idx_events_group_type_ts ON runtime_events(session_group, event_type, timestamp);
+          INSERT OR IGNORE INTO schema_migrations(version) VALUES(27);
         `);
       })();
     }

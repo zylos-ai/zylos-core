@@ -413,7 +413,7 @@ test('attachment hook refuses absent storage missing media and old schema withou
   let before = audit(f);
   assert.equal(f.hook(value).decision, 'abort'); assertAudit(f, before);
   fs.renameSync(media + '-hidden', media);
-  f.store.db.prepare('DELETE FROM schema_migrations WHERE version=26').run();
+  f.store.db.prepare('DELETE FROM schema_migrations WHERE version=?').run(TARGET_SCHEMA_VERSION);
   before = audit(f);
   assert.equal(f.hook(value).decision, 'abort'); assertAudit(f, before);
 });

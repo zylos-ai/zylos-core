@@ -105,6 +105,7 @@ test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard
     ALTER TABLE metric_points DROP COLUMN session_group;
     DROP INDEX idx_events_group_seq;
     DROP INDEX idx_events_group_run_seq;
+    DROP INDEX idx_events_group_type_ts;
     DROP TABLE core_log_cursors;
     ALTER TABLE runtime_events DROP COLUMN session_group;
     ALTER TABLE runtime_events DROP COLUMN run_id;
