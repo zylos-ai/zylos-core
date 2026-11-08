@@ -61,7 +61,7 @@ export function assertChatProcessIsolation(sandbox, { env = process.env, skillsD
 
 // Real HTTP/AuthGate/chat modules and two SQLite owners. Only the Core route and
 // notification adapter are controlled: no model, PM2 or tmux is launched here.
-export async function createChatApiFixture(t, sandbox, { name = 'instance', extraHandler, attachmentService = true } = {}) {
+export async function createChatApiFixture(t, sandbox, { name = 'instance', extraHandler, attachmentService = true, instanceTz = null } = {}) {
   console.log('Chat HTTP isolation:', JSON.stringify(sandbox.assertIsolation()));
   console.log('Chat Core process isolation:', JSON.stringify(assertChatProcessIsolation(sandbox)));
   const zylos = sandbox.paths.zylos;
@@ -142,7 +142,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (await auth.handle(req, res, url)) return;
       if (url.pathname.startsWith('/fleet/') && proxy && await proxy.handle(req, res, url)) return;
-      const common = { auth, config, conversations, sender, history, answers, delivery, attachments, readMode };
+      const common = { auth, config, conversations, sender, history, answers, delivery, attachments, readMode, instanceTz };
       if (await handleChatSettings(req, res, url, common)) return;
       if (attachments && await handleChatAttachments(req, res, url, common)) return;
       if (await handleChatConversations(req, res, url, common)) return;

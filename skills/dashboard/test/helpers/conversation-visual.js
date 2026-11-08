@@ -16,7 +16,8 @@ export async function runConversationVisual(t, sandbox) {
   if (output) fs.mkdirSync(output, { recursive: true });
   let reads = 0, draftWrites = 0;
   const messageRequests = [];
-  const fixture = await createChatApiFixture(t, sandbox, { name: 'Cache design review', extraHandler(req, res, url, f) {
+  // The instance zone (Los Angeles) differs from the browser's (Shanghai below), so times show which one the page uses.
+  const fixture = await createChatApiFixture(t, sandbox, { name: 'Cache design review', instanceTz: async () => ({ tz: 'America/Los_Angeles' }), extraHandler(req, res, url, f) {
     if (url.pathname.startsWith('/api/chat/')) return false;
     if (!url.pathname.startsWith('/api/')) return false;
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
@@ -133,7 +134,9 @@ export async function runConversationVisual(t, sandbox) {
       await page.locator('#wb-tech-btn').click();
       assert.equal(await reference.isVisible(), false);
     }
-    assert.match(await page.locator(`[data-message-id="${markdownRow.id}"] time`).innerText(), /11:02/, 'SQL UTC time displays in the browser timezone');
+    const markdownTime = await page.locator(`[data-message-id="${markdownRow.id}"] time`).innerText();
+    assert.match(markdownTime, /20:02/, 'SQL UTC time displays in the instance time zone (Los Angeles), not the browser zone');
+    assert.doesNotMatch(markdownTime, /11:02/, 'the browser zone (Shanghai) is not used');
     assert.equal((await page.locator('#wb-chat').innerText()).includes('[C4 messageId='), false);
   }
   // Measure the last line's actual layout in a mirror with identical textarea styles.
