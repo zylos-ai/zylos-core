@@ -17,8 +17,8 @@ import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, cellEndingAs, cellPolledInNewExec, rebase,
-  v1ChildRollout, v1LongChildRollout, v1ParentTurn, v2CompletedTurn, v2InterruptedTurn, v2TimedOutTurn }
+import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, CELL_D_LINES, V1_CHILD, V1_SPAWN_EXEC, V1_WAIT_EXEC, cellEndingAs, cellPolledInNewExec, rebase,
+  v1ChildRollout, v1LongChildRollout, v1ParentTurn, v2CompletedTurn, v2InterruptedTurn, v2TimedOutTurn, V2_INTERRUPT_CALL }
   from './fixtures/codex-multi-agent-rollout.js';
 
 const GROUP = 'dash-owned:a';
@@ -563,7 +563,7 @@ const codex = { runtime: 'codex', session: 'thread-1' };
 const steps = round => round.segments.flatMap(segment => segment.steps);
 const describe = round => steps(round).map(step => `${step.kind}:${step.label.key}:${step.status}`);
 const timeOf = (lines, match) => Date.parse(lines.find(match).timestamp);
-const PRIVATE = ['<redacted', 'zylo131', 'plan_audit', 'single_session', 'Kierkegaard', V1_CHILD, '"hi"'];
+const PRIVATE = ['<redacted', 'zylo131', 'plan_audit', 'single_session', 'triage_new', 'Kierkegaard', V1_CHILD, '"hi"'];
 function assertNothingPrivate(round, name) {
   const shown = JSON.stringify(round);
   for (const secret of PRIVATE) assert.ok(!shown.includes(secret), `${name}: ${secret} is not shown`);
@@ -590,9 +590,12 @@ test('a Codex v2 subtask is one step from its recorded start to its recorded com
 
 test('a Codex v2 subtask that was interrupted shows as stopped where it was interrupted', async t => {
   const lines = v2InterruptedTurn(at(1));
-  const { round } = await codexRound(t, lines);
-  assert.deepEqual(describe(round), ['subagent:subagent:stopped']);
-  assert.equal(steps(round)[0].end, Date.parse(lines.at(-1).timestamp));
+  const { round } = await codexRound(t, lines, { replyAt: 60 });
+  assert.deepEqual(describe(round), ['subagent:subagent:stopped'], 'one step: interrupt_agent and its result are not steps');
+  const [step] = steps(round);
+  assert.equal(step.start, timeOf(lines, line => line.payload.item?.kind === 'started'));
+  assert.equal(step.end, timeOf(lines, line => line.payload.item?.kind === 'interrupted'), 'stopped where it was interrupted');
+  assert.ok(lines.some(line => line.payload.name === 'interrupt_agent' && line.payload.call_id === V2_INTERRUPT_CALL));
   assertNothingPrivate(round, 'v2 interrupted');
 });
 
@@ -648,7 +651,8 @@ test('a long Codex subagent thread rollout read over several passes still neithe
 });
 
 test('a recorded code-mode command that yields is one step from its exec to the wait that sees it finish', async t => {
-  for (const [name, recorded] of [['0.153.4', CELL_A_LINES], ['0.166.0 with inner commands', CELL_B_LINES], ['0.166.0', CELL_C_LINES]]) {
+  for (const [name, recorded] of [['0.153.4', CELL_A_LINES], ['0.166.0 with inner commands', CELL_B_LINES], ['0.166.0', CELL_C_LINES],
+    ['0.163.0 yielding printed content', CELL_D_LINES]]) {
     const lines = rebase(recorded, at(1));
     const finish = lines.findLastIndex(line => line.payload.type === 'function_call_output');
     const live = await codexRound(t, lines.slice(0, finish), { ended: false });

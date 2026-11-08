@@ -85,14 +85,21 @@ export function v2CompletedTurn(startMs) {
   return rebase(sequence([v2Start(), v2TimedOutWait(), [v2Completion()]], 2000), startMs);
 }
 /**
- * v2: spawn, then the subagent is interrupted. The interrupted SubAgentActivity was not recorded here; it is built from
- * the recorded completed one with `kind: "interrupted"`.
+ * Recorded, redacted: Codex 0.166.0, a v2 subagent (`/root/triage_new`) that the parent interrupts 34 s after spawning
+ * it: the spawn call, its `SubAgentActivity` start, the `interrupt_agent` call, the `SubAgentActivity` interrupted item
+ * (its id is that call's id) and the call's result. Unrelated lines in between are left out.
  */
+export const V2_INTERRUPTED_LINES = [
+  {"timestamp":"2026-10-31T13:46:01.631Z","ordinal":109,"type":"response_item","payload":{"type":"function_call","status":"completed","id":"fc_0dec18f0c40d6b4a016ae5f11714dc8191a3c25d2e8f487569","name":"spawn_agent","namespace":"collaboration","arguments":"{\"task_name\": \"triage_new\", \"fork_turns\": \"all\", \"message\": \"<redacted>\"}","call_id":"call_0b22ff5a51aa42379de0fc0bb902fb99","internal_chat_message_metadata_passthrough":{"turn_id":"01a19235-0bfe-7802-bd4c-f9c63ccb07f5","create_time":1793454359.0856445}},"metadata":{"client_authored":false,"user_input_order":6}},
+  {"timestamp":"2026-10-31T13:46:01.729Z","ordinal":111,"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a19234-9c39-7b52-ba98-bc8d7e461b51","turn_id":"01a19235-0bfe-7802-bd4c-f9c63ccb07f5","item":{"type":"SubAgentActivity","model":"gpt-5.6-sol","reasoning_effort":"medium","id":"call_0b22ff5a51aa42379de0fc0bb902fb99","kind":"started","agent_thread_id":"01a19235-cc67-7b41-9a8a-6f597da45214","agent_path":"/root/triage_new"},"started_at_ms":1793454361729,"completed_at_ms":1793454361729}},
+  {"timestamp":"2026-10-31T13:46:35.245Z","ordinal":169,"type":"response_item","payload":{"type":"function_call","status":"completed","id":"fc_0dec18f0c40d6b4a016ae5f13b18ec81918c6879c05f580162","name":"interrupt_agent","namespace":"collaboration","arguments":"{\"target\":\"triage_new\"}","call_id":"call_4cbfb06b1ed748078c9921ce7842d1da","internal_chat_message_metadata_passthrough":{"turn_id":"01a19235-0bfe-7802-bd4c-f9c63ccb07f5","create_time":1793454395.1014223}},"metadata":{"client_authored":false,"user_input_order":13}},
+  {"timestamp":"2026-10-31T13:46:35.297Z","ordinal":171,"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a19234-9c39-7b52-ba98-bc8d7e461b51","turn_id":"01a19235-0bfe-7802-bd4c-f9c63ccb07f5","item":{"type":"SubAgentActivity","model":null,"reasoning_effort":null,"id":"call_4cbfb06b1ed748078c9921ce7842d1da","kind":"interrupted","agent_thread_id":"01a19235-cc67-7b41-9a8a-6f597da45214","agent_path":"/root/triage_new"},"started_at_ms":1793454395297,"completed_at_ms":1793454395297}},
+  {"timestamp":"2026-10-31T13:46:35.341Z","ordinal":172,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a19236-4fcd-7ba2-b7e2-487fdf2d8034","call_id":"call_4cbfb06b1ed748078c9921ce7842d1da","output":"{\"previous_status\":\"running\"}","internal_chat_message_metadata_passthrough":{"turn_id":"01a19235-0bfe-7802-bd4c-f9c63ccb07f5","create_time":1793454395.3414383}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+];
+export const V2_INTERRUPT_CALL = 'call_4cbfb06b1ed748078c9921ce7842d1da';
+/** v2: the recorded interrupted subagent. */
 export function v2InterruptedTurn(startMs) {
-  const interrupted = v2Completion();
-  interrupted.payload.item.kind = 'interrupted';
-  interrupted.payload.item.id = interrupted.payload.item.id.replace('subagent-completed-', 'subagent-interrupted-');
-  return rebase(sequence([v2Start(), [interrupted]], 2000), startMs);
+  return rebase(V2_INTERRUPTED_LINES, startMs);
 }
 /** v2: spawn and a wait that timed out; the finish is never seen. */
 export function v2TimedOutTurn(startMs) {
@@ -164,6 +171,20 @@ export const CELL_C_LINES = [
   {"timestamp":"2026-11-01T03:44:06.766Z","ordinal":27,"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a19534-fe52-71c3-977b-c102c472e091","turn_id":"01a19535-0054-7161-b9ce-b8a213148c29","item":{"type":"CommandExecution","id":"exec-56c9fd22-ac0c-4e21-9408-caa2e4ee4616","process_id":"66558","command":"<redacted>","cwd":"<redacted>","parsed_cmd":"<redacted>","source":"unified_exec_startup","status":"completed","aggregated_output":"<redacted>","exit_code":0,"duration":{"secs":0,"nanos":8432}},"started_at_ms":1793504646766,"completed_at_ms":1793504646766}},
   {"timestamp":"2026-11-01T03:44:08.762Z","ordinal":32,"type":"response_item","payload":{"type":"function_call","status":"completed","id":"fc_00878406a5b343eb016ae6b58811d4819180b5d9e1a77cb991","name":"wait","arguments":"{\"cell_id\":\"1\",\"yield_time_ms\":10000,\"max_tokens\":30000}","call_id":"call_83e899c0948c46e0a06750de995bb548","internal_chat_message_metadata_passthrough":{"turn_id":"01a19535-0054-7161-b9ce-b8a213148c29","create_time":1793504648.1350896}},"metadata":{"client_authored":false,"user_input_order":3}},
   {"timestamp":"2026-11-01T03:44:08.826Z","ordinal":34,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a19535-1e7a-7c81-918b-7876e607a24f","call_id":"call_83e899c0948c46e0a06750de995bb548","output":[{"type":"input_text","text":"Script completed\nWall time 0.0 seconds\nOutput:\n"},{"type":"input_text","text":"<redacted output part>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"01a19535-0054-7161-b9ce-b8a213148c29","create_time":1793504648.8262641}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+];
+
+/**
+ * Recorded, redacted: Codex 0.163.0, cell 12. The exec yields with a content array (the `Script running with cell ID
+ * 12` header, then content the script already printed); two `CommandExecution` items finish inside the cell; one wait
+ * sees it finish.
+ */
+export const CELL_D_LINES = [
+  {"timestamp":"2026-10-23T04:23:47.171Z","ordinal":118,"type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_0cd67e1fbb143d69016adae14cf2948191835c0bebb226c56a","status":"completed","call_id":"call_c885afc188cb460db545a28a8a5e7103","name":"exec","input":"<redacted js: await tools.exec_command({\"cmd\": \"...\", ...}); text(...)>","internal_chat_message_metadata_passthrough":{"turn_id":"01a166fe-1d30-7a60-84d0-caa440beea94","create_time":1792729420.9550776}}},
+  {"timestamp":"2026-10-23T04:23:47.275Z","ordinal":120,"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a166fe-1b3f-72e0-bfcf-c8101ec45513","turn_id":"01a166fe-1d30-7a60-84d0-caa440beea94","item":{"type":"CommandExecution","id":"exec-d17461ef-d1ee-4e07-b7a0-3130827ca972","process_id":"2184","command":"<redacted>","cwd":"<redacted>","parsed_cmd":"<redacted>","source":"unified_exec_startup","status":"completed","aggregated_output":"<redacted>","exit_code":0,"duration":{"secs":0,"nanos":6784}},"started_at_ms":1792729427275,"completed_at_ms":1792729427275}},
+  {"timestamp":"2026-10-23T04:23:47.545Z","ordinal":121,"type":"response_item","payload":{"type":"custom_tool_call_output","id":"ctco_01a16700-2e59-77f2-9aca-821a87bd2db9","call_id":"call_c885afc188cb460db545a28a8a5e7103","output":[{"type":"input_text","text":"Script running with cell ID 12\nWall time 0.4 seconds\nOutput:\n"},{"type":"input_text","text":"<redacted output>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"01a166fe-1d30-7a60-84d0-caa440beea94","create_time":1792729427.5453928}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
+  {"timestamp":"2026-10-23T04:23:47.614Z","ordinal":125,"type":"event_msg","payload":{"type":"item_completed","thread_id":"01a166fe-1b3f-72e0-bfcf-c8101ec45513","turn_id":"01a166fe-1d30-7a60-84d0-caa440beea94","item":{"type":"CommandExecution","id":"exec-93b001b5-37a7-4b80-a7ee-c1f6466c8907","process_id":"83731","command":"<redacted>","cwd":"<redacted>","parsed_cmd":"<redacted>","source":"unified_exec_startup","status":"completed","aggregated_output":"<redacted>","exit_code":0,"duration":{"secs":0,"nanos":59369159}},"started_at_ms":1792729427554,"completed_at_ms":1792729427614}},
+  {"timestamp":"2026-10-23T04:24:01.003Z","ordinal":128,"type":"response_item","payload":{"type":"function_call","status":"completed","id":"fc_0cd67e1fbb143d69016adae1607a7c8191a1846196d5d7307c","name":"wait","arguments":"{\"cell_id\":\"12\",\"max_tokens\":300,\"yield_time_ms\":1000}","call_id":"call_d60e28ff01f944ff8ffa94ebd2906c96","internal_chat_message_metadata_passthrough":{"turn_id":"01a166fe-1d30-7a60-84d0-caa440beea94","create_time":1792729440.4812615}},"metadata":{"client_authored":false,"user_input_order":10}},
+  {"timestamp":"2026-10-23T04:24:01.160Z","ordinal":130,"type":"response_item","payload":{"type":"function_call_output","id":"fco_01a16700-6388-7f40-914f-0881ad62d26f","call_id":"call_d60e28ff01f944ff8ffa94ebd2906c96","output":[{"type":"input_text","text":"Script completed\nWall time 0.0 seconds\nOutput:\n"},{"type":"input_text","text":"<redacted output part>"}],"internal_chat_message_metadata_passthrough":{"turn_id":"01a166fe-1d30-7a60-84d0-caa440beea94","create_time":1792729441.160864}},"metadata":{"client_authored":false,"fallback_token_limit_override":12000}},
 ];
 
 /**
