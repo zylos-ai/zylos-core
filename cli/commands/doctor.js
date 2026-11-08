@@ -31,6 +31,7 @@ import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.
 import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
 import { alertTargetNotice, formatAlertTargetNotice } from '../lib/alert-target-notice.js';
 import { readPoolCapacity } from '../lib/session-pool-config.js';
+import { readSessionModeStatus } from '../lib/session-mode-status.js';
 
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'doctor.log');
@@ -257,14 +258,35 @@ function checkTmuxSession(session) {
 
 // ── Diagnostics collection ───────────────────────────────────────
 
-export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork, pm2Check = checkPm2Installed } = {}) {
+export async function readDoctorSessionModeStatus({ readStatus = readSessionModeStatus,
+  databaseExists = () => fs.statSync(path.join(ZYLOS_DIR, 'comm-bridge', 'c4.db'), { throwIfNoEntry: false }) !== undefined } = {}) {
+  try {
+    if (!databaseExists()) return { status: null, error: { code: 'DB_NOT_FOUND', message: 'C4 database is not initialized' }, skipped: true };
+    return { status: await readStatus(), error: null, skipped: false };
+  } catch (error) {
+    return { status: null, error: { code: error.code ?? 'READ_FAILED', message: error.message }, skipped: false };
+  }
+}
+
+export function formatDoctorSessionModeStatus(value) {
+  if (!value) return [];
+  if (value.error) return [`Session mode status unavailable: ${value.error.code}: ${value.error.message}`];
+  const { transition, globalGate, blocked } = value.status;
+  const lines = [`Mode transition: ${transition ? `${transition.sourceMode} -> ${transition.targetMode} (${transition.phase})` : 'none'}`,
+    `Global gate: ${globalGate.present ? 'present' : 'absent'}`];
+  if (blocked) lines.push(`Mode transition blocked: ${blocked.reason}`);
+  return lines;
+}
+
+export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork,
+  pm2Check = checkPm2Installed, tmuxCheck = checkTmuxInstalled, modeStatus = readDoctorSessionModeStatus } = {}) {
   const selected = await resolve();
   const runtime = selected.runtime;
   const display = runtime === 'unknown' ? 'Unknown runtime' : runtime === 'codex' ? 'Codex' : 'Claude';
   const apiHost = runtime === 'unknown' ? null : runtime === 'codex' ? 'api.openai.com' : 'api.anthropic.com';
   const networkPromise = apiHost ? network(env, apiHost) : Promise.resolve({ dns: false, proxy: null, reachable: false, reason: 'runtime_unknown', details: {} });
 
-  const tmux = checkTmuxInstalled();
+  const tmux = tmuxCheck();
   const pm2 = pm2Check();
   const envFile = ensureEnvFilePrivate();
   const net = await networkPromise;
@@ -293,6 +315,7 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
     : { running: false, total: 0, online: 0, activityMonitor: false, procs: [] };
   const session = tmux.installed ? checkTmuxSession(selected.live.tmuxName) : false;
   const sessionMode = selected.sessionGroup == null ? 'single' : 'multi';
+  const sessionModeStatus = await modeStatus();
   let origin = null, targetRuntime = null, originNeed = null;
   if (sessionMode === 'multi' && selected.sessionGroup === 'origin' && !session) {
     const status = await collectStatus();
@@ -302,7 +325,7 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
   }
 
   return {
-    runtime, display, apiHost, sessionMode, sessionGroup: selected.sessionGroup ?? null, origin, targetRuntime, originNeed,
+    runtime, display, apiHost, sessionMode, sessionModeStatus, sessionGroup: selected.sessionGroup ?? null, origin, targetRuntime, originNeed,
     system: { tmux, pm2, network: net, envFile },
     ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
     services: { ...services, session },
@@ -313,6 +336,16 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
 
 export function buildDiagnosticJson(diag, coreVersion) {
   const issues = [];
+  const modeStatus = diag.sessionModeStatus;
+  if (modeStatus?.error && !modeStatus.skipped) {
+    issues.push({ id: 'session_mode_status_unavailable', label: `Session mode status unavailable: ${modeStatus.error.code}: ${modeStatus.error.message}`,
+      hint: 'Run: zylos session-mode status --json' });
+  } else if (modeStatus?.status?.blocked) {
+    const transition = modeStatus.status.transition;
+    issues.push({ id: 'session_mode_transition_blocked',
+      label: `Mode transition ${transition.sourceMode} -> ${transition.targetMode} (${transition.phase}) blocked: ${modeStatus.status.blocked.reason}`,
+      hint: 'Run: zylos session-mode status --json; inspect the blocker before retrying' });
+  }
 
   if (!diag.system.tmux.installed) {
     issues.push({ id: 'tmux_missing', label: 'tmux not installed', hint: 'Run zylos init' });
@@ -408,9 +441,11 @@ export function buildDiagnosticJson(diag, coreVersion) {
       },
       services: {
         passed: diag.services.running && diag.services.total > 0 &&
-          diag.services.procs.every(p => p.pm2_env?.status === 'online') && !diag.origin?.failure,
+          diag.services.procs.every(p => p.pm2_env?.status === 'online') && !diag.origin?.failure &&
+          !(modeStatus?.error && !modeStatus.skipped) && !modeStatus?.status?.blocked,
         procs: diag.services.procs.map(p => ({ name: p.name, status: p.pm2_env?.status || 'unknown' })),
         session: { active: diag.services.session, origin: diag.origin?.state ?? null },
+        sessionModeStatus: modeStatus ?? null,
       },
     },
     issues,
@@ -500,14 +535,16 @@ function displayAiGroup(diag, jsonGroup) {
 }
 
 function displayServiceGroup(diag, jsonGroup) {
+  const modeChecks = formatDoctorSessionModeStatus(diag.sessionModeStatus);
   if (!diag.system.pm2.installed) {
     console.log(groupHeader('Services', 'skip'));
     console.log(SKIP('skipped (requires PM2)'));
+    for (const check of modeChecks) console.log(SUB_LAST(check));
     logToFile('check: services — skipped');
     return;
   }
 
-  const checks = [];
+  const checks = [...modeChecks];
   const { running, total, procs, activityMonitor, session } = diag.services;
 
   if (!running || total === 0) {
@@ -905,7 +942,8 @@ export async function doctorCommand(args, upstreamSource) {
     process.exit(0);
   }
 
-  const fixable = diagnostic.issues.filter(issue => !issue.id.startsWith('origin_'));
+  const diagnosticOnly = issue => issue.id.startsWith('origin_') || issue.id.startsWith('session_mode_');
+  const fixable = diagnostic.issues.filter(issue => !diagnosticOnly(issue));
   const claudeReady = !checkOnly && isClaudeReady(diag) && fixable.length > 0;
 
   // Show issues — hide hints when Claude will auto-fix
@@ -913,7 +951,7 @@ export async function doctorCommand(args, upstreamSource) {
   for (let i = 0; i < diagnostic.issues.length; i++) {
     const issue = diagnostic.issues[i];
     console.log(`\n  ${bold(`[${i + 1}]`)} ${issue.label}`);
-    if ((!claudeReady || issue.id.startsWith('origin_')) && issue.hint) console.log(`      ${dim(issue.hint)}`);
+    if ((!claudeReady || diagnosticOnly(issue)) && issue.hint) console.log(`      ${dim(issue.hint)}`);
   }
 
   // Layer 2: attempt auto-fix via Claude

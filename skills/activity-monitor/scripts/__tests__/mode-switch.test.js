@@ -12,6 +12,7 @@ function fixture(overrides = {}) {
   const events = [], calls = [], controls = { machine: { running: 0, runningWithoutDeadline: 0 }, allSessionGroups: { running: 0, runningWithoutDeadline: 0 } };
   const db = {
     getModeTransition: () => row,
+    expireLegacyRunningControls: () => ({ count: 0, ids: [] }),
     beginModeTransition: (source, target) => { calls.push('begin'); row = { run_id: 'transition', source_mode: source, target_mode: target, phase: 'gating', reason: null, created_at: time / 1000 }; return { runId: row.run_id }; },
     setModeTransitionPhase: (runId, phase, { reason = null } = {}) => { assert.equal(row.run_id, runId); calls.push(phase); row = { ...row, phase, reason }; if (phase === 'complete') fences = []; return row; },
     setDrainFence: (group, options = {}) => { if (!fences.some(f => f.sessionGroup === group)) fences.push({ sessionGroup: group, reason: options.reason ?? null, runId: options.runId ?? null, createdAt: time / 1000 }); },
@@ -368,4 +369,80 @@ test('unknown second observation prevents absorption', async () => {
   await assert.rejects(owner.advance(), {code:'INVALID_OBSERVATION'});
   assert.equal(reads, 2); assert.equal(f.row.phase, 'gating');
   assert.equal(f.calls.includes('absorb'), false);
+});
+
+// Real coordinator/private SQLite boundary; run for legacy gate cleanup changes,
+// skip unrelated conversion/runtime changes. The official runner isolates HOME,
+// ZYLOS_DIR, PM2_HOME and short TMPDIR. No tmux, network, PM2 or child processes;
+// observation/restart/conversion are injected and fixture teardown closes the DB.
+for (const deadline of [null, 1800001000]) test(`old machine control with ${deadline === null ? 'no' : 'future'} deadline gates safely`, async t => {
+  let mode = 'single'; const events = [], clock = 1800000000000;
+  const { db, store } = databaseFixture(t, { now: () => clock,
+    readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
+  const id = Number(db.prepare(`INSERT INTO control_queue(content,raw_content,status,created_at,updated_at,ack_deadline_at)
+    VALUES('exit','exit','running',1700000000,1700000000,?)`).run(deadline).lastInsertRowid);
+  const owner = new ModeSwitchCoordinator({ db: store, now: () => clock,
+    readMode: () => ({ mode, keyPresent: true }), readConfiguration: () => ({ mode }),
+    readRequests: () => [], legacyPresent: () => false, observe: () => [],
+    lifecycle: { advanceReclaim: async () => {} }, convert: async () => {},
+    writeMode: target => { mode = target; }, restart: { advance: async () => ({ confirmed: true }) },
+    diagnostic: event => events.push(event) });
+  assert.equal((await owner.handle(request)).result, 'accepted');
+  for (let i = 0; i < 3; i++) await owner.advance();
+  const control = db.prepare('SELECT status,last_error FROM control_queue WHERE id=?').get(id);
+  if (deadline === null) {
+    assert.deepEqual(control, { status: 'timeout', last_error: 'SESSION_ENDED' });
+    assert.equal(mode, 'multi'); assert.equal(store.getModeTransition(), null); assert.equal(store.getDrainFence('*'), null);
+    const expired = events.filter(event => event.event === 'transition_legacy_controls_expired');
+    assert.equal(expired.length, 1); assert.equal(expired[0].count, 1); assert.deepEqual(expired[0].ids, [id]);
+  } else {
+    assert.equal(control.status, 'running'); assert.equal(mode, 'single'); assert.equal(store.getModeTransition().phase, 'gating');
+    assert.ok(store.getDrainFence('*')); assert.equal(events.some(event => event.event === 'transition_legacy_controls_expired'), false);
+  }
+});
+
+for (const obstacle of ['legacy-live', 'legacy-unknown', 'legacy-error', 'source-live', 'source-error', 'extra-fence', 'db-error']) {
+  test(`legacy cleanup preserves gating for ${obstacle}`, async () => {
+    const f = fixture(), owner = f.create(); await owner.handle(request);
+    f.controls.machine = { running: 1, runningWithoutDeadline: 1 };
+    let cleanups = 0;
+    owner.db.expireLegacyRunningControls = () => { cleanups++; if (obstacle === 'db-error') throw error('DB_BUSY'); return { count: 1, ids: [4] }; };
+    if (obstacle === 'legacy-live') f.legacy = true;
+    if (obstacle === 'legacy-unknown') owner.legacyPresent = () => undefined;
+    if (obstacle === 'legacy-error') owner.legacyPresent = () => { throw error('TMUX_UNAVAILABLE'); };
+    let observations = 0;
+    owner.observe = () => {
+      observations++;
+      if (obstacle === 'source-live' && observations > 1) return [{ present: true }];
+      if (obstacle === 'source-error' && observations > 1) return [{ observationError: error('TMUX_UNAVAILABLE') }];
+      return [];
+    };
+    if (obstacle === 'extra-fence') f.fences = [{ sessionGroup: 'origin', reason: 'ttl', runId: 'old' }];
+    if (['legacy-error', 'source-error', 'db-error'].includes(obstacle)) await assert.rejects(owner.advance());
+    else await owner.advance();
+    assert.equal(cleanups, obstacle === 'db-error' ? 1 : 0);
+    assert.equal(f.row.phase, 'gating'); assert.equal(f.calls.includes('absorb'), false);
+    assert.equal(f.events.some(event => event.event === 'transition_legacy_controls_expired'), false);
+  });
+}
+
+test('ineligible controls keep one stable blocker without claiming cleanup', async () => {
+  const f = fixture(), owner = f.create(); await owner.handle(request);
+  f.controls.machine = { running: 1, runningWithoutDeadline: 1 };
+  await owner.advance(); await owner.advance();
+  assert.equal(f.row.reason, 'running_control_without_deadline:machine:4,8');
+  assert.equal(f.events.filter(event => event.event === 'transition_blocked').length, 1);
+  assert.equal(f.events.some(event => event.event === 'transition_legacy_controls_expired'), false);
+  f.fences.push({ sessionGroup: 'origin', reason: 'ttl', runId: 'old' });
+  await owner.advance(); await owner.advance();
+  assert.equal(f.events.filter(event => event.event === 'transition_blocked').length, 1);
+});
+
+test('multi-to-single never applies legacy machine cleanup', async () => {
+  const f = fixture(); f.mode = 'multi'; const owner = f.create();
+  f.db.expireLegacyRunningControls = () => assert.fail('reverse transition must not clean legacy controls');
+  f.controls.machine = { running: 1, runningWithoutDeadline: 1 };
+  await owner.handle({ ...request, target: 'single' }); await owner.advance();
+  assert.equal(f.row.reason, 'running_control_without_deadline:machine:4,8');
+  assert.equal(f.row.phase, 'gating');
 });

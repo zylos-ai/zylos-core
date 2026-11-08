@@ -341,6 +341,7 @@ test('configuration recovery during an open transition resets automatic-skip ded
   db.setModeTransitionPhase = (runId, phase, { reason }) => { transition.reason = reason; };
   db.setDrainFence = () => {};
   db.listRunningControlsWithoutDeadline = scope => scope.machine ? [1] : [];
+  supervisor.modeSwitch.legacyPresent = () => true;
   const events = () => fs.readFileSync(path.join(root, 'activity-monitor/supervisor-events.jsonl'), 'utf8')
     .trim().split('\n').map(line => JSON.parse(line)).filter(row => row.event === 'auto_migration_skipped');
   await supervisor.loop.start();
