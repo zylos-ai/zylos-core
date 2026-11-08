@@ -58,10 +58,10 @@ export class SupervisorHealthObserver {
     const state = await this.coordinator.restore(runtime);
     if (state.health === 'ok' || state.health === 'auth_failed') this.recoveryWaits.delete(runtime);
     const cache = await this.coordinator.readNegativeCache(runtime, state);
-    const attempt = this.coordinator.associations.get(runtime);
+    const attempt = this.coordinator.registeredAttempt(runtime);
     // Registration already charged this run's attempt. Its confirming probe
     // completes that attempt; only a later attempt waits for the next backoff.
-    const continuingAttempt = attempt && (target ? [target] : await this.listScenes()).some(scene =>
+    const continuingAttempt = state.health === 'rate_limited' && attempt && (target ? [target] : await this.listScenes()).some(scene =>
       scene.sessionGroup === attempt.sessionGroup && scene.runId === attempt.runId && scene.runtime === runtime &&
       scene.ready === true && scene.present !== false && scene.processRunning !== false);
     return recoveryEligibility(state, { runtime, cache, nowMs: this.now(), continuingAttempt }).eligible;

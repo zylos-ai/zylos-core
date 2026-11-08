@@ -27,7 +27,8 @@ export function recoveryEligibility(state, { runtime, cache = null, nowMs = Date
   const last = (down ? budget.lastDownCheckAt : budget.lastRecoveryAt) || 0;
   const accelerated = (budget.lastUserMessageRecoveryAt || 0) > last;
   const due = last + (down ? 3600 : recoveryBackoff(budget.restartFailureCount || 0));
-  if (!continuingAttempt && !accelerated && now < due) {
+  const confirmingRateLimit = state.health === 'rate_limited' && continuingAttempt;
+  if (!confirmingRateLimit && !accelerated && now < due) {
     return { eligible: false, code: down ? 'down_retry_interval' : 'attempt_backoff', notBefore: due * 1000 };
   }
   return { eligible: true, accelerated };
@@ -71,6 +72,10 @@ export class RuntimeHealthCoordinator {
     this.queues = new Map();
     this.associations = new Map();
     this.authRecoveries = new Map();
+  }
+  registeredAttempt(runtime) {
+    const attempt = this.associations.get(runtime);
+    return attempt ? { ...attempt } : null;
   }
   store(runtime) {
     if (typeof runtime !== 'string' || !RUNTIME.test(runtime)) throw new TypeError('Invalid runtime');

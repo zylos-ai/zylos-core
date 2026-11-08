@@ -16,15 +16,21 @@ registerHooks({
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
 
 for (const locale of ['en', 'zh']) {
-  for (const health of ['rate_limited', 'ok']) {
-    test(`conversation page renders ${health} pending delivery in ${locale}`, async t => {
+  for (const { health, runtime, presence } of [
+    { health: 'rate_limited', runtime: 'claude', presence: 'running' },
+    { health: 'ok', runtime: 'claude', presence: 'running' },
+    { health: 'rate_limited', runtime: 'claude', presence: 'not_running' },
+    { health: 'ok', runtime: 'codex', presence: 'running' }
+  ]) {
+    test(`conversation page renders ${runtime} ${health} pending delivery while ${presence} in ${locale}`, { timeout: 2000 }, async t => {
       const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
       const document = conversationDocument(), root = document.createElement('div');
       const sessionGroup = 'dashboard:limited', id = 'g:AA';
       const page = mountConversationPage({ root, document, t: key => translations[key] ?? key, fetch: async path => {
         const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
-          : path === '/api/workbench/groups' ? { listKnown: true, rows: [{ sessionGroup, presence: 'running', target: { runtime: 'claude' } }],
-            instance: { runtimeHealth: { claude: { health } } }, sources: { status: { ok: true, readAt: 1000 } } }
+          : path === '/api/workbench/groups' ? { listKnown: true, rows: [{ sessionGroup, presence, target: { runtime } }],
+            instance: { runtimeHealth: { claude: { health: runtime === 'codex' ? 'rate_limited' : health }, codex: { health: 'ok' } } },
+            sources: { status: { ok: true, readAt: 1000 } } }
           : path.startsWith('/api/chat/conversations?') ? { items: [{ id, sessionGroup }], nextCursor: null }
           : path.includes('/messages?') ? { items: [{ id: 1, direction: 'in', status: 'pending', content: 'hello' },
             { id: 2, direction: 'in', status: 'delivered', content: 'already delivered' }], afterCursor: 'after', nextCursor: null }

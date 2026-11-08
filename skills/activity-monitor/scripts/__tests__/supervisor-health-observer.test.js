@@ -60,8 +60,39 @@ test('a newly registered rate-limit recovery probes its ready run without a seco
   assert.equal(f.now() - sentAt, 3000);
 });
 
+for (const health of ['unavailable', 'recovering', 'down']) {
+  test(`registered ${health} recovery retains its retry interval`, { timeout: 5000 }, async t => {
+    const f = fixture(t), scene = f.scene();
+    t.after(() => f.observer.shutdown());
+    f.setHealth(health);
+    f.setScenes([]);
+    const result = await f.coordinator.registerStartAttempt({ version: 1, type: 'start_attempt',
+      requestId: `sa-${f.now()}-123456789abc`, runtime: 'claude', sessionGroup: scene.sessionGroup, runId: scene.runId });
+    assert.equal(result.result, 'registered');
+    const attempt = f.coordinator.registeredAttempt('claude');
+    assert.equal(attempt.runId, scene.runId);
+    attempt.runId = 'changed-copy';
+    assert.equal(f.coordinator.registeredAttempt('claude').runId, scene.runId);
+    f.setScenes([scene]);
+    f.advance(3000);
+    assert.equal((await f.observer.requestProbe('claude')).recovered, false);
+    assert.equal(f.controls.length, 0);
+    assert.equal(f.health().health, health);
+    const interval = health === 'down' ? 3600000 : 60000;
+    f.advance(interval - 3001);
+    assert.equal(await f.observer.due('claude'), false);
+    f.advance(1);
+    const probe = f.observer.requestProbe('claude');
+    await f.prepared();
+    assert.equal(f.controls.length, 1);
+    f.controls[0].status = 'done';
+    await f.observer.tick();
+    assert.equal((await probe).recovered, true);
+  });
+}
+
 for (const restriction of ['cooldown', 'cache', 'replacement', 'fence', 'busy', 'auth', 'transition', 'not_ready', 'process_gone']) {
-  test(`registered recovery still respects ${restriction}`, async t => {
+  test(`registered recovery still respects ${restriction}`, { timeout: 5000 }, async t => {
     const f = fixture(t), scene = f.scene();
     t.after(() => f.observer.shutdown());
     f.setHealth('rate_limited');
@@ -115,7 +146,7 @@ test('a failed registered confirmation keeps rate limiting and consumes its sing
   assert.equal((await probe).classification, 'rate_limited');
   assert.equal(f.health().health, 'rate_limited');
   assert.equal(f.health().scheduling.restartFailureCount, 1);
-  assert.equal(f.coordinator.associations.has('claude'), false);
+  assert.equal(f.coordinator.registeredAttempt('claude'), null);
   await f.observer.requestProbe('claude');
   assert.equal(f.controls.length, 1, 'a failed confirmation cannot reuse the old registration');
 });

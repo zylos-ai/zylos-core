@@ -62,6 +62,7 @@ test('routes share observer preparation but an absent target is not a failed pro
   const observer = new SupervisorHealthObserver({ coordinator: {
     restore: runtime => new Promise(resolve => resolvers.push({runtime, resolve: () => resolve(f.states[runtime])})),
     readNegativeCache: runtime => f.router.readNegativeCache(runtime),
+    registeredAttempt: () => null,
   }, readMode: () => 'multi', listScenes: () => [] });
   f.router.requestProbe = runtime => observer.requestProbe(runtime);
   f.states.claude = { health: 'unavailable', reason: 'heartbeat_timeout', scheduling: {} };
@@ -183,7 +184,7 @@ test('absent recovery target leaves accelerated admission uncached; completed fa
     const f = fixture(t); f.states.claude.health = 'unavailable';
     f.coordinator.notifyUserMessage = () => accelerated;
     const observer = new SupervisorHealthObserver({ coordinator: {
-      restore: () => f.states.claude, readNegativeCache: () => null,
+      restore: () => f.states.claude, readNegativeCache: () => null, registeredAttempt: () => null,
     }, readMode: () => 'multi', listScenes: () => [] });
     t.after(() => observer.shutdown());
     f.router.requestProbe = runtime => observer.requestProbe(runtime);

@@ -1171,13 +1171,16 @@ const groupSnapshot = (presence, extra = {}) => ({
   },
   ...extra
 });
-test('conversation health follows its target runtime and clears when its source becomes unreadable', async t => {
+for (const failure of ['unreadable source', 'request failure']) test(`conversation health clears a stale restriction after ${failure}`, { timeout: 2000 }, async t => {
   let readable = true;
-  const f = groupFixture(() => groupSnapshot('running', {
-    rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' } }],
-    instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'ok' } } },
-    sources: { status: { ok: readable, readAt: 1000 } }
-  }));
+  const f = groupFixture(() => {
+    if (!readable && failure === 'request failure') throw { code: 'status_unavailable' };
+    return groupSnapshot('running', {
+      rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' } }],
+      instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'ok' } } },
+      sources: { status: { ok: readable, readAt: 1000 } }
+    });
+  });
   t.after(() => f.state.destroy());
   await f.state.open();
   await f.state.select('g:A');
@@ -1185,6 +1188,8 @@ test('conversation health follows its target runtime and clears when its source 
   readable = false;
   await f.timer.advance(30000);
   assert.equal(f.state.snapshot().groupHealth, null);
+  assert.equal(f.state.snapshot().groupPresence, null);
+  assert.equal(f.state.snapshot().groupPresenceReadAt, null);
 });
 test('running marker uses the exact group and clears after an unreadable workbench response', async () => {
   let fail = false;

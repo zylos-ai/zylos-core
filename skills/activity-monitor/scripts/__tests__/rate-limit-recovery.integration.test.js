@@ -92,7 +92,7 @@ for (const recovered of [true, false]) {
     assert.equal(pastes, 0, 'a ready process alone must not release business messages');
     const probe = observer.requestProbe('claude');
     for (let i = 0; i < 30 && [...observer.probes.values()].some(item => item.preparing); i++) await flush();
-    if (!observer.probes.size) assert.fail(JSON.stringify({ probe: await probe, association: health.associations.get('claude'), scenes: listScenes() }));
+    if (!observer.probes.size) assert.fail(JSON.stringify({ probe: await probe, association: health.registeredAttempt('claude'), scenes: listScenes() }));
     assert.equal(observer.probes.size, 1);
     assert.equal([...observer.probes.values()][0].preparing, false);
     await f.rounds(2); await observer.tick();
