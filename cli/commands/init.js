@@ -18,6 +18,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
+import { writeEnvFile, copyEnvFile } from '../lib/env.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
@@ -238,7 +239,7 @@ function saveSystemPath(envPath) {
   } else {
     content = content.trimEnd() + '\n\n# System PATH captured by zylos init (used by PM2 services)\n' + line + '\n';
   }
-  fs.writeFileSync(envPath, content);
+  writeEnvFile(envPath, content);
 }
 
 // ── Timezone configuration ───────────────────────────────────
@@ -318,7 +319,7 @@ function writeEnvTimezone(tz) {
   } else {
     content = content.trimEnd() + `\nTZ=${tz}\n`;
   }
-  fs.writeFileSync(envPath, content);
+  writeEnvFile(envPath, content);
 }
 
 /**
@@ -778,7 +779,7 @@ export function deployTemplates({ freshInstall = false } = {}) {
   const envSrc = path.join(TEMPLATES_SRC, '.env.example');
   const envDest = path.join(ZYLOS_DIR, '.env');
   if (fs.existsSync(envSrc) && !fs.existsSync(envDest)) {
-    fs.copyFileSync(envSrc, envDest);
+    copyEnvFile(envSrc, envDest);
     console.log(`  ${success('Created .env from template')}`);
   }
 
@@ -934,7 +935,7 @@ function ensureWebConsolePassword(explicitPassword = null) {
     } else {
       content = content.trimEnd() + `\n# Web Console password\n${newKey}=${explicitPassword}\n`;
     }
-    fs.writeFileSync(envPath, content);
+    writeEnvFile(envPath, content);
     return explicitPassword;
   }
 
@@ -948,7 +949,7 @@ function ensureWebConsolePassword(explicitPassword = null) {
   // Generate new password
   const password = crypto.randomBytes(12).toString('base64url').slice(0, 16);
   const entry = `\n# Web Console password\n${newKey}=${password}\n`;
-  fs.writeFileSync(envPath, content.trimEnd() + entry);
+  writeEnvFile(envPath, content.trimEnd() + entry);
   return password;
 }
 
@@ -986,7 +987,7 @@ function migrateWebConsolePassword() {
     content = content.replace(/^WEB_CONSOLE_PASSWORD=/m, 'ZYLOS_WEB_PASSWORD=');
     // Update comment if present
     content = content.replace(/^# Web Console password \(auto-generated\)$/m, '# Web Console password');
-    fs.writeFileSync(envPath, content);
+    writeEnvFile(envPath, content);
   }
 }
 

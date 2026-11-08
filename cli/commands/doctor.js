@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import dns from 'node:dns/promises';
 import { ZYLOS_DIR, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE, readSessionMode } from '../lib/config.js';
-import { readEnvFile } from '../lib/env.js';
+import { readEnvFile, checkEnvFilePermissions } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
 import { fetchLatestTagAsync, compareSemverDesc } from '../lib/github.js';
 import { getCurrentVersion } from '../lib/self-upgrade.js';
@@ -257,7 +257,7 @@ function checkTmuxSession(session) {
 
 // ── Diagnostics collection ───────────────────────────────────────
 
-export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork, pm2Check = checkPm2Installed } = {}) {
+export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork, pm2Check = checkPm2Installed, envFileCheck = checkEnvFilePermissions } = {}) {
   const selected = await resolve();
   const runtime = selected.runtime;
   const display = runtime === 'unknown' ? 'Unknown runtime' : runtime === 'codex' ? 'Codex' : 'Claude';
@@ -266,6 +266,7 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
 
   const tmux = checkTmuxInstalled();
   const pm2 = pm2Check();
+  const envFile = envFileCheck();
   const net = await networkPromise;
 
   // Runtime-specific CLI/auth checks.
@@ -302,7 +303,7 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
 
   return {
     runtime, display, apiHost, sessionMode, sessionGroup: selected.sessionGroup ?? null, origin, targetRuntime, originNeed,
-    system: { tmux, pm2, network: net },
+    system: { tmux, pm2, network: net, envFile },
     ai: { cli, auth, authStatus, autonomous, networkSkipped: !net.reachable },
     services: { ...services, session },
   };
@@ -334,6 +335,10 @@ export function buildDiagnosticJson(diag, coreVersion) {
       hint += ` (DNS: ${net.details.dnsError})`;
     }
     issues.push({ id: 'network_unreachable', label: `Cannot reach ${diag.apiHost}`, hint });
+  }
+  if (diag.system.envFile?.ok === false) {
+    issues.push({ id: 'env_permissions', label: `~/zylos/.env is accessible to other users (mode ${diag.system.envFile.mode})`,
+      hint: 'Run: chmod 600 ~/zylos/.env' });
   }
   const runtimeLabel = diag.display;
   if (diag.runtime !== 'unknown' && !diag.ai.cli.installed) {
@@ -380,13 +385,15 @@ export function buildDiagnosticJson(diag, coreVersion) {
     passed: issues.length === 0,
     groups: {
       system: {
-        passed: diag.system.tmux.installed && diag.system.pm2.installed && diag.system.network.reachable,
+        passed: diag.system.tmux.installed && diag.system.pm2.installed && diag.system.network.reachable &&
+          diag.system.envFile?.ok !== false,
         checks: {
           tmux: { ok: diag.system.tmux.installed, version: diag.system.tmux.version || null,
             sendKeysClientFlag: diag.system.tmux.useClientFlag ?? false,
             versionReason: diag.system.tmux.reason ?? null },
           pm2: { ok: diag.system.pm2.installed, version: diag.system.pm2.version || null },
           network: { ok: diag.system.network.reachable, host: diag.apiHost, proxy: diag.system.network.proxy || null },
+          envFile: { ok: diag.system.envFile?.ok !== false, mode: diag.system.envFile?.mode ?? null },
         },
       },
       ai_service: {
@@ -437,6 +444,10 @@ function displaySystemGroup(diag, jsonGroup) {
     } else {
       checks.push(red(`network: cannot reach ${diag.apiHost}`));
     }
+  }
+
+  if (diag.system.envFile?.ok === false) {
+    checks.push(red(`.env readable by other users (mode ${diag.system.envFile.mode})`));
   }
 
   displayCheckGroup('System', jsonGroup.passed ? 'pass' : 'fail', checks);

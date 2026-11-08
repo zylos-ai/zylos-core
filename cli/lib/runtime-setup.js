@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { ZYLOS_DIR } from './config.js';
+import { writeEnvFile } from './env.js';
 import { commandExists } from './shell-utils.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
 import { installCoreCodexHook } from './codex-hooks.js';
@@ -206,7 +207,7 @@ export function saveApiKeyToEnv(apiKey) {
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     content = upsertEnvValue(content, 'ANTHROPIC_API_KEY', apiKey, 'Anthropic API key (set by zylos init)');
-    fs.writeFileSync(envPath, content);
+    writeEnvFile(envPath, content);
   } catch {}
 }
 
@@ -248,7 +249,7 @@ export function saveSetupTokenToEnv(token) {
     content = upsertEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN', token, 'Claude Code setup token (set by zylos init)');
     content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
     content = content.replace(/^\s*ANTHROPIC_API_KEY\s*=.*\n?/m, '');
-    fs.writeFileSync(envPath, content);
+    writeEnvFile(envPath, content);
   } catch {}
 }
 
@@ -299,7 +300,7 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     content = upsertEnvValue(content, 'ANTHROPIC_BASE_URL', baseUrl, 'Anthropic base URL for Claude Code (set by zylos init)');
-    fs.writeFileSync(envPath, content);
+    writeEnvFile(envPath, content);
     process.env.ANTHROPIC_BASE_URL = baseUrl;
     return true;
   } catch {
@@ -589,7 +590,7 @@ export function saveCodexApiKeyToEnv(apiKey) {
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     content = upsertEnvValue(content, 'OPENAI_API_KEY', apiKey, 'OpenAI API key for Codex (set by zylos init)');
-    fs.writeFileSync(envPath, content);
+    writeEnvFile(envPath, content);
     process.env.OPENAI_API_KEY = apiKey;
     return true;
   } catch {
@@ -622,7 +623,7 @@ export function saveCodexBaseUrlToEnv(baseUrl) {
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     content = upsertEnvValue(content, 'OPENAI_BASE_URL', baseUrl, 'OpenAI base URL for Codex (set by zylos init)');
-    fs.writeFileSync(envPath, content);
+    writeEnvFile(envPath, content);
     process.env.OPENAI_BASE_URL = baseUrl;
     return true;
   } catch {
