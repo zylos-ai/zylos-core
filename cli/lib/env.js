@@ -13,16 +13,16 @@ const ENV_FILE_MODE = 0o600;
 
 /**
  * Restrict an existing .env file to owner read/write.
- * Best effort: a filesystem without POSIX modes keeps its own permissions.
+ * Best effort: the content is already written, and a filesystem without POSIX
+ * modes (or a read-only or foreign-owned file) keeps its own permissions;
+ * ensureEnvFilePrivate reads the mode back to report the outcome.
  *
  * @param {string} file
  */
 function secureEnvFile(file) {
   try {
     fs.chmodSync(file, ENV_FILE_MODE);
-  } catch (err) {
-    if (err.code !== 'ENOENT' && err.code !== 'EPERM' && err.code !== 'ENOTSUP') throw err;
-  }
+  } catch {}
 }
 
 function envFileMode(file) {

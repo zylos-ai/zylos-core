@@ -116,6 +116,21 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
     assert.deepEqual(ensureEnvFilePrivate(loop), { ok: true, mode: null, fixed: false });
   });
 
+  test('an .env that cannot be tightened is reported, without crashing or claiming a fix', async (t) => {
+    const { ensureEnvFilePrivate } = await import('../env.js');
+    fs.writeFileSync(envFile, 'A=1\n');
+    fs.chmodSync(envFile, 0o644);
+    const realChmod = fs.chmodSync;
+    t.after(() => { fs.chmodSync = realChmod; });
+    // A read-only mount rejects the change; some network filesystems accept it and keep the mode.
+    for (const chmod of [() => { throw Object.assign(new Error('read-only file system'), { code: 'EROFS' }); }, () => {}]) {
+      fs.chmodSync = chmod;
+      assert.deepEqual(ensureEnvFilePrivate(envFile), { ok: false, mode: '644', fixed: false });
+    }
+    fs.chmodSync = realChmod;
+    assert.equal(mode(envFile), '644');
+  });
+
   test('an .env owned by another user is reported, not changed', async () => {
     const { ensureEnvFilePrivate } = await import('../env.js');
     fs.writeFileSync(envFile, 'A=1\n');

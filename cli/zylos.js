@@ -142,7 +142,8 @@ Setup:
   config set <key> <value>  Set a config value
   attach              Attach to the Claude tmux session
   doctor              Diagnose and repair Zylos installation
-                      --check   Diagnose only, no repairs
+                      --check   Diagnose only, no repair run
+                                (an own .env is still set to 0600)
   shell               Interactive CLI mode (REPL)
   runtime <name>      Switch agent runtime (claude|codex)
   runtime status      Show currently configured runtime

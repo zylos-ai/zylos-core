@@ -338,7 +338,7 @@ export function buildDiagnosticJson(diag, coreVersion) {
   }
   if (diag.system.envFile?.ok === false) {
     issues.push({ id: 'env_permissions', label: `${ENV_FILE} is accessible to other users (mode ${diag.system.envFile.mode})`,
-      hint: `It belongs to another user; run as that user or root: chmod 600 ${ENV_FILE}` });
+      hint: `Could not tighten it automatically; as the file's owner run: chmod 600 ${ENV_FILE}` });
   }
   const runtimeLabel = diag.display;
   if (diag.runtime !== 'unknown' && !diag.ai.cli.installed) {
