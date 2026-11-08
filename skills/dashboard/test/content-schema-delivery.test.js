@@ -134,7 +134,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     }
     assert.ok(schemaImports >= 4, 'all schema imports and re-exports are checked');
     assert.equal(schemaVersions.size, 1, 'one shared schema module instance');
-    assert.equal(deliveryImports, 4, 'page, controller import/re-export and questions share delivery state');
+    assert.equal(deliveryImports, 3, 'page, controller and questions share delivery state');
     assert.equal(deliveryUrls.size, 1, 'one exact shared delivery-state module URL');
 
   }

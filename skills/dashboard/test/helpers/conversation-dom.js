@@ -1,7 +1,8 @@
 import { createDocument as minimalDocument, allNodes } from '../fixtures/workbench-dom.js';
 export { allNodes, tick, deferred } from '../fixtures/workbench-dom.js';
 
-// Inject DOM ownership and selectors only. Pixel layout belongs to the isolated browser test.
+// Inject DOM ownership, supported selectors and suppression of clicks on disabled controls.
+// Pixel layout belongs to the isolated browser test; unsupported selectors fail explicitly.
 export function createDocument() {
   const document = minimalDocument(), createElement = document.createElement;
   document.createElement = tag => {
@@ -34,8 +35,11 @@ export function createDocument() {
     node.replaceChildren = (...children) => { node.textContent = ''; node.append(...children); };
     node.replaceWith = replacement => { const parent = node.parentNode; if (parent) { parent.insertBefore(replacement, node); node.remove(); } };
     node.getAttribute = name => name.startsWith('data-') ? node.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] ?? null : node.attributes[name] ?? null;
-    node.matches = selector => selector.split(',').some(part => matches(node, part.trim()));
-    node.querySelectorAll = selector => allNodes(node).slice(1).filter(child => child.matches(selector));
+    node.matches = selector => selectors(selector).some(part => matches(node, part));
+    node.querySelectorAll = selector => {
+      const parts = selectors(selector);
+      return allNodes(node).slice(1).filter(child => parts.some(part => matches(child, part)));
+    };
     node.querySelector = selector => node.querySelectorAll(selector)[0] ?? null;
     node.closest = selector => { for (let current = node; current; current = current.parentNode) if (current.matches(selector)) return current; return null; };
     node.getBoundingClientRect = () => ({ top: 0, bottom: 0 });
@@ -46,6 +50,17 @@ export function createDocument() {
   };
   return document;
 }
+function selectors(selector) {
+  const attribute = String.raw`\[[\w-]+(?:="[^"\s,]*")?\]`;
+  const qualifier = `(?:\\.[\\w-]+|${attribute})`;
+  const simple = `(?:[a-z][a-z0-9-]*${qualifier}*|${qualifier}+)`;
+  const supported = new RegExp(`^${simple}(?:(?:\\s*>\\s*|\\s+)${simple})*$`, 'i');
+  const parts = typeof selector === 'string' ? selector.split(',').map(part => part.trim()) : [];
+  if (!parts.length || parts.some(part => !part || !supported.test(part))) {
+    throw new Error(`Unsupported conversation DOM selector: ${String(selector)}`);
+  }
+  return parts;
+}
 function matches(node, selector) {
   const child = selector.lastIndexOf('>');
   if (child >= 0) return matches(node, selector.slice(child + 1).trim()) && !!node.parentNode && matches(node.parentNode, selector.slice(0, child).trim());
@@ -55,7 +70,7 @@ function matches(node, selector) {
     for (let parent = node.parentNode; parent; parent = parent.parentNode) if (matches(parent, parts.join(' '))) return true;
     return false;
   }
-  const tag = selector.match(/^[a-z]+/i)?.[0];
+  const tag = selector.match(/^[a-z][a-z0-9-]*/i)?.[0];
   if (tag && node.tagName !== tag.toUpperCase()) return false;
   for (const [, name] of selector.matchAll(/\.([\w-]+)/g)) if (!node.classList.contains(name)) return false;
   for (const [, name, value] of selector.matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)) {

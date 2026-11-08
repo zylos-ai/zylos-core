@@ -2,6 +2,7 @@ import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import path from 'node:path';
+import { messageState, receiptState } from '../public/js/wb/chat-delivery-state.js';
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({
@@ -10,7 +11,7 @@ registerHooks({
     return next(specifier, context);
   }
 });
-const { createConversationState, messageState, receiptState } = await import('../public/js/wb/conversation-state.js');
+const { createConversationState } = await import('../public/js/wb/conversation-state.js');
 
 // Pure controller tests: official runner owns these paths. No HTTP, database,
 // PM2 or tmux is used, and scheduled polling belongs only to this fake clock.
@@ -36,9 +37,9 @@ afterEach(() => {
 });
 
 const pending = () => { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };
-function fixture(extra = () => undefined) {
+function fixture(extra = () => undefined, { identity } = {}) {
   const calls = [];
-  const state = createConversationState({ ...timers, request: async (path, options) => {
+  const state = createConversationState({ ...timers, identity, request: async (path, options) => {
     calls.push({path,options}); const result = extra(path,options); if (result !== undefined) return result;
     if (path === '/api/session-mode') return { data: { sessionMode: 'multi' } };
     if (path.includes('/messages?')) return {items:[],nextCursor:null,afterCursor:'after'};
@@ -155,6 +156,39 @@ test('hidden state cannot write or initiate history queries', async () => {
   const count=calls.length; assert.equal(state.snapshot().canWrite,false); assert.equal(state.snapshot().canCreate,false);
   await state.send(); await state.refreshMessages(); await state.refreshStatus(); assert.equal(calls.length,count); state.destroy();
 });
+for (const boundary of ['reopened page', 'changed identity']) {
+  test(`invalid cursor recovery cannot issue another history read after ${boundary}`, { timeout: 2000 }, async () => {
+    let identity = 'local';
+    const wait = pending(), started = pending();
+    const { state, calls } = fixture(requestPath => {
+      const url = new URL(requestPath, 'http://fixture');
+      if (url.pathname.endsWith('/messages') && url.searchParams.get('direction') === 'after') {
+        started.resolve();
+        return wait.promise;
+      }
+    }, { identity: () => identity });
+    await state.open();
+    await state.select('g:A');
+    const refreshing = state.refreshMessages();
+    await started.promise;
+    if (boundary === 'reopened page') {
+      // Active and identity become valid again; only the old epoch is stale.
+      state.close();
+      await state.open();
+      assert.equal(state.snapshot().canWrite, true);
+    } else {
+      // Epoch and active state stay unchanged until the page observes the
+      // instance switch. The callback alone must invalidate old recovery.
+      identity = 'remote';
+    }
+    const count = calls.length;
+    wait.reject({ code: 'invalid_chat_cursor' });
+    await refreshing;
+    assert.equal(calls.length, count, 'stale cursor failure must not trigger a fallback transport');
+    assert.equal(state.snapshot().messages.length, 0);
+    assert.equal(state.snapshot().error, null);
+  });
+}
 test('pending draft creation does not hijack a later navigation', async () => {
   const wait=pending(); const {state}=fixture((path,options)=>path==='/api/chat/drafts'?wait.promise:undefined);
   await state.open(); const created=state.createDraft('name'); await state.setTab('external'); await state.select('g:B');

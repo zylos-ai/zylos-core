@@ -1,7 +1,6 @@
 import { parseC4Content } from '../../chat-schema.js?v=99';
 import { messageState } from './chat-delivery-state.js?v=100';
 import { asDate } from './conversation-time.js?v=99';
-export { messageState, receiptState } from './chat-delivery-state.js?v=100';
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
 const base = '/api/chat/conversations';
 const pathFor = id => `${base}/${encodeURIComponent(id)}`;

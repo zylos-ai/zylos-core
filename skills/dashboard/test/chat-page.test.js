@@ -105,8 +105,7 @@ test('external tab has history but no write controls', async testContext => {
 
 test('remote-disabled replaces the entire page with only its notice', async testContext => {
   const f = fixture(testContext, { denied: true }); await f.page.open();
-  assert.ok(visibleText(f.root).includes('Remote disabled'));
-  assert.equal(visibleText(f.root).includes('Private body'), false);
+  assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
   assert.equal(allNodes(f.root).filter(node => node.tagName === 'BUTTON').length, 0);
   f.page.destroy();
 });
@@ -144,13 +143,10 @@ for (const operation of ['refresh', 'refreshMessages', 'select']) test(`remote c
   f.deny();
   if (operation === 'select') { allNodes(f.root).find(node => node.dataset.conversationId === 'g:BB').dispatch('click'); await tick(); await tick(); }
   else { f.button(operation).dispatch('click'); await tick(); await tick(); }
-  assert.ok(visibleText(f.root).includes('Remote disabled'));
-  assert.equal(visibleText(f.root).includes('Private body'), false);
+  assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
   assert.equal(allNodes(f.root).filter(node => node.tagName === 'BUTTON').length, 0);
-  f.page.redraw(); assert.ok(visibleText(f.root).includes('Remote disabled'));
-  assert.equal(visibleText(f.root).includes('Private body'), false);
-  await f.page.open(); assert.ok(visibleText(f.root).includes('Remote disabled'));
-  assert.equal(visibleText(f.root).includes('Private body'), false);
+  f.page.redraw(); assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
+  await f.page.open(); assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
   f.page.destroy();
 });
 
@@ -161,12 +157,10 @@ test('late old successful message response cannot restore the remote-disabled DO
   const pending = deferred(); f.holdMessage(pending);
   f.button('refreshMessages').dispatch('click'); await tick();
   f.deny(); f.button('refresh').dispatch('click'); await tick(); await tick();
-  assert.ok(visibleText(f.root).includes('Remote disabled'));
-  assert.equal(visibleText(f.root).includes('Private body'), false);
+  assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
   pending.resolve({ ok: true, status: 200, json: async () => ({ items: [{ id: 9, direction: 'out', status: 'delivered', content: 'Late secret' }], afterCursor: 'after' }) });
   await tick(); await tick();
-  assert.ok(visibleText(f.root).includes('Remote disabled'));
-  assert.equal(visibleText(f.root).includes('Private body'), false);
+  assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
   f.page.destroy();
 });
 

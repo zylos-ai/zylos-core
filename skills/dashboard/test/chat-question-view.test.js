@@ -30,8 +30,8 @@ function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = tru
   const render = () => renderQuestion({ document, row, envelope, block, question, canWrite, stateAvailable, statePendingPage, readOnlyExternal, otherAnswerDisclosure, t, formState,
     onSubmit: async (action, options) => { requests.push({ action, options }); return submit(action, options); } });
   const root = render();
-  return { root, render, requests, question, envelope, formState, nodes: () => visibleNodes(root),
-    button: name => visibleNodes(root).find(node => node.dataset.action === name) };
+  return { root, render, requests, question, envelope, formState, nodes: () => allNodes(root),
+    button: name => allNodes(root).find(node => node.dataset.action === name) };
 }
 const change = (input, value) => { input.value = value; input.dispatch('input'); input.dispatch('change'); };
 
@@ -52,14 +52,14 @@ test('multiple choice honors saved selection bounds before invoking the API', as
   const f = fixture({ data: { selection: 'multiple', minSelect: 2, maxSelect: 2 } });
   const inputs = f.nodes().filter(node => node.tagName === 'INPUT');
   inputs[0].checked = true; inputs[0].dispatch('change'); f.button('answer').dispatch('click'); await tick();
-  assert.equal(f.requests.length, 0); assert.match(visibleText(f.root), /invalidAnswer/);
+  assert.equal(f.requests.length, 0); assert.match(f.root.textContent, /invalidAnswer/);
   inputs[1].checked = true; inputs[1].dispatch('change'); f.button('answer').dispatch('click'); await tick();
   assert.equal(f.requests.length, 1); assert.deepEqual(f.requests[0].action.payload.selected, ['a', 'b']);
 });
 
 for (const status of ['answered', 'stopped', 'superseded', 'unknown']) test(`${status} question restores status without any answer actions`, () => {
   const f = fixture({ status });
-  assert.match(visibleText(f.root), new RegExp('chat.question.' + (status === 'unknown' ? 'unavailable' : status)));
+  assert.match(f.root.textContent, new RegExp('chat.question.' + (status === 'unknown' ? 'unavailable' : status)));
   assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName)), false);
 });
 
@@ -76,7 +76,7 @@ for (const reason of ['readonly', 'unregistered', 'wrong-c4', 'wrong-message', '
 
 test('confirmation cancel remains an answer and never calls a lifecycle control', async () => {
   const f = fixture({ type: 'confirmation', data: { cancelLabel: '<img src=x>' } });
-  assert.match(visibleText(f.root), /<img src=x/); assert.equal(f.nodes().some(node => node.tagName === 'IMG'), false);
+  assert.match(f.root.textContent, /<img src=x/); assert.equal(f.nodes().some(node => node.tagName === 'IMG'), false);
   f.button('cancelAnswer').dispatch('click'); await tick();
   assert.equal(f.requests.length, 1); assert.deepEqual(f.requests[0].action.payload, { outcome: 'cancel' });
   assert.equal(f.requests[0].action.type, 'confirmation.respond');
@@ -125,7 +125,7 @@ test('invalid form values stay visible and produce zero requests', async () => {
   const f = fixture({ type: 'form_intent', data: { fields: [{ key: 'count', label: 'Count', type: 'integer', min: 1, max: 5, required: true }] } });
   const input = f.nodes().find(node => node.tagName === 'INPUT'); change(input, '8');
   f.button('answer').dispatch('click'); await tick();
-  assert.equal(f.requests.length, 0); assert.match(visibleText(f.root), /invalidAnswer/);
+  assert.equal(f.requests.length, 0); assert.match(f.root.textContent, /invalidAnswer/);
   assert.equal(allNodes(f.render()).find(node => node.tagName === 'INPUT').value, 8);
 });
 
@@ -145,7 +145,7 @@ test('double click has one in-flight answer and explicit retry keeps the origina
 
 test('unknown delivery locks alternate input and cannot be retried without server permission', () => {
   const f = fixture({ formState: { locked: true, receipt: { stored: null, retryAllowed: false } } });
-  assert.match(visibleText(f.root), /pending_reconciliation/);
+  assert.match(f.root.textContent, /pending_reconciliation/);
   assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'TEXTAREA'].includes(node.tagName)), false);
 });
 
@@ -245,8 +245,8 @@ test('accepted answer without a C4 row displays not-stored instead of an empty d
   const f = fixture({ status: 'answered', formState: { receipt: {
     accepted: true, stored: false, retryAllowed: true, deliveryState: null,
   } } });
-  assert.match(visibleText(f.root), /chat.state.not_stored/);
-  assert.equal(visibleText(f.root).includes('chat.state.null'), false);
+  assert.match(f.root.textContent, /chat.state.not_stored/);
+  assert.equal(f.root.textContent.includes('chat.state.null'), false);
 });
 
 test('valid saved accepted action exposes an exact explicit retry', async () => {
@@ -270,7 +270,7 @@ for (const problem of ['actionError', 'malformed', 'different-id']) test(`saved 
     q.action = action; q.delivery = { stored: false, retryAllowed: true };
     if (problem === 'actionError') q.actionError = 'chat_answer_action_invalid';
   } });
-  assert.match(visibleText(f.root), /chat.question.actionUnavailable/);
+  assert.match(f.root.textContent, /chat.question.actionUnavailable/);
   assert.equal(f.nodes().some(node => node.tagName === 'BUTTON'), false); assert.equal(f.requests.length, 0);
 });
 
@@ -306,27 +306,27 @@ test('opening an answered question hydrates its stored action and retries exactl
 
 test('a failed state query preserves the last known lifecycle and explains the missing update separately', () => {
   const f = fixture({ status: 'paused', stateAvailable: false });
-  assert.match(visibleText(f.root), /chat.question.paused/); assert.match(visibleText(f.root), /chat.question.stateUnavailable/);
-  assert.equal(visibleText(f.root).includes('chat.question.unavailable'), false);
+  assert.match(f.root.textContent, /chat.question.paused/); assert.match(f.root.textContent, /chat.question.stateUnavailable/);
+  assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
   assert.ok(f.button('answer'));
   const initial = fixture({ missing: true, canWrite: false, stateAvailable: false });
-  assert.match(visibleText(initial.root), /chat.questions.unavailable/);
-  assert.equal(visibleText(initial.root).includes('chat.question.stateUnavailable'), false);
-  assert.equal(visibleText(initial.root).includes('chat.question.unavailable'), false);
+  assert.match(initial.root.textContent, /chat.questions.unavailable/);
+  assert.equal(initial.root.textContent.includes('chat.question.stateUnavailable'), false);
+  assert.equal(initial.root.textContent.includes('chat.question.unavailable'), false);
   assert.equal(initial.nodes().some(node => node.tagName === 'BUTTON'), false);
 });
 
 test('external history explains read-only questions without claiming they are unregistered', () => {
   const f = fixture({ missing: true, canWrite: false, readOnlyExternal: true, stateAvailable: false });
-  assert.match(visibleText(f.root), /chat.question.externalReadOnly/);
-  assert.equal(visibleText(f.root).includes('chat.question.unavailable'), false);
+  assert.match(f.root.textContent, /chat.question.externalReadOnly/);
+  assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
   assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'TEXTAREA'].includes(node.tagName)), false);
 });
 
 test('a question whose state page is not loaded does not claim missing registration', () => {
   const f = fixture({ missing: true, canWrite: false, statePendingPage: true });
-  assert.match(visibleText(f.root), /chat.question.stateNotLoaded/);
-  assert.equal(visibleText(f.root).includes('chat.question.unavailable'), false);
+  assert.match(f.root.textContent, /chat.question.stateNotLoaded/);
+  assert.equal(f.root.textContent.includes('chat.question.unavailable'), false);
   assert.equal(f.nodes().some(node => node.tagName === 'BUTTON'), false);
 });
 
@@ -401,9 +401,9 @@ test('a mounted paused question preserves a definite invalid-data rejection afte
 
 for (const error of ['chat_question_not_paused', 'chat_answer_conflict']) test(`${error} uses the server-ended explanation without inventing delivery uncertainty`, () => {
   const f = fixture({ status: 'answered', formState: { error, locked: true }, mutateQuestion(q) { q.delivery = { stored: true, deliveryState: 'pending', retryAllowed: false }; } });
-  assert.match(visibleText(f.root), /chat.question.ended/);
-  assert.equal(visibleText(f.root).includes('pending_reconciliation'), false);
-  assert.equal(visibleText(f.root).includes('chat.question.submitFailed'), false);
+  assert.match(f.root.textContent, /chat.question.ended/);
+  assert.equal(f.root.textContent.includes('pending_reconciliation'), false);
+  assert.equal(f.root.textContent.includes('chat.question.submitFailed'), false);
 });
 
 async function mountedQuestions(testContext, { mode = 'multi', saved = false, retryAllowed, failQuestionQuery = false } = {}) {
@@ -475,7 +475,6 @@ test('mounted failed question query retains paused status and disables retained 
   assert.ok(confirm); assert.equal(confirm.disabled, true);
   const separate = visibleNodes(f.root).find(node => node.classList.contains('chat-notice') && visibleText(node) === 'chat.questions.unavailable');
   assert.ok(separate); assert.equal(allNodes(card).includes(separate), false);
-  confirm.dispatch('click'); await tick();
   assert.equal(f.posts.length, 0);
 });
 
@@ -483,7 +482,7 @@ test('a saved question with invalid constraints displays unavailable without ans
   const f = fixture({ mutateQuestion(q) {
     q.constraints = null; q.questionError = 'chat_question_unavailable';
   } });
-  assert.match(visibleText(f.root), /chat.question.unavailable/);
+  assert.match(f.root.textContent, /chat.question.unavailable/);
   assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName)), false);
   assert.equal(f.requests.length, 0);
 });
