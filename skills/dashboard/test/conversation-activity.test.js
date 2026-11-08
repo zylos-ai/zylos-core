@@ -305,10 +305,42 @@ test('a press on a control is a click: only a list that moves under it, a touch 
   gesture.destroy();
 });
 
-/** A page whose message rows are 100 px tall, in list order, inside a 500 px tall stream; `older` is one more page. */
-function layoutFixture(context, { rows, older }) {
+test('a click right after the wheel still lets the wheel settle, even when its quiet period ends while the button is held', () => {
+  const listeners = new Map(), docListeners = new Map(), timers = new Map();
+  let next = 0, settled = 0;
+  const target = { ownerDocument: { addEventListener: (type, fn) => docListeners.set(type, fn), removeEventListener: type => docListeners.delete(type) },
+    addEventListener: (type, fn) => listeners.set(type, fn), removeEventListener: type => listeners.delete(type) };
+  const gesture = createScrollGesture(target, { setTimeout: fn => { timers.set(++next, fn); return next; },
+    clearTimeout: id => timers.delete(id), onSettle: () => settled++ });
+  const button = { closest: wanted => wanted.split(',').map(part => part.trim()).includes('button') ? {} : null };
+  const runAll = () => { for (const [id, fn] of [...timers]) { timers.delete(id); fn(); } };
+  for (const [kind, down, up] of [['mouse', () => listeners.get('pointerdown')({ pointerType: 'mouse', button: 0, target: button }), () => docListeners.get('pointerup')()],
+    ['touch', () => listeners.get('touchstart')({ target: button }), () => listeners.get('touchend')()]]) {
+    const before = settled;
+    listeners.get('wheel')();
+    assert.equal(gesture.active, true, `${kind}: the wheel is a gesture`);
+    down();
+    runAll();
+    assert.equal(gesture.active, true, `${kind}: the quiet period ends while the button is still held`);
+    up();
+    assert.equal(timers.size, 1, `${kind}: releasing the click starts a new quiet period for the wheel`);
+    runAll();
+    assert.equal(gesture.active, false, `${kind}: the gesture ends after the click`);
+    assert.equal(settled, before + 1, `${kind}: the page catches up once`);
+  }
+  listeners.get('pointerdown')({ pointerType: 'mouse', button: 0, target: button });
+  docListeners.get('pointerup')();
+  assert.equal(timers.size, 0, 'a click with no gesture before it still leaves nothing to settle');
+  gesture.destroy();
+});
+
+/**
+ * A page whose message rows are `rowHeight()` px tall (100 by default), in list order, inside a 500 px tall stream;
+ * `older` is one more page. Animation frames and window listeners are kept so a test can run them.
+ */
+function layoutFixture(context, { rows, older, rowHeight = () => 100 }) {
   const document = createDocument(), root = document.createElement('div');
-  const create = document.createElement, docListeners = new Map(), timers = [];
+  const create = document.createElement, docListeners = new Map(), viewListeners = new Map(), timers = [], frames = [];
   let stream = null;
   document.createElement = tag => {
     const node = create(tag);
@@ -318,14 +350,15 @@ function layoutFixture(context, { rows, older }) {
       if (node === stream) return { top: 0, bottom: 500 };
       const list = node.parentNode;
       if (!list?.classList.contains('conversation-message-list')) return { top: 0, bottom: 0 };
-      const top = list.children.indexOf(node) * 100 - (stream?.scrollTop ?? 0);
-      return { top, bottom: top + 100 };
+      const height = rowHeight(), top = list.children.indexOf(node) * height - (stream?.scrollTop ?? 0);
+      return { top, bottom: top + height };
     };
     return node;
   };
   document.addEventListener = (type, fn) => docListeners.set(type, fn);
   document.removeEventListener = type => docListeners.delete(type);
-  document.defaultView = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
+  document.defaultView = { addEventListener: (type, fn) => viewListeners.set(type, fn), removeEventListener: type => viewListeners.delete(type),
+    requestAnimationFrame: fn => { frames.push(fn); return frames.length; }, cancelAnimationFrame: id => { if (frames[id - 1]) frames[id - 1] = null; },
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: id => { if (timers[id - 1]) timers[id - 1].fn = null; },
     setInterval: () => 9, clearInterval() {}, innerWidth: 1280 };
   const page = mountConversationPage({ root, document, t, fetch: async path => {
@@ -339,13 +372,14 @@ function layoutFixture(context, { rows, older }) {
     return { ok: true, status: 200, json: async () => body };
   } });
   context.after(() => page.destroy());
-  return { root, page, timers, docListeners, async open() {
+  const runFrames = () => { for (let i = 0; i < frames.length; i++) { const fn = frames[i]; frames[i] = null; fn?.(); } };
+  return { root, page, timers, frames, runFrames, docListeners, viewListeners, view: document.defaultView, async open() {
     await page.open();
     allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click');
     for (let i = 0; i < 6; i++) await tick();
     stream = root.querySelector('.conversation-stream');
     const list = root.querySelector('.conversation-message-list');
-    Object.defineProperty(stream, 'scrollHeight', { get: () => list.children.length * 100, set() {}, configurable: true });
+    Object.defineProperty(stream, 'scrollHeight', { get: () => list.children.length * rowHeight(), set() {}, configurable: true });
     stream.clientHeight = 500;
     return { stream, list };
   } };
@@ -382,6 +416,51 @@ test('content that moves during a drag is moved back once the drag settles, unle
   stream.dispatch('touchend', {});
   f.timers.filter(timer => timer.fn && timer.ms === 180).at(-1).fn();
   assert.equal(reading.getBoundingClientRect().top, 0, 'once the list is still, the older page no longer pushes the row away');
+});
+
+test('a column that changes width while the list is still scrolling keeps the message being read once it settles', async t => {
+  let collapsed = null;
+  // Hiding the conversation list widens the conversation, so every row wraps to 80 px instead of 100 px.
+  const f = layoutFixture(t, { rows: Array.from({ length: 10 }, (_, i) => reply(11 + i)), rowHeight: () => collapsed?.classList.contains('conversation-list-collapsed') ? 80 : 100 });
+  const { stream, list } = await f.open();
+  collapsed = f.root.querySelector('.conversation-page') ?? f.root.firstElementChild;
+  stream.scrollTop = 300;
+  const reading = list.querySelector('[data-message-id="14"]');
+  assert.equal(reading.getBoundingClientRect().top, 0);
+  stream.dispatch('wheel', {});
+  const toggle = f.root.querySelector('.conversation-list-toggle');
+  stream.dispatch('pointerdown', { pointerType: 'mouse', button: 0, target: toggle });
+  toggle.dispatch('click');
+  f.docListeners.get('pointerup')();
+  assert.ok(collapsed.classList.contains('conversation-list-collapsed'), 'the list is hidden');
+  assert.equal(reading.getBoundingClientRect().top, -60, 'while the wheel is still settling the position is not written');
+  for (const timer of f.timers.filter(timer => timer.fn && timer.ms === 180)) timer.fn();
+  assert.equal(reading.getBoundingClientRect().top, 0, 'once it settles, the row being read is back where it was');
+});
+
+test('fitting the page while the list is still scrolling keeps the message being read once it settles', async t => {
+  let fitted = null;
+  // A shorter page makes the stream show its scrollbar, which narrows the column so the rows wrap to 110 px.
+  const f = layoutFixture(t, { rows: Array.from({ length: 10 }, (_, i) => reply(11 + i)), rowHeight: () => parseInt(fitted?.style.height, 10) < 700 ? 110 : 100 });
+  f.view.innerHeight = 800;
+  const { stream, list } = await f.open();
+  fitted = f.root.firstElementChild;
+  fitted.getClientRects = () => [{}];
+  f.viewListeners.get('resize')();
+  f.runFrames();
+  assert.equal(fitted.style.height, '800px');
+  stream.scrollTop = 300;
+  const reading = list.querySelector('[data-message-id="14"]');
+  assert.equal(reading.getBoundingClientRect().top, 0);
+  stream.dispatch('touchstart', {});
+  f.view.innerHeight = 600;
+  f.viewListeners.get('resize')();
+  f.runFrames();
+  assert.equal(fitted.style.height, '600px');
+  assert.equal(reading.getBoundingClientRect().top, 30, 'while the finger is down the position is not written');
+  stream.dispatch('touchend', {});
+  f.timers.filter(timer => timer.fn && timer.ms === 180).at(-1).fn();
+  assert.equal(reading.getBoundingClientRect().top, 0, 'once the list is still, the row being read is back where it was');
 });
 
 test('opening a folded part with the mouse or the keyboard keeps its head where it was on screen', async t => {

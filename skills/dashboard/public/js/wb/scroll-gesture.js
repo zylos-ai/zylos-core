@@ -33,7 +33,8 @@ export function createScrollGesture(target, { setTimeout: delay = globalThis.set
   const release = () => {
     if (!held) return;
     held = false;
-    if (armed) { armed = false; return; }
+    // A click ends no gesture of its own, but one it interrupted (the wheel just before it) still has to settle.
+    if (armed) { armed = false; if (active) settle(); return; }
     settle();
   };
   // A mouse press only arms: it becomes a gesture when the list scrolls while the button is held.
