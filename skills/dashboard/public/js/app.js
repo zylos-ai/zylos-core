@@ -390,7 +390,7 @@ const memoryScopeView = createMemoryScope({
   summaryRoot: $('#memory-summary'), t,
   request: fetchAgentJson, getTree: () => state.memory.tree, getFile: () => state.memory.file,
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
-  onChange: () => renderMemory(), onFile: path => { state.memory.filePaneOpen = true; window.scrollTo(0, 0); return openMemoryFile(path).catch(() => {}); },
+  onChange: () => renderMemory(), onFile: path => { state.memory.filePaneOpen = true; return openMemoryFile(path).catch(() => {}); },
   onGroup: path => state.memory.collapsed.delete(path),
   selectedPath: () => state.memory.selectedPath,
   isCollapsed: key => state.memory.collapsed.has(key),
@@ -2860,6 +2860,8 @@ workbench = mountWorkbench({
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   writable: () => wbWritable(remoteIsReadOnly),
   onMemory: key => {
+    // Show the group's file list, not a file left open from before.
+    state.memory.filePaneOpen = false;
     memoryScopeView.selectGroup(key);
     document.querySelector('.tab[data-tab="memory"]')?.click();
   },
