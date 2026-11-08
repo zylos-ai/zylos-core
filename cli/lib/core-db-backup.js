@@ -63,9 +63,8 @@ export function probeCoreDbSnapshotSync(zylosDir) {
     if(probe) fs.rmSync(probe,{recursive:true,force:true});
   }
 }
-// Run before any service is stopped or maintenance marker is published. This
-// opens existing databases read-only using the installed Core native driver.
-export function preflightCoreDbUpgrade(zylosDir, {dashboardOwnerManaged=true,driverRoot,schemaRoot}={}) {
+// Inspect path types without writing probes or opening a database.
+export function inspectCoreDbSnapshotDestination(zylosDir) {
   let destination = zylosDir;
   for (const relative of ['.backup', '.backup/db']) {
     const file = path.join(zylosDir, relative);
@@ -76,6 +75,12 @@ export function preflightCoreDbUpgrade(zylosDir, {dashboardOwnerManaged=true,dri
     }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
+  return destination;
+}
+// Run before any service is stopped or maintenance marker is published. This
+// opens existing databases read-only using the installed Core native driver.
+export function preflightCoreDbUpgrade(zylosDir, {dashboardOwnerManaged=true,driverRoot,schemaRoot}={}) {
+  const destination = inspectCoreDbSnapshotDestination(zylosDir);
   probeCoreDbSnapshotSync(zylosDir);
   if (destination !== zylosDir) probeCoreDbSnapshotSync(destination);
   return runCoreDbWorker({action:'offline-preflight',zylosDir,formatVersion:2,dashboardOwnerManaged,driverRoot,schemaRoot});

@@ -26,6 +26,7 @@ import { promptYesNo } from '../lib/prompts.js';
 import { evaluateUpgrade } from '../lib/claude-eval.js';
 import { resumeFinalize } from '../lib/upgrade-resume.js';
 import { recoverBeforeUpgrade } from '../lib/upgrade-discovery.js';
+import { collectUpgradePrerequisites } from '../lib/upgrade-prerequisites.js';
 import { upgradeFailureCode, upgradeFailureMessage } from '../lib/upgrade-admission.js';
 
 /**
@@ -86,9 +87,8 @@ export function formatC4Reply(type, data) {
       return r;
     }
     case 'self-check': {
-      const { hasUpdate, current, latest, changelog, localChanges } = data;
-      if (!hasUpdate) return `zylos-core is up to date (v${current})`;
-      let r = `zylos-core: ${current} -> ${latest}`;
+      const { hasUpdate, current, latest, changelog, localChanges, prerequisites } = data;
+      let r = hasUpdate ? `zylos-core: ${current} -> ${latest}` : `zylos-core is up to date (v${current})`;
       if (changelog) r += `\n\nChangelog:\n${changelog}`;
       if (localChanges && localChanges.length > 0) {
         r += '\n\nLocal skill modifications:';
@@ -97,7 +97,8 @@ export function formatC4Reply(type, data) {
           for (const f of added) r += `\n  A ${skill}/${f}`;
         }
       }
-      r += '\n\nReply "upgrade zylos confirm" to proceed.';
+      if (prerequisites?.length) r += '\n\n' + formatUpgradePrerequisites(prerequisites);
+      if (hasUpdate) r += '\n\nReply "upgrade zylos confirm" to proceed.';
       return r;
     }
     case 'upgrade': {
@@ -1015,13 +1016,23 @@ function detectCoreSkillChanges() {
   return results;
 }
 
+function formatUpgradePrerequisites(prerequisites) {
+  return 'Before upgrading:\n' + prerequisites.map(item => `  [${item.code}] ${item.message}\n  ${item.next}`).join('\n');
+}
+
 /**
  * Handle --self --check: check for zylos-core updates only (no lock needed).
  * Explicit versions check only precedence and tag existence; other checks
  * download to a temp directory for file comparison by Claude.
  */
-function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
-  const check = checkForCoreUpdates({ branch, beta, version });
+export function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }, deps = {}) {
+  const console = deps.console ?? globalThis.console;
+  const prerequisitesFor = targetRoot => (deps.collectUpgradePrerequisites ?? collectUpgradePrerequisites)({
+    zylosDir: deps.zylosDir ?? ZYLOS_DIR,
+    installedRoot: deps.installedRoot ?? path.resolve(import.meta.dirname, '../..'),
+    targetRoot, fromVersion: check.current,
+  });
+  const check = (deps.checkForCoreUpdates ?? checkForCoreUpdates)({ branch, beta, version });
 
   if (!check.success) {
     if (jsonOutput) {
@@ -1038,8 +1049,10 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
     const message = check.hasUpdate
       ? 'Version constraints satisfied and exact release tag found. Starting-version acceptance is determined by the target upgrade entry.'
       : 'Already at this version (SemVer precedence). No upgrade will run; the target tag and starting-version acceptance were not checked.';
-    const reply = `zylos-core: ${check.current} -> ${check.latest}. ${message}`;
-    if (jsonOutput) console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check, message, reply }, null, 2));
+    const prerequisites = check.hasUpdate ? prerequisitesFor() : [];
+    let reply = `zylos-core: ${check.current} -> ${check.latest}. ${message}`;
+    if (prerequisites.length) reply += '\n\n' + formatUpgradePrerequisites(prerequisites);
+    if (jsonOutput) console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check, prerequisites, message, reply }, null, 2));
     else console.log(reply);
     return;
   }
@@ -1047,13 +1060,14 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
   // When update is available (or --branch forces re-check): download to temp, read changelog, detect local changes
   let changelog = null;
   let tempDir = null;
+  let targetDownloadFailed = false;
 
   // With --branch, always proceed even if versions match (user wants to install specific branch)
   if (check.hasUpdate || branch) {
     // Download new version to temp dir (for template/file comparison by Claude)
     let dlResult;
     try {
-      dlResult = downloadCoreToTemp(check.latest, branch);
+      dlResult = (deps.downloadCoreToTemp ?? downloadCoreToTemp)(check.latest, branch);
     } catch (err) {
       dlResult = { success: false, error: err.message };
     }
@@ -1061,16 +1075,17 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
       tempDir = dlResult.tempDir;
 
       // Read changelog from downloaded package (more reliable than remote fetch)
-      const fullChangelog = readCoreChangelog(tempDir);
+      const fullChangelog = (deps.readCoreChangelog ?? readCoreChangelog)(tempDir);
       changelog = filterChangelog(fullChangelog, check.current);
     } else {
+      targetDownloadFailed = true;
       // Fallback: fetch changelog from remote
       try {
-        const rawChangelog = fetchRawFile('zylos-ai/zylos-core', 'CHANGELOG.md', `v${check.latest}`);
+        const rawChangelog = (deps.fetchRawFile ?? fetchRawFile)('zylos-ai/zylos-core', 'CHANGELOG.md', `v${check.latest}`);
         changelog = filterChangelog(rawChangelog, check.current);
       } catch {
         try {
-          const rawChangelog = fetchRawFile('zylos-ai/zylos-core', 'CHANGELOG.md');
+          const rawChangelog = (deps.fetchRawFile ?? fetchRawFile)('zylos-ai/zylos-core', 'CHANGELOG.md');
           changelog = filterChangelog(rawChangelog, check.current);
         } catch {
           // CHANGELOG.md may not exist
@@ -1080,17 +1095,23 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
   }
 
   // Detect local modifications to core skills
-  const allLocalChanges = (check.hasUpdate || branch) ? detectCoreSkillChanges() : [];
+  const allLocalChanges = (check.hasUpdate || branch) ? (deps.detectCoreSkillChanges ?? detectCoreSkillChanges)() : [];
+  const prerequisites = (check.hasUpdate || branch) ? prerequisitesFor(tempDir) : [];
+  if (targetDownloadFailed) prerequisites.push({
+    code: 'UPGRADE_FAILED',
+    message: 'Target-specific upgrade prerequisites could not be inspected because the target download failed.',
+    next: 'Retry this upgrade check when the target package can be downloaded.',
+  });
 
   if (jsonOutput) {
-    const output = { action: 'check', target: 'zylos-core', ...check };
+    const output = { action: 'check', target: 'zylos-core', ...check, prerequisites };
     if (branch) output.branch = branch;
     if (changelog) output.changelog = changelog;
     const mappedChanges = allLocalChanges.length > 0
       ? allLocalChanges.map(({ skill, changes }) => ({ skill, modified: changes.modified, added: changes.added }))
       : null;
     if (mappedChanges) output.localChanges = mappedChanges;
-    output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges });
+    output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges, prerequisites });
     console.log(JSON.stringify(output, null, 2));
   } else {
     if (!check.hasUpdate && !branch) {
@@ -1114,7 +1135,8 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
     }
   }
 
-  cleanupCoreTemp(tempDir);
+  if (!jsonOutput && prerequisites.length) console.log('\n' + formatUpgradePrerequisites(prerequisites));
+  (deps.cleanupCoreTemp ?? cleanupCoreTemp)(tempDir);
 }
 
 /**

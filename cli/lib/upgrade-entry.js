@@ -9,6 +9,7 @@ import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, ins
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
 import { recoveryNext } from './upgrade-discovery.js';
+import { inspectCoreSkillDependencies } from './upgrade-prerequisites.js';
 
 export function resolveUpgradeNpmCli() {
   for (const directory of String(process.env.PATH || '').split(path.delimiter)) {
@@ -55,18 +56,7 @@ export function inspectUpgradeSource(input, deps = {}) {
   if (source.name !== target.name || typeof target.version !== 'string') throw Object.assign(new Error('Downloaded target package identity does not match installed Core.'), {code:'INVALID_UPGRADE_HANDOFF'});
   const skillsDir = path.join(zylosDir, '.claude', 'skills');
   assertDashboardUninstalled(zylosDir);
-  const declaredSkills=new Set();
-  for(const packageRoot of [coreDir,tempDir]) {
-    const directory=path.join(packageRoot,'skills');
-    try {for(const entry of fs.readdirSync(directory,{withFileTypes:true}))if(entry.isDirectory())declaredSkills.add(entry.name);}
-    catch(error) {if(error.code!=='ENOENT')throw error;}
-  }
-  for(const name of declaredSkills) {
-    try {
-      const stat=fs.lstatSync(path.join(skillsDir,name,'node_modules'));
-      if(!stat.isDirectory())throw Object.assign(Error('Installed core skill node_modules must be a real directory or absent: '+name),{code:'INVALID_CORE_DEPENDENCIES'});
-    } catch(error) {if(error.code!=='ENOENT')throw error;}
-  }
+  inspectCoreSkillDependencies(coreDir, tempDir, skillsDir);
   const firstTakeover = inspectFirstDashboardTakeover(coreDir);
   const dashboardOwnerManaged = inspectDashboardOwnerManaged(zylosDir,{driverRoot:skillsDir});
   const options = {driverRoot:skillsDir, schemaRoot:path.join(tempDir,'skills'), dashboardOwnerManaged};
