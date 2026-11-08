@@ -55,7 +55,9 @@ test('timezone HTTP saves require admin access and a separate confirmed service 
         const apps = scripts.map(([name, relative]) => ({ name,
           script: path.join(root, '.claude/skills', relative), cwd: root,
           interpreter: process.execPath, autorestart: false,
-          env: { ZYLOS_DIR: root, fixture_name: name } }));
+          env: { ZYLOS_DIR: root, fixture_name: name,
+            fixture_timezone_module: new URL('../../scheduler/scripts/tz.js', import.meta.url).href,
+            fixture_dotenv_module: import.meta.resolve('dotenv') } }));
         fs.writeFileSync(ecosystem, `module.exports = ${JSON.stringify({ apps })};\n`);
         console.log('Timezone process isolation:', JSON.stringify({ ...proof, pm2Path,
           node: process.execPath, ecosystem, envFile, scripts: apps.map(app => app.script) }));
@@ -87,6 +89,16 @@ test('timezone HTTP saves require admin access and a separate confirmed service 
         pm2(['stop', 'zylos-openmax']);
         const pm2Data = () => ({ processes: JSON.parse(pm2(['jlist'])) });
         const snapshot = () => new Map(pm2Data().processes.map(proc => [proc.name, proc.pid]));
+        async function receiptFor(name, predicate = () => true) {
+          for (let attempt = 0; attempt < 100; attempt++) {
+            signal.throwIfAborted();
+            let value;
+            try { value = JSON.parse(fs.readFileSync(path.join(root, `${name}.json`), 'utf8')); } catch {}
+            if (value && predicate(value)) return value;
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          assert.fail(`Timed out waiting for ${name} receipt`);
+        }
         const before = snapshot();
         assert.ok(before.get('scheduler') > 0 && before.get('web-console') > 0 && before.get('runtime-sentinel') > 0);
         const [{ createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneRestart }, { AuthGate, hashPassword },
@@ -151,30 +163,47 @@ test('timezone HTTP saves require admin access and a separate confirmed service 
           assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
           const after = snapshot();
           for (const name of ['scheduler', 'web-console', 'runtime-sentinel']) assert.equal(after.get(name), before.get(name));
+          const savedAt = Date.now();
+          const schedulerReceipt = await receiptFor('scheduler', value => value.sampledAt >= savedAt);
+          assert.equal(schedulerReceipt.pid, before.get('scheduler'));
+          assert.equal(schedulerReceipt.source, 'scheduler.startupTimezone');
+          assert.equal(schedulerReceipt.tz, 'UTC', 'running scheduler keeps its startup timezone until restart');
+          assert.equal(schedulerReceipt.processTz, 'UTC');
+          const webReceipt = await receiptFor('web-console', value => value.sampledAt >= savedAt);
+          assert.equal(webReceipt.tz, 'UTC', 'Web Console retains its startup .env snapshot until restart');
+          assert.equal(webReceipt.source, 'web-console.startupEnv');
+          console.log('Timezone unchanged startup snapshots:', JSON.stringify({ scheduler: schedulerReceipt, webConsole: webReceipt }));
           assert.equal((await request(restartPath, { method: 'POST', body: { tz: 'Asia/Tokyo' } })).status, 400);
-          assert.equal((await request(restartPath, { method: 'POST', body: { tz: 'UTC', confirm: true } })).status, 409);
-          assert.equal((await request(restartPath, { method: 'POST', identity: 'read', body: { tz: 'Asia/Tokyo', confirm: true } })).status, 403);
-          assert.equal((await request(restartPath, { method: 'POST', sameOrigin: false, body: { tz: 'Asia/Tokyo', confirm: true } })).status, 403);
+          assert.equal((await request(restartPath, { method: 'POST', body: { tz: 'UTC', confirm: true, services: ['scheduler', 'web-console'] } })).status, 409);
+          assert.equal((await request(restartPath, { method: 'POST', identity: 'read', body: { tz: 'Asia/Tokyo', confirm: true, services: ['scheduler', 'web-console'] } })).status, 403);
+          assert.equal((await request(restartPath, { method: 'POST', sameOrigin: false, body: { tz: 'Asia/Tokyo', confirm: true, services: ['scheduler', 'web-console'] } })).status, 403);
           const unchanged = snapshot();
           for (const name of ['scheduler', 'web-console', 'runtime-sentinel']) assert.equal(unchanged.get(name), before.get(name));
         }
+        // A scheduler ordinary restart also reads its saved .env via the actual
+        // product reader; --update-env is not required for that reader.
+        {
+          const oldPid = snapshot().get('scheduler');
+          pm2(['restart', 'scheduler']);
+          const newPid = snapshot().get('scheduler');
+          assert.notEqual(newPid, oldPid);
+          const receipt = await receiptFor('scheduler', value => value.pid === newPid);
+          assert.equal(receipt.tz, 'Asia/Tokyo');
+          assert.equal(receipt.processTz, 'Asia/Tokyo', 'scheduler sets process timezone from .env at startup');
+          console.log('Timezone ordinary scheduler restart:', JSON.stringify({ oldPid, newPid, receipt }));
+        }
         // confirmed restart refreshes only owned running timezone consumers.
         {
-          const result = await request(restartPath, { method: 'POST', body: { tz: 'Asia/Tokyo', confirm: true } });
+          const restartBefore = snapshot();
+          const result = await request(restartPath, { method: 'POST', body: { tz: 'Asia/Tokyo', confirm: true, services: ['scheduler', 'web-console'] } });
           assert.equal(result.status, 200); assert.equal(result.body.ok, true);
           assert.deepEqual(result.body.restarted, ['scheduler', 'web-console']);
           assert.deepEqual(result.body.failed, []);
           const after = snapshot();
           for (const name of ['scheduler', 'web-console']) {
-            assert.ok(after.get(name) > 0); assert.notEqual(after.get(name), before.get(name));
-            let receipt;
-            for (let attempt = 0; attempt < 100; attempt++) {
-              signal.throwIfAborted();
-              try { receipt = JSON.parse(fs.readFileSync(path.join(root, `${name}.json`), 'utf8')); } catch {}
-              if (receipt?.pid === after.get(name)) break;
-              await new Promise(resolve => setTimeout(resolve, 20));
-            }
-            console.log('Timezone process receipt:', JSON.stringify({ name, before: before.get(name), after: after.get(name), receipt }));
+            assert.ok(after.get(name) > 0); assert.notEqual(after.get(name), restartBefore.get(name));
+            const receipt = await receiptFor(name, value => value.pid === after.get(name));
+            console.log('Timezone process receipt:', JSON.stringify({ name, before: restartBefore.get(name), after: after.get(name), receipt }));
             assert.equal(receipt?.pid, after.get(name)); assert.equal(receipt.tz, 'Asia/Tokyo');
           }
           assert.equal(after.get('runtime-sentinel'), before.get('runtime-sentinel'));
@@ -188,13 +217,33 @@ test('timezone HTTP saves require admin access and a separate confirmed service 
         {
           const nextEdit = await request(settingsPath, { method: 'PUT', body: { tz: 'Asia/Seoul' } });
           assert.equal(nextEdit.status, 200); assert.equal(nextEdit.body.tz, 'Asia/Seoul');
+          const attempted = [];
+          let failWebConsole = true;
           activeTimezone = createInstanceTimezone({ zylosDir: root, readPm2: async () => pm2Data(), log() {},
-            restartService: async name => { if (name === 'web-console') throw new Error('fixture restart failure'); } });
-          const partial = await request(restartPath, { method: 'POST', body: { tz: 'Asia/Seoul', confirm: true } });
+            restartService: async name => { attempted.push(name); if (name === 'web-console' && failWebConsole) throw new Error('fixture restart failure'); } });
+          const partial = await request(restartPath, { method: 'POST', body: { tz: 'Asia/Seoul', confirm: true, services: ['scheduler', 'web-console'] } });
           assert.equal(partial.status, 200); assert.equal(partial.body.ok, false);
           assert.deepEqual(partial.body.restarted, ['scheduler']);
           assert.deepEqual(partial.body.failed, [{ name: 'web-console', error: 'restart_failed' }]);
           assert.deepEqual(partial.body.restart_services.map(item => item.name), ['web-console']);
+          assert.deepEqual(attempted, ['scheduler', 'web-console']);
+          failWebConsole = false;
+          const retryStarted = Date.now();
+          const retry = await request(restartPath, { method: 'POST', body: {
+            tz: 'Asia/Seoul', confirm: true, services: partial.body.restart_services.map(item => item.name),
+          } });
+          assert.equal(retry.status, 200); assert.equal(retry.body.ok, true);
+          assert.deepEqual(retry.body.restarted, ['web-console']);
+          assert.deepEqual(attempted, ['scheduler', 'web-console', 'web-console'], 'retry must not restart the successful service');
+          assert.ok(Date.now() - retryStarted < 2000, 'the retry succeeded within the old dedup window');
+          // Identical successful request bodies can also be immediately retried;
+          // no action-level dedup may hide the timezone handler result.
+          const repeated = await request(restartPath, { method: 'POST', body: {
+            tz: 'Asia/Seoul', confirm: true, services: ['web-console'],
+          } });
+          assert.equal(repeated.status, 200); assert.equal(repeated.body.ok, true);
+          assert.deepEqual(repeated.body.restarted, ['web-console']);
+          assert.deepEqual(attempted, ['scheduler', 'web-console', 'web-console', 'web-console']);
           activeTimezone = timezone;
         }
         // an explicit managed deployment marker blocks both save and restart.
@@ -203,7 +252,7 @@ test('timezone HTTP saves require admin access and a separate confirmed service 
           const view = await request(settingsPath);
           assert.equal(view.body.writable, false); assert.equal(view.body.read_only_reason, 'timezone_managed');
           assert.equal((await request(settingsPath, { method: 'PUT', body: { tz: 'UTC' } })).status, 409);
-          assert.equal((await request(restartPath, { method: 'POST', body: { tz: 'Europe/Paris', confirm: true } })).status, 409);
+          assert.equal((await request(restartPath, { method: 'POST', body: { tz: 'Europe/Paris', confirm: true, services: ['scheduler', 'web-console'] } })).status, 409);
           assert.equal(fs.readFileSync(envFile, 'utf8'), original.replace('"UTC"', '"Asia/Seoul"'));
         }
       }, { timeoutMs: 75_000 });

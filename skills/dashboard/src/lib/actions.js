@@ -102,7 +102,9 @@ export async function handleAction(action, body, config, { timezone } = {}) {
   const zylosDir = config.zylosDir || path.join(os.homedir(), 'zylos');
   log(reqId, `=> ${action} ${JSON.stringify(body || {})}`);
 
-  if (isDuplicate(action, body)) {
+  // Timezone restarts act only on the explicitly confirmed remaining services;
+  // immediate partial-failure retries must reach fresh discovery.
+  if (action !== 'restart-timezone-services' && isDuplicate(action, body)) {
     log(reqId, `<= deduped (same payload within ${DEDUP_WINDOW_MS}ms)`);
     return { ok: false, error: 'duplicate_request', message: 'Identical request received within dedup window; ignored.', messageKey: 'result.duplicate_request' };
   }

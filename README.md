@@ -443,11 +443,17 @@ reference is in [activity-monitor](skills/activity-monitor/SKILL.md#multi-sessio
 
 Dashboard Settings reads the instance time zone from `.env` `TZ`. Admins can
 save a valid IANA time zone there; the writer preserves other assignments,
-comments and formatting and keeps `.env` private (0600). Saving does not restart
+comments and formatting and keeps `.env` private (0600), including unchanged
+saves. Symlinked or nonregular `.env` files are read-only. The Dashboard writer
+shares the existing config-lock protocol for `.env` writes; it does not lock
+external editors or serialize service restarts against later saves. Saving does not restart
 anything. A second confirmation restarts only discovered, running services from
 this instance: scheduler and web-console, plus zylos-openmax when installed and
-running. Their startup-cached time zone requires a restart. The list is advisory;
-unknown process discovery disables restart. Dashboard reads the file on each
+running. Scheduler and web-console read `.env` at startup, so an ordinary
+restart can reload their configured time zone. The current list is advisory;
+only names shown in the confirmation and still eligible are restarted, and
+failed-service retries exclude successful services. Unknown process discovery
+disables restart. Dashboard reads the file on each
 request and needs no restart. Existing runtime sessions keep running and take
 the new time zone on their next launch. Memory log dates may cross a new day
 boundary after the change.

@@ -1,16 +1,18 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { parse } from 'dotenv';
-import { isValidTimezone, loadTimezone } from '../../../scheduler/scripts/tz.js';
 import { withConfigLock } from './config-mutation.js';
+import { createScheduleTz } from './workbench/schedule-tz.js';
 import { loadCoreModule } from './core-modules.js';
 import { readJsonBody, sendJson } from './http.js';
 import { isSameOriginRequest } from './request-origin.js';
 
 const { readConfigStrict } = await loadCoreModule('config-store.js');
 const { createPm2Helpers } = await loadCoreModule('pm2.js');
+const execAsync = promisify(exec);
 
 export const INSTANCE_TIMEZONE_PATH = '/api/settings/timezone';
 const SERVICES = [
@@ -23,8 +25,17 @@ class TimezoneSettingsError extends Error {
   constructor(error, status) { super(error); this.code = error; this.status = status; }
 }
 const fail = (error, status) => { throw new TimezoneSettingsError(error, status); };
-const valid = tz => typeof tz === 'string' && tz.length > 0 && tz.length <= 128 &&
-  tz === tz.trim() && !/[\r\n\0]/.test(tz) && isValidTimezone(tz);
+function readableTimezone(tz) {
+  if (typeof tz !== 'string' || !tz || tz.length > 128 || tz !== tz.trim() || /[\r\n\0]/.test(tz)) return false;
+  try { new Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; } catch { return false; }
+}
+
+// Only writes require canonical IANA spelling. Existing read semantics, including
+// the scheduler's validation and fallback, remain owned by the shared reader.
+function writableTimezone(tz) {
+  if (!readableTimezone(tz) || tz !== 'UTC' && !tz.includes('/')) return false;
+  return new Intl.DateTimeFormat(undefined, { timeZone: tz }).resolvedOptions().timeZone === tz;
+}
 
 function samePath(left, right) {
   try { return typeof left === 'string' && fs.realpathSync(left) === fs.realpathSync(right); }
@@ -33,7 +44,7 @@ function samePath(left, right) {
 
 /** Keep every byte outside the effective (last) TZ value, including quotes and comments. */
 export function replaceTimezoneValue(text, tz) {
-  if (!valid(tz)) fail('invalid_timezone', 400);
+  if (!writableTimezone(tz)) fail('invalid_timezone', 400);
   // Follow dotenv's assignment grammar, retaining original offsets rather than
   // normalizing newlines. A quoted value can span lines and contain TZ text.
   const assignment = /^(\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?))(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?$/dmg;
@@ -81,10 +92,12 @@ async function writeEnvironment(file, text) {
 }
 
 /** Service candidates are advisory; no applied-version ledger or restart on save. */
-export function createInstanceTimezone({ zylosDir, readTimezone = loadTimezone,
-  readPm2 = () => null, restartService, log = message => process.stderr.write(`[timezone] ${message}\n`) } = {}) {
+export function createInstanceTimezone({ zylosDir, readTimezone,
+  readPm2 = () => null, restartService, execute = execAsync,
+  log = message => process.stderr.write(`[timezone] ${message}\n`) } = {}) {
   const envFile = path.join(zylosDir, '.env');
   const configFile = path.join(zylosDir, '.zylos/config.json');
+  const timezoneReader = readTimezone ?? createScheduleTz({ zylosDir });
 
   function policy() {
     const result = readConfigStrict(configFile);
@@ -119,9 +132,9 @@ export function createInstanceTimezone({ zylosDir, readTimezone = loadTimezone,
   }
   async function zone() {
     try {
-      const value = await readTimezone();
+      const value = await timezoneReader();
       const tz = typeof value === 'string' ? value : value?.tz;
-      return valid(tz) ? tz : null;
+      return readableTimezone(tz) ? tz : null;
     } catch { return null; }
   }
   async function get({ canWrite = true } = {}) {
@@ -131,14 +144,14 @@ export function createInstanceTimezone({ zylosDir, readTimezone = loadTimezone,
     return { tz: await zone(), writable: !reason, read_only_reason: reason, ...await candidates() };
   }
   async function save(body) {
-    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'tz') || !valid(body.tz)) fail('invalid_timezone', 400);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'tz') || !writableTimezone(body.tz)) fail('invalid_timezone', 400);
     let previous = null, changed = false;
     try {
       requireWritable();
       await withConfigLock(envFile, async () => {
         const text = requireWritable();
         const current = parse(text).TZ;
-        previous = valid(current) ? current : null;
+        previous = readableTimezone(current) ? current : null;
         changed = current !== body.tz;
         if (changed) await writeEnvironment(envFile, replaceTimezoneValue(text, body.tz));
         else await fs.promises.chmod(envFile, 0o600);
@@ -150,38 +163,55 @@ export function createInstanceTimezone({ zylosDir, readTimezone = loadTimezone,
     if (changed) log(`TZ saved: ${previous || '(unknown)'} -> ${body.tz}`);
     return { ok: true, changed, previous, ...await get() };
   }
-  const restartOne = restartService || ((name, tz) => {
-    const helpers = createPm2Helpers({ exec: (command, options) => execSync(command, {
-      ...options, env: { ...process.env, ZYLOS_DIR: zylosDir, TZ: tz }, timeout: 15_000, killSignal: 'SIGKILL',
-    }) });
-    // Named restart merges the CLI environment with --update-env. Ecosystem
-    // JSON actions retain cached variables absent from their explicit app.env.
+  const restartOne = restartService || (async (name, tz) => {
+    let execution;
+    const helpers = createPm2Helpers({ exec: (command, options) => {
+      execution = execute(command, {
+        ...options, env: { ...process.env, ZYLOS_DIR: zylosDir, TZ: tz }, timeout: 15_000, killSignal: 'SIGKILL',
+      });
+      return execution;
+    } });
+    // Preserve the existing named restart/environment policy while keeping its
+    // asynchronous completion and failure inside this request's lifecycle.
     helpers.restartManagedProcess(name, { updateEnv: true });
+    await execution;
   });
   async function restart(body) {
     const restarted = [], failed = [];
+    let remaining = [];
     try {
       if (!body || typeof body !== 'object' || Array.isArray(body) || body.confirm !== true ||
-          Object.keys(body).some(key => !['tz', 'confirm'].includes(key)) || !valid(body.tz)) fail('confirmation_required', 400);
+          Object.keys(body).some(key => !['tz', 'confirm', 'services'].includes(key)) || !writableTimezone(body.tz) ||
+          !Array.isArray(body.services) || body.services.length === 0 || body.services.length > SERVICES.length ||
+          body.services.some(name => !SERVICES.some(([allowed]) => name === allowed)) ||
+          new Set(body.services).size !== body.services.length) fail('confirmation_required', 400);
       const current = parse(requireWritable()).TZ;
       if (current !== body.tz) fail('timezone_changed', 409);
       const discovery = await candidates();
       if (discovery.restart_status !== 'known') fail('service_discovery_unavailable', 503);
-      for (const { name } of discovery.restart_services) {
+      remaining = discovery.restart_services.filter(service => body.services.includes(service.name));
+      for (const { name } of [...remaining]) {
         // An asynchronous service restart must not apply a later edit without confirmation.
         const fresh = await candidates();
         if (fresh.restart_status !== 'known') fail('service_discovery_unavailable', 503);
         if (parse(requireWritable()).TZ !== body.tz) fail('timezone_changed', 409);
-        if (!fresh.restart_services.some(service => service.name === name)) continue;
-        try { await restartOne(name, body.tz); restarted.push(name); }
+        if (!fresh.restart_services.some(service => service.name === name)) {
+          remaining = remaining.filter(service => service.name !== name);
+          continue;
+        }
+        try {
+          await restartOne(name, body.tz); restarted.push(name);
+          remaining = remaining.filter(service => service.name !== name);
+        }
         catch { failed.push({ name, error: 'restart_failed' }); }
       }
       log(`TZ services restart: ${restarted.join(',') || '(none)'}${failed.length ? '; failed=' + failed.map(item => item.name).join(',') : ''}`);
       return { ok: failed.length === 0, status: 200, restarted, failed,
         restart_services: failed.map(({ name }) => ({ name, status: 'online' })), restart_status: 'known' };
     } catch (error) {
-      if (error instanceof TimezoneSettingsError) return { ok: false, error: error.code, status: error.status, restarted, failed };
-      return { ok: false, error: 'restart_failed', status: 500, restarted, failed };
+      if (error instanceof TimezoneSettingsError) return { ok: false, error: error.code, status: error.status, restarted, failed,
+        restart_services: remaining, restart_status: error.code === 'service_discovery_unavailable' ? 'unknown' : 'known' };
+      return { ok: false, error: 'restart_failed', status: 500, restarted, failed, restart_services: remaining, restart_status: 'unknown' };
     }
   }
   return { get, save, restart };

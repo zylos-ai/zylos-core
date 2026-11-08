@@ -351,3 +351,19 @@ test('hot TTL metadata and writes honor present valid or invalid environment set
     fs.rmSync(zylosDir, { recursive: true, force: true });
   }
 });
+
+test('confirmed timezone restart retries immediately after a partial failure', async () => {
+  const body = { tz: 'Asia/Tokyo', confirm: true, services: ['web-console'] };
+  let calls = 0;
+  const timezone = { restart: async request => {
+    assert.deepEqual(request, body);
+    calls++;
+    return calls === 1 ? { ok: false, failed: [{ name: 'web-console', error: 'restart_failed' }] }
+      : { ok: true, restarted: ['web-console'], failed: [] };
+  } };
+  const before = Date.now();
+  assert.equal((await handleAction('restart-timezone-services', body, {}, { timezone })).ok, false);
+  assert.equal((await handleAction('restart-timezone-services', body, {}, { timezone })).ok, true);
+  assert.equal(calls, 2);
+  assert.ok(Date.now() - before < 2000, 'retry reached the handler inside the old dedup window');
+});

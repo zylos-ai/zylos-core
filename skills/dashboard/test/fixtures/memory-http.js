@@ -116,7 +116,7 @@ export async function setupMemoryHttp(t) {
   t.mock.module('../../src/lib/core-modules.js', { namedExports: {
     loadCoreModule: async name => {
       if (name === 'config.js') return { ZYLOS_DIR: root, readSessionMode: () => ({ mode: 'multi' }) };
-      if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js'].includes(name)) {
+      if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js', 'pm2.js'].includes(name)) {
         return import(new URL(`../../../../cli/lib/${name}`, import.meta.url));
       }
       if (name === 'am-sock-client.js') return {

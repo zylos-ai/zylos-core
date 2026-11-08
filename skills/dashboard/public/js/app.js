@@ -9,7 +9,7 @@ import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=117';
 import { renderVersion } from './wb/settings-version.js?v=104';
 import { mountConversationPage } from './wb/conversation-page.js?v=126';
 import { mountChatSettings } from './wb/chat-settings.js?v=113';
-import { mountTimezoneSettings } from './wb/settings-timezone.js?v=1';
+import { mountTimezoneSettings } from './wb/settings-timezone.js?v=2';
 import { mountWorkbench } from './wb/shell.js?v=116';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=104';
@@ -382,6 +382,7 @@ async function requestAgentJson(path, options = {}) {
     err.status = r.status;
     err.code = payload.error || null;
     err.current = payload.current || null;
+    err.result = payload;
     throw err;
   }
   return r.json();

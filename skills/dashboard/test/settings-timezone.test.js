@@ -27,7 +27,7 @@ test('saving writes the zone and requires a separate confirmation to restart', a
   const f = fixture(); await f.view.refresh(); await save(f);
   assert.deepEqual(f.writes, [{ tz: 'Asia/Singapore' }]); assert.equal(f.restarts.length, 0);
   assert.equal(f.pending.hidden, false); assert.equal(f.root.querySelector('#settings-timezone-services').textContent, 'wb.settings.timezone.scheduler');
-  await f.restart.dispatch('click'); assert.deepEqual(f.restarts, [{ tz: 'Asia/Singapore', confirm: true }]);
+  await f.restart.dispatch('click'); assert.deepEqual(f.restarts, [{ tz: 'Asia/Singapore', confirm: true, services: ['scheduler'] }]);
   assert.equal(f.questions.length, 2); assert.equal(f.pending.hidden, true);
 });
 test('cancelled save or restart leaves the corresponding operation untouched', async () => {
@@ -87,4 +87,76 @@ test('invalidation ignores a delayed save result and duplicate clicks cannot iss
 test('editing the saved value prevents restarting a different zone', async () => {
   const f = fixture(); await f.view.refresh(); await save(f); f.input.value = 'America/New_York'; await f.input.dispatch('input');
   await f.restart.dispatch('click'); assert.equal(f.restarts.length, 0); assert.equal(f.restart.disabled, true);
+});
+
+test('an outstanding restart confirmation is discarded after leaving or switching instance', async () => {
+  for (const change of ['invalidate', 'identity']) {
+    let identity = 'first', asks = 0; const confirmation = deferred();
+    const f = fixture({ identity: () => identity, confirm: () => ++asks === 1 ? true : confirmation.promise });
+    await f.view.refresh(); await save(f); const restarting = f.restart.dispatch('click');
+    if (change === 'invalidate') f.view.invalidate(); else identity = 'second';
+    confirmation.resolve(true); await restarting; assert.equal(f.restarts.length, 0);
+  }
+});
+test('restart sends exactly the services shown before confirmation without adding new candidates', async () => {
+  const pending = deferred(), value = settings({ tz: 'Asia/Singapore' }); let asks = 0;
+  const f = fixture({ write: async () => value, confirm: () => ++asks === 1 ? true : pending.promise });
+  await f.view.refresh(); await save(f); const restarting = f.restart.dispatch('click');
+  value.restart_services.push({ name: 'web-console', status: 'online' });
+  pending.resolve(true); await restarting;
+  assert.deepEqual(f.restarts, [{ tz: 'Asia/Singapore', confirm: true, services: ['scheduler'] }]);
+});
+test('a partial restart retries only failed services from its new confirmation list', async () => {
+  const calls = [], f = fixture({
+    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    restart: async body => { calls.push(body); return calls.length === 1
+      ? { ok: false, restarted: ['web-console'], failed: [{ name: 'scheduler', error: 'restart_failed' }], restart_services: [{ name: 'scheduler' }] }
+      : { ok: true, restarted: ['scheduler'], failed: [], restart_services: [] }; },
+  });
+  await f.view.refresh(); await save(f); await f.restart.dispatch('click'); await f.restart.dispatch('click');
+  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'web-console'], ['scheduler']]);
+  assert.equal(f.pending.hidden, true);
+});
+test('a rejected restart explains its cause instead of naming an empty failed-service list', async () => {
+  for (const [error, key] of [['duplicate_request', 'duplicate'], ['confirmation_required', 'confirmationRequired'], ['service_discovery_unavailable', 'discoveryUnknown']]) {
+    const f = fixture({ restart: async () => ({ ok: false, error, failed: [], restart_services: [{ name: 'scheduler' }] }) });
+    await f.view.refresh(); await save(f); await f.restart.dispatch('click');
+    assert.equal(f.notice.textContent, 'wb.settings.timezone.' + key); assert.equal(f.pending.hidden, false);
+  }
+});
+
+test('rediscovery after partial progress cannot add a successfully restarted service back to retry', async () => {
+  const calls = [], f = fixture({
+    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    restart: async body => { calls.push(body); return calls.length === 1
+      ? { ok: false, error: 'service_discovery_unavailable', restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [{ name: 'web-console' }] }
+      : { ok: true, restarted: ['web-console'], failed: [], restart_services: [] }; },
+  });
+  await f.view.refresh(); await save(f, 'UTC'); await f.restart.dispatch('click');
+  assert.equal(f.restart.disabled, true);
+  await f.root.querySelector('#settings-timezone-retry').dispatch('click');
+  assert.equal(f.restart.disabled, false); await f.restart.dispatch('click');
+  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'web-console'], ['web-console']]);
+});
+
+test('an HTTP error preserves successful restart progress through rediscovery and retry', async () => {
+  const calls = [], f = fixture({
+    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    restart: async body => {
+      calls.push(body);
+      if (calls.length === 1) {
+        const error = new Error('service_discovery_unavailable'); error.code = error.message;
+        error.result = { ok: false, restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [{ name: 'web-console' }] };
+        throw error;
+      }
+      return { ok: true, restarted: ['web-console'], failed: [], restart_services: [] };
+    },
+  });
+  await f.view.refresh(); await save(f, 'UTC'); await f.restart.dispatch('click');
+  assert.equal(f.restart.disabled, true); assert.equal(f.notice.textContent, 'wb.settings.timezone.discoveryUnknown');
+  assert.equal(f.root.querySelector('#settings-timezone-services').textContent, 'wb.settings.timezone.webConsole');
+  await f.root.querySelector('#settings-timezone-retry').dispatch('click'); await f.restart.dispatch('click');
+  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'web-console'], ['web-console']]);
 });

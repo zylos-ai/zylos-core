@@ -10,7 +10,7 @@ const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.met
 const serviceList = [{ name: 'scheduler', status: 'online' }, { name: 'web-console', status: 'online' }];
 async function startPage(sandbox) {
   const writes = [], restarts = [], reads = [], zones = new Map(), now = Date.now();
-  const state = { partialRestart: false };
+  const state = { partialRestart: false, unavailableAfterProgress: false };
   const server = http.createServer(async (req, res) => {
     try {
       const original = new URL(req.url, 'http://127.0.0.1');
@@ -28,10 +28,13 @@ async function startPage(sandbox) {
       }
       if (route === '/api/actions/restart-timezone-services' && req.method === 'POST') {
         const body = await readJsonBody(req, 4096); restarts.push({ path: original.pathname, body });
-        if (state.partialRestart) {
+        if (state.unavailableAfterProgress) {
+          state.unavailableAfterProgress = false;
+          sendJson(res, 503, { ok: false, error: 'service_discovery_unavailable', restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [serviceList[1]] });
+        } else if (state.partialRestart) {
           state.partialRestart = false;
           sendJson(res, 200, { ok: false, restarted: ['web-console'], failed: [{ name: 'scheduler', error: 'restart_failed' }], restart_services: [serviceList[0]] });
-        } else sendJson(res, 200, { ok: true, restarted: ['scheduler', 'web-console'], failed: [], restart_services: [] }); return;
+        } else sendJson(res, 200, { ok: true, restarted: body.services, failed: [], restart_services: [] }); return;
       }
       if (route === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (route.startsWith('/api/')) {
@@ -57,7 +60,7 @@ function measure() {
   const controls = [...card.querySelectorAll('button, input')].filter(node => !node.hidden && !node.closest('[hidden]'));
   const boxes = controls.map(node => { const b = node.getBoundingClientRect(); return { id: node.id, width: b.width, height: b.height, top: b.top }; });
   const input = boxes.find(node => node.id === 'settings-timezone-value'), save = boxes.find(node => node.id === 'settings-timezone-save');
-  return { boxes, width: document.documentElement.scrollWidth,
+  return { boxes, width: document.documentElement.scrollWidth, inputStyle: { disabled: card.querySelector('input').disabled, borderStyle: getComputedStyle(card.querySelector('input')).borderTopStyle, cursor: getComputedStyle(card.querySelector('input')).cursor },
     aligned: Math.abs(input.top - save.top) < 1 && Math.abs(input.height - save.height) < 1 };
 }
 
@@ -100,6 +103,8 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     const layout = await page.evaluate(measure);
     assert.equal(layout.width, width, 'No horizontal overflow');
     assert.equal(layout.aligned, true, 'Input and save share a row and height');
+    if (width >= 761) assert.ok(layout.boxes.find(box => box.id === 'settings-timezone-value').width <= 280, 'Desktop input stays bounded');
+    if (prefix.endsWith('/reader')) { assert.equal(layout.inputStyle.borderStyle, 'dashed'); assert.equal(layout.inputStyle.cursor, 'not-allowed'); }
     if (width < 761) for (const box of layout.boxes) { assert.ok(box.height >= 40 && box.width >= 40, JSON.stringify(box)); }
     metrics.push({ width, locale, prefix, ...layout });
     const shot = async kind => { if (evidence) await page.screenshot({ path: path.join(evidence, `${locale}-${width}-${kind}.png`) }); };
@@ -135,7 +140,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
       await answer(page, false); assert.equal(api.restarts.length, restarts, 'Cancel keeps saved zone without restart');
       await page.locator('#settings-timezone-restart').click(); await answer(page, true);
       await page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
-      assert.deepEqual(api.restarts.at(-1), { path: '/fleet/admin/api/actions/restart-timezone-services', body: { tz: 'Asia/Singapore', confirm: true } });
+      assert.deepEqual(api.restarts.at(-1), { path: '/fleet/admin/api/actions/restart-timezone-services', body: { tz: 'Asia/Singapore', confirm: true, services: ['scheduler', 'web-console'] } });
       assert.equal(api.restarts.length, restarts + 1); assert.deepEqual(errors, []);
     } finally { await context.close(); }
     const readOnly = await open(width, locale, '/fleet/reader');
@@ -159,7 +164,23 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.equal(await local.page.locator('#settings-timezone-pending').isVisible(), true);
     await local.page.locator('#settings-timezone-restart').click(); await answer(local.page, true);
     await local.page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
+    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'web-console']);
+    assert.deepEqual(api.restarts.at(-1).body.services, ['scheduler'], 'Immediate retry excludes the service that already succeeded');
     assert.deepEqual(api.writes.at(-1), { path: '/api/settings/timezone', body: { tz: 'Europe/London' } });
+    await local.page.locator('#settings-timezone-save').click(); await answer(local.page, true);
+    await local.page.locator('#settings-timezone-pending').waitFor({ state: 'visible' });
+    api.state.unavailableAfterProgress = true;
+    await local.page.locator('#settings-timezone-restart').click(); await answer(local.page, true);
+    await local.page.waitForFunction(() => document.querySelector('#settings-timezone-retry').hidden === false);
+    assert.equal(await local.page.locator('#settings-timezone-restart').isDisabled(), true);
+    assert.equal(await local.page.locator('#settings-timezone-services li').count(), 1);
+    assert.equal(await local.page.locator('#settings-timezone-services li').innerText(), 'Web console');
+    await local.page.locator('#settings-timezone-retry').click();
+    assert.equal(await local.page.locator('#settings-timezone-services li').count(), 1);
+    await local.page.locator('#settings-timezone-restart').click(); await answer(local.page, true);
+    await local.page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
+    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'web-console']);
+    assert.deepEqual(api.restarts.at(-1).body.services, ['web-console'], 'A real HTTP503 retains prior progress across rediscovery');
     const beforeLeave = api.writes.length;
     await local.page.locator('#settings-timezone-value').fill('America/New_York');
     await local.page.locator('#settings-timezone-save').click(); await dialog(local.page).waitFor();
@@ -169,6 +190,18 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.equal(await local.page.locator('#tab-settings').isVisible(), false);
     assert.deepEqual(local.errors, []);
   } finally { await local.context.close(); }
+  const stale = await open(1280, 'en', '/fleet/admin');
+  try {
+    await stale.page.locator('#settings-timezone-value').fill('Europe/London');
+    await stale.page.locator('#settings-timezone-save').click(); await answer(stale.page, true);
+    await stale.page.locator('#settings-timezone-pending').waitFor({ state: 'visible' });
+    const beforeRestart = api.restarts.length;
+    await stale.page.locator('#settings-timezone-restart').click(); await dialog(stale.page).waitFor();
+    await stale.page.locator('.tab[data-tab=overview]').dispatchEvent('click');
+    await answer(stale.page, true);
+    assert.equal(api.restarts.length, beforeRestart, 'Leaving the instance setting invalidates an outstanding restart confirmation');
+    assert.deepEqual(stale.errors, []);
+  } finally { await stale.context.close(); }
   if (evidence) fs.writeFileSync(path.join(evidence, 'metrics.json'), JSON.stringify({ metrics, writes: api.writes, restarts: api.restarts, reads: api.reads }, null, 2));
   console.log('Timezone browser verified:', JSON.stringify({ screenshots: evidence ? 12 : 0, viewportLocalePairs: 4, writes: api.writes.length, confirmedRestarts: api.restarts.length }));
 }

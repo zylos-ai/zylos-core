@@ -9,7 +9,8 @@ import { StateEngine } from '../src/lib/state-engine.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { CoreState } from '../src/lib/core-state.js';
-import { mutateConfig } from '../src/lib/config-mutation.js';
+import { PM2Collector } from '../src/lib/collectors/pm2-collector.js';
+import { mutateConfig, withConfigLock } from '../src/lib/config-mutation.js';
 import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
@@ -122,6 +123,7 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
   } });
   t.mock.module('../src/lib/config-mutation.js', { namedExports: {
     mutateConfig: (...args) => { mutations++; return mutateConfig(...args); },
+    withConfigLock,
   } });
   fs.mkdirSync(path.join(dir, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(dir, '.zylos', 'config.json'), JSON.stringify({ runtime }));
@@ -774,4 +776,29 @@ test('pricing usage aggregates dimension tokens and preserves old costs after pr
   assert.equal(ingest('price-after'), 1);
   assert.equal(readCost('price-before'), before);
   assert.ok(Math.abs(readCost('price-after') - before - 0.02) < 1e-9);
+});
+
+// Actual createServer timezone GET route + production PM2 wiring. Run for
+// candidate-discovery/wiring changes, skip pure styles. Reuses makeSettingsServer
+// isolation and teardown; collector reads are injected, no real PM2 is spawned.
+test('timezone settings discover the fresh process list on every HTTP request', async t => {
+  const server = await makeSettingsServer(t, 'claude', { auth: { enabled: true, password: 'fixture' } });
+  server.store.insertApiKey({ name: 'timezone-read-fixture', keyHash: hashApiKey('zylos_ak_timezone_fixture'), scope: 'read' });
+  const token = exchangeApiKeyForToken('zylos_ak_timezone_fixture').token;
+  const headers = { Authorization: `Bearer ${token}` };
+  const scheduler = path.join(server.dir, '.claude/skills/scheduler/scripts/daemon.js');
+  fs.mkdirSync(path.dirname(scheduler), { recursive: true }); fs.writeFileSync(scheduler, '');
+  fs.writeFileSync(path.join(server.dir, '.env'), 'TZ=UTC\n', { mode: 0o600 });
+  let status = 'online', reads = 0;
+  const entry = () => ({ name: 'scheduler', pm2_env: { status, pm_exec_path: scheduler, ZYLOS_DIR: server.dir } });
+  t.mock.method(PM2Collector.prototype, 'getLatestPM2Data', () => ({ processes: [{ name: 'cached-service' }] }));
+  t.mock.method(PM2Collector.prototype, '_execPm2Jlist', async () => { reads++; return JSON.stringify([entry()]); });
+  const first = await fetch(server.origin + '/api/settings/timezone', { headers });
+  assert.equal(first.status, 200);
+  assert.deepEqual((await first.json()).restart_services.map(service => service.name), ['scheduler']);
+  const afterFirst = reads; assert.ok(afterFirst > 0);
+  status = 'stopped';
+  const second = await fetch(server.origin + '/api/settings/timezone', { headers });
+  assert.equal(second.status, 200); assert.deepEqual((await second.json()).restart_services, []);
+  assert.ok(reads > afterFirst, 'the second route request must rediscover rather than read cached PM2 data');
 });

@@ -106,7 +106,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   } });
   t.mock.module('../src/lib/core-modules.js', { namedExports: {
     loadCoreModule: async name => {
-      if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js'].includes(name)) return import(new URL('../../../cli/lib/' + name, import.meta.url));
+      if (['model-rotation-thresholds.js', 'session-usage-reader.js', 'session-hot-ttl.js', 'config-store.js', 'config-lock.js', 'pm2.js'].includes(name)) return import(new URL('../../../cli/lib/' + name, import.meta.url));
       if (name === 'config.js') return { ZYLOS_DIR: root, readSessionMode: () => ({ mode: 'multi' }) };
       if (name === 'am-sock-client.js') return {
         submit: async request => { restarts.push(request); return { kind: 'accepted', reply: { result: 'accepted' } }; },

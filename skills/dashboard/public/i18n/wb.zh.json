@@ -962,6 +962,8 @@
   "wb.settings.timezone.readFailed": "无法读取实例时区，请重新打开设置后重试。",
   "wb.settings.timezone.saveFailed": "时区保存失败，运行中的服务没有重启。",
   "wb.settings.timezone.restartFailed": "部分服务重启失败：{services}，可以重试。",
+  "wb.settings.timezone.duplicate": "这条重启请求刚刚已收到，请稍后再重试失败的服务。",
+  "wb.settings.timezone.confirmationRequired": "重启确认信息不完整，请重新读取服务清单并确认。",
   "wb.settings.timezone.restartError": "服务未能重启，已保存的时区会保留，请检查服务清单后重试。",
   "wb.settings.timezone.restarted": "服务已重启，已保存的时区现已生效。"
 }

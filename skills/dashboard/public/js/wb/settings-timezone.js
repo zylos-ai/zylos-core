@@ -31,7 +31,7 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
   pending.append(pendingTitle, list, discovery, pendingActions);
   const notes = element(document, 'p', t('wb.settings.timezone.notes'), 'wb-note');
   card.card.append(label, row, help, policy, notice, pending, notes); root.append(card.card);
-  let generation = 0, owner = null, loaded = false, busy = false, saved = false, model = null;
+  let generation = 0, owner = null, loaded = false, busy = false, saved = false, model = null, restartAttempted = false;
   const current = (token, machine) => generation === token && owner === machine && identity() === machine;
   const editable = () => loaded && owner === identity() && model?.writable === true && writable() && available();
   const serviceName = name => ({ scheduler: t('wb.settings.timezone.scheduler'), 'web-console': t('wb.settings.timezone.webConsole'),
@@ -58,11 +58,12 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
   }
   function errorText(error, fallback) {
     const keys = { invalid_timezone: 'invalid', timezone_managed: 'managed', timezone_changed: 'changed',
-      config_unreadable: 'readOnly', forbidden: 'readOnlyRemote' };
+      config_unreadable: 'readOnly', forbidden: 'readOnlyRemote', duplicate_request: 'duplicate',
+      service_discovery_unavailable: 'discoveryUnknown', confirmation_required: 'confirmationRequired' };
     return t('wb.settings.timezone.' + (keys[error?.code || error?.message] ?? fallback));
   }
   function invalidate() {
-    generation++; owner = null; loaded = false; busy = false; saved = false; model = null;
+    generation++; owner = null; loaded = false; busy = false; saved = false; model = null; restartAttempted = false;
     input.value = ''; notice.textContent = ''; render();
   }
   async function refresh() {
@@ -87,34 +88,50 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
       if (!current(token, machine) || !editable()) return;
       const value = await write({ tz });
       if (!current(token, machine)) return;
-      model = value; input.value = value.tz ?? tz; saved = true; notice.textContent = t('wb.settings.timezone.saved');
+      model = value; restartAttempted = false; input.value = value.tz ?? tz; saved = true; notice.textContent = t('wb.settings.timezone.saved');
       onSaved(value.tz);
     } catch (error) { if (current(token, machine)) notice.textContent = errorText(error, 'saveFailed'); }
     finally { if (current(token, machine)) { busy = false; render(); } }
   });
+  function applyRestartProgress(value) {
+    restartAttempted = true;
+    model = { ...model, restart_services: value.restart_services ?? model.restart_services, restart_status: value.restart_status ?? model.restart_status };
+  }
   restartButton.addEventListener('click', async () => {
     if (restartButton.disabled || !saved || !editable()) return;
     const tz = model.tz, token = generation, machine = owner;
+    const confirmedServices = services().map(service => service.name);
     busy = true; render();
     try {
-      const body = t('wb.settings.timezone.restartConfirm', { tz, services: services().map(service => serviceName(service.name)).join('\n') });
+      const body = t('wb.settings.timezone.restartConfirm', { tz, services: confirmedServices.map(serviceName).join('\n') });
       if (!(await confirm(confirmation(body)))) return;
       if (!current(token, machine) || !editable() || input.value.trim() !== tz) return;
-      const value = await restart({ tz, confirm: true });
+      const value = await restart({ tz, confirm: true, services: confirmedServices });
       if (!current(token, machine)) return;
-      model = { ...model, restart_services: value.restart_services ?? model.restart_services };
-      if (value.failed?.length || value.ok === false) notice.textContent = t('wb.settings.timezone.restartFailed', { services: (value.failed ?? []).map(service => serviceName(service.name)).join(', ') });
+      applyRestartProgress(value);
+      if (value.error) notice.textContent = errorText({ code: value.error }, 'restartError');
+      else if (value.failed?.length) notice.textContent = t('wb.settings.timezone.restartFailed', { services: value.failed.map(service => serviceName(service.name)).join(', ') });
+      else if (value.ok === false) notice.textContent = t('wb.settings.timezone.restartError');
       else { saved = false; notice.textContent = t('wb.settings.timezone.restarted'); }
-    } catch (error) { if (current(token, machine)) notice.textContent = errorText(error, 'restartError'); }
+    } catch (error) {
+      if (current(token, machine)) {
+        const progress = error?.result;
+        if (Array.isArray(progress?.restarted) && Array.isArray(progress?.failed) && Array.isArray(progress?.restart_services)) applyRestartProgress(progress);
+        notice.textContent = errorText(error, 'restartError');
+      }
+    }
     finally { if (current(token, machine)) { busy = false; render(); } }
   });
   retry.addEventListener('click', async () => {
     if (busy || !saved || !editable()) return;
-    const token = generation, machine = owner; busy = true; render();
+    const token = generation, machine = owner;
+    const pendingServices = restartAttempted ? new Set(services().map(service => service.name)) : null;
+    busy = true; render();
     try {
       const value = await read();
       if (!current(token, machine)) return;
       if (value.tz !== model.tz) { saved = false; notice.textContent = t('wb.settings.timezone.changed'); }
+      else if (pendingServices) value.restart_services = (value.restart_services ?? []).filter(service => pendingServices.has(service.name));
       model = value; input.value = value.tz ?? '';
     } catch (error) { if (current(token, machine)) notice.textContent = errorText(error, 'readFailed'); }
     finally { if (current(token, machine)) { busy = false; render(); } }
