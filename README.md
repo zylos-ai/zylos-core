@@ -210,6 +210,29 @@ zylos init
 
 </details>
 
+### Upgrading an existing installation
+
+Use `zylos upgrade --self` for normal upgrades; do not upgrade an initialized
+machine with `npm install -g` directly. Direct npm installation updates the
+package but does not finish service, dependency or data initialization. If you
+already installed this way, run `zylos init` to finish setup, then check:
+
+```bash
+zylos status
+sqlite3 -readonly "${ZYLOS_DIR:-$HOME/zylos}/scheduler/scheduler.db" 'PRAGMA user_version;'
+```
+
+For 1.0, status must show all five core services online: `scheduler`,
+`web-console`, `c4-dispatcher`, `activity-monitor`, and `zylos-dashboard`
+(`caddy` is optional). The SQLite command must print `2`. Open the Dashboard
+URL printed by init and confirm the login page loads. For the default local
+Dashboard port, `curl --fail --location http://127.0.0.1:3470/` checks that page; use the
+configured port if different. SQLite CLI must be installed for the database
+check. A notice alone does not complete this setup.
+
+npm can hide successful postinstall output; `--foreground-scripts` exposes it
+for diagnostics. Follow the recovery checks even if npm displayed no notice.
+
 <details>
 <summary>Docker deployment</summary>
 

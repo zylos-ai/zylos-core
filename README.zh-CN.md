@@ -186,6 +186,26 @@ zylos init
 
 </details>
 
+### 升级已有安装
+
+正常升级请用 `zylos upgrade --self`，不要在已经初始化的机器上直接用
+`npm install -g` 升级。npm 直装只更新程序包，不会完成服务、依赖和数据初始化。
+如果已经这样安装，请运行 `zylos init` 补齐，然后检查：
+
+```bash
+zylos status
+sqlite3 -readonly "${ZYLOS_DIR:-$HOME/zylos}/scheduler/scheduler.db" 'PRAGMA user_version;'
+```
+
+1.0 的状态中应有五个核心服务且全部 online：`scheduler`、`web-console`、
+`c4-dispatcher`、`activity-monitor`、`zylos-dashboard`（`caddy` 为可选服务）。
+SQLite 命令应输出 `2`。打开 init 输出的 Dashboard URL，确认登录页能加载；
+默认本地端口可用 `curl --fail --location http://127.0.0.1:3470/` 检查，修改过端口则使用实际端口。
+数据库检查需要安装 SQLite CLI。安装提示本身不会完成上述初始化。
+
+npm 可能隐藏成功的 postinstall 输出；诊断时可加 `--foreground-scripts` 查看。
+即使 npm 没有显示提示，也应执行上述恢复检查。
+
 <details>
 <summary>Docker 部署</summary>
 

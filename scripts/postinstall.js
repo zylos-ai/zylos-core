@@ -142,12 +142,19 @@ function main() {
     return;
   }
 
+  const initialized = fs.existsSync(path.join(ZYLOS_DIR, '.zylos', 'components.json'));
+
   if (process.env.ZYLOS_SKIP_POSTINSTALL !== '1') {
     syncSkills();
     try { deployUpgradeBootstrap(ZYLOS_DIR); }
     catch (error) { console.warn('Warning: file-only upgrade recovery bootstrap unavailable: ' + error.message); }
   }
   syncSettings();
+
+  if (initialized && process.env.npm_lifecycle_event === 'postinstall'
+      && process.env.ZYLOS_SKIP_POSTINSTALL !== '1') {
+    console.log('\nThis machine has already been initialized. Run "zylos init" to finish service, dependency and data initialization. For normal upgrades, use "zylos upgrade --self".');
+  }
 }
 
 main();

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Upgrade notes
+- **Direct npm installation on initialized machines**: use `zylos upgrade --self` for normal upgrades, not `npm install -g`. If you already installed 1.0 directly with npm, run `zylos init` to finish service, dependency and data initialization. Postinstall now prints this guidance when it finds an existing install record; it does not run migrations. npm may hide successful lifecycle output (`--foreground-scripts` exposes it). Confirm `zylos status` shows `scheduler`, `web-console`, `c4-dispatcher`, `activity-monitor` and `zylos-dashboard` online, open the Dashboard URL printed by init (default local check: `curl --fail --location http://127.0.0.1:3470/`), and run `sqlite3 -readonly "${ZYLOS_DIR:-$HOME/zylos}/scheduler/scheduler.db" 'PRAGMA user_version;'` (requires SQLite CLI), which must print `2`. See [upgrade recovery checks](README.md#upgrading-an-existing-installation).
 - **Before upgrading from 0.9.x to 1.0**: if the standalone Dashboard component is installed, run `zylos uninstall dashboard --yes` first. Its data is retained; Zylos 1.0 includes Dashboard. If it remains installed, `zylos upgrade --self --yes` stops before changing the installed package or data, reports `DASHBOARD_STILL_INSTALLED` ("Uninstall standalone Dashboard before upgrading."), and directs you to that uninstall command.
 
 ### Fixed
