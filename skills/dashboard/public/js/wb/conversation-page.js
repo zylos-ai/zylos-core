@@ -373,7 +373,8 @@ export function mountConversationPage({
   input.addEventListener('keydown', event => {
     if (composerKeySends(event, { touch: touchFirst(view) })) {
       event.preventDefault();
-      if (!send.disabled) {
+      // When the last send's outcome is uncertain, only a click on the retry button retries; keys never do.
+      if (!send.disabled && !currentSnapshot?.retryRequired) {
         void requestSend();
       }
     }
@@ -389,7 +390,7 @@ export function mountConversationPage({
   root.replaceChildren(page);
   function updateInputPlaceholder(mode = currentSnapshot?.mode) {
     const key = mode === 'single' ? 'chat.page.singlePlaceholder'
-      : view?.innerWidth <= 760 || touchFirst(view) ? 'chat.page.mobilePlaceholder' : 'chat.page.placeholder';
+      : view?.innerWidth <= 760 || touchFirst(view) || currentSnapshot?.retryRequired ? 'chat.page.mobilePlaceholder' : 'chat.page.placeholder';
     input.placeholder = t(key);
   }
   function fitInput() {
@@ -406,6 +407,8 @@ export function mountConversationPage({
   }
   async function requestSend() {
     const selected = selectedKey;
+    // Sending disables the editor, which takes the focus away; a keyboard send gives it back so typing can go on.
+    const refocus = document.activeElement === input;
     const sourceScope = uploadScope(currentSnapshot);
     const captured = uploadTray.capture();
     const sent = await state.send({ retry: currentSnapshot.retryRequired, attachments: captured.ids });
@@ -420,6 +423,9 @@ export function mountConversationPage({
       unread = 0;
       updateUnread();
     }
+    // Only when nothing else took the focus meanwhile (the disabled editor leaves it on the page body).
+    const focusFree = !document.activeElement || document.activeElement === document.body || document.activeElement === input;
+    if (refocus && focusFree && !destroyed && selectedKey === selected && !input.disabled) input.focus();
   }
   function mobileDetail(open) {
     page.classList.toggle('conversation-detail-open', open);
@@ -1026,11 +1032,12 @@ export function mountConversationPage({
     send.dataset.action = s.retryRequired ? 'retry' : 'send';
     text(send.label, t(s.retryRequired ? 'chat.retry' : 'chat.send'));
     send.title = t(s.retryRequired ? 'chat.retry' : 'chat.send');
+    send.setAttribute('aria-label', send.title);
     void uploadTray.setScope(uploadScope(s));
     const upload = uploadTray.snapshot();
     const limits = upload.config ? t('chat.upload.limits').replace('{size}', String(upload.config.maxUploadBytes / (1024 * 1024))).replace('{count}', String(upload.config.maxAttachments)) : '';
     attach.title = [t('chat.attach'), limits].filter(Boolean).join(' · ');
-    const keys = touchFirst(view) ? '' : t('chat.page.keyHint');
+    const keys = s.retryRequired ? t('chat.page.retryHint') : touchFirst(view) ? '' : t('chat.page.keyHint');
     text(hint, [keys, t('chat.upload.pasteDrop'), limits, t('chat.page.sendHint')].filter(Boolean).join(' · '));
     attach.hidden = !s.canWrite;
     attach.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry;

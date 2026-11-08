@@ -647,6 +647,7 @@
   "chat.page.mobilePlaceholder": "Message your agent",
   "chat.page.sendHint": "Messages are stored before delivery. The status reports what actually happened.",
   "chat.page.keyHint": "Enter to send, Shift + Enter for a new line",
+  "chat.page.retryHint": "Click “Retry sending” to retry; keys do not send now",
   "chat.page.updateRetry": "Automatic updates paused; retrying",
   "chat.page.you": "You",
   "chat.page.ai": "AI",
