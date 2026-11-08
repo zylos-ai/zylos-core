@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { composeSettings, createSettingsLoader, settingsSections, resetSettingsDrafts } from '../public/js/wb/settings.js';
-import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
+import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, createOverrideSearch, renderDefaults, renderHotTtl, modelSaveConfirmation } from '../public/js/wb/settings-defaults.js';
 import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
 import { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
@@ -10,6 +10,8 @@ import { renderVersion } from '../public/js/wb/settings-version.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { deferred, tick } from './fixtures/workbench-dom.js';
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
+const hotTtlMeta = (overrides = {}) => ({ session_hot_ttl: { seconds: 1800, minutes: 30, source: 'config', mode: 'multi', read_only: false,
+  environment_set: false, environment_valid: false, min_minutes: 5, max_minutes: 1440, ...overrides } });
 function snapshot() {
   return { baselineRuntime: 'claude', hasOlder: true, instance: { runtimeHealth: { codex: { health: 'auth_failed' }, claude: { health: 'missing' } } },
     overrides: { runtime: [{ sessionGroup: 'a', runtime: 'codex' }], model: [{ sessionGroup: 'b', runtime: 'claude' }] },
@@ -63,6 +65,72 @@ test('settings loader reads one group snapshot and one first batch on each open 
   loader.invalidate(); pending.forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await first; assert.equal(loads.length, 0);
   const second = loader.open(); pending.slice(6).forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await second;
   assert.equal(loads.length, 1); assert.equal(paths.length, 12); assert.equal(paths.some(path => path.includes('after=')), false);
+});
+
+test('idle reclaim minutes reject invalid drafts and save one confirmed global action', async () => {
+  const document = documentFixture(), root = node(document, 'div'), sent = [], asked = [];
+  renderHotTtl(root, { metadata: { claude: hotTtlMeta() }, document, t, confirm: async text => { asked.push(text); return true; },
+    execute: async (action, body, options) => { sent.push({ action, body, options }); return true; } });
+  const input = root.querySelector('#settings-hot-ttl-minutes'), save = root.querySelector('#settings-save-hot-ttl');
+  assert.equal(input.value, '30'); assert.equal(input.min, '5'); assert.equal(input.max, '1440'); assert.equal(input.step, '1');
+  assert.equal(input.disabled, false); assert.equal(save.disabled, true);
+  for (const value of ['', '4', '1441', '5.5', 'abc']) {
+    input.value = value; await input.dispatch('input'); assert.equal(save.disabled, true, value);
+    await save.dispatch('click');
+  }
+  assert.equal(sent.length, 0); assert.equal(asked.length, 0);
+  input.value = '5'; await input.dispatch('input'); assert.equal(save.disabled, false); await save.dispatch('click');
+  assert.deepEqual(sent, [{ action: 'set-session-hot-ttl', body: { minutes: 5 }, options: { confirmed: true } }]);
+  assert.match(asked[0], /hotTtl\.confirm.*"minutes":5/); assert.equal(save.disabled, true);
+  assert.equal(root.querySelector('#settings-hot-ttl-result').textContent, 'wb.settings.hotTtl.saved');
+  input.value = '1440'; await input.dispatch('input'); assert.equal(save.disabled, false);
+});
+
+test('idle reclaim shows exact environment seconds and never writes under environment or mode locks', async () => {
+  const document = documentFixture(), root = node(document, 'div'), sent = [];
+  for (const overrides of [
+    { seconds: 1801, minutes: 1801 / 60, source: 'environment', environment_set: true, environment_valid: true, read_only: true },
+    { seconds: 900, minutes: 15, source: 'config', environment_set: true, environment_valid: false, read_only: true },
+    { mode: 'single', read_only: true },
+    { mode: null, read_only: true },
+  ]) {
+    renderHotTtl(root, { metadata: { codex: hotTtlMeta(overrides) }, document, t, confirm: async () => true,
+      execute: async (...args) => sent.push(args) });
+    const input = root.querySelector('#settings-hot-ttl-minutes'), save = root.querySelector('#settings-save-hot-ttl');
+    assert.equal(input.disabled, true); assert.equal(input.readOnly, true); assert.equal(save.disabled, true);
+    if (overrides.seconds === 1801) {
+      assert.equal(input.value, String(1801 / 60)); assert.match(root.textContent, /hotTtl\.environment(?!Invalid)/);
+      assert.match(root.textContent, /exactSeconds.*1801/);
+    }
+    if (overrides.environment_valid === false) assert.match(root.textContent, /hotTtl\.environmentInvalid/);
+    if (overrides.mode === 'single') assert.match(root.textContent, /hotTtl\.single/);
+    input.value = '5'; await input.dispatch('input'); await save.dispatch('click');
+  }
+  assert.equal(sent.length, 0);
+});
+
+test('idle reclaim retains drafts after cancellation or refusal and follows the page write lock', async () => {
+  const document = documentFixture(), root = node(document, 'div'), sent = [];
+  let writable = true, accepted = false, confirmation = false;
+  const locks = [], lock = (node, get) => locks.push(() => { node.disabled = get(); });
+  renderHotTtl(root, { metadata: { claude: hotTtlMeta() }, document, t, writable: () => writable, lock,
+    confirm: async () => confirmation, execute: async (...args) => { sent.push(args); return accepted; } });
+  const input = root.querySelector('#settings-hot-ttl-minutes'), save = root.querySelector('#settings-save-hot-ttl');
+  input.value = '5'; await input.dispatch('input'); await save.dispatch('click'); assert.equal(sent.length, 0);
+  confirmation = true; await save.dispatch('click'); assert.equal(sent.length, 1); assert.equal(save.disabled, false);
+  assert.equal(input.value, '5'); assert.equal(root.querySelector('#settings-hot-ttl-result').textContent, 'wb.settings.saveFailed');
+  writable = false; locks.forEach(fn => fn()); assert.equal(input.disabled, true); assert.equal(save.disabled, true);
+  await save.dispatch('click'); assert.equal(sent.length, 1);
+  writable = true; locks.forEach(fn => fn()); accepted = true; await save.dispatch('click'); assert.equal(save.disabled, true);
+});
+
+test('idle reclaim missing metadata stays unknown and does not reuse the prior instance value', () => {
+  const document = documentFixture(), root = node(document, 'div');
+  renderHotTtl(root, { metadata: { claude: hotTtlMeta() }, document, t });
+  renderHotTtl(root, { metadata: {}, document, t });
+  assert.equal(root.querySelector('#settings-hot-ttl-minutes').value, '');
+  assert.equal(root.querySelector('#settings-hot-ttl-minutes').disabled, true);
+  assert.equal(root.querySelector('#settings-hot-ttl-source').textContent, 'wb.unknown');
 });
 
 test('default engine keeps the sign-in gate and model and effort save together per engine', async () => {
@@ -359,8 +427,9 @@ test('removed header entry selectors have no startup bindings and account contro
 
 test('settings draft reset clears target-specific controls and disables writes until new data loads', () => {
   const fixture = priceFixture(), defaults = node(fixture.document, 'div', 'settings-defaults'); fixture.root.append(defaults); defaults.append(node(fixture.document, 'button', 'old-target'));
+  const idleReclaim = node(fixture.document, 'div', 'settings-idle-reclaim'); fixture.root.append(idleReclaim); idleReclaim.append(node(fixture.document, 'input', 'settings-hot-ttl-minutes'));
   appendPriceRow(fixture.base, 'old-target', fixture.rate, false, fixture); resetSettingsDrafts(fixture.root);
-  assert.equal(defaults.children.length, 0); assert.equal(fixture.base.children.length, 0); assert.equal(fixture.root.querySelector('#settings-save').disabled, true); assert.equal(fixture.root.querySelector('#settings-add-model').disabled, true);
+  assert.equal(defaults.children.length, 0); assert.equal(idleReclaim.children.length, 0); assert.equal(fixture.base.children.length, 0); assert.equal(fixture.root.querySelector('#settings-save').disabled, true); assert.equal(fixture.root.querySelector('#settings-add-model').disabled, true);
 });
 
 test('failed pricing summary is unknown while a successful empty response is zero', () => {

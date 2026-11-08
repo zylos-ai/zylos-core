@@ -1,4 +1,6 @@
 import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
+import { loadCoreModule } from './core-modules.js';
+const { resolveSessionHotTtl } = await loadCoreModule('session-hot-ttl.js');
 
 function positiveInteger(value) {
   if (typeof value === 'string') {
@@ -9,12 +11,12 @@ function positiveInteger(value) {
 }
 
 /** Resolve startup settings once; invalid optional values fall through to the
- * next source. Mode, model thresholds and launch configuration refresh separately. */
+ * next source. Mode, hot TTL, model thresholds and launch configuration refresh separately. */
 export function parseSupervisorConfiguration(config, env = process.env) {
   const setting = (key, fallback) => positiveInteger(env[`ZYLOS_${key.toUpperCase()}`])
     ?? positiveInteger(config[key]) ?? fallback;
   return {
-    hotTtlSeconds: setting('session_hot_ttl_seconds', 1800),
+    hotTtlSeconds: resolveSessionHotTtl(config, env).seconds,
     evictMinIdleSeconds: setting('session_evict_min_idle_seconds', 300),
     syncMinIntervalSeconds: setting('sync_min_interval_seconds', 600),
     syncMaxIntervalSeconds: setting('sync_max_interval_seconds', 21600),

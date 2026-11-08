@@ -1,6 +1,6 @@
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=103';
-import { settingsCard } from './settings.js?v=112';
+import { settingsCard } from './settings.js?v=113';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {
@@ -96,14 +96,19 @@ export function runtimeSaveConfirmation(runtime, snapshot, t = key => key) {
   return [runtime === 'codex' ? t('confirm.switch_runtime_codex') : t('confirm.switch_runtime', { value: engineName(runtime) }), runtimeConfirmation(snapshot, t)].join('\n');
 }
 
-export function renderDefaults(root, { snapshot, page, metadata = {}, document = root.ownerDocument,
+export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoot, document = root.ownerDocument,
   t = key => key, read, execute, confirm = async () => false, writable = () => true, onGroup = () => {} } = {}) {
   // Without a confirmation dialog no change runs: every save below asks once before it acts.
   root.replaceChildren();
   const groups = defaultGroups(snapshot, page);
+  let destroyed = false;
   const technical = () => document.documentElement?.dataset.detail === 'technical';
   const controls = [];
   const lock = (node, fn) => { controls.push({ node, lock: fn }); node.disabled = fn(); };
+  if (sessionRoot) {
+    renderHotTtl(sessionRoot, { metadata, document, t, execute, confirm, writable: () => !destroyed && writable(), lock,
+      refreshLocks: () => refreshLocks() });
+  }
   function groupRow(row, meta) {
     const button = element(document, 'button', undefined, 'wb-gl-row'); button.type = 'button';
     button.append(element(document, 'span', row.name?.displayName ?? fallbackName(row, t)));
@@ -212,7 +217,6 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
   // ─── Default model, effort and rotation threshold per engine ───
   const models = settingsCard(document, { icon: 'sliders', title: t('wb.settings.modelsTitle'), sub: t('wb.settings.modelsSub') });
   const drafts = {}, rows = {};
-  let destroyed = false;
   const result = element(document, 'p', '', 'wb-note'); result.setAttribute('role', 'status');
   const undo = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undo.type = 'button';
   const save = element(document, 'button', t('btn.save'), 'wb-btn wb-btn-primary'); save.type = 'button'; save.id = 'settings-save-models';
@@ -347,6 +351,60 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, document =
   function refreshLocks() { for (const { node, lock: fn } of controls) node.disabled = fn(); }
   redrawEngine(); redrawModels();
   return { destroy: () => { destroyed = true; search.destroy(); }, refreshLocks };
+}
+
+/** One global value, loaded and saved through the selected instance's normal action path. */
+export function renderHotTtl(root, { metadata = {}, document = root.ownerDocument, t = key => key,
+  execute, confirm = async () => false, writable = () => true, lock, refreshLocks = () => {} } = {}) {
+  root.replaceChildren();
+  const meta = metadata.claude?.session_hot_ttl ?? metadata.codex?.session_hot_ttl;
+  const seconds = meta?.seconds;
+  let baseline = Number.isFinite(seconds) ? seconds / 60 : null, busy = false;
+  const min = meta?.min_minutes ?? 5, max = meta?.max_minutes ?? 1440;
+  const editable = () => meta?.mode === 'multi' && meta?.read_only === false && !meta?.environment_set;
+  const label = element(document, 'label', t('wb.settings.hotTtl.label'), 'wb-fld-l');
+  label.setAttribute('for', 'settings-hot-ttl-minutes');
+  const input = element(document, 'input', undefined, 'wb-input wb-input-num');
+  input.id = 'settings-hot-ttl-minutes'; input.type = 'number'; input.min = String(min); input.max = String(max); input.step = '1';
+  input.value = baseline == null ? '' : String(baseline); input.readOnly = !editable();
+  input.setAttribute('aria-describedby', 'settings-hot-ttl-help');
+  const save = element(document, 'button', t('btn.save'), 'wb-btn wb-btn-primary');
+  save.id = 'settings-save-hot-ttl'; save.type = 'button';
+  const row = element(document, 'div', undefined, 'wb-set-inline'); row.append(input, element(document, 'span', t('wb.settings.hotTtl.minutes')), save);
+  const help = element(document, 'p', t('wb.settings.hotTtl.help'), 'wb-note'); help.id = 'settings-hot-ttl-help';
+  const range = element(document, 'p', t('wb.settings.hotTtl.range', { min, max }), 'wb-note');
+  const source = element(document, 'p', '', 'wb-note'); source.id = 'settings-hot-ttl-source';
+  const result = element(document, 'p', '', 'wb-note'); result.id = 'settings-hot-ttl-result'; result.setAttribute('role', 'status');
+  if (!meta || baseline == null) source.textContent = t('wb.unknown');
+  else {
+    const notes = [];
+    if (meta.environment_set) notes.push(t(meta.environment_valid ? 'wb.settings.hotTtl.environment' : 'wb.settings.hotTtl.environmentInvalid'));
+    if (meta.mode === 'single') notes.push(t('wb.settings.hotTtl.single'));
+    else if (meta.mode !== 'multi') notes.push(t('wb.unknown'));
+    if (seconds % 60 !== 0) notes.push(t('wb.settings.hotTtl.exactSeconds', { seconds }));
+    source.textContent = notes.join(' ');
+  }
+  const minutes = () => input.value.trim() === '' ? NaN : Number(input.value);
+  const invalid = () => !Number.isInteger(minutes()) || minutes() < min || minutes() > max;
+  const lockInput = () => busy || !writable() || !editable() || baseline == null;
+  const lockSave = () => lockInput() || invalid() || minutes() === baseline;
+  const redraw = () => { input.disabled = lockInput(); save.disabled = lockSave(); };
+  lock?.(input, lockInput); lock?.(save, lockSave);
+  input.addEventListener('input', redraw);
+  save.addEventListener('click', async () => {
+    if (lockSave()) return;
+    const value = minutes();
+    if (!(await confirm(t('wb.settings.hotTtl.confirm', { minutes: value })))) return;
+    if (lockSave()) return;
+    busy = true; redraw();
+    try {
+      const accepted = await execute('set-session-hot-ttl', { minutes: value }, { confirmed: true });
+      if (accepted === false) result.textContent = t('wb.settings.saveFailed');
+      else { baseline = value; result.textContent = t('wb.settings.hotTtl.saved'); }
+    } catch (error) { result.textContent = error.message; }
+    finally { busy = false; redraw(); refreshLocks(); }
+  });
+  root.append(label, row, help, range, source, result); redraw();
 }
 
 function wrapSelect(document, select) {

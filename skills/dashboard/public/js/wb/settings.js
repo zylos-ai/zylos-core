@@ -65,6 +65,7 @@ export function composeSettings(root, { settings, fleet, actions, controls = [],
     const control = actions.querySelector(selector); if (control) actionBody.append(control.closest('.action-field'));
   }
   for (const selector of ['#action-mode-status', '#action-instance-status', '#action-restart-status']) move(actions, selector, actionBody);
+  const idleReclaim = element(document, 'div'); idleReclaim.id = 'settings-idle-reclaim'; actionBody.append(idleReclaim);
 
   const pricingTop = element(document, 'div', undefined, 'wb-set-pricing-top'); pricingTop.id = 'settings-pricing-top'; sections.pricing.append(pricingTop);
   for (const selector of ['#settings-model-pricing-group', '#settings-priority-pricing-group', '#settings-fast-mode-group', '#settings-readonly-note', '#settings-status', '.settings-footer']) move(settings, selector, sections.pricing);
@@ -139,7 +140,7 @@ export function createSettingsLoader({ read, onLoad }) {
 }
 
 export function resetSettingsDrafts(root) {
-  for (const selector of ['#settings-defaults', '#settings-price-rows', '#settings-priority-price-rows']) root.querySelector(selector)?.replaceChildren();
+  for (const selector of ['#settings-defaults', '#settings-idle-reclaim', '#settings-price-rows', '#settings-priority-price-rows']) root.querySelector(selector)?.replaceChildren();
   for (const node of root.querySelectorAll('#settings-save, #settings-add-model, #settings-add-priority-model, #settings-fast-multiplier, #action-mode')) node.disabled = true;
   const status = root.querySelector('#settings-status'); if (status) { status.hidden = true; status.textContent = ''; }
 }

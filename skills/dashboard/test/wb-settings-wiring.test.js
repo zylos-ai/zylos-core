@@ -198,6 +198,24 @@ test('switching the default engine asks once and names the remote machine it act
   assert.deepEqual(sent, [{ action: 'switch-runtime', body: { runtime: 'codex' } }]);
 });
 
+test('idle reclaim uses the session card mount and the existing confirmed remote action path', async () => {
+  const p = page(), sent = [], asked = [], section = node(p.document, 'section');
+  const root = node(p.document, 'div', 'settings-defaults'), sessionRoot = node(p.document, 'div', 'settings-idle-reclaim'); section.append(root, sessionRoot);
+  const value = defaultsValue(); value.metadata.claude.session_hot_ttl = { seconds: 1800, minutes: 30, mode: 'multi', source: 'config',
+    read_only: false, environment_set: false, environment_valid: false, min_minutes: 5, max_minutes: 1440 };
+  const panel = wired(p, { runner: recordingRunner(sent, asked), remoteTarget: () => 'lab' }).renderDefaults(root, value, async () => ({}));
+  assert.equal(root.querySelector('#settings-hot-ttl-minutes'), null, 'the global setting is outside the per-engine cards');
+  const input = sessionRoot.querySelector('#settings-hot-ttl-minutes'); input.value = '5'; await input.dispatch('input');
+  await sessionRoot.querySelector('#settings-save-hot-ttl').dispatch('click');
+  assert.equal(p.dialogs.length, 1); assert.match(p.dialogs[0].body, /hotTtl\.confirm.*"minutes":5/);
+  assert.match(p.dialogs[0].body, /remote_target.*lab/);
+  assert.deepEqual(sent, [{ action: 'set-session-hot-ttl', body: { minutes: 5 } }]); assert.deepEqual(asked, []);
+  panel.destroy();
+  input.value = '10'; await input.dispatch('input');
+  await sessionRoot.querySelector('#settings-save-hot-ttl').dispatch('click');
+  assert.equal(sent.length, 1, 'a destroyed instance view cannot send its old draft to a new target');
+});
+
 test('the card\'s executor runs an action only when the card says it was confirmed', async () => {
   const sent = [], execute = confirmedRunner(async (action, body) => { sent.push({ action, body }); return true; });
   assert.equal(await execute('switch-model', { model: 'two' }), false);

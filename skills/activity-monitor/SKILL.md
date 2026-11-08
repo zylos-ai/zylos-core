@@ -25,7 +25,7 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 
 ## Multi-session Reclaim Configuration
 
-The supervisor reads these settings at startup from `.zylos/config.json` in
+The supervisor reads these settings from `.zylos/config.json` in
 the Zylos data directory, with valid environment values taking precedence:
 
 | Config key | Environment variable | Default |
@@ -35,7 +35,13 @@ the Zylos data directory, with valid environment values taking precedence:
 
 Values must be positive safe integers. An invalid environment value falls back
 to the config file; an invalid or missing config value falls back to the default.
-Restart the supervisor for changes to take effect.
+Hot TTL is refreshed on each Supervisor round. Dashboard's global idle-reclaim
+setting accepts 5–1440 whole minutes and writes seconds through the existing
+config lock; the next TTL check uses the saved value without a restart. Existing
+positive second values remain valid. The page is read-only in single-session
+mode or when the environment variable is present, and displays the effective
+value (including fallback when that environment value is invalid).
+The eviction minimum remains a startup setting and requires a restart to change.
 
 Both TTL and capacity eviction use the latest C4 message, runtime creation,
 same-run reclaim cancellation reset, or session activity (hooks/transcript).

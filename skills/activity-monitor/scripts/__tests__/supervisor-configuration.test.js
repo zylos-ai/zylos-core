@@ -55,7 +55,8 @@ test('entry honors the 1M Claude 30% threshold and configured 60s TTL from confi
   assert.equal(result.controls.length, 1, '50% usage must rotate with the configured 30% threshold');
   assert.deepEqual(result.fences, [{ sessionGroup: 'a', reason: 'ttl', runId: 'run-a' }], '120s idle must expire a 60s TTL');
   assert.equal(result.refreshed.mode, 'single');
-  for (const key of ['hotTtlSeconds', 'evictMinIdleSeconds', 'syncMinIntervalSeconds'])
+  assert.equal(result.refreshed.hotTtlSeconds, 999, 'hot TTL refreshes with the next configuration read');
+  for (const key of ['evictMinIdleSeconds', 'syncMinIntervalSeconds'])
     assert.deepEqual(result.refreshed[key], resolved[key], 'startup settings change only after restart');
   assert.equal(result.refreshed.rotationPolicy.new_session_threshold,99,'threshold policy refreshes each round');
 });
@@ -64,6 +65,7 @@ test('entry gives valid environment settings priority over real config.json', t 
   const result = fromFile(t, { ZYLOS_SESSION_HOT_TTL_SECONDS: '300', ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS: '180', ZYLOS_SYNC_MIN_INTERVAL_SECONDS: '25',
     ZYLOS_SYNC_MAX_INTERVAL_SECONDS: '2000', ZYLOS_ORIGIN_SYNC_THRESHOLD: '35', ZYLOS_SYNC_BATCH_LIMIT: '80' });
   assert.equal(result.configuration.hotTtlSeconds, 300);
+  assert.equal(result.refreshed.hotTtlSeconds, 300, 'environment TTL stays effective after config changes');
   assert.equal(result.configuration.evictMinIdleSeconds, 180);
   assert.equal(result.configuration.syncMinIntervalSeconds, 25);
   assert.equal(result.configuration.syncMaxIntervalSeconds, 2000);

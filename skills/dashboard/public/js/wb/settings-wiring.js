@@ -1,6 +1,6 @@
 import { confirmDialog } from './detail.js?v=112';
 import { renderKeyTable } from './settings-access.js?v=103';
-import { renderDefaults } from './settings-defaults.js?v=112';
+import { renderDefaults } from './settings-defaults.js?v=113';
 
 /** The executor the default-settings card gets: it runs an action only when the card says it was confirmed. */
 export function confirmedRunner(run) {
@@ -75,6 +75,7 @@ export function wireSettingsConfirmations({ document, t, runner, keyPage, remote
     /** The key table: rotating, revoking and deleting each ask first. */
     renderKeyTable: (root, keys) => renderKeyTable(root, keys, keyTableOptions()),
     /** The default-settings card: it confirms all of its changes once, then runs them without asking again. */
-    renderDefaults: (root, value, read) => renderDefaults(root, defaultsOptions(value, read)),
+    renderDefaults: (root, value, read) => renderDefaults(root, { ...defaultsOptions(value, read),
+      sessionRoot: root.parentElement?.querySelector('#settings-idle-reclaim') }),
   };
 }

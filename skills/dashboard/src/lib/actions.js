@@ -10,6 +10,9 @@ import { getCodexModels, codexEffortsForModel } from './codex-models.js';
 import { isNewerVersion } from './version-utils.js';
 import { loadCoreModule } from './core-modules.js';
 const { modelThreshold, thresholdLimit, readDefaultModels, readCodexModelWindows, migrateModelThresholds, setModelThreshold } = await loadCoreModule('model-rotation-thresholds.js');
+const { resolveSessionHotTtl, HOT_TTL_MIN_MINUTES, HOT_TTL_MAX_MINUTES } = await loadCoreModule('session-hot-ttl.js');
+const { readConfigStrict, configUnreadable } = await loadCoreModule('config-store.js');
+const { updateConfigWithLock } = await loadCoreModule('config-lock.js');
 
 const execFileAsync = promisify(execFile);
 
@@ -115,6 +118,7 @@ export async function handleAction(action, body, config) {
       case 'switch-model': result = await switchModel(reqId, body, config, zylosDir); break;
       case 'switch-effort': result = await switchEffort(reqId, body, config, zylosDir); break;
       case 'set-threshold': result = await setThreshold(reqId, body, config, zylosDir); break;
+      case 'set-session-hot-ttl': result = await setSessionHotTtl(reqId, body, zylosDir); break;
       case 'upgrade-zylos': result = await upgradeZylos(reqId, zylosDir); break;
       case 'upgrade-cc': result = await upgradeRuntimeCli(reqId, config); break;
       default: result = { ok: false, error: 'unknown_action', messageKey: 'result.unknown_action' };
@@ -338,6 +342,33 @@ async function setThreshold(reqId, body, config, zylosDir) {
   }
 }
 
+async function setSessionHotTtl(reqId, body, zylosDir) {
+  const configFile = path.join(zylosDir, '.zylos/config.json');
+  const current = readConfigStrict(configFile);
+  if (current.state === 'error') throw configUnreadable(current.error);
+  const effective = resolveSessionHotTtl(current.state === 'ok' ? current.config : {});
+  if (effective.environment_set) {
+    return { ok: false, error: 'environment_override', messageKey: 'result.hot_ttl_environment' };
+  }
+  if (effective.mode !== 'multi') {
+    return { ok: false, error: 'multi_session_required', messageKey: 'result.hot_ttl_multi_only' };
+  }
+  const minutes = typeof body?.minutes === 'number'
+    || (typeof body?.minutes === 'string' && /^\d+$/.test(body.minutes.trim())) ? Number(body.minutes) : NaN;
+  if (!Number.isSafeInteger(minutes) || minutes < HOT_TTL_MIN_MINUTES || minutes > HOT_TTL_MAX_MINUTES) {
+    return { ok: false, error: 'invalid_value', messageKey: 'result.invalid_hot_ttl',
+      messageParams: { min: HOT_TTL_MIN_MINUTES, max: HOT_TTL_MAX_MINUTES } };
+  }
+  try {
+    const seconds = minutes * 60;
+    updateConfigWithLock({ configFile, lockFile: `${configFile}.lock`, update: { set: { session_hot_ttl_seconds: seconds } } });
+    log(reqId, `session hot TTL set: ${seconds}s`);
+    return { ok: true, seconds, minutes, messageKey: 'result.hot_ttl_set', messageParams: { minutes } };
+  } catch (err) {
+    return { ok: false, error: 'set_failed', message: err.message, messageKey: 'result.set_failed', messageParams: { error: err.message } };
+  }
+}
+
 export function getActionsMeta(config, runtimeInfo) {
   const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
   const codexModels = runtime === 'codex' ? getCodexModels() : [];
@@ -414,6 +445,7 @@ export function getActionsMeta(config, runtimeInfo) {
     efforts_by_model,
     model_thresholds,
     model_threshold_max,
-    new_session_threshold: newSessionThreshold
+    new_session_threshold: newSessionThreshold,
+    session_hot_ttl: resolveSessionHotTtl(config),
   };
 }

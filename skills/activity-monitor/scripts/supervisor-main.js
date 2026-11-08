@@ -25,6 +25,7 @@ const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js'
 const { observeSessionTarget } = await loadCoreModule('runtime/session-target.js');
 const { zylosRoot, LEGACY_TMUX_NAMES } = await loadCoreModule('session-group-paths.js');
 const { readDefaultModels, readCodexModelWindows } = await loadCoreModule('model-rotation-thresholds.js');
+const { resolveSessionHotTtl } = await loadCoreModule('session-hot-ttl.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
 const { matchClaudeScreen } = await loadCoreModule('heartbeat/claude-probe.js');
 const { matchCodexScreen } = await loadCoreModule('heartbeat/codex-probe.js');
@@ -80,7 +81,8 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     // configuration still blocks lifecycle mutations, including pressure reclaim.
     const raw=await readConfig(), {mode}=await readMode();
     if(mode!=='multi' || poolReader.resolveSessionPoolBaseline({env,config:raw}).fixed)return null;
-    const context={configuration:{...configuration,...raw,...lifecycleConfiguration,mode,rotationPolicy:raw},
+    const context={configuration:{...configuration,...raw,...lifecycleConfiguration,mode,rotationPolicy:raw,
+      hotTtlSeconds:resolveSessionHotTtl(raw,env).seconds},
       transition:await db.getModeTransition(),fences:await db.listDrainFences(),restartRequests:supervisor.admission.readRequests()};
     context.scenes=await scenes.observe(context);
     if(stopping)return null;
@@ -115,6 +117,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
       const raw=await readConfig(), {mode,legacy}=await readMode();
       lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);
       configuration={...raw,...lifecycleConfiguration,mode,legacy,capacityUnavailable:false,
+        hotTtlSeconds:resolveSessionHotTtl(raw,env).seconds,
         rotationPolicy: raw, defaultModels: readDefaultModels({zylosDir:root,home:env.HOME,codexHome:env.CODEX_HOME}),
         codexModels: readCodexModelWindows({home:env.HOME,codexHome:env.CODEX_HOME})};
       if(mode!=='multi') {

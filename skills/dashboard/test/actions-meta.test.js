@@ -280,3 +280,74 @@ test('metadata reads the same root TOML model syntax as threshold migration', ()
     }
   } finally { fs.rmSync(zylosDir, { recursive: true, force: true }); }
 }));
+
+test('hot TTL actions save integer minutes as seconds and preserve unrelated configuration', async () => {
+  const zylosDir = makeZylosDir();
+  const previous = process.env.ZYLOS_SESSION_HOT_TTL_SECONDS;
+  delete process.env.ZYLOS_SESSION_HOT_TTL_SECONDS;
+  try {
+    fs.mkdirSync(path.join(zylosDir, '.zylos'));
+    const file = path.join(zylosDir, '.zylos/config.json');
+    const initial = { session_mode: 'multi', session_hot_ttl_seconds: 1800,
+      session_evict_min_idle_seconds: 300, model_rotation_thresholds: { claude: { opus: 65 } } };
+    fs.writeFileSync(file, JSON.stringify(initial));
+    const config = { zylosDir };
+    for (const minutes of [4, 1441, 1.5, '5x', false, '', null, undefined]) {
+      const before = fs.readFileSync(file, 'utf8');
+      const result = await handleAction('set-session-hot-ttl', { minutes }, config);
+      assert.equal(result.ok, false);
+      assert.equal(result.messageKey, 'result.invalid_hot_ttl');
+      assert.equal(fs.readFileSync(file, 'utf8'), before, 'invalid minutes must not change the file');
+    }
+    for (const minutes of [5, 1440]) {
+      const result = await handleAction('set-session-hot-ttl', { minutes }, config);
+      assert.equal(result.ok, true);
+      assert.equal(result.seconds, minutes * 60);
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.equal(saved.session_hot_ttl_seconds, minutes * 60);
+      assert.equal(saved.session_evict_min_idle_seconds, initial.session_evict_min_idle_seconds);
+      assert.deepEqual(saved.model_rotation_thresholds, initial.model_rotation_thresholds);
+      const meta = getActionsMeta({ ...saved, zylosDir }, {}).session_hot_ttl;
+      assert.equal(meta.minutes, minutes);
+      assert.equal(meta.read_only, false);
+    }
+    fs.writeFileSync(file, JSON.stringify({ ...initial, session_mode: 'single' }));
+    const before = fs.readFileSync(file, 'utf8');
+    const single = await handleAction('set-session-hot-ttl', { minutes: 25 }, { ...config, session_mode: 'multi' });
+    assert.equal(single.messageKey, 'result.hot_ttl_multi_only', 'actual config mode takes precedence over a stale caller');
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+  } finally {
+    if (previous === undefined) delete process.env.ZYLOS_SESSION_HOT_TTL_SECONDS;
+    else process.env.ZYLOS_SESSION_HOT_TTL_SECONDS = previous;
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
+
+test('hot TTL metadata and writes honor present valid or invalid environment settings', async () => {
+  const zylosDir = makeZylosDir();
+  const previous = process.env.ZYLOS_SESSION_HOT_TTL_SECONDS;
+  try {
+    fs.mkdirSync(path.join(zylosDir, '.zylos'));
+    const file = path.join(zylosDir, '.zylos/config.json');
+    const config = { session_mode: 'multi', session_hot_ttl_seconds: 2400, zylosDir };
+    fs.writeFileSync(file, JSON.stringify({ session_mode: 'multi', session_hot_ttl_seconds: 2400 }));
+    const before = fs.readFileSync(file, 'utf8');
+    for (const [environment, minutes, expectedSeconds, source] of [['121', 15, 121, 'environment'], ['', 16, 2400, 'config']]) {
+      process.env.ZYLOS_SESSION_HOT_TTL_SECONDS = environment;
+      const meta = getActionsMeta(config, {}).session_hot_ttl;
+      assert.equal(meta.seconds, expectedSeconds);
+      assert.equal(meta.minutes, expectedSeconds / 60);
+      assert.equal(meta.source, source);
+      assert.equal(meta.read_only, true);
+      assert.equal(meta.environment_set, true);
+      assert.equal(meta.environment_valid, environment !== '');
+      const result = await handleAction('set-session-hot-ttl', { minutes }, config);
+      assert.equal(result.messageKey, 'result.hot_ttl_environment');
+      assert.equal(fs.readFileSync(file, 'utf8'), before);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.ZYLOS_SESSION_HOT_TTL_SECONDS;
+    else process.env.ZYLOS_SESSION_HOT_TTL_SECONDS = previous;
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  }
+});
