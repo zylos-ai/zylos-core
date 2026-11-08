@@ -121,8 +121,14 @@ function parseCookies(header) {
   return cookies;
 }
 
-function getSessionCookie(req) {
-  return parseCookies(req.headers.cookie)[COOKIE_NAME] || null;
+function getSessionAuth(req) {
+  for (const pair of (req.headers.cookie || '').split(';')) {
+    const [name, ...rest] = pair.trim().split('=');
+    if (name !== COOKIE_NAME) continue;
+    const context = validateSession(rest.join('='));
+    if (context) return context;
+  }
+  return null;
 }
 
 // Scope the session cookie to the proxy prefix (e.g. /dashboard) so the
@@ -404,7 +410,7 @@ export class AuthGate {
 
   resolveAuthContext(req) {
     if (!this.enabled || !this.config.auth?.password) return null;
-    const cookieAuth = validateSession(getSessionCookie(req));
+    const cookieAuth = getSessionAuth(req);
     if (cookieAuth) {
       req._authContext = cookieAuth;
       return cookieAuth;
@@ -491,7 +497,7 @@ export class AuthGate {
     }
 
     if (req.method === 'GET' || req.method === 'HEAD') {
-      if (validateSession(getSessionCookie(req))) {
+      if (getSessionAuth(req)) {
         redirect(res, browserRoot(base));
         return true;
       }
@@ -542,7 +548,8 @@ export class AuthGate {
     }
     // Logout must always succeed: no origin check (proxies may rewrite Host)
     // and no session requirement. A forged logout only ends a session.
-    destroySession(getSessionCookie(req));
+    const context = getSessionAuth(req);
+    if (context) _store.deleteSession(context.credentialId);
     clearSessionCookie(res, base);
     redirect(res, browserPath(base, 'login'));
     return true;

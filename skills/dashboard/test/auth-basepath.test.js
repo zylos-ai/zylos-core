@@ -1638,3 +1638,28 @@ test('retired ingest endpoints accept neither local nor proxied writes', async (
     await closeServer(server);
   }
 });
+
+// Real HTTP duplicate-cookie admission and current-prefix logout.
+test('nested Dashboard login accepts any valid same-name cookie and logout clears only its path', { timeout: 15_000 }, async t => {
+  const { origin, server, zylosDir } = await makeServer();
+  t.after(async () => { server.closeAllConnections(); await closeServer(server); fs.rmSync(zylosDir, { recursive: true, force: true }); });
+  const headers = { 'x-forwarded-prefix': '/ib/dashboard', 'Content-Type': 'application/x-www-form-urlencoded' };
+  const login = await fetch(`${origin}/login`, { method: 'POST', headers, body: form({ password: 'secret' }), redirect: 'manual' });
+  await login.text();
+  assert.equal(login.status, 302);
+  const valid = loginCookies(login, { base: '/ib/dashboard' }).split(';')[0];
+  const invalid = '__Secure-zylos_dashboard_session=old-parent-cookie';
+  for (const cookie of [`${valid}; ${invalid}`, `${invalid}; ${valid}`]) {
+    const home = await fetch(origin, { headers: { ...headers, cookie }, redirect: 'manual' });
+    assert.equal(home.status, 200); await home.text();
+    const signedIn = await fetch(`${origin}/login`, { headers: { ...headers, cookie }, redirect: 'manual' });
+    assert.equal(signedIn.status, 302); assert.equal(signedIn.headers.get('location'), '/ib/dashboard/'); await signedIn.text();
+  }
+  const rejected = await fetch(origin, { headers: { ...headers, cookie: `${invalid}; __Secure-zylos_dashboard_session=also-invalid` }, redirect: 'manual' });
+  assert.equal(rejected.status, 302); assert.match(rejected.headers.get('location'), /^\/ib\/dashboard\/login/); await rejected.text();
+  const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { ...headers, cookie: `${valid}; ${invalid}` }, redirect: 'manual' });
+  await logout.text();
+  assert.deepEqual(logout.headers.getSetCookie(), ['__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/ib/dashboard; Max-Age=0']);
+  const ended = await fetch(origin, { headers: { ...headers, cookie: valid }, redirect: 'manual' });
+  assert.equal(ended.status, 302); await ended.text();
+});
