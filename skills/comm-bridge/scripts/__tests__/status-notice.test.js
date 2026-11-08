@@ -140,6 +140,30 @@ test('notice diagnostics drain both pipes and retain bounded output prefixes', t
   assert.equal(diagnostic.stderr, 'e'.repeat(8192));
 });
 
+// Covers a sender that closes stdin before reading the notice. The host must not
+// crash on the write error, and the unread notice stays uncertain as before.
+test('notice sender closing stdin early is uncertain without crashing the host', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'notice-stdin-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const channel = path.join(root, '.claude/skills/fake/scripts');
+  fs.mkdirSync(channel, { recursive: true });
+  fs.writeFileSync(path.join(channel, 'send.js'), 'process.exit(0);');
+  const code = `import {spawn} from 'node:child_process';
+    import {reserveStatusNotice,sendStatusNotice} from ${JSON.stringify(new URL('../status-notice.js', import.meta.url).href)};
+    import {close} from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
+    const childCode="process.stdin.destroy();setTimeout(()=>process.exit(0),300);";
+    const result=await sendStatusNotice(reserveStatusNotice('fake','room',{sessionGroup:'fake',runtime:'claude'}),'x'.repeat(1<<20),{}, {
+      timeoutMs:3000,spawn:(cmd,args,options)=>spawn(process.execPath,['-e',childCode],options)});
+    console.log(JSON.stringify(result));close();`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+    env: { ...process.env, ZYLOS_DIR: root }, encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout.trim());
+  assert.equal(output.outcome, 'uncertain');
+  assert.equal(output.exitCode, 0);
+});
+
 // Covers timeout settlement when a descendant retains inherited pipe writers.
 // The test owns and kills that descendant; the product kills only its direct child.
 for (const directExit of ['running', 'zero']) test(`notice timeout settles with a ${directExit} sender and inherited output pipes`, t => {
