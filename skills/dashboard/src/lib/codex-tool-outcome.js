@@ -6,13 +6,14 @@
 const FAILED_HEADER = /(?:Process exited with code [1-9]|^Exit code: [1-9])/m;
 const FAILED_MARKER = /(?:"exit_code"\s*:\s*[1-9]|"isError"\s*:\s*true)/;
 
-function outputText(output, depth = 0) {
+/** The text parts of a Codex tool output (a string, a content array or an object carrying them). */
+export function codexToolOutputText(output, depth = 0) {
   if (typeof output === 'string') return output;
   if (depth > 3 || output === null || typeof output !== 'object') return '';
-  if (Array.isArray(output)) return output.map(part => outputText(part, depth + 1)).filter(Boolean).join('\n');
+  if (Array.isArray(output)) return output.map(part => codexToolOutputText(part, depth + 1)).filter(Boolean).join('\n');
   if (typeof output.text === 'string') return output.text;
-  if (output.content !== undefined) return outputText(output.content, depth + 1);
-  if (typeof output.output === 'string' || Array.isArray(output.output)) return outputText(output.output, depth + 1);
+  if (output.content !== undefined) return codexToolOutputText(output.content, depth + 1);
+  if (typeof output.output === 'string' || Array.isArray(output.output)) return codexToolOutputText(output.output, depth + 1);
   return '';
 }
 
@@ -26,7 +27,7 @@ function failedObject(output) {
 /** Whether a Codex tool output reports a failed call. */
 export function codexToolOutputFailed(output) {
   if (failedObject(output)) return true;
-  const text = outputText(output);
+  const text = codexToolOutputText(output);
   const body = text.search(/^Output:$/m);
   return FAILED_HEADER.test(body < 0 ? text : text.slice(0, body)) || FAILED_MARKER.test(text);
 }

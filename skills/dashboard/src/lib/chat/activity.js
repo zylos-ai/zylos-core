@@ -12,8 +12,7 @@ import { randomUUID } from 'node:crypto';
  */
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-// Codex subagent starts are read with the boundaries only to know the subagents' own threads (see buildTurns).
-const TURN_TYPES = ['deliver', 'user_prompt_submit', 'stop', 'turn_complete', 'dashboard_interrupt', 'subagent_start'];
+const TURN_TYPES = ['deliver', 'user_prompt_submit', 'stop', 'turn_complete', 'dashboard_interrupt'];
 const END_TYPES = ['stop', 'turn_complete', 'dashboard_interrupt'];
 const STEP_TYPES = ['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result',
   'subagent_start', 'subagent_stop', 'assistant_message'];
@@ -29,11 +28,13 @@ const SETTLE_MS = CONTINUATION_GAP_MS + 10_000;
 const BOUNDARY_PAGE = 1000, BOUNDARY_PAGES = 10, STEP_LIMIT = 1500, STEPS_PER_ROUND = 500;
 // A delivery that never produced a turn stops being polled for after this long.
 const PENDING_LIMIT_MS = 30 * 60_000;
-// Calls that manage subagents rather than do work (both multi-agent tool generations); the subagent itself is a step.
+// Calls that manage subagents rather than do work (both multi-agent tool generations, including an `exec` that
+// calls them from code mode); the subagent itself is a step.
 const CODEX_AGENT_CONTROLS = new Set(['spawn_agent', 'send_input', 'wait_agent', 'close_agent', 'resume_agent',
   'send_message', 'list_agents', 'followup_task', 'interrupt_agent', 'wait', 'sleep']);
 const CODEX_COMMANDS = new Set(['exec', 'exec_command', 'shell', 'local_shell', 'container.exec', 'write_stdin', 'unified_exec']);
 
+const toolName = meta => typeof meta.tool_name === 'string' ? meta.tool_name.replace(/^functions\./, '').replace(/^collaboration\./, '') : '';
 const iso = ms => new Date(ms).toISOString();
 const ms = value => { const time = Date.parse(value); return Number.isFinite(time) ? time : null; };
 /** C4 stores UTC seconds as `YYYY-MM-DD HH:MM:SS`. */
@@ -45,7 +46,7 @@ const plain = value => typeof value === 'string' && value.trim() ? value.trim().
 /** One display label per step: a translation key and an optional plain argument; never a tool name or raw input. */
 export function stepLabel(event) {
   const meta = event.meta;
-  const tool = typeof meta.tool_name === 'string' ? meta.tool_name.replace(/^functions\./, '') : '';
+  const tool = toolName(meta);
   const detail = plain(meta.tool_detail);
   if (event.runtime === 'codex') {
     if (CODEX_COMMANDS.has(tool)) return { key: 'runCommand' };
@@ -74,18 +75,14 @@ export function recordGroupInterrupt(store, { sessionGroup, runId = null, sessio
 }
 
 /**
- * Turns from prompt/stop events, in time order. A Codex subagent runs on its own thread in the same group; prompts
- * and ends from a thread a subagent start names are that subagent's, so they neither open nor close a turn.
+ * Turns from prompt/stop events, in time order. No thread filter is applied: a Claude subagent reports through
+ * subagent hook events, and on real Codex 0.167.0 data a subagent's thread writes no prompt or end into its parent's
+ * group.
  */
 export function buildTurns(events) {
-  const turns = [], subagents = new Set();
+  const turns = [];
   let open = null;
   for (const event of events) {
-    if (event.type === 'subagent_start') {
-      if (event.runtime === 'codex' && typeof event.meta?.agent_id === 'string') subagents.add(event.meta.agent_id);
-      continue;
-    }
-    if (event.session && subagents.has(event.session)) continue;
     if (event.type === 'user_prompt_submit') {
       if (!open) { open = { start: event.at, end: null, stopped: false, sessions: new Set(), owner: false, round: null }; turns.push(open); }
       if (event.session) open.sessions.add(event.session);
@@ -186,8 +183,9 @@ export function buildSteps(events, round, { settling = false } = {}) {
     if (event.runtime === 'codex' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;
     if (event.runtime !== 'codex' && ['tool_call', 'tool_result', 'subagent_start', 'subagent_stop'].includes(event.type)) continue;
     if (meta.agent_id && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;
-    const tool = typeof meta.tool_name === 'string' ? meta.tool_name.replace(/^functions\./, '') : '';
-    if (['tool_call', 'tool_result'].includes(event.type) && CODEX_AGENT_CONTROLS.has(tool)) continue;
+    const tool = toolName(meta);
+    if (['tool_call', 'tool_result'].includes(event.type)
+      && (CODEX_AGENT_CONTROLS.has(tool) || Array.isArray(meta.wraps_agent_tools) && meta.wraps_agent_tools.length)) continue;
     const key = event.type.startsWith('subagent_') ? `agent:${meta.agent_id}`
       : `tool:${meta.tool_use_id ?? meta.call_id ?? ''}`;
     if (key.endsWith(':') || key === 'agent:undefined') continue;
@@ -196,6 +194,7 @@ export function buildSteps(events, round, { settling = false } = {}) {
       // A Codex subagent is named only as a subtask: its description is the message it was given.
       const label = event.type === 'subagent_start' ? { key: 'subagent' } : stepLabel(event);
       const step = { kind: label.key === 'subagent' ? 'subagent' : 'tool', label, status: 'running', start: event.at, end: null };
+      if (event.type === 'subagent_start') Object.defineProperty(step, 'codexSubagent', { value: true });
       if (add(step)) open.set(key, step);
     } else {
       const step = open.get(key);
@@ -208,7 +207,9 @@ export function buildSteps(events, round, { settling = false } = {}) {
   const stopped = round.turns.at(-1)?.stopped === true;
   for (const step of steps) {
     if (step.kind === 'say' || step.end !== null) continue;
-    if (end !== null && !settling) { step.status = stopped ? 'stopped' : 'incomplete'; step.end = end; }
+    // A Codex subagent's end is recorded only when the parent waits for it or is told it finished; when neither
+    // was seen, the subtask is taken to have ended with the round.
+    if (end !== null && !settling) { step.status = stopped ? 'stopped' : step.codexSubagent ? 'done' : 'incomplete'; step.end = end; }
     else step.status = 'running';
   }
   return { steps, truncated };
@@ -302,9 +303,6 @@ export class ChatActivity {
     const before = iso(sent - DELIVERY_LEAD_MS);
     const idle = this._events(`SELECT timestamp FROM runtime_events WHERE session_group=@group
       AND event_type IN ('stop','turn_complete') AND timestamp < @at
-      AND (session_id IS NULL OR session_id NOT IN (SELECT json_extract(metadata, '$.agent_id') FROM runtime_events
-        WHERE session_group=@group AND event_type='subagent_start' AND runtime='codex' AND json_valid(metadata)
-        AND json_extract(metadata, '$.agent_id') IS NOT NULL))
       ORDER BY timestamp DESC, event_seq DESC LIMIT 1`, { group, at: before })[0];
     const from = Math.min(sent - DELIVERY_LEAD_MS, idle ? ms(idle.timestamp) : sent - DELIVERY_LEAD_MS);
     const { rows, complete } = this._boundaries(group, from, rows => {

@@ -16,6 +16,8 @@ import { sendJson } from '../src/lib/http.js';
 import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
+import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
+import { codeModeV1Turn, multiAgentV2Turn } from './fixtures/codex-multi-agent-rollout.js';
 
 const GROUP = 'dash-owned:a';
 const ID = `g:${Buffer.from(GROUP).toString('hex').toUpperCase()}`;
@@ -476,22 +478,45 @@ test('Codex exec is a command and multi-agent controls of both generations are n
   assert.deepEqual(round.segments[0].steps.map(step => `${step.label.key}:${step.status}`), ['runCommand:failed']);
 });
 
-test('a Codex subagent thread neither opens nor ends the turn of the thread that started it', t => {
+// The real rollout collector writes into the same Dashboard store the activity is read from.
+async function collectRollout(f, name, lines) {
+  const file = path.join(f.root, `${name}.jsonl`);
+  fs.writeFileSync(file, lines.map(line => JSON.stringify(line)).join('\n') + '\n');
+  const mapping = { transcript_path: file, session_id: 'thread-1', session_group: GROUP, run_id: 'r1' };
+  f.store.insertUsageTranscript({ ...mapping, runtime: 'codex' }, new Date(T0).toISOString());
+  const transcripts = { snapshot: { listKnown: true }, currentOriginMapping: () => null, isOriginCurrent: () => false,
+    async collect(runtime, callback) { return (await callback(mapping, false)).written; } };
+  await new CodexRolloutCollector(f.store, { modelPrices: {} }, { transcripts }).collect();
+}
+
+test('a Codex subtask is one step from spawn to finish in both multi-agent generations, never a command or its message', async t => {
+  for (const [name, lines, end] of [['v2', multiAgentV2Turn(), at(9)], ['v1-code-mode', codeModeV1Turn(), at(8)]]) {
+    const f = fixture(t);
+    const codex = { runtime: 'codex', session: 'thread-1' };
+    f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0, codex);
+    await collectRollout(f, name, lines);
+    f.message(2, 15, 'out'); f.event('turn_complete', 16, codex);
+    const round = roundOf(read(f, [1]), 1);
+    const steps = round.segments[0].steps;
+    assert.deepEqual(steps.map(step => `${step.kind}:${step.label.key}:${step.label.arg ?? ''}:${step.status}`), ['subagent:subagent::done'], name);
+    assert.equal(steps[0].start, at(2), `${name}: starts when the spawn answered`);
+    assert.equal(steps[0].end, end, `${name}: ends when its finish was reported`);
+    const shown = JSON.stringify(round);
+    for (const secret of ['Look through', 'inspect_logs', 'Check the backup lock', 'Kepler', 'Found the restart', 'stale']) {
+      assert.ok(!shown.includes(secret), `${name}: ${secret} is not shown`);
+    }
+  }
+});
+
+test('a Codex subtask whose finish was never recorded ends with its round instead of reading as unfinished', t => {
   const f = fixture(t);
-  const main = { runtime: 'codex', session: 'thread-main' }, child = { runtime: 'codex', session: 'thread-child' };
-  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0, main);
-  f.event('subagent_start', 2, { ...main, meta: { agent_id: 'thread-child' } });
-  f.event('user_prompt_submit', 2.5, child);
-  f.event('tool_call', 3, { ...child, meta: { call_id: 'inner', tool_name: 'exec_command' } });
-  f.event('tool_result', 4, { ...child, meta: { call_id: 'inner', tool_name: 'exec_command', outcome: 'succeeded' } });
-  f.event('turn_complete', 10, child); f.event('stop', 10.1, child);
-  f.event('subagent_stop', 11, { ...main, meta: { agent_id: 'thread-child' } });
-  f.event('tool_call', 12, { ...main, meta: { call_id: 'own', tool_name: 'exec_command' } });
-  f.event('tool_result', 13, { ...main, meta: { call_id: 'own', tool_name: 'exec_command', outcome: 'succeeded' } });
-  f.message(2, 20, 'out'); f.event('turn_complete', 21, main); f.event('stop', 21.1, main);
-  const round = roundOf(read(f, [1]), 1);
-  assert.equal(round.end, at(21));
-  assert.deepEqual(round.segments[0].steps.map(step => `${step.label.key}:${step.status}`), ['subagent:done', 'runCommand:done']);
+  const codex = { runtime: 'codex', session: 'thread-1' };
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0, codex);
+  f.event('subagent_start', 2, { ...codex, meta: { agent_id: '/root/inspect_logs' } });
+  f.event('tool_call', 3, { ...codex, meta: { call_id: 'c1', tool_name: 'exec_command' } });
+  f.message(2, 15, 'out'); f.event('turn_complete', 16, codex);
+  const steps = roundOf(read(f, [1]), 1).segments[0].steps;
+  assert.deepEqual(steps.map(step => [step.label.key, step.status, step.end]), [['subagent', 'done', at(16)], ['runCommand', 'incomplete', at(16)]]);
 });
 
 test('a Dashboard database one version older gains the group, type and time index, and activity lookups use it', t => {

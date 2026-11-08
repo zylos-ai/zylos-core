@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { DEFAULT_CODEX_MODEL_PRICES, DEFAULT_CODEX_PRIORITY_MODEL_PRICES, modelPricesForRuntime, normalizeServiceTier } from '../config.js';
 import { Sanitizer } from '../sanitizer.js';
 import { UsageTranscripts, groupMainTranscript } from './usage-transcripts.js';
-import { codexToolOutputFailed } from '../codex-tool-outcome.js';
+import { codexToolOutputFailed, codexToolOutputText } from '../codex-tool-outcome.js';
 
 const PER_MTOK = 1_000_000;
 const ASSISTANT_MESSAGE_SUMMARY_LIMIT = 500;
@@ -25,6 +25,7 @@ export class CodexRolloutCollector {
     this._subagentSpawnByCallId = new Map();
     this._subagentStartedAt = new Map();
     this._subagentWaitByCallId = new Map();
+    this._codeModeWrapsByCallId = new Map();
     this._onEvent = null;
     this._onMetric = null;
     this._onRuntimeInfo = null;
@@ -505,6 +506,9 @@ export class CodexRolloutCollector {
     if (item.type === 'message' && item.role === 'assistant') {
       return this._ingestMessage(item, payload, timestamp, mapping, position);
     }
+    if (item.type === 'message' && (item.role === 'user' || item.role === 'developer')) {
+      return this._ingestSubagentNotification(item, timestamp, mapping, position);
+    }
     if (!['function_call', 'function_call_output', 'custom_tool_call', 'custom_tool_call_output'].includes(item.type)) return 0;
     const name = item.name || payload.name || null;
     const callId = item.call_id || payload.call_id || null;
@@ -514,6 +518,13 @@ export class CodexRolloutCollector {
     const toolArgs = parseToolArgs(item.arguments || item.input || payload.arguments || payload.input);
 
     if (callId && !isOutput && name) this._toolNameByCallId.set(callId, name);
+    // In code mode (multi-agent v1) the agent calls spawn_agent / wait_agent from JavaScript run by `exec`; such an
+    // exec is a subagent control, not a command.
+    if (callId && !isOutput && normalizedName === 'exec') {
+      const wraps = codeModeAgentCalls(item.input ?? item.arguments ?? payload.input ?? payload.arguments);
+      if (wraps.length) this._codeModeWrapsByCallId.set(callId, wraps);
+    }
+    const wraps = normalizedName === 'exec' && callId ? this._codeModeWrapsByCallId.get(callId) ?? null : null;
 
     if (!isOutput && normalizedName === 'spawn_agent' && callId) {
       this._subagentSpawnByCallId.set(callId, {
@@ -550,6 +561,7 @@ export class CodexRolloutCollector {
         raw_type: item.type,
         rollout_offset: position.byteOffset ?? null,
         rollout_line: position.lineIndex ?? null,
+        ...(wraps ? { wraps_agent_tools: wraps } : {}),
         // Only whether the call failed is kept; the output itself is never stored.
         ...(isOutput ? { outcome: codexToolOutputFailed(item.output ?? payload.output) ? 'failed' : 'succeeded' } : {})
       },
@@ -563,7 +575,9 @@ export class CodexRolloutCollector {
     const toolResult = this._insertEvent(toolEvent);
     written += toolResult?.inserted ? 1 : 0;
 
-    if (isOutput) {
+    if (isOutput && wraps) {
+      written += this._ingestCodeModeAgentOutput(wraps, callId, item.output ?? payload.output, timestamp, mapping, position);
+    } else if (isOutput) {
       written += this._ingestSubagentLifecycleOutput(normalizedName, callId, item.output ?? payload.output, timestamp, mapping, position);
     } else {
       written += this._ingestSubagentLifecycleCall(normalizedName, toolArgs, timestamp, mapping, position, callId);
@@ -574,9 +588,18 @@ export class CodexRolloutCollector {
 
   _ingestSubagentLifecycleOutput(toolName, callId, output, timestamp, mapping, position = {}) {
     if (toolName === 'spawn_agent') {
-      const parsed = parseToolArgs(output);
-      const agentId = agentIdFromObject(parsed);
+      // v1 answers with the agent id; v2 with the canonical task name (`{"task_name": "/root/…"}`), which later
+      // tools and the completion notice use to name the agent.
+      const parsed = parseToolOutput(output);
+      const agentId = spawnedAgentId(parsed);
       if (!agentId) return 0;
+      return this._insertSubagentStart(agentId, callId, parsed, timestamp, mapping, position, 'spawn_agent');
+    }
+    return this._ingestSubagentEndOutput(toolName, callId, output, timestamp, mapping, position);
+  }
+
+  _insertSubagentStart(agentId, callId, parsed, timestamp, mapping, position, sourceTool) {
+    {
       const spawn = this._subagentSpawnByCallId.get(callId) || {};
       const ingestId = `codex-subagent-start-${mapping.session_id || 'unknown'}-${agentId}`;
       this._subagentStartedAt.set(agentId, timestamp);
@@ -599,7 +622,7 @@ export class CodexRolloutCollector {
           status: 'running',
           description: spawn.description || null,
           source_event: 'response_item',
-          source_tool: 'spawn_agent',
+          source_tool: sourceTool,
           rollout_offset: position.byteOffset ?? null,
           rollout_line: position.lineIndex ?? null
         },
@@ -608,9 +631,11 @@ export class CodexRolloutCollector {
       });
       return result?.inserted ? 1 : 0;
     }
+  }
 
+  _ingestSubagentEndOutput(toolName, callId, output, timestamp, mapping, position = {}) {
     if (toolName === 'wait_agent') {
-      const parsed = parseToolArgs(output);
+      const parsed = parseToolOutput(output);
       const wait = this._subagentWaitByCallId.get(callId) || null;
       let written = 0;
       for (const status of waitAgentStatuses(parsed, wait?.targets || [])) {
@@ -636,7 +661,7 @@ export class CodexRolloutCollector {
     }
 
     if (toolName === 'close_agent') {
-      const parsed = parseToolArgs(output);
+      const parsed = parseToolOutput(output);
       const agentId = agentIdFromObject(parsed) || agentIdFromObject(parsed.previous_status);
       return agentId ? this._insertSubagentStop(agentId, timestamp, mapping, 'close_agent', position) : 0;
     }
@@ -677,6 +702,44 @@ export class CodexRolloutCollector {
     if (toolName !== 'close_agent') return 0;
     const agentId = agentIdFromObject(args);
     return agentId ? this._insertSubagentStop(agentId, timestamp, mapping, 'close_agent', position) : 0;
+  }
+
+  /**
+   * The output of an exec that called agent tools from code mode: whatever the script printed. A spawn's agent id
+   * (or task name) is taken from it when printed; otherwise the exec call itself names the subagent.
+   */
+  _ingestCodeModeAgentOutput(wraps, callId, output, timestamp, mapping, position = {}) {
+    let written = 0;
+    const printed = printedObjects(output);
+    if (wraps.includes('spawn_agent')) {
+      const ids = uniqueStrings(printed.map(spawnedAgentId));
+      for (const agentId of ids.length ? ids : [`exec-${callId}`]) {
+        written += this._insertSubagentStart(agentId, callId, printed.find(value => spawnedAgentId(value) === agentId) || {},
+          timestamp, mapping, position, 'exec');
+      }
+    }
+    for (const tool of ['wait_agent', 'close_agent']) {
+      if (!wraps.includes(tool)) continue;
+      for (const value of printed) written += this._ingestSubagentEndOutput(tool, callId, value, timestamp, mapping, position);
+    }
+    return written;
+  }
+
+  /**
+   * Multi-agent v2 reports a finished subagent to its parent as a `<subagent_notification>` input naming the agent
+   * (its task path) and its final status.
+   */
+  _ingestSubagentNotification(item, timestamp, mapping, position = {}) {
+    const text = (Array.isArray(item.content) ? item.content : [])
+      .map(part => typeof part?.text === 'string' ? part.text : '').join('\n');
+    let written = 0;
+    for (const match of text.matchAll(/<subagent_notification>([\s\S]*?)<\/subagent_notification>/g)) {
+      const notice = parseToolArgs(match[1].trim());
+      const agentId = firstString(notice.agent_path, notice.task_name, notice.agent_id, notice.id, notice.target);
+      if (!agentId || !finalAgentStatus(notice.status)) continue;
+      written += this._insertSubagentStop(agentId, timestamp, mapping, 'subagent_notification', position);
+    }
+    return written;
   }
 
   _insertSubagentUpdate(agentId, timestamp, mapping, sourceTool, position = {}, opts = {}, callId = null) {
@@ -1031,7 +1094,40 @@ function parseToolArgs(args) {
 
 function normalizeToolName(name) {
   if (!name || typeof name !== 'string') return '';
-  return name.replace(/^functions\./, '');
+  return name.replace(/^functions\./, '').replace(/^collaboration\./, '');
+}
+/** A tool output as an object: a JSON string, an object, or the JSON text of a content array. */
+function parseToolOutput(output) {
+  if (output && typeof output === 'object' && !Array.isArray(output) && output.content === undefined) return output;
+  return parseToolArgs(typeof output === 'string' ? output : codexToolOutputText(output).trim());
+}
+/** JSON objects a code-mode script printed (one per text part or line), for agent ids and statuses. */
+function printedObjects(output) {
+  const text = typeof output === 'string' ? output : codexToolOutputText(output);
+  const values = [];
+  for (const chunk of [text, ...text.split('\n')]) {
+    const start = chunk.indexOf('{'), end = chunk.lastIndexOf('}');
+    if (start < 0 || end <= start) continue;
+    const value = parseToolArgs(chunk.slice(start, end + 1));
+    if (value && typeof value === 'object' && Object.keys(value).length) values.push(value);
+  }
+  return values;
+}
+const CODE_MODE_AGENT_TOOLS = ['spawn_agent', 'wait_agent', 'close_agent', 'send_input', 'resume_agent'];
+/** Agent tools a code-mode script calls (`tools.spawn_agent(…)`, `tools["wait_agent"](…)`). */
+function codeModeAgentCalls(input) {
+  const code = typeof input === 'string' ? input : '';
+  return CODE_MODE_AGENT_TOOLS.filter(tool => new RegExp(`\\btools\\s*(?:\\.\\s*${tool}\\b|\\[\\s*['"\`]${tool}['"\`]\\s*\\])`).test(code));
+}
+function spawnedAgentId(value) {
+  if (!value || typeof value !== 'object') return null;
+  return agentIdFromObject(value) || firstString(value.task_name, value.agent_path);
+}
+/** A final agent status: a word, or an object keyed by it (`{ "completed": "…" }`). */
+function finalAgentStatus(status) {
+  const FINAL = ['completed', 'errored', 'shutdown', 'not_found', 'interrupted'];
+  if (typeof status === 'string') return FINAL.includes(status.toLowerCase());
+  return !!status && typeof status === 'object' && Object.keys(status).some(key => FINAL.includes(key.toLowerCase()));
 }
 
 function summarizeShellContinuation(args) {
