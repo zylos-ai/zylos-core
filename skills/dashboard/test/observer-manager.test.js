@@ -567,6 +567,43 @@ test('expired authentication cannot displace a group being observed', async t =>
   assert.equal(f.manager.leases.has(lease.id), true);
 });
 
+for (const lastGroup of ['telegram:42', 'openmax:room']) {
+  test(`overlapping group attachments leave ${lastGroup} available to the last caller`, async t => {
+    const f = groupedFixture();
+    f.targets.set('openmax:room', { sessionMode: 'multi', sessionGroup: 'openmax:room', runtime: 'codex', runId: 'run-openmax', tmuxName: 'managed-openmax' });
+    let completeFirst;
+    const start = f.coordinator.firstLease;
+    f.coordinator.firstLease = async (principal, target) => {
+      const active = await start(principal, target);
+      if (!completeFirst) await new Promise(resolve => { completeFirst = resolve; });
+      return active;
+    };
+    t.after(async () => { completeFirst?.(); await f.manager.shutdown(); });
+    const attempts = [f.manager.createLease(context('admin'), { sessionGroup: 'telegram:42' })];
+    // Register the rejection handler before any retirement can reject an old caller.
+    const outcomes = attempts.map(attempt => attempt.then(value => ({ value }), error => ({ error })));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(typeof completeFirst, 'function');
+    for (const sessionGroup of ['lark:room', lastGroup]) {
+      outcomes.push(f.manager.createLease(context('admin'), { sessionGroup })
+        .then(value => ({ value }), error => ({ error })));
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    completeFirst();
+    const results = await Promise.all(outcomes);
+    for (const result of results) if (result.error) assert.equal(result.error.code, 'operation_obsolete');
+    const last = results.at(-1);
+    if (last.value) assert.equal(last.value.sessionGroup, lastGroup);
+    const lease = last.value ?? await f.manager.createLease(context('admin'), { sessionGroup: lastGroup });
+    assert.equal(lease.sessionGroup, lastGroup);
+    assert.equal(f.manager.validateLease(lease.id, context('admin')).sessionGroup, lastGroup);
+    assert.equal(f.containment.active.observerTarget.sessionGroup, lastGroup);
+    assert.equal(f.manager._pendingLeases, 0);
+    for (const current of f.manager.leases.values()) assert.equal(current.sessionGroup, lastGroup);
+    assert.equal(f.manager.tickets.size, f.manager.leases.size);
+  });
+}
+
 
 for (const change of ['run replacement', 'attached binding replacement']) {
   test(`group ${change} during attachment rejects the pending lease`, async t => {

@@ -84,8 +84,15 @@ export class ObserverManager {
     context = this.authGate.revalidateAuthContext(context);
     if (!context) throw new ObserverManagerError('auth_required', 'Observer authentication expired');
     if (this._runtimeError) throw new ObserverManagerError('teardown_failed', 'Observer cleanup requires administrator recovery');
-    if (this.containment.active && this.generation !== null) return this.containment.active;
-    if (this._starting) return this._starting;
+    const current = this.containment.active && this.generation !== null ? this.containment.active : null;
+    if (current || this._starting) {
+      const active = current || await this._starting;
+      // Another group's demand can attach between the caller's preflight and this reuse.
+      if (this.resolveTarget && !sameObserverTarget(selected, active.observerTarget)) {
+        throw new ObserverManagerError('operation_obsolete', 'Observer generation belongs to another target');
+      }
+      return active;
+    }
     this._starting = this.coordinator.firstLease(context, selected).catch((error) => {
       if (error.cleanupError) this._runtimeError = error.cleanupError;
       throw error;

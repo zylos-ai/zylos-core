@@ -1192,6 +1192,12 @@ test('observer routes carry the selected group through status, lease creation, a
     const lease = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers, body: JSON.stringify({ sessionGroup: 'telegram:42' }) });
     assert.equal(lease.status, 201);
     assert.equal((await lease.json()).sessionGroup, 'telegram:42'); assert.equal(selected.join(','), 'telegram:42');
+    for (const body of [{ sessionGroup: 'telegram:42', target: 'forged-producer' }, { sessionGroup: 'telegram:42', runtime: 'claude' }]) {
+      const denied = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers, body: JSON.stringify(body) });
+      assert.equal(denied.status, 400);
+      assert.equal((await denied.json()).error, 'target_mismatch');
+      assert.equal(selected.length, 1, 'unknown request fields must be rejected before manager admission');
+    }
     const resized = await fetch(`${app.origin}/api/observer/agent-size`, { method: 'POST', headers, body: JSON.stringify({ cols: 100, rows: 40, sessionGroup: 'telegram:42' }) });
     assert.equal(resized.status, 200);
     assert.equal(f.containment.agentResizes[0].sessionGroup, 'telegram:42');

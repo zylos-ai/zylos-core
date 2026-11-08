@@ -1,8 +1,48 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, switchObserverTarget } from '../public/js/wb/observer-page.js';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from '../public/js/wb/observer-page.js';
 
 const healthy = { state: 'installed', desired: { enabled: true } };
+
+test('legacy producers admit only Origin and only leases without group metadata', () => {
+  for (const selection of [undefined, null, 'origin']) {
+    assert.deepEqual(observerLeaseTarget(healthy, selection), { supported: true, sessionGroup: undefined });
+    assert.equal(observerLeaseMatches(healthy, selection, { id: 'legacy' }), true);
+    for (const sessionGroup of [null, 'origin', 'telegram:alpha']) {
+      assert.equal(observerLeaseMatches(healthy, selection, { id: 'mismatch', sessionGroup }), false);
+    }
+  }
+  assert.equal(observerLeaseTarget(healthy, 'telegram:alpha').supported, false);
+  assert.equal(observerLeaseMatches(healthy, 'telegram:alpha', { id: 'legacy' }), false);
+  for (const sessionMode of [undefined, null, 'other']) {
+    assert.equal(observerLeaseTarget({ ...healthy, sessionMode }, 'origin').supported, false, 'a present but invalid mode is not a legacy producer');
+  }
+  assert.equal(observerLeaseTarget(null, 'origin').supported, false);
+  assert.equal(observerLeaseMatches(healthy, 'origin', null), false);
+});
+
+test('modern leases bind the exact selected group or the explicit single null target', () => {
+  const multi = { ...healthy, sessionMode: 'multi' }, single = { ...healthy, sessionMode: 'single' };
+  assert.deepEqual(observerLeaseTarget(multi, undefined), { supported: true, sessionGroup: 'origin' });
+  assert.deepEqual(observerLeaseTarget(multi, 'telegram:alpha'), { supported: true, sessionGroup: 'telegram:alpha' });
+  assert.equal(observerLeaseMatches(multi, 'telegram:alpha', { sessionGroup: 'telegram:alpha' }), true);
+  for (const lease of [{}, { sessionGroup: null }, { sessionGroup: 'origin' }, { sessionGroup: 'lark:beta' }]) {
+    assert.equal(observerLeaseMatches(multi, 'telegram:alpha', lease), false);
+  }
+  assert.deepEqual(observerLeaseTarget(single, 'origin'), { supported: true, sessionGroup: null });
+  assert.equal(observerLeaseMatches(single, 'origin', { sessionGroup: null }), true);
+  assert.equal(observerLeaseMatches(single, 'origin', {}), false);
+  assert.equal(observerLeaseMatches(single, 'origin', { sessionGroup: 'origin' }), false);
+});
+
+test('a failed acquisition has no terminal frame until a lease is available', () => {
+  assert.equal(observerFrameVisible({ noticeState: 'error' }), false);
+  assert.equal(observerFrameVisible({ noticeState: 'error', lease: { id: 'live' } }), true);
+  assert.equal(observerFrameVisible({ noticeState: 'connecting' }), true);
+  for (const state of [{ historyMode: true }, { choosing: true }, { idle: true }]) {
+    assert.equal(observerFrameVisible({ ...state, noticeState: 'live', lease: { id: 'live' } }), false);
+  }
+});
 
 test('the observer page shows the live view only for a healthy observer reached with a key that may control it', () => {
   assert.equal(observerPageUsable(healthy, { viewingRemote: false, access: 'read' }), true, 'this machine needs no remote key');

@@ -8,7 +8,7 @@ import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { tabForPath } from '../public/js/wb/view-mode.js';
-import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, switchObserverTarget } from '../public/js/wb/observer-page.js';
+import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from '../public/js/wb/observer-page.js';
 
 function deferred() {
   let resolve;
@@ -90,7 +90,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
       visibilityState: 'visible'
     },
     originSessionUnavailable: () => false,
-    runningObserverGroups, observerGroupRow, observerGroupName, switchObserverTarget,
+    runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget,
     renderConnection() {}, isSseOpen: () => false,
     t: (key) => key,
     clearTimeout(id) { if (timeouts[id - 1]) timeouts[id - 1].cancelled = true; },
@@ -183,7 +183,10 @@ function observerPageShown(harness) {
 }
 
 function observerResponse(data, { ok = true, status = ok ? 200 : 503 } = {}) {
-  return { ok, status, json: async () => data?.id && !Object.hasOwn(data, 'sessionGroup') ? { ...data, sessionGroup: null } : data, text: async () => '<html>renderer</html>' };
+  // These lifecycle fixtures represent the modern single-session producer.
+  const payload = data?.id && !Object.hasOwn(data, 'sessionGroup') ? { ...data, sessionGroup: null }
+    : data?.state === 'installed' && !Object.hasOwn(data, 'sessionMode') ? { ...data, sessionMode: 'single' } : data;
+  return { ok, status, json: async () => payload, text: async () => '<html>renderer</html>' };
 }
 
 test('/api/state exposes the agent identity colour for remote machines that still tint by it', () => {

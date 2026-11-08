@@ -12,7 +12,7 @@ import { mountWorkbench } from './wb/shell.js?v=114';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=103';
 import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=114';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, switchObserverTarget } from './wb/observer-page.js?v=114';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from './wb/observer-page.js?v=114';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=103';
 import { createUsagePage } from './wb/usage.js?v=114';
@@ -82,8 +82,7 @@ const state = {
     sizePending: null,
     group: undefined,
     groups: null,
-    selectionGeneration: 0,
-    pendingLease: null
+    selectionGeneration: 0
   },
   memory: {
     tree: null,
@@ -1024,6 +1023,8 @@ function setObserverNotice(message, status = 'idle') {
   if (!notice) return;
   notice.textContent = message;
   notice.dataset.state = status;
+  const frameShell = $('#observer-frame')?.parentElement;
+  if (frameShell && status === 'error' && !state.observer.lease) frameShell.hidden = true;
 }
 
 // Observer page frame follows the selected group's current identity.
@@ -1073,7 +1074,7 @@ function renderObserverPage() {
   const idle = available && !choose && !hasTarget && !state.observer.historyMode;
   $('#observer-notice-history').hidden = !idle;
   const frameShell = $('#observer-frame')?.parentElement;
-  if (frameShell) frameShell.hidden = Boolean(state.observer.historyMode || choose || idle);
+  if (frameShell) frameShell.hidden = !observerFrameVisible({ historyMode: state.observer.historyMode, choosing: choose, idle, lease: state.observer.lease, noticeState: $('#observer-notice')?.dataset.state });
   if (available && !state.observer.lease && !state.observer.historyMode) {
     if (choose) setObserverNotice(t(runningObserverGroups(state.observer.groups).length ? 'wb.observer.chooseGroup' : 'wb.observer.noRunningGroups'), 'idle');
     else if (idle && !state.observer.intent) setObserverNotice(t('wb.observer.noSession'), 'idle');
@@ -1300,6 +1301,11 @@ async function openObserver() {
     if (status?.state !== 'installed' || status.desired?.enabled !== true || observerRecoveryReason(status)) {
       throw Object.assign(new Error(t(observerRecoveryReason(status) ? 'observer.recovery_hint' : 'observer.not_available')), { code: 'observer_unavailable' });
     }
+    const selectedGroup = observer.group;
+    const leaseTarget = observerLeaseTarget(status, selectedGroup);
+    if (!leaseTarget.supported) {
+      throw Object.assign(new Error(t('wb.observer.groupUnsupported')), { code: 'group_observer_unsupported' });
+    }
     if ((status.sessionMode === 'multi' && observer.group === undefined) || (Object.hasOwn(status, 'target') && !status.target)) {
       if (observer.intent?.attempt > 0 && !(status.sessionMode === 'multi' && observer.group === undefined)) {
         throw Object.assign(new Error(t('wb.observer.sessionChanged')), { code: 'target_unavailable' });
@@ -1311,28 +1317,20 @@ async function openObserver() {
     observer.endpointPrefix = endpoints;
     // Keep lease acquisition observable after cancellation so a late ID can be
     // released against its original target. Frame/status fetches are abortable.
-    const expectedGroup = status.sessionMode === 'multi' ? observer.group ?? 'origin' : null;
-    const pending = observer.pendingLease = (async () => {
-      const response = await fetch(`${endpoints.api}/leases`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionGroup: expectedGroup })
-      });
-      const lease = await response.json().catch(() => ({}));
-      if (!response.ok) throw observerRequestError(lease, response.status);
-      if (!observerSessionCurrent(generation, targetKey)) {
-        void releaseObserverLease(endpoints, lease);
-        return null;
-      }
-      if (lease.sessionGroup !== expectedGroup) {
-        void releaseObserverLease(endpoints, lease);
-        throw Object.assign(new Error(t('wb.observer.groupUnsupported')), { code: 'group_observer_unsupported' });
-      }
-      return lease;
-    })();
-    let lease;
-    try { lease = await pending; }
-    finally { if (observer.pendingLease === pending) observer.pendingLease = null; }
-    if (!lease || !observerSessionCurrent(generation, targetKey)) return;
+    const response = await fetch(`${endpoints.api}/leases`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(leaseTarget.sessionGroup === undefined ? {} : { sessionGroup: leaseTarget.sessionGroup })
+    });
+    const lease = await response.json().catch(() => ({}));
+    if (!response.ok) throw observerRequestError(lease, response.status);
+    if (!observerSessionCurrent(generation, targetKey)) {
+      void releaseObserverLease(endpoints, lease);
+      return;
+    }
+    if (!observerLeaseMatches(status, selectedGroup, lease)) {
+      void releaseObserverLease(endpoints, lease);
+      throw Object.assign(new Error(t('wb.observer.groupUnsupported')), { code: 'group_observer_unsupported' });
+    }
     observer.lease = lease;
 
     const frameResp = await fetch(endpoints.frame, { signal: abort?.signal, headers: { 'X-Observer-Lease': lease.id } });

@@ -41,6 +41,28 @@ export function observerGroupName(row, sessionGroup, originName, t = key => key)
   return row?.name?.displayName || ((sessionGroup ?? 'origin') === 'origin' ? originName : fallbackName(row ?? { sessionGroup }, t));
 }
 
+/** A producer without mode metadata has only the legacy Origin target. */
+export function observerLeaseTarget(status, sessionGroup) {
+  if (!status || typeof status !== 'object') return { supported: false, sessionGroup: undefined };
+  if (!Object.hasOwn(status, 'sessionMode')) {
+    return { supported: sessionGroup == null || sessionGroup === 'origin', sessionGroup: undefined };
+  }
+  if (status.sessionMode === 'multi') return { supported: true, sessionGroup: sessionGroup ?? 'origin' };
+  if (status.sessionMode === 'single') return { supported: true, sessionGroup: null };
+  return { supported: false, sessionGroup: undefined };
+}
+
+/** Modern bindings are exact; only the legacy Origin protocol omits the field. */
+export function observerLeaseMatches(status, sessionGroup, lease) {
+  const target = observerLeaseTarget(status, sessionGroup);
+  if (!target.supported || !lease || typeof lease !== 'object') return false;
+  return target.sessionGroup === undefined ? !Object.hasOwn(lease, 'sessionGroup') : lease.sessionGroup === target.sessionGroup;
+}
+
+export function observerFrameVisible({ historyMode, choosing, idle, lease, noticeState } = {}) {
+  return !historyMode && !choosing && !idle && (Boolean(lease) || noticeState !== 'error');
+}
+
 /** Fence local viewer state before applying a group choice; network release may finish later. */
 export async function switchObserverTarget(observer, { identity, disconnect, apply }) {
   const generation = ++observer.selectionGeneration;
