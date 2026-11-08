@@ -1,9 +1,8 @@
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=98';
 import { createPricingPanel } from './wb/settings-pricing.js?v=98';
-import { renderDefaults } from './wb/settings-defaults.js?v=99';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=98';
-import { keyCounts, renderCreatedKey, renderKeyTable, renderRemoteAgents } from './wb/settings-access.js?v=99';
+import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=99';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=1';
 import { renderVersion } from './wb/settings-version.js?v=98';
 import { mountConversationPage } from './wb/conversation-page.js?v=101';
@@ -12,12 +11,13 @@ import { mountWorkbench } from './wb/shell.js?v=100';
 import { watchHeader } from './wb/header-fit.js?v=94';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=96';
 import { instanceStatusText, observeTheme, tabForPath, wbWritable } from './wb/view-mode.js?v=99';
+import { observerPageUsable, observerRecoveryReason } from './wb/observer-page.js?v=1';
 import { mountSchedule } from './wb/schedule.js?v=96';
 import { createUsagePage } from './wb/usage.js?v=97';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { fleetPageOptions, fleetSelfFromSnapshot, renderAgentFleet } from './agent-fleet.js?v=100';
+import { fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=100';
 import { createFleetSounds } from './fleet-sounds.js?v=100';
 import { refreshDashboardState } from './state-refresh.js?v=98';
 import { formatActionResult } from './action-result.js';
@@ -304,7 +304,7 @@ function initFleetHoverPause() {
 function renderFleet() {
   const container = $('#agent-fleet-root');
   if (!container) return;
-  renderAgentFleet(container, state.fleet, fleetPageOptions({ t, fmtAge, basePath: BASE_PATH, labels: agentFleetLabels(), self: state.fleetSelf }));
+  renderFleetPage(container, state.fleet, { t, fmtAge, basePath: BASE_PATH, labels: agentFleetLabels(), self: state.fleetSelf });
   const updated = $('#fleet-updated');
   if (updated) updated.textContent = fmtAge(state.fleet?.updated_at);
   fleetSounds?.refreshLabels();
@@ -1020,7 +1020,7 @@ function setObserverNotice(message, status = 'idle') {
 // Observer page frame: empty state when the component is missing or disabled; otherwise the title row
 // (Origin is the only group Core's observer attaches to), the scope note and the no-session notice.
 function observerPageAvailable(status = state.observer.status) {
-  return status?.state === 'installed' && status.desired?.enabled === true && !observerRecoveryReason(status) && !remoteIsReadOnly();
+  return observerPageUsable(status, { readOnly: remoteIsReadOnly() });
 }
 function renderObserverPage() {
   const status = state.observer.status, available = observerPageAvailable(status), focus = state.observer.focus;
@@ -1831,24 +1831,10 @@ function exitRemoteAgent({ push = true } = {}) {
 }
 
 function initFleetMode() {
-  // This machine opens its own workbench in place; other machines open through the
-  // in-page fleet proxy. Problem cards link to settings or re-read the fleet.
-  const root = $('#agent-fleet-root');
-  if (root) {
-    root.addEventListener('click', (e) => {
-      const action = e.target.closest('[data-fleet-action]');
-      if (action?.dataset.fleetAction) {
-        if (action.dataset.fleetAction === 'settings') openSettingsModal('fleet');
-        else refreshFleet().catch(() => {});
-        return;
-      }
-      const open = e.target.closest('.agent-open');
-      if (!open) return;
-      e.preventDefault();
-      if (open.dataset.self === 'true') showAgentDetail();
-      else if (open.dataset.agent) enterRemoteAgent(open.dataset.agent);
-    });
-  }
+  $('#agent-fleet-root')?.addEventListener('click', e => handleFleetClick(e, {
+    onSettings: () => openSettingsModal('fleet'), onRefresh: () => refreshFleet().catch(() => {}),
+    onSelf: showAgentDetail, onRemote: enterRemoteAgent,
+  }));
   $('#fleet-manage-open')?.addEventListener('click', () => openSettingsModal('fleet'));
   const backBtn = $('#back-to-fleet');
   if (backBtn) {
@@ -2056,7 +2042,7 @@ function renderApiKeys(data) {
   const purgeBtn = fleetManageModal.querySelector('#api-key-purge-revoked');
   if (purgeBtn) { purgeBtn.hidden = !counts.revoked; purgeBtn.textContent = t('wb.settings.keys.purge', { count: counts.revoked }); }
   fleetManageModal.querySelector('#api-key-count').textContent = t('wb.settings.keys.counts', counts);
-  renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys, settingsWiring().keyTable());
+  settingsWiring().renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys);
 }
 
 function renderCreatedApiKey(createdKey) {
@@ -2069,7 +2055,7 @@ function renderCreatedApiKey(createdKey) {
 /** Settings confirmations share the dashboard's own dialog instead of the browser prompt. */
 function settingsWiring() {
   return settingsWiring.value ??= wireSettingsConfirmations({
-    document, t, execute: execAction, setBusy: setModalBodyDisabled,
+    document, t, run: runConfirmedAction, setBusy: setModalBodyDisabled,
     remoteTarget: () => (state.remoteAgent || REMOTE_AGENT ? viewedAgentName() : null),
     keyActions: { rotate: rotateApiKey, revoke: revokeApiKey, delete: hardDeleteApiKey },
     writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup,
@@ -2389,11 +2375,6 @@ function observerStatusLabel(status) {
   return status.state || t('value.unknown');
 }
 
-function observerRecoveryReason(status) {
-  return (status?.runtime?.state === 'blocked' ? status.runtime.error || 'teardown_failed' : null) || status?.startupError || status?.desired?.lastError || status?.desired?.removalState ||
-    (status?.desired?.enabled && status?.desired?.teardownFence ? 'teardown_fenced' : null);
-}
-
 function renderObserverStatus(status = state.observer.status) {
   const recoveryReason = observerRecoveryReason(status);
   const available = observerPageAvailable(status);
@@ -2543,7 +2524,7 @@ function initSettingsPage() {
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
     settingsDefaults?.destroy();
-    settingsDefaults = renderDefaults(defaults, settingsWiring().defaults(value, read));
+    settingsDefaults = settingsWiring().renderDefaults(defaults, value, read);
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
@@ -2772,8 +2753,6 @@ async function execAction(action, body, { confirmed = false } = {}) {
     const shown = state.dashboardState;
     body = { ...body, sessionGroup: shown?.sessionGroup, runId: shown?.runId, sessionId: shown?.sessionId };
   }
-  const actionPath = agentPath(`/api/actions/${action}`);
-  const healthPath = agentPath('/api/health');
   if (CONFIRM_ACTIONS.has(action) && !confirmed) {
     const labels = {
       'switch-mode': t('confirm.switch_mode', { mode: body?.mode }),
@@ -2794,7 +2773,14 @@ async function execAction(action, body, { confirmed = false } = {}) {
     }
     if (!(await showConfirm(message))) return false;
   }
+  return runConfirmedAction(action, body);
+}
 
+// Runs a dashboard action that has already been confirmed (or needs no confirmation); it never asks.
+async function runConfirmedAction(action, body) {
+  if (remoteIsReadOnly()) return false;
+  const actionPath = agentPath(`/api/actions/${action}`);
+  const healthPath = agentPath('/api/health');
   const statusEl = actionsModal?.querySelector('#action-status');
   if (statusEl) {
     statusEl.hidden = false;

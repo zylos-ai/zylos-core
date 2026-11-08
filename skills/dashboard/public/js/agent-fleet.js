@@ -466,3 +466,25 @@ export function renderAgentFleet(container, fleet, options = {}) {
   container.innerHTML = renderAgentFleetViewHtml(view);
   return view;
 }
+
+/** Renders the Machines page with the page's own options, including "how long ago" in the page language. */
+export function renderFleetPage(container, fleet, { t, fmtAge, basePath, labels, self, now } = {}) {
+  return renderAgentFleet(container, fleet, fleetPageOptions({ t, fmtAge, basePath, labels, self, now }));
+}
+
+/**
+ * Clicks on the Machines page: a problem card's buttons open settings or re-read the fleet; "Open" opens this
+ * machine's own workbench in place, or another machine through the in-page fleet proxy.
+ */
+export function handleFleetClick(event, { onSettings = () => {}, onRefresh = () => {}, onSelf = () => {}, onRemote = () => {} } = {}) {
+  const action = event.target?.closest?.('[data-fleet-action]');
+  if (action?.dataset.fleetAction) {
+    if (action.dataset.fleetAction === 'settings') onSettings(); else onRefresh();
+    return;
+  }
+  const open = event.target?.closest?.('.agent-open');
+  if (!open) return;
+  event.preventDefault?.();
+  if (open.dataset.self === 'true') onSelf();
+  else if (open.dataset.agent) onRemote(open.dataset.agent);
+}

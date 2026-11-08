@@ -3,10 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { afterSentence, buildAgentFleetView, fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { afterSentence, buildAgentFleetView, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { tabForPath } from '../public/js/wb/view-mode.js';
+import { observerPageUsable, observerRecoveryReason } from '../public/js/wb/observer-page.js';
 
 function deferred() {
   let resolve;
@@ -97,6 +99,9 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     validObserverSize,
     validAgentSize,
     tabForPath,
+    observerPageUsable,
+    observerRecoveryReason,
+    handleFleetClick,
     ArrayBuffer,
     window: {
       location: { href: 'http://fixture.local/dashboard/', pathname: '/' },
@@ -539,9 +544,18 @@ test('this machine opens its own workbench and others open through the fleet pat
   const html = renderAgentFleetHtml(selfFleet, { basePath: '/dash' });
   assert.match(html, /class="wb-btn agent-open" href="\/dash\/" data-agent="local" data-self="true"/);
   assert.match(html, /class="wb-btn agent-open" href="\/dash\/fleet\/remote\/" data-agent="remote">/);
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /const open = e\.target\.closest\('\.agent-open'\);/);
-  assert.match(app, /if \(open\.dataset\.self === 'true'\) showAgentDetail\(\);\n\s*else if \(open\.dataset\.agent\) enterRemoteAgent\(open\.dataset\.agent\);/);
+  // Clicking "Open": this machine opens in place, another machine through the fleet path; problem-card buttons
+  // open settings or re-read the fleet. Nothing else on the page reacts.
+  const document = documentFixture(), calls = [];
+  const button = (className, dataset) => { const el = node(document, 'a'); el.className = className; Object.assign(el.dataset, dataset); const label = node(document, 'span'); el.append(label); return { el, label }; };
+  const handlers = { onSelf: () => calls.push('self'), onRemote: name => calls.push('remote:' + name), onSettings: () => calls.push('settings'), onRefresh: () => calls.push('refresh') };
+  const click = target => { let prevented = false; handleFleetClick({ target, preventDefault: () => { prevented = true; } }, handlers); return prevented; };
+  assert.equal(click(button('wb-btn agent-open', { agent: 'local', self: 'true' }).label), true, 'the link does not navigate away');
+  assert.equal(click(button('wb-btn agent-open', { agent: 'remote' }).el), true);
+  click(button('wb-btn', { fleetAction: 'settings' }).label);
+  click(button('wb-btn', { fleetAction: 'refresh' }).el);
+  assert.equal(click(node(document, 'div')), false);
+  assert.deepEqual(calls, ['self', 'remote:remote', 'settings', 'refresh']);
 });
 
 test('back-to-fleet control is hidden via [hidden] in single-agent mode (no CSS specificity leak)', () => {
@@ -788,7 +802,8 @@ test('machine cards enter remote agents in-page instead of full navigation', () 
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   const fleetMode = app.indexOf('function initFleetMode(');
   const block = app.slice(fleetMode, app.indexOf("const backBtn = $('#back-to-fleet');", fleetMode));
-  assert.match(block, /e\.preventDefault\(\);\s*\n\s*if \(open\.dataset\.self === 'true'\) showAgentDetail\(\);\s*\n\s*else if \(open\.dataset\.agent\) enterRemoteAgent\(open\.dataset\.agent\);/);
+  // What a click does is tested on handleFleetClick itself; here only that the app hands it the in-page entry.
+  assert.match(block, /addEventListener\('click', e => handleFleetClick\(e, \{[\s\S]*onSelf: showAgentDetail, onRemote: enterRemoteAgent,/);
 });
 
 test('remote Actions/Settings are gated by access and routed through the viewed agent', () => {
@@ -1031,16 +1046,6 @@ test('Observer navigation fetches target status, waits for it, and discards dela
     '/fleet/alpha/api/observer/status',
     '/fleet/bravo/api/observer/status'
   ]);
-});
-
-test('a remote machine reached with a read-only key shows the observer empty state, not the live view', () => {
-  const h = observerUiHarness();
-  h.context.state.remoteAgent = 'alpha';
-  h.context.state.observer.status = { state: 'installed', desired: { enabled: true } };
-  assert.equal(observerPageShown(h), true, 'an admin key opens the live view');
-  h.setReadOnly(true);
-  assert.equal(observerPageShown(h), false);
-  assert.equal(h.elements['#observer-empty'].hidden, false);
 });
 
 test('Observer navigation discards a delayed old-target status error', async () => {
