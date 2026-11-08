@@ -431,6 +431,10 @@ to start the Zylos services, so Dashboard and activity-monitor both inherit it.
 Setting this variable only for an individual PM2 service is unsupported:
 Dashboard cannot detect another service's environment, so its displayed value
 and read-only state may otherwise differ from the effective reclaim setting.
+After changing the variable, restart both services from that environment, for
+example `pm2 restart zylos-dashboard activity-monitor --update-env`.
+`zylos restart` alone is not enough: it restarts activity-monitor with the
+caller's environment but does not restart Dashboard.
 This is the authoritative scope rule for this variable; the reclaim settings
 reference is in [activity-monitor](skills/activity-monitor/SKILL.md#multi-session-reclaim-configuration).
 
