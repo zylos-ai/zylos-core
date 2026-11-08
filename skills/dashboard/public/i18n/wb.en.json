@@ -80,6 +80,7 @@
   "wb.platform.web-console": "Web console",
   "wb.platform.openmax": "OpenMax",
   "wb.platform.wechat": "WeChat",
+  "wb.platform.dashboard": "Dashboard",
   "wb.close": "Close",
   "wb.cancel": "Cancel",
   "wb.readOnly": "Read-only access; changes are unavailable",

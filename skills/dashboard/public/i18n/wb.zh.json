@@ -80,6 +80,7 @@
   "wb.platform.web-console": "网页控制台",
   "wb.platform.openmax": "OpenMax",
   "wb.platform.wechat": "微信",
+  "wb.platform.dashboard": "Dashboard",
   "wb.close": "关闭",
   "wb.cancel": "取消",
   "wb.readOnly": "只读访问，无法修改",

@@ -220,3 +220,20 @@ test('plain names say direct or group chat from the key, model names are capital
   assert.equal(allNodes(root).find(node => node.classList.contains('wb-current')).textContent, '');
   assert.equal(allNodes(root).find(node => node.classList.contains('wb-model')).textContent, 'Claude · default');
 });
+test('an unnamed Dashboard conversation shows as an untitled conversation with its time, never its id', async () => {
+  const { unnamedConversation } = await import('../public/js/wb/plain-text.js');
+  const document = createDocument(), id = 'dashboard:bd7d96b3-4d00-48d1-9f2e-7a51c0d2e9aa';
+  const at = Date.parse('2026-11-08T06:05:00Z');
+  const value = { ...row(id), name: null, c4: { componentName: 'dashboard', lastActivityAt: at } };
+  const plain = renderRow(value, { document, t });
+  assert.equal(nameOf(plain), unnamedConversation(value, t));
+  assert.match(nameOf(plain), /^chat\.unnamed · \S/);
+  assert.doesNotMatch(plain.textContent, /bd7d96b3/, 'the conversation id is not shown in the plain view');
+  assert.match(plain.textContent, /wb\.platform\.dashboard/, 'the channel line names Dashboard');
+  assert.match(nameOf(renderRow(value, { document, t, level: 'technical' })), /bd7d96b3/, 'the technical view still shows the group key');
+  const sameDay = unnamedConversation(value, t, { now: at + 60e3, locale: 'en-GB' });
+  assert.equal(sameDay, `chat.unnamed · ${new Date(at).toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit' })}`, 'the same day shows the time');
+  const later = unnamedConversation(value, t, { now: at + 3 * 86400e3, locale: 'en-GB' });
+  assert.equal(later, `chat.unnamed · ${new Date(at).toLocaleString('en-GB', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`, 'another day adds the date');
+  assert.equal(unnamedConversation({ sessionGroup: id }, t), 'chat.unnamed', 'without any time it is just untitled');
+});

@@ -21,9 +21,22 @@ export function fallbackName(row, t = key => key) {
   if (key === 'origin') return t('wb.term.origin');
   const colon = key.indexOf(':');
   const component = platformOf(row);
-  const platforms = new Set(['telegram', 'lark', 'feishu', 'web-console', 'openmax', 'wechat']);
+  if (component === 'dashboard' && colon >= 0) return unnamedConversation(row, t);
+  const platforms = new Set(['telegram', 'lark', 'feishu', 'web-console', 'openmax', 'wechat', 'dashboard']);
   const platform = platforms.has(component) ? t('wb.platform.' + component) : component;
   return colon < 0 ? platform : platform + ' · ' + key.slice(colon + 1);
+}
+/**
+ * A Dashboard conversation nobody has named yet reads like it does on the conversation page, with the time it was
+ * last active ("Untitled conversation · 14:05", or the date as well on another day), never its id.
+ */
+export function unnamedConversation(row, t = key => key, { now = Date.now(), locale = globalThis.document?.documentElement?.lang || undefined } = {}) {
+  const at = row.c4?.lastActivityAt ?? row.preview?.timestamp ?? (row.createdAt == null ? null : row.createdAt * 1000);
+  const date = at == null ? null : new Date(at);
+  if (!date || !Number.isFinite(date.getTime())) return t('chat.unnamed');
+  const sameDay = date.toDateString() === new Date(now).toDateString();
+  const when = date.toLocaleString(locale, sameDay ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return `${t('chat.unnamed')} · ${when}`;
 }
 /** Engine names read as product names: Claude, Codex. */
 export const runtimeName = runtime => runtime ? runtime.charAt(0).toUpperCase() + runtime.slice(1) : runtime;
