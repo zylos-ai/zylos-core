@@ -176,6 +176,14 @@ export async function runWorkbenchBrowser(t, sandbox) {
     return drawerState(page);
   }
 
+  // Straight after a close: the drawer is shut and its entry gone, said plainly within two seconds rather than
+  // left to a long wait for later state.
+  async function closedNow(page, what) {
+    await page.waitForFunction(() => !document.querySelector('.wb-set').classList.contains('wb-set-drawer-open') && !history.state?.settingsDrawer, null, { timeout: 2000 }).catch(() => {});
+    const state = await drawerState(page);
+    assert.deepEqual([state.open, state.entry], [false, false], `${what}: the drawer closes and leaves no history entry`);
+  }
+
   async function settings(width, height) {
     const { page, context, errors, shot } = await open(width, height, '/settings');
     const upgrade = () => page.locator('#tab-settings [data-action="upgrade-cc"]');
@@ -344,7 +352,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
         assert.equal((await drawerState(page)).focus, 'section:' + section, `${way}: focus starts on the current section`);
       }
       await close();
+      await closedNow(page, `closing with ${way}`);
       state = await closed(page);
+      assert.equal(settingsReads(), readsBefore, `closing with ${way}: settings is not read again`);
       assert.deepEqual([state.expanded, state.inert, state.focus, state.current, state.path, state.settingsShown], ['false', 0, 'toggle', section, '/settings', true], `closing with ${way}`);
       assert.equal(state.label, await label(section), `${way}: the button names the section`);
     }
@@ -364,6 +374,54 @@ export async function runWorkbenchBrowser(t, sandbox) {
     state = await drawerState(page);
     assert.deepEqual([state.open, state.settingsShown, state.path], [false, true, '/settings'], 'forward onto the old drawer entry keeps settings with the drawer closed');
     assert.equal(settingsReads(), readsForward, 'and does not reload settings');
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  // Closing the drawer in the page leaves its old entry on the browser's forward side (the Forward button, or the
+  // right-edge swipe on an iPhone). Forward onto it and Back off it again are both the same settings page: an
+  // unsaved price stays, settings is not read again, and one more Back leaves settings.
+  await step('phone settings drawer: Forward onto its old entry and Back again keep unsaved edits', async () => {
+    const { page, context, errors } = await open(390, 844, '/');
+    await page.locator('#wb-board .wb-row').first().waitFor();
+    await page.locator('#wb-settings-btn').click();
+    await page.locator('.wb-set-drawer-btn').waitFor({ state: 'visible' });
+    await openDrawer(page);
+    await page.locator('[data-settings-section="pricing"]').click();
+    await closed(page);
+    // An unsaved pricing edit: the fast-mode price multiplier.
+    const price = page.locator('#settings-fast-multiplier');
+    await price.waitFor({ state: 'visible' });
+    await price.fill('99');
+    const edit = () => page.evaluate(() => {
+      const input = document.querySelector('#settings-fast-multiplier'), bar = document.querySelector('.settings-footer');
+      return { value: input.value, dirty: input.classList.contains('wb-dirty-in'), saveBar: Boolean(bar && !bar.hidden) };
+    });
+    assert.deepEqual(await edit(), { value: '99', dirty: true, saveBar: true }, 'the edit shows as unsaved');
+    await openDrawer(page);
+    await page.locator('.wb-set-drawer-x').click();
+    await closed(page);
+    const settingsReads = () => (reads.get('/api/settings') ?? 0) + (reads.get('/api/keys') ?? 0);
+    const before = settingsReads();
+
+    await page.goForward();
+    await page.waitForFunction(() => history.state?.settingsDrawer, null, { timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    let state = await drawerState(page);
+    assert.deepEqual([state.entry, state.open, state.settingsShown, state.path], [true, false, true, '/settings'], 'Forward onto the old entry: settings with the drawer closed');
+    assert.deepEqual(await edit(), { value: '99', dirty: true, saveBar: true }, 'Forward keeps the unsaved edit');
+
+    await page.goBack();
+    await page.waitForFunction(() => !history.state?.settingsDrawer, null, { timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(400);
+    state = await drawerState(page);
+    assert.deepEqual([state.entry, state.open, state.settingsShown, state.path], [false, false, true, '/settings'], 'Back off the old entry: still settings');
+    assert.deepEqual(await edit(), { value: '99', dirty: true, saveBar: true }, 'Back off the old entry keeps the unsaved edit');
+    assert.equal(settingsReads(), before, 'Forward and Back over the old entry never read settings again');
+
+    await page.goBack();
+    await page.waitForFunction(() => location.pathname === '/' && !document.querySelector('#tab-overview').hidden, null, { timeout: 3000 }).catch(() => {});
+    assert.deepEqual(await page.evaluate(() => [location.pathname, !document.querySelector('#tab-overview').hidden]), ['/', true], 'one more Back returns to the overview');
     assert.deepEqual(errors, []);
     await context.close();
   });
