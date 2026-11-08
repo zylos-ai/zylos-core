@@ -236,6 +236,24 @@ test('discovery failure after progress returns only the unfinished confirmed ser
   assert.equal(result.restart_status, 'unknown');
 });
 
+test('initial discovery failure preserves confirmed services for a recovered retry', async t => {
+  let available = false;
+  const f = fixture(t, { dependencies: { readPm2: async () => {
+    if (!available) throw Error('offline');
+    return { processes: f.processes };
+  } } });
+  const failed = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ['web-console'] });
+  assert.equal(failed.error, 'service_discovery_unavailable');
+  assert.equal(failed.restart_status, 'unknown');
+  assert.deepEqual(failed.restart_services.map(service => service.name), ['web-console']);
+  assert.equal(f.restarted.length, 0);
+  available = true;
+  const retry = await f.timezone.restart({ tz: 'UTC', confirm: true, services: failed.restart_services.map(service => service.name) });
+  assert.equal(retry.ok, true);
+  assert.deepEqual(retry.restarted, ['web-console']);
+  assert.deepEqual(f.restarted.map(([name]) => name), ['web-console']);
+});
+
 test('managed restart awaits the asynchronous existing helper execution and reports rejection', async t => {
   const calls = []; let release, startedExecution;
   const completion = new Promise((resolve, reject) => { release = reject; });

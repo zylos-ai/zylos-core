@@ -185,6 +185,8 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
           !Array.isArray(body.services) || body.services.length === 0 || body.services.length > SERVICES.length ||
           body.services.some(name => !SERVICES.some(([allowed]) => name === allowed)) ||
           new Set(body.services).size !== body.services.length) fail('confirmation_required', 400);
+      // Until discovery succeeds, every confirmed service is still unattempted.
+      remaining = body.services.map(name => ({ name, status: 'online' }));
       const current = parse(requireWritable()).TZ;
       if (current !== body.tz) fail('timezone_changed', 409);
       const discovery = await candidates();

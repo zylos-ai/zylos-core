@@ -160,3 +160,28 @@ test('an HTTP error preserves successful restart progress through rediscovery an
   await f.root.querySelector('#settings-timezone-retry').dispatch('click'); await f.restart.dispatch('click');
   assert.deepEqual(calls.map(call => call.services), [['scheduler', 'web-console'], ['web-console']]);
 });
+
+test('initial discovery failure retains the confirmed services for an explicit retry after recovery', async () => {
+  const calls = [], f = fixture({
+    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }] }),
+    restart: async body => {
+      calls.push(body);
+      if (calls.length === 1) {
+        const error = new Error('service_discovery_unavailable'); error.code = error.message;
+        error.result = { ok: false, restarted: [], failed: [], restart_status: 'unknown', restart_services: [{ name: 'scheduler' }] };
+        throw error;
+      }
+      return { ok: true, restarted: ['scheduler'], failed: [], restart_services: [] };
+    },
+  });
+  await f.view.refresh(); await save(f, 'UTC'); await f.restart.dispatch('click');
+  assert.equal(f.pending.hidden, false); assert.equal(f.restart.disabled, true);
+  assert.equal(f.root.querySelector('#settings-timezone-services').textContent, 'wb.settings.timezone.scheduler');
+  await f.root.querySelector('#settings-timezone-retry').dispatch('click');
+  assert.equal(f.restart.disabled, false);
+  assert.equal(f.root.querySelector('#settings-timezone-services').textContent, 'wb.settings.timezone.scheduler');
+  await f.restart.dispatch('click');
+  assert.deepEqual(calls.map(call => call.services), [['scheduler'], ['scheduler']]);
+  assert.equal(f.pending.hidden, true);
+});
