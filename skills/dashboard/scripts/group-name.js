@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
+import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { createDisplayNames } from '../src/lib/workbench/display-names.js';
 
 const invalid = () => Object.assign(new Error('Invalid command arguments'), { code: 'INVALID_ARGS' });
@@ -28,6 +30,12 @@ export async function runGroupName(argv, { env = process.env, stdout = process.s
     const zylosDir = env.ZYLOS_DIR || path.join(env.HOME || os.homedir(), 'zylos');
     const file = path.join(env.ZYLOS_DATA_DIR || path.join(zylosDir, 'components', 'dashboard'), 'dashboard.db');
     if (!fs.existsSync(file)) throw Object.assign(new Error('Dashboard database not found'), { code: 'DATABASE_NOT_FOUND' });
+    const check = new Database(file, { readonly: true, fileMustExist: true });
+    let compatible = false;
+    try { compatible = inspectDatabase(check).currentVersion === TARGET_SCHEMA_VERSION; }
+    catch { /* Unsupported schema metadata or layout also requires an upgrade. */ }
+    finally { check.close(); }
+    if (!compatible) throw new Error('Dashboard requires an upgrade.');
     store = openStore(file);
     const names = createNames({ store, zylosDir });
     const data = command === 'set' ? names.setName(values[0], values[1], 'agent')

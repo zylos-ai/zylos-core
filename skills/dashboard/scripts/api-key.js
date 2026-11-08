@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import fs from 'node:fs';
+import Database from 'better-sqlite3';
 import { Store } from '../src/lib/store.js';
+import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { generateApiKey, hashApiKey } from '../src/lib/auth.js';
 
 const DATA_DIR = process.env.ZYLOS_DATA_DIR
@@ -11,6 +13,15 @@ const DB_PATH = path.join(DATA_DIR, 'dashboard.db');
 function openStore() {
   if (!fs.existsSync(DB_PATH)) {
     console.error(`Database not found: ${DB_PATH}`);
+    process.exit(1);
+  }
+  const check = new Database(DB_PATH, { readonly: true, fileMustExist: true });
+  let compatible = false;
+  try { compatible = inspectDatabase(check).currentVersion === TARGET_SCHEMA_VERSION; }
+  catch { /* Unsupported schema metadata or layout also requires an upgrade. */ }
+  finally { check.close(); }
+  if (!compatible) {
+    console.error('Dashboard requires an upgrade.');
     process.exit(1);
   }
   return new Store(DB_PATH);
