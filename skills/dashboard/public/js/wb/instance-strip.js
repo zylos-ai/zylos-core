@@ -7,7 +7,9 @@ export function remainingQuotaPercent(used) {
   if (used == null || used === '' || !Number.isFinite(Number(used))) return null;
   return Math.max(0, Math.min(100, 100 - Number(used)));
 }
-export const quotaColor = remaining => `hsl(${Number((remaining * 1.2).toFixed(2))} 75% var(--wb-quota-lightness))`;
+const quotaHue = remaining => Number((remaining * 1.2).toFixed(2));
+export const quotaColor = remaining => `hsl(${quotaHue(remaining)} 75% var(--wb-quota-lightness))`;
+export const quotaFillColor = remaining => `hsl(${quotaHue(remaining)} var(--wb-quota-fill-saturation) var(--wb-quota-fill-lightness))`;
 export function accountRuntimes(snapshot) {
   return [...new Set([snapshot.baselineRuntime,
     ...(snapshot.rows ?? []).map(row => row.launchConfig?.runtime ?? row.target?.runtime),
@@ -18,7 +20,7 @@ const clock = at => new Date(at).toLocaleTimeString([], { hour: '2-digit', minut
 export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);
 function meter(document, pct) {
   const bar = element(document, 'span', undefined, 'wb-meter');
-  const fill = element(document, 'i'); fill.style.width = pct + '%'; fill.style.backgroundColor = quotaColor(pct);
+  const fill = element(document, 'i'); fill.style.width = pct + '%'; fill.style.backgroundColor = quotaFillColor(pct);
   bar.append(fill); return bar;
 }
 function item(document, ...children) {

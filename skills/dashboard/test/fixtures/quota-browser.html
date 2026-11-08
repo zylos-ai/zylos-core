@@ -23,7 +23,9 @@
     } };
     const packs = Object.fromEntries(await Promise.all(['en', 'zh'].map(async locale =>
       [locale, await (await fetch('/_assets/i18n/wb.' + locale + '.json')).json()])));
-    window.showQuota = (locale, theme, detail) => {
+    window.showQuota = (locale, theme, detail, remaining = null) => {
+      const current = remaining == null ? snapshot : { ...snapshot, instance: { ...snapshot.instance,
+        accounts: { claude: { used_percentage: 100 - remaining }, codex: { usedPercentage: 100 - remaining } } } };
       document.documentElement.lang = locale;
       document.documentElement.dataset.theme = theme;
       document.documentElement.dataset.detail = detail;
@@ -31,9 +33,9 @@
       const t = (key, params = {}) => (pack[key] ?? key).replace(/\{(\w+)\}/g, (_, key) => params[key]);
       const labels = Object.fromEntries(Object.entries(pack).filter(([key]) => key.startsWith('wb.fleet.'))
         .map(([key, value]) => [key.slice(9), value]));
-      instanceStrip(document.getElementById('strip'), snapshot, { t, level: detail, cost: 1.25 });
-      const self = fleetSelfFromSnapshot({ ...snapshot, instance: { ...snapshot.instance,
-        accounts: { claude: null, codex: snapshot.instance.accounts.codex } } });
+      instanceStrip(document.getElementById('strip'), current, { t, level: detail, cost: 1.25 });
+      const self = fleetSelfFromSnapshot({ ...current, instance: { ...current.instance,
+        accounts: { claude: null, codex: current.instance.accounts.codex } } });
       document.getElementById('main').innerHTML = renderAgentFleetHtml({ agents: [
         { name: 'Eva', self: true, state: 'IDLE', daily_cost: 1.25 },
         { name: 'empty-remote', state: 'IDLE', rate_limit_7d_pct: null, daily_cost: 0.4 },

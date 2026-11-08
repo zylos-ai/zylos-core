@@ -1,5 +1,5 @@
 import { element, icon } from './plain-text.js?v=103';
-import { money } from './instance-strip.js?v=113';
+import { money } from './instance-strip.js?v=114';
 import { dateField } from './date-field.js?v=103';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];

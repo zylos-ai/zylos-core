@@ -1,7 +1,7 @@
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=99';
 import { boardController, renderBoard, renderDistribution } from './board.js?v=103';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip } from './instance-strip.js?v=113';
+import { instanceStrip } from './instance-strip.js?v=114';
 import { renderAttention } from './attention-bar.js?v=103';
 import { createGroupDetail } from './detail.js?v=112';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=103';

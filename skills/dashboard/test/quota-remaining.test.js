@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, instanceStrip } from '../public/js/wb/instance-strip.js';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, instanceStrip } from '../public/js/wb/instance-strip.js';
 import { fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 
@@ -27,6 +27,7 @@ test('weekly remaining quota clamps used percentages and preserves unknown sampl
 test('remaining quota maps continuously from green through yellow to red', () => {
   for (const [remaining, hue] of [[100,120],[50,60],[10,12],[0,0],[49,58.8]]) {
     assert.equal(quotaColor(remaining), `hsl(${hue} 75% var(--wb-quota-lightness))`);
+    assert.equal(quotaFillColor(remaining), `hsl(${hue} var(--wb-quota-fill-saturation) var(--wb-quota-fill-lightness))`);
   }
 });
 
@@ -48,7 +49,7 @@ test('strip and fleet include quota-only Codex and retain in-use engines without
   assert.deepEqual(accountRuntimes({ rows: [{ target: { runtime: 'codex' } }] }), ['codex']);
 });
 
-test('strip meters and mobile percentage text share remaining quota colors and localized tooltips', () => {
+test('strip meters and percentage text use the same remaining hue and localized tooltips', () => {
   for (const locale of ['en', 'zh']) for (const level of ['plain', 'technical']) {
     const values = pack(locale), t = translator(values);
     for (const used of [0, 50, 90, 100, 125]) {
@@ -56,10 +57,10 @@ test('strip meters and mobile percentage text share remaining quota colors and l
       const box = accounts(strip({ baselineRuntime: 'codex', instance: { accounts: { codex: { usedPercentage: used } } } }, locale, { level }))[0];
       const fill = allNodes(box).find(node => node.tagName === 'I' && node.style.width);
       assert.equal(fill.style.width, remaining + '%');
-      assert.equal(fill.style.backgroundColor, quotaColor(remaining));
+      assert.equal(fill.style.backgroundColor, quotaFillColor(remaining));
       const amount = box.children.at(-1);
       assert.equal(amount.textContent, remaining + '%');
-      assert.equal(amount.style.color, fill.style.backgroundColor);
+      assert.equal(amount.style.color, quotaColor(remaining));
       assert.equal(box.title, t('wb.quotaRemaining', { pct: remaining }));
     }
     const labels = Object.fromEntries(['rate7d','quotaHead','quotaRemaining','quotaUnknown'].map(key => [key, values['wb.fleet.' + key]]));

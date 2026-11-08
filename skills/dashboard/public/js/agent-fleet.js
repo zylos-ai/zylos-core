@@ -1,4 +1,4 @@
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor } from './wb/instance-strip.js?v=113';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor } from './wb/instance-strip.js?v=114';
 
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline', 'stuck']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
@@ -340,7 +340,7 @@ const pctText = (value) => value == null ? '--' : `${Number(value).toFixed(0)}%`
 function quotaBar(label, value, labels) {
   const pct = remainingQuotaPercent(value);
   const title = pct == null ? labels.quotaUnknown : fill(labels.quotaRemaining, { pct: Math.round(pct) });
-  const color = pct == null ? '' : ` style="--wb-quota-color:${quotaColor(pct)}"`;
+  const color = pct == null ? '' : ` style="--wb-quota-color:${quotaColor(pct)};--wb-quota-fill:${quotaFillColor(pct)}"`;
   return `<div class="wb-qbar" title="${escapeHtml(title)}"${color}><span>${escapeHtml(label)}</span><span class="wb-qbar-tr"><i style="width:${pct == null ? 0 : pct}%"></i></span><b>${pct == null ? escapeHtml(labels.quotaUnknown) : pctText(pct)}</b></div>`;
 }
 function quotaBars(tile, labels) {
