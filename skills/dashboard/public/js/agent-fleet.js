@@ -448,6 +448,18 @@ export function renderAgentFleetHtml(fleet, options = {}) {
   return renderAgentFleetViewHtml(buildAgentFleetView(fleet, options));
 }
 
+/**
+ * Options the Machines page renders with: the page's labels, and "how long ago" in the page language
+ * (whole hours from an hour on, the page's own short wording below that).
+ */
+export function fleetPageOptions({ t, fmtAge, basePath = '', labels, self = null, now = Date.now }) {
+  const ageText = ts => {
+    const seconds = Math.max(0, Math.floor((now() - Date.parse(ts)) / 1000));
+    return seconds >= 3600 ? t('time.hours_exact', { h: Math.floor(seconds / 3600) }) : fmtAge(ts);
+  };
+  return { basePath, labels, ageText, self };
+}
+
 export function renderAgentFleet(container, fleet, options = {}) {
   if (!container) return null;
   const view = buildAgentFleetView(fleet, options);

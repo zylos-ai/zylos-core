@@ -17,8 +17,8 @@ import { createUsagePage } from './wb/usage.js?v=97';
 import { ObserverHistory } from './observer-history.js?v=2';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { fleetSelfFromSnapshot, renderAgentFleet } from './agent-fleet.js?v=99';
-import { createFleetSounds } from './fleet-sounds.js?v=98';
+import { fleetPageOptions, fleetSelfFromSnapshot, renderAgentFleet } from './agent-fleet.js?v=100';
+import { createFleetSounds } from './fleet-sounds.js?v=100';
 import { refreshDashboardState } from './state-refresh.js?v=98';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
@@ -304,12 +304,7 @@ function initFleetHoverPause() {
 function renderFleet() {
   const container = $('#agent-fleet-root');
   if (!container) return;
-  renderAgentFleet(container, state.fleet, {
-    basePath: BASE_PATH,
-    labels: agentFleetLabels(),
-    ageText: ts => ageSec(ts) >= 3600 ? t('time.hours_exact', { h: Math.floor(ageSec(ts) / 3600) }) : fmtAge(ts),
-    self: state.fleetSelf
-  });
+  renderAgentFleet(container, state.fleet, fleetPageOptions({ t, fmtAge, basePath: BASE_PATH, labels: agentFleetLabels(), self: state.fleetSelf }));
   const updated = $('#fleet-updated');
   if (updated) updated.textContent = fmtAge(state.fleet?.updated_at);
   fleetSounds?.refreshLabels();
