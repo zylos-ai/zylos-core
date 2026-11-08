@@ -31,7 +31,7 @@ function sameScope(intent, identity) {
     intent.claude_pid === identity.claude_pid;
 }
 
-// Only the child performs blocking channel I/O; AM remains the sole state writer.
+// Only the child performs channel I/O; AM remains the sole state writer.
 export function sendNoticeWorker(claim, message, route, { zylosDir = runtimeRoot(), spawnWorker = spawn } = {}) {
   return new Promise(resolve => {
     let done = false;
@@ -133,6 +133,6 @@ if (isMainModule(import.meta.url) && process.argv[2] === '--send') {
   for await (const chunk of process.stdin) input += chunk;
   try {
     const {claim,message,route} = JSON.parse(input);
-    process.stdout.write(JSON.stringify(sendStatusNotice(claim,message,route,{diagnostic:false})));
+    process.stdout.write(JSON.stringify(await sendStatusNotice(claim,message,route,{diagnostic:false})));
   } finally { close(); }
 }

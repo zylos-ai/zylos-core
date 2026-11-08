@@ -104,7 +104,7 @@ test('Dashboard accepts the shared delivery fixture and canonical SQLite IDs wit
   assert.notEqual(f.receive({ ...packet, c4_id: '09223372036854775807' }).status, 0);
 });
 
-// Boundary: synchronous notification calls real c4-send and real Dashboard receiver, no HTTP callback.
+// Boundary: awaited notification calls real c4-send and real Dashboard receiver, no HTTP callback.
 // Run on send/status notification changes; skip for UI-only edits. No runtime/socket is created.
 test('Core status notification traverses the real Dashboard receiver without HTTP or extra groups', t => {
   const f = setup(t);

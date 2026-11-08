@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn as spawnChild } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SKILLS_DIR, DATA_DIR } from './c4-config.js';
 import { reserveStatusNoticeCooldown, clearStatusNoticeCooldownReservation } from './c4-db.js';
@@ -39,6 +39,8 @@ export function logStatusNotice(claim, route, outcome, result = {}, { zylosDir =
       endpoint: normalizeStatusEndpoint(claim.endpoint), health: route.health || claim.health || 'unavailable',
       reason: route.reason || claim.reason || 'unavailable', kind: route.noticeKind || route.kind || 'inbound',
       outcome, exitCode: result.status ?? null, signal: result.signal ?? null,
+      ...(result.stdout ? { stdout: result.stdout } : {}),
+      ...(result.stderr ? { stderr: result.stderr } : {}),
       ...(result.workerExitCode !== undefined || result.workerSignal !== undefined ? {
         workerExitCode: result.workerExitCode ?? null, workerSignal: result.workerSignal ?? null,
       } : {}) }) + '\n');
@@ -49,7 +51,7 @@ export function logStatusNotice(claim, route, outcome, result = {}, { zylosDir =
   } catch { /* Diagnostics must not change send outcomes. */ }
 }
 
-export function sendStatusNotice(claim, message, route = {}, { spawn = spawnSync, diagnostic = true } = {}) {
+export async function sendStatusNotice(claim, message, route = {}, { spawn = spawnChild, diagnostic = true, timeoutMs = 30000 } = {}) {
   validateTarget(claim.channel, claim.endpoint);
   const script = fileURLToPath(new URL('./c4-send.js', import.meta.url));
   const channelScript = path.join(SKILLS_DIR, claim.channel, 'scripts', 'send.js');
@@ -60,16 +62,46 @@ export function sendStatusNotice(claim, message, route = {}, { spawn = spawnSync
     if (diagnostic) logStatusNotice(claim, route, 'failed');
     return { outcome: 'failed', code: 'NOTICE_SEND_UNAVAILABLE' };
   }
-  let result;
-  try {
-    const groupName = parseSessionGroup(claim.sessionGroup ?? route.sessionGroup)?.groupName;
-    result = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin']),
-      ...(groupName ? ['--session-group', groupName] : [])], {
-      input: message, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30000, killSignal: 'SIGKILL',
-    });
-  } catch (error) {
-    result = { error };
-  }
+  const result = await new Promise(resolve => {
+    let child, error, timer, exited = false, stdout = '', stderr = '';
+    const closeReaders = () => { child.stdout.destroy(); child.stderr.destroy(); };
+    const finish = (status = null, signal = null) => {
+      clearTimeout(timer);
+      resolve({ status, signal, error, pid: child?.pid, stdout, stderr });
+    };
+    try {
+      const groupName = parseSessionGroup(claim.sessionGroup ?? route.sessionGroup)?.groupName;
+      child = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin']),
+        ...(groupName ? ['--session-group', groupName] : [])], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      // Keep draining both pipes after the diagnostic prefix is full.
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(0, 8192); });
+      child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(0, 8192); });
+      child.once('error', failure => { error = failure; });
+      child.once('exit', (status, signal) => {
+        exited = true;
+        // Descendants can retain pipe writers after the direct sender exits.
+        if (error || status !== 0 || signal) closeReaders();
+      });
+      child.once('close', (status, signal) => finish(status, signal));
+      child.stdin.on('error', failure => { error ??= failure; });
+      // Keep the deadline until pipe completion, even after a zero direct exit.
+      timer = setTimeout(() => {
+        error ??= Object.assign(new Error('Status notice send timed out'), { code: 'ETIMEDOUT' });
+        if (exited) closeReaders();
+        else child.kill('SIGKILL');
+      }, timeoutMs);
+      child.stdin.end(message);
+    } catch (failure) {
+      error = failure;
+      // Once started, settle only on close so no sender outlives its caller.
+      if (child?.pid) child.kill('SIGKILL');
+      else finish();
+    }
+  });
   const outcome = result.status === 0 && !result.error && !result.signal ? 'sent'
     : result.error && ['ENOENT', 'EACCES'].includes(result.error.code) && !result.pid ? 'failed' : 'uncertain';
   if (outcome === 'failed') clearOwn();

@@ -545,6 +545,55 @@ describe('c4-receive health gating', () => {
     });
   });
 
+  // Covers two receives in one host process, with the first real channel child
+  // still pending. Run for receive/notice concurrency changes; unrelated paths
+  // may skip. Private data and the bounded child are released before teardown.
+  it('suppresses a second same-endpoint receive while its first notice is in flight', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      writeRuntimeHealth(tmpDir, 'down');
+      createBlockingAppendChannelSendScript(tmpDir, 'test-chan');
+      const code = `import assert from 'node:assert/strict';
+        import fs from 'node:fs';
+        import path from 'node:path';
+        import {receive} from ${JSON.stringify(new URL('../c4-receive.js', import.meta.url).href)};
+        import * as db from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
+        const started=path.join(process.env.ZYLOS_DIR,'test-chan-send-started');
+        const release=path.join(process.env.ZYLOS_DIR,'test-chan-send-release');
+        const args=['--channel','test-chan','--endpoint','shared-endpoint'];
+        const dependencies={queryRoute:async()=>({runtime:'claude',health:'unavailable',reason:'runtime_unavailable',userMessage:'Temporarily unavailable.'})};
+        let settled=false;
+        const first=receive([...args,'--content','first concurrent'],dependencies).finally(()=>{settled=true;});
+        try {
+          const deadline=Date.now()+3000;
+          while(!fs.existsSync(started) && Date.now()<deadline) await new Promise(r=>setTimeout(r,10));
+          assert.equal(fs.existsSync(started),true,'first notice child started');
+          assert.equal(settled,false,'first receive waits for its notice');
+          const second=await receive([...args,'--content','second concurrent'],dependencies);
+          assert.equal(second.action,'suppressed');
+          assert.equal(settled,false,'suppressed receive completes before first notice');
+          fs.writeFileSync(release,'ok');
+          const result=await first;
+          assert.equal(result.action,'delivered');
+          const suppressed=db.getDb().prepare('SELECT delivery_action FROM conversations WHERE id=?').get(second.id);
+          assert.equal(suppressed.delivery_action,'suppressed');
+          const counts=db.getDb().prepare("SELECT direction,COUNT(*) AS n FROM conversations GROUP BY direction").all();
+          assert.equal(counts.find(row=>row.direction==='in').n,2);
+          assert.equal(counts.find(row=>row.direction==='out').n,1);
+          const lines=fs.readFileSync(path.join(process.env.ZYLOS_DIR,'test-chan-send.jsonl'),'utf8').trim().split('\\n');
+          assert.equal(lines.length,1,'one notice reached the channel');
+          console.log(JSON.stringify({first:result.action,second:second.action}));
+        } finally {
+          fs.writeFileSync(release,'ok');
+          await first.catch(()=>{});db.close();
+        }`;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+        env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { first: 'delivered', second: 'suppressed' });
+    });
+  });
+
   it('prunes expired status notice cooldown entries when recording a notification', () => {
     withTmpDir(({ tmpDir, env }) => {
       const now = Math.floor(Date.now() / 1000);

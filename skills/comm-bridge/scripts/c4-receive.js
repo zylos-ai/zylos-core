@@ -127,7 +127,7 @@ export async function receive(args, dependencies = {}) {
     }
     return result;
   }
-  const sent = send(claim, route.userMessage, finalRoute);
+  const sent = await send(claim, route.userMessage, finalRoute);
   if (sent.outcome === 'sent') return result;
   throw dataError(sent.outcome === 'failed' ? 'UNHEALTHY_NOTIFY_FAILED' : 'UNHEALTHY_NOTIFY_UNCERTAIN',
     `Inbound committed; status notice ${sent.outcome}. Do not resend.`, { persisted, id: record.id });
