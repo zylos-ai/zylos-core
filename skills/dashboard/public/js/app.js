@@ -4,7 +4,7 @@ import { createPricingPanel } from './wb/settings-pricing.js?v=98';
 import { renderDefaults } from './wb/settings-defaults.js?v=99';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=98';
 import { keyCounts, renderCreatedKey, renderKeyTable, renderRemoteAgents } from './wb/settings-access.js?v=99';
-import { confirmDialog } from './wb/detail.js?v=99';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=1';
 import { renderVersion } from './wb/settings-version.js?v=98';
 import { mountConversationPage } from './wb/conversation-page.js?v=100';
 import { mountChatSettings } from './wb/chat-settings.js?v=98';
@@ -2056,7 +2056,7 @@ function renderApiKeys(data) {
   const purgeBtn = fleetManageModal.querySelector('#api-key-purge-revoked');
   if (purgeBtn) { purgeBtn.hidden = !counts.revoked; purgeBtn.textContent = t('wb.settings.keys.purge', { count: counts.revoked }); }
   fleetManageModal.querySelector('#api-key-count').textContent = t('wb.settings.keys.counts', counts);
-  renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys, { t, confirm: confirmSetting, onAction: (action, name) => ({ rotate: rotateApiKey, revoke: revokeApiKey, delete: hardDeleteApiKey })[action](name) });
+  renderKeyTable(fleetManageModal.querySelector('#api-key-list'), keys, settingsWiring().keyTable());
 }
 
 function renderCreatedApiKey(createdKey) {
@@ -2067,8 +2067,16 @@ function renderCreatedApiKey(createdKey) {
 }
 
 /** Settings confirmations share the dashboard's own dialog instead of the browser prompt. */
-function confirmSetting(body, { title = t('wb.settings.confirmTitle'), ok = t('btn.confirm'), danger = true } = {}) {
-  return confirmDialog(document, { title, body, ok, cancel: t('btn.cancel'), danger });
+function settingsWiring() {
+  return settingsWiring.value ??= wireSettingsConfirmations({
+    document, t, execute: execAction, setBusy: setModalBodyDisabled,
+    remoteTarget: () => (state.remoteAgent || REMOTE_AGENT ? viewedAgentName() : null),
+    keyActions: { rotate: rotateApiKey, revoke: revokeApiKey, delete: hardDeleteApiKey },
+    writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup,
+  });
+}
+function confirmSetting(body, options) {
+  return settingsWiring().confirm(body, options);
 }
 
 async function copyCreatedApiKey() {
@@ -2535,7 +2543,7 @@ function initSettingsPage() {
   const read = async path => { const target = observerTargetKey(); const value = await fetchJson(path); if (target !== observerTargetKey()) throw Error('view_changed'); return value; };
   settingsLoader = createSettingsLoader({ read, onLoad(value) {
     settingsDefaults?.destroy();
-    settingsDefaults = renderDefaults(defaults, settingsDefaultsOptions(value, read));
+    settingsDefaults = renderDefaults(defaults, settingsWiring().defaults(value, read));
     settingsPricing?.destroy(); settingsPricing = null;
     if (value.prices) {
       settingsPricing = createPricingPanel({ root: settingsPage.sections.pricing, host: root, snapshot: value.snapshot,
@@ -2568,17 +2576,6 @@ function refreshSettingsLocks() {
   syncModeSegment();
   settingsDefaults?.refreshLocks();
   refreshSettingsVersion();
-}
-// The default-settings card confirms all of its changes once, then runs them without asking again.
-function settingsDefaultsOptions(value, read) {
-  return { ...value, t, read, execute: executeSettingsAction, confirm: confirmSettingsChange,
-    writable: () => !remoteIsReadOnly() && countdownTimer === null, onGroup: openWorkbenchGroup };
-}
-function confirmSettingsChange(text) {
-  return showConfirm(state.remoteAgent || REMOTE_AGENT ? `${text}\n${t('confirm.remote_target', { agent: viewedAgentName() })}` : text);
-}
-function executeSettingsAction(action, body, { confirmed = false } = {}) {
-  return execAction(action, body, { confirmed });
 }
 function refreshSettingsPage() {
   closeSettingsModal();

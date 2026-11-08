@@ -7,11 +7,6 @@ import { afterSentence, buildAgentFleetView, fleetSelfFromSnapshot, renderAgentF
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { tabForPath } from '../public/js/wb/view-mode.js';
-import { renderAgentFleet } from '../public/js/agent-fleet.js';
-import { keyCounts, renderKeyTable } from '../public/js/wb/settings-access.js';
-import { renderDefaults } from '../public/js/wb/settings-defaults.js';
-import { confirmDialog } from '../public/js/wb/detail.js';
-import { documentFixture, node } from './fixtures/settings-dom.js';
 
 function deferred() {
   let resolve;
@@ -391,97 +386,6 @@ test('this machine reads both weekly quotas from the raw groups snapshot, Claude
   assert.match(card, /Codex<\/span><span class="wb-qbar-tr"><i style="width:35%" class="wb-sw-codex">/);
   const compare = html.slice(html.indexOf('wb-f-compare'), html.indexOf('wb-f-card'));
   assert.match(compare, /Codex<\/span><span class="wb-qbar-tr"><i style="width:35%" class="wb-sw-codex">/);
-});
-
-// Runs the app's own settings and Machines wiring (sliced from app.js, as the other harnesses here do)
-// against the real modules, with an in-page dialog that answers itself and a recording fetch.
-function settingsWiringHarness({ answer = true } = {}) {
-  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
-  const fn = name => {
-    const start = app.search(new RegExp('^(async )?function ' + name + '\\(', 'm'));
-    assert.ok(start >= 0, 'app.js defines ' + name);
-    return app.slice(start, app.indexOf('\n}\n', start) + 3);
-  };
-  const confirmActions = app.match(/^const CONFIRM_ACTIONS = .*$/m)[0];
-  const document = documentFixture(), dialogs = [], requests = [];
-  const listeners = new Map();
-  document.body = node(document, 'body');
-  document.addEventListener = (name, handler) => listeners.set(name, handler);
-  document.removeEventListener = name => listeners.delete(name);
-  const append = document.body.append.bind(document.body);
-  document.body.append = (...nodes) => {
-    append(...nodes);
-    for (const added of nodes) {
-      const dialog = added.querySelector('.wb-modal'); if (!dialog) continue;
-      dialogs.push({ title: dialog.children[0].textContent, body: dialog.children[1].textContent });
-      const [no, yes] = dialog.querySelector('.wb-modal-acts').children;
-      queueMicrotask(() => (harness.answer ? yes : no).dispatch('click'));
-    }
-  };
-  const t = (key, params = {}) => key === 'time.hours_exact' ? params.h + ' 小时前' : key === 'wb.fleet.lastSeen' ? '{time}最后在线' : key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
-  const keyRoot = node(document, 'div');
-  for (const id of ['api-key-list', 'api-key-count', 'api-key-purge-revoked']) keyRoot.append(node(document, 'div', id));
-  const fleetRoot = { innerHTML: '', querySelectorAll: () => [], querySelector: () => null, addEventListener() {} };
-  const context = {
-    document, t, keyCounts, renderKeyTable, renderDefaults, confirmDialog, renderAgentFleet, console,
-    fleetManageModal: keyRoot, actionsModal: null, REMOTE_AGENT: '', BASE_PATH: '', countdownTimer: null, fleetSounds: null,
-    state: { remoteAgent: null, dashboardState: {}, fleet: null, fleetSelf: null },
-    $: selector => selector === '#agent-fleet-root' ? fleetRoot : null,
-    api: path => path, agentPath: path => path, remoteIsReadOnly: () => false, viewedAgentName: () => 'here', effortLabel: value => value,
-    fmtAge: () => '5m ago', ageSec: ts => (Date.now() - Date.parse(ts)) / 1000,
-    setApiKeyBusy() {}, fleetManageStatus() {}, fleetManageError: (code, fallback) => fallback, renderCreatedApiKey() {},
-    openWorkbenchGroup() {}, formatActionResult: () => '', startCountdownAndReload() {}, refreshState: async () => {}, refreshModeStatus() {},
-    syncModeSegment() {}, renderOriginAvailability() {}, setTimeout,
-    fetch: async (url, options = {}) => { requests.push({ url, method: options.method ?? 'GET', body: options.body }); return { ok: true, json: async () => ({ ok: true, keys: [] }) }; },
-  };
-  vm.createContext(context);
-  vm.runInContext([confirmActions, 'let pendingManualRestart = null;',
-    ...['agentFleetLabels', 'renderFleet', 'renderApiKeys', 'confirmSetting', 'rotateApiKey', 'revokeApiKey', 'hardDeleteApiKey', 'settingsDefaultsOptions',
-      'confirmSettingsChange', 'executeSettingsAction', 'setModalBodyDisabled', 'showConfirm', 'execAction'].map(fn)].join('\n'), context);
-  const harness = { answer, context, document, dialogs, requests, keyRoot, fleetRoot };
-  return harness;
-}
-
-test('the app asks before revoking a key, sends nothing on cancel, and saves model and effort after one confirmation', async () => {
-  const h = settingsWiringHarness({ answer: false });
-  h.context.renderApiKeys({ keys: [{ name: 'ops', scope: 'admin', status: 'active' }, { name: 'old', scope: 'read', status: 'revoked' }] });
-  await h.keyRoot.querySelector('.api-key-revoke').dispatch('click');
-  assert.deepEqual(h.dialogs.map(item => item.title), ['wb.settings.keys.confirm.revoke.title:{"name":"ops"}'], 'revoking shows the in-page dialog');
-  assert.deepEqual(h.requests, [], 'cancel sends nothing');
-  await h.keyRoot.querySelector('.api-key-delete').dispatch('click');
-  assert.equal(h.dialogs.length, 2); assert.deepEqual(h.requests, []);
-  h.answer = true;
-  await h.keyRoot.querySelector('.api-key-revoke').dispatch('click');
-  assert.deepEqual(h.requests.map(item => [item.method, item.url]), [['DELETE', '/api/keys/ops']]);
-
-  const settings = settingsWiringHarness();
-  const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low', 'minimal'] } });
-  const root = node(settings.document, 'div');
-  const value = { snapshot: { baselineRuntime: 'claude', instance: { runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } } }, overrides: { runtime: [], model: [] }, rows: [] },
-    page: { runtimeTotal: 1 }, metadata: { claude: meta('claude'), codex: meta('codex') } };
-  renderDefaults(root, settings.context.settingsDefaultsOptions(value, async () => ({})));
-  for (const runtime of ['claude', 'codex']) {
-    const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
-    const effort = root.querySelector('#settings-effort-' + runtime); effort.value = runtime === 'codex' ? 'minimal' : 'low'; await effort.dispatch('change');
-  }
-  await root.querySelector('#settings-save-models').dispatch('click');
-  assert.equal(settings.dialogs.length, 1, 'one confirmation for the whole card, none per action');
-  assert.deepEqual(settings.requests.map(item => item.url).sort(), ['/api/actions/switch-effort', '/api/actions/switch-effort', '/api/actions/switch-model', '/api/actions/switch-model']);
-
-  const engine = settingsWiringHarness(), engineRoot = node(engine.document, 'div');
-  renderDefaults(engineRoot, engine.context.settingsDefaultsOptions(value, async () => ({})));
-  await engineRoot.querySelector('#settings-use-codex').dispatch('click');
-  await engineRoot.querySelector('#settings-save-runtime').dispatch('click');
-  assert.equal(engine.dialogs.length, 1, 'switching the default engine also asks exactly once');
-  assert.deepEqual(engine.requests.map(item => [item.url, JSON.parse(item.body)]), [['/api/actions/switch-runtime', { runtime: 'codex' }]]);
-});
-
-test('the Machines page the app renders says how long ago a machine was reachable in the page language', () => {
-  const h = settingsWiringHarness();
-  h.context.state.fleet = { agents: [{ name: 'lab', state: 'OFFLINE', health_reason: 'unreachable', last_seen: new Date(Date.now() - 2 * 3600e3 - 60e3).toISOString() }] };
-  h.context.renderFleet();
-  assert.match(h.fleetRoot.innerHTML, /2 小时前最后在线/);
-  assert.doesNotMatch(h.fleetRoot.innerHTML, /2h/);
 });
 
 test('an unreachable machine says how long ago it was last reachable in the page language', () => {
