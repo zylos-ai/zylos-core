@@ -29,8 +29,8 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
     const units = [...new Set(data.series.map(series => series.unit ?? data.yUnit ?? ''))];
     const category = data.xType === 'category';
     type = category ? 'bar' : 'line';
-    // Values with distinct units never share a stack or a value scale.
-    const stacked = category && units.length === 1;
+    // Time-series comparisons do not declare additive parts; only breakdown stacks.
+    const stacked = false;
     scales.x = { type: category ? 'category' : data.xType === 'number' ? 'linear' : 'time',
       title: { display: !!data.xLabel, text: data.xLabel, color: text }, ticks: { color: text },
       grid: { color: grid }, border: { color: grid }, stacked };
@@ -77,7 +77,7 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
   }
   return { type, data: { ...(labels ? { labels } : {}), datasets }, options: {
     indexAxis, locale, responsive: true, maintainAspectRatio: false, animation: false, color: text,
-    scales, plugins: { legend: { display: block.type !== 'category_series' || !!data.reference,
+    scales, plugins: { legend: { display: block.type !== 'category_series' || !!data.reference, onClick: null,
       labels: { color: text, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
     tooltip: { callbacks: { label(context) {
       const amount = context.parsed[indexAxis === 'y' ? 'x' : 'y'];

@@ -58,3 +58,40 @@ test('malformed stored field types remain available to shared validation without
   f.submit(); await tick(); assert.equal(f.requests.length, 0);
   assert.ok(f.formState.fieldErrors.some(item => item.key === 'tags' && item.reason === 'type'));
 });
+test('multiline fields render with browser readonly textarea type and submit typed text', async () => {
+  const document = createDocument(), original = document.createElement;
+  document.createElement = tag => {
+    const node = original(tag);
+    if (tag === 'textarea') Object.defineProperty(node, 'type', { get: () => 'textarea' });
+    return node;
+  };
+  const message = structuredClone(envelope), block = message.blocks[0];
+  block.data.fields.push({ key: 'notes', type: 'multiline_text', label: 'Notes', required: true, maxLength: 100 });
+  const formState = { values: { customer_type: 'person' } }, requests = [];
+  const root = renderQuestion({ document, envelope: message, block, row: { id: 12, direction: 'out' }, canWrite: true, formState,
+    question: { c4Id: '12', messageId: message.messageId, interruptId: message.interruptId, questionSummary: message.questionSummary, status: 'paused' },
+    onSubmit: async action => { requests.push(action); } });
+  const textarea = root.querySelector('[data-field-key="notes"] textarea');
+  assert.equal(textarea.type, 'textarea'); textarea.value = 'line one\nline two'; textarea.dispatch('input');
+  allNodes(root).find(node => node.dataset.action === 'answer').dispatch('click'); await tick();
+  assert.equal(requests.length, 1); assert.equal(requests[0].payload.values.notes, 'line one\nline two');
+});
+test('shared local field validation blocks requests and preserves actionable form-level correction message', async () => {
+  const f = fixture({ customer_type: 'company', employee_count: 0 });
+  f.submit(); await tick();
+  assert.equal(f.requests.length, 0);
+  assert.deepEqual(f.formState.fieldErrors, [{ key: 'company_name', reason: 'required' }, { key: 'employee_count', reason: 'range' }]);
+  assert.equal(f.root.querySelector('.chat-form-error').textContent, 'chat.question.correctFields');
+  const error = f.label('employee_count').querySelector('.chat-field-error');
+  assert.equal(error.hidden, false); assert.equal(error.textContent, 'chat.question.field.range');
+});
+test('bounded required single-select uses segment buttons and preserves existing conditional filtering', async () => {
+  const f = fixture({ customer_type: 'person', company_name: 'retained', employee_count: 2 });
+  const group = f.label('customer_type').querySelector('.chat-form-segments');
+  assert.equal(group.children.length, 3); assert.equal(f.input('customer_type').hidden, true);
+  const company = group.children.find(node => node.value === 'company'); company.dispatch('click');
+  assert.equal(company.getAttribute('aria-pressed'), 'true'); assert.equal(f.label('company_name').hidden, false);
+  group.children.find(node => node.value === 'person').dispatch('click');
+  assert.equal(company.getAttribute('aria-pressed'), 'false'); assert.equal(f.label('company_name').hidden, true);
+  f.submit(); await tick(); assert.deepEqual(f.requests[0].payload.values, { customer_type: 'person' });
+});

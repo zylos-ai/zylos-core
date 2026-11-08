@@ -10,6 +10,16 @@ const laterThan = (left, right) => {
     b = String(right);
   return a.length === b.length ? a > b : a.length > b.length;
 };
+/** Release message DOM and resources when the current snapshot no longer owns its id. */
+export function disposeMissingMessages(messages, ids) {
+  for (const [id, record] of messages) {
+    if (!ids.has(id)) {
+      record.resource?.destroy?.();
+      record.node.remove();
+      messages.delete(id);
+    }
+  }
+}
 /** A persistent page: polling reconciles keyed rows and delivery labels, never the editor. */
 export function mountConversationPage({
   root,
@@ -420,6 +430,7 @@ export function mountConversationPage({
         return record.node;
       }
     });
+    if (content.classList.contains('conversation-composed-content') || content.classList.contains('conversation-chart-content')) body.classList.add('conversation-message-body-wide');
     const status = node('span', undefined, 'chat-message-status conversation-message-status');
     status.setAttribute('role', 'status');
     const statusIcon = node('span', undefined, 'conversation-delivery-icon');
@@ -648,13 +659,7 @@ export function mountConversationPage({
       }
       ordered.push(record.node);
     }
-    for (const [id, record] of messages) {
-      if (!ids.has(id)) {
-        record.resource?.destroy?.();
-        record.node.remove();
-        messages.delete(id);
-      }
-    }
+    disposeMissingMessages(messages, ids);
     const liveDays = new Set(ordered.filter(el => el.classList.contains('conversation-day')));
     for (const [day, divider] of days) {
       if (!liveDays.has(divider)) {
