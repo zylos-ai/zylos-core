@@ -22,6 +22,21 @@ export function disposeMissingMessages(messages, ids) {
     }
   }
 }
+/**
+ * Whether a keydown in the composer sends the message. Enter sends and Shift+Enter starts a new line, as in the
+ * Web Console; ⌘/Ctrl+Enter also sends. An Enter that commits an input method's composition never sends. On a
+ * touch-first device Enter keeps starting a new line and only the send button sends: on-screen keyboards have no
+ * Shift. A hardware keyboard's ⌘/Ctrl+Enter still sends there.
+ */
+export function composerKeySends(event, { touch = false } = {}) {
+  if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) return false;
+  if (event.ctrlKey || event.metaKey) return true;
+  return !event.shiftKey && !touch;
+}
+/** Touch-first: the primary pointer is coarse and cannot hover (phones, tablets), not a touch-screen laptop. */
+export function touchFirst(view) {
+  return view?.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches === true;
+}
 /** A persistent page: polling reconciles keyed rows and delivery labels, never the editor. */
 export function mountConversationPage({
   root,
@@ -323,10 +338,10 @@ export function mountConversationPage({
   input.rows = 1;
   input.setAttribute('aria-label', t('chat.input'));
   updateInputPlaceholder();
-  const send = action('send', () => {}, 'send', 'wb-btn wb-btn-primary');
+  const send = action('send', () => {}, 'send', 'wb-btn wb-btn-primary conversation-send');
   send.type = 'submit';
   const hint = node('p', t('chat.page.sendHint'), 'conversation-compose-hint');
-  const attach = action('attach', () => fileInput.click(), 'plus');
+  const attach = action('attach', () => fileInput.click(), 'paperclip', 'wb-icon-btn conversation-attach');
   const fileInput = node('input'); fileInput.type = 'file'; fileInput.multiple = true;
   fileInput.hidden = true; fileInput.dataset.action = 'chooseFiles'; fileInput.setAttribute('aria-label', t('chat.attach'));
   const trayLabel = node('p', '', 'conversation-upload-label');
@@ -356,7 +371,7 @@ export function mountConversationPage({
   composer.append(receipt, trayLabel, tray, uploadNotice, composeBox, hint);
   input.addEventListener('input', () => state.setInput(input.value));
   input.addEventListener('keydown', event => {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.isComposing) {
+    if (composerKeySends(event, { touch: touchFirst(view) })) {
       event.preventDefault();
       if (!send.disabled) {
         void requestSend();
@@ -374,7 +389,7 @@ export function mountConversationPage({
   root.replaceChildren(page);
   function updateInputPlaceholder(mode = currentSnapshot?.mode) {
     const key = mode === 'single' ? 'chat.page.singlePlaceholder'
-      : view?.innerWidth <= 760 ? 'chat.page.mobilePlaceholder' : 'chat.page.placeholder';
+      : view?.innerWidth <= 760 || touchFirst(view) ? 'chat.page.mobilePlaceholder' : 'chat.page.placeholder';
     input.placeholder = t(key);
   }
   function fitInput() {
@@ -1010,11 +1025,13 @@ export function mountConversationPage({
     fitInput();
     send.dataset.action = s.retryRequired ? 'retry' : 'send';
     text(send.label, t(s.retryRequired ? 'chat.retry' : 'chat.send'));
+    send.title = t(s.retryRequired ? 'chat.retry' : 'chat.send');
     void uploadTray.setScope(uploadScope(s));
     const upload = uploadTray.snapshot();
     const limits = upload.config ? t('chat.upload.limits').replace('{size}', String(upload.config.maxUploadBytes / (1024 * 1024))).replace('{count}', String(upload.config.maxAttachments)) : '';
-    attach.title = limits;
-    text(hint, [t('chat.upload.pasteDrop'), limits, t('chat.page.sendHint')].filter(Boolean).join(' · '));
+    attach.title = [t('chat.attach'), limits].filter(Boolean).join(' · ');
+    const keys = touchFirst(view) ? '' : t('chat.page.keyHint');
+    text(hint, [keys, t('chat.upload.pasteDrop'), limits, t('chat.page.sendHint')].filter(Boolean).join(' · '));
     attach.hidden = !s.canWrite;
     attach.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry;
     fileInput.disabled = attach.disabled;

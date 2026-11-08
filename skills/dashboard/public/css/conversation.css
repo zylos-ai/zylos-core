@@ -995,3 +995,9 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   .conversation-upload-tray { grid-template-columns:minmax(0,1fr); }
   .conversation-compose-box>.wb-btn { min-width:40px; padding:0 10px; }
 }
+
+/* Composer: icon-only attach and send buttons, square at the input's single-line height. A retry keeps its label. */
+.conversation-page .conversation-compose-box>.conversation-attach,
+.conversation-page .conversation-compose-box>.conversation-send[data-action=send] { width:var(--conversation-control-height); min-width:var(--conversation-control-height); height:var(--conversation-control-height); min-height:var(--conversation-control-height); padding:0; justify-content:center; }
+.conversation-page .conversation-send[data-action=send]>span { display:none; }
+.conversation-page .conversation-compose-box>.wb-btn .wb-ico,.conversation-page .conversation-compose-box>.wb-icon-btn .wb-ico { width:18px; height:18px; }
