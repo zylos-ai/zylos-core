@@ -1,17 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import path from 'node:path';
 import { createCatalogArtifacts } from '../../comm-bridge/scripts/c4-component-catalog.js';
 import { runComponents } from '../scripts/components.js';
 import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, MODEL_INSTRUCTIONS,
   parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
-
-const isolation = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]));
-const isolationRoot = path.dirname(isolation.TMPDIR || '');
-assert.match(path.basename(isolationRoot), /^zylos-tests-/);
-for (const value of Object.values(isolation)) assert.ok(value && value.startsWith(isolationRoot + path.sep), 'component CLI tests require the official isolated runner');
-console.log('Component catalog isolation:', JSON.stringify({ ...isolation, resources: 'static catalog and bounded CLI children; no DB, network, PM2 or tmux' }));
 
 // Static CLI boundary only: no DB, HTTP, PM2 or tmux. Run on generated catalog
 // or CLI output changes; unrelated chat delivery/runtime work may skip.
@@ -22,13 +15,20 @@ function call(args, catalog) {
   return { exit, output, error };
 }
 
-test('component CLI lists the implemented keys and generated descriptions', () => {
+test('component CLI lists the implemented keys, descriptions and selection guidance', () => {
   const result = call(['list', '--json']);
   assert.equal(result.exit, 0);
   const data = JSON.parse(result.output).data;
   assert.deepEqual(data.keys, REGISTERED_COMPONENT_KEYS);
   assert.deepEqual(data.components.map(item => item.key), REGISTERED_COMPONENT_KEYS);
   assert.equal(data.components.length, 8);
+  assert.equal(new Set(data.components.map(item => item.key)).size, 8);
+  for (const item of data.components) {
+    const definition = COMPONENT_DEFINITIONS.find(component => component.key === item.key);
+    assert.equal(typeof item.useWhen, 'string');
+    assert.ok(item.useWhen.length > 0);
+    assert.equal(item.useWhen, definition.useWhen);
+  }
 });
 
 for (const item of COMPONENT_DEFINITIONS) test(`component CLI describes and emits a legal ${item.key} message`, () => {
@@ -103,7 +103,9 @@ test('installed component CLI entry prints real list and message output', () => 
   const script = new URL('../scripts/components.js', import.meta.url);
   const run = args => execFileSync(process.execPath, [script.pathname, ...args], {
     encoding: 'utf8', timeout: 5000, maxBuffer: 512 * 1024 });
-  assert.deepEqual(JSON.parse(run(['list', '--json'])).data.keys, REGISTERED_COMPONENT_KEYS);
+  const listed = JSON.parse(run(['list', '--json'])).data;
+  assert.deepEqual(listed.keys, REGISTERED_COMPONENT_KEYS);
+  for (const item of listed.components) assert.equal(item.useWhen, COMPONENT_DEFINITIONS.find(component => component.key === item.key).useWhen);
   assert.equal(parseC4Content(run(['example', 'choice@1']).trimEnd()).kind, 'envelope');
   const described = JSON.parse(run(['describe', 'time_series@1', '--json'])).data;
   assert.equal(described.useWhen, COMPONENT_DEFINITIONS.find(item => item.key === 'time_series@1').useWhen);

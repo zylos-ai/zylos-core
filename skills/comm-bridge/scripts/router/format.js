@@ -29,7 +29,7 @@ export function formatConversation(row, { scriptPath = sendPath } = {}) {
     ? `\nAttachments: ${path.join(SKILLS_DIR, 'dashboard', 'SKILL.md')}\n`
     : '';
   const componentHint = row.channel === 'dashboard' && row.direction === 'in'
-    ? `\nDashboard supports charts and interactive components; prefer them when the data or decision fits. List local options: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json.\n`
+    ? `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n`
     : '';
   const suffix = componentHint + (row.endpoint_id ? `${attachmentHint} ${replyVia(row, scriptPath)}` : '');
   return truncateForDelivery(content, suffix, row.id);

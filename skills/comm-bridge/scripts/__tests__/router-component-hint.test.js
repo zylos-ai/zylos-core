@@ -14,7 +14,7 @@ import { C4Reader } from '../../../dashboard/src/lib/c4-reader.js';
 import { ChatHistory } from '../../../dashboard/src/lib/chat/history.js';
 import { createDisplayNames } from '../../../dashboard/src/lib/workbench/display-names.js';
 
-const marker = 'Dashboard supports charts and interactive components';
+const marker = 'Charts/choices/forms when useful:';
 const count = value => value.split(marker).length - 1;
 const row = (extra = {}) => ({ id: 970001, direction: 'in', channel: 'dashboard', endpoint_id: 'dialog',
   session_group: 'dashboard:dialog', content: 'Show the recent usage.', ...extra });

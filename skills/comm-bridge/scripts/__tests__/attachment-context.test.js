@@ -68,6 +68,9 @@ test('Dashboard inbound attachment hint retains the exact original reply route a
   assert.ok(complete.includes(content));
   assert.ok(complete.includes(path.join(SKILLS_DIR, 'dashboard/SKILL.md')));
   assert.ok(complete.includes('Attachments:'));
+  const marker = 'Charts/choices/forms when useful:';
+  assert.equal(complete.split(marker).length - 1, 1);
+  assert.ok(complete.indexOf(marker) < complete.indexOf('Attachments:'));
   assert.ok(complete.endsWith(original));
   assert.equal(complete.split(original).length - 1, 1);
   assert.equal(complete.includes('--session-group local-dialog'), false);
@@ -77,13 +80,23 @@ test('Dashboard inbound attachment hint retains the exact original reply route a
 });
 
 test('ordinary Dashboard text includes component guidance within its paste budget without an attachment hint', t => {
-  const scriptPath = '/c4-send.js';
+  const scriptPath = sendPath;
   const empty = { ...row, id: 910010, content: '' };
   const suffix = formatConversation(empty, { scriptPath });
-  assert.ok(suffix.includes('Dashboard supports charts and interactive components'));
+  assert.ok(suffix.includes('Charts/choices/forms when useful:'));
   assert.equal(suffix.includes('Attachments:'), false);
   const maximum = 800 - suffix.length;
-  assert.ok(maximum > 0);
+  assert.ok(maximum >= 500, `Full installed paths must retain at least 500 body characters, got ${maximum}`);
+  console.log(JSON.stringify({ pasteBudget: 800, skillsDir: SKILLS_DIR, routeCharacters: (' ' + replyVia(empty, scriptPath)).length, hintCharacters: suffix.length - (' ' + replyVia(empty, scriptPath)).length, baselineBodyCharacters: 800 - (' ' + replyVia(empty, scriptPath)).length, guidedBodyCharacters: maximum }));
+  const command = suffix.split('\n').find(line => line.startsWith('Charts/choices/forms when useful:'));
+  assert.ok(command.endsWith(' list --json'));
+  assert.equal(command.endsWith('--json.'), false);
+  const representative = { ...empty, endpoint_id: runId, session_group: `dashboard-owned:${runId}` };
+  const representativeSuffix = formatConversation(representative, { scriptPath });
+  const representativeBaseline = 800 - (' ' + replyVia(representative, scriptPath)).length;
+  const representativeMaximum = 800 - representativeSuffix.length;
+  assert.ok(representativeMaximum >= 450, `UUID routing must retain at least 450 body characters, got ${representativeMaximum}`);
+  console.log(JSON.stringify({ routeShape: 'UUID endpoint and group', baselineBodyCharacters: representativeBaseline, guidedBodyCharacters: representativeMaximum }));
   for (const [index, length] of [1, maximum].entries()) {
     const plain = { ...row, id: 910010 + index, content: 'x'.repeat(length) };
     const directory = path.join(ATTACHMENTS_DIR, `conv-${plain.id}`);

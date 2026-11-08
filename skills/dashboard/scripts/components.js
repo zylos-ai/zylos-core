@@ -41,7 +41,7 @@ export function runComponents(argv, { stdout = process.stdout, stderr = process.
     const definition = key && COMPONENT_DEFINITIONS.find(item => item.key === key);
     if (key && !definition) throw Error(`Component is not implemented in this Core: ${key}`);
     const data = command === 'list' ? { source: CATALOG_SOURCE, keys: REGISTERED_COMPONENT_KEYS,
-      components: COMPONENT_DEFINITIONS.map(({ key, type, schemaVersion, description }) => ({ key, type, schemaVersion, description })) }
+      components: COMPONENT_DEFINITIONS.map(({ key, type, schemaVersion, description, useWhen }) => ({ key, type, schemaVersion, description, useWhen })) }
       : command === 'describe' ? { source: CATALOG_SOURCE, ...definition, parameters: parameterSchema(definition.parameters, catalog),
         instructions: MODEL_INSTRUCTIONS + '\n\nThis description includes every referenced parameter definition in parameters.$defs; all parameter references resolve within that object.' }
         : definition.example;
