@@ -36,7 +36,7 @@ function fixture(t, { wrapped = false, dashboard = true, record } = {}) {
   // The standalone installer uses this same skill/data directory as Core.
   if (dashboard) components.dashboard = record === undefined ? {
     version: '0.5.5', repo: 'zylos-ai/zylos-dashboard', type: 'declarative', isThirdParty: false,
-    installedAt: '2026-11-01T00:00:00.000Z', skillDir: deployedCode, dataDir, source: 'registry',
+    installedAt: '2026-11-01T00:00:00.000Z', skillDir: deployedCode, dataDir, source: { type: 'github-release', repo: 'zylos-ai/zylos-dashboard', ref: '0.5.5', refType: 'tag' },
   } : record;
   write(registryFile, JSON.stringify(wrapped ? { metadata: { retained: true }, components } : components, null, 2) + '\n');
   t.diagnostic(JSON.stringify({ root, zylosDir, deployedCode, registryFile, mode: 'private files only; no PM2 or database opens' }));

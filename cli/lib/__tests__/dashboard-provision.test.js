@@ -127,7 +127,7 @@ for (const registered of [true, false]) test(`component uninstall ${registered ?
     for (const directory of [path.dirname(metadata), skillDir, dataDir]) fs.mkdirSync(directory, { recursive: true });
     const entries = { telegram: { version: '1.2.3' } };
     if (registered) entries.dashboard = { version: '0.5.5', repo: 'zylos-ai/zylos-dashboard', type: 'declarative', isThirdParty: false,
-      installedAt: '2026-11-01T00:00:00.000Z', skillDir, dataDir, source: 'registry' };
+      installedAt: '2026-11-01T00:00:00.000Z', skillDir, dataDir, source: { type: 'github-release', repo: 'zylos-ai/zylos-dashboard', ref: '0.5.5', refType: 'tag' } };
     fs.writeFileSync(metadata, JSON.stringify(entries));
     const before = fs.readFileSync(metadata, 'utf8');
     fs.writeFileSync(path.join(skillDir, 'retained'), 'Core code');
