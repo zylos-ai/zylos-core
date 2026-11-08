@@ -45,7 +45,10 @@ function systemZoneinfoDirectory() {
 }
 
 function requireHostTimezone(tz, zoneinfoDir) {
-  if (!zoneinfoDir) return;
+  if (!zoneinfoDir) {
+    if (tz !== 'UTC' && new Intl.DateTimeFormat(undefined, { timeZone: tz }).resolvedOptions().timeZone !== tz) fail('invalid_timezone', 400);
+    return;
+  }
   let file = zoneinfoDir, handle;
   try {
     // readdir also enforces exact spelling on case-insensitive filesystems.

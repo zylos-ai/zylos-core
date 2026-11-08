@@ -8,6 +8,8 @@ import { createInstanceTimezone, replaceTimezoneValue } from '../src/lib/instanc
 import { withConfigLock } from '../src/lib/config-mutation.js';
 
 const ALL_SERVICES = ['scheduler', 'web-console', 'zylos-openmax'];
+const SYSTEM_ZONEINFO_DIRS = ['/usr/share/zoneinfo', '/usr/lib/zoneinfo', '/usr/share/lib/zoneinfo', '/etc/zoneinfo'];
+const installedZoneinfo = () => SYSTEM_ZONEINFO_DIRS.find(directory => fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory());
 
 function fixture(t, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-timezone-'));
@@ -56,6 +58,7 @@ test('invalid timezone and unknown fields cannot change the environment', async 
 });
 
 test('current IANA names save even when ICU resolves them to older names', async t => {
+  if (!installedZoneinfo()) { t.skip('Current IANA spellings require installed host data'); return; }
   const f = fixture(t);
   for (const tz of ['Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh']) {
     assert.equal((await f.timezone.save({ tz })).tz, tz);
@@ -68,7 +71,7 @@ test('installed host data controls supported names and exact spelling', async t 
   t.after(() => fs.rmSync(data, { recursive: true, force: true }));
   fs.mkdirSync(path.join(data, 'Asia'));
   // Use a real installed TZif, with a deliberately limited host name set.
-  const installed = ['/usr/share/zoneinfo', '/usr/lib/zoneinfo', '/usr/share/lib/zoneinfo', '/etc/zoneinfo']
+  const installed = SYSTEM_ZONEINFO_DIRS
     .map(directory => path.join(directory, 'Asia/Kolkata')).find(file => fs.existsSync(file));
   if (!installed) { t.skip('No installed TZif fixture on this platform'); return; }
   fs.copyFileSync(installed, path.join(data, 'Asia/Kolkata'));
@@ -85,14 +88,35 @@ test('installed host data controls supported names and exact spelling', async t 
   assert.equal(f.restarted.length, 0);
 });
 
-test('platforms without system zoneinfo retain recognized IANA names without ICU canonical equality', async t => {
+test('platforms without system zoneinfo require exact ICU canonical names', async t => {
   const f = fixture(t, { dependencies: { zoneinfoDir: null } });
-  for (const tz of ['Asia/Kolkata', 'Europe/Kyiv', 'Asia/Ho_Chi_Minh', 'Asia/Calcutta']) {
+  for (const tz of ['UTC', 'Asia/Calcutta']) {
     assert.equal((await f.timezone.save({ tz })).tz, tz);
   }
-  for (const tz of ['asia/kolkata', 'Asia/kolkata', '+08:00', '-05:30']) {
+  const before = fs.readFileSync(f.envFile);
+  for (const tz of ['America/New_york', 'ASIA/TOKYO', 'Asia/KoLkata', 'asia/kolkata', 'Asia/kolkata', '+08:00', '-05:30']) {
     await assert.rejects(f.timezone.save({ tz }), { code: 'invalid_timezone', status: 400 });
+    assert.equal(fs.readFileSync(f.envFile).equals(before), true);
   }
+});
+
+test('default host timezone discovery rejects spelling absent from installed data', async t => {
+  if (!installedZoneinfo()) { t.skip('No standard system zoneinfo directory'); return; }
+  const f = fixture(t), before = fs.readFileSync(f.envFile);
+  await assert.rejects(f.timezone.save({ tz: 'America/New_york' }), { code: 'timezone_unavailable_on_host', status: 400 });
+  assert.equal(fs.readFileSync(f.envFile).equals(before), true);
+  assert.equal(f.restarted.length, 0);
+});
+
+test('restarting a timezone missing from host data rejects before any service restart', async t => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'timezone-data-'));
+  t.after(() => fs.rmSync(data, { recursive: true, force: true }));
+  const f = fixture(t, { text: 'TZ=Asia/Calcutta\nOTHER=keep\n', dependencies: { zoneinfoDir: data } });
+  const before = fs.readFileSync(f.envFile);
+  const result = await f.timezone.restart({ tz: 'Asia/Calcutta', confirm: true, services: ALL_SERVICES });
+  assert.equal(result.status, 400); assert.equal(result.error, 'timezone_unavailable_on_host');
+  assert.deepEqual(result.restarted, []); assert.equal(f.restarted.length, 0);
+  assert.equal(fs.readFileSync(f.envFile).equals(before), true);
 });
 
 test('saving preserves unrelated bytes and private permissions without restarting', async t => {

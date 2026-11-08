@@ -442,12 +442,14 @@ reference is in [activity-monitor](skills/activity-monitor/SKILL.md#multi-sessio
 ### Instance time zone
 
 Dashboard Settings reads the instance time zone from `.env` `TZ`. Admins can
-save a valid IANA time zone there, including current names such as `Asia/Kolkata`
-and `Europe/Kyiv` even when ICU returns an older name. Lowercase names and numeric
-offsets are rejected. When system zoneinfo is installed, the name must match an
+save a valid IANA time zone there. With system zoneinfo installed, current names
+such as `Asia/Kolkata` and `Europe/Kyiv` are accepted even when ICU returns an
+older name. Lowercase names and numeric offsets are rejected. When system zoneinfo is installed, the name must match an
 installed TZif file with exact case; otherwise saving explains that the host
 does not support it and leaves `.env` unchanged. Without system zoneinfo,
-validation uses ICU recognition and capitalized region/name syntax. The writer preserves other assignments,
+validation accepts only `UTC` or an exact ICU canonical name (for example,
+`Asia/Calcutta` on ICU versions that still return that name); incorrect case is
+rejected. The writer preserves other assignments,
 comments and formatting and keeps `.env` private (0600), including unchanged
 saves. Symlinked or nonregular `.env` files are read-only. The Dashboard writer
 shares the existing config-lock protocol for `.env` writes; it does not lock
