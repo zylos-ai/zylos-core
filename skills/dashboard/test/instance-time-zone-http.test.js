@@ -73,4 +73,11 @@ test('usage and state follow the .env time zone on every request, without a rest
   assert.equal(unknown.tz, 'UTC', 'an unusable zone reads UTC');
   assert.equal(unknown.tzFallback, true, 'and says so');
   assert.equal((await get('/api/state')).tz, null);
+  // Without a TZ line the scheduler runs in the process zone, or UTC; that is the instance zone, not a fallback.
+  fs.writeFileSync(path.join(root, '.env'), '# instance settings\n');
+  const processZone = new Intl.DateTimeFormat('en-US', { timeZone: process.env.TZ || 'UTC' }).resolvedOptions().timeZone;
+  const noLine = await get('/api/workbench/usage?range=7d');
+  assert.equal(noLine.tz, processZone, 'an .env without TZ reads the zone the scheduler uses');
+  assert.equal(noLine.tzFallback, false);
+  assert.equal((await get('/api/state')).tz, processZone);
 });
