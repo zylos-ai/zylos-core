@@ -20,7 +20,7 @@ const uncertain = message => ({ ok: false, unknown: true, error: { code: 'RESULT
 export function createGroupActions({ zylosDir, config = { zylosDir },
   loadCoreModule = defaultLoadCoreModule, handleCoreAction = defaultHandleCoreAction,
   execute = promisify(execFile), env = process.env, now = Date.now,
-  sleep = setTimeout, uuid = crypto.randomUUID } = {}) {
+  sleep = setTimeout, uuid = crypto.randomUUID, onInterrupt = () => {} } = {}) {
   const childEnv = { ...env, ZYLOS_DIR: zylosDir };
   delete childEnv.ZYLOS_SESSION_GROUP;
   async function control(content, target) {
@@ -55,6 +55,10 @@ export function createGroupActions({ zylosDir, config = { zylosDir },
     const target = { sessionGroup: key, runId: body.runId, sessionId: body.sessionId ?? null };
     if (action !== 'restart') {
       const first = { ...await control('[KEYSTROKE]Escape', target), control: 'escape' };
+      if (action === 'interrupt' && first.ok) {
+        // The runtime leaves no trace of an interrupt; the record lets the conversation page show the round as stopped.
+        try { onInterrupt({ ...target, controlId: first.controlId, at: now() }); } catch { /* Recording never changes the result. */ }
+      }
       if (action === 'interrupt' || !first.ok) return { ...first, steps: [first] };
       await sleep(500);
       const second = { ...await control('continue', target), control: 'continue' };

@@ -179,7 +179,9 @@ test('mixed runtime groups use their own prices and combine into one total', asy
   near(codex.find(row => row.dimensions.event_id === 'priority').dimensions.cost, standardCost * 2);
   assert.equal(codex.find(row => row.dimensions.event_id === 'unknown').dimensions.cost, undefined);
   near(f.store.aggregateCost({ since: '2026-11-06T00:00:00.000Z' }), claudeCost * 3 + standardCost * 3);
-  assert.equal(f.store.queryEvents({ types: ['assistant_message'] }).length, 0);
+  const words = f.store.queryEvents({ types: ['assistant_message'], limit: 20 });
+  assert.equal(words.length, 9, 'group A keeps the words of its own transcript lines');
+  assert.ok(words.every(row => row.session_group === 'A' && row.run_id === 'A-run'));
 });
 
 test('Claude rereads fill empty group attribution without changing an existing group', async t => {
@@ -239,7 +241,7 @@ test('Codex subagent lifecycle and tools retain the parent group and run', async
   }
 });
 
-test('assistant summaries are limited to the current Origin run', async t => {
+test('assistant summaries come from the current Origin run and from other groups\' own transcripts', async t => {
   const f = fixture(t, async () => ({ listKnown: true, rows: [
     { sessionGroup: 'origin', live: { runId: 'origin-run' } },
     { sessionGroup: 'A', live: { runId: 'A-run' } },
@@ -252,12 +254,10 @@ test('assistant summaries are limited to the current Origin run', async t => {
   await f.claude.collect();
   assert.equal(usage(f.store).length, 4);
   const summaries = f.store.queryEvents({ types: ['assistant_message'] });
-  assert.equal(summaries.length, 1);
-  assert.equal(summaries[0].session_id, 'current');
-  assert.equal(summaries[0].session_group, 'origin');
-  assert.equal(summaries[0].run_id, 'origin-run');
+  assert.deepEqual(summaries.map(row => [row.session_group, row.session_id, row.run_id]).sort(),
+    [['A', 'other', 'A-run'], ['B', 'also-current', 'B-run'], ['origin', 'current', 'origin-run']]);
   const health = f.store.db.prepare("SELECT extra FROM source_health WHERE name='conversation_reader' AND signal_type='collector_liveness'").get();
-  assert.equal(JSON.parse(health.extra).messages_ingested, 1);
+  assert.equal(JSON.parse(health.extra).messages_ingested, 3);
   assert.equal(f.claude._offsets.size, 0);
 });
 

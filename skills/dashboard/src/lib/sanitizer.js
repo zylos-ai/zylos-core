@@ -38,6 +38,11 @@ export class Sanitizer {
       if (tool_name) metadata.tool_name = tool_name;
       if (tool_use_id) metadata.tool_use_id = tool_use_id;
       if (tool_detail) metadata.tool_detail = tool_detail;
+      // A command's own description is safe to show as a step; a summarized command line is not.
+      if (tool_name === 'Bash' && tool_detail) {
+        const description = rawPayload.tool_input?.description;
+        metadata.detail_source = typeof description === 'string' && description ? 'description' : 'command';
+      }
       if (prompt_source) metadata.prompt_source = prompt_source;
 
       const safeFields = [
@@ -126,6 +131,8 @@ export class Sanitizer {
         return `${toolName || 'Unknown'}${detail}`;
       case 'PostToolUse':
         return `${toolName || 'Unknown'}${detail}`;
+      case 'PostToolUseFailure':
+        return `${toolName || 'Unknown'} failed${detail}`;
       case 'UserPromptSubmit':
         return promptSource ? `Prompt from ${promptSource}` : 'Prompt received';
       case 'Stop':

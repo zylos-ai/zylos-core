@@ -14,6 +14,7 @@ import { AuthGate, exchangeApiKeyForToken, generateApiKey, hashApiKey, migratePa
 import { handleChatSettings } from './lib/chat/settings.js';
 import { ChatHistory } from './lib/chat/history.js';
 import { handleChatHistory } from './lib/chat/history-routes.js';
+import { ChatActivity, recordGroupInterrupt } from './lib/chat/activity.js';
 import { ChatConversations, isChatLocalIdUsed } from './lib/chat/conversations.js';
 import { ChatSender } from './lib/chat/send.js';
 import { ChatAnswers } from './lib/chat/answers.js';
@@ -417,7 +418,10 @@ const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
 const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, getSnapshot: getDetailSnapshot });
 const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog });
-const groupAction = createGroupActions({ zylosDir: config.zylosDir, config });
+function recordDashboardInterrupt(record) {
+  recordGroupInterrupt(store, record);
+}
+const groupAction = createGroupActions({ zylosDir: config.zylosDir, config, onInterrupt: recordDashboardInterrupt });
 
 async function runtimeOverridesPage(params) {
   const childEnv = { ...process.env, ZYLOS_DIR: config.zylosDir };
@@ -1681,6 +1685,7 @@ export function createServer() {
     console.error('[chat] Answer delivery recovery remains pending.');
   });
   const history = new ChatHistory({ c4Reader, conversations, attachments });
+  const chatActivity = new ChatActivity({ history, store });
   const rootDir = publicDir();
   const fleetProxy = new FleetProxy({ config, rootDir, poller: fleetPoller, authGate: auth });
 
@@ -1730,7 +1735,7 @@ export function createServer() {
     }
     if (await handleChatConversations(req, res, url, { auth, config, conversations, sender,
       readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
-    if (await handleChatHistory(req, res, url, { auth, config, history, instanceTz: scheduleTz })) return;
+    if (await handleChatHistory(req, res, url, { auth, config, history, activity: chatActivity, instanceTz: scheduleTz })) return;
 
     if (await observerService.handle(req, res, url)) {
       return;

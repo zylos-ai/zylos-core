@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fastModeMultiplierForRuntime, modelPricesForRuntime } from '../config.js';
 import { Sanitizer } from '../sanitizer.js';
-import { UsageTranscripts } from './usage-transcripts.js';
+import { UsageTranscripts, groupMainTranscript } from './usage-transcripts.js';
 
 const PER_MTOK = 1_000_000;
 const ASSISTANT_MESSAGE_SUMMARY_LIMIT = 500;
@@ -130,7 +130,8 @@ export class ConversationCollector {
         const written = this._collectFile(file, {
         sessionId: mapping.session_id, group: mapping.session_group, runId: mapping.run_id,
         agentId: mapping.parent_path ? path.basename(file, '.jsonl').replace(/^agent-/, '') : null,
-        usageOnly: Boolean(mapping.parent_path) || !originCurrent,
+        usageOnly: Boolean(mapping.parent_path) || !originCurrent && !groupMainTranscript(mapping),
+        origin: originCurrent,
         });
         messages += this._lastFileMessages;
         return { written, byteOffset: this._offsets.get(file) };
@@ -146,7 +147,9 @@ export class ConversationCollector {
     return written;
   }
 
-  _collectFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false, group = null, runId = null } = {}) {
+  // Assistant words of other groups' main transcripts are stored for their conversation pages but never reach the
+  // origin state engine or the origin turn timing.
+  _collectFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false, group = null, runId = null, origin = true } = {}) {
     this._lastFileMessages = 0;
     const startOffset = this._offsets.get(jsonlPath) || 0;
 
@@ -188,7 +191,7 @@ export class ConversationCollector {
       const rowSessionId = agentId ? sessionId : (msg.sessionId || sessionId);
 
       if (msg.type === 'user') {
-        if (usageOnly) continue;
+        if (usageOnly || !origin) continue;
         const userContent = msg.message?.content;
         const isToolResult = Array.isArray(userContent) &&
           userContent.every(c => c.type === 'tool_result');
@@ -230,7 +233,7 @@ export class ConversationCollector {
 
       const text = textBlocks.join('\n');
       const hasToolUse = content.some(c => c.type === 'tool_use');
-      const turnDuration = this._lastUserPromptAt
+      const turnDuration = origin && this._lastUserPromptAt
         ? Math.max(0, new Date(timestamp).getTime() - new Date(this._lastUserPromptAt).getTime())
         : null;
 
@@ -259,7 +262,7 @@ export class ConversationCollector {
         };
         const result = this.store.insertEvent(event);
         if (result?.inserted) {
-          if (this._onEvent) {
+          if (origin && this._onEvent) {
             this._onEvent({ ...event, metadata: JSON.parse(event.metadata) });
           }
           written++;
@@ -271,7 +274,7 @@ export class ConversationCollector {
         }
       }
 
-      if (!hasToolUse) {
+      if (origin && !hasToolUse) {
         // turn-end (stop) is emitted by the Claude hook, not from JSONL —
         // emitting here too would double-fire. Reset the turn marker.
         this._lastUserPromptAt = null;

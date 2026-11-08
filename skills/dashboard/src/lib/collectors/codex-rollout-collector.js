@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { DEFAULT_CODEX_MODEL_PRICES, DEFAULT_CODEX_PRIORITY_MODEL_PRICES, modelPricesForRuntime, normalizeServiceTier } from '../config.js';
 import { Sanitizer } from '../sanitizer.js';
-import { UsageTranscripts } from './usage-transcripts.js';
+import { UsageTranscripts, groupMainTranscript } from './usage-transcripts.js';
+import { codexToolOutputFailed } from '../codex-tool-outcome.js';
 
 const PER_MTOK = 1_000_000;
 const ASSISTANT_MESSAGE_SUMMARY_LIMIT = 500;
@@ -548,7 +549,9 @@ export class CodexRolloutCollector {
         source_event: 'response_item',
         raw_type: item.type,
         rollout_offset: position.byteOffset ?? null,
-        rollout_line: position.lineIndex ?? null
+        rollout_line: position.lineIndex ?? null,
+        // Only whether the call failed is kept; the output itself is never stored.
+        ...(isOutput ? { outcome: codexToolOutputFailed(item.output ?? payload.output) ? 'failed' : 'succeeded' } : {})
       },
       source: 'rollout',
       confidence: 'actual'
@@ -746,7 +749,10 @@ export class CodexRolloutCollector {
   }
 
   _ingestMessage(item, payload, timestamp, mapping, position = {}) {
-    if (!mapping.isOriginCurrent) return 0;
+    // Other groups' main rollouts keep their assistant words for their conversation pages, without notifying the
+    // origin listeners.
+    const origin = Boolean(mapping.isOriginCurrent);
+    if (!origin && !groupMainTranscript(mapping)) return 0;
     const textBlocks = Array.isArray(item.content)
       ? item.content
         .filter(c => c.type === 'output_text' && c.text?.trim())
@@ -781,7 +787,7 @@ export class CodexRolloutCollector {
       confidence: 'actual'
     };
 
-    const result = this._insertEvent(event);
+    const result = origin ? this._insertEvent(event) : this.store.insertEvent(event);
     return result?.inserted ? 1 : 0;
   }
 

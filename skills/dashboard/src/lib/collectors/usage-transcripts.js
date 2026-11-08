@@ -4,6 +4,11 @@ import { claudeProjectSlug } from '../claude-project-path.js';
 
 const DAY = 86400000;
 
+/** A non-origin group's own main transcript (not a subagent file): its assistant words belong to that group. */
+export function groupMainTranscript(mapping) {
+  return !mapping?.parent_path && typeof mapping?.session_group === 'string' && mapping.session_group !== 'origin';
+}
+
 export class UsageTranscripts {
   constructor(store, config, { getSnapshot, now = Date.now } = {}) {
     this.store = store;

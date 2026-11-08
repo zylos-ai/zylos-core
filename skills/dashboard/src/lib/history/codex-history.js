@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { HistoryParser, SessionLogIndex } from './session-log-index.js';
 import { parseInbound, parseOutbound, recoverInbound, contentBlocks, binaryBlock } from './inbound-parser.js';
+import { codexToolOutputFailed } from '../codex-tool-outcome.js';
 
 function toolArguments(value) {
   if (typeof value !== 'string') return value ?? {};
@@ -97,7 +98,7 @@ export class CodexHistory extends HistoryParser {
       const call = state.calls.get(item.call_id);
       if (!call) return internal();
       call.fields.output = item.output ?? '';
-      call.status = /(?:Process exited with code [1-9]|"exit_code"\s*:\s*[1-9]|"isError"\s*:\s*true)/.test(String(item.output)) ? 'error' : 'success';
+      call.status = codexToolOutputFailed(item.output) ? 'error' : 'success';
       if (call.commandOutputs?.length) {
         call.fields.commands = call.commandOutputs;
         if (/truncated output|output.*truncated/i.test(String(item.output))) {

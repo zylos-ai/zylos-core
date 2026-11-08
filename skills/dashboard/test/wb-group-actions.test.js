@@ -4,11 +4,11 @@ import { createGroupActions } from '../src/lib/workbench/group-actions.js';
 
 function fixture({ results = [{ ok: true, data: { id: 1 } }], mode = 'multi', reply = { kind: 'accepted', reply: { result: 'accepted' } }, completion = 'accepted', coreRoot } = {}) {
   let clock = 1000;
-  const calls = [], sleeps = [], submissions = [], lookups = [], origin = [];
+  const calls = [], sleeps = [], submissions = [], lookups = [], origin = [], interrupts = [];
   const config = { zylosDir: '/isolated/instance', extra: 'retained' };
   const action = createGroupActions({ zylosDir: config.zylosDir, config,
     env: { HOME: '/isolated/home', ZYLOS_SESSION_GROUP: 'wrong-group', RETAIN: 'yes' },
-    now: () => clock, uuid: () => 'request-fixture',
+    now: () => clock, uuid: () => 'request-fixture', onInterrupt: record => interrupts.push(record),
     sleep: async ms => { sleeps.push(ms); clock += ms; },
     handleCoreAction: async (...args) => { origin.push(args); return { ok: true, messageKey: 'existing_core_reply' }; },
     loadCoreModule: async name => {
@@ -23,7 +23,7 @@ function fixture({ results = [{ ok: true, data: { id: 1 } }], mode = 'multi', re
       if (result instanceof Error) throw result;
       return { stdout: typeof result === 'string' ? result : JSON.stringify(result) };
     } });
-  return { action, calls, sleeps, submissions, lookups, origin, config };
+  return { action, calls, sleeps, submissions, lookups, origin, config, interrupts };
 }
 const target = { runId: 'snapshot-run', sessionId: 'snapshot-session' };
 
@@ -54,6 +54,22 @@ test('ordinary interruption binds the requested group and snapshot run/session i
   assert.equal(options.timeout, 15000); assert.equal(options.maxBuffer, 1024 * 1024);
   assert.equal(options.env.ZYLOS_DIR, '/isolated/instance');
   assert.equal(options.env.ZYLOS_SESSION_GROUP, undefined); assert.equal(options.env.RETAIN, 'yes');
+});
+
+test('only a submitted group interrupt is recorded for the conversation page', async () => {
+  const f = fixture();
+  await f.action('dashboard:A', 'interrupt', target);
+  assert.deepEqual(f.interrupts, [{ sessionGroup: 'dashboard:A', runId: 'snapshot-run', sessionId: 'snapshot-session', controlId: 1, at: 1000 }]);
+  await f.action('dashboard:A', 'chop-chop', target);
+  await f.action('origin', 'interrupt', { ...target, sessionGroup: 'origin' });
+  assert.equal(f.interrupts.length, 1, 'nudges and Origin interrupts are not recorded');
+  const rejected = fixture({ results: [{ ok: false, error: { code: 'TARGET_CHANGED', message: 'changed' } }] });
+  await rejected.action('dashboard:A', 'interrupt', target);
+  assert.equal(rejected.interrupts.length, 0);
+  const throwing = createGroupActions({ zylosDir: '/isolated/instance', now: () => 5, onInterrupt: () => { throw new Error('store closed'); },
+    loadCoreModule: async () => ({ readSessionMode: () => ({ mode: 'multi' }) }),
+    execute: async () => ({ stdout: JSON.stringify({ ok: true, data: { id: 3 } }) }) });
+  assert.equal((await throwing('dashboard:A', 'interrupt', target)).submission, 'submitted', 'recording never changes the result');
 });
 
 test('nudge stops after the first rejection and preserves its raw target error', async () => {

@@ -67,7 +67,8 @@ test('Codex collection visits every supplied mapping and preserves group attribu
     assert.equal(subagents.length, 2);
     assert.ok(subagents.every(item => item.run_id === mapping.run_id));
   }
-  assert.equal(store.queryEvents({ types: ['assistant_message'] }).length, 1);
+  // Group B's own rollout keeps its assistant words for its conversation page.
+  assert.deepEqual(store.queryEvents({ types: ['assistant_message'] }).map(row => row.session_group).sort(), ['B', 'origin']);
   assert.equal(collector.getRuntimeInfo().session_id, 'origin-session');
 });
 
