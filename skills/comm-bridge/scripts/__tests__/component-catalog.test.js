@@ -67,12 +67,18 @@ test('the static component list is the catalog intersection with shipped impleme
   assert.deepEqual(restricted.COMPONENT_DEFINITIONS.map(item => item.key), ['markdown@1']);
   assert.ok(restricted.INTERACTIVE_COMPONENT_TYPES.includes('choice'));
   assert.equal(restricted.MODEL_INSTRUCTIONS.includes('choice@1:'), false);
+  assert.equal(restricted.MODEL_INSTRUCTIONS.includes(COMPONENT_CATALOG.find(item => item.type === 'choice').useWhen), false);
   assert.equal(createCatalogArtifacts({ implementedKeys: [] }).MODEL_INSTRUCTIONS.includes('markdown@1:'), false);
   assert.equal(new Set(catalogKeys).size, catalogKeys.length);
   for (const definition of COMPONENT_DEFINITIONS) {
     assert.equal(definition.key, `${definition.type}@${definition.schemaVersion}`);
     assert.equal(typeof definition.description, 'string');
     assert.ok(definition.description.length > 0);
+    const source = COMPONENT_CATALOG.find(component => `${component.type}@${component.schemaVersion}` === definition.key);
+    assert.equal(definition.useWhen, source.useWhen);
+    assert.equal(typeof definition.useWhen, 'string');
+    assert.ok(definition.useWhen.length > 0);
+    assert.ok(MODEL_INSTRUCTIONS.includes(`When to use: ${source.useWhen}`));
     const rules = BLOCK_SCHEMA.allOf.filter(rule => (rule.if?.properties?.type?.const ?? rule.then?.properties?.type?.const) === definition.type
       && (rule.if.properties.schemaVersion?.const ?? 1) === definition.schemaVersion
       && typeof rule.then?.properties?.data?.$ref === 'string');
@@ -121,4 +127,19 @@ test('attachment definitions extend the shared schema without claiming a rendere
     assert.deepEqual(Object.keys(BLOCK_SCHEMA.$defs.attachmentData.properties), ['attachmentId', 'nameSnapshot']);
     assert.equal(BLOCK_SCHEMA.$defs.attachmentData.additionalProperties, false);
   }
+});
+
+
+test('catalog selection guidance covers the reply decisions and keeps chart takeaways in text', () => {
+  const guidance = type => COMPONENT_CATALOG.find(component => component.type === type).useWhen;
+  assert.match(guidance('markdown'), /ordinary explanations, short answers, steps and code/);
+  assert.match(guidance('markdown'), /tables as Markdown tables/);
+  for (const [type, subject] of [['time_series', /time trends/], ['breakdown', /part-to-whole shares/], ['category_series', /compare.*categories/]]) {
+    assert.match(guidance(type), subject);
+    assert.match(guidance(type), /one or two sentences explaining the takeaway/);
+  }
+  assert.match(guidance('choice'), /user needs to select among two to ten concrete options/);
+  assert.match(guidance('confirmation'), /before a dangerous or irreversible operation/);
+  assert.match(guidance('confirmation'), /wait for the user to answer before acting/);
+  for (const form of COMPONENT_CATALOG.filter(component => component.type === 'form_intent')) assert.match(form.useWhen, /multiple related fields/);
 });

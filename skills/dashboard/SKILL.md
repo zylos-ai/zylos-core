@@ -53,6 +53,9 @@ Observability dashboard for a local Zylos agent, with a Dashboard conversation c
 
 ## Conversation channel
 
+Before replying, consult [Available structured components](#available-structured-components)
+for this Core's component list, selection guidance and complete examples.
+
 The Dashboard channel requires Core support for channel-declared synchronous
 BeforeSend hooks and post-storage stdin delivery. Deploy the matching Core and
 Dashboard capabilities together; an older argv-only Core cannot deliver this
@@ -230,6 +233,10 @@ remains read-only. These draft and ordinary-send endpoints manage registration,
 naming and message submission; question answers and UI actions have separate contracts.
 
 ### Available structured components
+
+Choose a supported component when it makes the reply clearer or lets the user
+answer directly. Keep ordinary replies concise. Selection guidance lives in the
+component catalog and is returned by `describe`; consult it before composing.
 
 Read the component list from the same installed Core before composing a C4 message:
 

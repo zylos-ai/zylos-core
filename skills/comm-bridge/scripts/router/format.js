@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { SKILLS_DIR } from '../c4-config.js';
-import { replyVia } from '../c4-query-format.js';
+import { replyVia, shellQuote } from '../c4-query-format.js';
 import { truncateForDelivery } from '../c4-utils.js';
 import { projectC4Content } from '../c4-content-projection.js';
 import { splitContentAndAttachments } from '../attachment-annotations.js';
@@ -28,6 +28,9 @@ export function formatConversation(row, { scriptPath = sendPath } = {}) {
     && splitContentAndAttachments(content).attachments.length
     ? `\nAttachments: ${path.join(SKILLS_DIR, 'dashboard', 'SKILL.md')}\n`
     : '';
-  const suffix = row.endpoint_id ? `${attachmentHint} ${replyVia(row, scriptPath)}` : '';
+  const componentHint = row.channel === 'dashboard' && row.direction === 'in'
+    ? `\nDashboard supports charts and interactive components; prefer them when the data or decision fits. List local options: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json.\n`
+    : '';
+  const suffix = componentHint + (row.endpoint_id ? `${attachmentHint} ${replyVia(row, scriptPath)}` : '');
   return truncateForDelivery(content, suffix, row.id);
 }

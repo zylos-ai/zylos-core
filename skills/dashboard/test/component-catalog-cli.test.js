@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 import { createCatalogArtifacts } from '../../comm-bridge/scripts/c4-component-catalog.js';
 import { runComponents } from '../scripts/components.js';
 import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, MODEL_INSTRUCTIONS,
   parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
+
+const isolation = Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]));
+const isolationRoot = path.dirname(isolation.TMPDIR || '');
+assert.match(path.basename(isolationRoot), /^zylos-tests-/);
+for (const value of Object.values(isolation)) assert.ok(value && value.startsWith(isolationRoot + path.sep), 'component CLI tests require the official isolated runner');
+console.log('Component catalog isolation:', JSON.stringify({ ...isolation, resources: 'static catalog and bounded CLI children; no DB, network, PM2 or tmux' }));
 
 // Static CLI boundary only: no DB, HTTP, PM2 or tmux. Run on generated catalog
 // or CLI output changes; unrelated chat delivery/runtime work may skip.
@@ -45,6 +52,8 @@ for (const item of COMPONENT_DEFINITIONS) test(`component CLI describes and emit
   };
   visit(data.parameters);
   assert.equal(data.description, item.description);
+  assert.equal(data.useWhen, item.useWhen);
+  assert.ok(data.instructions.includes(`When to use: ${item.useWhen}`));
   assert.ok(data.instructions.startsWith(MODEL_INSTRUCTIONS));
   const example = call(['example', item.key]);
   assert.equal(example.exit, 0);
@@ -96,4 +105,7 @@ test('installed component CLI entry prints real list and message output', () => 
     encoding: 'utf8', timeout: 5000, maxBuffer: 512 * 1024 });
   assert.deepEqual(JSON.parse(run(['list', '--json'])).data.keys, REGISTERED_COMPONENT_KEYS);
   assert.equal(parseC4Content(run(['example', 'choice@1']).trimEnd()).kind, 'envelope');
+  const described = JSON.parse(run(['describe', 'time_series@1', '--json'])).data;
+  assert.equal(described.useWhen, COMPONENT_DEFINITIONS.find(item => item.key === 'time_series@1').useWhen);
+  assert.match(described.instructions, /When to use: Use for time trends/);
 });

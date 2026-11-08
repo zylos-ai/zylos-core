@@ -76,12 +76,15 @@ test('Dashboard inbound attachment hint retains the exact original reply route a
   assert.equal(databaseOpens, 0);
 });
 
-test('ordinary Dashboard text retains its paste budget without an attachment hint', t => {
+test('ordinary Dashboard text includes component guidance within its paste budget without an attachment hint', t => {
   const scriptPath = '/c4-send.js';
-  const suffix = ` ${replyVia(row, scriptPath)}`;
+  const empty = { ...row, id: 910010, content: '' };
+  const suffix = formatConversation(empty, { scriptPath });
+  assert.ok(suffix.includes('Dashboard supports charts and interactive components'));
+  assert.equal(suffix.includes('Attachments:'), false);
   const maximum = 800 - suffix.length;
-  assert.ok(maximum >= 640);
-  for (const [index, length] of [640, maximum].entries()) {
+  assert.ok(maximum > 0);
+  for (const [index, length] of [1, maximum].entries()) {
     const plain = { ...row, id: 910010 + index, content: 'x'.repeat(length) };
     const directory = path.join(ATTACHMENTS_DIR, `conv-${plain.id}`);
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

@@ -34,6 +34,7 @@ const ACTION_SCHEMA = {"$defs":{"messageId":{"type":"string","pattern":"^[A-Za-z
 export const COMPONENT_CATALOG = [
   {
     "type": "markdown",
+    "useWhen": "Use plain Markdown for ordinary explanations, short answers, steps and code. Keep tables as Markdown tables; use a chart only when it improves understanding.",
     "schemaVersion": 1,
     "dataSchema": "markdownData",
     "interactive": false,
@@ -57,6 +58,7 @@ export const COMPONENT_CATALOG = [
   },
   {
     "type": "time_series",
+    "useWhen": "Use for time trends when at least two dated or ordered measurements are available, such as daily usage. Include one or two sentences explaining the takeaway; do not send only a chart or invent missing data.",
     "schemaVersion": 1,
     "dataSchema": "timeSeriesData",
     "interactive": false,
@@ -97,6 +99,7 @@ export const COMPONENT_CATALOG = [
   },
   {
     "type": "breakdown",
+    "useWhen": "Use for part-to-whole shares when two to twelve nonnegative parts of a meaningful total are available, such as PR shares by status. Include one or two sentences explaining the takeaway; do not send only a chart or invent values.",
     "schemaVersion": 1,
     "dataSchema": "breakdownData",
     "interactive": false,
@@ -132,6 +135,7 @@ export const COMPONENT_CATALOG = [
   },
   {
     "type": "category_series",
+    "useWhen": "Use to compare two to twenty-four categories with known values, such as PR counts by status. Include one or two sentences explaining the takeaway; do not send only a chart or invent values.",
     "schemaVersion": 1,
     "dataSchema": "categorySeriesData",
     "interactive": false,
@@ -167,6 +171,7 @@ export const COMPONENT_CATALOG = [
   },
   {
     "type": "choice",
+    "useWhen": "Use when the user needs to select among two to ten concrete options, including choosing between proposed plans. Ask one clear question and wait for the answer; use Markdown when no user selection is needed.",
     "schemaVersion": 1,
     "dataSchema": "choiceData",
     "interactive": true,
@@ -211,6 +216,7 @@ export const COMPONENT_CATALOG = [
   },
   {
     "type": "confirmation",
+    "useWhen": "Use to request explicit confirmation before a dangerous or irreversible operation, such as deleting a group. State the operation and its consequences, then wait for the user to answer before acting.",
     "schemaVersion": 1,
     "dataSchema": "confirmationData",
     "interactive": true,
@@ -247,6 +253,7 @@ export const COMPONENT_CATALOG = [
   },
   {
     "type": "form_intent",
+    "useWhen": "Use when the user needs to provide multiple related fields together. Ask only for needed information; use a short Markdown question for a single simple detail.",
     "schemaVersion": 1,
     "dataSchema": "formIntentData",
     "interactive": true,
@@ -376,6 +383,7 @@ function blockSchemaWithHostDefinitions() {
 }
 
 COMPONENT_CATALOG.push({ type: 'form_intent', schemaVersion: 2, dataSchema: 'formIntentDataV2', interactive: true,
+  useWhen: 'Use when the user needs to provide multiple related fields and later questions depend on earlier answers. Ask only for needed information; use a short Markdown question for a single simple detail.',
   description: 'A conditional form. Field activeWhen uses scalar eq/in or present:true; hidden upstream values are missing downstream. Submit only active keys.',
   example: { version: 1, kind: 'message', messageId: 'conditional_form_question',
     fallbackText: '登记主体信息；等待用户回答。', blocks: [{ id: 'question', type: 'form_intent', schemaVersion: 2,
@@ -391,6 +399,7 @@ COMPONENT_CATALOG.push({ type: 'form_intent', schemaVersion: 2, dataSchema: 'for
 
 for (const [kind, name] of [['image', 'diagram.png'], ['file', 'report.pdf']]) {
   COMPONENT_CATALOG.push({ type: `x-zylos.${kind}`, schemaVersion: 1, dataSchema: 'attachmentData', interactive: false,
+    useWhen: `Use to share an existing registered ${kind} attachment when this Core lists the component as implemented.`,
     description: `A registered ${kind} attachment. Register on the target instance first; data contains only attachmentId and nameSnapshot. The ID does not grant download permission. Keep the filename and ID in fallbackText.`,
     example: { version: 1, kind: 'message', messageId: `attachment_${kind}_message`,
       fallbackText: `${name} (attachment att_${kind})`, blocks: [{ id: kind, type: `x-zylos.${kind}`, schemaVersion: 1,
@@ -410,7 +419,7 @@ export function createCatalogArtifacts({ implementedKeys = CORE_COMPONENT_KEYS }
   const definitions = COMPONENT_CATALOG.map(component => ({
     key: `${component.type}@${component.schemaVersion}`, type: component.type,
     schemaVersion: component.schemaVersion, interactive: component.interactive,
-    description: component.description,
+    description: component.description, useWhen: component.useWhen,
     parameters: clone(blockSchema.$defs[component.dataSchema]), example: clone(component.example),
   }));
   const registered = definitions.filter(component => available.has(component.key));
@@ -420,7 +429,7 @@ export function createCatalogArtifacts({ implementedKeys = CORE_COMPONENT_KEYS }
     'Replace example values while preserving field constraints. Every non-markdown block needs fallbackText.',
     'Interactive messages need the matching interrupt and summary. Actions are checked against the stored question.',
     'Parameter references resolve against BLOCK_SCHEMA.$defs or ACTION_SCHEMA.$defs in the same schema module.',
-    ...registered.map(component => `${component.key}: ${component.description}\nParameters: ${JSON.stringify(component.parameters)}`),
+    ...registered.map(component => `${component.key}: ${component.description}\nWhen to use: ${component.useWhen}\nParameters: ${JSON.stringify(component.parameters)}`),
   ].join('\n\n');
   return { BLOCK_SCHEMA: blockSchema, ACTION_SCHEMA: clone(ACTION_SCHEMA),
     CATALOG_SOURCE: clone(CATALOG_SOURCE), HOST_SCHEMA_SOURCE: clone(HOST_SCHEMA_SOURCE),
