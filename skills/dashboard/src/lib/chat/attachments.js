@@ -5,9 +5,10 @@ import Database from 'better-sqlite3';
 import { C4Reader } from '../c4-reader.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../schema.js';
 import {
-  MAX_ATTACHMENTS, sanitizeDisplayName, sanitizedExtension, uploadKind,
-  parseAttachmentAnnotation, resolveAllowedPathSync, sniffImage, readUploadLimit,
-} from '../../../../web-console/scripts/attachment-utils.js';
+  MAX_ATTACHMENTS, sanitizedExtension, uploadKind,
+  resolveAllowedPathSync, sniffImage, readUploadLimit,
+} from '../../../scripts/attachment-utils.js';
+import { sanitizeDisplayName, parseAttachmentAnnotation } from '../../../../comm-bridge/scripts/attachment-annotations.js';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { validateGroupName, validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
 

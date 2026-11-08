@@ -35,12 +35,6 @@ function setup(t) {
     if (name === 'comm-bridge') fs.copyFileSync(path.join(source, 'init-db.sql'), path.join(dest, 'init-db.sql'));
     else fs.cpSync(path.join(source, 'src/lib'), path.join(dest, 'src/lib'), { recursive: true });
   }
-  // The attachment service imports only WC's existing shared utility, not its server.
-  const utility = path.join(skills, 'web-console');
-  fs.mkdirSync(path.join(utility, 'scripts'), { recursive: true });
-  fs.copyFileSync(path.join(core, 'skills/web-console/package.json'), path.join(utility, 'package.json'));
-  fs.copyFileSync(path.join(core, 'skills/web-console/scripts/attachment-utils.js'), path.join(utility, 'scripts/attachment-utils.js'));
-  fs.symlinkSync(fs.realpathSync(path.join(core, 'skills/web-console/node_modules')), path.join(utility, 'node_modules'));
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'pm2'), TMPDIR: tmp,
     TMUX_TMPDIR: tmp, PATH: bin, ZYLOS_PACKAGE_ROOT: core, ZYLOS_SESSION_GROUP: 'origin',
     CHANNEL_SEND_LOG: path.join(root, 'sends'), CHANNEL_HTTP_LOG: path.join(root, 'http'),

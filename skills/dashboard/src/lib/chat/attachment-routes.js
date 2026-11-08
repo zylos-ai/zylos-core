@@ -3,8 +3,8 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { requireChatAccess, requireChatWrite } from './access.js';
 import { sendJson } from '../http.js';
-import { sniffImage, contentDisposition } from '../../../../web-console/scripts/attachment-utils.js';
-import { receiveMultipartFile } from '../../../../web-console/scripts/multipart-upload.js';
+import { sniffImage, contentDisposition } from '../../../scripts/attachment-utils.js';
+import { receiveMultipartFile } from '../../../scripts/multipart-upload.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 export const attachmentPrincipal = context => context && `${context.kind}:${context.principalId}`;

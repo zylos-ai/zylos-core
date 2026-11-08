@@ -5,7 +5,7 @@ import { createChatSandbox } from './chat-integration-harness.js';
 import { createRemoteChatApiFixture } from './chat-integration-api.js';
 import { waitForTtlRunEnding } from './chat-runtime-support.js';
 import { parseC4Content } from '../../../comm-bridge/scripts/c4-content-schema.js';
-import { splitContentAndAttachments } from '../../../web-console/scripts/attachment-utils.js';
+import { splitContentAndAttachments } from '../../../comm-bridge/scripts/attachment-annotations.js';
 
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP1kAAAAASUVORK5CYII=', 'base64');
