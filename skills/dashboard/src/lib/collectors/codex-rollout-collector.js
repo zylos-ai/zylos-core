@@ -26,6 +26,9 @@ export class CodexRolloutCollector {
     this._subagentStartedAt = new Map();
     this._subagentWaitByCallId = new Map();
     this._codeModeWrapsByCallId = new Map();
+    // Code-mode execs that spawn and have not answered yet, and the threads Codex reported they spawned.
+    this._pendingSpawnExecs = [];
+    this._spawnedThreadsByCallId = new Map();
     this._onEvent = null;
     this._onMetric = null;
     this._onRuntimeInfo = null;
@@ -286,6 +289,7 @@ export class CodexRolloutCollector {
 
   _ingestEvent(event, mapping, sessionMeta = {}, position = {}) {
     const payload = event.payload || {};
+    if (event.type === 'session_meta' && subagentThreadMeta(payload)) sessionMeta.subagentThread = true;
     if (event.type === 'session_meta' && payload.cli_version) {
       sessionMeta.cliVersion = payload.cli_version;
       if (mapping.isOriginCurrent && position.publishRuntimeInfo !== false) this._updateRuntimeInfo({
@@ -310,8 +314,11 @@ export class CodexRolloutCollector {
       });
       return 0;
     }
+    // A subagent's own thread names its parent as the session; its turns, tools and words are not the parent's.
+    // Only its token usage and turn timing metrics are kept.
+    const subagentThread = sessionMeta.subagentThread === true;
     if (event.type === 'response_item') {
-      return this._ingestResponseItem(payload, timestampForEvent(event), mapping, position);
+      return subagentThread ? 0 : this._ingestResponseItem(payload, timestampForEvent(event), mapping, position);
     }
     if (event.type !== 'event_msg' || !payload.type) return 0;
 
@@ -325,10 +332,38 @@ export class CodexRolloutCollector {
       });
     }
     if (payload.type === 'task_complete') {
-      return this._ingestTaskComplete(payload, timestamp, mapping, position);
+      return this._ingestTaskComplete(payload, timestamp, mapping, position, { turnEvent: !subagentThread });
     }
+    if (subagentThread) return 0;
     if (payload.type === 'response_item') {
       return this._ingestResponseItem(payload, timestamp, mapping, position);
+    }
+    if (payload.type === 'item_completed') {
+      return this._ingestItemCompleted(payload.item, timestamp, mapping, position);
+    }
+    return 0;
+  }
+
+  /**
+   * Codex reports subagent activity as completed items: multi-agent v2 writes `SubAgentActivity` (`started` /
+   * `completed` / `interacted`, naming the agent by its task path); code mode writes `CollabAgentToolCall` for the
+   * agent tools an `exec` called, naming the threads it spawned.
+   */
+  _ingestItemCompleted(item, timestamp, mapping, position = {}) {
+    if (!item || typeof item !== 'object') return 0;
+    if (item.type === 'SubAgentActivity') {
+      const agentId = firstString(item.agent_path, item.agent_thread_id);
+      if (!agentId) return 0;
+      if (item.kind === 'started') {
+        return this._insertSubagentStart(agentId, item.id, {}, timestamp, mapping, position, 'subagent_activity');
+      }
+      if (item.kind === 'completed') return this._insertSubagentStop(agentId, timestamp, mapping, 'subagent_activity', position);
+      return 0;
+    }
+    if (item.type === 'CollabAgentToolCall' && item.tool === 'spawn_agent' && this._pendingSpawnExecs.length) {
+      const threads = uniqueStrings([...(Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids : []),
+        ...(Array.isArray(item.receiver_agents) ? item.receiver_agents.map(agent => agent?.thread_id) : [])]);
+      if (threads.length) this._spawnedThreadsByCallId.set(this._pendingSpawnExecs.shift(), threads);
     }
     return 0;
   }
@@ -402,7 +437,7 @@ export class CodexRolloutCollector {
     });
   }
 
-  _ingestTaskComplete(payload, timestamp, mapping, position = {}) {
+  _ingestTaskComplete(payload, timestamp, mapping, position = {}, { turnEvent = true } = {}) {
     let written = 0;
     const duration = numberOrNull(payload.duration_ms);
     const ttft = numberOrNull(payload.time_to_first_token_ms);
@@ -440,7 +475,7 @@ export class CodexRolloutCollector {
         confidence: 'actual'
       });
     }
-    if (duration != null || ttft != null) {
+    if (turnEvent && (duration != null || ttft != null)) {
       const ingestId = `codex-turn-complete-${rolloutPositionId('task_complete', mapping, position)}`;
       const result = this._insertEvent({
         id: stableEventId(ingestId),
@@ -523,6 +558,7 @@ export class CodexRolloutCollector {
     if (callId && !isOutput && normalizedName === 'exec') {
       const wraps = codeModeAgentCalls(item.input ?? item.arguments ?? payload.input ?? payload.arguments);
       if (wraps.length) this._codeModeWrapsByCallId.set(callId, wraps);
+      if (wraps.includes('spawn_agent') && !this._pendingSpawnExecs.includes(callId)) this._pendingSpawnExecs.push(callId);
     }
     const wraps = normalizedName === 'exec' && callId ? this._codeModeWrapsByCallId.get(callId) ?? null : null;
 
@@ -664,6 +700,18 @@ export class CodexRolloutCollector {
       return agentId ? this._insertSubagentStop(agentId, timestamp, mapping, 'close_agent', position) : 0;
     }
 
+    // Multi-agent v2 lists every agent of the tree by task path with its status; a final status ends that subagent.
+    if (toolName === 'list_agents') {
+      const parsed = parseToolOutput(output);
+      let written = 0;
+      for (const agent of Array.isArray(parsed.agents) ? parsed.agents : []) {
+        const agentId = firstString(agent?.agent_name, agent?.agent_path);
+        if (!agentId || agentId === '/root' || !finalAgentStatus(agent.agent_status)) continue;
+        written += this._insertSubagentStop(agentId, timestamp, mapping, 'list_agents', position);
+      }
+      return written;
+    }
+
     return 0;
   }
 
@@ -704,13 +752,19 @@ export class CodexRolloutCollector {
 
   /**
    * The output of an exec that called agent tools from code mode: whatever the script printed. A spawn's agent id
-   * (or task name) is taken from it when printed; otherwise the exec call itself names the subagent.
+   * (or task name) is taken from it when printed, else from the threads Codex reported spawning, else the exec call
+   * itself names the subagent.
    */
   _ingestCodeModeAgentOutput(wraps, callId, output, timestamp, mapping, position = {}) {
     let written = 0;
     const printed = printedObjects(output);
     if (wraps.includes('spawn_agent')) {
-      const ids = uniqueStrings(printed.map(spawnedAgentId));
+      this._pendingSpawnExecs = this._pendingSpawnExecs.filter(id => id !== callId);
+      const reported = this._spawnedThreadsByCallId.get(callId) || [];
+      this._spawnedThreadsByCallId.delete(callId);
+      // The printed result names the agent; else the threads Codex reported spawning; else the exec call itself.
+      const printedIds = uniqueStrings(printed.map(spawnedAgentId));
+      const ids = printedIds.length ? printedIds : reported;
       for (const agentId of ids.length ? ids : [`exec-${callId}`]) {
         written += this._insertSubagentStart(agentId, callId, printed.find(value => spawnedAgentId(value) === agentId) || {},
           timestamp, mapping, position, 'exec');
@@ -724,8 +778,8 @@ export class CodexRolloutCollector {
   }
 
   /**
-   * Multi-agent v2 reports a finished subagent to its parent as a `<subagent_notification>` input naming the agent
-   * (its task path) and its final status.
+   * Codex reports a finished subagent to its parent as a `<subagent_notification>` input naming the agent (its task
+   * path in multi-agent v2, its agent id in v1) and its final status.
    */
   _ingestSubagentNotification(item, timestamp, mapping, position = {}) {
     const text = (Array.isArray(item.content) ? item.content : [])
@@ -979,6 +1033,7 @@ export class CodexRolloutCollector {
           metadata.effort = runtimeEffort(event.payload || {});
           metadata.modelTimestamp = event.timestamp || null;
         }
+        if (event.type === 'session_meta' && subagentThreadMeta(event.payload)) metadata.subagentThread = true;
         if (event.type === 'session_meta' && event.payload?.cli_version) {
           metadata.cliVersion = event.payload.cli_version;
           metadata.cliVersionTimestamp = event.timestamp || null;
@@ -1112,10 +1167,19 @@ function printedObjects(output) {
   return values;
 }
 const CODE_MODE_AGENT_TOOLS = ['spawn_agent', 'wait_agent', 'close_agent', 'send_input', 'resume_agent'];
-/** Agent tools a code-mode script calls (`tools.spawn_agent(…)`, `tools["wait_agent"](…)`). */
+/**
+ * Agent tools a code-mode script calls: `tools.multi_agent_v1__spawn_agent(…)` (as Codex 0.167.0 names them),
+ * `tools.spawn_agent(…)`, `tools["wait_agent"](…)`.
+ */
 function codeModeAgentCalls(input) {
   const code = typeof input === 'string' ? input : '';
-  return CODE_MODE_AGENT_TOOLS.filter(tool => new RegExp(`\\btools\\s*(?:\\.\\s*${tool}\\b|\\[\\s*['"\`]${tool}['"\`]\\s*\\])`).test(code));
+  const name = tool => `(?:multi_agent_v\\d+__)?${tool}`;
+  return CODE_MODE_AGENT_TOOLS.filter(tool => new RegExp(`\\btools\\s*(?:\\.\\s*${name(tool)}\\b|\\[\\s*['"\`]${name(tool)}['"\`]\\s*\\])`).test(code));
+}
+/** A rollout of a subagent's own thread (its `session_meta` names a parent thread). */
+function subagentThreadMeta(meta) {
+  return meta?.thread_source === 'subagent' || !!meta?.source?.subagent ||
+    (typeof meta?.parent_thread_id === 'string' && meta.parent_thread_id !== '' && meta.id !== meta.parent_thread_id);
 }
 function spawnedAgentId(value) {
   if (!value || typeof value !== 'object') return null;
