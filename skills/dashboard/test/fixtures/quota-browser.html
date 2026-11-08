@@ -1,0 +1,47 @@
+<!doctype html>
+<html data-theme="light" data-detail="technical">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/_assets/css/style.css">
+  <link rel="stylesheet" href="/_assets/themes/light.css">
+  <link rel="stylesheet" href="/_assets/themes/dark.css">
+  <link rel="stylesheet" href="/_assets/css/wb.css">
+  <link rel="stylesheet" href="/_assets/css/wb-icons.css">
+</head>
+<body>
+  <header class="app-header"><span class="brand">Zylos Dashboard</span></header>
+  <div id="strip" class="wb-instance"></div>
+  <main id="main" class="fleet-view"></main>
+  <script type="module">
+    import { instanceStrip } from '/_assets/js/wb/instance-strip.js';
+    import { fleetSelfFromSnapshot, renderAgentFleetHtml } from '/_assets/js/agent-fleet.js';
+    const snapshot = { mode: 'multi', baselineRuntime: 'claude', rows: [], counts: { idle: 0 }, instance: {
+      accounts: { claude: { used_percentage: 50 }, codex: { usedPercentage: 90 } },
+      runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } },
+      pool: { used: 0, capacity: 4 }, services: { online: 8, total: 8 }
+    } };
+    const packs = Object.fromEntries(await Promise.all(['en', 'zh'].map(async locale =>
+      [locale, await (await fetch('/_assets/i18n/wb.' + locale + '.json')).json()])));
+    window.showQuota = (locale, theme, detail) => {
+      document.documentElement.lang = locale;
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.detail = detail;
+      const pack = packs[locale];
+      const t = (key, params = {}) => (pack[key] ?? key).replace(/\{(\w+)\}/g, (_, key) => params[key]);
+      const labels = Object.fromEntries(Object.entries(pack).filter(([key]) => key.startsWith('wb.fleet.'))
+        .map(([key, value]) => [key.slice(9), value]));
+      instanceStrip(document.getElementById('strip'), snapshot, { t, level: detail, cost: 1.25 });
+      const self = fleetSelfFromSnapshot({ ...snapshot, instance: { ...snapshot.instance,
+        accounts: { claude: null, codex: snapshot.instance.accounts.codex } } });
+      document.getElementById('main').innerHTML = renderAgentFleetHtml({ agents: [
+        { name: 'Eva', self: true, state: 'IDLE', daily_cost: 1.25 },
+        { name: 'empty-remote', state: 'IDLE', rate_limit_7d_pct: null, daily_cost: 0.4 },
+        { name: 'green-sample', state: 'IDLE', rate_limit_7d_pct: 0 },
+        { name: 'exhausted-sample', state: 'IDLE', rate_limit_7d_pct: 100 }
+      ] }, { self, labels });
+    };
+    window.quotaReady = true;
+  </script>
+</body>
+</html>

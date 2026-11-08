@@ -80,3 +80,12 @@ test('strip authentication and cooldown states keep their existing text and omit
     assert.ok(allNodes(box).some(node => node.classList.contains(health === 'auth_failed' ? 'wb-txt-err' : 'wb-txt-warn')));
   }
 });
+
+
+test('strip rounds fractional weekly quota in both percentage text and tooltip', () => {
+  for (const locale of ['en', 'zh']) for (const level of ['plain', 'technical']) {
+    const box = accounts(strip({ baselineRuntime: 'codex', instance: { accounts: { codex: { usedPercentage: 33.3 } } } }, locale, { level }))[0];
+    assert.equal(box.children.at(-1).textContent, '67%');
+    assert.equal(box.title, translator(pack(locale))('wb.quotaRemaining', { pct: 67 }));
+  }
+});
