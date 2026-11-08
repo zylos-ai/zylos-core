@@ -424,6 +424,16 @@ running thread. Stored thread approval choices can also survive resume, so check
 the effective settings when reusing an older thread. This configuration addresses
 default resolution; it is not a guarantee against every TUI reconnect defect.
 
+### Idle reclaim environment
+
+`ZYLOS_SESSION_HOT_TTL_SECONDS` must be set uniformly in the environment used
+to start the Zylos services, so Dashboard and activity-monitor both inherit it.
+Setting this variable only for an individual PM2 service is unsupported:
+Dashboard cannot detect another service's environment, so its displayed value
+and read-only state may otherwise differ from the effective reclaim setting.
+This is the authoritative scope rule for this variable; the reclaim settings
+reference is in [activity-monitor](skills/activity-monitor/SKILL.md#multi-session-reclaim-configuration).
+
 ---
 
 ## Communication Channels

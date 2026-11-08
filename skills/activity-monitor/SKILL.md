@@ -30,7 +30,7 @@ the Zylos data directory, with valid environment values taking precedence:
 
 | Config key | Environment variable | Default |
 | --- | --- | --- |
-| `session_hot_ttl_seconds` | `ZYLOS_SESSION_HOT_TTL_SECONDS` | 1800 seconds |
+| `session_hot_ttl_seconds` | [`ZYLOS_SESSION_HOT_TTL_SECONDS`](../../README.md#idle-reclaim-environment) | 1800 seconds |
 | `session_evict_min_idle_seconds` | `ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS` | 300 seconds |
 
 Values must be positive safe integers. An invalid environment value falls back
@@ -40,7 +40,8 @@ setting accepts 5–1440 whole minutes and writes seconds through the existing
 config lock; the next TTL check uses the saved value without a restart. Existing
 positive second values remain valid. The page is read-only in single-session
 mode or when the environment variable is present, and displays the effective
-value (including fallback when that environment value is invalid).
+value (including fallback when that environment value is invalid). The environment
+scope follows the [authoritative README rule](../../README.md#idle-reclaim-environment).
 The eviction minimum remains a startup setting and requires a restart to change.
 
 Both TTL and capacity eviction use the latest C4 message, runtime creation,
