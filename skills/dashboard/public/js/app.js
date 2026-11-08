@@ -1,3 +1,4 @@
+import { browserDraftStore, consumeDraftReset, createDraftRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=102';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=98';
 import { createPricingPanel } from './wb/settings-pricing.js?v=98';
@@ -5,7 +6,7 @@ import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/set
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=99';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=1';
 import { renderVersion } from './wb/settings-version.js?v=98';
-import { mountConversationPage } from './wb/conversation-page.js?v=101';
+import { mountConversationPage } from './wb/conversation-page.js?v=102';
 import { mountChatSettings } from './wb/chat-settings.js?v=98';
 import { mountWorkbench } from './wb/shell.js?v=100';
 import { watchHeader } from './wb/header-fit.js?v=94';
@@ -37,6 +38,12 @@ setAssetRoot(ASSET_ROOT);
 const REMOTE_AGENT_MATCH = BASE_PATH.match(/\/fleet\/([^/]+)$/);
 const REMOTE_AGENT = REMOTE_AGENT_MATCH ? decodeURIComponent(REMOTE_AGENT_MATCH[1]) : null;
 const PARENT_DASHBOARD_PATH = REMOTE_AGENT ? `${BASE_PATH.slice(0, REMOTE_AGENT_MATCH.index)}/` : null;
+const FORM_AUTH_ROOT = draftAuthRoot(window.location, BASE_PATH);
+consumeDraftReset({ document, location: window.location, base: BASE_PATH });
+const draftAuth = createDraftAuth({ authRoot: FORM_AUTH_ROOT,
+  onClear: scope => chatPage?.clearDrafts?.(scope) });
+const draftFetch = draftAuth.fetch;
+const draftRestoreStore = createDraftRestoreStore({ document, location: window.location, base: BASE_PATH });
 const REMOTE_ACCESS = document.documentElement.dataset.remoteAccess === 'admin' ? 'admin' : 'read';
 
 const THEMES = ['light', 'dark', 'system'];
@@ -343,7 +350,7 @@ function renderAll() {
 
 // ─── Data fetching ───
 async function fetchJson(path) {
-  const r = await fetch(api(agentPath(path)), { cache: 'no-store' });
+  const r = await draftFetch(api(agentPath(path)), { cache: 'no-store' });
   if (r.status === 401) {
     window.location.href = api('/login');
     throw new Error('unauthorized');
@@ -357,7 +364,7 @@ async function fetchAgentJson(path) {
 }
 
 async function requestAgentJson(path, options = {}) {
-  const r = await fetch(api(agentPath(path)), {
+  const r = await draftFetch(api(agentPath(path)), {
     cache: 'no-store',
     ...options,
     headers: {
@@ -1110,7 +1117,7 @@ async function applyObserverSize(event) {
   renderObserverSizeForm();
   setObserverSizeStatus(t('observer.size.applying'), 'pending');
   try {
-    const resp = await fetch(observerEndpoint('/api/observer/agent-size'), {
+    const resp = await draftFetch(observerEndpoint('/api/observer/agent-size'), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(size)
     });
     const data = await resp.json().catch(() => ({}));
@@ -1142,7 +1149,7 @@ function syncObserverMetrics(iframe, metrics) {
 
 function releaseObserverLease(endpoints, lease) {
   if (!lease?.id || !endpoints?.api) return;
-  fetch(`${endpoints.api}/leases/${encodeURIComponent(lease.id)}/release`, {
+  draftFetch(`${endpoints.api}/leases/${encodeURIComponent(lease.id)}/release`, {
     method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }
   }).catch(() => {});
 }
@@ -1211,7 +1218,7 @@ async function closeObserver({ release = true, preserveNotice = false, preserveI
 
 async function renewObserverLease(generation, targetKey, lease, endpointPrefix) {
   if (!lease?.id || !endpointPrefix?.api) return;
-  const resp = await fetch(`${endpointPrefix.api}/leases/${encodeURIComponent(lease.id)}/renew`, {
+  const resp = await draftFetch(`${endpointPrefix.api}/leases/${encodeURIComponent(lease.id)}/renew`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }
   });
   const data = await resp.json().catch(() => ({}));
@@ -1255,7 +1262,7 @@ async function openObserver() {
     observer.endpointPrefix = endpoints;
     // Keep lease acquisition observable after cancellation so a late ID can be
     // released against its original target. Frame/status fetches are abortable.
-    const leaseResp = await fetch(`${endpoints.api}/leases`, {
+    const leaseResp = await draftFetch(`${endpoints.api}/leases`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }
     });
     const lease = await leaseResp.json().catch(() => ({}));
@@ -1266,7 +1273,7 @@ async function openObserver() {
     }
     observer.lease = lease;
 
-    const frameResp = await fetch(endpoints.frame, { signal: abort?.signal, headers: { 'X-Observer-Lease': lease.id } });
+    const frameResp = await draftFetch(endpoints.frame, { signal: abort?.signal, headers: { 'X-Observer-Lease': lease.id } });
     if (!frameResp.ok) {
       const data = await frameResp.json().catch(() => ({}));
       throw observerRequestError(data, frameResp.status);
@@ -1557,7 +1564,7 @@ function scheduleSseReconnect() {
   state.sseRetries = (state.sseRetries || 0) + 1;
   state.sseReconnectTimer = setTimeout(async () => {
     try {
-      const r = await fetch(api(agentPath('/api/state')), { cache: 'no-store' });
+      const r = await draftFetch(api(agentPath('/api/state')), { cache: 'no-store' });
       if (r.status === 401) {
         window.location.href = api('/login');
         return;
@@ -1863,8 +1870,9 @@ async function changeLocale(locale) {
 
 function initLogout() {
   $('#logout-btn').addEventListener('click', async () => {
+    draftAuth.clear();
     try {
-      await fetch(api('/logout'), { method: 'POST' });
+      await draftFetch(api('/logout'), { method: 'POST' });
     } catch { /* ignore */ }
     window.location.href = api('/login');
   });
@@ -2079,7 +2087,7 @@ async function copyCreatedApiKey() {
 
 async function loadApiKeys() {
   try {
-    const resp = await fetch(api('/api/keys'), { cache: 'no-store' });
+    const resp = await draftFetch(api('/api/keys'), { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.keys_load_failed')));
     renderApiKeys(data);
@@ -2093,7 +2101,7 @@ async function testFleetAgent() {
   setFleetAddBusy(true);
   fleetManageStatus(t('fleet_manage.testing'), 'running');
   try {
-    const resp = await fetch(api('/api/fleet/agents/test'), {
+    const resp = await draftFetch(api('/api/fleet/agents/test'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ base_url: body.base_url, read_api_key: body.read_api_key })
@@ -2117,7 +2125,7 @@ async function saveFleetAgent() {
   setFleetAddBusy(true);
   fleetManageStatus(t('fleet_manage.saving'), 'running');
   try {
-    const resp = await fetch(api('/api/fleet/agents'), {
+    const resp = await draftFetch(api('/api/fleet/agents'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -2127,7 +2135,7 @@ async function saveFleetAgent() {
     fleetManageModal.querySelector('#fleet-add-name').value = '';
     fleetManageModal.querySelector('#fleet-add-url').value = '';
     fleetManageModal.querySelector('#fleet-add-key').value = '';
-    renderFleetManage(data.agents ? data : await (await fetch(api('/api/fleet/agents'), { cache: 'no-store' })).json());
+    renderFleetManage(data.agents ? data : await (await draftFetch(api('/api/fleet/agents'), { cache: 'no-store' })).json());
     fleetManageStatus(t('fleet_manage.saved'), 'success');
     await refreshFleet();
     return true;
@@ -2143,7 +2151,7 @@ async function removeFleetAgent(name) {
   if (!(await confirmSetting(t('fleet_manage.remove_confirm', { name }), { ok: t('wb.settings.fleet.remove') }))) return;
   fleetManageStatus(t('fleet_manage.removing'), 'running');
   try {
-    const resp = await fetch(api(`/api/fleet/agents/${encodeURIComponent(name)}`), { method: 'DELETE' });
+    const resp = await draftFetch(api(`/api/fleet/agents/${encodeURIComponent(name)}`), { method: 'DELETE' });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || t('fleet_manage.remove_failed'));
     renderFleetManage(data);
@@ -2161,7 +2169,7 @@ async function createApiKey() {
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.creating_key'), 'running');
   try {
-    const resp = await fetch(api('/api/keys'), {
+    const resp = await draftFetch(api('/api/keys'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -2206,7 +2214,7 @@ async function purgeRevokedApiKeys() {
   setApiKeyBusy(true);
   fleetManageStatus(t('fleet_manage.purging_revoked'), 'running');
   try {
-    const resp = await fetch(api('/api/keys/purge-revoked'), { method: 'POST' });
+    const resp = await draftFetch(api('/api/keys/purge-revoked'), { method: 'POST' });
     const data = await resp.json();
     if (!resp.ok) throw new Error(fleetManageError(data.error, t('fleet_manage.purge_revoked_failed')));
     renderApiKeys(data);
@@ -2225,7 +2233,7 @@ async function saveFleetSelfName() {
   const name = fleetManageModal.querySelector('#fleet-self-name').value.trim();
   fleetManageStatus(t('fleet_manage.saving'), 'running');
   try {
-    const resp = await fetch(api('/api/agent/name'), {
+    const resp = await draftFetch(api('/api/agent/name'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
@@ -2391,7 +2399,7 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
   state.observer.statusRequest = request;
   request.promise = (async () => {
     try {
-      const resp = await fetch(endpoint, { cache: 'no-store', signal });
+      const resp = await draftFetch(endpoint, { cache: 'no-store', signal });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw observerRequestError(data, resp.status);
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
@@ -2436,7 +2444,7 @@ async function runObserverLifecycle(action) {
   try {
     if (action === 'disable' || action === 'uninstall') await closeObserver({ release: true });
     if (!current()) return;
-    const resp = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
+    const resp = await draftFetch(endpoint, { method, headers: { 'Content-Type': 'application/json' } });
     const data = await resp.json().catch(() => ({}));
     if (!current()) return;
     if (!resp.ok) throw new Error(data.error || t('observer.action_failed'));
@@ -2534,7 +2542,7 @@ function refreshSettingsPage() {
   refreshModeStatus().catch(() => {});
   if (!REMOTE_AGENT) {
     const identity = observerTargetKey();
-    fetch(api('/api/fleet/agents'), { cache: 'no-store' }).then(async response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).then(value => { if (identity === observerTargetKey()) renderFleetManage(value); }).catch(error => { if (identity === observerTargetKey()) fleetManageStatus(error.message, 'error'); });
+    draftFetch(api('/api/fleet/agents'), { cache: 'no-store' }).then(async response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).then(value => { if (identity === observerTargetKey()) renderFleetManage(value); }).catch(error => { if (identity === observerTargetKey()) fleetManageStatus(error.message, 'error'); });
     loadApiKeys();
   }
   for (const name of ['fleet', 'keys']) { const remote = Boolean(REMOTE_AGENT); const button = document.querySelector(`[data-settings-section="${name}"]`); if (button) button.hidden = remote; if (remote) settingsPage.sections[name].hidden = true; }
@@ -2691,7 +2699,7 @@ async function pollAndReload(healthPath = '/api/health') {
   for (let i = 0; i < 15; i++) {
     await new Promise(r => setTimeout(r, 2000));
     try {
-      const r = await fetch(api(healthPath), { cache: 'no-store' });
+      const r = await draftFetch(api(healthPath), { cache: 'no-store' });
       if (r.ok) { window.location.reload(); return; }
     } catch {}
   }
@@ -2762,7 +2770,7 @@ async function sendAction(action, body) {
   }
 
   try {
-    const r = await fetch(api(actionPath), {
+    const r = await draftFetch(api(actionPath), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {})
@@ -2898,10 +2906,10 @@ startTimers();
 
 usagePage = createUsagePage({ root: document.querySelector('#wb-usage'), t,
   identity: () => observerTargetKey(), detail: () => document.documentElement.dataset.detail ?? 'plain',
-  read: async path => { const response = await fetch(api(agentPath(path))); if (!response.ok) throw Error('read_failed'); return response.json(); },
+  read: async path => { const response = await draftFetch(api(agentPath(path))); if (!response.ok) throw Error('read_failed'); return response.json(); },
 });
 workbench = mountWorkbench({
-  t,
+  t, fetch: draftFetch,
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   writable: () => wbWritable(remoteIsReadOnly),
@@ -2928,7 +2936,7 @@ export function openWorkbenchGroup(key) {
 settingsPage?.detail(document.documentElement.dataset.detail);
 refreshSettingsVersion();
 const stopSchedule = mountSchedule({
-  t,
+  t, fetch: draftFetch,
   locale: getLocale,
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
@@ -2937,6 +2945,8 @@ const stopSchedule = mountSchedule({
 });
 window.addEventListener('pagehide', stopSchedule);
 chatPage = mountConversationPage({ root: document.querySelector('#wb-chat'), t,
+  fetch: draftFetch, draftStore: draftRestoreStore,
+  draftScope: () => ({ authRoot: FORM_AUTH_ROOT, instance: draftInstance(FORM_AUTH_ROOT, state.remoteAgent ?? REMOTE_AGENT ?? null) }),
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   technicalDetails: () => document.documentElement.dataset.detail === 'technical',

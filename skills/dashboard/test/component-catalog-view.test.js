@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { createDocument, allNodes } from './fixtures/workbench-dom.js';
+import { createDocument, allNodes } from './helpers/conversation-dom.js';
 import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, makeQuestionSummary,
   parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 
@@ -12,6 +12,7 @@ registerHooks({ resolve(specifier, context, next) {
   return next(specifier, context);
 } });
 const { renderChatContent } = await import('../public/js/wb/chat-blocks.js');
+const { renderQuestion } = await import('../public/js/wb/chat-questions.js');
 
 // Actual DOM renderer boundary, in-memory document only. Run when catalog
 // implementation claims or renderer registration changes, skip unrelated IO.
@@ -34,4 +35,23 @@ test('every advertised component has a shipped renderer beyond fallback text', (
       : item.type === 'choice' ? 'UL' : item.type === 'form_intent' ? 'DL' : 'P';
     assert.ok(allNodes(root).some(node => node.tagName === expectedTag), item.key);
   }
+});
+
+
+test('advertised conditional form example has live active-field controls in the shipped renderer', () => {
+  assert.ok(REGISTERED_COMPONENT_KEYS.includes('form_intent@2'));
+  const item = COMPONENT_DEFINITIONS.find(item => item.key === 'form_intent@2');
+  const envelope = structuredClone(item.example), document = createDocument();
+  const question = { c4Id: 1, messageId: envelope.messageId, interruptId: envelope.interruptId,
+    questionSummary: envelope.questionSummary, status: 'paused' };
+  const formState = { values: { customer_type: 'person', company_name: 'Retained company' } };
+  const root = renderChatContent({ document, row: { id: 1, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(envelope) },
+    renderQuestion: args => renderQuestion({ ...args, document, question, formState, canWrite: true, onSubmit: async () => {} }) });
+  const company = root.querySelector('[data-field-key="company_name"]');
+  assert.ok(company); assert.equal(company.hidden, true);
+  const customer = root.querySelector('[data-field-key="customer_type"] select');
+  customer.value = 'company'; customer.dispatch('change');
+  assert.equal(company.hidden, false); assert.equal(company.querySelector('input').value, 'Retained company');
+  assert.equal(root.querySelectorAll('[data-field-key="company_name"]').length, 1);
+  assert.equal(root.querySelectorAll('.chat-form-fields').length, 0);
 });

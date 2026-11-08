@@ -820,5 +820,14 @@
   "wb.settings.confirmModels": "保存下面这些改动？各组下次启动时生效。",
   "wb.settings.changeModel": "{runtime} 模型：{value}",
   "wb.settings.changeEffort": "{runtime} 思考强度：{value}",
-  "wb.settings.partlySaved": "只保存了一部分。已生效：{done}；未生效：{left}，详情见操作结果"
+  "wb.settings.partlySaved": "只保存了一部分。已生效：{done}；未生效：{left}，详情见操作结果",
+  "chat.question.field.required": "请填写此项。",
+  "chat.question.field.type": "请输入有效的值。",
+  "chat.question.field.range": "输入超出允许范围。",
+  "chat.question.field.inactive": "此字段当前不适用。",
+  "chat.question.field.unknown": "无法识别此字段。",
+  "chat.question.draft.saved": "草稿已保存在当前标签页",
+  "chat.question.draft.restored": "已恢复草稿",
+  "chat.question.draft.unsaved": "草稿未保存",
+  "chat.chart.data": "图表数据"
 }

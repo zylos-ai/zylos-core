@@ -521,6 +521,9 @@ export class AuthGate {
     clearFailures(ip);
     const remember = body.remember === 'on';
     setSessionCookie(res, createSession(remember), base, remember);
+    // Boolean cleanup signal only: no session or credential identifier reaches JS.
+    const draftResetName = `zylos_dashboard_draft_reset_${encodeURIComponent(String(base || '').replace(/\/+$/, ''))}`;
+    appendSetCookie(res, `${draftResetName}=1; Secure; SameSite=Strict; Path=${sessionCookiePath(base)}`);
     const redirectTo = body.next && isPathWithinBase(body.next, base) ? body.next : browserRoot(base);
     redirect(res, redirectTo);
     return true;

@@ -1,4 +1,4 @@
-import { parseC4Content, CONTENT_PREFIX, validateAnswer } from '../../chat-schema.js?v=99';
+import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=102';
 import { element } from './plain-text.js?v=94';
 import { receiptState } from './chat-delivery-state.js?v=100';
 
@@ -11,7 +11,7 @@ const referenceMatches = (question, envelope, block, row) => question && !questi
 
 /** A question uses its immutable message for fields and Dashboard for its current lifecycle. */
 export function renderQuestion({ document, envelope, block, row, question, canWrite = false, stateAvailable = true, statePendingPage = false, readOnlyExternal = false,
-  t = key => key, onSubmit = null, formState = {}, otherAnswerDisclosure = false } = {}) {
+  t = key => key, onSubmit = null, formState = {}, onDraftChange = null, otherAnswerDisclosure = false } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-question');
   const validEnvelope = parseC4Content(CONTENT_PREFIX + JSON.stringify(envelope));
@@ -32,7 +32,8 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     label.setAttribute('role', 'status'); root.append(label);
   }
   const ended = ['chat_question_not_paused', 'chat_answer_conflict'].includes(formState.error);
-  if (formState.error && (ended || receipt?.stored !== true)) {
+  if (formState.error && (ended || receipt?.stored !== true)
+    && !(block.type === 'form_intent' && lifecycle === 'paused' && !formState.locked)) {
     const errorKey = ended ? 'chat.question.ended'
       : formState.error === 'chat_question_unavailable' ? 'chat.question.invalidData' : 'chat.question.submitFailed';
     const error = node('p', t(errorKey), 'chat-error');
@@ -45,7 +46,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   const writable = canWrite && !readOnlyExternal && valid && !actionUnavailable && typeof onSubmit === 'function';
   const controls = [];
   let submitting = false;
-  const status = node('p', '', 'chat-error'); status.setAttribute('role', 'alert');
+  const status = node('p', '', block.type === 'form_intent' ? 'chat-error chat-form-error' : 'chat-error'); status.setAttribute('role', 'alert');
   function button(text, handler, action) {
     const result = node('button', text, 'action-btn'); result.type = 'button';
     result.dataset.action = action; result.disabled = !!formState.sending;
@@ -104,14 +105,47 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     root.append(button(data.confirmLabel || t('chat.question.confirm'), () => answer({ outcome: 'confirm' }), 'confirmAnswer'),
       button(data.cancelLabel || t('chat.question.cancel'), () => answer({ outcome: 'cancel' }), 'cancelAnswer'));
   } else if (block.type === 'form_intent') {
+    root.dataset.formControls = 'true';
     formState.values ??= {};
+    const conditional = block.schemaVersion === 2;
+    const fieldNodes = new Map();
+    const draftHint = node('p', '', 'chat-notice chat-form-draft-status'); draftHint.setAttribute('role', 'status');
     const form = node('div', undefined, 'chat-question-fields');
+    const refresh = () => {
+      const active = conditional ? new Set(evaluateFormState(data.fields, formState.values).activeKeys) : null;
+      for (const [key, entry] of fieldNodes) {
+        entry.label.hidden = !!active && !active.has(key);
+        const error = !entry.label.hidden && (formState.fieldErrors || []).find(item => item.key === key);
+        entry.error.textContent = error ? t('chat.question.field.' + error.reason) : '';
+        entry.error.hidden = !error;
+        entry.input.setAttribute('aria-invalid', error ? 'true' : 'false');
+      }
+      draftHint.textContent = formState.draftStatus ? t('chat.question.draft.' + formState.draftStatus) : '';
+      draftHint.hidden = !draftHint.textContent;
+      status.textContent = formState.error ? t('chat.question.submitFailed') : formState.formError ? t('chat.question.invalidAnswer') : '';
+    };
+    root.updateFormState = refresh;
+    root.clearEditableValues = () => {
+      formState.values = {}; formState.freeText = ''; formState.fieldErrors = []; formState.formError = null; formState.draftStatus = null;
+      for (const control of controls) {
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(control.tagName)) {
+          control.value = ''; control.checked = false;
+          for (const option of control.options || []) option.selected = false;
+        }
+      }
+      refresh();
+    };
     for (const field of data.fields) {
       if (!Object.hasOwn(formState.values, field.key) && field.defaultValue !== undefined) formState.values[field.key] = clone(field.defaultValue);
       if (!Object.hasOwn(formState.values, field.key) && field.type === 'boolean' && field.required === true) formState.values[field.key] = false;
-      const label = node('label', undefined, 'chat-question-field'); label.append(node('span', field.label));
+      const label = node('label', undefined, 'chat-question-field'); label.dataset.fieldKey = field.key; label.append(node('span', field.label + (field.required ? ' *' : '')));
       let input;
-      const value = formState.values[field.key];
+      const storedValue = formState.values[field.key];
+      // Storage is untrusted; rendering guards do not replace shared submission validation.
+      const value = field.type === 'multi_select' ? (Array.isArray(storedValue) ? storedValue : [])
+        : field.type === 'boolean' ? storedValue === true
+        : ['number', 'integer'].includes(field.type) ? (typeof storedValue === 'number' ? storedValue : undefined)
+        : typeof storedValue === 'string' ? storedValue : undefined;
       if (field.type === 'single_select' || field.type === 'multi_select') {
         input = node('select'); input.multiple = field.type === 'multi_select';
         if (!input.multiple) { const empty = node('option', t('chat.question.choose')); empty.value = ''; input.append(empty); }
@@ -145,19 +179,49 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         else if (['number', 'integer'].includes(field.type)) formState.values[field.key] = Number(input.value);
         else if (field.type === 'datetime') { const d = new Date(input.value); formState.values[field.key] = Number.isFinite(d.getTime()) ? d.toISOString() : input.value; }
         else formState.values[field.key] = input.value;
+        formState.fieldErrors = (formState.fieldErrors || []).filter(item => item.key !== field.key);
+        formState.formError = null; formState.error = null;
+        if (onDraftChange) {
+          try { formState.draftStatus = onDraftChange(clone(formState.values)); }
+          catch { formState.draftStatus = 'unsaved'; }
+        }
+        refresh();
       };
       input.addEventListener('input', save); input.addEventListener('change', save);
       controls.push(input); label.append(input);
       if (field.help) label.append(node('span', field.help, 'chat-notice'));
+      const fieldError = node('span', '', 'chat-error'); fieldError.setAttribute('role', 'alert');
+      fieldError.id = 'field-error-' + envelope.messageId + '-' + block.id + '-' + field.key;
+      input.setAttribute('aria-describedby', fieldError.id);
+      label.append(fieldError); fieldNodes.set(field.key, { label, input, error: fieldError });
       form.append(label);
     }
-    root.append(form, button(data.submitLabel || t('chat.question.submit'), () => answer({ values: clone(formState.values) }), 'answer'));
+    root.append(form, draftHint, button(data.submitLabel || t('chat.question.submit'), () => {
+      let values = clone(formState.values);
+      if (conditional) {
+        const evaluated = evaluateFormState(data.fields, formState.values);
+        values = Object.fromEntries(evaluated.activeKeys.filter(key => Object.hasOwn(formState.values, key)).map(key => [key, clone(formState.values[key])]));
+        const checked = validateFormFields(data.fields, values);
+        formState.fieldErrors = checked.errors; formState.formError = checked.formError || (evaluated.errors.length ? 'invalid' : null);
+        refresh();
+        if (checked.errors.length || formState.formError) return;
+      }
+      answer({ values });
+    }, 'answer'));
+    refresh();
   }
   if (envelope.interrupt.otherInput !== false) {
     const label = node('label', otherAnswerDisclosure ? undefined : t('chat.question.otherAnswer'), 'chat-question-other');
     const input = node('textarea'); input.value = formState.freeText ?? ''; input.maxLength = 1000;
     input.setAttribute('aria-label', t('chat.question.otherAnswer')); input.disabled = !!formState.sending;
-    input.addEventListener('input', () => { formState.freeText = input.value; });
+    input.addEventListener('input', () => {
+      formState.freeText = input.value;
+      if (block.type === 'form_intent' && onDraftChange) {
+        try { formState.draftStatus = onDraftChange(clone(formState.values)); }
+        catch { formState.draftStatus = 'unsaved'; }
+        root.updateFormState?.();
+      }
+    });
     controls.push(input); label.append(input);
     const submitOther = button(t('chat.question.submitOther'), () => answer({ freeText: formState.freeText ?? '' }), 'answerOther');
     if (otherAnswerDisclosure) {

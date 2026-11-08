@@ -820,5 +820,14 @@
   "wb.settings.confirmModels": "Save these changes? Groups use them from their next start.",
   "wb.settings.changeModel": "{runtime} model: {value}",
   "wb.settings.changeEffort": "{runtime} effort: {value}",
-  "wb.settings.partlySaved": "Only partly saved. Applied: {done}. Not applied: {left}; see the action result"
+  "wb.settings.partlySaved": "Only partly saved. Applied: {done}. Not applied: {left}; see the action result",
+  "chat.question.field.required": "This field is required.",
+  "chat.question.field.type": "Enter a valid value.",
+  "chat.question.field.range": "Value is outside the allowed range.",
+  "chat.question.field.inactive": "This field is not applicable.",
+  "chat.question.field.unknown": "This field is not recognized.",
+  "chat.question.draft.saved": "Draft saved in this tab",
+  "chat.question.draft.restored": "Draft restored",
+  "chat.question.draft.unsaved": "Draft not saved",
+  "chat.chart.data": "Chart data"
 }

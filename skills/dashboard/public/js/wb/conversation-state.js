@@ -1,4 +1,4 @@
-import { parseC4Content } from '../../chat-schema.js?v=99';
+import { parseC4Content, evaluateFormState } from '../../chat-schema.js?v=102';
 import { messageState } from './chat-delivery-state.js?v=100';
 import { asDate } from './conversation-time.js?v=99';
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
@@ -8,6 +8,8 @@ const query = values => new URLSearchParams(Object.entries(values).filter(([, v]
 export function createConversationState({
   request,
   identity = null,
+  draftStore = null,
+  draftScope = () => null,
   onChange,
   t = key => key,
   document = globalThis.document,
@@ -286,7 +288,21 @@ export function createConversationState({
     readGroupPresence(current, currentTab, e);
     await Promise.all([history(current, id, currentTab, 'initial', e), questions(current, id, currentTab, false, e)]);
   }
-  function applyQuestions(current, rows, cursor) {
+  function questionDraftScope(id, row) {
+    const block = row?.constraints?.block, scope = draftScope();
+    if (!scope || !id || typeof row?.messageId !== 'string' || block?.type !== 'form_intent'
+      || typeof block.id !== 'string' || ![1, 2].includes(block.schemaVersion)) return null;
+    return { ...scope, conversationId: id, messageId: row.messageId, blockId: block.id, schemaVersion: block.schemaVersion };
+  }
+  function clearQuestionDraft(id, row, form) {
+    const scope = form?.draftScope || questionDraftScope(id, row);
+    if (scope) draftStore?.remove(scope);
+    if (form) {
+      form.values = {}; form.freeText = ''; form.fieldErrors = []; form.formError = null;
+      form.draftStatus = null; form.draftCleared = true;
+    }
+  }
+  function applyQuestions(current, rows, cursor, id) {
     const existing = new Map(current.questions.map(row => [row.interruptId, row]));
     for (const row of rows) {
       existing.set(row.interruptId, row);
@@ -294,10 +310,11 @@ export function createConversationState({
       const formKey = `${row.c4Id}:${row.interruptId}`;
       if (!current.questionForms.has(formKey) && row.status === 'answered' && row.action?.id === row.answerId && !row.actionError) current.questionForms.set(formKey, {});
       const form = current.questionForms.get(formKey);
+      if (row.status !== 'paused') clearQuestionDraft(id, row, form);
       if (form && !form.sending) {
         const reconciling = form.receipt?.needsReconciliation === true;
         form.receipt = row.delivery ?? null;
-        if (reconciling && row.status === 'paused' && !row.answerId) {
+        if (!form.authCleared && reconciling && row.status === 'paused' && !row.answerId) {
           if (form.locked) form.error = null;
           form.locked = false;
         }
@@ -333,7 +350,7 @@ export function createConversationState({
         if (!Array.isArray(data?.items)) throw {
           code: 'chat_invalid_response'
         };
-        applyQuestions(current, data.items, token);
+        applyQuestions(current, data.items, token, id);
         refreshed.push(token);
         nextCursor = data.nextCursor ?? null;
         if (!allPages) break;
@@ -375,7 +392,7 @@ export function createConversationState({
     if (!question || question.questionError || questionC4Id !== undefined && String(question.c4Id) !== String(questionC4Id)) return;
     const formKey = `${question.c4Id}:${interruptId}`;
     const form = current.questionForms.get(formKey);
-    if (!form || form.sending || form.locked && !retry || !action || question.status !== 'paused' && !(question.status === 'answered' && retry && question.answerId === action.id)) return;
+    if (!form || form.authCleared || form.sending || form.locked && !retry || !action || question.status !== 'paused' && !(question.status === 'answered' && retry && question.answerId === action.id)) return;
     if (retry && (question.status !== 'answered' || form.action?.id !== action.id || form.receipt?.retryAllowed !== true)) return;
     const e = epoch,
       id = selectedId,
@@ -388,6 +405,7 @@ export function createConversationState({
     form.action = submitted;
     form.sending = true;
     form.error = null;
+    form.fieldErrors = []; form.formError = null;
     current.error = null;
     current.questionVersion++;
     current.questionsLoading = false;
@@ -406,7 +424,8 @@ export function createConversationState({
       if (!result?.answer || !result?.delivery || result.answer.answerId !== submitted.id || ![true, false, null].includes(result.delivery.stored)) throw {
         code: 'chat_invalid_response'
       };
-      if (destroyed || blocked || sendIdentity !== openedIdentity) return;
+      if (destroyed || blocked || form.authCleared || sendIdentity !== openedIdentity) return;
+      clearQuestionDraft(id, question, form);
       form.receipt = result.delivery;
       form.error = result.delivery.error ?? null;
       form.locked = true;
@@ -420,13 +439,24 @@ export function createConversationState({
         delivery: result.delivery
       } : row);
     } catch (err) {
-      if (sendIdentity !== openedIdentity || blocked || destroyed) return;
+      if (sendIdentity !== openedIdentity || blocked || destroyed || form.authCleared) return;
       if (err?.code === 'remote_chat_disabled' || err?.payload?.error === 'remote_chat_disabled') {
         failure(err, e);
         return;
       }
       form.error = err?.code || err?.payload?.error || 'chat_request_failed';
       if ([400, 422].includes(err?.status)) {
+        // Field errors belong only to this immutable form and its submitted active keys.
+        const fields = question.constraints?.block?.data?.fields;
+        if (question.constraints?.block?.type === 'form_intent' && question.constraints.block.schemaVersion === 2
+          && Array.isArray(fields) && Array.isArray(err?.payload?.fields)) {
+          const allowed = new Set(evaluateFormState(fields, submitted.payload?.values || {}).activeKeys);
+          form.fieldErrors = err.payload.fields.slice(0, fields.length).filter(item => item
+            && allowed.has(item.key)
+            && ['required', 'type', 'range', 'inactive', 'unknown'].includes(item.reason))
+            .map(({ key, reason }) => ({ key, reason }));
+        }
+
         form.action = null;
         form.locked = false;
         form.receipt = null;
@@ -858,6 +888,17 @@ export function createConversationState({
   }
   return {
     snapshot,
+    clearDrafts(scope) {
+      for (const current of cells.values()) for (const form of current.questionForms.values()) {
+        const own = form.draftScope;
+        if (own && own.authRoot === scope.authRoot && (!scope.instance || own.instance === scope.instance)) {
+          clearQuestionDraft(null, null, form);
+          form.locked = true;
+          form.authCleared = true;
+        }
+      }
+      emit();
+    },
     subscribe(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);

@@ -1,10 +1,10 @@
 import { element, icon } from './plain-text.js?v=94';
 import { asDate } from './conversation-time.js?v=99';
 import { channelIcon } from './board.js?v=98';
-import { createConversationState } from './conversation-state.js?v=100';
+import { createConversationState } from './conversation-state.js?v=102';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
-import { renderQuestion } from './chat-questions.js?v=100';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=99';
+import { renderQuestion } from './chat-questions.js?v=102';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=102';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -18,6 +18,8 @@ export function mountConversationPage({
   fetch: fetcher = globalThis.fetch,
   endpoint = path => path,
   identity,
+  draftStore = null,
+  draftScope = () => null,
   onOpenGroup,
   technicalDetails = () => false
 } = {}) {
@@ -100,6 +102,8 @@ export function mountConversationPage({
   const state = createConversationState({
     request,
     identity,
+    draftStore,
+    draftScope,
     document,
     t
   });
@@ -440,6 +444,7 @@ export function mountConversationPage({
       statusButtonLabel,
       author,
       questions,
+      resource: content,
       content: row.content
     };
     patchMessage(record, row, s);
@@ -450,6 +455,23 @@ export function mountConversationPage({
     const key = `${record.row.id}:${record.envelope.interruptId}`;
     if (!s.questionForms.has(key)) {
       s.questionForms.set(key, {});
+    }
+    const form = s.questionForms.get(key);
+    const scope = draftScope();
+    const matches = question && !question.questionError && question.messageId === record.envelope.messageId
+      && question.interruptId === record.envelope.interruptId && record.envelope.interrupt?.blockId === record.block.id;
+    if (scope && matches && record.block.type === 'form_intent' && s.tab === 'mine' && s.questionsReady) {
+      const fullScope = { ...scope, conversationId: s.selectedId, messageId: record.envelope.messageId,
+        blockId: record.block.id, schemaVersion: record.block.schemaVersion };
+      const scopeKey = JSON.stringify(fullScope);
+      if (form.draftKey !== scopeKey) {
+        form.values = {}; form.draftKey = scopeKey; form.draftScope = fullScope;
+        if (question.status === 'paused') {
+          const saved = draftStore?.loadEditable ? draftStore.loadEditable(fullScope) : (() => { const values = draftStore?.load(fullScope); return values ? { values, freeText: '' } : null; })();
+          if (saved) { form.values = saved.values; form.freeText = saved.freeText; form.draftStatus = 'restored'; }
+          form.draftCleared = false;
+        } else { draftStore?.remove(fullScope); form.draftCleared = true; }
+      }
     }
     const rendered = renderQuestion({
       document,
@@ -463,7 +485,12 @@ export function mountConversationPage({
       readOnlyExternal: s.tab === 'external',
       statePendingPage: !!s.questionCursor,
       otherAnswerDisclosure: true,
-      formState: s.questionForms.get(key),
+      formState: form,
+      onDraftChange: values => {
+        if (!form.draftScope || currentSnapshot?.questionForms !== s.questionForms
+          || currentSnapshot?.selectedId !== s.selectedId || question?.status !== 'paused') return null;
+        return draftStore?.save(form.draftScope, values, { freeText: form.freeText ?? '' })?.saved ? 'saved' : 'unsaved';
+      },
       onSubmit: (answer, options) => state.answer(record.envelope.interruptId, answer, {
         ...options,
         conversationId: s.selectedId,
@@ -490,16 +517,20 @@ export function mountConversationPage({
     for (const q of record.questions) {
       const question = s.questions.find(item => String(item.c4Id) === String(row.id) && item.interruptId === q.envelope.interruptId);
       const form = s.questionForms.get(`${row.id}:${q.envelope.interruptId}`) ?? {};
-      const signature = JSON.stringify([question, s.canWrite, s.questionsReady, s.questionError, s.questionCursor, form.sending, form.locked, form.error, form.receipt, t('chat.question.paused')]);
+      const signature = JSON.stringify([question, s.canWrite, s.questionsReady, s.questionError, s.questionCursor, form.sending, form.locked, form.error, form.receipt, form.fieldErrors, form.formError, form.draftCleared, t('chat.question.paused')]);
       if (q.signature === signature) {
         continue;
       }
       q.signature = signature;
+      if (form.draftCleared) q.node.clearEditableValues?.();
+      q.node.updateFormState?.();
       const fresh = questionNode(q, s);
       const choiceDescription = q.node.closest('.chat-block')?.querySelector('.chat-choice-options');
       if (choiceDescription) {
         choiceDescription.hidden = fresh.dataset.choiceControls === 'true' || !!q.node.querySelector('.chat-question-options input');
       }
+      const formDescription = q.node.closest('.chat-block')?.querySelector('.chat-question-description>.chat-form-fields');
+      if (formDescription) formDescription.hidden = fresh.dataset.formControls === 'true' || !!q.node.querySelector('.chat-question-fields');
       const otherSummary = q.node.querySelector('.conversation-question-other>summary');
       if (otherSummary) {
         text(otherSummary, t('chat.question.otherAnswer'));
@@ -518,11 +549,11 @@ export function mountConversationPage({
         announcement.setAttribute('aria-live', 'polite');
         q.node.prepend(announcement);
       }
-      const messages = [...fresh.children].filter(child => child.matches('p.chat-question-status,p.chat-notice,p.chat-message-status,p.chat-error'));
+      const messages = [...fresh.children].filter(child => !child.classList.contains('chat-form-draft-status') && !child.classList.contains('chat-form-error') && child.matches('p.chat-question-status,p.chat-notice,p.chat-message-status,p.chat-error'));
       const joined = messages.map(child => child.textContent).filter(Boolean).join(' · ');
       text(announcement, joined);
       for (const child of [...q.node.children]) {
-        if (child !== announcement && child.matches('p.chat-question-status,p.chat-notice,p.chat-message-status')) {
+        if (child !== announcement && !child.classList.contains('chat-form-draft-status') && !child.classList.contains('chat-form-error') && child.matches('p.chat-question-status,p.chat-notice,p.chat-message-status')) {
           child.hidden = true;
         }
       }
@@ -601,6 +632,7 @@ export function mountConversationPage({
       }
       let record = messages.get(id);
       if (record && record.content !== row.content) {
+        record.resource?.destroy?.();
         record.node.remove();
         messages.delete(id);
         record = null;
@@ -618,6 +650,7 @@ export function mountConversationPage({
     }
     for (const [id, record] of messages) {
       if (!ids.has(id)) {
+        record.resource?.destroy?.();
         record.node.remove();
         messages.delete(id);
       }
@@ -630,6 +663,7 @@ export function mountConversationPage({
       }
     }
     positionChildren(messageList, ordered);
+    for (const record of messages.values()) record.resource?.mount?.();
     if (switched || !maxSeenId && s.messages.length || added && near && !s.gap
       || pinned && (stream.scrollHeight !== previousHeight || stream.clientHeight !== previousClientHeight)) {
       stream.scrollTop = stream.scrollHeight;
@@ -722,6 +756,7 @@ export function mountConversationPage({
       list.replaceChildren();
       messageList.replaceChildren();
       listRows.clear();
+      for (const record of messages.values()) record.resource?.destroy?.();
       messages.clear();
       days.clear();
       selectedKey = null;
@@ -744,6 +779,7 @@ export function mountConversationPage({
       renaming = false;
       renameForm.hidden = true;
       renameInput.value = '';
+      for (const record of messages.values()) record.resource?.destroy?.();
       messages.clear();
       days.clear();
       messageList.replaceChildren();
@@ -952,6 +988,7 @@ export function mountConversationPage({
       state.close();
     },
     redraw,
+    clearDrafts(scope) { state.clearDrafts(scope); },
     destroy() {
       destroyed = true;
       view?.removeEventListener('resize', scheduleFit);
@@ -962,6 +999,7 @@ export function mountConversationPage({
       unsubscribe();
       state.destroy();
       listRows.clear();
+      for (const record of messages.values()) record.resource?.destroy?.();
       messages.clear();
       days.clear();
       root.replaceChildren();

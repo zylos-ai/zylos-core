@@ -1,5 +1,7 @@
 import { element } from './plain-text.js?v=94';
-import { renderChatContent } from './chat-blocks.js?v=99';
+import { renderChatContent } from './chat-blocks.js?v=102';
+import { applyChatView } from './chat-view.js?v=102';
+import { conversationChartResource } from './conversation-charts.js?v=102';
 export function conversationErrorKey(code) {
   if (['chat_auth_required', 'chat_conversation_forbidden', 'insufficient_scope'].includes(code)) {
     return 'chat.error.forbidden';
@@ -22,21 +24,29 @@ export function conversationErrorKey(code) {
   return 'chat.error.requestFailed';
 }
 
-/** Render existing Content in order; View and conditional forms are a separate capability. */
+/** Render validated complete Content with optional View and page-owned chart resources. */
 export function renderConversationContent({
   document,
   row,
   t,
   renderQuestion,
+  supportsBlock,
   showTechnicalDetails = false
 }) {
+  const resources = [];
   const content = renderChatContent({
     document,
     row,
     t,
     renderQuestion,
+    supportsBlock,
     showTechnicalDetails,
-    supportsBlock: block => block.type !== 'form_intent' || block.schemaVersion === 1
+    layout: (root, view, blockNodes) => applyChatView(document, root, view, blockNodes),
+    renderChart({ block, fallback }) {
+      const resource = conversationChartResource({ document, block, fallback, t });
+      resources.push(resource);
+      return resource.node;
+    }
   });
   const createMarkdown = document.defaultView?.markdownit;
   if (typeof createMarkdown === 'function') {
@@ -57,5 +67,7 @@ export function renderConversationContent({
       text.replaceWith(formatted);
     }
   }
+  content.mount = () => { for (const resource of resources) resource.mount(); };
+  content.destroy = () => { for (const resource of resources) resource.destroy(); };
   return content;
 }

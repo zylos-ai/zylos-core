@@ -1,13 +1,13 @@
-import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=99';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=102';
 import { element } from './plain-text.js?v=94';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=99';
+export { validateAnswer } from '../../chat-schema.js?v=102';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 
 /** Render the validated shared protocol as inert DOM; the host owns answers. */
-export function renderChatContent({ document, row, t = key => key, renderQuestion, supportsBlock, showTechnicalDetails = true } = {}) {
+export function renderChatContent({ document, row, t = key => key, renderQuestion, supportsBlock, renderChart, layout, showTechnicalDetails = true } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-message-content');
   const reference = () => {
@@ -78,7 +78,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     text(figure, data.summary);
     return figure;
   }
-  function staticQuestion(block, { showChoiceOptions = true } = {}) {
+  function staticQuestion(block, { showChoiceOptions = true, showFormFields = true } = {}) {
     const part = node('div', undefined, 'chat-question-description'), data = block.data;
     if (block.type === 'choice') {
       text(part, data.prompt, 'chat-block-title');
@@ -107,7 +107,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
         if (field.unit) text(detail, field.unit);
         list.append(detail);
       }
-      part.append(list);
+      if (showFormFields) part.append(list);
     }
     const state = data.state;
     if (state && state.status !== 'open') {
@@ -131,6 +131,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     }
     return part;
   }
+  const blockNodes = new Map();
   for (const block of envelope.blocks) {
     try {
       const part = node('section', undefined, 'chat-block chat-block-' + block.type);
@@ -146,13 +147,16 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
       } else if (!REGISTERED_COMPONENT_KEYS.includes(`${block.type}@${block.schemaVersion}`) || supportsBlock?.(block) === false) {
         text(part, block.fallbackText || envelope.fallbackText);
       } else if (block.type === 'markdown') text(part, block.data.text || block.fallbackText || envelope.fallbackText, 'chat-message-text');
-      else if (['time_series', 'breakdown', 'category_series'].includes(block.type)) part.append(chart(block));
+      else if (['time_series', 'breakdown', 'category_series'].includes(block.type)) {
+        const fallback = chart(block);
+        part.append(renderChart?.({ block, fallback }) ?? fallback);
+      }
       else if (interactive.has(block.type)) {
         let question;
         if (renderQuestion && envelope.interrupt?.blockId === block.id) {
           question = renderQuestion({ envelope, block, row });
         }
-        part.append(staticQuestion(block, { showChoiceOptions: question?.dataset.choiceControls !== 'true' }));
+        part.append(staticQuestion(block, { showChoiceOptions: question?.dataset.choiceControls !== 'true', showFormFields: question?.dataset.formControls !== 'true' }));
         if (question) part.append(question);
       } else text(part, block.fallbackText || envelope.fallbackText);
       // References are labels only: even valid URI schemes do not grant execution.
@@ -162,7 +166,16 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
         part.append(citations);
       }
       root.append(part);
-    } catch { root.append(error()); }
+      blockNodes.set(block.id, part);
+    } catch {
+      const failed = error();
+      root.append(failed);
+      blockNodes.set(block.id, failed);
+    }
+  }
+  if (parsed.view && layout) {
+    try { layout(root, parsed.view, blockNodes); }
+    catch { root.replaceChildren(...blockNodes.values()); }
   }
   return root;
 }
