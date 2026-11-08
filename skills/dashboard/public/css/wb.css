@@ -1201,7 +1201,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 /* ─── Phones: everything a finger taps is at least 40px; icon-only buttons are 40px square ─── */
 .memory-back { display: none; }
 @media (max-width: 760px) {
-  :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-drawer)
+  :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal)
     :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot) { min-height: 40px; }
   :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh) { min-width: 40px; }
   .wb-switch-l { min-height: 40px; }

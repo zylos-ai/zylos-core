@@ -24,7 +24,7 @@ const phone = phoneRules(css);
 test('on phones every control a finger taps is at least 40px, icon-only buttons 40px wide', () => {
   const rule = phone.match(/:is\(([^)]*)\)\s*:is\(button, select, summary, a\.wb-btn, input[^{]*\{ min-height: 40px; \}/);
   assert.ok(rule, 'one rule sets the minimum height of tappable controls');
-  for (const area of ['.app-header', '#fleet-view', '#tab-overview', '#tab-memory', '#tab-observer', '#tab-trends', '#tab-schedule', '#tab-settings', '.wb-modal', '.wb-drawer']) {
+  for (const area of ['.app-header', '#fleet-view', '#tab-overview', '#tab-memory', '#tab-observer', '#tab-trends', '#tab-schedule', '#tab-settings', '.wb-modal']) {
     assert.ok(rule[1].split(',').map(item => item.trim()).includes(area), area + ' is covered');
   }
   assert.doesNotMatch(rule[1], /#tab-chat/, 'the conversation page keeps its own layout');
