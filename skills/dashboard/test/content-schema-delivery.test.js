@@ -85,7 +85,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const appUrl = origin + prefix + '/_assets/' + appPath;
     let parentUrl = appUrl;
     const activeModules = new Map();
-    for (const [name, version] of [['conversation-page', 108], ['conversation-content', 106], ['chat-blocks', 106]]) {
+    for (const [name, version] of [['conversation-page', 108], ['conversation-content', 107], ['chat-blocks', 106]]) {
       const parent = await moduleAt(parentUrl);
       const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
       const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=${version}`));
@@ -102,7 +102,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
       activeModules.set(name, new URL(specifier, pageUrl).href);
     }
     for (const [parent, names] of [[appUrl, [['chat-drafts', 102]]],
-      [activeModules.get('conversation-content'), [['chat-view', 103], ['conversation-charts', 103]]]]) {
+      [activeModules.get('conversation-content'), [['chat-view', 103], ['conversation-charts', 104]]]]) {
       const source = await moduleAt(parent);
       for (const [name, version] of names) {
         const specifier = [...source.matchAll(/from ['"]([^'"]+)['"]/g)]

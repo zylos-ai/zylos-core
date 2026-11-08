@@ -2,7 +2,7 @@ import { element } from './plain-text.js?v=103';
 import { renderChatContent, parseC4Content } from './chat-blocks.js?v=106';
 import { createChatAttachment } from './chat-attachments.js?v=3';
 import { applyChatView } from './chat-view.js?v=103';
-import { conversationChartResource } from './conversation-charts.js?v=103';
+import { conversationChartResource } from './conversation-charts.js?v=104';
 export function conversationErrorKey(code) {
   if (['chat_auth_required', 'chat_conversation_forbidden', 'insufficient_scope'].includes(code)) {
     return 'chat.error.forbidden';

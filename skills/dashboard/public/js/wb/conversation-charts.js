@@ -1,6 +1,7 @@
 import { element } from './plain-text.js?v=103';
 
 const colors = ['#4f8cf7', '#aa79e8', '#35a998', '#e1a33d', '#e06b83', '#73859f'];
+const halfDay = 12 * 60 * 60 * 1000;
 
 function formatted(value, unit, format, locale) {
   if (value === null) return '';
@@ -34,6 +35,15 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
     scales.x = { type: category ? 'category' : data.xType === 'number' ? 'linear' : 'time',
       title: { display: !!data.xLabel, text: data.xLabel, color: text }, ticks: { color: text },
       grid: { color: grid }, border: { color: grid }, stacked };
+    if (data.xType === 'date') {
+      // Without a unit Chart.js picks one from the pixel width, so a week of days came out as hour ticks.
+      // Days tick only on the dates present, labelled in the page language; half a day either side keeps
+      // a single point inside the plot instead of a zero-width millisecond range.
+      const dayLabel = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' });
+      scales.x.time = { unit: 'day' };
+      scales.x.ticks = { color: text, source: 'data', callback: value => dayLabel.format(value) };
+      scales.x.afterDataLimits = scale => { scale.min -= halfDay; scale.max += halfDay; };
+    }
     const categoryKeys = [], categoryLabels = new Map();
     const points = data.series.map(series => {
       const counts = new Map();
@@ -79,7 +89,9 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
     indexAxis, locale, responsive: true, maintainAspectRatio: false, animation: false, color: text,
     scales, plugins: { legend: { display: block.type !== 'category_series' || !!data.reference, onClick: null,
       labels: { color: text, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
-    tooltip: { callbacks: { label(context) {
+    tooltip: { callbacks: { ...(data.xType === 'date' ? { title(items) {
+      return items.length ? new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric' }).format(items[0].parsed.x) : '';
+    } } : {}), label(context) {
       const amount = context.parsed[indexAxis === 'y' ? 'x' : 'y'];
       return `${context.dataset.label}: ${formatted(amount, context.dataset.unit, data.format, locale)}`;
     } } } }
