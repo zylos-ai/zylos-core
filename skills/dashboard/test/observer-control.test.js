@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import Database from 'better-sqlite3';
 import { ObserverControlServer, runObserverPreUninstall } from '../src/lib/observer-control.js';
 
 function fixture(t, observer = { enabled: true, generation: 4 }) {
@@ -10,6 +11,15 @@ function fixture(t, observer = { enabled: true, generation: 4 }) {
   t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   const configPath = path.join(dataDir, 'config.json');
   fs.writeFileSync(configPath, `${JSON.stringify({ observer }, null, 2)}\n`, { mode: 0o600 });
+  const temporary = fs.realpathSync(os.tmpdir());
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME']) {
+    assert.ok(process.env[key]?.startsWith(`${path.dirname(temporary)}${path.sep}`), `${key} must use the runner sandbox`);
+  }
+  assert.ok(dataDir.startsWith(`${temporary}${path.sep}`));
+  console.log('Observer control isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: temporary, dataDir,
+    tmuxSocket: path.join(dataDir, 'tmux.sock'), tmuxStarted: false,
+    database: path.join(dataDir, 'observer/runtime/control/coordinator-lock.sqlite') }));
   return { dataDir, configPath };
 }
 
@@ -26,6 +36,114 @@ test('component pre-uninstall joins the running producer coordinator', async (t)
   assert.deepEqual(result, { mode: 'online' });
   assert.equal(calls, 1);
   assert.equal(fs.statSync(server.socketPath).mode & 0o777, 0o600);
+  assert.equal(path.dirname(server.socketPath), path.join(fs.realpathSync(os.tmpdir()), `zobs-${process.getuid()}`));
+  assert.equal(fs.statSync(path.dirname(server.socketPath)).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.dirname(server.socketPath)).uid, process.getuid());
+  await server.close();
+  assert.equal(fs.existsSync(server.socketPath), false);
+});
+
+function useTemporaryDirectory(t, directory) {
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = directory;
+  t.after(() => {
+    if (previous === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previous;
+  });
+}
+
+// Covers path selection, permissions and client/server agreement. Run for socket
+// location changes; unrelated rendering changes may skip this case.
+test('long temporary paths fall back to a private data control socket', async (t) => {
+  const { dataDir, configPath } = fixture(t);
+  const temporary = path.join(dataDir, 'long-'.repeat(25));
+  fs.mkdirSync(temporary, { mode: 0o700 });
+  useTemporaryDirectory(t, temporary);
+  const server = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
+  t.after(() => server.close());
+  assert.equal(server.socketPath, path.join(dataDir, 'observer/runtime/control/control.sock'));
+  assert.ok(Buffer.byteLength(server.socketPath) < 104);
+  await server.start();
+  assert.equal(fs.statSync(path.dirname(server.socketPath)).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(server.socketPath).mode & 0o777, 0o600);
+  assert.deepEqual(await runObserverPreUninstall({ dataDir, configPath }), { mode: 'online' });
+  await server.close();
+  assert.equal(fs.existsSync(server.socketPath), false);
+  assert.equal(fs.readdirSync(temporary).length, 0);
+});
+
+// Covers the final path-length rejection without side effects. Run for endpoint
+// path changes; unrelated coordinator operations may skip this case.
+test('overlong temporary and data paths require a shorter TMPDIR without creating sockets', (t) => {
+  const { dataDir } = fixture(t);
+  // Multibyte paths must be measured in bytes, not JavaScript characters.
+  const long = path.join(dataDir, '\u754c'.repeat(40));
+  fs.mkdirSync(long, { mode: 0o700 });
+  useTemporaryDirectory(t, long);
+  assert.throws(() => new ObserverControlServer({ dataDir: long, onPreUninstall: async () => {} }), {
+    code: 'control_socket_path_too_long',
+  });
+  assert.equal(fs.readdirSync(long).length, 0);
+});
+
+// Covers unsafe existing parents and close after failed publication. Run for
+// socket permission/cleanup changes; unrelated protocol changes may skip it.
+test('shared and symlink socket directories are rejected without following or changing them', async (t) => {
+  for (const kind of ['shared', 'symlink']) {
+    await t.test(kind, async (t) => {
+      const { dataDir } = fixture(t);
+      useTemporaryDirectory(t, dataDir);
+      const server = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
+      const directory = path.dirname(server.socketPath);
+      const outside = path.join(dataDir, 'outside');
+      fs.mkdirSync(outside, { mode: 0o700 });
+      const sentinel = path.join(outside, path.basename(server.socketPath));
+      fs.writeFileSync(sentinel, 'preserve', { mode: 0o600 });
+      if (kind === 'shared') {
+        fs.mkdirSync(directory, { mode: 0o755 });
+        fs.chmodSync(directory, 0o755);
+      } else fs.symlinkSync(outside, directory);
+      await assert.rejects(server.start(), { code: 'unsafe_runtime_state' });
+      await server.close();
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), 'preserve');
+      if (kind === 'shared') assert.equal(fs.statSync(directory).mode & 0o777, 0o755);
+      else assert.equal(fs.lstatSync(directory).isSymbolicLink(), true);
+    });
+  }
+});
+
+// Covers endpoint relocation/upgrade and environment mismatch. Run when control
+// discovery or coordinator ownership changes; unrelated UI changes may skip it.
+test('an undiscovered producer mutex refuses offline teardown and a second coordinator', { timeout: 25000 }, async (t) => {
+  const { dataDir, configPath } = fixture(t);
+  const producer = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
+  await producer.acquire();
+  t.after(() => producer.close());
+  const before = fs.readFileSync(configPath, 'utf8');
+  // The previous endpoint and a different TMPDIR are both absent at the new
+  // address. Keep the unchanged SQLite protocol held, exactly as either does.
+  await assert.rejects(runObserverPreUninstall({ dataDir, configPath }), { code: 'coordinator_active' });
+  const contender = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
+  await assert.rejects(contender.start(), { code: 'coordinator_active' });
+  await contender.close();
+  assert.equal(fs.readFileSync(configPath, 'utf8'), before);
+  await producer.close();
+  assert.deepEqual(await runObserverPreUninstall({ dataDir, configPath }), { mode: 'offline' });
+});
+
+// Covers the unchanged lock contract used by an older client/coordinator. Run
+// with endpoint or mutex changes; skip for unrelated rendering changes.
+test('a relocated producer excludes clients using the previous SQLite ownership protocol', async (t) => {
+  const { dataDir } = fixture(t);
+  const producer = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
+  await producer.start();
+  t.after(() => producer.close());
+  const database = new Database(path.join(dataDir, 'observer/runtime/control/coordinator-lock.sqlite'), { timeout: 0 });
+  t.after(() => database.close());
+  assert.throws(() => database.exec('BEGIN EXCLUSIVE'), { code: 'SQLITE_BUSY' });
+  await producer.close();
+  database.exec('BEGIN EXCLUSIVE');
+  database.exec('ROLLBACK');
 });
 
 test('component pre-uninstall takes offline ownership only with no live producer', async (t) => {
@@ -103,7 +221,9 @@ test('SQLite ownership excludes another process and releases on its normal OS ex
   // Keep the owner reachable until shutdown; a completed eval module can be GC'd,
   // closing its native SQLite handle even while stdin keeps the child alive.
   const script = `import { ObserverControlServer } from ${JSON.stringify(moduleUrl)};\nconst owner = new ObserverControlServer({dataDir:process.argv[1],onPreUninstall:async()=>{}});\nawait owner.acquire();\nprocess.stdout.write('owned\\n');\nprocess.stdin.once('data',()=>{ if (!owner.lock) throw Error('owner lost lock'); process.exit(0); });`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', script, dataDir], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script, dataDir], {
+    stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000, killSignal: 'SIGKILL',
+  });
   const exited = once(child, 'exit');
   t.after(async () => { if (child.exitCode === null) { child.stdin.end('exit'); await exited; } });
   const [ready] = await once(child.stdout, 'data');
@@ -122,8 +242,10 @@ test('SQLite ownership excludes another process and releases on its normal OS ex
 test('concurrent close releases ownership retained after socket publication failure', async (t) => {
   const { dataDir } = fixture(t);
   const server = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
-  server.socketPath = path.join(dataDir, 'missing-parent', 'control.sock');
-  const started = assert.rejects(server.start(), /listen/);
+  const parent = path.join(dataDir, 'not-a-directory');
+  fs.writeFileSync(parent, '', { mode: 0o600 });
+  server.socketPath = path.join(parent, 'control.sock');
+  const started = assert.rejects(server.start(), { code: 'EEXIST' });
   await server.close();
   await started;
   assert.equal(server.lock, null);

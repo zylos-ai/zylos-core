@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
-import { privateParents } from './observer-tmux-state.js';
+import { mkdirPrivate, privateParents, privatePath } from './observer-tmux-state.js';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { createObserverContainment } from './observer-containment.js';
 import { ObserverCoordinator } from './observer-coordinator.js';
@@ -57,7 +58,15 @@ async function acquireCoordinatorLock(controlRoot, { timeoutMs = CONNECT_TIMEOUT
 
 function controlSocketPath(dataDir) {
   const key = crypto.createHash('sha256').update(path.resolve(dataDir)).digest('hex').slice(0, 20);
-  return path.join('/tmp', `zobs-ctl-${key}.sock`);
+  const temporary = path.join(fs.realpathSync(os.tmpdir()), `zobs-${process.getuid()}`, `zobs-ctl-${key}.sock`);
+  const local = path.join(observerPaths(dataDir).control, 'control.sock');
+  // Leave space for the terminator on both macOS (104 bytes) and Linux (108).
+  for (const candidate of [temporary, local]) {
+    if (Buffer.byteLength(candidate) < 104) return candidate;
+  }
+  throw Object.assign(new Error('Observer control socket path too long; set a shorter TMPDIR and restart Dashboard'), {
+    code: 'control_socket_path_too_long',
+  });
 }
 
 function readLine(socket, timeoutMs) {
@@ -95,6 +104,7 @@ export class ObserverControlServer {
     this.lock = null;
     this._starting = null;
     this._acquiring = null;
+    this._socketPublished = false;
   }
 
   async acquire() {
@@ -110,6 +120,7 @@ export class ObserverControlServer {
     this._starting = (async () => {
       await this.acquire();
       try {
+        await mkdirPrivate(path.dirname(this.socketPath));
         try { await fs.promises.unlink(this.socketPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
         this.server = net.createServer((socket) => {
           readLine(socket, CONNECT_TIMEOUT_MS).then(async (message) => {
@@ -126,6 +137,7 @@ export class ObserverControlServer {
           this.server.once('error', reject);
           this.server.listen(this.socketPath, resolve);
         });
+        this._socketPublished = true;
         await fs.promises.chmod(this.socketPath, 0o600);
       } catch (error) {
         try { this.server?.close(); } catch {}
@@ -147,14 +159,19 @@ export class ObserverControlServer {
     if (!this.lock) return;
     if (this.server) await new Promise((resolve) => this.server.close(resolve));
     this.server = null;
-    try { await fs.promises.unlink(this.socketPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    if (this._socketPublished) {
+      try { await fs.promises.unlink(this.socketPath); } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      this._socketPublished = false;
+    }
     await this.lock?.release();
     this.lock = null;
   }
 }
 
 async function requestRunningProducer(dataDir) {
-  const socket = net.createConnection(controlSocketPath(dataDir));
+  const socketPath = controlSocketPath(dataDir);
+  await privatePath(path.dirname(socketPath));
+  const socket = net.createConnection(socketPath);
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { socket.destroy(); reject(new Error('Observer control connect timeout')); }, CONNECT_TIMEOUT_MS);
     socket.once('connect', () => { clearTimeout(timeout); resolve(); });
