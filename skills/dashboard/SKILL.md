@@ -41,7 +41,7 @@ config:
       description: Dashboard bind address
       default: "127.0.0.1"
     - name: DASHBOARD_AUTH_PASSWORD
-      description: Dashboard login password (independent from Web Console; generated on first install and never printed)
+      description: Dashboard login password (independent from Web Console; generated on first install and shown once by zylos init)
       sensitive: true
 
 
@@ -120,15 +120,26 @@ npm start
 
 Default URL: `http://127.0.0.1:3470/`
 
-A new installation creates an independent random password hash without printing
-the password. Before first sign-in, set an owner-chosen Dashboard password through
-the existing `hooks/configure.js` stdin JSON interface: supply
-`DASHBOARD_AUTH_PASSWORD` as the scrypt value produced by
-`hashPassword` from `src/lib/auth.js`. Point `ZYLOS_DATA_DIR` at this instance's
-`components/dashboard` directory. Keep the plaintext in memory, out of command
-arguments, files and logs; the configure input and saved config contain only the
-hash. Restart Dashboard after changing its configuration. Existing installations
-keep their configured password. Dashboard does not share Web Console credentials.
+A new installation generates an independent random Dashboard password. At the end
+of `zylos init`, the terminal shows the Dashboard address and new password once;
+only its scrypt hash is saved. An existing config without a password is repaired
+without changing its other settings. Existing passwords are retained and cannot
+be displayed again. Dashboard does not share Web Console credentials.
+
+With Caddy, init shows the public `/dashboard/` route. With `--no-caddy`, it shows
+`http://127.0.0.1:<port>/`; this is local-only port access without a public route.
+
+To generate a replacement password, run:
+
+```bash
+zylos dashboard reset-password
+```
+
+The command shows the new password once and stores only its hash. It restarts a
+running Dashboard so the replacement applies immediately; if Dashboard is not
+running, the change applies at its next start. If service status or restart cannot
+be confirmed, the command reports that you must restart Dashboard before signing
+in. Keep the displayed password out of files, shell history and logs.
 
 For optional terminal viewing, supported platforms and cleanup recovery, see
 [Observer](docs/observer.md). Observer automatically selects the target Dashboard

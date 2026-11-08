@@ -30,6 +30,7 @@ const commands = {
   init: initCommand,
   upstream: upstreamCommand,
   config: configCommand,
+  dashboard: async (...args) => (await import('./commands/dashboard.js')).dashboardCommand(...args),
   attach: async (...args) => (await import('./commands/attach.js')).attachCommand(...args),
   doctor: async (...args) => (await import('./commands/doctor.js')).doctorCommand(...args),
   shell: shellCommand,
@@ -137,6 +138,7 @@ Setup:
   upstream clear      Clear the saved source; retain trust, cache and profile files
   upstream refresh    Refresh the selected remote profile
                       --upstream-config <file|https-url|direct> (this command only, including init)
+  dashboard reset-password  Generate and show a new Dashboard password once
   config              Show all configuration
   config get <key>    Get a config value
   config set <key> <value>  Set a config value

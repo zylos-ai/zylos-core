@@ -1,37 +1,15 @@
 #!/usr/bin/env node
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hashPassword } from '../src/lib/auth.js';
-import { mutateConfig } from '../src/lib/config-mutation.js';
+import { provisionDashboardAuth } from '../src/lib/auth-provision.js';
 
 const zylosDir = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-const dataDir = path.join(zylosDir, 'components', 'dashboard');
-const configPath = path.join(dataDir, 'config.json');
-
-fs.mkdirSync(path.join(dataDir, 'logs'), { recursive: true });
-
-const fresh = !fs.existsSync(configPath);
-if (fresh || !JSON.parse(fs.readFileSync(configPath, 'utf8')).auth?.password) {
-  await mutateConfig(configPath, config => {
-    if (fresh) {
-      const defaults = {
-        port: 3470,
-        host: '127.0.0.1',
-        observer: { enabled: false }
-      };
-      for (const [key, value] of Object.entries(defaults)) {
-        if (config[key] === undefined) config[key] = value;
-      }
-    }
-    if (!config.auth?.password) {
-      config.auth = { enabled: true, ...config.auth,
-        password: hashPassword(crypto.randomBytes(16).toString('hex')) };
-    }
-  });
+const generated = await provisionDashboardAuth(zylosDir);
+// Init alone requests a private pipe; normal lifecycle stdout/logs stay secret-free.
+if (process.env.ZYLOS_DASHBOARD_PASSWORD_FD === '3') {
+  fs.writeFileSync(3, JSON.stringify(generated));
 }
-
-console.log(`dashboard data dir ready: ${dataDir}`);
+console.log(`dashboard data dir ready: ${path.join(zylosDir, 'components', 'dashboard')}`);
 
 // Core owns runtime hooks and statusLine; standalone lifecycle is retired.

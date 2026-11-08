@@ -18,7 +18,13 @@ mock.module('node:child_process', { namedExports: { ...childProcess,
 } });
 console.log('Init route worker isolation:', JSON.stringify(Object.fromEntries(
   ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR'].map(key => [key, process.env[key]]))));
-const { startCoreServices } = await import('../../../../cli/commands/init.js');
-assert.equal(startCoreServices(), 1);
+const { startCoreServices, parseInitFlags } = await import('../../../../cli/commands/init.js');
+const { printDashboardInfo } = await import('../../../../cli/lib/dashboard-access.js');
+const flags = parseInitFlags(process.argv.slice(2));
+const access = { zylosDir: root, noCaddy: flags.caddy === false };
+assert.equal(startCoreServices(null, access), 1);
 assert.ok(commands.some(command => command.startsWith('pm2 start ')));
 assert.ok(commands.includes('pm2 save'));
+console.log('Init service phase finished.');
+printDashboardInfo(access);
+assert.equal(access.password, undefined);
