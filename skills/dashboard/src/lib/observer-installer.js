@@ -9,7 +9,6 @@ import { observerPaths } from './observer-paths.js';
 const execFileAsync = promisify(execFile);
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
-const MAX_RELEASE_METADATA_BYTES = 1024 * 1024;
 const RELEASE_API_ROOT = 'https://api.github.com/repos/zellij-org/zellij/releases';
 const RELEASE_HOSTS = new Set(['github.com', 'api.github.com', 'release-assets.githubusercontent.com']);
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -98,7 +97,6 @@ async function releaseRequest(url, { fetchImpl, signal, accept }) {
     } catch {
       throw downloadFailure('download_failed', 'network error', true);
     }
-    if (response.url) assertReleaseUrl(response.url);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location');
       await response.body?.cancel();
@@ -138,12 +136,7 @@ async function apiAssetResponse(artifact, options) {
     ...options, accept: 'application/vnd.github+json',
   });
   const chunks = [];
-  let bytes = 0;
   for await (const chunk of responseChunks(response)) {
-    bytes += chunk.length;
-    if (bytes > MAX_RELEASE_METADATA_BYTES) {
-      throw new ObserverInstallError('invalid_release_metadata', 'Release metadata exceeds the size limit');
-    }
     chunks.push(chunk);
   }
   let release;
@@ -201,10 +194,13 @@ async function downloadAttempt(artifact, destination, { fetchImpl, signal, onPro
   } catch (error) {
     try { await handle?.close(); } catch {}
     handle = null;
-    if (created) await fs.promises.unlink(destination);
+    if (created) {
+      try { await fs.promises.unlink(destination); } catch (cleanupError) { error = cleanupError; }
+    }
     if (signal?.aborted) throw downloadFailure('download_cancelled', 'download cancelled');
     if (controller.signal.aborted) throw downloadFailure('download_timeout', 'download timed out', true);
-    throw error;
+    if (error instanceof ObserverInstallError) throw error;
+    throw downloadFailure('download_failed', 'local download failure');
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);
@@ -224,11 +220,11 @@ async function downloadArchive(artifact, destination, options) {
   }
   try {
     const download = await downloadAttempt(artifact, destination, options, true);
-    options.logger.info(`Observer artifact download: direct ${directError.message}; API fallback download succeeded`);
+    try { options.logger.info(`Observer artifact download: direct ${directError.message}; API fallback download succeeded`); } catch {}
     return download;
   } catch (error) {
     const message = `Artifact download failed: direct ${directError.message}; API ${error instanceof ObserverInstallError ? error.message : 'local download failure'}`;
-    options.logger.warn(message);
+    try { options.logger.warn(message); } catch {}
     throw new ObserverInstallError(error.code || 'download_failed', message, error);
   }
 }

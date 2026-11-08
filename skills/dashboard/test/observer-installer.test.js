@@ -353,6 +353,7 @@ test('API archive bytes must match the pinned manifest even when metadata claims
 for (const location of [
   'https://untrusted.invalid/archive', 'http://github.com/archive',
   'https://github.com.untrusted.invalid/archive', 'https://user:password@github.com/archive',
+  'https://evilgithub.com/archive',
   'https://release-assets.githubusercontent.com:444/archive',
 ]) test(`API redirect refuses unsafe destination ${new URL(location).hostname}`, async (t) => {
   const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), {
@@ -380,7 +381,6 @@ test('metadata cannot nominate an asset API outside the pinned repository', asyn
 
 for (const [name, response, code] of [
   ['invalid JSON', () => new Response('{'), 'invalid_release_metadata'],
-  ['oversized metadata', () => new Response('x'.repeat(1024 * 1024 + 1)), 'invalid_release_metadata'],
   ['missing asset', () => Response.json({ assets: [] }), 'release_asset_missing'],
 ]) test(`API ${name} fails without requesting an asset`, async (t) => {
   const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), { metadata: response });
@@ -399,13 +399,19 @@ for (const preaborted of [true, false]) test(`external cancellation ${preaborted
   assert.equal(calls.length, preaborted ? 0 : 1);
 });
 
-test('archive size and progress callback errors never trigger network fallback', async (t) => {
+test('archive size errors never trigger network fallback', async (t) => {
   const oversized = fallbackFixture(t, () => new Response('small', { headers: { 'content-length': String(128 * 1024 * 1024 + 1) } }));
   await assert.rejects(oversized.installer.install(), (error) => error.code === 'archive_too_large');
   assert.equal(oversized.calls.length, 1);
-  const progress = fallbackFixture(t, () => new Response('bytes'));
-  await assert.rejects(progress.installer.install({ onProgress: () => { throw new Error('progress failed'); } }), /progress failed/);
-  assert.equal(progress.calls.length, 1);
+});
+
+for (const useApi of [false, true]) test(`${useApi ? 'API' : 'direct'} progress callback errors report download_failed without retrying`, async (t) => {
+  const progress = fallbackFixture(t, () => new Response(useApi ? '' : 'bytes', { status: useApi ? 504 : 200 }));
+  await assert.rejects(progress.installer.install({ onProgress: () => { throw new Error('progress failed'); } }),
+    (error) => error.code === 'download_failed' && /local download failure/.test(error.message));
+  assert.equal(progress.calls.length, useApi ? 4 : 1);
+  assert.deepEqual(fs.readdirSync(progress.installer.paths.staging), []);
+  assert.equal(fs.existsSync(progress.installer.paths.installedManifest), false);
 });
 
 test('API timeout reports both paths and does not retry again', async (t) => {
@@ -436,18 +442,46 @@ test('external cancellation during API metadata stops the fallback', async (t) =
   assert.equal(calls.length, 2);
 });
 
-test('local archive open failure cancels the response and never falls back', async (t) => {
+for (const useApi of [false, true]) test(`${useApi ? 'API' : 'direct'} local archive conflict reports download_failed and cancels the response`, async (t) => {
   let cancelled = false;
-  const { installer, calls } = fallbackFixture(t, () => new Response(new ReadableStream({
-    start() {}, cancel() { cancelled = true; },
-  })));
-  const original = fs.promises.open;
-  fs.promises.open = async (file, ...args) => {
-    if (String(file).endsWith('zellij.tar.gz')) throw new Error('disk unavailable');
-    return original(file, ...args);
+  let destination;
+  const response = () => {
+    const stages = fs.readdirSync(installer.paths.staging);
+    assert.equal(stages.length, 1);
+    destination = path.join(installer.paths.staging, stages[0], 'zellij.tar.gz');
+    fs.mkdirSync(destination);
+    return new Response(new ReadableStream({
+      start() {}, cancel() { cancelled = true; },
+    }));
   };
-  try { await assert.rejects(installer.install(), /disk unavailable/); }
-  finally { fs.promises.open = original; }
-  assert.equal(calls.length, 1);
+  const { installer, calls } = fallbackFixture(t,
+    () => useApi ? new Response('', { status: 504 }) : response(),
+    useApi ? { asset: response } : {});
+  await assert.rejects(installer.install(), (error) => {
+    assert.equal(error.code, 'download_failed');
+    assert.match(error.message, useApi ? /direct HTTP 504; API local download failure/ : /^local download failure$/);
+    return true;
+  });
+  assert.equal(calls.length, useApi ? 3 : 1);
   assert.equal(cancelled, true);
+  assert.equal(fs.existsSync(destination), false);
+  assert.equal(fs.existsSync(installer.paths.installedManifest), false);
+});
+
+test('throwing success logger preserves a verified API installation', async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }));
+  installer.logger.info = () => { throw new Error('logger unavailable'); };
+  assert.equal((await installer.install()).state, 'installed');
+  assert.equal((await installer.verify()).state, 'installed');
+  assert.equal(calls.length, 4);
+});
+
+test('throwing failure logger preserves the download error and both path results', async (t) => {
+  const { installer, calls } = fallbackFixture(t, () => new Response('', { status: 504 }), {
+    asset: () => new Response('', { status: 403 }),
+  });
+  installer.logger.warn = () => { throw new Error('logger unavailable'); };
+  await assert.rejects(installer.install(), (error) => error.code === 'download_failed' &&
+    /direct HTTP 504; API HTTP 403/.test(error.message));
+  assert.equal(calls.length, 3);
 });

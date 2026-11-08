@@ -15,6 +15,7 @@ const execFileAsync = promisify(execFile);
 // Run when release transport, redirects, catalog pins, or installation validation change.
 // Skip offline/default runs. This case requires the official isolated Node runner:
 // private HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR, checked before any request.
+// Machines using proxy environment variables must also set NODE_USE_ENV_PROXY=1.
 // No tmux server or database is used. Large artifacts may use a separate private
 // test root outside ~/zylos (shared-memory TMPDIR may be too small or noexec).
 // All artifacts are removed by t.after, including on failure.
