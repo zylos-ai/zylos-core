@@ -15,8 +15,8 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import dns from 'node:dns/promises';
-import { ZYLOS_DIR, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE, readSessionMode } from '../lib/config.js';
-import { readEnvFile, checkEnvFilePermissions } from '../lib/env.js';
+import { ZYLOS_DIR, CONFIG_DIR, SKILLS_DIR, COMPONENTS_FILE, ENV_FILE, readSessionMode } from '../lib/config.js';
+import { readEnvFile, ensureEnvFilePrivate } from '../lib/env.js';
 import { loadComponents } from '../lib/components.js';
 import { fetchLatestTagAsync, compareSemverDesc } from '../lib/github.js';
 import { getCurrentVersion } from '../lib/self-upgrade.js';
@@ -257,7 +257,7 @@ function checkTmuxSession(session) {
 
 // ── Diagnostics collection ───────────────────────────────────────
 
-export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork, pm2Check = checkPm2Installed, envFileCheck = checkEnvFilePermissions } = {}) {
+export async function collectDiagnostics(env, { resolve = resolveCliSession, network = checkNetwork, pm2Check = checkPm2Installed } = {}) {
   const selected = await resolve();
   const runtime = selected.runtime;
   const display = runtime === 'unknown' ? 'Unknown runtime' : runtime === 'codex' ? 'Codex' : 'Claude';
@@ -266,7 +266,7 @@ export async function collectDiagnostics(env, { resolve = resolveCliSession, net
 
   const tmux = checkTmuxInstalled();
   const pm2 = pm2Check();
-  const envFile = envFileCheck();
+  const envFile = ensureEnvFilePrivate();
   const net = await networkPromise;
 
   // Runtime-specific CLI/auth checks.
@@ -337,8 +337,8 @@ export function buildDiagnosticJson(diag, coreVersion) {
     issues.push({ id: 'network_unreachable', label: `Cannot reach ${diag.apiHost}`, hint });
   }
   if (diag.system.envFile?.ok === false) {
-    issues.push({ id: 'env_permissions', label: `~/zylos/.env is accessible to other users (mode ${diag.system.envFile.mode})`,
-      hint: 'Run: chmod 600 ~/zylos/.env' });
+    issues.push({ id: 'env_permissions', label: `${ENV_FILE} is accessible to other users (mode ${diag.system.envFile.mode})`,
+      hint: `It belongs to another user; run as that user or root: chmod 600 ${ENV_FILE}` });
   }
   const runtimeLabel = diag.display;
   if (diag.runtime !== 'unknown' && !diag.ai.cli.installed) {
@@ -393,7 +393,8 @@ export function buildDiagnosticJson(diag, coreVersion) {
             versionReason: diag.system.tmux.reason ?? null },
           pm2: { ok: diag.system.pm2.installed, version: diag.system.pm2.version || null },
           network: { ok: diag.system.network.reachable, host: diag.apiHost, proxy: diag.system.network.proxy || null },
-          envFile: { ok: diag.system.envFile?.ok !== false, mode: diag.system.envFile?.mode ?? null },
+          envFile: { ok: diag.system.envFile?.ok !== false, mode: diag.system.envFile?.mode ?? null,
+            fixed: diag.system.envFile?.fixed === true },
         },
       },
       ai_service: {
@@ -447,7 +448,9 @@ function displaySystemGroup(diag, jsonGroup) {
   }
 
   if (diag.system.envFile?.ok === false) {
-    checks.push(red(`.env readable by other users (mode ${diag.system.envFile.mode})`));
+    checks.push(red(`.env accessible to other users (mode ${diag.system.envFile.mode})`));
+  } else if (diag.system.envFile?.fixed) {
+    checks.push(`.env permissions: ${green('fixed')} ${dim(`(${diag.system.envFile.previousMode} → ${diag.system.envFile.mode})`)}`);
   }
 
   displayCheckGroup('System', jsonGroup.passed ? 'pass' : 'fail', checks);

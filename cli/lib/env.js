@@ -17,7 +17,7 @@ const ENV_FILE_MODE = 0o600;
  *
  * @param {string} file
  */
-export function secureEnvFile(file) {
+function secureEnvFile(file) {
   try {
     fs.chmodSync(file, ENV_FILE_MODE);
   } catch (err) {
@@ -25,24 +25,35 @@ export function secureEnvFile(file) {
   }
 }
 
+function envFileMode(file) {
+  try {
+    const stat = fs.statSync(file);
+    return { mode: stat.mode & 0o777, uid: stat.uid };
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Report whether a .env file is readable or writable by group or others.
- * Platforms without POSIX permission bits are not checked.
+ * Make sure group and other users cannot access a .env file.
+ * A file owned by the current user is tightened to 0600 on the spot; a file
+ * owned by someone else is only reported. Missing or unreadable files, and
+ * platforms without POSIX permission bits, are not checked.
  *
  * @param {string} [file]
- * @returns {{ok: boolean, exists: boolean, mode: string|null, checked: boolean}}
+ * @returns {{ok: boolean, mode: string|null, fixed: boolean}}
  */
-export function checkEnvFilePermissions(file = ENV_FILE, { platform = process.platform } = {}) {
-  if (platform === 'win32') return { ok: true, exists: fs.existsSync(file), mode: null, checked: false };
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch (err) {
-    if (err.code === 'ENOENT') return { ok: true, exists: false, mode: null, checked: true };
-    throw err;
+export function ensureEnvFilePrivate(file = ENV_FILE, { platform = process.platform, uid = process.getuid?.() } = {}) {
+  const format = bits => bits.toString(8).padStart(3, '0');
+  const before = platform === 'win32' ? null : envFileMode(file);
+  if (!before) return { ok: true, mode: null, fixed: false };
+  if ((before.mode & 0o077) === 0) return { ok: true, mode: format(before.mode), fixed: false };
+  if (before.uid === uid) {
+    secureEnvFile(file);
+    const after = envFileMode(file);
+    if (after && (after.mode & 0o077) === 0) return { ok: true, mode: format(after.mode), fixed: true, previousMode: format(before.mode) };
   }
-  const bits = stat.mode & 0o777;
-  return { ok: (bits & 0o077) === 0, exists: true, mode: bits.toString(8).padStart(3, '0'), checked: true };
+  return { ok: false, mode: format(before.mode), fixed: false };
 }
 
 /**
@@ -53,17 +64,6 @@ export function checkEnvFilePermissions(file = ENV_FILE, { platform = process.pl
  */
 export function writeEnvFile(file, content) {
   fs.writeFileSync(file, content, { mode: ENV_FILE_MODE });
-  secureEnvFile(file);
-}
-
-/**
- * Copy a template into place as an owner-only .env file.
- *
- * @param {string} source
- * @param {string} file
- */
-export function copyEnvFile(source, file) {
-  fs.copyFileSync(source, file);
   secureEnvFile(file);
 }
 

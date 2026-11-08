@@ -18,7 +18,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
-import { writeEnvFile, copyEnvFile } from '../lib/env.js';
+import { writeEnvFile } from '../lib/env.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
@@ -779,7 +779,7 @@ export function deployTemplates({ freshInstall = false } = {}) {
   const envSrc = path.join(TEMPLATES_SRC, '.env.example');
   const envDest = path.join(ZYLOS_DIR, '.env');
   if (fs.existsSync(envSrc) && !fs.existsSync(envDest)) {
-    copyEnvFile(envSrc, envDest);
+    fs.copyFileSync(envSrc, envDest); // saveSystemPath below rewrites it owner-only
     console.log(`  ${success('Created .env from template')}`);
   }
 
