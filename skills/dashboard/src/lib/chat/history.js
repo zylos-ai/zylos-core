@@ -14,7 +14,12 @@ const previewLabels = locale => locale === 'en'
   : { image: '[图片]', file: '[文件]', chart: '[图表]', component: '[组件]', media: '[媒体] 原渠道附件', invalid: '无法显示的消息' };
 const readableAttachment = (attachment, locale = 'zh') => `${previewLabels(locale)[attachment.kind === 'image' ? 'image' : 'file']} ${sanitizeDisplayName(attachment.name)}`;
 
-/** Browser summaries contain attachment names, never storage/model references. */
+/**
+ * Browser summaries of valid content contain attachment names, never
+ * storage/model references. An invalid message's qualified whole-message
+ * fallbackText is shown as written, so it may contain attachment IDs the
+ * agent put there; IDs are not credentials and cannot fetch an attachment.
+ */
 export function chatAttachmentPreview(content, { external = false, locale = 'zh' } = {}) {
   return attachmentPreview(content, { external, locale });
 }
