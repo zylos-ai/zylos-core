@@ -28,7 +28,7 @@ test('duration axes generate whole half-hour ticks at desktop and mobile widths'
 
 test('duration axes choose whole seconds, minutes and hours for their data range', () => {
   for (const [values, expected] of [
-    [[1, 3], [0, 1, 2, 3]], [[0, 59], [0, 15, 30, 45, 60]],
+    [[1, 3], [0, 1, 2, 3]], [[0, 0.5], [0, 1]], [[0, 59], [0, 15, 30, 45, 60]],
     [[0, 600], [0, 300, 600]], [[0, 7200], [0, 1800, 3600, 5400, 7200]],
     [[0, 28800], [0, 7200, 14400, 21600, 28800]],
     [[-59, 59], [-60, -30, 0, 30, 60]], [[0, 0], [0, 1]]

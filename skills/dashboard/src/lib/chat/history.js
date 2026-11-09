@@ -22,15 +22,15 @@ export function chatAttachmentPreview(content, { external = false, locale = 'zh'
 function attachmentPreview(content, { external = false, locale = 'zh' } = {}, format = null) {
   const parsed = parseC4Content(content);
   const labels = previewLabels(locale);
-  const body = text => {
-    if (!format) return external ? text.replace(/^\[MEDIA:[^\r\n]*$/gm, labels.media) : text;
+  const body = (text, literal = false) => {
+    if (!format || literal) return external ? text.replace(/^\[MEDIA:[^\r\n]*$/gm, labels.media) : text;
     if (!external) return format(text);
     // Channel media notices, like attachment names, are plain text outside Markdown.
     return text.split(/(^\[MEDIA:[^\r\n]*$)/gm)
       .map(part => /^\[MEDIA:[^\r\n]*$/.test(part) ? labels.media : format(part))
       .filter(Boolean).join('\n');
   };
-  if (parsed.kind === 'invalid') return parsed.fallbackText ?? labels.invalid;
+  if (parsed.kind === 'invalid') return body(parsed.fallbackText ?? labels.invalid, true);
   if (parsed.kind === 'envelope') {
     const blocks = parsed.envelope.blocks ?? [];
     if (!blocks.some(block => block.type !== 'markdown')) {

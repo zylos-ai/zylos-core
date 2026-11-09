@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { conversationPreview } from '../src/lib/chat/history.js';
+import { chatAttachmentPreview, conversationPreview } from '../src/lib/chat/history.js';
 import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 // Pure text/schema path only. No history database or network is opened.
 const packet = text => CONTENT_PREFIX + JSON.stringify({version:1,kind:'message',messageId:'readable-preview',fallbackText:text,blocks:[{id:'body',type:'markdown',schemaVersion:1,fallbackText:text,data:{text:'body'}}]});
@@ -18,6 +18,18 @@ test('invalid structured previews retain qualified fallback as literal text', ()
   }
 });
 test('plain text containing marker-like text remains literal user text',()=>{const text='Literal [C4 messageId=example; c4_id=7]';assert.equal(conversationPreview(text),text);});
+test('external invalid previews replace media paths while retaining literal explanation text', () => {
+  const fallbackText = '**Literal** <img src=x> &amp;\n[MEDIA:/home/example/private/report.pdf]\n[MEDIA:/srv/private/second.png]';
+  const invalid = CONTENT_PREFIX + JSON.stringify({ version: 99, fallbackText });
+  for (const preview of [chatAttachmentPreview, conversationPreview]) {
+    assert.equal(preview(invalid), fallbackText);
+    for (const [locale, label] of [['zh', '[媒体] 原渠道附件'], ['en', '[Media] Original-channel attachment']]) {
+      const actual = preview(invalid, { external: true, locale });
+      assert.equal(actual, `**Literal** <img src=x> &amp;\n${label}\n${label}`);
+      assert.equal(actual.includes('/home/') || actual.includes('/srv/'), false);
+    }
+  }
+});
 test('preview truncation preserves complete Unicode characters',()=>{assert.equal(conversationPreview('😀'.repeat(161)),'😀'.repeat(160));assert.equal(conversationPreview(packet('🪴'.repeat(161))),'🪴'.repeat(160));});
 
 test('incremental and list summaries retain mixed text and attachment names without managed paths', async () => {

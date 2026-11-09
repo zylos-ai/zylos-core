@@ -175,7 +175,8 @@ test('outbound GC preserves an unlinked copy after association failure and retri
 
 // Boundary: rows can arrive without BeforeSend (for example through admin
 // insert). Invalid attachment states must not poison either history tab or GC.
-test('invalid attachment lifecycle rows cannot break either history tab or block GC repair', async t => {
+// Run for invalid fallback previews as well as attachment history/GC changes.
+for (const withFallback of [true, false]) test(`invalid attachment lifecycle rows ${withFallback ? 'with' : 'without'} explanation cannot break either history tab or block GC repair`, async t => {
   const f = fixture(t), registered = await register(f), id = registered.attachmentId;
   const invalidRows = [];
   for (const type of ['x-zylos.image', 'x-zylos.file']) {
@@ -183,7 +184,7 @@ test('invalid attachment lifecycle rows cannot break either history tab or block
       const block = { id: 'broken', type, schemaVersion: 1, fallbackText: 'Unavailable attachment',
         ...(status ? { status } : {}), ...(status === 'error' ? { reason: 'unavailable' } : {}) };
       const raw = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: 'bad-attachment',
-        fallbackText: 'Unavailable attachment', blocks: [block] });
+        ...(withFallback ? { fallbackText: 'Unavailable attachment' } : {}), blocks: [block] });
       assert.equal(parseC4Content(raw).kind, 'invalid');
       const own = f.add(raw); invalidRows.push(own);
       f.core.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,session_group,content,status)
@@ -194,7 +195,7 @@ test('invalid attachment lifecycle rows cannot break either history tab or block
   for (const tab of ['mine', 'external']) {
     const history = f.history(), list = history.list({ tab });
     assert.equal(list.items.length, 1);
-    assert.equal(list.items[0].preview, '无法显示的消息');
+    assert.equal(list.items[0].preview, withFallback ? 'Unavailable attachment' : '无法显示的消息');
     const messages = history.messages(list.items[0].id, { tab });
     assert.equal(messages.items.length, 8);
     for (const row of messages.items) assert.deepEqual(row.attachments, []);
