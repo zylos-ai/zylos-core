@@ -39,7 +39,11 @@ test('shared field diagnostics prevent submission and clear when edited', async 
   assert.deepEqual(f.formState.fieldErrors, [{ key: 'company_name', reason: 'required' }, { key: 'employee_count', reason: 'range' }]);
   assert.equal(f.input('employee_count').getAttribute('aria-invalid'), 'true');
   f.change('employee_count', '2'); f.change('company_name', '');
-  f.submit(); await tick(); assert.equal(f.requests.length, 1); // Shared contract permits required empty text.
+  f.submit(); await tick(); assert.equal(f.requests.length, 0);
+  assert.deepEqual(f.formState.fieldErrors, [{ key: 'company_name', reason: 'required' }]);
+  f.change('company_name', 'Acme');
+  f.submit(); await tick(); assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].payload.values.company_name, 'Acme');
 });
 test('retained forms update diagnostics and clear removed values without erasing visible inputs', () => {
   const f = fixture({ customer_type: 'person', company_name: 'private' }, () => 'unsaved');

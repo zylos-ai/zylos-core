@@ -35,6 +35,43 @@ function fixture({ type = 'choice', data = {}, status = 'paused', canWrite = tru
 }
 const change = (input, value) => { input.value = value; input.dispatch('input'); input.dispatch('change'); };
 
+for (const allowFreeText of [undefined, true, false]) for (const otherInput of [undefined, true, false]) {
+  test(`choice other-answer input honors allowFreeText=${allowFreeText} and otherInput=${otherInput}`, () => {
+    const f = fixture({ data: allowFreeText === undefined ? {} : { allowFreeText }, mutateQuestion(q) {
+      if (otherInput !== undefined) q.constraints.interrupt.otherInput = otherInput;
+    } });
+    assert.equal(f.nodes().some(node => node.tagName === 'TEXTAREA'), allowFreeText !== false && otherInput !== false);
+  });
+}
+
+for (const type of ['choice', 'form_intent']) test(`answered historical ${type} retains its original action despite tightened checks`, () => {
+  const data = type === 'choice' ? { options: [{ id: 'a', label: 'Approve' }, { id: 'a', label: 'Reject' }] } : {};
+  const f = fixture({ type, data, status: 'answered', mutateQuestion(q) {
+    q.answerId = 'original-answer';
+    q.action = { id: q.answerId, protocolVersion: '0.1', type: q.constraints.block.data.action.type,
+      target: q.constraints.block.data.action.target, context: { messageId: q.messageId, blockId: 'question' },
+      payload: type === 'choice' ? { selected: ['a'] } : { values: { name: '' } } };
+  } });
+  assert.equal(validateAnswer(f.question.action, f.envelope), false);
+  assert.match(f.root.textContent, /chat.question.answered/);
+  assert.doesNotMatch(f.root.textContent, /invalidContent|actionUnavailable|chat.question.unavailable/);
+  assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName)), false);
+  assert.equal(f.question.action.payload[type === 'choice' ? 'selected' : 'values'][type === 'choice' ? 0 : 'name'], type === 'choice' ? 'a' : '');
+});
+
+test('an unanswered historical choice with duplicate IDs has no submission controls', () => {
+  const f = fixture({ data: { options: [{ id: 'a', label: 'Approve' }, { id: 'a', label: 'Reject' }] } });
+  assert.match(f.root.textContent, /chat.question.unavailable/);
+  assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName)), false);
+});
+
+for (const status of ['stopped', 'superseded']) test(`${status} historical choice retains its lifecycle despite duplicate IDs`, () => {
+  const f = fixture({ status, data: { options: [{ id: 'a', label: 'Approve' }, { id: 'a', label: 'Reject' }] } });
+  assert.match(f.root.textContent, new RegExp('chat.question.' + status));
+  assert.doesNotMatch(f.root.textContent, /chat.question.unavailable/);
+  assert.equal(f.nodes().some(node => ['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName)), false);
+});
+
 test('paused choice submits one shared-schema answer and binds immutable message and block', async () => {
   const f = fixture();
   const first = f.nodes().find(node => node.tagName === 'INPUT'); first.checked = true; first.dispatch('change');

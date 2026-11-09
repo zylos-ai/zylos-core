@@ -148,13 +148,34 @@ function boundedBlockNodes(block) {
   }
   return true;
 }
-function validBlock(block) {
+const present = value => value != null && (typeof value !== 'string' || /[^\s\p{Default_Ignorable_Code_Point}]/u.test(value))
+  && (!Array.isArray(value) || value.length > 0);
+function validFieldDefinition(field) {
+  const select = ['single_select', 'multi_select'].includes(field.type);
+  if (select ? new Set(field.options.map(option => option.id)).size !== field.options.length : own(field, 'options')) return false;
+  if ((own(field, 'min') || own(field, 'max')) && !['number', 'integer'].includes(field.type)) return false;
+  if (field.min !== undefined && field.max !== undefined && field.min > field.max) return false;
+  return !own(field, 'defaultValue') || (field.defaultValue !== null
+    && validFieldValue({ ...field, required: false }, field.defaultValue));
+}
+function validBlock(block, submission = false) {
   if (!matches(BLOCK_SCHEMA, block, BLOCK_SCHEMA) || !blockTypes.includes(block.type)) return false;
   if (!boundedBlockNodes(block)) return false;
   if (block.metadata?.provenance === 'adapter' && block.type !== 'markdown') return false;
   if (block.data && !dataLimits(block.data)) return false;
   if (block.type === 'form_intent' && block.schemaVersion === 2 && block.data
-    && evaluateFormState(block.data.fields, {}).errors.length) return false;
+    && evaluateFormState(block.data.fields, {}, { historical: !submission }).errors.length) return false;
+  if (submission && block.data) {
+    const data = block.data;
+    if (block.type === 'choice') {
+      const minimum = data.minSelect ?? 1, maximum = data.maxSelect ?? data.options.length;
+      if (new Set(data.options.map(option => option.id)).size !== data.options.length
+        || minimum < 1 || minimum > data.options.length || minimum > maximum
+        || ((data.selection ?? 'single') === 'single' && minimum > 1)) return false;
+    }
+    if (block.type === 'form_intent' && (new Set(data.fields.map(field => field.key)).size !== data.fields.length
+      || !data.fields.every(validFieldDefinition))) return false;
+  }
   return block.type !== 'markdown' || !block.data || byteLength(block.data.text) <= 32768;
 }
 
@@ -175,11 +196,11 @@ export function makeQuestionSummary(envelope) {
 function validAction(action) {
   return matches(ACTION_SCHEMA.$defs.actionRequest, action, ACTION_SCHEMA) && action.protocolVersion === '0.1';
 }
-function validEnvelope(envelope) {
+function validEnvelope(envelope, submission = false) {
   if (!object(envelope) || envelope.version !== 1 || !id(envelope.messageId) || !string(envelope.fallbackText, 1, 16000)) return false;
   if (envelope.kind === 'message') {
     if (!keys(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'blocks'], ['metadata', 'interruptId', 'questionSummary', 'interrupt'])
-      || !Array.isArray(envelope.blocks) || envelope.blocks.length > 64 || !envelope.blocks.every(validBlock)
+      || !Array.isArray(envelope.blocks) || envelope.blocks.length > 64 || !envelope.blocks.every(block => validBlock(block, submission))
       || new Set(envelope.blocks.map(block => block.id)).size !== envelope.blocks.length
       || (own(envelope, 'metadata') && (!object(envelope.metadata) || !withinMetadataDepth(envelope.metadata)))) return false;
     const questionKeys = ['interruptId', 'questionSummary', 'interrupt'];
@@ -226,12 +247,13 @@ function viewError(view, metadata, blocks) {
   const nodes = new Map(view.nodes.map(node => [node.id, node]));
   if (nodes.size !== view.nodes.length) return 'duplicate_view_node';
   if (!nodes.has(view.root)) return 'missing_view_root';
-  const blockIds = new Set(blocks.map(block => block.id)), referenced = new Set(), parents = new Map();
+  const blockIds = new Map(blocks.map(block => [block.id, block])), referenced = new Set(), parents = new Map();
   const children = node => node.type === 'section' ? [...(node.header ?? []), ...(node.body ?? []), ...(node.actions ?? [])]
     : node.type === 'block' ? [] : node.children;
   for (const node of nodes.values()) {
     if (node.type === 'block') {
       if (!blockIds.has(node.blockId)) return 'unknown_view_block';
+      if ((blockIds.get(node.blockId).status ?? 'complete') !== 'complete') return 'incomplete_view_block';
       if (referenced.has(node.blockId)) return 'duplicate_view_block';
       referenced.add(node.blockId);
     }
@@ -300,12 +322,12 @@ export function readC4Envelope(content) {
   } catch { return { kind: 'invalid', reason: 'invalid_envelope' }; }
 }
 
-export function parseC4Content(content) {
+export function parseC4Content(content, { submission = false } = {}) {
   const framed = readC4Envelope(content);
   if (framed.kind !== 'envelope') return framed;
   try {
     const split = splitMessageView(framed.envelope);
-    if (!validEnvelope(split.envelope)) return { kind: 'invalid', reason: 'invalid_envelope' };
+    if (!validEnvelope(split.envelope, submission)) return { kind: 'invalid', reason: 'invalid_envelope' };
     const error = split.hasView ? viewError(split.view, split.metadata, split.envelope.blocks) : null;
     return { kind: 'envelope', envelope: split.envelope, suffix: framed.suffix,
       view: split.hasView && !error ? split.view : null, ...(error ? { viewError: error } : {}) };
@@ -331,7 +353,7 @@ export function describeC4ContentRejection(content) {
     if (!string(envelope.fallbackText, 1, 16000)) return 'fallbackText must contain 1 to 16000 characters.';
     if (envelope.kind === 'message') {
       if (!Array.isArray(envelope.blocks) || envelope.blocks.length > 64) return 'blocks must be an array with at most 64 entries.';
-      const invalidBlock = envelope.blocks.findIndex(block => !validBlock(block));
+      const invalidBlock = envelope.blocks.findIndex(block => !validBlock(block, true));
       if (invalidBlock >= 0) return `blocks[${invalidBlock}] does not match a supported block schema.`;
       if (new Set(envelope.blocks.map(block => block.id)).size !== envelope.blocks.length) return 'Block identifiers must be unique.';
       if (object(envelope.interrupt)) {
@@ -346,7 +368,8 @@ export function describeC4ContentRejection(content) {
   } catch { return 'Envelope fields do not match the required schema.'; }
 }
 
-function validFieldValue(field, value) {
+function validFieldValue(field, value, { historical = false } = {}) {
+  if (!historical && field.required === true && !present(value)) return false;
   if (value == null) return field.required !== true;
   if (['text', 'multiline_text'].includes(field.type)) return string(value, 0, field.maxLength ?? 2000);
   if (['number', 'integer'].includes(field.type)) return typeof value === 'number' && Number.isFinite(value)
@@ -359,13 +382,14 @@ function validFieldValue(field, value) {
   return false;
 }
 /** Evaluate active fields from the same definitions used by answer validation. */
-export function evaluateFormState(fields, values) {
+export function evaluateFormState(fields, values, { historical = false } = {}) {
   const invalid = reason => ({ activeKeys: [], errors: [reason] });
   if (!Array.isArray(fields) || !fields.length || fields.length > 12) return invalid('invalid_form_fields');
   if (!object(values)) return invalid('invalid_form_values');
   const byKey = new Map();
   for (const field of fields) {
     if (!matches(BLOCK_SCHEMA.$defs.formFieldV2, field, BLOCK_SCHEMA)) return invalid('invalid_form_field');
+    if (!historical && !validFieldDefinition(field)) return invalid('invalid_form_field');
     if (byKey.has(field.key)) return invalid(`duplicate_form_field:${field.key}`);
     byKey.set(field.key, field);
   }
@@ -397,7 +421,8 @@ export function evaluateFormState(fields, values) {
     if (!condition) { active.add(field.key); continue; }
     if (!active.has(condition.field) || !own(values, condition.field)) continue;
     const value = values[condition.field];
-    if (own(condition, 'present') ? value !== null && value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0)
+    const hasValue = historical ? value != null && value !== '' && (!Array.isArray(value) || value.length > 0) : present(value);
+    if (own(condition, 'present') ? hasValue
       : own(condition, 'eq') ? value === condition.eq : condition.in.includes(value)) active.add(field.key);
   }
   return { activeKeys: fields.filter(field => active.has(field.key)).map(field => field.key), errors: [] };
@@ -409,8 +434,8 @@ export function evaluateFormState(fields, values) {
  * inactive/unknown keys first, then active fields in their definition order.
  * Invalid definitions or a non-object values input return formError instead.
  */
-export function validateFormFields(fields, values) {
-  const state = evaluateFormState(fields, values);
+export function validateFormFields(fields, values, options = {}) {
+  const state = evaluateFormState(fields, values, options);
   if (state.errors.length) return { activeKeys: state.activeKeys, errors: [], formError: state.errors[0] };
   const active = new Set(state.activeKeys), known = new Set(fields.map(field => field.key)), errors = [];
   for (const key of Object.keys(values)) {
@@ -420,9 +445,9 @@ export function validateFormFields(fields, values) {
   for (const field of fields) {
     if (!active.has(field.key)) continue;
     const value = own(values, field.key) ? values[field.key] : undefined;
-    if (validFieldValue(field, value)) continue;
+    if (validFieldValue(field, value, options)) continue;
     let reason = 'type';
-    if (value == null) reason = 'required';
+    if (value == null || (field.required && !present(value))) reason = 'required';
     else if (['text', 'multiline_text'].includes(field.type) && typeof value === 'string') reason = 'range';
     else if (['number', 'integer'].includes(field.type) && typeValid(field.type, value)) reason = 'range';
     else if (field.type === 'single_select' && typeof value === 'string') reason = 'range';
@@ -432,15 +457,16 @@ export function validateFormFields(fields, values) {
   return { activeKeys: state.activeKeys, errors };
 }
 
-export function validateAnswer(action, questionEnvelope) {
+export function validateAnswer(action, questionEnvelope, { historical = false } = {}) {
   try {
     questionEnvelope = splitMessageView(questionEnvelope).envelope;
-    if (!validAction(action) || !validEnvelope(questionEnvelope) || questionEnvelope.kind !== 'message' || !questionEnvelope.interrupt) return false;
+    if (!validAction(action) || !validEnvelope(questionEnvelope, !historical) || questionEnvelope.kind !== 'message' || !questionEnvelope.interrupt) return false;
     const block = questionEnvelope.blocks.find(item => item.id === questionEnvelope.interrupt.blockId), data = block.data;
     if (action.context.messageId !== questionEnvelope.messageId || action.context.blockId !== block.id
       || action.type !== data.action.type || action.target !== data.action.target || (data.state?.status ?? 'open') !== 'open') return false;
     const payload = action.payload;
-    if (own(payload, 'freeText')) return questionEnvelope.interrupt.otherInput !== false;
+    if (own(payload, 'freeText')) return questionEnvelope.interrupt.otherInput !== false
+      && (historical || block.type !== 'choice' || data.allowFreeText !== false);
     if (block.type === 'choice') {
       const selected = payload.selected;
       return ((data.selection ?? 'single') !== 'single' || selected.length === 1)
@@ -450,11 +476,11 @@ export function validateAnswer(action, questionEnvelope) {
     if (block.type === 'confirmation') return ['confirm', 'cancel'].includes(payload.outcome);
     if (block.type === 'form_intent') {
       if (block.schemaVersion === 2) {
-        const result = validateFormFields(data.fields, payload.values);
+        const result = validateFormFields(data.fields, payload.values, { historical });
         return !result.formError && result.errors.length === 0;
       }
       return Object.keys(payload.values).every(key => data.fields.some(field => field.key === key))
-        && data.fields.every(field => validFieldValue(field, own(payload.values, field.key) ? payload.values[field.key] : undefined));
+        && data.fields.every(field => validFieldValue(field, own(payload.values, field.key) ? payload.values[field.key] : undefined, { historical }));
     }
     return false;
   } catch { return false; }

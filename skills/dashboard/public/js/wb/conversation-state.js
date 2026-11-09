@@ -1,4 +1,4 @@
-import { parseC4Content, evaluateFormState } from '../../chat-schema.js?v=102';
+import { parseC4Content, evaluateFormState } from '../../chat-schema.js?v=103';
 import { messageState } from './chat-delivery-state.js?v=100';
 import { asDate } from './conversation-time.js?v=99';
 import { normalizeChatSubscription, chatSubscriptionKey, matchesChatEvent } from './conversation-push.js?v=1';

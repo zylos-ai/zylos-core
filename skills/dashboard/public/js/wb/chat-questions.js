@@ -1,4 +1,4 @@
-import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=102';
+import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=103';
 import { element } from './plain-text.js?v=104';
 import { receiptState } from './chat-delivery-state.js?v=100';
 import { instantFromInput, zonedInputValue } from './instance-zone.js?v=100';
@@ -15,7 +15,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   t = key => key, onSubmit = null, formState = {}, onDraftChange = null, otherAnswerDisclosure = false, timeZone = null } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-question');
-  const validEnvelope = parseC4Content(CONTENT_PREFIX + JSON.stringify(envelope));
+  const validEnvelope = parseC4Content(CONTENT_PREFIX + JSON.stringify(envelope), { submission: question?.status === 'paused' });
   const valid = validEnvelope.kind === 'envelope' && referenceMatches(question, envelope, block, row);
   const lifecycle = valid && ['paused', 'answered', 'stopped', 'superseded'].includes(question.status)
     ? question.status : 'unavailable';
@@ -41,8 +41,8 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     error.setAttribute('role', 'alert'); root.append(error);
   }
   const actionUnavailable = lifecycle === 'answered' && (question.actionError ||
-    (question.action && (question.action.id !== question.answerId || !validateAnswer(question.action, envelope))) ||
-    (formState.action && (formState.action.id !== question.answerId || !validateAnswer(formState.action, envelope))));
+    (question.action && (question.action.id !== question.answerId || !validateAnswer(question.action, envelope, { historical: true }))) ||
+    (formState.action && (formState.action.id !== question.answerId || !validateAnswer(formState.action, envelope, { historical: true }))));
   if (actionUnavailable) root.append(node('p', t('chat.question.actionUnavailable'), 'chat-error'));
   const writable = canWrite && !readOnlyExternal && valid && !actionUnavailable && typeof onSubmit === 'function';
   const controls = [];
@@ -226,7 +226,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
     }, 'answer'));
     refresh();
   }
-  if (envelope.interrupt.otherInput !== false) {
+  if (envelope.interrupt.otherInput !== false && (block.type !== 'choice' || data.allowFreeText !== false)) {
     const label = node('label', otherAnswerDisclosure ? undefined : t('chat.question.otherAnswer'), 'chat-question-other');
     const input = node('textarea'); input.value = formState.freeText ?? ''; input.maxLength = 1000;
     input.setAttribute('aria-label', t('chat.question.otherAnswer')); input.disabled = !!formState.sending;

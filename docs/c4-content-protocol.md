@@ -76,6 +76,10 @@ Blocks keep ChatWeave's `{id,type,schemaVersion,data,fallbackText?,metadata?,sta
 
 Block data also retains upstream depth ≤6 (data root =1) and per-block 5,000 JSON-node limits.
 
+For new sends and new answers, host procedural checks require unique choice option IDs, unique select option IDs and unique form field keys in both form versions. Choice bounds must be satisfiable: minSelect defaults to 1 and must be at least 1, at most the option count, at most maxSelect, and at most 1 for single selection. Explicit minSelect:0 is rejected. Field defaults must match the field type, numeric bounds and select membership; null defaults are rejected. Only number/integer fields may declare min/max, with min ≤ max. Non-select fields cannot declare options. These checks supplement the pinned upstream BLOCK_SCHEMA without changing it.
+
+Required fields reject missing/null values, empty strings, strings containing only Unicode whitespace or default-ignorable characters (including zero-width characters), and empty arrays. The same presence check drives activeWhen.present. Zero and false are present; optional empty strings and arrays remain legal when their field type permits them.
+
 The table selects a supported host subset; it does not rename or redefine the complete upstream block catalogue. Other upstream or future blocks are read-only fallback/error in this version. Detailed per-field limits and interaction-state shapes are the pinned upstream schema; the shared validator embeds the selected definitions so Node and browser use one contract, without runtime network/dependency loading.
 
 Interaction states retain upstream semantics: open (default), resolved, expired, cancelled, superseded. Resolved has exactly the suitable selected/outcome/values/freeText plus resolvedAt; cancelled requires a reason; superseded requires supersededBy. Server-ended states carry no user resolvedBy. Confirmation **cancel is a resolved answer**, not the cancelled state. These states describe saved display data, not Core execution gating. C4 does not patch old question rows; Dashboard overlays current question state.
@@ -134,7 +138,7 @@ View is `{schemaVersion:1,root:<nodeId>,nodes:[...]}` with closed fields. Nodes 
 
 Node IDs use the block-ID alphabet and 64-character limit. All nodes must be reachable from root, with no cycle or multiple parents. Every Content block, including noninteractive blocks, may be referenced at most once. Unreferenced blocks remain available for consumers to append in original Content order. At most 128 nodes and semantic tree depth 6 (root counts 1); metadata depth also counts its root as 1. Flat children/slot arrays keep a legal leaf at metadata depth 6. No nested props/slots, partial references, repeat, arbitrary text, HTML, CSS, scripts or URLs.
 
-`form_intent` schemaVersion 2 preserves v1 fields and adds optional `activeWhen` to each field. The condition is exactly one of `{field,eq:<nonnull scalar>}`, `{field,in:[<nonnull scalars>]}` or `{field,present:true}`. Referenced fields must exist and dependencies must be acyclic. `eq`/`in` require a scalar field and same-type constants; `in` has 1–20 items. A multi_select field supports only present:true; present:false is rejected. Presence excludes missing, null, empty string and empty array, but includes 0 and false.
+`form_intent` schemaVersion 2 preserves v1 fields and adds optional `activeWhen` to each field. The condition is exactly one of `{field,eq:<nonnull scalar>}`, `{field,in:[<nonnull scalars>]}` or `{field,present:true}`. Referenced fields must exist and dependencies must be acyclic. `eq`/`in` require a scalar field and same-type constants; `in` has 1–20 items. A multi_select field supports only present:true; present:false is rejected. Presence uses the required-field check above, including rejection of whitespace/zero-width-only strings, but includes 0 and false.
 
 `evaluateFormState(fields,values)` is exported by the same import-free schema module and returns `{activeKeys,errors}`. It validates definitions and evaluates dependencies in topological order; activeKeys retain original field order. An inactive source is missing for all downstream conditions even when values retains its old draft. The function does not mutate values or persist drafts. Invalid definitions produce errors; callers must not treat that result as permission to submit.
 
@@ -152,7 +156,15 @@ ActionRequest is `{id,protocolVersion:'0.1',type,target,context,payload,clientTs
 | confirmation.respond | `{outcome:'confirm'|'cancel'}` or `{freeText}` |
 | form.submit | `{values:{saved field key:value}}` or `{freeText}` |
 
-freeText is nonempty, max 500 code points, only on an open interrupt whose otherInput is not false. It is an answer, not a new chat message and is never interpreted as an option by schema. No new ID on timeout/retry; reuse the same action.id. Idempotent acceptance and concurrency remain Dashboard responsibilities.
+freeText is nonempty, max 500 code points, only on an open interrupt whose otherInput is not false. For choice blocks, allowFreeText must also not be false: both flags must permit free text. The other-answer input follows the same rule. It is an answer, not a new chat message and is never interpreted as an option by schema. No new ID on timeout/retry; reuse the same action.id. Idempotent acceptance and concurrency remain Dashboard responsibilities.
+
+### New submissions and historical display
+
+`parseC4Content(content)` preserves the previous Content acceptance rules for stored history, projections, fleet rendering and savedEnvelope reconstruction. BeforeSend explicitly uses `{submission:true}` to apply the new host consistency checks. New answer validation is strict by default, including answers to reconstructed saved questions. An unanswered old question that fails these checks is unavailable for new answers.
+
+For already-answered question overlays, the browser uses the historical parser and `validateAnswer(action,envelope,{historical:true})`, preserving old duplicate-ID questions and empty-string answers without marking their saved actions unavailable. The historical option is for display only; submission/retry and server acceptance still use strict validation. Stored answer messages continue to display their original fallbackText. View validation still degrades an invalid layout to legal Content plus viewError, including references to pending/error blocks; complete or omitted block status is allowed. BeforeSend rejects viewError, while answer validation remains independent of layout.
+
+Only paused question overlays use strict definition parsing because only paused questions accept new answers. Stopped and superseded overlays retain their historical lifecycle without enabling controls. Historical v2 conditional forms also preserve the previous presence semantics: a whitespace-only source still activates a present:true dependent when validating an original answer for display.
 
 Explicit `control` is **host lifecycle metadata**, not another ChatWeave ActionSpec:
 
