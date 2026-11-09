@@ -33,8 +33,8 @@ export function stepText(step, t = key => key) {
 /**
  * Where each activity part goes. A part that ends with a reply folds above that reply when it has steps; the part
  * after the last reply is the live area while the round runs (shown before the first reply even with no steps, and
- * after a reply once something happens). Finished trailing steps fold below their preceding loaded reply; without
- * that reply they retain the separate area after the round's last loaded message.
+ * after a reply once something happens). Trailing work sits below its preceding loaded reply when that reply is the
+ * round's last loaded message; otherwise it retains the separate area after the round's last loaded message.
  * The live area sits under the latest user message, including one sent moments ago that is still waiting to be routed.
  */
 export function activityPlacement(messages, activity) {
@@ -72,13 +72,12 @@ export function activityPlacement(messages, activity) {
         }
         continue;
       }
-      if (round.state === 'running') {
-        if (!replies || segment.steps.length) trailing.push({ key, round, segment, live: true, anchor });
-      } else if (stepCount(segment)) {
-        if (precedingReply !== null && loadedReplies.has(precedingReply)) {
+      const live = round.state === 'running';
+      if (live ? !replies || segment.steps.length : stepCount(segment)) {
+        if (precedingReply === anchor && loadedReplies.has(precedingReply)) {
           if (!afterReply.has(precedingReply)) afterReply.set(precedingReply, []);
-          afterReply.get(precedingReply).push({ key, round, segment, live: false, afterReply: true, replyId: precedingReply });
-        } else trailing.push({ key, round, segment, live: false, anchor });
+          afterReply.get(precedingReply).push({ key, round, segment, live, afterReply: true, replyId: precedingReply });
+        } else trailing.push({ key, round, segment, live, anchor });
       }
     }
   }
@@ -122,7 +121,7 @@ export function createActivityArea({ document, t = key => key, onToggle }) {
     const countText = segment.truncated ? `${count}+` : String(count);
     const steps = t(count === 1 && !segment.truncated ? 'chat.activity.oneStep' : 'chat.activity.steps').replace('{count}', countText);
     headText.textContent = entry.afterReply
-      ? t('chat.activity.afterReply').replace('{duration}', formatDuration(elapsed, t)).replace('{steps}', countText)
+      ? t(live ? 'chat.activity.afterReplyWorking' : 'chat.activity.afterReply').replace('{duration}', formatDuration(elapsed, t)).replace('{steps}', steps)
       : t(live ? 'chat.activity.working' : 'chat.activity.worked').replace('{time}', formatDuration(elapsed, t)).replace('{steps}', steps);
     if (!live) {
       head.setAttribute('aria-expanded', String(expanded));

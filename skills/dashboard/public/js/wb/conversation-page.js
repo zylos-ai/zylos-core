@@ -9,7 +9,7 @@ import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=104';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=109';
 import { createGroupSide } from './group-side.js?v=3';
-import { activityPlacement, createActivityArea } from './conversation-activity.js?v=102';
+import { activityPlacement, createActivityArea } from './conversation-activity.js?v=103';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 const laterThan = (left, right) => {
   const a = String(left),
@@ -905,7 +905,7 @@ export function mountConversationPage({
   function activityArea() {
     return createActivityArea({ document, t, onToggle: toggleActivity });
   }
-  /** Reply work folds above it, finished follow-up work below it; unmatched or live parts keep their separate area. */
+  /** Reply work folds above it; follow-up work stays below the last loaded reply or after a later user message. */
   function placeActivity(s, ordered) {
     const placement = activityPlacement(s.messages, s.tab === 'mine' ? s.activity : null);
     activityEntries.clear();
@@ -953,7 +953,7 @@ export function mountConversationPage({
       while (ordered[position]?.classList?.contains('conversation-activity-message')) position++;
       ordered.splice(position, 0, item.node);
     }
-    const live = placement.trailing.some(entry => entry.live);
+    const live = [...activityEntries.values()].some(({ entry }) => entry.live);
     if (live && activityTimer === null && view?.setInterval) activityTimer = view.setInterval(tickActivity, 1000);
     if (!live && activityTimer !== null) { view?.clearInterval(activityTimer); activityTimer = null; }
   }

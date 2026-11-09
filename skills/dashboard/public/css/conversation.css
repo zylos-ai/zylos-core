@@ -1110,17 +1110,17 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   }
 }
 
-/* Agent activity: one folded line above each reply, open while the agent works. Folded heads and the live head
+/* Agent activity: folded lines around replies, open while the agent works. Folded heads and the live head
    share one box so their left edges line up; the time column is a grid column at the area's right edge, so it never
    moves with the length of a step's text. */
 .conversation-page .conversation-activity-slot { display:flex; flex-direction:column; gap:2px; }
 .conversation-page .conversation-activity-slot[hidden] { display:none; }
-.conversation-page .conversation-message-body:not(.conversation-message-body-wide)>.conversation-activity-slot:not([hidden])~.chat-message-content { align-self:flex-start; }
+.conversation-page .conversation-message-body:not(.conversation-message-body-wide):has(>.conversation-activity-slot:not([hidden]))>.chat-message-content { align-self:flex-start; }
 .conversation-activity { display:flex; flex-direction:column; gap:2px; max-width:100%; font-size:12.5px; line-height:1.5; color:var(--text-dim); }
 .conversation-activity[data-open] { width:520px; }
 .conversation-activity-head { display:inline-flex; align-self:flex-start; align-items:center; gap:5px; max-width:100%; min-height:24px; margin:0; padding:2px 8px 2px 6px; border:1px solid transparent; border-radius:7px; background:none; font:inherit; font-size:12px; color:var(--text-muted); text-align:left; }
 .conversation-activity-head>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.conversation-activity-after-reply .conversation-activity-head { padding-left:0; font-size:11.5px; }
+.conversation-activity-after-reply .conversation-activity-head { font-size:11.5px; }
 .conversation-activity-after-reply .conversation-activity-head>span { overflow:visible; text-overflow:clip; white-space:normal; overflow-wrap:anywhere; }
 button.conversation-activity-head { cursor:pointer; }
 button.conversation-activity-head:hover { background:var(--wb-hover, var(--wb-line)); color:var(--text-dim); }

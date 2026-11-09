@@ -98,7 +98,7 @@ test('a split reply folds the part up to it and the later steps start a new live
   assert.equal(placed.trailing.length, 0, 'right after a reply nothing new is shown until the agent does something');
   parts[1].steps = [tool(30, null, 'running')];
   placed = activityPlacement([msg(1, 'in'), msg(2, 'out')], activity(items, [round('1', { state: 'running', end: null, segments: parts })]));
-  assert.equal(placed.trailing.length, 1); assert.equal(placed.trailing[0].anchor, 2); assert.equal(placed.trailing[0].live, true);
+  assert.equal(placed.trailing.length, 0); assert.equal(placed.afterReply.get(2)[0].replyId, 2); assert.equal(placed.afterReply.get(2)[0].live, true);
 });
 
 test('finished trailing steps attach to their immediately preceding loaded reply by id', () => {
@@ -114,13 +114,13 @@ test('finished trailing steps attach to their immediately preceding loaded reply
   assert.equal(entry.key, '1:tail'); assert.equal(entry.segment, tail);
 });
 
-test('a running trailing segment retains its live area instead of attaching below a reply', () => {
+test('a running trailing segment attaches its live area below the last loaded reply', () => {
   const running = activity([{ id: 1, state: 'round', round: '1' }], [round('1', { state: 'running', end: null,
     segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] }, { replyId: null, start: s(10), end: null, steps: [tool(11, null, 'running')] }]
   })]);
   const placed = activityPlacement([msg(1, 'in'), msg(2, 'out')], running);
-  assert.equal(placed.afterReply.size, 0); assert.equal(placed.trailing.length, 1);
-  assert.equal(placed.trailing[0].live, true); assert.equal(placed.trailing[0].anchor, 2);
+  assert.equal(placed.afterReply.size, 1); assert.equal(placed.trailing.length, 0);
+  assert.equal(placed.afterReply.get(2)[0].live, true); assert.equal(placed.afterReply.get(2)[0].replyId, 2);
 });
 
 test('finished zero-step follow-up work stays absent even when it contains words', () => {
@@ -142,6 +142,35 @@ test('a missing preceding reply keeps the existing trailing area and never attac
     assert.equal(placed.trailing[0].live, false); assert.equal(placed.trailing[0].anchor, messages.at(-1).id);
     assert.equal(placed.trailing[0].segment.steps[0].status, 'failed');
   }
+});
+
+test('a user interjection keeps running and finished trailing work after that user message', () => {
+  for (const state of ['running', 'done']) {
+    const shared = round('1', { messageIds: [1, 3], state, end: state === 'running' ? null : 26,
+      segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] },
+        { replyId: null, start: s(10), end: state === 'running' ? null : s(26), steps: [tool(21, 25, 'failed')] }]
+    });
+    const items = [{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'round', round: '1' }];
+    const placed = activityPlacement([msg(1, 'in'), msg(2, 'out'), msg(3, 'in')], activity(items, [shared]));
+    assert.equal(placed.afterReply.size, 0);
+    assert.equal(placed.trailing.length, 1);
+    assert.equal(placed.trailing[0].anchor, 3);
+    assert.equal(placed.trailing[0].live, state === 'running');
+    assert.equal(placed.trailing[0].segment.steps[0].status, 'failed');
+  }
+});
+
+test('a finished round without a reply never borrows the preceding round reply', () => {
+  const parts = [round('1', { segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] },
+    { replyId: null, start: s(10), end: s(15), steps: [tool(11, 14)] }] }),
+    round('3', { start: 20, end: 30, segments: [{ replyId: null, start: s(20), end: s(30), steps: [tool(21, 29, 'failed')] }] })];
+  const placed = activityPlacement([msg(1, 'in'), msg(2, 'out'), msg(3, 'in')],
+    activity([{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'round', round: '3' }], parts));
+  assert.equal(placed.afterReply.get(2).length, 1);
+  assert.equal(placed.afterReply.get(2)[0].round.key, '1');
+  assert.equal(placed.trailing.length, 1);
+  assert.equal(placed.trailing[0].round.key, '3');
+  assert.equal(placed.trailing[0].anchor, 3);
 });
 
 test('the live head shows elapsed round time and steps; thinking shows only when no tool runs', () => {
@@ -183,7 +212,7 @@ test('after-reply work uses the localized follow-up summary and retains failed s
   const entry = { key: '1:tail', replyId: 2, afterReply: true, live: false, round: { state: 'done' },
     segment: { replyId: null, start: s(59), end: s(65), steps: [tool(60, 64, 'failed')] } };
   for (const [words, summary, failure] of [[zh, '回复后又处理 6 秒 · 1 步', '没有完成 · 4 秒'],
-    [en, 'After replying: 6 s · steps: 1', 'Did not finish · 4 s']]) {
+    [en, 'Worked 6 s more after replying · 1 step', 'Did not finish · 4 s']]) {
     const document = createDocument(), toggled = [];
     const area = createActivityArea({ document, t: key => words[key], onToggle: key => toggled.push(key) });
     area.update(entry, { open: false, now: s(500) });
@@ -195,6 +224,24 @@ test('after-reply work uses the localized follow-up summary and retains failed s
     assert.equal(area.node.querySelector('button').getAttribute('aria-expanded'), 'true');
     assert.equal(area.node.querySelector('.conversation-activity-step').dataset.status, 'failed');
     assert.equal(area.node.querySelector('.conversation-activity-time').textContent, failure);
+  }
+});
+
+test('running follow-up work counts live time in both languages and becomes a folded completed summary', () => {
+  const segment = { replyId: null, start: s(10), end: null, steps: [tool(11, null, 'running')] };
+  const entry = { key: '1:tail', replyId: 2, afterReply: true, live: true, round: { state: 'running' }, segment };
+  for (const [words, liveSummary, doneSummary] of [[zh, '回复后正在处理 6 秒 · 1 步', '回复后又处理 8 秒 · 1 步'],
+    [en, 'Working after replying: 6 s · 1 step', 'Worked 8 s more after replying · 1 step']]) {
+    const area = createActivityArea({ document: createDocument(), t: key => words[key] });
+    area.update(entry, { open: false, now: s(16) });
+    assert.equal(area.node.querySelector('.conversation-activity-head').textContent, liveSummary);
+    assert.equal(area.node.querySelector('.conversation-activity-steps').hidden, false);
+    assert.equal(area.node.querySelector('.conversation-activity-time').textContent, words === zh ? '5 秒' : '5 s');
+    area.update(entry, { open: false, now: s(17) });
+    assert.match(area.node.querySelector('.conversation-activity-head').textContent, /7/);
+    area.update({ ...entry, live: false, round: { state: 'done' }, segment: { ...segment, end: s(18) } }, { open: false, now: s(30) });
+    assert.equal(area.node.querySelector('button').textContent, doneSummary);
+    assert.equal(area.node.querySelector('.conversation-activity-steps').hidden, true);
   }
 });
 
@@ -213,10 +260,11 @@ test('a step still running in a folded part never shows more time than the part 
 
 function pageFixture(context, { rows, activityBody, activityStatus = () => 200 }) {
   const document = createDocument(), root = document.createElement('div');
-  const timers = [];
+  const timers = [], intervals = [];
   document.defaultView = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: id => { if (timers[id - 1]) timers[id - 1].fn = null; },
-    setInterval: () => 9, clearInterval() {}, innerWidth: 1280 };
+    setInterval: (fn, ms) => { intervals.push({ fn, ms }); return intervals.length; },
+    clearInterval: id => { if (intervals[id - 1]) intervals[id - 1].fn = null; }, innerWidth: 1280 };
   const reads = [];
   const page = mountConversationPage({ root, document, t, fetch: async path => {
     if (path.includes('/activity?')) reads.push(new URLSearchParams(path.split('?')[1]).get('ids'));
@@ -230,7 +278,7 @@ function pageFixture(context, { rows, activityBody, activityStatus = () => 200 }
     return { ok: status === 200, status, json: async () => body };
   } });
   context.after(() => page.destroy());
-  return { document, root, page, timers, reads, async open() {
+  return { document, root, page, timers, intervals, reads, async open() {
     await page.open();
     allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click');
     for (let i = 0; i < 6; i++) await tick();
@@ -259,6 +307,44 @@ test('history activity is folded above its reply, outside the reply content, and
   assert.equal(f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity-steps').hidden, false,
     'a later update does not fold it back');
   assert.deepEqual(f.reads, ['1'], 'a finished round is not read again');
+});
+
+test('messages without follow-up work hide their after-reply slot', async t => {
+  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => doneBody() });
+  await f.open();
+  const slots = f.root.querySelectorAll('.conversation-activity-after-reply-slot');
+  assert.equal(slots.length, 2);
+  for (const slot of slots) {
+    assert.equal(slot.hidden, true, 'an empty slot must not add message spacing');
+    assert.equal(slot.children.length, 0);
+  }
+});
+
+test('live follow-up work stays inside its reply, ticks there and folds when the round ends', async t => {
+  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
+  let body = { now: s(16), items: [{ id: 1, state: 'round', round: '1' }], rounds: [round('1', { state: 'running', end: null,
+    segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] },
+      { replyId: null, start: s(10), end: null, steps: [tool(11, null, 'running')] }] })] };
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
+  await f.open();
+  const reply = f.root.querySelector('[data-message-id="2"]');
+  const area = reply.querySelector('.conversation-activity-after-reply');
+  assert.ok(area);
+  assert.equal(f.root.querySelectorAll('.conversation-activity-message').length, 0);
+  assert.match(area.querySelector('.conversation-activity-head').textContent, /回复后正在处理 6 秒 · 1 步/);
+  assert.equal(area.querySelector('.conversation-activity-steps').hidden, false);
+  const clock = f.intervals.find(timer => timer.fn && timer.ms === 1000);
+  assert.ok(clock, 'the attached live area must own a clock even without a separate trailing area');
+  clock.fn();
+  body = { now: s(18), items: body.items, rounds: [round('1', { end: 18,
+    segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] },
+      { replyId: null, start: s(10), end: s(18), steps: [tool(11, 18, 'failed')] }] })] };
+  await refresh(f);
+  assert.equal(reply.querySelector('.conversation-activity-after-reply'), area, 'the area stays under the reply as it finishes');
+  assert.equal(area.querySelector('button').textContent, '回复后又处理 8 秒 · 1 步');
+  assert.equal(area.querySelector('.conversation-activity-steps').hidden, true);
+  assert.equal(clock.fn, null, 'finished follow-up work releases its clock');
 });
 
 test('finished follow-up work stays below the reply body with no extra AI article and keeps its expanded failure on redraw', async t => {
@@ -301,6 +387,34 @@ test('loading a missing reply moves its existing follow-up activity out of the f
   const area = f.root.querySelector('[data-message-id="2"] .conversation-activity-after-reply-slot .conversation-activity');
   assert.ok(area); assert.equal(area.querySelector('button').getAttribute('aria-expanded'), 'true');
   assert.equal(area.querySelector('.conversation-activity-step').dataset.status, 'failed');
+});
+
+test('settling follow-up work moves to a later reply and removes the old reply area', async t => {
+  let rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'first reply', status: 'delivered' }];
+  let body = { now: s(65), items: [{ id: 1, state: 'round', round: '1' }], rounds: [{ ...round('1', { end: 65,
+    segments: [{ replyId: 2, start: s(0), end: s(59), steps: [] },
+      { replyId: null, start: s(59), end: s(65), steps: [tool(60, 64, 'failed')] }] }), settling: true }] };
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
+  await f.open();
+  const first = f.root.querySelector('[data-message-id="2"] .conversation-activity-after-reply-slot');
+  first.querySelector('button').dispatch('click');
+  assert.equal(first.querySelector('button').getAttribute('aria-expanded'), 'true');
+  const readsBeforeUpdate = f.reads.length;
+  rows = [...rows, { id: 4, direction: 'out', content: 'later reply', status: 'delivered' }];
+  body = { ...body, now: s(75), rounds: [round('1', { end: 75,
+    segments: [{ replyId: 2, start: s(0), end: s(59), steps: [] },
+      { replyId: 4, start: s(59), end: s(70), steps: [tool(60, 64, 'failed')] },
+      { replyId: null, start: s(70), end: s(75), steps: [tool(71, 74, 'failed')] }] })] };
+  await refresh(f);
+  assert.equal(first.hidden, true);
+  assert.equal(first.children.length, 0, 'no stale follow-up activity remains on the old reply');
+  assert.equal(f.root.querySelectorAll('.conversation-activity-after-reply').length, 1);
+  const moved = f.root.querySelector('[data-message-id="4"] .conversation-activity-after-reply');
+  assert.ok(moved);
+  assert.equal(moved.querySelector('button').getAttribute('aria-expanded'), 'true', 'the tail keeps its existing open key');
+  assert.equal(moved.querySelector('.conversation-activity-step').dataset.status, 'failed');
+  assert.equal(f.reads.length, readsBeforeUpdate + 1, 'the update reads the settling round again');
+  assert.equal(f.reads.at(-1), '1', 'the refreshed activity belongs to the same original user message');
 });
 
 test('the live activity follows the latest message and folds onto the final reply when it arrives', async t => {

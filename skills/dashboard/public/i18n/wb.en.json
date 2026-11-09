@@ -911,6 +911,8 @@
   "wb.observer.groupUnsupported": "This remote version does not support observing the selected group.",
   "chat.activity.working": "Working {time} · {steps}",
   "chat.activity.worked": "Worked {time} · {steps}",
+  "chat.activity.afterReply": "Worked {duration} more after replying · {steps}",
+  "chat.activity.afterReplyWorking": "Working after replying: {duration} · {steps}",
   "chat.activity.steps": "{count} steps",
   "chat.activity.oneStep": "1 step",
   "chat.activity.truncated": "Earlier steps are not shown",
@@ -965,6 +967,5 @@
   "wb.settings.timezone.restartFailed": "Some services could not restart: {services}. You can retry.",
   "wb.settings.timezone.confirmationRequired": "The restart confirmation is incomplete. Reload the service list and confirm again.",
   "wb.settings.timezone.restartError": "Could not restart the services. The saved time zone is kept; retry after checking the service list.",
-  "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied.",
-  "chat.activity.afterReply": "After replying: {duration} · steps: {steps}"
+  "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied."
 }
