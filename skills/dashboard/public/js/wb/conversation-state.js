@@ -44,6 +44,7 @@ export function createConversationState({
     loading = false,
     creatingDraft = false;
   let groupPresenceRead = null;
+  let deletionAllowed = false;
   let streamState = 'polling', streamTimer = null, streamScope = null, readDirty = false, retryAt = 0;
   const cells = new Map(),
     listeners = new Set(onChange ? [onChange] : []);
@@ -102,6 +103,7 @@ export function createConversationState({
     updateError,
     streamState,
     creatingDraft,
+    canDelete: active && !blocked && mode === 'multi' && deletionAllowed,
     canRetry: active && !!cell()?.retryRequired && cell()?.receipt?.retryAllowed === true && !cell()?.sending,
     canWrite: active && !blocked && tab === 'mine' && mode === 'multi' && !!selectedId && cell()?.ownershipResolved === true,
     canCreate: active && !blocked && tab === 'mine' && mode === 'multi'
@@ -339,6 +341,7 @@ export function createConversationState({
         code: 'chat_invalid_response'
       };
       readZone(data);
+      deletionAllowed = data.deletionAllowed === true;
       items = more || quiet ? merge(items, data.items) : data.items;
       items.sort((a, b) => Number(b.stamp || 0) - Number(a.stamp || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       if (more) listDepth++;
@@ -1131,6 +1134,7 @@ export function createConversationState({
         nextCursor = null;
         selectedId = null;
         mode = null;
+        deletionAllowed = false;
         blocked = false;
         error = null;
         loading = false;
@@ -1185,6 +1189,16 @@ export function createConversationState({
       updateError = null;
       retryDelay = 5000;
       await select(id, fallbackMetadata);
+      schedule();
+    },
+    async deleted(id) {
+      items = items.filter(item => item.id !== id);
+      const removed = cells.get(key(id));
+      for (const form of removed?.questionForms?.values() ?? []) clearQuestionDraft(null, null, form);
+      cells.delete(key(id));
+      if (selectedId === id) { selectedId = null; selectedVersion++; }
+      emit();
+      await list();
       schedule();
     },
     createDraft,

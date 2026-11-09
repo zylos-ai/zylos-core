@@ -786,7 +786,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-date[hidden] { display: none; }
 .wb-date-native { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; cursor: pointer; }
 .wb-usage-dash { color: var(--text-muted); }
-.wb-usage-status { margin: 8px 0 0; color: var(--text-dim); font-size: 12.5px; }
+.wb-usage-status, .wb-usage-deletion-note { margin: 8px 0 0; color: var(--text-dim); font-size: 12.5px; }
 .wb-usage-status:empty { display: none; }
 #wb-usage-body > .wb-note { margin: 10px 0 0; }
 .wb-usage-page .wb-card { border-color: var(--wb-line-strong); border-radius: 12px; background: var(--wb-panel); }

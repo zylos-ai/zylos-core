@@ -1,5 +1,6 @@
 import { isSameOriginRequest } from './request-origin.js';
 import { CHAT_SETTINGS_PATH } from './chat/access.js';
+import { isGroupDeletionRoute } from './workbench/group-deletion.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -355,6 +356,9 @@ export class FleetProxy {
   }
 
   async proxyApi(req, res, agent, suffix, search) {
+    if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || suffix.endsWith('/deletion'))) {
+      sendJson(res, 403, { error: 'remote_deletion_forbidden' }); return;
+    }
     if (req.method === 'PUT' && suffix === '/api/settings/timezone' ||
         req.method === 'POST' && suffix === '/api/actions/restart-timezone-services') {
       const context = req._authContext;

@@ -302,6 +302,9 @@ function needsAdminApiAccess(pathname, method) {
   pathname = pathname.replace(/\/{2,}/g, '/');
   if (pathname === '/api/observer' || pathname.startsWith('/api/observer/')) return true;
   if (pathname.startsWith('/api/actions')) return true;
+  if ((method === 'GET' && /^\/api\/workbench\/groups\/[^/]+\/deletion$/.test(pathname)) ||
+      (method === 'DELETE' && /^\/api\/workbench\/groups\/[^/]+$/.test(pathname)) ||
+      /^\/api\/chat\/drafts\/[^/]+(?:\/deletion)?$/.test(pathname)) return true;
   if (['/api/settings', '/api/settings/timezone'].includes(pathname) && method === 'PUT') return true;
   if (pathname === '/api/fleet/agents' || pathname.startsWith('/api/fleet/agents/')) return true;
   if (pathname === '/api/agent/name') return true;

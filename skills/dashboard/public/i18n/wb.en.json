@@ -967,5 +967,14 @@
   "wb.settings.timezone.restartFailed": "Some services could not restart: {services}. You can retry.",
   "wb.settings.timezone.confirmationRequired": "The restart confirmation is incomplete. Reload the service list and confirm again.",
   "wb.settings.timezone.restartError": "Could not restart the services. The saved time zone is kept; retry after checking the service list.",
-  "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied."
+  "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied.",
+  "chat.delete.button": "Delete conversation",
+  "chat.delete.retry": "Retry deletion",
+  "chat.delete.draftConfirm": "Remove this draft and its uploaded attachments? It has no sent messages. This cannot be undone.",
+  "chat.delete.confirm": "Delete this conversation? It currently has {messages} messages and {attachments} attachments. Its AI session will stop after current work finishes. Messages, attachments, group memory and locally recorded transcripts will be deleted. Content already synced to main memory stays; backups expire under their retention policy. Deleted conversations no longer count toward message totals. This cannot be undone.",
+  "chat.delete.deleting": "Finishing current work and deleting…",
+  "chat.delete.pending": "Deletion is not finished. Click delete again to continue; no new confirmation is needed.",
+  "chat.delete.error": "Could not finish deletion. Retry to continue the same operation.",
+  "chat.delete.estimated": "Conversation deleted. Counts are estimates after an interrupted cleanup.",
+  "wb.usage.deletedConversations": "Deleted conversations no longer count toward message totals. Their token usage and costs are retained."
 }

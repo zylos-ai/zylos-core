@@ -4,13 +4,14 @@ import { element, icon } from './plain-text.js?v=104';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon } from './board.js?v=115';
-import { createConversationState } from './conversation-state.js?v=127';
+import { createConversationState } from './conversation-state.js?v=128';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=104';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=109';
 import { createGroupSide } from './group-side.js?v=3';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=103';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
+import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=2';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -54,6 +55,8 @@ export function mountConversationPage({
   draftScope = () => null,
   groupLinks = null,
   technicalDetails = () => false,
+  local = () => false,
+  confirm = async () => false,
   onStreamSubscription = () => {},
   storage = globalThis.localStorage
 } = {}) {
@@ -153,6 +156,14 @@ export function mountConversationPage({
     document,
     t
   });
+  let deletionEstimate = null;
+  const deletion = createConversationDeletion({ request, confirm, t, identity,
+    available: item => !destroyed && !page.hidden && local() && state.snapshot().canDelete &&
+      state.snapshot().items.some(row => row.id === item.id),
+    onChange: () => redraw(), onDeleted: (id, result) => {
+      deletionEstimate = result.countsEstimated === true ? { identity: typeof identity === 'function' ? identity() : identity } : null;
+      return state.deleted(id);
+    } });
   let uploadRedrawQueued = false;
   const uploadTray = createUploadTray({ fetch: fetcher,
     createXHR: () => new view.XMLHttpRequest(),
@@ -261,9 +272,12 @@ export function mountConversationPage({
   externalSection.append(icon(document, 'lock'), node('span', t('chat.page.externalSection')));
   const list = node('div', undefined, 'conversation-items');
   const listNotice = node('p', undefined, 'chat-notice conversation-list-notice');
+  const deletionNotice = node('p', undefined, 'chat-notice conversation-deletion-notice');
+  deletionNotice.setAttribute('role', 'status');
+  deletionNotice.hidden = true;
   const more = action('loadMore', () => state.loadMore());
   more.classList.add('conversation-load-more');
-  sidebar.append(listToolbar, create, createForm, externalSection, list, listNotice, more);
+  sidebar.append(listToolbar, create, createForm, externalSection, list, deletionNotice, listNotice, more);
   const detail = node('section', undefined, 'conversation-detail');
   detail.setAttribute('aria-label', t('chat.history'));
   const header = node('header', undefined, 'conversation-header');
@@ -1113,6 +1127,7 @@ export function mountConversationPage({
       live.add(item.id);
       let row = listRows.get(item.id);
       if (!row) {
+        const wrapper = node('div', undefined, 'conversation-list-row');
         const button = node('button', undefined, 'chat-list-item conversation-list-item');
         button.type = 'button';
         button.dataset.conversationId = item.id;
@@ -1137,7 +1152,12 @@ export function mountConversationPage({
           mobileDetail(true);
           void state.select(item.id);
         });
+        const remove = action('chat.delete.button', () => deletion.remove(item), 'trash', 'wb-icon-btn conversation-delete');
+        const notice = node('span', undefined, 'conversation-delete-status');
+        notice.setAttribute('role', 'status');
+        wrapper.append(button, remove, notice);
         row = {
+          wrapper, remove, notice,
           button,
           name,
           channel,
@@ -1147,6 +1167,15 @@ export function mountConversationPage({
         };
         listRows.set(item.id, row);
       }
+      const deletionState = deletion.status(item);
+      row.remove.hidden = !s.canDelete || !local() || !deletionPath(item);
+      row.remove.disabled = deletionState?.busy === true;
+      const deletionLabel = deletionState?.state === 'pending' || deletionState?.state === 'error' ? 'chat.delete.retry' : 'chat.delete.button';
+      text(row.remove.label, t(deletionLabel));
+      row.remove.setAttribute('aria-label', t(deletionLabel) + ': ' + nameOf(item));
+      row.remove.setAttribute('title', t(deletionLabel));
+      row.notice.hidden = !deletionState?.state || !['deleting', 'pending', 'error'].includes(deletionState.state);
+      text(row.notice, row.notice.hidden ? '' : t('chat.delete.' + deletionState.state));
       const itemChannel = channelOf(item);
       row.channel.hidden = s.tab === 'mine' || !itemChannel;
       text(row.channel, channelLabel(itemChannel));
@@ -1162,11 +1191,11 @@ export function mountConversationPage({
       if (date) {
         row.time.dateTime = date.toISOString();
       }
-      ordered.push(row.button);
+      ordered.push(row.wrapper);
     }
     for (const [id, row] of listRows) {
       if (!live.has(id)) {
-        row.button.remove();
+        row.wrapper.remove();
         listRows.delete(id);
       }
     }
@@ -1175,6 +1204,8 @@ export function mountConversationPage({
     more.disabled = !!s.loading;
     listNotice.hidden = !!s.items.length && !s.loading;
     text(listNotice, t(s.loading ? 'chat.loading' : s.tab === 'mine' ? 'chat.page.emptyMine' : 'chat.page.emptyExternal'));
+    deletionNotice.hidden = !local() || !deletionEstimate || deletionEstimate.identity !== (typeof identity === 'function' ? identity() : identity);
+    text(deletionNotice, deletionNotice.hidden ? '' : t('chat.delete.estimated'));
     accessNotice.hidden = s.mode !== 'single' || s.tab !== 'mine';
     text(accessText, t('chat.single'));
     const outcome = receiptState(s.receipt);
@@ -1339,6 +1370,8 @@ export function mountConversationPage({
       return !state.snapshot().error;
     },
     close() {
+      deletion.invalidate();
+      deletionEstimate = null;
       groupSide?.close({ focus: false });
       page.hidden = true;
       state.close();
@@ -1346,6 +1379,7 @@ export function mountConversationPage({
     redraw() { redraw(); groupSide?.redraw(); },
     clearDrafts(scope) { uploadTray.clearForAuthentication(scope?.instance ? { instance: scope.instance } : undefined); state.clearDrafts(scope); },
     destroy() {
+      deletion.invalidate();
       groupSide?.destroy();
       destroyed = true;
       uploadTray.destroy();

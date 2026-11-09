@@ -279,10 +279,12 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
   const apply = element(document, 'button', t('wb.usage.apply'), 'wb-btn'); apply.type = 'button'; apply.id = 'wb-usage-apply';
   controls.append(seg, sinceField.field, dash, untilField.field, apply);
   const status = element(document, 'p', undefined, 'wb-usage-status'); status.id = 'wb-usage-status'; status.setAttribute('role', 'status');
-  const body = element(document, 'div'); body.id = 'wb-usage-body'; root.replaceChildren(title, controls, status, body);
+  const deletionNotice = element(document, 'p', t('wb.usage.deletedConversations'), 'wb-usage-deletion-note');
+  const body = element(document, 'div'); body.id = 'wb-usage-body'; root.replaceChildren(title, controls, deletionNotice, status, body);
   const mark = () => choices.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.range === range)));
   const draw = () => {
     title.textContent = t('wb.nav.usage');
+    deletionNotice.textContent = t('wb.usage.deletedConversations');
     for (const button of choices) button.textContent = t('wb.usage.range.' + button.dataset.range);
     seg.setAttribute('aria-label', t('wb.usage.range'));
     since.setAttribute('aria-label', t('wb.usage.since')); until.setAttribute('aria-label', t('wb.usage.until')); apply.textContent = t('wb.usage.apply');

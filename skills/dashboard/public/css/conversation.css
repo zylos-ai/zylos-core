@@ -1157,3 +1157,10 @@ button.conversation-activity-head:focus-visible { outline:2px solid var(--accent
 }
 
 .conversation-push-status { color: var(--text-muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+
+.conversation-list-row { display:flex; align-items:center; flex-wrap:wrap; gap:4px; min-width:0; }
+.conversation-list-row .conversation-list-item { flex:1; min-width:0; width:0; }
+.conversation-delete { flex:none; min-width:40px; min-height:40px; color:var(--text-dim); }
+.conversation-delete:hover { color:var(--danger,#b42318); }
+.conversation-delete span { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.conversation-delete-status { flex-basis:100%; padding:0 9px 7px; font-size:11px; line-height:1.5; color:var(--text-dim); overflow-wrap:anywhere; }
