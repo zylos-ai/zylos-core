@@ -193,8 +193,8 @@ for a scenario.
   (skill paths resolve), not merely config-readable.
 - `service-health` — asserts `better-sqlite3` resolves from the deployed
   `comm-bridge` skill's own nested `node_modules/better-sqlite3/` and that
-  `scheduler` and `web-console` have no nested copy; then opens and writes a
-  SQLite DB for each of the three skills through the shared loader
+  `scheduler`, `web-console` and `dashboard` have no nested copy; then opens and
+  writes a SQLite DB for each of the four skills through the shared loader
   (`comm-bridge/scripts/sqlite-driver.js`) and asserts the process maps exactly
   one `better_sqlite3.node`, the comm-bridge copy. A hoisted/global
   `better-sqlite3` must not make this scenario pass.
