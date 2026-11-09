@@ -30,6 +30,7 @@ const { applyBaseUrl } = await import('../../commands/runtime.js');
 const { persistInstalledSettingsAndSyncCoupledThreshold } = await import('../sync-runtime-hooks.js');
 const { reconcileAssemblerSettingsFile, updateFailureReport } = await import('../instruction-migration.js');
 const { checkPrivateFile, copyPrivateFile, writePrivateFile } = await import('../private-file.js');
+const { writeEnvEntries } = await import('../env.js');
 
 after(() => {
   process.umask(originalUmask);
@@ -217,6 +218,38 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       copyPrivateFile(source, target);
       assert.equal(mode(target), '600');
       assert.deepEqual(fs.readFileSync(target), fs.readFileSync(source));
+    });
+
+    // Records the mode of the destination at the moment each write call runs.
+    function modesSeenByWrites(t, action) {
+      const realWrite = fs.writeFileSync, seen = [];
+      t.after(() => { fs.writeFileSync = realWrite; });
+      fs.writeFileSync = function (target, ...rest) {
+        const stat = typeof target === 'number' ? fs.fstatSync(target) : fs.existsSync(target) ? fs.statSync(target) : null;
+        seen.push(stat ? (stat.mode & 0o777).toString(8) : 'new');
+        return realWrite.call(this, target, ...rest);
+      };
+      try { action(); } finally { fs.writeFileSync = realWrite; }
+      return seen;
+    }
+
+    test('an existing world-readable file is restricted before new content is written', t => {
+      worldReadable(userSettings, { env: {} });
+      assert.deepEqual(modesSeenByWrites(t, () => writePrivateFile(userSettings, '{"env":{"ANTHROPIC_API_KEY":"credential-value-0013"}}\n')), ['600']);
+      assert.equal(readJson(userSettings).env.ANTHROPIC_API_KEY, 'credential-value-0013');
+    });
+
+    test('appending to an existing world-readable .env restricts it before the entries are written', t => {
+      const envFile = path.join(zylos, '.env');
+      fs.writeFileSync(envFile, 'TZ=UTC\n');
+      fs.chmodSync(envFile, 0o644);
+      assert.deepEqual(modesSeenByWrites(t, () => writeEnvEntries({ FIXTURE_TOKEN: 'credential-value-0014' }, 'fixture')), ['600']);
+      assert.match(fs.readFileSync(envFile, 'utf8'), /^TZ=UTC\n[\s\S]*^FIXTURE_TOKEN=credential-value-0014$/m);
+    });
+
+    test('the credential file list names each runtime\'s own files', () => {
+      assert.deepEqual(setup.credentialFiles('claude'), [userSettings, claudeJson]);
+      assert.deepEqual(setup.credentialFiles('codex'), [codexAuth]);
     });
 
     test('a symbolic link is followed: its target is written and tightened', () => {
