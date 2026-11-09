@@ -29,6 +29,13 @@ const source = locale => [locale === 'zh' ? chineseLead : englishLead,
   locale === 'zh' ? `[**《链接》**后文](${href} "${title}")` : `[**Linked bold**](${href} "${title}")`,
   '`**（行内代码）**后文`', '```text\n**（代码块）**后文\n```'].join('\n\n');
 
+async function screenshot(page, locale, width, view) {
+  const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
+  if (!evidence) return;
+  fs.mkdirSync(evidence, { recursive: true });
+  await page.screenshot(path.join(evidence, `markdown-${locale}-${width}-${view}.png`));
+}
+
 async function fixture(t, locale, width) {
   const sandbox = createChatSandbox(t);
   console.info('markdown-emphasis browser targets', JSON.stringify(sandbox.assertIsolation()));
@@ -81,6 +88,7 @@ async function fixture(t, locale, width) {
   assert.equal(preview.visible, true, 'sidebar preview is visible before selecting the conversation');
   assert.ok(preview.text.startsWith(locale === 'zh' ? chinesePreview : englishPreview), preview.text);
   assert.equal(preview.text.includes(locale === 'zh' ? '**（粗体）**' : '**Bold text**'), false);
+  await screenshot(page, locale, width, 'preview');
   await page.evaluate(`document.querySelector(${JSON.stringify(row)}).click()`);
   await until(() => page.evaluate(`!!document.querySelector(${JSON.stringify(body + ' pre code')})`), 'real reply body renders', 5000);
   return { sandbox, browser, page, preview };
@@ -94,7 +102,7 @@ async function fixture(t, locale, width) {
 // outside browser requests are blocked, and no model or collector is started.
 // Sandbox lifecycle/abort reclaims service/Chrome groups, timers, DBs and roots
 // on success, failure and timeout. Output and observations are bounded.
-for (const [locale, width] of [['zh', 1280], ['zh', 390], ['en', 1280]]) {
+for (const [locale, width] of [['zh', 1280], ['zh', 390], ['en', 1280], ['en', 390]]) {
   test(`Markdown body and conversation preview agree in ${locale} at ${width}`, { skip: !enabled, timeout: 35000 }, async t => {
     const f = await fixture(t, locale, width);
     const result = await f.page.evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(body)}),link=el.querySelector('a'),box=el.getBoundingClientRect();return {strong:[...el.querySelectorAll('strong')].map(n=>n.textContent),em:[...el.querySelectorAll('em')].map(n=>n.textContent),inline:el.querySelector('p code')?.textContent,fenced:el.querySelector('pre code')?.textContent,href:link?.getAttribute('href'),title:link?.getAttribute('title'),target:link?.getAttribute('target'),rel:link?.getAttribute('rel'),visible:box.width>0&&box.height>0};})()`);
@@ -108,11 +116,7 @@ for (const [locale, width] of [['zh', 1280], ['zh', 390], ['en', 1280]]) {
     assert.equal(await f.page.evaluate('!!document.querySelector(".chat-error:not([hidden])")'), false);
     assert.equal(f.browser.errors.length, 0, JSON.stringify(f.browser.errors));
     assert.equal(f.browser.external.length, 0, JSON.stringify(f.browser.external));
-    const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
-    if (evidence) {
-      fs.mkdirSync(evidence, { recursive: true });
-      await f.page.screenshot(path.join(evidence, `markdown-${locale}-${width}.png`));
-    }
+    await screenshot(f.page, locale, width, 'body');
     console.info('markdown-emphasis browser result', JSON.stringify({ locale, width, preview: f.preview, ...result }));
     await f.browser.close(); await f.sandbox.close();
   });

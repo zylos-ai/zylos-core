@@ -40,8 +40,6 @@
   },
   "devDependencies": {
     "regexpu-core": "6.4.0",
-    "smol-toml": "1.9.0",
-    "markdown-it-cjk-friendly": "3.0.0",
-    "get-east-asian-width": "1.7.0"
+    "smol-toml": "1.9.0"
   }
 }
