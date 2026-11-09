@@ -1,14 +1,18 @@
-import test from 'node:test';
+import nodeTest from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { TmuxObserverContainment } from '../src/lib/observer-containment-tmux.js';
 import { observerSocketRoot, mkdirPrivate, validateState, writeAtomic, privatePath, exists } from '../src/lib/observer-tmux-state.js';
 import { assertObserverTestIsolation } from './helpers/observer-isolation.js';
 
 assertObserverTestIsolation();
+
+// Canonical /private/tmp fixtures on macOS exceed the 16-byte root budget
+// needed by these data-path and 103/104-byte boundary cases.
+const test = (name, fn) => nodeTest(name, { skip: process.platform === 'darwin'
+  ? 'Requires a canonical fixture root <=16 bytes; macOS /private/tmp is too long' : false }, fn);
 
 const nonce = '0123456789abcdef0123456789abcdef';
 const leaf = `zobs2-${nonce.slice(0, 16)}`;
@@ -19,7 +23,6 @@ async function fixture(t) {
   const dataDir = path.join(base, 'd');
   const temporary = path.join(base, 't');
   for (const root of [dataDir, temporary]) await fs.mkdir(root, { mode: 0o700 });
-  t.mock.method(os, 'tmpdir', () => temporary);
   return { base, dataDir, temporary };
 }
 function dataPathOfLength(base, length) {
@@ -31,7 +34,8 @@ function dataPathOfLength(base, length) {
 
 test('short data socket paths do not resolve temporary storage and have private parents', async t => {
   const f = await fixture(t);
-  t.mock.method(os, 'tmpdir', () => { throw new Error('temporary storage must not be read'); });
+  const realpath = fs.realpath.bind(fs);
+  t.mock.method(fs, 'realpath', file => { assert.notEqual(file, '/tmp', 'data-first selection must not resolve tmp'); return realpath(file); });
   const socket = await observerSocketRoot(f.dataDir, nonce);
   assert.equal(socket, path.join(f.dataDir, 'observer', 'sockets', leaf));
   await mkdirPrivate(path.dirname(socket));
@@ -68,7 +72,9 @@ for (const kind of ['missing', 'long']) test(`fixed tmp fallback ignores ${kind}
   await fs.mkdir(dataDir, { mode: 0o700 });
   const temporary = path.join(f.base, kind === 'missing' ? 'missing' : 't'.repeat(100));
   if (kind === 'long') await fs.mkdir(temporary, { mode: 0o700 });
-  t.mock.method(os, 'tmpdir', () => temporary);
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = temporary;
+  t.after(() => { process.env.TMPDIR = previous; });
   assert.equal(await observerSocketRoot(dataDir, nonce), path.join(await fs.realpath('/tmp'), `zobs-${process.getuid()}`, leaf));
   if (kind === 'missing') assert.equal(await exists(temporary), false);
 });
@@ -90,7 +96,8 @@ for (const long of [false, true]) for (const kind of ['permissions', 'symlink'])
     await fs.mkdir(path.dirname(parent), { recursive: true, mode: 0o700 });
     if (kind === 'symlink') await fs.symlink(f.temporary, parent);
     else { await fs.mkdir(parent, { mode: 0o700 }); await fs.chmod(parent, 0o755); }
-    t.mock.method(os, 'tmpdir', () => { throw new Error('must not fall back'); });
+    const realpath = fs.realpath.bind(fs);
+    t.mock.method(fs, 'realpath', file => { assert.notEqual(file, '/tmp', 'unsafe data must not fall back'); return realpath(file); });
     await assert.rejects(observerSocketRoot(dataDir, nonce), { code: 'unsafe_runtime_state' });
     assert.equal((await fs.stat(f.temporary)).mode & 0o777, 0o700);
   });
@@ -130,7 +137,6 @@ test('newly published generations validate without accessing tmp and reconcile o
   const f = await published(t);
   const foreign = path.join(f.dataDir, 'observer', 'sockets', 'unrelated');
   await fs.writeFile(foreign, 'retain');
-  t.mock.method(os, 'tmpdir', () => { throw new Error('tmp not needed'); });
   const realpath = fs.realpath.bind(fs);
   t.mock.method(fs, 'realpath', file => { assert.notEqual(file, '/tmp'); return realpath(file); });
   assert.equal((await validateState(f.state.root)).socketRoot, f.state.socketRoot);
@@ -160,7 +166,6 @@ test('persisted fixed tmp scope validates and reconciles after TMPDIR changes', 
   const previous = process.env.TMPDIR;
   process.env.TMPDIR = path.join(f.base, 'changed');
   t.after(() => { process.env.TMPDIR = previous; });
-  t.mock.method(os, 'tmpdir', () => process.env.TMPDIR);
   assert.equal((await validateState(f.state.root)).socketRoot, f.state.socketRoot);
   f.commands.length = 0;
   await f.adapter.reconcilePersisted();
@@ -197,6 +202,31 @@ test('persisted tmp scope refuses foreign anchors, account directories and nonce
     await writeAtomic(path.join(f.state.root, 'state.json'), { ...f.state, socketRoot, outerSocket: path.join(socketRoot, 'tmux') });
     await assert.rejects(validateState(f.state.root), { code: 'unsafe_runtime_state' });
   }
+});
+
+for (const scope of ['data', 'tmp']) test(`persisted ${scope} identity remains recoverable beyond the current publication length limit`, async t => {
+  const f = await published(t, { fallback: true });
+  let socketRoot;
+  if (scope === 'data') socketRoot = path.join(f.dataDir, 'observer', 'sockets', path.basename(f.state.socketRoot));
+  else {
+    const temporary = path.join(f.base, 'temporary-'.repeat(8));
+    const realpath = fs.realpath.bind(fs);
+    t.mock.method(fs, 'realpath', file => file === '/tmp' ? Promise.resolve(temporary) : realpath(file));
+    socketRoot = path.join(temporary, `zobs-${process.getuid()}`, path.basename(f.state.socketRoot));
+  }
+  await mkdirPrivate(path.dirname(socketRoot));
+  assert.ok(Buffer.byteLength(path.join(socketRoot, 'contract_version_1', f.state.sessionName)) >= 104);
+  const state = { ...f.state, socketRoot, outerSocket: path.join(socketRoot, 'tmux') };
+  await writeAtomic(path.join(state.root, 'state.json'), state);
+  assert.equal((await validateState(state.root)).socketRoot, socketRoot);
+  await writeAtomic(path.join(state.root, 'state.json'), { ...state, socketRoot: socketRoot + '-foreign' });
+  await assert.rejects(validateState(state.root), { code: 'unsafe_runtime_state' });
+  await writeAtomic(path.join(state.root, 'state.json'), state);
+  f.commands.length = 0;
+  await f.adapter.reconcilePersisted();
+  assert.equal(await exists(state.root), false);
+  assert.equal(await exists(socketRoot), false);
+  assert.equal(f.commands.length, 0);
 });
 
 test('schema two accepts only the same nonce historical tmp socket without creating it', async t => {

@@ -2,16 +2,47 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { TmuxObserverContainment } from '../src/lib/observer-containment-tmux.js';
 import { runStartupWorker } from '../src/lib/observer-tmux-worker.js';
 import { readReceipt, writeAtomic, exists, validateState, digest } from '../src/lib/observer-tmux-state.js';
+import { assertObserverTestIsolation } from './helpers/observer-isolation.js';
+
+assertObserverTestIsolation();
 
 const role = (pid, command = 'fixture-process', ppid = 1) => ({ pid, ppid, start: `start-${pid}`, status: 'S', command });
+const fixtureScopes = new WeakMap();
 async function fixture(t, extra = {}) {
-  const dataDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'observer-tmux-unit-')));
+  const dataDir = await fs.realpath(await fs.mkdtemp(path.join(fsSync.existsSync('/dev/shm') ? '/dev/shm' : '/tmp', 't')));
   t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const sample = path.join(dataDir, 'observer', 'sockets', 'zobs2-0123456789abcdef', 'contract_version_1', 'observer-0123456789abcdef');
+  const preferData = Buffer.byteLength(sample) < 104;
+  const firstFixture = !fixtureScopes.has(t);
+  if (firstFixture) fixtureScopes.set(t, { roots: new Set(), temporary: path.join(dataDir, 'p') });
+  const { roots, temporary } = fixtureScopes.get(t);
+  roots.add(dataDir);
+  const privateFixturePath = file => {
+    const resolved = path.resolve(file);
+    assert.ok([...roots].some(root => resolved === root || resolved.startsWith(root + path.sep)),
+      'lifecycle filesystem writes must stay inside registered private fixtures');
+  };
+  // Install each test's filesystem guards once, even when it owns many fixtures.
+  if (firstFixture) {
+    await fs.mkdir(temporary, { mode: 0o700 });
+    const realpath = fs.realpath.bind(fs);
+    t.mock.method(fs, 'realpath', file => {
+      if (file !== '/tmp') return realpath(file);
+      assert.equal(preferData, false, 'short lifecycle data paths must not resolve tmp');
+      return Promise.resolve(temporary);
+    });
+    for (const name of ['mkdir', 'rm']) {
+      const operation = fs[name].bind(fs);
+      t.mock.method(fs, name, (file, ...args) => { privateFixturePath(file); return operation(file, ...args); });
+    }
+  }
+  console.log('Observer lifecycle preflight:', JSON.stringify({ dataDir, temporary,
+    fullSessionBytes: Buffer.byteLength(sample), socketBranch: preferData ? 'data' : 'private mapped tmp',
+    sharedTmpWrites: 'rejected by mkdir/rm guards', nativeCommands: 'substituted' }));
   const binaryPath = path.join(dataDir, 'zellij');
   await fs.writeFile(binaryPath, 'inert fixture; never executed', { mode: 0o700 });
   const calls = [];
@@ -21,6 +52,9 @@ async function fixture(t, extra = {}) {
     cleanupTimeoutMs: 1, startupTimeoutMs: 1, ...extra });
   const publish = async () => {
     const state = await adapter._publish({ generation: 1, binaryPath, runtime: 'codex' });
+    const expectedParent = preferData ? path.join(dataDir, 'observer', 'sockets') : path.join(temporary, `zobs-${process.getuid()}`);
+    assert.equal(path.dirname(state.socketRoot), expectedParent);
+    privateFixturePath(state.socketRoot);
     t.after(() => fs.rm(state.socketRoot, { recursive: true, force: true }));
     return state;
   };

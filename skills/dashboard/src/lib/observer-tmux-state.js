@@ -11,6 +11,7 @@ export const runCommand = promisify(execFile);
 export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 function socketPathsFit(socketRoot, nonce) {
+  // Zellij 0.45.1 nests session sockets under contract_version_1.
   return ['tmux', path.join('contract_version_1', `observer-${nonce.slice(0, 16)}`)]
     .every((name) => Buffer.byteLength(path.join(socketRoot, name)) < 104);
 }
@@ -30,7 +31,7 @@ export async function observerSocketRoot(dataDir, nonce) {
 async function validSocketRoot(state) {
   const dataDir = path.resolve(state.root, '../../../..');
   const local = dataSocketRoot(dataDir, state.nonce);
-  if (state.socketRoot === local && socketPathsFit(local, state.nonce)) {
+  if (state.socketRoot === local) {
     await privateParents(path.dirname(local));
     if (await exists(path.dirname(local))) await privatePath(path.dirname(local));
     return true;
@@ -39,7 +40,7 @@ async function validSocketRoot(state) {
   if (typeof state.socketRoot !== 'string' || path.basename(state.socketRoot) !== leaf) return false;
   if (path.basename(path.dirname(state.socketRoot)) === `zobs-${process.getuid()}`) {
     const temporary = path.join(await fs.realpath('/tmp'), `zobs-${process.getuid()}`, leaf);
-    if (state.socketRoot !== temporary || !socketPathsFit(temporary, state.nonce)) return false;
+    if (state.socketRoot !== temporary) return false;
     await privateParents(path.dirname(state.socketRoot));
     if (await exists(path.dirname(state.socketRoot))) await privatePath(path.dirname(state.socketRoot));
     return true;
