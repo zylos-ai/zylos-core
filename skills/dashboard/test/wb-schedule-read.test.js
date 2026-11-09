@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createScheduleRead, scheduleReadResponse } from '../src/lib/workbench/schedule-read.js';
+import { createScheduleRead, scheduleReadResponse, nextRuns } from '../src/lib/workbench/schedule-read.js';
 import { createScheduleTz, localToOffsetIso } from '../src/lib/workbench/schedule-tz.js';
 import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
+import { createCronIterator } from '../../scheduler/scripts/cron-utils.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 
 // Integration: real read-only SQLite reads of a temporary scheduler.db, real
@@ -106,9 +107,10 @@ test('schedule read reports counts, sections, recent results and last error from
   const page = await f.reader().read();
   assert.equal(page.available, true);
   assert.equal(page.tz, 'Asia/Singapore');
-  assert.equal(page.tasks.length, 97);
+  assert.equal(page.tasks.length, 56);
+  assert.deepEqual(page.counts, { all: 97, enabled: 26, paused: 8, failed: 22, completed: 41 });
   const counts = type => page.tasks.filter(task => task.type === type).length;
-  assert.deepEqual([counts('recurring'), counts('interval'), counts('one-time')], [17, 2, 78]);
+  assert.deepEqual([counts('recurring'), counts('interval'), counts('one-time')], [16, 2, 38]);
   const recent = rows.filter(row => row.executed_at >= NOW - 7 * DAY);
   const success = recent.filter(row => row.status === 'success').length;
   const bad = recent.filter(row => ['failed', 'timeout'].includes(row.status)).length;
@@ -118,8 +120,9 @@ test('schedule read reports counts, sections, recent results and last error from
   });
   assert.equal(bad, 4);
   const byId = new Map(page.tasks.map(task => [task.id, task]));
-  assert.equal(byId.get(ids.completed).status, 'completed');
-  assert.equal(page.tasks.filter(task => task.status === 'completed' && task.type === 'one-time').length, 40);
+  const completed = (await f.reader().detail(ids.completed)).task;
+  assert.equal(completed.status, 'completed');
+  assert.equal(page.tasks.some(task => task.status === 'completed'), false);
   const failedRecurring = page.tasks.filter(task => task.type === 'recurring' && task.status === 'failed');
   assert.equal(failedRecurring.length, 2);
   assert.equal(failedRecurring.every(task => task.reenable === false), true);
@@ -136,7 +139,7 @@ test('schedule read reports counts, sections, recent results and last error from
   assert.equal(byId.get(ids.timedOut).lastError, 'Task timed out');
   assert.equal(byId.get(ids.recovered).showLastError, false);
   assert.equal(byId.get(ids.recovered).lastError, null);
-  assert.equal(byId.get(ids.completed).showLastError, false);
+  assert.equal(completed.showLastError, false);
   assert.equal(page.tasks.filter(task => task.showLastError).length, 2);
   assert.equal(page.daily7d.tz, 'Asia/Singapore');
   assert.equal(page.daily7d.utcFallback, false);
@@ -313,4 +316,123 @@ test('target groups follow the dispatch rule using the group snapshot without na
   assert.deepEqual(withoutTelegram.tasks.find(task => task.id === whole.id).target, { kind: 'raw', text: 'telegram' });
   const failing = await f.reader({ getSnapshot: async () => { throw Error('snapshot failed'); } }).read();
   assert.deepEqual(failing.tasks.find(task => task.id === grouped.id).target, { kind: 'raw', text: 'telegram:dm-1001' });
+});
+
+
+test('upcoming cron runs parse once and stop after five runs and the full day', () => {
+  for (const [expression, expected] of [['0 8 * * *', 5], ['0 * * * *', 25], ['* * * * *', 1441]]) {
+    let parsed = 0, advanced = 0;
+    const cron = { createCronIterator(...args) {
+      parsed++;
+      const interval = createCronIterator(...args);
+      return { next() { advanced++; return interval.next(); } };
+    } };
+    const runs = nextRuns({ status: 'pending', type: 'recurring', cron_expression: expression }, 5, NOW, 'UTC', cron, { until: NOW + DAY });
+    assert.equal(parsed, 1);
+    assert.equal(advanced, expression === '* * * * *' ? 1 : expected);
+    assert.equal(runs.length, expected);
+    assert.ok(runs.at(-1) > NOW + DAY);
+    assert.equal(runs.truncated, undefined);
+    if (expression === '* * * * *') assert.equal(runs.filter(at => at <= NOW + DAY).length, 1440);
+  }
+  assert.deepEqual(nextRuns({ status: 'pending', type: 'recurring', cron_expression: '0 8 * * *' }, 5, NOW, 'UTC',
+    { createCronIterator: () => ({ next: () => NOW }) }, { until: NOW + DAY }),
+  { unavailable: true, reason: 'cron_preview_unavailable' });
+  const capped = nextRuns({ status: 'pending', type: 'recurring', cron_expression: '* * * * * *' }, 5, NOW, 'UTC', { createCronIterator }, { until: NOW + DAY });
+  assert.equal(capped.length, 2000);
+  assert.equal(capped.truncated, true);
+  const interval = nextRuns({ status: 'pending', type: 'interval', interval_seconds: 60, next_run_at: NOW - DAY * 100 },
+    5, NOW, 'UTC', null, { until: NOW + DAY });
+  assert.equal(interval[0], NOW + 60);
+  assert.equal(interval.length, 1441);
+  assert.equal(interval.filter(at => at <= NOW + DAY).length, 1440);
+  const daily = nextRuns({ status: 'pending', type: 'interval', interval_seconds: DAY, next_run_at: NOW + DAY },
+    5, NOW, 'UTC', null, { until: NOW + DAY });
+  assert.equal(daily.length, 5);
+});
+
+test('completed tasks page stably while counts, timeline and week totals remain global', async t => {
+  const f = fixture(t);
+  f.task({ type: 'recurring', cron_expression: '* * * * *' });
+  f.task({ type: 'recurring', cron_expression: '0 8 * * *' });
+  for (let i = 0; i < 17; i++) f.task({ status: i < 8 ? 'paused' : 'pending' });
+  const completed = [];
+  for (let i = 0; i < 101; i++) {
+    const task = f.task({ status: 'completed', updated_at: NOW - Math.floor(i / 2), prompt: '😀'.repeat(250) + ' HiddenNeedle%_ ÄWord' });
+    completed.push(task);
+    f.run(task.id, { executed_at: NOW - HOUR, completed_at: NOW - HOUR + 1, status: i % 2 ? 'success' : 'failed' });
+  }
+  const reader = f.reader();
+  const page = query => scheduleReadResponse(reader, '/api/workbench/schedule', new URLSearchParams(query));
+  const initial = await page({});
+  assert.equal(initial.tasks.length, 19);
+  assert.deepEqual(initial.counts, { all: 120, enabled: 11, paused: 8, failed: 0, completed: 101 });
+  assert.equal(initial.kpi.next24h, 1441);
+  assert.equal(initial.kpi.runs7d, 101);
+  const first = await page({ status: 'completed' });
+  assert.equal(first.tasks.length, 30);
+  assert.equal(Array.from(first.tasks[0].prompt).length, 200);
+  assert.equal(first.tasks[0].promptTruncated, true);
+  assert.deepEqual(first.counts, initial.counts);
+  assert.deepEqual(first.kpi, initial.kpi);
+  assert.deepEqual(first.daily7d, initial.daily7d);
+  assert.equal(first.timelineTasks.length, 19);
+  assert.equal(first.timelineTasks[0].nextRuns.in24h.length, 1440);
+  const seen = [...first.tasks.map(task => task.id)];
+  let cursor = first.nextCursor;
+  // A new completion inserted before the cursor does not shift following pages.
+  const late = f.task({ status: 'completed', updated_at: NOW + 1 });
+  const sizes = [];
+  while (cursor) {
+    const next = await page({ status: 'completed', cursor });
+    sizes.push(next.tasks.length);
+    seen.push(...next.tasks.map(task => task.id));
+    assert.ok(seen.length <= 101);
+    cursor = next.nextCursor;
+  }
+  assert.deepEqual(sizes, [30, 30, 11]);
+  assert.equal(seen.length, 101);
+  assert.equal(new Set(seen).size, 101);
+  assert.equal(seen.includes(late.id), false);
+  for (const task of completed) assert.ok(seen.includes(task.id));
+  const searched = await page({ status: 'completed', q: 'hiddenneedle%_' });
+  assert.equal(searched.tasks.length, 30);
+  assert.equal(searched.counts.completed, 102);
+  assert.equal((await page({ status: 'completed', q: 'äword' })).tasks.length, 30);
+  const detail = await scheduleReadResponse(reader, `/api/workbench/schedule/${completed[0].id}`, new URLSearchParams());
+  assert.equal(detail.task.prompt, completed[0].prompt);
+  assert.equal(detail.task.promptTruncated, false);
+  const enabled = await page({ status: 'enabled' });
+  assert.equal(enabled.tasks.length, 19);
+  assert.equal((await page({ status: 'paused' })).tasks.length, 19);
+  assert.equal((await page({ q: 'missing-text' })).tasks.length, 0);
+  for (const query of [{ status: 'unknown' }, { limit: '101' }, { limit: '0' }, { status: 'completed', cursor: 'bad' },
+    { status: 'completed', cursor: Buffer.from(JSON.stringify(['wrong', 2])).toString('base64url') }, { cursor: first.nextCursor }]) {
+    await assert.rejects(page(query), error => error.statusCode === 400);
+  }
+  await assert.rejects(reader.detail('absent'), error => error.statusCode === 404 && error.code === 'task_not_found');
+});
+
+test('capped high frequency previews are explicitly partial without hiding healthy tasks', async t => {
+  const f = fixture(t);
+  const capped = f.task({ type: 'recurring', cron_expression: '* * * * * *' });
+  const good = f.task({ type: 'recurring', cron_expression: '0 8 * * *' });
+  const page = await f.reader().read();
+  assert.equal(page.tasks.find(task => task.id === capped.id).nextRuns.truncated, true);
+  assert.equal(page.tasks.find(task => task.id === capped.id).nextRuns.in24h.length, 2000);
+  assert.equal(page.tasks.find(task => task.id === good.id).nextRuns.runs.length, 5);
+  assert.equal(page.kpi.partialPreview, true);
+  assert.equal(page.kpi.next24h, 2001);
+});
+
+
+test('arithmetic minute boundaries match the real parser through daylight saving transitions', () => {
+  for (const from of ['2027-03-14T06:58:37Z', '2027-11-07T05:58:37Z']) {
+    const start = Date.parse(from) / 1000;
+    const iterator = createCronIterator('* * * * *', 'America/New_York', new Date(start * 1000));
+    const actual = nextRuns({ status: 'pending', type: 'recurring', cron_expression: '* * * * *' }, 5,
+      start, 'America/New_York', { createCronIterator }, { until: start + DAY });
+    assert.equal(actual.length, 1441);
+    for (const run of actual) assert.equal(run, iterator.next());
+  }
 });

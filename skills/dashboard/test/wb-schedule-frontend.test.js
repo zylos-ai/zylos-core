@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { axisLabels, dayTime, deliveryLine, groupTasks, laneDots, laneTicks, missText, mountSchedule, targetLabel, untilText, writeMessage,
-  writeOutcome } from '../public/js/wb/schedule.js';
+  writeOutcome, statusCounts } from '../public/js/wb/schedule.js';
 import { createForm, createPreviewer, formPayload, initialForm, saveAllowed } from '../public/js/wb/schedule-form.js';
 import { allNodes, createDocument, deferred, tick } from './fixtures/workbench-dom.js';
 import { packTranslator } from './fixtures/schedule-env.js';
@@ -18,7 +18,8 @@ function task(fields = {}) {
 }
 const page = (tasks = [task()]) => ({ available: true, tz: 'Asia/Singapore', readAt: 0,
   kpi: { enabled: 1, paused: 0, running: 0, next24h: 1, partialPreview: false, runs7d: 0, bad7d: 0, successRate7d: null },
-  daily7d: { tz: 'Asia/Singapore', utcFallback: false, days: [] }, tasks });
+  daily7d: { tz: 'Asia/Singapore', utcFallback: false, days: [] }, tasks, counts: statusCounts(tasks),
+  timelineTasks: tasks.filter(item => ['pending', 'running'].includes(item.status)), nextCursor: null });
 
 test('target and delivery lines use the dispatch target and always keep two parts', () => {
   const group = { kind: 'group', sessionGroup: 'telegram:dm-1001', componentName: 'telegram', displayName: null };
@@ -172,7 +173,10 @@ function harness(context, respond, { writable = true, hidden = false } = {}) {
     now: () => 1800000000000,
     fetch: async (path, options = {}) => {
       calls.push({ path, method: options.method ?? 'GET', body: options.body });
-      const value = await respond(path, options);
+      let value = await respond(path, options);
+      // Existing page fixtures share their full task rows with the detail route.
+      const detail = path.match(/\/api\/workbench\/schedule\/([^/?]+)$/);
+      if (detail && value?.tasks) value = { task: value.tasks.find(item => item.id === decodeURIComponent(detail[1])) };
       return value?.json ? value : { ok: true, json: async () => value };
     } });
   context.after(stop);
@@ -181,7 +185,7 @@ function harness(context, respond, { writable = true, hidden = false } = {}) {
     poll: () => [...intervals.values()].find(timer => timer.delay === 30000).handler(),
     setOwner: value => { owner = value; },
     mutate: () => mutation?.(),
-    reads: () => calls.filter(call => call.method === 'GET' && call.path.endsWith('/api/workbench/schedule')).length };
+    reads: () => calls.filter(call => call.method === 'GET' && call.path.split('?')[0].endsWith('/api/workbench/schedule')).length };
 }
 
 // Mounted page lifecycle with the real schedule modules and injected DOM, fetch,
@@ -505,4 +509,138 @@ test('task detail header gives the title its own row and keeps state and actions
   assert.ok(sub.children[0].classList.contains('wb-sched-state'), 'the state comes first in the second row');
   assert.ok(sub.children[1].classList.contains('wb-d-acts'), 'the actions follow the state');
   assert.equal(allNodes(sub.children[1]).some(node => node.classList.contains('wb-icon-danger')), true, 'deleting is among those actions');
+});
+
+function chooseFilter(h, name) {
+  allNodes(h.root).find(node => node.tagName === 'BUTTON' && node.attributes['aria-pressed'] !== undefined &&
+    node.textContent.startsWith(t('wb.schedule.filter.' + name))).dispatch('click');
+}
+const listRows = h => allNodes(h.root).filter(node => node.classList.contains('wb-sched-select'));
+
+// Mounted contract cases below use only the injected DOM/fetch/timers. Run for
+// list pagination, server search, detail loading or lifecycle changes; skip for
+// server-only edits. No external resources or children; the isolated Node runner
+// owns HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and teardown unmounts each page.
+test('completed pages keep server counts and timeline and follow fresh cursors on a poll', async context => {
+  const active = task();
+  const completed = Array.from({ length: 101 }, (_, index) => task({ id: `done-${index}`, name: `Completed ${index}`,
+    type: 'one-time', status: 'completed', nextRuns: { runs: [], in24h: [] } }));
+  const counts = { all: 120, enabled: 11, paused: 8, failed: 0, completed: 101 };
+  let generation = 0;
+  const h = harness(context, path => {
+    const query = new URL(path, 'http://fixture.invalid').searchParams;
+    if (query.get('status') !== 'completed') return { ...page([active]), counts };
+    const cursor = query.get('cursor');
+    if (!cursor) generation++;
+    const start = cursor ? 30 : 0;
+    return { ...page(completed.slice(start, start + 30)), counts, timelineTasks: [active], nextCursor: `page-${generation}` };
+  });
+  await tick();
+  chooseFilter(h, 'completed');
+  await tick();
+  assert.equal(listRows(h).length, 30);
+  assert.equal(allNodes(h.root).filter(node => node.classList.contains('wb-sched-dot')).length, 1);
+  assert.ok(allNodes(h.root).some(node => node.textContent === '全部120'));
+  assert.ok(allNodes(h.root).some(node => node.textContent === '已完成101'));
+  buttons(h.root, '加载更多')[0].dispatch('click');
+  await tick();
+  assert.equal(listRows(h).length, 60);
+  await h.poll();
+  assert.equal(listRows(h).length, 60, 'poll retains the expanded page depth');
+  assert.ok(h.calls.some(call => call.path.includes('cursor=page-2')), 'poll follows the newly issued cursor');
+  assert.equal(allNodes(h.root).filter(node => node.classList.contains('wb-sched-dot')).length, 1);
+  const search = allNodes(h.root).find(node => node.type === 'search');
+  search.value = 'needle'; search.dispatch('change');
+  await tick();
+  assert.equal(listRows(h).length, 30, 'new search resets the completed cursor');
+  assert.ok(h.calls.at(-1).path.includes('q=needle'));
+  assert.equal(h.calls.at(-1).path.includes('cursor='), false);
+});
+
+test('a full-text server search keeps matches whose prompt summary does not contain the query', async context => {
+  const match = task({ prompt: 'Only the summary is sent.', promptTruncated: true });
+  const h = harness(context, path => {
+    const query = new URL(path, 'http://fixture.invalid').searchParams;
+    return page(query.get('q') === 'tail phrase' ? [match] : [task()]);
+  });
+  await tick();
+  const search = allNodes(h.root).find(node => node.type === 'search');
+  search.value = 'tail phrase'; search.dispatch('search');
+  await tick();
+  assert.ok(h.calls.some(call => call.path.includes('q=tail+phrase')));
+  assert.equal(listRows(h).length, 1);
+  assert.match(textOf(h.root), /Only the summary is sent/);
+});
+
+test('a late completed page cannot replace a newly selected filter', async context => {
+  const more = deferred();
+  const done = task({ id: 'done-1', name: 'Completed first', status: 'completed', nextRuns: { runs: [], in24h: [] } });
+  const h = harness(context, path => {
+    if (path.includes('cursor=')) return { ok: true, json: () => more.promise };
+    if (path.includes('status=completed')) return { ...page([done]), nextCursor: 'next' };
+    return page();
+  });
+  await tick(); chooseFilter(h, 'completed'); await tick();
+  buttons(h.root, '加载更多')[0].dispatch('click');
+  await tick();
+  chooseFilter(h, 'all'); await tick();
+  more.resolve(page([task({ id: 'late', name: 'Stale completed task', status: 'completed' })]));
+  await tick();
+  assert.match(textOf(h.root), /Morning report/);
+  assert.equal(textOf(h.root).includes('Stale completed task'), false);
+  assert.equal(textOf(h.root).includes('Completed first'), false);
+});
+
+test('detail and editing wait for the complete prompt instead of using a list summary', async context => {
+  const detail = deferred();
+  const summary = task({ prompt: 'Truncated summary', promptTruncated: true });
+  const full = 'Complete prompt\n' + '内容'.repeat(240) + '\nfinal secret tail';
+  const h = harness(context, path => {
+    if (path === '/api/workbench/schedule/task-1') return { ok: true, json: () => detail.promise };
+    if (path.includes('/history')) return { rows: [], next: null };
+    return page([summary]);
+  });
+  await tick(); listRows(h)[0].dispatch('click'); await tick();
+  assert.equal(buttons(h.root, '编辑').length, 0, 'no editable summary while detail is loading');
+  assert.equal(allNodes(h.root).some(node => node.classList.contains('wb-sched-prompt')), false);
+  detail.resolve({ task: task({ prompt: full, promptTruncated: false }) });
+  await tick();
+  assert.equal(allNodes(h.root).find(node => node.classList.contains('wb-sched-prompt')).textContent, full);
+  buttons(h.root, '编辑')[0].dispatch('click');
+  assert.equal(allNodes(h.root).find(node => node.tagName === 'TEXTAREA').value, full);
+});
+
+test('detail failures and stale detail replies expose no editable truncated prompt', async context => {
+  const late = deferred();
+  const h = harness(context, path => {
+    if (path === '/api/workbench/schedule/task-1') return { ok: true, json: () => late.promise };
+    if (path === '/api/workbench/schedule/other') throw Error('offline');
+    if (path.includes('/history')) return { rows: [], next: null };
+    return page([task({ promptTruncated: true }), task({ id: 'other', name: 'Other task', promptTruncated: true })]);
+  });
+  await tick(); listRows(h)[0].dispatch('click'); await tick();
+  listRows(h)[1].dispatch('click'); await tick();
+  late.resolve({ task: task({ name: 'Outdated detail', prompt: 'Full but outdated' }) });
+  await tick();
+  assert.equal(textOf(h.root).includes('Outdated detail'), false);
+  assert.match(textOf(h.root), /数据读取失败/);
+  assert.equal(buttons(h.root, '编辑').length, 0);
+  assert.equal(allNodes(h.root).some(node => node.tagName === 'TEXTAREA'), false);
+});
+
+test('a global timeline dot opens its full task while the completed list is selected', async context => {
+  const active = task({ prompt: 'Active full prompt from detail' });
+  const done = task({ id: 'done', name: 'Completed item', status: 'completed', nextRuns: { runs: [], in24h: [] } });
+  const h = harness(context, path => {
+    if (path === '/api/workbench/schedule/task-1') return { task: active };
+    if (path.includes('/history')) return { rows: [], next: null };
+    return path.includes('status=completed') ? { ...page([done]), timelineTasks: [active] } : page([active]);
+  });
+  await tick(); chooseFilter(h, 'completed'); await tick();
+  assert.equal(listRows(h).length, 1);
+  assert.match(listRows(h)[0].textContent, /Completed item/);
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-dot')).dispatch('click');
+  await tick();
+  assert.equal(allNodes(h.root).find(node => node.classList.contains('wb-sched-prompt')).textContent, active.prompt);
+  assert.equal(buttons(h.root, '编辑').length, 1);
 });

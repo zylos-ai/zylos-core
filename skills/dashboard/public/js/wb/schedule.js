@@ -268,7 +268,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   const guard = createFetchGuard();
   let data = null, error = false, selected = null, history = null, historyGen = 0, form = null, confirmFor = null,
     filter = { status: 'all', target: 'all', query: '' }, owner = identity(), stopped = false, notice = null,
-    fullPrompt = null;
+    fullPrompt = null, detailTask = null, detailError = false, detailGen = 0, listBusy = false, pageCount = 1;
   // The page, the drawer and the dialog layer stay mounted across redraws, so a refresh keeps the drawer's
   // scroll position and an open form keeps its focus and typed text.
   const main = element(document, 'div', undefined, 'wb-sched-main');
@@ -293,6 +293,12 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     selected = null;
     history = null;
     historyGen++;
+    detailGen++;
+    detailTask = null;
+    detailError = false;
+    listBusy = false;
+    pageCount = 1;
+    filter = { status: 'all', target: 'all', query: '' };
     form = null;
     confirmFor = null;
     notice = null;
@@ -314,18 +320,69 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     return document.visibilityState !== 'hidden' && document.querySelector('#tab-schedule')?.classList.contains('active') &&
       !document.querySelector('#agent-detail')?.hidden;
   };
-  async function refresh({ force = false } = {}) {
+  function listPath(cursor = null) {
+    const query = new URLSearchParams();
+    if (filter.status !== 'all') query.set('status', filter.status);
+    if (filter.query.trim()) query.set('q', filter.query.trim());
+    if (cursor !== null) query.set('cursor', cursor);
+    return '/api/workbench/schedule' + (query.size ? `?${query}` : '');
+  }
+  async function refresh({ force = false, more = false } = {}) {
     if (!force && !visible()) return;
     reset();
+    if (listBusy && !force) return;
+    if (more && (filter.status !== 'completed' || !data?.nextCursor)) return;
+    if (force && !more) pageCount = 1;
     const gen = guard.next();
+    const completed = filter.status === 'completed';
+    const pages = completed && !more ? pageCount : 1;
+    let cursor = more ? data.nextCursor : null;
+    listBusy = true;
+    redraw();
     try {
-      const value = await read('/api/workbench/schedule');
-      if (!guard.current(gen)) return;
-      data = value;
+      let value, tasks = more ? [...data.tasks] : [], loaded = 0;
+      // Follow fresh cursors on a poll so an already expanded completed list keeps
+      // its depth without retaining stale cursor boundaries after task changes.
+      do {
+        value = await read(listPath(cursor));
+        if (!guard.current(gen)) return;
+        tasks.push(...value.tasks);
+        loaded++;
+        cursor = value.nextCursor;
+      } while (!more && completed && cursor && loaded < pages);
+      const unique = new Map(tasks.map(task => [task.id, task]));
+      data = { ...value, tasks: [...unique.values()] };
+      pageCount = more ? pageCount + 1 : loaded;
       error = false;
     } catch {
       if (!guard.current(gen)) return;
       error = true;
+    } finally {
+      if (guard.current(gen)) listBusy = false;
+    }
+    redraw();
+    if (selected && !form) loadDetail(selected);
+  }
+  function changeList(change) {
+    filter = { ...filter, ...change };
+    guard.invalidate();
+    listBusy = false;
+    pageCount = 1;
+    if (data) data = { ...data, tasks: [], nextCursor: null };
+    refresh({ force: true });
+  }
+  async function loadDetail(id) {
+    const gen = ++detailGen;
+    try {
+      const value = await read(`/api/workbench/schedule/${encodeURIComponent(id)}`);
+      if (gen !== detailGen || selected !== id) return;
+      if (!value.task || value.task.id !== id) throw Error('invalid_detail');
+      detailTask = value.task;
+      detailError = false;
+    } catch {
+      if (gen !== detailGen || selected !== id) return;
+      detailTask = null;
+      detailError = true;
     }
     redraw();
   }
@@ -370,11 +427,16 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     confirmFor = null;
     history = null;
     fullPrompt = null;
+    detailTask = null;
+    detailError = false;
     redraw();
-    const task = data?.tasks.find(item => item.id === id);
-    if (task) loadHistory(task);
+    loadDetail(id);
+    loadHistory({ id });
   }
   function close() {
+    detailGen++;
+    historyGen++;
+    detailTask = null;
     selected = null;
     form = null;
     confirmFor = null;
@@ -382,6 +444,9 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     redraw();
   }
   function openForm(task, reenable = false) {
+    // Only the detail endpoint owns a complete prompt; list summaries never
+    // become edit state, even when the summary happens to fit in 200 characters.
+    if (task && (task !== detailTask || task.promptTruncated)) return;
     const creating = !task;
     const original = initialForm(task, { reenable, tz: tz() });
     const handle = createForm(document, {
@@ -405,6 +470,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         if (message === null) {
           form = null;
           selected = outcome.data?.task?.id ?? selected;
+          if (selected) loadDetail(selected);
           notice = outcome.data?.reenabled ? t('wb.schedule.reenabled') : null;
           redraw();
         } else {
@@ -504,7 +570,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       label.style.setProperty('left', `${tick.left}%`);
       axis.append(label);
     }
-    for (const dot of laneDots(data.tasks, start)) {
+    for (const dot of laneDots(data.timelineTasks ?? data.tasks, start)) {
       const node = button(document, '', () => select(dot.task.id), 'wb-sched-dot' +
         (dot.task.priority === 1 ? ' wb-p1' : '') + (dot.task.id === selected ? ' active' : ''));
       node.title = `${dot.task.name} · ${day(dot.at)}`;
@@ -518,14 +584,13 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   function renderFilters() {
     const bar = element(document, 'div', undefined, 'wb-sched-filters');
-    const counts = statusCounts(data.tasks);
+    const counts = data.counts ?? statusCounts(data.tasks);
     const seg = element(document, 'div', undefined, 'wb-seg');
     seg.setAttribute('role', 'group');
     seg.setAttribute('aria-label', t('wb.schedule.filter.label'));
     for (const value of FILTERS) {
       const item = button(document, t('wb.schedule.filter.' + value), () => {
-        filter = { ...filter, status: value };
-        redraw();
+        changeList({ status: value });
       });
       item.append(element(document, 'span', counts[value] ?? 0, 'wb-n'));
       item.setAttribute('aria-pressed', String(filter.status === value));
@@ -537,7 +602,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const all = element(document, 'option', t('wb.schedule.filter.allTargets'));
     all.value = 'all';
     target.append(all);
-    for (const label of [...new Set(data.tasks.map(task => targetLabel(task.target, { t })))].sort()) {
+    for (const label of [...new Set([...(data.timelineTasks ?? []), ...data.tasks].map(task => targetLabel(task.target, { t })))].sort()) {
       const option = element(document, 'option', label);
       option.value = label;
       target.append(option);
@@ -556,8 +621,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     search.setAttribute('aria-label', t('wb.schedule.search'));
     const apply = () => {
       if (search.value === filter.query) return;
-      filter = { ...filter, query: search.value };
-      redraw();
+      changeList({ query: search.value });
     };
     search.addEventListener('change', apply);
     search.addEventListener('search', apply);
@@ -613,7 +677,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const head = element(document, 'div', undefined, 'wb-sched-th');
     for (const key of ['task', 'rule', 'next', 'recent', 'target', 'status']) head.append(element(document, 'span', t('wb.schedule.col.' + key)));
     wrap.append(head);
-    const sections = groupTasks(data.tasks, { ...filter, t });
+    const sections = groupTasks(data.tasks, { ...filter, query: '', t });
     if (!sections.length) wrap.append(element(document, 'p', t('wb.schedule.noMatch'), 'wb-sched-empty'));
     for (const section of sections) {
       const block = element(document, 'section', undefined, 'wb-sched-section');
@@ -621,6 +685,11 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       if (section.name === 'enabled') block.children[0].append(element(document, 'small', t('wb.schedule.sortedByNext')));
       for (const task of section.tasks) block.append(renderRow(task));
       wrap.append(block);
+    }
+    if (filter.status === 'completed' && data.nextCursor) {
+      const more = button(document, t('wb.detail.loadMore'), () => refresh({ more: true }), 'wb-link-btn wb-sched-more');
+      more.disabled = listBusy;
+      wrap.append(more);
     }
     return wrap;
   }
@@ -815,7 +884,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       empty.append(icon(document, 'clock'), element(document, 'p', t('wb.schedule.empty')));
       notes.push(empty);
     }
-    const task = data?.available ? data.tasks.find(item => item.id === selected) : null;
+    const task = data?.available && detailTask?.id === selected ? detailTask : null;
     if (data?.available) {
       const top = element(document, 'div', undefined, 'wb-sched-top');
       top.append(renderKpi(), renderWeek(), renderTimeline());
@@ -823,7 +892,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     }
     main.replaceChildren(...notes);
     const showForm = data?.available && form && (form.taskId === null || form.taskId === task?.id);
-    const key = showForm ? form : task ? task.id : null;
+    const key = showForm ? form : selected;
     if (showForm) {
       // A mounted form is never rebuilt: its inputs keep focus and their text.
       form.panel ??= renderFormPanel();
@@ -832,6 +901,11 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       const scroll = key === sideKey ? sideBody?.scrollTop ?? 0 : 0;
       aside.replaceChildren(renderDetail(task));
       if (scroll) sideBody.scrollTop = scroll;
+    } else if (selected) {
+      const pending = element(document, 'div', undefined, 'wb-sched-detail');
+      pending.append(iconButton(document, 'x', t('wb.close'), close),
+        element(document, 'p', t(detailError ? 'wb.readFailed' : 'chat.loading'), 'wb-sched-note'));
+      aside.replaceChildren(pending);
     } else {
       aside.replaceChildren();
     }
@@ -890,7 +964,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     // A form with typed changes stays open; it is closed with Cancel.
     else if (form?.handle.dirty()) return;
     else if (form) form = null;
-    else if (selected) selected = null;
+    else if (selected) { close(); event.preventDefault?.(); return; }
     else return;
     event.preventDefault?.();
     redraw();

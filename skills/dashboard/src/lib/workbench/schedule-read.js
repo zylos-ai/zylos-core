@@ -10,7 +10,7 @@ const ENABLED = new Set(['pending', 'running']);
 const BAD = new Set(['failed', 'timeout']);
 const DAY = 86400;
 const PREVIEW_RUNS = 3;
-const MAX_RUNS = 200;
+const MAX_RUNS = 2000;
 
 const httpError = (statusCode, code) => Object.assign(new Error(code), { statusCode, code });
 
@@ -42,17 +42,31 @@ async function importOrNull(specifier) {
  * Upcoming runs of one task. A task whose cron cannot be evaluated is marked
  * unavailable without affecting the others.
  */
-export function nextRuns(task, n, from, tz, cronUtils) {
+export function nextRuns(task, n, from, tz, cronUtils, { until = null } = {}) {
   if (!ENABLED.has(task.status)) return [];
   if (task.type === 'recurring') {
     if (!cronUtils) return { unavailable: true, reason: 'cron_preview_unavailable' };
     try {
-      const runs = [];
-      let at = from;
-      for (let index = 0; index < n; index++) {
-        at = cronUtils.getNextRun(task.cron_expression, tz, new Date(at * 1000));
-        runs.push(at);
+      const iterator = cronUtils.createCronIterator(task.cron_expression, tz, new Date(from * 1000));
+      // Every local minute is also every epoch minute, including offset changes.
+      // Resolve the first boundary with the parser, then count the dense series
+      // arithmetically so 1,440 daily occurrences do not need 1,440 date walks.
+      if (String(task.cron_expression).trim().split(/\s+/).join(' ') === '* * * * *') {
+        const first = iterator.next();
+        if (!Number.isFinite(first) || first <= from) throw Error('invalid_cron_progress');
+        return runSeries(first, 60, n, until);
       }
+      const runs = [];
+      const limit = until === null ? n : MAX_RUNS;
+      let previous = from;
+      for (let index = 0; index < limit; index++) {
+        const at = iterator.next();
+        if (!Number.isFinite(at) || at <= previous) throw Error('invalid_cron_progress');
+        runs.push(at);
+        previous = at;
+        if (until !== null && runs.length >= n && at > until) return runs;
+      }
+      if (until !== null) runs.truncated = true;
       return runs;
     } catch {
       return { unavailable: true, reason: 'cron_preview_unavailable' };
@@ -60,9 +74,66 @@ export function nextRuns(task, n, from, tz, cronUtils) {
   }
   if (task.type === 'interval') {
     if (!(task.interval_seconds > 0) || task.next_run_at == null) return [];
-    return Array.from({ length: n }, (_, k) => task.next_run_at + k * task.interval_seconds);
+    const step = task.interval_seconds;
+    // Old anchors are advanced arithmetically, without walking past executions.
+    const start = task.next_run_at > from ? task.next_run_at
+      : task.next_run_at + (Math.floor((from - task.next_run_at) / step) + 1) * step;
+    return runSeries(start, step, n, until);
   }
   return task.next_run_at == null ? [] : [task.next_run_at];
+}
+
+function runSeries(start, step, n, until) {
+  const required = until === null ? n : Math.max(n, Math.floor((until - start) / step) + 2);
+  const runs = Array.from({ length: Math.min(required, MAX_RUNS) }, (_, k) => start + k * step);
+  if (required > MAX_RUNS) runs.truncated = true;
+  return runs;
+}
+
+const SUMMARY_COLUMNS = `id, name, substr(prompt, 1, 200) AS prompt,
+  length(prompt) > 200 AS prompt_truncated, type, status, cron_expression,
+  interval_seconds, next_run_at, last_run_at, updated_at, priority, require_idle,
+  miss_threshold, last_error, session_component, session_group_name, reply_channel, reply_endpoint`;
+
+function listOptions({ status = 'all', q = '', cursor = null, limit = null } = {}) {
+  status ??= 'all';
+  q ??= '';
+  if (!['all', 'enabled', 'paused', 'failed', 'completed'].includes(status)) throw httpError(400, 'invalid_status');
+  const size = limit === null ? 30 : /^\d+$/.test(String(limit)) ? Number(limit) : NaN;
+  if (!Number.isInteger(size) || size < 1 || size > 100) throw httpError(400, 'invalid_limit');
+  let before = null;
+  if (cursor !== null) {
+    try {
+      if (status !== 'completed' || typeof cursor !== 'string' || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw Error();
+      before = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+      if (!Array.isArray(before) || before.length !== 2 || !Number.isSafeInteger(before[0]) ||
+        typeof before[1] !== 'string' || !before[1].length || before[1].length > 512 ||
+        Buffer.from(JSON.stringify(before)).toString('base64url') !== cursor) throw Error();
+    } catch {
+      throw httpError(400, 'invalid_cursor');
+    }
+  }
+  return { status, q: String(q).trim(), before, size };
+}
+
+function serializeTask(task, history, nowSec, tz, cronUtils, resolve) {
+  const latest = history.at(-1);
+  const showLastError = Boolean(latest && BAD.has(latest.status));
+  const upcoming = nextRuns(task, 5, nowSec, tz, cronUtils, { until: nowSec + DAY });
+  const unavailable = !Array.isArray(upcoming);
+  const runs = unavailable ? [] : upcoming.filter(time => time > nowSec);
+  const { target, reply } = resolve(task);
+  return {
+    id: task.id, name: task.name, prompt: task.prompt, promptTruncated: Boolean(task.prompt_truncated),
+    type: task.type, status: task.status, cron: task.cron_expression ?? null,
+    intervalSeconds: task.interval_seconds ?? null, nextRunAt: task.next_run_at ?? null,
+    lastRunAt: task.last_run_at ?? null, updatedAt: task.updated_at ?? null,
+    priority: task.priority, requireIdle: Boolean(task.require_idle), missThreshold: task.miss_threshold,
+    showLastError, lastError: showLastError ? task.last_error ?? null : null, recent: history,
+    nextRuns: unavailable ? upcoming : { runs: runs.slice(0, 5), in24h: runs.filter(time => time <= nowSec + DAY),
+      ...(upcoming.truncated ? { truncated: true } : {}) },
+    target, reply, reenable: task.status === 'failed' && task.type === 'one-time',
+  };
 }
 
 function openDb(dbFile) {
@@ -118,19 +189,49 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
     return task => deliveryTarget(task, rows, names);
   }
 
-  async function read(at = now()) {
+  async function read(at = now(), options = {}) {
+    const { status, q, before, size } = listOptions(options);
     if (!fs.existsSync(dbFile)) return { available: false, tasks: [] };
     const nowSec = Math.floor(at / 1000);
-    let tasks, recent, week;
+    let tasks, listed, recent, week, statusRows, nextCursor = null;
     let db;
     try {
       db = openDb(dbFile);
-      tasks = db.prepare('SELECT * FROM tasks').all();
-      recent = db.prepare(`SELECT * FROM (
+      // Keep the list, counts and history on one SQLite snapshot while tasks finish.
+      db.exec('BEGIN');
+      // The overview always spans active tasks; a completed page or search never
+      // changes the KPI or timeline. Completed prompt bodies stay in SQLite.
+      tasks = db.prepare(`SELECT ${SUMMARY_COLUMNS} FROM tasks WHERE status != 'completed'`).all();
+      statusRows = db.prepare('SELECT status, count(*) AS count FROM tasks GROUP BY status').all();
+      const where = [status === 'completed' ? "status = 'completed'" : "status != 'completed'"];
+      const params = [];
+      // Match the former browser search, including Unicode case folding and
+      // literal %, _ and backslashes, against full prompt bodies inside SQLite.
+      if (q) {
+        const needle = q.toLowerCase();
+        db.function('schedule_search', value => Number(String(value ?? '').toLowerCase().includes(needle)));
+        where.push('(schedule_search(name) OR schedule_search(prompt) OR schedule_search(id))');
+      }
+      if (before) {
+        where.push('(COALESCE(updated_at, 0) < ? OR (COALESCE(updated_at, 0) = ? AND id < ?))');
+        params.push(before[0], before[0], before[1]);
+      }
+      const paged = status === 'completed';
+      listed = status === 'all' && !q ? tasks : db.prepare(`SELECT ${SUMMARY_COLUMNS} FROM tasks
+        WHERE ${where.join(' AND ')} ORDER BY COALESCE(updated_at, 0) DESC, id DESC ${paged ? 'LIMIT ?' : ''}`)
+        .all(...params, ...(paged ? [size + 1] : []));
+      if (paged && listed.length > size) {
+        const last = listed[size - 1];
+        nextCursor = Buffer.from(JSON.stringify([last.updated_at ?? 0, last.id])).toString('base64url');
+        listed = listed.slice(0, size);
+      }
+      const visibleIds = [...new Set([...tasks, ...listed].map(task => task.id))];
+      recent = visibleIds.length ? db.prepare(`SELECT * FROM (
           SELECT id, task_id, status, executed_at, completed_at, duration_ms, error,
             ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY executed_at DESC, id DESC) AS rn
-          FROM task_history) WHERE rn <= 12`).all();
+          FROM task_history WHERE task_id IN (${visibleIds.map(() => '?').join(',')})) WHERE rn <= 12`).all(...visibleIds) : [];
       week = db.prepare('SELECT status, executed_at FROM task_history WHERE executed_at >= ?').all(nowSec - 8 * DAY);
+      db.exec('COMMIT');
     } catch {
       throw httpError(503, 'scheduler_unreadable');
     } finally {
@@ -145,47 +246,26 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
       list.push(historyRow(row));
       byTask.set(row.task_id, list);
     }
-    const resolve = await delivery(tasks);
+    const resolve = await delivery([...tasks, ...listed]);
     const kpi = { enabled: 0, paused: 0, running: 0, next24h: 0, partialPreview: false, runs7d: 0, bad7d: 0, successRate7d: null };
-    const out = [];
-    for (const task of tasks) {
-      const history = (byTask.get(task.id) ?? []).reverse();
-      const latest = history.at(-1);
-      const showLastError = Boolean(latest && BAD.has(latest.status));
-      const upcoming = nextRuns(task, MAX_RUNS, nowSec, tz, cronUtils);
-      const unavailable = !Array.isArray(upcoming);
-      const runs = unavailable ? [] : upcoming.filter(time => time > nowSec);
-      const in24h = runs.filter(time => time <= nowSec + DAY);
+    const counts = { all: 0, enabled: 0, paused: 0, failed: 0, completed: 0 };
+    for (const row of statusRows) {
+      counts.all += row.count;
+      if (ENABLED.has(row.status)) counts.enabled += row.count;
+      if (['paused', 'failed', 'completed'].includes(row.status)) counts[row.status] += row.count;
+    }
+    const out = new Map();
+    for (const task of [...tasks, ...listed]) {
+      if (out.has(task.id)) continue;
+      const item = serializeTask(task, (byTask.get(task.id) ?? []).slice().reverse(), nowSec, tz, cronUtils, resolve);
+      out.set(task.id, item);
       if (ENABLED.has(task.status)) {
         kpi.enabled++;
-        if (unavailable) kpi.partialPreview = true;
-        else kpi.next24h += in24h.length;
+        if (item.nextRuns.unavailable || item.nextRuns.truncated) kpi.partialPreview = true;
+        kpi.next24h += item.nextRuns.in24h?.length ?? 0;
       }
       if (task.status === 'paused') kpi.paused++;
       if (task.status === 'running') kpi.running++;
-      const { target, reply } = resolve(task);
-      out.push({
-        id: task.id,
-        name: task.name,
-        prompt: task.prompt,
-        type: task.type,
-        status: task.status,
-        cron: task.cron_expression ?? null,
-        intervalSeconds: task.interval_seconds ?? null,
-        nextRunAt: task.next_run_at ?? null,
-        lastRunAt: task.last_run_at ?? null,
-        updatedAt: task.updated_at ?? null,
-        priority: task.priority,
-        requireIdle: Boolean(task.require_idle),
-        missThreshold: task.miss_threshold,
-        showLastError,
-        lastError: showLastError ? task.last_error ?? null : null,
-        recent: history,
-        nextRuns: unavailable ? upcoming : { runs: runs.slice(0, 5), in24h },
-        target,
-        reply,
-        reenable: task.status === 'failed' && task.type === 'one-time',
-      });
     }
     const days = [];
     for (let back = 6; back >= 0; back--) {
@@ -210,8 +290,33 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
       ...(zone.tz ? {} : { tzReason: zone.reason }),
       kpi,
       daily7d: { tz, utcFallback: !zone.tz, days },
-      tasks: out,
+      tasks: listed.map(task => out.get(task.id)),
+      timelineTasks: tasks.map(task => out.get(task.id)),
+      counts,
+      nextCursor,
     };
+  }
+
+  async function detail(id, at = now()) {
+    if (!fs.existsSync(dbFile)) throw httpError(404, 'task_not_found');
+    let db, task, recent;
+    try {
+      db = openDb(dbFile);
+      db.exec('BEGIN');
+      task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+      recent = task ? db.prepare(`SELECT id, status, executed_at, completed_at, duration_ms, error
+        FROM task_history WHERE task_id = ? ORDER BY executed_at DESC, id DESC LIMIT 12`).all(id) : [];
+      db.exec('COMMIT');
+    } catch {
+      throw httpError(503, 'scheduler_unreadable');
+    } finally {
+      db?.close();
+    }
+    if (!task) throw httpError(404, 'task_not_found');
+    const zone = await scheduleTz();
+    const cronUtils = task.type === 'recurring' ? await importOrNull(cronModule) : null;
+    const resolve = await delivery([task]);
+    return { task: serializeTask(task, recent.reverse().map(historyRow), Math.floor(at / 1000), zone.tz ?? 'UTC', cronUtils, resolve) };
   }
 
   function history(id, { before = null, beforeId = null, limit = null } = {}) {
@@ -267,12 +372,14 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
     throw httpError(400, 'invalid_preview');
   }
 
-  return { read, history, preview };
+  return { read, detail, history, preview };
 }
 
 /** GET routes of the schedule page; authentication is owned by the API gate. */
 export async function scheduleReadResponse(reader, pathname, searchParams) {
-  if (pathname === '/api/workbench/schedule') return reader.read();
+  if (pathname === '/api/workbench/schedule') return reader.read(undefined, {
+    status: searchParams.get('status'), q: searchParams.get('q'), cursor: searchParams.get('cursor'), limit: searchParams.get('limit'),
+  });
   if (pathname === '/api/workbench/schedule/preview') {
     return reader.preview({
       kind: searchParams.get('kind'),
@@ -281,7 +388,7 @@ export async function scheduleReadResponse(reader, pathname, searchParams) {
       locale: searchParams.get('locale') === 'en' ? 'en' : 'zh',
     });
   }
-  const route = pathname.match(/^\/api\/workbench\/schedule\/([^/]+)\/history$/);
+  const route = pathname.match(/^\/api\/workbench\/schedule\/([^/]+)(\/history)?$/);
   if (!route) return undefined;
   let id;
   try {
@@ -289,6 +396,7 @@ export async function scheduleReadResponse(reader, pathname, searchParams) {
   } catch {
     throw httpError(400, 'invalid_task');
   }
+  if (!route[2]) return reader.detail(id);
   return reader.history(id, {
     before: searchParams.get('before'),
     beforeId: searchParams.get('beforeId'),

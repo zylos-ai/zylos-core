@@ -17,15 +17,25 @@ export function getDefaultTimezone() {
  * @returns {number} Unix timestamp of next run
  */
 export function getNextRun(cronExpression, timezone, fromDate = new Date()) {
-  try {
-    const tz = timezone || getDefaultTimezone();
-    const options = {
-      currentDate: fromDate,
-      tz
-    };
+  return createCronIterator(cronExpression, timezone, fromDate).next();
+}
 
-    const interval = parser.parseExpression(cronExpression, options);
-    return Math.floor(interval.next().getTime() / 1000);
+/** Parse once and advance through successive run times in the scheduler zone. */
+export function createCronIterator(cronExpression, timezone, fromDate = new Date()) {
+  try {
+    const interval = parser.parseExpression(cronExpression, {
+      currentDate: fromDate,
+      tz: timezone || getDefaultTimezone(),
+    });
+    return {
+      next() {
+        try {
+          return Math.floor(interval.next().getTime() / 1000);
+        } catch (error) {
+          throw new Error(`Invalid cron expression "${cronExpression}": ${error.message}`);
+        }
+      },
+    };
   } catch (error) {
     throw new Error(`Invalid cron expression "${cronExpression}": ${error.message}`);
   }
