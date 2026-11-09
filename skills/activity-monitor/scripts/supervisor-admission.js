@@ -11,6 +11,11 @@ function validGroup(group) { try { assertSessionGroup(group); return true; } cat
 export function validSupervisorRequest(request) {
   if (!object(request) || request.version !== 1 || !validRequestId(request.requestId)) return false;
   switch (request.type) {
+    case 'delete_group': return validGroup(request.sessionGroup) && nonempty(request.actor) && request.actor.length <= 512
+      && (!Object.hasOwn(request, 'operationId') || validRequestId(request.operationId))
+      && (!Object.hasOwn(request, 'preview') || object(request.preview) &&
+        Object.keys(request.preview).every(key => ['messages','attachments','files'].includes(key)) &&
+        Object.values(request.preview).every(value => Number.isSafeInteger(value) && value >= 0));
     case 'restart_all': return request.reason === 'upgrade';
     case 'manual_restart': return (!Object.hasOwn(request, 'expectedRunId') || nonempty(request.expectedRunId))
       && (!Object.hasOwn(request, 'expectedSessionId') || typeof request.expectedSessionId === 'string')
@@ -68,13 +73,14 @@ export class SupervisorAdmission {
         }
         const rows = this.store.read();
         switch (request.type) {
+          case 'delete_group': return reply(await this.deleteGroup(request, rows));
           case 'restart_all': return reply(await this.restart(request, rows));
           case 'manual_restart': return reply(await this.manual(request, rows));
           default: return reply({ ok: false, code: 'invalid_request' });
         }
       } catch (error) {
         if (error.code !== 'requests_unreadable' || request.type === 'ready_for_config_reclaim') throw error;
-        return reply(request.type === 'manual_restart'
+        return reply(['manual_restart', 'delete_group'].includes(request.type)
           ? { ok: false, result: 'rejected', reason: error.code } : { ok: false, code: error.code });
       }
     });
@@ -97,6 +103,33 @@ export class SupervisorAdmission {
     }
     this.store.write([...rows, { requestId: request.requestId, reason: 'upgrade', acceptedAt: this.now(), runIds }]);
     return { ok: true, result: 'accepted', runCount: runIds.length };
+  }
+  async deleteGroup(request, rows) {
+    const reject = reason => ({ ok: false, result: 'rejected', reason });
+    if (request.sessionGroup === 'origin') return reject('origin_forbidden');
+    const operationId = request.operationId ?? request.requestId;
+    const existing = await this.db.getGroupDeletionAudit(operationId);
+    if (existing?.sessionGroup === request.sessionGroup && existing.status === 'done') return { ok: true, result: 'already_completed', operationId, runId: existing.runId };
+    if ((await this.readMode()).mode !== 'multi') return reject('not_multi');
+    if (await this.db.getModeTransition() || await this.db.getDrainFence('*')) return reject('transition_open');
+    const active = await this.db.getActiveDeletion(request.sessionGroup);
+    if (!active && await this.db.getDrainFence(request.sessionGroup)) return reject('fence_conflict');
+    const run = active ? { runId: active.runId } : await this.readRun(request.sessionGroup);
+    if (!active && run !== null && (!nonempty(run?.runId) || !run.ready)) return reject('identity_unavailable');
+    const deletion = active ?? await this.db.beginGroupDeletion(request.sessionGroup, { operationId, actor: request.actor,
+      runId: run?.runId ?? null, preview: request.preview });
+    // The lifecycle owner removes only this group's queued manual/upgrade intent.
+    // Its fence already excludes new admission before the intent is changed.
+    const remaining = rows.flatMap(row => {
+      if (row.reason === 'manual_restart') return row.mode === 'multi' && row.sessionGroup === request.sessionGroup ? [] : [row];
+      if (row.reason === 'upgrade' && run?.runId && row.runIds.includes(run.runId)) {
+        const runIds = row.runIds.filter(id => id !== run.runId);
+        return runIds.length ? [{ ...row, runIds }] : [];
+      }
+      return [row];
+    });
+    if (remaining.length !== rows.length || remaining.some((row, index) => row !== rows[index])) this.store.write(remaining);
+    return { ok: true, result: active ? 'already_accepted' : 'accepted', operationId: deletion.operationId, runId: deletion.runId };
   }
   async manual(request, rows) {
     const rejected = reason => ({ ok: false, result: 'rejected', reason });
@@ -141,7 +174,9 @@ export class SupervisorAdmission {
     if (!run.ready) return reject('not_ready');
     if (!validSnapshot(run.launchConfig)) return reject('snapshot_unavailable');
     const fence = await this.db.getDrainFence(request.sessionGroup);
-    if (fence && ((fence.reason !== 'model_config') || (fence.runId !== request.expectedRunId))) return reject('other_fence');
+    // Deletion already owns stopping this run. Let its in-flight configuration
+    // control finish without replacing the delete fence or scheduling a restart.
+    if (fence && (!['model_config', 'delete'].includes(fence.reason) || fence.runId !== request.expectedRunId)) return reject('other_fence');
     if (rows.some(row => row.reason === 'manual_restart' &&
       (row.mode === 'single' ? null : row.sessionGroup ?? 'origin') === request.sessionGroup)) return reject('manual_restart_pending');
     if (fence) return { ok: true, result: 'already_accepted' };

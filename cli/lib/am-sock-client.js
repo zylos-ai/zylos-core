@@ -33,6 +33,9 @@ export function validateReply(request, reply) {
   }
   if (!reply.ok && publicCodes.includes(reply.code)) return true;
   switch (request.type) {
+    case 'delete_group':
+      return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'already_completed']) && nonempty(reply.operationId) && (reply.runId === null || nonempty(reply.runId))
+        : reply.result === 'rejected' && oneOf(reply.reason, ['origin_forbidden', 'not_multi', 'transition_open', 'fence_conflict', 'identity_unavailable', 'requests_unreadable']);
     case 'restart_all':
       return reply.ok
         ? oneOf(reply.result, ['accepted', 'already_accepted', 'done_empty']) && integer(reply.runCount)
@@ -47,7 +50,7 @@ export function validateReply(request, reply) {
     case 'mode_switch':
       return reply.ok ? reply.result === 'noop' || (reply.result === 'accepted' && nonempty(reply.runId))
         : (reply.code === 'transition_open' && nonempty(reply.runId) && oneOf(reply.target, ['single', 'multi']))
-          || oneOf(reply.code, ['config_unreadable', 'legacy_session_present', 'manual_restart_pending', 'requests_unreadable']);
+          || oneOf(reply.code, ['config_unreadable', 'legacy_session_present', 'manual_restart_pending', 'requests_unreadable', 'deletion_in_progress']);
     default: return false;
   }
 }
@@ -57,7 +60,7 @@ export function submit(request, { deadlineAt, replyMaxMs = 10000, connectRetryEv
   socketPath = path.join(ZYLOS_DIR, 'activity-monitor', 'am.sock'),
   connect = options => net.createConnection(options), now = (() => { const wall = Date.now(); const mono = performance.now(); return () => wall + performance.now() - mono; })(),
 } = {}) {
-  if (!object(request) || !oneOf(request.type, ['start_attempt', 'restart_all', 'ready_for_config_reclaim', 'manual_restart', 'mode_switch'])) throw new TypeError('Unsupported supervisor request');
+  if (!object(request) || !oneOf(request.type, ['start_attempt', 'restart_all', 'ready_for_config_reclaim', 'manual_restart', 'mode_switch', 'delete_group'])) throw new TypeError('Unsupported supervisor request');
   if (!Number.isFinite(replyMaxMs) || replyMaxMs <= 0 || (deadlineAt !== undefined && !integer(deadlineAt))
       || (connectRetryEveryMs !== undefined && (!Number.isFinite(connectRetryEveryMs) || connectRetryEveryMs <= 0))) throw new TypeError('Invalid supervisor deadline');
   const deadline = deadlineAt ?? now() + replyMaxMs;

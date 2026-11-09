@@ -55,7 +55,10 @@ export class ModeSwitchCoordinator {
     try { current = modeOf(await this.readMode()); if (!modes.has(current)) throw failure('CONFIG_UNREADABLE', 'Invalid session mode'); }
     catch { return { ok: false, code: 'config_unreadable' }; }
     if (current !== source) throw failure('TRANSITION_PRECONDITION', 'Session mode changed before transition admission');
-    const { runId } = await this.db.beginModeTransition(source, request.target);
+    if ((await this.db.listDrainFences()).some(fence => fence.reason === 'delete')) return { ok: false, code: 'deletion_in_progress' };
+    let runId;
+    try { ({ runId } = await this.db.beginModeTransition(source, request.target)); }
+    catch (error) { if (error.code === 'DELETION_IN_PROGRESS') return { ok: false, code: 'deletion_in_progress' }; throw error; }
     this.event('transition_begin', { run_id: runId, phase: 'gating' }, { source, target: request.target });
     return { ok: true, result: 'accepted', runId };
   }
@@ -72,6 +75,7 @@ export class ModeSwitchCoordinator {
     const value = await this.readMode();
     if (value.keyPresent !== false || modeOf(value) !== 'single' || await this.legacyPresent()) return;
     if ((await this.readRequests()).some(request => request.reason === 'manual_restart')) return;
+    if ((await this.db.listDrainFences()).some(fence => fence.reason === 'delete')) return;
     const { runId } = await this.db.beginModeTransition('single', 'multi');
     this.event('auto_migration_begin', { run_id: runId, phase: 'gating' });
   }

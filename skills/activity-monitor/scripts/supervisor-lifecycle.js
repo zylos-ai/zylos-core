@@ -6,7 +6,7 @@ import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
-const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config']);
+const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config', 'delete']);
 const error = (code, message) => Object.assign(new Error(message), { code });
 const modeOf = context => context.configuration.mode;
 const targetOf = group => group === null ? { machine: true } : { sessionGroup: group };
@@ -206,6 +206,12 @@ export class SupervisorLifecycle {
     const current = await this.d.db.getDrainFence(fence.sessionGroup);
     if (!current) { context.fences = context.fences.filter(item => item.sessionGroup !== fence.sessionGroup); this.runEndFailures.delete(key); return; }
     if (current.reason !== fence.reason || current.runId !== fence.runId) { this.runEndFailures.delete(key); throw error('FENCE_MISMATCH', 'Reclaim fence changed'); }
+    if (fence.reason === 'delete') {
+      // The deleting caller owns the fence until storage cleanup and audit finish.
+      // Failure must remain retryable without reopening the group.
+      await this.d.db.recordRunEnd(fence.sessionGroup, { runId: fence.runId, reason: 'delete', clearFence: false });
+      return;
+    }
     try {
       await this.d.db.recordRunEnd(fence.sessionGroup, { runId: fence.runId, reason: fence.reason,
         clearFence: fence.reason === 'manual_restart' ? { expectedReason: fence.reason, expectedRunId: fence.runId } : true });
@@ -261,6 +267,7 @@ export class SupervisorLifecycle {
       if (!current || current.runId !== fence.runId || current.reason !== fence.reason) return 'changed';
     }
     let scene = await this.reclaimRead(fence, () => this.scene(group, context));
+    if (fence.reason === 'delete' && scene.present && scene.runId && scene.runId !== fence.runId) return 'changed';
     if (finite(scene.currentSessionTs)) {
       const expired = await this.reclaimRead(fence, () => this.d.db.expireStaleRunningControls(targetOf(group), { deliveredBefore: Math.floor(scene.currentSessionTs / 1000) }));
       for (const row of expired) await this.event('control_expired', { session_group: group, control_id: row.id, run_id: fence.runId });
@@ -274,18 +281,18 @@ export class SupervisorLifecycle {
         const childBlocked = this.subagentReclaimBlocked(scene, fence.reason, context);
         if (childBlocked ||
             !await this.reclaimRead(fence, () => this.idle(scene, context))) {
-          if (singleAuth || fence.reason === 'model_config') return 'waiting_idle';
+          if (singleAuth || ['model_config', 'delete'].includes(fence.reason)) return 'waiting_idle';
           if (!unfenced) await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
           await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: childBlocked ? 'subagent_activity' : 'not_idle' });
           return 'cancelled';
         }
-        const again = await this.reclaimRead(fence, async () => singleAuth ? this.running(group, { withoutDeadline: true }) : {
+        const again = await this.reclaimRead(fence, async () => singleAuth ? this.running(group, { withoutDeadline: true }) : fence.reason === 'delete' ? this.running(group) : {
           conversations: group === null ? await this.d.db.countGlobalRunningConversations() : await this.d.db.countRunningConversations(group), controls: 0,
         });
         if (again.conversations !== 0 || again.controls !== 0) {
-          if (singleAuth) return 'waiting_inflight';
-          if (fence.reason !== 'model_config' && !unfenced) {
+          if (singleAuth || fence.reason === 'delete') return 'waiting_inflight';
+          if (!['model_config', 'delete'].includes(fence.reason) && !unfenced) {
             await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'inflight_after_idle' });
             await this.clear(fence, context);
             if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
@@ -298,6 +305,7 @@ export class SupervisorLifecycle {
       if (scene.present && scene.runId === fence.runId) {
         if (typeof scene.processRunning !== 'boolean') return 'unknown_process';
         if (scene.processRunning && this.subagentReclaimBlocked(scene, fence.reason, context)) {
+          if (fence.reason === 'delete') return 'waiting_idle';
           if (preparedTtl && this.activeSubagents(scene, context)) return 'waiting_idle';
           await this.clear(fence, context);
           if (fence.reason === 'ttl') this.ttlReset.set(group, { runId: fence.runId, at: this.now() });
@@ -318,10 +326,23 @@ export class SupervisorLifecycle {
     } else if (scene.present && !scene.runId) {
       return 'unknown_identity';
     }
+    if (fence.reason === 'delete') {
+      // Keep the deletion fence unless a fresh observation confirms that the
+      // stopped executor is gone. Never publish an ending for a replacement.
+      const stopped = await this.reclaimRead(fence, () => this.observe(group, context), 'reclaim_stop_unconfirmed');
+      if (stopped.present) {
+        if (!stopped.runId) return 'unknown_identity';
+        if (stopped.runId !== fence.runId) return 'changed';
+        if (stopped.processRunning !== false) throw error('STOP_UNCONFIRMED', 'Runtime process termination is not confirmed');
+      }
+    }
     await this.d.intentionalStop?.(group, fence.runId);
     if (!unfenced) {
       const current = scene.present && scene.runId !== fence.runId ? await this.d.readCurrentSession?.(group) : null;
-      if (current?.runId && current.runId !== fence.runId) await this.clear(fence, context);
+      if (current?.runId && current.runId !== fence.runId) {
+        if (fence.reason === 'delete') return 'changed';
+        await this.clear(fence, context);
+      }
       else await this.completeRun(fence, context);
     }
     this.ttlPreparation.delete(group);
@@ -349,6 +370,7 @@ export class SupervisorLifecycle {
   }
 
   subagentReclaimBlocked(scene, reason, context) {
+    if (reason === 'delete') return (scene.activeSubagents?.length ?? 0) > 0;
     if (!['ttl', 'evict'].includes(reason)) return false;
     if (this.activeSubagents(scene, context)) return true;
     const last = scene.lastSubagentActivityAt;
