@@ -52,12 +52,15 @@ export function previewMessageText(content, { limit = 80 } = {}) {
   else if (parsed.kind !== 'text') text = parsed.fallbackText;
   else {
     if (parsed.text.includes(OVERFLOW_POINTER)) return null;
-    const body = parsed.text.replace(REPLY_ROUTE, '');
-    const block = CURRENT_MESSAGE.exec(body);
+    // The block comes first: what the person wrote may itself quote a reply route, which then stays.
+    const block = CURRENT_MESSAGE.exec(parsed.text);
     if (block) text = block[1].replace(SENDER, '');
-    else if (HEADER_SENDER.test(body)) text = body.replace(HEADER_SENDER, '');
-    else if (CHANNEL_HEADER.test(body.split('\n', 1)[0].trim())) return null;
-    else text = body;
+    else {
+      const body = parsed.text.replace(REPLY_ROUTE, '');
+      if (HEADER_SENDER.test(body)) text = body.replace(HEADER_SENDER, '');
+      else if (CHANNEL_HEADER.test(body.split('\n', 1)[0].trim())) return null;
+      else text = body;
+    }
   }
   if (typeof text !== 'string') return null;
   text = text.replace(/\s+/g, ' ').trim();

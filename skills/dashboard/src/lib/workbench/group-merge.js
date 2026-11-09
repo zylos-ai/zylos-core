@@ -14,13 +14,16 @@ export function safePreview(item, sanitizer = new Sanitizer('')) {
   return { ...preview, text: text == null ? null : sanitizer.safeSummary(redactQuerySecrets(text)) };
 }
 
-// People paste links that carry credentials in the query string (?token=…, &api_key=…). The preview keeps the
-// link readable and drops only those values. Only a URL query parameter counts (after "?" or "&"), its name made
-// of whole words joined by "_", "-" or "." with one of them a credential word (so not monkey= or hotkey=). The
-// value ends at whitespace, "&", "#" or any non-ASCII character, so the words after a link stay.
-const QUERY_SECRET = /([?&](?:[a-z0-9]+[_.-])*(?:token|key|apikey|secret|password|passwd|signature|sig|auth)(?:[_.-][a-z0-9]+)*=)[!"$%'-~]+/gi;
+// People paste links that carry credentials in the query string (?token=…, &api_key=…, &accessToken=…). The
+// preview keeps the link readable and drops only those values. Only a URL query parameter counts (after "?", "&"
+// or an HTML-escaped "&amp;"). Its name is split into words at "_", "-", "." and a lower-to-upper case change;
+// one of those words must be a credential word, so monkey= or hotkey= stay. The value ends at whitespace, "&",
+// "#" or any non-ASCII character, so the words after a link stay.
+const QUERY_PARAM = /(\?|&amp;|&)([A-Za-z0-9_.-]+)=([!"$%'-~]+)/g;
+const SECRET_WORDS = new Set(['token', 'key', 'apikey', 'secret', 'password', 'passwd', 'signature', 'sig', 'auth']);
+const secretName = name => name.split(/[_.-]|(?<=[a-z0-9])(?=[A-Z])/).some(word => SECRET_WORDS.has(word.toLowerCase()));
 export function redactQuerySecrets(text) {
-  return text.replace(QUERY_SECRET, '$1[REDACTED]');
+  return text.replace(QUERY_PARAM, (whole, start, name) => (secretName(name) ? `${start}${name}=[REDACTED]` : whole));
 }
 
 export function mergeGroups({ status, c4, q, names = new Map(), statusError }, sanitizer = new Sanitizer('')) {

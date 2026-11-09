@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
-import { memoryBacklogView, memoryBacklogAge, leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
+import { memoryBacklogView, memoryBacklogAge, memoryBacklogValueWidth, leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 
 // Direct product imports and injected DOM/request. Run for memory scope, charts,
@@ -149,6 +149,21 @@ test('backlog card: threshold in the header, age as a mark on its row, quiet gro
   assert.equal(nodesOfClass(card2, 'wb-memory-rest').length, 0);
   filter.value = 'nothing'; filter.dispatch('input');
   assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.noMatch/);
+  f.controller.destroy();
+});
+
+test('the backlog count column gets one shared width when a count is shown in words', async () => {
+  assert.equal(memoryBacklogValueWidth([{ count: 3 }, { count: 0 }], 'Unknown'), '', 'numbers only: the column sizes itself');
+  assert.equal(memoryBacklogValueWidth([{ count: 3 }, { count: null }], 'Unknown'), '8ch');
+  assert.equal(memoryBacklogValueWidth([{ count: null }], '未知'), '5ch', 'a wide character counts twice');
+  assert.equal(memoryBacklogValueWidth(null, 'Unknown'), '');
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [
+    { sessionGroup: 'telegram:dm-1', count: 4, threshold: 15, syncing: false },
+    { sessionGroup: 'telegram:dm-2', count: null, threshold: 15, syncing: false },
+  ] }) });
+  await f.controller.load();
+  const rows = nodesOfClass(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0], 'wb-memory-rows')[0];
+  assert.equal(rows.style['--wb-bl-value'], `${[...'wb.unknown'].length + 1}ch`, 'the rows share the width of the unknown label');
   f.controller.destroy();
 });
 

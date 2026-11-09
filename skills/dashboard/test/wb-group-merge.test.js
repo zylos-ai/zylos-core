@@ -63,6 +63,10 @@ test('the preview drops credential values from links but keeps the link readable
   assert.equal(redactQuerySecrets('https://x.test/?key=a1 then more'), 'https://x.test/?key=[REDACTED] then more');
   // Names are matched as whole words: these are not credentials.
   assert.equal(redactQuerySecrets('https://x.test/?monkey=1&hotkey=2&keyboard=us&tokens2=3'), 'https://x.test/?monkey=1&hotkey=2&keyboard=us&tokens2=3');
+  // camelCase names split at the case change, and an HTML-escaped "&amp;" separates parameters like "&".
+  assert.equal(redactQuerySecrets('https://x.test/?accessToken=a1&authToken=b2&clientSecret=c3&APIKey=d4'), 'https://x.test/?accessToken=[REDACTED]&authToken=[REDACTED]&clientSecret=[REDACTED]&APIKey=[REDACTED]');
+  assert.equal(redactQuerySecrets('<a href="https://x.test/?page=2&amp;token=abc&amp;id=7">'), '<a href="https://x.test/?page=2&amp;token=[REDACTED]&amp;id=7">');
+  assert.equal(redactQuerySecrets('https://x.test/?monkeyKing=1&hotKeys=2&tokenizer=3'), 'https://x.test/?monkeyKing=1&hotKeys=2&tokenizer=3', 'no credential word: kept');
   // Only a URL query parameter counts: "token=" written in a sentence, or after another separator, stays.
   assert.equal(redactQuerySecrets('the token=abc field and monkey business'), 'the token=abc field and monkey business');
   assert.equal(redactQuerySecrets('a;token=abc and (key=abc)'), 'a;token=abc and (key=abc)');

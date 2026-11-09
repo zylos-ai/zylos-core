@@ -110,8 +110,10 @@ test('stylesheet: on phones usage ranges fill the row, custom dates fold onto on
 
 test('stylesheet: memory backlog rows are one 40px line on phones, with names wrapping and counts never cut', () => {
   // The count column grows to its content ("Unknown" in English) instead of spilling out of the card.
-  assert.match(phone, /\.wb-memory-bl \{ grid-template-columns: minmax\(0, 1fr\) minmax\(56px, 26%\) minmax\(2\.6em, max-content\);[^}]*min-height: 40px; \}/);
-  assert.match(css, /^\.wb-memory-bl \{ grid-template-columns: minmax\(120px, 260px\) minmax\(60px, 1fr\) minmax\(3em, max-content\);/m, 'and on wide screens');
+  assert.match(phone, /\.wb-memory-bl \{ grid-template-columns: minmax\(0, 1fr\) minmax\(56px, 26%\) minmax\(max\(2\.6em, var\(--wb-bl-value, 0px\)\), max-content\);[^}]*min-height: 40px; \}/);
+  assert.match(css, /^\.wb-memory-bl \{ grid-template-columns: minmax\(120px, 260px\) minmax\(60px, 1fr\) minmax\(max\(3em, var\(--wb-bl-value, 0px\)\), max-content\);/m, 'and on wide screens');
+  // Wide screens too: badges that do not fit move under the name instead of squeezing it.
+  assert.match(css, /^\.wb-memory-bl-head \{ display: flex; flex-wrap: wrap;/m);
   assert.match(phone, /\.wb-memory-bl-head \.wb-memory-chart-label \{ white-space: normal; overflow-wrap: anywhere;/);
 });
 

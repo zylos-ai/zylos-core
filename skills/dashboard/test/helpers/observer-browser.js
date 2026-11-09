@@ -8,7 +8,9 @@ import { GROUP, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const OTHER = 'lark:team.topic';
-const frame = '<!doctype html><html><body>Private observer fixture<script>addEventListener("message",e=>{if(e.data?.type==="observer-init"){const p=e.ports[0];p.start();p.postMessage({type:"ready"});}})</script></body></html>';
+// The fixture frame says it is ready, and reports the terminal size a case hands it ("fixture-metrics"), as the
+// real frame reports its rendered size.
+const frame = '<!doctype html><html><body>Private observer fixture<script>let p=null;addEventListener("message",e=>{if(e.data?.type==="observer-init"){p=e.ports[0];p.start();p.postMessage({type:"ready"});}else if(e.data?.type==="fixture-metrics"&&p)p.postMessage({type:"metrics",width:e.data.width,height:e.data.height});})</script></body></html>';
 
 // Full shipped entry/modules and native browser events. API/iframe/WebSocket are
 // fixtures, so these cases do not replace manager concurrency or native tmux tests.
@@ -194,6 +196,30 @@ export async function runObserverBrowser(t, sandbox, signal) {
     await page.locator('[data-observer-view="history"]').click();
     await page.locator('#observer-history').waitFor({ state: 'visible' });
     assert.equal(await row.isVisible(), false, 'history view again: no live status row');
+  });
+  // Status row, wide-terminal hint and size button follow the page state: hidden while a running group is to be
+  // picked; a terminal wider than its frame marks the frame and shows the hint; the size button goes with the form.
+  await step('the status row, the wide-terminal hint and the size button follow the page state', async page => {
+    await page.locator('#observer-tab').click();
+    await page.locator('#observer-group-picker').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => /Choose a running group/.test(document.querySelector('#observer-notice')?.textContent || ''));
+    assert.equal(await page.locator('.wb-o-notice').isVisible(), false, 'choosing among running groups: the picker speaks, the row is hidden');
+    await select(page, GROUP); await page.waitForFunction(() => window.__observerSockets.length > 0);
+    await page.locator('.wb-o-notice').waitFor({ state: 'visible' });
+    const shell = page.locator('.observer-frame-shell'), hint = page.locator('.wb-o-wide-hint');
+    await shell.waitFor({ state: 'visible' });
+    const report = width => page.evaluate(width => document.querySelector('#observer-frame').contentWindow.postMessage({ type: 'fixture-metrics', width, height: 400 }, '*'), width);
+    await report(5000);
+    await page.waitForFunction(() => document.querySelector('.observer-frame-shell').classList.contains('wb-o-wide'));
+    assert.equal(await hint.isVisible(), true, 'a terminal wider than its frame shows the sideways hint');
+    await report(200);
+    await page.waitForFunction(() => !document.querySelector('.observer-frame-shell').classList.contains('wb-o-wide'));
+    assert.equal(await hint.isVisible(), false, 'a terminal that fits shows no hint');
+    const size = () => page.evaluate(() => ({ form: document.querySelector('#observer-size-form').hidden, button: document.querySelector('#observer-size-toggle').hidden }));
+    assert.deepEqual(await size(), { form: false, button: false }, 'live view with a known agent size: form and button offered');
+    await page.locator('[data-observer-view="history"]').click();
+    await page.locator('#observer-history').waitFor({ state: 'visible' });
+    assert.deepEqual(await size(), { form: true, button: true }, 'history view: no size form, and no button for it');
   });
   scenario = 'pending-lease';
   await step('late lease acquisition cannot block selecting another group and is released', async page => {

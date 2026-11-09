@@ -189,6 +189,16 @@ export function memoryBacklogAge(firstAt, now = Date.now()) {
   return hours >= 48 ? { unit: 'days', count: Math.floor(hours / 24) } : { unit: 'hours', count: hours };
 }
 const isNumber = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+/**
+ * A shared minimum width for the backlog count column when a count is shown as words ("Unknown"), so every
+ * row's bar starts at the same place. Measured in `ch`, two per wide (CJK) character; the column still grows
+ * to its content, so a low estimate only costs alignment, never a cut word. Empty when every count is a number.
+ */
+export function memoryBacklogValueWidth(rows, unknownLabel) {
+  if (!(rows ?? []).some(row => !isNumber(row.count))) return '';
+  const width = [...String(unknownLabel)].reduce((sum, char) => sum + (char.codePointAt(0) >= 0x2e80 ? 2 : 1), 0);
+  return `${width + 1}ch`;
+}
 // Past this many groups the backlog card offers a name filter.
 const BACKLOG_FILTER_AT = 12;
 
@@ -443,6 +453,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     const match = row => !needle || row.sessionGroup.toLowerCase().includes(needle)
       || memoryGroupLabel({ ...(getTree()?.sessionGroups ?? []).find(group => group.sessionGroup === row.sessionGroup), ...row }, t).toLowerCase().includes(needle);
     const active = view.active.filter(match), quiet = view.quiet.filter(match);
+    backlogRows.style.setProperty('--wb-bl-value', memoryBacklogValueWidth(active, t('wb.unknown')));
     for (const row of active) backlogRows.append(backlogItem(row));
     // A search shows every match; otherwise groups with nothing pending fold into one line.
     if (needle) for (const row of quiet) backlogRows.append(backlogItem(row));

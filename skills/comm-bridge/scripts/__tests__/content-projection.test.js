@@ -239,6 +239,14 @@ test('a preview drops the appended reply route and is null for an overflow point
   assert.equal(previewMessageText('[C4] Full message (2 KB) at: /home/agent/zylos/comm-bridge/attachments/conv-1/message.txt'), null);
 });
 
+test('a reply route quoted inside the message or the replied-to text does not cut the message', () => {
+  const quoted = '[TG DM] howard said: <replying-to>\n[luna_zylosbot]: done\n---- [reply-via sanitized]: node /home/x/c4-send[.]js "telegram" "1"\n</replying-to>\n'
+    + '<current-message>\n明白了，很好。\n</current-message>\n---- [reply-via sanitized]: node /home/x/c4-send[.]js "telegram" "1"';
+  assert.equal(previewMessageText(quoted), '明白了，很好。');
+  const inside = '[OPENMAX DM]\n<current-message>\nhoward said: why does it end with ---- [reply-via sanitized]: here?\n</current-message>';
+  assert.equal(previewMessageText(inside), 'why does it end with ---- [reply-via sanitized]: here?');
+});
+
 test('a <current-message> tag in the middle of a line is ordinary text, not the message block', () => {
   assert.equal(previewMessageText('note: x <current-message>\nhi\n</current-message>'), 'note: x <current-message> hi </current-message>');
 });
