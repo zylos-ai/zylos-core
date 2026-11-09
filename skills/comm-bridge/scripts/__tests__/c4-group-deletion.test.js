@@ -20,7 +20,7 @@ function fixture(t, db = new Database(':memory:')) {
   const beginGroup = store.beginGroupDeletion, beginDraft = store.beginDraftDeletion;
   store.beginGroupDeletion = (group, options) => {
     const targetKey = JSON.stringify(['group', group]);
-    return beginGroup(group, { ...store.getDeletionPreviewBoundary(targetKey), targetKey, ...options });
+    return beginGroup(group, { ...store.getDeletionPreviewBoundary(targetKey), ...options });
   };
   store.beginDraftDeletion = (localId, options) => {
     let namespace = db.prepare("SELECT namespace FROM channel_namespaces WHERE component_name='dashboard'").get()?.namespace;
@@ -364,17 +364,17 @@ test('the final writer enforces a confirmed cutoff and preserves retained group-
   const rowBefore = db.prepare('SELECT * FROM conversations WHERE id=?').get(later.id);
   const controlBefore = db.prepare('SELECT * FROM control_queue WHERE session_group=?').get(group);
   const slotBefore = db.prepare('SELECT * FROM slot_occupancy WHERE session_group=?').get(group);
-  s.beginGroupDeletion(group, { ...options, ...preview, targetKey });
+  s.beginGroupDeletion(group, { ...options, ...preview });
   assert.deepEqual(s.listDeletionMessages(group, { operationId: options.operationId }).map(row => row.id), [old.id]);
   const done = s.finalizeGroupDeletion(group, { operationId: options.operationId });
-  assert.equal(done.counts.messages, 1); assert.equal(done.cutoffId, old.id); assert.equal(done.generationId, null);
+  assert.equal(done.counts.messages, 1); assert.equal(done.cutoffId, old.id);
   assert.deepEqual(db.prepare('SELECT * FROM conversations WHERE id=?').get(later.id), rowBefore);
   assert.deepEqual(db.prepare('SELECT * FROM control_queue WHERE session_group=?').get(group), controlBefore);
   assert.deepEqual(db.prepare('SELECT * FROM slot_occupancy WHERE session_group=?').get(group), slotBefore);
   assert.equal(db.prepare('SELECT runtime FROM group_runtime_overrides WHERE session_group=?').get(group).runtime, 'claude');
-  assert.throws(() => s.beginGroupDeletion(group, { ...options, ...preview, targetKey, operationId: 'stale-second-preview' }), { code: 'DELETION_PREVIEW_STALE' });
+  assert.throws(() => s.beginGroupDeletion(group, { ...options, ...preview, operationId: 'stale-second-preview' }), { code: 'DELETION_PREVIEW_STALE' });
   assert.deepEqual(db.prepare('SELECT * FROM conversations WHERE id=?').get(later.id), rowBefore);
-  assert.equal(s.getDeletionPreviewBoundary(targetKey).generationId, options.operationId);
+  assert.equal(s.getDeletionPreviewBoundary(targetKey).cutoffId, later.id);
 });
 
 test('deletion admission rejects a cutoff beyond the group head without changing the database', t => {
@@ -384,7 +384,7 @@ test('deletion admission rejects a cutoff beyond the group head without changing
   const targetKey = JSON.stringify(['group', group]);
   const snapshot = db.serialize();
   for (const cutoffId of [old.id + 1, Number.MAX_SAFE_INTEGER]) {
-    assert.throws(() => s.beginGroupDeletion(group, { ...options, targetKey, cutoffId, generationId: null }),
+    assert.throws(() => s.beginGroupDeletion(group, { ...options, cutoffId }),
       { code: 'DELETION_PREVIEW_STALE' });
     assert.equal(db.serialize().equals(snapshot), true, 'every database byte must remain unchanged');
     assert.equal(s.getGroupDeletionAudit(options.operationId), null);
@@ -392,12 +392,21 @@ test('deletion admission rejects a cutoff beyond the group head without changing
   }
 });
 
-test('deletion admission rejects a canonical target key belonging to another group', t => {
-  const { db, store: s } = fixture(t), group = 'telegram';
+test('group deletion derives the target key from the group on the server', t => {
+  const { store: s } = fixture(t), group = 'telegram';
   const old = s.insertConversation('out', group, 'room', 'owned message');
-  s.insertConversation('out', 'other', 'room', 'unrelated message');
-  const snapshot = db.serialize();
-  assert.throws(() => s.beginGroupDeletion(group, { ...options, targetKey: JSON.stringify(['group', 'other']),
-    cutoffId: old.id, generationId: null }), { code: 'DELETION_OWNERSHIP_MISMATCH' });
-  assert.equal(db.serialize().equals(snapshot), true, 'the wrong target key must not create audit or fence state');
+  const result = s.beginGroupDeletion(group, { ...options, cutoffId: old.id });
+  assert.equal(result.targetKey, JSON.stringify(['group', group]));
+});
+
+test('message identifiers never repeat after deletion or VACUUM', t => {
+  const { db, store: s } = fixture(t);
+  const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='conversations'").get().sql;
+  assert.match(sql, /\bid\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/i);
+  const first = s.insertConversation('out', 'telegram', 'room', 'first');
+  db.exec('DELETE FROM conversations');
+  const second = s.insertConversation('out', 'telegram', 'room', 'second');
+  assert.ok(second.id > first.id);
+  db.exec('DELETE FROM conversations; VACUUM');
+  assert.ok(s.insertConversation('out', 'telegram', 'room', 'third').id > second.id);
 });

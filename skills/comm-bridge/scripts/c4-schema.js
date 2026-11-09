@@ -83,7 +83,6 @@ export const COLUMN_DEFINITIONS = {
     run_id: { type: 'TEXT', pk: false },
     target_key: { type: 'TEXT', pk: false },
     cutoff_id: { type: 'INTEGER', pk: false },
-    generation_id: { type: 'TEXT', pk: false },
     started_at: { type: 'INTEGER', pk: false },
     completed_at: { type: 'INTEGER', pk: false },
     status: { type: 'TEXT', pk: false },

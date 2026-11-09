@@ -12,7 +12,7 @@ function amounts(value = {}) {
 function decode(row) {
   if (!row) return null;
   return { operationId: row.operation_id, sessionGroup: row.session_group, draftLocalId: row.draft_local_id, actor: row.actor, runId: row.run_id,
-    targetKey: row.target_key, cutoffId: row.cutoff_id, generationId: row.generation_id,
+    targetKey: row.target_key, cutoffId: row.cutoff_id,
     startedAt: row.started_at, completedAt: row.completed_at, status: row.status, countsEstimated: Boolean(row.counts_estimated),
     preview: { messages: row.preview_messages, attachments: row.preview_attachments, files: row.preview_files },
     retainedMessages: row.retained_messages, groupDataRetained: row.retained_messages > 0,
@@ -51,13 +51,14 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
         typeof key[2] === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(key[2])) return key;
     throw dataError('INVALID_ARGS', 'Invalid confirmed target');
   }
-  const generation = (c, targetKey) => get(c, "SELECT operation_id FROM group_deletion_audit WHERE target_key=? AND status='done' ORDER BY rowid DESC LIMIT 1", targetKey)?.operation_id ?? null;
-  function boundary(c, targetKey, cutoffId, generationId) {
+  function boundary(c, targetKey, cutoffId) {
     const key = target(targetKey);
-    if (!count(cutoffId) || !(generationId === null || text(generationId))) throw dataError('INVALID_ARGS', 'A confirmed deletion boundary is required');
-    if (generation(c, targetKey) !== generationId) throw dataError('DELETION_PREVIEW_STALE', 'The conversation changed; preview deletion again');
+    if (!count(cutoffId)) throw dataError('INVALID_ARGS', 'A confirmed deletion boundary is required');
     const maxId = key[0] === 'group' ? get(c, 'SELECT COALESCE(MAX(id),0) AS id FROM conversations WHERE session_group=?', key[1]).id : 0;
     if (cutoffId > maxId) throw dataError('DELETION_PREVIEW_STALE', 'The confirmed cutoff exceeds the conversation; preview deletion again');
+    if (key[0] === 'group' && cutoffId > 0 && !get(c, 'SELECT 1 FROM conversations WHERE session_group=? AND id<=? LIMIT 1', key[1], cutoffId)) {
+      throw dataError('DELETION_PREVIEW_STALE', 'The previewed messages no longer exist; preview deletion again');
+    }
   }
   function draft(c, localId, targetKey) {
     const key = target(targetKey);
@@ -71,9 +72,9 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
     getDeletionPreviewBoundary: targetKey => snapshot(c => {
       const key = target(targetKey);
       const active = get(c, "SELECT * FROM group_deletion_audit WHERE target_key=? AND status='started' ORDER BY rowid DESC LIMIT 1", targetKey);
-      if (active) return { cutoffId: active.cutoff_id, generationId: active.generation_id, operationId: active.operation_id, pending: true };
+      if (active) return { cutoffId: active.cutoff_id, operationId: active.operation_id, pending: true };
       return { cutoffId: key[0] === 'group' ? get(c, 'SELECT COALESCE(MAX(id),0) AS id FROM conversations WHERE session_group=?', key[1]).id : 0,
-        generationId: generation(c, targetKey), pending: false };
+        pending: false };
     }),
     getGroupDeletionAudit: operationId => read(c => decode(audit(c, operationId))),
     markDeletionCleanup: operationId => write(c => {
@@ -88,15 +89,14 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
       if (!row || row.status !== 'started' || row.cleanup_attempts === 0) return;
       run(c, 'UPDATE group_deletion_audit SET cleanup_attempts=cleanup_attempts-1 WHERE operation_id=?', operationId);
     }),
-    beginDraftDeletion: (localId, { operationId, actor, preview, targetKey, cutoffId, generationId } = {}) => write(c => {
+    beginDraftDeletion: (localId, { operationId, actor, preview, targetKey, cutoffId } = {}) => write(c => {
       if (!text(operationId) || !text(actor)) throw dataError('INVALID_ARGS', 'Deletion identity and actor are required');
       const before = audit(c, operationId);
       if (before && (before.session_group !== null || before.draft_local_id !== localId)) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Operation belongs to another target');
       if (before?.status === 'done') return decode(before);
-      if (before && (before.target_key !== targetKey || before.cutoff_id !== cutoffId || before.generation_id !== generationId)) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Confirmed deletion boundary does not match');
+      if (before && (before.target_key !== targetKey || before.cutoff_id !== cutoffId)) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Confirmed deletion boundary does not match');
       draft(c, localId, targetKey);
-      boundary(c, targetKey, cutoffId, generationId);
-      if (cutoffId !== 0) throw dataError('INVALID_ARGS', 'Draft cutoff must be zero');
+      boundary(c, targetKey, cutoffId);
       if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'")) throw dataError('TRANSITION_OPEN', 'Mode transition is in progress');
       const active = get(c, "SELECT * FROM group_deletion_audit WHERE target_key=? AND status='started'", targetKey);
       if (active) {
@@ -104,7 +104,7 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
         return decode(active);
       }
       const n = amounts(preview);
-      run(c, "INSERT INTO group_deletion_audit(operation_id,session_group,draft_local_id,actor,target_key,cutoff_id,generation_id,started_at,status,preview_messages,preview_attachments,preview_files) VALUES(?,NULL,?,?,?,?,?,?,'started',?,?,?)", operationId, localId, actor, targetKey, cutoffId, generationId, seconds(), n.messages, n.attachments, n.files);
+      run(c, "INSERT INTO group_deletion_audit(operation_id,session_group,draft_local_id,actor,target_key,cutoff_id,started_at,status,preview_messages,preview_attachments,preview_files) VALUES(?,NULL,?,?,?,?,?,'started',?,?,?)", operationId, localId, actor, targetKey, cutoffId, seconds(), n.messages, n.attachments, n.files);
       return decode(audit(c, operationId));
     }),
     finalizeDraftDeletion: (localId, { operationId, counts, cleanup } = {}) => write(c => {
@@ -122,15 +122,15 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
     }),
 
     getActiveDeletion: sessionGroup => { group(sessionGroup); return read(c => decode(get(c, "SELECT a.* FROM drain_fences f JOIN group_deletion_audit a ON a.operation_id=f.operation_id WHERE f.session_group=? AND f.reason='delete' AND a.status='started'", sessionGroup))); },
-    beginGroupDeletion: (sessionGroup, { operationId, actor, runId = null, preview, targetKey, cutoffId, generationId } = {}) => write(c => {
+    beginGroupDeletion: (sessionGroup, { operationId, actor, runId = null, preview, cutoffId } = {}) => write(c => {
       group(sessionGroup);
       if (!text(operationId) || !text(actor) || runId !== null && !text(runId)) throw dataError('INVALID_ARGS', 'Deletion identity and actor are required');
       const before = audit(c, operationId);
       if (before && before.session_group !== sessionGroup) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Operation belongs to another group');
       if (before?.status === 'done') return decode(before);
-      if (targetKey !== JSON.stringify(['group', sessionGroup])) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Confirmed group does not match');
-      if (before && (before.target_key !== targetKey || before.cutoff_id !== cutoffId || before.generation_id !== generationId)) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Confirmed deletion boundary does not match');
-      boundary(c, targetKey, cutoffId, generationId);
+      const targetKey = JSON.stringify(['group', sessionGroup]);
+      if (before && (before.target_key !== targetKey || before.cutoff_id !== cutoffId)) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Confirmed deletion boundary does not match');
+      boundary(c, targetKey, cutoffId);
       if (get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'") || get(c, "SELECT 1 FROM drain_fences WHERE session_group='*'")) throw dataError('TRANSITION_OPEN', 'Mode transition or global drain is in progress');
       const fence = get(c, 'SELECT * FROM drain_fences WHERE session_group=?', sessionGroup);
       if (fence) {
@@ -140,7 +140,7 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
       }
       if (before) throw dataError('DELETION_OWNERSHIP_MISMATCH', 'Deletion audit exists without its fence');
       const n = amounts(preview), started = seconds();
-      run(c, "INSERT INTO group_deletion_audit(operation_id,session_group,actor,run_id,target_key,cutoff_id,generation_id,started_at,status,preview_messages,preview_attachments,preview_files) VALUES(?,?,?,?,?,?,?,?,'started',?,?,?)", operationId, sessionGroup, actor, runId, targetKey, cutoffId, generationId, started, n.messages, n.attachments, n.files);
+      run(c, "INSERT INTO group_deletion_audit(operation_id,session_group,actor,run_id,target_key,cutoff_id,started_at,status,preview_messages,preview_attachments,preview_files) VALUES(?,?,?,?,?,?,?,'started',?,?,?)", operationId, sessionGroup, actor, runId, targetKey, cutoffId, started, n.messages, n.attachments, n.files);
       run(c, "INSERT INTO drain_fences(session_group,reason,run_id,created_at,operation_id,actor) VALUES(?,'delete',?,?,?,?)", sessionGroup, runId ?? operationId, started, operationId, actor);
       return decode(audit(c, operationId));
     }),

@@ -22,15 +22,13 @@ export function createConversationDeletion({ request, confirm, t = key => key,
     update({ ...previous, busy: true, state: 'preview' });
     try {
       let operationId = previous?.operationId;
-      let cutoffId = previous?.cutoffId, generationId = previous?.generationId, targetKey = previous?.targetKey;
+      let cutoffId = previous?.cutoffId;
       if (!operationId) {
         const preview = await request(`${path}/deletion`);
         if (!valid()) return;
         if (preview.ok === false) throw { payload: preview };
         if (typeof preview.operationId !== 'string' || !preview.operationId ||
-          !Number.isSafeInteger(preview.cutoffId) || preview.cutoffId < 0 ||
-          !(preview.generationId === null || typeof preview.generationId === 'string' && preview.generationId) ||
-          typeof preview.targetKey !== 'string' || !preview.targetKey) throw { code: 'invalid_deletion_preview' };
+          !Number.isSafeInteger(preview.cutoffId) || preview.cutoffId < 0) throw { code: 'invalid_deletion_preview' };
         const draft = preview.draft === true;
         const message = draft ? t('chat.delete.draftConfirm') :
           t('chat.delete.confirm', { messages: preview.messages ?? 0, attachments: preview.attachments ?? 0 });
@@ -38,14 +36,14 @@ export function createConversationDeletion({ request, confirm, t = key => key,
           update({ ...previous, busy: false }); return;
         }
         operationId = preview.operationId;
-        ({ cutoffId, generationId, targetKey } = preview);
+        ({ cutoffId } = preview);
       }
       if (typeof operationId !== 'string' || !operationId) throw { code: 'invalid_deletion_preview' };
-      update({ operationId, cutoffId, generationId, targetKey, busy: true, state: 'deleting' });
-      const result = await request(path, { method: 'DELETE', body: { confirmed: true, operationId, cutoffId, generationId, targetKey } });
+      update({ operationId, cutoffId, busy: true, state: 'deleting' });
+      const result = await request(path, { method: 'DELETE', body: { confirmed: true, operationId, cutoffId } });
       if (!valid()) return;
       if (result.pending === true) {
-        update({ busy: false, state: 'pending', operationId: result.operationId ?? operationId, cutoffId, generationId, targetKey });
+        update({ busy: false, state: 'pending', operationId: result.operationId ?? operationId, cutoffId });
       } else if (result.ok === false) throw { payload: result };
       else {
         operations.delete(id);
@@ -61,8 +59,6 @@ export function createConversationDeletion({ request, confirm, t = key => key,
       }
       update({ busy: false, state: payload?.pending ? 'pending' : 'error',
         cutoffId: operations.get(id)?.cutoffId ?? previous?.cutoffId,
-        generationId: operations.get(id)?.generationId ?? previous?.generationId ?? null,
-        targetKey: operations.get(id)?.targetKey ?? previous?.targetKey,
         operationId: payload?.operationId ?? operations.get(id)?.operationId ?? previous?.operationId });
     } finally {
       const record = operations.get(id);

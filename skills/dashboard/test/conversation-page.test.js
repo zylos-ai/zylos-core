@@ -465,20 +465,20 @@ test('initial ready catchup releases the loading notice and both manual read but
 });
 
 
-for (const locale of ['en', 'zh']) for (const retainedMessages of [0, 2]) {
-  test(`completed deletion ${retainedMessages ? 'shows retained memory' : 'omits retention notice'} in ${locale}`, async t => {
+for (const locale of ['en', 'zh']) for (const retainedMessages of [0, 2]) for (const countsEstimated of [false, true]) {
+  test(`completed deletion ${retainedMessages ? 'shows retained memory' : 'omits retention notice'} in ${locale} with ${countsEstimated ? 'estimated' : 'exact'} counts`, async t => {
     const document = conversationDocument(), root = document.createElement('div');
+    document.documentElement = { lang: locale };
     const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
     const translate = (key, args = {}) => (translations[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(args[name]));
-    const result = { ok: true, pending: false, retainedMessages, groupDataRetained: retainedMessages > 0, countsEstimated: false };
-    let deleted = false, writes = 0, identity = 'local';
-    const page = mountConversationPage({ root, document, local: () => identity === 'local', identity: () => identity,
+    const result = { ok: true, pending: false, retainedMessages, groupDataRetained: retainedMessages > 0, countsEstimated };
+    let deleted = false, writes = 0, identity = 'local-a';
+    const page = mountConversationPage({ root, document, local: () => true, identity: () => identity,
       t: translate, confirm: async () => true, fetch: async (path, options = {}) => {
         let body;
         if (options.method === 'DELETE') { deleted = true; writes++; body = result; }
         else body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
-          : path.endsWith('/deletion') ? { ok: true, operationId: 'retention-operation', cutoffId: 4,
-            generationId: null, targetKey: JSON.stringify(['group', 'dashboard:retention']), messages: 4, attachments: 0 }
+          : path.endsWith('/deletion') ? { ok: true, operationId: 'retention-operation', cutoffId: 4, messages: 4, attachments: 0 }
           : path.startsWith('/api/chat/conversations?') ? { items: deleted ? [] : [{ id: 'g:AA', sessionGroup: 'dashboard:retention' }],
             nextCursor: null, deletionAllowed: true }
           : { items: [], nextCursor: null };
@@ -490,10 +490,12 @@ for (const locale of ['en', 'zh']) for (const retainedMessages of [0, 2]) {
     await tick(); await tick();
     assert.equal(writes, 1, 'the mounted page performed the confirmed delete');
     const notice = root.querySelector('.conversation-deletion-notice');
-    assert.equal(notice.hidden, retainedMessages === 0);
-    assert.equal(notice.textContent, retainedMessages ? translate('chat.delete.retained', { count: retainedMessages }) : '');
+    assert.equal(notice.hidden, retainedMessages === 0 && !countsEstimated);
+    const expected = [retainedMessages ? translate('chat.delete.retained', { count: retainedMessages }) : '',
+      countsEstimated ? translate('chat.delete.estimated') : ''].filter(Boolean).join(locale === 'zh' ? '' : ' ');
+    assert.equal(notice.textContent, expected);
     if (retainedMessages) {
-      identity = 'remote';
+      identity = 'local-b';
       await page.open();
       assert.equal(notice.hidden, true, 'a completion from another instance is not shown');
       assert.equal(notice.textContent, '');

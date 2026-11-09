@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createConversationDeletion, deletionPath } from '../public/js/wb/conversation-delete.js';
 
 const item = { id: 'g:ABC', sessionGroup: 'dashboard:example' };
-const boundary = { cutoffId: 4, generationId: null, targetKey: JSON.stringify(['group', 'dashboard:example']) };
+const boundary = { cutoffId: 4 };
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function fixture(options = {}) {
   const calls = [], confirmations = [], removed = [];
@@ -117,7 +117,7 @@ test('stale confirmation discards its boundary and requires a fresh preview and 
   const requests = []; let previews = 0;
   const f = fixture({ request: async (_path, options) => {
     if (!options?.method) return { ok: true, operationId: `op-${++previews}`,
-      cutoffId: previews === 1 ? 4 : 9, generationId: previews === 1 ? null : 'completed-first', targetKey: boundary.targetKey };
+      cutoffId: previews === 1 ? 4 : 9 };
     requests.push(options.body);
     if (requests.length === 1) throw { payload: { ok: false, error: { code: 'DELETION_PREVIEW_STALE' } } };
     return { ok: true };
@@ -128,13 +128,13 @@ test('stale confirmation discards its boundary and requires a fresh preview and 
   await f.controller.remove(item);
   assert.equal(previews, 2); assert.equal(f.confirmations.length, 2);
   assert.deepEqual(requests, [
-    { confirmed: true, operationId: 'op-1', cutoffId: 4, generationId: null, targetKey: boundary.targetKey },
-    { confirmed: true, operationId: 'op-2', cutoffId: 9, generationId: 'completed-first', targetKey: boundary.targetKey },
+    { confirmed: true, operationId: 'op-1', cutoffId: 4 },
+    { confirmed: true, operationId: 'op-2', cutoffId: 9 },
   ]);
 });
 
 test('a preview without a complete typed boundary cannot be confirmed', async () => {
-  for (const change of [{ cutoffId: undefined }, { cutoffId: -1 }, { generationId: undefined }, { targetKey: undefined }]) {
+  for (const change of [{ cutoffId: undefined }, { cutoffId: -1 }, { cutoffId: 1.5 }, { cutoffId: Number.MAX_SAFE_INTEGER + 1 }]) {
     let deletes = 0;
     const f = fixture({ request: async (_path, options) => {
       if (options?.method) { deletes++; return { ok: true }; }

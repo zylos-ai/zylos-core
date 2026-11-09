@@ -29,7 +29,6 @@ async function startPage(sandbox) {
       if ((route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/')) && route.endsWith('/deletion')) {
         const draftTarget = route.includes('/drafts/');
         sendJson(res, 200, { ok: true, operationId: 'browser-operation', cutoffId: draftTarget ? 0 : 8,
-          generationId: null, targetKey: JSON.stringify(draftTarget ? ['draft', 'dashboard', '333'] : ['group', 'dashboard:sample']),
           messages: 8, attachments: 2, draft: draftTarget }); return;
       }
       if (req.method === 'DELETE' && (route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/'))) {
@@ -139,7 +138,9 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.match(await estimate.innerText(), locale === 'zh' ? /估计值/ : /estimates/);
     await shot('estimated');
     const retainedText = locale === 'zh' ? '还有 2 条消息被保留，对话记忆已保留。' : '2 messages remain; conversation memory has been retained.';
-    assert.ok((await estimate.innerText()).includes(retainedText));
+    const estimatedText = locale === 'zh' ? '对话已删除；此前清理中断，删除数量为估计值。' : 'Conversation deleted. Counts are estimates after an interrupted cleanup.';
+    assert.equal(await estimate.innerText(), retainedText + (locale === 'zh' ? '' : ' ') + estimatedText);
+    for (const { body } of api.writes) assert.deepEqual(Object.keys(body).sort(), ['confirmed', 'cutoffId', 'operationId']);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     await shot('retained');
     api.state.retainedMessages = 0; api.state.countsEstimated = false;

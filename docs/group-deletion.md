@@ -14,27 +14,33 @@ requires multi-session mode. A true Dashboard draft uses storage-only cleanup.
 
 ## Preview and confirmation
 
-Preview returns an `operationId`, `cutoffId`, `generationId` and `targetKey`.
-Core reads the group's maximum message ID and last completed deletion identity
-in one snapshot. `generationId: null` means the first generation, not any
-generation. `targetKey` binds the exact group, or draft namespace and local ID.
-The message count includes pending/running messages through the cutoff because
-those messages may complete before confirmation. Messages still pending/running
-at final cleanup remain, so the actual deletion count can be lower.
-Preview creates no audit or lock. A preview of an active deletion instead
-returns that operation's stored boundary.
+Preview returns an `operationId` and `cutoffId`. Core reads the group's maximum
+message ID in one snapshot. The message count includes pending/running messages
+through the cutoff because they may complete before confirmation. Messages still
+pending/running at final cleanup remain, so the actual deletion count can be lower.
+Preview creates no audit or lock. A preview of an active deletion instead returns
+that operation's stored cutoff.
 
 Deletion is an administrator-only interface, including the local CLI. Confirmation
-must carry the same fields. Both the coordinator before admission and the Core
-writer reject a cutoff above the group's current maximum message ID. Preview is
-stateless: a caller-supplied in-range cutoff cannot be distinguished from a real
-preview value. This boundary is not a substitute for administrator authorization.
-Core checks the generation again in its admission writer transaction and stores the boundary in the existing audit.
-Only terminal messages with `id <= cutoffId` are eligible. Message IDs use the
-existing AUTOINCREMENT allocator. If another deletion has completed since the
-preview, a different preview operation is stale, even if new messages have
-recreated the same group. Core refuses it with `DELETION_PREVIEW_STALE`; preview
-and confirm again. A draft promoted to an active group also needs a new preview.
+carries the operation ID and cutoff. Core's admission writer rejects a cutoff above
+the group's current maximum message ID. For a positive cutoff, it also requires
+at least one message from that group with `id <= cutoffId`. If all previewed
+messages have disappeared, it returns `DELETION_PREVIEW_STALE` before fencing or
+stopping the current run. Message IDs use AUTOINCREMENT, including after deleting
+all rows or VACUUM, so newly created messages cannot satisfy that old boundary.
+If a previous deletion retained a previewed input, another tab's confirmation can
+still succeed, removing only eligible messages through its own cutoff.
+
+Preview is stateless: a caller-supplied in-range cutoff cannot be distinguished
+from a real preview value. This boundary is not a substitute for administrator
+authorization. The server derives and stores its own exact group or draft target
+key in the existing audit; the client does not provide a target key.
+A draft that resolves to a group at confirmation returns `DRAFT_BECAME_ACTIVE`
+before stopping a run or writing an audit. Groups without messages remain deletable
+with cutoff zero. Group-wide data written after that empty preview but before
+confirmation may also be removed; cutoff zero does not snapshot those files or
+records. If messages arrive, they remain above the zero cutoff and protect the
+group-wide data under the usual retention rule.
 
 The same operation can be retried without widening its recorded cutoff. A
 completed retry returns the original audit result before resolving or deleting
@@ -56,14 +62,11 @@ the exact confirmation flags. To confirm a previous preview, carry its values:
 
 ```sh
 zylos group delete telegram:room --yes --json \
-  --operation-id <preview-operation-id> --cutoff-id 123 \
-  --generation-id 'null' --target-key '["group","telegram:room"]'
+  --operation-id <preview-operation-id> --cutoff-id 123
 ```
 
-`--generation-id` is JSON: use `null` for the first generation or a quoted JSON
-string for a prior completed operation. A fresh `--yes` without any operation or
-boundary flags explicitly previews the current target within that invocation
-before confirmation. An unknown operation ID without its full preview boundary
+A fresh `--yes` without any operation or boundary flags explicitly previews the
+current target within that invocation before confirmation. An unknown operation ID without its full preview boundary
 is refused; it never silently takes a newer preview. A known audit retry can
 supply only its operation ID. `--actor` supplies the audit actor (default local
 CLI user). The CLI does not present an interactive prompt.
@@ -99,7 +102,7 @@ Encode groups as URL path components. DELETE accepts only the server preview's
 fields plus explicit confirmation:
 
 ```json
-{"confirmed":true,"operationId":"<preview-id>","cutoffId":123,"generationId":null,"targetKey":"[\"group\",\"telegram:room\"]"}
+{"confirmed":true,"operationId":"<preview-id>","cutoffId":123}
 ```
 
 The actor comes from the authenticated cookie. Successful completion returns
@@ -176,7 +179,7 @@ A crash may leave missing files with retained rows. Retry tolerates absence and
 uses the same audit; it cannot expand its cutoff. A busy Dashboard writer may
 also make other groups' inbound C4 writes encounter a busy failure while the
 Core writer waits. There is no deletion job table or saved file manifest; the
-cutoff, target and generation are stored in the existing audit.
+cutoff and server-derived target are stored in the existing audit.
 
 Normal first completion reports actual observed removals, never preview totals.
 A durable cleanup attempt is recorded before irreversible file work. Known

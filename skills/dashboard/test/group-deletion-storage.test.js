@@ -54,11 +54,11 @@ function fixture(t) {
 const groupId = group => `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
 const boundary = (core, group) => {
   const targetKey = JSON.stringify(['group', group]);
-  return { targetKey, ...core.getDeletionPreviewBoundary(targetKey) };
+  return core.getDeletionPreviewBoundary(targetKey);
 };
 async function confirmation(service, target, operationId) {
-  const { cutoffId, generationId, targetKey } = await service.preview(target);
-  return { confirmed: true, actor: 'owner', operationId, cutoffId, generationId, targetKey };
+  const { cutoffId } = await service.preview(target);
+  return { confirmed: true, actor: 'owner', operationId, cutoffId };
 }
 function stoppedService(t, f, onStage = () => {}) {
   const coreStore = createStore(f.c4Db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
@@ -374,8 +374,7 @@ test('participant cleanup status survives the Core coordinator transaction and C
   const snapshot = await service.preview({ draftLocalId: draft.localId });
   let output = '', errors = '';
   const exit = await runGroupDeletionCli(['--draft-local-id', draft.localId, '--yes', '--json',
-    '--actor', 'owner', '--operation-id', 'participant-http-status', '--cutoff-id', String(snapshot.cutoffId),
-    '--generation-id', JSON.stringify(snapshot.generationId), '--target-key', snapshot.targetKey], {
+    '--actor', 'owner', '--operation-id', 'participant-http-status', '--cutoff-id', String(snapshot.cutoffId)], {
     create: () => service,
     io: { stdout: { write(text) { output += text; } }, stderr: { write(text) { errors += text; } } },
   });

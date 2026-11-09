@@ -10,7 +10,7 @@ const invalid = (code, statusCode = 400) => Object.assign(new Error(code), { cod
 /** The child owns Core's C4 writer; this Dashboard process keeps its read-only connection. */
 export function createGroupDeletionBridge({ zylosDir, loadCoreModule = defaultLoadCoreModule,
   execute = promisify(execFile), env = process.env } = {}) {
-  return async (target, { preview = false, actor, operationId, cutoffId, generationId, targetKey } = {}) => {
+  return async (target, { preview = false, actor, operationId, cutoffId } = {}) => {
     const { groupDeletionCliPath } = await loadCoreModule('group-delete.js');
     const childEnv = { ...env, ZYLOS_DIR: zylosDir };
     delete childEnv.ZYLOS_SESSION_GROUP;
@@ -18,9 +18,7 @@ export function createGroupDeletionBridge({ zylosDir, loadCoreModule = defaultLo
       ...(target.draftLocalId ? ['--draft-local-id', target.draftLocalId] : ['--group', target.sessionGroup]),
       preview ? '--preview' : '--yes', '--json', '--actor', actor,
       ...(operationId ? ['--operation-id', operationId] : []),
-      ...(cutoffId !== undefined ? ['--cutoff-id', String(cutoffId)] : []),
-      ...(generationId !== undefined ? ['--generation-id', JSON.stringify(generationId)] : []),
-      ...(targetKey !== undefined ? ['--target-key', targetKey] : [])];
+      ...(cutoffId !== undefined ? ['--cutoff-id', String(cutoffId)] : [])];
     let stdout;
     try { ({ stdout } = await execute(process.execPath, args, { env: childEnv, timeout: 30000, maxBuffer: 1024 * 1024 })); }
     catch (error) {
@@ -80,16 +78,13 @@ export function createGroupDeletionRoutes({ auth, config, conversations,
       const context = auth.resolveAuthContext(req);
       const body = preview ? null : await readJsonBody(req, 4096);
       if (!preview && (!body || body.confirmed !== true || Array.isArray(body) ||
-        Object.keys(body).some(key => !['confirmed', 'operationId', 'cutoffId', 'generationId', 'targetKey'].includes(key)) ||
+        Object.keys(body).some(key => !['confirmed', 'operationId', 'cutoffId'].includes(key)) ||
         (typeof body.operationId !== 'string' || !body.operationId || body.operationId.length > 128) ||
-        !Number.isSafeInteger(body.cutoffId) || body.cutoffId < 0 ||
-        !(body.generationId === null || typeof body.generationId === 'string' && body.generationId.length > 0 && body.generationId.length <= 512) ||
-        typeof body.targetKey !== 'string' || !body.targetKey || body.targetKey.length > 1024)) {
+        !Number.isSafeInteger(body.cutoffId) || body.cutoffId < 0)) {
         throw invalid('deletion_confirmation_required');
       }
       const result = await core(target, { preview, actor: `dashboard:${context.principalId}`,
-        ...(body?.operationId ? { operationId: body.operationId, cutoffId: body.cutoffId,
-          generationId: body.generationId, targetKey: body.targetKey } : {}) });
+        ...(body?.operationId ? { operationId: body.operationId, cutoffId: body.cutoffId } : {}) });
       const code = result.error?.code ?? result.error;
       const denied = ['ORIGIN_DELETE_FORBIDDEN', 'origin_forbidden'].includes(code);
       const conflict = ['TRANSITION_OPEN', 'transition_open',

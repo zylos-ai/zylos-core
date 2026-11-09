@@ -46,15 +46,14 @@ test('active deletion admission rejects every changed ownership field before alt
   const f = fixture(t), sessionGroup = 'telegram:a';
   await f.admission.handle(restart('queued-upgrade'));
   const bytes = fs.readFileSync(f.file);
-  const active = { operationId: 'owned-delete', cutoffId: 4, generationId: null,
+  const active = { operationId: 'owned-delete', cutoffId: 4,
     targetKey: JSON.stringify(['group', sessionGroup]), runId: 'r1', status: 'started' };
   f.db.getGroupDeletionAudit = () => null;
   f.db.getActiveDeletion = () => active;
   f.db.beginGroupDeletion = () => { throw new Error('active deletion must not begin again'); };
   const request = { version: 1, type: 'delete_group', requestId: 'delete-request', sessionGroup, actor: 'owner',
-    operationId: active.operationId, cutoffId: active.cutoffId, generationId: active.generationId, targetKey: active.targetKey };
-  for (const change of [{ operationId: 'different-delete' }, { cutoffId: 5 }, { generationId: 'different-generation' },
-    { targetKey: JSON.stringify(['group', 'telegram:b']) }]) {
+    operationId: active.operationId, cutoffId: active.cutoffId };
+  for (const change of [{ operationId: 'different-delete' }, { cutoffId: 5 }]) {
     const reply = await f.admission.handle({ ...request, ...change });
     assert.equal(reply.ok, false);
     assert.equal(reply.result, 'rejected');

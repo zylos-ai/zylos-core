@@ -31,7 +31,7 @@ function fixture(t, options = {}) {
   const service = createGroupDeletion({ zylosDir: instance, homeDir: home, database: db, store,
     participant: options.noDashboard ? undefined : participant, waitMs: 100,
     requestStop: async request => {
-      const audit = store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', preview: request.preview, cutoffId: request.cutoffId, generationId: request.generationId, targetKey: request.targetKey });
+      const audit = store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', preview: request.preview, cutoffId: request.cutoffId });
       if (ready) store.recordRunEnd(request.sessionGroup, { runId: audit.runId, reason: 'delete' });
       return { kind: 'accepted', sent: true, reply: { ok: true } };
     }, ...options.service });
@@ -41,7 +41,7 @@ function fixture(t, options = {}) {
     const group = typeof target === 'string' ? target : target.sessionGroup;
     const targetKey = JSON.stringify(group ? ['group', group] : ['draft', 'dashboard', target.draftLocalId]);
     const known = options.operationId && store.getGroupDeletionAudit(options.operationId);
-    const confirmation = known ? {} : { ...store.getDeletionPreviewBoundary(targetKey), targetKey };
+    const confirmation = known ? {} : { ...store.getDeletionPreviewBoundary(targetKey) };
     return rawDelete(target, { ...confirmation, ...options });
   };
   const insert = (id, group, direction, status) => {
@@ -147,7 +147,7 @@ test('CLI preview never mutates and confirmed CLI calls the same Core deletion f
   assert.equal(JSON.parse(output).messages, 1); assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM conversations').get().n, 1);
   const preview = JSON.parse(output);
   output = '';
-  assert.equal(await runGroupDeletionCli(['--group', group, '--yes', '--json', '--actor', 'owner', '--operation-id', preview.operationId, '--cutoff-id', String(preview.cutoffId), '--generation-id', JSON.stringify(preview.generationId), '--target-key', preview.targetKey], { io, create: () => f.service }), 0);
+  assert.equal(await runGroupDeletionCli(['--group', group, '--yes', '--json', '--actor', 'owner', '--operation-id', preview.operationId, '--cutoff-id', String(preview.cutoffId)], { io, create: () => f.service }), 0);
   assert.equal(JSON.parse(output).pending, false); assert.equal(errors, '');
   assert.equal(JSON.parse(output).retainedMessages, 0); assert.equal(JSON.parse(output).groupDataRetained, false);
 });
@@ -199,6 +199,9 @@ test('draft retry labels only its observed cleanup counts after media removal an
   assert.equal(result.counts.attachments, 0);
   assert.equal(result.counts.files, 0);
   assert.equal(result.countsEstimated, true);
+  assert.equal(result.retainedMessages, 0); assert.equal(result.groupDataRetained, false);
+  const again = await f.rawDelete({ draftLocalId: 'private-draft' }, { confirmed: true, actor: 'owner', operationId: 'draft-retry-counts' });
+  assert.equal(again.retainedMessages, 0); assert.equal(again.groupDataRetained, false);
   assert.equal(fs.existsSync(file), false);
   let output = '';
   assert.equal(await runGroupDeletionCli(['--draft-local-id', 'private-draft', '--yes', '--operation-id', 'draft-retry-counts'], {
@@ -247,7 +250,7 @@ test('the default deletion budget includes admission and waits until twenty seco
     requestStop: async (request, options) => {
       assert.equal(options.deadlineAt, 11000);
       clock += 9000;
-      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', cutoffId: request.cutoffId, generationId: request.generationId, targetKey: request.targetKey });
+      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', cutoffId: request.cutoffId });
       return { kind: 'accepted', sent: true, reply: { ok: true } };
     },
   } });
@@ -266,7 +269,7 @@ test('an exhausted admission budget does not begin another drain or transcript w
   const f = fixture(t, { service: { waitMs: undefined, now: () => clock,
     requestStop: async (request, options) => {
       assert.equal(options.deadlineAt, 10000);
-      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', cutoffId: request.cutoffId, generationId: request.generationId, targetKey: request.targetKey });
+      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', cutoffId: request.cutoffId });
       clock = 20000;
       return { kind: 'accepted', sent: true, reply: { ok: true } };
     }, sleep: async () => assert.fail('No further wait after the total deadline'),
@@ -284,7 +287,7 @@ test('preview time reduces the admission deadline to the original deletion budge
     requestStop: async (request, options) => {
       assert.equal(clock, 12000);
       assert.equal(options.deadlineAt, 20000);
-      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', cutoffId: request.cutoffId, generationId: request.generationId, targetKey: request.targetKey });
+      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', cutoffId: request.cutoffId });
       return { kind: 'accepted', sent: true, reply: { ok: true } };
     },
   } });
@@ -309,7 +312,7 @@ test('an expired preview budget still gives supervisor submission a minimum conn
         socket.write = (line, callback) => {
           const sent = JSON.parse(line);
           submissions++;
-          f.store.beginGroupDeletion(sent.sessionGroup, { operationId: sent.operationId, actor: sent.actor, runId: 'run-one', cutoffId: sent.cutoffId, generationId: sent.generationId, targetKey: sent.targetKey });
+          f.store.beginGroupDeletion(sent.sessionGroup, { operationId: sent.operationId, actor: sent.actor, runId: 'run-one', cutoffId: sent.cutoffId });
           callback();
           socket.emit('data', Buffer.from(JSON.stringify({ version: 1, type: sent.type, requestId: sent.requestId,
             ok: true, result: 'accepted', operationId: sent.operationId, runId: 'run-one' }) + '\n'));
@@ -351,7 +354,7 @@ test('confirmed cutoffs preserve later delivered messages and reject another pre
   const f = fixture(t), group = 'telegram:one';
   f.insert(1, group, 'in', 'delivered');
   const first = await f.service.preview(group), second = await f.service.preview(group);
-  assert.equal(first.cutoffId, 1); assert.equal(first.generationId, null);
+  assert.equal(first.cutoffId, 1);
   assert.notEqual(first.operationId, second.operationId);
   const memory = path.join(f.instance, 'memory/session-groups', group);
   fs.mkdirSync(memory, { recursive: true }); fs.writeFileSync(path.join(memory, 'state.md'), 'keep later context');
@@ -374,7 +377,7 @@ test('confirmed cutoffs preserve later delivered messages and reject another pre
   assert.equal((await f.rawDelete(group, { operationId: first.operationId, confirmed: true, actor: 'owner' })).pending, false);
   assert.deepEqual(f.db.prepare('SELECT * FROM conversations WHERE id=2').get(), later);
   const fresh = await f.service.preview(group);
-  assert.equal(fresh.generationId, first.operationId); assert.equal(fresh.cutoffId, 2);
+  assert.equal(fresh.cutoffId, 2);
   assert.equal((await f.rawDelete(group, { ...fresh, confirmed: true, actor: 'owner' })).counts.messages, 1);
 });
 
@@ -393,15 +396,14 @@ test('fresh deletion requires its preview boundary and an active retry cannot wi
   assert.ok(f.db.prepare('SELECT 1 FROM conversations WHERE id=2').get());
 });
 
-test('CLI forwards an explicitly confirmed cutoff and a JSON null generation', async () => {
+test('CLI forwards an explicitly confirmed cutoff', async () => {
   let called, output = '';
-  const targetKey = JSON.stringify(['group', 'telegram:one']);
   const service = { async delete(target, options) { called = { target, options }; return { ok: true, pending: true, operationId: 'confirmed' }; }, close() {} };
   const code = await runGroupDeletionCli(['--group', 'telegram:one', '--yes', '--json', '--operation-id', 'confirmed',
-    '--cutoff-id', '9', '--generation-id', 'null', '--target-key', targetKey], { create: () => service,
+    '--cutoff-id', '9'], { create: () => service,
     io: { stdout: { write: text => { output += text; } }, stderr: { write() {} } } });
-  assert.equal(code, 0); assert.equal(called.options.cutoffId, 9); assert.equal(called.options.generationId, null);
-  assert.equal(called.options.targetKey, targetKey); assert.equal(JSON.parse(output).operationId, 'confirmed');
+  assert.equal(code, 0); assert.equal(called.options.cutoffId, 9);
+  assert.equal(JSON.parse(output).operationId, 'confirmed');
 });
 
 test('a confirmed draft cannot silently become an active group before deletion', async t => {
@@ -412,6 +414,8 @@ test('a confirmed draft cannot silently become an active group before deletion',
   const before = f.db.prepare('SELECT * FROM conversations WHERE id=1').get();
   await assert.rejects(f.rawDelete(target, { ...preview, confirmed: true, actor: 'owner' }), { code: 'DRAFT_BECAME_ACTIVE' });
   assert.equal(f.cleanups(), 0); assert.equal(f.store.listDrainFences().length, 0);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM group_deletion_audit').get().n, 0);
+  assert.equal(f.store.listRunEndings(['dashboard:promoted']).length, 0);
   assert.deepEqual(f.db.prepare('SELECT * FROM conversations WHERE id=1').get(), before);
 });
 
@@ -424,9 +428,14 @@ test('a draft route cannot acknowledge an unrelated completed group with the sam
   assert.equal(f.cleanups(), 1);
 });
 
-test('a cutoff above the current group maximum rejects before admission without changing data', async t => {
+test('a cutoff above the current group maximum is rejected by Core admission without changing data', async t => {
   let admissions = 0;
-  const f = fixture(t, { service: { requestStop: async () => { admissions++; throw new Error('unexpected admission'); } } });
+  const f = fixture(t, { service: { requestStop: async request => {
+    admissions++;
+    try { f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, cutoffId: request.cutoffId }); }
+    catch (cause) { return { kind: 'rejected', reply: { reason: cause.code } }; }
+    throw new Error('invalid cutoff was accepted');
+  } } });
   const group = 'telegram:one';
   f.insert(1, group, 'in', 'delivered');
   const preview = await f.service.preview(group);
@@ -442,7 +451,7 @@ test('a cutoff above the current group maximum rejects before admission without 
     assert.equal(f.db.serialize().equals(before), true);
     assert.equal(fs.readFileSync(file, 'utf8'), 'unchanged group state');
   }
-  assert.equal(admissions, 0);
+  assert.equal(admissions, 2);
   assert.equal(f.cleanups(), 0);
 });
 
@@ -472,4 +481,40 @@ test('CLI completion prints retained data only when messages remain', async t =>
     if (pending) assert.match(output, /\n1 messages remain; conversation memory and group data have been retained\.\n/);
     else assert.doesNotMatch(output, /messages remain|have been retained/);
   }
+});
+
+
+test('a first draft deletion and its completed retry retain no messages or group data', async t => {
+  const f = fixture(t), target = { draftLocalId: 'empty-draft' };
+  const preview = await f.service.preview(target);
+  const first = await f.rawDelete(target, { ...preview, confirmed: true, actor: 'owner' });
+  assert.equal(first.retainedMessages, 0); assert.equal(first.groupDataRetained, false);
+  f.participant.resolveTarget = () => { throw new Error('completed retry must not resolve a new target'); };
+  const again = await f.rawDelete(target, { operationId: first.operationId, confirmed: true, actor: 'owner' });
+  assert.equal(again.retainedMessages, 0); assert.equal(again.groupDataRetained, false);
+  assert.equal(f.cleanups(), 1);
+});
+
+test('two previews can delete the same still-retained input without touching later messages', async t => {
+  const f = fixture(t), group = 'telegram:one';
+  f.insert(1, group, 'in', 'pending');
+  const first = await f.service.preview(group), second = await f.service.preview(group);
+  f.insert(2, group, 'out', 'delivered');
+  const initial = await f.rawDelete(group, { ...first, confirmed: true, actor: 'owner' });
+  assert.equal(initial.counts.messages, 0); assert.equal(initial.retainedMessages, 2);
+  f.db.prepare("UPDATE conversations SET status='delivered' WHERE id=1").run();
+  const result = await f.rawDelete(group, { ...second, confirmed: true, actor: 'owner' });
+  assert.equal(result.counts.messages, 1); assert.equal(result.retainedMessages, 1);
+  assert.equal(f.db.prepare('SELECT 1 FROM conversations WHERE id=1').get(), undefined);
+  assert.ok(f.db.prepare('SELECT 1 FROM conversations WHERE id=2').get());
+});
+
+test('a zero-cutoff group remains deletable without messages', async t => {
+  const f = fixture(t), group = 'telegram:empty';
+  const preview = await f.service.preview(group); assert.equal(preview.cutoffId, 0);
+  const memory = path.join(f.instance, 'memory/session-groups', group);
+  fs.mkdirSync(memory, { recursive: true }); fs.writeFileSync(path.join(memory, 'state.md'), 'created after preview');
+  const result = await f.rawDelete(group, { ...preview, confirmed: true, actor: 'owner' });
+  assert.equal(result.counts.messages, 0); assert.equal(result.counts.files, 1);
+  assert.equal(result.groupDataRetained, false); assert.equal(fs.existsSync(memory), false);
 });

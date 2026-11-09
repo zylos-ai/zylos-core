@@ -33,7 +33,6 @@ export function migrateToV3(db) {
       run_id TEXT,
       target_key TEXT NOT NULL,
       cutoff_id INTEGER NOT NULL CHECK (cutoff_id >= 0),
-      generation_id TEXT,
       started_at INTEGER NOT NULL,
       completed_at INTEGER,
       status TEXT NOT NULL CHECK (status IN ('started','done')),

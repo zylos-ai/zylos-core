@@ -11,7 +11,7 @@ import { conversationErrorKey, renderConversationContent } from './conversation-
 import { createGroupSide } from './group-side.js?v=3';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=103';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
-import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=3';
+import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=4';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -1210,7 +1210,7 @@ export function mountConversationPage({
     }
     if (deletionResult?.countsEstimated === true) completionText.push(t('chat.delete.estimated'));
     deletionNotice.hidden = !local() || !completionText.length || deletionResult.identity !== (typeof identity === 'function' ? identity() : identity);
-    text(deletionNotice, deletionNotice.hidden ? '' : completionText.join(' '));
+    text(deletionNotice, deletionNotice.hidden ? '' : completionText.join(document.documentElement?.lang?.startsWith('zh') ? '' : ' '));
     accessNotice.hidden = s.mode !== 'single' || s.tab !== 'mine';
     text(accessText, t('chat.single'));
     const outcome = receiptState(s.receipt);

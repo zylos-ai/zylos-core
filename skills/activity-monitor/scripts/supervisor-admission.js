@@ -13,7 +13,6 @@ export function validSupervisorRequest(request) {
   switch (request.type) {
     case 'delete_group': return validGroup(request.sessionGroup) && nonempty(request.actor) && request.actor.length <= 512
       && Number.isSafeInteger(request.cutoffId) && request.cutoffId >= 0
-      && (request.generationId === null || nonempty(request.generationId)) && nonempty(request.targetKey)
       && (!Object.hasOwn(request, 'operationId') || validRequestId(request.operationId))
       && (!Object.hasOwn(request, 'preview') || object(request.preview) &&
         Object.keys(request.preview).every(key => ['messages','attachments','files'].includes(key)) &&
@@ -116,12 +115,12 @@ export class SupervisorAdmission {
     if ((await this.readMode()).mode !== 'multi') return reject('not_multi');
     if (await this.db.getModeTransition() || await this.db.getDrainFence('*')) return reject('transition_open');
     const active = await this.db.getActiveDeletion(request.sessionGroup);
-    if (active && (active.operationId !== operationId || active.cutoffId !== request.cutoffId || active.generationId !== request.generationId || active.targetKey !== request.targetKey)) return reject('DELETION_OWNERSHIP_MISMATCH');
+    if (active && (active.operationId !== operationId || active.cutoffId !== request.cutoffId)) return reject('DELETION_OWNERSHIP_MISMATCH');
     if (!active && await this.db.getDrainFence(request.sessionGroup)) return reject('fence_conflict');
     const run = active ? { runId: active.runId } : await this.readRun(request.sessionGroup);
     if (!active && run !== null && (!nonempty(run?.runId) || !run.ready)) return reject('identity_unavailable');
     const deletion = active ?? await this.db.beginGroupDeletion(request.sessionGroup, { operationId, actor: request.actor,
-      runId: run?.runId ?? null, preview: request.preview, cutoffId: request.cutoffId, generationId: request.generationId, targetKey: request.targetKey });
+      runId: run?.runId ?? null, preview: request.preview, cutoffId: request.cutoffId });
     // The lifecycle owner removes only this group's queued manual/upgrade intent.
     // Its fence already excludes new admission before the intent is changed.
     const remaining = rows.flatMap(row => {
