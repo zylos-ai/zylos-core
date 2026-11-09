@@ -83,7 +83,7 @@ export function createDispatcher(overrides = {}, options = {}) {
     formatConversation: overrides.formatConversation ?? formatConversation,
     notifyDelivered: overrides.notifyDelivered ?? notifyDelivered,
   }, { ...options.delivery, tmux });
-  router = createRouter({ ...providers, handleExpired,
+  router = createRouter({ ...providers, handleExpired, sendStatusNotice,
     canAttemptDelivery: delivery.canAttempt, finishDeliveryWait: delivery.finishWait, sweepDeliveryWaits: delivery.sweepWaits,
     deliverControl: overrides.deliverControl ?? delivery.deliverControl,
     deliverConversation: overrides.deliverConversation ?? delivery.deliverConversation,

@@ -71,6 +71,7 @@ export class SupervisorLifecycle {
     this.runEndFailures = new Map();
     this.roundToken = null;
     this.runEndNotices = new Map();
+    this.capacityWaitDiagnostics = new Map();
   }
 
   async event(event, details) {
@@ -239,7 +240,7 @@ export class SupervisorLifecycle {
     }
   }
 
-  async beginReclaim(scene, reason, context) {
+  async beginReclaim(scene, reason, context, { subreason } = {}) {
     if (reason === 'evict' && (scene.sessionGroup === 'origin' || scene.sessionGroup === null)) return false;
     if (reason === 'ttl' && scene.sessionGroup === null) return false;
     if (!scene.present || !scene.ready || !scene.runId || scene.sessionGroup === null) return false;
@@ -254,7 +255,12 @@ export class SupervisorLifecycle {
     await this.d.db.setDrainFence(scene.sessionGroup, { reason, runId: scene.runId });
     const saved = await this.d.db.getDrainFence(scene.sessionGroup);
     if (saved) context.fences = [...context.fences.filter(item => item.sessionGroup !== scene.sessionGroup), saved];
-    return saved?.reason === reason && saved.runId === scene.runId;
+    const started = saved?.reason === reason && saved.runId === scene.runId;
+    if (started && reason === 'evict') await this.event('reclaim_started', {
+      session_group: scene.sessionGroup, run_id: scene.runId, reason,
+      subreason: subreason ?? 'capacity_demand',
+    });
+    return started;
   }
 
   async advanceReclaim(fence, context, { unfenced = false, singleAuth = false } = {}) {
@@ -454,13 +460,25 @@ export class SupervisorLifecycle {
     const failure = scenes.find(scene => scene.observationError);
     if (failure) throw failure.observationError;
     const fences = context.fences;
-    const demand = evictionDemand(await this.d.db.listSlotOccupancy(), await this.d.db.listPendingSessionGroups(), fences, context.configuration.capacity);
-    if (!demand.need) return demand;
+    const slots = await this.d.db.listSlotOccupancy(), pending = await this.d.db.listPendingSessionGroups();
+    const demand = evictionDemand(slots, pending, fences, context.configuration.capacity);
+    if (!demand.need) { this.capacityWaitDiagnostics.clear(); return demand; }
     const candidates = await this.evictionCandidates(scenes, context);
+    const occupied = new Set(slots.map(row => row.sessionGroup));
+    const waiting = new Set(pending.map(row => row.sessionGroup)
+      .filter(group => group && group !== 'origin' && !occupied.has(group)));
+    const snapshot = JSON.stringify([slots.length, context.configuration.capacity, candidates.length]);
+    const previous = this.capacityWaitDiagnostics;
+    this.capacityWaitDiagnostics = new Map([...waiting].map(group => [group, snapshot]));
+    for (const group of waiting) if (previous.get(group) !== snapshot) {
+      await this.event('capacity_eviction_checked', { session_group: group,
+        occupied_slots: slots.length, pool_limit: context.configuration.capacity,
+        candidate_count: candidates.length, no_evictable_candidate: candidates.length === 0 });
+    }
     let selected = 0;
     for (const scene of candidates) {
       if (selected >= demand.need) break;
-      if (await this.beginReclaim(scene, 'evict', context)) selected++;
+      if (await this.beginReclaim(scene, 'evict', context, { subreason: 'capacity_demand' })) selected++;
     }
     return { ...demand, selected };
   }
@@ -482,7 +500,7 @@ export class SupervisorLifecycle {
     if (context.fences.some(fence => fence.sessionGroup !== 'origin' && CAPACITY_REASONS.has(fence.reason))) return null;
     const [candidate] = await this.evictionCandidates(context.scenes, context);
     if (!candidate) return null;
-    return await this.beginReclaim(candidate, 'evict', context) ? candidate : null;
+    return await this.beginReclaim(candidate, 'evict', context, { subreason: 'memory_pressure' }) ? candidate : null;
   }
 
   async checkRotation(scene, context) {

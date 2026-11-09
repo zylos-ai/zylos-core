@@ -1407,3 +1407,62 @@ test('rotation uses an alias threshold only for sessions launched through that a
   for (const item of f.scenes) await f.lifecycle.checkRotation(item, f.context);
   assert.deepEqual(f.controls.map(row => row.sessionGroup), ['alias']);
 });
+
+// Diagnostic-only capacity changes call the real lifecycle with bounded fake
+// state. Run for eviction admission/reclaim diagnostics; unrelated runtime
+// transport changes may skip. No process, socket, database or live marker opens.
+test('capacity demand records unavailable eviction candidates for each waiting group', async () => {
+  const f = fixture();
+  f.scenes[0].state = 'busy';
+  f.pending = [{ sessionGroup: 'waiting' }, { sessionGroup: 'waiting' }];
+  const first = await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(first.selected, 0);
+  const entry = f.events.find(event => event.event === 'capacity_eviction_checked');
+  assert.equal(entry.session_group, 'waiting');
+  assert.equal(entry.occupied_slots, 1);
+  assert.equal(entry.pool_limit, 1);
+  assert.equal(entry.candidate_count, 0);
+  assert.equal(entry.no_evictable_candidate, true);
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(f.events.filter(event => event.event === 'capacity_eviction_checked').length, 1,
+    'unchanged capacity evidence does not repeat every polling round');
+  f.scenes[0].state = 'idle';
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  const changed = f.events.filter(event => event.event === 'capacity_eviction_checked').at(-1);
+  assert.equal(changed.candidate_count, 1);
+  assert.equal(changed.no_evictable_candidate, false);
+  f.pending = [];
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(f.lifecycle.capacityWaitDiagnostics.size, 0);
+});
+
+test('reclaim start diagnostics distinguish demand from memory pressure without changing fences', async () => {
+  for (const pressure of [false, true]) {
+    const f = fixture();
+    f.pending = [{ sessionGroup: 'waiting' }];
+    let start;
+    f.deps.diagnostic = event => {
+      f.events.push(event);
+      if (event.event === 'reclaim_started') {
+        assert.equal(f.fences.get('a')?.reason, 'evict', 'diagnostic follows the confirmed fence write');
+        start = event;
+      }
+    };
+    if (pressure) assert.equal((await f.lifecycle.checkCapacityPressure(f.context)).sessionGroup, 'a');
+    else assert.equal((await f.lifecycle.checkEviction(f.scenes, f.context)).selected, 1);
+    assert.equal(start.session_group, 'a');
+    assert.equal(start.run_id, 'run-a');
+    assert.equal(start.reason, 'evict');
+    assert.equal(start.subreason, pressure ? 'memory_pressure' : 'capacity_demand');
+    assert.equal(f.fences.get('a').reason, 'evict');
+    assert.equal(f.stops.length, 0, 'start evidence does not imply the run has already stopped');
+  }
+});
+
+test('eviction diagnostics do not report a reclaim start before a fence is saved', async () => {
+  const f = fixture();
+  f.pending = [{ sessionGroup: 'waiting' }];
+  f.db.setDrainFence = () => {};
+  assert.equal((await f.lifecycle.checkEviction(f.scenes, f.context)).selected, 0);
+  assert.equal(f.events.some(event => event.event === 'reclaim_started'), false);
+});

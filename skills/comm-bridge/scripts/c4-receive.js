@@ -65,6 +65,7 @@ export async function receive(args, dependencies = {}) {
   const reserve = dependencies.reserveStatusNotice ?? reserveStatusNotice;
   const send = dependencies.sendStatusNotice ?? sendStatusNotice;
   const diagnostic = dependencies.diagnostic ?? console.error;
+  const receivedAt = (dependencies.now ?? Date.now)();
   const input = parseReceiveArgs(args, { diagnostic });
   const { channel: rawChannel, endpoint, content, noReply, priority, requireIdle, groupName, coreSource } = input;
   if (endpoint !== null) {
@@ -83,8 +84,8 @@ export async function receive(args, dependencies = {}) {
   const channel = rawChannel || 'system';
   const binding = rawChannel ? db.getChannelNamespace(rawChannel) : null;
   const preGroup = rawChannel ? (binding ? composeSessionGroup(binding.namespace, groupName) : null) : 'origin';
-  const request = { version: 2, type: 'route', requestId: `${process.pid}-${Date.now()}`, channel,
-    endpoint, noReply, receivedAt: Date.now(), sessionGroup: preGroup, componentName: rawChannel,
+  const request = { version: 2, type: 'route', requestId: `${process.pid}-${receivedAt}`, channel,
+    endpoint, noReply, receivedAt, sessionGroup: preGroup, componentName: rawChannel,
     ...(coreSource ? { coreSide: true, coreSource } : {}) };
   const route = await routeQuery(request);
   const pending = route.decision === 'pending';
@@ -100,6 +101,13 @@ export async function receive(args, dependencies = {}) {
     throw dataError('INTERNAL_ERROR', 'Inbound commit state is unknown; do not resend without checking.',
       { persisted: null, cause: error });
   }
+  // Keep millisecond arrival evidence beside the committed row without changing
+  // its second-resolution database timestamp or the routing decision.
+  try {
+    await append({ event: 'message_received', conversation_id: record.id,
+      channel: record.channel, endpoint: record.endpoint_id || '', session_group: record.session_group,
+      runtime: route.runtime, reason_code: route.decision, received_at_ms: receivedAt, detail: '' });
+  } catch { /* Diagnostic failure must not change an already committed receive. */ }
   const result = { ok: true, action: pending ? 'queued' : auth ? 'auth_rejected' : 'delivered',
     id: record.id, sessionGroup: record.session_group, runtime: route.runtime };
   if (auth) result.reasonLogged = await append({ event: 'auth_rejected', conversation_id: record.id,

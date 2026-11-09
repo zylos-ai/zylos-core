@@ -3,6 +3,7 @@ const { tmuxNameForGroup, groupFromTmuxName } = await loadCoreModule('session-gr
 import { createLane } from './lane.js';
 import { createActivationManager } from './activation.js';
 import { createContinuationRestarts } from './continuation.js';
+import { createCapacityWaits } from './capacity-wait.js';
 import { initializeRouter } from './startup.js';
 import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
   CONTROL_CLEANUP_INTERVAL_MS, CONTROL_RETENTION_DAYS, READY_TIMEOUT_MS } from '../c4-config.js';
@@ -40,6 +41,7 @@ export function createRouter(dependencies, configuration = {}) {
   };
   function track(promise) { tasks.add(promise); promise.finally(() => tasks.delete(promise)).catch(() => {}); return promise; }
   const context = { deps, options, state, diagnostic, now, tmuxName: group => tmuxNameForGroup(group ?? 'origin') };
+  context.capacityWaits = createCapacityWaits({ ...context, track });
   context.continuationRestarts = createContinuationRestarts({ now, deps, diagnostic });
   context.refreshSlots = () => { state.slots = new Map(deps.db.listSlotOccupancy().map(row => [row.sessionGroup, row])); };
   context.availableCapacity = () => {
@@ -57,7 +59,10 @@ export function createRouter(dependencies, configuration = {}) {
       opportunities.add(group); attemptedRound.set(group, state.round); return true;
     }
     const slots = context.availableCapacity() - [...opportunities].filter(key => !state.slots.has(key)).length;
-    if (slots <= 0) return false;
+    if (slots <= 0) {
+      if (candidate.continuation) context.capacityWaits.wait(group);
+      return false;
+    }
     const inbound = deps.db.listPendingSessionGroups();
     const inboundGroups = new Set(inbound.map(row => row.sessionGroup));
     const candidates = [
@@ -197,6 +202,7 @@ export function createRouter(dependencies, configuration = {}) {
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
     const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
     state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
+    context.capacityWaits.sweep(new Set([...pending, ...continuations].map(row => row.sessionGroup)));
     const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
       ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
     const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
@@ -219,6 +225,7 @@ export function createRouter(dependencies, configuration = {}) {
   }
   async function stop() {
     state.stopped = true; clearInterval(timer); timer = null;
+    context.capacityWaits.stop();
     for (const current of state.lanes.values()) current.stop();
     await Promise.allSettled([...tasks]);
   }

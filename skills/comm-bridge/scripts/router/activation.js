@@ -31,7 +31,10 @@ export function createActivationManager(context) {
     return [...state.live.values()].some(live => live?.present && live.runtime === runtime) ||
       [...state.activations.values()].some(activation => activation.launchStarted && activation.launchConfig.runtime === runtime);
   }
-  function wait(group, code) { diagnostic('wait_health', { session_group: group, code, reason: code }); }
+  function wait(group, code) {
+    context.capacityWaits?.clear(group);
+    diagnostic('wait_health', { session_group: group, code, reason: code });
+  }
   function waitOrigin(code) {
     if (state.resident.waitCode !== code) wait('origin', code);
     state.resident.waitCode = code;
@@ -104,11 +107,17 @@ export function createActivationManager(context) {
         if (!health.missing && !health.unreadable && health.health === 'auth_failed') { wait(group, 'auth_blocked'); return; }
         const before = await deps.readLiveIdentity(group);
         state.live.set(group, before);
-        if (before.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) return;
+        if (before.present || deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) {
+          context.capacityWaits?.clear(group); return;
+        }
         runId = uuid();
         slot = deps.db.takeSlot(group, { runId, k: options.poolSize() });
         context.refreshSlots();
-        if (!slot.taken) return;
+        if (!slot.taken) {
+          if (slot.reason === 'full') context.capacityWaits?.wait(group, candidate, launchConfig);
+          return;
+        }
+        context.capacityWaits?.acquired(group);
         if (!health.missing && !health.unreadable && restricted.has(health.health) && !hasRuntime(launchConfig.runtime)) {
           requestRuntime = launchConfig.runtime;
           if (requests.has(requestRuntime) || uncertain.get(requestRuntime) === state.round) return;
@@ -211,7 +220,11 @@ export function createActivationManager(context) {
       runId = uuid();
       slot = deps.db.takeSlot(group, { runId, k: options.poolSize() });
       context.refreshSlots();
-      if (!slot.taken) return;
+      if (!slot.taken) {
+        if (slot.reason === 'full') context.capacityWaits?.wait(group, null, launchConfig);
+        return;
+      }
+      context.capacityWaits?.acquired(group);
       activation = { group, runId, launchConfig, startedAt: now(), message: null,
         resident: false, continuation: true, slotTaken: true, slotPrior: slot.prior, launchStarted: false, launchSettled: false, launchError: null };
       state.activations.set(group, activation);

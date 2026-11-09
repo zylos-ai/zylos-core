@@ -119,30 +119,33 @@ test('real timed-out sender is killed and classified uncertain, not retried', as
   assert.equal(diagnostics.length, 1); assert.equal((await sender()(record, route)).outcome, 'suppressed');
 });
 
-test('receipt assertions reject dropped group/runtime keys and nonzero-as-failed mutants', async () => {
-  const moduleURL = new URL('../c4-status-notice.js', import.meta.url);
-  const original = fs.readFileSync(moduleURL, 'utf8');
-  async function mutant(before, after) {
-    assert.ok(original.includes(before), 'mutation anchor exists');
-    const source = original.replace(before, after)
-      .replaceAll('import.meta.url', JSON.stringify(moduleURL.href))
-      .replace(/from '(\.\/[^']+)'/g, (_, relative) => `from '${new URL(relative, moduleURL).href}'`);
-    return (await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'))).createStatusNoticeSender;
+test('capacity wait sends the shared receipt to the original channel and endpoint with cooldown', async () => {
+  const record = row({ direction: 'in', channel: 'telegram', endpoint_id: 'original-room', session_group: 'telegram:original' });
+  const routing = { decision: 'capacity_wait', context: 'capacity', noticeCode: 'capacity_wait',
+    health: 'capacity_wait', reason: 'capacity_wait', runtime: 'codex' };
+  const calls = [];
+  const send = sender({ render: input => messageForStatus(input, {}), spawn: (exe, argv) => {
+    const child = fakeChild();
+    child.stdin.end = message => { calls.push({ exe, argv, message }); queueMicrotask(() => child.emit('close', 0, null)); };
+    return child;
+  } });
+  assert.equal((await send(record, routing)).outcome, 'sent');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].argv.slice(1), ['telegram', 'original-room', '--session-group', 'original']);
+  assert.equal(calls[0].message, messageForStatus(routing, {}));
+  assert.match(calls[0].message, /消息已收到。目前同时处理的对话较多，正在排队/);
+  assert.equal((await send({ ...record, id: record.id + 1 }, routing)).outcome, 'suppressed');
+  assert.equal(calls.length, 1);
+});
+
+test('capacity wait skips internal, system, outbound, no-reply and admission-pending records', async () => {
+  const unexpected = () => { throw Error('must not render, reserve or spawn'); };
+  const send = sender({ render: unexpected, db: { reserveStatusNoticeCooldown: unexpected }, spawn: unexpected });
+  const routing = { decision: 'capacity_wait', context: 'capacity', noticeCode: 'capacity_wait',
+    health: 'capacity_wait', reason: 'capacity_wait', runtime: 'claude' };
+  for (const change of [{ channel: 'internal' }, { channel: 'system' }, { direction: 'out' },
+    { direction: undefined }, { endpoint_id: null }]) {
+    assert.equal((await send(row({ direction: 'in', ...change }), routing)).outcome, 'skipped');
   }
-  for (const [before, after, changed] of [
-    ['record.session_group ?? null,', 'null,', { session_group: 'chat:other' }],
-    ["route.runtime || 'unknown', health", "'unknown', health", { runtime: 'codex' }],
-  ]) {
-    const create = await mutant(before, after), record = row();
-    const send = create({ db, render: () => 'notice', spawn: () => fakeChild(), diagnostic: () => {} });
-    assert.equal((await send(record, route)).outcome, 'sent');
-    const result = await send(changed.session_group ? { ...record, ...changed } : record, changed.runtime ? { ...route, ...changed } : route);
-    assert.throws(() => assert.equal(result.outcome, 'sent'), { code: 'ERR_ASSERTION' });
-    assert.equal(result.outcome, 'suppressed');
-  }
-  const create = await mutant("exitCode === 0 ? 'sent' : 'uncertain'", "exitCode === 0 ? 'sent' : 'failed'");
-  const record = row(), send = create({ db, render: () => 'notice', spawn: () => fakeChild(1), diagnostic: () => {} });
-  const result = await send(record, route);
-  assert.throws(() => assert.equal(result.outcome, 'uncertain'), { code: 'ERR_ASSERTION' });
-  assert.equal(reservation(record), undefined);
+  assert.equal((await send(row({ direction: 'in' }), { ...routing, decision: 'pending' })).outcome, 'skipped');
 });

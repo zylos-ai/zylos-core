@@ -24,6 +24,8 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
   const warn = (stage, record, error) => { try { log(`Status notice ${stage} conversation=${record.id}: ${error?.message ?? error}`); } catch {} };
   return async function sendStatusNotice(record, route = {}) {
     if (!record.endpoint_id || route.decision === 'pending') return { outcome: 'skipped' };
+    if (route.noticeCode === 'capacity_wait' &&
+        (record.direction !== 'in' || ['internal', 'system', 'void'].includes(record.channel))) return { outcome: 'skipped' };
     const normalized = { ...route, health: route.health || 'unavailable' };
     normalized.reason ||= normalized.health;
     normalized.runtime ||= 'unknown';

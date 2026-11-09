@@ -22,6 +22,20 @@ test('first failure wording does not claim an already delivered request was neve
   assert.doesNotMatch(message, /未进入处理队列|not added to the processing queue/);
 });
 
+test('capacity wait receipt confirms queuing without a time estimate or failure suffix', () => {
+  const message = messageForStatus({ context: 'capacity', noticeCode: 'capacity_wait', health: 'capacity_wait' }, {});
+  assert.equal(message, '[Zylos] 消息已收到。目前同时处理的对话较多，正在排队，空出位置后马上处理。\n' +
+    '[Zylos] Your message was received. Several conversations are being handled at the moment, so it is queued and will be processed as soon as a slot becomes available.');
+  assert.doesNotMatch(message, /未进入处理队列|not added|重试|retry|秒|seconds|预计|estimated/);
+});
+
+test('capacity wait receipt supports existing per-locale operator overrides', () => {
+  const message = messageForStatus({ context: 'capacity', noticeCode: 'capacity_wait' }, {
+    brand: 'Test Brand', templates: { capacity: { capacity_wait: { zh: '正在排队。', en: 'Queued.' } } },
+  });
+  assert.equal(message, '[Test Brand] 正在排队。\n[Test Brand] Queued.');
+});
+
 test('operators override brand and each failure context; messages stay bilingual', () => {
   const config = { language: 'en', brand: 'Product', templates: {
     failure: { rate_limited: { en: 'Please retry this request later.' } },

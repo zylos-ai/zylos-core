@@ -16,6 +16,10 @@ const DEFAULTS = {
   },
 };
 const CAPACITY_TEMPLATES = {
+  capacity_wait: {
+    zh: '消息已收到。目前同时处理的对话较多，正在排队，空出位置后马上处理。',
+    en: 'Your message was received. Several conversations are being handled at the moment, so it is queued and will be processed as soon as a slot becomes available.',
+  },
   memory_low: {
     zh: '这台机器内存快用完了，运行可能变慢或不稳定；如果经常出现，请考虑给这台机器增加内存。',
     en: 'This machine is almost out of memory, so things may slow down or become unstable. If this happens often, consider adding memory to this machine.',

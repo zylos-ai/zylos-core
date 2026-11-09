@@ -90,6 +90,7 @@ export function createLane(context, group) {
     const live = state.live.get(group);
     if (!live) return; // Unobservable is not absent.
     if (live.present) {
+      context.capacityWaits.clear(group);
       if (live.ready && live.runId) {
         if (state.mode === 'multi') {
           try {
@@ -126,10 +127,14 @@ export function createLane(context, group) {
     const row = await nextMessage();
     if (!row) {
       if (state.continuations.has(group)) await context.activation.beginContinuation(group);
+      else context.capacityWaits.clear(group);
       return;
     }
     if (context.availableCapacity() <= 0 && state.slots.get(group)?.state !== 'held') {
-      diagnostic('wait_capacity', { session_group: group, conversation_id: row.id });
+      if (deps.db.getDrainFence(group) !== null || deps.db.getDrainFence('*') !== null) {
+        context.capacityWaits.clear(group); return;
+      }
+      context.capacityWaits.wait(group, row);
       return;
     }
     if (!context.acquireOpportunity(group, row)) return;
