@@ -1,9 +1,14 @@
 import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-group.js';
 
-const usage = 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>]';
+const usage = 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>] | zylos group delete <group> [--yes]';
 
 export async function groupCommand(args, { run, io = process } = {}) {
   const [kind, ...flags] = args;
+  if (kind === 'delete') {
+    const { runGroupDeletionCli } = await import('../lib/group-delete-cli.js');
+    process.exitCode = await runGroupDeletionCli(['--group', flags[0] ?? '', ...flags.slice(1)], { io });
+    return process.exitCode;
+  }
   if (kind === 'overrides') {
     let json = false;
     const groups = [], options = {};
