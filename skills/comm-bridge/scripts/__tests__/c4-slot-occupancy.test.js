@@ -7,6 +7,7 @@ import { fixture } from './c4-v2-test-helpers.js';
 import { createStore } from '../c4-v2-store.js';
 import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
+import * as historicalOwner from './helpers/c4-v2-owner.js';
 import { seedV1, oldRows, snapshot } from './helpers/c4-v2-fixtures.js';
 
 const start = 1800000000;
@@ -115,6 +116,28 @@ test('adoption rejects invalid identities, caller timestamps and single mode wit
   const single = createStore(db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'single' } }) });
   assert.throws(() => single.adoptSlot('test:a', { runId: 'late' }), { code: 'INVALID_ARGS' });
   assert.deepEqual(snapshot(db), before);
+});
+
+test('adoption cannot restore deleted run identities across repeated group recreation', t => {
+  const { db, store } = fixture(t);
+  store.insertConversation('in', 'test', 'endpoint', 'queued', { groupName: 'a' });
+  for (const [runId, operationId] of [['first-run', 'first-delete'], ['second-run', 'second-delete']]) {
+    assert.equal(store.adoptSlot('test:a', { runId }).adopted, true);
+    store.beginGroupDeletion('test:a', { runId, operationId, actor: 'password:owner', preview: {} });
+    const fenced = rows(db);
+    assert.deepEqual(store.adoptSlot('test:a', { runId }), { adopted: false, reason: 'fenced' });
+    assert.deepEqual(store.adoptSlot('test:a', { runId: 'unobserved-replacement' }), { adopted: false, reason: 'fenced' });
+    assert.deepEqual(rows(db), fenced);
+    store.recordRunEnd('test:a', { runId, reason: 'delete' });
+    store.finalizeGroupDeletion('test:a', { operationId });
+    assert.equal(store.listRunEndings(['test:a']).length, 0, 'Deletion removes the ordinary ending record');
+    assert.deepEqual(store.adoptSlot('test:a', { runId }), { adopted: false, reason: 'ended' });
+    assert.equal(rows(db).length, 0);
+  }
+  assert.deepEqual(store.adoptSlot('test:a', { runId: 'first-run' }), { adopted: false, reason: 'ended' });
+  assert.deepEqual(store.adoptSlot('test:a', { runId: 'third-run' }), { adopted: true });
+  assert.deepEqual(store.adoptSlot('test:b', { runId: 'first-run' }), { adopted: true }, 'Run exclusion is scoped to its deleted group');
+  assert.equal(rows(db).length, 2);
 });
 
 test('release with a prior reservation cannot rewrite a run that has already ended', t => {
@@ -274,7 +297,7 @@ test('two concurrent connections competing for the last slot yield exactly one w
 
 test('migration adds empty occupancy with exact constraints and preserves historical rows', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db, { extensions: true });
-  const before = oldRows(db); guardDatabase(db, owner);
+  const before = oldRows(db); guardDatabase(db, historicalOwner);
   assert.equal(db.pragma('user_version', { simple: true }), 2); assert.deepEqual(oldRows(db), before);
   assert.equal(rows(db).length, 0);
   const insert = db.prepare('INSERT INTO slot_occupancy(session_group,run_id,state,held_until,created_at) VALUES(?,?,?,?,?)');
@@ -282,9 +305,12 @@ test('migration adds empty occupancy with exact constraints and preserves histor
 });
 
 test('schema two missing occupancy is rejected without changing schema or existing rows', t => {
-  const { db, store } = fixture(t); store.recordRunEnd('test:a', { runId: 'r', reason: 'unexpected' });
+  const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db);
+  guardDatabase(db, historicalOwner);
+  const store = createStore(db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
+  store.recordRunEnd('test:a', { runId: 'r', reason: 'unexpected' });
   db.exec('DROP TABLE slot_occupancy'); const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 2, missing slot_occupancy\.session_group/);
+  assert.throws(() => guardDatabase(db, historicalOwner), /^Error: c4: unsupported schema 2, missing slot_occupancy\.session_group/);
   assert.deepEqual(snapshot(db), before);
 });
 

@@ -44,6 +44,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     const row = get(c, 'SELECT * FROM drain_fences WHERE session_group=?', group);
     if (conditional && (!row || row.reason !== expectedReason || row.run_id !== expectedRunId)) throw dataError('FENCE_MISMATCH', 'Fence identity does not match');
     if (!row) return;
+    if (row.reason === 'delete') throw dataError('FENCE_MISMATCH', 'Deletion fences are released only by finalization');
     if (row.reason === 'manual_restart' || expectedReason === 'manual_restart') {
       if (expectedReason !== 'manual_restart' || !expectedRunId || row.reason !== expectedReason || row.run_id !== expectedRunId) throw dataError('FENCE_MISMATCH', 'Manual restart fence identity does not match');
     } else if (group === '*') throw dataError('FENCE_INVALID', 'Transition fences are removed only on completion');
@@ -55,7 +56,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       requireGroup(sessionGroup);
       if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['runId', 'reason', 'clearFence'].includes(key))) throw dataError('INVALID_ARGS', 'Invalid run ending options');
       const { runId, reason, clearFence = false } = options;
-      if (typeof runId !== 'string' || !runId.trim() || !['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid run ending identity or reason');
+      if (typeof runId !== 'string' || !runId.trim() || !['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected', 'delete'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid run ending identity or reason');
       if (typeof clearFence !== 'boolean' && (!clearFence || typeof clearFence !== 'object' || Array.isArray(clearFence) || Object.keys(clearFence).some(key => !['expectedReason', 'expectedRunId'].includes(key)) || typeof clearFence.expectedReason !== 'string' || typeof clearFence.expectedRunId !== 'string' || !clearFence.expectedRunId)) throw dataError('INVALID_ARGS', 'Invalid fence condition');
       if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Run endings require multi mode');
       const previous = get(c, 'SELECT * FROM run_endings WHERE session_group=?', sessionGroup);
@@ -68,7 +69,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
         if (['ttl', 'evict'].includes(reason)) run(c, 'DELETE FROM slot_occupancy WHERE session_group=? AND run_id=?', sessionGroup, runId);
         else run(c, "UPDATE slot_occupancy SET state='held',held_until=? WHERE session_group=? AND run_id=? AND state='running'", current + 120, sessionGroup, runId);
       }
-      if (clearFence) clear(c, sessionGroup, clearFence === true ? {} : clearFence, clearFence !== true);
+      if (clearFence && reason !== 'delete') clear(c, sessionGroup, clearFence === true ? {} : clearFence, clearFence !== true);
       return { recorded };
     }),
     takeSlot: (sessionGroup, options) => write(c => {
@@ -102,6 +103,10 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     adoptSlot: (sessionGroup, options) => write(c => {
       slotGroup(sessionGroup); slotOptions(options, ['runId']);
       const { runId } = options; slotRun(runId); multiSlots();
+      if (get(c, "SELECT 1 FROM drain_fences WHERE session_group=? AND reason='delete'", sessionGroup)) return { adopted: false, reason: 'fenced' };
+      // A completed deletion removes run_endings. Its audit still identifies
+      // the ended run, including when an older Router observation arrives late.
+      if (get(c, "SELECT 1 FROM group_deletion_audit WHERE session_group=? AND run_id=? AND status='done'", sessionGroup, runId)) return { adopted: false, reason: 'ended' };
       if (get(c, 'SELECT run_id FROM run_endings WHERE session_group=?', sessionGroup)?.run_id === runId) return { adopted: false, reason: 'ended' };
       const prior = get(c, 'SELECT run_id,state FROM slot_occupancy WHERE session_group=?', sessionGroup);
       if (prior?.run_id === runId && prior.state === 'running') return { adopted: false, reason: 'already' };

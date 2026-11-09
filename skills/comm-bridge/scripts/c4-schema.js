@@ -1,11 +1,12 @@
 import { migrateSchema } from './c4-migrations.js';
 import { migrateToV2 } from './c4-migrations-v2.js';
+import { migrateToV3 } from './c4-migrations-v3.js';
 import { inspectLayout } from './sqlite-schema.js';
 import { rejectLegacySchemaProbe } from './upgrade-admission.js';
 
 rejectLegacySchemaProbe();
 
-export const SUPPORTED_SCHEMA_VERSION = 2;
+export const SUPPORTED_SCHEMA_VERSION = 3;
 export const supportsNewDatabase = true;
 
 export const COLUMN_DEFINITIONS = {
@@ -74,7 +75,27 @@ export const COLUMN_DEFINITIONS = {
     checkpoint_id: { type: 'INTEGER', pk: false },
     updated_at: { type: 'INTEGER', pk: false }
   },
+  group_deletion_audit: {
+    operation_id: { type: 'TEXT', pk: true },
+    draft_local_id: { type: 'TEXT', pk: false },
+    session_group: { type: 'TEXT', pk: false },
+    actor: { type: 'TEXT', pk: false },
+    run_id: { type: 'TEXT', pk: false },
+    started_at: { type: 'INTEGER', pk: false },
+    completed_at: { type: 'INTEGER', pk: false },
+    status: { type: 'TEXT', pk: false },
+    preview_messages: { type: 'INTEGER', pk: false },
+    preview_attachments: { type: 'INTEGER', pk: false },
+    preview_files: { type: 'INTEGER', pk: false },
+    deleted_messages: { type: 'INTEGER', pk: false },
+    deleted_attachments: { type: 'INTEGER', pk: false },
+    deleted_files: { type: 'INTEGER', pk: false },
+    counts_estimated: { type: 'INTEGER', pk: false },
+    cleanup_attempts: { type: 'INTEGER', pk: false }
+  },
   drain_fences: {
+    operation_id: { type: 'TEXT', pk: false },
+    actor: { type: 'TEXT', pk: false },
     session_group: { type: 'TEXT', pk: true },
     reason: { type: 'TEXT', pk: false },
     run_id: { type: 'TEXT', pk: false },
@@ -122,6 +143,11 @@ export const TABLES = Object.fromEntries(
 );
 
 export const MIGRATIONS = Object.freeze({
+  2: Object.freeze({ to: 3, migrate: migrateToV3, changes: {
+    rebuildTables: ['run_endings'],
+    addColumns: { drain_fences: { operation_id: { type: 'TEXT', pk: false }, actor: { type: 'TEXT', pk: false } } },
+    addTables: { group_deletion_audit: COLUMN_DEFINITIONS.group_deletion_audit },
+  } }),
   0: Object.freeze({ to: 1, migrate: migrateSchema }),
   1: Object.freeze({
     to: 2,
@@ -146,7 +172,9 @@ export const MIGRATIONS = Object.freeze({
           'channel_namespaces', 'group_heads', 'origin_sync_cursors', 'drain_fences',
           'mode_transitions', 'group_runtime_overrides', 'group_model_overrides', 'run_endings', 'slot_occupancy',
         ]
-          .map(table => [table, COLUMN_DEFINITIONS[table]]),
+          .map(table => [table, table === 'drain_fences'
+            ? Object.fromEntries(Object.entries(COLUMN_DEFINITIONS[table]).filter(([name]) => !['operation_id', 'actor'].includes(name)))
+            : COLUMN_DEFINITIONS[table]]),
       ),
     },
   }),

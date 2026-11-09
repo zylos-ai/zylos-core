@@ -131,6 +131,36 @@ test('one adoption error leaves delivery available and the next round repairs th
   assert.equal(f.db.listSlotOccupancy()[0].runId, 'late-run');
 });
 
+test('a stale ready observation cannot restore deleted occupancy and block queued recreation', async t => {
+  const f = routerFixture(t, { poolSize: 1 });
+  f.put('a', { runId: 'deleted-run' });
+  const old = f.add('a');
+  await start(f);
+  assert.equal(f.row(old.id).status, 'delivered');
+  f.db.beginGroupDeletion('a', { operationId: 'delete-a', runId: 'deleted-run', actor: 'password:owner', preview: {} });
+  const queued = f.add('a');
+  f.db.recordRunEnd('a', { runId: 'deleted-run', reason: 'delete' });
+  f.scene.delete('a'); f.current.delete('a');
+  const deliver = f.deps.deliverConversation;
+  f.deps.deliverConversation = async (row, live) => {
+    // The terminal boundary rejects a target that vanished after observation.
+    // Real delivery requeues this guarded send; keep that behavior in the seam.
+    if (!f.scene.has('a')) { f.db.requeueConversation(row.id); return; }
+    return deliver(row, live);
+  };
+  f.db.finalizeGroupDeletion('a', { operationId: 'delete-a' });
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  assert.equal(f.router.state.listed.has('a'), true);
+  assert.equal(f.router.state.live.get('a').runId, 'deleted-run', 'Router still holds the pre-deletion observation');
+  f.router.tick();
+  assert.equal(f.db.listSlotOccupancy().length, 0, 'Synchronous adoption must reject the old observation before its async refresh');
+  assert.equal(f.router.state.slots.has('a'), false);
+  await f.router.idle(); await f.rounds(5);
+  assert.equal(f.row(queued.id).status, 'delivered');
+  assert.equal(f.calls.filter(row => row[0] === 'launch' && row[1].sessionGroup === 'a').length, 1);
+  assert.notEqual(f.db.listSlotOccupancy()[0].runId, 'deleted-run');
+});
+
 test('an unobservable listing never adopts a stale ready scene', async t => {
   const f = routerFixture(t); ready(f, 'a', 'late-run');
   const adoptions = countAdoptions(f);

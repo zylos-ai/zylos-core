@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
-import * as owner from '../c4-schema.js';
+import * as owner from './helpers/c4-v2-owner.js';
 import * as v1 from './helpers/c4-v1-owner.js';
 import { migrateToV2 } from '../c4-migrations-v2.js';
 import { guardDatabase, migrateDatabase, planDatabaseMigration } from '../sqlite-schema.js';

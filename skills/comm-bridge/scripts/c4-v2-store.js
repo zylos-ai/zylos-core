@@ -3,6 +3,7 @@ import { writeSync } from 'node:fs';
 import { composeSessionGroup, parseSessionGroup, requireGroup, validNamespace, dataError, isDataError } from './c4-session-group.js';
 import { configFunctions } from './c4-store-config.js';
 import { deliveryFunctions } from './c4-store-delivery.js';
+import { deletionFunctions } from './c4-store-deletion.js';
 import { progressFunctions } from './c4-store-progress.js';
 import { controlFunctions } from './c4-store-control.js';
 import { transitionFunctions } from './c4-store-transition.js';
@@ -141,7 +142,7 @@ export function createStore(database, dependencies = {}) {
   const config = configFunctions(context);
   const progress = progressFunctions(context);
   const transitions = transitionFunctions({ ...context, ...progress });
-  Object.assign(api, deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
+  Object.assign(api, deletionFunctions(context), deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
   api.buildTargetBinding = createTargetBindingBuilder({ ...context, baseline: config.baseline, resolveTarget: dependencies.resolveTarget });
   function listGroups({ match, limit, activeSince, keyMatch } = {}) {
     if (match !== undefined && typeof match !== 'string') throw dataError('INVALID_ARGS', 'match must be a string');

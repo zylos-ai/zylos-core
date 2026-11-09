@@ -20,6 +20,7 @@ export function transitionFunctions({ read, write, snapshot, get, all, run, seco
       if (!['single','multi'].includes(source) || !['single','multi'].includes(target)) throw dataError('INVALID_ARGS', 'Invalid transition mode');
       if (source === target) throw dataError('TRANSITION_SAME_MODE', 'Source and target are equal');
       if (find(c)) throw dataError('TRANSITION_OPEN', 'A transition is already open');
+      if (get(c, "SELECT 1 FROM drain_fences WHERE reason='delete'")) throw dataError('DELETION_IN_PROGRESS', 'Group deletion must finish first');
       if (get(c, "SELECT 1 FROM drain_fences WHERE reason='manual_restart'")) throw dataError('MANUAL_RESTART_FENCE', 'Manual restart must finish first');
       const runId = randomUUID();
       run(c, "INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES(?,?,?,'gating',?,?)", runId, source, target, seconds(), seconds());

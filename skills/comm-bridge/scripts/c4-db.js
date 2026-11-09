@@ -511,3 +511,13 @@ export const auditCheckpoints = () => store.auditCheckpoints();
 if (isMainModule(import.meta.url)) {
   import('./c4-public-cli.js').then(({ runCli }) => runCli('database', process.argv.slice(2)));
 }
+
+// Core-owned deletion writes; Dashboard uses the shared Core coordinator.
+export const beginGroupDeletion = (...args) => store.beginGroupDeletion(...args);
+export const getActiveDeletion = (...args) => store.getActiveDeletion(...args);
+export const getGroupDeletionAudit = (...args) => store.getGroupDeletionAudit(...args);
+export const listDeletionMessages = (...args) => store.listDeletionMessages(...args);
+export const finalizeGroupDeletion = (...args) => store.finalizeGroupDeletion(...args);
+export const markDeletionCleanup = (...args) => store.markDeletionCleanup(...args);
+export const beginDraftDeletion = (...args) => store.beginDraftDeletion(...args);
+export const finalizeDraftDeletion = (...args) => store.finalizeDraftDeletion(...args);
