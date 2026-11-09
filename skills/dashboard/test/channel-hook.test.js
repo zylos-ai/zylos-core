@@ -106,7 +106,7 @@ for (const component of COMPONENT_DEFINITIONS.filter(item => item.interactive)) 
     assert.equal(parseC4Content(content).kind, 'invalid');
     const result = evaluateBeforeSend(wire(content));
     assert.equal(result.decision, 'abort');
-    assert.match(result.message, /questionSummary must equal the interrupted block's derived summary/);
+    assert.match(result.message, /^Invalid Dashboard structured content: \/questionSummary \[derivedSummary\] must equal the interrupted block's derived summary/);
     assert.match(result.message, /fallbackText/);
     assert.equal(result.message.includes(envelope.questionSummary), false);
     assert.equal(result.message.includes(block.fallbackText), false);
@@ -121,11 +121,11 @@ test('Dashboard hook reports the first safe structural or framing reason without
   const marker = 'PRIVATE_CONTENT_DO_NOT_ECHO';
   const envelope = structuredClone(fixtures.valid.find(item => item.name === 'confirmation').envelope);
   const cases = [
-    [CONTENT_PREFIX + '{"' + marker, /Expected one JSON object after the C4 marker/],
-    [CONTENT_PREFIX + JSON.stringify({ ...envelope, version: 2, fallbackText: marker }), /Envelope version must be 1/],
-    [CONTENT_PREFIX + JSON.stringify({ ...envelope, blocks: [{ ...envelope.blocks[0], [marker]: marker }] }), /blocks\[0\] does not match a supported block schema/],
-    [CONTENT_PREFIX + JSON.stringify({ ...envelope, [marker]: marker }), /Envelope fields do not match the required/],
-    [CONTENT_PREFIX + JSON.stringify(envelope) + marker, /Unexpected text follows the structured JSON object/],
+    [CONTENT_PREFIX + '{"' + marker, /\(root\) \[invalid_json\] expected one JSON object after the C4 marker/],
+    [CONTENT_PREFIX + JSON.stringify({ ...envelope, version: 2, fallbackText: marker }), /\/version \[const\] must be 1\./],
+    [CONTENT_PREFIX + JSON.stringify({ ...envelope, blocks: [{ ...envelope.blocks[0], [marker]: marker }] }), /\/blocks\/0 \[additionalProperties\] contains a property that is not allowed/],
+    [CONTENT_PREFIX + JSON.stringify({ ...envelope, [marker]: marker }), /\(root\) \[additionalProperties\] contains a property that is not allowed/],
+    [CONTENT_PREFIX + JSON.stringify(envelope) + marker, /\(root\) \[invalid_suffix\] unexpected text follows the structured JSON object/],
   ];
   for (const [content, reason] of cases) {
     const result = evaluateBeforeSend(wire(content));
@@ -136,6 +136,34 @@ test('Dashboard hook reports the first safe structural or framing reason without
   }
 });
 
+
+test('Dashboard hook names the path and rule of the first block or envelope error', () => {
+  const question = () => structuredClone(COMPONENT_DEFINITIONS.find(item => item.key === 'choice@1').example);
+  const cases = [
+    [envelope => { delete envelope.blocks[0].schemaVersion; }, '/blocks/0/schemaVersion [required] is required.'],
+    [envelope => { envelope.blocks[0].data.action.type = 'private.action_type'; },
+      '/blocks/0/data/action/type [enum] must be one of "choice.select", "confirmation.respond", "form.submit".'],
+    [envelope => { envelope.blocks[0].data.action.target = 'Private.Target'; }, '/blocks/0/data/action/target [pattern] '],
+    [envelope => { envelope.blocks[0].data.options[0].label = 'x'.repeat(121); },
+      '/blocks/0/data/options/0/label [maxLength] must contain at most 120 characters.'],
+    [envelope => { envelope.blocks[0].type = 'private_type'; }, '/blocks/0/type [enum] must be one of "markdown", '],
+    [envelope => { delete envelope.questionSummary; }, '/questionSummary [required] '],
+    [envelope => { envelope.interrupt.reason = 'private_reason'; },
+      '/interrupt/reason [enum] must be one of "confirmation", "input_required".'],
+  ];
+  for (const [change, expected] of cases) {
+    const envelope = question();
+    change(envelope);
+    const content = CONTENT_PREFIX + JSON.stringify(envelope);
+    assert.equal(parseC4Content(content).kind, 'invalid');
+    const result = evaluateBeforeSend(wire(content));
+    assert.equal(result.decision, 'abort');
+    assert.equal(validateHookOutput(result), true);
+    assert.ok(result.message.startsWith('Invalid Dashboard structured content: ' + expected), result.message);
+    assert.doesNotMatch(result.message, /private/i);
+    assert.ok([...result.message].length <= 500);
+  }
+});
 
 test('Dashboard hook explains when an interrupt does not identify an interactive block', () => {
   for (const blockId of ['missing_target', 'plain_context']) {
@@ -149,7 +177,7 @@ test('Dashboard hook explains when an interrupt does not identify an interactive
     const result = evaluateBeforeSend(input);
     assert.equal(result.decision, 'abort');
     assert.equal(validateHookOutput(result), true);
-    assert.match(result.message, /interrupt\.blockId must identify an interactive block/);
+    assert.match(result.message, /\/interrupt\/blockId \[interactiveBlock\] must identify a block of type "choice", "confirmation", "form_intent"/);
     assert.doesNotMatch(result.message, /register|missing_target|plain_context/);
     assert.equal(JSON.stringify(input), before);
   }

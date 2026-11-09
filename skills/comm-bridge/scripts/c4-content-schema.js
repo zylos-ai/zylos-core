@@ -69,65 +69,140 @@ function reference(ref, document) {
   const source = name === 'action.schema.json' ? ACTION_SCHEMA : name === 'content-block.schema.json' ? BLOCK_SCHEMA : document;
   return { document: source, schema: pointer.split('/').slice(1).reduce((value, part) => value?.[part.replaceAll('~1', '/').replaceAll('~0', '~')], source) };
 }
+// A rejection is {code, path, message}: code names the failing schema keyword
+// or host rule, path is a JSON Pointer to the failing value and message is
+// fixed text built from the schema or rule only. Paths are made of schema
+// member names and array positions, which never contain "~" or "/". A member
+// reached through additionalProperties has a submitted key, so the path stops
+// at its parent object. Callers that only need a boolean pass `at = null`:
+// failures then return one shared value without building paths or text.
+const QUIET_FAILURE = Object.freeze({ code: 'invalid', path: '', message: 'is invalid' });
+const HIDDEN_MEMBER = Symbol('hidden member');
+const list = values => values.map(value => JSON.stringify(value)).join(', ');
+function pointer(segments, child) {
+  let path = '';
+  for (const segment of segments) {
+    if (segment === HIDDEN_MEMBER) return path;
+    path += '/' + segment;
+  }
+  return child === undefined ? path : path + '/' + child;
+}
+const failAt = (at, segments, code, message) => at ? { code, path: pointer([...at, ...segments]), message } : QUIET_FAILURE;
+const within = (at, ...segments) => at && [...at, ...segments];
+function keywordMessage(code, schema) {
+  switch (code) {
+    case 'const': return `must be ${JSON.stringify(schema.const)}`;
+    case 'enum': return `must be one of ${list(schema.enum)}`;
+    case 'type': return `must be of type ${[schema.type].flat().join(' or ')}`;
+    case 'finite': return 'must be a finite number';
+    case 'minLength': return `must contain at least ${schema.minLength} characters`;
+    case 'maxLength': return `must contain at most ${schema.maxLength} characters`;
+    case 'pattern': return `must match the pattern ${schema.pattern}`;
+    case 'format': return `must be a valid ${schema.format} string`;
+    case 'minimum': return `must be at least ${schema.minimum}`;
+    case 'maximum': return `must be at most ${schema.maximum}`;
+    case 'required': return 'is required';
+    case 'minProperties': return `must contain at least ${schema.minProperties} properties`;
+    case 'maxProperties': return `must contain at most ${schema.maxProperties} properties`;
+    case 'propertyNames': return 'contains a property name that is not allowed';
+    case 'additionalProperties': return 'contains a property that is not allowed'
+      + (schema.properties ? `; allowed properties: ${Object.keys(schema.properties).join(', ')}` : '');
+    case 'minItems': return `must contain at least ${schema.minItems} items`;
+    case 'maxItems': return `must contain at most ${schema.maxItems} items`;
+    case 'uniqueItems': return 'must not contain duplicate items';
+    case 'anyOf': return 'does not match any allowed form';
+    case 'oneOf': return 'must match exactly one allowed form';
+    case 'not': return 'combines properties or values that are not allowed together';
+    default: return 'is not allowed here';
+  }
+}
+function keywordFailure(at, code, schema, child) {
+  return at ? { code, path: pointer(at, child), message: keywordMessage(code, schema) } : QUIET_FAILURE;
+}
 // Internal interpreter for the fixed, embedded schema subset below. It is not
 // a public or general-purpose JSON Schema evaluator and never evaluates code.
-function matches(schema, value, document) {
-  if (typeof schema === 'boolean') return schema;
-  if (!object(schema)) return false;
+// Returns null when the value matches, otherwise the first failure in
+// evaluation order. Subschemas used only as conditions or alternatives
+// (if, not, anyOf, oneOf, propertyNames) are always evaluated quietly.
+function schemaFailure(schema, value, document, at) {
+  if (typeof schema === 'boolean') return schema ? null : keywordFailure(at, 'false', schema);
+  if (!object(schema)) return keywordFailure(at, 'schema', schema);
+  let failure;
   if (schema.$ref) {
     const ref = reference(schema.$ref, document);
-    if (!matches(ref.schema, value, ref.document)) return false;
+    if ((failure = schemaFailure(ref.schema, value, ref.document, at))) return failure;
   }
-  if (own(schema, 'const') && value !== schema.const) return false;
-  if (schema.enum && !schema.enum.includes(value)) return false;
-  if (schema.type && !(Array.isArray(schema.type) ? schema.type : [schema.type]).some(type => typeValid(type, value))) return false;
+  if (own(schema, 'const') && value !== schema.const) return keywordFailure(at, 'const', schema);
+  if (schema.enum && !schema.enum.includes(value)) return keywordFailure(at, 'enum', schema);
+  if (schema.type && !(Array.isArray(schema.type) ? schema.type : [schema.type]).some(type => typeValid(type, value))) return keywordFailure(at, 'type', schema);
   if (typeof value === 'string') {
-    if (schema.minLength !== undefined && chars(value) < schema.minLength) return false;
-    if (schema.maxLength !== undefined && chars(value) > schema.maxLength) return false;
-    if (schema.pattern && !new RegExp(schema.pattern, 'u').test(value)) return false;
-    if (schema.format && !formatValid(schema.format, value)) return false;
+    if (schema.minLength !== undefined && chars(value) < schema.minLength) return keywordFailure(at, 'minLength', schema);
+    if (schema.maxLength !== undefined && chars(value) > schema.maxLength) return keywordFailure(at, 'maxLength', schema);
+    if (schema.pattern && !new RegExp(schema.pattern, 'u').test(value)) return keywordFailure(at, 'pattern', schema);
+    if (schema.format && !formatValid(schema.format, value)) return keywordFailure(at, 'format', schema);
   }
   if (typeof value === 'number') {
-    if (!Number.isFinite(value) || (schema.minimum !== undefined && value < schema.minimum) || (schema.maximum !== undefined && value > schema.maximum)) return false;
+    if (!Number.isFinite(value)) return keywordFailure(at, 'finite', schema);
+    if (schema.minimum !== undefined && value < schema.minimum) return keywordFailure(at, 'minimum', schema);
+    if (schema.maximum !== undefined && value > schema.maximum) return keywordFailure(at, 'maximum', schema);
   }
   if (object(value)) {
-    if (schema.required?.some(key => !own(value, key))) return false;
+    const missing = schema.required?.find(key => !own(value, key));
+    if (missing !== undefined) return keywordFailure(at, 'required', schema, missing);
     const names = Object.keys(value);
-    if (schema.maxProperties !== undefined && names.length > schema.maxProperties) return false;
-    if (schema.minProperties !== undefined && names.length < schema.minProperties) return false;
+    if (schema.maxProperties !== undefined && names.length > schema.maxProperties) return keywordFailure(at, 'maxProperties', schema);
+    if (schema.minProperties !== undefined && names.length < schema.minProperties) return keywordFailure(at, 'minProperties', schema);
     for (const name of names) {
-      if (schema.propertyNames && !matches(schema.propertyNames, name, document)) return false;
+      if (schema.propertyNames && schemaFailure(schema.propertyNames, name, document, null)) return keywordFailure(at, 'propertyNames', schema);
       if (schema.properties && own(schema.properties, name)) {
-        if (!matches(schema.properties[name], value[name], document)) return false;
-      } else if (schema.additionalProperties === false) return false;
-      else if (object(schema.additionalProperties) && !matches(schema.additionalProperties, value[name], document)) return false;
+        if ((failure = schemaFailure(schema.properties[name], value[name], document, within(at, name)))) return failure;
+      } else if (schema.additionalProperties === false) return keywordFailure(at, 'additionalProperties', schema);
+      else if (object(schema.additionalProperties)
+        && (failure = schemaFailure(schema.additionalProperties, value[name], document, within(at, HIDDEN_MEMBER)))) return failure;
     }
   }
   if (Array.isArray(value)) {
-    if (schema.minItems !== undefined && value.length < schema.minItems) return false;
-    if (schema.maxItems !== undefined && value.length > schema.maxItems) return false;
-    if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) return false;
-    if (schema.items && value.some(item => !matches(schema.items, item, document))) return false;
+    if (schema.minItems !== undefined && value.length < schema.minItems) return keywordFailure(at, 'minItems', schema);
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) return keywordFailure(at, 'maxItems', schema);
+    if (schema.uniqueItems && new Set(value.map(item => JSON.stringify(item))).size !== value.length) return keywordFailure(at, 'uniqueItems', schema);
+    if (schema.items) {
+      for (let index = 0; index < value.length; index++) {
+        if ((failure = schemaFailure(schema.items, value[index], document, within(at, index)))) return failure;
+      }
+    }
   }
-  if (schema.allOf?.some(item => !matches(item, value, document))) return false;
-  if (schema.anyOf && !schema.anyOf.some(item => matches(item, value, document))) return false;
-  if (schema.oneOf && schema.oneOf.filter(item => matches(item, value, document)).length !== 1) return false;
-  if (schema.not && matches(schema.not, value, document)) return false;
-  if (schema.if && !matches(matches(schema.if, value, document) ? schema.then ?? true : schema.else ?? true, value, document)) return false;
-  return true;
+  if (schema.allOf) {
+    for (const item of schema.allOf) if ((failure = schemaFailure(item, value, document, at))) return failure;
+  }
+  if (schema.anyOf && !schema.anyOf.some(item => !schemaFailure(item, value, document, null))) return keywordFailure(at, 'anyOf', schema);
+  if (schema.oneOf && schema.oneOf.filter(item => !schemaFailure(item, value, document, null)).length !== 1) return keywordFailure(at, 'oneOf', schema);
+  if (schema.not && !schemaFailure(schema.not, value, document, null)) return keywordFailure(at, 'not', schema);
+  if (schema.if) {
+    const branch = schemaFailure(schema.if, value, document, null) ? schema.else : schema.then;
+    if (branch !== undefined && (failure = schemaFailure(branch, value, document, at))) return failure;
+  }
+  return null;
 }
-function dataLimits(value) {
+const matches = (schema, value, document) => schemaFailure(schema, value, document, null) === null;
+/** Returns the first limit block data exceeds, or null. */
+function dataLimitFailure(value) {
   const queue = [{ value, depth: 1 }];
   let nodes = 0;
   while (queue.length) {
     const item = queue.pop();
-    if (++nodes > 5000 || item.depth > 6) return false;
+    if (++nodes > 5000) return 'maxNodes';
+    if (item.depth > 6) return 'maxDepth';
     if (object(item.value) || Array.isArray(item.value)) {
       for (const child of Object.values(item.value)) queue.push({ value: child, depth: item.depth + 1 });
     }
   }
-  return byteLength(JSON.stringify(value)) <= 65536;
+  return byteLength(JSON.stringify(value)) <= 65536 ? null : 'maxBytes';
 }
+const DATA_LIMIT_MESSAGES = {
+  maxNodes: 'must contain at most 5000 JSON nodes',
+  maxDepth: 'must nest at most 6 levels deep, counting data itself as 1',
+  maxBytes: 'must serialize to at most 65536 UTF-8 bytes',
+};
 function withinMetadataDepth(value) {
   const stack = [{ value, depth: 1 }];
   while (stack.length) {
@@ -150,33 +225,108 @@ function boundedBlockNodes(block) {
 }
 const present = value => value != null && (typeof value !== 'string' || /[^\s\p{Default_Ignorable_Code_Point}]/u.test(value))
   && (!Array.isArray(value) || value.length > 0);
-function validFieldDefinition(field) {
+/** First repeated option ID position, or -1. */
+const repeatedOption = options => options.findIndex((option, index) => options.findIndex(other => other.id === option.id) !== index);
+/** Submission-time consistency of one form field definition; null when valid. */
+function fieldDefinitionFailure(field, at) {
   const select = ['single_select', 'multi_select'].includes(field.type);
-  if (select ? new Set(field.options.map(option => option.id)).size !== field.options.length : own(field, 'options')) return false;
-  if ((own(field, 'min') || own(field, 'max')) && !['number', 'integer'].includes(field.type)) return false;
-  if (field.min !== undefined && field.max !== undefined && field.min > field.max) return false;
-  return !own(field, 'defaultValue') || (field.defaultValue !== null
-    && validFieldValue({ ...field, required: false }, field.defaultValue));
-}
-function validBlock(block, submission = false) {
-  if (!matches(BLOCK_SCHEMA, block, BLOCK_SCHEMA) || !blockTypes.includes(block.type)) return false;
-  if (!boundedBlockNodes(block)) return false;
-  if (block.metadata?.provenance === 'adapter' && block.type !== 'markdown') return false;
-  if (block.data && !dataLimits(block.data)) return false;
-  if (block.type === 'form_intent' && block.schemaVersion === 2 && block.data
-    && evaluateFormState(block.data.fields, {}, { historical: !submission }).errors.length) return false;
-  if (submission && block.data) {
-    const data = block.data;
-    if (block.type === 'choice') {
-      const minimum = data.minSelect ?? 1, maximum = data.maxSelect ?? data.options.length;
-      if (new Set(data.options.map(option => option.id)).size !== data.options.length
-        || minimum < 1 || minimum > data.options.length || minimum > maximum
-        || ((data.selection ?? 'single') === 'single' && minimum > 1)) return false;
-    }
-    if (block.type === 'form_intent' && (new Set(data.fields.map(field => field.key)).size !== data.fields.length
-      || !data.fields.every(validFieldDefinition))) return false;
+  if (select) {
+    const index = repeatedOption(field.options);
+    if (index >= 0) return failAt(at, ['options', index, 'id'], 'uniqueOptionId', 'must be unique within the field');
+  } else if (own(field, 'options')) {
+    return failAt(at, ['options'], 'optionsNotAllowed', 'is allowed only on single_select and multi_select fields');
   }
-  return block.type !== 'markdown' || !block.data || byteLength(block.data.text) <= 32768;
+  if (!['number', 'integer'].includes(field.type)) {
+    const bound = ['min', 'max'].find(key => own(field, key));
+    if (bound) return failAt(at, [bound], 'boundsNotAllowed', 'is allowed only on number and integer fields');
+  }
+  if (field.min !== undefined && field.max !== undefined && field.min > field.max) {
+    return failAt(at, ['max'], 'boundsOrder', 'must not be less than min');
+  }
+  if (own(field, 'defaultValue') && (field.defaultValue === null || !validFieldValue({ ...field, required: false }, field.defaultValue))) {
+    return failAt(at, ['defaultValue'], 'invalidDefault', 'must be a value this field accepts');
+  }
+  return null;
+}
+const validFieldDefinition = field => fieldDefinitionFailure(field, null) === null;
+const FORM_DEFINITION_MESSAGES = {
+  invalid_form_fields: 'must contain 1 to 12 fields',
+  invalid_form_field: 'does not match the form field schema',
+  duplicate_form_field: 'must be unique within the form',
+  unknown_condition_field: 'must name another field of this form',
+  condition_type: 'must compare a single-value field with constants of that field type',
+  form_condition_cycle: 'must not make fields depend on each other in a cycle',
+};
+// evaluateFormState reports field-specific errors as `<reason>:<key>`; locate
+// the field by position so the key itself is not repeated.
+function formDefinitionFailure(fields, reason, at, historical) {
+  if (!at) return QUIET_FAILURE;
+  const [code, key] = reason.split(':');
+  const message = FORM_DEFINITION_MESSAGES[code] ?? 'is not a valid form definition';
+  if (code === 'invalid_form_field') {
+    for (let index = 0; index < fields.length; index++) {
+      const fieldAt = [...at, 'data', 'fields', index];
+      const failure = schemaFailure(BLOCK_SCHEMA.$defs.formFieldV2, fields[index], BLOCK_SCHEMA, fieldAt)
+        ?? (historical ? null : fieldDefinitionFailure(fields[index], fieldAt));
+      if (failure) return failure;
+    }
+  }
+  if (key === undefined) return failAt(at, ['data', 'fields'], code, message);
+  if (code === 'duplicate_form_field') {
+    const index = fields.findIndex((field, position) => fields.findIndex(other => other.key === field.key) !== position);
+    return failAt(at, ['data', 'fields', index, 'key'], code, message);
+  }
+  const index = fields.findIndex(field => field.key === key);
+  return failAt(at, ['data', 'fields', index, 'activeWhen', ...(code === 'unknown_condition_field' ? ['field'] : [])], code, message);
+}
+/** Checks that apply only to content being sent now; stored history skips them. */
+function submissionBlockFailure(block, at) {
+  const data = block.data;
+  if (block.type === 'choice') {
+    const index = repeatedOption(data.options);
+    if (index >= 0) return failAt(at, ['data', 'options', index, 'id'], 'uniqueOptionId', 'must be unique within the choice');
+    const minimum = data.minSelect ?? 1, maximum = data.maxSelect ?? data.options.length;
+    if (minimum < 1) return failAt(at, ['data', 'minSelect'], 'minimum', 'must be at least 1');
+    if (minimum > data.options.length) return failAt(at, ['data', 'minSelect'], 'selectionBounds', 'must not exceed the number of options');
+    if (minimum > maximum) return failAt(at, ['data', 'maxSelect'], 'selectionBounds', 'must not be less than minSelect (1 when omitted)');
+    if ((data.selection ?? 'single') === 'single' && minimum > 1) {
+      return failAt(at, ['data', 'minSelect'], 'selectionBounds', 'must be 1 or omitted for single selection');
+    }
+  }
+  if (block.type === 'form_intent') {
+    const fields = data.fields;
+    const repeated = fields.findIndex((field, index) => fields.findIndex(other => other.key === field.key) !== index);
+    if (repeated >= 0) return failAt(at, ['data', 'fields', repeated, 'key'], 'duplicate_form_field', FORM_DEFINITION_MESSAGES.duplicate_form_field);
+    for (let index = 0; index < fields.length; index++) {
+      const failure = fieldDefinitionFailure(fields[index], within(at, 'data', 'fields', index));
+      if (failure) return failure;
+    }
+  }
+  return null;
+}
+/** `submission` adds the send-time consistency checks; stored history omits them. */
+function blockFailure(block, at, submission = false) {
+  const failure = schemaFailure(BLOCK_SCHEMA, block, BLOCK_SCHEMA, at);
+  if (failure) return failure;
+  if (!blockTypes.includes(block.type)) return failAt(at, ['type'], 'enum', `must be one of ${list(blockTypes)}`);
+  if (!boundedBlockNodes(block)) return failAt(at, [], 'maxNodes', 'must contain at most 5000 JSON nodes');
+  if (block.metadata?.provenance === 'adapter' && block.type !== 'markdown') {
+    return failAt(at, ['metadata', 'provenance'], 'const', 'adapter provenance is allowed on markdown blocks only');
+  }
+  const limit = block.data ? dataLimitFailure(block.data) : null;
+  if (limit) return failAt(at, ['data'], limit, DATA_LIMIT_MESSAGES[limit]);
+  if (block.type === 'form_intent' && block.schemaVersion === 2 && block.data) {
+    const [reason] = evaluateFormState(block.data.fields, {}, { historical: !submission }).errors;
+    if (reason) return formDefinitionFailure(block.data.fields, reason, at, !submission);
+  }
+  if (submission && block.data) {
+    const failure = submissionBlockFailure(block, at);
+    if (failure) return failure;
+  }
+  if (block.type === 'markdown' && block.data && byteLength(block.data.text) > 32768) {
+    return failAt(at, ['data', 'text'], 'maxBytes', 'must contain at most 32768 UTF-8 bytes');
+  }
+  return null;
 }
 
 /** Attachment rejection diagnostics only; does not validate a block/envelope. */
@@ -193,43 +343,133 @@ export function makeQuestionSummary(envelope) {
     .find(value => typeof value === 'string' && value.trim());
   return typeof source === 'string' ? [...source.replace(/\s+/gu, ' ').trim()].slice(0, 500).join('') : '';
 }
-function validAction(action) {
-  return matches(ACTION_SCHEMA.$defs.actionRequest, action, ACTION_SCHEMA) && action.protocolVersion === '0.1';
+function actionFailure(action, at) {
+  const failure = schemaFailure(ACTION_SCHEMA.$defs.actionRequest, action, ACTION_SCHEMA, at);
+  if (failure) return failure;
+  return action.protocolVersion === '0.1' ? null : failAt(at, ['protocolVersion'], 'const', 'must be "0.1"');
 }
-function validEnvelope(envelope, submission = false) {
-  if (!object(envelope) || envelope.version !== 1 || !id(envelope.messageId) || !string(envelope.fallbackText, 1, 16000)) return false;
-  if (envelope.kind === 'message') {
-    if (!keys(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'blocks'], ['metadata', 'interruptId', 'questionSummary', 'interrupt'])
-      || !Array.isArray(envelope.blocks) || envelope.blocks.length > 64 || !envelope.blocks.every(block => validBlock(block, submission))
-      || new Set(envelope.blocks.map(block => block.id)).size !== envelope.blocks.length
-      || (own(envelope, 'metadata') && (!object(envelope.metadata) || !withinMetadataDepth(envelope.metadata)))) return false;
-    const questionKeys = ['interruptId', 'questionSummary', 'interrupt'];
-    if (questionKeys.every(key => !own(envelope, key))) return true;
-    if (!questionKeys.every(key => own(envelope, key)) || !id(envelope.interruptId) || !string(envelope.questionSummary, 1, 500)
-      || !keys(envelope.interrupt, ['blockId', 'reason'], ['otherInput'])
-      || !['confirmation', 'input_required'].includes(envelope.interrupt.reason)
-      || (own(envelope.interrupt, 'otherInput') && typeof envelope.interrupt.otherInput !== 'boolean')) return false;
-    const block = envelope.blocks.find(item => item.id === envelope.interrupt.blockId);
-    return !!block && interactive.includes(block.type) && (block.status ?? 'complete') === 'complete' && object(block.data) && (block.data.state?.status ?? 'open') === 'open'
-      && envelope.interrupt.reason === (block.type === 'confirmation' ? 'confirmation' : 'input_required')
-      && envelope.questionSummary === makeQuestionSummary(envelope);
+const validAction = action => actionFailure(action, null) === null;
+// Envelope members are checked procedurally; these helpers report them with
+// the same {code, path, message} shape as the schema interpreter.
+function membersFailure(value, required, optional, at) {
+  if (!object(value)) return failAt(at, [], 'type', 'must be of type object');
+  const missing = required.find(key => !own(value, key));
+  if (missing !== undefined) return failAt(at, [missing], 'required', 'is required');
+  if (Object.keys(value).some(key => !required.includes(key) && !optional.includes(key))) {
+    return failAt(at, [], 'additionalProperties', `contains a property that is not allowed; allowed properties: ${[...required, ...optional].join(', ')}`);
   }
-  if (envelope.kind === 'answer') {
-    return keys(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'interruptId', 'questionSummary', 'action', 'metadata'])
-      && id(envelope.interruptId) && string(envelope.questionSummary, 1, 500) && validAction(envelope.action)
-      && keys(envelope.metadata, ['zylos']) && keys(envelope.metadata.zylos, ['answerId'])
-      && envelope.metadata.zylos.answerId === envelope.action.id;
-  }
-  if (envelope.kind === 'control') {
-    if (!keys(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'interruptId', 'control']) || !id(envelope.interruptId)) return false;
-    const control = envelope.control;
-    return object(control) && id(control.messageId)
-      && (control.operation === 'stop' ? keys(control, ['operation', 'messageId'])
-        : control.operation === 'replace' && keys(control, ['operation', 'messageId', 'replacementInterruptId'])
-          && id(control.replacementInterruptId));
-  }
-  return false;
+  return null;
 }
+function textFailure(container, key, minimum, maximum, at) {
+  if (!own(container, key)) return failAt(at, [key], 'required', 'is required');
+  const value = container[key];
+  if (typeof value !== 'string') return failAt(at, [key], 'type', 'must be of type string');
+  if (chars(value) < minimum) return failAt(at, [key], 'minLength', `must contain at least ${minimum} characters`);
+  if (chars(value) > maximum) return failAt(at, [key], 'maxLength', `must contain at most ${maximum} characters`);
+  return null;
+}
+function idFailure(container, key, at) {
+  if (!own(container, key)) return failAt(at, [key], 'required', 'is required');
+  return id(container[key]) ? null : failAt(at, [key], 'pattern', 'must match the pattern ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$');
+}
+const first = (...checks) => {
+  for (const check of checks) {
+    const failure = check();
+    if (failure) return failure;
+  }
+  return null;
+};
+const QUESTION_KEYS = ['interruptId', 'questionSummary', 'interrupt'];
+const SUMMARY_MESSAGE = "must equal the interrupted block's derived summary: fallbackText, then prompt/title/purpose, then envelope fallbackText; normalize whitespace and keep at most 500 characters";
+function questionFailure(envelope, at) {
+  if (QUESTION_KEYS.every(key => !own(envelope, key))) return null;
+  const missing = QUESTION_KEYS.find(key => !own(envelope, key));
+  if (missing) return failAt(at, [missing], 'required', 'is required when the message asks a question');
+  const interrupt = envelope.interrupt;
+  const failure = first(() => idFailure(envelope, 'interruptId', at),
+    () => textFailure(envelope, 'questionSummary', 1, 500, at),
+    () => membersFailure(interrupt, ['blockId', 'reason'], ['otherInput'], within(at, 'interrupt')));
+  if (failure) return failure;
+  if (!['confirmation', 'input_required'].includes(interrupt.reason)) {
+    return failAt(at, ['interrupt', 'reason'], 'enum', 'must be one of "confirmation", "input_required"');
+  }
+  if (own(interrupt, 'otherInput') && typeof interrupt.otherInput !== 'boolean') {
+    return failAt(at, ['interrupt', 'otherInput'], 'type', 'must be of type boolean');
+  }
+  const index = envelope.blocks.findIndex(item => item.id === interrupt.blockId), block = envelope.blocks[index];
+  if (!block || !interactive.includes(block.type)) {
+    return failAt(at, ['interrupt', 'blockId'], 'interactiveBlock', `must identify a block of type ${list(interactive)} in this message`);
+  }
+  if ((block.status ?? 'complete') !== 'complete') return failAt(at, ['blocks', index, 'status'], 'const', 'must be "complete" for the interrupted block');
+  if (!object(block.data)) return failAt(at, ['blocks', index, 'data'], 'required', 'is required for the interrupted block');
+  if ((block.data.state?.status ?? 'open') !== 'open') {
+    return failAt(at, ['blocks', index, 'data', 'state', 'status'], 'const', 'must be "open" for the interrupted block');
+  }
+  const reason = block.type === 'confirmation' ? 'confirmation' : 'input_required';
+  if (interrupt.reason !== reason) return failAt(at, ['interrupt', 'reason'], 'const', `must be "${reason}" for a ${block.type} block`);
+  return envelope.questionSummary === makeQuestionSummary(envelope) ? null : failAt(at, ['questionSummary'], 'derivedSummary', SUMMARY_MESSAGE);
+}
+function messageFailure(envelope, at, submission) {
+  let failure = membersFailure(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'blocks'], ['metadata', ...QUESTION_KEYS], at);
+  if (failure) return failure;
+  const blocks = envelope.blocks;
+  if (!Array.isArray(blocks)) return failAt(at, ['blocks'], 'type', 'must be of type array');
+  if (blocks.length > 64) return failAt(at, ['blocks'], 'maxItems', 'must contain at most 64 items');
+  for (let index = 0; index < blocks.length; index++) {
+    if ((failure = blockFailure(blocks[index], within(at, 'blocks', index), submission))) return failure;
+  }
+  const seen = new Set();
+  for (let index = 0; index < blocks.length; index++) {
+    if (seen.has(blocks[index].id)) return failAt(at, ['blocks', index, 'id'], 'uniqueBlockId', 'must be unique within the message');
+    seen.add(blocks[index].id);
+  }
+  if (own(envelope, 'metadata')) {
+    if (!object(envelope.metadata)) return failAt(at, ['metadata'], 'type', 'must be of type object');
+    if (!withinMetadataDepth(envelope.metadata)) return failAt(at, ['metadata'], 'maxDepth', 'must nest at most 6 levels deep, counting metadata itself as 1');
+  }
+  return questionFailure(envelope, at);
+}
+function answerFailure(envelope, at) {
+  const metadata = envelope.metadata;
+  return first(
+    () => membersFailure(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'interruptId', 'questionSummary', 'action', 'metadata'], [], at),
+    () => idFailure(envelope, 'interruptId', at),
+    () => textFailure(envelope, 'questionSummary', 1, 500, at),
+    () => actionFailure(envelope.action, within(at, 'action')),
+    () => membersFailure(metadata, ['zylos'], [], within(at, 'metadata')),
+    () => membersFailure(metadata.zylos, ['answerId'], [], within(at, 'metadata', 'zylos')),
+    () => metadata.zylos.answerId === envelope.action.id ? null
+      : failAt(at, ['metadata', 'zylos', 'answerId'], 'const', 'must equal action.id'));
+}
+function controlFailure(envelope, at) {
+  const control = envelope.control, controlAt = within(at, 'control');
+  return first(
+    () => membersFailure(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'interruptId', 'control'], [], at),
+    () => idFailure(envelope, 'interruptId', at),
+    () => object(control) ? null : failAt(at, ['control'], 'type', 'must be of type object'),
+    () => idFailure(control, 'messageId', controlAt),
+    () => control.operation === 'stop' ? membersFailure(control, ['operation', 'messageId'], [], controlAt)
+      : control.operation === 'replace' ? membersFailure(control, ['operation', 'messageId', 'replacementInterruptId'], [], controlAt)
+        || idFailure(control, 'replacementInterruptId', controlAt)
+        : own(control, 'operation') ? failAt(controlAt, ['operation'], 'enum', 'must be one of "stop", "replace"')
+          : failAt(controlAt, ['operation'], 'required', 'is required'));
+}
+/** First envelope failure, or null. Pass `at = null` for a boolean check;
+ * `submission` adds the send-time block checks.
+ */
+function envelopeFailure(envelope, at, submission = false) {
+  if (!object(envelope)) return failAt(at, [], 'type', 'must be of type object');
+  if (!own(envelope, 'version')) return failAt(at, ['version'], 'required', 'is required');
+  if (envelope.version !== 1) return failAt(at, ['version'], 'const', 'must be 1');
+  const failure = first(() => idFailure(envelope, 'messageId', at), () => textFailure(envelope, 'fallbackText', 1, 16000, at));
+  if (failure) return failure;
+  if (envelope.kind === 'message') return messageFailure(envelope, at, submission);
+  if (envelope.kind === 'answer') return answerFailure(envelope, at);
+  if (envelope.kind === 'control') return controlFailure(envelope, at);
+  return own(envelope, 'kind') ? failAt(at, ['kind'], 'enum', 'must be one of "message", "answer", "control"')
+    : failAt(at, ['kind'], 'required', 'is required');
+}
+const validEnvelope = (envelope, submission = false) => envelopeFailure(envelope, null, submission) === null;
 
 // View is presentation metadata. Validate the remaining envelope independently.
 function splitMessageView(envelope) {
@@ -334,38 +574,40 @@ export function parseC4Content(content, { submission = false } = {}) {
   } catch { return { kind: 'invalid', reason: 'invalid_envelope' }; }
 }
 
-/** Rejection hints only; the parser above remains the acceptance authority.
- * Return fixed text and numeric positions, never submitted values or keys.
+const FRAMING_MESSAGES = {
+  content_type: 'content must be a string',
+  content_too_large: 'content must not exceed 65536 UTF-8 bytes',
+  invalid_json: 'expected one JSON object after the C4 marker',
+  invalid_suffix: 'unexpected text follows the structured JSON object',
+};
+/**
+ * First rejection point for content being sent, as {code, path, message}, or
+ * null when parseC4Content(content, {submission: true}) accepts the envelope.
+ * View metadata is checked separately (parseC4Content reports it as viewError). Content without the C4
+ * marker is reported as code `marker`. path is a JSON Pointer into the
+ * envelope ('' for the content itself); code is the failing schema keyword or
+ * host rule. Paths and messages contain schema names, protocol limits and
+ * array positions only, never submitted values or keys.
+ */
+export function findC4ContentError(content) {
+  const framed = readC4Envelope(content);
+  if (framed.kind === 'text') return { code: 'marker', path: '', message: 'content must start with the [C4-JSON] marker followed by a newline' };
+  if (framed.kind !== 'envelope') {
+    return { code: framed.reason, path: '', message: FRAMING_MESSAGES[framed.reason] ?? 'content must contain a JSON envelope' };
+  }
+  try { return envelopeFailure(splitMessageView(framed.envelope).envelope, [], true); }
+  catch { return { code: 'invalid_envelope', path: '', message: 'envelope does not match the required schema' }; }
+}
+/** One line: `<JSON Pointer or (root)> [<code>] <message>.` */
+export function formatC4ContentError(error) {
+  return `${error.path || '(root)'} [${error.code}] ${error.message}.`;
+}
+/** Rejection hint for content the send-time parser rejected; the parser
+ * remains the acceptance authority.
  */
 export function describeC4ContentRejection(content) {
-  const framed = readC4Envelope(content);
-  if (framed.kind !== 'envelope') return {
-    content_type: 'Content must be a string.',
-    content_too_large: 'Content exceeds 65536 UTF-8 bytes.',
-    invalid_json: 'Expected one JSON object after the C4 marker.',
-    invalid_suffix: 'Unexpected text follows the structured JSON object.',
-  }[framed.reason] ?? 'Structured content must contain a JSON envelope.';
-  try {
-    const { envelope } = splitMessageView(framed.envelope);
-    if (!object(envelope)) return 'Envelope must be an object.';
-    if (envelope.version !== 1) return 'Envelope version must be 1.';
-    if (!id(envelope.messageId)) return 'messageId must be a valid protocol identifier.';
-    if (!string(envelope.fallbackText, 1, 16000)) return 'fallbackText must contain 1 to 16000 characters.';
-    if (envelope.kind === 'message') {
-      if (!Array.isArray(envelope.blocks) || envelope.blocks.length > 64) return 'blocks must be an array with at most 64 entries.';
-      const invalidBlock = envelope.blocks.findIndex(block => !validBlock(block, true));
-      if (invalidBlock >= 0) return `blocks[${invalidBlock}] does not match a supported block schema.`;
-      if (new Set(envelope.blocks.map(block => block.id)).size !== envelope.blocks.length) return 'Block identifiers must be unique.';
-      if (object(envelope.interrupt)) {
-        const block = envelope.blocks.find(block => block.id === envelope.interrupt.blockId);
-        if (!block || !interactive.includes(block.type)) return 'interrupt.blockId must identify an interactive block.';
-        if (typeof envelope.questionSummary === 'string' && envelope.questionSummary !== makeQuestionSummary(envelope)) {
-          return "questionSummary must equal the interrupted block's derived summary: fallbackText, then prompt/title/purpose, then envelope fallbackText; normalize whitespace and keep at most 500 characters.";
-        }
-      }
-    }
-    return 'Envelope fields do not match the required message, answer or control schema.';
-  } catch { return 'Envelope fields do not match the required schema.'; }
+  return formatC4ContentError(findC4ContentError(content)
+    ?? { code: 'invalid_envelope', path: '', message: 'envelope does not match the required message, answer or control schema' });
 }
 
 function validFieldValue(field, value, { historical = false } = {}) {

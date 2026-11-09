@@ -244,6 +244,7 @@ Read the component list from the same installed Core before composing a C4 messa
 node ~/zylos/.claude/skills/dashboard/scripts/components.js list --json
 node ~/zylos/.claude/skills/dashboard/scripts/components.js describe choice@1 --json
 node ~/zylos/.claude/skills/dashboard/scripts/components.js example choice@1
+node ~/zylos/.claude/skills/dashboard/scripts/components.js validate message.txt
 ```
 
 `list` reports only catalog entries implemented by this Core. `describe` returns
@@ -254,6 +255,14 @@ returns `{ok:true,data:<message>}` for inspection; send the raw example, not thi
 wrapper. No command sends a message or contacts another instance. This static
 list describes the installed Core, not the version of a remote fleet browser.
 Unimplemented or unknown component keys fail instead of offering examples.
+
+Before sending, you can check a message with `components.js validate <file>`
+(or pipe it on stdin): it runs the same send-time validator as the Dashboard
+send check, exits 0 for valid content, and otherwise exits 1 with the first
+error as `<path> [<code>] <message>`, where path is a JSON Pointer such as
+`/blocks/0/data/action/type`. With `--json` it prints `{ok:true,data:{valid:true}}`
+or `{ok:false,error:{code,path,message}}`. Fix that location and validate again.
+Attachment IDs and reply routing are checked only when sending.
 
 Write each envelope and block `fallbackText` as the real message in plain
 words; channels without a renderer show only that text. A stored C4 message is

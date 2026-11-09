@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createCatalogArtifacts } from '../../comm-bridge/scripts/c4-component-catalog.js';
 import { runComponents } from '../scripts/components.js';
 import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, MODEL_INSTRUCTIONS,
@@ -8,10 +11,11 @@ import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, MODEL
 
 // Static CLI boundary only: no DB, HTTP, PM2 or tmux. Run on generated catalog
 // or CLI output changes; unrelated chat delivery/runtime work may skip.
-function call(args, catalog) {
+function call(args, catalog, input) {
   let output = '', error = '';
   const exit = runComponents(args, { catalog, stdout: { write: value => { output += value; } },
-    stderr: { write: value => { error += value; } } });
+    stderr: { write: value => { error += value; } },
+    ...(input === undefined ? {} : { readInput: () => input }) });
   return { exit, output, error };
 }
 
@@ -91,7 +95,7 @@ test('component CLI describes the transitive form field and action definitions',
 
 test('component CLI refuses unimplemented components and malformed arguments', () => {
   for (const args of [['list', 'extra'], ['describe'], ['example', 'x-zylos.image@1'],
-    ['describe', 'form_intent@3'], ['list', '--json', '--json'], ['unknown']]) {
+    ['describe', 'form_intent@3'], ['list', '--json', '--json'], ['unknown'], ['validate', 'a.txt', 'b.txt']]) {
     const result = call(args);
     assert.equal(result.exit, 1);
     assert.equal(result.output, '');
@@ -110,4 +114,70 @@ test('installed component CLI entry prints real list and message output', () => 
   const described = JSON.parse(run(['describe', 'time_series@1', '--json'])).data;
   assert.equal(described.useWhen, COMPONENT_DEFINITIONS.find(item => item.key === 'time_series@1').useWhen);
   assert.match(described.instructions, /When to use: Use for time trends/);
+});
+
+const choiceMessage = () => CONTENT_PREFIX + JSON.stringify(COMPONENT_DEFINITIONS.find(item => item.key === 'choice@1').example) + '\n';
+const wrongActionType = () => choiceMessage().replace('"choice.select"', '"choice.private_value"');
+
+test('component CLI validates content and reports the first error path', () => {
+  const valid = call(['validate'], undefined, choiceMessage());
+  assert.deepEqual(valid, { exit: 0, output: 'Valid C4 content.\n', error: '' });
+  assert.deepEqual(JSON.parse(call(['validate', '--json'], undefined, choiceMessage()).output), { ok: true, data: { valid: true } });
+
+  const invalid = call(['validate', '-'], undefined, wrongActionType());
+  assert.equal(invalid.exit, 1);
+  assert.equal(invalid.output, '');
+  assert.equal(invalid.error,
+    '/blocks/0/data/action/type [enum] must be one of "choice.select", "confirmation.respond", "form.submit".\n');
+  const invalidJson = call(['validate', '--json'], undefined, wrongActionType());
+  assert.equal(invalidJson.exit, 1);
+  const { ok, error } = JSON.parse(invalidJson.output);
+  assert.equal(ok, false);
+  assert.deepEqual({ code: error.code, path: error.path }, { code: 'enum', path: '/blocks/0/data/action/type' });
+  assert.equal(invalidJson.output.includes('private_value'), false);
+
+  const text = call(['validate'], undefined, 'Plain reply without the marker\n');
+  assert.equal(text.exit, 1);
+  assert.equal(text.output, '');
+  assert.match(text.error, /^\(root\) \[marker\] content must start with the \[C4-JSON\] marker/);
+  assert.equal(JSON.parse(call(['validate', '--json'], undefined, 'Plain reply').output).error.code, 'marker');
+});
+
+test('component CLI validation applies the View rules of the send-time check', () => {
+  const envelope = structuredClone(COMPONENT_DEFINITIONS.find(item => item.key === 'choice@1').example);
+  envelope.metadata = { view: { schemaVersion: 1, root: 'root', nodes: [{ id: 'root', type: 'block', blockId: 'question' }] } };
+  assert.equal(call(['validate'], undefined, CONTENT_PREFIX + JSON.stringify(envelope)).exit, 0);
+  envelope.metadata.view.nodes[0].blockId = 'missing';
+  const result = call(['validate', '--json'], undefined, CONTENT_PREFIX + JSON.stringify(envelope));
+  assert.equal(result.exit, 1);
+  assert.deepEqual(JSON.parse(result.output).error, { code: 'unknown_view_block', path: '/metadata/view', message: 'view metadata is not a valid View' });
+});
+
+// Installed entry: spawns node on the real script with stdin or a file in a
+// per-test temporary directory; no DB, HTTP, PM2 or tmux. Run when the CLI
+// entry or input handling changes.
+test('installed component CLI validates stdin and files with matching exit codes', t => {
+  const script = new URL('../scripts/components.js', import.meta.url).pathname;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'component-validate-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const run = (args, input) => spawnSync(process.execPath, [script, 'validate', ...args], {
+    input, encoding: 'utf8', timeout: 5000, maxBuffer: 512 * 1024 });
+  const example = execFileSync(process.execPath, [script, 'example', 'choice@1'], { encoding: 'utf8', timeout: 5000 });
+  const fromStdin = run([], example);
+  assert.deepEqual([fromStdin.status, fromStdin.stdout, fromStdin.stderr], [0, 'Valid C4 content.\n', '']);
+
+  const file = path.join(dir, 'message.txt');
+  fs.writeFileSync(file, wrongActionType());
+  const fromFile = run([file]);
+  assert.equal(fromFile.status, 1);
+  assert.match(fromFile.stderr, /^\/blocks\/0\/data\/action\/type \[enum\] /);
+  assert.equal(fromFile.stdout, '');
+
+  const text = run(['--json'], 'Plain reply');
+  assert.equal(text.status, 1);
+  assert.equal(JSON.parse(text.stdout).error.code, 'marker');
+
+  const missing = run([path.join(dir, 'absent.txt')]);
+  assert.equal(missing.status, 1);
+  assert.equal(missing.stderr, 'Cannot read the content to validate.\n');
 });

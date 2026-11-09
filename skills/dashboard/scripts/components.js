@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as installedCatalog from '../../comm-bridge/scripts/c4-content-schema.js';
@@ -27,16 +28,38 @@ function parameterSchema(parameters, catalog) {
   return Object.keys(definitions).length ? { ...schema, $defs: definitions } : schema;
 }
 
+const USAGE = 'Usage: components.js list | describe <type@version> | example <type@version> | validate [<file>|-] [--json]';
+
+/** Check one message exactly as it would be sent, with the parser BeforeSend uses.
+ * Attachment registration and reply routing are checked only when sending.
+ */
+function validateContent(content) {
+  const error = installedCatalog.findC4ContentError(content);
+  if (error) return error;
+  const { viewError } = installedCatalog.parseC4Content(content, { submission: true });
+  return viewError ? { code: viewError, path: '/metadata/view', message: 'view metadata is not a valid View' } : null;
+}
+
 /** Read the static capabilities shipped by this Core; no remote-page inference. */
-export function runComponents(argv, { stdout = process.stdout, stderr = process.stderr, catalog = installedCatalog } = {}) {
+export function runComponents(argv, { stdout = process.stdout, stderr = process.stderr, catalog = installedCatalog,
+  readInput = file => fs.readFileSync(file === '-' ? 0 : file, 'utf8') } = {}) {
   const { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, MODEL_INSTRUCTIONS, CATALOG_SOURCE } = catalog;
   try {
     const json = argv.includes('--json');
     if (argv.filter(arg => arg === '--json').length > 1) throw Error('Use --json once');
     const [command, key, ...extra] = argv.filter(arg => arg !== '--json');
+    if (command === 'validate' && !extra.length) {
+      let content;
+      try { content = readInput(key ?? '-'); } catch { throw Error('Cannot read the content to validate.'); }
+      const error = validateContent(content);
+      if (json) stdout.write(JSON.stringify(error ? { ok: false, error } : { ok: true, data: { valid: true } }) + '\n');
+      else if (error) stderr.write(installedCatalog.formatC4ContentError(error) + '\n');
+      else stdout.write('Valid C4 content.\n');
+      return error ? 1 : 0;
+    }
     if (extra.length || !['list', 'describe', 'example'].includes(command) ||
         (command === 'list' ? key !== undefined : key === undefined)) {
-      throw Error('Usage: components.js list | describe <type@version> | example <type@version> [--json]');
+      throw Error(USAGE);
     }
     const definition = key && COMPONENT_DEFINITIONS.find(item => item.key === key);
     if (key && !definition) throw Error(`Component is not implemented in this Core: ${key}`);
