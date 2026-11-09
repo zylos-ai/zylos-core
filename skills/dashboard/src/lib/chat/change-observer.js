@@ -27,6 +27,7 @@ export class ChatChangeObserver {
     this.delay = delay;
     this.cancel = cancel;
     this.subscriptions = new Set();
+    this.recoveries = new Set();
     this.timer = null;
     this.version = null;
     this.closed = false;
@@ -35,7 +36,7 @@ export class ChatChangeObserver {
   subscribe(subscription, { validate, send, onStop } = {}) {
     if (this.closed) return () => {};
     const options = normalizeChatSubscription(subscription);
-    const record = { options, key: JSON.stringify(options), validate, send, onStop, snapshot: null };
+    const record = { options, key: JSON.stringify(options), validate, send, onStop, snapshot: null, generation: null };
     this.subscriptions.add(record);
     this._sample();
     this._schedule();
@@ -48,8 +49,10 @@ export class ChatChangeObserver {
   }
 
   _remove(record, reason) {
-    if (!this.subscriptions.delete(record)) return;
-    if (!this.subscriptions.size) {
+    const active = this.subscriptions.delete(record);
+    const recovering = this.recoveries.delete(record);
+    if (!active && !recovering) return;
+    if (!this.subscriptions.size && !this.recoveries.size) {
       if (this.timer !== null) this.cancel(this.timer);
       this.timer = null;
       this.version = null;
@@ -59,33 +62,52 @@ export class ChatChangeObserver {
     }
   }
 
+  _detach(record) {
+    if (!this.subscriptions.delete(record)) return;
+    // Keep only a generation watch: no chat snapshot or admission capacity.
+    record.snapshot = null;
+    this.recoveries.add(record);
+    try { record.onStop?.('chat_unavailable'); } catch { /* subscriber owns transport */ }
+  }
+
+  _recover(version) {
+    if (!version) return;
+    for (const record of [...this.recoveries]) {
+      if (record.generation !== version.generation) this._remove(record, 'chat_database_changed');
+    }
+  }
+
   _send(record, event) {
     if (this.closed || !this.subscriptions.has(record)) return false;
     try {
       if (record.send(event, { version: 1, ...record.options, ids: record.snapshot?.delivery.map(row => row.id) ?? [] }) !== false) return true;
     } catch { /* closed or slow transport */ }
-    this._remove(record, 'chat_unavailable');
+    this._detach(record);
     return false;
   }
 
   _sample() {
-    if (this.closed || !this.subscriptions.size) return;
-    for (const record of [...this.subscriptions]) {
+    if (this.closed || !this.subscriptions.size && !this.recoveries.size) return;
+    for (const record of [...this.subscriptions, ...this.recoveries]) {
       if (!this._authorized(record)) this._remove(record, 'chat_access_revoked');
     }
-    if (!this.subscriptions.size) return;
+    if (!this.subscriptions.size && !this.recoveries.size) return;
     let version;
     try { version = this.reader.readVersion(); } catch { version = null; }
     if (!version || this.version && version.generation !== this.version.generation) {
-      for (const record of [...this.subscriptions]) this._remove(record, 'chat_unavailable');
+      for (const record of [...this.subscriptions]) this._detach(record);
+      this._recover(version);
+      this.version = null;
       return;
     }
+    this._recover(version);
     const changed = !this.version || this.version.version !== version.version;
     const snapshots = new Map();
     for (const record of [...this.subscriptions]) {
       if (this.closed || !this.subscriptions.has(record)) continue;
       if (!changed && record.snapshot) continue;
       try {
+        record.generation = version.generation;
         const previous = record.snapshot;
         const key = JSON.stringify([record.key, previous?.highwater ?? null]);
         if (!snapshots.has(key)) snapshots.set(key, this.history.chatChangeSnapshot(record.options,
@@ -98,14 +120,14 @@ export class ChatChangeObserver {
           if (this.subscriptions.has(record) && JSON.stringify(previous.delivery) !== JSON.stringify(next.delivery)) this._send(record, 'chat_delivery_changed');
         }
       } catch {
-        this._remove(record, 'chat_unavailable');
+        this._detach(record);
       }
     }
-    if (this.subscriptions.size) this.version = version;
+    this.version = this.subscriptions.size ? version : null;
   }
 
   _schedule() {
-    if (this.closed || this.timer !== null || !this.subscriptions.size) return;
+    if (this.closed || this.timer !== null || !this.subscriptions.size && !this.recoveries.size) return;
     this.timer = this.delay(() => {
       this.timer = null;
       this._sample();
@@ -116,6 +138,6 @@ export class ChatChangeObserver {
 
   close() {
     this.closed = true;
-    for (const record of [...this.subscriptions]) this._remove(record, 'chat_unavailable');
+    for (const record of [...this.subscriptions, ...this.recoveries]) this._remove(record, 'chat_unavailable');
   }
 }

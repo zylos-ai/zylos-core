@@ -76,6 +76,10 @@ fetch:(url,options={})=>fetch(url,{...options,headers:{...options.headers,'X-Fix
 window.page=page;window.dispose=()=>{clearTimeout(retry);source?.close();push.destroy();page.destroy();};
 await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.ready=true;
 </script></html>`;
+  const offlineFile = sandbox.paths.c4Db + '.unavailable';
+  const restoreDatabase = () => { if (fs.existsSync(offlineFile)) fs.renameSync(offlineFile, sandbox.paths.c4Db); };
+  sandbox.addCleanup(restoreDatabase);
+  sandbox.addCleanup(() => { observer.close(); hub.closeAll(); reader.close(); clearInterval(auth._cleanupTimer); });
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -124,10 +128,6 @@ await page.openGroup(${JSON.stringify(group)},{channel:'dashboard'});window.read
     } catch (error) { json(res, { error: error.code || 'fixture_error' }, error.statusCode || 500); }
   });
   const origin = await sandbox.startHttp(server);
-  const offlineFile = sandbox.paths.c4Db + '.unavailable';
-  const restoreDatabase = () => { if (fs.existsSync(offlineFile)) fs.renameSync(offlineFile, sandbox.paths.c4Db); };
-  sandbox.addCleanup(restoreDatabase);
-  sandbox.addCleanup(() => { observer.close(); hub.closeAll(); reader.close(); clearInterval(auth._cleanupTimer); });
   return { origin, writer, reader, history, hub, observer, requests, events, group, conversationId, pendingId,
     deliverAndReply(label = 'New AI reply / 新 AI 回复') {
       let id;

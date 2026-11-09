@@ -11,7 +11,7 @@ export async function until(check, message, timeoutMs = 2000) {
   assert.fail(message);
 }
 
-export async function startChatBrowser(t, sandbox, origin) {
+export async function startChatBrowser(t, sandbox, origin, { expectedBlockedHosts = [] } = {}) {
   const profile = path.join(sandbox.root, 'chrome-profile'), tmp = path.join(sandbox.root, 'ct');
   const singletonSocket = path.join(tmp, '.org.chromium.Chromium.XXXXXX', 'SingletonSocket');
   assert.ok(Buffer.byteLength(singletonSocket) <= 107,
@@ -44,7 +44,7 @@ export async function startChatBrowser(t, sandbox, origin) {
   await until(() => fs.existsSync(portFile), 'Chrome starts in its private profile', 5000);
   const port = fs.readFileSync(portFile, 'utf8').split('\n')[0], debug = 'http://127.0.0.1:' + port;
   const errors = [], external = [];
-  async function page({ width = 1280, locale = 'en' } = {}) {
+  async function page({ width = 1280, locale = 'en', pathname, ready = 'window.ready===true', onEvent } = {}) {
     const target = await (await fetch(debug + '/json/new?about:blank', { method: 'PUT' })).json();
     const socket = new WebSocket(target.webSocketDebuggerUrl);
     await once(socket, 'open');
@@ -65,10 +65,11 @@ export async function startChatBrowser(t, sandbox, origin) {
       } else if (data.method === 'Runtime.exceptionThrown' && !errors.length) errors.push(JSON.stringify(data.params.exceptionDetails).slice(0,2000));
       else if (data.method === 'Fetch.requestPaused') {
         const allowed = data.params.request.url.startsWith(origin + '/');
-        if (!allowed && !external.length) external.push(data.params.request.url);
+        if (!allowed && !expectedBlockedHosts.includes(new URL(data.params.request.url).hostname) && !external.length) external.push(data.params.request.url);
         void call(allowed ? 'Fetch.continueRequest' : 'Fetch.failRequest', allowed
           ? { requestId: data.params.requestId } : { requestId: data.params.requestId, errorReason: 'BlockedByClient' }).catch(() => {});
       }
+      if (!data.id) onEvent?.(data);
     });
     const evaluate = async expression => {
       const value = await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
@@ -84,11 +85,11 @@ export async function startChatBrowser(t, sandbox, origin) {
         pending.clear(); socket.close();
       } };
     sockets.add(connection);
-    await call('Runtime.enable'); await call('Page.enable');
+    await call('Runtime.enable'); await call('Page.enable'); await call('Network.enable');
     await call('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
     await call('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
-    await call('Page.navigate', { url: origin + '/?locale=' + locale });
-    try { await until(() => evaluate('window.ready===true'), 'real conversation page opens', 5000); }
+    await call('Page.navigate', { url: origin + (pathname ?? '/?locale=' + locale) });
+    try { await until(() => evaluate(ready), 'real conversation page opens', 5000); }
     catch (error) { console.info('browser load diagnostic', JSON.stringify({errors, page: await evaluate('({ready:window.ready,text:document.body.innerText.slice(0,3000)})')})); throw error; }
     return connection;
   }

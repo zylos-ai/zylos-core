@@ -19,7 +19,7 @@ async function until(check) {
 // Real HTTP/AuthGate/producer/proxy streams. Run for chat stream access/relay
 // changes; skip unrelated UI. Official runner isolation is read back before
 // listeners; no DB/tmux/PM2/model. All clients/listeners/timers are fixture-owned.
-async function fixture(t) {
+async function fixture(t, { beforeLocalListen = () => {} } = {}) {
   console.info('chat proxy isolation', JSON.stringify(Object.fromEntries(['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR'].map(key => [key,process.env[key]]))), 'DB/socket/PM2/tmux unused; loopback ephemeral ports');
   let localRevoked = false, version = 1, forwarded = 0, touches = 0, deletes = 0;
   const session = { created_at: Date.now(), last_activity_at: Date.now() };
@@ -34,11 +34,33 @@ async function fixture(t) {
   const auth = new AuthGate(config, store), localAuth = new AuthGate(config, store), hub = new SseHub(20);
   const observer = new ChatChangeObserver({ c4Reader: { readVersion: () => ({ generation: 1, version }) }, history: { chatChangeSnapshot: (_scope, { afterId = null } = {}) => ({ highwater: version, listChanged: afterId !== null && afterId < version, latestId: null, delivery: [] }) }, intervalMs: 20 });
   const sockets = new Set(), servers = [];
+  let cleanupPromise;
+  const cleanup = () => cleanupPromise ||= (async () => {
+    for (const socket of sockets) socket.destroy();
+    observer.close(); hub.closeAll(); clearInterval(auth._cleanupTimer); clearInterval(localAuth._cleanupTimer);
+    for (const server of servers) {
+      server.closeAllConnections();
+      if (server.listening) await new Promise(resolve => server.close(resolve));
+    }
+  })();
+  t.after(cleanup);
+  t.signal.addEventListener('abort', () => { void cleanup(); }, { once: true });
   async function listen(fn) {
     const server = http.createServer(fn); servers.push(server);
-    await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
+    await new Promise((resolve, reject) => {
+      const failed = error => reject(error);
+      server.once('error', failed);
+      server.listen(0, '127.0.0.1', () => {
+        server.removeListener('error', failed);
+        if (cleanupPromise || t.signal.aborted) {
+          server.closeAllConnections();
+          server.close(() => reject(new Error('private fixture startup cancelled')));
+        } else resolve();
+      });
+    });
     return `http://127.0.0.1:${server.address().port}`;
   }
+  try {
   const remote = await listen(async (req,res) => {
     const url = new URL(req.url,'http://fixture');
     if (await auth.handle(req,res,url)) return;
@@ -46,6 +68,7 @@ async function fixture(t) {
   });
   const proxy = new FleetProxy({ authGate: localAuth, config: { fleet: { agents: [{ name:'Peer',base_url:remote }] } },
     poller: { getSessionToken: async () => token }, fetch: (...args) => { forwarded++; return fetch(...args); } });
+  beforeLocalListen({ servers, observer, hub, auth, localAuth });
   const local = await listen(async(req,res) => {
     const url=new URL(req.url,'http://fixture');
     if (await localAuth.handle(req,res,url)) return;
@@ -62,10 +85,6 @@ async function fixture(t) {
     req.on('error',err=>{error=err;ended=true;});sockets.add(req);
     return {text:()=>text,status:()=>status,ended:()=>ended,error:()=>error,close:()=>req.destroy()};
   }
-  t.after(async()=>{
-    for(const socket of sockets)socket.destroy();observer.close();hub.closeAll();clearInterval(auth._cleanupTimer);clearInterval(localAuth._cleanupTimer);
-    for(const server of servers){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
-  });
   return {open,config,hub,observer,session,quiet:()=>hub._stopKeepalive(),touches:()=>touches,deletes:()=>deletes,forwarded:()=>forwarded,revoke:()=>{localRevoked=true;},change:()=>{version++;},
     rawChunk(chunk) { for (const client of hub.clients) client.res.write(chunk); },
     async leakSplitRecord() {
@@ -76,7 +95,29 @@ async function fixture(t) {
         await pause(10);
       }
     } };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
+
+// Fixture startup lifecycle only: a private error after the producer starts
+// must reclaim it before rejection. Run when relay fixture setup changes;
+// product-only UI work may skip. Same runner isolation, no DB/PM2/tmux/model.
+test('an interrupted relay fixture startup closes its listeners and timers', gated, async t => {
+  let resources;
+  await assert.rejects(fixture(t, { beforeLocalListen(value) {
+    resources = value;
+    throw new Error('private fixture startup interrupted');
+  } }), /private fixture startup interrupted/);
+  assert.equal(resources.servers.length, 1);
+  assert.equal(resources.servers[0].listening, false);
+  assert.equal(resources.observer.closed, true);
+  assert.equal(resources.observer.timer, null);
+  assert.equal(resources.hub.keepaliveTimer, null);
+  assert.equal(resources.auth._cleanupTimer._destroyed, true);
+  assert.equal(resources.localAuth._cleanupTimer._destroyed, true);
+});
 
 test('Fleet chat streams enforce local admin and producer remote policy without leaking IDs',gated,async t=>{
   const f=await fixture(t);

@@ -121,17 +121,24 @@ test('database replacement invalidates streams and a new subscription baselines 
   second.prepare(`INSERT INTO conversations (id,direction,channel,endpoint_id,session_group,content,status)
     VALUES (10,'in','dashboard','one','dash:one','replacement private','pending')`).run(); second.close();
   fs.renameSync(replacement, f.sandbox.paths.c4Db);
-  f.timers.tick(); assert.deepEqual(stream.stopped, ['chat_unavailable']); assert.equal(f.timers.count(), 0);
+  f.timers.tick(); assert.deepEqual(stream.stopped, ['chat_unavailable', 'chat_database_changed']); assert.equal(f.timers.count(), 0);
   const fresh = f.subscribe({ tab: 'mine', conversationId: idFor('dash:one') });
   assert.equal(fresh.events[0].event, 'chat_ready'); assert.equal(f.reader._generation, 2);
 });
 
-test('unreadable or missing database stops polling and recovery requires a readable baseline', gate, t => {
+test('missing database retains one generation watch and restoration closes each detached stream once', gate, t => {
   const f = fixture(t); f.write({ id: 1 }); const stream = f.subscribe(); f.writer.close();
   fs.renameSync(f.sandbox.paths.c4Db, f.sandbox.paths.c4Db + '.saved');
-  f.timers.tick(); assert.equal(stream.stopped[0], 'chat_unavailable'); assert.equal(f.timers.count(), 0);
+  f.timers.tick(); assert.equal(stream.stopped[0], 'chat_unavailable'); assert.equal(f.timers.count(), 1);
   const unavailable = f.subscribe(); assert.equal(unavailable.events.length, 0); assert.equal(unavailable.stopped[0], 'chat_unavailable');
+  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.observer.recoveries.size, 2);
+  for (let i = 0; i < 25; i++) f.timers.tick();
+  assert.deepEqual(stream.stopped, ['chat_unavailable']); assert.deepEqual(unavailable.stopped, ['chat_unavailable']);
+  assert.equal(f.timers.count(), 1, 'many missing samples share one loop without ending ordinary streams');
   fs.renameSync(f.sandbox.paths.c4Db + '.saved', f.sandbox.paths.c4Db);
+  f.timers.tick();
+  for (const item of [stream, unavailable]) assert.deepEqual(item.stopped, ['chat_unavailable', 'chat_database_changed']);
+  assert.equal(f.observer.recoveries.size, 0); assert.equal(f.timers.count(), 0);
   const recovered = f.subscribe(); assert.equal(recovered.events[0].event, 'chat_ready');
   fs.renameSync(f.sandbox.paths.c4Db, f.sandbox.paths.c4Db + '.valid');
   fs.writeFileSync(f.sandbox.paths.c4Db, 'corrupt replacement');
@@ -155,7 +162,7 @@ test('history reopens a restored database after caching an empty replacement wit
   f.timers.tick();
   assert.equal(stream.stopped[0], 'chat_unavailable');
   assert.equal(f.reader._db, null, 'observer closes its missing database handle');
-  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.timers.count(), 0);
+  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.timers.count(), 1);
 
   const emptyWriter = createDb(filename);
   try { assert.equal(emptyWriter.prepare('SELECT COUNT(*) AS n FROM conversations').get().n, 0); }
@@ -172,7 +179,27 @@ test('history reopens a restored database after caching an empty replacement wit
   assert.equal(f.history.messages(idFor('dash:one'), { tab: 'mine' }).items[0].content, 'original stored message');
   assert.equal(emptyHandle.open, false, 'cached empty handle is closed');
   assert.equal(f.reader._generation, emptyGeneration + 1, 'existing open path advances generation once');
-  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.timers.count(), 0);
+  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.timers.count(), 1);
+});
+
+// Same isolated real-DB fixture and lifecycle as above. Run for generation-watch
+// membership or authorization changes; UI-only work may skip. No HTTP or tmux.
+test('detached generation watches never sample history and release their shared loop on revocation or unsubscribe', gate, t => {
+  const f = fixture(t); f.write({ id: 1 });
+  const first = f.subscribe(), second = f.subscribe();
+  let snapshots = 0;
+  const snapshot = f.history.chatChangeSnapshot.bind(f.history);
+  f.history.chatChangeSnapshot = (...args) => { snapshots++; return snapshot(...args); };
+  f.writer.close(); fs.renameSync(f.sandbox.paths.c4Db, f.sandbox.paths.c4Db + '.saved');
+  f.timers.tick(); assert.equal(f.observer.recoveries.size, 2);
+  for (let i = 0; i < 25; i++) f.timers.tick();
+  assert.equal(snapshots, 0, 'detached streams perform only version checks');
+  first.allowed = false; f.timers.tick();
+  assert.deepEqual(first.stopped, ['chat_unavailable', 'chat_access_revoked']);
+  assert.equal(f.observer.recoveries.size, 1); assert.equal(f.timers.count(), 1);
+  second.off(); assert.equal(f.observer.recoveries.size, 0); assert.equal(f.timers.count(), 0);
+  fs.renameSync(f.sandbox.paths.c4Db + '.saved', f.sandbox.paths.c4Db); f.timers.tick();
+  assert.deepEqual(second.stopped, ['chat_unavailable'], 'closed transport has no recovery callback');
 });
 
 test('metadata snapshots share history visibility and discover only scoped pending rows', gate, t => {

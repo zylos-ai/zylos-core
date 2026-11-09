@@ -208,6 +208,88 @@ test('coalesced hints cannot bypass bounded backoff after a pending read fails',
   assert.equal(f.state.snapshot().updateError, null);
 });
 
+test('a newly admitted ready stream immediately retries truth after unavailable polling failed', async t => {
+  let attempts = 0;
+  const f = fixture(t, u => {
+    if (!u.pathname.endsWith('/messages') || u.searchParams.get('direction') !== 'after') return;
+    if (++attempts === 1) return Promise.reject({ code: 'chat_history_unavailable' });
+    return { items: [{ id: attempts, direction: 'out', content: 'recovered reply', status: 'delivered' }], afterCursor: 'cursor' };
+  });
+  await f.open(); await f.event('chat_ready');
+  assert.equal(attempts, 1); assert.equal(f.state.snapshot().updateError, 'chat_history_unavailable');
+  await f.event('chat_unavailable'); f.state.streamStatus('connecting');
+  await f.timer.advance(1000);
+  await f.event('chat_ready');
+  assert.equal(attempts, 2, 'new admission retries before the old five-second deadline');
+  assert.equal(f.reads().at(-1).at, 2000);
+  assert.equal(f.state.snapshot().updateError, null);
+  assert.equal(f.state.snapshot().messages.find(row => row.id === 2)?.content, 'recovered reply');
+  await f.event('chat_messages_changed');
+  assert.equal(attempts, 3, 'subsequent live hints immediately read committed truth');
+  assert.equal(f.state.snapshot().messages.find(row => row.id === 3)?.content, 'recovered reply');
+});
+
+test('duplicate ready events on an already live stream preserve failed-read backoff', async t => {
+  let attempts = 0;
+  const f = fixture(t, u => {
+    if (!u.pathname.endsWith('/messages') || u.searchParams.get('direction') !== 'after') return;
+    if (++attempts === 1) return Promise.reject({ code: 'temporary' });
+    return { items: [], afterCursor: 'cursor' };
+  });
+  await f.open(); await f.event('chat_ready');
+  await f.timer.advance(1000); await f.event('chat_ready'); await f.event('chat_messages_changed');
+  assert.equal(attempts, 1, 'same-stream ready and dirty hints cannot bypass the active deadline');
+  await f.timer.advance(3999); assert.equal(attempts, 1);
+  await f.timer.advance(1); assert.equal(attempts, 2);
+  assert.equal(f.state.snapshot().updateError, null);
+});
+
+test('new stream admission catches up immediately after an older in-flight poll fails', async t => {
+  let reject, attempts = 0;
+  const pending = new Promise((_, fail) => { reject = fail; });
+  const f = fixture(t, u => {
+    if (!u.pathname.endsWith('/messages') || u.searchParams.get('direction') !== 'after') return;
+    if (++attempts === 1) return pending;
+    return { items: [{ id: 2, direction: 'out', content: 'fresh database reply', status: 'delivered' }], afterCursor: 'cursor2' };
+  });
+  await f.open(); await f.event('chat_ready');
+  await f.event('chat_unavailable'); f.state.streamStatus('connecting'); await f.event('chat_ready');
+  assert.equal(attempts, 1, 'new admission preserves single-flight ownership');
+  reject({ code: 'chat_history_unavailable' }); await flush();
+  assert.equal(attempts, 2, 'the ready catchup runs after the failed owner without waiting for its retry timer');
+  assert.equal(f.timer.now(), 1000); assert.equal(f.state.snapshot().updateError, null);
+  assert.equal(f.state.snapshot().messages.find(row => row.id === 2)?.content, 'fresh database reply');
+});
+
+test('new readiness while hidden preserves one immediate catchup when visible again', async t => {
+  let attempts = 0;
+  const f = fixture(t, u => {
+    if (!u.pathname.endsWith('/messages') || u.searchParams.get('direction') !== 'after') return;
+    if (++attempts === 1) return Promise.reject({ code: 'chat_history_unavailable' });
+    return { items: [], afterCursor: 'cursor' };
+  });
+  await f.open(); await f.event('chat_ready'); await f.event('chat_unavailable');
+  await f.visible(false); f.state.streamStatus('connecting'); await f.event('chat_ready');
+  assert.equal(attempts, 1, 'hidden readiness only marks dirty');
+  await f.visible(true);
+  assert.equal(attempts, 2, 'visible restoration catches up before the failed owner deadline');
+  assert.equal(f.timer.now(), 1000); assert.equal(f.state.snapshot().updateError, null);
+});
+
+for (const changed of ['scope', 'epoch']) test(`a ready catchup waiting on an old poll cannot cross a changed ${changed}`, async t => {
+  let reject, attempts = 0;
+  const pending = new Promise((_, fail) => { reject = fail; });
+  const f = fixture(t, u => {
+    if (!u.pathname.endsWith('/messages') || u.searchParams.get('direction') !== 'after') return;
+    attempts++; return pending;
+  });
+  await f.open(); await f.event('chat_ready');
+  await f.event('chat_unavailable'); f.state.streamStatus('connecting'); await f.event('chat_ready');
+  if (changed === 'scope') await f.state.setTab('external'); else f.state.close();
+  reject({ code: 'chat_history_unavailable' }); await flush();
+  assert.equal(attempts, 1, 'the old admitted scope cannot start another truth request');
+});
+
 test('a message hint alongside manual status still reads new message truth', async t => {
   const f = fixture(t, u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after'
     ? { items: [{ id: 2, direction: 'out', status: 'delivered', content: 'combined reply' }], afterCursor: 'after2' } : undefined);

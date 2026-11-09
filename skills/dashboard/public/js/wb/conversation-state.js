@@ -189,27 +189,30 @@ export function createConversationState({
       streamStatus('disconnected', subscription);
       return;
     }
+    const admitted = name === 'chat_ready' && streamState !== 'live';
     if (name === 'chat_ready') {
       clearStreamTimer();
       streamState = 'live';
       streamScope = chatSubscriptionKey(subscription);
       emit();
     } else if (!['chat_messages_changed', 'chat_delivery_changed'].includes(name)) return;
-    void poll({ dirty: true });
+    void poll({ dirty: true, admitted });
   }
-  async function poll({ dirty = false, manual = false } = {}) {
+  async function poll({ dirty = false, manual = false, admitted = false } = {}) {
+    const e = epoch, navigation = selectedVersion, scope = streamScope;
     readDirty ||= dirty;
-    if (polling) {
+    while (polling) {
       await polling;
-      return;
+      if (!admitted || !valid(e) || selectedVersion !== navigation || streamScope !== scope || streamState !== 'live') return;
     }
-    if (!valid(epoch) || !visible()) return;
+    if (!valid(e)) return;
+    if (admitted) retryAt = 0;
+    if (!visible()) return;
     if (!manual && updateError && retryAt > now()) {
       schedule(retryAt - now());
       return;
     }
     stopTimer();
-    const e = epoch, navigation = selectedVersion;
     let passDirty = false;
     // Install the lock before even an empty pass can finish.
     const task = Promise.resolve().then(async () => {

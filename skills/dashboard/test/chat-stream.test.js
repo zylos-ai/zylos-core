@@ -19,7 +19,7 @@ class Response extends EventEmitter {
 }
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 function fixture(t) {
-  let revoked = false, reads = 0, touches = 0, deletes = 0, fault = null, version = 1;
+  let revoked = false, reads = 0, touches = 0, deletes = 0, fault = null, version = 1, generation = 1;
   const session = { created_at: Date.now(), last_activity_at: Date.now() };
   const cookie = 'isolated-chat-stream-session', secondCookie = 'second-isolated-chat-stream-session';
   const tokens = { read: 'zylos_st_' + 'a'.repeat(64), admin: 'zylos_st_' + 'b'.repeat(64) };
@@ -34,7 +34,7 @@ function fixture(t) {
   const config = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: false } };
   const auth = new AuthGate(config, store), hub = new SseHub(10);
   let task;
-  const observer = new ChatChangeObserver({ c4Reader: { readVersion: () => fault === 'database' ? null : ({ generation: 1, version }) },
+  const observer = new ChatChangeObserver({ c4Reader: { readVersion: () => fault === 'database' ? null : ({ generation, version }) },
     history: { chatChangeSnapshot: () => { reads++; if (fault === 'conversation') throw Error('chat_history_unavailable'); return { highwater: 1, listChanged: false, latestId: 1, delivery: [] }; } },
     setTimeout: fn => { task = fn; return 1; }, clearTimeout: () => { task = null; } });
   t.after(() => { observer.close(); hub.closeAll(); clearInterval(auth._cleanupTimer); });
@@ -45,7 +45,10 @@ function fixture(t) {
     const handled = handleChatStream(req, res, new URL('/api/stream' + search, 'http://fixture'), { auth, config, hub, observer });
     return { req, res, handled };
   };
-  return { request, config, hub, observer, session, touches: () => touches, deletes: () => deletes, reads: () => reads, fail: (value = 'database') => { fault = value; version++; }, revoke: () => { revoked = true; }, tick: () => task?.() };
+  return { request, config, hub, observer, session, touches: () => touches, deletes: () => deletes, reads: () => reads,
+    fail: (value = 'database') => { if (fault === 'database' && value !== 'database') generation++; fault = value; version++; },
+    replace: () => { generation++; version++; },
+    revoke: () => { revoked = true; }, tick: () => { const pending = task; task = null; pending?.(); } };
 }
 
 test('chat stream uses actual cookie and API chat admission before any snapshot', t => {
@@ -178,14 +181,16 @@ for (const afterReady of [false, true]) for (const failure of ['database', 'conv
   assert.ok(frame, 'the frontend receives explicit fallback metadata even after it was live');
   assert.deepEqual(JSON.parse(frame[1]), { version: 1, tab: 'mine', conversationId: 'g:AA', ids: [] });
   assert.equal(f.hub.clients.size, 1); assert.equal(f.hub.chatClients.size, 0);
-  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.observer.timer, null);
+  assert.equal(f.observer.subscriptions.size, 0); assert.equal(f.observer.recoveries.size, 1);
+  assert.notEqual(f.observer.timer, null);
   for (const event of ['state_change', 'metric', 'fleet_state']) f.hub.broadcast(event, { state: 'idle' });
   for (const event of ['state_change', 'metric', 'fleet_state']) assert.ok(res.text().includes(`event: ${event}\n`));
   assert.equal(res.writableEnded, false);
   f.fail(null);
   const replacement = f.request().res;
   assert.equal(replacement.status, 200); assert.match(replacement.text(), /event: chat_ready/);
-  assert.equal(f.hub.clients.size, 2); assert.equal(f.observer.subscriptions.size, 1);
+  assert.equal(f.hub.clients.size, failure === 'database' ? 1 : 2); assert.equal(f.observer.subscriptions.size, 1);
+  assert.equal(res.writableEnded, failure === 'database', 'restoration closes a missing-generation watch through normal admission');
   res.end(); assert.equal(f.hub.chatClients.size, 1, 'closing a detached client cannot release the replacement owner');
   replacement.end(); assert.equal(f.hub.chatClients.size, 0);
 });
@@ -202,6 +207,53 @@ for (const invalidation of ['revoke', 'idle', 'remotePolicy']) test(`a chat-deta
   assert.equal(res.writableEnded, true); assert.match(res.text().slice(prior.length), /auth_expired/);
   assert.doesNotMatch(res.text().slice(prior.length), /state_change|not allowed/);
   assert.equal(f.hub.clients.size, 0); assert.equal(f.hub.chatClients.size, 0);
+  assert.equal(f.observer.recoveries.size, 0); assert.equal(f.observer.timer, null);
+});
+
+test('database replacement ends the affected stream once and normal admission restores chat', t => {
+  const f = fixture(t), { res } = f.request(); let closes = 0;
+  res.on('close', () => closes++);
+  f.replace(); f.tick();
+  assert.equal(res.writableEnded, true); assert.equal(closes, 1);
+  assert.equal(f.hub.clients.size, 0); assert.equal(f.hub.chatClients.size, 0);
+  assert.equal(f.observer.recoveries.size, 0); assert.equal(f.observer.timer, null);
+  for (let i = 0; i < 25; i++) f.tick();
+  assert.equal(closes, 1);
+  const replacement = f.request().res;
+  assert.match(replacement.text(), /event: chat_ready/); assert.equal(replacement.writableEnded, false);
+});
+
+test('missing database keeps ordinary events live through repeated samples and recovery closes it once', t => {
+  const f = fixture(t), { res } = f.request(); let closes = 0;
+  res.on('close', () => closes++);
+  f.fail(); f.tick(); const reads = f.reads();
+  for (let i = 0; i < 25; i++) {
+    f.tick();
+    assert.equal(closes, 0, 'persistent unavailability cannot initiate reconnects');
+  }
+  assert.equal(f.reads(), reads, 'recovery watches do not read conversation snapshots');
+  assert.equal((res.text().match(/event: chat_unavailable\n/g) || []).length, 1);
+  f.hub.broadcast('state_change', { state: 'idle' });
+  assert.match(res.text(), /event: state_change/); assert.equal(res.writableEnded, false);
+  f.replace(); f.fail(null); f.tick();
+  assert.equal(closes, 1); assert.equal(f.observer.recoveries.size, 0);
+  assert.equal(f.observer.timer, null);
+  const replacement = f.request().res;
+  assert.match(replacement.text(), /event: chat_ready/); assert.equal(replacement.writableEnded, false);
+});
+
+test('a generation change with unreadable chat history reconnects once then retains an ordinary stream', t => {
+  const f = fixture(t), { res } = f.request();
+  f.fail('conversation'); f.tick();
+  assert.equal(res.writableEnded, false);
+  f.replace(); f.tick(); assert.equal(res.writableEnded, true);
+  const retry = f.request().res;
+  assert.match(retry.text(), /event: chat_unavailable/); assert.equal(retry.writableEnded, false);
+  const reads = f.reads();
+  for (let i = 0; i < 25; i++) { f.tick(); assert.equal(retry.writableEnded, false); }
+  assert.equal(f.reads(), reads, 'same-generation history failure cannot repeatedly read or reconnect');
+  f.hub.broadcast('metric', { idle: true }); assert.match(retry.text(), /event: metric/);
+  retry.end(); assert.equal(f.observer.recoveries.size, 0); assert.equal(f.observer.timer, null);
 });
 
 test('two cookie principals each receive their own default twenty chat subscriptions', t => {

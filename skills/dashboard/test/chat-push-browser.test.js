@@ -190,7 +190,7 @@ for (const status of [503, 401]) test(`stream ${status} reconnect attempts prese
   await page.evaluate('window.dispose()'); await browser.close(); await sandbox.close();
 });
 
-test('an unavailable chat database preserves ordinary stream events and polling recovery', {
+test('an unavailable chat database preserves ordinary events and returns to live after restoration', {
   skip: !enabled, timeout: 15000,
 }, async t => {
   const sandbox = createChatSandbox(t);
@@ -210,11 +210,12 @@ test('an unavailable chat database preserves ordinary stream events and polling 
   await pause(1200);
   assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, streams, 'chat failure does not reconnect the EventSource');
   fixture.restoreDatabase();
-  const update = fixture.addReply('Reply recovered through polling after the private database returns.');
-  await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${update.id}"]')`), 'fallback reads truth after database restoration', 6000);
-  assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, streams);
+  await until(() => page.evaluate(`document.querySelector('.conversation-push-status')?.dataset.streamState==='live'`), 'database restoration reconnects through normal admission', 2200);
+  const update = fixture.addReply('Reply arrives live after the private database returns.');
+  await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${update.id}"]')`), 'restored live stream reads committed truth', 1000);
+  assert.equal(fixture.requests.filter(row => row.path === '/api/stream').length, streams + 1);
   assert.equal(browser.errors.length, 0); assert.equal(browser.external.length, 0);
   assert.equal(fixture.requests.some(row => row.method !== 'GET'), false);
-  console.info('chat unavailable browser result', JSON.stringify({ streamsBefore: streams, streamsAfter: streams, activeOrdinary: 1, chatSubscriptions: 0, ordinaryReceived: true, pollingRecovered: true }));
+  console.info('chat unavailable browser result', JSON.stringify({ streamsBefore: streams, streamsAfter: streams + 1, activeStreams: 1, chatSubscriptions: 1, ordinaryReceived: true, liveRecovered: true }));
   await page.evaluate('window.dispose()'); await browser.close(); await sandbox.close();
 });
