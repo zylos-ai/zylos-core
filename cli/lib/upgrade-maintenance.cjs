@@ -627,6 +627,27 @@ function command(bin, args, options = {}) {
   if (r.error || r.status !== 0) throw Error(r.error?.message || String(r.stderr) || `${bin} exited ${r.status}`);
   return r.stdout;
 }
+function realOrRaw(file) {
+  try {
+    return fs.realpathSync(file);
+  } catch {
+    return file;
+  }
+}
+function underRoot(file, roots) {
+  return roots.some(root => file.startsWith(root + path.sep));
+}
+const KNOWN_WRITERS = /\/(?:c4-(?:send|db|control|enqueue|queue)|scheduler|database|usage-monitor|core-db-backup-worker)\.(?:js|mjs)(?:\s|$)/;
+// A known one-shot writer belongs to this install when its command line names
+// the journal paths, or when an absolute writer script path resolves under
+// them (the writer was launched through a symlinked HOME or ZYLOS_DIR).
+// Relative script paths are only recognized through the journal paths.
+function installWriter(j, args) {
+  if (!KNOWN_WRITERS.test(args)) return false;
+  if (args.includes(j.skillsDir) || args.includes(j.zylosDir)) return true;
+  const roots = [realOrRaw(j.skillsDir), realOrRaw(j.zylosDir)];
+  return args.split(/\s+/).some(token => path.isAbsolute(token) && KNOWN_WRITERS.test(token) && underRoot(realOrRaw(token), roots));
+}
 function services(j) {
   const output = command('pm2', ['jlist']);
   // A cold PM2 daemon prints startup banners before the JSON array.
@@ -638,7 +659,12 @@ function services(j) {
   try {
     roots.push(fs.realpathSync(j.skillsDir));
   } catch {}
-  return list.filter(p => roots.some(root => String(p.pm2_env?.pm_exec_path || '').startsWith(root + path.sep))).map(p => ({
+  // PM2 keeps the script path it was launched with, which may go through a
+  // symlinked HOME or ZYLOS_DIR while the journal records the real path.
+  return list.filter(p => {
+    const script = String(p.pm2_env?.pm_exec_path || '');
+    return underRoot(script, roots) || underRoot(realOrRaw(script), roots);
+  }).map(p => ({
     name: p.name,
     status: p.pm2_env?.status,
     pid: p.pid,
@@ -649,9 +675,8 @@ function stop(j) {
   if (!canRecognizeProcesses()) return stopObserved(j);
   for (const p of services(j)) if (!['stopped', 'errored'].includes(p.status)) command('pm2', ['stop', p.name]);
   if (services(j).some(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0)) throw Error('managed services not confirmed stopped');
-  const knownNames = /\/(?:c4-(?:send|db|control|enqueue|queue)|scheduler|database|usage-monitor|core-db-backup-worker)\.(?:js|mjs)(?:\s|$)/;
   const processRows = command('ps', ['-eo', 'pid=,args=']).split('\n');
-  const found = processRows.map(row => row.trim().match(/^(\d+)\s+(.*)$/)).filter(Boolean).filter(r => knownNames.test(r[2]) && (r[2].includes(j.skillsDir) || r[2].includes(j.zylosDir))).map(r => identity(Number(r[1]))).filter(p => p.pid !== process.pid && p.pid !== process.ppid);
+  const found = processRows.map(row => row.trim().match(/^(\d+)\s+(.*)$/)).filter(Boolean).filter(r => installWriter(j, r[2])).map(r => identity(Number(r[1]))).filter(p => p.pid !== process.pid && p.pid !== process.ppid);
   const known = [...(j.knownProcesses || []), ...found];
   const deadline = Date.now() + 10000;
   while (known.some(p => alive(p) && p.pid !== process.pid)) {
@@ -669,12 +694,11 @@ function stopObserved(j) {
   }
   for (const p of services(j)) if (!['stopped', 'errored'].includes(p.status)) command('pm2', ['stop', p.name]);
   if (services(j).some(p => !['stopped', 'errored'].includes(p.status) || p.pid > 0)) throw Error('managed services not confirmed stopped');
-  const knownNames = /\/(?:c4-(?:send|db|control|enqueue|queue)|scheduler|database|usage-monitor|core-db-backup-worker)\.(?:js|mjs)(?:\s|$)/;
   const deadline = Date.now() + 10000;
   for (;;) {
     const writers = command('ps', ['-eo', 'pid=,args=']).split('\n')
       .map(row => row.trim().match(/^(\d+)\s+(.*)$/)).filter(Boolean)
-      .filter(row => ![process.pid, process.ppid].includes(Number(row[1])) && knownNames.test(row[2]) && (row[2].includes(j.skillsDir) || row[2].includes(j.zylosDir)));
+      .filter(row => ![process.pid, process.ppid].includes(Number(row[1])) && installWriter(j, row[2]));
     if (!writers.length) return;
     if (Date.now() >= deadline) throw Error('known CLI/worker exit grace exhausted');
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
