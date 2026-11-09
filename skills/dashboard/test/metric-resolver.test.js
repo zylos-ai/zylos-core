@@ -61,6 +61,10 @@ test('usage and host reads enforce auth and removed five-hour routes return unkn
   const recordedMetric = await weekly.json();
   assert.equal(recordedMetric.value, null);
   assert.equal(recordedMetric.confidence, 'none');
+  f.core.observation = { usage: { valid: true, sampledAt: Date.now(), value: { context_window: { used_percentage: 37 } } } };
+  const context = await (await request(f.origin, '/api/metrics/context_pct', { headers })).json();
+  assert.equal(context.value, 37, 'recorded weekly quota must not suppress the independent context metric');
+  assert.equal(context.confidence, 'actual');
   const state = await (await request(f.origin, '/api/state', { headers })).json();
   assert.equal(Object.hasOwn(state, 'rate_limit_pct'), false);
   assert.equal(state.rate_limit_7d_pct, 21);

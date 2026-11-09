@@ -52,13 +52,22 @@ export function readCodexSampleForIdentity({ sessionGroup, identity, env = proce
 }
 
 function readCodexEventSample(event, identity, account) {
+  const source = readCodexEventSource(event);
+  if (!source) return null;
+  const row = source.rows.findLast(item => item.type === 'event_msg' && item.payload?.type === 'token_count' &&
+    (!account || item.payload.rate_limits));
+  return codexSampleFromRow(source, row, identity);
+}
+
+function readCodexEventSource(event) {
   if (event?.v > 1) process.emitWarning('Reading known fields from a newer session event version');
   if (typeof event?.transcript_path !== 'string' || !path.isAbsolute(event.transcript_path)) return null;
   const rollout = readSnapshot(event.transcript_path);
   if (rollout.error) return null;
-  const rows = completeRows(rollout.text);
-  const row = rows.findLast(item => item.type === 'event_msg' && item.payload?.type === 'token_count' &&
-    (!account || item.payload.rate_limits));
+  return { rows: completeRows(rollout.text), mtime: rollout.mtime };
+}
+
+function codexSampleFromRow({ rows, mtime }, row, identity) {
   if (!row || typeof row.timestamp !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(row.timestamp)) return null;
   const day = new Date(row.timestamp.slice(0, 10) + 'T00:00:00Z');
   if (!Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== row.timestamp.slice(0, 10)) return null;
@@ -72,7 +81,7 @@ function readCodexEventSample(event, identity, account) {
   const ceiling = info?.model_context_window;
   const contextUsage = Number.isFinite(used) && used >= 0 && Number.isFinite(ceiling) && ceiling > 0 ? { used, ceiling } : null;
   return { sample: { identity: { runId: identity.runId, sessionId: identity.sessionId }, capturedAt,
-    model, contextUsage, rateLimits: codexRateLimits(row.payload.rate_limits) }, mtime: rollout.mtime };
+    model, contextUsage, rateLimits: codexRateLimits(row.payload.rate_limits) }, mtime };
 }
 
 export function currentRecordedWeekly(value, recordedAt, now) {
@@ -91,15 +100,19 @@ export function readRecordedCodexSample({ sessionGroup, env = process.env, now =
   const starts = completeRows(events.text).filter(row => row.v === 1 && row.event === 'session_start' &&
     row.runtime === 'codex' && row.session_group === sessionGroup && typeof row.run_id === 'string' &&
     row.run_id && typeof row.session_id === 'string' && row.session_id && Number.isSafeInteger(row.ts) && row.ts >= 0);
-  // Runs are sequential within a group; avoid opening older rollouts once one is usable.
+  // Runs are sequential: the newest run with any token sample ends this group's search.
   starts.sort((a, b) => b.ts - a.ts);
   const seen = new Set();
   for (const event of starts) {
     const key = JSON.stringify([event.run_id, event.session_id]);
     if (seen.has(key)) continue;
     seen.add(key);
-    const sample = readCodexEventSample(event, { runId: event.run_id, sessionId: event.session_id }, true);
-    if (sample && currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now)) return sample;
+    const source = readCodexEventSource(event);
+    if (!source) continue;
+    const row = source.rows.findLast(item => item.type === 'event_msg' && item.payload?.type === 'token_count');
+    if (!row) continue;
+    const sample = codexSampleFromRow(source, row, { runId: event.run_id, sessionId: event.session_id });
+    return sample && currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now) ? sample : null;
   }
   return null;
 }
