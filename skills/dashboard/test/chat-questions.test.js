@@ -13,6 +13,23 @@ const question = (f, id) => f.dashboardDb.prepare('SELECT * FROM chat_questions 
 const assertStoredWarning = result => assert.match(result.stderr, /already stored in C4 and visible read-only in Dashboard\. Do not resend/);
 const noQuestions = f => assert.equal(f.count('chat_questions', f.dashboardDb), 0);
 
+// Boundary: real BeforeSend rejects ambiguous choices before C4 storage or delivery.
+// Run on choice/send validation changes; unrelated UI changes may skip. The fixture
+// prints private paths, permits no tmux executable, and owns timed child cleanup.
+test('BeforeSend rejects duplicate choice IDs before storage and accepts distinct IDs', t => {
+  const f = setupChannelFixture(t), envelope = structuredClone(parseC4Content(contentFor('single')).envelope);
+  fs.symlinkSync(fs.realpathSync(new URL('../../../node_modules', import.meta.url)), path.join(f.env.ZYLOS_DIR, 'node_modules'));
+  envelope.blocks[0].data.options[1].id = envelope.blocks[0].data.options[0].id;
+  const rejected = f.send(CONTENT_PREFIX + JSON.stringify(envelope));
+  assert.ifError(rejected.error); assert.notEqual(rejected.status, 0);
+  assert.match(rejected.stderr, /HOOK_ABORTED.*Invalid Dashboard structured content/);
+  assert.equal(f.count('conversations'), 0); assert.equal(f.count('group_heads'), 0); noQuestions(f);
+  assert.equal(fs.existsSync(f.env.CHANNEL_SEND_LOG), false);
+  const accepted = f.send(contentFor('single'));
+  assert.ifError(accepted.error); assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(f.count('conversations'), 1); assert.equal(f.count('chat_questions', f.dashboardDb), 1);
+});
+
 // Boundary: actual hook -> committed C4 -> receiver -> real Dashboard Store.
 // Run on protocol/registration changes; UI-only edits may skip.
 for (const name of ['single', 'multiple', 'confirmation', 'form']) test(`Stored ${name} question registers its original group references and constraints`, t => {

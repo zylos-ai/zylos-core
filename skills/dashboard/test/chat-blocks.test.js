@@ -41,6 +41,24 @@ const choices = selection => block('choice', { prompt: 'Choose a plan', selectio
 const confirmation = () => block('confirmation', { title: 'Confirm change', body: 'Check these facts', severity: 'normal', details: [{ label: 'Count', value: 3 }], action: action('confirmation.respond') });
 const form = () => block('form_intent', { title: 'Profile', purpose: 'Tell us more', fields: [{ key: 'name', type: 'text', label: 'Name', help: 'Public name' }, { key: 'category', type: 'single_select', label: 'Category', options: [{ id: 'a', label: 'First' }] }], action: action('form.submit') });
 
+test('historical answered messages retain their saved readable answer with legacy question definitions', () => {
+  for (const [item, payload, original] of [
+    [block('choice', { prompt: 'Decision', options: [{ id: 'a', label: 'Approve' }, { id: 'a', label: 'Reject' }], action: action('choice.select') }), { selected: ['a'] }, 'Original answer: Reject'],
+    [block('form_intent', { fields: [{ key: 'name', type: 'text', label: 'Name', required: true }], action: action('form.submit') }), { values: { name: '' } }, 'Original answer: Name='],
+  ]) {
+    const question = envelope([item], true);
+    const request = { id: 'original-answer', protocolVersion: '0.1', ...item.data.action,
+      context: { messageId: question.messageId, blockId: item.id }, payload };
+    const answer = { version: 1, kind: 'answer', messageId: 'answer-message', interruptId: question.interruptId,
+      questionSummary: question.questionSummary, fallbackText: original, action: request, metadata: { zylos: { answerId: request.id } } };
+    assert.doesNotMatch(render(question).textContent, /invalidContent/);
+    const root = render(answer);
+    assert.ok(root.textContent.includes(original));
+    assert.doesNotMatch(root.textContent, /invalidContent|actionUnavailable/);
+    assert.equal(allNodes(root).some(node => ['BUTTON', 'INPUT'].includes(node.tagName)), false);
+  }
+});
+
 test('immutable resolved interactive blocks display their saved answer without controls', () => {
   for (const [item, saved, expected] of [
     [choices('single'), { selected: ['b'] }, 'Plan B'],

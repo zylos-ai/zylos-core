@@ -46,6 +46,38 @@ function fixture(t) {
   return { store, answers, file, question, action, accept, count };
 }
 
+// Boundary: savedEnvelope reconstructs old records permissively, but the real
+// answer transaction must apply current checks before writing. Run for shared
+// validation/answer changes; unrelated UI changes may skip. Private SQLite only;
+// the official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR, no sockets spawned.
+for (const invalid of ['duplicate-choice', 'free-text-disabled', 'required-empty']) {
+  test(`current answer acceptance rejects saved ${invalid} and accepts valid intent`, t => {
+    const f = fixture(t), q = f.question(invalid === 'required-empty' ? 'form' : 'single');
+    const original = JSON.parse(f.answers.question(q.group, q.envelope.interruptId).constraints);
+    const constraints = structuredClone(original);
+    let payload;
+    if (invalid === 'duplicate-choice') {
+      constraints.block.data.options[1].id = constraints.block.data.options[0].id;
+      payload = { selected: [constraints.block.data.options[0].id] };
+    } else if (invalid === 'free-text-disabled') {
+      constraints.block.data.allowFreeText = false; payload = { freeText: 'Other' };
+    } else {
+      constraints.block.data.fields = [{ key: 'name', label: 'Name', type: 'text', required: true }];
+      original.block.data.fields = structuredClone(constraints.block.data.fields);
+      payload = { values: { name: '' } };
+    }
+    const save = value => f.store.db.prepare('UPDATE chat_questions SET constraints=? WHERE c4_id=?').run(JSON.stringify(value), q.id);
+    save(constraints);
+    assert.throws(() => f.accept(q, f.action(q, payload)), { code: 'invalid_chat_answer' });
+    assert.equal(f.count('chat_answers'), 0); assert.equal(f.count('chat_answer_deliveries'), 0);
+    assert.equal(f.answers.question(q.group, q.envelope.interruptId).status, 'paused');
+    save(original);
+    const valid = invalid === 'required-empty' ? { values: { name: 'Filled' } } : payload;
+    assert.equal(f.accept(q, f.action(q, valid)).created, true);
+    assert.equal(f.count('chat_answers'), 1); assert.equal(f.count('chat_answer_deliveries'), 1);
+  });
+}
+
 for (const name of ['single', 'multiple', 'confirmation', 'form']) {
   test(`accepting a ${name} answer saves the host summary and unfinished delivery atomically`, t => {
     const f = fixture(t), q = f.question(name), block = q.envelope.blocks.find(item => item.id === q.envelope.interrupt.blockId);

@@ -1,9 +1,9 @@
-import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=102';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=103';
 import { element } from './plain-text.js?v=104';
 import { attachmentDisplayText } from './chat-attachments.js?v=4';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=102';
+export { validateAnswer } from '../../chat-schema.js?v=103';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 

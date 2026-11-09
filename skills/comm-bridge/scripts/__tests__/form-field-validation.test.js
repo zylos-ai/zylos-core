@@ -28,15 +28,15 @@ for (const example of fixtures.answers) test(`shared field diagnostics preserve 
 });
 
 const types = [
-  ['text', { maxLength: 3 }, ['abc', ''], [[4, 'type'], ['abcd', 'range']]],
-  ['multiline_text', { maxLength: 3 }, ['a\nb', ''], [[false, 'type'], ['abcd', 'range']]],
+  ['text', { maxLength: 3 }, ['abc'], [[4, 'type'], ['abcd', 'range'], ['', 'required']]],
+  ['multiline_text', { maxLength: 3 }, ['a\nb'], [[false, 'type'], ['abcd', 'range'], ['', 'required']]],
   ['number', { min: 1, max: 3 }, [1, 2.5, 3], [['2', 'type'], [0, 'range'], [4, 'range']]],
   ['integer', { min: 1, max: 3 }, [1, 3], [[1.5, 'type'], ['2', 'type'], [0, 'range'], [4, 'range']]],
   ['boolean', {}, [false, true], [[0, 'type'], ['false', 'type']]],
   ['date', {}, ['2024-02-29'], [[4, 'type'], ['2025-02-29', 'type']]],
   ['datetime', {}, ['2024-02-29T12:30:00Z'], [[4, 'type'], ['2024-02-29T25:00:00Z', 'type']]],
   ['single_select', { options: [{ id: 'a', label: 'A' }] }, ['a'], [[4, 'type'], ['b', 'range']]],
-  ['multi_select', { options: [{ id: 'a', label: 'A' }] }, [[], ['a']], [['a', 'type'], [[4], 'type'], [['b'], 'range'], [['a', 'a'], 'range']]],
+  ['multi_select', { options: [{ id: 'a', label: 'A' }] }, [['a']], [['a', 'type'], [[4], 'type'], [['b'], 'range'], [['a', 'a'], 'range'], [[], 'required']]],
 ];
 for (const [type, constraints, accepted, rejected] of types) test(`${type} field reasons preserve saved type and bounds`, () => {
   const question = clone(fixtures.formQuestion);
@@ -54,7 +54,8 @@ for (const [type, constraints, accepted, rejected] of types) test(`${type} field
     assert.equal(validateAnswer(actionFor(question, values), question), false);
   }
   field.required = false;
-  for (const values of [{}, { value: null }]) {
+  const empty = ['text', 'multiline_text'].includes(type) ? [{ value: '' }] : type === 'multi_select' ? [{ value: [] }] : [];
+  for (const values of [{}, { value: null }, ...empty]) {
     assert.equal(success(diagnostics(question, values)), true);
     assert.equal(validateAnswer(actionFor(question, values), question), true);
   }

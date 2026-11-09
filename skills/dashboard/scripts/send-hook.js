@@ -28,7 +28,7 @@ export function evaluateBeforeSend(input, { env = process.env } = {}) {
           && Object.hasOwn(block.data, 'path'))) {
       return abort('File blocks accept attachment IDs only. Run the Dashboard attachment register command first.');
     }
-    const parsed = parseC4Content(content);
+    const parsed = parseC4Content(content, { submission: true });
     if (parsed.kind !== 'envelope') {
       return raw.kind === 'envelope' && Array.isArray(raw.envelope?.blocks)
         && raw.envelope.blocks.some(block => attachment(block) && !validateAttachmentData(block.data))
