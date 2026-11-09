@@ -7,17 +7,17 @@ import { sendHtml, sendJson, serveStatic, readJsonBody } from '../../src/lib/htt
 import { workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
-const serviceList = [{ name: 'scheduler', status: 'online' }, { name: 'web-console', status: 'online' }];
+const serviceList = [{ name: 'scheduler', status: 'online' }, { name: 'web-console', status: 'online' }, { name: 'activity-monitor', status: 'online' }, { name: 'c4-dispatcher', status: 'online' }];
 async function startPage(sandbox) {
   const writes = [], restarts = [], reads = [], zones = new Map(), now = Date.now();
-  const state = { partialRestart: false, unavailableAfterProgress: false, rejectTimezone: false };
+  const state = { initialTimezone: 'Asia/Calcutta', partialRestart: false, unavailableAfterProgress: false, rejectTimezone: false };
   const server = http.createServer(async (req, res) => {
     try {
       const original = new URL(req.url, 'http://127.0.0.1');
       const prefix = original.pathname.match(/^\/fleet\/(admin|reader)/)?.[0] ?? '';
       const route = original.pathname.slice(prefix.length) || '/';
       const url = new URL(route + original.search, original.origin);
-      const settings = () => ({ tz: zones.get(prefix) ?? 'UTC', writable: true, read_only_reason: null,
+      const settings = () => ({ tz: zones.get(prefix) ?? state.initialTimezone, writable: true, read_only_reason: null,
         restart_services: serviceList, restart_status: 'known' });
       if (route === '/api/settings/timezone') {
         if (req.method === 'GET') { reads.push(original.pathname); sendJson(res, 200, settings()); return; }
@@ -41,7 +41,7 @@ async function startPage(sandbox) {
       if (route === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (route.startsWith('/api/')) {
         let value = req.method === 'GET' ? workbenchAnswer(url, now) : undefined;
-        if (route === '/api/state') value = { ...value, tz: zones.get(prefix) ?? 'UTC' };
+        if (route === '/api/state') value = { ...value, tz: zones.get(prefix) ?? state.initialTimezone };
         sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' }); return;
       }
       if (['/', '/settings', '/usage', '/memory'].includes(route)) {
@@ -59,10 +59,10 @@ async function startPage(sandbox) {
 
 function measure() {
   const card = document.querySelector('#settings-timezone');
-  const controls = [...card.querySelectorAll('button, input')].filter(node => !node.hidden && !node.closest('[hidden]'));
+  const controls = [...card.querySelectorAll('button, select')].filter(node => !node.hidden && !node.closest('[hidden]'));
   const boxes = controls.map(node => { const b = node.getBoundingClientRect(); return { id: node.id, width: b.width, height: b.height, top: b.top }; });
   const input = boxes.find(node => node.id === 'settings-timezone-value'), save = boxes.find(node => node.id === 'settings-timezone-save');
-  return { boxes, width: document.documentElement.scrollWidth, inputStyle: { disabled: card.querySelector('input').disabled, borderStyle: getComputedStyle(card.querySelector('input')).borderTopStyle, cursor: getComputedStyle(card.querySelector('input')).cursor },
+  return { boxes, width: document.documentElement.scrollWidth, inputStyle: { disabled: card.querySelector('select').disabled, borderStyle: getComputedStyle(card.querySelector('select')).borderTopStyle, cursor: getComputedStyle(card.querySelector('select')).cursor },
     aligned: Math.abs(input.top - save.top) < 1 && Math.abs(input.height - save.height) < 1 };
 }
 
@@ -108,9 +108,13 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.equal(layout.aligned, true, 'Input and save share a row and height');
     if (width >= 761) assert.ok(layout.boxes.find(box => box.id === 'settings-timezone-value').width <= 280, 'Desktop input stays bounded');
     if (prefix.endsWith('/reader')) { assert.equal(layout.inputStyle.borderStyle, 'dashed'); assert.equal(layout.inputStyle.cursor, 'not-allowed'); }
-    if (width < 761) for (const box of layout.boxes) { assert.ok(box.height >= 40 && box.width >= 40, JSON.stringify(box)); }
+    for (const box of layout.boxes) { assert.ok(box.height >= 40 && box.width >= 40, JSON.stringify(box)); }
     metrics.push({ width, locale, prefix, ...layout });
-    const shot = async kind => { if (evidence) await page.screenshot({ path: path.join(evidence, `${locale}-${width}-${kind}.png`) }); };
+    const shot = async kind => { if (evidence) {
+      await page.locator('#settings-timezone').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, `${locale}-${width}-${kind}.png`) });
+      if (['editable', 'readonly', 'saved'].includes(kind)) await page.locator('#settings-timezone').screenshot({ path: path.join(evidence, `${locale}-${width}-${kind}-card.png`) });
+    } };
     return { page, context, errors, shot };
   }
   const dialog = page => page.locator('.wb-modal[role="alertdialog"]');
@@ -121,10 +125,19 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     const { page, context, errors, shot } = await open(width, locale, '/fleet/admin');
     try {
       assert.equal(await page.locator('#settings-timezone-value').isDisabled(), false);
+      if (api.writes.length === 0) {
+        assert.equal(await page.locator('#settings-timezone-value').inputValue(), 'Asia/Calcutta');
+        assert.equal(await page.locator('#settings-timezone-save').isDisabled(), true);
+        await page.locator('#settings-timezone-value').selectOption('Asia/Kolkata');
+      }
+      const choices = await page.locator('#settings-timezone-value option').evaluateAll(nodes => nodes.filter(node => !node.disabled).map(node => node.value));
+      assert.equal(new Set(choices).size, choices.length);
+      for (const old of ['Asia/Calcutta', 'Europe/Kiev', 'Asia/Saigon', 'Pacific/Truk', 'Pacific/Ponape', 'Africa/Asmera']) assert.equal(choices.includes(old), false, old);
+      assert.ok(await page.locator('#settings-timezone-value optgroup').count() > 1);
       await shot('editable');
       api.state.rejectTimezone = true;
       const savedBeforeRejection = api.writes.length;
-      await page.locator('#settings-timezone-value').fill('Asia/Calcutta');
+      await page.locator('#settings-timezone-value').selectOption('Asia/Kolkata');
       await page.locator('#settings-timezone-save').click(); await answer(page, true);
       const reason = locale === 'zh' ? '主机系统的时区数据不支持此名称' : 'unavailable in the host system';
       await page.waitForFunction(reason => document.querySelector('#settings-timezone-result').textContent.includes(reason), reason);
@@ -132,14 +145,15 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
       await shot('host-unsupported');
       const before = api.writes.length, restarts = api.restarts.length;
-      await page.locator('#settings-timezone-value').fill('Asia/Singapore');
+      await page.locator('#settings-timezone-value').selectOption('Asia/Singapore');
       await page.locator('#settings-timezone-save').click(); await answer(page, false);
       assert.equal(api.writes.length, before, 'Cancel never writes');
       await page.locator('#settings-timezone-save').click(); await answer(page, true);
       await page.locator('#settings-timezone-pending').waitFor({ state: 'visible' });
       assert.deepEqual(api.writes.at(-1), { path: '/fleet/admin/api/settings/timezone', body: { tz: 'Asia/Singapore' } });
       assert.equal(api.writes.length, before + 1); assert.equal(api.restarts.length, restarts, 'Saving never restarts');
-      assert.equal(await page.locator('#settings-timezone-services li').count(), 2);
+      assert.equal(await page.locator('#settings-timezone-services li').count(), 4);
+      await shot('saved');
       await page.locator('#settings-timezone-restart').click();
       await dialog(page).waitFor();
       if (width < 761) {
@@ -152,7 +166,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
       await answer(page, false); assert.equal(api.restarts.length, restarts, 'Cancel keeps saved zone without restart');
       await page.locator('#settings-timezone-restart').click(); await answer(page, true);
       await page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
-      assert.deepEqual(api.restarts.at(-1), { path: '/fleet/admin/api/actions/restart-timezone-services', body: { tz: 'Asia/Singapore', confirm: true, services: ['scheduler', 'web-console'] } });
+      assert.deepEqual(api.restarts.at(-1), { path: '/fleet/admin/api/actions/restart-timezone-services', body: { tz: 'Asia/Singapore', confirm: true, services: ['scheduler', 'web-console', 'activity-monitor', 'c4-dispatcher'] } });
       assert.equal(api.restarts.length, restarts + 1); assert.deepEqual(errors, []);
     } finally { await context.close(); }
     const readOnly = await open(width, locale, '/fleet/reader');
@@ -166,7 +180,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
   }
   const local = await open(1280, 'en');
   try {
-    await local.page.locator('#settings-timezone-value').fill('Europe/London');
+    await local.page.locator('#settings-timezone-value').selectOption('Europe/London');
     await local.page.locator('#settings-timezone-save').click(); await answer(local.page, true);
     await local.page.locator('#settings-timezone-pending').waitFor({ state: 'visible' });
     api.state.partialRestart = true;
@@ -176,7 +190,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.equal(await local.page.locator('#settings-timezone-pending').isVisible(), true);
     await local.page.locator('#settings-timezone-restart').click(); await answer(local.page, true);
     await local.page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
-    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'web-console']);
+    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'web-console', 'activity-monitor', 'c4-dispatcher']);
     assert.deepEqual(api.restarts.at(-1).body.services, ['scheduler'], 'Immediate retry excludes the service that already succeeded');
     assert.deepEqual(api.writes.at(-1), { path: '/api/settings/timezone', body: { tz: 'Europe/London' } });
     await local.page.locator('#settings-timezone-save').click(); await answer(local.page, true);
@@ -191,10 +205,10 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.equal(await local.page.locator('#settings-timezone-services li').count(), 1);
     await local.page.locator('#settings-timezone-restart').click(); await answer(local.page, true);
     await local.page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
-    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'web-console']);
+    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'web-console', 'activity-monitor', 'c4-dispatcher']);
     assert.deepEqual(api.restarts.at(-1).body.services, ['web-console'], 'A real HTTP503 retains prior progress across rediscovery');
     const beforeLeave = api.writes.length;
-    await local.page.locator('#settings-timezone-value').fill('America/New_York');
+    await local.page.locator('#settings-timezone-value').selectOption('America/New_York');
     await local.page.locator('#settings-timezone-save').click(); await dialog(local.page).waitFor();
     await local.page.locator('.tab[data-tab=overview]').dispatchEvent('click');
     await answer(local.page, true);
@@ -204,7 +218,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
   } finally { await local.context.close(); }
   const stale = await open(1280, 'en', '/fleet/admin');
   try {
-    await stale.page.locator('#settings-timezone-value').fill('Europe/London');
+    await stale.page.locator('#settings-timezone-value').selectOption('Europe/London');
     await stale.page.locator('#settings-timezone-save').click(); await answer(stale.page, true);
     await stale.page.locator('#settings-timezone-pending').waitFor({ state: 'visible' });
     const beforeRestart = api.restarts.length;
@@ -215,5 +229,5 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.deepEqual(stale.errors, []);
   } finally { await stale.context.close(); }
   if (evidence) fs.writeFileSync(path.join(evidence, 'metrics.json'), JSON.stringify({ metrics, writes: api.writes, restarts: api.restarts, reads: api.reads }, null, 2));
-  console.log('Timezone browser verified:', JSON.stringify({ screenshots: evidence ? 16 : 0, viewportLocalePairs: 4, writes: api.writes.length, confirmedRestarts: api.restarts.length }));
+  console.log('Timezone browser verified:', JSON.stringify({ screenshots: evidence ? 32 : 0, viewportLocalePairs: 4, writes: api.writes.length, confirmedRestarts: api.restarts.length }));
 }

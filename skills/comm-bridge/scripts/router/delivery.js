@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { loadCoreModule } from './core-modules.js';
 import { TMUX_COMMAND as C, TMUX_FORMAT as F, isIdentityError, adapterError } from '../tmux-protocol.js';
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
@@ -49,7 +50,7 @@ export function createDelivery(deps, configuration = {}) {
     idlePollMs: REQUIRE_IDLE_EXECUTION_POLL_MS, retryBaseMs: RETRY_BASE_MS,
     gateBackoffBaseMs: 1000, gateBackoffMaxMs: 30000, ...configuration };
   const now = deps.now ?? Date.now;
-  const sleep = deps.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const sleep = deps.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }));
   const open = deps.openTmuxConnection ?? openTmuxConnection;
   const resolve = deps.resolveSessionTarget ?? resolveSessionTarget;
   const revalidate = deps.revalidateSessionTarget ?? revalidateSessionTarget;
@@ -207,16 +208,26 @@ export function createDelivery(deps, configuration = {}) {
       }
       return false;
     }
+    const idleWait = new AbortController();
+    async function waitForIdle(ms) {
+      if (stopped || draining) return;
+      try { await sleep(ms, idleWait.signal); }
+      catch (error) { if (error.name !== 'AbortError' || !idleWait.signal.aborted) throw error; }
+    }
     async function idleSettlement() {
-      await sleep(options.idleHoldMs);
+      // Router stop already blocks the next message. Only this queue pacing
+      // wait may be cancelled; paste, Enter and verification still drain.
+      if (stopped || draining) return;
+      await waitForIdle(options.idleHoldMs);
       const deadline = now() + options.idleWaitMs;
       for (;;) {
+        if (stopped || draining) return;
         const current = await readState();
         if (current.state === 'idle' || offline(current.state) || now() >= deadline || stopped) return;
-        await sleep(options.idlePollMs);
+        await waitForIdle(options.idlePollMs);
       }
     }
-    const controller = { cancel: () => { draining = true; clearTimeout(timer); periodic.reset('stop'); } };
+    const controller = { cancel: () => { draining = true; idleWait.abort(); clearTimeout(timer); periodic.reset('stop'); } };
     active.add(controller);
     try {
       if (stopped) gateCode = 'delivery_stopped';

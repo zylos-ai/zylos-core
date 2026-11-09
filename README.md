@@ -441,36 +441,42 @@ reference is in [activity-monitor](skills/activity-monitor/SKILL.md#multi-sessio
 
 ### Instance time zone
 
-Dashboard Settings reads the instance time zone from `.env` `TZ`. Admins can
-save a valid IANA time zone there. With system zoneinfo installed, current names
-such as `Asia/Kolkata` and `Europe/Kyiv` are accepted even when ICU returns an
-older name. Lowercase names and numeric offsets are rejected. When system zoneinfo is installed, the name must match an
-installed TZif file with exact case; otherwise saving explains that the host
-does not support it and leaves `.env` unchanged. Without system zoneinfo,
-validation accepts only `UTC` or an exact ICU canonical name (for example,
-`Asia/Calcutta` on ICU versions that still return that name); incorrect case is
-rejected. The writer preserves other assignments,
-comments and formatting and keeps `.env` private (0600), including unchanged
-saves. Symlinked or nonregular `.env` files are read-only. The Dashboard writer
-shares the existing config-lock protocol for `.env` writes; it does not lock
-external editors or serialize service restarts against later saves. Saving does not restart
-anything. A second confirmation restarts only discovered, running services from
-this instance: scheduler and web-console, plus zylos-openmax when installed and
-running. Scheduler and web-console read `.env` at startup, so an ordinary
-restart can reload their configured time zone. The current list is advisory;
-only names shown in the confirmation and still eligible are restarted, and
-failed-service retries exclude successful services. Unknown process discovery
-disables restart. Dashboard reads the file on each
-request and needs no restart. Existing runtime sessions keep running and take
-the new time zone on their next launch. Memory log dates may cross a new day
-boundary after the change.
+Dashboard Settings reads the instance time zone from `.env` `TZ`. Admins choose
+from a region-grouped list based on `Intl.supportedValuesOf('timeZone')`, with
+older ICU names mapped to their current IANA location names and duplicates
+removed. UTC is included. A current value outside the list remains visible;
+it is not silently changed. Choose a supported option before saving.
 
-Read-only Fleet connections can view the setting; admin connections write and
-restart through the remote instance's own endpoints. A deployment can explicitly
-disable manual changes by setting `"timezone_managed": true` in
-`.zylos/config.json`. This is a deployment declaration, not platform-name
-detection. The field may be absent or false to allow editing; unreadable config
-or a non-boolean declaration makes the setting read-only until repaired.
+The writer accepts only those current IANA names or UTC, rejecting aliases,
+incorrect case and numeric offsets. When system zoneinfo is installed, the name
+must also match an installed TZif file with exact case; unsupported names show
+a clear error and leave `.env` unchanged. Without system zoneinfo, the same
+current-name list still applies. Other assignments, comments and formatting
+are preserved, and `.env` stays private (0600), including unchanged saves.
+Symlinked, missing or nonregular `.env` files are read-only. The setting does
+not depend on whether `.zylos/config.json` is readable.
+
+The writer shares the existing config-lock protocol for `.env` writes; it does
+not lock external editors or serialize service restarts against later saves.
+Saving does not restart anything. A separate confirmation offers running core
+services from this instance that need a restart: scheduler, web-console,
+activity-monitor and c4-dispatcher. Restarts use their existing PM2 names without `--update-env` or injecting the Dashboard environment. The dispatcher restart sets PM2’s
+stop timeout to 10 seconds so in-flight verification can finish; stopping also
+cancels its post-send idle pacing waits. This protects ordinary graceful
+restarts, not an externally forced kill. Each service loads `.env` TZ at startup; if TZ is absent, activity-monitor and
+c4-dispatcher preserve their inherited value. Other components may still need
+a restart and are outside this action's service list.
+
+Only names shown in the confirmation and still eligible are restarted.
+Failed-service retries exclude successful services, and unknown process
+discovery disables restart. Dashboard reads the file on each request and needs
+no restart. Existing runtime sessions keep running; the new time zone applies
+when they next launch. Memory log dates may cross a new day boundary after a
+change.
+
+Read-only Fleet connections can view the setting. Admin connections write and
+restart through the remote instance's own endpoints. The read-only input uses
+the same disabled style as the reclaim setting.
 
 ---
 

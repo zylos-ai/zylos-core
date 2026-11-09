@@ -37,8 +37,11 @@ export function createPm2Helpers({
     stdio = 'pipe',
     save = false,
     fallbackToPlainRestartOnError = false,
-    updateEnv = false,
+    killTimeoutMs,
   } = {}) {
+    if (killTimeoutMs !== undefined && (!Number.isSafeInteger(killTimeoutMs) || killTimeoutMs <= 0)) {
+      throw new TypeError('Invalid PM2 kill timeout');
+    }
     if (ecosystemPath && exists(ecosystemPath)) {
       try {
         restartFromEcosystem([name], { ecosystemPath, stdio, save });
@@ -53,7 +56,7 @@ export function createPm2Helpers({
       }
     }
 
-    exec(`pm2 restart "${name}"${updateEnv ? ' --update-env' : ''} 2>/dev/null`, { stdio });
+    exec(`pm2 restart "${name}"${killTimeoutMs === undefined ? '' : ` --kill-timeout ${killTimeoutMs}`} 2>/dev/null`, { stdio });
 
     if (save) {
       savePm2ProcessList({save: () => exec('pm2 save 2>/dev/null', { stdio })});

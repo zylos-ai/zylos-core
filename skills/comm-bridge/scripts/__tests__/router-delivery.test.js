@@ -350,3 +350,54 @@ test('periodic Enter failure after verified delivery drains without requeue or d
   assert.ok(f.calls.some(c=>c[0]==='diagnostic' && c[1]==='periodic_failed'));
   const count=keys; await new Promise(resolve=>setTimeout(resolve,15)); assert.equal(keys,count);
 });
+
+for (const stopAt of ['idle hold', 'before idle hold', 'idle poll']) {
+  test(`stop during ${stopAt} cancels queue pacing but drains verification and ledger`, { timeout: 3000 }, async t => {
+    const f = setup(t), row = f.message(), entered = deferred(), releaseVerify = deferred();
+    row.require_idle = 1;
+    const timers = new Set(); let idleWaits = 0, abortedWaits = 0, verified = false;
+    f.deps.now = Date.now;
+    f.deps.sleep = (ms, signal) => {
+      if (!signal) {
+        if (ms === 500 && !verified) { entered.resolve(); return releaseVerify.promise.then(() => { verified = true; }); }
+        return Promise.resolve();
+      }
+      idleWaits++;
+      if (stopAt === 'idle poll' && idleWaits === 1) { f.state.state = 'running'; return Promise.resolve(); }
+      entered.resolve();
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { timers.delete(timer); resolve(); }, ms); timers.add(timer);
+        signal.addEventListener('abort', () => {
+          clearTimeout(timer); timers.delete(timer); abortedWaits++;
+          reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
+        }, { once: true });
+      });
+    };
+    const delivery = f.create({ idleHoldMs: 60000, idlePollMs: 60000 });
+    const pending = delivery.deliverConversation(row);
+    t.after(async () => { releaseVerify.resolve(); for (const timer of timers) clearTimeout(timer); await delivery.stop(); });
+    await entered.promise;
+    if (stopAt !== 'before idle hold') {
+      releaseVerify.resolve();
+      for (let i = 0; timers.size === 0 && i < 30; i++) await new Promise(setImmediate);
+      assert.equal(timers.size, 1, 'queue pacing timer must actually be active');
+    }
+    assert.equal(f.row(row.id).status, 'running');
+    const stopping = delivery.stop();
+    if (stopAt === 'before idle hold') {
+      await new Promise(setImmediate);
+      assert.equal(f.row(row.id).status, 'running', 'stop cannot skip in-flight verification');
+      assert.equal(f.calls.some(call => call[0] === 'close'), false);
+      releaseVerify.resolve();
+    }
+    await Promise.all([pending, stopping]);
+    assert.equal(f.row(row.id).status, 'delivered'); assert.equal(f.row(row.id).retry_count, 0);
+    assert.equal(f.calls.filter(call => call[0] === 'paste').length, 1);
+    assert.equal(timers.size, 0, 'stop must clear the underlying idle timer');
+    assert.equal(abortedWaits, stopAt === 'before idle hold' ? 0 : 1);
+    assert.equal(idleWaits, stopAt === 'before idle hold' ? 0 : stopAt === 'idle poll' ? 2 : 1);
+    assert.equal(verified, true);
+    const order = f.calls.map(call => call[0]);
+    assert.ok(order.indexOf('close') < order.indexOf('markDelivered'));
+  });
+}

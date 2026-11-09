@@ -954,8 +954,10 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-input-num { width: 84px; }
 .wb-input-name { width: 220px; }
 .wb-timezone-controls { flex-wrap: nowrap; }
-.wb-timezone-controls .wb-input { width: min(100%, 280px); max-width: 280px; min-width: 0; flex: 0 1 280px; }
-.wb-timezone-controls .wb-input:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
+.wb-timezone-controls .wb-select-wrap { width: min(100%, 280px); max-width: 280px; min-width: 0; flex: 0 1 280px; }
+.wb-timezone-controls .wb-select { min-height: 40px; text-overflow: ellipsis; }
+.wb-timezone-controls .wb-btn, .wb-timezone-pending .wb-btn { min-height: 40px; min-width: 40px; }
+.wb-timezone-controls .wb-select:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
 .wb-timezone-controls .wb-btn { flex: none; }
 .wb-timezone-pending { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--wb-line); }
 .wb-timezone-pending[hidden] { display: none; }

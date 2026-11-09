@@ -92,15 +92,13 @@ describe('PM2 ecosystem restart helpers', () => {
     ]);
   });
 
-  it('refreshes a named process environment only when explicitly requested', () => {
+  it('uses a bounded named restart stop timeout without updating the process environment', () => {
     const calls = [];
-    const { restartManagedProcess } = createPm2Helpers({ exec: cmd => calls.push(cmd) });
-    restartManagedProcess('scheduler');
-    restartManagedProcess('scheduler', { updateEnv: true });
-    assert.deepEqual(calls, [
-      'pm2 restart "scheduler" 2>/dev/null',
-      'pm2 restart "scheduler" --update-env 2>/dev/null',
-    ]);
+    const { restartManagedProcess } = createPm2Helpers({ exec: command => calls.push(command) });
+    restartManagedProcess('c4-dispatcher', { killTimeoutMs: 10000 });
+    assert.deepEqual(calls, ['pm2 restart "c4-dispatcher" --kill-timeout 10000 2>/dev/null']);
+    assert.throws(() => restartManagedProcess('c4-dispatcher', { killTimeoutMs: '10000; echo unsafe' }), TypeError);
+    assert.equal(calls.length, 1);
   });
 
   it('recreates the process from ecosystem when ecosystem restart execution fails', () => {

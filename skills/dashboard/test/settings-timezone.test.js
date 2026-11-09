@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mountTimezoneSettings, validTimezone } from '../public/js/wb/settings-timezone.js';
+import { canonicalTimezoneName, timezoneOptions } from '../public/js/wb/timezone-names.js';
 import { documentFixture } from './fixtures/settings-dom.js';
 import { deferred } from './fixtures/workbench-dom.js';
 
@@ -12,12 +13,12 @@ function fixture(options = {}) {
     read: async () => settings(), write: async body => { writes.push(body); return settings({ tz: body.tz, ok: true, changed: true }); },
     restart: async body => { restarts.push(body); return { ok: true, restarted: ['scheduler'], failed: [], restart_services: [] }; },
     confirm: async text => { questions.push(text); return true; }, ...options });
-  return { root, view, writes, restarts, questions, input: root.querySelector('input'),
+  return { root, view, writes, restarts, questions, input: root.querySelector('select'),
     save: root.querySelector('#settings-timezone-save'), restart: root.querySelector('#settings-timezone-restart'),
     pending: root.querySelector('#settings-timezone-pending'), notice: root.querySelector('#settings-timezone-result'),
     policy: root.querySelector('#settings-timezone-policy') };
 }
-async function save(f, tz = 'Asia/Singapore') { f.input.value = tz; await f.input.dispatch('input'); await f.save.dispatch('click'); }
+async function save(f, tz = 'Asia/Singapore') { f.input.value = tz; await f.input.dispatch('change'); await f.save.dispatch('click'); }
 
 test('time zone validation rejects unknown or empty values and permits valid IANA zones', () => {
   for (const value of ['', null, 'Not/AZone', 4]) assert.equal(validTimezone(value), false);
@@ -32,7 +33,7 @@ test('time zone card uses the shared decorative clock icon', async () => {
 });
 test('host timezone rejection displays its specific reason and keeps the saved value untouched', async () => {
   const f = fixture({ write: async () => { const error = new Error('timezone_unavailable_on_host'); error.code = error.message; throw error; } });
-  await f.view.refresh(); await save(f, 'Asia/Calcutta');
+  await f.view.refresh(); await save(f, 'Asia/Kolkata');
   assert.equal(f.notice.textContent, 'wb.settings.timezone.hostUnsupported');
   assert.equal(f.pending.hidden, true); assert.equal(f.restarts.length, 0);
 });
@@ -53,11 +54,11 @@ test('invalid input cannot write and an unknown but readable current zone can be
   assert.equal(f.input.disabled, false); await save(f, 'not/a-zone'); assert.equal(f.save.disabled, true); assert.equal(f.writes.length, 0);
   await save(f); assert.equal(f.writes.length, 1);
 });
-test('read-only remote and managed deployments reject dispatched writes and restarts', async () => {
-  for (const options of [{ writable: () => false }, { read: async () => settings({ writable: false, read_only_reason: 'timezone_managed' }) }]) {
+test('read-only remote and unreadable configuration reject dispatched writes and restarts', async () => {
+  for (const options of [{ writable: () => false }, { read: async () => settings({ writable: false, read_only_reason: 'tz_env_read_error' }) }]) {
     const f = fixture(options); await f.view.refresh(); await save(f); await f.restart.dispatch('click');
     assert.equal(f.input.disabled, true); assert.equal(f.writes.length, 0); assert.equal(f.restarts.length, 0);
-    assert.match(f.policy.textContent, /readOnlyRemote|managed/);
+    assert.match(f.policy.textContent, /readOnlyRemote|readOnly/);
   }
 });
 test('temporary action unavailability disables controls without claiming remote access is read-only', async () => {
@@ -98,7 +99,7 @@ test('invalidation ignores a delayed save result and duplicate clicks cannot iss
   assert.equal(f.input.value, ''); assert.equal(f.pending.hidden, true); assert.equal(f.notice.textContent, '');
 });
 test('editing the saved value prevents restarting a different zone', async () => {
-  const f = fixture(); await f.view.refresh(); await save(f); f.input.value = 'America/New_York'; await f.input.dispatch('input');
+  const f = fixture(); await f.view.refresh(); await save(f); f.input.value = 'America/New_York'; await f.input.dispatch('change');
   await f.restart.dispatch('click'); assert.equal(f.restarts.length, 0); assert.equal(f.restart.disabled, true);
 });
 
@@ -197,4 +198,62 @@ test('initial discovery failure retains the confirmed services for an explicit r
   await f.restart.dispatch('click');
   assert.deepEqual(calls.map(call => call.services), [['scheduler'], ['scheduler']]);
   assert.equal(f.pending.hidden, true);
+});
+
+// Expected country-location names follow IANA 2026e backward/backzone, independently
+// of ICU's old primary identifiers. Every renamed option must disappear from the DOM.
+const renamedZones = [
+  ['Africa/Asmera', 'Africa/Asmara'],
+  ['America/Buenos_Aires', 'America/Argentina/Buenos_Aires'],
+  ['America/Catamarca', 'America/Argentina/Catamarca'],
+  ['America/Coral_Harbour', 'America/Atikokan'],
+  ['America/Cordoba', 'America/Argentina/Cordoba'],
+  ['America/Godthab', 'America/Nuuk'],
+  ['America/Indianapolis', 'America/Indiana/Indianapolis'],
+  ['America/Jujuy', 'America/Argentina/Jujuy'],
+  ['America/Louisville', 'America/Kentucky/Louisville'],
+  ['America/Mendoza', 'America/Argentina/Mendoza'],
+  ['Asia/Calcutta', 'Asia/Kolkata'], ['Asia/Katmandu', 'Asia/Kathmandu'],
+  ['Asia/Rangoon', 'Asia/Yangon'], ['Asia/Saigon', 'Asia/Ho_Chi_Minh'],
+  ['Atlantic/Faeroe', 'Atlantic/Faroe'], ['Europe/Kiev', 'Europe/Kyiv'],
+  ['Pacific/Enderbury', 'Pacific/Kanton'], ['Pacific/Ponape', 'Pacific/Pohnpei'],
+  ['Pacific/Truk', 'Pacific/Chuuk'],
+];
+test('time zone options map old identifiers to current IANA country locations without duplicates', async () => {
+  const supplied = renamedZones.flat(), options = timezoneOptions(supplied);
+  assert.equal(options.length, renamedZones.length + 1);
+  for (const [old, current] of renamedZones) {
+    assert.equal(canonicalTimezoneName(old), current);
+    assert.equal(canonicalTimezoneName(current), current);
+    assert.equal(options.includes(old), false, old);
+    assert.equal(options.includes(current), true, current);
+    assert.equal(validTimezone(old), false, old);
+  }
+  assert.equal(canonicalTimezoneName('asia/calcutta'), 'asia/calcutta', 'Mapping never repairs spelling');
+  const f = fixture(); await f.view.refresh();
+  const actual = f.input.querySelectorAll('option').map(option => option.value);
+  assert.equal(new Set(actual).size, actual.length);
+  const suppliedByIntl = Intl.supportedValuesOf('timeZone');
+  for (const [old, current] of renamedZones) {
+    assert.equal(actual.includes(old), false, old);
+    if (suppliedByIntl.includes(old) || suppliedByIntl.includes(current)) assert.equal(actual.includes(current), true, current);
+  }
+  assert.ok(f.input.querySelectorAll('optgroup').length > 1, 'Regions make the native dropdown navigable');
+  for (const name of ['Africa/Accra', 'Asia/Kuala_Lumpur']) assert.equal(actual.includes(name), suppliedByIntl.includes(name), 'Keep current geographic names');
+});
+test('an unlisted current value remains visible unchanged until an explicit choice is saved', async () => {
+  for (const tz of ['Asia/Calcutta', 'Custom/Legacy']) {
+    const f = fixture({ read: async () => settings({ tz }) }); await f.view.refresh();
+    assert.equal(f.input.value, tz);
+    const original = f.input.querySelectorAll('option').find(option => option.value === tz);
+    assert.equal(original.textContent, tz); assert.equal(original.disabled, true);
+    assert.equal(f.save.disabled, true); await f.save.dispatch('click'); assert.equal(f.writes.length, 0);
+    await save(f, 'Asia/Kolkata'); assert.equal(f.writes[0].tz, 'Asia/Kolkata');
+  }
+});
+test('restart service labels cover the core monitor and dispatcher', async () => {
+  const f = fixture({ write: async body => settings({ tz: body.tz, restart_services: [{ name: 'activity-monitor' }, { name: 'c4-dispatcher' }] }) });
+  await f.view.refresh(); await save(f);
+  assert.equal(f.root.querySelector('#settings-timezone-services').textContent,
+    'wb.settings.timezone.activityMonitorwb.settings.timezone.dispatcher');
 });

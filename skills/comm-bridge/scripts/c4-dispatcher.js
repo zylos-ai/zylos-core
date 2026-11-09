@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadStartupTimezone } from './startup-timezone.js';
 import { createDispatcher } from './router/factory.js';
 import { close } from './c4-db.js';
 
@@ -6,6 +7,7 @@ import { close } from './c4-db.js';
 export async function main({ create = createDispatcher, closeDatabase = close,
   signals = process, log = message => console.log(`[${new Date().toISOString()}] ${message}`),
 } = {}) {
+  loadStartupTimezone();
   const dispatcher = create();
   let stopping;
   let started;

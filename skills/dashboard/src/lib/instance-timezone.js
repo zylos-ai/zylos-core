@@ -4,21 +4,23 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parse } from 'dotenv';
+import { canonicalTimezoneName, timezoneOptions } from '../../public/js/wb/timezone-names.js';
 import { withConfigLock } from './config-mutation.js';
 import { createScheduleTz } from './workbench/schedule-tz.js';
 import { loadCoreModule } from './core-modules.js';
 import { readJsonBody, sendJson } from './http.js';
 import { isSameOriginRequest } from './request-origin.js';
 
-const { readConfigStrict } = await loadCoreModule('config-store.js');
 const { createPm2Helpers } = await loadCoreModule('pm2.js');
 const execAsync = promisify(exec);
+const currentTimezones = new Set(timezoneOptions());
 
 export const INSTANCE_TIMEZONE_PATH = '/api/settings/timezone';
 const SERVICES = [
   ['scheduler', 'scheduler/scripts/daemon.js'],
   ['web-console', 'web-console/scripts/server.js'],
-  ['zylos-openmax', 'openmax/src/comm-bridge.js'],
+  ['activity-monitor', 'activity-monitor/scripts/activity-monitor.js'],
+  ['c4-dispatcher', 'comm-bridge/scripts/c4-dispatcher.js'],
 ];
 
 class TimezoneSettingsError extends Error {
@@ -33,7 +35,7 @@ function readableTimezone(tz) {
 // ICU may return an older IANA name (for example Calcutta for Kolkata).
 // Check recognition and spelling separately from the host's installed tzdata.
 function writableTimezone(tz) {
-  return readableTimezone(tz) && (tz === 'UTC' || /^(?:[A-Z][A-Za-z0-9_+.-]*\/)+[A-Z][A-Za-z0-9_+.-]*$/.test(tz));
+  return readableTimezone(tz) && canonicalTimezoneName(tz) === tz && (tz === 'UTC' || /^(?:[A-Z][A-Za-z0-9_+.-]*\/)+[A-Z][A-Za-z0-9_+.-]*$/.test(tz));
 }
 
 function systemZoneinfoDirectory() {
@@ -46,7 +48,7 @@ function systemZoneinfoDirectory() {
 
 function requireHostTimezone(tz, zoneinfoDir) {
   if (!zoneinfoDir) {
-    if (tz !== 'UTC' && new Intl.DateTimeFormat(undefined, { timeZone: tz }).resolvedOptions().timeZone !== tz) fail('invalid_timezone', 400);
+    if (!currentTimezones.has(tz)) fail('invalid_timezone', 400);
     return;
   }
   let file = zoneinfoDir, handle;
@@ -62,6 +64,7 @@ function requireHostTimezone(tz, zoneinfoDir) {
     if (fs.readSync(handle, header, 0, 4, 0) !== 4 || header.toString() !== 'TZif') fail('timezone_unavailable_on_host', 400);
   } catch { fail('timezone_unavailable_on_host', 400); }
   finally { if (handle !== undefined) fs.closeSync(handle); }
+  if (!currentTimezones.has(tz)) fail('invalid_timezone', 400);
 }
 
 function samePath(left, right) {
@@ -124,20 +127,9 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
   readPm2 = () => null, restartService, execute = execAsync, zoneinfoDir = systemZoneinfoDirectory(),
   log = message => process.stderr.write(`[timezone] ${message}\n`) } = {}) {
   const envFile = path.join(zylosDir, '.env');
-  const configFile = path.join(zylosDir, '.zylos/config.json');
   const timezoneReader = readTimezone ?? createScheduleTz({ zylosDir });
 
-  function policy() {
-    const result = readConfigStrict(configFile);
-    if (result.state === 'error' || result.state === 'ok' && Object.hasOwn(result.config, 'timezone_managed') &&
-        typeof result.config.timezone_managed !== 'boolean') return 'config_unreadable';
-    return result.state === 'ok' && result.config.timezone_managed === true ? 'timezone_managed' : null;
-  }
-  function requireWritable() {
-    const reason = policy();
-    if (reason) fail(reason === 'timezone_managed' ? 'timezone_managed' : reason, reason === 'timezone_managed' ? 409 : 503);
-    return readEnvironment(envFile);
-  }
+  function requireWritable() { return readEnvironment(envFile); }
   async function candidates() {
     let data;
     try { data = await readPm2(); } catch { data = null; }
@@ -150,10 +142,12 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
       const proc = matches[0], env = proc.pm2_env;
       if (env?.status !== 'online' || !samePath(env.pm_exec_path, expected)) continue;
       const ownedRoot = env.ZYLOS_DIR ?? env.env?.ZYLOS_DIR;
+      const processHome = env.HOME ?? env.env?.HOME;
       const cwd = env.pm_cwd;
       const owned = ownedRoot !== undefined ? samePath(ownedRoot, zylosDir)
         : samePath(cwd, zylosDir) || samePath(cwd, path.dirname(expected)) ||
-          samePath(cwd, path.join(zylosDir, '.claude/skills', script.split('/')[0]));
+          samePath(cwd, path.join(zylosDir, '.claude/skills', script.split('/')[0])) ||
+          typeof processHome === 'string' && samePath(path.join(processHome, 'zylos'), zylosDir);
       if (owned) restart_services.push({ name, status: 'online' });
     }
     return { restart_services, restart_status: 'known' };
@@ -166,7 +160,7 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
     } catch { return null; }
   }
   async function get({ canWrite = true } = {}) {
-    let reason = policy();
+    let reason = null;
     try { readEnvironment(envFile); } catch { reason ||= 'tz_env_read_error'; }
     if (!canWrite) reason ||= 'read_only_access';
     return { tz: await zone(), writable: !reason, read_only_reason: reason, ...await candidates() };
@@ -192,17 +186,18 @@ export function createInstanceTimezone({ zylosDir, readTimezone,
     if (changed) log(`TZ saved: ${previous || '(unknown)'} -> ${body.tz}`);
     return { ok: true, changed, previous, ...await get() };
   }
-  const restartOne = restartService || (async (name, tz) => {
+  const restartOne = restartService || (async name => {
     let execution;
     const helpers = createPm2Helpers({ exec: (command, options) => {
       execution = execute(command, {
-        ...options, env: { ...process.env, ZYLOS_DIR: zylosDir, TZ: tz }, timeout: 15_000, killSignal: 'SIGKILL',
+        ...options, timeout: 15_000, killSignal: 'SIGKILL',
       });
       return execution;
     } });
-    // Preserve the existing named restart/environment policy while keeping its
+    // Use an ordinary named restart while keeping its
     // asynchronous completion and failure inside this request's lifecycle.
-    helpers.restartManagedProcess(name, { updateEnv: true });
+    // Allow delivery verification to drain beyond PM2's default stop deadline.
+    helpers.restartManagedProcess(name, name === 'c4-dispatcher' ? { killTimeoutMs: 10_000 } : undefined);
     await execution;
   });
   async function restart(body) {

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /** The supervisor observes and reconciles sessions; the dispatcher owns process launch. */
+import { loadStartupTimezone } from '../../comm-bridge/scripts/startup-timezone.js';
 import { isMainModule } from './is-main-module.js';
 import { startSupervisor } from './supervisor-main.js';
 
 export async function main({start=startSupervisor,runtime=process,log=console.error}={}) {
+  loadStartupTimezone();
   const service=await start();
   for(const signal of ['SIGTERM','SIGINT'])runtime.once(signal,()=>{
     void service.stop().then(()=>runtime.exit(0),error=>{log(error.code ?? error.message);runtime.exit(1);});

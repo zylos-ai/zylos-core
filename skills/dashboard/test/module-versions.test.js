@@ -38,7 +38,7 @@ function loadedVersions() {
 
 test('every module the page loads is imported at one cache version only', () => {
   const versions = loadedVersions();
-  assert.ok(versions.has('js/app.js') && versions.has('js/wb/conversation-page.js') && versions.has('js/wb/board.js'), 'the walk reaches the page modules');
+  assert.ok(versions.has('js/app.js') && versions.has('js/wb/conversation-page.js') && versions.has('js/wb/board.js') && versions.has('js/wb/timezone-names.js'), 'the walk reaches the page modules');
   const mixed = [...versions].filter(([, set]) => set.size > 1).map(([file, set]) => `${file}: ${[...set].join(', ')}`);
   assert.deepEqual(mixed, [], 'a module imported at two ?v= values loads twice and keeps two copies of its state');
   for (const file of versions.keys()) assert.ok(servedFrom[file] || fs.existsSync(path.join(publicRoot, file)), `${file} exists`);
