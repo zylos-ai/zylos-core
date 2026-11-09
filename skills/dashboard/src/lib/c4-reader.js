@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import path from 'node:path';
 import fs from 'node:fs';
 

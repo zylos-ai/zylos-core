@@ -92,7 +92,7 @@ import { createCoreStateChangePublisher } from './lib/core-state-publisher.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
 import { applyVersionUpdateFields, codexRuntimeFields } from './lib/runtime-info.js';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 
 const startedAt = new Date();
 const MEMORY_WRITE_BODY_MAX_BYTES = 2 * 1024 * 1024 + 64 * 1024;

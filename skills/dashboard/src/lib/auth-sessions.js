@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { inspectDatabase } from './schema.js';
 import { assertCoreDatabaseAvailable } from '../../../comm-bridge/scripts/sqlite-schema.js';
 

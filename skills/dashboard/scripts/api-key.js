@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import fs from 'node:fs';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { generateApiKey, hashApiKey } from '../src/lib/auth.js';

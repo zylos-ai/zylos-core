@@ -16,7 +16,7 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import { spawn } from 'child_process';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { fileURLToPath } from 'url';
 import {
   MAX_ATTACHMENTS,

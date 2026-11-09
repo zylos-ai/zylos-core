@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import * as schema from './schema.js';
 import { guardDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
 import crypto from 'node:crypto';

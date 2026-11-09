@@ -5,7 +5,7 @@
  */
 
 import { isMainModule } from './is-main-module.js';
-import Database from 'better-sqlite3';
+import Database from './sqlite-driver.js';
 import * as schema from './c4-schema.js';
 import { guardDatabase, assertCoreDatabaseAvailable } from './sqlite-schema.js';
 import path from 'path';

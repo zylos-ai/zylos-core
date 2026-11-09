@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { mkdirPrivate, privateParents, privatePath } from './observer-tmux-state.js';
 import fs from 'node:fs';
 import net from 'node:net';

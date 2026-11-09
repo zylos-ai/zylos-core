@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { createDisplayNames } from '../src/lib/workbench/display-names.js';

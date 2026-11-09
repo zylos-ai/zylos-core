@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import Database from 'better-sqlite3';
+import Database from '../../../../comm-bridge/scripts/sqlite-driver.js';
 import { C4Reader } from '../c4-reader.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../schema.js';
 import {

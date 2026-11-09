@@ -2,7 +2,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { renderInstruction } from './runtime/assembler.mjs';
 import { instructionPaths, readInstructionFormatVersion, CURRENT_INSTRUCTION_FORMAT_VERSION,
@@ -20,12 +19,12 @@ import { installClaude, installCodex } from './runtime-setup.js';
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
-function readRuntimeOverrides(ctx) {
+async function readRuntimeOverrides(ctx) {
   const file = path.join(ctx.zylosDir, 'comm-bridge/c4.db');
   try { fs.lstatSync(file); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  const installed = createRequire(path.join(ctx.zylosDir, '.claude/skills/comm-bridge/package.json'));
-  const Database = installed('better-sqlite3');
+  // The upgrade process also reads C4 through the package's c4-db.js; both must use the process's one driver.
+  const { default: Database } = await import('../../skills/comm-bridge/scripts/sqlite-driver.js');
   const db = new Database(file, { readonly: true, fileMustExist: true, timeout: 5000 });
   try {
     // Pre-multi databases have no D10 overrides. Never migrate during preparation.
