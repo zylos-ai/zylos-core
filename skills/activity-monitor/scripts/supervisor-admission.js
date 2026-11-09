@@ -12,6 +12,8 @@ export function validSupervisorRequest(request) {
   if (!object(request) || request.version !== 1 || !validRequestId(request.requestId)) return false;
   switch (request.type) {
     case 'delete_group': return validGroup(request.sessionGroup) && nonempty(request.actor) && request.actor.length <= 512
+      && Number.isSafeInteger(request.cutoffId) && request.cutoffId >= 0
+      && (request.generationId === null || nonempty(request.generationId)) && nonempty(request.targetKey)
       && (!Object.hasOwn(request, 'operationId') || validRequestId(request.operationId))
       && (!Object.hasOwn(request, 'preview') || object(request.preview) &&
         Object.keys(request.preview).every(key => ['messages','attachments','files'].includes(key)) &&
@@ -79,6 +81,7 @@ export class SupervisorAdmission {
           default: return reply({ ok: false, code: 'invalid_request' });
         }
       } catch (error) {
+        if (request.type === 'delete_group' && ['DELETION_PREVIEW_STALE', 'DELETION_OWNERSHIP_MISMATCH', 'DRAFT_BECAME_ACTIVE'].includes(error.code)) return reply({ ok: false, result: 'rejected', reason: error.code });
         if (error.code !== 'requests_unreadable' || request.type === 'ready_for_config_reclaim') throw error;
         return reply(['manual_restart', 'delete_group'].includes(request.type)
           ? { ok: false, result: 'rejected', reason: error.code } : { ok: false, code: error.code });
@@ -113,11 +116,12 @@ export class SupervisorAdmission {
     if ((await this.readMode()).mode !== 'multi') return reject('not_multi');
     if (await this.db.getModeTransition() || await this.db.getDrainFence('*')) return reject('transition_open');
     const active = await this.db.getActiveDeletion(request.sessionGroup);
+    if (active && (active.operationId !== operationId || active.cutoffId !== request.cutoffId || active.generationId !== request.generationId || active.targetKey !== request.targetKey)) return reject('DELETION_OWNERSHIP_MISMATCH');
     if (!active && await this.db.getDrainFence(request.sessionGroup)) return reject('fence_conflict');
     const run = active ? { runId: active.runId } : await this.readRun(request.sessionGroup);
     if (!active && run !== null && (!nonempty(run?.runId) || !run.ready)) return reject('identity_unavailable');
     const deletion = active ?? await this.db.beginGroupDeletion(request.sessionGroup, { operationId, actor: request.actor,
-      runId: run?.runId ?? null, preview: request.preview });
+      runId: run?.runId ?? null, preview: request.preview, cutoffId: request.cutoffId, generationId: request.generationId, targetKey: request.targetKey });
     // The lifecycle owner removes only this group's queued manual/upgrade intent.
     // Its fence already excludes new admission before the intent is changed.
     const remaining = rows.flatMap(row => {

@@ -58,8 +58,11 @@ export async function createGroupDeletionFixture(t, { group = 'telegram:room' } 
   const scenes = new SupervisorScenes({ env, connectionOptions: { socketPath: sandbox.paths.socket },
     readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state: 'idle', idleSince: Date.now() - 60_000 }), readUsage: () => 0 });
   function startDeleteChild({ group: target = group, operationId, pauseAfterFiles = false } = {}) {
+    const targetKey = JSON.stringify(['group', target]);
+    const boundary = store.getGroupDeletionAudit(operationId) ? null : store.getDeletionPreviewBoundary(targetKey);
     const child = sandbox.startChild(process.execPath, [fixturePath('group-deletion-command.js'), '--group', target,
-      '--yes', '--json', '--actor', 'integration:owner', '--operation-id', operationId], {
+      '--yes', '--json', '--actor', 'integration:owner', '--operation-id', operationId,
+      ...(boundary ? ['--cutoff-id', String(boundary.cutoffId), '--generation-id', JSON.stringify(boundary.generationId), '--target-key', targetKey] : [])], {
       env: { ...env, GROUP_DELETION_PAUSE: pauseAfterFiles ? '1' : '0' }, timeoutMs: 30_000 });
     child.completion.then(result => { if (fs.existsSync(root)) fs.writeFileSync(path.join(root, 'command-result.json'), JSON.stringify(result)); });
     return child;

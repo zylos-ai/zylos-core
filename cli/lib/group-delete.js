@@ -92,13 +92,13 @@ export function createGroupDeletion({
     }
   }
 
-  function messages(group, includeRunning = false) {
+  function messages(group, includeRunning = false, cutoffId = Number.MAX_SAFE_INTEGER) {
     return database.prepare(`SELECT id,direction,status,channel,endpoint_id,session_id FROM conversations
-      WHERE session_group=? AND (direction='out' OR direction='in' AND status NOT IN (${includeRunning ? "'pending'" : "'pending','running'"})) ORDER BY id`).all(group);
+      WHERE session_group=? AND id<=? AND (direction='out' OR direction='in' AND status NOT IN (${includeRunning ? "'pending'" : "'pending','running'"})) ORDER BY id`).all(group, cutoffId);
   }
 
-  function paths(group, rows) {
-    const roots = [
+  function paths(group, rows, keepGroupSources = false) {
+    const roots = keepGroupSources ? [] : [
       [path.join(zylosDir, 'memory', 'session-groups'), groupMemoryDir(group, { ZYLOS_DIR: zylosDir })],
       [path.join(zylosDir, 'activity-monitor', 'session-groups'), groupRunDir(group, { ZYLOS_DIR: zylosDir })],
     ];
@@ -110,17 +110,23 @@ export function createGroupDeletion({
     return roots;
   }
 
+  const keyOf = resolved => JSON.stringify(resolved.sessionGroup ? ['group', resolved.sessionGroup] : ['draft', resolved.namespace, resolved.localId]);
+  function retained(group, cutoffId) {
+    return database.prepare("SELECT id FROM conversations WHERE session_group=? AND (id>? OR direction='in' AND status IN ('pending','running')) ORDER BY id").all(group, cutoffId).map(row => row.id);
+  }
   async function preview(value) {
     const target = targetOf(value);
     await open();
     const resolved = await participant.resolveTarget(target);
+    const targetKey = keyOf(resolved);
+    const boundary = store.getDeletionPreviewBoundary(targetKey);
     const group = resolved.sessionGroup;
-    const extra = await participant.preview(resolved);
-    const rows = group ? messages(group, true) : [];
-    const active = group ? store.getActiveDeletion(group) : null;
-    const files = (extra.files ?? 0) + (group ? paths(group, rows).reduce((n, [base, file]) => n + countFiles(base, file), 0) : 0);
-    return { ok: true, ...resolved, draft: !!resolved.draft, messages: rows.length, attachments: extra.attachments ?? 0,
-      files, operationId: active?.operationId ?? uuid(), pending: !!active };
+    const kept = group ? retained(group, boundary.cutoffId) : [];
+    const extra = await participant.preview({ ...resolved, ...boundary, targetKey, hasRetainedMessages: kept.length > 0 });
+    const rows = group ? messages(group, true, boundary.cutoffId) : [];
+    const files = (extra.files ?? 0) + (group ? paths(group, rows, kept.length > 0).reduce((n, [base, file]) => n + countFiles(base, file), 0) : 0);
+    return { ok: true, ...resolved, ...boundary, targetKey, draft: !!resolved.draft, messages: rows.length, attachments: extra.attachments ?? 0,
+      files, operationId: boundary.operationId ?? uuid() };
   }
 
   function completed(target, operationId) {
@@ -150,25 +156,38 @@ export function createGroupDeletion({
     }
   }
 
-  async function deleteConversation(value, { confirmed = false, actor, operationId } = {}) {
+  async function deleteConversation(value, { confirmed = false, actor, operationId, cutoffId, generationId, targetKey } = {}) {
     const deadlineAt = now() + waitMs;
     const target = targetOf(value);
     if (confirmed !== true) throw error('CONFIRMATION_REQUIRED', 'Confirm the irreversible deletion before continuing');
     if (typeof actor !== 'string' || !actor || actor.length > 512) throw error('INVALID_ARGUMENT', 'A deletion actor is required');
     if (operationId !== undefined && (typeof operationId !== 'string' || !operationId || operationId.length > 512)) throw error('INVALID_ARGUMENT', 'Invalid deletion operation');
     await open();
+    const known = operationId ? store.getGroupDeletionAudit(operationId) : null;
+    if (known) {
+      if ((cutoffId !== undefined && cutoffId !== known.cutoffId) || (generationId !== undefined && generationId !== known.generationId) ||
+          (targetKey !== undefined && targetKey !== known.targetKey)) throw error('DELETION_OWNERSHIP_MISMATCH', 'Confirmed deletion boundary does not match');
+      cutoffId = known.cutoffId; generationId = known.generationId; targetKey = known.targetKey;
+    } else if (!Number.isSafeInteger(cutoffId) || cutoffId < 0 || !(generationId === null || typeof generationId === 'string' && generationId) || typeof targetKey !== 'string') {
+      throw error('DELETION_CONFIRMATION_REQUIRED', 'Preview the conversation before confirming deletion');
+    }
     const done = completed(target, operationId);
     if (done) return done;
     const resolved = await participant.resolveTarget(target);
-    const extra = await participant.preview(resolved);
+    const resolvedKey = keyOf(resolved);
+    if (targetKey !== resolvedKey) throw error(targetKey?.startsWith('["draft",') && resolved.sessionGroup ? 'DRAFT_BECAME_ACTIVE' : 'DELETION_PREVIEW_STALE', 'The conversation changed; preview deletion again');
+    const current = store.getDeletionPreviewBoundary(targetKey);
+    if (!known && current.generationId !== generationId) throw error('DELETION_PREVIEW_STALE', 'The conversation changed; preview deletion again');
     const group = resolved.sessionGroup;
+    const keptBefore = group ? retained(group, cutoffId) : [];
+    const extra = await participant.preview({ ...resolved, cutoffId, targetKey, hasRetainedMessages: keptBefore.length > 0 });
     if (!group) {
-      const audit = store.beginDraftDeletion(resolved.localId, { operationId: operationId ?? uuid(), actor,
+      const audit = store.beginDraftDeletion(resolved.localId, { operationId: operationId ?? uuid(), actor, cutoffId, generationId, targetKey,
         preview: { messages: 0, attachments: extra.attachments ?? 0, files: extra.files ?? 0 } });
       if (audit.status === 'done') return { ok: true, pending: false, operationId: audit.operationId, counts: audit.counts, countsEstimated: audit.countsEstimated };
       const result = withCleanupAttempt(audit.operationId, onFilePhase => store.finalizeDraftDeletion(resolved.localId, { operationId: audit.operationId,
         cleanup: () => {
-          const removed = participant.cleanup({ ...resolved, pendingMessageIds: [], onFilePhase });
+          const removed = participant.cleanup({ ...resolved, cutoffId, hasRetainedMessages: false, retainedMessageIds: [], pendingMessageIds: [], onFilePhase });
           onStage('files_removed', audit);
           return removed;
         } }));
@@ -176,13 +195,14 @@ export function createGroupDeletion({
     }
 
     const existing = store.getActiveDeletion(group);
-    const requestId = existing?.operationId ?? operationId ?? uuid();
-    const initialRows = messages(group, true);
+    if (existing && operationId !== existing.operationId) throw error('DELETION_OWNERSHIP_MISMATCH', 'Another deletion owns this conversation');
+    const requestId = operationId ?? uuid();
+    const initialRows = messages(group, true, cutoffId);
     const initial = { messages: initialRows.length, attachments: extra.attachments ?? 0,
-      files: (extra.files ?? 0) + paths(group, initialRows).reduce((n, [base, file]) => n + countFiles(base, file), 0) };
+      files: (extra.files ?? 0) + paths(group, initialRows, keptBefore.length > 0).reduce((n, [base, file]) => n + countFiles(base, file), 0) };
     const admissionNow = now();
     const result = await requestStop({ version: 1, type: 'delete_group', requestId,
-      operationId: requestId, sessionGroup: group, actor, preview: initial },
+      operationId: requestId, sessionGroup: group, actor, preview: initial, cutoffId, generationId, targetKey },
     { socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock'),
       deadlineAt: Math.max(admissionNow + 1000, Math.min(deadlineAt, admissionNow + 10000)) });
     if (result.kind === 'rejected') throw error(result.reply?.reason ?? result.reply?.code ?? 'GROUP_DELETE_REJECTED', 'Core rejected deletion admission');
@@ -202,7 +222,7 @@ export function createGroupDeletion({
       await sleep(Math.min(pollMs, Math.max(1, deadlineAt - now())));
     } while (true);
     await onStage('stopped', active);
-    try { await participant.finalizeTranscripts({ ...resolved, processExited: true, deadlineAt, now }); }
+    try { await participant.finalizeTranscripts({ ...resolved, cutoffId: active.cutoffId, hasRetainedMessages: retained(group, active.cutoffId).length > 0, processExited: true, deadlineAt, now }); }
     catch (cause) {
       if (cause.code === 'group_delete_usage_pending' || cause.code === 'GROUP_DELETE_USAGE_PENDING') {
         return { ok: true, pending: true, operationId: active.operationId, reason: 'usage_pending' };
@@ -217,10 +237,12 @@ export function createGroupDeletion({
         // pending attachment links. Dashboard's writer serializes old imports.
         const pendingMessageIds = database.prepare("SELECT id FROM conversations WHERE session_group=? AND direction='in' AND status='pending'").all(group).map(row => row.id);
         const toDelete = store.listDeletionMessages(group, { operationId: active.operationId });
-        const groupSources = paths(group, toDelete);
+        const retainedMessageIds = retained(group, active.cutoffId);
+        const hasRetainedMessages = retainedMessageIds.length > 0;
+        const groupSources = paths(group, toDelete, hasRetainedMessages);
         for (const [base, file] of groupSources) countFiles(base, file);
         let removed = 0;
-        const outcome = participant.cleanup({ ...resolved, pendingMessageIds, onFilePhase,
+        const outcome = participant.cleanup({ ...resolved, cutoffId: active.cutoffId, hasRetainedMessages, retainedMessageIds, pendingMessageIds, onFilePhase,
           removeGroupSources: () => {
             for (const [base, file] of groupSources) removed += removeTree(base, file);
             onStage('files_removed', active);

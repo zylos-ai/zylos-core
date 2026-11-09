@@ -970,10 +970,11 @@
   "wb.settings.timezone.restarted": "服务已重启，已保存的时区现已生效。",
   "chat.delete.button": "删除对话",
   "chat.delete.retry": "重试删除",
-  "chat.delete.draftConfirm": "移除这个草稿及其已上传附件？它没有已发送的消息。操作不能撤销。",
-  "chat.delete.confirm": "删除这个对话？目前有 {messages} 条消息、{attachments} 个附件。会等当前工作结束后停止它的 AI 会话，删除消息、附件、组记忆和这个对话在本机记录的原文。已同步到主记忆的内容会保留，备份按保留期自然过期。删除的对话不再计入消息数。操作不能撤销。",
+  "chat.delete.draftConfirm": "移除此草稿？它没有已发送的消息。上传附件将保留，此操作无法撤销。",
+  "chat.delete.confirm": "删除本次预览范围内的已完成消息？预览显示 {messages} 条消息、{attachments} 个可删除附件。AI 会在当前工作结束后停止。后来的消息及无法确认归属的数据会保留；主记忆、用量和备份不变。删除的消息不再计入消息数，此操作无法撤销。",
   "chat.delete.deleting": "正在等待当前工作结束并删除…",
   "chat.delete.pending": "删除还没完成，再点一次删除继续，无需再次确认。",
+  "chat.delete.stale": "预览已过期。请再次点击删除，重新预览并确认当前对话。",
   "chat.delete.error": "删除尚未完成，请重试以继续同一次操作。",
   "chat.delete.estimated": "对话已删除；此前清理中断，删除数量为估计值。",
   "wb.usage.deletedConversations": "删除的对话不再计入消息数，token 用量与费用仍会保留。"

@@ -137,8 +137,8 @@ test('a stale ready observation cannot restore deleted occupancy and block queue
   const old = f.add('a');
   await start(f);
   assert.equal(f.row(old.id).status, 'delivered');
-  f.db.beginGroupDeletion('a', { operationId: 'delete-a', runId: 'deleted-run', actor: 'password:owner', preview: {} });
-  const queued = f.add('a');
+  const targetKey = JSON.stringify(['group', 'a']);
+  f.db.beginGroupDeletion('a', { ...f.db.getDeletionPreviewBoundary(targetKey), targetKey, operationId: 'delete-a', runId: 'deleted-run', actor: 'password:owner', preview: {} });
   f.db.recordRunEnd('a', { runId: 'deleted-run', reason: 'delete' });
   f.scene.delete('a'); f.current.delete('a');
   const deliver = f.deps.deliverConversation;
@@ -149,6 +149,7 @@ test('a stale ready observation cannot restore deleted occupancy and block queue
     return deliver(row, live);
   };
   f.db.finalizeGroupDeletion('a', { operationId: 'delete-a' });
+  const queued = f.add('a');
   assert.equal(f.db.listSlotOccupancy().length, 0);
   assert.equal(f.router.state.listed.has('a'), true);
   assert.equal(f.router.state.live.get('a').runId, 'deleted-run', 'Router still holds the pre-deletion observation');

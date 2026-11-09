@@ -85,7 +85,7 @@ test('deletion survives a killed CLI and delivers fenced input into a recreated 
         catch (error) { if (error.code === 'ESRCH') return true; throw error; }
       }, 'Old runtime process PID must be gone');
       assert.equal(f.store.listRunEndings([group]).some(row => row.reason === 'delete' && row.runId === identity.runId), true);
-      assert.equal(fs.existsSync(dir), false);
+      assert.equal(fs.readFileSync(path.join(dir, 'state.md'), 'utf8'), 'private old content', 'Queued input keeps ambiguous group memory');
       process.kill(child.pid, 'SIGKILL');
       const killed = await child.completion;
       assert.equal(killed.signal, 'SIGKILL');

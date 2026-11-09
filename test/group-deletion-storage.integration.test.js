@@ -171,7 +171,8 @@ test('Dashboard conversation deletes owned storage and recreates with an attachm
     assert.equal(preview.ok, true); assert.equal(preview.attachments, 1);
     let deleted;
     await f.waitFor(async () => {
-      deleted = await f.bridge({ sessionGroup: f.group }, { actor: 'dashboard:owner', operationId });
+      deleted = await f.bridge({ sessionGroup: f.group }, { actor: 'dashboard:owner', operationId,
+        cutoffId: preview.cutoffId, generationId: preview.generationId, targetKey: preview.targetKey });
       assert.equal(deleted.ok, true, JSON.stringify(deleted)); return deleted.pending === false;
     }, 'Real Dashboard bridge CLI must finish deleting', 20_000);
     assertDeleted(f, files, operationId); assert.equal(fs.existsSync(uploadedFile), false); assert.equal(fs.existsSync(spillDir), false);

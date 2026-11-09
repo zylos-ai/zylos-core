@@ -14,7 +14,7 @@ const origin = { id: groupId('origin'), sessionGroup: 'origin', channel: 'origin
 const external = { id: groupId('telegram:sample'), sessionGroup: 'telegram:sample', channel: 'telegram', displayName: 'Telegram product chat', stamp: 2461352 };
 
 async function startPage(sandbox) {
-  const writes = [], state = { pending: false, removed: new Set(), deletionAllowed: true };
+  const writes = [], state = { pending: false, stale: false, removed: new Set(), deletionAllowed: true };
   const server = http.createServer(async (req, res) => {
     try {
       const full = new URL(req.url, 'http://fixture');
@@ -27,11 +27,15 @@ async function startPage(sandbox) {
         sendJson(res, 200, { items, nextCursor: null, tz: 'Asia/Singapore', deletionAllowed: state.deletionAllowed }); return;
       }
       if ((route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/')) && route.endsWith('/deletion')) {
-        sendJson(res, 200, { ok: true, operationId: 'browser-operation', messages: 8, attachments: 2, draft: route.includes('/drafts/') }); return;
+        const draftTarget = route.includes('/drafts/');
+        sendJson(res, 200, { ok: true, operationId: 'browser-operation', cutoffId: draftTarget ? 0 : 8,
+          generationId: null, targetKey: JSON.stringify(draftTarget ? ['draft', 'dashboard', '333'] : ['group', 'dashboard:sample']),
+          messages: 8, attachments: 2, draft: draftTarget }); return;
       }
       if (req.method === 'DELETE' && (route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/'))) {
         const body = await readJsonBody(req, 4096); writes.push({ route, body });
-        if (state.pending) sendJson(res, 202, { ok: true, pending: true, operationId: body.operationId });
+        if (state.stale) sendJson(res, 409, { ok: false, error: { code: 'DELETION_PREVIEW_STALE' } });
+        else if (state.pending) sendJson(res, 202, { ok: true, pending: true, operationId: body.operationId });
         else {
           state.removed.add(route.includes('/drafts/') ? draft.id : active.id);
           sendJson(res, 200, { ok: true, operationId: body.operationId, countsEstimated: true, counts: { messages: 8, attachments: 2, files: 3 } });
@@ -77,7 +81,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
   sandbox.addCleanup(() => browser.close());
   const metrics = [];
   for (const locale of ['zh', 'en']) for (const width of [1280, 390]) {
-    api.state.removed.clear(); api.state.pending = false; api.state.deletionAllowed = true;
+    api.state.removed.clear(); api.state.pending = false; api.state.stale = false; api.state.deletionAllowed = true;
     const context = await browser.newContext({ viewport: { width, height: 844 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US',
       ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
     sandbox.addCleanup(() => context.close());
@@ -109,6 +113,13 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     await page.locator('.conversation-delete:visible').nth(1).click(); await dialog.waitFor();
     assert.ok(!(await dialog.innerText()).includes(locale === 'zh' ? '主记忆' : 'main memory'));
     await shot('draft-confirm'); await dialog.locator('button').first().click();
+    api.state.stale = true;
+    await page.locator('.conversation-delete:visible').first().click(); await dialog.waitFor(); await dialog.locator('button').last().click();
+    const stale = page.locator('.conversation-delete-status:visible').filter({ hasText: locale === 'zh' ? '预览已过期' : 'preview is out of date' });
+    await stale.waitFor();
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+    await shot('stale');
+    api.state.stale = false;
     api.state.pending = true;
     await page.locator('.conversation-delete:visible').first().click(); await dialog.waitFor(); await dialog.locator('button').last().click();
     const pending = page.locator('.conversation-delete-status:visible').filter({ hasText: locale === 'zh' ? '再点一次删除继续' : 'Click delete again to continue' });
@@ -147,5 +158,5 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.deepEqual(errors, []); await context.close();
   }
   if (evidence) fs.writeFileSync(path.join(evidence, 'layout.json'), JSON.stringify(metrics, null, 2));
-  console.info('Deletion browser verified', JSON.stringify({ screenshots: evidence ? 32 : 0, pairs: 4, writes: api.writes.length }));
+  console.info('Deletion browser verified', JSON.stringify({ screenshots: evidence ? 36 : 0, pairs: 4, writes: api.writes.length }));
 }

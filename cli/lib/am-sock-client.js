@@ -35,7 +35,7 @@ export function validateReply(request, reply) {
   switch (request.type) {
     case 'delete_group':
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'already_completed']) && nonempty(reply.operationId) && (reply.runId === null || nonempty(reply.runId))
-        : reply.result === 'rejected' && oneOf(reply.reason, ['origin_forbidden', 'not_multi', 'transition_open', 'fence_conflict', 'identity_unavailable', 'requests_unreadable']);
+        : reply.result === 'rejected' && oneOf(reply.reason, ['origin_forbidden', 'not_multi', 'transition_open', 'fence_conflict', 'identity_unavailable', 'requests_unreadable', 'DELETION_PREVIEW_STALE', 'DELETION_OWNERSHIP_MISMATCH', 'DRAFT_BECAME_ACTIVE']);
     case 'restart_all':
       return reply.ok
         ? oneOf(reply.result, ['accepted', 'already_accepted', 'done_empty']) && integer(reply.runCount)

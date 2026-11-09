@@ -22,14 +22,14 @@ function fixture(t, { absent = false } = {}) {
   const context = () => ({ configuration: state.config, transition: store.getModeTransition(), scenes: live ? [{ ...live }] : [], fences: store.listDrainFences(), restartRequests: state.requests });
   return { db, store, admission, lifecycle, state, context, get live() { return live; } };
 }
-const request = { version: 1, type: 'delete_group', requestId: 'delete-request', sessionGroup: 'telegram', actor: 'password:owner', preview: { messages: 1 } };
+const request = { version: 1, type: 'delete_group', requestId: 'delete-request', sessionGroup: 'telegram', actor: 'password:owner', cutoffId: 0, generationId: null, targetKey: JSON.stringify(['group', 'telegram']), preview: { messages: 1 } };
 test('deletion admission owns a durable fence, cancels matching restart intent and validates standard replies', async t => {
   const f = fixture(t); f.state.requests = [
     { requestId: 'manual', reason: 'manual_restart', sessionGroup: 'telegram', mode: 'multi', expectedRunId: 'runtime-old', runIds: ['runtime-old'] },
     { requestId: 'upgrade', reason: 'upgrade', runIds: ['runtime-old', 'other-run'] }];
   const reply = await f.admission.handle(request); assert.equal(reply.result, 'accepted'); assert.equal(reply.runId, 'runtime-old'); assert.equal(validateReply(request, reply), true);
   assert.equal(f.state.requests.length, 1); assert.equal(f.state.requests[0].runIds[0], 'other-run');
-  const retry = await f.admission.handle({ ...request, requestId: 'retry' }); assert.equal(retry.result, 'already_accepted'); assert.equal(retry.operationId, request.requestId);
+  const retry = await f.admission.handle({ ...request, requestId: 'retry', operationId: request.requestId }); assert.equal(retry.result, 'already_accepted'); assert.equal(retry.operationId, request.requestId);
 });
 test('deletion waits running inputs, controls and idle before stopping, and keeps its fence through recording', async t => {
   const f = fixture(t), input = f.store.insertConversation('in', 'telegram', 'room', 'in flight'); f.store.claimConversation(input.id);
@@ -164,4 +164,24 @@ test('configuration readiness cannot borrow a deletion fence from another run', 
   assert.equal((await f.admission.handle(readiness)).reason, 'other_fence');
   assert.deepEqual(f.store.getDrainFence('telegram'), fence);
   assert.equal(f.state.stops.length, 0);
+});
+
+test('admission rejects a previous deletion epoch before fencing the recreated group', async t => {
+  const f = fixture(t), group = 'telegram', targetKey = JSON.stringify(['group', group]);
+  f.store.insertConversation('out', group, 'room', 'old visible row');
+  const boundary = f.store.getDeletionPreviewBoundary(targetKey);
+  const firstRequest = { ...request, ...boundary, targetKey, requestId: 'first-confirmation', operationId: 'first-confirmation' };
+  assert.equal((await f.admission.handle(firstRequest)).result, 'accepted');
+  const firstFence = f.store.getDrainFence(group);
+  assert.equal(await f.lifecycle.advanceReclaim(firstFence, f.context()), 'done');
+  f.store.finalizeGroupDeletion(group, { operationId: firstRequest.operationId });
+  const newMessage = f.store.insertConversation('out', group, 'room', 'new epoch keep');
+  const before = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(newMessage.id);
+  const stale = { ...firstRequest, requestId: 'second-confirmation', operationId: 'second-confirmation' };
+  const reply = await f.admission.handle(stale);
+  assert.equal(reply.result, 'rejected'); assert.equal(reply.reason, 'DELETION_PREVIEW_STALE');
+  assert.equal(validateReply(stale, reply), true);
+  assert.equal(f.store.getDrainFence(group), null);
+  assert.equal(f.store.getGroupDeletionAudit(stale.operationId), null);
+  assert.deepEqual(f.db.prepare('SELECT * FROM conversations WHERE id=?').get(newMessage.id), before);
 });

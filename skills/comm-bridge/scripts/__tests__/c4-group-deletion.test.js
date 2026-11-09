@@ -14,7 +14,21 @@ function fixture(t, db = new Database(':memory:')) {
   guardDatabase(db, owner);
   t.after(() => { if (db.open) db.close(); });
   const dependencies = { validateComponent: () => true, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) };
-  return { db, store: createStore(db, dependencies) };
+  const store = createStore(db, dependencies);
+  // Existing state-machine cases confirm the current snapshot at admission.
+  // Boundary-specific cases supply the earlier snapshot explicitly.
+  const beginGroup = store.beginGroupDeletion, beginDraft = store.beginDraftDeletion;
+  store.beginGroupDeletion = (group, options) => {
+    const targetKey = JSON.stringify(['group', group]);
+    return beginGroup(group, { ...store.getDeletionPreviewBoundary(targetKey), targetKey, ...options });
+  };
+  store.beginDraftDeletion = (localId, options) => {
+    let namespace = db.prepare("SELECT namespace FROM channel_namespaces WHERE component_name='dashboard'").get()?.namespace;
+    if (!namespace) { namespace = 'dashboard'; db.prepare("INSERT INTO channel_namespaces(namespace,component_name) VALUES('dashboard','dashboard')").run(); }
+    const targetKey = JSON.stringify(['draft', namespace, localId]);
+    return beginDraft(localId, { ...store.getDeletionPreviewBoundary(targetKey), targetKey, ...options });
+  };
+  return { db, store };
 }
 const options = { operationId: 'delete-test', actor: 'password:owner', runId: 'old-run', preview: { messages: 2, attachments: 1, files: 3 } };
 const binding = runId => JSON.stringify({ expectedRunId: runId, tmuxTarget: { serverGeneration: 'g', sessionId: '$0', paneId: '%0' } });
@@ -33,7 +47,7 @@ test('deletion admission preserves pending inputs and fences input and control c
   assert.equal(s.listDeletionMessages('telegram', { operationId: op.operationId })[0].id, terminal.id);
   assert.equal(db.prepare("SELECT operation_id,actor FROM drain_fences WHERE session_group='telegram'").get().actor, options.actor);
   assert.throws(() => s.beginModeTransition('multi', 'single'), { code: 'DELETION_IN_PROGRESS' });
-  assert.equal(s.beginGroupDeletion('telegram', { ...options, operationId: 'second' }).operationId, op.operationId);
+  assert.throws(() => s.beginGroupDeletion('telegram', { ...options, operationId: 'second' }), { code: 'DELETION_OWNERSHIP_MISMATCH' });
 });
 
 test('finalization deletes terminal group data, releases capacity and retains queued work and unrelated groups', t => {
@@ -53,12 +67,12 @@ test('finalization deletes terminal group data, releases capacity and retains qu
   assert.equal(audit.status, 'done'); assert.equal(audit.counts.messages, 2);
   assert.equal(audit.counts.attachments, 0); assert.equal(audit.counts.files, 0); assert.equal(audit.countsEstimated, false);
   assert.equal(s.getDrainFence('telegram'), null);
-  assert.equal(db.prepare("SELECT count(*) AS n FROM slot_occupancy WHERE session_group='telegram'").get().n, 0);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM slot_occupancy WHERE session_group='telegram'").get().n, 1);
   assert.equal(db.prepare('SELECT head_id FROM group_heads WHERE session_group=?').get('telegram').head_id, pending.id);
   assert.equal(s.claimConversation(pending.id), true);
   assert.equal(s.claimControl(unbound.id), true);
   assert.equal(db.prepare('SELECT content FROM conversations WHERE id=?').get(other.id).content, 'not this group');
-  assert.equal(db.prepare("SELECT count(*) AS n FROM control_queue WHERE session_group='telegram'").get().n, 1);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM control_queue WHERE session_group='telegram'").get().n, 2);
   const recreated = s.insertConversation('out', 'telegram', 'room', 'new generation');
   assert.equal(s.beginGroupDeletion('telegram', options).status, 'done');
   assert.equal(s.finalizeGroupDeletion('telegram', { operationId: options.operationId }).status, 'done');
@@ -326,4 +340,30 @@ test('a retracted pre-file attempt leaves the remaining cleanup count exact', t 
   assert.equal(done.counts.attachments, 1);
   s.retractDeletionCleanup(options.operationId);
   assert.equal(s.getGroupDeletionAudit(options.operationId).countsEstimated, false);
+});
+
+test('the final writer enforces a confirmed cutoff and preserves retained group-wide data', t => {
+  const { db, store: s } = fixture(t), group = 'telegram';
+  const old = s.insertConversation('out', group, 'room', 'confirmed old row');
+  const targetKey = JSON.stringify(['group', group]);
+  const preview = s.getDeletionPreviewBoundary(targetKey);
+  s.insertControl('keep control without a message cutoff', { sessionGroup: group, appendAckSuffix: false });
+  db.prepare("UPDATE control_queue SET status='done' WHERE session_group=?").run(group);
+  db.prepare("INSERT INTO group_runtime_overrides(session_group,runtime) VALUES(?,'claude')").run(group);
+  db.prepare("INSERT INTO slot_occupancy VALUES(?,'old-run','held',9999999999,1)").run(group);
+  const later = s.insertConversation('out', group, 'room', 'unconfirmed later row');
+  const rowBefore = db.prepare('SELECT * FROM conversations WHERE id=?').get(later.id);
+  const controlBefore = db.prepare('SELECT * FROM control_queue WHERE session_group=?').get(group);
+  const slotBefore = db.prepare('SELECT * FROM slot_occupancy WHERE session_group=?').get(group);
+  s.beginGroupDeletion(group, { ...options, ...preview, targetKey });
+  assert.deepEqual(s.listDeletionMessages(group, { operationId: options.operationId }).map(row => row.id), [old.id]);
+  const done = s.finalizeGroupDeletion(group, { operationId: options.operationId });
+  assert.equal(done.counts.messages, 1); assert.equal(done.cutoffId, old.id); assert.equal(done.generationId, null);
+  assert.deepEqual(db.prepare('SELECT * FROM conversations WHERE id=?').get(later.id), rowBefore);
+  assert.deepEqual(db.prepare('SELECT * FROM control_queue WHERE session_group=?').get(group), controlBefore);
+  assert.deepEqual(db.prepare('SELECT * FROM slot_occupancy WHERE session_group=?').get(group), slotBefore);
+  assert.equal(db.prepare('SELECT runtime FROM group_runtime_overrides WHERE session_group=?').get(group).runtime, 'claude');
+  assert.throws(() => s.beginGroupDeletion(group, { ...options, ...preview, targetKey, operationId: 'stale-second-preview' }), { code: 'DELETION_PREVIEW_STALE' });
+  assert.deepEqual(db.prepare('SELECT * FROM conversations WHERE id=?').get(later.id), rowBefore);
+  assert.equal(s.getDeletionPreviewBoundary(targetKey).generationId, options.operationId);
 });

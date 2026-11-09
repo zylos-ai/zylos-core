@@ -970,10 +970,11 @@
   "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied.",
   "chat.delete.button": "Delete conversation",
   "chat.delete.retry": "Retry deletion",
-  "chat.delete.draftConfirm": "Remove this draft and its uploaded attachments? It has no sent messages. This cannot be undone.",
-  "chat.delete.confirm": "Delete this conversation? It currently has {messages} messages and {attachments} attachments. Its AI session will stop after current work finishes. Messages, attachments, group memory and locally recorded transcripts will be deleted. Content already synced to main memory stays; backups expire under their retention policy. Deleted conversations no longer count toward message totals. This cannot be undone.",
+  "chat.delete.draftConfirm": "Remove this draft? It has no sent messages. Uploaded attachments will be retained. This cannot be undone.",
+  "chat.delete.confirm": "Delete the completed messages covered by this preview? It shows {messages} messages and {attachments} removable attachments. The AI session will stop after current work finishes. Later messages and data whose ownership cannot be proven will be kept. Main memory, usage and backups remain. Deleted messages no longer count toward message totals. This cannot be undone.",
   "chat.delete.deleting": "Finishing current work and deleting…",
   "chat.delete.pending": "Deletion is not finished. Click delete again to continue; no new confirmation is needed.",
+  "chat.delete.stale": "This preview is out of date. Click delete again to preview and confirm the current conversation.",
   "chat.delete.error": "Could not finish deletion. Retry to continue the same operation.",
   "chat.delete.estimated": "Conversation deleted. Counts are estimates after an interrupted cleanup.",
   "wb.usage.deletedConversations": "Deleted conversations no longer count toward message totals. Their token usage and costs are retained."

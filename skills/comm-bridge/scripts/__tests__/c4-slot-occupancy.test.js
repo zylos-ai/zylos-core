@@ -120,10 +120,11 @@ test('adoption rejects invalid identities, caller timestamps and single mode wit
 
 test('adoption cannot restore deleted run identities across repeated group recreation', t => {
   const { db, store } = fixture(t);
-  store.insertConversation('in', 'test', 'endpoint', 'queued', { groupName: 'a' });
+  store.insertConversation('out', 'test', 'endpoint', 'completed before deletion', { groupName: 'a' });
   for (const [runId, operationId] of [['first-run', 'first-delete'], ['second-run', 'second-delete']]) {
     assert.equal(store.adoptSlot('test:a', { runId }).adopted, true);
-    store.beginGroupDeletion('test:a', { runId, operationId, actor: 'password:owner', preview: {} });
+    const targetKey = JSON.stringify(['group', 'test:a']);
+    store.beginGroupDeletion('test:a', { ...store.getDeletionPreviewBoundary(targetKey), targetKey, runId, operationId, actor: 'password:owner', preview: {} });
     const fenced = rows(db);
     assert.deepEqual(store.adoptSlot('test:a', { runId }), { adopted: false, reason: 'fenced' });
     assert.deepEqual(store.adoptSlot('test:a', { runId: 'unobserved-replacement' }), { adopted: false, reason: 'fenced' });

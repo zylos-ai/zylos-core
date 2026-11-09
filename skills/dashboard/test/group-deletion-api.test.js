@@ -9,6 +9,7 @@ import { createGroupDeletionBridge, createGroupDeletionRoutes } from '../src/lib
 
 const cookie = 'deletion-private-cookie', api = `zylos_st_${'a'.repeat(64)}`;
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+const boundary = { cutoffId: 4, generationId: null, targetKey: JSON.stringify(['group', 'dashboard:example']) };
 const owner = { cookie: `__Secure-zylos_dashboard_session=${cookie}`, 'sec-fetch-site': 'same-origin' };
 function fixture(t) {
   const config = { zylosDir: process.env.ZYLOS_DIR, auth: { enabled: true, password: 'scrypt:configured' } };
@@ -52,7 +53,7 @@ test('deletion preview admits only password owner cookies including against admi
 
 test('deletion requires same origin and explicit confirmation bound to an operation', async t => {
   const f = fixture(t), path = '/api/workbench/groups/dashboard%3Aexample';
-  const body = { confirmed: true, operationId: 'private-operation' };
+  const body = { confirmed: true, operationId: 'private-operation', ...boundary };
   assert.equal((await call(f.handler, path, { method: 'DELETE', body, headers: { cookie: owner.cookie, origin: 'https://foreign.invalid', host: 'local.invalid' } })).status, 403);
   for (const invalid of [{}, { operationId: 'private-operation' }, { confirmed: true }, { ...body, actor: 'somebody-else' }, { ...body, operationId: '' }]) {
     assert.equal((await call(f.handler, path, { method: 'DELETE', body: invalid })).status, 400);
@@ -60,6 +61,19 @@ test('deletion requires same origin and explicit confirmation bound to an operat
   assert.equal(f.calls.length, 0);
   assert.equal((await call(f.handler, path, { method: 'DELETE', body })).status, 200);
   assert.equal(f.calls[0].options.operationId, body.operationId);
+  assert.equal(f.calls[0].options.cutoffId, boundary.cutoffId);
+  assert.equal(f.calls[0].options.generationId, null);
+  assert.equal(f.calls[0].options.targetKey, boundary.targetKey);
+});
+
+test('missing or malformed preview boundaries never reach the deletion child', async t => {
+  const f = fixture(t), path = '/api/workbench/groups/dashboard%3Aexample';
+  const body = { confirmed: true, operationId: 'private-operation', ...boundary };
+  for (const change of [{ cutoffId: undefined }, { cutoffId: -1 }, { cutoffId: 1.1 },
+    { generationId: undefined }, { generationId: 0 }, { targetKey: undefined }, { targetKey: '' }]) {
+    assert.equal((await call(f.handler, path, { method: 'DELETE', body: { ...body, ...change } })).status, 400);
+  }
+  assert.equal(f.calls.length, 0);
 });
 
 test('Origin and malformed group targets never reach Core', async t => {
@@ -102,7 +116,7 @@ test('missing draft registration still reaches Core for an idempotent completed 
     },
   });
   const res = await call(handler, '/api/chat/drafts/removed', {
-    method: 'DELETE', body: { confirmed: true, operationId: 'completed-operation' },
+    method: 'DELETE', body: { confirmed: true, operationId: 'completed-operation', ...boundary },
   });
   assert.equal(res.status, 200);
 });
@@ -113,8 +127,8 @@ test('Core bridge uses the shared child entry with a server actor and no caller 
     loadCoreModule: async name => { assert.equal(name, 'group-delete.js'); return { groupDeletionCliPath: '/core/group-delete-cli.js' }; },
     execute: async (...args) => { seen.push(args); return { stdout: '{"ok":true,"pending":true,"operationId":"existing"}' }; },
   });
-  assert.equal((await bridge({ sessionGroup: 'dashboard:x' }, { actor: 'dashboard:owner', operationId: 'existing' })).pending, true);
-  assert.deepEqual(seen[0][1], ['/core/group-delete-cli.js', '--group', 'dashboard:x', '--yes', '--json', '--actor', 'dashboard:owner', '--operation-id', 'existing']);
+  assert.equal((await bridge({ sessionGroup: 'dashboard:x' }, { actor: 'dashboard:owner', operationId: 'existing', ...boundary })).pending, true);
+  assert.deepEqual(seen[0][1], ['/core/group-delete-cli.js', '--group', 'dashboard:x', '--yes', '--json', '--actor', 'dashboard:owner', '--operation-id', 'existing', '--cutoff-id', '4', '--generation-id', 'null', '--target-key', boundary.targetKey]);
   assert.equal(seen[0][2].env.ZYLOS_DIR, '/private/instance');
   assert.equal(Object.hasOwn(seen[0][2].env, 'ZYLOS_SESSION_GROUP'), false);
   await bridge({ draftLocalId: 'draft' }, { actor: 'dashboard:owner', preview: true });

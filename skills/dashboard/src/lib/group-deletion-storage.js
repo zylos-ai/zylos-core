@@ -60,18 +60,25 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
       let row;
       try { row = draftRow(target.draftLocalId); }
       catch (error) {
-        if (error.code !== 'chat_conversation_not_found' || !core().prepare(`SELECT 1 FROM group_deletion_audit
-          WHERE draft_local_id=? AND session_group IS NULL AND status='started'`).get(target.draftLocalId)) throw error;
-        return { sessionGroup: null, localId: target.draftLocalId, namespace: null, draft: true };
+        if (error.code !== 'chat_conversation_not_found') throw error;
+        const audit = core().prepare(`SELECT target_key FROM group_deletion_audit
+          WHERE draft_local_id=? AND session_group IS NULL AND status='started'`).get(target.draftLocalId);
+        let key;
+        try { key = JSON.parse(audit?.target_key); } catch { throw error; }
+        if (!Array.isArray(key) || key.length !== 3 || key[0] !== 'draft' || key[2] !== target.draftLocalId ||
+            !parseSessionGroup(`${key[1]}:${key[2]}`)) throw error;
+        const namespace = key[1];
+        return { sessionGroup: null, localId: target.draftLocalId, namespace, draft: true };
       }
       const namespace = row.namespace ?? dashboardBinding();
+      if (!namespace) throw fail('group_delete_core_unavailable', 503);
       const sessionGroup = namespace ? `${namespace}:${row.local_id}` : null;
       if (row.state === 'active' || sessionGroup && groupExists(sessionGroup)) {
         if (!sessionGroup) throw fail('group_delete_core_unavailable', 503);
         return { sessionGroup, localId: row.local_id, namespace, draft: false };
       }
       if (row.state !== 'draft') throw fail('group_delete_send_pending');
-      return { sessionGroup: null, localId: row.local_id, namespace: row.namespace, draft: true };
+      return { sessionGroup: null, localId: row.local_id, namespace, draft: true };
     }
     const parsed = parseSessionGroup(target?.sessionGroup);
     if (!parsed || target.sessionGroup === 'origin') throw fail('group_delete_forbidden', 403);
@@ -94,17 +101,20 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
   }
   function runtimeTargets(rows) {
     const targets = [];
+    const sharedSession = sid => !!db.prepare('SELECT 1 FROM usage_transcripts WHERE session_id=? AND session_group IS NOT ? LIMIT 1')
+      .get(sid, rows[0]?.session_group);
     for (const row of rows) {
       const file = transcriptFile(row);
       targets.push([file, path.join(homeDir, row.runtime === 'claude' ? '.claude/projects' : '.codex/sessions')]);
       if (row.runtime === 'claude' && !row.parent_path) {
         targets.push([path.join(path.dirname(file), row.session_id), path.join(homeDir, '.claude/projects')],
-          [path.join(homeDir, '.claude/session-env', row.session_id), path.join(homeDir, '.claude/session-env')],
           [path.join(tmpdir, `claude-${uid}`, path.basename(path.dirname(file)), row.session_id), path.join(tmpdir, `claude-${uid}`)]);
+        if (!sharedSession(row.session_id)) targets.push(
+          [path.join(homeDir, '.claude/session-env', row.session_id), path.join(homeDir, '.claude/session-env')]);
       }
     }
     for (const sid of new Set(rows.map(row => row.session_id))) {
-      targets.push([path.join(tmpdir, `zylos-shard-spill-${uid}`, sid), path.join(tmpdir, `zylos-shard-spill-${uid}`)]);
+      if (!sharedSession(sid)) targets.push([path.join(tmpdir, `zylos-shard-spill-${uid}`, sid), path.join(tmpdir, `zylos-shard-spill-${uid}`)]);
     }
     return targets;
   }
@@ -120,25 +130,37 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
     for (const [file, root] of targets) visit(file, root);
     return found.size;
   }
-  function removableAttachments({ localId, namespace, sessionGroup }) {
+  function retainedMessages({ sessionGroup, cutoffId = Number.MAX_SAFE_INTEGER }) {
+    return sessionGroup ? core().prepare(`SELECT * FROM conversations WHERE session_group=? AND
+      (id>? OR (direction='in' AND status IN ('pending','running')))`).all(sessionGroup, cutoffId) : [];
+  }
+  function removableAttachments(target) {
+    const { localId, namespace, sessionGroup, cutoffId = Number.MAX_SAFE_INTEGER } = target;
     if (!localId) return [];
+    if (!namespace) throw fail('group_delete_core_unavailable', 503);
     const media = path.join(zylosDir, 'components/dashboard/media');
-    const pending = sessionGroup ? core().prepare("SELECT * FROM conversations WHERE session_group=? AND direction='in' AND status='pending'").all(sessionGroup) : [];
-    const owner = pending.length && fs.existsSync(media) ? new ChatAttachments({ store, c4Reader: { _open: core }, zylosDir, readonly: true }) : null;
-    const rows = namespace ? db.prepare('SELECT * FROM chat_attachments WHERE local_id=? AND namespace=?').all(localId, namespace)
-      : db.prepare('SELECT * FROM chat_attachments WHERE local_id=?').all(localId);
+    const retained = retainedMessages(target);
+    const owner = retained.length && fs.existsSync(media) ? new ChatAttachments({ store, c4Reader: { _open: core }, zylosDir, readonly: true }) : null;
+    const rows = db.prepare('SELECT * FROM chat_attachments WHERE local_id=? AND namespace=?').all(localId, namespace);
     return rows.filter(row => {
       const links = db.prepare('SELECT c4_id FROM chat_attachment_messages WHERE attachment_id=?').all(row.id);
-      if (pending.some(message => links.some(link => Number(link.c4_id) === Number(message.id)))) return false;
+      if (!links.length) return false;
+      for (const link of links) {
+        const message = core().prepare('SELECT session_group,id,direction,status FROM conversations WHERE id=?').get(link.c4_id);
+        if (!message || message.session_group !== sessionGroup || message.id > cutoffId ||
+            message.direction === 'in' && ['pending','running'].includes(message.status)) return false;
+      }
       const record = { ...row, linked: links.length > 0 ? 1 : 0 };
-      return !owner || !pending.some(message => owner._references(message).some(reference => owner._matches(record, message, reference)));
+      return !owner || !retained.some(message => owner._references(message).some(reference => owner._matches(record, message, reference)));
     });
   }
-  function finalizeTranscripts({ sessionGroup, processExited = false, deadlineAt = Infinity, now = Date.now }) {
+  function finalizeTranscripts(target) {
+    const { sessionGroup, processExited = false, deadlineAt = Infinity, now = Date.now } = target;
     const withinBudget = () => { if (now() >= deadlineAt) throw fail('group_delete_usage_pending'); };
     withinBudget();
     if (!processExited) throw fail('group_delete_usage_pending');
     if (!db) return { transcripts: 0 };
+    if (target.hasRetainedMessages === true || retainedMessages(target).length) return { transcripts: 0 };
     const config = { ...loadConfig({ zylosDir }), homeDir, zylosDir };
     const claude = new ConversationCollector(store, config), codex = new CodexRolloutCollector(store, config);
     const rows = mappings(sessionGroup);
@@ -191,7 +213,7 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
     return { transcripts: completed };
   }
   function preview(target) {
-    const resolved = target?.draft !== undefined ? target : resolveTarget(target);
+    const resolved = target?.draft !== undefined ? target : { ...resolveTarget(target), cutoffId: target.cutoffId };
     if (!db) return { ...resolved, attachments: 0, files: 0 };
     const attachments = removableAttachments(resolved);
     const media = path.join(zylosDir, 'components/dashboard/media');
@@ -199,42 +221,40 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
       if (path.basename(row.storage_name) !== row.storage_name) throw fail('group_delete_path_unavailable');
       return [[path.join(media, row.storage_name), media], [path.join(media, row.storage_name + '.part'), media]];
     });
-    const rows = resolved.sessionGroup ? mappings(resolved.sessionGroup) : [];
+    const rows = resolved.sessionGroup && !retainedMessages(resolved).length ? mappings(resolved.sessionGroup) : [];
     return { ...resolved, attachments: attachments.length,
       files: countOwnedTargets([...runtimeTargets(rows), ...mediaTargets]) };
   }
   function cleanup(target) {
     const { removeGroupSources = () => 0, onFilePhase = () => {} } = target;
-    const resolved = target.draft !== undefined ? target : resolveTarget(target);
+    const resolved = target.draft !== undefined ? target : { ...resolveTarget(target), cutoffId: target.cutoffId };
     if (!db) { onFilePhase(); return { attachments: 0, files: Number(removeGroupSources()) || 0, records: 0 }; }
     return db.transaction(() => {
       if (resolved.draft) {
         const fresh = resolveTarget({ draftLocalId: resolved.localId });
-        if (!fresh.draft) throw fail('group_delete_send_pending');
+        if (!fresh.draft || fresh.namespace !== resolved.namespace) throw fail('group_delete_send_pending');
       }
       const { sessionGroup, localId, namespace } = resolved;
+      const retained = retainedMessages({ ...resolved, cutoffId: target.cutoffId });
+      const preserveGroup = target.hasRetainedMessages === true || retained.length > 0;
       const pending = new Set();
       if (sessionGroup) {
         const media = path.join(zylosDir, 'components/dashboard/media');
         const attachmentOwner = fs.existsSync(media) ? new ChatAttachments({ store,
           c4Reader: { _open: core }, zylosDir, readonly: true }) : null;
-        for (const row of core().prepare("SELECT * FROM conversations WHERE session_group=? AND direction='in' AND status='pending'").iterate(sessionGroup)) {
+        for (const row of retained) {
           pending.add(Number(row.id));
           attachmentOwner?.linkRow(row);
         }
       }
       let files = 0, attachments = 0, records = 0;
-      const rows = sessionGroup ? mappings(sessionGroup) : [];
+      const rows = sessionGroup && !preserveGroup ? mappings(sessionGroup) : [];
       const finished = rows.filter(row => row.status === 'finished');
       if (finished.length !== rows.length) throw fail('group_delete_usage_pending');
       const runtimeFiles = runtimeTargets(finished);
       const media = path.join(zylosDir, 'components/dashboard/media');
-      const select = !localId ? [] : namespace
-        ? db.prepare('SELECT * FROM chat_attachments WHERE local_id=? AND namespace=?').all(localId, namespace)
-        : db.prepare('SELECT * FROM chat_attachments WHERE local_id=?').all(localId);
-      const attachmentsToRemove = select.filter(attachment => {
-        const links = db.prepare('SELECT c4_id FROM chat_attachment_messages WHERE attachment_id=?').all(attachment.id);
-        if (links.some(link => pending.has(Number(link.c4_id)))) return false;
+      if (localId && !namespace) throw fail('group_delete_core_unavailable', 503);
+      const attachmentsToRemove = removableAttachments({ ...resolved, cutoffId: target.cutoffId }).filter(attachment => {
         if (path.basename(attachment.storage_name) !== attachment.storage_name) throw fail('group_delete_path_unavailable');
         return true;
       });
@@ -262,20 +282,30 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
       if (sessionGroup) {
         const keepQuestions = new Set();
         for (const answer of db.prepare(`SELECT a.*,d.c4_id FROM chat_answers a LEFT JOIN chat_answer_deliveries d ON d.answer_id=a.answer_id WHERE a.session_group=?`).all(sessionGroup)) {
-          if (pending.has(Number(answer.c4_id))) { keepQuestions.add(String(answer.question_c4_id)); continue; }
+          const question = core().prepare('SELECT session_group,id,direction,status FROM conversations WHERE id=?').get(answer.question_c4_id);
+          const delivery = core().prepare('SELECT session_group,id,direction,status FROM conversations WHERE id=?').get(answer.c4_id);
+          const ownedMessage = message => message && message.session_group === sessionGroup && message.id <= (target.cutoffId ?? Number.MAX_SAFE_INTEGER)
+            && !pending.has(Number(message.id));
+          if (!ownedMessage(question) || !ownedMessage(delivery)) { keepQuestions.add(String(answer.question_c4_id)); continue; }
           records += db.prepare('DELETE FROM chat_answer_deliveries WHERE answer_id=?').run(answer.answer_id).changes;
           records += db.prepare('DELETE FROM chat_answers WHERE answer_id=?').run(answer.answer_id).changes;
         }
         for (const question of db.prepare('SELECT c4_id FROM chat_questions WHERE session_group=?').all(sessionGroup)) {
-          if (pending.has(Number(question.c4_id)) || keepQuestions.has(String(question.c4_id))) continue;
+          const message = core().prepare('SELECT session_group,id FROM conversations WHERE id=?').get(question.c4_id);
+          if (!message || message.session_group !== sessionGroup || message.id > (target.cutoffId ?? Number.MAX_SAFE_INTEGER) ||
+              pending.has(Number(question.c4_id)) || keepQuestions.has(String(question.c4_id))) continue;
           records += db.prepare('DELETE FROM chat_question_controls WHERE question_c4_id=?').run(question.c4_id).changes;
           records += db.prepare('DELETE FROM chat_questions WHERE c4_id=?').run(question.c4_id).changes;
         }
-        records += db.prepare('DELETE FROM group_display_names WHERE session_group=?').run(sessionGroup).changes;
-        records += db.prepare('DELETE FROM runtime_events WHERE session_group=?').run(sessionGroup).changes;
-        records += db.prepare('DELETE FROM core_log_cursors WHERE stream=?').run(`events:${sessionGroup}`).changes;
+        if (!preserveGroup) {
+          records += db.prepare('DELETE FROM group_display_names WHERE session_group=?').run(sessionGroup).changes;
+          records += db.prepare('DELETE FROM runtime_events WHERE session_group=?').run(sessionGroup).changes;
+          records += db.prepare('DELETE FROM core_log_cursors WHERE stream=?').run(`events:${sessionGroup}`).changes;
+        }
       }
-      if (localId) records += db.prepare('DELETE FROM chat_conversations WHERE local_id=?').run(localId).changes;
+      if (localId && !preserveGroup) records += resolved.draft
+        ? db.prepare("DELETE FROM chat_conversations WHERE local_id=? AND state='draft' AND (namespace=? OR namespace IS NULL)").run(localId, namespace).changes
+        : db.prepare('DELETE FROM chat_conversations WHERE local_id=? AND namespace=?').run(localId, namespace).changes;
       return { attachments, files, records };
     }).immediate();
   }

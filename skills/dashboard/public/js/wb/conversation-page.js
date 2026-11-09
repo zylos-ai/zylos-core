@@ -11,7 +11,7 @@ import { conversationErrorKey, renderConversationContent } from './conversation-
 import { createGroupSide } from './group-side.js?v=3';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=103';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
-import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=2';
+import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=3';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -1174,7 +1174,7 @@ export function mountConversationPage({
       text(row.remove.label, t(deletionLabel));
       row.remove.setAttribute('aria-label', t(deletionLabel) + ': ' + nameOf(item));
       row.remove.setAttribute('title', t(deletionLabel));
-      row.notice.hidden = !deletionState?.state || !['deleting', 'pending', 'error'].includes(deletionState.state);
+      row.notice.hidden = !deletionState?.state || !['deleting', 'pending', 'error', 'stale'].includes(deletionState.state);
       text(row.notice, row.notice.hidden ? '' : t('chat.delete.' + deletionState.state));
       const itemChannel = channelOf(item);
       row.channel.hidden = s.tab === 'mine' || !itemChannel;
