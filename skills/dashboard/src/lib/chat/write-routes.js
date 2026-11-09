@@ -28,7 +28,12 @@ export async function handleChatConversations(req, res, url, { auth, config, con
     catch { sendJson(res, 400, { error: 'invalid_chat_conversation' }); return true; }
     if (read) {
       const receipt = await sender.reconcile(id);
-      const row = conversations.get(receipt.localId);
+      let row;
+      try { row = conversations.get(receipt.localId); }
+      catch (error) {
+        if (error.code !== 'chat_conversation_not_found') throw error;
+        row = await sender.resolve(id);
+      }
       sendJson(res, 200, { ...receipt, conversation: row });
       return true;
     }

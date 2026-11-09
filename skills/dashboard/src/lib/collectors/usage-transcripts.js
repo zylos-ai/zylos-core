@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { claudeProjectSlug } from '../claude-project-path.js';
+import { sameSourceFile } from '../source-file-identity.js';
 
 const DAY = 86400000;
 
@@ -135,9 +136,9 @@ export class UsageTranscripts {
     for (const row of rows) {
       if (row.runtime !== runtime) continue;
       const stamp = new Date(at).toISOString();
-      let status = 'active', offset = row.byte_offset;
+      let status = 'active', offset = row.byte_offset, identity = null;
       try {
-        fs.statSync(row.transcript_path);
+        identity = fs.statSync(row.transcript_path);
         const result = await callback(row, this.isOriginCurrent(row, snapshot));
         if (typeof result === 'number') offset = result;
         else {
@@ -152,11 +153,22 @@ export class UsageTranscripts {
       } catch (error) {
         if (error.code === 'ENOENT') status = 'missing';
         else {
-          this.store.updateUsageTranscript(row.transcript_path, { now: stamp });
+          this.store.db.transaction(() => {
+            if (this.store.getUsageTranscript(row.transcript_path)?.status === 'finished') return;
+            if (identity && !sameSourceFile(row.transcript_path, identity)) return;
+            this.store.updateUsageTranscript(row.transcript_path, { now: stamp });
+          }).immediate();
           throw error;
         }
       }
-      this.store.updateUsageTranscript(row.transcript_path, { byte_offset: offset, status, now: stamp });
+      this.store.db.transaction(() => {
+        // A deletion may have finalized this mapping while the collector awaited
+        // its callback. Never downgrade that EOF proof or write an old cursor
+        // onto a replacement file at the same name.
+        if (this.store.getUsageTranscript(row.transcript_path)?.status === 'finished') return;
+        if (identity && !sameSourceFile(row.transcript_path, identity)) return;
+        this.store.updateUsageTranscript(row.transcript_path, { byte_offset: offset, status, now: stamp });
+      }).immediate();
     }
     return written;
   }

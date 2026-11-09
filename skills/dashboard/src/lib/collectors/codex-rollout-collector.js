@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { DEFAULT_CODEX_MODEL_PRICES, DEFAULT_CODEX_PRIORITY_MODEL_PRICES, modelPricesForRuntime, normalizeServiceTier } from '../config.js';
 import { Sanitizer } from '../sanitizer.js';
 import { UsageTranscripts, groupMainTranscript } from './usage-transcripts.js';
+import { sameSourceFile } from '../source-file-identity.js';
 import { codexToolOutputFailed, codexToolOutputText } from '../codex-tool-outcome.js';
 
 const PER_MTOK = 1_000_000;
@@ -51,6 +52,16 @@ export class CodexRolloutCollector {
   }
 
   collectMapping(mapping) {
+    let identity;
+    try { identity = fs.statSync(mapping?.transcript_path); }
+    catch { return this._collectCurrentMapping(mapping); }
+    return this.store.db.transaction(() => {
+      if (!sameSourceFile(mapping.transcript_path, identity)) return 0;
+      return this._collectCurrentMapping(mapping);
+    }).immediate();
+  }
+
+  _collectCurrentMapping(mapping) {
     const now = new Date().toISOString();
 
     if (!mapping?.transcript_path) {

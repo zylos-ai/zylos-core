@@ -91,6 +91,7 @@ function makeMockStore() {
       health[`${name}:${signalType}`] = { status, extra };
     },
     db: {
+      transaction(operation) { return { immediate: operation }; },
       prepare(sql) {
         return {
           get(param) {

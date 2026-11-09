@@ -140,8 +140,7 @@ export function resolveAgentIdentity(loaded = {}, zylosDir = getZylosDir()) {
   return { name, id };
 }
 
-export function loadConfig() {
-  const zylosDir = getZylosDir();
+export function loadConfig({ zylosDir = getZylosDir() } = {}) {
   const dataDir = getDataDir(zylosDir);
   const configPath = path.join(dataDir, 'config.json');
   const defaults = {

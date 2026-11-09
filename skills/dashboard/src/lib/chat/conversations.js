@@ -19,6 +19,41 @@ export function isChatLocalIdUsed(c4Reader, localId) {
       WHERE n.component_name='dashboard' LIMIT 1`).get({ localId });
 }
 
+/** Read the existing Core ownership proof without registering either database. */
+function existingChatGroup(sessionGroup, c4Reader) {
+  const colon = typeof sessionGroup === 'string' ? sessionGroup.indexOf(':') : -1;
+  if (colon < 1) throw fail('chat_conversation_forbidden', 403);
+  const namespace = sessionGroup.slice(0, colon), localId = sessionGroup.slice(colon + 1);
+  if (!validNamespace(namespace)) throw fail('chat_conversation_forbidden', 403);
+  try { validateGroupName(localId); } catch { throw fail('chat_conversation_forbidden', 403); }
+  const core = c4Reader._open();
+  if (!core) throw fail('chat_history_unavailable', 502);
+  if (core.prepare('SELECT component_name FROM channel_namespaces WHERE namespace=?').get(namespace)?.component_name !== 'dashboard') {
+    throw fail('chat_conversation_forbidden', 403);
+  }
+  if (core.prepare("SELECT 1 FROM drain_fences WHERE session_group=? AND reason='delete'").get(sessionGroup)) {
+    throw fail('chat_conversation_deleting', 409);
+  }
+  const exists = core.prepare(`SELECT 1 FROM group_heads WHERE session_group=?
+    UNION ALL SELECT 1 FROM conversations WHERE session_group=? AND channel='dashboard' AND endpoint_id=? LIMIT 1`)
+    .get(sessionGroup, sessionGroup, localId);
+  if (!exists) throw fail('chat_conversation_not_found', 404);
+  return { namespace, localId };
+}
+
+/** Re-register only a proven Core group, without creating Core routing state. */
+export function registerExistingChatGroup(db, sessionGroup, c4Reader, now = Date.now) {
+  return db.transaction(() => {
+    const { namespace, localId } = existingChatGroup(sessionGroup, c4Reader);
+    const stamp = now();
+    db.prepare(`INSERT INTO chat_conversations(local_id,namespace,state,created_at,updated_at)
+      VALUES (?,?,'active',?,?) ON CONFLICT(local_id) DO NOTHING`).run(localId, namespace, stamp, stamp);
+    const row = db.prepare('SELECT * FROM chat_conversations WHERE local_id=?').get(localId);
+    if (row.namespace !== namespace || row.state !== 'active') throw fail('chat_conversation_forbidden', 403);
+    return row;
+  }).immediate();
+}
+
 /** Dashboard-owned registration only; creating or renaming a draft never writes C4. */
 export class ChatConversations {
   constructor({ store, idGenerator = randomUUID, now = Date.now, isUsed = () => false }) {
@@ -61,6 +96,20 @@ export class ChatConversations {
     const row = this.db.prepare('SELECT * FROM chat_conversations WHERE namespace=? AND local_id=?')
       .get(sessionGroup.slice(0, colon), sessionGroup.slice(colon + 1));
     return row ? this._project(row) : null;
+  }
+
+  /** A read-only projection for a recreated group; writes register after authorization. */
+  existingGroup(sessionGroup, c4Reader) {
+    const { namespace, localId } = existingChatGroup(sessionGroup, c4Reader);
+    return this._project({ local_id: localId, namespace, state: 'active', last_outcome: null,
+      created_at: null, updated_at: null, first_message_id: null, first_content: null,
+      pending_content: null, last_message_id: null });
+  }
+
+  /** Re-register only an existing Core group owned by the Dashboard namespace. */
+  registerExistingGroup(sessionGroup, c4Reader) {
+    const row = registerExistingChatGroup(this.db, sessionGroup, c4Reader, this.now);
+    return this.get(row.local_id);
   }
 
   create({ displayName = null } = {}) {

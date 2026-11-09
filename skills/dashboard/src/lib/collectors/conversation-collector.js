@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { fastModeMultiplierForRuntime, modelPricesForRuntime } from '../config.js';
 import { Sanitizer } from '../sanitizer.js';
 import { UsageTranscripts, groupMainTranscript } from './usage-transcripts.js';
+import { sameSourceFile } from '../source-file-identity.js';
 
 const PER_MTOK = 1_000_000;
 const ASSISTANT_MESSAGE_SUMMARY_LIMIT = 500;
@@ -149,7 +150,16 @@ export class ConversationCollector {
 
   // Assistant words of other groups' main transcripts are stored for their conversation pages but never reach the
   // origin state engine or the origin turn timing.
-  _collectFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false, group = null, runId = null, origin = true } = {}) {
+  _collectFile(jsonlPath, options = {}) {
+    let identity;
+    try { identity = fs.statSync(jsonlPath); } catch { return 0; }
+    return this.store.db.transaction(() => {
+      if (!sameSourceFile(jsonlPath, identity)) return 0;
+      return this._collectCurrentFile(jsonlPath, options);
+    }).immediate();
+  }
+
+  _collectCurrentFile(jsonlPath, { sessionId = null, agentId = null, usageOnly = false, group = null, runId = null, origin = true } = {}) {
     this._lastFileMessages = 0;
     const startOffset = this._offsets.get(jsonlPath) || 0;
 

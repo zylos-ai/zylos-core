@@ -70,7 +70,12 @@ export class ChatSender {
       ({ namespace, groupName: localId } = parsed);
     } else throw fail('invalid_chat_conversation');
     try { validateGroupName(localId); } catch { throw fail('invalid_chat_conversation'); }
-    const row = this.conversations.get(localId);
+    let row;
+    try { row = this.conversations.get(localId); }
+    catch (error) {
+      if (error.code !== 'chat_conversation_not_found' || !namespace) throw error;
+      row = this.conversations.existingGroup(`${namespace}:${localId}`, this.c4Reader);
+    }
     if (row.channel !== 'dashboard' || row.localId !== localId || (namespace &&
         (row.namespace !== namespace || (row.state !== 'active' && !(reconcile && unknown(row.lastOutcome)))))) {
       throw fail('chat_conversation_forbidden', 403);
@@ -79,6 +84,14 @@ export class ChatSender {
       if (!validNamespace(row.namespace)) throw fail('chat_conversation_forbidden', 403);
     }
     return row;
+  }
+
+  _registerForWrite(row) {
+    try { return this.conversations.get(row.localId); }
+    catch (error) {
+      if (error.code !== 'chat_conversation_not_found' || row.state !== 'active') throw error;
+      return this.conversations.registerExistingGroup(`${row.namespace}:${row.localId}`, this.c4Reader);
+    }
   }
 
   async resolve(id) {
@@ -94,6 +107,7 @@ export class ChatSender {
     const binding = await core.ensureChannelNamespace('dashboard');
     if (binding?.componentName !== 'dashboard' || !validNamespace(binding.namespace)
         || (row.namespace && row.namespace !== binding.namespace)) throw fail('chat_conversation_forbidden', 403);
+    if (row.state === 'active') return this._registerForWrite(row);
     return row;
   }
 
@@ -179,6 +193,14 @@ export class ChatSender {
       throw fail('invalid_chat_content');
     }
     let row = await this.resolve(id);
+    try { this.conversations.get(row.localId); }
+    catch (error) {
+      if (error.code !== 'chat_conversation_not_found' || row.state !== 'active') throw error;
+      await this.loadCore();
+      const denied = await authorize?.(row);
+      if (denied) throw fail(denied.error || 'chat_conversation_forbidden', denied.status || 403);
+      row = this._registerForWrite(row);
+    }
     const records = this.attachments?.prepareSend(row, attachments, principal) ?? [];
     if (records.length) content = buildAnnotatedContent(content, records);
     if (!content.trim() || Buffer.byteLength(content) > MAX_CONTENT_BYTES) throw fail('invalid_chat_content');

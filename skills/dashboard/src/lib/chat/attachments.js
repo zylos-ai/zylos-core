@@ -3,6 +3,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from '../../../../comm-bridge/scripts/sqlite-driver.js';
 import { C4Reader } from '../c4-reader.js';
+import { registerExistingChatGroup } from './conversations.js';
+import { sameSourceFile } from '../source-file-identity.js';
 import { inspectDatabase, TARGET_SCHEMA_VERSION } from '../schema.js';
 import {
   MAX_ATTACHMENTS, sanitizedExtension, uploadKind,
@@ -44,12 +46,16 @@ export class ChatAttachments {
     return db;
   }
 
-  _conversation(conversation) {
+  _conversation(conversation, { recover = false } = {}) {
     const localId = typeof conversation === 'string' ? conversation : conversation?.localId;
     try { validateGroupName(localId); } catch { throw fail('invalid_chat_conversation'); }
-    const row = this.db.prepare('SELECT local_id,namespace FROM chat_conversations WHERE local_id=?').get(localId);
-    if (!row) throw fail('chat_conversation_not_found', 404);
+    let row = this.db.prepare('SELECT local_id,namespace FROM chat_conversations WHERE local_id=?').get(localId);
     const binding = this._core().prepare("SELECT namespace FROM channel_namespaces WHERE component_name='dashboard'").get();
+    if (!row && recover && binding && (typeof conversation === 'string' ||
+        conversation.channel === 'dashboard' && (!conversation.namespace || conversation.namespace === binding.namespace))) {
+      row = registerExistingChatGroup(this.db, `${binding.namespace}:${localId}`, this.c4Reader, this.now);
+    }
+    if (!row) throw fail('chat_conversation_not_found', 404);
     if (!binding || !validNamespace(binding.namespace) || (row.namespace && row.namespace !== binding.namespace)
         || (typeof conversation === 'object' && (conversation.channel !== 'dashboard'
           || conversation.namespace && conversation.namespace !== binding.namespace))) {
@@ -92,8 +98,18 @@ export class ChatAttachments {
     return { id: record.id, name: record.name, size: record.size, mime: record.mime, kind: record.kind };
   }
 
+  _deletionOperation(group) {
+    const core = this._core();
+    if (core.prepare("SELECT 1 FROM drain_fences WHERE session_group=? AND reason='delete'").get(group.sessionGroup)) {
+      throw fail('chat_conversation_deleting', 409);
+    }
+    return core.prepare('SELECT operation_id FROM group_deletion_audit WHERE session_group=? OR draft_local_id=? ORDER BY rowid DESC LIMIT 1')
+      .get(group.sessionGroup, group.localId)?.operation_id ?? null;
+  }
+
   async _copy(group, { name, mime, kind, source, principal, stream, watermark = this._watermark() }) {
     if (!Number.isSafeInteger(watermark) || watermark < 0) throw fail('chat_attachment_core_unavailable', 502);
+    const deletionOperation = this._deletionOperation(group);
     const id = randomUUID();
     const storageName = `attachment-${randomUUID()}${sanitizedExtension(name)}`;
     const temporary = path.join(this.mediaDir, `${storageName}.part`);
@@ -112,24 +128,33 @@ export class ChatAttachments {
       }
       if (source === 'agent' && kind === 'image' && !sniffImage(prefix)) throw fail('chat_attachment_not_image');
       await handle.sync();
+      const identity = await handle.stat();
       await handle.close();
       handle = null;
-      // A stalled writer may have been collected by another process. Never
-      // publish its record or ID after its temporary name has disappeared.
-      if (!(await fs.promises.lstat(temporary)).isFile()) throw fail('chat_attachment_unavailable', 404);
       const createdAt = this.now();
-      this.db.prepare(`INSERT INTO chat_attachments
-        (id,local_id,namespace,storage_name,name,size,mime,kind,source,principal,created_at,
-          c4_watermark,scanned_c4_id,next_check_at)
-        VALUES (@id,@localId,@namespace,@storageName,@name,@size,@mime,@kind,@source,@principal,@createdAt,
-          @watermark,@watermark,@nextCheckAt)`).run({ id, ...group, storageName,
-        name: sanitizeDisplayName(name), size, mime: String(mime || 'application/octet-stream'),
-        kind, source, principal, createdAt, watermark, nextCheckAt: createdAt + ATTACHMENT_TTL_MS });
+      const record = this.db.transaction(() => {
+        this._conversation(group);
+        if (this._deletionOperation(group) !== deletionOperation) throw fail('chat_conversation_deleted', 409);
+        // The writer lock serializes publication with deletion and GC. A stream
+        // from the old conversation cannot publish into a recreated group.
+        if (!sameSourceFile(temporary, identity)) throw fail('chat_attachment_unavailable', 404);
+        fs.renameSync(temporary, final);
+        this.db.prepare(`INSERT INTO chat_attachments
+          (id,local_id,namespace,storage_name,name,size,mime,kind,source,principal,created_at,
+            c4_watermark,scanned_c4_id,next_check_at)
+          VALUES (@id,@localId,@namespace,@storageName,@name,@size,@mime,@kind,@source,@principal,@createdAt,
+            @watermark,@watermark,@nextCheckAt)`).run({ id, ...group, storageName,
+          name: sanitizeDisplayName(name), size, mime: String(mime || 'application/octet-stream'),
+          kind, source, principal, createdAt, watermark, nextCheckAt: createdAt + ATTACHMENT_TTL_MS });
+        return this._public(this._record(id, group));
+      }).immediate();
       registered = true;
-      await fs.promises.rename(temporary, final);
-      return { ...this._public(this._record(id, group)), expiresAt: createdAt + ATTACHMENT_SEND_WINDOW_MS };
+      return { ...record, expiresAt: createdAt + ATTACHMENT_SEND_WINDOW_MS };
     } catch (error) {
-      if (!registered) await fs.promises.unlink(temporary).catch(() => {});
+      if (!registered) {
+        await fs.promises.unlink(temporary).catch(() => {});
+        await fs.promises.unlink(final).catch(() => {});
+      }
       if (error.statusCode) throw error;
       throw fail('chat_attachment_write_failed', 502);
     } finally {
@@ -145,7 +170,7 @@ export class ChatAttachments {
   }
 
   async register(conversation, { kind, path: sourcePath }) {
-    const group = this._conversation(conversation);
+    const group = this._conversation(conversation, { recover: true });
     if (!['image', 'file'].includes(kind) || typeof sourcePath !== 'string' || !path.isAbsolute(sourcePath)) {
       throw fail('invalid_chat_attachment');
     }

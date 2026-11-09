@@ -1,3 +1,4 @@
+import { sameSourceFile } from './source-file-identity.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -357,6 +358,7 @@ export class CoreLogImporter {
     try {
       while (!this.stopping) {
         const stat = await this.statFile(handle);
+        const sourceIdentity = await handle.stat();
         const old = this.current.get(stream, stat.dev, stat.ino);
         if (stat.nlink === 0 && old?.status === 'active') {
           this.store.db.transaction(() => {
@@ -396,6 +398,9 @@ export class CoreLogImporter {
         if (!reason && old && Object.entries(row).every(([key, value]) => old[key] === value)) break;
         let inserted = 0;
         const committed = this.store.db.transaction(() => {
+          // Deletion removes the source while holding this same database writer lock.
+          // A descriptor opened before that operation cannot restore its old rows.
+          if (!sameSourceFile(file, sourceIdentity)) return false;
           const now = this.current.get(stream, stat.dev, stat.ino);
           if (JSON.stringify(now) !== JSON.stringify(old)) return false;
           if (reason) this.mark.run('gap', stream, stat.dev, stat.ino, old.generation);
