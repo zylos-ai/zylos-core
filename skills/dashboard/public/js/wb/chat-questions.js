@@ -1,4 +1,4 @@
-import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=103';
+import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=104';
 import { element } from './plain-text.js?v=104';
 import { receiptState } from './chat-delivery-state.js?v=100';
 import { instantFromInput, zonedInputValue } from './instance-zone.js?v=100';
@@ -15,6 +15,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   t = key => key, onSubmit = null, formState = {}, onDraftChange = null, otherAnswerDisclosure = false, timeZone = null } = {}) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
   const root = node('div', undefined, 'chat-question');
+  if (block.type === 'confirmation') root.dataset.severity = block.data?.severity;
   const validEnvelope = parseC4Content(CONTENT_PREFIX + JSON.stringify(envelope), { submission: question?.status === 'paused' });
   const valid = validEnvelope.kind === 'envelope' && referenceMatches(question, envelope, block, row);
   const lifecycle = valid && ['paused', 'answered', 'stopped', 'superseded'].includes(question.status)
@@ -50,6 +51,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   const status = node('p', '', block.type === 'form_intent' ? 'chat-error chat-form-error' : 'chat-error'); status.setAttribute('role', 'alert');
   function button(text, handler, action) {
     const result = node('button', text, 'action-btn'); result.type = 'button';
+    if (action === 'confirmAnswer' && block.data?.severity === 'destructive') result.className += ' wb-btn-danger';
     result.dataset.action = action; result.disabled = !!formState.sending;
     result.addEventListener('click', () => { if (!result.disabled) handler(); });
     controls.push(result); return result;

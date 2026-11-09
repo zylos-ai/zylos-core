@@ -6,6 +6,7 @@ import { createDocument, allNodes } from './helpers/conversation-dom.js';
 import { CONTENT_PREFIX, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { applyChatView } from '../public/js/wb/chat-view.js';
 import { conversationChartConfig, conversationChartResource } from '../public/js/wb/conversation-charts.js';
+import { formatDuration } from '../public/js/wb/duration-format.js';
 const shared = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({ resolve(specifier, context, next) {
   if (context.parentURL && new URL(specifier, context.parentURL).pathname.endsWith('/public/chat-schema.js')) return next(shared, context);
@@ -16,6 +17,35 @@ const { renderChatContent } = await import('../public/js/wb/chat-blocks.js');
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/view-and-form.json', import.meta.url), 'utf8'));
 const t = key => key;
 const row = envelope => ({ id: 7, content: CONTENT_PREFIX + JSON.stringify(envelope) });
+
+test('duration formatting handles fractions signs zero and rounding into larger units', () => {
+  for (const [seconds, digits, expected] of [
+    [0, 6, '0s'], [-0, 6, '0s'], [-0.0001, 0, '0s'],
+    [1.25, 2, '1.25s'], [61.25, 2, '1m 1.25s'], [-61.25, 2, '-1m 1.25s'],
+    [59.9999, 0, '1m'], [3599.9999, 0, '1h'],
+    [-3599.9999, 0, '-1h'], [5400, 6, '1h 30m'], [-5400, 6, '-1h 30m'],
+  ]) assert.equal(formatDuration(seconds, digits, 'en-US'), expected, `${seconds} seconds rounded to ${digits} fractional digits`);
+});
+
+test('invalid envelope fallback bypasses composed Markdown rendering and all question controls', () => {
+  const document = createDocument();
+  let markdownCalls = 0;
+  document.defaultView = { markdownit: () => ({
+    use() { return this; }, renderer: { rules: {} }, utils: { escapeHtml: value => value },
+    render() { markdownCalls++; assert.fail('invalid fallback must remain plain text'); },
+  }) };
+  const envelope = structuredClone(fixtures.message);
+  envelope.fallbackText = '**Notice** <script>evil()</script> [link](https://example.test)';
+  envelope.blocks.push({ id: 'unknown', type: 'future_block', schemaVersion: 1, fallbackText: 'Block fallback', data: {} });
+  const content = renderConversationContent({ document, row: row(envelope), t,
+    renderQuestion() { assert.fail('invalid envelope cannot offer an answer'); } });
+  assert.equal(markdownCalls, 0);
+  assert.equal(content.querySelector('.chat-invalid-fallback').textContent, envelope.fallbackText);
+  assert.equal(content.querySelector('.conversation-markdown'), null);
+  assert.equal(content.textContent, envelope.fallbackText + 'chat.partialContentchat.block.reference 7');
+  assert.equal(allNodes(content).some(node => node.dataset.blockId || ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'SCRIPT', 'A'].includes(node.tagName)), false);
+  content.destroy();
+});
 
 for (const name of ['balanced_columns', 'sidebar_columns', 'section_slots']) test(`validated ${name} moves complete blocks and preserves one question control`, () => {
   const document = createDocument(), envelope = structuredClone(fixtures.message);
@@ -86,6 +116,24 @@ test('categorical time series uses aligned grouped bars with titles axes legends
   assert.equal(config.data.labels.join(','), 'p50,p99');
   assert.equal(config.data.datasets[1].data[0], 6100); assert.equal(config.data.datasets[1].data[1], null);
   assert.equal(config.options.plugins.tooltip.callbacks.label({ parsed: { y: 4200 }, dataset: config.data.datasets[0] }), 'A: 4,200 req');
+});
+
+test('duration axis ticks and tooltips use the same readable seconds as the chart table', () => {
+  const block = seriesBlock(); block.data.format = { style: 'duration' };
+  block.data.series = [{ key: 'latency', label: 'Latency', points: [
+    { x: 'Short', y: 59 }, { x: 'Hour', y: 3600 }, { x: 'Long', y: 5400 },
+  ] }];
+  const config = conversationChartConfig(block);
+  for (const [seconds, expected] of [[59, '59s'], [3600, '1h'], [5400, '1h 30m']]) {
+    assert.equal(config.options.scales.y.ticks.callback(seconds), expected);
+    assert.equal(config.options.plugins.tooltip.callbacks.label({ parsed: { y: seconds }, dataset: config.data.datasets[0] }), `Latency: ${expected}`);
+  }
+  assert.deepEqual(config.data.datasets[0].data, [59, 3600, 5400]);
+  const document = createDocument();
+  const envelope = { version: 1, kind: 'message', messageId: 'durations', fallbackText: 'Durations', blocks: [block] };
+  const content = renderConversationContent({ document, row: row(envelope), t });
+  assert.deepEqual(allNodes(content).filter(node => node.className === 'chat-chart-value').map(node => node.textContent), ['59s', '1h', '1h 30m']);
+  content.destroy();
 });
 
 test('mixed units have separate scales and are never summed in a stack', () => {

@@ -364,6 +364,7 @@
   "chat.retry": "Retry sending",
   "chat.draft": "Draft",
   "chat.invalidContent": "This message could not be decoded.",
+  "chat.partialContent": "Some content could not be displayed.",
   "chat.user": "User",
   "chat.assistant": "Assistant",
   "chat.unnamed": "Untitled conversation",

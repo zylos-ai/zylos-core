@@ -15,7 +15,7 @@ export function projectC4Content(content, { c4Id } = {}) {
   const parsed = parseC4Content(content);
   if (parsed.kind === 'text') return parsed.text;
   const reference = `c4_id=${c4Reference(c4Id)}`;
-  if (parsed.kind !== 'envelope') return `[C4 content invalid; ${reference}]`;
+  if (parsed.kind !== 'envelope') return `${parsed.fallbackText === undefined ? '' : parsed.fallbackText + '\n'}[C4 content invalid; ${reference}]`;
   const { fallbackText, messageId, interruptId } = parsed.envelope;
   const interrupt = interruptId === undefined ? '' : ` interruptId=${interruptId}`;
   return `${fallbackText}\n[C4 messageId=${messageId}${interrupt}; ${reference}]`;

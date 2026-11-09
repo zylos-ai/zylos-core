@@ -565,13 +565,16 @@ export function readC4Envelope(content) {
 export function parseC4Content(content, { submission = false } = {}) {
   const framed = readC4Envelope(content);
   if (framed.kind !== 'envelope') return framed;
+  const invalid = () => ({ kind: 'invalid', reason: 'invalid_envelope',
+    ...(object(framed.envelope) && string(framed.envelope.fallbackText, 1, 16000)
+      ? { fallbackText: framed.envelope.fallbackText } : {}) });
   try {
     const split = splitMessageView(framed.envelope);
-    if (!validEnvelope(split.envelope, submission)) return { kind: 'invalid', reason: 'invalid_envelope' };
+    if (!validEnvelope(split.envelope, submission)) return invalid();
     const error = split.hasView ? viewError(split.view, split.metadata, split.envelope.blocks) : null;
     return { kind: 'envelope', envelope: split.envelope, suffix: framed.suffix,
       view: split.hasView && !error ? split.view : null, ...(error ? { viewError: error } : {}) };
-  } catch { return { kind: 'invalid', reason: 'invalid_envelope' }; }
+  } catch { return invalid(); }
 }
 
 const FRAMING_MESSAGES = {

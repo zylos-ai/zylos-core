@@ -120,6 +120,18 @@ test('confirmation cancel remains an answer and never calls a lifecycle control'
   assert.equal(f.question.status, 'paused');
 });
 
+for (const severity of ['normal', 'destructive']) test(`${severity} confirmation exposes severity and styles only its confirm action`, async () => {
+  const f = fixture({ type: 'confirmation', data: { severity } });
+  assert.equal(f.root.dataset.severity, severity);
+  assert.equal(f.button('confirmAnswer').className.split(/\s+/).includes('wb-btn-danger'), severity === 'destructive');
+  assert.equal(f.button('cancelAnswer').className.split(/\s+/).includes('wb-btn-danger'), false);
+  assert.equal(f.button('confirmAnswer').disabled, false);
+  f.button('confirmAnswer').dispatch('click'); await tick();
+  assert.equal(f.requests.length, 1);
+  assert.equal(validateAnswer(f.requests[0].action, f.envelope), true);
+  assert.deepEqual(f.requests[0].action.payload, { outcome: 'confirm' });
+});
+
 test('forms retain valid typed values after failure and redraw', async () => {
   const f = fixture({ type: 'form_intent', submit: async () => { throw new Error('network'); } });
   const input = f.nodes().find(node => node.tagName === 'INPUT'); change(input, 'Howard');

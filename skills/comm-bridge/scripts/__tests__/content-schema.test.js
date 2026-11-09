@@ -2,12 +2,72 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
-  CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, makeQuestionSummary,
+  CONTENT_PREFIX, MAX_CONTENT_BYTES, parseC4Content, makeQuestionSummary, findC4ContentError,
   validateAnswer, normalizeHookMessage, validateHookInput, validateHookOutput, validateDeliveryPacket,
 } from '../c4-content-schema.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const encode = value => CONTENT_PREFIX + JSON.stringify(value);
+
+// Pure shared-parser boundary. Run for invalid-content display or acceptance
+// changes; unrelated UI/transport changes may skip. No storage or runtime starts.
+for (const [name, change] of [
+  ['unknown block', envelope => { envelope.blocks[0].type = 'unknown'; }],
+  ['unknown version', envelope => { envelope.version = 999; }],
+  ['unknown envelope field', envelope => { envelope.extra = true; }],
+  ['missing blocks', envelope => { delete envelope.blocks; }],
+]) test(`invalid ${name} retains only whole-message fallback without accepting blocks`, () => {
+  const example = fixtures.actions.find(row => row.name === 'other_input');
+  const envelope = structuredClone(example.question);
+  envelope.fallbackText = '<img src=x onerror=alert(1)> **literal** [link](javascript:alert(1))';
+  envelope.metadata = { private: 'HIDDEN_METADATA' };
+  change(envelope);
+  const result = parseC4Content(encode(envelope));
+  assert.deepEqual(result, { kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText });
+  assert.equal('blocks' in result || 'envelope' in result, false);
+  assert.deepEqual(parseC4Content(encode(envelope), { submission: true }), result);
+  assert.notEqual(findC4ContentError(encode(envelope)), null);
+  assert.equal(validateAnswer(example.action, envelope), false);
+});
+
+test('strict rejection retains fallback while diagnostics reject duplicate choice options', () => {
+  const envelope = structuredClone(fixtures.actions.find(row => row.name === 'other_input').question);
+  envelope.fallbackText = 'Whole-message explanation';
+  const content = () => encode(envelope);
+  assert.equal(parseC4Content(content(), { submission: true }).kind, 'envelope');
+  assert.equal(findC4ContentError(content()), null);
+  envelope.blocks[0].data.options[1].id = envelope.blocks[0].data.options[0].id;
+  assert.equal(parseC4Content(content()).kind, 'envelope', 'stored historical definitions remain readable');
+  assert.deepEqual(parseC4Content(content(), { submission: true }), {
+    kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText,
+  });
+  const error = findC4ContentError(content());
+  assert.equal(error?.code, 'uniqueOptionId');
+  assert.equal(error?.path, '/blocks/0/data/options/1/id');
+});
+
+test('invalid content fallback uses the existing Unicode code-point limits', () => {
+  for (const fallbackText of ['x', '😀'.repeat(16000)]) {
+    const result = parseC4Content(encode({ fallbackText }));
+    assert.equal(result.kind, 'invalid');
+    assert.equal(result.reason, 'invalid_envelope');
+    assert.equal(result.fallbackText, fallbackText);
+  }
+  for (const fallbackText of ['', 'x'.repeat(16001), 1, false, null, [], { text: 'no' }]) {
+    assert.deepEqual(parseC4Content(encode({ fallbackText })), { kind: 'invalid', reason: 'invalid_envelope' });
+  }
+  assert.deepEqual(parseC4Content(encode({})), { kind: 'invalid', reason: 'invalid_envelope' });
+});
+
+test('framing failures do not acquire a fallback from partial or trailing JSON', () => {
+  for (const content of [CONTENT_PREFIX + '{"fallbackText":"partial"',
+    encode({ fallbackText: 'trailing' }) + 'prose', CONTENT_PREFIX + 'not JSON', CONTENT_PREFIX + '[]']) {
+    const result = parseC4Content(content);
+    assert.equal(result.kind, 'invalid');
+    assert.equal('fallbackText' in result, false);
+  }
+});
+
 for (const fixture of fixtures.valid) test(`content envelope accepts ${fixture.name}`, () => {
   const result = parseC4Content(fixture.content);
   assert.equal(result.kind, 'envelope');
@@ -162,19 +222,19 @@ test('parse reasons preserve precedence at byte JSON suffix and schema boundarie
     { kind: 'invalid', reason: 'content_too_large' });
   const invalidEnvelope = { ...fixtures.valid[0].envelope, version: 2 };
   assert.deepEqual(parseC4Content(encode(invalidEnvelope) + 'garbage'), { kind: 'invalid', reason: 'invalid_suffix' });
-  assert.deepEqual(parseC4Content(encode(invalidEnvelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(invalidEnvelope)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: invalidEnvelope.fallbackText });
 });
 
 test('message answer metadata and control reject unknown fields', () => {
   const message = structuredClone(fixtures.valid.find(row => row.name === 'markdown').envelope);
   message.extra = true;
-  assert.deepEqual(parseC4Content(encode(message)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(message)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: message.fallbackText });
   const answer = structuredClone(fixtures.valid.find(row => row.name === 'answer_cancel').envelope);
   answer.metadata.extra = true;
-  assert.deepEqual(parseC4Content(encode(answer)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(answer)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: answer.fallbackText });
   const control = structuredClone(fixtures.valid.find(row => row.name === 'stop').envelope);
   control.control.extra = true;
-  assert.deepEqual(parseC4Content(encode(control)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(control)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: control.fallbackText });
 });
 
 test('control envelopes reject metadata and blocks at the top level', () => {
@@ -183,7 +243,7 @@ test('control envelopes reject metadata and blocks at the top level', () => {
     assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
     for (const extra of [{ metadata: {} }, { blocks: [] }]) {
       assert.deepEqual(parseC4Content(encode({ ...envelope, ...extra })),
-        { kind: 'invalid', reason: 'invalid_envelope' }, `${name}: ${Object.keys(extra)[0]}`);
+        { kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText }, `${name}: ${Object.keys(extra)[0]}`);
     }
   }
 });
@@ -214,11 +274,11 @@ test('question reasons match their block type and referenced blocks must remain 
   for (const [name, reason] of [['single', 'confirmation'], ['confirmation', 'input_required']]) {
     const question = structuredClone(fixtures.valid.find(row => row.name === name).envelope);
     question.interrupt.reason = reason;
-    assert.deepEqual(parseC4Content(encode(question)), { kind: 'invalid', reason: 'invalid_envelope' });
+    assert.deepEqual(parseC4Content(encode(question)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: question.fallbackText });
   }
   const question = structuredClone(fixtures.valid.find(row => row.name === 'single').envelope);
   question.blocks[0].data.state = { status: 'expired' };
-  assert.deepEqual(parseC4Content(encode(question)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(question)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: question.fallbackText });
 });
 
 test('multiple choice enforces both saved lower and upper selection bounds', () => {
@@ -239,7 +299,7 @@ test('block counts and fallback Unicode limits include their exact maximum', () 
   envelope.blocks = Array.from({ length: 64 }, (_, index) => ({ id: `block${index}`, type: 'markdown', schemaVersion: 1, data: { text: '' } }));
   assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
   envelope.blocks.push({ id: 'block64', type: 'markdown', schemaVersion: 1, data: { text: '' } });
-  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText });
   envelope.blocks = [];
   envelope.fallbackText = '😀'.repeat(16000);
   assert.ok(Buffer.byteLength(encode(envelope)) < MAX_CONTENT_BYTES);
@@ -255,7 +315,7 @@ test('markdown UTF8 limit rejects the first multibyte character beyond its bound
   assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
   envelope.blocks[0].data.text = '中'.repeat(10923);
   assert.equal(Buffer.byteLength(envelope.blocks[0].data.text), 32769);
-  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText });
 });
 
 const nestedObject = depth => {
@@ -270,7 +330,7 @@ test('block data accepts depth six and rejects depth seven', () => {
   envelope.blocks = [block];
   assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
   block.data.state.values.value = nestedObject(4);
-  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText });
 });
 
 test('a single block accepts five thousand JSON nodes but rejects the next node', () => {
@@ -283,7 +343,7 @@ test('a single block accepts five thousand JSON nodes but rejects the next node'
   assert.equal(parseC4Content(encode(envelope)).kind, 'envelope');
   block.metadata.host.nodes.push(null);
   assert.equal(nodeCount(block), 5001);
-  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText });
 });
 
 test('hook context rejects empty values and delivery distinguishes null from missing', () => {
@@ -317,7 +377,7 @@ test('message metadata accepts depth six and rejects depth seven and deeply nest
   assert.doesNotThrow(() => JSON.stringify(accepted.envelope));
   assert.doesNotThrow(() => structuredClone(accepted.envelope));
   envelope.metadata = nestedObject(7);
-  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope' });
+  assert.deepEqual(parseC4Content(encode(envelope)), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText });
   const prefix = CONTENT_PREFIX + '{"version":1,"kind":"message","messageId":"deep_metadata","fallbackText":"text","blocks":[],"metadata":{"nested":';
   const deep = prefix + '['.repeat(32000) + '0' + ']'.repeat(32000) + '}}';
   assert.ok(Buffer.byteLength(deep) < MAX_CONTENT_BYTES);

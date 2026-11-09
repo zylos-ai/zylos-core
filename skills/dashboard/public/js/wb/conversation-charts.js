@@ -1,5 +1,6 @@
 import { element } from './plain-text.js?v=104';
 import { formatZoned, instanceZone, zonedInputValue } from './instance-zone.js?v=100';
+import { formatDuration } from './duration-format.js?v=1';
 
 const colors = ['#4f8cf7', '#aa79e8', '#35a998', '#e1a33d', '#e06b83', '#73859f'];
 const halfDay = 12 * 60 * 60 * 1000;
@@ -62,6 +63,7 @@ export function chartDay(value, timeZone) {
 
 function formatted(value, unit, format, locale) {
   if (value === null) return '';
+  if (format?.style === 'duration') return formatDuration(value, format.maximumFractionDigits, locale);
   let amount = value;
   const options = { maximumFractionDigits: format?.maximumFractionDigits ?? 6 };
   if (format?.style === 'integer') options.maximumFractionDigits = 0;

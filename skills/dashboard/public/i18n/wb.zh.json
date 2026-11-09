@@ -364,6 +364,7 @@
   "chat.retry": "明确重试发送",
   "chat.draft": "草稿",
   "chat.invalidContent": "无法解析此消息。",
+  "chat.partialContent": "部分内容无法显示。",
   "chat.user": "用户",
   "chat.assistant": "助手",
   "chat.unnamed": "未命名对话",

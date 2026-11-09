@@ -18,7 +18,7 @@ Here `\n` denotes LF bytes, not backslash characters. `health` and `reason` are 
 
 Marked content, including prefix/JSON/any suffix, has a maximum of **65,536 UTF-8 bytes**, inclusive. Count bytes, not UTF-16 units or characters. The parser returns unmarked ordinary text unchanged regardless of its length, preserving existing history from every channel. The Dashboard channel BeforeSend hook separately enforces a 65,536-byte sending cap on both ordinary and structured content before storage; this is a sending rule, not a general history-reading cap. No truncation of structured content. Images/large data use existing references, not inline binaries.
 
-`parseC4Content(content)` returns `{kind:'text',text}`, `{kind:'envelope',envelope,suffix,view,viewError?}` or `{kind:'invalid',reason}`. Invalid tagged content never becomes ordinary text; invalid results do not carry raw payload. Consumers provide their existing readable error/C4 reference and no actions. Unsupported Content versions/types are invalid for this adapter and therefore read-only fallback/error, never an invitation to fetch remote code.
+`parseC4Content(content)` returns `{kind:'text',text}`, `{kind:'envelope',envelope,suffix,view,viewError?}` or `{kind:'invalid',reason,fallbackText?}`. Invalid tagged content never becomes ordinary text and never exposes blocks or actions. After valid object framing, JSON syntax, suffix and byte-limit checks, an `invalid_envelope` result carries only the object's own `fallbackText` when it is a string of 1–16,000 Unicode code points; no other raw payload is returned. Dashboard displays that string literally as plain text with a small “部分内容无法显示” notice; IM projection appends the existing invalid-content/C4 marker to it. Missing or invalid fallback text, non-JSON content and framing errors retain the existing error/C4-reference behavior. Unsupported Content versions/types remain invalid and cannot be answered. BeforeSend still strictly rejects the whole invalid envelope; there is no per-block degradation or remote code loading.
 
 ## Parse result reason categories
 
@@ -30,7 +30,7 @@ These fixed functional values are part of the common parser contract. Classifica
 | `content_too_large` | Marked UTF-8 content exceeds 65,536 bytes. Unmarked text is never invalidated by this reading limit. |
 | `invalid_json` | Marked body is not one complete syntactically valid JSON object. |
 | `invalid_suffix` | The complete object has neither JSON whitespace nor the exact known suffix after it. |
-| `invalid_envelope` | Parsed object has unsupported version/type, missing/invalid fields or inconsistent question/answer references. |
+| `invalid_envelope` | Parsed object has unsupported version/type, missing/invalid fields or inconsistent question/answer references. A qualified whole-message `fallbackText` is retained for plain-text display only. |
 
 Invalid fixtures state expected reason explicitly; replacing one category with another must fail a test. These are parse categories, not new hook machine reason codes.
 
@@ -80,6 +80,8 @@ For new sends and new answers, host procedural checks require unique choice opti
 
 Required fields reject missing/null values, empty strings, strings containing only Unicode whitespace or default-ignorable characters (including zero-width characters), and empty arrays. The same presence check drives activeWhen.present. Zero and false are present; optional empty strings and arrays remain legal when their field type permits them.
 
+The pinned upstream schema and protocol enumerate `format.style: "duration"` without defining a numeric unit. This adapter interprets chart duration values as **seconds**. Tables, chart axes and tooltips use readable `h`, `m`, `s` components (59 → `59s`, 3600 → `1h`, 5400 → `1h 30m`), omit zero components, and show zero as `0s`. Values are rounded to `maximumFractionDigits` (default 6) before splitting; negative values retain one leading minus sign. The formatter supplies its own unit labels instead of appending a chart/series unit. Destructive confirmations expose `data-severity="destructive"` and use the existing danger colors for the confirmation button in both themes; normal confirmations retain their ordinary appearance.
+
 The table selects a supported host subset; it does not rename or redefine the complete upstream block catalogue. Other upstream or future blocks are read-only fallback/error in this version. Detailed per-field limits and interaction-state shapes are the pinned upstream schema; the shared validator embeds the selected definitions so Node and browser use one contract, without runtime network/dependency loading.
 
 Interaction states retain upstream semantics: open (default), resolved, expired, cancelled, superseded. Resolved has exactly the suitable selected/outcome/values/freeText plus resolvedAt; cancelled requires a reason; superseded requires supersededBy. Server-ended states carry no user resolvedBy. Confirmation **cancel is a resolved answer**, not the cancelled state. These states describe saved display data, not Core execution gating. C4 does not patch old question rows; Dashboard overlays current question state.
@@ -119,7 +121,7 @@ Deploy the compatible Core readers and the local Schema served to fleet pages
 before producing these new types. A known Schema with no renderer uses the
 filename fallback. An older Core or page Schema invalidates the **whole** mixed
 envelope, including existing history after rollback; stopping production does
-not repair those old readers. The static component list continues to include
+not repair those old readers. When that reader supports invalid-result fallback text, it displays a qualified whole-message `fallbackText` literally with the invalid-content notice/marker, without rendering any blocks or actions. Otherwise it keeps its existing error display. The static component list continues to include
 only renderers shipped by that Core. Attachment rendering belongs to the new
 conversation page.
 

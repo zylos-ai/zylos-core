@@ -1,9 +1,10 @@
-import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=103';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=104';
 import { element } from './plain-text.js?v=104';
 import { attachmentDisplayText } from './chat-attachments.js?v=4';
+import { formatDuration } from './duration-format.js?v=1';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=103';
+export { validateAnswer } from '../../chat-schema.js?v=104';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 
@@ -16,10 +17,11 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     label.hidden = !showTechnicalDetails;
     return label;
   };
-  const error = () => {
+  const error = fallbackText => {
     const result = node('div', undefined, 'chat-block-error');
     result.setAttribute('role', 'note');
-    result.append(node('p', t('chat.invalidContent'), 'chat-error'), reference());
+    if (fallbackText !== undefined) result.append(node('p', fallbackText, 'chat-invalid-fallback'));
+    result.append(node('p', t(fallbackText === undefined ? 'chat.invalidContent' : 'chat.partialContent'), fallbackText === undefined ? 'chat-error' : 'chat-notice'), reference());
     return result;
   };
   const parsed = parseC4Content(row.content);
@@ -33,7 +35,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     }
     return root;
   }
-  if (parsed.kind !== 'envelope') { root.append(error()); return root; }
+  if (parsed.kind !== 'envelope') { root.append(error(parsed.fallbackText)); return root; }
   const envelope = parsed.envelope;
   if (envelope.kind !== 'message' || !envelope.blocks.length) {
     root.append(node('p', envelope.fallbackText, 'chat-message-text')); return root;
@@ -44,6 +46,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
   const value = (amount, unit, format) => {
     if (amount === null) return t('chat.block.noValue');
     if (typeof amount !== 'number') return String(amount);
+    if (format?.style === 'duration') return formatDuration(amount, format.maximumFractionDigits, document.documentElement?.lang || undefined);
     let number = amount;
     const options = { maximumFractionDigits: format?.maximumFractionDigits ?? 6 };
     if (format?.style === 'integer') options.maximumFractionDigits = 0;
@@ -146,6 +149,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     try {
       const part = node('section', undefined, 'chat-block chat-block-' + block.type);
       part.dataset.blockId = block.id; part.dataset.blockType = block.type;
+      if (block.type === 'confirmation' && block.data) part.dataset.severity = block.data.severity;
       if (block.status === 'error' || block.status === 'pending') {
         text(part, block.fallbackText);
         if (block.status === 'error') {

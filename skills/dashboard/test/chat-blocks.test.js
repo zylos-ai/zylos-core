@@ -111,6 +111,23 @@ test('confirmation and form descriptions preserve source titles facts and labels
   for (const root of [confirmRoot, formRoot]) assert.equal(allNodes(root).some(node => ['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(node.tagName)), false);
 });
 
+for (const severity of ['normal', 'destructive']) test(`${severity} confirmation retains its severity on the rendered card`, () => {
+  const item = confirmation(); item.data.severity = severity;
+  const root = render(envelope([item], true));
+  const card = allNodes(root).find(node => node.dataset.blockId === item.id);
+  assert.equal(card.dataset.severity, severity);
+  assert.match(card.textContent, /Confirm changeCheck these facts/);
+});
+
+test('duration chart table formats seconds as readable hours minutes and seconds', () => {
+  const root = render(envelope([block('time_series', { xType: 'category', format: { style: 'duration' },
+    series: [{ key: 'latency', label: 'Latency', points: [
+      { x: 'Short', y: 59 }, { x: 'Hour', y: 3600 }, { x: 'Long', y: 5400 }, { x: 'Missing', y: null },
+    ] }] })]));
+  const values = allNodes(root).filter(node => node.className === 'chat-chart-value').map(node => node.textContent);
+  assert.deepEqual(values, ['59s', '1h', '1h 30m', 'chat.block.noValue']);
+});
+
 test('time series displays multiple labelled series null gaps units and bounded graphical values', () => {
   const root = render(envelope([block('time_series', { title: 'Traffic', xType: 'date', xLabel: 'Day', yLabel: 'Requests', yUnit: 'req', summary: 'Upward trend', series: [
     { key: 'web', label: 'Web', points: [{ x: '2026-01-01', y: 10 }, { x: '2026-01-02', y: null }] },
@@ -183,9 +200,33 @@ for (const [name, invalid] of [
 ]) test(`${name} remains visible as a referenced read-only error`, () => {
   let calls = 0;
   const root = render(invalid, { renderQuestion() { calls++; } });
-  assert.equal(root.textContent, 'chat.invalidContentchat.block.reference 42');
+  assert.equal(root.textContent, name === 'broken JSON' ? 'chat.invalidContentchat.block.reference 42'
+    : 'Envelope fallbackchat.partialContentchat.block.reference 42');
   assert.equal(calls, 0);
   assert.equal(allNodes(root).some(node => ['BUTTON', 'INPUT', 'A', 'SCRIPT'].includes(node.tagName)), false);
+});
+
+test('unknown blocks preserve only literal envelope fallback without rendering any blocks or controls', () => {
+  const source = envelope([choices('single'), block('future_block', { title: 'Private unknown data' }, { id: 'unknown' })], true);
+  source.fallbackText = '**Notice** <img src=x onerror=evil()> [answer](javascript:evil())\nSecond line';
+  const parsed = parseC4Content(CONTENT_PREFIX + JSON.stringify(source));
+  assert.equal(parsed.kind, 'invalid');
+  const root = render(source, { renderQuestion() { assert.fail('invalid content cannot delegate a question'); } });
+  const fallback = allNodes(root).find(node => node.className === 'chat-invalid-fallback');
+  assert.equal(fallback.textContent, source.fallbackText);
+  assert.equal(root.textContent, source.fallbackText + 'chat.partialContentchat.block.reference 42');
+  assert.equal(allNodes(root).some(node => node.dataset.blockId || ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A', 'IMG', 'SCRIPT'].includes(node.tagName)), false);
+});
+
+test('invalid envelopes without qualified fallback retain the generic referenced error', () => {
+  for (const fallbackText of [undefined, null, '', 17, 'x'.repeat(16001)]) {
+    const source = envelope([block('future_block', { title: 'Unknown' })]);
+    if (fallbackText === undefined) delete source.fallbackText;
+    else source.fallbackText = fallbackText;
+    const root = render(source, { renderQuestion() { assert.fail('invalid content cannot delegate a question'); } });
+    assert.equal(root.textContent, 'chat.invalidContentchat.block.reference 42');
+    assert.equal(allNodes(root).some(node => node.className === 'chat-invalid-fallback'), false);
+  }
 });
 
 test('citations remain plain references even for executable URI schemes and HTML labels', () => {
@@ -250,7 +291,7 @@ test('mixed attachment blocks use filenames without a renderer while the known q
   for (const invalid of fixture.invalidData) {
     const source = structuredClone(fixture.mixed); source.blocks[1].data = invalid.data;
     const rejected = render(source, { renderQuestion() { assert.fail('invalid envelope must not offer an answer'); } });
-    assert.equal(rejected.textContent, 'chat.invalidContentchat.block.reference 42', invalid.name);
+    assert.equal(rejected.textContent, source.fallbackText + 'chat.partialContentchat.block.reference 42', invalid.name);
   }
 });
 
@@ -264,7 +305,7 @@ test('attachment pending error and missing-data blocks invalidate the complete b
       if (example.omitData) delete invalid.data;
       source.blocks[index] = invalid;
       const root = render(source, { renderQuestion() { assert.fail('invalid attachment message cannot expose actions'); } });
-      assert.equal(root.textContent, 'chat.invalidContentchat.block.reference 42', `${block.type} ${example.name}`);
+      assert.equal(root.textContent, source.fallbackText + 'chat.partialContentchat.block.reference 42', `${block.type} ${example.name}`);
     }
   }
 });

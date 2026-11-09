@@ -20,8 +20,31 @@ for (const fixture of fixtures.valid) test(`projection exposes only fallback and
   const reference = `[C4 messageId=${messageId}${interruptId === undefined ? '' : ` interruptId=${interruptId}`}; c4_id=123]`;
   assert.equal(projectC4Content(fixture.content, { c4Id: 123 }), `${fallbackText}\n${reference}`);
 });
-for (const fixture of fixtures.invalid) test(`projection hides invalid ${fixture.name}`, () => {
-  assert.equal(projectC4Content(fixture.content, { c4Id: 123 }), invalid);
+for (const fixture of fixtures.invalid) test(`projection preserves only qualified fallback for invalid ${fixture.name}`, () => {
+  const fallback = fixture.reason === 'invalid_envelope' && fixture.name !== 'missing_fallback'
+    ? JSON.parse(fixture.content.slice(CONTENT_PREFIX.length)).fallbackText + '\n' : '';
+  assert.equal(projectC4Content(fixture.content, { c4Id: 123 }), fallback + invalid);
+});
+
+// Pure IM/model projection boundary. Run for parser/projection changes;
+// unrelated presentation and transport changes may skip. No external sends.
+test('invalid unknown blocks project their whole-message fallback as literal text', () => {
+  const envelope = structuredClone(fixtures.valid.find(row => row.name === 'single').envelope);
+  envelope.blocks[0].type = 'unknown';
+  envelope.metadata = { private: secret };
+  envelope.blocks[0].data.prompt = secret;
+  envelope.fallbackText = '<script>alert(1)</script> **literal** [link](javascript:alert(1))';
+  assert.equal(projectC4Content(encode(envelope), { c4Id: 123 }), `${envelope.fallbackText}\n${invalid}`);
+  assert.equal(projectC4Content(encode(envelope), { c4Id: 123 }).includes(secret), false);
+});
+
+test('invalid fallback values and non-JSON content keep the existing invalid marker', () => {
+  for (const fallbackText of ['', null, false, 12, [], {}, 'x'.repeat(16001)]) {
+    assert.equal(projectC4Content(encode({ fallbackText }), { c4Id: 123 }), invalid);
+  }
+  for (const content of [encode({}), CONTENT_PREFIX + 'not JSON', CONTENT_PREFIX + '[]']) {
+    assert.equal(projectC4Content(content, { c4Id: 123 }), invalid);
+  }
 });
 
 test('ordinary text including large JSON is returned byte for byte', () => {
@@ -64,7 +87,7 @@ for (const [name, change] of [
   change(envelope);
   const content = encode(envelope);
   assert.equal(parseC4Content(content).kind, 'invalid');
-  assert.equal(projectC4Content(content, { c4Id: 123 }), invalid);
+  assert.equal(projectC4Content(content, { c4Id: 123 }), `${name === 'missing fallback' ? '' : envelope.fallbackText + '\n'}${invalid}`);
   assert.equal(projectC4Content(content, { c4Id: 123 }).includes(secret), false);
 });
 

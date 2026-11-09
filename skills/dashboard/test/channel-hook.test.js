@@ -54,6 +54,20 @@ test('Dashboard hook aborts malformed or unsupported marked envelopes', () => {
   rejects(CONTENT_PREFIX);
 });
 
+test('Dashboard hook rejects invalid envelopes even when their fallback is readable', () => {
+  const valid = fixtures.valid.find(fixture => parseC4Content(fixture.content).envelope.kind === 'message');
+  accepts(valid.content);
+  const envelope = structuredClone(parseC4Content(valid.content).envelope);
+  envelope.fallbackText = '<strong>Readable fallback</strong> [literal](https://example.invalid)';
+  envelope.blocks.push({ id: 'unsupported', type: 'future_widget', schemaVersion: 1, data: {} });
+  const content = CONTENT_PREFIX + JSON.stringify(envelope);
+  assert.deepEqual(parseC4Content(content), { kind: 'invalid', reason: 'invalid_envelope', fallbackText: envelope.fallbackText });
+  const input = wire(content), before = JSON.stringify(input);
+  rejects(content);
+  assert.equal(evaluateBeforeSend(input).decision, 'abort');
+  assert.equal(JSON.stringify(input), before);
+});
+
 test('Dashboard hook rejects invalid wire and wrong channel or declaration identity', () => {
   const inputs = [null, {}, { ...wire('text'), version: 2 }, { ...wire('text'), hook_id: 'other.content' }];
   const other = wire('text'); other.request.channel = 'other'; inputs.push(other);

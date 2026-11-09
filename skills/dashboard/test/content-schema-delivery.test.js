@@ -73,7 +73,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
     const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(pageText)?.[1];
-    assert.equal(appPath, 'js/app.js?v=138', 'the entry page invalidates the application module cache');
+    assert.equal(appPath, 'js/app.js?v=139', 'the entry page invalidates the application module cache');
     const cache = new Map();
     async function moduleAt(url) {
       if (cache.has(url)) return cache.get(url);
@@ -99,7 +99,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(await moduleAt(pluginUrl), fs.readFileSync(path.join(publicRoot, 'js/markdown-it-cjk-friendly/index.js'), 'utf8'));
     let parentUrl = appUrl;
     const activeModules = new Map();
-    for (const [name, version] of [['conversation-page', 137], ['conversation-content', 112], ['chat-blocks', 108]]) {
+    for (const [name, version] of [['conversation-page', 138], ['conversation-content', 113], ['chat-blocks', 109]]) {
       const parent = await moduleAt(parentUrl);
       const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
       const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=${version}`));
@@ -110,14 +110,14 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const pageUrl = activeModules.get('conversation-page');
     assert.match(importLine(await moduleAt(activeModules.get('conversation-content')), 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\.\/markdown-it-cjk-friendly\/index\.js\?v=1['"]/);
     const page = await moduleAt(pageUrl);
-    for (const [name, version] of [['conversation-state', 129], ['chat-questions', 105], ['conversation-activity', 103], ['conversation-delete', 4]]) {
+    for (const [name, version] of [['conversation-state', 130], ['chat-questions', 106], ['conversation-activity', 103], ['conversation-delete', 4]]) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
         .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=${version}`));
       assert.ok(specifier, `${name} belongs to the active page graph`);
       activeModules.set(name, new URL(specifier, pageUrl).href);
     }
     for (const [parent, names] of [[appUrl, [['chat-drafts', 102]]],
-      [activeModules.get('conversation-content'), [['chat-view', 104], ['conversation-charts', 106]]]]) {
+      [activeModules.get('conversation-content'), [['chat-view', 104], ['conversation-charts', 107]]]]) {
       const source = await moduleAt(parent);
       for (const [name, version] of names) {
         const specifier = [...source.matchAll(/from ['"]([^'"]+)['"]/g)]
@@ -140,7 +140,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
         schemaImports++;
         const schemaUrl = new URL(match[1], moduleUrl);
         assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
-        assert.equal(schemaUrl.search, '?v=103', 'the shipped form renderer advances every shared schema cache key together');
+        assert.equal(schemaUrl.search, '?v=104', 'the shipped form renderer advances every shared schema cache key together');
         schemaVersions.add(schemaUrl.search);
         const response = await fetch(schemaUrl);
         assert.equal(response.status, 200);
