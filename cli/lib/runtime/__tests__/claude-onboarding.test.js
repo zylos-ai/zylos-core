@@ -91,6 +91,27 @@ test('Claude launch creates missing confirmation files and project entry', async
   assert.deepEqual(settings, { skipDangerousModePermissionPrompt: true });
 });
 
+// Both files can hold credentials (~/.claude.json approved key suffixes, settings env).
+test('Claude launch creates missing confirmation files owner-only', async t => {
+  const umask = process.umask(0o022);
+  t.after(() => process.umask(umask));
+  const f = fixture(t);
+  await f.launch();
+  for (const file of Object.values(f.files)) assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600', file);
+});
+
+test('Claude launch tightens world-readable confirmation files it repairs', async t => {
+  const umask = process.umask(0o022);
+  t.after(() => process.umask(umask));
+  const f = fixture(t);
+  delete f.config.hasCompletedOnboarding;
+  delete f.settings.skipDangerousModePermissionPrompt;
+  f.write();
+  for (const file of Object.values(f.files)) fs.chmodSync(file, 0o644);
+  await f.launch();
+  for (const file of Object.values(f.files)) assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600', file);
+});
+
 test('Claude launch leaves true confirmations and user files byte-identical', async t => {
   const f = fixture(t);
   f.write();
