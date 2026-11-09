@@ -23,15 +23,23 @@ function settings(root) {
 function run(command, args, root, timeout = 30000) {
   return execFileSync(command, args, { encoding: 'utf8', timeout, stdio: ['ignore','pipe','pipe'], env: { ...process.env, ZYLOS_DIR: root } });
 }
+function realOrResolved(file) {
+  try { return fs.realpathSync(file); } catch { return path.resolve(file); }
+}
+// PM2 keeps the path it was started with, which may go through a symlinked
+// HOME or ZYLOS_DIR while the upgrade passes the real installation path.
+function samePath(file, expected) {
+  return path.resolve(file) === expected || realOrResolved(file) === realOrResolved(expected);
+}
 function matches(processes, loc) {
   const found = processes.filter(p => p.name === name);
   return found.length === 1 && found[0].pm2_env?.status === 'online'
-    && path.resolve(found[0].pm2_env.pm_exec_path || '') === path.join(loc.code, 'src/index.js')
-    && path.resolve(found[0].pm2_env.pm_cwd || '') === loc.code;
+    && samePath(found[0].pm2_env.pm_exec_path || '', path.join(loc.code, 'src/index.js'))
+    && samePath(found[0].pm2_env.pm_cwd || '', loc.code);
 }
 function managedPid(processes, loc) {
   const found = processes.filter(p => p.name === name
-    && path.resolve(p.pm2_env?.pm_exec_path || '') === path.join(loc.code, 'src/index.js'));
+    && samePath(p.pm2_env?.pm_exec_path || '', path.join(loc.code, 'src/index.js')));
   return found.length === 1 && Number.isInteger(found[0].pid) && found[0].pid > 0 ? found[0].pid : null;
 }
 
