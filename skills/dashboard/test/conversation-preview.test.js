@@ -37,6 +37,26 @@ test('conversation previews remove each Markdown marker while preserving human t
   for (const [source, expected] of examples) assert.equal(conversationPreview(source), expected, source);
 });
 
+test('plain and structured previews remove emphasis beside Chinese punctuation and Han text', () => {
+  const examples = [
+    ['**（粗体）**后文', '（粗体）后文'],
+    ['**内容。**后文', '内容。后文'],
+    ['前文__（内容）__后文', '前文（内容）后文'],
+    ['前文*“斜体”*后文', '前文“斜体”后文'],
+    ['前文_「斜体」_后文', '前文「斜体」后文'],
+    ['前文**【嵌套 *（斜体）*后文】**后文', '前文【嵌套 （斜体）后文】后文'],
+    ['[前文**《标签》**后文](https://example.com/a_**b** "**原样**")', '前文《标签》后文'],
+    ['**省略……**后文与**破折—**后文', '省略……后文与破折—后文'],
+    ['`**（代码）**后文`', '**（代码）**后文'],
+    ['\\*\\*（转义）\\*\\*后文', '**（转义）**后文'],
+  ];
+  for (const [source, expected] of examples) {
+    assert.equal(conversationPreview(source), expected, source);
+    assert.equal(conversationPreview(packet(source)), expected, source);
+    assert.equal(conversationPreview(packet(source), { locale: 'en' }), expected, source);
+  }
+});
+
 test('markup-only content falls back to the original text before the Unicode limit', () => {
   for (const content of ['-', '---', '***', '___', '---\n'.repeat(80)]) {
     assert.equal(conversationPreview(content), Array.from(content).slice(0, 160).join(''));

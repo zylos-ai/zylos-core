@@ -1,7 +1,8 @@
 import '../../../public/js/markdown-it.min.js';
+import { cjkEmphasis } from '../../../public/js/markdown-cjk-emphasis.js';
 
 // Reuse the same vendored Markdown parser as the message body, without rendering HTML.
-const markdown = globalThis.markdownit({ html: false, linkify: false });
+const markdown = globalThis.markdownit({ html: false, linkify: false }).use(cjkEmphasis);
 export function markdownPreview(text, { locale = 'zh' } = {}) {
   const code = locale === 'en' ? '[Code]' : '[代码]';
   const parts = [];

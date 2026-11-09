@@ -1,8 +1,10 @@
+import { cjkEmphasis } from './markdown-cjk-emphasis.js?v=1';
+
 // Memory content is semi-trusted (agent-written): html:false keeps raw HTML escaped,
 // and every link opens in a new tab without access to this page.
 export function createMarkdownRenderer(markdownit) {
   if (typeof markdownit !== 'function') return null;
-  const md = markdownit({ html: false, linkify: true });
+  const md = markdownit({ html: false, linkify: true }).use(cjkEmphasis);
   // Only links with a scheme (https://, ftp:// …) become links. Bare file names such as identity.md or
   // state.md would otherwise turn into links to a .md domain; www. addresses without a scheme stay text too.
   md.linkify.set({ fuzzyLink: false });

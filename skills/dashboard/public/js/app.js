@@ -1,13 +1,13 @@
 import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=102';
-import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=1';
+import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=2';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=114';
 import { createPricingPanel } from './wb/settings-pricing.js?v=115';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=104';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=104';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=117';
 import { renderVersion } from './wb/settings-version.js?v=104';
-import { mountConversationPage } from './wb/conversation-page.js?v=135';
+import { mountConversationPage } from './wb/conversation-page.js?v=131';
 import { mountChatSettings } from './wb/chat-settings.js?v=113';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=5';
 import { mountWorkbench } from './wb/shell.js?v=116';

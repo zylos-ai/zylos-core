@@ -1,26 +1,17 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
 import test from 'node:test';
+import '../public/js/markdown-it.min.js';
 import { createMarkdownRenderer, markdownHtml } from '../public/js/markdown-config.js';
 const vendoredPath = new URL('../public/js/markdown-it.min.js', import.meta.url).pathname;
 
-// The UMD bundle sits inside a "type":"module" package, so require() would
-// misparse it; evaluate it the way a CJS host would.
-function loadVendoredMarkdownIt() {
-  const code = fs.readFileSync(vendoredPath, 'utf8');
-  const mod = { exports: {} };
-  new Function('module', 'exports', code)(mod, mod.exports);
-  return mod.exports;
-}
-
-// The renderer the memory page uses, built on the vendored bundle.
-const buildRenderer = () => createMarkdownRenderer(loadVendoredMarkdownIt());
+// Native import follows the browser bundle's global export, without reevaluating source.
+const buildRenderer = () => createMarkdownRenderer(globalThis.markdownit);
 
 test('vendored markdown-it bundle is committed and loadable', () => {
   const stat = fs.statSync(vendoredPath);
   assert.ok(stat.size > 50_000, 'expected the full minified bundle, not a stub');
-  assert.equal(typeof loadVendoredMarkdownIt(), 'function');
+  assert.equal(typeof globalThis.markdownit, 'function');
 });
 
 test('inline formatting renders: bold, italic, code, strikethrough-free fallback', () => {

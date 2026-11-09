@@ -73,7 +73,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
     const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(pageText)?.[1];
-    assert.equal(appPath, 'js/app.js?v=136', 'the entry page invalidates the application module cache');
+    assert.equal(appPath, 'js/app.js?v=132', 'the entry page invalidates the application module cache');
     const cache = new Map();
     async function moduleAt(url) {
       if (cache.has(url)) return cache.get(url);
@@ -84,9 +84,16 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
       return body;
     }
     const appUrl = origin + prefix + '/_assets/' + appPath;
+    const appSource = await moduleAt(appUrl);
+    assert.match(appSource, /from ['"]\.\/markdown-config\.js\?v=2['"]/);
+    const markdownUrl = new URL('./markdown-config.js?v=2', appUrl).href;
+    const markdownSource = await moduleAt(markdownUrl);
+    assert.match(markdownSource, /from ['"]\.\/markdown-cjk-emphasis\.js\?v=1['"]/);
+    const pluginUrl = new URL('./markdown-cjk-emphasis.js?v=1', markdownUrl).href;
+    assert.equal(await moduleAt(pluginUrl), fs.readFileSync(path.join(publicRoot, 'js/markdown-cjk-emphasis.js'), 'utf8'));
     let parentUrl = appUrl;
     const activeModules = new Map();
-    for (const [name, version] of [['conversation-page', 135], ['conversation-content', 109], ['chat-blocks', 107]]) {
+    for (const [name, version] of [['conversation-page', 131], ['conversation-content', 110], ['chat-blocks', 107]]) {
       const parent = await moduleAt(parentUrl);
       const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
       const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=${version}`));
@@ -95,6 +102,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
       activeModules.set(name, parentUrl);
     }
     const pageUrl = activeModules.get('conversation-page');
+    assert.match(await moduleAt(activeModules.get('conversation-content')), /from ['"]\.\.\/markdown-cjk-emphasis\.js\?v=1['"]/);
     const page = await moduleAt(pageUrl);
     for (const [name, version] of [['conversation-state', 128], ['chat-questions', 104], ['conversation-activity', 103], ['conversation-delete', 4]]) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
