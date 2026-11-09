@@ -13,6 +13,7 @@ const { modelThreshold, thresholdLimit, readDefaultModels, readCodexModelWindows
 const { resolveSessionHotTtl, HOT_TTL_MIN_MINUTES, HOT_TTL_MAX_MINUTES } = await loadCoreModule('session-hot-ttl.js');
 const { readConfigStrict, configUnreadable } = await loadCoreModule('config-store.js');
 const { updateConfigWithLock } = await loadCoreModule('config-lock.js');
+const { writePrivateFile } = await loadCoreModule('private-file.js');
 
 const execFileAsync = promisify(execFile);
 
@@ -43,8 +44,9 @@ function readSettings(zylosDir) {
   }
 }
 
+// Claude settings may carry credentials in env; keep them owner-only.
 function writeSettings(zylosDir, settings) {
-  fs.writeFileSync(settingsPath(zylosDir), JSON.stringify(settings, null, 2) + '\n');
+  writePrivateFile(settingsPath(zylosDir), JSON.stringify(settings, null, 2) + '\n');
 }
 
 export function readCodexRootString(key, zylosDir) {

@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENV_FILE } from './config.js';
-import { PRIVATE_FILE_MODE, checkPrivateFile, tightenPrivateFile, writePrivateFile } from './private-file.js';
+import { checkPrivateFile, writePrivateFile } from './private-file.js';
 
 /**
  * Make sure group and other users cannot access a .env file.
@@ -100,8 +100,7 @@ export function writeEnvEntries(entries, componentName) {
   // Ensure parent directory exists
   fs.mkdirSync(path.dirname(ENV_FILE), { recursive: true });
 
-  fs.appendFileSync(ENV_FILE, block, { mode: PRIVATE_FILE_MODE });
-  tightenPrivateFile(ENV_FILE);
+  writePrivateFile(ENV_FILE, block, { flag: 'a' });
 
   return { written, skipped };
 }

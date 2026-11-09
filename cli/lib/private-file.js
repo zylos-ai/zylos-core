@@ -5,9 +5,10 @@
  * readable by the owner only, both when they are created and when an existing
  * file is rewritten. Backups of such files get the same mode.
  *
- * Tightening is best effort: the content is already written, and a read-only
- * or foreign-owned file (or a filesystem without POSIX modes) keeps its own
- * permissions. checkPrivateFile reads the mode back to report the outcome.
+ * Tightening is best effort: a file that cannot be restricted (foreign-owned,
+ * or a filesystem without POSIX modes) keeps its own permissions and is still
+ * written when it is writable. checkPrivateFile reads the mode back to report
+ * the outcome.
  * Symbolic links are followed, so the file a link points to is the one
  * written and tightened.
  */
@@ -21,7 +22,7 @@ export const PRIVATE_FILE_MODE = 0o600;
  *
  * @param {string} file
  */
-export function tightenPrivateFile(file) {
+function tightenPrivateFile(file) {
   try {
     fs.chmodSync(file, PRIVATE_FILE_MODE);
   } catch {}
@@ -38,18 +39,28 @@ function fileMode(file) {
 
 /**
  * Write a file, creating it owner-only and tightening an existing one.
+ * The open descriptor is restricted before any content is written, so new
+ * content never sits in a file other users can read.
  *
  * @param {string} file
  * @param {string|Uint8Array} content
+ * @param {{flag?: 'w'|'a'}} [options] - 'a' appends instead of replacing
  */
-export function writePrivateFile(file, content) {
-  fs.writeFileSync(file, content, { mode: PRIVATE_FILE_MODE });
-  tightenPrivateFile(file);
+export function writePrivateFile(file, content, { flag = 'w' } = {}) {
+  const fd = fs.openSync(file, flag, PRIVATE_FILE_MODE);
+  try {
+    try {
+      fs.fchmodSync(fd, PRIVATE_FILE_MODE);
+    } catch {}
+    fs.writeFileSync(fd, content);
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /**
  * Copy a file into an owner-only target (backups and restores of private files).
- * A new target is created owner-only, so no copy is ever readable by others.
+ * The target, new or existing, is restricted before the copy is written.
  *
  * @param {string} source
  * @param {string} target
