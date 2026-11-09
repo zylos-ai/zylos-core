@@ -1,6 +1,6 @@
-import { chatKind, element, fallbackName, icon, platformOf, runtimeName } from './plain-text.js?v=104';
+import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js?v=105';
 import { toolLabel, waitText } from './view-mode.js?v=115';
-import { activityStrip } from './activity-strip.js?v=104';
+import { activityStrip } from './activity-strip.js?v=105';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
   (a.mode === 'default' || (a.model === b.model && a.effort === b.effort));
@@ -78,7 +78,7 @@ function nowCell(document, row, { level, t }) {
     return current;
   }
   const text = row.wait ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t)
-    : row.preview?.text ? t('wb.board.lastReceived', { text: row.preview.text })
+    : row.preview ? lastReceived(row, t)
       : row.state?.kind === 'not_running' && level !== 'technical' ? t('wb.board.standby') : '';
   current.append(element(document, 'span', text));
   current.title = text;

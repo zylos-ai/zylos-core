@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=104';
+import { element } from './plain-text.js?v=105';
 
 /** Compose only the complete nodes referenced by the shared parser's validated View. */
 export function applyChatView(document, root, view, blockNodes) {

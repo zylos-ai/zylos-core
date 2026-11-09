@@ -1,15 +1,15 @@
 import { createUploadTray } from './chat-upload-tray.js?v=2';
-import { createChatAttachment } from './chat-attachments.js?v=4';
-import { element, icon } from './plain-text.js?v=104';
+import { createChatAttachment } from './chat-attachments.js?v=5';
+import { element, icon } from './plain-text.js?v=105';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
-import { channelIcon } from './board.js?v=115';
+import { channelIcon } from './board.js?v=116';
 import { createConversationState } from './conversation-state.js?v=131';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
-import { renderQuestion } from './chat-questions.js?v=106';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=114';
-import { createGroupSide } from './group-side.js?v=3';
-import { activityPlacement, createActivityArea } from './conversation-activity.js?v=103';
+import { renderQuestion } from './chat-questions.js?v=107';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=115';
+import { createGroupSide } from './group-side.js?v=4';
+import { activityPlacement, createActivityArea } from './conversation-activity.js?v=104';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=4';
 const laterThan = (left, right) => {

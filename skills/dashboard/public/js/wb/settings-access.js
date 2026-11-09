@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=104';
+import { element, icon } from './plain-text.js?v=105';
 
 const keyStatus = key => key.status || (key.revoked_at ? 'revoked' : 'active');
 const dateText = (value, t) => value ? String(value).replace('T', ' ').replace(/\.\d+Z?$|Z$/, '').slice(0, 16) : t('wb.settings.keys.never');

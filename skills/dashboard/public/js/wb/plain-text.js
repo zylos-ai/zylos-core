@@ -48,3 +48,18 @@ export function chatKind(row) {
   if (colon < 0 || ['web-console', 'dashboard'].includes(platformOf(row))) return null;
   return /^dm-/.test(key.slice(colon + 1)) ? 'dm' : 'group';
 }
+/**
+ * What the group last received, for one line: the person's words, or, when the message carried only channel
+ * wrapping (no readable text), the channel and the time it arrived. Empty without a preview.
+ */
+export function lastReceived(row, t = key => key, { now = Date.now(), locale = globalThis.document?.documentElement?.lang || undefined, key = 'wb.board.lastReceived' } = {}) {
+  const preview = row.preview;
+  if (!preview) return '';
+  if (preview.text) return t(key, { text: preview.text });
+  const component = preview.channel ?? platformOf(row);
+  const channel = ['telegram', 'lark', 'feishu', 'web-console', 'openmax', 'wechat', 'dashboard'].includes(component) ? t('wb.platform.' + component) : component;
+  const date = preview.timestamp == null ? null : new Date(preview.timestamp);
+  if (!date || !Number.isFinite(date.getTime())) return t('wb.board.lastReceivedFrom', { channel });
+  const when = formatZoned(date, locale, zonedDay(date) === zonedDay(now) ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return t('wb.board.lastReceivedAt', { channel, time: when });
+}

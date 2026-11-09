@@ -1,12 +1,12 @@
-import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=104';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=105';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=115';
-import { groupEventCount, renderOverview } from './detail-overview.js?v=115';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=115';
-import { eventTypesFor, recentWindow } from './timeline-rows.js?v=107';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=113';
-import { renderNameEditor } from './name-edit.js?v=113';
-import { formatZoned } from './instance-zone.js?v=100';
+import { channelIcon, platformLabel, statePill } from './board.js?v=116';
+import { groupEventCount, renderOverview } from './detail-overview.js?v=116';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=116';
+import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=114';
+import { renderNameEditor } from './name-edit.js?v=114';
+import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 
 export function resolveDetailRow(selection, snapshot = {}) {
   const item = typeof selection === 'string' || selection == null ? { sessionGroup: selection } : selection;
@@ -79,6 +79,15 @@ export function formatStartedAt(value, locale) {
   return Number.isFinite(date.getTime()) ? formatZoned(date, locale) : null;
 }
 
+/** The plain header line: the engine and when this run started (the time alone today, with the date otherwise). */
+export function plainMeta(row, t = key => key, { now = Date.now(), locale } = {}) {
+  const runtime = row.launchConfig?.runtime ?? row.target?.runtime;
+  const date = row.createdAt == null ? null : new Date(row.createdAt * 1000);
+  const started = date && Number.isFinite(date.getTime()) ? t('wb.detail.startedAt', { time: formatZoned(date, locale,
+    zonedDay(date) === zonedDay(now) ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }) : null;
+  return [runtime ? runtimeName(runtime) : null, started].filter(Boolean).join(' · ');
+}
+
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
   t = key => key, writable = () => true, detail = () => 'plain', identity = () => '',
   onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm, observable = () => false, onObserve = () => {},
@@ -115,7 +124,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (!controller || !active(generation) || !state.row) return;
     const row = state.row;
     const key = row.sessionGroup ?? 'origin';
-    const header = element(document, 'header', undefined, 'wb-detail-header');
+    const header = element(document, 'header', undefined, 'wb-detail-header wb-group-head');
     const top = element(document, 'div', undefined, 'wb-d-top');
     const title = row.sessionGroup == null ? t('wb.single') : row.name?.displayName ?? fallbackName(row, t);
     const box = element(document, 'span', undefined, 'wb-ch'); box.append(icon(document, channelIcon(row)));
@@ -133,6 +142,15 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     sub.append(statePill(document, row, { t, level: getLevel() }));
     top.append(box, heading, sub);
     const actions = element(document, 'div', undefined, 'wb-d-acts');
+    // Opening the conversation is the main action, so it leads the action row.
+    if (typeof onConversation === 'function' && row.sessionGroup && row.sessionGroup !== 'origin') {
+      const conversation = element(document, 'button', undefined, 'wb-btn wb-btn-primary wb-d-conv');
+      conversation.append(element(document, 'span', t('chat.page.viewConversation'), 'wb-conv-label'));
+      conversation.type = 'button';
+      conversation.dataset.action = 'viewConversation';
+      conversation.addEventListener('click', () => onConversation(row));
+      actions.append(conversation);
+    }
     for (const item of groupActionButtons(row, getWritable())) {
       const button = element(document, 'button', undefined, 'wb-icon-btn wb-act'); button.type = 'button';
       button.disabled = item.disabled || state.actionBusy;
@@ -149,7 +167,6 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     sub.append(actions); top.append(closeButton);
     header.append(top);
     const previousScroll = root.querySelector?.('.wb-detail-timeline')?.scrollTop ?? 0;
-    const uptime = row.createdAt == null ? t('wb.unknown') : Math.max(0, Math.floor((now() - row.createdAt * 1000) / 60000));
     const platform = row.sessionGroup == null ? t('wb.single') : row.sessionGroup === 'origin' ? t('wb.term.origin') : platformLabel(row, t, { describe: false });
     // Technical: the group key in monospace, then run, start and launch configuration.
     const meta = element(document, 'p', undefined, 'wb-detail-meta');
@@ -158,7 +175,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const rest = [row.live?.runId, formatStartedAt(row.createdAt, document.documentElement?.lang), ...(row.launchConfig ? [runtimeName(row.launchConfig.runtime), row.launchConfig.model, row.launchConfig.effort]
         : row.target?.reason === 'launch_config_unreadable' ? [runtimeName(row.target.runtime), t('wb.detail.launchConfigUnreadable')] : [])].filter(value => value != null);
       if (rest.length) meta.append(element(document, 'span', ' · ' + rest.join(' · ')));
-    } else meta.textContent = platform + ' · ' + (row.createdAt == null ? t('wb.unknown') : t('wb.detail.continuous', { minutes: uptime }));
+    } else meta.textContent = plainMeta(row, t, { now: now(), locale: document.documentElement?.lang }) || platform;
     const tabs = element(document, 'nav', undefined, 'wb-detail-tabs');
     tabs.setAttribute('role', 'tablist');
     for (const tab of ['overview', 'timeline']) {
@@ -195,13 +212,6 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         onInput: value => { state.nameDraft = value; }, onCancel: () => { state.nameOpen = false; draw(); },
         onSave: value => { state.row = { ...state.row, name: value }; state.nameOpen = false; onRename(value); draw(); },
       });
-    }
-    if (typeof onConversation === 'function' && row.sessionGroup && row.sessionGroup !== 'origin') {
-      const conversation = element(document, 'button', t('chat.page.viewConversation'), 'wb-btn wb-btn-secondary');
-      conversation.type = 'button';
-      conversation.dataset.action = 'viewConversation';
-      conversation.addEventListener('click', () => onConversation(row));
-      header.append(conversation);
     }
     header.append(meta, tabs);
     root.replaceChildren(header, body);

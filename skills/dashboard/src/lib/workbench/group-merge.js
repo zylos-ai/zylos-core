@@ -5,8 +5,13 @@ export function c4Meta(item) {
     lastActivityAt: item.lastActivityAt ?? null } : null;
 }
 
+// The page shows what the person said (`message`); null when the channel wrapping carries no current message,
+// so the page names the channel and time instead of protocol text. Older stores without `message` keep `text`.
 export function safePreview(item, sanitizer = new Sanitizer('')) {
-  return item?.preview ? { ...item.preview, text: sanitizer.safeSummary(item.preview.text) } : null;
+  if (!item?.preview) return null;
+  const { message, ...preview } = item.preview;
+  const text = message === undefined ? preview.text : message;
+  return { ...preview, text: text == null ? null : sanitizer.safeSummary(text) };
 }
 
 export function mergeGroups({ status, c4, q, names = new Map(), statusError }, sanitizer = new Sanitizer('')) {

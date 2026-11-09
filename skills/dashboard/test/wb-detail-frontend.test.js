@@ -153,11 +153,15 @@ test('overview recent activity and evidence are plain in plain view and raw only
   assert.equal(times[0].title, new Date(iso).toLocaleString(undefined, { timeZone: ZONE }));
   assert.equal(allNodes(root).some(node => node.tagName === 'DETAILS'), false);
   assert.doesNotMatch(root.textContent, /no_rule|wb\.detail\.evidence/);
+  assert.equal(allNodes(root).some(node => node.classList?.contains('wb-ev-code')), false, 'plain view shows no event codes');
   renderOverview(root, current, data, { document, t, level: 'technical' });
-  assert.match(root.children[1].textContent, /wait_health/);
-  assert.match(root.children[1].textContent, /reclaim_done/);
+  // Technical view keeps the readable label and adds the recorded code after it.
+  const codes = allNodes(root.children[1]).filter(node => node.classList?.contains('wb-ev-code')).map(node => node.textContent);
+  assert.deepEqual(codes, ['wait_health', 'reclaim_done']);
+  assert.match(root.children[1].textContent, /wb\.event\.wait_healthwait_health/);
+  assert.match(root.children[1].textContent, /wb\.event\.reclaim_donereclaim_done/);
   assert.equal(allNodes(root.children[1]).find(node => node.tagName === 'TIME').title, iso);
-  assert.match(root.textContent, /wb\.detail\.evidence · no_rule/);
+  assert.match(root.textContent, /wb\.detail\.evidence · wb\.detail\.evidenceNoRuleno_rule/, 'the evidence names the reason in words, then its code');
 });
 
 test('recent activity lists newest first, dates events from another day, and counts the same events as the timeline', () => {
@@ -387,14 +391,18 @@ test('technical detail header names an unreadable launch configuration instead o
   g.controller.destroy();
 });
 
-test('plain detail header reports platform and uptime from run creation rather than state duration', async () => {
-  // Direct or group chat comes from the group key ("<channel>:dm-<peer>"), as in the prototype.
-  for (const [key, kind] of [['telegram:dm-1001', 'dm'], ['telegram:product-team', 'group']]) {
-    const current = row(key, { createdAt: 1000, duration: 5 });
-    const f = detailFixture(async path => response(defaultRead(path)), { now: () => 1120000 });
+test('plain detail header names the engine and when the session started; the group key stays technical', async () => {
+  const startedSec = 1000, sameDay = startedSec * 1000 + 120000, nextDay = startedSec * 1000 + 2 * 86400e3;
+  const at = (options, locale) => new Date(startedSec * 1000).toLocaleString(locale, { ...options, timeZone: ZONE });
+  for (const [key, now, options] of [['telegram:dm-1001', sameDay, { hour: '2-digit', minute: '2-digit' }],
+    ['telegram:product-team', nextDay, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }]]) {
+    const current = row(key, { createdAt: startedSec, duration: 5 });
+    const f = detailFixture(async path => response(defaultRead(path)), { now: () => now });
     await f.controller.open(current, { rows: [current], listKnown: true });
     const meta = allNodes(f.root).find(node => node.classList.contains('wb-detail-meta'));
-    assert.equal(meta.textContent, `wb.platform.telegram · wb.chat.${kind} · wb.detail.continuous {"minutes":2}`);
+    // Today shows the time only; another day adds the date.
+    assert.equal(meta.textContent, `Claude · wb.detail.startedAt ${JSON.stringify({ time: at(options) })}`);
+    assert.doesNotMatch(meta.textContent, new RegExp(key + '|wb\\.platform|wb\\.detail\\.continuous'));
     f.controller.destroy();
   }
 });
@@ -930,13 +938,15 @@ test('timeline chips combine filters: one chip uses the server filter, several f
   } });
   await loader.open('a', 'cur');
   const document = createDocument(), root = document.createElement('div');
-  const labels = () => allNodes(root).filter(node => node.classList.contains('wb-ev-t')).map(node => node.textContent);
+  // Technical rows keep the readable label and add the recorded code after it.
+  const code = node => allNodes(node).find(child => child.classList?.contains('wb-ev-code'))?.textContent ?? '';
+  const labels = () => allNodes(root).filter(node => node.classList.contains('wb-ev-t')).map(node => [node.textContent.slice(0, node.textContent.length - code(node).length), code(node)].filter(Boolean).join(' | '));
   renderTimeline(root, loader, { document, t, level: 'technical' });
-  assert.deepEqual(labels(), ['pre_tool_use', 'wb.timeline.received', 'session_start'], 'events and messages interleave by time, newest first');
+  assert.deepEqual(labels(), ['wb.event.pre_tool_use | pre_tool_use', 'wb.timeline.received', 'wb.event.session_start | session_start'], 'events and messages interleave by time, newest first');
   await loader.setChips(['messages', 'lifecycle']);
   assert.equal(loader.state.filter, 'all');
   renderTimeline(root, loader, { document, t, level: 'technical' });
-  assert.deepEqual(labels(), ['wb.timeline.received', 'session_start']);
+  assert.deepEqual(labels(), ['wb.timeline.received', 'wb.event.session_start | session_start']);
   await loader.setChips(['tools']);
   assert.equal(loader.state.filter, 'tools');
   renderTimeline(root, loader, { document, t, level: 'technical' });
@@ -1082,6 +1092,45 @@ test('group details expose conversation navigation for real groups and omit orig
   await f.controller.open(row('origin'), { rows: [], listKnown: true });
   assert.equal(allNodes(f.root).some(node => node.dataset.action === 'viewConversation'), false);
   f.controller.destroy();
+});
+
+test('the conversation button leads the action row, as the primary action beside the group actions', async () => {
+  const f = detailFixture(async path => response(defaultRead(path)), { onConversation: () => {} });
+  const current = row('telegram:a', { state: { kind: 'idle' } });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const actions = allNodes(f.root).find(node => node.classList.contains('wb-d-acts'));
+  const order = actions.children.map(node => node.dataset.action ?? node.dataset.wbAction);
+  assert.deepEqual(order, ['viewConversation', 'interrupt', 'chop-chop', 'restart']);
+  assert.equal(actions.children[0].classList.contains('wb-btn-primary'), true);
+  assert.equal(allNodes(f.root).find(node => node.classList.contains('wb-group-head')).tagName, 'HEADER');
+  f.controller.destroy();
+});
+
+test('the now card says what the state means instead of repeating the header state, and holds its observe button', () => {
+  const document = createDocument(), seen = [];
+  const said = row('telegram:a', { state: { kind: 'idle' }, duration: 75, preview: { text: 'please check the layout', channel: 'telegram', timestamp: 1000 } });
+  let root = document.createElement('div');
+  renderOverview(root, said, {}, { document, t, onObserve: view => seen.push(view) });
+  const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
+  assert.equal(card.textContent.includes('wb.state.idle'), false, 'the header pill already shows the state and its duration');
+  assert.match(card.textContent, /wb\.board\.lastReceived \{"text":"please check the layout"\}/);
+  const observe = allNodes(card).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.observe');
+  assert.ok(observe, 'the observe button sits inside the card it belongs to');
+  // A message whose text cannot be shown names its channel and time instead of the raw protocol text.
+  const hidden = row('openmax:x', { state: { kind: 'idle' }, preview: { text: null, channel: 'openmax', timestamp: Date.parse('2026-11-09T08:05:00Z') } });
+  root = document.createElement('div');
+  renderOverview(root, hidden, {}, { document, t, currentTime: Date.parse('2026-11-09T09:00:00Z') });
+  const fallback = allNodes(root).find(node => node.classList.contains('wb-now-card')).textContent;
+  assert.match(fallback, /^wb\.board\.lastReceivedAt \{"channel":"wb\.platform\.openmax","time":"[^"]+"\}$/);
+  // Without anything received the card falls back to the state itself.
+  root = document.createElement('div');
+  renderOverview(root, row('telegram:b', { state: { kind: 'idle' }, duration: 30 }), {}, { document, t });
+  assert.match(allNodes(root).find(node => node.classList.contains('wb-now-card')).textContent, /^wb\.state\.idle/);
+});
+
+test('a stopped session reads as a plain event, with its code only in technical detail', () => {
+  assert.equal(eventLabel({ event_type: 'runtime_health:stop', category: 'runtime_health' }, 'plain', t), 'wb.event.runtime_health:stop');
+  assert.equal(eventLabel({ event_type: 'runtime_health:stop', category: 'runtime_health' }, 'technical', t), 'runtime_health:stop');
 });
 
 test('every group detail offers observation, including sleeping groups that enter history', () => {

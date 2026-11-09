@@ -1,6 +1,6 @@
-import { confirmDialog } from './detail.js?v=115';
-import { renderKeyTable } from './settings-access.js?v=104';
-import { renderDefaults } from './settings-defaults.js?v=116';
+import { confirmDialog } from './detail.js?v=116';
+import { renderKeyTable } from './settings-access.js?v=105';
+import { renderDefaults } from './settings-defaults.js?v=117';
 
 /** The executor the default-settings card gets: it runs an action only when the card says it was confirmed. */
 export function confirmedRunner(run) {

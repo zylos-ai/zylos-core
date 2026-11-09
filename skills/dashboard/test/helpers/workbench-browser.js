@@ -80,7 +80,8 @@ function measure() {
     memoryShare: content && memoryPage ? (Math.min(innerHeight, content.bottom) - Math.max(memoryPage.top, content.top)) / (innerHeight - memoryPage.top) : null,
     memoryPageTop: memoryPage && Math.round(memoryPage.top),
     kpiRows: [...new Set(kpi)].map(top => kpi.filter(value => value === top).length),
-    title: box('.wb-d-top .wb-d-title'), state: box('.wb-d-top .wb-d-sub > :first-child'), actions: box('.wb-d-top .wb-d-acts'),
+    title: box('.wb-d-top .wb-d-title'), state: box('.wb-d-top .wb-d-sub > :first-child'), actions: box('.wb-d-top .wb-d-acts'), icon: box('.wb-d-top > .wb-ch'),
+    actionButtons: [...document.querySelectorAll('.wb-d-top .wb-d-acts > button')].map(button => { const b = visible(button); return b && { action: button.dataset.action ?? button.dataset.wbAction, top: b.top, bottom: b.bottom, left: b.left, right: b.right }; }).filter(Boolean),
   };
 }
 
@@ -244,15 +245,22 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.ok(file.memoryShare >= MEMORY_SHARE, `the file text fills at least ${MEMORY_SHARE * 100}% of the screen under the app header (was ${file.memoryShare.toFixed(3)}, page top ${file.memoryPageTop})`);
     assert.ok(await page.locator('#memory-tree').evaluate(node => node.getBoundingClientRect().height === 0 || getComputedStyle(node).display === 'none'), 'the list is not on the file screen');
 
-    // Overview and group detail: the title has the first row; state and actions start under the title text.
+    // Overview and group detail: icon, name and state share the first row; the actions are the second row, starting
+    // at the icon's left edge, one row of equal-height buttons with the conversation first.
     await page.locator('.tab[data-tab="overview"]').click();
     await page.locator('#wb-board .wb-row').first().waitFor();
     await check('overview');
     await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
     await page.locator('.wb-d-top .wb-d-sub').waitFor();
     const detail = await check('detail');
-    assert.ok(detail.state.top >= detail.title.bottom - 1, 'the state is on the second row');
-    assert.ok(Math.abs(detail.state.left - detail.title.left) <= 1, `the second row starts at the title text (${detail.state.left} vs ${detail.title.left})`);
+    assert.ok(detail.state.top < detail.title.bottom && detail.state.left >= detail.title.right - 1, 'the state is on the name row, after the name');
+    assert.ok(detail.actions.top >= detail.title.bottom - 1, 'the actions are the second row');
+    assert.ok(Math.abs(detail.actions.left - detail.icon.left) <= 1, `the action row starts at the icon's edge (${detail.actions.left} vs ${detail.icon.left})`);
+    const buttons = detail.actionButtons;
+    assert.equal(buttons[0]?.action, 'viewConversation', 'opening the conversation leads the row');
+    assert.equal(new Set(buttons.map(button => Math.round(button.top))).size, 1, 'the actions stay on one row');
+    assert.equal(new Set(buttons.map(button => Math.round(button.bottom - button.top))).size, 1, 'the actions share one height');
+    assert.ok(buttons.at(-1).right <= detail.documentWidth, 'the action row fits the screen');
 
     // From the group detail into this group's memory: the list of the group's files, not the file left open.
     await page.locator('.wb-detail-memory .wb-link-btn').click();
@@ -478,12 +486,15 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await context.close();
   });
 
-  await step('a desktop screen keeps the detail header on one row', async () => {
+  await step('a desktop screen keeps the name and state on one row, with the actions under them', async () => {
     const { page, context, errors } = await open(1280, 800, '/');
     await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
     await page.locator('.wb-d-top .wb-d-sub').waitFor({ state: 'attached' });
     const detail = await page.evaluate(measure);
     assert.ok(detail.state.top < detail.title.bottom && detail.state.bottom > detail.title.top, 'the state sits beside the title');
+    assert.ok(detail.actions.top >= detail.title.bottom - 1 && Math.abs(detail.actions.left - detail.icon.left) <= 1, 'the actions start under the icon');
+    assert.equal(detail.actionButtons[0]?.action, 'viewConversation');
+    assert.ok(detail.actionButtons.every(button => Math.round(button.top) === Math.round(detail.actionButtons[0].top)), 'one row of actions');
     assert.equal(detail.documentWidth, 1280);
     assert.deepEqual(errors, []);
     await context.close();
@@ -512,9 +523,12 @@ export async function runWorkbenchBrowser(t, sandbox) {
       // The phone detail covers the header, so the technical detail switch is pressed from the page.
       await page.locator('#wb-tech-btn').evaluate(node => node.click());
       await page.locator('.wb-timeline-event.wb-ev-merged').waitFor();
+      // Technical rows keep the readable label and add the recorded event code after it.
       const rows = await labels('.wb-timeline-event .wb-ev-t');
-      assert.deepEqual(rows, ['stop', 'release', 'post_tool_use', 'pre_tool_use', 'user_prompt_submit', 'session_start'],
+      assert.deepEqual(rows, ['完成一轮', '后台记录', '工具使用完成', '开始使用工具', '收到任务', '会话开始'],
         `${width}: technical detail adds the 600 releases as one row, in time order`);
+      assert.deepEqual(await page.locator('.wb-timeline-event .wb-ev-code').allTextContents(),
+        ['stop', 'release', 'post_tool_use', 'pre_tool_use', 'user_prompt_submit', 'session_start'], `${width}: each technical row names its event code`);
       assert.match(await page.locator('.wb-timeline-event.wb-ev-merged .wb-ev-rep').textContent(), /^600 次 · \d\d:\d\d – \d\d:\d\d$/);
       layout = await page.evaluate(measure);
       assert.equal(layout.documentWidth, width, `${width}: no sideways scrolling in technical detail`);

@@ -63,6 +63,14 @@
 .wb-seg-sm button + button { border-left: 1px solid var(--wb-line-strong); }
 .wb-seg-sm button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
 .wb-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; color: var(--text-dim); border: 1px solid var(--wb-line-strong); border-radius: 5px; padding: 0 6px; line-height: 18px; white-space: nowrap; }
+/* Text in every button, segment, tab, tag and pill sits in the middle of its box: flex centring and one line
+   height (Latin, Chinese, and icon with text alike), not padding. Zero specificity, so a control's own display
+   (hidden, column layouts) and fixed line heights still apply; the pill keeps its height with min-height. */
+:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .connection-pill, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-detail-tabs button, .wb-chip, .wb-scope, .wb-scope-b) { display: inline-flex; align-items: center; }
+:where(.wb-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-detail-tabs button, .wb-chip) { justify-content: center; }
+/* `button { font: inherit }` would bring back the page's 1.5 line height, so the line height is set at class weight. */
+:is(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-pill, .connection-pill), .wb-seg button, .wb-seg2 button, .wb-detail-tabs button, .app-header .tab, .wb-chip { line-height: 1.2; }
+.wb-pill { min-height: 24px; }
 .wb-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-muted); }
 
 /* ─── Header: brand, page navigation and tools on one row ─── */
@@ -99,6 +107,16 @@ html.wb-nav-row .app-header .header-left { flex: 0 1 auto; min-width: 0; overflo
 html.wb-nav-row .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -16px; padding: 0 12px 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
 html.wb-nav-row .app-header .tab-bar::-webkit-scrollbar { display: none; }
 html.wb-nav-row .app-header .tab { flex: none; }
+/* Where you are: settings is not a section of the navigation, so while it is open the navigation ends in a
+   "Settings" entry marked as the current page, and the gear that opened it reads as pressed. */
+.app-header .tab.wb-tab-here { display: none; }
+body:has(#tab-settings.active) .app-header .tab.wb-tab-here { display: inline-flex; color: var(--text); font-weight: 600; background: var(--wb-hover); }
+body:has(#tab-settings.active) #wb-settings-btn { background: var(--wb-hover); color: var(--text); }
+.wb-tech-short { display: none; }
+/* A navigation row that scrolls sideways fades at the edge that has more sections behind it. */
+.app-header .tab-bar.wb-fade-r { -webkit-mask-image: linear-gradient(to left, transparent, #000 32px); mask-image: linear-gradient(to left, transparent, #000 32px); }
+.app-header .tab-bar.wb-fade-l { -webkit-mask-image: linear-gradient(to right, transparent, #000 32px); mask-image: linear-gradient(to right, transparent, #000 32px); }
+.app-header .tab-bar.wb-fade-l.wb-fade-r { -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
 
 /* ─── Overview page: edge to edge, the drawer takes the right 480px ─── */
 main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
@@ -270,13 +288,22 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-d-acts { display: flex; gap: 2px; }
 .wb-d-sub { display: contents; }
 .wb-d-acts .wb-icon-btn { width: 28px; height: 28px; }
+.wb-d-acts .wb-d-conv { height: 28px; margin-right: 4px; padding: 0 10px; }
+/* Group detail: row one is icon, name, state and close; row two is the actions, starting at the icon's left edge. */
+.wb-group-head .wb-d-top:has(> .wb-d-sub) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; }
+.wb-group-head .wb-d-top:has(> .wb-d-sub) > :last-child { grid-column: 4; grid-row: 1; }
+.wb-group-head .wb-d-top:has(> .wb-d-sub) > .wb-d-sub { display: contents; }
+.wb-group-head .wb-d-sub > .wb-pill { grid-column: 3; grid-row: 1; }
+.wb-group-head .wb-d-sub > .wb-d-acts { grid-column: 1 / -1; grid-row: 2; align-items: center; }
+.wb-group-head .wb-d-sub > .wb-d-acts:empty { display: none; }
 .wb-detail-meta { margin: 8px 0 0; color: var(--text-dim); font-size: 12px; }
 .wb-name-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .wb-name-editor .wb-input { flex: 1 1 180px; }
 .wb-name-error:empty { display: none; }
 .wb-name-error { flex-basis: 100%; margin: 0; font-size: 12px; }
 .wb-detail-tabs { display: flex; gap: 2px; margin-top: 10px; }
-.wb-detail-tabs button { margin-bottom: -1px; padding: 6px 10px 8px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-dim); font-size: 13px; cursor: pointer; }
+/* Equal transparent borders above and below the text keep it centred over the 2px underline of the current tab. */
+.wb-detail-tabs button { gap: 4px; height: 34px; margin-bottom: -1px; padding: 0 10px; border: 0; border-block: 2px solid transparent; background: transparent; color: var(--text-dim); font-size: 13px; cursor: pointer; }
 .wb-detail-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); font-weight: 600; }
 .wb-detail-tabs .wb-n { color: var(--text-muted); font-weight: 450; }
 .wb-detail-error, .wb-action-result { margin: 0; padding: 0 0 10px; font-size: 12px; }
@@ -415,13 +442,20 @@ html[data-detail=plain] #observer-tab { display: none!important; }
 }
 @media (max-width: 760px) {
   :root { --wb-header-h: 0px; }
-  .app-header { flex-wrap: wrap; height: auto; min-height: 48px; padding: 0 12px; column-gap: 6px; row-gap: 0; position: sticky; }
-  .app-header .header-left { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+  /* Phones: one compact row (name, technical switch, three icons) over one scrollable row of sections; both
+     rows start at the same 12px edge as the page content and the header never grows a third row. */
+  .app-header { flex-wrap: wrap; height: auto; min-height: 0; padding: 2px 12px 0; column-gap: 0; row-gap: 0; position: sticky; }
+  .app-header .header-left { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+  .app-header .brand { overflow: hidden; text-overflow: ellipsis; }
   .brand-inst { display: none; }
-  .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -12px; padding: 0 8px 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .app-header .header-actions { gap: 0; margin-right: -8px; }
+  .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -12px; padding: 0 2px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
   .app-header .tab-bar::-webkit-scrollbar { display: none; }
-  .app-header .tab { flex: none; }
-  .wb-tech-btn { margin-right: 2px; padding: 0 8px; }
+  .app-header .tab { flex: none; height: 40px; padding: 0 10px; font-size: 14px; border-radius: 0; background: none; box-shadow: inset 0 -2px 0 transparent; }
+  .app-header .tab.active, body:has(#tab-settings.active) .app-header .tab.wb-tab-here { background: none; color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .wb-tech-btn { height: 40px; margin: 0; padding: 0 6px; border: 0; background: none; font-size: 13px; }
+  .wb-tech-long { display: none; }
+  .wb-tech-short { display: inline; }
   .wb-instance { gap: 2px 0; padding: 6px 12px; }
   .wb-inst-item { padding: 3px 10px 3px 0; white-space: nowrap; }
   .wb-inst-item + .wb-inst-item { border-left: 0; }
@@ -451,6 +485,12 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-d-top:has(> .wb-d-sub) > :last-child { grid-column: 3; grid-row: 1; }
   .wb-d-top > .wb-d-sub { grid-column: 2 / -1; grid-row: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
   .wb-d-sub > .wb-d-acts { flex-wrap: wrap; gap: 6px; }
+  /* Phones: the actions share the full header width at the same height; opening the conversation is the wider one. */
+  .wb-group-head .wb-d-sub > .wb-d-acts { flex-wrap: nowrap; gap: 6px; min-width: 0; }
+  .wb-group-head .wb-d-acts > * { flex: 1 1 0; min-width: 0; height: 40px; padding: 0 6px; }
+  .wb-group-head .wb-d-acts > .wb-d-conv { flex-grow: 1.4; }
+  .wb-group-head .wb-d-acts :is(.wb-act-label, .wb-conv-label) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wb-detail-meta .wb-mono { overflow-wrap: anywhere; }
 }
 
 /* ─── Schedule: list on the left, the same right-edge drawer as the overview ─── */
@@ -664,6 +704,8 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
   .wb-sched-detail .wb-d-acts .wb-icon-btn { width: auto; height: 30px; gap: 5px; padding: 0 10px; border-color: var(--wb-line-strong); background: var(--wb-panel); color: var(--text); font-size: 12.5px; }
   .wb-sched-detail .wb-d-acts .wb-icon-danger { color: var(--wb-err); }
   .wb-sched-detail .wb-d-sub > .wb-d-acts { flex: 1 1 auto; }
+  /* The state and action row starts at the icon's edge like the group detail, not indented under the name. */
+  .wb-sched-detail .wb-d-top > .wb-d-sub { grid-column: 1 / -1; }
   .wb-sched-detail .wb-d-acts .wb-vh { position: static; width: auto; height: auto; overflow: visible; clip: auto; }
 }
 
@@ -837,6 +879,9 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 @media (max-width: 1220px) { .wb-usage-page { margin: 0 4px; } }
 @media (max-width: 900px) { .wb-usage-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
+  /* Pages without their own edge padding (usage, conversations) use the same 12px edge as the header and the overview. */
+  main { padding-left: 12px; padding-right: 12px; }
+  .wb-usage-page { margin: 0; }
   .wb-usage-controls .wb-seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
   .wb-usage-controls .wb-input { flex: 1 1 140px; width: auto; min-width: 0; }
   .wb-usage-dash { display: none; }
@@ -982,6 +1027,10 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-hdot.warn { background: var(--wb-wait); }
 .wb-hdot.err { background: var(--wb-err); }
 .wb-login { display: inline-flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 12px; }
+/* Engine choice: the engine name with its own sign-in state underneath, inside the same button. */
+.wb-seg2.wb-seg-engine { height: auto; }
+.wb-seg-engine button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; min-height: var(--wb-h); padding: 7px 16px; line-height: 1.2; text-align: left; }
+.wb-seg-engine .wb-login { font-size: 11.5px; font-weight: 400; line-height: 1.2; }
 .wb-login-unavailable { color: var(--wb-err); }
 .wb-login-unavailable .wb-hdot { background: var(--wb-err); }
 .wb-login-unknown .wb-hdot { background: var(--wb-off); }
@@ -1200,7 +1249,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-o-empty[hidden] { display: none; }
 .wb-o-empty > .wb-ico { width: 22px; height: 22px; color: var(--text-muted); }
 .wb-o-empty b { color: var(--text); font-size: 14.5px; }
-.wb-now-foot { margin-top: 8px; }
+.wb-now-foot { display: flex; justify-content: flex-end; margin-top: 8px; }
+.wb-ev-code { margin-left: 6px; color: var(--text-muted); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11px; font-weight: 400; overflow-wrap: anywhere; }
 
 @media (max-width: 760px) {
   .wb-set { flex-direction: column; background: none; }
@@ -1217,8 +1267,20 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-set-drawer-btn .wb-ico { color: var(--text-dim); }
   .wb-set-drawer-btn > .wb-ico:last-child { transform: rotate(90deg); }
   @media (prefers-reduced-motion: reduce) { .wb-set-nav, .wb-set-scrim, .wb-set-drawer-open :is(.wb-set-nav, .wb-set-scrim) { transition: none; } }
-  .wb-set-body { padding: 16px 16px 32px; }
-  .wb-savebar { margin: 18px -16px 0; padding: 12px 16px; }
+  /* One 12px page edge and a lighter card padding leave the cards' content most of the width. */
+  .wb-set-body { padding: 12px 12px 32px; }
+  /* Price-table tabs share the width; who uses each table drops to a second line instead of pushing the other tab off screen. */
+  .wb-rt-tab { flex: 1 1 0; min-width: 0; flex-wrap: wrap; justify-content: flex-start; gap: 2px 7px; padding: 8px 6px; white-space: normal; text-align: left; }
+  .wb-rt-tab small { flex: 1 1 100%; font-size: 11.5px; }
+  /* The sound switch's 40px touch frame is transparent; pull it back so the visible switch starts at the text edge. */
+  .fleet-sound-toggle.wb-switch-btn { margin-left: -10px; }
+  /* The section button at the top names the section, so the section's own heading is not repeated under it. */
+  .wb-set-h { display: none; }
+  .wb-set-lead { margin-bottom: 12px; font-size: 13px; }
+  .wb-set-card { padding: 12px; border-radius: 10px; }
+  .wb-set-card-h { margin-bottom: 8px; }
+  .wb-seg-engine { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .wb-savebar { margin: 18px -12px 0; padding: 12px; }
   .wb-set-split { grid-template-columns: 1fr; gap: 12px; }
   .wb-pref, .wb-fld { grid-template-columns: 1fr; gap: 6px; }
   .wb-model-fields { grid-template-columns: minmax(0, 1fr) 104px; }
@@ -1251,7 +1313,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
     :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: 40px; }
   :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh) { min-width: 40px; }
   .wb-switch-l { min-height: 40px; }
-  .wb-seg { height: auto; }
+  /* Segmented controls grow with their 40px buttons instead of clipping them. */
+  :is(.wb-seg, .wb-seg2) { height: auto; }
   /* Switch-style buttons keep their 36×20 look inside a transparent 40px frame. */
   .fleet-sound-toggle.wb-switch-btn { box-sizing: content-box; border: 10px solid transparent; background-clip: padding-box; }
   .fleet-sound-toggle.wb-switch-btn:hover { border: 10px solid transparent; }

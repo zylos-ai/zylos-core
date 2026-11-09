@@ -5,6 +5,7 @@ import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
 import { parseSessionGroup, dataError } from '../c4-session-group.js';
+import { previewMessageText } from '../c4-content-projection.js';
 
 function fixture(t) {
   const db = new Database(':memory:'); t.after(() => db.close()); guardDatabase(db, owner);
@@ -59,13 +60,13 @@ test('default and legacy matching output remain byte compatible with the previou
     return (() => {
       const result = [];
       for (const head of all(c, 'SELECT h.session_group,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id ORDER BY h.head_id DESC')) {
-        const preview = get(c, "SELECT timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
+        const preview = get(c, "SELECT id,timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
         const text = preview ? [...preview.content].slice(0, 80).join('') : null;
         if (match !== undefined && !head.session_group.toLowerCase().includes(match.toLowerCase()) && !(text ?? '').toLowerCase().includes(match.toLowerCase())) continue;
         const parsed = parseSessionGroup(head.session_group);
         const componentName = parsed && parsed.namespace !== 'origin' ? get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', parsed.namespace)?.component_name ?? null : null;
         const millis = value => Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
-        result.push({ sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text } : null });
+        result.push({ sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text, message: previewMessageText(preview.content, { c4Id: preview.id }) } : null });
         if (result.length === limit) break;
       }
       return result;

@@ -1,6 +1,6 @@
-import { element, icon } from './plain-text.js?v=104';
+import { element, icon } from './plain-text.js?v=105';
 import { canonicalTimezoneName, timezoneOptions } from './timezone-names.js?v=2';
-import { settingsCard } from './settings.js?v=114';
+import { settingsCard } from './settings.js?v=115';
 
 export function validTimezone(value) {
   if (typeof value !== 'string' || !value.trim() || canonicalTimezoneName(value.trim()) !== value.trim()) return false;

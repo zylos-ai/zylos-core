@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CONTENT_PREFIX, parseC4Content } from '../c4-content-schema.js';
-import { projectC4Content } from '../c4-content-projection.js';
+import { previewMessageText, projectC4Content } from '../c4-content-projection.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const encode = envelope => CONTENT_PREFIX + JSON.stringify(envelope);
@@ -178,4 +178,33 @@ for (const fixture of viewFixtures.views) test(`View ${fixture.name} leaves mode
   assert.equal(projectC4Content(encode(base), { c4Id: 123 }), expected);
   assert.equal(projectC4Content(original, { c4Id: 123 }), expected);
   if (parsed.viewError) assert.equal(expected.includes(parsed.viewError), false);
+});
+
+test('a preview shows what the person said inside the channel wrapping, without the sender prefix', () => {
+  const wrapped = '[OM-RUN r_f03d9218] [OPENMAX DM] (org: Enjoy)\n<org-context org-id="019f63e3"/>\n'
+    + '<message-context conversation-id="01a1" source-message-id="17"/>\n<openmax-instruction>\nBefore handling the current message, invoke the skill.\n</openmax-instruction>\n'
+    + '<current-message>\nhoward said: 这个卡片在手机上\n看布局太乱了\n</current-message> ---- image: /tmp/a.png name="a.png"\n';
+  assert.equal(previewMessageText(wrapped), '这个卡片在手机上 看布局太乱了');
+  assert.equal(previewMessageText('[Lark DM]\n<current-message>\ne1fg313c said: ok, 0.167.0\n</current-message>\n'), 'ok, 0.167.0');
+  // Only a block on its own lines counts: a message quoting the tag inline is ordinary text.
+  assert.equal(previewMessageText('[Task] look at `<current-message>` handling'), '[Task] look at `<current-message>` handling');
+});
+
+test('a preview is null for channel wrapping without a current message, and plain text passes through', () => {
+  assert.equal(previewMessageText('[OM-RUN r_1] [OPENMAX DM] (org: Enjoy)\n<org-context org-id="x"/>\n'), null);
+  assert.equal(previewMessageText('[Lark DM]\nsomething internal'), null);
+  assert.equal(previewMessageText('[urgent] fix the build'), '[urgent] fix the build');
+  assert.equal(previewMessageText('  hello\n\nthere '), 'hello there');
+  assert.equal(previewMessageText(''), null);
+  assert.equal(previewMessageText(null), null);
+  const valid = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: 'm1', fallbackText: 'Summary for the person',
+    blocks: [{ id: 'b1', type: 'markdown', schemaVersion: 1, data: { text: 'Summary' } }] });
+  assert.equal(parseC4Content(valid).kind, 'envelope');
+  assert.equal(previewMessageText(valid, { c4Id: 7 }), 'Summary for the person [C4 messageId=m1; c4_id=7]');
+});
+
+test('a long preview is cut at the code point limit and ends with an ellipsis', () => {
+  assert.equal(previewMessageText('🚀'.repeat(80)), '🚀'.repeat(80));
+  assert.equal(previewMessageText('🚀'.repeat(81)), '🚀'.repeat(79) + '…');
+  assert.equal(previewMessageText('word '.repeat(10), { limit: 12 }), 'word word…');
 });

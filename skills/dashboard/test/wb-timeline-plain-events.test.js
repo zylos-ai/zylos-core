@@ -65,6 +65,8 @@ function fixture(t, { unattributed = false } = {}) {
   return { store, read, reads, put };
 }
 const labels = root => allNodes(root).filter(node => node.classList.contains('wb-ev-t')).map(node => node.text ?? '');
+// Technical view keeps the readable label and adds the recorded event code after it.
+const codes = root => allNodes(root).filter(node => node.classList.contains('wb-ev-code')).map(node => node.textContent);
 const repeats = root => allNodes(root).filter(node => node.classList.contains('wb-ev-rep')).map(node => node.textContent);
 
 test('600 release diagnostics: plain view shows only the plain events newest first, technical view merges them into one row', async t => {
@@ -83,6 +85,7 @@ test('600 release diagnostics: plain view shows only the plain events newest fir
   assert.deepEqual(labels(root), ['wb.event.stop', 'wb.event.post_tool_use', 'wb.event.pre_tool_use', 'wb.event.user_prompt_submit', 'wb.event.session_start'],
     'newest first inside the run');
   assert.doesNotMatch(root.textContent, /release|wb\.event\.category\.diagnostic/);
+  assert.deepEqual(codes(root), [], 'plain view shows no event codes');
   assert.deepEqual(repeats(root), []);
 
   level = 'technical';
@@ -94,8 +97,9 @@ test('600 release diagnostics: plain view shows only the plain events newest fir
   assert.equal(loader.state.totalEvents, 605);
   assert.equal(loader.state.runs[0].n, 605);
   renderTimeline(root, loader, { document, t: tr, level });
-  assert.deepEqual(labels(root), ['stop', 'release', 'post_tool_use', 'pre_tool_use', 'user_prompt_submit', 'session_start'],
+  assert.deepEqual(labels(root), ['wb.event.stop', 'wb.event.category.diagnostic', 'wb.event.post_tool_use', 'wb.event.pre_tool_use', 'wb.event.user_prompt_submit', 'wb.event.session_start'],
     'the 600 releases are one row, between the events around them');
+  assert.deepEqual(codes(root), ['stop', 'release', 'post_tool_use', 'pre_tool_use', 'user_prompt_submit', 'session_start'], 'each row names its recorded event code');
   const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE });
   assert.deepEqual(repeats(root), [tr('wb.timeline.repeated', { count: 600, from: short(at(4)), to: short(at(4 + 599 * 0.1)) })]);
 
@@ -126,12 +130,13 @@ test('recent activity is not taken over by diagnostics and follows the technical
   detail.setViewDetail();
   // The switch alone rereads: wait (bounded) for the read it starts and the redraw after it.
   const recentReadOf = () => f.reads.find(url => url.pathname === '/api/timeline' && url.searchParams.get('limit') === String(recentWindow));
-  for (let i = 0; i < 50 && !(recentReadOf() && labels(recent()).includes('release')); i++) await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 50 && !(recentReadOf() && codes(recent()).includes('release')); i++) await new Promise(resolve => setImmediate(resolve));
   const recentRead = recentReadOf();
   assert.ok(recentRead, 'switching to technical detail rereads recent activity');
   assert.equal(recentRead.searchParams.has('types'), false);
   // The window holds the stop and the 99 newest releases; the releases run on past it, so the count is a lower bound.
-  assert.deepEqual(labels(recent()), ['stop', 'release'], 'the releases in the window are one row');
+  assert.deepEqual(labels(recent()), ['wb.event.stop', 'wb.event.category.diagnostic'], 'the releases in the window are one row');
+  assert.deepEqual(codes(recent()), ['stop', 'release']);
   assert.deepEqual(repeats(recent()), [tr('wb.timeline.repeatedUntil', { count: recentWindow - 1, to: short(at(4 + 599 * 0.1)) })]);
   assert.match(root.textContent, /wb\.detail\.fullTimeline \{"events":605,"runs":1\}/);
 });
@@ -207,11 +212,11 @@ test('switching technical detail with the timeline tab open shows the diagnostic
   await open();
   await detail.selectTab('timeline');
   await waitFor(() => labels(root).length);
-  assert.equal(labels(root).includes('release'), false);
+  assert.equal(codes(root).includes('release'), false);
   level.value = 'technical';
   detail.setViewDetail();
-  await waitFor(() => labels(root).includes('release'));
-  assert.equal(labels(root).includes('release'), true, 'the open timeline rereads at the new level');
+  await waitFor(() => codes(root).includes('release'));
+  assert.equal(codes(root).includes('release'), true, 'the open timeline rereads at the new level');
 });
 
 test('a run count read for a level switched away from is dropped when it arrives late', async t => {

@@ -41,3 +41,15 @@ test('C4 Origin is deduplicated and browser fields never include raw preview thr
   assert.equal(Object.hasOwn(result.rows[0].c4, 'preview'), false);assert.ok(!JSON.stringify(result).includes(secret));
   assert.equal(result.rows[0].preview.text, '[REDACTED]');assert.equal(input.preview.text, secret);
 });
+test('the preview shows what the person said, or nothing when the channel wrapping has no current message', () => {
+  const secret = 'sk-' + 'y'.repeat(32);
+  const said = { ...group('a'), preview: { text: '[OM-RUN r_1] [OPENMAX DM] (org: Enjoy) <org-context', message: 'please check ' + secret, timestamp: 10, channel: 'openmax' } };
+  const wrapped = { ...group('b'), preview: { text: '[OM-RUN r_2] [OPENMAX DM] (org: Enjoy) <org-context', message: null, timestamp: 20, channel: 'openmax' } };
+  const rows = mergeGroups({ status, c4: { ok: true, data: { groups: [said, wrapped], hasOlder: false } }, q }).rows;
+  const preview = key => rows.find(row => row.sessionGroup === key).preview;
+  assert.equal(preview('a').text, 'please check [REDACTED]');
+  assert.equal(Object.hasOwn(preview('a'), 'message'), false, 'the unredacted field is not passed on');
+  assert.equal(preview('b').text, null);
+  assert.equal(preview('b').channel, 'openmax'); assert.equal(preview('b').timestamp, 20);
+  assert.ok(!JSON.stringify(rows).includes(secret) && !JSON.stringify(rows).includes('OM-RUN'));
+});

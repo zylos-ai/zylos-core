@@ -1,8 +1,8 @@
-import { element, icon, runtimeName } from './plain-text.js?v=104';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=115';
+import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=105';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=116';
 import { toolLabel, waitText } from './view-mode.js?v=115';
-import { displayTime, eventLabel, timeValue } from './event-labels.js?v=90';
-import { recentRows } from './timeline-rows.js?v=107';
+import { displayTime, eventLabel, timeValue } from './event-labels.js?v=91';
+import { recentRows } from './timeline-rows.js?v=108';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 
 export function activeSubagents(events, runId) {
@@ -108,8 +108,10 @@ export function eventRow(document, event, { level = 'plain', t = key => key, lab
   const stamp = element(document, 'time', time.text); stamp.title = time.title;
   const mark = element(document, 'span', undefined, 'wb-ev-k');
   mark.append(icon(document, kind === 'bot' ? 'bot' : kind, 'xs'));
-  const text = (label == null ? toolEventLabel(document, event, { level, t }) : null)
-    ?? element(document, 'span', label ?? eventLabel(event, level, t), 'wb-ev-t');
+  const tool = label == null ? toolEventLabel(document, event, { level, t }) : null;
+  const text = tool ?? element(document, 'span', label ?? eventLabel(event, 'plain', t), 'wb-ev-t');
+  // Technical view keeps the readable label and adds the recorded event code after it.
+  if (!tool && label == null && level === 'technical' && event.event_type) text.append(element(document, 'span', eventLabel(event, level, t), 'wb-ev-code'));
   if (after) text.append(after);
   node.append(stamp, mark, text);
   return node;
@@ -173,7 +175,7 @@ function nowCard(document, row, data, { level, t, snapshot }) {
       if (index > 0) card.append(line);
       if (level === 'technical' && tool.detail) card.append(element(document, 'div', tool.detail, 'wb-args'));
     }
-    if (row.preview?.text) card.append(element(document, 'p', t('wb.board.lastReceived', { text: row.preview.text }), 'wb-now-sub'));
+    if (row.preview) card.append(element(document, 'p', lastReceived(row, t), 'wb-now-sub'));
   } else if (row.wait) {
     const failed = row.wait.kind === 'start_failed' || kind === 'error';
     card.classList.add(failed ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
@@ -181,18 +183,24 @@ function nowCard(document, row, data, { level, t, snapshot }) {
     card.append(element(document, 'p', waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t), 'wb-now-sub'));
   } else {
     if (kind === 'error') card.classList.add('wb-now-err');
-    title.append(icon(document, kind === 'not_running' ? 'power' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock'),
-      element(document, 'span', t('wb.state.' + kind)));
-    if (row.duration != null && !['not_running', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
-    const sub = kind === 'not_running' ? t('wb.detail.standby') : row.preview?.text ? t('wb.board.lastReceived', { text: row.preview.text }) : '';
-    if (sub) card.append(element(document, 'p', sub, 'wb-now-sub'));
+    const glyph = icon(document, kind === 'not_running' ? 'power' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock');
+    // The header already shows the state and for how long, so the card says what it means: the last message, or standby.
+    const sub = kind === 'not_running' ? t('wb.detail.standby') : lastReceived(row, t);
+    if (sub) { title.classList.add('wb-now-said'); title.append(glyph, element(document, 'span', sub)); }
+    else {
+      title.append(glyph, element(document, 'span', t('wb.state.' + kind)));
+      if (row.duration != null && !['not_running', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
+    }
   }
   if (level === 'technical') {
     const evidence = detailEvidence(row, snapshot);
     const details = element(document, 'details', undefined, 'wb-detail-evidence');
     details.open = false;
     const summary = element(document, 'summary');
-    summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.evidence') + ' · ' + evidence.headline));
+    // The reason code stays visible (this is the technical view) after a readable phrase when there is one.
+    const readable = evidence.headline === 'no_rule' ? t('wb.detail.evidenceNoRule') : null;
+    summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.evidence') + ' · ' + (readable ?? '')),
+      element(document, 'span', evidence.headline, 'wb-ev-code'));
     details.append(summary);
     const table = element(document, 'table'), body = element(document, 'tbody');
     for (const item of evidence.samples) {
@@ -216,7 +224,8 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     node.append(head); root.append(node); return node;
   };
   const now = section('wb.detail.now', 'wb-detail-now', 'activity');
-  now.append(nowCard(document, row, data, { level, t, snapshot }));
+  const card = nowCard(document, row, data, { level, t, snapshot });
+  now.append(card);
   const agents = activeSubagents(data.currentEvents ?? [], row.live?.runId);
   if (agents.length) {
     const subs = element(document, 'div', undefined, 'wb-subs');
@@ -227,13 +236,13 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     }
     now.append(subs);
   }
-  // Sleeping groups enter the observer page's no-session/history branch.
+  // Sleeping groups enter the observer page's no-session/history branch. The button closes the card it belongs to.
   if (onObserve) {
     const foot = element(document, 'div', undefined, 'wb-now-foot');
     const live = element(document, 'button', undefined, 'wb-btn wb-btn-sm'); live.type = 'button';
     live.dataset.observerGroup = row.sessionGroup ?? 'origin';
     live.append(icon(document, 'term', 'xs'), element(document, 'span', t('wb.detail.observe')));
-    live.addEventListener('click', () => onObserve('live')); foot.append(live); now.append(foot);
+    live.addEventListener('click', () => onObserve('live')); foot.append(live); card.append(foot);
   }
   // Newest first, dated when not from today. The count covers the same events: those in runs and those in none.
   const recent = section('wb.detail.recent', 'wb-detail-recent', 'clock');

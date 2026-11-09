@@ -1,6 +1,6 @@
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
-import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=104';
-import { settingsCard } from './settings.js?v=114';
+import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=105';
+import { settingsCard } from './settings.js?v=115';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {
@@ -140,23 +140,21 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   engine.card.id = 'settings-current-runtime';
   let draftRuntime = groups.baseline;
   const line = element(document, 'div', undefined, 'wb-set-inline');
-  const seg = element(document, 'div', undefined, 'wb-seg2'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', t('wb.settings.currentRuntime'));
+  // Each engine's choice carries its own sign-in state, so the state stays under the engine it describes on any width.
+  const seg = element(document, 'div', undefined, 'wb-seg2 wb-seg-engine'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', t('wb.settings.currentRuntime'));
   const segButtons = {};
   for (const runtime of runtimes) {
     const health = runtimeHealth(snapshot, runtime);
-    const button = element(document, 'button', engineName(runtime)); button.type = 'button'; button.id = 'settings-use-' + runtime;
+    const button = element(document, 'button', undefined); button.type = 'button'; button.id = 'settings-use-' + runtime;
+    const login = element(document, 'span', undefined, 'wb-login wb-login-' + health);
+    login.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', t('wb.settings.health.' + health)));
+    button.append(element(document, 'span', engineName(runtime), 'wb-engine-name'), login);
     button.title = health === 'unavailable' ? t('wb.settings.health.unavailable') : '';
     button.addEventListener('click', () => { draftRuntime = runtime; redrawEngine(); });
     lock(button, () => !writable() || health === 'unavailable');
     seg.append(button); segButtons[runtime] = button;
   }
   line.append(seg);
-  for (const runtime of runtimes) {
-    const health = runtimeHealth(snapshot, runtime);
-    const login = element(document, 'span', undefined, 'wb-login wb-login-' + health);
-    login.append(element(document, 'span', undefined, 'wb-hdot'), element(document, 'span', runtime === 'codex' ? 'Codex' : 'Claude'), element(document, 'span', t('wb.settings.health.' + health)));
-    line.append(login);
-  }
   const saveRuntime = element(document, 'button', t('wb.settings.saveRuntime'), 'wb-btn wb-btn-primary'); saveRuntime.type = 'button'; saveRuntime.id = 'settings-save-runtime';
   const undoRuntime = element(document, 'button', t('wb.settings.undo'), 'wb-btn'); undoRuntime.type = 'button'; undoRuntime.id = 'settings-undo-runtime';
   undoRuntime.addEventListener('click', () => { draftRuntime = groups.baseline; redrawEngine(); });
@@ -173,11 +171,14 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
   line.append(saveRuntime, undoRuntime);
   const engineResult = element(document, 'p', '', 'wb-note'); engineResult.setAttribute('role', 'status');
   const split = element(document, 'div', undefined, 'wb-set-split');
+  // A count of zero tells nothing, so its line is left out.
   const followerCol = element(document, 'div');
-  followerCol.append(element(document, 'div', t('wb.settings.followers', { count: groups.followers == null ? t('wb.unknown') : groups.followers.length }), 'wb-gsum'));
-  if (groups.followers == null) followerCol.append(failed());
-  else if (groups.followers.length) followerCol.append(groupList(groups.followers, stateText, { searchable: true }));
+  if (groups.followers == null) followerCol.append(element(document, 'div', t('wb.settings.followers', { count: t('wb.unknown') }), 'wb-gsum'), failed());
+  else if (groups.followers.length) followerCol.append(element(document, 'div', t('wb.settings.followers', { count: groups.followers.length }), 'wb-gsum'),
+    groupList(groups.followers, stateText, { searchable: true }));
+  followerCol.hidden = groups.followers != null && !groups.followers.length;
   const overrideCol = element(document, 'div');
+  overrideCol.hidden = groups.total === 0;
   overrideCol.append(element(document, 'div', t('wb.settings.overrides', { count: groups.total ?? t('wb.unknown') }), 'wb-gsum'));
   if (groups.total == null) overrideCol.append(failed());
   const overrides = element(document, 'div', undefined, 'wb-gl-box');

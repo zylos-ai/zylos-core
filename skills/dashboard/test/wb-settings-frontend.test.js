@@ -188,6 +188,26 @@ test('idle reclaim missing metadata stays unknown and does not reuse the prior i
   assert.equal(root.querySelector('#settings-hot-ttl-source').textContent, 'wb.unknown');
 });
 
+test('each engine choice carries its own sign-in state, and group lines with a count of zero are left out', () => {
+  const document = documentFixture(), root = document.createElement('div');
+  const quiet = { ...snapshot(), rows: snapshot().rows.map(row => ({ ...row, presence: 'not_running' })) };
+  renderDefaults(root, { confirm: async () => true, snapshot: quiet, page: { runtimeTotal: 0, runtime: [] }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
+  const claude = root.querySelector('#settings-use-claude'), codex = root.querySelector('#settings-use-codex');
+  // The state sits inside the engine's own button, so it cannot wrap away from the engine it describes.
+  assert.match(claude.textContent, /^Claude.*wb\.settings\.health\.available$/);
+  assert.match(codex.textContent, /^Codex.*wb\.settings\.health\.unavailable$/);
+  assert.equal(root.querySelectorAll('.wb-login').every(login => login.closest('#settings-use-claude, #settings-use-codex')), true, 'no sign-in state outside the engine choices');
+  const counts = root.querySelectorAll('.wb-gsum');
+  assert.equal(counts.length, 1, 'only the override line is rendered; nothing runs on the default');
+  assert.equal(counts[0].parentElement.hidden, true, 'no group overrides the engine, so that line is hidden too');
+  assert.equal(root.querySelector('#settings-overrides-search'), null);
+
+  const busy = document.createElement('div');
+  renderDefaults(busy, { confirm: async () => true, snapshot: snapshot(), page: { runtimeTotal: 2, runtime: [] }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
+  const lines = busy.querySelectorAll('.wb-gsum').filter(line => !line.parentElement.hidden).map(line => line.textContent);
+  assert.deepEqual(lines, ['wb.settings.followers:{"count":3}', 'wb.settings.overrides:{"count":2}'], 'counts above zero keep their lines');
+});
+
 test('default engine keeps the sign-in gate and model and effort save together per engine', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low'] } });

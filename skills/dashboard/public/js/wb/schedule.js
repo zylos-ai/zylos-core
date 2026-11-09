@@ -1,7 +1,7 @@
-import { element, fallbackName, icon } from './plain-text.js?v=104';
+import { element, fallbackName, icon } from './plain-text.js?v=105';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 import { cronText } from './cron-text.js?v=94';
-import { createForm, createPreviewer, formPayload, initialForm, intervalText, missText, previewPath, wrapSelect } from './schedule-form.js?v=104';
+import { createForm, createPreviewer, formPayload, initialForm, intervalText, missText, previewPath, wrapSelect } from './schedule-form.js?v=105';
 
 export { missText };
 

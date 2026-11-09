@@ -5,6 +5,8 @@ import { createCoreCli } from './core-cli.js';
 const error = (code, message) => Object.assign(new Error(message), { code });
 const platforms = { telegram: 'Telegram', lark: 'Lark', feishu: '飞书', 'web-console': '网页控制台', openmax: 'OpenMax', wechat: '微信' };
 const project = (key, row) => ({ sessionGroup: key, displayName: row?.display_name ?? null, source: row?.source ?? null });
+// Naming reads the redacted preview text only; the unredacted current-message field is not passed on.
+const withoutMessage = ({ message, ...preview }) => preview;
 
 export function validKey(key) { return key !== 'origin' && parseSessionGroup(key) !== null; }
 export function validName(name) {
@@ -45,7 +47,7 @@ export function createDisplayNames({ store, zylosDir, runC4Db = createCoreCli({ 
       return groups.filter(row => row.sessionGroup !== 'origin' && (!unnamed || !store.getGroupDisplayName(row.sessionGroup)))
         .map(row => ({ sessionGroup: row.sessionGroup, fallbackName: fallbackName(row.sessionGroup, row.componentName),
           lastActivityAt: row.lastActivityAt ?? null,
-          preview: row.preview ? { ...row.preview, text: sanitizer.safeSummary(row.preview.text, 80) } : null }));
+          preview: row.preview ? { ...withoutMessage(row.preview), text: sanitizer.safeSummary(row.preview.text, 80) } : null }));
     },
   };
 }

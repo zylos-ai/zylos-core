@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=104';
+import { element, icon } from './plain-text.js?v=105';
 
 export function mountChatSettings(root, { document = root.ownerDocument, t = key => key, local, read, write }) {
   const panel = element(document, 'div', undefined, 'wb-set-card');

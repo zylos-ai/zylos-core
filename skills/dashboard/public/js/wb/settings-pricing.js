@@ -1,4 +1,4 @@
-import { element, icon, runtimeName } from './plain-text.js?v=104';
+import { element, icon, runtimeName } from './plain-text.js?v=105';
 import { money } from './instance-strip.js?v=117';
 import { priceWithEditedBaseRates } from '../pricing-form.js';
 
