@@ -99,6 +99,40 @@ test('recorded Codex reads the newest valid run and stops before older rollouts'
   assert.equal(opened.filter(file => String(file).endsWith('events.jsonl')).length, 1);
 });
 
+test('recorded Codex skips an existing rollout without token samples', async t => {
+  const f = fixture(t), group = 'codex:history';
+  const oldFile = f.write('older.jsonl', JSON.stringify({ timestamp: new Date(now - 5000).toISOString(), type: 'event_msg',
+    payload: { type: 'token_count', rate_limits: { secondary: { window_minutes: 10080, used_percent: 17, resets_at: reset } } } }) + '\n');
+  const newFile = f.write('newer.jsonl', [
+    { timestamp: new Date(now - 1000).toISOString(), type: 'turn_context', payload: { model: 'codex' } },
+    { timestamp: new Date(now - 500).toISOString(), type: 'response_item', payload: { type: 'message', content: [] } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  f.write(`activity-monitor/session-groups/${group}/events.jsonl`, [
+    { v: 1, ts: now - 6000, event: 'session_start', runtime: 'codex', session_group: group, run_id: 'old', session_id: 'old', transcript_path: oldFile },
+    { v: 1, ts: now - 2000, event: 'session_start', runtime: 'codex', session_group: group, run_id: 'new', session_id: 'new', transcript_path: newFile },
+  ].map(event => JSON.stringify(event)).join('\n') + '\n');
+  const record = await f.reader.readAccountUsage('codex', { allowRecorded: true });
+  assert.equal(record.value.sevenDay.usedPercentage, 17);
+  assert.equal(record.recordedAt, now - 5000);
+  assert.equal(record.live, false);
+});
+
+test('recorded Codex uses the last complete token sample in a rollout', async t => {
+  const f = fixture(t), group = 'codex:history';
+  const rollout = f.write('sampled.jsonl', [
+    { percent: 10, at: now - 5000 }, { percent: 20, at: now - 1000 },
+  ].map(({ percent, at }) => JSON.stringify({ timestamp: new Date(at).toISOString(), type: 'event_msg',
+    payload: { type: 'token_count', rate_limits: { secondary: { window_minutes: 10080, used_percent: percent, resets_at: reset } } } })).join('\n') + '\n');
+  f.write(`activity-monitor/session-groups/${group}/events.jsonl`, JSON.stringify({
+    v: 1, ts: now - 6000, event: 'session_start', runtime: 'codex', session_group: group,
+    run_id: 'sampled', session_id: 'sampled', transcript_path: rollout,
+  }) + '\n');
+  const record = await f.reader.readAccountUsage('codex', { allowRecorded: true });
+  assert.equal(record.value.sevenDay.usedPercentage, 20);
+  assert.equal(record.recordedAt, now - 1000);
+  assert.equal(record.live, false);
+});
+
 test('expired Codex history opens only the newest sampled rollout in each group', async t => {
   const f = fixture(t), rollouts = new Set(), newest = new Set();
   let bytes = 0;
