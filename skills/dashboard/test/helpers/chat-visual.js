@@ -65,10 +65,12 @@ export async function runVisualCase(t, sandbox) {
   // Historic bad packet remains readable; it is not sent through a permissive
   // fake hook. Product BeforeSend rejects new bad packets as intended.
   fixture.c4.insertConversation('out', 'dashboard', localId, CONTENT_PREFIX + '{historic-bad-packet', { groupName: localId });
+  let unknownInputId;
   for (const [direction, status, content] of [['in', 'pending', 'Waiting for runtime'], ['in', 'failed', 'Failed delivery'],
-    ['out', 'failed', 'Unknown authority state']]) {
+    ['out', 'failed', 'Unknown outbound state'], ['in', 'unknown', 'Unknown authority state']]) {
     const row = fixture.c4.insertConversation(direction, 'dashboard', localId, content, { groupName: localId });
     fixture.db.prepare('UPDATE conversations SET status=? WHERE id=?').run(status, row.id);
+    if (direction === 'in' && status === 'unknown') unknownInputId = row.id;
   }
   // More than 50 registered questions whose messages are older than the newest
   // body page: page loading must not fabricate unregistered status.
@@ -114,26 +116,32 @@ export async function runVisualCase(t, sandbox) {
       await page.goto(fixture.base + '/chat');
       await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
       assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), theme);
-      assert.ok(await page.locator('[data-action="loadMore"]').count());
+      await page.locator('[data-action="loadMore"]').waitFor({ state: 'visible' });
       let groupPages = 0;
-      while (await page.locator('[data-action="loadMore"]').count()) {
+      // Pagination controls stay mounted; cursor exhaustion hides them.
+      while (await page.locator('[data-action="loadMore"]').isVisible()) {
         assert.ok(++groupPages <= 3, 'Group pagination must terminate');
         const before = await page.locator('[data-conversation-id]').count();
         await page.locator('[data-action="loadMore"]').click();
         await page.waitForFunction(before => document.querySelectorAll('[data-conversation-id]').length > before, before);
       }
+      assert.ok(groupPages > 0, 'Group pagination must load another page');
+      assert.equal(await page.locator('[data-conversation-id]').count(), 53);
       await page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`).click();
       await page.locator('#wb-chat .chat-message').first().waitFor();
-      assert.ok(await page.locator('[data-action="loadOlder"]').count());
-      assert.equal(await page.locator('[data-action="loadMore"]').count(), 0);
-      if (await page.locator('[data-action="loadMoreQuestions"]').count()) await page.locator('[data-action="loadMoreQuestions"]').click();
+      await page.locator('[data-action="loadOlder"]').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('[data-action="loadMore"]').isVisible(), false);
+      await page.locator('[data-action="loadMoreQuestions"]').waitFor({ state: 'visible' });
+      await page.locator('[data-action="loadMoreQuestions"]').click();
+      await page.locator('[data-action="loadMoreQuestions"]').waitFor({ state: 'hidden' });
       let older = 0;
-      while (await page.locator('[data-action="loadOlder"]').count()) {
+      while (await page.locator('[data-action="loadOlder"]').isVisible()) {
         assert.ok(++older <= 4, 'Message pagination must terminate');
         const before = await page.locator('.chat-message').count();
         await page.locator('[data-action="loadOlder"]').click();
         await page.waitForFunction(before => document.querySelectorAll('.chat-message').length > before, before);
       }
+      assert.ok(older > 0, 'Message pagination must load another page');
       await page.waitForFunction(() => document.querySelectorAll('.chat-block').length >= 8);
       // Check each gallery message by its authoritative row, so the many
       // additional choice questions cannot mask a missing block or chart.
@@ -145,7 +153,9 @@ export async function runVisualCase(t, sandbox) {
           assert.equal(await part.count(), 1);
           assert.equal(await part.getAttribute('data-block-type'), block.type);
           if (block.type === 'markdown') {
-            assert.equal(await part.locator('.chat-message-text').innerText(), block.data.text);
+            // Markdown consumes the fixture's escaped quote; HTML stays inert text.
+            assert.equal(await part.locator('.chat-message-text').innerText(), '嵌套 { 字符 } 与 " 引号；<img onerror="bad()">');
+            assert.equal(await part.locator('img').count(), 0);
           } else if (['time_series', 'breakdown', 'category_series'].includes(block.type)) {
             const series = block.type === 'time_series' ? block.data.series
               : [{ points: (block.data.parts ?? block.data.points).map(point => ({ x: point.label, y: point.value })) }];
@@ -174,7 +184,7 @@ export async function runVisualCase(t, sandbox) {
       const locale = await page.evaluate(() => document.documentElement.lang);
       const labels = JSON.parse(fs.readFileSync(new URL(`../../public/i18n/wb.${locale.startsWith('zh') ? 'zh' : 'en'}.json`, import.meta.url), 'utf8'));
       for (const key of ['chat.question.answered', 'chat.question.stopped', 'chat.question.superseded',
-        'chat.state.pending', 'chat.state.failed', 'chat.state.pending_reconciliation']) assert.ok(body.includes(labels[key]), key);
+        'chat.page.delivery.pending', 'chat.page.delivery.failed', 'chat.page.delivery.pending_reconciliation']) assert.ok(body.includes(labels[key]), key);
       assert.equal(await page.locator('.chat-block-error').count(), 1);
       assert.ok(body.includes('historic-bad-packet') === false);
       assert.ok(await page.locator('[data-action="answer"]').count() + await page.locator('[data-action="confirmAnswer"]').count());
@@ -183,6 +193,7 @@ export async function runVisualCase(t, sandbox) {
       await save(`gallery-detail-${width}-${theme}`, false);
       await page.locator('.chat-question-status').filter({ hasText: labels['chat.question.stopped'] }).first().scrollIntoViewIfNeeded();
       await save(`lifecycle-detail-${width}-${theme}`, false);
+      if (width === 390) await page.locator('[data-action="page.back"]').click();
       await page.locator('[data-action="external"]').click();
       await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
       await page.locator('#wb-chat [data-conversation-id]').first().click();
@@ -190,6 +201,7 @@ export async function runVisualCase(t, sandbox) {
       assert.equal(await page.locator('[data-action="send"]').count(), 0);
       assert.equal(await page.locator('.chat-question button').count(), 0);
       await save(`external-readonly-${width}-${theme}`);
+      if (width === 390) await page.locator('[data-action="page.back"]').click();
       await page.locator('[data-action="mine"]').click();
       await page.locator('[data-conversation-id^="d:"]').first().waitFor();
       await page.locator('[data-conversation-id^="d:"]').first().click();
@@ -207,7 +219,7 @@ export async function runVisualCase(t, sandbox) {
       await toggle(true);
       await page.goto(fixture.base + '/fleet/Remote/chat');
       await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
-      for (let n = 0; n < 3 && await page.locator('[data-action="loadMore"]').count(); n++) {
+      for (let n = 0; n < 3 && await page.locator('[data-action="loadMore"]').isVisible(); n++) {
         const before = await page.locator('[data-conversation-id]').count();
         await page.locator('[data-action="loadMore"]').click();
         await page.waitForFunction(before => document.querySelectorAll('[data-conversation-id]').length > before, before);
@@ -226,18 +238,25 @@ export async function runVisualCase(t, sandbox) {
       await save(`remote-closed-${operation}`);
       expectedChatDenial = false;
     }
+    // The synthetic unknown status has been rendered; restore a drainable
+    // fixture input before exercising the real mode-switch checkpoint.
+    fixture.db.prepare('UPDATE conversations SET status=? WHERE id=?').run('pending', unknownInputId);
     await fixture.convertToSingle();
     await page.goto(fixture.base + '/chat');
     await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
-    assert.equal(await page.locator('[data-action="create"]').count(), 0);
-    for (let n = 0; n < 3 && await page.locator('[data-action="loadMore"]').count(); n++) {
+    assert.equal(await page.locator('[data-action="create"]').isVisible(), true);
+    assert.equal(await page.locator('[data-action="create"]').isEnabled(), false);
+    for (let n = 0; n < 3 && await page.locator('[data-action="loadMore"]').isVisible(); n++) {
       const before = await page.locator('[data-conversation-id]').count();
       await page.locator('[data-action="loadMore"]').click();
       await page.waitForFunction(before => document.querySelectorAll('[data-conversation-id]').length > before, before);
     }
     await page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`).click();
     await page.locator('.chat-message').first().waitFor();
-    assert.equal(await page.locator('[data-action="send"], .chat-question button, .chat-composer').count(), 0);
+    assert.equal(await page.locator('.chat-question button').count(), 0);
+    assert.equal(await page.locator('.chat-composer').isVisible(), true);
+    assert.equal(await page.locator('[data-action="send"]').isEnabled(), false);
+    assert.equal(await page.locator('.chat-input').isEnabled(), false);
     assert.match(await page.locator('#wb-chat').innerText(), /multi/);
     assert.equal(fixture.readMode(), 'single');
     await save('single-readonly');
