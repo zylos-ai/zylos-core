@@ -26,6 +26,8 @@ export function setupChannelFixture(t) {
   const dataDir = path.join(zylos, 'components/dashboard');
   const c4Path = path.join(zylos, 'comm-bridge/c4.db'), dashboardPath = path.join(dataDir, 'dashboard.db');
   for (const directory of [home, skills, tmp, bin, dataDir, path.dirname(c4Path), path.join(zylos, '.zylos')]) fs.mkdirSync(directory, { recursive: true });
+  // Copied scripts also resolve Core-level dependencies from the fixture install.
+  fs.symlinkSync(fs.realpathSync(path.join(core, 'node_modules')), path.join(zylos, 'node_modules'));
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({ runtime: 'codex', session_mode: 'multi' }));
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'pm2'), TMPDIR: tmp,

@@ -108,6 +108,7 @@ export async function runDisplayRefinements(sandbox) {
         border: getComputedStyle(document.querySelector('#destructive .chat-block-confirmation')).borderInlineStartColor,
         table: document.querySelector('#duration .chat-chart-table')?.textContent,
         ticks: [59,3600,5400].map(value => chart.config.options.scales.y.ticks.callback(value)),
+        generatedTicks: chart.scales.y.ticks.map(tick => ({ value: tick.value, label: tick.label })),
         tooltips: [59,3600,5400].map(value => chart.config.options.plugins.tooltip.callbacks.label({parsed:{y:value},dataset:chart.data.datasets[0]})),
         painted, canvasWidth: canvas.width, canvasHeight: canvas.height,
         overflow: document.documentElement.scrollWidth > innerWidth + 1,
@@ -120,6 +121,10 @@ export async function runDisplayRefinements(sandbox) {
     assert.equal(result.danger.background, result.border);
     for (const duration of ['59s', '1h', '1h 30m']) assert.ok(result.table?.includes(duration), duration + ' is visible in the actual data table');
     assert.equal(result.ticks.join('|'), '59s|1h|1h 30m');
+    assert.deepEqual(result.generatedTicks, [
+      { value: 0, label: '0s' }, { value: 1800, label: '30m' },
+      { value: 3600, label: '1h' }, { value: 5400, label: '1h 30m' }
+    ]);
     assert.equal(result.tooltips.join('|'), 'Elapsed: 59s|Elapsed: 1h|Elapsed: 1h 30m');
     assert.ok(result.painted > 1000); assert.ok(result.canvasWidth > 100 && result.canvasHeight > 100);
     assert.equal(result.overflow, false); assert.equal(errors.length, 0, errors[0]);

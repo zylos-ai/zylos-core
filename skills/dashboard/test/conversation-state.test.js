@@ -1147,6 +1147,19 @@ test('unparseable incremental previews use the injected locale fallback', async 
   assert.equal(f.state.snapshot().items.find(item => item.id === 'g:A').preview, 'Localized unavailable message');
   f.state.destroy();
 });
+test('invalid incremental previews preserve qualified fallback as literal text', async () => {
+  const fallbackText = '<img onerror="alert(1)"> **literal** [link](https://example.com)';
+  const f = fixture(u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after' ? {
+    items: [{ id: 11, direction: 'out', content: '[C4-JSON]\n' + JSON.stringify({ version: 99, fallbackText }) }],
+    afterCursor: 'a11'
+  } : undefined);
+  try {
+    await f.state.open();
+    await f.state.select('g:A');
+    await f.timer.advance(5000);
+    assert.equal(f.state.snapshot().items.find(item => item.id === 'g:A').preview, fallbackText);
+  } finally { f.state.destroy(); }
+});
 function groupFixture(readGroup, extra = () => undefined) {
   return fixture((u, options) => {
     const value = extra(u, options);

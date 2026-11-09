@@ -63,7 +63,8 @@ test('known attachment previews show names while unknown types invalidate the wh
       data: { attachmentId: 'SECRET_ID_REFERENCE', nameSnapshot: 'report.pdf' }, fallbackText: 'file' }] });
   assert.equal(chatAttachmentPreview(raw), '[文件] report.pdf');
   assert.equal(chatAttachmentPreview(raw).includes('SECRET_ID_REFERENCE'), false);
-  assert.equal(chatAttachmentPreview(raw.replace('x-zylos.file', 'x-zylos.unknown')), '无法显示的消息');
+  assert.equal(chatAttachmentPreview(raw.replace('x-zylos.file', 'x-zylos.unknown')), 'SECRET_ID_REFERENCE');
+  assert.equal(chatAttachmentPreview(raw.replace('x-zylos.file', 'x-zylos.unknown').replace('"fallbackText":"SECRET_ID_REFERENCE",', '')), '无法显示的消息');
 });
 
 test('history uses one metadata batch and refreshes unavailable rows without a new message', t => {

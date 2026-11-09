@@ -247,7 +247,14 @@ test('malformed attachment envelopes stay invalid and do not expose a partly gue
   const f = browser(), source = structuredClone(fixture.mixed); source.blocks[1].schemaVersion = 99;
   const root = renderConversationContent({ document: f.document, row: { id: 42, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(source), attachments: [record()] }, attachmentContext: { conversationId: 'g:A' } });
   t.after(() => root.destroy());
-  assert.equal(root.textContent, 'chat.invalidContentchat.block.reference 42'); assert.equal(root.querySelector('img,a,button,fieldset'), null);
+  assert.equal(root.textContent, source.fallbackText + 'chat.partialContentchat.block.reference 42');
+  assert.equal(root.querySelector('img,a,button,fieldset,form,input,select,textarea'), null);
+  for (const fallbackText of [undefined, '', 42, 'x'.repeat(16001)]) {
+    const invalid = renderConversationContent({ document: f.document, row: { id: 42, direction: 'out', content: CONTENT_PREFIX + JSON.stringify({ ...source, fallbackText }), attachments: [record()] }, attachmentContext: { conversationId: 'g:A' } });
+    t.after(() => invalid.destroy());
+    assert.equal(invalid.textContent, 'chat.invalidContentchat.block.reference 42');
+    assert.equal(invalid.querySelector('img,a,button,fieldset,form,input,select,textarea'), null);
+  }
 });
 
 test('plain history metadata patches add replace and remove only owned media resources', t => {

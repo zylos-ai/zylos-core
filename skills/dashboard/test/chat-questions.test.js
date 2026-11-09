@@ -18,7 +18,6 @@ const noQuestions = f => assert.equal(f.count('chat_questions', f.dashboardDb), 
 // prints private paths, permits no tmux executable, and owns timed child cleanup.
 test('BeforeSend rejects duplicate choice IDs before storage and accepts distinct IDs', t => {
   const f = setupChannelFixture(t), envelope = structuredClone(parseC4Content(contentFor('single')).envelope);
-  fs.symlinkSync(fs.realpathSync(new URL('../../../node_modules', import.meta.url)), path.join(f.env.ZYLOS_DIR, 'node_modules'));
   envelope.blocks[0].data.options[1].id = envelope.blocks[0].data.options[0].id;
   const rejected = f.send(CONTENT_PREFIX + JSON.stringify(envelope));
   assert.ifError(rejected.error); assert.notEqual(rejected.status, 0);

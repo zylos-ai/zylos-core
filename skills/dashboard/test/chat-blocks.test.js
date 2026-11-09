@@ -122,10 +122,10 @@ for (const severity of ['normal', 'destructive']) test(`${severity} confirmation
 test('duration chart table formats seconds as readable hours minutes and seconds', () => {
   const root = render(envelope([block('time_series', { xType: 'category', format: { style: 'duration' },
     series: [{ key: 'latency', label: 'Latency', points: [
-      { x: 'Short', y: 59 }, { x: 'Hour', y: 3600 }, { x: 'Long', y: 5400 }, { x: 'Missing', y: null },
+      { x: 'Short', y: 59 }, { x: 'Hour', y: 3600 }, { x: 'Long', y: 5400 }, { x: 'Fraction', y: 90.5 }, { x: 'Missing', y: null },
     ] }] })]));
   const values = allNodes(root).filter(node => node.className === 'chat-chart-value').map(node => node.textContent);
-  assert.deepEqual(values, ['59s', '1h', '1h 30m', 'chat.block.noValue']);
+  assert.deepEqual(values, ['59s', '1h', '1h 30m', '1m 30.5s', 'chat.block.noValue']);
 });
 
 test('time series displays multiple labelled series null gaps units and bounded graphical values', () => {
@@ -163,6 +163,18 @@ test('pending and failed blocks show fallback without delegating actions', () =>
     assert.equal(allNodes(root).some(node => ['BUTTON', 'INPUT'].includes(node.tagName)), false);
     assert.ok(root.textContent.includes(status === 'error' ? 'chat.block.reference 42' : 'chat.block.pending'));
     assert.equal(root.textContent.includes('chat.invalidContent'), false);
+  }
+});
+
+test('pending and failed confirmations without data retain their own fallback without actions', () => {
+  for (const status of ['pending', 'error']) {
+    let calls = 0;
+    const source = envelope([{ id: 'block-one', type: 'confirmation', schemaVersion: 1, status, fallbackText: 'Confirmation content unavailable' }]);
+    assert.equal(parseC4Content(CONTENT_PREFIX + JSON.stringify(source)).kind, 'envelope');
+    const root = render(source, { renderQuestion() { calls++; return createDocument().createElement('button'); } });
+    assert.equal(root.textContent, 'Confirmation content unavailable' + (status === 'pending' ? 'chat.block.pending' : 'chat.block.reference 42'));
+    assert.equal(calls, 0);
+    assert.equal(allNodes(root).some(node => ['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'FORM', 'FIELDSET'].includes(node.tagName)), false);
   }
 });
 

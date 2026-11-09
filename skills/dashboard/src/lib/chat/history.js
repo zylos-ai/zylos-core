@@ -30,7 +30,7 @@ function attachmentPreview(content, { external = false, locale = 'zh' } = {}, fo
       .map(part => /^\[MEDIA:[^\r\n]*$/.test(part) ? labels.media : format(part))
       .filter(Boolean).join('\n');
   };
-  if (parsed.kind === 'invalid') return labels.invalid;
+  if (parsed.kind === 'invalid') return parsed.fallbackText ?? labels.invalid;
   if (parsed.kind === 'envelope') {
     const blocks = parsed.envelope.blocks ?? [];
     if (!blocks.some(block => block.type !== 'markdown')) {

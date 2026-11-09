@@ -6,6 +6,17 @@ import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 const packet = text => CONTENT_PREFIX + JSON.stringify({version:1,kind:'message',messageId:'readable-preview',fallbackText:text,blocks:[{id:'body',type:'markdown',schemaVersion:1,fallbackText:text,data:{text:'body'}}]});
 test('structured list preview includes only human fallback, without model references',()=>{assert.equal(conversationPreview(packet('Short answer')),'Short answer');});
 test('invalid content yields only a generic readable notice',()=>{assert.equal(conversationPreview(CONTENT_PREFIX+'{broken'),'无法显示的消息');assert.ok(!conversationPreview(CONTENT_PREFIX+'{broken').includes('c4_id'));});
+test('invalid structured previews retain qualified fallback as literal text', () => {
+  const invalid = fallbackText => CONTENT_PREFIX + JSON.stringify({ version: 99, fallbackText });
+  const literal = '<script>alert(1)</script> **literal** [link](https://example.com) &amp;';
+  for (const options of [{}, { external: true, locale: 'en' }]) {
+    assert.equal(conversationPreview(invalid(literal), options), literal);
+    assert.equal(conversationPreview(invalid('😀'.repeat(161)), options), '😀'.repeat(160));
+    for (const fallback of [undefined, '', 42, 'x'.repeat(16001)]) {
+      assert.equal(conversationPreview(invalid(fallback), options), options.locale === 'en' ? 'Unable to display message' : '无法显示的消息');
+    }
+  }
+});
 test('plain text containing marker-like text remains literal user text',()=>{const text='Literal [C4 messageId=example; c4_id=7]';assert.equal(conversationPreview(text),text);});
 test('preview truncation preserves complete Unicode characters',()=>{assert.equal(conversationPreview('😀'.repeat(161)),'😀'.repeat(160));assert.equal(conversationPreview(packet('🪴'.repeat(161))),'🪴'.repeat(160));});
 

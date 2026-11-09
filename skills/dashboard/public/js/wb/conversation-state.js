@@ -143,7 +143,7 @@ export function createConversationState({
   };
   const preview = content => {
     const parsed = parseC4Content(content);
-    return parsed.kind === 'text' ? parsed.text : parsed.kind === 'envelope' ? parsed.envelope.fallbackText : t('chat.invalidContent');
+    return parsed.kind === 'text' ? parsed.text : parsed.kind === 'envelope' ? parsed.envelope.fallbackText : parsed.fallbackText ?? t('chat.invalidContent');
   };
   function updateCurrentItem(current, id) {
     const latest = current.messages.at(-1);

@@ -6,6 +6,75 @@ import { chartDay, conversationChartConfig } from '../public/js/wb/conversation-
 
 Chart.register(...registerables);
 
+const durationBlock = values => ({ type: 'time_series', data: { xType: 'number', format: { style: 'duration' },
+  series: [{ label: 'Duration', points: values.map((y, x) => ({ x, y })) }] } });
+
+function numericAxis(config, width, name = 'y') {
+  config.options.responsive = false; config.options.devicePixelRatio = 1;
+  const chart = new Chart(canvas(width), config);
+  try {
+    const scale = chart.scales[name];
+    return { values: scale.ticks.map(tick => tick.value), labels: scale.ticks.map(tick => tick.label) };
+  } finally { chart.destroy(); }
+}
+
+test('duration axes generate whole half-hour ticks at desktop and mobile widths', () => {
+  for (const width of [900, 330]) {
+    const axis = numericAxis(conversationChartConfig(durationBlock([59, 3600, 5400]), { locale: 'en' }), width);
+    assert.deepEqual(axis.values, [0, 1800, 3600, 5400], `${width}px`);
+    assert.deepEqual(axis.labels, ['0s', '30m', '1h', '1h 30m'], `${width}px`);
+  }
+});
+
+test('duration axes choose whole seconds, minutes and hours for their data range', () => {
+  for (const [values, expected] of [
+    [[1, 3], [0, 1, 2, 3]], [[0, 59], [0, 15, 30, 45, 60]],
+    [[0, 600], [0, 300, 600]], [[0, 7200], [0, 1800, 3600, 5400, 7200]],
+    [[0, 28800], [0, 7200, 14400, 21600, 28800]],
+    [[-59, 59], [-60, -30, 0, 30, 60]], [[0, 0], [0, 1]]
+  ]) {
+    const axis = numericAxis(conversationChartConfig(durationBlock(values), { locale: 'en' }), 900);
+    assert.deepEqual(axis.values, expected, String(values));
+  }
+});
+
+test('duration steps apply to horizontal, stacked and separate unit axes without changing source values', () => {
+  const category = { type: 'category_series', data: { format: { style: 'duration' },
+    points: [59, 3600, 5400].map(value => ({ label: String(value), value })) } };
+  const breakdown = { type: 'breakdown', data: { format: { style: 'duration' },
+    parts: [{ label: 'First', value: 1800 }, { label: 'Second', value: 3600 }] } };
+  for (const block of [category, breakdown]) {
+    const config = conversationChartConfig(block, { locale: 'en' });
+    assert.deepEqual(numericAxis(config, 900, 'x').values, [0, 1800, 3600, 5400]);
+  }
+  const block = durationBlock([59, 3600, 5400]);
+  block.data.series[0].unit = 'first';
+  block.data.series.push({ label: 'Second', unit: 'second', points: [{ x: 0, y: 30 }, { x: 1, y: 60 }] });
+  const config = conversationChartConfig(block, { locale: 'en' });
+  assert.deepEqual(config.data.datasets[0].data, [{ x: 0, y: 59 }, { x: 1, y: 3600 }, { x: 2, y: 5400 }]);
+  assert.deepEqual(numericAxis(config, 900, 'y1').values, [0, 15, 30, 45, 60]);
+});
+
+test('ordinary and percent numeric axes keep their existing tick selection', () => {
+  const ordinary = durationBlock([59, 3600, 5400]);
+  delete ordinary.data.format;
+  const normal = conversationChartConfig(ordinary, { locale: 'en' });
+  assert.equal(normal.options.scales.y.afterDataLimits, undefined);
+  assert.deepEqual(numericAxis(normal, 900).values, [0, 1000, 2000, 3000, 4000, 5000, 6000]);
+  const percent = durationBlock([0, 0.5, 1]);
+  percent.data.format.style = 'percent';
+  const config = conversationChartConfig(percent, { locale: 'en' });
+  assert.equal(config.options.scales.y.afterDataLimits, undefined);
+  assert.deepEqual(numericAxis(config, 900).values, [0, 0.25, 0.5, 0.75, 1]);
+});
+
+test('duration axis and tooltip preserve fractional seconds with the default precision', () => {
+  const config = conversationChartConfig(durationBlock([90.5]), { locale: 'en' });
+  assert.equal(config.options.scales.y.ticks.callback(90.5), '1m 30.5s');
+  assert.equal(config.options.plugins.tooltip.callbacks.label({ parsed: { y: 90.5 }, dataset: config.data.datasets[0] }),
+    'Duration: 1m 30.5s');
+});
+
 // Chart.js lays out ticks without a DOM through its basic platform; a 2d context stub only has to measure
 // text (6px per character) and swallow drawing calls.
 function canvas(width, height = 260) {

@@ -40,7 +40,10 @@ for (const block of fixtures.blocks) {
       if (example.omitData) delete invalid.data;
       const content = encode(message(invalid));
       assert.equal(parseC4Content(content).kind, 'invalid', example.name);
-      assert.equal(projectC4Content(content, { c4Id: 23 }), '[C4 content invalid; c4_id=23]', example.name);
+      assert.equal(projectC4Content(content, { c4Id: 23 }), 'Registered attachment\n[C4 content invalid; c4_id=23]', example.name);
+      for (const fallbackText of [undefined, '', 42, 'x'.repeat(16001)]) {
+        assert.equal(projectC4Content(encode({ ...message(invalid), fallbackText }), { c4Id: 23 }), '[C4 content invalid; c4_id=23]', example.name);
+      }
     }
   });
 }

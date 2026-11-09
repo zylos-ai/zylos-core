@@ -75,6 +75,19 @@ function formatted(value, unit, format, locale) {
   return new Intl.NumberFormat(locale, options).format(amount) + (unit ? ` ${unit}` : '');
 }
 
+function durationLimits(scale) {
+  // Aim for four intervals, keeping tick boundaries on whole time units.
+  const target = (scale.max - scale.min) / 4;
+  let step = [1, 5, 10, 15, 30, 60, 300, 600, 900, 1800].find(value => value >= target);
+  if (step === undefined) {
+    const hours = target / 3600, magnitude = 10 ** Math.floor(Math.log10(hours));
+    step = [1, 2, 5, 10].find(value => value * magnitude >= hours) * magnitude * 3600;
+  }
+  scale.min = Math.floor(scale.min / step) * step;
+  scale.max = Math.ceil(scale.max / step) * step;
+  scale.options.ticks.stepSize = step;
+}
+
 /** Chart kinds are a host presentation choice; protocol data remains unchanged. */
 export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dce3', locale, timeZone } = {}) {
   const data = block.data;
@@ -84,7 +97,8 @@ export function conversationChartConfig(block, { text = '#64748b', grid = '#d7dc
   const axis = (title, unit) => ({ ...(data.format?.style === 'percent' || unit === '%'
     ? { suggestedMax: data.format?.style === 'percent' ? 1 : 100 } : {}), title: { display: !!title, text: title, color: text },
     ticks: { color: text, callback: tick(unit), ...(data.format?.style === 'percent' || unit === '%'
-      ? { stepSize: data.format?.style === 'percent' ? 0.25 : 25 } : {}) }, grid: { color: grid }, border: { color: grid } });
+      ? { stepSize: data.format?.style === 'percent' ? 0.25 : 25 } : {}) }, grid: { color: grid }, border: { color: grid },
+    ...(data.format?.style === 'duration' ? { afterDataLimits: durationLimits } : {}) });
   const datasets = [], scales = {};
   let type = 'bar', indexAxis = 'x', labels;
   if (block.type === 'time_series') {
