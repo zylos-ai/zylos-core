@@ -143,10 +143,12 @@
           <p id="observer-target"></p>
         </div>
         <label class="wb-o-picker" id="observer-group-picker" hidden>
-          <span data-i18n="wb.observer.chooseGroup">Choose a running group</span>
+          <span class="wb-vh" data-i18n="wb.observer.chooseGroup">Choose a running group</span>
           <select class="wb-input" id="observer-group-select"></select>
         </label>
+        <p class="wb-note wb-o-scope" data-i18n="wb.observer.scope">One group at a time: switching groups reconnects.</p>
         <span class="wb-grow"></span>
+        <button class="wb-btn wb-o-size-btn" id="observer-size-toggle" type="button" aria-controls="observer-size-form" aria-expanded="false"><span data-i18n="wb.observer.size">Size</span><span class="wb-o-size-now" id="observer-size-now"></span></button>
         <form class="observer-size-form wb-o-size" id="observer-size-form" novalidate>
           <label><span data-i18n="observer.size.cols">Width</span>
             <input class="wb-input" type="number" id="observer-size-cols" min="20" max="500" step="1" value="120" required></label>
@@ -164,11 +166,11 @@
         <div class="observer-notice" id="observer-notice" data-state="idle" data-i18n="observer.connecting">Connecting to read-only terminal…</div>
         <button class="wb-link-btn" id="observer-notice-history" type="button" data-i18n="wb.observer.seeHistory" hidden>See history</button>
       </div>
-      <p class="wb-note wb-o-scope" data-i18n="wb.observer.scope">One group at a time: switching groups reconnects.</p>
       <div id="observer-history" hidden></div>
       <div class="observer-frame-shell">
         <iframe id="observer-frame" title="Read-only terminal observer" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
       </div>
+      <p class="wb-note wb-o-wide-hint" data-i18n="wb.observer.wideHint">The terminal is wider than the screen; swipe sideways to see all of it.</p>
     </div>
   </section>
 

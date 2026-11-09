@@ -12,9 +12,9 @@ import { mountChatSettings } from './wb/chat-settings.js?v=114';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=6';
 import { mountWorkbench } from './wb/shell.js?v=118';
 import { watchHeader } from './wb/header-fit.js?v=95';
-import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=105';
+import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=106';
 import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=115';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from './wb/observer-page.js?v=116';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from './wb/observer-page.js?v=117';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=143';
 import { createUsagePage } from './wb/usage.js?v=118';
@@ -1047,7 +1047,7 @@ function renderObserverPage() {
   const multi = status?.sessionMode === 'multi';
   const groupName = group === undefined && multi ? t('wb.observer.chooseGroup') : observerGroupName(row, group, t('wb.term.origin'), t);
   const hasTarget = status && Object.hasOwn(status, 'target') ? Boolean(status.target) : !originSessionUnavailable(state.dashboardState);
-  $('#observer-title').textContent = t(focus && hasTarget ? 'wb.observer.focusTitle' : 'wb.observer.pageTitle', { name: groupName });
+  $('#observer-title').textContent = t(observerTitleKey({ focus, hasTarget, multi }), { name: groupName });
   const target = $('#observer-target');
   target.replaceChildren();
   const run = status?.target?.runId;
@@ -1078,6 +1078,8 @@ function renderObserverPage() {
   $('#observer-notice-history').hidden = !idle;
   const frameShell = $('#observer-frame')?.parentElement;
   if (frameShell) frameShell.hidden = !observerFrameVisible({ historyMode: state.observer.historyMode, choosing: choose, idle, lease: state.observer.lease, noticeState: $('#observer-notice')?.dataset.state });
+  const noticeRow = $('.wb-o-notice');
+  if (noticeRow) noticeRow.hidden = observerNoticeHidden({ choosing: choose, runningCount: runningObserverGroups(state.observer.groups).length });
   if (available && !state.observer.lease && !state.observer.historyMode) {
     if (choose) setObserverNotice(t(runningObserverGroups(state.observer.groups).length ? 'wb.observer.chooseGroup' : 'wb.observer.noRunningGroups'), 'idle');
     else if (idle && !state.observer.intent) setObserverNotice(t('wb.observer.noSession'), 'idle');
@@ -1133,6 +1135,13 @@ function renderObserverSizeForm(status = state.observer.status) {
   const form = $('#observer-size-form');
   if (!form) return;
   form.hidden = Boolean(state.observer.historyMode) || !validAgentSize(status?.agentSize);
+  // Phones fold the size form behind a button that shows the current size.
+  const toggle = $('#observer-size-toggle');
+  if (toggle) {
+    toggle.hidden = form.hidden;
+    const now = $('#observer-size-now');
+    if (now) now.textContent = observerSizeLabel(status?.agentSize, !form.hidden);
+  }
   const apply = $('#observer-size-apply');
   if (apply) apply.disabled = remoteIsReadOnly() || Boolean(state.observer.sizePending);
   const targetKey = observerTargetKey();
@@ -1187,6 +1196,8 @@ function syncObserverMetrics(iframe, metrics) {
   if (![metrics.width, metrics.height].every(value => Number.isFinite(value) && value > 0 && value <= 20000)) return;
   iframe.style.width = `max(100%, ${Math.ceil(metrics.width)}px)`;
   iframe.style.height = `max(100%, ${Math.ceil(metrics.height)}px)`;
+  const shell = iframe.parentElement;
+  shell?.classList?.toggle('wb-o-wide', observerFrameWide(metrics.width, shell.clientWidth));
 }
 
 function releaseObserverLease(endpoints, lease) {
@@ -1779,6 +1790,11 @@ function initObserverControls() {
     openObserverFor(event.target.value || undefined, 'live', { focus: Boolean(state.observer.focus) }).catch(() => {});
   });
   $('#observer-size-form')?.addEventListener('submit', (event) => { applyObserverSize(event).catch(() => {}); });
+  $('#observer-size-toggle')?.addEventListener('click', (event) => {
+    const open = event.currentTarget.getAttribute('aria-expanded') !== 'true';
+    event.currentTarget.setAttribute('aria-expanded', String(open));
+    $('#observer-size-form')?.classList.toggle('wb-o-size-open', open);
+  });
   $('#observer-back')?.addEventListener('click', leaveObserverFocus);
   $('#observer-empty-back')?.addEventListener('click', leaveObserverFocus);
   $('#observer-empty-settings')?.addEventListener('click', () => openSettingsModal('observer'));

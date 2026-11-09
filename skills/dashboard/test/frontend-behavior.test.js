@@ -8,7 +8,7 @@ import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { tabForPath } from '../public/js/wb/view-mode.js';
-import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from '../public/js/wb/observer-page.js';
+import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from '../public/js/wb/observer-page.js';
 
 function deferred() {
   let resolve;
@@ -91,6 +91,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     },
     originSessionUnavailable: () => false,
     runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget,
+    observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide,
     renderConnection() {}, isSseOpen: () => false,
     t: (key) => key,
     clearTimeout(id) { if (timeouts[id - 1]) timeouts[id - 1].cancelled = true; },

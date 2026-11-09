@@ -63,6 +63,27 @@ export function observerFrameVisible({ historyMode, choosing, idle, lease, notic
   return !historyMode && !choosing && !idle && (Boolean(lease) || noticeState !== 'error');
 }
 
+/** Page title key: while the group picker is on screen it names the group, so the title is just the page name. */
+export function observerTitleKey({ focus, hasTarget, multi } = {}) {
+  if (focus && hasTarget) return 'wb.observer.focusTitle';
+  return multi && !focus ? 'observer.title' : 'wb.observer.pageTitle';
+}
+
+/** Before a group is chosen the picker says what to do; the status row only speaks when there is nothing to pick. */
+export function observerNoticeHidden({ choosing, runningCount } = {}) {
+  return Boolean(choosing) && runningCount > 0;
+}
+
+/** Text after the folded size button ("Size 120×40"); empty when the size form is not offered. */
+export function observerSizeLabel(agentSize, offered) {
+  return offered && agentSize ? ` ${agentSize.cols}×${agentSize.rows}` : '';
+}
+
+/** A terminal wider than its box scrolls sideways, and the page says so under it. */
+export function observerFrameWide(frameWidth, boxWidth) {
+  return Math.ceil(frameWidth) > boxWidth;
+}
+
 /** Fence local viewer state before applying a group choice; network release may finish later. */
 export async function switchObserverTarget(observer, { identity, disconnect, apply }) {
   const generation = ++observer.selectionGeneration;

@@ -96,3 +96,38 @@ test('stylesheet: on phones the settings sections are a drawer from the left; ev
   assert.ok(drawerClasses.size >= 5);
   for (const name of drawerClasses) assert.ok(settings.includes(`'${name.slice(1)}`) || settings.includes(` ${name.slice(1)}'`), name + ' is built by the settings page');
 });
+
+test('stylesheet: on phones usage ranges fill the row, custom dates fold onto one row, totals read as a list', () => {
+  assert.match(css, /^\.wb-usage-custom \{ display: contents; \}/m, 'wide screens keep the dates in the control row');
+  assert.match(css, /^\.wb-usage-custom-btn \{ display: none !important; \}/m);
+  assert.match(phone, /\.wb-usage-controls \.wb-seg button \{ flex: 1 1 0;/);
+  assert.match(phone, /\.wb-usage-custom \{ display: none;/);
+  assert.match(phone, /\.wb-usage-custom-open \.wb-usage-custom \{ display: flex; \}/);
+  assert.match(phone, /\.wb-usage-total \{ grid-template-columns: minmax\(0, 1fr\) auto; grid-template-areas: "label value" "sub value";/);
+  assert.match(phone, /\.wb-usage-head \.wb-usage-legend \{ flex-basis: 100%; \}/, 'legends go under chart titles');
+  assert.match(phone, /\.wb-usage-table tbody th:first-child \{ white-space: normal; overflow-wrap: anywhere; \}/, 'long names wrap inside data tables');
+});
+
+test('stylesheet: memory backlog rows are one 40px line on phones, with names wrapping instead of cut', () => {
+  assert.match(phone, /\.wb-memory-bl \{ grid-template-columns: minmax\(0, 1fr\) minmax\(56px, 26%\) 2\.6em;[^}]*min-height: 40px; \}/);
+  assert.match(phone, /\.wb-memory-bl-head \.wb-memory-chart-label \{ white-space: normal; overflow-wrap: anywhere;/);
+});
+
+test('stylesheet and page: on phones the terminal observer is one left-aligned column, the size form folds behind a button', () => {
+  assert.match(phone, /\.wb-o-bar \{ flex-flow: row wrap; align-items: center; justify-content: flex-start;/, 'overrides the older stacked toolbar');
+  assert.match(phone, /\.wb-o-bar > \* \{ flex: 1 1 100%; \}/, 'one item per row, controls fill the width');
+  assert.match(phone, /\.wb-o-bar > #observer-back \{ flex: none; \}\s*\.wb-o-bar > \.wb-o-title \{ flex: 1 1 0;/, 'back button and title share the first row');
+  assert.match(phone, /\.wb-o-bar \.wb-o-picker, \.wb-o-bar \.wb-o-picker select \{ width: 100%; \}/, 'outranks the 220px desktop select width');
+  assert.match(phone, /\.wb-o-bar \.observer-view-switch button \{ flex: 1 1 0; \}/);
+  assert.match(phone, /\.wb-o-size:not\(\.wb-o-size-open\) \{ display: none; \}/);
+  assert.match(css, /^\.wb-o-size-btn \{ display: none; \}/m, 'wide screens keep the size form in the toolbar');
+  assert.match(css, /^\.observer-frame-shell\.wb-o-wide:not\(\[hidden\]\) \+ \.wb-o-wide-hint \{ display: block; \}/m);
+  // The picker label is read by screen readers only (the select already says "choose a running group"),
+  // and the one-line scope note sits in the toolbar, under the picker, before any group is chosen.
+  assert.match(html, /<span class="wb-vh" data-i18n="wb\.observer\.chooseGroup">/);
+  const bar = html.slice(html.indexOf('wb-o-bar">'), html.indexOf('class="wb-o-notice"'));
+  assert.ok(bar.indexOf('id="observer-group-picker"') < bar.indexOf('data-i18n="wb.observer.scope"'), 'scope note follows the picker');
+  assert.match(bar, /id="observer-size-toggle"[^>]*aria-controls="observer-size-form" aria-expanded="false"/);
+  assert.ok(html.indexOf('class="observer-frame-shell"') < html.indexOf('class="wb-note wb-o-wide-hint"'), 'the hint sits right after the frame');
+  assert.match(app, /\$\('#observer-size-toggle'\)\?\.addEventListener\('click'/);
+});

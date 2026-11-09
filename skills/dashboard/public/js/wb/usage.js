@@ -277,15 +277,30 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
   const untilField = dateField(document, until, () => t('wb.usage.until'));
   const dash = element(document, 'span', '—', 'wb-usage-dash');
   const apply = element(document, 'button', t('wb.usage.apply'), 'wb-btn'); apply.type = 'button'; apply.id = 'wb-usage-apply';
-  controls.append(seg, sinceField.field, dash, untilField.field, apply);
+  // Wide screens show the custom dates beside the ranges. Phones fold them behind the last segment and open
+  // them on one row; the fold only shows or hides the fields and reads nothing.
+  const custom = element(document, 'div', undefined, 'wb-usage-custom'); custom.id = 'wb-usage-custom';
+  custom.append(sinceField.field, dash, untilField.field, apply);
+  const customToggle = element(document, 'button', t('wb.usage.range.custom'), 'wb-usage-custom-btn'); customToggle.type = 'button';
+  customToggle.setAttribute('aria-controls', custom.id);
+  let customOpen = false;
+  customToggle.addEventListener('click', () => { customOpen = !customOpen; mark(); });
+  seg.append(customToggle);
+  controls.append(seg, custom);
   const status = element(document, 'p', undefined, 'wb-usage-status'); status.id = 'wb-usage-status'; status.setAttribute('role', 'status');
   const deletionNotice = element(document, 'p', t('wb.usage.deletedConversations'), 'wb-usage-deletion-note');
   const body = element(document, 'div'); body.id = 'wb-usage-body'; root.replaceChildren(title, controls, deletionNotice, status, body);
-  const mark = () => choices.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.range === range)));
+  const mark = () => {
+    choices.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.range === range)));
+    const open = customOpen || range === 'custom';
+    customToggle.setAttribute('aria-expanded', String(open)); customToggle.classList.toggle('wb-on', range === 'custom');
+    controls.classList.toggle('wb-usage-custom-open', open);
+  };
   const draw = () => {
     title.textContent = t('wb.nav.usage');
     deletionNotice.textContent = t('wb.usage.deletedConversations');
     for (const button of choices) button.textContent = t('wb.usage.range.' + button.dataset.range);
+    customToggle.textContent = t('wb.usage.range.custom');
     seg.setAttribute('aria-label', t('wb.usage.range'));
     since.setAttribute('aria-label', t('wb.usage.since')); until.setAttribute('aria-label', t('wb.usage.until')); apply.textContent = t('wb.usage.apply');
     sinceField.sync(); untilField.sync();

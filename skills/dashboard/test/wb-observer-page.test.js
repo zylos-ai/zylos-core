@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from '../public/js/wb/observer-page.js';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from '../public/js/wb/observer-page.js';
 
 const healthy = { state: 'installed', desired: { enabled: true } };
 
@@ -156,4 +156,30 @@ test('observer group labels use the same readable fallback as the board', () => 
   assert.equal(observerGroupName({ sessionGroup: 'lark:team.topic', c4: { componentName: 'lark' } }, 'lark:team.topic', 'System assistant', t), 'Lark · team.topic');
   assert.equal(observerGroupName({ sessionGroup: 'lark:team.topic', name: { displayName: 'Operations' } }, 'lark:team.topic', 'System assistant', t), 'Operations');
   assert.equal(observerGroupName(null, 'origin', 'System assistant', t), 'System assistant');
+});
+
+test('with the group picker on screen the title is just the page name', () => {
+  assert.equal(observerTitleKey({ multi: true, focus: false, hasTarget: true }), 'observer.title');
+  assert.equal(observerTitleKey({ multi: true, focus: true, hasTarget: true }), 'wb.observer.focusTitle');
+  assert.equal(observerTitleKey({ multi: true, focus: true, hasTarget: false }), 'wb.observer.pageTitle');
+  assert.equal(observerTitleKey({ multi: false, focus: false, hasTarget: true }), 'wb.observer.pageTitle');
+});
+
+test('the status row stays quiet while a running group is waiting to be picked', () => {
+  assert.equal(observerNoticeHidden({ choosing: true, runningCount: 2 }), true);
+  assert.equal(observerNoticeHidden({ choosing: true, runningCount: 0 }), false, 'nothing to pick: the row explains why');
+  assert.equal(observerNoticeHidden({ choosing: false, runningCount: 2 }), false, 'a chosen group shows its connection state');
+});
+
+test('the folded size button shows the current size only when resizing is offered', () => {
+  assert.equal(observerSizeLabel({ cols: 120, rows: 40 }, true), ' 120×40');
+  assert.equal(observerSizeLabel({ cols: 120, rows: 40 }, false), '');
+  assert.equal(observerSizeLabel(undefined, true), '');
+});
+
+test('a terminal wider than its box is marked for the sideways-scroll hint', () => {
+  assert.equal(observerFrameWide(1200.2, 340), true);
+  assert.equal(observerFrameWide(340.4, 340), true, 'partial pixels round up, matching the frame width set on the iframe');
+  assert.equal(observerFrameWide(339, 340), false);
+  assert.equal(observerFrameWide(340, 340), false);
 });

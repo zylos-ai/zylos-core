@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createDocument, allNodes, deferred } from './fixtures/workbench-dom.js';
-import { leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
+import { memoryBacklogView, memoryBacklogAge, leaveMemoryConflict, memoryFileScope, memoryFlatFiles, memoryUpkeepNotice, memoryScope, memoryGroupLabel, memoryBudgetRows, createMemoryScope, memoryWriteMessage, saveMemoryOnce, applyMemorySave, memoryWriteAllowed, applyMemoryWriteAccess, renderMemoryPreservingEditor, captureMemorySave, memorySaveCurrent, memorySaveTargetCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent } from '../public/js/wb/memory-scope.js';
 import { parseSessionGroup } from '../../comm-bridge/scripts/c4-session-group.js';
 
 // Direct product imports and injected DOM/request. Run for memory scope, charts,
@@ -87,6 +87,78 @@ test('technical charts show each threshold, unknown readings, age, Core budgets 
   const buttons = allNodes(f.chartsRoot).filter(node => node.tagName === 'BUTTON');
   buttons[0].dispatch('click'); assert.equal(f.groups.at(-1), 'session-groups/telegram:dm-1001');
   buttons.find(node => node.textContent === 'state.md').dispatch('click'); assert.equal(f.files.at(-1), 'state.md');
+  f.controller.destroy();
+});
+
+test('backlog rows: waiting groups first, then by pending count, groups with nothing pending set apart', () => {
+  const view = memoryBacklogView([
+    { sessionGroup: 'quiet', count: 0, syncing: false, threshold: 15 },
+    { sessionGroup: 'few', count: 3, syncing: false, threshold: 15 },
+    { sessionGroup: 'unknown', count: null, syncing: null, threshold: 15 },
+    { sessionGroup: 'old-small', count: 2, aged: true, firstAt: '2026-11-01 00:00:00', syncing: false, threshold: 15 },
+    { sessionGroup: 'many', count: 40, syncing: false, threshold: 15 },
+    { sessionGroup: 'old-big', count: 9, aged: true, firstAt: '2026-11-02 00:00:00', syncing: false, threshold: 15 },
+    { sessionGroup: 'zero-syncing', count: 0, syncing: true, threshold: 15 },
+    { sessionGroup: 'origin', count: 0, syncing: false, threshold: 30 },
+  ]);
+  assert.deepEqual(view.active.map(row => row.sessionGroup), ['old-big', 'old-small', 'many', 'few', 'zero-syncing', 'unknown']);
+  assert.deepEqual(view.quiet.map(row => row.sessionGroup), ['quiet', 'origin']);
+  assert.equal(view.threshold, 15, 'the header names the threshold most groups share');
+  assert.equal(view.quiet[1].ownThreshold, 30, 'a group with another threshold keeps it on its row');
+  assert.equal(view.active[0].ownThreshold, null);
+  assert.equal(memoryBacklogView(null).threshold, null);
+});
+
+test('backlog age reads C4 UTC text in whole hours, then days from 48 hours', () => {
+  const now = Date.parse('2026-11-09T12:00:00Z');
+  assert.deepEqual(memoryBacklogAge('2026-11-09 02:30:00', now), { unit: 'hours', count: 9 });
+  assert.deepEqual(memoryBacklogAge('2026-11-07T12:00:01Z', now), { unit: 'hours', count: 47 });
+  assert.deepEqual(memoryBacklogAge('2026-11-06 12:00:00', now), { unit: 'days', count: 3 });
+  assert.equal(memoryBacklogAge(null, now), null); assert.equal(memoryBacklogAge('later', now), null);
+  assert.equal(memoryBacklogAge('2026-11-10 00:00:00', now), null, 'a time ahead of the clock gives no age');
+});
+
+test('backlog card: threshold in the header, age as a mark on its row, quiet groups folded, a filter past twelve groups', async () => {
+  const hoursAgo = h => new Date(Date.now() - h * 3600e3).toISOString();
+  const groups = [{ sessionGroup: 'telegram:dm-1', displayName: 'Waiting long', count: 20, threshold: 15, syncing: false, aged: true, firstAt: hoursAgo(9.5) }];
+  for (let i = 0; i < 12; i++) groups.push({ sessionGroup: `telegram:dm-q${i}`, displayName: `Quiet ${i}`, count: 0, threshold: 15, syncing: false });
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups, hasOlder: false }) });
+  await f.controller.load();
+  const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
+  assert.match(card.textContent, /wb.memory.thresholdHint \{"count":15\}/);
+  const rows = () => nodesOfClass(card, 'wb-memory-bl');
+  const first = rows()[0];
+  assert.equal(nodesOfClass(first, 'wb-memory-chart-label')[0].textContent, 'Waiting long');
+  const mark = nodesOfClass(first, 'wb-memory-bl-tag')[0];
+  assert.equal(mark.textContent, 'wb.memory.agedHours {"count":9}'); assert.match(mark.className, /\bwarn\b/);
+  assert.equal(nodesOfClass(nodesOfClass(first, 'wb-memory-bl-head')[0], 'wb-memory-bl-tag').includes(mark), true, 'the mark sits with the name, not on a line of its own');
+  const rest = nodesOfClass(card, 'wb-memory-rest')[0];
+  assert.equal(rest.tagName, 'DETAILS'); assert.equal(rest.open, false);
+  assert.match(rest.textContent, /wb.memory.restQuiet \{"count":12\}/);
+  assert.equal(nodesOfClass(rest, 'wb-memory-bl').length, 12, 'quiet groups stay reachable inside the fold');
+  rest.open = true; rest.dispatch('toggle');
+  f.controller.render();
+  assert.equal(nodesOfClass(f.chartsRoot, 'wb-memory-rest')[0].open, true, 'an opened fold stays open across refreshes');
+  const filter = allNodes(card).find(node => node.tagName === 'INPUT');
+  assert.ok(filter, 'thirteen groups get a filter');
+  filter.value = 'quiet 1'; filter.dispatch('input');
+  const card2 = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
+  assert.deepEqual(nodesOfClass(card2, 'wb-memory-chart-label').map(node => node.textContent), ['Quiet 1', 'Quiet 10', 'Quiet 11'], 'a search lists matching quiet groups unfolded');
+  assert.equal(nodesOfClass(card2, 'wb-memory-rest').length, 0);
+  filter.value = 'nothing'; filter.dispatch('input');
+  assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.noMatch/);
+  f.controller.destroy();
+});
+
+test('a short backlog list has no filter and folds an all-quiet list under one line', async () => {
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [
+    { sessionGroup: 'telegram:dm-1', count: 0, threshold: 15, syncing: false },
+    { sessionGroup: 'telegram:dm-2', count: 0, threshold: 15, syncing: false },
+  ] }) });
+  await f.controller.load();
+  const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
+  assert.equal(allNodes(card).some(node => node.tagName === 'INPUT'), false);
+  assert.match(nodesOfClass(card, 'wb-memory-rest')[0].textContent, /wb.memory.allQuiet \{"count":2\}/);
   f.controller.destroy();
 });
 

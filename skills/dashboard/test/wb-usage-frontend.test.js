@@ -244,6 +244,30 @@ test('host curves keep a legend, a labelled 0–100% axis and a readable height,
   view.destroy();
 });
 
+test('on phones the custom dates fold behind the last range button, which opens them without reading', async () => {
+  const f = fixture(), paths = [];
+  const page = createUsagePage({ ...f, read: async path => { paths.push(path); return value; } });
+  await page.open();
+  const nodes = allNodes(f.root), controls = nodes.find(node => node.classList.contains('wb-usage-controls'));
+  const seg = nodes.find(node => node.id === 'wb-usage-range'), toggle = seg.children.at(-1), custom = nodes.find(node => node.id === 'wb-usage-custom');
+  assert.equal(toggle.textContent, 'wb.usage.range.custom'); assert.equal(toggle.attributes['aria-controls'], 'wb-usage-custom');
+  assert.deepEqual(custom.children.filter(node => node.tagName === 'BUTTON').map(node => node.id), ['wb-usage-apply'], 'Apply sits with the dates');
+  assert.equal(toggle.attributes['aria-expanded'], 'false'); assert.equal(controls.classList.contains('wb-usage-custom-open'), false);
+  const reads = paths.length;
+  toggle.dispatch('click');
+  assert.equal(toggle.attributes['aria-expanded'], 'true'); assert.equal(controls.classList.contains('wb-usage-custom-open'), true);
+  assert.equal(paths.length, reads, 'opening the fold reads nothing');
+  toggle.dispatch('click'); assert.equal(controls.classList.contains('wb-usage-custom-open'), false);
+  nodes.find(node => node.id === 'wb-usage-since').value = '2026-11-01T00:00';
+  nodes.find(node => node.id === 'wb-usage-until').value = '2026-11-03T00:00';
+  toggle.dispatch('click'); nodes.find(node => node.id === 'wb-usage-apply').dispatch('click'); await tick();
+  assert.match(paths.at(-1), /since=/);
+  toggle.dispatch('click');
+  assert.equal(controls.classList.contains('wb-usage-custom-open'), true, 'an applied custom range keeps its dates in view');
+  assert.equal(toggle.classList.contains('wb-on'), true);
+  page.destroy();
+});
+
 test('range buttons and the always-visible custom dates choose what is read', async () => {
   const f = fixture(), paths = [];
   const page = createUsagePage({ ...f, read: async path => { paths.push(path); return value; } });
