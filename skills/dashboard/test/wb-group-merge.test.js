@@ -67,6 +67,11 @@ test('the preview drops credential values from links but keeps the link readable
   assert.equal(redactQuerySecrets('https://x.test/?accessToken=a1&authToken=b2&clientSecret=c3&APIKey=d4'), 'https://x.test/?accessToken=[REDACTED]&authToken=[REDACTED]&clientSecret=[REDACTED]&APIKey=[REDACTED]');
   assert.equal(redactQuerySecrets('<a href="https://x.test/?page=2&amp;token=abc&amp;id=7">'), '<a href="https://x.test/?page=2&amp;token=[REDACTED]&amp;id=7">');
   assert.equal(redactQuerySecrets('https://x.test/?monkeyKing=1&hotKeys=2&tokenizer=3'), 'https://x.test/?monkeyKing=1&hotKeys=2&tokenizer=3', 'no credential word: kept');
+  // A link nested in another parameter's value loses its credential too; the outer value stays readable.
+  assert.equal(redactQuerySecrets('https://x.test/login?redirect=https://y/?token=abc'), 'https://x.test/login?redirect=https://y/?token=[REDACTED]');
+  assert.equal(redactQuerySecrets('?next=/cb?access_token=abc&page=2'), '?next=/cb?access_token=[REDACTED]&page=2');
+  assert.equal(redactQuerySecrets('?a=b?token=abc'), '?a=b?token=[REDACTED]');
+  assert.equal(redactQuerySecrets('?next=/cb?monkey=1'), '?next=/cb?monkey=1', 'nested, no credential word: kept');
   // Only a URL query parameter counts: "token=" written in a sentence, or after another separator, stays.
   assert.equal(redactQuerySecrets('the token=abc field and monkey business'), 'the token=abc field and monkey business');
   assert.equal(redactQuerySecrets('a;token=abc and (key=abc)'), 'a;token=abc and (key=abc)');

@@ -753,8 +753,9 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-source { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; }
 .wb-memory-diagnostic, .wb-memory-warning { color: var(--wb-wait); font-size: 11.5px; }
 /* Backlog rows: name and badges in one cell, then bar and count; one compact line per group. */
-.wb-memory-bl { grid-template-columns: minmax(120px, 260px) minmax(60px, 1fr) minmax(max(3em, var(--wb-bl-value, 0px)), max-content); min-height: 32px; margin: 0; gap: 4px 12px; }
-/* The name keeps its line; badges that do not fit beside it move under it rather than squeezing it. */
+.wb-memory-bl { grid-template-columns: minmax(120px, 260px) minmax(60px, 1fr) minmax(max(3em, var(--wb-bl-value, 0px)), max-content); min-height: 32px; margin: 0; padding-bottom: 4px; gap: 4px 12px; }
+/* The name keeps its line; badges that do not fit beside it move under it rather than squeezing it. The row's bottom
+   padding keeps a wrapped badge line apart from the next name while a one-line row stays centered. */
 .wb-memory-bl-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; }
 .wb-memory-bl-head .wb-memory-chart-label { flex: 0 1 auto; }
 .wb-memory-bl .wb-memory-flags { flex: 0 1 auto; flex-wrap: wrap; gap: 4px; }
@@ -840,7 +841,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
   .wb-memory-flags { grid-column: 1 / -1; }
   /* Phones: name, short bar and count on one 40px line; a long name wraps instead of being cut, and badges
      drop under the name only when they do not fit beside it. */
-  .wb-memory-bl { grid-template-columns: minmax(0, 1fr) minmax(56px, 26%) minmax(max(2.6em, var(--wb-bl-value, 0px)), max-content); gap: 0 8px; min-height: 40px; }
+  .wb-memory-bl { grid-template-columns: minmax(0, 1fr) minmax(56px, 26%) minmax(max(2.6em, var(--wb-bl-value, 0px)), max-content); gap: 0 8px; min-height: 40px; padding-bottom: 0; }
   .wb-memory-bl-head { flex-wrap: wrap; column-gap: 6px; row-gap: 0; }
   .wb-memory-bl-head .wb-memory-chart-label { white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.3; }
   .wb-memory-bl .wb-memory-flags { grid-column: auto; margin-bottom: 4px; }

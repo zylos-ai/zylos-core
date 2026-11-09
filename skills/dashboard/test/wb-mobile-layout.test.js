@@ -110,10 +110,14 @@ test('stylesheet: on phones usage ranges fill the row, custom dates fold onto on
 
 test('stylesheet: memory backlog rows are one 40px line on phones, with names wrapping and counts never cut', () => {
   // The count column grows to its content ("Unknown" in English) instead of spilling out of the card.
-  assert.match(phone, /\.wb-memory-bl \{ grid-template-columns: minmax\(0, 1fr\) minmax\(56px, 26%\) minmax\(max\(2\.6em, var\(--wb-bl-value, 0px\)\), max-content\);[^}]*min-height: 40px; \}/);
+  assert.match(phone, /\.wb-memory-bl \{ grid-template-columns: minmax\(0, 1fr\) minmax\(56px, 26%\) minmax\(max\(2\.6em, var\(--wb-bl-value, 0px\)\), max-content\);[^}]*min-height: 40px; padding-bottom: 0; \}/);
   assert.match(css, /^\.wb-memory-bl \{ grid-template-columns: minmax\(120px, 260px\) minmax\(60px, 1fr\) minmax\(max\(3em, var\(--wb-bl-value, 0px\)\), max-content\);/m, 'and on wide screens');
   // Wide screens too: badges that do not fit move under the name instead of squeezing it.
   assert.match(css, /^\.wb-memory-bl-head \{ display: flex; flex-wrap: wrap;/m);
+  // A wrapped badge line keeps 4px from the next group's name; the space is the row's own, so a one-line row's name,
+  // badges and bar stay centered with each other.
+  assert.match(css, /^\.wb-memory-bl \{[^}]*min-height: 32px; margin: 0; padding-bottom: 4px;/m);
+  assert.doesNotMatch(css, /^\.wb-memory-bl \.wb-memory-flags \{[^}]*margin-bottom/m);
   assert.match(phone, /\.wb-memory-bl-head \.wb-memory-chart-label \{ white-space: normal; overflow-wrap: anywhere;/);
 });
 

@@ -18,12 +18,13 @@ export function safePreview(item, sanitizer = new Sanitizer('')) {
 // preview keeps the link readable and drops only those values. Only a URL query parameter counts (after "?", "&"
 // or an HTML-escaped "&amp;"). Its name is split into words at "_", "-", "." and a lower-to-upper case change;
 // one of those words must be a credential word, so monkey= or hotkey= stay. The value ends at whitespace, "&",
-// "#" or any non-ASCII character, so the words after a link stay.
+// "#" or any non-ASCII character, so the words after a link stay. Another parameter's value is searched too, so a
+// link nested in it (?redirect=https://y/?token=…) loses its credential as well.
 const QUERY_PARAM = /(\?|&amp;|&)([A-Za-z0-9_.-]+)=([!"$%'-~]+)/g;
 const SECRET_WORDS = new Set(['token', 'key', 'apikey', 'secret', 'password', 'passwd', 'signature', 'sig', 'auth']);
 const secretName = name => name.split(/[_.-]|(?<=[a-z0-9])(?=[A-Z])/).some(word => SECRET_WORDS.has(word.toLowerCase()));
 export function redactQuerySecrets(text) {
-  return text.replace(QUERY_PARAM, (whole, start, name) => (secretName(name) ? `${start}${name}=[REDACTED]` : whole));
+  return text.replace(QUERY_PARAM, (whole, start, name, value) => `${start}${name}=${secretName(name) ? '[REDACTED]' : redactQuerySecrets(value)}`);
 }
 
 export function mergeGroups({ status, c4, q, names = new Map(), statusError }, sanitizer = new Sanitizer('')) {
