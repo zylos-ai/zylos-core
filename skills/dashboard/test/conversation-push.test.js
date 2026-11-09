@@ -77,6 +77,39 @@ test('stream readiness immediately fetches truth and uses a thirty second fallba
   await f.timer.advance(1); assert.equal(f.reads().length, live + 1);
 });
 
+test('a live message stream still refreshes running activity every two seconds and returns to the normal fallback when it ends', async t => {
+  let running = true, activityReads = 0;
+  const f = fixture(t, (url, _options, now) => {
+    if (!url.pathname.endsWith('/activity')) return;
+    activityReads++;
+    assert.equal(url.searchParams.get('ids'), '1');
+    return { now, items: [{ id: 1, state: 'round', round: '1' }], rounds: [{
+      key: '1', messageIds: [1], state: running ? 'running' : 'done', start: 1000, end: running ? null : now,
+      segments: [{ replyId: null, start: 1000, end: running ? null : now,
+        steps: [{ kind: 'say', text: `Activity read ${activityReads}`, at: now }] }]
+    }] };
+  });
+  await f.open(); await f.event('chat_ready');
+  assert.equal(f.state.snapshot().streamState, 'live');
+  const readyReads = activityReads;
+  assert.ok(readyReads > 0, 'the real controller reads the activity endpoint');
+  await f.timer.advance(1999); assert.equal(activityReads, readyReads);
+  await f.timer.advance(1); assert.equal(activityReads, readyReads + 1);
+  assert.equal(f.state.snapshot().activity.rounds.get('1').segments[0].steps[0].text, `Activity read ${readyReads + 1}`);
+  running = false;
+  await f.timer.advance(1999); assert.equal(activityReads, readyReads + 1);
+  await f.timer.advance(1); assert.equal(activityReads, readyReads + 2);
+  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'done');
+  assert.equal(f.state.snapshot().streamState, 'live', 'activity polling retains the existing live message stream');
+  const messageReads = f.reads().length;
+  const listAt = f.calls.filter(call => call.u.pathname === '/api/chat/conversations').at(-1).at;
+  await f.timer.advance(listAt + 30000 - f.timer.now() - 1);
+  assert.equal(f.reads().length, messageReads, 'finished activity no longer schedules two-second reads');
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, messageReads + 1, 'the existing thirty-second live fallback/list deadline resumes');
+  assert.equal(activityReads, readyReads + 2, 'finished activity is no longer sampled');
+});
+
 test('old streams without ready retain five second polling after the bounded capability wait', async t => {
   const f = fixture(t); await f.open();
   f.state.streamStatus('connecting');
