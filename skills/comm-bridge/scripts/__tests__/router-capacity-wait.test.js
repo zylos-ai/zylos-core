@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createCapacityWaits } from '../router/capacity-wait.js';
+import { createActivationManager } from '../router/activation.js';
 import { routerFixture } from './helpers/router-fixture.js';
 
 function fixture() {
@@ -108,4 +109,72 @@ test('real Router capacity gate uses the shared timer and ends it at slot acquis
   assert.equal(f.row(row.id).status, 'delivered');
   const granted = f.events.find(event => event.event === 'capacity_wait_acquired'); assert.ok(granted);
   assert.equal(granted.wait_started_at_ms, start.wait_started_at_ms); assert.equal(granted.wait_ms, 10001);
+});
+
+for (const scope of ['group', 'global']) {
+  test(`a ${scope} drain fence prevents capacity timing and receipts`, async t => {
+    const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); f.put('busy'); const row = f.add('waiting');
+    const sent = []; f.deps.sendStatusNotice = async record => { sent.push(record); return { outcome: 'sent' }; };
+    if (scope === 'group') f.db.setDrainFence('waiting', { reason: 'evict', runId: 'old-run' });
+    else f.db.setDrainFence('*');
+    await f.create().initialize(); await f.rounds(3); f.advance(20000); await f.rounds(3);
+    assert.equal(f.events.filter(event => event.event === 'wait_capacity' && event.session_group === 'waiting').length, 0);
+    assert.equal(sent.length, 0); assert.equal(f.row(row.id).status, 'pending');
+    assert.equal(f.calls.filter(call => call[0] === 'launch').length, 0);
+  });
+}
+
+test('an own-running slot refusal does not start a capacity wait during activation', async t => {
+  const f = routerFixture(t, { poolSize: 1 }); const row = f.add('waiting');
+  assert.equal(f.db.takeSlot('waiting', { runId: 'already-starting', k: 1 }).taken, true);
+  const router = f.create(); router.state.mode = 'multi'; router.state.sceneObservable = true;
+  const tasks = [], refusals = [], sent = [], takeSlot = f.db.takeSlot;
+  f.deps.sendStatusNotice = async record => { sent.push(record); return { outcome: 'sent' }; };
+  f.db.takeSlot = (...args) => { const result = takeSlot(...args); refusals.push(result.reason); return result; };
+  const context = { deps: f.deps, options: f.options, state: router.state, now: f.now,
+    diagnostic: f.deps.diagnostic, track: task => tasks.push(task),
+    refreshSlots: () => { router.state.slots = new Map(f.db.listSlotOccupancy().map(slot => [slot.sessionGroup, slot])); } };
+  context.refreshSlots(); context.capacityWaits = createCapacityWaits(context);
+  const activation = createActivationManager(context);
+  t.after(async () => { context.capacityWaits.stop(); await Promise.allSettled(tasks); });
+  // Call the real preflight after scheduler eligibility: the store owns a
+  // running row even though the observed runtime has not become present yet.
+  await activation.begin('waiting', row); f.advance(20000); await activation.begin('waiting', row);
+  await Promise.all(tasks);
+  assert.deepEqual(refusals, ['own_running', 'own_running']);
+  assert.equal(f.events.filter(event => event.event === 'wait_capacity').length, 0);
+  assert.equal(sent.length, 0); assert.equal(f.row(row.id).status, 'pending');
+  assert.equal(f.calls.filter(call => call[0] === 'launch').length, 0);
+});
+
+test('a rowless continuation waiting for capacity records one waiting event', async t => {
+  const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); f.put('busy'); const row = f.add('waiting');
+  f.sqlite.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(row.id);
+  f.db.recordRunEnd('waiting', { runId: 'ended-run', reason: 'unexpected' });
+  const sent = []; f.deps.sendStatusNotice = async record => { sent.push(record); return { outcome: 'sent' }; };
+  await f.create().initialize(); await f.rounds(3); f.advance(5000); await f.rounds(3);
+  const waiting = f.events.filter(event => event.event === 'wait_capacity' && event.session_group === 'waiting');
+  assert.equal(waiting.length, 1); assert.equal(waiting[0].conversation_id, null);
+  assert.equal(waiting[0].wait_started_at_ms, f.now());
+  assert.equal(waiting[0].occupied_slots, 1); assert.equal(waiting[0].pool_limit, 1);
+  f.advance(20000); await f.rounds(3);
+  assert.equal(f.events.filter(event => event.event === 'wait_capacity' && event.session_group === 'waiting').length, 1);
+  assert.equal(sent.length, 0); assert.equal(f.calls.filter(call => call[0] === 'launch').length, 0);
+});
+
+test('an existing session clears its earlier capacity clock before a later absence', async t => {
+  const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); f.put('busy'); const row = f.add('waiting');
+  const sent = []; f.deps.sendStatusNotice = async record => { sent.push(record); return { outcome: 'sent' }; };
+  // Keep the pending row through the present phase so queue sweeping cannot
+  // clear the clock on behalf of the existing-session branch under test.
+  f.db.claimConversation = () => false;
+  await f.create().initialize(); await f.rounds(3);
+  const first = f.events.find(event => event.event === 'wait_capacity' && event.session_group === 'waiting'); assert.ok(first);
+  f.put('waiting'); await f.rounds(3); assert.equal(f.row(row.id).status, 'pending');
+  f.advance(9000); f.scene.delete('waiting'); f.db.recordRunEnd('waiting', { runId: 'run-waiting', reason: 'ttl' });
+  await f.rounds(3);
+  const starts = f.events.filter(event => event.event === 'wait_capacity' && event.session_group === 'waiting');
+  assert.equal(starts.length, 2); assert.equal(starts[1].wait_started_at_ms - first.wait_started_at_ms, 9000);
+  f.advance(1001); await f.rounds(3); assert.equal(sent.length, 0);
+  f.advance(9000); await f.rounds(3); assert.equal(sent.length, 1);
 });
