@@ -40,6 +40,7 @@ export function createCapacityWaits({ deps, state, options, diagnostic, now, tra
       return deps.sendStatusNotice(record, {
         decision: 'capacity_wait', context: 'capacity', noticeCode: 'capacity_wait',
         noticeKind: 'capacity_wait', health: 'capacity_wait', reason: 'capacity_wait', runtime: config.runtime,
+        waitStartedAtMs: episode.startedAt,
       });
     }).then(result => diagnostic('capacity_wait_notice', { session_group: group, conversation_id: record.id,
       wait_started_at_ms: episode.startedAt, wait_ms: Math.max(0, now() - episode.startedAt), outcome: result?.outcome ?? 'unknown' }),

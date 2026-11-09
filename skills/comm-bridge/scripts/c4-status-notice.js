@@ -13,7 +13,9 @@ const sendScript = fileURLToPath(new URL('./c4-send.js', import.meta.url));
 export function statusNoticeKey(record, route = {}) {
   const health = route.health || 'unavailable';
   return 'v2:' + JSON.stringify([record.channel, normalizeStatusEndpoint(record.endpoint_id),
-    record.session_group ?? null, route.runtime || 'unknown', health, route.reason || health]);
+    record.session_group ?? null, route.runtime || 'unknown', health, route.reason || health,
+    ...(route.noticeCode === 'capacity_wait' && Number.isSafeInteger(route.waitStartedAtMs)
+      ? [route.waitStartedAtMs] : [])]);
 }
 
 /** Shared post-commit receipt sender. It never changes the conversation row. */

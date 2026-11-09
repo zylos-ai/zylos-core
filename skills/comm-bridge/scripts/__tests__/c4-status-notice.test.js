@@ -122,7 +122,7 @@ test('real timed-out sender is killed and classified uncertain, not retried', as
 test('capacity wait sends the shared receipt to the original channel and endpoint with cooldown', async () => {
   const record = row({ direction: 'in', channel: 'telegram', endpoint_id: 'original-room', session_group: 'telegram:original' });
   const routing = { decision: 'capacity_wait', context: 'capacity', noticeCode: 'capacity_wait',
-    health: 'capacity_wait', reason: 'capacity_wait', runtime: 'codex' };
+    health: 'capacity_wait', reason: 'capacity_wait', runtime: 'codex', waitStartedAtMs: 1800000000123 };
   const calls = [];
   const send = sender({ render: input => messageForStatus(input, {}), spawn: (exe, argv) => {
     const child = fakeChild();
@@ -136,6 +136,8 @@ test('capacity wait sends the shared receipt to the original channel and endpoin
   assert.match(calls[0].message, /消息已收到。目前同时处理的对话较多，正在排队/);
   assert.equal((await send({ ...record, id: record.id + 1 }, routing)).outcome, 'suppressed');
   assert.equal(calls.length, 1);
+  assert.equal((await send(record, { ...routing, waitStartedAtMs: routing.waitStartedAtMs + 10001 })).outcome, 'sent');
+  assert.equal(calls.length, 2, 'a distinct wait episode can send inside the existing 600-second cooldown');
 });
 
 test('capacity wait skips internal, system, outbound, no-reply and admission-pending records', async () => {
