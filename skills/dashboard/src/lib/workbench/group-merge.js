@@ -11,7 +11,14 @@ export function safePreview(item, sanitizer = new Sanitizer('')) {
   if (!item?.preview) return null;
   const { message, ...preview } = item.preview;
   const text = message === undefined ? preview.text : message;
-  return { ...preview, text: text == null ? null : sanitizer.safeSummary(text) };
+  return { ...preview, text: text == null ? null : sanitizer.safeSummary(redactQuerySecrets(text)) };
+}
+
+// People paste links that carry credentials in the query string (?token=…, &api_key=…). The preview keeps the
+// link readable and drops only those values.
+const QUERY_SECRET = /([?&;][\w.-]*?(?:token|key|secret|password|passwd|signature|sig|auth)=)[^&#;\s]+/gi;
+export function redactQuerySecrets(text) {
+  return text.replace(QUERY_SECRET, '$1[REDACTED]');
 }
 
 export function mergeGroups({ status, c4, q, names = new Map(), statusError }, sanitizer = new Sanitizer('')) {

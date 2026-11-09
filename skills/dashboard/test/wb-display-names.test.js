@@ -151,3 +151,17 @@ test('local name routes require admin and publish human-owned names in group sna
   response = await request(route, 'DELETE'); assert.equal(response.status, 200); assert.equal((await response.json()).data.displayName, null);
   clock += 2100; response = await request('/api/workbench/groups'); assert.equal((await response.json()).rows.find(row => row.sessionGroup === 'telegram:a').name, null);
 });
+
+test('naming candidates carry only the redacted preview text, never the reader message', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'display-name-'));
+  const store = new Store(path.join(root, 'dashboard.db'));
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const secret = 'sk-' + 'q'.repeat(32);
+  const groups = [{ sessionGroup: 'telegram:a', componentName: 'telegram', lastActivityAt: 5,
+    preview: { timestamp: 5, channel: 'telegram', endpoint: 'a', text: 'please use ' + secret, message: 'please use ' + secret } }];
+  const names = createDisplayNames({ store, zylosDir: root, runC4Db: async () => ({ ok: true, data: groups }) });
+  const [row] = await names.listNames();
+  assert.equal(row.preview.text, 'please use [REDACTED]');
+  assert.equal(Object.hasOwn(row.preview, 'message'), false);
+  assert.equal(JSON.stringify(row).includes(secret), false);
+});

@@ -185,11 +185,13 @@ function nowCard(document, row, data, { level, t, snapshot }) {
     if (kind === 'error') card.classList.add('wb-now-err');
     const glyph = icon(document, kind === 'not_running' ? 'power' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock');
     // The header already shows the state and for how long, so the card says what it means: the last message, or standby.
+    // An error or an unknown state is the news itself: the card keeps that word and puts the last message under it.
     const sub = kind === 'not_running' ? t('wb.detail.standby') : lastReceived(row, t);
-    if (sub) { title.classList.add('wb-now-said'); title.append(glyph, element(document, 'span', sub)); }
+    if (sub && kind !== 'error' && kind !== 'unknown') { title.classList.add('wb-now-said'); title.append(glyph, element(document, 'span', sub)); }
     else {
       title.append(glyph, element(document, 'span', t('wb.state.' + kind)));
       if (row.duration != null && !['not_running', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
+      if (sub) card.append(element(document, 'p', sub, 'wb-now-sub'));
     }
   }
   if (level === 'technical') {

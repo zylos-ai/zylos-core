@@ -110,3 +110,46 @@ test('header watching refits on resize, locale, detail and section changes and r
   assert.equal(windowListeners.size, 0); assert.equal(documentListeners.size, 0); assert.equal(observed.length, 0);
   assert.equal(nav.listeners.size, 0, 'the scroll listener is released');
 });
+
+function watchedNav({ active = 1, width = 390 } = {}) {
+  const f = fixture({ content: 900, width: 1100 });
+  const nav = navFixture({ width, active });
+  f.header.querySelector = selector => (selector === '.tab-bar' ? nav : null);
+  const frames = [], windowListeners = new Map();
+  let onMutations = null;
+  const window = {
+    requestAnimationFrame: fn => { frames.push(fn); return frames.length; }, cancelAnimationFrame: () => {},
+    addEventListener: (name, fn) => windowListeners.set(name, fn), removeEventListener: name => windowListeners.delete(name),
+    MutationObserver: class { constructor(fn) { onMutations = fn; } observe() {} disconnect() {} },
+  };
+  const document = { documentElement: f.root, getElementById: () => null, addEventListener() {}, removeEventListener() {} };
+  const watcher = watchHeader({ header: f.header, document, window });
+  return { nav, frames, windowListeners, watcher, mutate: records => onMutations(records) };
+}
+
+test('a section change seen on a tab refits, while the row\'s own fade classes do not', () => {
+  const w = watchedNav();
+  w.mutate([{ attributeName: 'class', target: w.nav }]);
+  assert.equal(w.frames.length, 0, 'the row toggling its own fades is not a reason to refit');
+  w.mutate([{ attributeName: 'class', target: w.nav }, { attributeName: 'class', target: w.nav.tabs[4] }]);
+  assert.equal(w.frames.length, 1, 'a tab changing class (a new section) refits');
+  w.nav.tabs[1].classList.remove('active'); w.nav.tabs[4].classList.add('active');
+  w.frames.shift()();
+  assert.equal(w.nav.scrollLeft, 430 - (390 - 32), 'and brings the new section into view');
+  w.mutate([{ attributeName: 'hidden', target: w.nav }]);
+  assert.equal(w.frames.length, 1, 'other attributes on the row still refit');
+  w.watcher.destroy();
+});
+
+test('resizing or turning the screen brings the current section back into view; scrolling by hand does not move it', () => {
+  // Wide window: the row fits and nothing scrolls.
+  const w = watchedNav({ active: 4, width: 800 });
+  assert.equal(w.nav.scrollLeft, 0);
+  // The window narrows: same section, but the row now hides it.
+  w.nav.clientWidth = 390; w.nav.getBoundingClientRect = () => ({ left: 0, right: 390 });
+  w.windowListeners.get('resize')(); w.frames.shift()();
+  assert.equal(w.nav.scrollLeft, 430 - (390 - 32), 'the current section is revealed after the resize');
+  w.nav.scrollLeft = 0; w.watcher.fit();
+  assert.equal(w.nav.scrollLeft, 0, 'same section and size: the row stays where the person scrolled it');
+  w.watcher.destroy();
+});

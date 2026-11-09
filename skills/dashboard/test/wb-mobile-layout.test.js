@@ -131,3 +131,12 @@ test('stylesheet and page: on phones the terminal observer is one left-aligned c
   assert.ok(html.indexOf('class="observer-frame-shell"') < html.indexOf('class="wb-note wb-o-wide-hint"'), 'the hint sits right after the frame');
   assert.match(app, /\$\('#observer-size-toggle'\)\?\.addEventListener\('click'/);
 });
+
+test('stylesheet: on phones a group\'s name has the first row, and the actions are icons beside a labelled conversation button', () => {
+  assert.match(phone, /\.wb-group-head \.wb-d-top:has\(> \.wb-d-sub\) > \.wb-d-sub \{ display: flex; flex-wrap: wrap; grid-column: 1 \/ -1; grid-row: 2;/, 'state and actions form the second row');
+  assert.match(phone, /\.wb-group-head \.wb-d-title \{ display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal;/, 'a long name takes two lines instead of being cut');
+  assert.match(phone, /\.wb-group-head \.wb-d-acts > \.wb-act \{ flex: none; width: 40px; padding: 0; \}/);
+  assert.match(phone, /\.wb-group-head \.wb-d-acts \.wb-act-label \{ display: none; \}/, 'secondary actions show their icon; their name stays as aria-label');
+  // Wider touch screens (tablets) keep the labelled actions.
+  assert.match(css, /@media \(max-width: 900px\) \{[^@]*\.wb-act-label \{ display: inline; \}/);
+});

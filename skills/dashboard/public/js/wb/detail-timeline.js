@@ -1,6 +1,6 @@
 import { element, icon } from './plain-text.js?v=105';
 import { endReasonLabel, timeValue } from './event-labels.js?v=91';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=116';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=117';
 import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=108';
 
 export { timeValue };

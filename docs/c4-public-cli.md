@@ -39,6 +39,11 @@ Other independent commands:
 `--key-match` matches group keys only and is meant for occasional searches.
 `--active-since` takes Unix milliseconds, stops at the first older group, and returns
 `{groups, hasOlder}`; the other forms return an array.
+Each group's `preview` (the newest inbound message, or `null`) is
+`{timestamp, channel, endpoint, text, message}`: `text` is the model-facing projection
+of the whole message, and `message` is a one-line reader preview of what the person
+wrote (the `<current-message>` body without its sender prefix, an envelope's fallback
+text, at most 80 characters) or `null` when the message carries only channel wrapping.
 
 `group-queues` is a read-only snapshot of the groups that have pending or running
 inbound messages or a drain fence. It returns `{groups, globalFence}`, and each group has

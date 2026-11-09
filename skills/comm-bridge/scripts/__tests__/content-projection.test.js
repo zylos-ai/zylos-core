@@ -197,14 +197,47 @@ test('a preview is null for channel wrapping without a current message, and plai
   assert.equal(previewMessageText('  hello\n\nthere '), 'hello there');
   assert.equal(previewMessageText(''), null);
   assert.equal(previewMessageText(null), null);
+});
+
+test('a preview of structured content is its fallback text, never the model-facing references', () => {
   const valid = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: 'm1', fallbackText: 'Summary for the person',
     blocks: [{ id: 'b1', type: 'markdown', schemaVersion: 1, data: { text: 'Summary' } }] });
   assert.equal(parseC4Content(valid).kind, 'envelope');
-  assert.equal(previewMessageText(valid, { c4Id: 7 }), 'Summary for the person [C4 messageId=m1; c4_id=7]');
+  assert.equal(previewMessageText(valid), 'Summary for the person');
+  for (const fixture of fixtures.valid) assert.equal(previewMessageText(fixture.content), fixture.envelope.fallbackText.replace(/\s+/g, ' ').trim().slice(0, 80) || null, fixture.name);
+  // Invalid content shows its own fallback text when it has one, otherwise nothing (the reader shows channel and time).
+  const unknown = structuredClone(fixtures.valid.find(row => row.name === 'single').envelope);
+  unknown.blocks[0].type = 'unknown';
+  unknown.fallbackText = 'Form reply for the person';
+  assert.equal(parseC4Content(encode(unknown)).kind, 'invalid');
+  assert.equal(previewMessageText(encode(unknown)), 'Form reply for the person');
+  for (const content of [encode({}), CONTENT_PREFIX + 'not JSON', encode({ fallbackText: '' })]) assert.equal(previewMessageText(content), null);
+  for (const fixture of fixtures.invalid) assert.doesNotMatch(previewMessageText(fixture.content) ?? '', /\[C4 /, fixture.name);
+});
+
+test('a preview reads the older one-line channel formats', () => {
+  // "<sender> said: " before the opening tag, on the header line or alone.
+  assert.equal(previewMessageText('[TG DM] howard said: <current-message>\nbuild is green\n</current-message>'), 'build is green');
+  assert.equal(previewMessageText('howard said: <current-message>\nbuild is green\n</current-message>\n---- reply via: x'), 'build is green');
+  assert.equal(previewMessageText('[TG GROUP] (team) howard said: <current-message>build is green</current-message>'), 'build is green');
+  // Header and "<sender> said: " on one line with the words after them, no block.
+  assert.equal(previewMessageText('[TG DM] howard said: build is green\nsecond line'), 'build is green second line');
+  assert.equal(previewMessageText('[TG GROUP] (team) Howard Zhou said: ok'), 'ok');
+  // Ordinary text that merely mentions saying something is left alone.
+  assert.equal(previewMessageText('she said: ship it'), 'she said: ship it');
 });
 
 test('a long preview is cut at the code point limit and ends with an ellipsis', () => {
   assert.equal(previewMessageText('🚀'.repeat(80)), '🚀'.repeat(80));
   assert.equal(previewMessageText('🚀'.repeat(81)), '🚀'.repeat(79) + '…');
   assert.equal(previewMessageText('word '.repeat(10), { limit: 12 }), 'word word…');
+});
+
+test('a long preview keeps a word that ends exactly at the cut, and cuts a very long word instead of dropping it', () => {
+  // The character after the cut is a space: the last word is whole, nothing to back off.
+  assert.equal(previewMessageText('abcd efgh ijkl', { limit: 5 }), 'abcd…');
+  // The nearest space is more than 20 characters back: cut inside the word rather than lose most of the line.
+  assert.equal(previewMessageText('a ' + 'x'.repeat(40), { limit: 30 }), 'a ' + 'x'.repeat(27) + '…');
+  // Within 20 characters: end at the space.
+  assert.equal(previewMessageText('a '.repeat(3) + 'x'.repeat(40), { limit: 20 }), 'a a a…');
 });

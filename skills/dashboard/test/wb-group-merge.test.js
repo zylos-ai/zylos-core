@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeGroups } from '../src/lib/workbench/group-merge.js';
+import { mergeGroups, redactQuerySecrets, safePreview } from '../src/lib/workbench/group-merge.js';
 const live = (sessionGroup, presence = 'running') => ({ sessionGroup, presence });
 const status = { view: 'multi', origin: live('origin', 'not_running'), groups: [live('a')], groupListError: null };
 const group = sessionGroup => ({ sessionGroup, componentName: 'telegram', sessionGroupName: sessionGroup, lastActivityAt: 100 });
@@ -52,4 +52,12 @@ test('the preview shows what the person said, or nothing when the channel wrappi
   assert.equal(preview('b').text, null);
   assert.equal(preview('b').channel, 'openmax'); assert.equal(preview('b').timestamp, 20);
   assert.ok(!JSON.stringify(rows).includes(secret) && !JSON.stringify(rows).includes('OM-RUN'));
+});
+
+test('the preview drops credential values from links but keeps the link readable', () => {
+  const said = { preview: { message: 'open https://x.test/a?token=abc123&page=2 and https://y.test/b?id=1&api_key=K-9.z#top', timestamp: 1, channel: 'lark' } };
+  assert.equal(safePreview(said).text, 'open https://x.test/a?token=[REDACTED]&page=2 and https://y.test/b?id=1&api_key=[REDACTED]#top');
+  assert.equal(redactQuerySecrets('?access_token=t1;Signature=s2&X-Auth=a3&PASSWORD=p4'), '?access_token=[REDACTED];Signature=[REDACTED]&X-Auth=[REDACTED]&PASSWORD=[REDACTED]');
+  // Words that only look similar, and a key outside a query string, stay.
+  assert.equal(redactQuerySecrets('the token= field and monkey business ?page=2&keyboard=us'), 'the token= field and monkey business ?page=2&keyboard=us');
 });

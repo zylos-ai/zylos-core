@@ -81,6 +81,9 @@ function measure() {
     memoryPageTop: memoryPage && Math.round(memoryPage.top),
     kpiRows: [...new Set(kpi)].map(top => kpi.filter(value => value === top).length),
     title: box('.wb-d-top .wb-d-title'), state: box('.wb-d-top .wb-d-sub > :first-child'), actions: box('.wb-d-top .wb-d-acts'), icon: box('.wb-d-top > .wb-ch'),
+    // Button labels a person sees but that are cut short (ellipsis): none may be.
+    clippedLabels: [...document.querySelectorAll('.wb-d-top .wb-d-acts > button span')].filter(span => visible(span) && span.scrollWidth > span.clientWidth + 1).map(span => span.textContent).slice(0, 5),
+    titleClipped: (title => Boolean(title) && (title.scrollHeight > title.clientHeight + 1 || title.scrollWidth > title.clientWidth + 1))(document.querySelector('.wb-d-top .wb-d-title')),
     actionButtons: [...document.querySelectorAll('.wb-d-top .wb-d-acts > button')].map(button => { const b = visible(button); return b && { action: button.dataset.action ?? button.dataset.wbAction, top: b.top, bottom: b.bottom, left: b.left, right: b.right }; }).filter(Boolean),
   };
 }
@@ -252,15 +255,21 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await check('overview');
     await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
     await page.locator('.wb-d-top .wb-d-sub').waitFor();
-    const detail = await check('detail');
-    assert.ok(detail.state.top < detail.title.bottom && detail.state.left >= detail.title.right - 1, 'the state is on the name row, after the name');
-    assert.ok(detail.actions.top >= detail.title.bottom - 1, 'the actions are the second row');
-    assert.ok(Math.abs(detail.actions.left - detail.icon.left) <= 1, `the action row starts at the icon's edge (${detail.actions.left} vs ${detail.icon.left})`);
-    const buttons = detail.actionButtons;
-    assert.equal(buttons[0]?.action, 'viewConversation', 'opening the conversation leads the row');
-    assert.equal(new Set(buttons.map(button => Math.round(button.top))).size, 1, 'the actions stay on one row');
-    assert.equal(new Set(buttons.map(button => Math.round(button.bottom - button.top))).size, 1, 'the actions share one height');
-    assert.ok(buttons.at(-1).right <= detail.documentWidth, 'the action row fits the screen');
+    // The long-named group: its name has the first row (up to two lines) and is not cut; the state leads the
+    // second row from the icon's edge, then the actions, none of whose labels are cut.
+    const phoneHeader = (detail, language) => {
+      assert.equal(detail.titleClipped, false, `${language}: the whole name is shown`);
+      assert.ok(detail.state.top >= detail.title.bottom - 1, `${language}: the state is under the name`);
+      assert.ok(Math.abs(detail.state.left - detail.icon.left) <= 1, `${language}: the state starts at the icon's edge (${detail.state.left} vs ${detail.icon.left})`);
+      assert.ok(detail.actions.left >= detail.state.right - 1 || detail.actions.top >= detail.state.bottom - 1, `${language}: the actions follow the state, beside it or under it`);
+      const buttons = detail.actionButtons;
+      assert.equal(buttons[0]?.action, 'viewConversation', `${language}: opening the conversation leads the actions`);
+      assert.equal(new Set(buttons.map(button => Math.round(button.top))).size, 1, `${language}: the actions stay on one row`);
+      assert.equal(new Set(buttons.map(button => Math.round(button.bottom - button.top))).size, 1, `${language}: the actions share one height`);
+      assert.ok(buttons.at(-1).right <= detail.documentWidth, `${language}: the action row fits the screen`);
+      assert.deepEqual(detail.clippedLabels, [], `${language}: no button label is cut`);
+    };
+    phoneHeader(await check('detail'), 'Chinese');
 
     // From the group detail into this group's memory: the list of the group's files, not the file left open.
     await page.locator('.wb-detail-memory .wb-link-btn').click();
@@ -278,6 +287,14 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await page.locator('.wb-sched-kpi .wb-sched-kpi-item').first().waitFor();
     const sched = await check('schedule');
     assert.deepEqual(sched.kpiRows, [3, 3]);
+
+    // The same group header in English, whose labels are longer.
+    await page.evaluate(() => localStorage.setItem('zylos-dashboard-locale', 'en'));
+    await page.reload();
+    await page.locator('.tab[data-tab="overview"]').click();
+    await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
+    await page.locator('.wb-d-top .wb-d-sub').waitFor();
+    phoneHeader(await check('detail-english'), 'English');
     assert.deepEqual(errors, []);
     await context.close();
   });

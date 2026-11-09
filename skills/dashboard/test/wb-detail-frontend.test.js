@@ -1128,6 +1128,21 @@ test('the now card says what the state means instead of repeating the header sta
   assert.match(allNodes(root).find(node => node.classList.contains('wb-now-card')).textContent, /^wb\.state\.idle/);
 });
 
+test('an error or unknown state keeps its word in the now card, with the last message under it', () => {
+  const document = createDocument();
+  const preview = { text: 'please check the layout', channel: 'telegram', timestamp: 1000 };
+  for (const kind of ['error', 'unknown']) {
+    const root = document.createElement('div');
+    renderOverview(root, row('telegram:a', { state: { kind }, duration: 40, preview }), {}, { document, t });
+    const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
+    const title = allNodes(card).find(node => node.classList.contains('wb-now-title'));
+    assert.match(title.textContent, new RegExp('^wb\\.state\\.' + kind), kind + ': the state word leads the card');
+    assert.equal(title.classList.contains('wb-now-said'), false);
+    const sub = allNodes(card).find(node => node.classList.contains('wb-now-sub'));
+    assert.match(sub?.textContent ?? '', /wb\.board\.lastReceived \{"text":"please check the layout"\}/, kind + ': the last message follows');
+  }
+});
+
 test('a stopped session reads as a plain event, with its code only in technical detail', () => {
   assert.equal(eventLabel({ event_type: 'runtime_health:stop', category: 'runtime_health' }, 'plain', t), 'wb.event.runtime_health:stop');
   assert.equal(eventLabel({ event_type: 'runtime_health:stop', category: 'runtime_health' }, 'technical', t), 'runtime_health:stop');

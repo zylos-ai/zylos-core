@@ -21,28 +21,37 @@ export function projectC4Content(content, { c4Id } = {}) {
   return `${fallbackText}\n[C4 messageId=${messageId}${interrupt}; ${reference}]`;
 }
 
-// A channel wraps the person's words in a line-anchored <current-message> block, after its own routing
-// header and context tags, and starts them with "<sender> said: ".
-const CURRENT_MESSAGE = /(?:^|\n)<current-message>\n([\s\S]*?)\n<\/current-message>(?=\s|$)/;
+// A channel wraps the person's words in a <current-message> block, after its own routing header and context
+// tags, and starts them with "<sender> said: ". Older channels put "<sender> said: " before the opening tag on
+// the same line. The block must open a line (optionally after that prefix): a tag quoted mid-sentence is text.
+const CURRENT_MESSAGE = /(?:^|\n)(?:[^\n<]{1,200} said: )?<current-message>\n?([\s\S]*?)\n?<\/current-message>(?=\s|$)/;
 const SENDER = /^[^\n:]{1,80} said: /;
 // A first line made only of bracketed routing tags (with an optional "(org: …)") is a channel header.
 const CHANNEL_HEADER = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?$/;
+// Older channels put the header and "<sender> said: " on one line, followed by the words.
+const HEADER_SENDER = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?[^\n:[\]]{1,80} said: /;
 
 /**
- * What the person said in an inbound message, for a one-line preview: the <current-message> body without
- * its sender prefix, or the projected text of a message that carries no channel wrapping. Null when the
- * content is channel wrapping without a current message, so a reader shows the channel and time instead.
+ * What the person said in an inbound message, for a one-line preview, never the model-facing projection:
+ * the <current-message> body without its sender prefix; the words after an old one-line "header sender said:";
+ * a C4 envelope's fallback text; invalid content's own fallback text. Null when there is nothing a person
+ * wrote (channel wrapping only, invalid content without fallback text), so a reader shows channel and time.
  * Whitespace is collapsed; longer text is cut to `limit` code points ending in "…".
  */
-export function previewMessageText(content, { c4Id, limit = 80 } = {}) {
+export function previewMessageText(content, { limit = 80 } = {}) {
   if (typeof content !== 'string') return null;
-  const block = CURRENT_MESSAGE.exec(content);
+  const parsed = parseC4Content(content);
   let text;
-  if (block) text = block[1].replace(SENDER, '');
+  if (parsed.kind === 'envelope') text = parsed.envelope.fallbackText;
+  else if (parsed.kind !== 'text') text = parsed.fallbackText;
   else {
-    text = projectC4Content(content, { c4Id });
-    if (CHANNEL_HEADER.test(text.split('\n', 1)[0].trim())) return null;
+    const block = CURRENT_MESSAGE.exec(parsed.text);
+    if (block) text = block[1].replace(SENDER, '');
+    else if (HEADER_SENDER.test(parsed.text)) text = parsed.text.replace(HEADER_SENDER, '');
+    else if (CHANNEL_HEADER.test(parsed.text.split('\n', 1)[0].trim())) return null;
+    else text = parsed.text;
   }
+  if (typeof text !== 'string') return null;
   text = text.replace(/\s+/g, ' ').trim();
   if (!text) return null;
   const chars = [...text];

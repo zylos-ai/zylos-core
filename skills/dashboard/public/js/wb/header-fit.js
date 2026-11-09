@@ -36,14 +36,15 @@ export function revealTab(nav, tab, edge = 32) {
 
 export function watchHeader({ header, document = header?.ownerDocument, window = globalThis.window } = {}) {
   if (!header) return { fit: () => false, destroy() {} };
-  let frame = null, shown = null;
+  let frame = null, shown = null, shownSize = null;
   const nav = header.querySelector('.tab-bar');
   const fit = () => {
     const overflow = fitHeader(header, document.documentElement);
     if (nav) {
-      // Only a change of section moves the row, so a person scrolling it is not pulled back.
-      const current = currentTab(nav);
-      if (current !== shown) { shown = current; revealTab(nav, current); }
+      // A change of section, or of the row's size (window resized, phone turned, row moved), moves the row.
+      // Scrolling by hand changes neither, so a person scrolling it is not pulled back.
+      const current = currentTab(nav), size = `${nav.clientWidth}/${nav.scrollWidth}`;
+      if (current !== shown || size !== shownSize) { shown = current; shownSize = size; revealTab(nav, current); }
       fadeNav(nav);
     }
     return overflow;
@@ -53,7 +54,8 @@ export function watchHeader({ header, document = header?.ownerDocument, window =
     frame = window.requestAnimationFrame(() => { frame = null; fit(); });
   };
   // Labels change with locale, the machine name arrives late and the technical switch adds the observer tab.
-  // Changing section moves the tabs' `active` class (settings marks its panel active instead).
+  // Changing section moves the tabs' `active` class (settings marks its panel active instead). The row's own
+  // class is only its edge fades, which fitting sets itself, so that alone does not refit.
   const mutations = window.MutationObserver ? new window.MutationObserver(records => {
     if (records.some(record => record.attributeName !== 'class' || record.target !== nav)) schedule();
   }) : null;

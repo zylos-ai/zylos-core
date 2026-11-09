@@ -5,7 +5,6 @@ import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
 import { parseSessionGroup, dataError } from '../c4-session-group.js';
-import { previewMessageText } from '../c4-content-projection.js';
 
 function fixture(t) {
   const db = new Database(':memory:'); t.after(() => db.close()); guardDatabase(db, owner);
@@ -50,7 +49,7 @@ test('key search is case insensitive and ordered by latest head without matching
   assert.equal(rows[0].componentName, 'feishu');
 });
 
-test('default and legacy matching output remain byte compatible with the previous reader', t => {
+test('default and legacy matching output keep the previous reader\'s fields byte for byte and add only the preview message', t => {
   const { db: c, store } = fixture(t);
   const all = (db, sql, ...args) => db.prepare(sql).all(...args);
   const get = (db, sql, ...args) => db.prepare(sql).get(...args);
@@ -60,13 +59,13 @@ test('default and legacy matching output remain byte compatible with the previou
     return (() => {
       const result = [];
       for (const head of all(c, 'SELECT h.session_group,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id ORDER BY h.head_id DESC')) {
-        const preview = get(c, "SELECT id,timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
+        const preview = get(c, "SELECT timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
         const text = preview ? [...preview.content].slice(0, 80).join('') : null;
         if (match !== undefined && !head.session_group.toLowerCase().includes(match.toLowerCase()) && !(text ?? '').toLowerCase().includes(match.toLowerCase())) continue;
         const parsed = parseSessionGroup(head.session_group);
         const componentName = parsed && parsed.namespace !== 'origin' ? get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', parsed.namespace)?.component_name ?? null : null;
         const millis = value => Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
-        result.push({ sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text, message: previewMessageText(preview.content, { c4Id: preview.id }) } : null });
+        result.push({ sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text } : null });
         if (result.length === limit) break;
       }
       return result;
@@ -74,7 +73,10 @@ test('default and legacy matching output remain byte compatible with the previou
   }
 
   for (const options of [{}, { limit: 2 }, { match: 'preview' }, { match: 'LARK:OC_', limit: 1 }, { match: 'missing' }]) {
-    assert.equal(JSON.stringify(store.queries.listGroups(options)), JSON.stringify(legacyListGroups(options)));
+    const rows = store.queries.listGroups(options);
+    for (const row of rows) if (row.preview) assert.ok(Object.hasOwn(row.preview, 'message'), 'every preview carries the reader message');
+    const withoutMessage = rows.map(row => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => key !== 'message')) } : row);
+    assert.equal(JSON.stringify(withoutMessage), JSON.stringify(legacyListGroups(options)));
   }
 });
 

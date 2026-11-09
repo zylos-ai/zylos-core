@@ -245,3 +245,18 @@ test('an unnamed Dashboard conversation shows as an untitled conversation with i
   assert.equal(unnamedConversation(moved, t, { now: at + 60e3, locale: 'en-GB' }), sameDay, 'a new message does not rename it');
   assert.equal(unnamedConversation({ sessionGroup: id, c4: { componentName: 'dashboard', lastActivityAt: at } }, t), 'chat.unnamed', 'without a session time it is just untitled');
 });
+
+test('a last-received line without words names the channel, with the date when the message is not from today', async () => {
+  const { lastReceived } = await import('../public/js/wb/plain-text.js');
+  setInstanceZone('UTC');
+  try {
+    const t = (key, vars) => vars ? `${key} ${JSON.stringify(vars)}` : key;
+    const now = Date.UTC(2026, 10, 9, 18, 0);
+    const row = at => ({ preview: { text: null, channel: 'openmax', timestamp: at } });
+    const today = lastReceived(row(Date.UTC(2026, 10, 9, 8, 5)), t, { now, locale: 'en-US' });
+    const earlier = lastReceived(row(Date.UTC(2026, 10, 7, 8, 5)), t, { now, locale: 'en-US' });
+    assert.match(today, /^wb\.board\.lastReceivedAt \{"channel":"wb\.platform\.openmax","time":"08:05 AM"\}$/);
+    assert.match(earlier, /^wb\.board\.lastReceivedAt \{"channel":"wb\.platform\.openmax","time":"11\/7, 08:05 AM"\}$/);
+    assert.equal(lastReceived({ preview: { text: null, channel: 'openmax', timestamp: null } }, t), 'wb.board.lastReceivedFrom {"channel":"wb.platform.openmax"}');
+  } finally { setInstanceZone(undefined); }
+});

@@ -208,6 +208,17 @@ test('each engine choice carries its own sign-in state, and group lines with a c
   assert.deepEqual(lines, ['wb.settings.followers:{"count":3}', 'wb.settings.overrides:{"count":2}'], 'counts above zero keep their lines');
 });
 
+test('when the groups following the default cannot be listed, that line stays with an unknown count and a read note', () => {
+  const document = documentFixture(), root = document.createElement('div');
+  const unlisted = { ...snapshot(), overrides: null };
+  renderDefaults(root, { confirm: async () => true, snapshot: unlisted, page: { runtimeTotal: null, runtime: [] }, metadata: {}, document, t, read: async () => ({}), execute: async () => true });
+  const follower = root.querySelectorAll('.wb-gsum').find(line => line.textContent.startsWith('wb.settings.followers'));
+  assert.ok(follower, 'the follower line is rendered');
+  assert.equal(follower.textContent, 'wb.settings.followers:{"count":"wb.unknown"}');
+  assert.equal(follower.parentElement.hidden, false, 'an unknown count is not hidden like a zero');
+  assert.equal(follower.parentElement.querySelectorAll('.wb-note').length, 1, 'the read failure is said under it');
+});
+
 test('default engine keeps the sign-in gate and model and effort save together per engine', async () => {
   const document = documentFixture(), root = document.createElement('div'), calls = [];
   const meta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low'] } });

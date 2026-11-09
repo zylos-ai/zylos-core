@@ -485,11 +485,21 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-d-top:has(> .wb-d-sub) > :last-child { grid-column: 3; grid-row: 1; }
   .wb-d-top > .wb-d-sub { grid-column: 2 / -1; grid-row: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
   .wb-d-sub > .wb-d-acts { flex-wrap: wrap; gap: 6px; }
-  /* Phones: the actions share the full header width at the same height; opening the conversation is the wider one. */
-  .wb-group-head .wb-d-sub > .wb-d-acts { flex-wrap: nowrap; gap: 6px; min-width: 0; }
-  .wb-group-head .wb-d-acts > * { flex: 1 1 0; min-width: 0; height: 40px; padding: 0 6px; }
-  .wb-group-head .wb-d-acts > .wb-d-conv { flex-grow: 1.4; }
-  .wb-group-head .wb-d-acts :is(.wb-act-label, .wb-conv-label) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Phones: the group's name has the first row beside the close button and may take two lines. The second row
+     holds the state, the conversation button (the main action, with its label) and the other actions as 40px
+     icons, named for screen readers as on desktop, so no label is cut in either language. */
+  .wb-group-head .wb-d-top:has(> .wb-d-sub) { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .wb-group-head .wb-d-top:has(> .wb-d-sub) > :last-child { grid-column: 3; }
+  .wb-group-head .wb-d-top:has(> .wb-d-sub) > .wb-d-sub { display: flex; flex-wrap: wrap; grid-column: 1 / -1; grid-row: 2; align-items: center; gap: 6px; min-width: 0; }
+  .wb-group-head .wb-d-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
+  .wb-group-head .wb-d-sub > .wb-pill { flex: none; }
+  /* When the state and actions do not fit on one row (longer English labels), the actions move under the state whole. */
+  .wb-group-head .wb-d-sub > .wb-d-acts { flex: 1 1 auto; flex-wrap: nowrap; gap: 6px; min-width: 0; }
+  .wb-group-head .wb-d-acts > * { height: 40px; }
+  .wb-group-head .wb-d-acts > .wb-d-conv { flex: 1 1 auto; min-width: 0; padding: 0 10px; }
+  .wb-group-head .wb-d-acts > .wb-act { flex: none; width: 40px; padding: 0; }
+  .wb-group-head .wb-d-acts .wb-act-label { display: none; }
+  .wb-group-head .wb-d-acts .wb-conv-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wb-detail-meta .wb-mono { overflow-wrap: anywhere; }
 }
 
