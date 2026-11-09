@@ -103,13 +103,24 @@ fields plus explicit confirmation:
 ```
 
 The actor comes from the authenticated cookie. Successful completion returns
-`ok: true`, `pending: false`, `operationId`, `counts` and `countsEstimated`.
+`ok: true`, `pending: false`, `operationId`, `counts`, `countsEstimated`,
+`retainedMessages` and `groupDataRetained`. The retained count is the number of
+messages remaining when the final Core transaction completes, including later
+messages and input still pending/running. Group-wide data is retained whenever
+that count is positive. The audit stores this count, so a completed-operation
+retry returns the original result even after the conversation receives more
+messages. True drafts and groups with no remaining messages return `0` and
+`false`. CLI output and the Dashboard's localized completion notice explain
+that messages and conversation memory remain only when the count is positive.
 HTTP 202 with `pending: true` is unfinished: `draining` waits for current work,
 `usage_pending` waits for final import. Retry retains the same confirmation.
 A stale preview or ownership conflict returns 409. Errors preserve participant
 HTTP status through Core CLI JSON (for example missing conversation 404 or
 unavailable Dashboard storage 503). Single-session group admission returns
 `not_multi`; true drafts do not need a runtime stop.
+
+Bare namespace groups such as `telegram` can be deleted: fallback replies routed
+to that group belong to it. Origin remains protected.
 
 ## What is deleted and what is conservatively retained
 

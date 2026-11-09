@@ -175,6 +175,7 @@ test('Dashboard conversation deletes owned storage and recreates with an attachm
         cutoffId: preview.cutoffId, generationId: preview.generationId, targetKey: preview.targetKey });
       assert.equal(deleted.ok, true, JSON.stringify(deleted)); return deleted.pending === false;
     }, 'Real Dashboard bridge CLI must finish deleting', 20_000);
+    assert.equal(deleted.retainedMessages, 0); assert.equal(deleted.groupDataRetained, false);
     assertDeleted(f, files, operationId); assert.equal(fs.existsSync(uploadedFile), false); assert.equal(fs.existsSync(spillDir), false);
     assert.equal(count(f.dashboard.db, 'chat_attachment_messages', 'attachment_id', upload.id), 0);
     assert.equal(f.store.getGroupDeletionAudit(operationId).counts.attachments, 1);
@@ -214,6 +215,8 @@ test('external conversation deletes group storage and receives replies after rec
     const spillDir = path.join(f.root, 'comm-bridge/attachments', `conv-${first.id}`); assert.equal(fs.existsSync(spillDir), true);
     const deleted = await f.startDeleteChild({ operationId }).completion;
     assert.equal(deleted.code, 0, deleted.stdout + deleted.stderr); assert.equal(JSON.parse(deleted.stdout.trim()).pending, false);
+    assert.equal(JSON.parse(deleted.stdout.trim()).retainedMessages, 0);
+    assert.equal(JSON.parse(deleted.stdout.trim()).groupDataRetained, false);
     assertDeleted(f, files, operationId); assert.equal(fs.existsSync(spillDir), false);
     assert.equal(fs.existsSync(attachment), true, 'External original source is outside group-owned C4 storage');
     const cost = f.dashboard.aggregateCost({ sessionId: files.sid });

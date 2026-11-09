@@ -156,12 +156,12 @@ export function mountConversationPage({
     document,
     t
   });
-  let deletionEstimate = null;
+  let deletionResult = null;
   const deletion = createConversationDeletion({ request, confirm, t, identity,
     available: item => !destroyed && !page.hidden && local() && state.snapshot().canDelete &&
       state.snapshot().items.some(row => row.id === item.id),
     onChange: () => redraw(), onDeleted: (id, result) => {
-      deletionEstimate = result.countsEstimated === true ? { identity: typeof identity === 'function' ? identity() : identity } : null;
+      deletionResult = { ...result, identity: typeof identity === 'function' ? identity() : identity };
       return state.deleted(id);
     } });
   let uploadRedrawQueued = false;
@@ -1204,8 +1204,13 @@ export function mountConversationPage({
     more.disabled = !!s.loading;
     listNotice.hidden = !!s.items.length && !s.loading;
     text(listNotice, t(s.loading ? 'chat.loading' : s.tab === 'mine' ? 'chat.page.emptyMine' : 'chat.page.emptyExternal'));
-    deletionNotice.hidden = !local() || !deletionEstimate || deletionEstimate.identity !== (typeof identity === 'function' ? identity() : identity);
-    text(deletionNotice, deletionNotice.hidden ? '' : t('chat.delete.estimated'));
+    const completionText = [];
+    if (deletionResult?.retainedMessages > 0 && deletionResult.groupDataRetained === true) {
+      completionText.push(t('chat.delete.retained', { count: deletionResult.retainedMessages }));
+    }
+    if (deletionResult?.countsEstimated === true) completionText.push(t('chat.delete.estimated'));
+    deletionNotice.hidden = !local() || !completionText.length || deletionResult.identity !== (typeof identity === 'function' ? identity() : identity);
+    text(deletionNotice, deletionNotice.hidden ? '' : completionText.join(' '));
     accessNotice.hidden = s.mode !== 'single' || s.tab !== 'mine';
     text(accessText, t('chat.single'));
     const outcome = receiptState(s.receipt);
@@ -1371,7 +1376,7 @@ export function mountConversationPage({
     },
     close() {
       deletion.invalidate();
-      deletionEstimate = null;
+      deletionResult = null;
       groupSide?.close({ focus: false });
       page.hidden = true;
       state.close();

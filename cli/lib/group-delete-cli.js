@@ -41,7 +41,12 @@ export async function runGroupDeletionCli(args, { io = process, create = createG
     if (options.json) io.stdout.write(`${JSON.stringify(result)}\n`);
     else if (!result.ok) io.stderr.write(`Error [${result.error.code}]: ${result.error.message}\n`);
     else if (!options.yes) io.stdout.write(`Conversation: ${options.group ?? options['draft-local-id']}\nMessages: ${result.messages}; attachments: ${result.attachments}; files: ${result.files}.\nDeletion is irreversible. Only messages through this preview cutoff and data proven to belong to them are removed; later messages, uncertain data, main memory, usage and backups remain.\nConfirm with --yes --operation-id ${result.operationId} --cutoff-id ${result.cutoffId} --generation-id '${JSON.stringify(result.generationId)}' --target-key '${result.targetKey}'.\n`);
-    else io.stdout.write(result.pending ? `Deletion pending (${result.reason ?? 'retry'}); retry with --operation-id ${result.operationId}.\n` : `Deleted conversation. ${JSON.stringify(result.counts)}${result.countsEstimated ? ' Counts are estimates after an interrupted cleanup.' : ''}\n`);
+    else {
+      io.stdout.write(result.pending ? `Deletion pending (${result.reason ?? 'retry'}); retry with --operation-id ${result.operationId}.\n` : `Deleted conversation. ${JSON.stringify(result.counts)}${result.countsEstimated ? ' Counts are estimates after an interrupted cleanup.' : ''}\n`);
+      if (!result.pending && result.retainedMessages > 0 && result.groupDataRetained) {
+        io.stdout.write(`${result.retainedMessages} messages remain; conversation memory and group data have been retained.\n`);
+      }
+    }
     return result.ok ? 0 : 1;
   } catch (cause) {
     const result = { ok: false, error: { code: cause.code ?? 'GROUP_DELETE_FAILED', message: cause.message,

@@ -73,7 +73,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
     const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(pageText)?.[1];
-    assert.equal(appPath, 'js/app.js?v=134', 'the entry page invalidates the application module cache');
+    assert.equal(appPath, 'js/app.js?v=135', 'the entry page invalidates the application module cache');
     const cache = new Map();
     async function moduleAt(url) {
       if (cache.has(url)) return cache.get(url);
@@ -86,7 +86,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const appUrl = origin + prefix + '/_assets/' + appPath;
     let parentUrl = appUrl;
     const activeModules = new Map();
-    for (const [name, version] of [['conversation-page', 133], ['conversation-content', 109], ['chat-blocks', 107]]) {
+    for (const [name, version] of [['conversation-page', 134], ['conversation-content', 109], ['chat-blocks', 107]]) {
       const parent = await moduleAt(parentUrl);
       const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
       const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=${version}`));

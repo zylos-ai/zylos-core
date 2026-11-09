@@ -93,6 +93,7 @@ export const COLUMN_DEFINITIONS = {
     deleted_messages: { type: 'INTEGER', pk: false },
     deleted_attachments: { type: 'INTEGER', pk: false },
     deleted_files: { type: 'INTEGER', pk: false },
+    retained_messages: { type: 'INTEGER', pk: false },
     counts_estimated: { type: 'INTEGER', pk: false },
     cleanup_attempts: { type: 'INTEGER', pk: false }
   },

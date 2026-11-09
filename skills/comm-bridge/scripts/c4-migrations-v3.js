@@ -43,6 +43,7 @@ export function migrateToV3(db) {
       deleted_messages INTEGER NOT NULL DEFAULT 0,
       deleted_attachments INTEGER NOT NULL DEFAULT 0,
       deleted_files INTEGER NOT NULL DEFAULT 0,
+      retained_messages INTEGER NOT NULL DEFAULT 0 CHECK (retained_messages >= 0),
       counts_estimated INTEGER NOT NULL DEFAULT 0 CHECK (counts_estimated IN (0,1)),
       cleanup_attempts INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_attempts >= 0)
     );

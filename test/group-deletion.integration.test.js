@@ -39,6 +39,7 @@ test('a first deletion of an idle live conversation completes in one CLI call wi
       const receipt = JSON.parse(result.stdout.trim());
       assert.equal(receipt.pending, false, 'The first call must finish without asking for another deletion');
       assert.equal(receipt.countsEstimated, false);
+      assert.equal(receipt.retainedMessages, 0); assert.equal(receipt.groupDataRetained, false);
       assert.equal(receipt.counts.messages, 2); assert.ok(receipt.counts.files >= 1);
       assert.equal(f.runtimePresent(group), false);
       assert.equal(fs.existsSync(memory), false);
@@ -99,6 +100,7 @@ test('deletion survives a killed CLI and delivers fenced input into a recreated 
       const receipt = JSON.parse(result.stdout.trim());
       assert.equal(receipt.pending, false);
       assert.equal(receipt.countsEstimated, true);
+      assert.equal(receipt.retainedMessages, 1); assert.equal(receipt.groupDataRetained, true);
       assert.equal(f.store.getGroupDeletionAudit(operationId).status, 'done');
       assert.equal(f.store.getDrainFence(group), null);
       assert.equal(f.database.prepare('SELECT count(*) AS n FROM group_deletion_audit WHERE operation_id=?').get(operationId).n, 1);

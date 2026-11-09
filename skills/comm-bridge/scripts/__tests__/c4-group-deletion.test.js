@@ -65,6 +65,7 @@ test('finalization deletes terminal group data, releases capacity and retains qu
   const audit = s.finalizeGroupDeletion('telegram', { operationId: options.operationId,
     counts: { messages: 90, attachments: 3, files: 9 }, cleanup: () => ({ attachments: 0, files: 0 }) });
   assert.equal(audit.status, 'done'); assert.equal(audit.counts.messages, 2);
+  assert.equal(audit.retainedMessages, 1); assert.equal(audit.groupDataRetained, true);
   assert.equal(audit.counts.attachments, 0); assert.equal(audit.counts.files, 0); assert.equal(audit.countsEstimated, false);
   assert.equal(s.getDrainFence('telegram'), null);
   assert.equal(db.prepare("SELECT count(*) AS n FROM slot_occupancy WHERE session_group='telegram'").get().n, 1);
@@ -75,7 +76,8 @@ test('finalization deletes terminal group data, releases capacity and retains qu
   assert.equal(db.prepare("SELECT count(*) AS n FROM control_queue WHERE session_group='telegram'").get().n, 2);
   const recreated = s.insertConversation('out', 'telegram', 'room', 'new generation');
   assert.equal(s.beginGroupDeletion('telegram', options).status, 'done');
-  assert.equal(s.finalizeGroupDeletion('telegram', { operationId: options.operationId }).status, 'done');
+  const retried = s.finalizeGroupDeletion('telegram', { operationId: options.operationId });
+  assert.equal(retried.status, 'done'); assert.equal(retried.retainedMessages, 1); assert.equal(retried.groupDataRetained, true);
   assert.ok(db.prepare('SELECT 1 FROM conversations WHERE id=?').get(recreated.id));
 });
 
@@ -115,7 +117,8 @@ test('absent groups are fenced and delete endings never request automatic contin
   s.recordRunEnd('dashboard:empty', { runId: fence.runId, reason: 'delete', clearFence: true });
   assert.equal(s.listPendingContinuations().length, 0);
   assert.equal(s.getDrainFence('dashboard:empty').reason, 'delete');
-  s.finalizeGroupDeletion('dashboard:empty', { operationId: op.operationId });
+  const done = s.finalizeGroupDeletion('dashboard:empty', { operationId: op.operationId });
+  assert.equal(done.retainedMessages, 0); assert.equal(done.groupDataRetained, false);
   assert.equal(db.prepare('SELECT count(*) AS n FROM group_heads').get().n, 0);
 });
 
@@ -124,7 +127,8 @@ test('draft deletion shares the audit without inventing a group and refuses a ne
   const op = s.beginDraftDeletion('draft-id', options);
   assert.equal(op.sessionGroup, null); assert.equal(op.draftLocalId, 'draft-id');
   assert.equal(s.listDrainFences().length, 0);
-  assert.equal(s.finalizeDraftDeletion('draft-id', { operationId: op.operationId, cleanup: () => ({ files: 1 }) }).counts.files, 1);
+  const done = s.finalizeDraftDeletion('draft-id', { operationId: op.operationId, cleanup: () => ({ files: 1 }) });
+  assert.equal(done.counts.files, 1); assert.equal(done.retainedMessages, 0); assert.equal(done.groupDataRetained, false);
   const next = s.beginDraftDeletion('new-id', { ...options, operationId: 'next' });
   s.insertConversation('in', 'dashboard', 'new-id', 'new message', { groupName: 'new-id' });
   assert.throws(() => s.finalizeDraftDeletion('new-id', { operationId: next.operationId }), { code: 'DRAFT_BECAME_ACTIVE' });
@@ -138,7 +142,7 @@ test('migration chain reaches deletion schema from historical layouts with user 
     db.exec("CREATE TABLE local_notes(value TEXT); INSERT INTO local_notes VALUES('keep'); ALTER TABLE conversations ADD COLUMN local_tag TEXT");
     migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true });
     assert.equal(db.pragma('user_version', { simple: true }), 3);
-    assert.ok(db.prepare('PRAGMA table_info(group_deletion_audit)').all().some(row => row.name === 'cleanup_attempts'));
+    assert.ok(db.prepare('PRAGMA table_info(group_deletion_audit)').all().some(row => row.name === 'retained_messages'));
     assert.equal(db.prepare('SELECT value FROM local_notes').get().value, 'keep');
     assert.ok(db.prepare('PRAGMA table_info(conversations)').all().some(row => row.name === 'local_tag'));
     migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true }); assert.equal(db.pragma('user_version', { simple: true }), 3);
@@ -221,6 +225,11 @@ test('a reopened database resumes one audit and keeps fenced-era input for the n
   assert.equal(result.counts.attachments, 0); assert.equal(result.counts.files, 0); assert.equal(result.countsEstimated, true);
   assert.equal(next.db.prepare('SELECT count(*) AS n FROM group_deletion_audit').get().n, 1);
   assert.equal(next.store.claimConversation(later.id), true);
+  next.db.close();
+  const completed = fixture(t, new Database(file));
+  completed.store.insertConversation('out', 'telegram', 'room', 'new after completion');
+  const receipt = completed.store.finalizeGroupDeletion('telegram', { operationId: options.operationId });
+  assert.equal(receipt.retainedMessages, 1); assert.equal(receipt.groupDataRetained, true);
 });
 
 test('draft checks use the Dashboard registered namespace rather than a same-name channel', t => {

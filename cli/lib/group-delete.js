@@ -140,7 +140,8 @@ export function createGroupDeletion({
       audit.draftLocalId === target.draftLocalId || Boolean(dashboardNamespace &&
         audit.sessionGroup === `${dashboardNamespace}:${target.draftLocalId}`);
     if (!matches) throw error('DELETION_OWNERSHIP_MISMATCH', 'Deletion operation belongs to another conversation');
-    return audit.status === 'done' ? { ok: true, pending: false, operationId, counts: audit.counts, countsEstimated: audit.countsEstimated } : null;
+    return audit.status === 'done' ? { ok: true, pending: false, operationId, counts: audit.counts, countsEstimated: audit.countsEstimated,
+      retainedMessages: audit.retainedMessages, groupDataRetained: audit.groupDataRetained } : null;
   }
 
   function withCleanupAttempt(operationId, finalize) {
@@ -186,14 +187,16 @@ export function createGroupDeletion({
     if (!group) {
       const audit = store.beginDraftDeletion(resolved.localId, { operationId: operationId ?? uuid(), actor, cutoffId, generationId, targetKey,
         preview: { messages: 0, attachments: extra.attachments ?? 0, files: extra.files ?? 0 } });
-      if (audit.status === 'done') return { ok: true, pending: false, operationId: audit.operationId, counts: audit.counts, countsEstimated: audit.countsEstimated };
+      if (audit.status === 'done') return { ok: true, pending: false, operationId: audit.operationId, counts: audit.counts, countsEstimated: audit.countsEstimated,
+        retainedMessages: audit.retainedMessages, groupDataRetained: audit.groupDataRetained };
       const result = withCleanupAttempt(audit.operationId, onFilePhase => store.finalizeDraftDeletion(resolved.localId, { operationId: audit.operationId,
         cleanup: () => {
           const removed = participant.cleanup({ ...resolved, cutoffId, hasRetainedMessages: false, onFilePhase });
           onStage('files_removed', audit);
           return removed;
         } }));
-      return { ok: true, pending: false, operationId: result.operationId, counts: result.counts, countsEstimated: result.countsEstimated };
+      return { ok: true, pending: false, operationId: result.operationId, counts: result.counts, countsEstimated: result.countsEstimated,
+        retainedMessages: result.retainedMessages, groupDataRetained: result.groupDataRetained };
     }
 
     const existing = store.getActiveDeletion(group);
@@ -250,7 +253,8 @@ export function createGroupDeletion({
         if (outcome?.then) throw error('GROUP_DELETE_ASYNC_CLEANUP', 'Cleanup must finish inside its writer transaction');
         return { attachments: outcome?.attachments ?? 0, files: removed + (outcome?.files ?? 0) };
       } }));
-    return { ok: true, pending: false, operationId: audit.operationId, counts: audit.counts, countsEstimated: audit.countsEstimated };
+    return { ok: true, pending: false, operationId: audit.operationId, counts: audit.counts, countsEstimated: audit.countsEstimated,
+      retainedMessages: audit.retainedMessages, groupDataRetained: audit.groupDataRetained };
   }
 
   return { preview, delete: deleteConversation, close() {

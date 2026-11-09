@@ -15,6 +15,7 @@ function decode(row) {
     targetKey: row.target_key, cutoffId: row.cutoff_id, generationId: row.generation_id,
     startedAt: row.started_at, completedAt: row.completed_at, status: row.status, countsEstimated: Boolean(row.counts_estimated),
     preview: { messages: row.preview_messages, attachments: row.preview_attachments, files: row.preview_files },
+    retainedMessages: row.retained_messages, groupDataRetained: row.retained_messages > 0,
     counts: { messages: row.deleted_messages, attachments: row.deleted_attachments, files: row.deleted_files } };
 }
 
@@ -157,8 +158,8 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
       drained(c, sessionGroup);
       const removed = cleanupNow(cleanup, c), n = amounts({ ...counts, ...removed });
       const deleted = run(c, `DELETE FROM conversations WHERE session_group=? AND id<=? AND ${terminalMessage}`, sessionGroup, row.cutoff_id).changes;
-      const hasRetained = Boolean(get(c, 'SELECT 1 FROM conversations WHERE session_group=? LIMIT 1', sessionGroup));
-      if (!hasRetained) {
+      const retainedMessages = get(c, 'SELECT COUNT(*) AS n FROM conversations WHERE session_group=?', sessionGroup).n;
+      if (retainedMessages === 0) {
         for (const table of ['checkpoints','origin_sync_cursors','group_runtime_overrides','group_model_overrides','run_endings','slot_occupancy']) run(c, `DELETE FROM ${table} WHERE session_group=?`, sessionGroup);
         // Bound controls are for the stopped executor; unbound pending controls
         // remain eligible for the newly created group.
@@ -168,7 +169,7 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
       const head = get(c, 'SELECT MAX(id) AS id FROM conversations WHERE session_group=?', sessionGroup).id;
       if (head === null) run(c, 'DELETE FROM group_heads WHERE session_group=?', sessionGroup);
       else run(c, 'INSERT INTO group_heads(session_group,head_id) VALUES(?,?) ON CONFLICT(session_group) DO UPDATE SET head_id=excluded.head_id', sessionGroup, head);
-      run(c, "UPDATE group_deletion_audit SET status='done',completed_at=?,deleted_messages=?,deleted_attachments=?,deleted_files=?,counts_estimated=? WHERE operation_id=?", seconds(), deleted, n.attachments, n.files, Number(countsEstimated), operationId);
+      run(c, "UPDATE group_deletion_audit SET status='done',completed_at=?,deleted_messages=?,deleted_attachments=?,deleted_files=?,counts_estimated=?,retained_messages=? WHERE operation_id=?", seconds(), deleted, n.attachments, n.files, Number(countsEstimated), retainedMessages, operationId);
       run(c, "DELETE FROM drain_fences WHERE session_group=? AND reason='delete' AND operation_id=?", sessionGroup, operationId);
       return decode(audit(c, operationId));
     }),

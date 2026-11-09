@@ -976,6 +976,7 @@
   "chat.delete.pending": "Deletion is not finished. Click delete again to continue; no new confirmation is needed.",
   "chat.delete.stale": "This preview is out of date. Click delete again to preview and confirm the current conversation.",
   "chat.delete.error": "Could not finish deletion. Retry to continue the same operation.",
+  "chat.delete.retained": "{count} messages remain; conversation memory has been retained.",
   "chat.delete.estimated": "Conversation deleted. Counts are estimates after an interrupted cleanup.",
   "wb.usage.deletedConversations": "Deleted conversations no longer count toward message totals. Their token usage and costs are retained."
 }

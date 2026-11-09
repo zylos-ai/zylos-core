@@ -463,3 +463,40 @@ test('initial ready catchup releases the loading notice and both manual read but
   for (const action of ['refreshMessages', 'refreshStatus']) assert.equal(root.querySelector(`[data-action="${action}"]`).disabled, false);
   assert.equal(allNodes(root).some(node => node.dataset.conversationId === 'g:BB'), false);
 });
+
+
+for (const locale of ['en', 'zh']) for (const retainedMessages of [0, 2]) {
+  test(`completed deletion ${retainedMessages ? 'shows retained memory' : 'omits retention notice'} in ${locale}`, async t => {
+    const document = conversationDocument(), root = document.createElement('div');
+    const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+    const translate = (key, args = {}) => (translations[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(args[name]));
+    const result = { ok: true, pending: false, retainedMessages, groupDataRetained: retainedMessages > 0, countsEstimated: false };
+    let deleted = false, writes = 0, identity = 'local';
+    const page = mountConversationPage({ root, document, local: () => identity === 'local', identity: () => identity,
+      t: translate, confirm: async () => true, fetch: async (path, options = {}) => {
+        let body;
+        if (options.method === 'DELETE') { deleted = true; writes++; body = result; }
+        else body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+          : path.endsWith('/deletion') ? { ok: true, operationId: 'retention-operation', cutoffId: 4,
+            generationId: null, targetKey: JSON.stringify(['group', 'dashboard:retention']), messages: 4, attachments: 0 }
+          : path.startsWith('/api/chat/conversations?') ? { items: deleted ? [] : [{ id: 'g:AA', sessionGroup: 'dashboard:retention' }],
+            nextCursor: null, deletionAllowed: true }
+          : { items: [], nextCursor: null };
+        return { ok: true, status: 200, json: async () => body };
+      } });
+    t.after(() => page.destroy());
+    await page.open();
+    root.querySelector('.conversation-delete').dispatch('click');
+    await tick(); await tick();
+    assert.equal(writes, 1, 'the mounted page performed the confirmed delete');
+    const notice = root.querySelector('.conversation-deletion-notice');
+    assert.equal(notice.hidden, retainedMessages === 0);
+    assert.equal(notice.textContent, retainedMessages ? translate('chat.delete.retained', { count: retainedMessages }) : '');
+    if (retainedMessages) {
+      identity = 'remote';
+      await page.open();
+      assert.equal(notice.hidden, true, 'a completion from another instance is not shown');
+      assert.equal(notice.textContent, '');
+    }
+  });
+}

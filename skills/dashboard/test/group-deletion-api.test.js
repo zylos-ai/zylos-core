@@ -185,3 +185,21 @@ test('Core storage errors preserve their HTTP status through the bridge response
     assert.equal(res.status, status);
   }
 });
+
+
+test('completed Core retention fields pass through the child bridge and DELETE response unchanged', async t => {
+  const f = fixture(t);
+  for (const retainedMessages of [0, 3]) {
+    const receipt = { ok: true, pending: false, operationId: 'completed-operation', retainedMessages,
+      groupDataRetained: retainedMessages > 0, counts: { messages: 4, attachments: 0, files: 0 } };
+    const bridge = createGroupDeletionBridge({ zylosDir: f.config.zylosDir,
+      loadCoreModule: async () => ({ groupDeletionCliPath: '/core/group-delete-cli.js' }),
+      execute: async () => ({ stdout: JSON.stringify(receipt) }) });
+    const handler = createGroupDeletionRoutes({ ...f, core: bridge });
+    const response = await call(handler, '/api/workbench/groups/dashboard%3Aexample', {
+      method: 'DELETE', body: { confirmed: true, operationId: 'completed-operation', ...boundary },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, receipt);
+  }
+});

@@ -14,7 +14,7 @@ const origin = { id: groupId('origin'), sessionGroup: 'origin', channel: 'origin
 const external = { id: groupId('telegram:sample'), sessionGroup: 'telegram:sample', channel: 'telegram', displayName: 'Telegram product chat', stamp: 2461352 };
 
 async function startPage(sandbox) {
-  const writes = [], state = { pending: false, stale: false, removed: new Set(), deletionAllowed: true };
+  const writes = [], state = { pending: false, stale: false, removed: new Set(), deletionAllowed: true, retainedMessages: 2, countsEstimated: true };
   const server = http.createServer(async (req, res) => {
     try {
       const full = new URL(req.url, 'http://fixture');
@@ -38,7 +38,9 @@ async function startPage(sandbox) {
         else if (state.pending) sendJson(res, 202, { ok: true, pending: true, operationId: body.operationId });
         else {
           state.removed.add(route.includes('/drafts/') ? draft.id : active.id);
-          sendJson(res, 200, { ok: true, operationId: body.operationId, countsEstimated: true, counts: { messages: 8, attachments: 2, files: 3 } });
+          sendJson(res, 200, { ok: true, operationId: body.operationId, countsEstimated: state.countsEstimated,
+            retainedMessages: state.retainedMessages, groupDataRetained: state.retainedMessages > 0,
+            counts: { messages: 8, attachments: 2, files: 3 } });
         }
         return;
       }
@@ -82,6 +84,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
   const metrics = [];
   for (const locale of ['zh', 'en']) for (const width of [1280, 390]) {
     api.state.removed.clear(); api.state.pending = false; api.state.stale = false; api.state.deletionAllowed = true;
+    api.state.retainedMessages = 2; api.state.countsEstimated = true;
     const context = await browser.newContext({ viewport: { width, height: 844 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US',
       ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
     sandbox.addCleanup(() => context.close());
@@ -135,11 +138,25 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     await estimate.waitFor();
     assert.match(await estimate.innerText(), locale === 'zh' ? /估计值/ : /estimates/);
     await shot('estimated');
+    const retainedText = locale === 'zh' ? '还有 2 条消息被保留，对话记忆已保留。' : '2 messages remain; conversation memory has been retained.';
+    assert.ok((await estimate.innerText()).includes(retainedText));
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+    await shot('retained');
+    api.state.retainedMessages = 0; api.state.countsEstimated = false;
+    await page.locator('.conversation-delete:visible').first().click();
+    await dialog.waitFor(); await dialog.locator('button').last().click();
+    await page.waitForFunction(id => !document.querySelector(`[data-conversation-id="${id}"]`), draft.id);
+    const completion = page.locator('.conversation-deletion-notice');
+    assert.equal(await completion.isVisible(), false, 'zero retained messages and exact counts need no completion warning');
+    assert.equal(await completion.innerText(), '');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+    await shot('no-retained');
     await page.locator('[data-action="external"]').click();
     await page.locator('.conversation-list-item').filter({ hasText: 'Origin' }).waitFor();
     const originRow = page.locator('.conversation-list-row').filter({ hasText: 'Origin' });
     assert.equal(await originRow.locator('.conversation-delete').isVisible(), false);
     assert.equal(await page.locator('.conversation-delete:visible').count(), 1); await shot('external');
+    api.state.removed.clear();
     await page.goto(api.base + '/fleet/reader/chat');
     await page.locator('.conversation-list-item').first().waitFor();
     assert.equal(await page.locator('.conversation-delete:visible').count(), 0); await shot('remote');
@@ -158,5 +175,5 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.deepEqual(errors, []); await context.close();
   }
   if (evidence) fs.writeFileSync(path.join(evidence, 'layout.json'), JSON.stringify(metrics, null, 2));
-  console.info('Deletion browser verified', JSON.stringify({ screenshots: evidence ? 36 : 0, pairs: 4, writes: api.writes.length }));
+  console.info('Deletion browser verified', JSON.stringify({ screenshots: evidence ? 44 : 0, pairs: 4, writes: api.writes.length }));
 }

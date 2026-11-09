@@ -976,6 +976,7 @@
   "chat.delete.pending": "删除还没完成，再点一次删除继续，无需再次确认。",
   "chat.delete.stale": "预览已过期。请再次点击删除，重新预览并确认当前对话。",
   "chat.delete.error": "删除尚未完成，请重试以继续同一次操作。",
+  "chat.delete.retained": "还有 {count} 条消息被保留，对话记忆已保留。",
   "chat.delete.estimated": "对话已删除；此前清理中断，删除数量为估计值。",
   "wb.usage.deletedConversations": "删除的对话不再计入消息数，token 用量与费用仍会保留。"
 }

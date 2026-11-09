@@ -72,6 +72,7 @@ test('deletion keeps pending input and its head while removing only the owned co
   fs.mkdirSync(memory, { recursive: true }); fs.writeFileSync(path.join(memory, 'state.md'), 'group memory');
   const result = await f.service.delete(group, { confirmed: true, actor: 'owner', operationId: 'confirmed-one' });
   assert.equal(result.pending, false); assert.equal(result.counts.messages, 2);
+  assert.equal(result.retainedMessages, 1); assert.equal(result.groupDataRetained, true);
   assert.equal(result.counts.attachments, 2); assert.equal(result.counts.files, 2);
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM conversations WHERE session_group=?').get(group).n, 1);
   assert.equal(f.db.prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(group).head_id, 3);
@@ -84,6 +85,7 @@ test('deletion keeps pending input and its head while removing only the owned co
   f.insert(5, group, 'in', 'delivered');
   const again = await f.service.delete(group, { confirmed: true, actor: 'owner', operationId: 'confirmed-one' });
   assert.equal(again.pending, false); assert.equal(f.db.prepare('SELECT 1 FROM conversations WHERE id=5').get() !== undefined, true);
+  assert.equal(again.retainedMessages, 1); assert.equal(again.groupDataRetained, true);
   assert.equal(f.cleanups(), 1);
 });
 
@@ -134,6 +136,7 @@ test('Core deletion does not need an installed Dashboard when no Dashboard datab
   const f = fixture(t, { noDashboard: true }), group = 'telegram:one'; f.insert(1, group, 'out', 'delivered');
   const result = await f.service.delete(group, { confirmed: true, actor: 'owner', operationId: 'core-only' });
   assert.equal(result.pending, false); assert.equal(result.counts.messages, 1);
+  assert.equal(result.retainedMessages, 0); assert.equal(result.groupDataRetained, false);
 });
 
 test('CLI preview never mutates and confirmed CLI calls the same Core deletion function', async t => {
@@ -146,6 +149,7 @@ test('CLI preview never mutates and confirmed CLI calls the same Core deletion f
   output = '';
   assert.equal(await runGroupDeletionCli(['--group', group, '--yes', '--json', '--actor', 'owner', '--operation-id', preview.operationId, '--cutoff-id', String(preview.cutoffId), '--generation-id', JSON.stringify(preview.generationId), '--target-key', preview.targetKey], { io, create: () => f.service }), 0);
   assert.equal(JSON.parse(output).pending, false); assert.equal(errors, '');
+  assert.equal(JSON.parse(output).retainedMessages, 0); assert.equal(JSON.parse(output).groupDataRetained, false);
 });
 
 test('CLI JSON preserves participant HTTP error status for the Dashboard bridge', async () => {
@@ -357,6 +361,7 @@ test('confirmed cutoffs preserve later delivered messages and reject another pre
   const later = f.db.prepare('SELECT * FROM conversations WHERE id=2').get();
   const result = await f.rawDelete(group, { ...first, confirmed: true, actor: 'owner' });
   assert.equal(result.counts.messages, 1);
+  assert.equal(result.retainedMessages, 1); assert.equal(result.groupDataRetained, true);
   assert.deepEqual(f.db.prepare('SELECT * FROM conversations WHERE id=2').get(), later);
   assert.equal(fs.readFileSync(path.join(memory, 'state.md'), 'utf8'), 'keep later context');
   assert.equal(fs.readFileSync(path.join(overflow, 'message.txt'), 'utf8'), 'later overflow');
@@ -452,4 +457,19 @@ test('preview counts pending messages through its cutoff that finish before conf
   const result = await f.rawDelete(group, { ...preview, confirmed: true, actor: 'owner' });
   assert.equal(result.counts.messages, 2);
   assert.equal(f.store.getGroupDeletionAudit(preview.operationId).preview.messages, 2);
+});
+
+
+test('CLI completion prints retained data only when messages remain', async t => {
+  for (const pending of [false, true]) {
+    const f = fixture(t), group = 'telegram:notice';
+    f.insert(1, group, 'in', 'delivered');
+    if (pending) f.insert(2, group, 'in', 'pending');
+    let output = '', errors = '';
+    const code = await runGroupDeletionCli(['--group', group, '--yes'], { create: () => f.service,
+      io: { stdout: { write: text => { output += text; } }, stderr: { write: text => { errors += text; } } } });
+    assert.equal(code, 0); assert.equal(errors, ''); assert.match(output, /Deleted conversation/);
+    if (pending) assert.match(output, /\n1 messages remain; conversation memory and group data have been retained\.\n/);
+    else assert.doesNotMatch(output, /messages remain|have been retained/);
+  }
 });
