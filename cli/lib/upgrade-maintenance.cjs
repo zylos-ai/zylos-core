@@ -641,7 +641,11 @@ const KNOWN_WRITERS = /\/(?:c4-(?:send|db|control|enqueue|queue)|scheduler|datab
 // A known one-shot writer belongs to this install when its command line names
 // the journal paths, or when an absolute writer script path resolves under
 // them (the writer was launched through a symlinked HOME or ZYLOS_DIR).
-// Relative script paths are only recognized through the journal paths.
+// Relative script paths are only recognized through the journal paths. A
+// writer launched through a symlinked path that contains spaces is not
+// recognized, because the command line is split on whitespace; when the real
+// install path contains spaces, the writer is still matched through the
+// journal paths.
 function installWriter(j, args) {
   if (!KNOWN_WRITERS.test(args)) return false;
   if (args.includes(j.skillsDir) || args.includes(j.zylosDir)) return true;
@@ -660,10 +664,12 @@ function services(j) {
     roots.push(fs.realpathSync(j.skillsDir));
   } catch {}
   // PM2 keeps the script path it was launched with, which may go through a
-  // symlinked HOME or ZYLOS_DIR while the journal records the real path.
+  // symlinked HOME or ZYLOS_DIR while the journal records the real path. Only
+  // absolute paths are resolved: a missing or relative path would otherwise
+  // resolve against the current directory of the upgrade command.
   return list.filter(p => {
     const script = String(p.pm2_env?.pm_exec_path || '');
-    return underRoot(script, roots) || underRoot(realOrRaw(script), roots);
+    return underRoot(script, roots) || (path.isAbsolute(script) && underRoot(realOrRaw(script), roots));
   }).map(p => ({
     name: p.name,
     status: p.pm2_env?.status,

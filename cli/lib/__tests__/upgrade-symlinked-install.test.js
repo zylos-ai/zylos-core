@@ -84,12 +84,35 @@ test('an install without symlinks keeps matching only services under the journal
   fs.mkdirSync(outside);
   fs.writeFileSync(path.join(outside, 'service.js'), '');
   fs.symlinkSync(outside, path.join(f.root, 'outside-link'));
+  const sibling = path.join(f.env.ZYLOS_DIR, '.claude', 'skills-other', 'service.js');
+  fs.mkdirSync(path.dirname(sibling), {recursive:true});
+  fs.writeFileSync(sibling, '');
+  // The upgrade command may run from inside a skill directory, where a missing
+  // or relative script path would resolve under the install.
+  const cwd = process.cwd();
+  process.chdir(path.dirname(f.scripts.scheduler));
+  t.after(() => process.chdir(cwd));
   f.records([...online(f, name => f.scripts[name]),
     {name:'unrelated', pid:124, pm2_env:{status:'online', pm_exec_path:path.join(outside, 'service.js')}},
     {name:'unrelated-link', pid:125, pm2_env:{status:'online', pm_exec_path:path.join(f.root, 'outside-link', 'service.js')}},
-    {name:'missing-path', pid:126, pm2_env:{status:'online'}}]);
+    {name:'missing-path', pid:126, pm2_env:{status:'online'}},
+    {name:'relative-path', pid:127, pm2_env:{status:'online', pm_exec_path:'service.js'}},
+    {name:'sibling-directory', pid:128, pm2_env:{status:'online', pm_exec_path:sibling}}]);
   assert.deepEqual(m.services(f.j).map(service => [service.name, service.script]),
     [['scheduler', f.scripts.scheduler], ['custom-service', f.scripts['custom-service']]]);
+});
+
+test('services() keeps a service whose skill directory links outside the install root', t => {
+  const f = serviceRestartFixture(t);
+  const checkout = path.join(f.root, 'development-checkout');
+  fs.mkdirSync(checkout);
+  fs.writeFileSync(path.join(checkout, 'service.js'), '');
+  fs.symlinkSync(checkout, path.join(f.skillsDir, 'linked-skill'));
+  const script = path.join(f.skillsDir, 'linked-skill', 'service.js');
+  assert.ok(!fs.realpathSync(script).startsWith(f.skillsDir + path.sep));
+  f.records([...online(f, name => f.scripts[name]), {name:'linked-skill', pid:124, pm2_env:{status:'online', pm_exec_path:script}}]);
+  assert.deepEqual(m.services(f.j).map(service => [service.name, service.script]),
+    [['scheduler', f.scripts.scheduler], ['custom-service', f.scripts['custom-service']], ['linked-skill', script]]);
 });
 
 test('an install without symlinks still waits for a writer launched through the journal path', {skip:process.platform !== 'linux'}, async t => {
@@ -97,6 +120,15 @@ test('an install without symlinks still waits for a writer launched through the 
   const writer = await startWriter(t, f, path.join(f.skillsDir, 'comm-bridge', 'scripts', 'c4-send.js'));
   m.stopObserved(f.j);
   assert.equal(fs.existsSync(writer.done), true);
+});
+
+test('a writer launched through a journal install path that contains spaces is still waited for', {skip:process.platform !== 'linux'}, async t => {
+  const f = serviceRestartFixture(t);
+  const zylosDir = path.join(f.root, 'zylos home');
+  const spaced = {root:f.root, skillsDir:path.join(zylosDir, '.claude', 'skills')};
+  const writer = await startWriter(t, spaced, path.join(spaced.skillsDir, 'comm-bridge', 'scripts', 'c4-send.js'));
+  m.stopObserved({...f.j, zylosDir, skillsDir:spaced.skillsDir});
+  assert.equal(fs.existsSync(writer.done), true, 'stop returned while the writer under the spaced install path was still running');
 });
 
 test('a known writer from another install is not waited for', {skip:process.platform !== 'linux'}, async t => {
