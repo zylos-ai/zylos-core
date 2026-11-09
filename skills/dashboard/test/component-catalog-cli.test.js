@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createCatalogArtifacts } from '../../comm-bridge/scripts/c4-component-catalog.js';
 import { runComponents } from '../scripts/components.js';
+import { evaluateBeforeSend } from '../scripts/send-hook.js';
 import { CONTENT_PREFIX, COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, MODEL_INSTRUCTIONS,
   parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 
@@ -180,4 +181,33 @@ test('installed component CLI validates stdin and files with matching exit codes
   const missing = run([path.join(dir, 'absent.txt')]);
   assert.equal(missing.status, 1);
   assert.equal(missing.stderr, 'Cannot read the content to validate.\n');
+});
+
+test('component CLI validation accepts exactly what the Dashboard send check accepts', () => {
+  const fixtures = JSON.parse(fs.readFileSync(new URL('../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
+  const wire = content => {
+    const input = structuredClone(fixtures.hookInputs.find(row => row.name === 'valid_input').value);
+    input.request.content = content;
+    return input;
+  };
+  const choice = () => structuredClone(COMPONENT_DEFINITIONS.find(item => item.key === 'choice@1').example);
+  const repeatedOption = choice();
+  repeatedOption.blocks[0].data.options[1].id = repeatedOption.blocks[0].data.options[0].id;
+  const pendingInView = choice();
+  pendingInView.blocks.push({ id: 'later', type: 'markdown', schemaVersion: 1, status: 'pending', fallbackText: 'Loading' });
+  pendingInView.metadata = { view: { schemaVersion: 1, root: 'root', nodes: [{ id: 'root', type: 'block', blockId: 'later' }] } };
+  const texts = [...fixtures.valid.map(item => item.content), ...fixtures.invalid.map(item => item.content),
+    ...COMPONENT_DEFINITIONS.map(item => CONTENT_PREFIX + JSON.stringify(item.example)),
+    CONTENT_PREFIX + JSON.stringify(repeatedOption), CONTENT_PREFIX + JSON.stringify(pendingInView)];
+  let rejected = 0;
+  for (const text of texts.filter(item => item.startsWith(CONTENT_PREFIX))) {
+    const sent = evaluateBeforeSend(wire(text));
+    const checked = call(['validate'], undefined, text);
+    assert.equal(checked.exit === 0, sent.decision === 'continue', text.slice(0, 120));
+    if (sent.decision === 'continue') continue;
+    rejected++;
+    assert.ok(sent.message === 'Invalid Dashboard structured content: ' + checked.error.trimEnd()
+      || sent.message === 'Invalid Dashboard view: ' + JSON.parse(call(['validate', '--json'], undefined, text).output).error.code, sent.message);
+  }
+  assert.equal(rejected, fixtures.invalid.filter(item => item.content.startsWith(CONTENT_PREFIX)).length + 2);
 });
