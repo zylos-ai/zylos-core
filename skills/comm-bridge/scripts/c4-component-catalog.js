@@ -43,14 +43,14 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "markdown_message",
-      "fallbackText": "可读消息",
+      "fallbackText": "部署已完成：3 个服务都在运行，没有报错。",
       "blocks": [
         {
           "id": "text",
           "type": "markdown",
           "schemaVersion": 1,
           "data": {
-            "text": "A readable message."
+            "text": "部署已完成：**3 个服务**都在运行，没有报错。"
           }
         }
       ]
@@ -67,7 +67,7 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "chart_message",
-      "fallbackText": "可读消息",
+      "fallbackText": "近两天用量：11-01 为 1，11-02 暂无数据。",
       "blocks": [
         {
           "id": "chart",
@@ -108,7 +108,7 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "breakdown_message",
-      "fallbackText": "可读消息",
+      "fallbackText": "构成：甲 2（40%），乙 3（60%），共 5。",
       "blocks": [
         {
           "id": "parts",
@@ -135,7 +135,7 @@ export const COMPONENT_CATALOG = [
   },
   {
     "type": "category_series",
-    "useWhen": "Use to compare two to twenty-four categories with known values, such as PR counts by status. Include one or two sentences explaining the takeaway; do not send only a chart or invent values.",
+    "useWhen": "Use to compare one to twenty-four categories with known values, such as PR counts by status. Include one or two sentences explaining the takeaway; do not send only a chart or invent values.",
     "schemaVersion": 1,
     "dataSchema": "categorySeriesData",
     "interactive": false,
@@ -144,7 +144,7 @@ export const COMPONENT_CATALOG = [
       "version": 1,
       "kind": "message",
       "messageId": "category_message",
-      "fallbackText": "可读消息",
+      "fallbackText": "分类对比：甲为 0，乙暂无数据。",
       "blocks": [
         {
           "id": "categories",
@@ -426,7 +426,8 @@ export function createCatalogArtifacts({ implementedKeys = CORE_COMPONENT_KEYS }
   const instructions = [
     'C4 version 1; ChatWeave protocol 0.1. Use only the components listed below.',
     'Send the complete example envelope with the exact [C4-JSON] marker followed by a newline.',
-    'Replace example values while preserving field constraints. Every non-markdown block needs fallbackText.',
+    'Replace example values while preserving field constraints. Every non-markdown block needs fallbackText. Write fallbackText as the real message in plain words, not a placeholder: it is what channels without a renderer show.',
+    'A stored C4 message is never updated in place: a block with status pending stays pending, so send a complete block in a later message instead. Omit action.expiresAt: the host neither displays nor enforces it, and a late answer to an open question is still accepted.',
     'Interactive messages need the matching interrupt and summary. questionSummary must equal makeQuestionSummary(envelope): use the interrupted block\'s first nonempty string from fallbackText, data.prompt, data.title, data.purpose, then the envelope fallbackText; collapse whitespace to single spaces, trim, and keep the first 500 Unicode characters. Actions are checked against the stored question.',
     'Parameter references resolve against BLOCK_SCHEMA.$defs or ACTION_SCHEMA.$defs in the same schema module.',
     ...registered.map(component => `${component.key}: ${component.description}\nWhen to use: ${component.useWhen}\nParameters: ${JSON.stringify(component.parameters)}`),

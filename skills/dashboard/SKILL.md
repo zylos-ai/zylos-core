@@ -255,6 +255,32 @@ wrapper. No command sends a message or contacts another instance. This static
 list describes the installed Core, not the version of a remote fleet browser.
 Unimplemented or unknown component keys fail instead of offering examples.
 
+Write each envelope and block `fallbackText` as the real message in plain
+words; channels without a renderer show only that text. A stored C4 message is
+never updated in place: a block sent with `status: "pending"` stays pending, so
+send the complete block in a later message. Omit `action.expiresAt`; the host
+neither displays nor enforces it, and a late answer to an open question is
+still accepted.
+
+#### Arranging blocks with `metadata.view`
+
+A message may add `metadata.view` to arrange its own blocks, for example two
+charts side by side under a short summary. View only places blocks that the
+message already contains; it adds no text, styling, links or actions. Node
+types are `stack` (`children`, optional `gap`), `columns` (`children`;
+`layout: "balanced"` takes 2–4 children, `"sidebar"` exactly 2), `section`
+(`header`/`body`/`actions` ID arrays) and `block` (`blockId` of one complete
+block in the same message). Every node must be reachable from `root`, each
+block may be placed at most once, and blocks you leave out are shown after the
+layout in their original order. Use View only on `kind: "message"`. Dashboard
+rejects an invalid View before sending, so fix the layout rather than resending
+unchanged; the full rules are in the C4 content protocol's "Host View" section.
+
+```text
+[C4-JSON]
+{"version":1,"kind":"message","messageId":"pr_status_overview","fallbackText":"本周 PR 概况：共 5 个，已合并 3 个、待评审 2 个；仓库 core 3 个、docs 2 个。","blocks":[{"id":"summary","type":"markdown","schemaVersion":1,"data":{"text":"本周共 **5 个 PR**，已合并 3 个，待评审 2 个。"}},{"id":"by_status","type":"breakdown","schemaVersion":1,"data":{"title":"按状态","parts":[{"key":"merged","label":"已合并","value":3},{"key":"in_review","label":"待评审","value":2}]},"fallbackText":"按状态：已合并 3，待评审 2"},{"id":"by_repo","type":"category_series","schemaVersion":1,"data":{"title":"按仓库","points":[{"key":"core","label":"core","value":3},{"key":"docs","label":"docs","value":2}]},"fallbackText":"按仓库：core 3，docs 2"}],"metadata":{"view":{"schemaVersion":1,"root":"page","nodes":[{"id":"page","type":"stack","children":["intro","charts"]},{"id":"intro","type":"block","blockId":"summary"},{"id":"charts","type":"columns","layout":"balanced","children":["status_chart","repo_chart"]},{"id":"status_chart","type":"block","blockId":"by_status"},{"id":"repo_chart","type":"block","blockId":"by_repo"}]}}}
+```
+
 ### Questions, answers and delivery recovery
 
 `GET /api/chat/conversations/:id/questions?limit=50&cursor=…` returns a bounded
