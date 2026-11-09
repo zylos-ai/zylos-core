@@ -138,7 +138,7 @@ test('a stale ready observation cannot restore deleted occupancy and block queue
   await start(f);
   assert.equal(f.row(old.id).status, 'delivered');
   const targetKey = JSON.stringify(['group', 'a']);
-  f.db.beginGroupDeletion('a', { ...f.db.getDeletionPreviewBoundary(targetKey), targetKey, operationId: 'delete-a', runId: 'deleted-run', actor: 'password:owner', preview: {} });
+  f.db.beginGroupDeletion('a', { ...f.db.getDeletionPreviewBoundary(targetKey), operationId: 'delete-a', runId: 'deleted-run', actor: 'password:owner', preview: {} });
   f.db.recordRunEnd('a', { runId: 'deleted-run', reason: 'delete' });
   f.scene.delete('a'); f.current.delete('a');
   const deliver = f.deps.deliverConversation;

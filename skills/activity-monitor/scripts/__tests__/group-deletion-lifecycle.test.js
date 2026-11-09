@@ -168,8 +168,12 @@ test('configuration readiness cannot borrow a deletion fence from another run', 
 
 test('admission rejects a preview whose messages no longer exist before fencing the recreated group', async t => {
   const f = fixture(t), group = 'telegram', targetKey = JSON.stringify(['group', group]);
+  const foreign = f.store.insertConversation('out', 'other', 'room', 'earlier unrelated message');
+  const foreignBefore = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(foreign.id);
+  assert.equal(foreignBefore.session_group, 'other');
   f.store.insertConversation('out', group, 'room', 'old visible row');
   const boundary = f.store.getDeletionPreviewBoundary(targetKey);
+  assert.ok(foreign.id < boundary.cutoffId, 'An earlier message from another group cannot anchor this preview');
   const firstRequest = { ...request, ...boundary, requestId: 'first-confirmation', operationId: 'first-confirmation' };
   assert.equal((await f.admission.handle(firstRequest)).result, 'accepted');
   const firstFence = f.store.getDrainFence(group);
@@ -191,4 +195,5 @@ test('admission rejects a preview whose messages no longer exist before fencing 
   assert.equal(f.store.getDrainFence(group), null);
   assert.equal(f.store.getGroupDeletionAudit(stale.operationId), null);
   assert.deepEqual(f.db.prepare('SELECT * FROM conversations WHERE id=?').get(newMessage.id), before);
+  assert.deepEqual(f.db.prepare('SELECT * FROM conversations WHERE id=?').get(foreign.id), foreignBefore);
 });

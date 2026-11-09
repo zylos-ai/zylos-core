@@ -124,7 +124,7 @@ test('adoption cannot restore deleted run identities across repeated group recre
   for (const [runId, operationId] of [['first-run', 'first-delete'], ['second-run', 'second-delete']]) {
     assert.equal(store.adoptSlot('test:a', { runId }).adopted, true);
     const targetKey = JSON.stringify(['group', 'test:a']);
-    store.beginGroupDeletion('test:a', { ...store.getDeletionPreviewBoundary(targetKey), targetKey, runId, operationId, actor: 'password:owner', preview: {} });
+    store.beginGroupDeletion('test:a', { ...store.getDeletionPreviewBoundary(targetKey), runId, operationId, actor: 'password:owner', preview: {} });
     const fenced = rows(db);
     assert.deepEqual(store.adoptSlot('test:a', { runId }), { adopted: false, reason: 'fenced' });
     assert.deepEqual(store.adoptSlot('test:a', { runId: 'unobserved-replacement' }), { adopted: false, reason: 'fenced' });

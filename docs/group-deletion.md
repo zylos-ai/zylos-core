@@ -40,7 +40,10 @@ before stopping a run or writing an audit. Groups without messages remain deleta
 with cutoff zero. Group-wide data written after that empty preview but before
 confirmation may also be removed; cutoff zero does not snapshot those files or
 records. If messages arrive, they remain above the zero cutoff and protect the
-group-wide data under the usual retention rule.
+group-wide data under the usual retention rule. An old cutoff-zero confirmation
+can also stop a recreated run and write a completed audit with zero deleted
+messages, even when new messages now exist; those messages and group-wide data
+remain. This is part of the approved empty-group deletion behavior.
 
 The same operation can be retried without widening its recorded cutoff. A
 completed retry returns the original audit result before resolving or deleting
