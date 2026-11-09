@@ -947,7 +947,7 @@
   "wb.settings.timezone.saveConfirm": "将此实例的时区保存为 {tz}？本次只保存设置，不会重启任何进程。",
   "wb.settings.timezone.saved": "时区已保存，Dashboard 的日期和时间会更新，无需重启 Dashboard。",
   "wb.settings.timezone.restartNeeded": "让运行中的服务使用已保存的时区",
-  "wb.settings.timezone.restartExplain": "以下服务需要重启后才会使用新时区，确认后才会重启。其他组件可能也需要重启。",
+  "wb.settings.timezone.restartExplain": "上面这些服务需要重启后才会使用新时区，确认后才会重启。其他组件可能也需要重启。",
   "wb.settings.timezone.noRestart": "没有运行中的服务需要重启，服务下次启动时使用已保存的时区。",
   "wb.settings.timezone.discoveryUnknown": "暂时无法获取服务清单，请重试检查后再重启。",
   "wb.settings.timezone.restart": "重启服务…",
