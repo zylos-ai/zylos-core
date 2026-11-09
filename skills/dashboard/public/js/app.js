@@ -16,7 +16,7 @@ import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLab
 import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=115';
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget } from './wb/observer-page.js?v=115';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
-import { mountSchedule } from './wb/schedule.js?v=142';
+import { mountSchedule } from './wb/schedule.js?v=143';
 import { createUsagePage } from './wb/usage.js?v=118';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';

@@ -498,6 +498,12 @@ main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-sched-timeline { position: relative; height: 34px; border: 1px solid var(--wb-line); border-radius: var(--wb-r); background: var(--wb-panel); }
 .wb-sched-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--wb-line); }
 .wb-sched-dot { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; padding: 0; border: 2px solid var(--wb-panel); border-radius: 50%; background: var(--text-dim); cursor: pointer; box-sizing: content-box; }
+.wb-sched-band { position: absolute; height: 40px; margin: 0; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--accent); cursor: pointer; }
+.wb-sched-band::before { content: ""; position: absolute; top: 17px; right: 0; left: 0; height: 6px; border-radius: 3px; background: currentColor; opacity: .55; }
+.wb-sched-band.wb-p1 { color: var(--wb-wait); }
+.wb-sched-band:hover::before, .wb-sched-band.active::before { opacity: 1; }
+.wb-sched-band:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wb-sched-more { margin: 16px; }
 .wb-sched-dot:hover { background: var(--text); transform: scale(1.25); }
 .wb-sched-dot.wb-p1 { background: var(--wb-wait); }
 .wb-sched-dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--wb-accent-soft); }

@@ -180,6 +180,7 @@ export function axisLabels(ticks) {
   return { labels, hideNow: labels.some(label => label.midnight && label.left < 6) };
 }
 
+const legacyTask = task => !Object.prototype.hasOwnProperty.call(task, 'promptTruncated');
 const nextRun = task => Array.isArray(task.nextRuns?.runs) ? task.nextRuns.runs[0] ?? null : null;
 
 /** Filtered list sections: enabled by next run, then failed, paused and completed. */
@@ -268,7 +269,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   const guard = createFetchGuard();
   let data = null, error = false, selected = null, history = null, historyGen = 0, form = null, confirmFor = null,
     filter = { status: 'all', target: 'all', query: '' }, owner = identity(), stopped = false, notice = null,
-    fullPrompt = null, detailTask = null, detailError = false, detailGen = 0, listBusy = false, pageCount = 1;
+    fullPrompt = null, detailTask = null, detailError = false, detailGen = 0, listBusy = false, pageCount = 1, legacyServer = false;
   // The page, the drawer and the dialog layer stay mounted across redraws, so a refresh keeps the drawer's
   // scroll position and an open form keeps its focus and typed text.
   const main = element(document, 'div', undefined, 'wb-sched-main');
@@ -298,6 +299,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     detailError = false;
     listBusy = false;
     pageCount = 1;
+    legacyServer = false;
     filter = { status: 'all', target: 'all', query: '' };
     form = null;
     confirmFor = null;
@@ -320,7 +322,10 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     return document.visibilityState !== 'hidden' && document.querySelector('#tab-schedule')?.classList.contains('active') &&
       !document.querySelector('#agent-detail')?.hidden;
   };
+  const pagedList = () => !legacyServer && (filter.status === 'completed' ||
+    (filter.status === 'all' && Boolean(filter.query.trim())));
   function listPath(cursor = null) {
+    if (legacyServer) return '/api/workbench/schedule';
     const query = new URLSearchParams();
     if (filter.status !== 'all') query.set('status', filter.status);
     if (filter.query.trim()) query.set('q', filter.query.trim());
@@ -331,11 +336,11 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     if (!force && !visible()) return;
     reset();
     if (listBusy && !force) return;
-    if (more && (filter.status !== 'completed' || !data?.nextCursor)) return;
+    if (more && (!pagedList() || !data?.nextCursor)) return;
     if (force && !more) pageCount = 1;
     const gen = guard.next();
-    const completed = filter.status === 'completed';
-    const pages = completed && !more ? pageCount : 1;
+    const paged = pagedList();
+    const pages = paged && !more ? pageCount : 1;
     let cursor = more ? data.nextCursor : null;
     listBusy = true;
     redraw();
@@ -349,9 +354,10 @@ export function mountSchedule({ document = globalThis.document, window = globalT
         tasks.push(...value.tasks);
         loaded++;
         cursor = value.nextCursor;
-      } while (!more && completed && cursor && loaded < pages);
+      } while (!more && paged && cursor && loaded < pages);
       const unique = new Map(tasks.map(task => [task.id, task]));
       data = { ...value, tasks: [...unique.values()] };
+      legacyServer = data.tasks.some(legacyTask);
       pageCount = more ? pageCount + 1 : loaded;
       error = false;
     } catch {
@@ -365,6 +371,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   function changeList(change) {
     filter = { ...filter, ...change };
+    if (legacyServer) { redraw(); return; }
     guard.invalidate();
     listBusy = false;
     pageCount = 1;
@@ -373,6 +380,13 @@ export function mountSchedule({ document = globalThis.document, window = globalT
   }
   async function loadDetail(id) {
     const gen = ++detailGen;
+    const listed = [...(data?.tasks ?? []), ...(data?.timelineTasks ?? [])].find(task => task.id === id);
+    if (listed && legacyTask(listed)) {
+      detailTask = listed;
+      detailError = false;
+      redraw();
+      return;
+    }
     try {
       const value = await read(`/api/workbench/schedule/${encodeURIComponent(id)}`);
       if (gen !== detailGen || selected !== id) return;
@@ -570,13 +584,29 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       label.style.setProperty('left', `${tick.left}%`);
       axis.append(label);
     }
-    for (const dot of laneDots(data.timelineTasks ?? data.tasks, start)) {
+    const timeline = data.timelineTasks ?? data.tasks;
+    const dense = timeline.filter(task => (task.nextRuns?.in24h?.length ?? 0) > 96);
+    if (dense.length) lane.style.setProperty('height', `${46 + dense.length * 44}px`);
+    for (const [index, task] of dense.entries()) {
+      const runs = task.nextRuns.in24h;
+      const first = Math.max(0, Math.min(100, (runs[0] - start) / 864));
+      const last = Math.max(first, Math.min(100, (runs.at(-1) - start) / 864));
+      const band = button(document, '', () => select(task.id), 'wb-sched-band' +
+        (task.priority === 1 ? ' wb-p1' : '') + (task.id === selected ? ' active' : ''));
+      band.title = `${task.name} · ${t('wb.schedule.times', { n: runs.length })}`;
+      band.setAttribute('aria-label', band.title);
+      band.style.setProperty('left', `${first}%`);
+      band.style.setProperty('width', `${last - first}%`);
+      band.style.setProperty('top', `${46 + index * 44}px`);
+      lane.append(band);
+    }
+    for (const dot of laneDots(timeline.filter(task => (task.nextRuns?.in24h?.length ?? 0) <= 96), start)) {
       const node = button(document, '', () => select(dot.task.id), 'wb-sched-dot' +
         (dot.task.priority === 1 ? ' wb-p1' : '') + (dot.task.id === selected ? ' active' : ''));
       node.title = `${dot.task.name} · ${day(dot.at)}`;
       node.setAttribute('aria-label', node.title);
       node.style.setProperty('left', `${dot.left}%`);
-      node.style.setProperty('top', `${30 + dot.row * 22}%`);
+      node.style.setProperty('top', `${10 + dot.row * 7.5}px`);
       lane.append(node);
     }
     box.append(lane, axis);
@@ -655,7 +685,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const title = element(document, 'b');
     title.append(element(document, 'span', task.name, 'wb-sched-title'));
     if (level() === 'technical') title.append(element(document, 'span', 'P' + task.priority, 'wb-tag wb-sched-prio'));
-    name.append(title, element(document, 'small', firstSentence(task.prompt)));
+    name.append(title, element(document, 'small', firstSentence(task.promptSummary ?? task.prompt)));
     const rule = element(document, 'span', scheduleText(task, { t, locale: locale() }), 'wb-sched-rule');
     if (level() === 'technical' && task.cron) rule.append(element(document, 'small', task.cron, 'wb-mono'));
     // The original rule stays reachable in plain view, including rules that are not put into words.
@@ -677,7 +707,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const head = element(document, 'div', undefined, 'wb-sched-th');
     for (const key of ['task', 'rule', 'next', 'recent', 'target', 'status']) head.append(element(document, 'span', t('wb.schedule.col.' + key)));
     wrap.append(head);
-    const sections = groupTasks(data.tasks, { ...filter, query: '', t });
+    const sections = groupTasks(data.tasks, { ...filter, query: legacyServer ? filter.query : '', t });
     if (!sections.length) wrap.append(element(document, 'p', t('wb.schedule.noMatch'), 'wb-sched-empty'));
     for (const section of sections) {
       const block = element(document, 'section', undefined, 'wb-sched-section');
@@ -686,7 +716,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       for (const task of section.tasks) block.append(renderRow(task));
       wrap.append(block);
     }
-    if (filter.status === 'completed' && data.nextCursor) {
+    if (pagedList() && data.nextCursor) {
       const more = button(document, t('wb.detail.loadMore'), () => refresh({ more: true }), 'wb-link-btn wb-sched-more');
       more.disabled = listBusy;
       wrap.append(more);

@@ -9,6 +9,7 @@ import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 // the child-process spy in place.
 const { createSchedulerCli, createScheduleWrite, formToArgs } = await import('../src/lib/workbench/schedule-write.js?direct');
 import { createScheduleRead } from '../src/lib/workbench/schedule-read.js';
+import { initialForm, formPayload } from '../public/js/wb/schedule-form.js';
 import { createScheduleTz } from '../src/lib/workbench/schedule-tz.js';
 import { AuthGate, hashApiKey } from '../src/lib/auth.js';
 import { deliveryLine, groupTasks, writeMessage } from '../public/js/wb/schedule.js';
@@ -358,4 +359,33 @@ test('schedule HTTP routes read, write and map errors through the real server', 
   assert.equal(unreadable.status, 503);
   assert.deepEqual(await unreadable.json(), { error: 'scheduler_unreadable' });
   assert.equal(children.length, 4);
+});
+
+
+// Integration: real reader summary -> unchanged legacy form functions -> real
+// scheduler CLI write. Run for summary field or edit/write contract changes;
+// skip unrelated rendering edits. scheduleEnv prints/asserts isolated HOME,
+// ZYLOS_DIR, PM2_HOME, short TMPDIR, private tmux directory and DB paths. The CLI
+// child is timeout-bounded; teardown closes handles and removes the fixture.
+test('an older editor changing priority cannot write a summary back over the full task content', async context => {
+  const d = dashboard(context);
+  const prompt = 'Full task content. '.repeat(40) + 'Retain this final instruction.';
+  const created = await d.write('POST', '/api/workbench/schedule', { name: 'Long task', prompt,
+    schedule: { kind: 'every', value: '2h' }, priority: '3' });
+  assert.equal(created.body.result, 'done');
+  const id = created.body.data.task.id;
+  const listed = (await d.reader.read()).tasks.find(task => task.id === id);
+  assert.equal(Object.hasOwn(listed, 'prompt'), false);
+  assert.equal(Array.from(listed.promptSummary).length, 200);
+  assert.equal(listed.promptTruncated, true);
+  // These form functions are unchanged from the pre-summary client version.
+  const original = initialForm(listed, { tz: 'Asia/Singapore' });
+  assert.equal(original.prompt, '');
+  const payload = formPayload({ ...original, priority: '1' }, original);
+  assert.equal(payload.prompt, '');
+  const result = await d.write('PUT', `/api/workbench/schedule/${id}`, payload);
+  assert.equal(result.body.result, 'done');
+  const saved = d.open().prepare('SELECT priority, prompt FROM tasks WHERE id = ?').get(id);
+  assert.equal(saved.priority, 1);
+  assert.equal(saved.prompt, prompt);
 });

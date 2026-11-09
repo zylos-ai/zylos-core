@@ -3,7 +3,8 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 
 // Integration boundary: the real schedule page and real read model/routes over
 // a private SQLite fixture; unrelated workbench APIs return fixed answers.
-// Run for schedule list paging, summary/detail loading, search and page layout;
+// Run for schedule list paging, combined completed/active search, summary/detail
+// loading, dense timeline bands and page layout;
 // skip for unrelated dashboard pages and scheduler dispatch-only changes.
 // The opt-in sandbox proves HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private socket
 // and database paths before opening SQLite, HTTP or Chrome, and owns cleanup.

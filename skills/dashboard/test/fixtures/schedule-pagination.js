@@ -2,6 +2,7 @@ import * as schema from '../../../scheduler/scripts/schema.js';
 import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 
 export const LONG_PROMPT = '核对当天消息并整理工作记录。'.repeat(30) + '\n全文搜索标记 schedule-fulltext-tail';
+export const SHARED_NEEDLE = 'schedule-shared';
 
 /** Populate only the connection supplied by an already isolated test caller. */
 export function populateSchedulePagination(db, now = Math.floor(Date.now() / 1000)) {
@@ -12,8 +13,9 @@ export function populateSchedulePagination(db, now = Math.floor(Date.now() / 100
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const rows = [];
   const add = (id, name, type, status, cron = null, interval = null, prompt = '汇总工作进展，整理下一步。') => {
+    prompt += `\n全量搜索标记 ${SHARED_NEEDLE}`;
     const row = { id, name, prompt, type, status, cron, interval };
-    insert.run(id, name, prompt, type, cron, interval, now + 60, 3, status, 0, 300, now - 20 * 86400, now - rows.length);
+    insert.run(id, name, prompt, type, cron, interval, now + (id === 'once' ? 3600 : 60), 3, status, 0, 300, now - 20 * 86400, now - rows.length);
     rows.push(row);
     return row;
   };
@@ -29,5 +31,5 @@ export function populateSchedulePagination(db, now = Math.floor(Date.now() / 100
     const at = now - 60 - i * 1500;
     history.run(rows[i % rows.length].id, at, at + 2, i % 13 === 0 ? 'failed' : 'success', 2000);
   }
-  return { rows, now, activeId: 'daily-0', longCompletedId: 'completed-100', prompt: LONG_PROMPT };
+  return { rows, now, activeId: 'daily-0', longCompletedId: 'completed-100', prompt: rows.find(row => row.id === 'completed-100').prompt };
 }

@@ -48,22 +48,31 @@ export function nextRuns(task, n, from, tz, cronUtils, { until = null } = {}) {
     if (!cronUtils) return { unavailable: true, reason: 'cron_preview_unavailable' };
     try {
       const iterator = cronUtils.createCronIterator(task.cron_expression, tz, new Date(from * 1000));
-      // Every local minute is also every epoch minute, including offset changes.
-      // Resolve the first boundary with the parser, then count the dense series
-      // arithmetically so 1,440 daily occurrences do not need 1,440 date walks.
-      if (String(task.cron_expression).trim().split(/\s+/).join(' ') === '* * * * *') {
+      // Dense minute rules use one parsed boundary, then epoch-minute arithmetic.
+      // Check local minutes for steps that do not divide the hour or cross an
+      // offset change; this preserves the rule across half-hour DST changes too.
+      const fields = String(task.cron_expression).trim().split(/\s+/);
+      if (fields.length === 5 && fields.slice(1).every(field => field === '*') &&
+        /^(?:\*|\*\/[1-9]\d*|0-59)$/.test(fields[0])) {
         const first = iterator.next();
-        if (!Number.isFinite(first) || first <= from) throw Error('invalid_cron_progress');
-        return runSeries(first, 60, n, until);
+        const step = fields[0].startsWith('*/') ? Number(fields[0].slice(2)) : 1;
+        if (step === 1) return runSeries(first, 60, n, until);
+        const minute = new Intl.DateTimeFormat('en-US', { timeZone: tz, minute: 'numeric', numberingSystem: 'latn' });
+        const runs = [];
+        const limit = until === null ? n : MAX_RUNS;
+        for (let at = first; runs.length < limit; at += 60) {
+          if (Number(minute.format(new Date(at * 1000))) % step !== 0) continue;
+          runs.push(at);
+          if (until !== null && runs.length >= n && at > until) return runs;
+        }
+        if (until !== null) runs.truncated = true;
+        return runs;
       }
       const runs = [];
       const limit = until === null ? n : MAX_RUNS;
-      let previous = from;
       for (let index = 0; index < limit; index++) {
         const at = iterator.next();
-        if (!Number.isFinite(at) || at <= previous) throw Error('invalid_cron_progress');
         runs.push(at);
-        previous = at;
         if (until !== null && runs.length >= n && at > until) return runs;
       }
       if (until !== null) runs.truncated = true;
@@ -90,41 +99,38 @@ function runSeries(start, step, n, until) {
   return runs;
 }
 
-const SUMMARY_COLUMNS = `id, name, substr(prompt, 1, 200) AS prompt,
-  length(prompt) > 200 AS prompt_truncated, type, status, cron_expression,
-  interval_seconds, next_run_at, last_run_at, updated_at, priority, require_idle,
-  miss_threshold, last_error, session_component, session_group_name, reply_channel, reply_endpoint`;
-
 function listOptions({ status = 'all', q = '', cursor = null, limit = null } = {}) {
   status ??= 'all';
-  q ??= '';
+  q = String(q ?? '').trim();
   if (!['all', 'enabled', 'paused', 'failed', 'completed'].includes(status)) throw httpError(400, 'invalid_status');
   const size = limit === null ? 30 : /^\d+$/.test(String(limit)) ? Number(limit) : NaN;
   if (!Number.isInteger(size) || size < 1 || size > 100) throw httpError(400, 'invalid_limit');
   let before = null;
   if (cursor !== null) {
     try {
-      if (status !== 'completed' || typeof cursor !== 'string' || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw Error();
+      if (!(status === 'completed' || status === 'all' && q) || typeof cursor !== 'string' || cursor.length > 2048 || !/^[A-Za-z0-9_-]+$/.test(cursor)) throw Error();
       before = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
       if (!Array.isArray(before) || before.length !== 2 || !Number.isSafeInteger(before[0]) ||
-        typeof before[1] !== 'string' || !before[1].length || before[1].length > 512 ||
-        Buffer.from(JSON.stringify(before)).toString('base64url') !== cursor) throw Error();
+        typeof before[1] !== 'string' || !before[1].length || before[1].length > 512) throw Error();
     } catch {
       throw httpError(400, 'invalid_cursor');
     }
   }
-  return { status, q: String(q).trim(), before, size };
+  return { status, q, before, size };
 }
 
-function serializeTask(task, history, nowSec, tz, cronUtils, resolve) {
+function serializeTask(task, history, nowSec, tz, cronUtils, resolve, fullPrompt = false) {
   const latest = history.at(-1);
   const showLastError = Boolean(latest && BAD.has(latest.status));
   const upcoming = nextRuns(task, 5, nowSec, tz, cronUtils, { until: nowSec + DAY });
   const unavailable = !Array.isArray(upcoming);
   const runs = unavailable ? [] : upcoming.filter(time => time > nowSec);
   const { target, reply } = resolve(task);
+  const characters = fullPrompt ? null : Array.from(String(task.prompt ?? ''));
   return {
-    id: task.id, name: task.name, prompt: task.prompt, promptTruncated: Boolean(task.prompt_truncated),
+    id: task.id, name: task.name,
+    ...(fullPrompt ? { prompt: task.prompt, promptTruncated: false }
+      : { promptSummary: characters.slice(0, 200).join(''), promptTruncated: characters.length > 200 }),
     type: task.type, status: task.status, cron: task.cron_expression ?? null,
     intervalSeconds: task.interval_seconds ?? null, nextRunAt: task.next_run_at ?? null,
     lastRunAt: task.last_run_at ?? null, updatedAt: task.updated_at ?? null,
@@ -200,30 +206,29 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
       // Keep the list, counts and history on one SQLite snapshot while tasks finish.
       db.exec('BEGIN');
       // The overview always spans active tasks; a completed page or search never
-      // changes the KPI or timeline. Completed prompt bodies stay in SQLite.
-      tasks = db.prepare(`SELECT ${SUMMARY_COLUMNS} FROM tasks WHERE status != 'completed'`).all();
+      // changes the KPI or timeline. SELECT * also supports older task schemas.
+      tasks = db.prepare("SELECT * FROM tasks WHERE status != 'completed'").all();
       statusRows = db.prepare('SELECT status, count(*) AS count FROM tasks GROUP BY status').all();
-      const where = [status === 'completed' ? "status = 'completed'" : "status != 'completed'"];
-      const params = [];
-      // Match the former browser search, including Unicode case folding and
-      // literal %, _ and backslashes, against full prompt bodies inside SQLite.
+      // Preserve the former browser search, including Unicode lowercase and
+      // literal %, _ and backslashes, against full prompt bodies.
+      const match = q ? 'AND (schedule_search(name) OR schedule_search(prompt) OR schedule_search(id))' : '';
       if (q) {
         const needle = q.toLowerCase();
         db.function('schedule_search', value => Number(String(value ?? '').toLowerCase().includes(needle)));
-        where.push('(schedule_search(name) OR schedule_search(prompt) OR schedule_search(id))');
       }
-      if (before) {
-        where.push('(COALESCE(updated_at, 0) < ? OR (COALESCE(updated_at, 0) = ? AND id < ?))');
-        params.push(before[0], before[0], before[1]);
-      }
-      const paged = status === 'completed';
-      listed = status === 'all' && !q ? tasks : db.prepare(`SELECT ${SUMMARY_COLUMNS} FROM tasks
-        WHERE ${where.join(' AND ')} ORDER BY COALESCE(updated_at, 0) DESC, id DESC ${paged ? 'LIMIT ?' : ''}`)
-        .all(...params, ...(paged ? [size + 1] : []));
-      if (paged && listed.length > size) {
-        const last = listed[size - 1];
-        nextCursor = Buffer.from(JSON.stringify([last.updated_at ?? 0, last.id])).toString('base64url');
-        listed = listed.slice(0, size);
+      listed = status === 'completed' ? [] : q
+        ? db.prepare(`SELECT * FROM tasks WHERE status != 'completed' ${match}`).all() : tasks;
+      if (status === 'completed' || status === 'all' && q) {
+        const cursor = before ? 'AND (COALESCE(updated_at, 0) < ? OR (COALESCE(updated_at, 0) = ? AND id < ?))' : '';
+        const params = before ? [before[0], before[0], before[1], size + 1] : [size + 1];
+        let completed = db.prepare(`SELECT * FROM tasks WHERE status = 'completed' ${match} ${cursor}
+          ORDER BY COALESCE(updated_at, 0) DESC, id DESC LIMIT ?`).all(...params);
+        if (completed.length > size) {
+          const last = completed[size - 1];
+          nextCursor = Buffer.from(JSON.stringify([last.updated_at ?? 0, last.id])).toString('base64url');
+          completed = completed.slice(0, size);
+        }
+        listed = [...listed, ...completed];
       }
       const visibleIds = [...new Set([...tasks, ...listed].map(task => task.id))];
       recent = visibleIds.length ? db.prepare(`SELECT * FROM (
@@ -291,7 +296,8 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
       kpi,
       daily7d: { tz, utcFallback: !zone.tz, days },
       tasks: listed.map(task => out.get(task.id)),
-      timelineTasks: tasks.map(task => out.get(task.id)),
+      ...(listed.length === tasks.length && listed.every((task, index) => task.id === tasks[index].id) ? {}
+        : { timelineTasks: tasks.map(task => out.get(task.id)) }),
       counts,
       nextCursor,
     };
@@ -316,7 +322,7 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
     const zone = await scheduleTz();
     const cronUtils = task.type === 'recurring' ? await importOrNull(cronModule) : null;
     const resolve = await delivery([task]);
-    return { task: serializeTask(task, recent.reverse().map(historyRow), Math.floor(at / 1000), zone.tz ?? 'UTC', cronUtils, resolve) };
+    return { task: serializeTask(task, recent.reverse().map(historyRow), Math.floor(at / 1000), zone.tz ?? 'UTC', cronUtils, resolve, true) };
   }
 
   function history(id, { before = null, beforeId = null, limit = null } = {}) {

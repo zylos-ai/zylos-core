@@ -11,7 +11,7 @@ const textOf = node => allNodes(node).map(item => item.text ?? '').join('|');
 const buttons = (root, label) => allNodes(root).filter(node => node.tagName === 'BUTTON' && node.textContent === label);
 
 function task(fields = {}) {
-  return { id: 'task-1', name: 'Morning report', prompt: 'Write the report. Then send it.', type: 'recurring', status: 'pending',
+  return { promptTruncated: false, id: 'task-1', name: 'Morning report', prompt: 'Write the report. Then send it.', type: 'recurring', status: 'pending',
     cron: '0 8 * * *', intervalSeconds: null, nextRunAt: 1800003600, lastRunAt: null, updatedAt: 1799990000, priority: 3,
     requireIdle: false, missThreshold: 300, showLastError: false, lastError: null, recent: [],
     nextRuns: { runs: [1800003600], in24h: [1800003600] }, target: { kind: 'origin' }, reply: null, reenable: false, ...fields };
@@ -177,6 +177,12 @@ function harness(context, respond, { writable = true, hidden = false } = {}) {
       // Existing page fixtures share their full task rows with the detail route.
       const detail = path.match(/\/api\/workbench\/schedule\/([^/?]+)$/);
       if (detail && value?.tasks) value = { task: value.tasks.find(item => item.id === decodeURIComponent(detail[1])) };
+      if (!detail && value?.tasks) value = { ...value, tasks: value.tasks.map(task => {
+        if (!Object.hasOwn(task, 'promptTruncated')) return task;
+        const summary = { ...task, promptSummary: task.promptSummary ?? task.prompt };
+        delete summary.prompt;
+        return summary;
+      }) };
       return value?.json ? value : { ok: true, json: async () => value };
     } });
   context.after(stop);
@@ -643,4 +649,76 @@ test('a global timeline dot opens its full task while the completed list is sele
   await tick();
   assert.equal(allNodes(h.root).find(node => node.classList.contains('wb-sched-prompt')).textContent, active.prompt);
   assert.equal(buttons(h.root, '编辑').length, 1);
+});
+
+test('legacy full task lists search locally and edit without a detail endpoint', async context => {
+  const full = 'Legacy full prompt '.repeat(25) + 'uniquetail';
+  const legacy = task({ id: 'legacy', status: 'completed', prompt: full, nextRuns: { runs: [], in24h: [] } });
+  delete legacy.promptTruncated;
+  const h = harness(context, path => {
+    if (path.includes('/history')) return { rows: [], next: null };
+    assert.equal(path, '/api/workbench/schedule', 'legacy reads never request search or task detail');
+    const value = page([legacy]);
+    delete value.counts;
+    delete value.timelineTasks;
+    return value;
+  });
+  await tick();
+  const before = h.reads();
+  const search = allNodes(h.root).find(node => node.type === 'search');
+  search.value = 'uniquetail'; search.dispatch('change');
+  assert.equal(h.reads(), before, 'legacy fulltext search uses the already loaded prompt');
+  assert.equal(listRows(h).length, 1, 'legacy all search retains completed matches');
+  listRows(h)[0].dispatch('click'); await tick();
+  assert.equal(h.calls.some(call => call.path === '/api/workbench/schedule/legacy'), false);
+  buttons(h.root, '编辑')[0].dispatch('click');
+  assert.equal(allNodes(h.root).find(node => node.tagName === 'TEXTAREA').value, full);
+});
+
+test('dense task runs use one accessible band while sparse task dots and real counts remain', async context => {
+  const start = 1800000000;
+  const dense = task({ name: 'Every minute', nextRuns: { runs: [start + 60],
+    in24h: Array.from({ length: 1440 }, (_, index) => start + (index + 1) * 60) } });
+  const sparse = task({ id: 'daily', name: 'Daily summary', nextRuns: { runs: [start + 3600], in24h: [start + 3600] } });
+  const h = harness(context, path => {
+    if (path.includes('/history')) return { rows: [], next: null };
+    const value = page([dense, sparse]);
+    value.kpi.next24h = 1441;
+    return value;
+  });
+  await tick();
+  const bands = allNodes(h.root).filter(node => node.classList.contains('wb-sched-band'));
+  const dots = allNodes(h.root).filter(node => node.classList.contains('wb-sched-dot'));
+  assert.equal(bands.length, 1);
+  assert.equal(bands[0].attributes['aria-label'], 'Every minute · 1440 次');
+  assert.equal(dots.length, 1);
+  assert.match(dots[0].title, /Daily summary/);
+  assert.ok(Number.parseFloat(bands[0].style.top) > Number.parseFloat(dots[0].style.top));
+  assert.match(textOf(h.root), /1441 次/);
+  bands[0].dispatch('click'); await tick();
+  assert.equal(allNodes(h.root).find(node => node.classList.contains('wb-d-title')).textContent, 'Every minute');
+});
+
+test('all search pages combine active and completed matches without repeating active rows', async context => {
+  const active = task({ id: 'active-match', name: 'Active match' });
+  const completed = Array.from({ length: 61 }, (_, index) => task({ id: `complete-${index}`, name: `Completed match ${index}`,
+    status: 'completed', nextRuns: { runs: [], in24h: [] } }));
+  const h = harness(context, path => {
+    const query = new URL(path, 'http://fixture.invalid').searchParams;
+    if (!query.has('q')) return page([active]);
+    const start = query.has('cursor') ? 30 : 0;
+    return { ...page([active, ...completed.slice(start, start + 30)]), timelineTasks: [active], nextCursor: 'next-completed' };
+  });
+  await tick();
+  const search = allNodes(h.root).find(node => node.type === 'search');
+  search.value = 'match'; search.dispatch('change'); await tick();
+  assert.equal(listRows(h).length, 31);
+  assert.match(listRows(h)[0].textContent, /Active match/);
+  buttons(h.root, '加载更多')[0].dispatch('click'); await tick();
+  assert.equal(listRows(h).length, 61);
+  assert.equal(listRows(h).filter(node => node.textContent.includes('Active match')).length, 1);
+  await h.poll();
+  assert.equal(listRows(h).length, 61, 'combined search retains expanded page depth');
+  const searches = h.calls.filter(call => call.path.includes('q=match'));
+  assert.ok(searches.at(-1).path.includes('cursor='));
 });

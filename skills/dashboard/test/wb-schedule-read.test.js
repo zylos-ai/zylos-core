@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createScheduleRead, scheduleReadResponse, nextRuns } from '../src/lib/workbench/schedule-read.js';
 import { createScheduleTz, localToOffsetIso } from '../src/lib/workbench/schedule-tz.js';
 import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
+import { migrateSchema } from '../../scheduler/scripts/migrations.js';
 import { createCronIterator } from '../../scheduler/scripts/cron-utils.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 
@@ -335,9 +336,6 @@ test('upcoming cron runs parse once and stop after five runs and the full day', 
     assert.equal(runs.truncated, undefined);
     if (expression === '* * * * *') assert.equal(runs.filter(at => at <= NOW + DAY).length, 1440);
   }
-  assert.deepEqual(nextRuns({ status: 'pending', type: 'recurring', cron_expression: '0 8 * * *' }, 5, NOW, 'UTC',
-    { createCronIterator: () => ({ next: () => NOW }) }, { until: NOW + DAY }),
-  { unavailable: true, reason: 'cron_preview_unavailable' });
   const capped = nextRuns({ status: 'pending', type: 'recurring', cron_expression: '* * * * * *' }, 5, NOW, 'UTC', { createCronIterator }, { until: NOW + DAY });
   assert.equal(capped.length, 2000);
   assert.equal(capped.truncated, true);
@@ -366,13 +364,21 @@ test('completed tasks page stably while counts, timeline and week totals remain 
   const page = query => scheduleReadResponse(reader, '/api/workbench/schedule', new URLSearchParams(query));
   const initial = await page({});
   assert.equal(initial.tasks.length, 19);
+  assert.equal(Object.hasOwn(initial, 'timelineTasks'), false);
+  for (const task of initial.tasks) {
+    assert.equal(Object.hasOwn(task, 'prompt'), false);
+    assert.equal(typeof task.promptSummary, 'string');
+    assert.equal(typeof task.promptTruncated, 'boolean');
+  }
   assert.deepEqual(initial.counts, { all: 120, enabled: 11, paused: 8, failed: 0, completed: 101 });
   assert.equal(initial.kpi.next24h, 1441);
   assert.equal(initial.kpi.runs7d, 101);
   const first = await page({ status: 'completed' });
   assert.equal(first.tasks.length, 30);
-  assert.equal(Array.from(first.tasks[0].prompt).length, 200);
+  assert.equal(Array.from(first.tasks[0].promptSummary).length, 200);
   assert.equal(first.tasks[0].promptTruncated, true);
+  assert.equal(Object.hasOwn(first.tasks[0], 'prompt'), false);
+  assert.equal(first.timelineTasks.every(task => !Object.hasOwn(task, 'prompt')), true);
   assert.deepEqual(first.counts, initial.counts);
   assert.deepEqual(first.kpi, initial.kpi);
   assert.deepEqual(first.daily7d, initial.daily7d);
@@ -395,7 +401,7 @@ test('completed tasks page stably while counts, timeline and week totals remain 
   assert.equal(new Set(seen).size, 101);
   assert.equal(seen.includes(late.id), false);
   for (const task of completed) assert.ok(seen.includes(task.id));
-  const searched = await page({ status: 'completed', q: 'hiddenneedle%_' });
+  const searched = await page({ status: 'completed', q: 'HIDDENNEEDLE%_' });
   assert.equal(searched.tasks.length, 30);
   assert.equal(searched.counts.completed, 102);
   assert.equal((await page({ status: 'completed', q: 'äword' })).tasks.length, 30);
@@ -434,5 +440,89 @@ test('arithmetic minute boundaries match the real parser through daylight saving
       start, 'America/New_York', { createCronIterator }, { until: start + DAY });
     assert.equal(actual.length, 1441);
     for (const run of actual) assert.equal(run, iterator.next());
+  }
+});
+
+
+// Integration boundaries/isolation are the same as the read cases above; these
+// add old-schema and cross-page search/ordering coverage for read model edits.
+test('summary reads work with the original scheduler schema without session columns', async t => {
+  const f = scheduleEnv(t, { link: false });
+  const db = f.open();
+  migrateSchema(db);
+  assert.equal(db.pragma('table_info(tasks)').some(column => column.name === 'session_component'), false);
+  db.prepare(`INSERT INTO tasks (id, name, prompt, type, next_run_at, created_at, updated_at)
+    VALUES ('old-task', 'Original schema', ?, 'one-time', ?, ?, ?)`).run('😀'.repeat(230), NOW + 60, NOW, NOW);
+  const reader = createScheduleRead({ zylosDir: f.zylosDir, now: () => NOW_MS, scheduleTz: async () => ({ tz: 'UTC' }) });
+  const page = await reader.read();
+  assert.equal(page.available, true);
+  assert.equal(page.kpi.enabled, 1);
+  assert.equal(page.tasks[0].promptSummary, '😀'.repeat(200));
+  assert.equal(page.tasks[0].promptTruncated, true);
+  assert.equal(Object.hasOwn(page.tasks[0], 'prompt'), false);
+  assert.equal(Object.hasOwn(page, 'timelineTasks'), false);
+  assert.deepEqual(page.tasks[0].target, { kind: 'origin' });
+  assert.equal((await reader.detail('old-task')).task.prompt, '😀'.repeat(230));
+});
+
+test('all search includes paged completions and preserves tied timestamps across page boundaries', async t => {
+  const f = fixture(t);
+  const active = f.task({ prompt: 'Active shared-needle' });
+  const expected = [];
+  for (let i = 0; i < 11; i++) expected.push(f.task({ status: 'completed', updated_at: NOW - Math.floor(i / 3),
+    prompt: 'x'.repeat(240) + ' Shared-Needle' }));
+  const reader = f.reader();
+  const compare = expected.slice().sort((a, b) => b.updated_at - a.updated_at || b.id.localeCompare(a.id)).map(task => task.id);
+  for (const limit of [1, 7]) {
+    const seen = [];
+    let cursor = null;
+    do {
+      const page = await reader.read(undefined, { status: 'all', q: 'SHARED-NEEDLE', limit, cursor });
+      assert.equal(page.tasks[0].id, active.id);
+      assert.equal(page.tasks[0].status, 'pending');
+      assert.equal(page.counts.all, 12);
+      assert.equal(page.counts.completed, 11);
+      assert.ok(page.tasks.slice(1).every(task => task.status === 'completed'));
+      assert.ok(page.tasks.every(task => !Object.hasOwn(task, 'prompt')));
+      seen.push(...page.tasks.slice(1).map(task => task.id));
+      assert.ok(seen.length <= 11);
+      cursor = page.nextCursor;
+    } while (cursor);
+    assert.deepEqual(seen, compare);
+  }
+  const completedOnly = await reader.read(undefined, { status: 'completed', q: 'SHARED-NEEDLE', limit: 1 });
+  assert.equal(completedOnly.tasks.length, 1);
+  assert.equal(completedOnly.tasks[0].id, compare[0]);
+  const noncompleted = await reader.read(undefined, { status: 'enabled', q: 'SHARED-NEEDLE' });
+  assert.equal(noncompleted.tasks.length, 1);
+  assert.equal(noncompleted.tasks[0].id, active.id);
+  assert.equal(Object.hasOwn(noncompleted, 'timelineTasks'), false);
+});
+
+test('dense minute aliases and steps use one parsed boundary and match real zoned cron runs', () => {
+  const cases = [
+    ['*/1 * * * *', 'UTC', '2027-01-15T00:00:37Z'],
+    ['*/2 * * * *', 'UTC', '2027-01-15T00:00:37Z'],
+    ['*/5 * * * *', 'UTC', '2027-01-15T00:00:37Z'],
+    ['0-59 * * * *', 'UTC', '2027-01-15T00:00:37Z'],
+    ['*/7 * * * *', 'America/New_York', '2027-11-07T05:58:37Z'],
+    ['*/7 * * * *', 'Australia/Lord_Howe', '2027-10-02T15:28:37Z'],
+  ];
+  for (const [expression, tz, from] of cases) {
+    const start = Date.parse(from) / 1000;
+    let parsed = 0, advanced = 0;
+    const cron = { createCronIterator(...args) {
+      parsed++;
+      const interval = createCronIterator(...args);
+      return { next() { advanced++; return interval.next(); } };
+    } };
+    const actual = nextRuns({ status: 'pending', type: 'recurring', cron_expression: expression }, 5,
+      start, tz, cron, { until: start + DAY });
+    assert.equal(parsed, 1);
+    assert.equal(advanced, 1);
+    assert.ok(actual.length >= 5);
+    assert.ok(actual.at(-1) > start + DAY);
+    const reference = createCronIterator(expression, tz, new Date(start * 1000));
+    for (const run of actual) assert.equal(run, reference.next(), `${expression} ${tz}`);
   }
 });
