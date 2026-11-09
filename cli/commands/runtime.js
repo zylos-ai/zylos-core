@@ -23,6 +23,8 @@ import { isCodexTrustValid, getCodexVersion } from '../lib/codex-hooks.js';
 import { isSplitInstructionsActive } from '../lib/runtime/instruction-builder.js';
 import { commandExists } from '../lib/shell-utils.js';
 import {
+  credentialFilePermissionWarnings,
+  credentialFiles,
   isValidBaseUrl,
   saveApiKey,
   saveApiKeyToEnv,
@@ -96,37 +98,51 @@ function showStatus() {
 
 // ── Credential save helpers ───────────────────────────────────────────────
 
+// Credential files that stay readable by others after a save are reported as warnings.
+function warnUnrestrictedCredentialFiles(target, warnings) {
+  for (const message of credentialFilePermissionWarnings(credentialFiles(target))) {
+    warnings.push({ code: 'CREDENTIAL_FILE_NOT_PRIVATE', message });
+  }
+}
+
 /**
  * Save credentials for the target runtime and write to .env.
  * Returns true on success, false on failure.
  *
  * @param {string} target - 'claude' | 'codex'
  * @param {{ apiKey?: string, setupToken?: string }} creds
+ * @param {Array<{code: string, message: string}>} [warnings] - receives credential file permission warnings
  * @returns {boolean}
  */
-function applyCredentials(target, creds) {
+function applyCredentials(target, creds, warnings = []) {
   if (target === 'claude') {
     if (creds.setupToken) {
       if (!saveSetupToken(creds.setupToken)) return false;
       saveSetupTokenToEnv(creds.setupToken);
+      warnUnrestrictedCredentialFiles(target, warnings);
       return true;
     }
     if (creds.apiKey) {
       if (!saveApiKey(creds.apiKey)) return false;
       saveApiKeyToEnv(creds.apiKey);
+      warnUnrestrictedCredentialFiles(target, warnings);
       return true;
     }
   } else if (target === 'codex') {
     if (creds.apiKey) {
-      return saveCodexApiKey(creds.apiKey);
+      if (!saveCodexApiKey(creds.apiKey)) return false;
+      warnUnrestrictedCredentialFiles(target, warnings);
+      return true;
     }
   }
   return false;
 }
 
-export function applyBaseUrl(target, baseUrl) {
+export function applyBaseUrl(target, baseUrl, warnings = []) {
   if (target === 'claude') {
-    return saveClaudeBaseUrlToSettingsAndEnv(baseUrl);
+    if (!saveClaudeBaseUrlToSettingsAndEnv(baseUrl)) return false;
+    warnUnrestrictedCredentialFiles(target, warnings);
+    return true;
   }
   if (target === 'codex') {
     if (!saveCodexBaseUrlToEnv(baseUrl)) return false;
@@ -309,9 +325,9 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     if (!exists(target)) return fail('RUNTIME_NOT_INSTALLED', `${target} CLI missing; run zylos init`);
     try {
       for (const [key, value, save] of [
-        ['apiKey', parsed.apiKey, () => credentials(target, { apiKey: parsed.apiKey })],
-        ['setupToken', parsed.setupToken, () => credentials(target, { setupToken: parsed.setupToken })],
-        ['baseUrl', parsed.baseUrl, () => baseUrl(target, parsed.baseUrl)],
+        ['apiKey', parsed.apiKey, () => credentials(target, { apiKey: parsed.apiKey }, warnings)],
+        ['setupToken', parsed.setupToken, () => credentials(target, { setupToken: parsed.setupToken }, warnings)],
+        ['baseUrl', parsed.baseUrl, () => baseUrl(target, parsed.baseUrl, warnings)],
       ]) {
         if (value) { if (!await save()) return fail('CREDENTIAL_SAVE_FAILED', `Could not save ${key}`); credentialsSaved.push(key); }
       }

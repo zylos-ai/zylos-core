@@ -7,32 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ENV_FILE } from './config.js';
-
-// .env holds API keys, tokens and passwords; keep it readable by the owner only.
-const ENV_FILE_MODE = 0o600;
-
-/**
- * Restrict an existing .env file to owner read/write.
- * Best effort: the content is already written, and a filesystem without POSIX
- * modes (or a read-only or foreign-owned file) keeps its own permissions;
- * ensureEnvFilePrivate reads the mode back to report the outcome.
- *
- * @param {string} file
- */
-function secureEnvFile(file) {
-  try {
-    fs.chmodSync(file, ENV_FILE_MODE);
-  } catch {}
-}
-
-function envFileMode(file) {
-  try {
-    const stat = fs.statSync(file);
-    return { mode: stat.mode & 0o777, uid: stat.uid };
-  } catch {
-    return null;
-  }
-}
+import { PRIVATE_FILE_MODE, checkPrivateFile, tightenPrivateFile, writePrivateFile } from './private-file.js';
 
 /**
  * Make sure group and other users cannot access a .env file.
@@ -43,17 +18,8 @@ function envFileMode(file) {
  * @param {string} [file]
  * @returns {{ok: boolean, mode: string|null, fixed: boolean}}
  */
-export function ensureEnvFilePrivate(file = ENV_FILE, { platform = process.platform, uid = process.getuid?.() } = {}) {
-  const format = bits => bits.toString(8).padStart(3, '0');
-  const before = platform === 'win32' ? null : envFileMode(file);
-  if (!before) return { ok: true, mode: null, fixed: false };
-  if ((before.mode & 0o077) === 0) return { ok: true, mode: format(before.mode), fixed: false };
-  if (before.uid === uid) {
-    secureEnvFile(file);
-    const after = envFileMode(file);
-    if (after && (after.mode & 0o077) === 0) return { ok: true, mode: format(after.mode), fixed: true, previousMode: format(before.mode) };
-  }
-  return { ok: false, mode: format(before.mode), fixed: false };
+export function ensureEnvFilePrivate(file = ENV_FILE, options = {}) {
+  return checkPrivateFile(file, options);
 }
 
 /**
@@ -63,8 +29,7 @@ export function ensureEnvFilePrivate(file = ENV_FILE, { platform = process.platf
  * @param {string} content
  */
 export function writeEnvFile(file, content) {
-  fs.writeFileSync(file, content, { mode: ENV_FILE_MODE });
-  secureEnvFile(file);
+  writePrivateFile(file, content);
 }
 
 /**
@@ -135,8 +100,8 @@ export function writeEnvEntries(entries, componentName) {
   // Ensure parent directory exists
   fs.mkdirSync(path.dirname(ENV_FILE), { recursive: true });
 
-  fs.appendFileSync(ENV_FILE, block, { mode: ENV_FILE_MODE });
-  secureEnvFile(ENV_FILE);
+  fs.appendFileSync(ENV_FILE, block, { mode: PRIVATE_FILE_MODE });
+  tightenPrivateFile(ENV_FILE);
 
   return { written, skipped };
 }

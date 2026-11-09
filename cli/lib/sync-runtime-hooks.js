@@ -25,6 +25,7 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { hookScriptKey, hookScriptBaseKey, getCommandHooks } from './hook-utils.js';
 import { readSessionMode } from './config.js';
+import { copyPrivateFile, writePrivateFile } from './private-file.js';
 import { renderCodexProjectConfig, renderCodexGlobalConfig, writeCodexConfig, resolveCodexBypassPermissions } from './runtime-setup.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 import {
@@ -360,9 +361,9 @@ export function persistInstalledSettingsAndSyncCoupledThreshold({
   modelBackfilled = false,
   maxBackups = DEFAULT_MAX_SETTINGS_BACKUPS,
   mkdirSync = fs.mkdirSync,
-  writeFileSync = fs.writeFileSync,
+  writeFileSync = writePrivateFile,
   existsSync = fs.existsSync,
-  copyFileSync = fs.copyFileSync,
+  copyFileSync = copyPrivateFile,
   readdirSync = fs.readdirSync,
   unlinkSync = fs.unlinkSync,
   syncThreshold = syncModelCoupledNewSessionThreshold,

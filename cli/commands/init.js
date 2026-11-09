@@ -25,6 +25,7 @@ import { createRequire } from 'node:module';
 import { execSync, execFileSync, spawnSync, spawn } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, COMPONENTS_FILE, BIN_DIR, HTTP_DIR, CADDYFILE, CADDY_BIN, getZylosConfig, readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
 import { writeEnvFile } from '../lib/env.js';
+import { writePrivateFile } from '../lib/private-file.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
 import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
@@ -47,6 +48,8 @@ import {
   isCodexAuthenticated,
   isValidBaseUrl,
   approveApiKey,
+  credentialFilePermissionWarnings,
+  credentialFiles,
   saveApiKey,
   saveApiKeyToEnv,
   saveAuthToken,
@@ -511,7 +514,7 @@ function rollbackSetupToken() {
     if (settings.env) {
       delete settings.env.CLAUDE_CODE_OAUTH_TOKEN;
     }
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    writePrivateFile(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   } catch (err) {
     console.error(`  ${warn(`Could not rollback setup token from settings.json: ${err.message}`)}`);
   }
@@ -561,7 +564,7 @@ export function preAcceptClaudeTerms() {
   } catch {}
   if (!claudeJson.hasCompletedOnboarding) {
     claudeJson.hasCompletedOnboarding = true;
-    fs.writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n');
+    writePrivateFile(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + '\n');
     changed = true;
   }
 
@@ -575,7 +578,7 @@ export function preAcceptClaudeTerms() {
   } catch {}
   if (!settings.skipDangerousModePermissionPrompt) {
     settings.skipDangerousModePermissionPrompt = true;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    writePrivateFile(settingsPath, JSON.stringify(settings, null, 2) + '\n');
     changed = true;
   }
 
@@ -2369,6 +2372,9 @@ export async function initCommand(args) {
     if (preAcceptClaudeTerms()) {
       if (!quiet) console.log(`  ${success('Claude Code terms pre-accepted')}`);
     }
+  }
+  for (const message of credentialFilePermissionWarnings(credentialFiles(selectedRuntime))) {
+    console.warn(`  ${warn(message)}`);
   }
 
   if (!quiet) console.log('');

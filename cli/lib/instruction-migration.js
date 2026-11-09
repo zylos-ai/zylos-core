@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { hookScriptKey } from './hook-utils.js';
+import { PRIVATE_FILE_MODE } from './private-file.js';
 import {
   canonicalAssemblerEntry,
   reconcileAssemblerEntries,
@@ -282,14 +283,15 @@ function atomicWrite(filePath, content, {
   fsyncSync = fs.fsyncSync,
   closeSync = fs.closeSync,
   unlinkSync = fs.unlinkSync,
-} = {}) {
+} = {}, { mode } = {}) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-  const existingMode = existsSync(filePath) ? statSync(filePath).mode & 0o777 : null;
+  // Without a caller-chosen mode the replacement keeps the existing file's mode.
+  const targetMode = mode ?? (existsSync(filePath) ? statSync(filePath).mode & 0o777 : null);
   let fd;
   try {
-    writeFileSync(tempPath, content, 'utf8');
-    if (existingMode !== null) chmodSync(tempPath, existingMode);
+    writeFileSync(tempPath, content, mode === undefined ? 'utf8' : { encoding: 'utf8', mode });
+    if (targetMode !== null) chmodSync(tempPath, targetMode);
     fd = openSync(tempPath, 'r');
     fsyncSync(fd);
     closeSync(fd);
@@ -526,7 +528,8 @@ export function reconcileAssemblerSettingsFile({
   const content = JSON.stringify(copy, null, 2) + '\n';
   try {
     faultInjector('settings:before-write');
-    atomicWrite(settingsPath, content, io);
+    // Claude settings may carry credentials in env; keep them owner-only.
+    atomicWrite(settingsPath, content, io, { mode: PRIVATE_FILE_MODE });
     return { ok: true, changed: true, settingsPath, ...convergence };
   } catch (error) {
     return { ok: false, handledError: true, settingsPath, error, anomalies: [] };

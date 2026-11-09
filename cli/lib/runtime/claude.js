@@ -22,6 +22,7 @@ const execFileAsync = promisify(execFile);
 import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { ZYLOS_DIR } from '../config.js';
+import { writePrivateFile } from '../private-file.js';
 
 
 const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
@@ -82,7 +83,7 @@ async function ensureOnboardingComplete(projectDir, env) {
       fill(config.projects[project], 'hasTrustDialogAccepted', true);
       fill(config.projects[project], 'hasCompletedProjectOnboarding', true);
     }
-    if (changed) fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
+    if (changed) writePrivateFile(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
   } catch { /* First-confirmation repair must not prevent launch. */ }
 
   const settingsPath = path.join(home, '.claude', 'settings.json');
@@ -91,7 +92,7 @@ async function ensureOnboardingComplete(projectDir, env) {
     if (settings.skipDangerousModePermissionPrompt !== true) {
       settings.skipDangerousModePermissionPrompt = true;
       fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+      writePrivateFile(settingsPath, JSON.stringify(settings, null, 2) + '\n');
     }
   } catch { /* Other confirmation files are repaired independently. */ }
 }

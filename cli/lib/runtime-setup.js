@@ -15,6 +15,7 @@ import { parse, stringify } from 'smol-toml';
 import { parse as parseDotEnv } from 'dotenv';
 import { ZYLOS_DIR } from './config.js';
 import { writeEnvFile } from './env.js';
+import { checkPrivateFile, writePrivateFile } from './private-file.js';
 import { commandExists } from './shell-utils.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
 import { installCoreCodexHook } from './codex-hooks.js';
@@ -173,8 +174,39 @@ export function approveApiKey(keyOrToken) {
       config.projects[projectPath].hasTrustDialogAccepted = true;
       config.projects[projectPath].hasCompletedProjectOnboarding = true;
     }
-    fs.writeFileSync(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
+    writePrivateFile(claudeJsonPath, JSON.stringify(config, null, 2) + '\n');
   } catch {}
+}
+
+/**
+ * User-level files holding the selected runtime's credentials: Claude settings
+ * (env credentials) and ~/.claude.json (approved key suffixes), or Codex auth.json.
+ *
+ * @param {'claude'|'codex'} runtime
+ * @returns {string[]}
+ */
+export function credentialFiles(runtime) {
+  const home = os.homedir();
+  if (runtime === 'codex') return [path.join(home, '.codex', 'auth.json')];
+  return [path.join(home, '.claude', 'settings.json'), path.join(home, '.claude.json')];
+}
+
+/**
+ * Keep credential files owner-only and describe the ones that could not be
+ * restricted (foreign-owned or read-only). Never throws.
+ *
+ * @param {string[]} files
+ * @returns {string[]} one message per file other users can still read
+ */
+export function credentialFilePermissionWarnings(files) {
+  const warnings = [];
+  for (const file of files) {
+    const result = checkPrivateFile(file);
+    if (!result.ok) {
+      warnings.push(`${file} holds credentials but is mode ${result.mode} and could not be restricted; run: chmod 600 ${file}`);
+    }
+  }
+  return warnings;
 }
 
 const CLAUDE_CREDENTIAL_KEYS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
@@ -207,7 +239,7 @@ function saveClaudeCredential(key, value) {
     if (!settings.env) settings.env = {};
     for (const other of CLAUDE_CREDENTIAL_KEYS) delete settings.env[other];
     settings.env[key] = value;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    writePrivateFile(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   } catch {
     return false;
   }
@@ -309,7 +341,7 @@ function saveClaudeBaseUrlToSettings(baseUrl) {
     try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
     if (!settings.env) settings.env = {};
     settings.env.ANTHROPIC_BASE_URL = baseUrl;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    writePrivateFile(settingsPath, JSON.stringify(settings, null, 2) + '\n');
     return true;
   } catch {
     return false;
@@ -599,7 +631,7 @@ export function saveCodexApiKey(apiKey) {
     try { authContent = JSON.parse(fs.readFileSync(authPath, 'utf8')); } catch { }
     authContent.auth_mode = 'apikey';
     authContent.OPENAI_API_KEY = apiKey;
-    fs.writeFileSync(authPath, JSON.stringify(authContent, null, 2) + '\n', { mode: 0o600 });
+    writePrivateFile(authPath, JSON.stringify(authContent, null, 2) + '\n');
     process.env.OPENAI_API_KEY = apiKey;
     return true;
   } catch {
