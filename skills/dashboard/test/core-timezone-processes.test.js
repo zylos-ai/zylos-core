@@ -131,8 +131,7 @@ for (const scenario of [
         console.log('Private tmux cleanup:', JSON.stringify({ socket: sandbox.paths.socket, exited: true }));
       });
       tmux(['-f', '/dev/null', 'new-session', '-d', '-s', 'zylos-group-origin', '/bin/cat']);
-      const { createRequire } = await import('node:module');
-      const Database = createRequire(import.meta.url)('better-sqlite3');
+      const { default: Database } = await import('../../comm-bridge/scripts/sqlite-driver.js');
       const { guardDatabase } = await import('../../comm-bridge/scripts/sqlite-schema.js');
       const schema = await import('../../comm-bridge/scripts/c4-schema.js');
       const { createStore } = await import('../../comm-bridge/scripts/c4-v2-store.js');

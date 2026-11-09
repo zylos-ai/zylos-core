@@ -29,7 +29,7 @@ test('timezone HTTP save and confirmed restart use real scheduler without caller
       fs.cpSync(path.join(repo, 'skills/scheduler'), path.join(installedSkills, 'scheduler'), { recursive: true, filter: source => path.basename(source) !== 'node_modules' });
       fs.symlinkSync(path.join(repo, 'skills/comm-bridge'), path.join(installedSkills, 'comm-bridge'), 'dir');
       const dependencies = path.join(installedSkills, 'scheduler/node_modules'); fs.mkdirSync(dependencies);
-      for (const dependency of ['better-sqlite3', 'dotenv']) fs.symlinkSync(fs.realpathSync(path.join(repo, 'node_modules', dependency)), path.join(dependencies, dependency), 'dir');
+      for (const dependency of ['dotenv']) fs.symlinkSync(fs.realpathSync(path.join(repo, 'node_modules', dependency)), path.join(dependencies, dependency), 'dir');
       const schedulerDependencies = process.env.ZYLOS_SCHEDULER_TEST_DEPENDENCIES;
       assert.ok(schedulerDependencies && path.isAbsolute(schedulerDependencies), 'Use an explicit existing scheduler dependency directory');
       for (const dependency of ['cron-parser', 'chrono-node']) fs.symlinkSync(fs.realpathSync(path.join(schedulerDependencies, dependency)), path.join(dependencies, dependency), 'dir');
