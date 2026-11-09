@@ -57,6 +57,15 @@ export async function usageServer(t, configBody = {}) {
   fs.mkdirSync(path.join(dir, 'components/dashboard'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'components/dashboard/config.json'), JSON.stringify({ auth: { enabled: false }, ...configBody }));
   process.env.ZYLOS_DIR = dir;
+  const runnerRoot = path.dirname(process.env.HOME);
+  assert.match(path.basename(runnerRoot), /^zylos-tests-/);
+  for (const target of [dir, process.env.PM2_HOME, process.env.TMPDIR]) {
+    assert.ok(path.resolve(target).startsWith(runnerRoot + path.sep));
+  }
+  console.log('Usage HTTP isolation:', JSON.stringify({ HOME: process.env.HOME,
+    ZYLOS_DIR: dir, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR,
+    socket: path.join(dir, 'tmux.sock'), databaseRoot: dir,
+    listener: '127.0.0.1:0', coreAndCli: 'mocked before import; no tmux or PM2 opened' }));
   const { createServer } = await import(`../../src/index.js?usage=${Date.now()}-${Math.random()}`);
   server = createServer();
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });

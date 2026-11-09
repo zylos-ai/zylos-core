@@ -72,22 +72,23 @@ test('Core state enforces readiness, freshness and runtime-specific account usag
     status: { valid: true, reason: null, sampledAt: Date.now(), value: { state: 'idle' } },
     usage: { valid: false, reason: 'missing' },
   };
-  t.mock.module(new URL('../../../cli/lib/config.js', import.meta.url).href, { exports: {
-    readSessionMode: () => ({ mode: 'multi', keyPresent: true }),
-  } });
-  t.mock.module(new URL('../../../cli/lib/session-state-reader.js', import.meta.url).href, { exports: {
+  const reader = {
     readSessionState: async (group, options) => { calls.push({ type: 'state', group, options }); return structuredClone(observation); },
     readLiveIdentity: async () => structuredClone(observation.identity),
     resolveTargetRuntime: async () => 'codex',
     readRuntimeHealth: () => ({ health: 'ok' }),
-    readAccountUsage: async runtime => {
+    readAccountUsage: async (runtime, options) => {
+      assert.deepEqual(options, { allowRecorded: true });
       calls.push({ type: 'account', runtime });
-      return runtime === 'codex' ? { five_hour: { used_percentage: 23 } } : { five_hour: { used_percentage: 91 } };
+      return { value: runtime === 'codex' ? { five_hour: { used_percentage: 23 } } : { five_hour: { used_percentage: 91 } }, live: true, recordedAt: Date.now() };
     },
-  } });
-  t.mock.module(new URL('../../../cli/lib/session-group-paths.js', import.meta.url).href, { exports: {
-    listGroupTmuxSessions: async () => [{ sessionGroup: 'origin' }],
-  } });
+  };
+  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi', keyPresent: true }) };
+    if (name === 'session-state-reader.js') return reader;
+    if (name === 'session-group-paths.js') return { listGroupTmuxSessions: async () => [{ sessionGroup: 'origin' }] };
+    assert.fail(`Unexpected core module ${name}`);
+  } } });
   const { CoreState } = await import(`../src/lib/core-state.js?contracts=${Date.now()}`);
   const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR });
   const state = await core.refresh();

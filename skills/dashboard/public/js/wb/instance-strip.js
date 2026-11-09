@@ -1,6 +1,6 @@
 import { element, icon, runtimeName } from './plain-text.js?v=104';
 import { recoveryTime } from './cooldown.js?v=89';
-import { formatZoned } from './instance-zone.js?v=100';
+import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 // Account quota samples are passed through as each runtime reports them: Claude uses
 // used_percentage (or utilization), Codex keeps its camelCase usedPercentage.
 export const accountUsedPercent = usage => usage?.used_percentage ?? usage?.utilization ?? usage?.usedPercentage ?? null;
@@ -18,6 +18,12 @@ export function accountRuntimes(snapshot) {
   ].filter(Boolean))];
 }
 const clock = at => formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' });
+export function quotaRecordedTime(usage, now = Date.now()) {
+  if (usage?.live !== false || !Number.isFinite(usage.recordedAt)) return null;
+  const sameDay = zonedDay(usage.recordedAt) === zonedDay(now);
+  return formatZoned(usage.recordedAt, undefined, { ...(sameDay ? {} : { year: 'numeric', month: '2-digit', day: '2-digit' }),
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+}
 export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);
 function meter(document, pct) {
   const bar = element(document, 'span', undefined, 'wb-meter');
@@ -59,6 +65,11 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
       if (pct != null) amount.style.color = quotaColor(pct);
       box.append(amount);
       box.title = pct == null ? t('wb.quotaUnknown') : t('wb.quotaRemaining', { pct: Math.round(pct) });
+      const recordedTime = pct == null ? null : quotaRecordedTime(usage, now);
+      if (recordedTime) {
+        box.append(element(document, 'small', '· ' + t('wb.quotaRecorded', { time: recordedTime }), 'wb-quota-recorded'));
+        box.title += ' · ' + t('wb.quotaRecordedHint');
+      }
     }
     root.append(box);
   }

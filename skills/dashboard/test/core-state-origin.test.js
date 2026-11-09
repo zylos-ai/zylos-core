@@ -45,13 +45,14 @@ test('Core state reads Origin facts only for absence or authentication and reads
   let mode = 'multi', observation = absent(), health = { health: 'ok' }, targetRuntime = 'codex', factsReads = 0;
   let facts = { originNeed: { inbound: 0, controls: 0, oldestAt: null }, transitionOpen: false, fenced: false };
   const accountCalls = [];
-  let accountAvailable = true;
+  let accountAvailable = true, accountLive = true, changes = 0;
   const reader = {
     readSessionState: async () => structuredClone(observation),
     readLiveIdentity: async () => ({ present: true, ready: true, runtime: 'codex', runId: 'other-run', sessionId: 'other-session' }),
-    resolveTargetRuntime: async group => { assert.equal(group, 'origin'); return targetRuntime; },
+    resolveTargetRuntime: async group => { assert.equal(group, mode === 'multi' ? 'origin' : null); return targetRuntime; },
     readRuntimeHealth: async runtime => { assert.equal(runtime, targetRuntime); return health; },
-    readAccountUsage: async runtime => { accountCalls.push(runtime); return accountAvailable && runtime === 'codex' ? { fiveHour: { usedPercentage: 37 }, sevenDay: { usedPercentage: 61 } } : null; },
+    readAccountUsage: async (runtime, options) => { assert.deepEqual(options, { allowRecorded: true }); accountCalls.push(runtime); return accountAvailable && runtime === 'codex'
+      ? { value: { fiveHour: { usedPercentage: 37 }, sevenDay: { usedPercentage: 61 } }, live: accountLive, recordedAt: 1000 } : null; },
   };
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
@@ -63,26 +64,33 @@ test('Core state reads Origin facts only for absence or authentication and reads
     assert.fail(`Unexpected core module ${name}`);
   } } });
   const { CoreState } = await import(`../src/lib/core-state.js?origin-facts=${Date.now()}`);
-  const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR });
+  const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
   assert.equal((await core.refresh()).state, 'SLEEPING');
   assert.deepEqual(accountCalls, ['codex']);
   assert.equal(core.accountUsage.fiveHour.usedPercentage, 37);
   assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
+  assert.equal(core.accountUsageRecord.live, true);
+  assert.equal(core.accountUsageRecord.recordedAt, 1000);
+  const before = changes;
+  await core.refresh(); assert.equal(changes, before);
+  accountLive = false;
+  await core.refresh(); assert.equal(changes, before + 1);
+  assert.equal(core.accountUsageRecord.live, false);
   const metrics = new MetricResolver({}, { statusline: { getAccountUsage: () => ({ runtime: 'codex', value: core.accountUsage }) } }, {});
   assert.equal(metrics.resolve('rate_limit').value, null);
   assert.equal(metrics.resolve('rate_limit').fallback_reason, 'Unknown metric: rate_limit');
   assert.equal(metrics.resolve('rate_limit_7d').value, 61);
-  assert.equal(factsReads, 1);
+  assert.equal(factsReads, 3);
   observation = live();
   assert.equal((await core.refresh()).state, 'BUSY');
   health = { health: 'rate_limited' };
   assert.equal((await core.refresh()).state, 'BUSY');
-  assert.equal(factsReads, 1, 'present healthy or limited Origin does not open C4');
+  assert.equal(factsReads, 3, 'present healthy or limited Origin does not open C4');
   health = { health: 'auth_failed' };
   facts.originNeed = { inbound: 1, controls: 0, oldestAt: Math.floor(Date.now() / 1000) };
   assert.equal((await core.refresh()).state, 'AUTH_WAIT');
   assert.equal(core.getState().runId, 'run-current');
-  assert.equal(factsReads, 2);
+  assert.equal(factsReads, 4);
   observation = absent(); health = { health: 'rate_limited' };
   facts.originNeed.oldestAt -= 400;
   assert.equal((await core.refresh()).state, 'RATE_WAIT');
@@ -108,6 +116,10 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.equal((await core.refresh()).state, 'OFFLINE');
   assert.equal(factsReads, reads);
   assert.equal(core.accountUsage, null);
+  accountAvailable = true;
+  assert.equal((await core.refresh()).state, 'OFFLINE');
+  assert.equal(core.accountUsage.sevenDay.usedPercentage, 61);
+  assert.equal(core.accountUsageRecord.live, false);
 });
 
 test('Origin states have matching detail, Fleet and action availability presentation', () => {

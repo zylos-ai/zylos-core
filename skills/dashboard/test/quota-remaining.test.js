@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, instanceStrip } from '../public/js/wb/instance-strip.js';
 import { fleetSelfFromSnapshot, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
+import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
 
 const fleet = { agents: [{ name: 'local', self: true, state: 'IDLE' }] };
 const pack = locale => JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
@@ -89,4 +90,31 @@ test('strip rounds fractional weekly quota in both percentage text and tooltip',
     assert.equal(box.children.at(-1).textContent, '67%');
     assert.equal(box.title, translator(pack(locale))('wb.quotaRemaining', { pct: 67 }));
   }
+});
+
+test('recorded quota shows its instance-local time in strip and both fleet views', () => {
+  setInstanceZone('Asia/Shanghai');
+  const now = Date.parse('2026-11-10T00:10:00+08:00');
+  for (const locale of ['en', 'zh']) for (const sameDay of [true, false]) {
+    const recordedAt = now - (sameDay ? 60000 : 3600000);
+    const sample = { used_percentage: 7, recordedAt, live: false };
+    const snapshot = { baselineRuntime: 'claude', instance: { accounts: { claude: sample } } };
+    const values = pack(locale), t = translator(values);
+    const box = accounts(strip(snapshot, locale, { now }))[0];
+    assert.match(box.textContent, /93%/);
+    assert.ok(box.textContent.includes(sameDay ? '00:09' : '23:10'));
+    if (!sameDay) assert.ok(box.textContent.includes('2026'));
+    assert.ok(box.title.includes(t('wb.quotaRecordedHint')));
+    const labels = Object.fromEntries(Object.entries(values).filter(([key]) => key.startsWith('wb.fleet.')).map(([key, value]) => [key.slice(9), value]));
+    const self = fleetSelfFromSnapshot(snapshot);
+    const html = renderAgentFleetHtml({ agents: [{ name: 'local', self: true, state: 'IDLE' },
+      { name: 'remote', state: 'IDLE', rate_limit_7d_pct: 7, rate_limit_7d_recorded_at: recordedAt, rate_limit_7d_live: false }] }, { self, labels });
+    assert.equal((html.match(/class="wb-quota-recorded"/g) ?? []).length, 4, 'local and remote in card and comparison');
+    assert.ok(html.includes(t('wb.quotaRecordedHint')));
+    sample.live = true;
+    assert.doesNotMatch(accounts(strip(snapshot, locale, { now }))[0].textContent, /Recorded|记录/);
+    sample.live = false; sample.used_percentage = null;
+    assert.doesNotMatch(accounts(strip(snapshot, locale, { now }))[0].textContent, /Recorded|记录/);
+  }
+  setInstanceZone(null);
 });

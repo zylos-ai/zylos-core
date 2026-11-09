@@ -1,4 +1,4 @@
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor } from './wb/instance-strip.js?v=115';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=116';
 
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline', 'stuck']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
@@ -171,6 +171,8 @@ export function defaultAgentFleetLabels() {
     quotaHead: '7-day quota remaining',
     quotaRemaining: '7-day quota remaining {pct}%',
     quotaUnknown: 'No data',
+    quotaRecorded: 'Recorded {time}',
+    quotaRecordedHint: 'No session is currently running; showing the most recent recorded quota.',
     subagent: 'Subagent',
     self: 'This machine',
     modeMulti: 'Multi-session',
@@ -264,6 +266,7 @@ export function buildAgentFleetView(fleet, options = {}) {
       effort: labelText(agent.effort),
       activityFeed,
       rate7dPct: pctValue(agent.rate_limit_7d_pct),
+      rate7dRecord: { recordedAt: agent.rate_limit_7d_recorded_at, live: agent.rate_limit_7d_live },
       sessionCostLabel: money(agent.session_cost ?? agent.cost),
       dailyCost: Number.isFinite(Number(agent.daily_cost)) && agent.daily_cost != null ? Number(agent.daily_cost) : null,
       dailyCostLabel: money(agent.daily_cost),
@@ -329,6 +332,7 @@ export function fleetSelfFromSnapshot(snapshot) {
     groups: snapshot?.rows?.length ?? null,
     pool: snapshot?.instance?.pool ?? null,
     runtimes: accountRuntimes(snapshot ?? {}),
+    accountRecords: snapshot?.instance?.accounts ?? {},
     accounts: Object.fromEntries(['claude', 'codex'].map((runtime) => [runtime, accountUsedPercent(snapshot?.instance?.accounts?.[runtime])]))
   };
 }
@@ -337,20 +341,23 @@ export function fleetSelfFromSnapshot(snapshot) {
 const pillKind = { busy: 'busy', thinking: 'busy', idle: 'idle', stuck: 'waiting' };
 const pctText = (value) => value == null ? '--' : `${Number(value).toFixed(0)}%`;
 // Both views use remaining quota; remote rate_limit_7d_pct is still a used percentage.
-function quotaBar(label, value, labels) {
+function quotaBar(label, value, labels, record) {
   const pct = remainingQuotaPercent(value);
-  const title = pct == null ? labels.quotaUnknown : fill(labels.quotaRemaining, { pct: Math.round(pct) });
+  const time = pct == null ? null : quotaRecordedTime(record);
+  const recorded = time ? `<small class="wb-quota-recorded">${escapeHtml(fill(labels.quotaRecorded, { time }))}</small>` : '';
+  const title = (pct == null ? labels.quotaUnknown : fill(labels.quotaRemaining, { pct: Math.round(pct) })) +
+    (time ? ' · ' + labels.quotaRecordedHint : '');
   const color = pct == null ? '' : ` style="--wb-quota-color:${quotaColor(pct)};--wb-quota-fill:${quotaFillColor(pct)}"`;
-  return `<div class="wb-qbar" title="${escapeHtml(title)}"${color}><span>${escapeHtml(label)}</span><span class="wb-qbar-tr"><i style="width:${pct == null ? 0 : pct}%"></i></span><b>${pct == null ? escapeHtml(labels.quotaUnknown) : pctText(pct)}</b></div>`;
+  return `<div class="wb-qbar" title="${escapeHtml(title)}"${color}><span>${escapeHtml(label)}</span><span class="wb-qbar-tr"><i style="width:${pct == null ? 0 : pct}%"></i></span><b>${pct == null ? escapeHtml(labels.quotaUnknown) : pctText(pct)}</b>${recorded}</div>`;
 }
 function quotaBars(tile, labels) {
   const accounts = tile.self?.accounts;
   if (accounts) {
     const runtimes = tile.self.runtimes ?? ['claude', 'codex'].filter(runtime => accounts[runtime] != null);
-    const rows = runtimes.map(runtime => quotaBar(runtime === 'codex' ? 'Codex' : 'Claude', accounts[runtime], labels));
+    const rows = runtimes.map(runtime => quotaBar(runtime === 'codex' ? 'Codex' : 'Claude', accounts[runtime], labels, tile.self.accountRecords?.[runtime]));
     if (rows.length) return `<div class="wb-qbars">${rows.join('')}</div>`;
   }
-  return `<div class="wb-qbars">${quotaBar(labels.rate7d, tile.rate7dPct, labels)}</div>`;
+  return `<div class="wb-qbars">${quotaBar(labels.rate7d, tile.rate7dPct, labels, tile.rate7dRecord)}</div>`;
 }
 function selfStates(tile, labels) {
   const self = tile.self, counts = self.counts || {};

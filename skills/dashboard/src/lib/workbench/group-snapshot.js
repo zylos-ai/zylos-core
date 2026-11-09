@@ -80,8 +80,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       if (!reader) { try { reader = await loadCoreModule('session-state-reader.js'); } catch {} }
       await Promise.all(['claude', 'codex'].map(async runtime => {
         try {
-          const value = await reader.readAccountUsage(runtime);
-          accounts[runtime] = value?.seven_day ?? value?.sevenDay ?? null;
+          const sample = await reader.readAccountUsage(runtime, { allowRecorded: true });
+          const weekly = sample?.value?.seven_day ?? sample?.value?.sevenDay;
+          accounts[runtime] = weekly ? { ...weekly, recordedAt: sample.recordedAt, live: sample.live } : null;
           accountSources[runtime] = { ok: true, readAt: now() };
         } catch {
           accounts[runtime] = null;

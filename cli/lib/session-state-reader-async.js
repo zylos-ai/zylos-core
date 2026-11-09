@@ -6,6 +6,7 @@ import { openTmuxConnection } from './runtime/tmux-connection.js';
 import { isIdentityError } from './runtime/tmux-protocol.js';
 import { observeSessionTarget } from './runtime/session-target.js';
 import { readJsonSample, readCodexSampleForIdentity, sampleResult, sameIdentity } from './session-usage-reader.js';
+import { readRecordedAccountUsage } from './recorded-account-usage.js';
 
 const publicIdentity = value => Object.fromEntries(['present','tmuxName','runId','createdAt','runtime','launchConfig','ready','sessionId'].map(key => [key, value[key]]));
 const absent = group => ({ present: false, tmuxName: tmuxNameForGroup(group ?? 'origin'), runId: null, createdAt: null,
@@ -64,7 +65,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
     if (typeof resolve !== 'function') throw Object.assign(new Error('Session launch configuration resolver is unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
     return (await resolve({ sessionGroup, sessionMode: sessionGroup === null ? 'single' : 'multi' })).runtime;
   }
-  async function readAccountUsage(runtime) {
+  async function readAccountUsage(runtime, { allowRecorded = false } = {}) {
     if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');
     const samples = [];
     for (const { sessionGroup } of await listSessions(connectionOptions)) {
@@ -75,14 +76,16 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
           readCodexSampleForIdentity({ sessionGroup, identity: first, env, account: true });
         const last = await read();
         if (!sameIdentity(first, last)) return null;
-        if (runtime === 'codex') return sample?.sample.rateLimits ? { value: sample.sample.rateLimits, mtime: sample.mtime } : null;
+        if (runtime === 'codex') return sample?.sample.rateLimits ? { value: sample.sample.rateLimits, mtime: sample.mtime, recordedAt: sample.sample.capturedAt } : null;
         if (sample.error || sample.identity.runId !== first.runId || sample.identity.sessionId !== first.sessionId) return null;
-        return sample.value.rate_limits ? { value: sample.value.rate_limits, mtime: sample.mtime } : null;
+        return sample.value.rate_limits ? { value: sample.value.rate_limits, mtime: sample.mtime, recordedAt: sample.sampledAt ?? sample.mtime } : null;
       });
       if (candidate) samples.push(candidate);
     }
     samples.sort((a, b) => b.mtime - a.mtime);
-    return samples[0]?.value ?? null;
+    if (!allowRecorded) return samples[0]?.value ?? null;
+    if (samples.length) return { value: samples[0].value, recordedAt: samples[0].recordedAt, live: true };
+    return readRecordedAccountUsage(runtime, env, now());
   }
   return { readLiveIdentity, readSessionState, resolveTargetRuntime, readCodexUsageSample, readAccountUsage };
 }

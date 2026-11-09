@@ -28,9 +28,10 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
   const reader = { readSessionState: async key => {
     observations.push(key);
     return live.get(key) ?? { identity: { present: false }, status: { valid: false, reason: 'not_running' }, usage: { valid: false } };
-  }, readAccountUsage: async runtime => {
+  }, readAccountUsage: async (runtime, options) => {
+    assert.deepEqual(options, { allowRecorded: true });
     reads.push(runtime); if (runtime === 'codex') throw new Error('unreadable');
-    return { seven_day: { used_percentage: 23 }, five_hour: { used_percentage: 99 } };
+    return { value: { seven_day: { used_percentage: 23 }, five_hour: { used_percentage: 99 } }, recordedAt: clock - 3600000, live: false };
   } };
   const cli = { runC4Db: async args => {
     calls.push(args);
@@ -157,10 +158,17 @@ test('unexpected build failure does not poison cache or the next request', async
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
 test('full and summary responses preserve metadata-only C4 and redact messages and tools', async t => {
-  const f = fixture(t), value = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams());
+  const f = fixture(t);
+  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
+  console.log('Quota snapshot isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: f.root,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, socket: path.join(f.root, 'tmux.sock'),
+    storage: 'injected, no DB/PM2/tmux/network opened' }));
+  const value = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams());
   assert.equal(value.listKnown, true); assert.equal(value.baselineRuntime, 'claude');
   assert.equal(value.instance.pool.used, 3); assert.equal(value.instance.pool.capacity, null);
   assert.equal(value.instance.accounts.claude.used_percentage, 23); assert.equal(value.instance.accounts.codex, null);
+  assert.equal(value.instance.accounts.claude.live, false);
+  assert.equal(value.instance.accounts.claude.recordedAt, f.now() - 3600000);
   assert.equal(JSON.stringify(value).includes('five_hour'), false);
   assert.equal(value.sources.accounts.codex.reason, 'account_usage_unreadable');
   const row = value.rows.find(item => item.sessionGroup === 'telegram:g0');

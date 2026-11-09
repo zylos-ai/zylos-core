@@ -35,14 +35,15 @@ test('removed five-hour metric never reads current or historical samples while w
 
 // HTTP integration: real routes/AuthGate/Store on private random loopback;
 // mocked CLI/Core BEFORE index import, owned timers/DB/listener cleanup in
-// usageServer. Run for these endpoints/auth/5h payload changes, skip UI-only.
+// usageServer. Run for these endpoints/auth/quota payload changes, skip UI-only.
 // Runner must isolate HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private tmux socket.
 test('usage and host reads enforce auth and removed five-hour routes return unknown', async t => {
   const f = await usageServer(t, { auth: { enabled: true, password: 'scrypt:fixture' } });
   f.core.accountUsage = { seven_day: { used_percentage: 21 }, five_hour: { used_percentage: 73 } };
+  f.core.accountUsageRecord = { recordedAt: 1000, live: false };
   f.store.insertApiKey({ name: 'reader', keyHash: hashApiKey('zylos_ak_usage_fixture'), scope: 'read' });
   const headers = { Authorization: `Bearer ${exchangeApiKeyForToken('zylos_ak_usage_fixture').token}` };
-  for (const route of ['/api/workbench/usage', '/api/workbench/host']) {
+  for (const route of ['/api/workbench/usage', '/api/workbench/host', '/api/state']) {
     assert.equal((await request(f.origin, route)).status, 401);
     assert.equal((await request(f.origin, route, { headers })).status, 200);
   }
@@ -61,6 +62,15 @@ test('usage and host reads enforce auth and removed five-hour routes return unkn
   const state = await (await request(f.origin, '/api/state', { headers })).json();
   assert.equal(Object.hasOwn(state, 'rate_limit_pct'), false);
   assert.equal(state.rate_limit_7d_pct, 21);
+  assert.equal(state.rate_limit_7d_live, false);
+  assert.equal(state.rate_limit_7d_recorded_at, 1000);
+  f.core.accountUsageRecord = { recordedAt: 2000, live: true };
+  const liveState = await (await request(f.origin, '/api/state', { headers })).json();
+  assert.equal(liveState.rate_limit_7d_live, true);
+  assert.equal(liveState.rate_limit_7d_recorded_at, 2000);
+  f.core.accountUsage = null; f.core.accountUsageRecord = null;
+  const emptyState = await (await request(f.origin, '/api/state', { headers })).json();
+  for (const key of ['rate_limit_7d_pct', 'rate_limit_7d_live', 'rate_limit_7d_recorded_at']) assert.equal(emptyState[key], null);
   assert.equal((await request(f.origin, '/api/workbench/groups/a/name', { method: 'PUT',
     body: JSON.stringify({ name: 'fixture' }), headers: { ...headers, 'content-type': 'application/json' } })).status, 403);
   assert.equal(f.store.queryMetrics({ name: 'account_quota' }).length, 0);

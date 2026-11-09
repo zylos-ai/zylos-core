@@ -48,6 +48,7 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
     assert.equal(options.headers.Authorization, 'Bearer zylos_st_secret');
     return jsonResponse({
       state: 'BUSY',
+      rate_limit_7d_pct: 4, rate_limit_7d_live: false, rate_limit_7d_recorded_at: 1000,
       running_tools: [{ tool_name: 'Bash', tool_detail: 'npm test' }],
       runtime_info: { model: 'GPT-5', effort: 'high', zylos_update: '1.2.3' },
       new_session_threshold: 75,
@@ -74,6 +75,9 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
   assert.equal(fleet.agents[0].color, agentColor('Remote').color);
   assert.equal(fleet.agents[0].hue, agentColor('Remote').hue);
   assert.equal(fleet.agents[0].state, 'BUSY');
+  assert.equal(fleet.agents[0].rate_limit_7d_pct, 4);
+  assert.equal(fleet.agents[0].rate_limit_7d_live, false);
+  assert.equal(fleet.agents[0].rate_limit_7d_recorded_at, 1000);
   assert.equal(fleet.agents[0].activity, 'npm test');
   assert.equal(fleet.agents[0].context_pct, 42);
   assert.equal(fleet.agents[0].cost, 1.23);
@@ -1363,14 +1367,19 @@ test('stateToFleetRecord activity_feed shows thinking when busy without tools, e
 
 test('stateToFleetRecord passes rate limit percentages through, defaulting to null', () => {
   const withRates = stateToFleetRecord({ name: 'a' }, {
-    state: 'IDLE', rate_limit_pct: 13, rate_limit_7d_pct: 9
+    state: 'IDLE', rate_limit_pct: 13, rate_limit_7d_pct: 9,
+    rate_limit_7d_live: false, rate_limit_7d_recorded_at: 1000
   }, { self: false, nowMs: 0 });
   assert.equal(withRates.rate_limit_pct, 13);
   assert.equal(withRates.rate_limit_7d_pct, 9);
+  assert.equal(withRates.rate_limit_7d_live, false);
+  assert.equal(withRates.rate_limit_7d_recorded_at, 1000);
 
   const without = stateToFleetRecord({ name: 'a' }, { state: 'IDLE' }, { self: false, nowMs: 0 });
   assert.equal(without.rate_limit_pct, null);
   assert.equal(without.rate_limit_7d_pct, null);
+  assert.equal(without.rate_limit_7d_live, null);
+  assert.equal(without.rate_limit_7d_recorded_at, null);
 });
 
 test('stateToFleetRecord idle activity prefers last assistant message over stale prompt', () => {

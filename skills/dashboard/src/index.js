@@ -500,6 +500,8 @@ function buildApiStatePayload() {
   const usage = usageObservation.valid ? usageObservation.value : null;
   stateData.context_pct = usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null);
   stateData.rate_limit_7d_pct = coreState.accountUsage?.seven_day?.used_percentage ?? coreState.accountUsage?.sevenDay?.usedPercentage ?? null;
+  stateData.rate_limit_7d_recorded_at = coreState.accountUsageRecord?.recordedAt ?? null;
+  stateData.rate_limit_7d_live = coreState.accountUsageRecord?.live ?? null;
   Object.assign(stateData, getCostTiers());
   return stateData;
 }

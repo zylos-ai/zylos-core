@@ -14,13 +14,14 @@ function stableBusinessValue(value) {
     .filter(([key]) => !VOLATILE_KEYS.has(key))
     .map(([key, item]) => [key, stableBusinessValue(item)]));
 }
-function businessSource(projected, observation, accountUsage) {
+function businessSource(projected, observation, accountUsage, accountRecord) {
   const usage = observation?.usage?.valid ? observation.usage.value : null;
   return stableBusinessValue({
     projected,
     contextPct: usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null),
     rateLimitPct: accountUsage?.five_hour?.used_percentage ?? accountUsage?.fiveHour?.usedPercentage ?? null,
     rateLimit7dPct: accountUsage?.seven_day?.used_percentage ?? accountUsage?.sevenDay?.usedPercentage ?? null,
+    accountRecord: accountRecord ? { recordedAt: accountRecord.recordedAt, live: accountRecord.live } : null,
   });
 }
 export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitizer(process.env.ZYLOS_DIR || process.cwd()), facts = null, view = null) {
@@ -96,11 +97,17 @@ export class CoreState {
             originNeed: facts.originNeed, runtimeHealth: { [targetRuntime]: health }, targetRuntime, nowSec });
         }
       }
-      const accountUsage = ['claude', 'codex'].includes(targetRuntime) ? await reader.readAccountUsage(targetRuntime).catch(() => null) : null;
+      if (mode !== 'multi' && !['claude', 'codex'].includes(targetRuntime)) {
+        try { targetRuntime = await reader.resolveTargetRuntime(null); } catch { targetRuntime = null; }
+      }
+      const accountRecord = ['claude', 'codex'].includes(targetRuntime)
+        ? await reader.readAccountUsage(targetRuntime, { allowRecorded: true }).catch(() => null) : null;
+      const accountUsage = accountRecord?.value ?? null;
       const projected = projectOrigin(group, observation, this.sanitizer, facts, view);
-      const source = businessSource(projected, observation, accountUsage);
+      const source = businessSource(projected, observation, accountUsage, accountRecord);
       this.observation = observation;
       this.accountUsage = accountUsage;
+      this.accountUsageRecord = accountRecord;
       const changed = !isDeepStrictEqual(source, this.lastSource);
       this.lastSource = source;
       this.snapshot = projected;
@@ -108,6 +115,7 @@ export class CoreState {
     } catch (error) {
       this.costKey = null;
       this.accountUsage = null;
+      this.accountUsageRecord = null;
       this.observation = null;
       const source = { error: { code: error.code || 'read_failed', message: error.message } };
       if (!isDeepStrictEqual(source, this.lastSource)) {

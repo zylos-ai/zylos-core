@@ -71,6 +71,36 @@ export function readCodexSampleForIdentity({ sessionGroup, identity, env = proce
     model, contextUsage, rateLimits: codexRateLimits(row.payload.rate_limits) }, mtime: rollout.mtime };
 }
 
+export function currentRecordedWeekly(value, recordedAt, now) {
+  const weekly = value?.seven_day ?? value?.sevenDay;
+  const percent = weekly?.used_percentage ?? weekly?.utilization ?? weekly?.usedPercentage;
+  const reset = weekly?.resets_at ?? weekly?.resetsAt;
+  const resetsAt = typeof reset === 'number' ? reset * 1000 : Date.parse(reset);
+  return Number.isFinite(recordedAt) && recordedAt >= 0 && recordedAt <= now &&
+    Number.isFinite(percent) && percent >= 0 && percent <= 100 && Number.isFinite(resetsAt) && resetsAt > now;
+}
+
+/** Recorded account evidence uses its recorded run/session, never a live identity. */
+export function readRecordedCodexSample({ sessionGroup, env = process.env, now = Date.now() }) {
+  const events = readSnapshot(path.join(groupRunDir(sessionGroup, env), 'events.jsonl'));
+  if (events.error) return null;
+  const starts = completeRows(events.text).filter(row => row.v === 1 && row.event === 'session_start' &&
+    row.runtime === 'codex' && row.session_group === sessionGroup && typeof row.run_id === 'string' &&
+    row.run_id && typeof row.session_id === 'string' && row.session_id);
+  let latest = null;
+  const seen = new Set();
+  for (const event of starts.reverse()) {
+    const key = JSON.stringify([event.run_id, event.session_id]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const sample = readCodexSampleForIdentity({ sessionGroup, env, account: true,
+      identity: { present: true, ready: true, runtime: 'codex', runId: event.run_id, sessionId: event.session_id } });
+    if (sample && currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now) &&
+      (!latest || sample.sample.capturedAt > latest.sample.capturedAt)) latest = sample;
+  }
+  return latest;
+}
+
 export function sameIdentity(a, b) {
   return Boolean(a?.present && a.ready && b?.present && b.ready &&
     ['runId', 'sessionId', 'runtime', 'createdAt', 'serverGeneration', 'tmuxSessionId', 'paneId'].every(key => a[key] === b[key]));
