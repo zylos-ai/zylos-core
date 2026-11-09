@@ -180,9 +180,11 @@ export function createGroupDeletion({
     const initialRows = messages(group, true);
     const initial = { messages: initialRows.length, attachments: extra.attachments ?? 0,
       files: (extra.files ?? 0) + paths(group, initialRows).reduce((n, [base, file]) => n + countFiles(base, file), 0) };
+    const admissionNow = now();
     const result = await requestStop({ version: 1, type: 'delete_group', requestId,
       operationId: requestId, sessionGroup: group, actor, preview: initial },
-    { socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock'), deadlineAt: Math.min(deadlineAt, now() + 10000) });
+    { socketPath: path.join(zylosDir, 'activity-monitor', 'am.sock'),
+      deadlineAt: Math.max(admissionNow + 1000, Math.min(deadlineAt, admissionNow + 10000)) });
     if (result.kind === 'rejected') throw error(result.reply?.reason ?? result.reply?.code ?? 'GROUP_DELETE_REJECTED', 'Core rejected deletion admission');
     const active = store.getActiveDeletion(group);
     if (!active) {
@@ -200,7 +202,6 @@ export function createGroupDeletion({
       await sleep(Math.min(pollMs, Math.max(1, deadlineAt - now())));
     } while (true);
     await onStage('stopped', active);
-    if (now() >= deadlineAt) return { ok: true, pending: true, operationId: active.operationId, reason: 'usage_pending' };
     try { await participant.finalizeTranscripts({ ...resolved, processExited: true, deadlineAt, now }); }
     catch (cause) {
       if (cause.code === 'group_delete_usage_pending' || cause.code === 'GROUP_DELETE_USAGE_PENDING') {

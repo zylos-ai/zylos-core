@@ -30,6 +30,9 @@ within one 20-second budget measured from coordinator entry. Admission
 (its own maximum is 10 seconds), the stopped-run wait and final transcript
 import share that budget; transcript import checks it between mappings and
 Codex batches. If work remains, retry the same command with that operation ID.
+Admission always gets at least one second to connect and submit, even if preview
+or other work before admission has exhausted the shared budget. In that case it
+may exceed the 20-second budget; drain and import receive no new waiting budget.
 
 This is a cooperative budget, not a hard process time limit. A single
 synchronous call cannot be interrupted: Claude reads its unread transcript

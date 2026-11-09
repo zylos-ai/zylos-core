@@ -125,6 +125,76 @@ test('real storage cleanup interrupted at its first unlink makes same-operation 
   assert.equal(f.c4Db.prepare('SELECT COUNT(*) n FROM group_deletion_audit').get().n, 1);
 });
 
+test('a conversation interrupted at its first runtime unlink retains estimated retry counts and final usage', async t => {
+  const f = fixture(t), group = 'dashboard:runtime-interruption';
+  f.register('runtime-interruption'); f.message(group);
+  const text = JSON.stringify({ type: 'assistant', uuid: 'runtime-unlink-usage', requestId: 'runtime-unlink-request',
+    sessionId: 'runtime-unlink-session', timestamp: new Date().toISOString(), message: {
+      id: 'runtime-unlink-response', role: 'assistant', model: 'claude-sonnet-4',
+      usage: { input_tokens: 100, output_tokens: 20 }, content: [{ type: 'text', text: 'private answer' }],
+    } }) + '\n';
+  const runtime = f.transcript(group, 'runtime-unlink-session', 'claude', text);
+  f.participant.finalizeTranscripts({ sessionGroup: group, processExited: true });
+  assert.equal(f.store.getUsageTranscript(runtime).status, 'finished');
+  assert.equal(f.store.getUsageTranscript(runtime).byte_offset, Buffer.byteLength(text));
+  const usageCount = () => f.store.db.prepare("SELECT COUNT(*) n FROM metric_points WHERE session_group=? AND metric_name='usage_event'").get(group).n;
+  assert.equal(usageCount(), 1);
+  const media = f.write(path.join(f.zylos, 'components/dashboard/media/after-runtime.txt'), 'owned');
+  f.store.db.prepare(`INSERT INTO chat_attachments(id,local_id,namespace,storage_name,name,size,mime,kind,source,created_at,c4_watermark,scanned_c4_id,next_check_at)
+    VALUES ('after-runtime','runtime-interruption','dashboard','after-runtime.txt','after-runtime.txt',5,'text/plain','file','user',1,0,0,1)`).run();
+  const coreStore = createStore(f.c4Db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
+  let admissions = 0, completedFileStages = 0;
+  const service = createGroupDeletion({ zylosDir: f.zylos, homeDir: f.home, database: f.c4Db,
+    store: coreStore, participant: f.participant, waitMs: 1000,
+    requestStop: async request => {
+      admissions++;
+      const audit = coreStore.beginGroupDeletion(group, { operationId: request.operationId, actor: request.actor, preview: request.preview });
+      coreStore.recordRunEnd(group, { runId: audit.operationId, reason: 'delete' });
+      return { kind: 'accepted', sent: true };
+    },
+    onStage(stage) { if (stage === 'files_removed') completedFileStages++; },
+  });
+  t.after(() => service.close());
+  const options = { confirmed: true, actor: 'owner', operationId: 'runtime-unlink-interruption' };
+  const unlink = fs.unlinkSync;
+  const removed = [];
+  // Fail after the first real runtime removal, before media cleanup can signal
+  // anything. Moving the file-phase signal past runtime removal loses this proof.
+  const syscall = t.mock.method(fs, 'unlinkSync', file => {
+    const result = unlink(file);
+    removed.push(file);
+    if (file === runtime) throw Object.assign(new Error('I/O failure after runtime unlink'), { code: 'EIO' });
+    return result;
+  });
+  try {
+    await assert.rejects(service.delete(group, options), cause =>
+      cause.code === 'DB_WRITE_FAILED' && cause.cause?.code === 'EIO');
+    assert.equal(removed.length, 1); assert.equal(removed[0], runtime);
+    assert.equal(fs.existsSync(runtime), false); assert.equal(fs.existsSync(media), true);
+    assert.equal(f.c4Db.prepare('SELECT COUNT(*) n FROM conversations WHERE session_group=?').get(group).n, 1);
+    assert.ok(f.conversations.findByGroup(group));
+    assert.equal(coreStore.getGroupDeletionAudit(options.operationId).status, 'started');
+    assert.equal(f.c4Db.prepare('SELECT cleanup_attempts FROM group_deletion_audit WHERE operation_id=?').get(options.operationId).cleanup_attempts, 1);
+    assert.equal(f.store.getUsageTranscript(runtime).status, 'finished');
+    assert.equal(usageCount(), 1);
+  } finally { syscall.mock.restore(); }
+  const result = await service.delete(group, options);
+  assert.equal(result.pending, false); assert.equal(result.operationId, options.operationId);
+  assert.equal(result.countsEstimated, true);
+  assert.equal(result.counts.messages, 1); assert.equal(result.counts.attachments, 1); assert.equal(result.counts.files, 1);
+  assert.equal(fs.existsSync(media), false);
+  assert.equal(f.c4Db.prepare('SELECT COUNT(*) n FROM conversations WHERE session_group=?').get(group).n, 0);
+  assert.equal(f.conversations.findByGroup(group), null);
+  assert.equal(coreStore.getGroupDeletionAudit(options.operationId).status, 'done');
+  assert.equal(coreStore.getGroupDeletionAudit(options.operationId).countsEstimated, true);
+  assert.equal(f.store.getUsageTranscript(runtime).status, 'finished'); assert.equal(usageCount(), 1);
+  assert.equal(admissions, 2); assert.equal(completedFileStages, 1);
+  const acknowledged = await service.delete(group, options);
+  assert.deepEqual(acknowledged, result);
+  assert.equal(admissions, 2); assert.equal(completedFileStages, 1); assert.equal(usageCount(), 1);
+  assert.equal(f.c4Db.prepare('SELECT COUNT(*) n FROM group_deletion_audit').get().n, 1);
+});
+
 test('participant cleanup status survives the Core coordinator transaction and CLI JSON', async t => {
   const f = fixture(t), draft = f.conversations.create();
   const coreStore = createStore(f.c4Db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });

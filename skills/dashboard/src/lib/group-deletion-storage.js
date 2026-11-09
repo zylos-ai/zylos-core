@@ -145,7 +145,6 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
     // The known mapped main also owns its bounded subagent directory. Discover
     // it before finalizing so a just-written child cannot be removed unbilled.
     for (const row of rows) {
-      withinBudget();
       if (row.runtime !== 'claude' || row.parent_path) continue;
       transcriptFile(row);
       const directory = path.join(path.dirname(row.transcript_path), row.session_id, 'subagents');
@@ -159,7 +158,6 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
     }
     let completed = 0;
     for (const row of mappings(sessionGroup)) {
-      withinBudget();
       const file = transcriptFile(row);
       let identity;
       try { identity = fs.statSync(file); }

@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
 import Database from '../../../skills/comm-bridge/scripts/sqlite-driver.js';
 import * as schema from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import { guardDatabase } from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
 import { createStore } from '../../../skills/comm-bridge/scripts/c4-v2-store.js';
 import { createGroupDeletion } from '../group-delete.js';
 import { runGroupDeletionCli } from '../group-delete-cli.js';
+import { submit } from '../am-sock-client.js';
 
 function fixture(t, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'group-delete-'));
@@ -258,6 +260,59 @@ test('an exhausted admission budget does not begin another drain or transcript w
   const result = await f.service.delete('telegram:one', { confirmed: true, actor: 'owner', operationId: 'exhausted-op' });
   assert.equal(result.pending, true);
   assert.equal(result.reason, 'draining');
+  assert.equal(f.cleanups(), 0);
+});
+
+test('preview time reduces the admission deadline to the original deletion budget', async t => {
+  let clock = 0;
+  const f = fixture(t, { ready: false, service: { waitMs: undefined, now: () => clock,
+    sleep: async ms => { clock += ms; },
+    requestStop: async (request, options) => {
+      assert.equal(clock, 12000);
+      assert.equal(options.deadlineAt, 20000);
+      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one' });
+      return { kind: 'accepted', sent: true, reply: { ok: true } };
+    },
+  } });
+  f.participant.preview = () => { clock += 12000; return { attachments: 0, files: 0 }; };
+  const result = await f.service.delete('telegram:one', { confirmed: true, actor: 'owner', operationId: 'preview-budget' });
+  assert.equal(result.reason, 'draining');
+  assert.equal(clock, 20000);
+  assert.equal(f.cleanups(), 0);
+});
+
+test('an expired preview budget still gives supervisor submission a minimum connection window', async t => {
+  let clock = 0, connections = 0, submissions = 0;
+  const f = fixture(t, { ready: false, service: { waitMs: undefined, now: () => clock,
+    sleep: async () => assert.fail('No drain wait after an exhausted total budget'),
+    requestStop: (request, options) => {
+      assert.equal(clock, 25000);
+      assert.equal(options.deadlineAt, 26000);
+      return submit(request, { ...options, now: () => clock, connect() {
+        connections++;
+        const socket = new EventEmitter();
+        socket.destroy = () => {};
+        socket.write = (line, callback) => {
+          const sent = JSON.parse(line);
+          submissions++;
+          f.store.beginGroupDeletion(sent.sessionGroup, { operationId: sent.operationId, actor: sent.actor, runId: 'run-one' });
+          callback();
+          socket.emit('data', Buffer.from(JSON.stringify({ version: 1, type: sent.type, requestId: sent.requestId,
+            ok: true, result: 'accepted', operationId: sent.operationId, runId: 'run-one' }) + '\n'));
+        };
+        queueMicrotask(() => socket.emit('connect'));
+        return socket;
+      } });
+    },
+  } });
+  f.participant.preview = () => { clock += 25000; return { attachments: 0, files: 0 }; };
+  const result = await f.service.delete('telegram:one', { confirmed: true, actor: 'owner', operationId: 'expired-preview' });
+  assert.equal(connections, 1);
+  assert.equal(submissions, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.pending, true);
+  assert.equal(result.reason, 'draining');
+  assert.equal(f.store.getActiveDeletion('telegram:one').operationId, 'expired-preview');
   assert.equal(f.cleanups(), 0);
 });
 

@@ -8,8 +8,8 @@ import { SupervisorAdmission } from '../supervisor-admission.js';
 import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 import { validateReply } from '../../../../cli/lib/am-sock-client.js';
 import { readyForConfigReclaim } from '../supervisor-request.js';
-function fixture(t, { absent = false, database, closeDatabase } = {}) {
-  const db = database ?? new Database(':memory:'); guardDatabase(db, owner); t.after(closeDatabase ?? (() => db.close()));
+function fixture(t, { absent = false } = {}) {
+  const db = new Database(':memory:'); guardDatabase(db, owner); t.after(() => db.close());
   const store = createStore(db, { validateComponent: () => true, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
   let live = absent ? null : { sessionGroup: 'telegram', runId: 'runtime-old', sessionId: 'session-old', present: true, ready: true,
     processRunning: true, state: 'idle', idleSince: 0, runtime: 'claude', runDir: '/private/fixture', createdAt: 0 };
@@ -115,11 +115,11 @@ test('a post-stop replacement cannot become stopped evidence for deletion', asyn
   assert.equal(f.store.listRunEndings(['telegram']).length, 0); assert.equal(f.store.getDrainFence('telegram').reason, 'delete');
 });
 
-// Real notification -> claim -> ready admission -> ack -> delete reclaim.
-// Uses the official runner's private C4 database; no tmux, service or model.
+// Real notification -> claim -> ready admission -> delete reclaim. The private
+// in-memory writer completes the control; the singleton ack facade is not used.
+// No environment-derived database, tmux, service or model is opened.
 test('a running configuration control can acknowledge through deletion and let its own run stop', async t => {
-  const core = await import('../../../comm-bridge/scripts/c4-db.js');
-  const f = fixture(t, { database: core.getDb(), closeDatabase: core.close });
+  const f = fixture(t);
   f.live.launchConfig = { runtime: 'codex', mode: 'default' };
   f.lifecycle.now = Date.now;
   f.lifecycle.d.bindTarget = scene => JSON.stringify({ expectedRunId: scene.runId,
@@ -143,7 +143,7 @@ test('a running configuration control can acknowledge through deletion and let i
   assert.equal(response.data.result, 'already_accepted');
   assert.deepEqual(f.store.getDrainFence('telegram'), fence);
   assert.equal(f.store.getActiveDeletion('telegram').operationId, request.requestId);
-  core.ackControl(control.id);
+  assert.equal(f.db.prepare("UPDATE control_queue SET status='done' WHERE id=? AND status='running'").run(control.id).changes, 1);
   assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(control.id).status, 'done');
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context()), 'done');
   assert.deepEqual(f.state.stops, ['runtime-old']);

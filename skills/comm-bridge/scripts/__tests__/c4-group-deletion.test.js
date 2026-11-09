@@ -252,7 +252,7 @@ test('draft counts report current cleanup only and retain uncertainty across an 
   s.markDeletionCleanup(options.operationId);
   assert.throws(() => s.finalizeDraftDeletion('draft-id', { operationId: options.operationId, cleanup() { throw new Error('interrupted'); } }), { code: 'DB_WRITE_FAILED' });
   s.markDeletionCleanup(options.operationId);
-  const done = s.finalizeDraftDeletion('draft-id', { operationId: options.operationId,     counts: { messages: 99, attachments: 100, files: 200 }, cleanup: () => ({ attachments: 0, files: 1 }) });
+  const done = s.finalizeDraftDeletion('draft-id', { operationId: options.operationId, counts: { messages: 99, attachments: 100, files: 200 }, cleanup: () => ({ attachments: 0, files: 1 }) });
   assert.equal(done.countsEstimated, true); assert.equal(done.counts.messages, 0); assert.equal(done.counts.attachments, 0); assert.equal(done.counts.files, 1);
 });
 
