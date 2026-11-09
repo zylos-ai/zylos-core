@@ -73,7 +73,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
     const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(pageText)?.[1];
-    assert.equal(appPath, 'js/app.js?v=132', 'the entry page invalidates the application module cache');
+    assert.equal(appPath, 'js/app.js?v=133', 'the entry page invalidates the application module cache');
     const cache = new Map();
     async function moduleAt(url) {
       if (cache.has(url)) return cache.get(url);
@@ -84,11 +84,17 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
       return body;
     }
     const appUrl = origin + prefix + '/_assets/' + appPath;
+    // Keep failed import diagnostics bounded even for the large application module.
+    const importLine = (source, name) => (source.split('\n').find(line => line.startsWith('import ') && line.includes(name)) || '').slice(0, 512);
     const appSource = await moduleAt(appUrl);
-    assert.match(appSource, /from ['"]\.\/markdown-config\.js\?v=2['"]/);
+    assert.match(importLine(appSource, 'markdown-config.js'), /from ['"]\.\/markdown-config\.js\?v=2['"]/);
+    assert.match(importLine(appSource, 'observer-history.js'), /from ['"]\.\/observer-history\.js\?v=4['"]/);
+    const observerUrl = new URL('./observer-history.js?v=4', appUrl).href;
+    const observerSource = await moduleAt(observerUrl);
+    assert.match(importLine(observerSource, 'markdown-cjk-emphasis.js'), /from ['"]\.\/markdown-cjk-emphasis\.js\?v=1['"]/);
     const markdownUrl = new URL('./markdown-config.js?v=2', appUrl).href;
     const markdownSource = await moduleAt(markdownUrl);
-    assert.match(markdownSource, /from ['"]\.\/markdown-cjk-emphasis\.js\?v=1['"]/);
+    assert.match(importLine(markdownSource, 'markdown-cjk-emphasis.js'), /from ['"]\.\/markdown-cjk-emphasis\.js\?v=1['"]/);
     const pluginUrl = new URL('./markdown-cjk-emphasis.js?v=1', markdownUrl).href;
     assert.equal(await moduleAt(pluginUrl), fs.readFileSync(path.join(publicRoot, 'js/markdown-cjk-emphasis.js'), 'utf8'));
     let parentUrl = appUrl;
@@ -102,7 +108,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
       activeModules.set(name, parentUrl);
     }
     const pageUrl = activeModules.get('conversation-page');
-    assert.match(await moduleAt(activeModules.get('conversation-content')), /from ['"]\.\.\/markdown-cjk-emphasis\.js\?v=1['"]/);
+    assert.match(importLine(await moduleAt(activeModules.get('conversation-content')), 'markdown-cjk-emphasis.js'), /from ['"]\.\.\/markdown-cjk-emphasis\.js\?v=1['"]/);
     const page = await moduleAt(pageUrl);
     for (const [name, version] of [['conversation-state', 128], ['chat-questions', 104], ['conversation-activity', 103], ['conversation-delete', 4]]) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]

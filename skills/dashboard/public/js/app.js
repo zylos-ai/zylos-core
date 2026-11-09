@@ -18,7 +18,7 @@ import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserv
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=104';
 import { createUsagePage } from './wb/usage.js?v=116';
-import { ObserverHistory } from './observer-history.js?v=3';
+import { ObserverHistory } from './observer-history.js?v=4';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
 import { fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=115';

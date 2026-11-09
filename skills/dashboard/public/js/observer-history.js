@@ -1,11 +1,12 @@
 import { zonedDay, zonedInputValue } from './wb/instance-zone.js?v=100';
+import { cjkEmphasis } from './markdown-cjk-emphasis.js?v=1';
 // Read-only history UI. The controller never owns the terminal or its lease.
 export function escapeHistory(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 export function createHistoryMarkdown(factory) {
   if (!factory) return text => `<pre>${escapeHistory(text)}</pre>`;
-  const md = factory({ html: false, linkify: true });
+  const md = factory({ html: false, linkify: true }).use(cjkEmphasis);
   md.validateLink = url => /^https?:\/\//i.test(url);
   md.renderer.rules.link_open = (tokens, i, options, env, renderer) => {
     tokens[i].attrSet('rel', 'noopener noreferrer');
