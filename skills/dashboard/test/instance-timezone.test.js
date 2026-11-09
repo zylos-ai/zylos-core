@@ -107,6 +107,19 @@ test('default host timezone discovery rejects spelling absent from installed dat
   assert.equal(f.restarted.length, 0);
 });
 
+test('saving the current timezone still requires installed host data', async t => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'timezone-data-'));
+  t.after(() => fs.rmSync(data, { recursive: true, force: true }));
+  const f = fixture(t, { text: 'TZ=Asia/Tokyo\nOTHER=keep\n', dependencies: { zoneinfoDir: data } });
+  const before = fs.readFileSync(f.envFile);
+  const mode = fs.statSync(f.envFile).mode & 0o777;
+  await assert.rejects(f.timezone.save({ tz: 'Asia/Tokyo' }), { code: 'timezone_unavailable_on_host', status: 400 });
+  assert.equal(fs.readFileSync(f.envFile).equals(before), true);
+  assert.equal(fs.statSync(f.envFile).mode & 0o777, mode);
+  assert.equal(f.logs.length, 0);
+  assert.equal(f.restarted.length, 0);
+});
+
 test('restarting a timezone missing from host data rejects before any service restart', async t => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'timezone-data-'));
   t.after(() => fs.rmSync(data, { recursive: true, force: true }));

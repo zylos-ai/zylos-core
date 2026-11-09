@@ -1,5 +1,5 @@
 import { element, icon } from './plain-text.js?v=104';
-import { canonicalTimezoneName, timezoneOptions } from './timezone-names.js?v=1';
+import { canonicalTimezoneName, timezoneOptions } from './timezone-names.js?v=2';
 import { settingsCard } from './settings.js?v=114';
 
 export function validTimezone(value) {
