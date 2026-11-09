@@ -22,6 +22,17 @@ const value = {
   costByRuntime:[{runtime:'claude',at:'2026-11-01T16:00:00.000Z',value:2},{runtime:'codex',at:'2026-11-02T16:00:00.000Z',value:3}],
   tokensByRuntime:[], messages:[{at:'2026-11-01T16:00:00.000Z',in:4,out:2}], rotations:[{at:'2026-11-02T16:00:00.000Z',value:1}], tools:[{name:'Read',count:8}], projects:{items:[{name:'example',outputTokens:91}]},
 };
+for (const locale of ['en', 'zh']) test(`usage page explains deleted message totals in ${locale}`, async () => {
+  const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+  const f = fixture();
+  const page = createUsagePage({ ...f, read: async () => value, t: key => translations[key] ?? key });
+  await page.open();
+  const note = allNodes(f.root).find(node => node.classList.contains('wb-usage-deletion-note'));
+  assert.ok(note);
+  assert.equal(note.textContent, translations['wb.usage.deletedConversations']);
+  assert.match(note.textContent, locale === 'zh' ? /不再计入消息数/ : /no longer count toward message totals/);
+  page.destroy();
+});
 test('usage plain view shows costs and signed messages with runtime stacks and tables', () => {
   const f=fixture(); const view=renderUsage(f.root,value,f);
   assert.equal(f.configs.length,2); assert.equal(f.configs[0].options.scales.x.stacked,true);

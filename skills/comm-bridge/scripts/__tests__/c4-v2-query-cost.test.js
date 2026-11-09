@@ -136,7 +136,7 @@ test('queue and group readers bound history work and use indexed access paths', 
     for (let i = 0; i < 1000; i++) head.run('old:' + i, insert.run('delivered', 'old:' + i, '2026-01-01 00:00:00').lastInsertRowid);
     for (let i = 0; i < 3; i++) head.run('recent:' + i, insert.run(i === 0 ? 'running' : 'pending', 'recent:' + i, '2026-01-30 00:00:00').lastInsertRowid);
   })();
-  db.exec("INSERT INTO drain_fences VALUES('fence:only','model_config','r1',1)");
+  db.exec("INSERT INTO drain_fences(session_group,reason,run_id,created_at) VALUES('fence:only','model_config','r1',1)");
   function inspect(operation) {
     trace = []; recording = true;
     let result;

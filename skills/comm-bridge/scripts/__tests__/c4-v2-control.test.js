@@ -151,7 +151,7 @@ test('stale target rejects pending, unbound, terminal and absent controls withou
 test('fence validation matrix, first-write preservation and manual restart identity guards', t => {
   const { store: s } = fixture(t, single);
   assert.throws(() => s.setDrainFence('origin', { reason: 'evict', runId: 'r' }), { code: 'FENCE_INVALID' });
-  for (const [group, opts] of [['a', {}], ['*', { reason: 'auth', runId: 'r' }]]) assert.throws(() => s.setDrainFence(group, opts), { code: 'FENCE_INVALID' });
+  for (const [group, opts] of [['a', {}], ['*', { reason: 'auth', runId: 'r' }], ['a', { reason: 'delete', runId: 'r' }]]) assert.throws(() => s.setDrainFence(group, opts), { code: 'FENCE_INVALID' });
   s.setDrainFence('a', { reason: 'ttl', runId: 'first' }); const first = s.getDrainFence('a'); s.setDrainFence('a', { reason: 'upgrade', runId: 'second' }); assert.deepEqual(s.getDrainFence('a'), first);
   s.clearDrainFence('a'); s.clearDrainFence('a');
   s.setDrainFence('origin', { reason: 'manual_restart', runId: 'old' });
@@ -193,7 +193,7 @@ for (const reason of ['upgrade', 'auth', 'mode_switch', 'model_config']) {
       assert.deepEqual(rows(), []);
     }
     store.setDrainFence('origin', { reason, runId: 'origin-run' });
-    assert.deepEqual(rows(), [{ session_group: 'origin', reason, run_id: 'origin-run', created_at: NOW }]);
+    assert.deepEqual(rows(), [{ session_group: 'origin', reason, run_id: 'origin-run', created_at: NOW, operation_id: null, actor: null }]);
     assert.deepEqual(store.getDrainFence('origin'), { sessionGroup: 'origin', reason, runId: 'origin-run', createdAt: NOW });
     const before = rows();
     assert.throws(() => store.setDrainFence('origin', { reason }), { code: 'FENCE_INVALID' });

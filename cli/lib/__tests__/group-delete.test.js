@@ -23,10 +23,10 @@ function fixture(t, options = {}) {
     resolveTarget: target => target.draftLocalId ? { localId: target.draftLocalId, sessionGroup: null, draft: true } : { ...target, draft: false },
     preview: () => ({ attachments: 2, files: 0 }),
     finalizeTranscripts() { if (!usageReady) throw Object.assign(new Error('waiting'), { code: 'group_delete_usage_pending' }); },
-    cleanup({ removeGroupSources }) { cleanups++; removeGroupSources?.(); return { attachments: 2, files: 0 }; }, close() {},
+    cleanup({ removeGroupSources, onFilePhase }) { cleanups++; onFilePhase?.(); removeGroupSources?.(); return { attachments: 2, files: 0 }; }, close() {},
   };
   const service = createGroupDeletion({ zylosDir: instance, homeDir: home, database: db, store,
-    participant: options.noDashboard ? undefined : participant, waitMs: 0,
+    participant: options.noDashboard ? undefined : participant, waitMs: 100,
     requestStop: async request => {
       const audit = store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one', preview: request.preview });
       if (ready) store.recordRunEnd(request.sessionGroup, { runId: audit.runId, reason: 'delete' });
@@ -136,6 +136,17 @@ test('CLI preview never mutates and confirmed CLI calls the same Core deletion f
   assert.equal(JSON.parse(output).pending, false); assert.equal(errors, '');
 });
 
+test('CLI JSON preserves participant HTTP error status for the Dashboard bridge', async () => {
+  for (const status of [404, 503]) {
+    let output = '';
+    const service = { async delete() { throw Object.assign(new Error('participant unavailable'), { code: 'participant_unavailable', status }); }, close() {} };
+    assert.equal(await runGroupDeletionCli(['--group', 'telegram:one', '--yes', '--json'], {
+      create: () => service, io: { stdout: { write: text => { output += text; } }, stderr: { write() {} } },
+    }), 1);
+    assert.equal(JSON.parse(output).error.status, status);
+  }
+});
+
 test('a completed bound draft retry acknowledges its original operation after registration removal', async t => {
   const f = fixture(t), group = 'chatlocal:reborn';
   f.db.prepare("INSERT INTO channel_namespaces(namespace,component_name) VALUES ('chatlocal','dashboard')").run();
@@ -156,7 +167,8 @@ test('draft retry labels only its observed cleanup counts after media removal an
   const file = path.join(f.root, 'private-media.txt'); fs.writeFileSync(file, 'private draft attachment');
   let removed = false;
   f.participant.preview = () => ({ attachments: removed ? 0 : 1, files: removed ? 0 : 1 });
-  f.participant.cleanup = () => {
+  f.participant.cleanup = ({ onFilePhase }) => {
+    onFilePhase();
     if (!removed) { fs.unlinkSync(file); removed = true; throw new Error('Stopped after removing private media'); }
     return { attachments: 0, files: 0 };
   };
@@ -177,4 +189,91 @@ test('draft retry labels only its observed cleanup counts after media removal an
     create: () => f.service, io: { stdout: { write: text => { output += text; } }, stderr: { write() {} } },
   }), 0);
   assert.match(output, /Counts are estimates/);
+});
+
+
+test('changed Core ownership fails before file cleanup and a repaired retry keeps exact counts', async t => {
+  let replace = true;
+  const group = 'telegram:one';
+  const f = fixture(t, { service: { onStage(stage) {
+    if (stage !== 'usage_imported' || !replace) return;
+    fs.renameSync(memory, saved);
+    fs.symlinkSync(saved, memory);
+    replace = false;
+  } } });
+  f.insert(1, group, 'in', 'delivered');
+  const memory = path.join(f.instance, 'memory/session-groups', group);
+  const saved = path.join(f.root, 'retained-memory');
+  fs.mkdirSync(memory, { recursive: true });
+  fs.writeFileSync(path.join(memory, 'state.md'), 'keep until cleanup');
+  const options = { confirmed: true, actor: 'owner', operationId: 'changed-ownership' };
+  await assert.rejects(f.service.delete(group, options), cause =>
+    cause.code === 'DB_WRITE_FAILED' && cause.cause?.code === 'GROUP_DELETE_PATH_INVALID');
+  assert.equal(f.cleanups(), 0);
+  assert.equal(fs.readFileSync(path.join(saved, 'state.md'), 'utf8'), 'keep until cleanup');
+  const attempt = f.db.prepare('SELECT cleanup_attempts,counts_estimated FROM group_deletion_audit WHERE operation_id=?').get(options.operationId);
+  assert.equal(attempt.cleanup_attempts, 0);
+  assert.equal(attempt.counts_estimated, 0);
+  fs.unlinkSync(memory);
+  fs.renameSync(saved, memory);
+  const result = await f.service.delete(group, options);
+  assert.equal(result.pending, false);
+  assert.equal(result.countsEstimated, false);
+  assert.equal(result.counts.files, 1);
+  assert.equal(f.cleanups(), 1);
+});
+
+
+test('the default deletion budget includes admission and waits until twenty seconds before pending', async t => {
+  let clock = 1000, slept = 0;
+  const f = fixture(t, { ready: false, service: { waitMs: undefined, now: () => clock,
+    sleep: async ms => { clock += ms; slept += ms; },
+    requestStop: async (request, options) => {
+      assert.equal(options.deadlineAt, 11000);
+      clock += 9000;
+      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one' });
+      return { kind: 'accepted', sent: true, reply: { ok: true } };
+    },
+  } });
+  f.insert(1, 'telegram:one', 'out', 'delivered');
+  const result = await f.service.delete('telegram:one', { confirmed: true, actor: 'owner', operationId: 'budget-op' });
+  assert.equal(result.pending, true);
+  assert.equal(result.reason, 'draining');
+  assert.equal(clock, 21000);
+  assert.equal(slept, 11000);
+  assert.equal(f.cleanups(), 0);
+  assert.equal(f.store.getActiveDeletion('telegram:one').operationId, 'budget-op');
+});
+
+test('an exhausted admission budget does not begin another drain or transcript wait', async t => {
+  let clock = 0;
+  const f = fixture(t, { service: { waitMs: undefined, now: () => clock,
+    requestStop: async (request, options) => {
+      assert.equal(options.deadlineAt, 10000);
+      f.store.beginGroupDeletion(request.sessionGroup, { operationId: request.operationId, actor: request.actor, runId: 'run-one' });
+      clock = 20000;
+      return { kind: 'accepted', sent: true, reply: { ok: true } };
+    }, sleep: async () => assert.fail('No further wait after the total deadline'),
+  } });
+  const result = await f.service.delete('telegram:one', { confirmed: true, actor: 'owner', operationId: 'exhausted-op' });
+  assert.equal(result.pending, true);
+  assert.equal(result.reason, 'draining');
+  assert.equal(f.cleanups(), 0);
+});
+
+test('transcript import shares the original deadline and never starts cleanup after it expires', async t => {
+  let clock = 500;
+  const f = fixture(t, { service: { waitMs: undefined, now: () => clock,
+    onStage(stage) { if (stage === 'stopped') clock += 19000; },
+  } });
+  f.participant.finalizeTranscripts = ({ deadlineAt, now }) => {
+    assert.equal(deadlineAt, 20500);
+    assert.equal(now(), 19500);
+    clock += 1000;
+  };
+  const result = await f.service.delete('telegram:one', { confirmed: true, actor: 'owner', operationId: 'import-budget-op' });
+  assert.equal(result.pending, true);
+  assert.equal(result.reason, 'usage_pending');
+  assert.equal(f.cleanups(), 0);
+  assert.equal(f.db.prepare('SELECT cleanup_attempts FROM group_deletion_audit').get().cleanup_attempts, 0);
 });

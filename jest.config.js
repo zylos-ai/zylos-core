@@ -1,5 +1,10 @@
 export default {
   transform: {},
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    '<rootDir>/test/group-deletion.integration.test.js',
+    '<rootDir>/test/group-deletion-storage.integration.test.js',
+  ],
   globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',
   // Jest covers test/ and the mode-switch integration entries placed beside

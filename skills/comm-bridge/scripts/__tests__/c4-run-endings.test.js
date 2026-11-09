@@ -5,6 +5,7 @@ import { fixture } from './c4-v2-test-helpers.js';
 import { createStore } from '../c4-v2-store.js';
 import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
+import * as historicalOwner from './helpers/c4-v2-owner.js';
 import { seedV1, oldRows, snapshot } from './helpers/c4-v2-fixtures.js';
 
 const clock = 1800000000;
@@ -248,7 +249,7 @@ test('run-ending readers propagate failures and normalize busy errors', () => {
 
 test('run-ending migration preserves v1 rows and creates empty ending and occupancy tables', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db, { extensions: true });
-  const before = oldRows(db); guardDatabase(db, owner);
+  const before = oldRows(db); guardDatabase(db, historicalOwner);
   assert.equal(db.pragma('user_version', { simple: true }), 2);
   assert.deepEqual(oldRows(db), before);
   assert.deepEqual(db.prepare('SELECT * FROM run_endings').all(), []);
@@ -257,12 +258,12 @@ test('run-ending migration preserves v1 rows and creates empty ending and occupa
   assert.equal(ddl, "CREATE TABLE run_endings ( session_group TEXT PRIMARY KEY NOT NULL CHECK (session_group <> '' AND session_group <> '*'), run_id TEXT NOT NULL CHECK (run_id <> ''), reason TEXT NOT NULL CHECK (reason IN ('ttl','evict','upgrade','auth','model_config','mode_switch','manual_restart','unexpected')), ended_at INTEGER NOT NULL, continuation_pending INTEGER NOT NULL DEFAULT 0 CHECK (continuation_pending IN (0,1)) )");
 });
 
-test('schema two missing the run-ending table is rejected without recreating it or changing rows', t => {
+test('current schema missing the run-ending table is rejected without recreating it or changing rows', t => {
   const { db, store } = fixture(t);
   store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
   db.exec('DROP TABLE run_endings');
   const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 2, missing run_endings\.session_group/);
+  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 3, missing run_endings\.session_group/);
   assert.deepEqual(snapshot(db), before);
 });
 
@@ -271,14 +272,14 @@ test('public database facade exposes run-ending primitives', async () => {
   for (const name of ['recordRunEnd', 'listRunEndings', 'listPendingContinuations', 'clearContinuation', 'clearAllContinuations']) assert.equal(typeof facade[name], 'function');
 });
 
-test('schema two with the retired continuation column is rejected without mutation', t => {
+test('current schema with the retired continuation column is rejected without mutation', t => {
   const { db, store } = fixture(t);
   store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
   db.exec('ALTER TABLE run_endings RENAME COLUMN continuation_pending TO continuation_control_id');
   const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 2, missing run_endings\.continuation_pending/);
+  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 3, missing run_endings\.continuation_pending/);
   assert.deepEqual(snapshot(db), before);
-  assert.equal(db.pragma('user_version', { simple: true }), 2);
+  assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
 });
 
 test('new run-ending marker defaults to zero and rejects non-boolean storage values', t => {

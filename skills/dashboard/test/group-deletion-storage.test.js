@@ -13,12 +13,15 @@ import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { ChatAttachments } from '../src/lib/chat/attachments.js';
 import { UsageTranscripts } from '../src/lib/collectors/usage-transcripts.js';
 import { ChatSender } from '../src/lib/chat/send.js';
+import { handleChatConversations } from '../src/lib/chat/write-routes.js';
+import { handleChatAttachments } from '../src/lib/chat/attachment-routes.js';
 import { CoreLogImporter } from '../src/lib/core-log-importer.js';
 import { receive } from '../../comm-bridge/scripts/c4-receive.js';
 import { SKILLS_DIR } from '../../comm-bridge/scripts/c4-config.js';
 import { isDataError } from '../../comm-bridge/scripts/c4-session-group.js';
 import { buildAnnotatedContent } from '../../comm-bridge/scripts/attachment-annotations.js';
 import { createGroupDeletion } from '../../../cli/lib/group-delete.js';
+import { runGroupDeletionCli } from '../../../cli/lib/group-delete-cli.js';
 import { Readable } from 'node:stream';
 
 // Files/SQLite only. Run for deletion participants, final usage imports, or
@@ -49,6 +52,105 @@ function fixture(t) {
   return { root, home, zylos, tmpdir, c4Db, store, participant, conversations, message, register, write, transcript };
 }
 const groupId = group => `g:${Buffer.from(group).toString('hex').toUpperCase()}`;
+
+test('a busy Dashboard writer before file cleanup keeps a successful retry count exact', async t => {
+  const f = fixture(t), draft = f.conversations.create();
+  const media = f.write(path.join(f.zylos, 'components/dashboard/media/busy.txt'), 'owned');
+  f.store.db.prepare(`INSERT INTO chat_attachments(id,local_id,namespace,storage_name,name,size,mime,kind,source,created_at,c4_watermark,scanned_c4_id,next_check_at)
+    VALUES ('busy',?,'dashboard','busy.txt','busy.txt',5,'text/plain','file','user',1,0,0,1)`).run(draft.localId);
+  const coreStore = createStore(f.c4Db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
+  const service = createGroupDeletion({ zylosDir: f.zylos, homeDir: f.home, database: f.c4Db,
+    store: coreStore, participant: f.participant });
+  t.after(() => service.close());
+  const competitor = new Database(path.join(f.zylos, 'components/dashboard/dashboard.db'));
+  t.after(() => { if (competitor.inTransaction) competitor.exec('ROLLBACK'); competitor.close(); });
+  f.store.db.pragma('busy_timeout=0');
+  competitor.exec('BEGIN IMMEDIATE');
+  await assert.rejects(service.delete({ draftLocalId: draft.localId }, {
+    confirmed: true, actor: 'owner', operationId: 'busy-before-files',
+  }), { code: 'DB_BUSY' });
+  assert.equal(fs.existsSync(media), true);
+  assert.equal(coreStore.getGroupDeletionAudit('busy-before-files').countsEstimated, false);
+  assert.equal(f.c4Db.prepare('SELECT cleanup_attempts FROM group_deletion_audit').get().cleanup_attempts, 0);
+  competitor.exec('ROLLBACK');
+  const result = await service.delete({ draftLocalId: draft.localId }, {
+    confirmed: true, actor: 'owner', operationId: 'busy-before-files',
+  });
+  assert.equal(result.countsEstimated, false);
+  assert.equal(result.counts.attachments, 1); assert.equal(result.counts.files, 1);
+  assert.equal(fs.existsSync(media), false);
+});
+
+test('real storage cleanup interrupted at its first unlink makes same-operation retry counts estimated', async t => {
+  const f = fixture(t), draft = f.conversations.create();
+  const media = f.write(path.join(f.zylos, 'components/dashboard/media/interrupted.txt'), 'owned');
+  f.store.db.prepare(`INSERT INTO chat_attachments(id,local_id,namespace,storage_name,name,size,mime,kind,source,created_at,c4_watermark,scanned_c4_id,next_check_at)
+    VALUES ('interrupted',?,'dashboard','interrupted.txt','interrupted.txt',5,'text/plain','file','user',1,0,0,1)`).run(draft.localId);
+  const coreStore = createStore(f.c4Db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
+  const service = createGroupDeletion({ zylosDir: f.zylos, homeDir: f.home, database: f.c4Db,
+    store: coreStore, participant: f.participant });
+  t.after(() => service.close());
+  const unlink = fs.unlinkSync;
+  let interrupted = false;
+  // Exercise the real participant and real unlink, then fail at the earliest
+  // irreversible boundary. No product module or source is replaced/evaluated.
+  const syscall = t.mock.method(fs, 'unlinkSync', file => {
+    const result = unlink(file);
+    if (file === media && !interrupted) {
+      interrupted = true;
+      throw Object.assign(new Error('I/O failure after first unlink'), { code: 'EIO' });
+    }
+    return result;
+  });
+  const target = { draftLocalId: draft.localId };
+  const options = { confirmed: true, actor: 'owner', operationId: 'first-unlink-interruption' };
+  try {
+    await assert.rejects(service.delete(target, options), cause =>
+      cause.code === 'DB_WRITE_FAILED' && cause.cause?.code === 'EIO');
+    assert.equal(interrupted, true);
+    assert.equal(fs.existsSync(media), false);
+    assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM chat_attachments WHERE id='interrupted'").get().n, 1);
+    assert.ok(f.conversations.get(draft.localId));
+    assert.equal(coreStore.getGroupDeletionAudit(options.operationId).status, 'started');
+    assert.equal(f.c4Db.prepare('SELECT cleanup_attempts FROM group_deletion_audit WHERE operation_id=?').get(options.operationId).cleanup_attempts, 1);
+  } finally { syscall.mock.restore(); }
+  const result = await service.delete(target, options);
+  assert.equal(result.pending, false);
+  assert.equal(result.operationId, options.operationId);
+  assert.equal(result.countsEstimated, true);
+  assert.equal(result.counts.files, 0);
+  assert.equal(result.counts.attachments, 1);
+  assert.equal(coreStore.getGroupDeletionAudit(options.operationId).countsEstimated, true);
+  assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM chat_attachments WHERE id='interrupted'").get().n, 0);
+  assert.equal(f.c4Db.prepare('SELECT COUNT(*) n FROM group_deletion_audit').get().n, 1);
+});
+
+test('participant cleanup status survives the Core coordinator transaction and CLI JSON', async t => {
+  const f = fixture(t), draft = f.conversations.create();
+  const coreStore = createStore(f.c4Db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
+  let cleanupCalls = 0;
+  const service = createGroupDeletion({ zylosDir: f.zylos, homeDir: f.home, database: f.c4Db,
+    store: coreStore, participant: { ...f.participant, cleanup() {
+      cleanupCalls++;
+      throw Object.assign(new Error('Dashboard storage unavailable'), { code: 'group_delete_dashboard_unavailable', status: 503 });
+    } } });
+  t.after(() => service.close());
+  let output = '', errors = '';
+  const exit = await runGroupDeletionCli(['--draft-local-id', draft.localId, '--yes', '--json',
+    '--actor', 'owner', '--operation-id', 'participant-http-status'], {
+    create: () => service,
+    io: { stdout: { write(text) { output += text; } }, stderr: { write(text) { errors += text; } } },
+  });
+  assert.equal(exit, 1);
+  assert.equal(cleanupCalls, 1);
+  assert.equal(errors, '');
+  const result = JSON.parse(output);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'group_delete_dashboard_unavailable');
+  assert.equal(result.error.status, 503);
+  assert.equal(coreStore.getGroupDeletionAudit('participant-http-status').status, 'started');
+  assert.equal(f.c4Db.prepare('SELECT cleanup_attempts FROM group_deletion_audit WHERE operation_id=?').get('participant-http-status').cleanup_attempts, 0);
+});
 
 test('draft deletion rejects uncertain sends and switches to the real group after Core commit', t => {
   const f = fixture(t), draft = f.conversations.create();
@@ -133,13 +235,14 @@ test('a recreated Dashboard group is registered for normal sending while foreign
   const coreStore = createStore(f.c4Db, { validateComponent: () => true, readConfig: () => ({ state: 'ok', config: { session_mode: 'multi', runtime: 'claude' } }) });
   const sender = new ChatSender({ conversations: f.conversations, c4Reader: { _open: () => f.c4Db }, zylosDir: f.zylos });
   assert.equal((await sender.resolve(groupId(group))).state, 'active');
-  assert.equal(f.conversations.findByGroup(group).firstContent, null);
+  assert.equal(f.conversations.findByGroup(group), null, 'Resolving is read-only');
   sender.loadCore = async () => ({ getChannelNamespace: coreStore.getChannelNamespace,
     ensureChannelNamespace: coreStore.ensureChannelNamespace, isDataError,
     receive: args => receive(args, { db: coreStore, queryRoute: async () => ({ decision: 'pending', runtime: 'claude' }),
       appendEntryEvent: async () => true, reserveStatusNotice: () => ({ suppressed: true }), diagnostic() {} }) });
   const reply = await sender.send(groupId(group), { content: 'reply after recreation' });
   assert.equal(reply.stored, true, JSON.stringify(reply)); assert.equal(reply.draft, false);
+  assert.equal(f.conversations.findByGroup(group).firstContent, null);
   assert.equal(f.c4Db.prepare('SELECT content FROM conversations WHERE id=?').get(reply.messageId).content, 'reply after recreation');
 
   f.c4Db.prepare("INSERT INTO channel_namespaces(namespace,component_name) VALUES ('telegram','telegram')").run();
@@ -188,6 +291,40 @@ test('fresh Codex usage is imported through EOF and only exact rollout cursors a
   assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM codex_rollout_paths WHERE transcript_path=?').get(file).n, 0);
   assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM metric_points WHERE session_group=?').get(group).n, points);
   assert.equal(f.store.getUsageTranscript(file).status, 'finished');
+});
+
+test('transcript budget expiry preserves raw files and committed batch progress for retry', t => {
+  const f = fixture(t), group = 'dashboard:budgeted-import';
+  f.write(path.join(f.zylos, 'components/dashboard/config.json'), JSON.stringify({ codexRolloutMaxLinesPerCollect: 2 }));
+  const text = [
+    { type: 'session_meta', timestamp: new Date().toISOString(), payload: { id: 'budgeted-session' } },
+    ...Array.from({ length: 3 }, (_, index) => ({ type: 'event_msg', timestamp: new Date().toISOString(),
+      payload: { type: 'token_count', info: { model: 'gpt-5.3-codex',
+        last_token_usage: { input_tokens: 100 + index, cached_input_tokens: 0, output_tokens: 20 } } } })),
+  ].map(row => JSON.stringify(row)).join('\n') + '\n';
+  const file = f.transcript(group, 'budgeted-session', 'codex', text);
+  const target = { sessionGroup: group, processExited: true, deadlineAt: 20000 };
+  assert.throws(() => f.participant.finalizeTranscripts({ ...target, now: () => 20000 }), { code: 'group_delete_usage_pending' });
+  assert.equal(f.store.getCodexRolloutCursor(file) == null, true);
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
+  assert.throws(() => f.participant.finalizeTranscripts({ ...target,
+    now: () => (f.store.getCodexRolloutCursor(file)?.byte_offset ?? 0) > 0 ? 20000 : 0,
+  }), { code: 'group_delete_usage_pending' });
+  const cursor = f.store.getCodexRolloutCursor(file).byte_offset;
+  assert.ok(cursor > 0 && cursor < Buffer.byteLength(text));
+  assert.equal(f.store.getUsageTranscript(file).status, 'active');
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
+  const usageCount = () => f.store.db.prepare("SELECT COUNT(*) n FROM metric_points WHERE session_group=? AND metric_name='usage_event'").get(group).n;
+  assert.equal(usageCount(), 1);
+  f.participant.finalizeTranscripts({ ...target, now: () => 0 });
+  assert.equal(f.store.getUsageTranscript(file).status, 'finished');
+  assert.equal(f.store.getUsageTranscript(file).byte_offset, Buffer.byteLength(text));
+  assert.equal(f.store.getCodexRolloutCursor(file).byte_offset, Buffer.byteLength(text));
+  assert.equal(usageCount(), 3);
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
+  f.participant.cleanup({ sessionGroup: group });
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(usageCount(), 3);
 });
 
 test('question and answer child records are removed together while pending inputs and other groups remain', t => {
@@ -359,7 +496,7 @@ test('a newly queued attachment is preserved and never counted as deleted from a
   const coreStore = createStore(f.c4Db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
   let queued;
   const service = createGroupDeletion({ zylosDir: f.zylos, homeDir: f.home, database: f.c4Db,
-    store: coreStore, participant: f.participant, waitMs: 0,
+    store: coreStore, participant: f.participant, waitMs: 1000,
     requestStop: async request => {
       const audit = coreStore.beginGroupDeletion(group, { operationId: request.operationId, actor: request.actor, preview: request.preview });
       coreStore.recordRunEnd(group, { runId: audit.operationId, reason: 'delete' });
@@ -381,4 +518,80 @@ test('a newly queued attachment is preserved and never counted as deleted from a
   assert.equal(coreStore.getGroupDeletionAudit(result.operationId).preview.attachments, 1);
   assert.equal(f.c4Db.prepare('SELECT status FROM conversations WHERE id=?').get(queued).status, 'pending');
   assert.equal(fs.existsSync(media), true);
+});
+
+
+test('native cleanup removes display names, runtime events and import cursors only for its group', t => {
+  const f = fixture(t), group = 'dashboard:owned-events', other = 'dashboard:retained-events';
+  for (const [index, target] of [group, other].entries()) {
+    f.store.writeGroupDisplayName(target, 'private name', 'human');
+    f.store.insertEvent({ id: `event-${index}`, ingest_id: `ingest-${index}`, timestamp: new Date().toISOString(),
+      session_group: target, event_type: 'tool_use', category: 'tool', summary: 'private activity' });
+    f.store.db.prepare('INSERT INTO core_log_cursors(stream,file_dev,file_ino,generation,file_name) VALUES (?,1,?,1,?)')
+      .run(`events:${target}`, index + 1, `private-${index}`);
+  }
+  f.participant.cleanup({ sessionGroup: group });
+  for (const table of ['group_display_names', 'runtime_events']) {
+    assert.equal(f.store.db.prepare(`SELECT count(*) n FROM ${table} WHERE session_group=?`).get(group).n, 0);
+    assert.equal(f.store.db.prepare(`SELECT count(*) n FROM ${table} WHERE session_group=?`).get(other).n, 1);
+  }
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM core_log_cursors WHERE stream=?').get(`events:${group}`).n, 0);
+  assert.equal(f.store.db.prepare('SELECT count(*) n FROM core_log_cursors WHERE stream=?').get(`events:${other}`).n, 1);
+});
+
+test('a draft becoming unknown after target resolution cannot be cleaned', t => {
+  const f = fixture(t), draft = f.conversations.create();
+  const resolved = f.participant.resolveTarget({ draftLocalId: draft.localId });
+  f.conversations.markUnknown(draft.localId, 'interrupted send');
+  assert.throws(() => f.participant.cleanup(resolved), { code: 'group_delete_send_pending' });
+  assert.ok(f.conversations.get(draft.localId));
+});
+
+test('a symbolic-link component inside a mapped runtime path is refused', t => {
+  const f = fixture(t), group = 'dashboard:aliased-transcript';
+  const outside = path.join(f.root, 'outside'); fs.mkdirSync(outside);
+  const target = f.write(path.join(outside, 'aliased-session.jsonl'), 'retained');
+  const projects = path.join(f.home, '.claude/projects'); fs.mkdirSync(projects, { recursive: true });
+  fs.symlinkSync(outside, path.join(projects, 'alias'));
+  f.store.insertUsageTranscript({ transcript_path: path.join(projects, 'alias/aliased-session.jsonl'), runtime: 'claude',
+    session_group: group, session_id: 'aliased-session' }, new Date().toISOString());
+  assert.throws(() => f.participant.preview({ sessionGroup: group }), { code: 'group_delete_path_unavailable' });
+  assert.equal(fs.readFileSync(target, 'utf8'), 'retained');
+});
+
+test('recreated groups are registered only by authorized send or attachment writes', async t => {
+  const f = fixture(t), group = 'dashboard:authorization-first'; f.message(group, 'pending');
+  const reader = { _open: () => f.c4Db };
+  const sender = new ChatSender({ conversations: f.conversations, c4Reader: reader, zylosDir: f.zylos });
+  const config = { chat: { allowRemote: false } };
+  const auth = { enabled: true, resolveAuthContext(req) {
+    req._authContext = req.headers.cookie ? { kind: 'cookie', scope: 'admin', principalId: 'owner' } : null;
+    return req._authContext;
+  } };
+  const id = groupId(group), route = `/api/chat/conversations/${encodeURIComponent(id)}`;
+  const invoke = async (handler, pathname, method, headers = {}, body = {}) => {
+    const req = Readable.from(method === 'GET' ? [] : [Buffer.from(JSON.stringify(body))]);
+    Object.assign(req, { method, headers });
+    const res = { writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
+    assert.equal(await handler(req, res, new URL(pathname, 'http://fixture'), {
+      auth, config, conversations: f.conversations, sender, attachments: { config: () => ({ maxUploadBytes: 1 }) }, readMode: () => 'multi',
+    }), true);
+    return res;
+  };
+  assert.equal((await invoke(handleChatConversations, route, 'GET')).status, 403);
+  assert.equal((await invoke(handleChatConversations, route, 'GET', { cookie: 'owner' })).status, 200);
+  assert.equal((await invoke(handleChatConversations, route, 'PATCH', { cookie: 'owner' }, { displayName: 'new name' })).status, 403);
+  assert.equal((await invoke(handleChatConversations, route, 'PATCH', { cookie: 'owner', 'sec-fetch-site': 'same-origin' }, { displayName: 'new name' })).status, 404);
+  assert.equal((await invoke(handleChatAttachments, route + '/uploads/config', 'GET')).status, 403);
+  assert.equal((await invoke(handleChatAttachments, route + '/uploads/config', 'GET', { cookie: 'owner', 'sec-fetch-site': 'same-origin' })).status, 200);
+  assert.equal(f.conversations.findByGroup(group), null);
+  sender.loadCore = async () => ({ ensureChannelNamespace: () => ({ componentName: 'dashboard', namespace: 'dashboard' }) });
+  await assert.rejects(sender.send(id, { content: 'denied send' }, { authorize: () => ({ error: 'same_origin_required', status: 403 }) }), { code: 'same_origin_required' });
+  assert.equal(f.conversations.findByGroup(group), null);
+  await sender.prepareAttachmentConversation(await sender.resolve(id), { authorize: () => ({ error: 'same_origin_required', status: 403 }) })
+    .then(() => assert.fail('Denied attachment preparation must fail'), error => assert.equal(error.code, 'same_origin_required'));
+  assert.equal(f.conversations.findByGroup(group), null);
+  sender.loadCore = async () => ({ ensureChannelNamespace: () => ({ componentName: 'dashboard', namespace: 'dashboard' }) });
+  const authorized = await sender.prepareAttachmentConversation(await sender.resolve(id), { authorize: () => null });
+  assert.equal(authorized.state, 'active'); assert.equal(f.conversations.findByGroup(group).state, 'active');
 });

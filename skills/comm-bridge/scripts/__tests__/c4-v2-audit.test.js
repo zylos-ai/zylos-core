@@ -13,7 +13,7 @@ test('historical v1 over-bound checkpoint survives migration and reports exact f
   db.prepare('UPDATE checkpoints SET end_conversation_id=? WHERE id=?').run(max + 1000, last);
   const historical = oldRows(db);
   guardDatabase(db, owner);
-  assert.equal(db.pragma('user_version', { simple: true }), 2);
+  assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
   assert.deepEqual(oldRows(db), historical, 'migration must not clamp historical end or rewrite old fields');
   const store = createStore(db), before = snapshot(db), changes = db.prepare('SELECT total_changes() AS n').get().n;
   db.pragma('query_only = ON');

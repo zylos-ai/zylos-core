@@ -58,7 +58,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
   fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
   if(item.owner==='scheduler')fs.copyFileSync(path.resolve('skills/scheduler/scripts/migrations-v2.js'),path.join(owner,'scripts/migrations-v2.js'));
  }
- for(const file of ['sqlite-schema.js','c4-migrations-v2.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
+ for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
  for(const item of CORE_DATABASES){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
   for(const [name,columns] of Object.entries(mod.TABLES)) {
    const defs=mod.COLUMN_DEFINITIONS?.[name]||{};

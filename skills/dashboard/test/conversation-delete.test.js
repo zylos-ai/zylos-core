@@ -60,7 +60,7 @@ test('duplicate clicks during a pending preview cannot start parallel operations
   assert.equal(calls, 2);
 });
 
-test('pending deletion retries reuse its original operation even if a new preview offers another', async () => {
+test('pending deletion retries reuse its confirmed operation without another preview or confirmation', async () => {
   const operations = []; let previews = 0, deletes = 0;
   const f = fixture({ request: async (_path, options) => {
     if (!options?.method) return { ok: true, operationId: ++previews === 1 ? 'same' : 'new' };
@@ -68,6 +68,7 @@ test('pending deletion retries reuse its original operation even if a new previe
   } });
   await f.controller.remove(item); assert.equal(f.controller.status(item).state, 'pending');
   await f.controller.remove(item); assert.deepEqual(operations, ['same', 'same']);
+  assert.equal(previews, 1); assert.equal(f.confirmations.length, 1);
   assert.deepEqual(f.removed, [item.id]);
 });
 
@@ -81,6 +82,7 @@ test('lost delete replies retain the confirmed operation for a safe retry', asyn
   } });
   await f.controller.remove(item); assert.equal(f.controller.status(item).state, 'error');
   await f.controller.remove(item); assert.deepEqual(operations, ['original', 'original']);
+  assert.equal(f.confirmations.length, 1);
 });
 
 test('changing instance or closing the page during confirmation prevents delete', async () => {

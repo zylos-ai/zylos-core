@@ -130,6 +130,12 @@ needed. A step that inserts or deletes rows in `conversations` would add
 - **Using `maybeTables` / `maybeColumns` to skip checks.** Use them only when
   some released deployments may legitimately already have the object.
 
+The C4 version 2-to-3 step rebuilds `run_endings`. Before replacing it, that
+step checks all tables for foreign keys referencing `run_endings` and
+refuses with the referencing table name if one exists. It does not alter
+foreign-key enforcement or check unrelated deployment foreign keys. The
+original database and schema version remain intact on refusal.
+
 ## Not checked
 
 The engine checks table and column names, column definitions and row counts.

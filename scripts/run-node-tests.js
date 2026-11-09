@@ -6,6 +6,10 @@ import { spawnSync } from 'node:child_process';
 import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
+const ROOT_NODE_TESTS = [
+  'test/group-deletion.integration.test.js',
+  'test/group-deletion-storage.integration.test.js',
+];
 const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'dashboard', 'test'),
   path.join(ROOT, 'skills', 'web-console', 'scripts', '__tests__'),
@@ -33,6 +37,7 @@ function walk(dir, files = []) {
 
 function isNodeTest(file) {
   const rel = path.relative(ROOT, file).split(path.sep).join('/');
+  if (ROOT_NODE_TESTS.includes(rel)) return true;
   // These integration entries use Jest and are selected by jest.config.js.
   if (rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js'
       || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js') return false;
@@ -48,8 +53,9 @@ function isNodeTest(file) {
   return false;
 }
 
-const discoveredFiles = TEST_ROOTS
+const discoveredFiles = [...ROOT_NODE_TESTS.map(file => path.join(ROOT, file)).filter(file => fs.existsSync(file)), ...TEST_ROOTS
   .flatMap((dir) => walk(dir))
+  ]
   .filter(isNodeTest)
   .sort()
   .map((file) => path.relative(ROOT, file));

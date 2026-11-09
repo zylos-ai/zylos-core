@@ -173,7 +173,7 @@ test('real override CLI handles empty stores, invalid arguments and unreadable c
   assert.equal(old.status, 1);
   assert.equal(old.value.ok, false); assert.equal(old.value.error.code, 'INVALID_ARGUMENT');
   assert.deepEqual(old.value.error.persisted, []);
-  assert.equal(old.value.error.message, 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>]');
+  assert.equal(old.value.error.message, 'Usage: zylos group <runtime|model> <get|set|reset> [options] | zylos group overrides [--group <group>]... | zylos group overrides [--match <text>] [--after <group>] | zylos group delete <group> [--yes]');
   const maxGroups = f.json(['overrides', ...Array.from({ length: 500 }, (_, i) => ['--group', `chat:g${i}`]).flat()]);
   assert.equal(maxGroups.status, 0, maxGroups.stderr);
   assert.deepEqual(maxGroups.value.data.runtime, []); assert.deepEqual(maxGroups.value.data.model, []);

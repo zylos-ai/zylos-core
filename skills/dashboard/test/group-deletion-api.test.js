@@ -54,7 +54,7 @@ test('deletion requires same origin and explicit confirmation bound to an operat
   const f = fixture(t), path = '/api/workbench/groups/dashboard%3Aexample';
   const body = { confirmed: true, operationId: 'private-operation' };
   assert.equal((await call(f.handler, path, { method: 'DELETE', body, headers: { cookie: owner.cookie, origin: 'https://foreign.invalid', host: 'local.invalid' } })).status, 403);
-  for (const invalid of [{}, { confirmed: true }, { ...body, actor: 'somebody-else' }, { ...body, operationId: '' }]) {
+  for (const invalid of [{}, { operationId: 'private-operation' }, { confirmed: true }, { ...body, actor: 'somebody-else' }, { ...body, operationId: '' }]) {
     assert.equal((await call(f.handler, path, { method: 'DELETE', body: invalid })).status, 400);
   }
   assert.equal(f.calls.length, 0);
@@ -82,7 +82,7 @@ test('pending deletion and Core conflicts preserve their result envelope', async
   const handler = createGroupDeletionRoutes({ ...f, core: async () => value });
   let res = await call(handler, '/api/workbench/groups/dashboard%3Aexample/deletion');
   assert.equal(res.status, 202); assert.equal(res.body.operationId, 'same-operation');
-  value = { ok: false, error: { code: 'MODE_TRANSITION_ACTIVE' } };
+  value = { ok: false, error: { code: 'FENCE_MISMATCH' } };
   res = await call(handler, '/api/workbench/groups/dashboard%3Aexample/deletion');
   assert.equal(res.status, 409); assert.deepEqual(res.body, value);
   value = { ok: false, error: { code: 'TRANSITION_OPEN' } };
@@ -148,5 +148,26 @@ test('conversation list exposes deletion capability only to the local password o
     await handleChatHistory(req, res, new URL('http://fixture/api/chat/conversations'), { ...f,
       config: { ...f.config, chat: { allowRemote: true } }, history: { list: () => ({ items: [] }) } });
     assert.equal(res.body.deletionAllowed, allowed);
+  }
+});
+
+
+test('unmatched group read routes fall through without deletion authorization or Core calls', async t => {
+  const f = fixture(t);
+  for (const path of ['/api/workbench/groups/search', '/api/workbench/groups/telegram%3Aexample', '/api/chat/drafts/example']) {
+    const req = { method: 'GET', headers: {} };
+    const res = { writeHead() { assert.fail('Must leave the response to the existing read route'); } };
+    assert.equal(await f.handler(req, res, new URL(path, 'http://fixture')), false);
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test('Core storage errors preserve their HTTP status through the bridge response envelope', async t => {
+  const f = fixture(t);
+  for (const status of [404, 503]) {
+    const handler = createGroupDeletionRoutes({ ...f, core: async () => ({ ok: false,
+      error: { code: status === 404 ? 'chat_conversation_not_found' : 'group_delete_dashboard_unavailable', status } }) });
+    const res = await call(handler, '/api/chat/drafts/missing/deletion');
+    assert.equal(res.status, status);
   }
 });

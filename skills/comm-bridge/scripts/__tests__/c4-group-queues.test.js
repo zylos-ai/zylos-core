@@ -26,7 +26,7 @@ test('queue summaries include fenced and running groups but exclude terminal his
   seed.run(19, 'pending', '', 1, '2026-01-01 00:00:00');
   db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('out','test','out','pending','test:out')").run();
   db.transaction(() => { for (let i = 0; i < 1000; i++) seed.run(100 + i, 'delivered', 'old:' + i, 3, '2026-01-01 00:00:00'); })();
-  const fence = db.prepare('INSERT INTO drain_fences VALUES(?,?,?,?)');
+  const fence = db.prepare('INSERT INTO drain_fences(session_group,reason,run_id,created_at) VALUES(?,?,?,?)');
   fence.run('test:B', 'ttl', 'r1', 100);
   fence.run('test:C', 'model_config', 'r2', 101);
   const store = createStore(db);
@@ -58,7 +58,7 @@ test('empty summaries and fence-only global state retain their shapes', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); guardDatabase(db, owner);
   const store = createStore(db);
   assert.deepEqual(store.listGroupQueues(), { groups: [], globalFence: null });
-  db.exec("INSERT INTO drain_fences VALUES('*',NULL,NULL,1)");
+  db.exec("INSERT INTO drain_fences(session_group,reason,run_id,created_at) VALUES('*',NULL,NULL,1)");
   assert.deepEqual(store.listGroupQueues(), { groups: [], globalFence: { sessionGroup: '*', reason: null, runId: null, createdAt: 1 } });
 });
 
@@ -76,7 +76,7 @@ test('queue rows and fences share one snapshot while another connection writes',
     }
   } });
   t.after(() => db.close()); db.pragma('journal_mode=WAL'); guardDatabase(db, owner);
-  db.exec("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','test','x','pending','test:A'); INSERT INTO drain_fences VALUES('test:A','ttl','r1',1)");
+  db.exec("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','test','x','pending','test:A'); INSERT INTO drain_fences(session_group,reason,run_id,created_at) VALUES('test:A','ttl','r1',1)");
   writer = new Database(file); t.after(() => writer.close());
   const store = createStore(db);
   interleave = true;
@@ -89,6 +89,6 @@ test('queue rows and fences share one snapshot while another connection writes',
 
 test('queue groups use binary key ordering', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); guardDatabase(db, owner);
-  db.exec("INSERT INTO drain_fences VALUES('test:a','model_config','r1',1),('test:Z','model_config','r2',1)");
+  db.exec("INSERT INTO drain_fences(session_group,reason,run_id,created_at) VALUES('test:a','model_config','r1',1),('test:Z','model_config','r2',1)");
   assert.deepEqual(createStore(db).listGroupQueues().groups.map(row => row.sessionGroup), ['test:Z', 'test:a']);
 });

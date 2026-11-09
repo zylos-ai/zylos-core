@@ -232,6 +232,20 @@ function pageDocument() {
   return document;
 }
 
+for (const allowed of [false, true]) test(`conversation list ${allowed ? 'shows' : 'hides'} delete actions from the server permission`, async t => {
+  const document = pageDocument(), root = document.createElement('div');
+  const page = mountConversationPage({ root, document, local: () => true, fetch: async path => {
+    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:owned' }], nextCursor: null, deletionAllowed: allowed }
+      : { items: [], nextCursor: null };
+    return { ok: true, status: 200, json: async () => body };
+  } });
+  t.after(() => page.destroy()); await page.open();
+  const actions = allNodes(root).filter(node => node.classList.contains('conversation-delete'));
+  assert.equal(actions.length, 1);
+  assert.equal(actions[0].hidden, !allowed);
+});
+
 test('mounted conversation page forwards language headers without adding query parameters', async t => {
   for (const locale of ['zh', 'en']) {
     const document = pageDocument(), root = document.createElement('div'), reads = [];

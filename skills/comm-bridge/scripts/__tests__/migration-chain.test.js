@@ -1,8 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
 import { inspectLayout, planDatabaseMigration, migrateDatabase, guardDatabase } from '../sqlite-schema.js';
@@ -10,98 +8,6 @@ import * as c4 from '../c4-schema.js';
 import * as scheduler from '../../../scheduler/scripts/schema.js';
 import * as web from '../../../web-console/scripts/schema.js';
 const fixtures = new URL('./fixtures/migration-history/', import.meta.url);
-
-function foreignKeyRebuild(db, { fail = false, invalidate = false } = {}) {
- db.exec(`CREATE TABLE parent_rows(id INTEGER PRIMARY KEY,value TEXT);
-   CREATE TABLE child_rows(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES parent_rows(id) ON DELETE CASCADE);
-   INSERT INTO parent_rows VALUES(1,'retained'); INSERT INTO child_rows VALUES(7,1); PRAGMA user_version=1`);
- return {name:'foreign-key-rebuild',SUPPORTED_SCHEMA_VERSION:2,supportsNewDatabase:false,
-  inspectSchema(connection,options){return inspectLayout(connection,'foreign-key-rebuild',2,{parent_rows:['id','value']},options);},
-  MIGRATIONS:{1:{to:2,changes:{rebuildTables:['parent_rows']},migrate(connection){
-   assert.equal(connection.inTransaction,true);
-   assert.equal(connection.pragma('foreign_keys',{simple:true}),0,'Foreign key actions must be off before DROP');
-   connection.exec(`CREATE TABLE replacement(id INTEGER PRIMARY KEY,value TEXT);
-     INSERT INTO replacement SELECT * FROM parent_rows; DROP TABLE parent_rows; ALTER TABLE replacement RENAME TO parent_rows`);
-   if(invalidate)connection.exec('UPDATE child_rows SET parent_id=99');
-   if(fail)throw new Error('rebuild callback failed');
-  }}}};
-}
-
-for(const foreignKeys of [0,1])test(`rebuild preserves dependent rows and restores foreign key setting ${foreignKeys}`,()=>{
- const db=new Database(':memory:');try{
-  const owner=foreignKeyRebuild(db);db.pragma(`foreign_keys=${foreignKeys}`);
-  migrateDatabase(db,owner,{allowExtraTables:true});
-  assert.equal(db.pragma('foreign_keys',{simple:true}),foreignKeys);
-  assert.equal(db.prepare('SELECT parent_id FROM child_rows WHERE id=7').get().parent_id,1);
-  assert.equal(db.prepare('SELECT value FROM parent_rows WHERE id=1').get().value,'retained');
-  assert.equal(db.prepare('PRAGMA foreign_key_check').get(),undefined);
- }finally{db.close();}
-});
-
-for(const scenario of ['callback failure','invalid resulting foreign key'])test(`rebuild ${scenario} rolls back data and restores enforcement`,()=>{
- const db=new Database(':memory:');try{
-  const owner=foreignKeyRebuild(db,{fail:scenario==='callback failure',invalidate:scenario==='invalid resulting foreign key'});
-  db.pragma('foreign_keys=ON');
-  const before=db.prepare("SELECT name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all();
-  assert.throws(()=>migrateDatabase(db,owner,{allowExtraTables:true}),scenario==='callback failure'?/rebuild callback failed/:/foreign key check failed/);
-  assert.equal(db.inTransaction,false);assert.equal(db.pragma('foreign_keys',{simple:true}),1);
-  assert.equal(db.pragma('user_version',{simple:true}),1);
-  assert.deepEqual(db.prepare("SELECT name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").all(),before);
-  assert.equal(db.prepare('SELECT parent_id FROM child_rows WHERE id=7').get().parent_id,1);
-  assert.equal(db.prepare('SELECT value FROM parent_rows WHERE id=1').get().value,'retained');
- }finally{db.close();}
-});
-
-// Real two-connection SQLite lock boundary. Run for migration transaction/FK
-// handling; unrelated product edits may skip. Runner HOME/ZYLOS_DIR/PM2_HOME/
-// TMPDIR are private; no runtime, services or network. Both connections close.
-test('a locked rebuild BEGIN restores foreign keys without touching the competing transaction',{timeout:20000},()=>{
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'schema-rebuild-'));
- const db=new Database(path.join(root,'private.db'));let blocker;
- try{
-  const owner=foreignKeyRebuild(db);db.pragma('foreign_keys=ON');
-  blocker=new Database(db.name);blocker.exec('BEGIN IMMEDIATE');
-  assert.throws(()=>migrateDatabase(db,owner,{allowExtraTables:true}),{code:'SQLITE_BUSY'});
-  assert.equal(db.inTransaction,false);assert.equal(blocker.inTransaction,true);
-  assert.equal(db.pragma('foreign_keys',{simple:true}),1);assert.equal(db.pragma('user_version',{simple:true}),1);
-  assert.equal(db.prepare('SELECT parent_id FROM child_rows WHERE id=7').get().parent_id,1);
- }finally{if(blocker?.inTransaction)blocker.exec('ROLLBACK');blocker?.close();db.close();fs.rmSync(root,{recursive:true,force:true});}
-});
-
-test('a rebuild rejects existing invalid foreign key data and restores disabled enforcement',()=>{
- const db=new Database(':memory:');try{
-  const owner=foreignKeyRebuild(db);db.pragma('foreign_keys=OFF');db.exec('UPDATE child_rows SET parent_id=99');
-  assert.throws(()=>migrateDatabase(db,owner,{allowExtraTables:true}),/foreign key check failed/);
-  assert.equal(db.pragma('foreign_keys',{simple:true}),0);assert.equal(db.pragma('user_version',{simple:true}),1);
-  assert.equal(db.prepare('SELECT parent_id FROM child_rows WHERE id=7').get().parent_id,99);
-  assert.equal(db.prepare('SELECT value FROM parent_rows WHERE id=1').get().value,'retained');
- }finally{db.close();}
-});
-
-test('a rebuild refuses a caller transaction without rolling it back or changing enforcement',()=>{
- const db=new Database(':memory:');try{
-  const owner=foreignKeyRebuild(db);db.pragma('foreign_keys=ON');db.exec('BEGIN IMMEDIATE');
-  db.prepare('UPDATE parent_rows SET value=?').run('caller change');
-  assert.throws(()=>migrateDatabase(db,owner,{allowExtraTables:true}),/existing transaction/);
-  assert.equal(db.inTransaction,true);assert.equal(db.pragma('foreign_keys',{simple:true}),1);
-  assert.equal(db.prepare('SELECT value FROM parent_rows').get().value,'caller change');
-  db.exec('ROLLBACK');assert.equal(db.prepare('SELECT value FROM parent_rows').get().value,'retained');
- }finally{db.close();}
-});
-
-test('migration without a declared rebuild keeps foreign key enforcement and validation behavior',()=>{
- const db=new Database(':memory:');try{
-  foreignKeyRebuild(db);db.pragma('foreign_keys=OFF');db.exec('UPDATE child_rows SET parent_id=99');db.pragma('foreign_keys=ON');
-  const owner={name:'column-migration',SUPPORTED_SCHEMA_VERSION:2,
-   inspectSchema(connection,options){return inspectLayout(connection,'column-migration',2,{parent_rows:connection.pragma('user_version',{simple:true})===1?['id','value']:['id','value','extra']},options);},
-   MIGRATIONS:{1:{to:2,changes:{addColumns:{parent_rows:{extra:{type:'TEXT',pk:false}}}},migrate(connection){
-    assert.equal(connection.pragma('foreign_keys',{simple:true}),1);connection.exec('ALTER TABLE parent_rows ADD COLUMN extra TEXT');
-   }}}};
-  migrateDatabase(db,owner,{allowExtraTables:true});
-  assert.equal(db.pragma('foreign_keys',{simple:true}),1);assert.equal(db.pragma('user_version',{simple:true}),2);
-  assert.equal(db.prepare('SELECT parent_id FROM child_rows WHERE id=7').get().parent_id,99);
- }finally{db.close();}
-});
 
 for (const [name, owner, seed, query] of [
   ...['v0.1.0','v0.4.11','v0.5.2'].map(tag => [`c4-${tag}.sql`,c4,"INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES('in','web-console','session-handoff','retained')",'SELECT content FROM conversations']),

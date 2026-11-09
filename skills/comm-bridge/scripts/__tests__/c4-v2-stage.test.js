@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { guardDatabase } from '../sqlite-schema.js';
 import * as owner from '../c4-schema.js';
+import * as historicalOwner from './helpers/c4-v2-owner.js';
 import { createStore } from '../c4-v2-store.js';
 import { seedV1, NEW_TABLES } from './helpers/c4-v2-fixtures.js';
 const moduleURL = new URL('../c4-db.js', import.meta.url).href;
@@ -41,14 +42,14 @@ test('PR-B injectable factory does not touch its connection until a database ope
   const store = createStore(() => { opens++; return db; }); assert.equal(opens, 0);
   assert.equal(store.getChannelNamespace('missing'), null); assert.equal(opens, 1);
 });
-test('PR-B public getDb runs real owner migration from historical v1 then checks v2 layout', t => {
+test('public getDb runs real owner migration from historical v1 then checks current layout', t => {
   const dir = root(t); mkdirSync(join(dir, 'comm-bridge')); const filename = join(dir, 'comm-bridge/c4.db');
   const db = new Database(filename); seedV1(db); db.close();
   const result = child(dir, `import assert from 'node:assert/strict'; import {getDb,close} from ${JSON.stringify(moduleURL)};
-const db=getDb(); assert.equal(db.pragma('user_version',{simple:true}),2);
+const db=getDb(); assert.equal(db.pragma('user_version',{simple:true}),${owner.SUPPORTED_SCHEMA_VERSION});
 for(const name of ['group_heads','drain_fences','mode_transitions','origin_sync_cursors']) assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)); close();`);
   assert.equal(result.status, 0, result.stderr);
-  const read = new Database(filename, { readonly: true }); t.after(() => read.close()); assert.equal(read.pragma('user_version', { simple: true }), 2);
+  const read = new Database(filename, { readonly: true }); t.after(() => read.close()); assert.equal(read.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
 });
 for (const corruption of ['future-version', 'missing-required-column']) test(`PR-B public getDb rejects ${corruption} through owner guard before accepting connection`, t => {
   const dir = root(t); mkdirSync(join(dir, 'comm-bridge')); const filename = join(dir, 'comm-bridge/c4.db');
@@ -61,13 +62,13 @@ for(let i=0;i<2;i++) assert.throws(()=>getDb(),/schema|supported/); close();`);
   assert.equal(result.status, 0, result.stderr); assert.deepEqual(readFileSync(filename), before);
 });
 
-test('PR-A: complete v2 owner is registered and guards an isolated database', t => {
+test('complete frozen v2 owner is registered and guards an isolated database', t => {
   const db = new Database(':memory:'); t.after(() => db.close());
-  guardDatabase(db, owner);
-  assert.equal(owner.SUPPORTED_SCHEMA_VERSION, 2);
-  assert.equal(owner.MIGRATIONS[1].to, 2);
-  assert.deepEqual(Object.keys(owner.MIGRATIONS[1].changes).sort(), ['addColumns', 'addTables']);
-  assert.deepEqual(Object.keys(owner.MIGRATIONS[1].changes.addTables).sort(), [...NEW_TABLES].sort());
+  guardDatabase(db, historicalOwner);
+  assert.equal(historicalOwner.SUPPORTED_SCHEMA_VERSION, 2);
+  assert.equal(historicalOwner.MIGRATIONS[1].to, 2);
+  assert.deepEqual(Object.keys(historicalOwner.MIGRATIONS[1].changes).sort(), ['addColumns', 'addTables']);
+  assert.deepEqual(Object.keys(historicalOwner.MIGRATIONS[1].changes.addTables).sort(), [...NEW_TABLES].sort());
   const check = (candidate) => {
     assert.deepEqual(Object.keys(candidate.TABLES).sort(), db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name).sort());
     for (const [table, definitions] of Object.entries(candidate.COLUMN_DEFINITIONS)) {
@@ -76,13 +77,13 @@ test('PR-A: complete v2 owner is registered and guards an isolated database', t 
       assert.deepEqual(Object.fromEntries(columns.map(c => [c.name, { type: c.type, pk: c.pk > 0 }])), definitions);
     }
   };
-  check(owner);
-  assert.equal(owner.COLUMN_DEFINITIONS.group_model_overrides.session_group.pk, true);
-  assert.equal(owner.COLUMN_DEFINITIONS.group_model_overrides.runtime.pk, true);
-  const { origin_sync_cursors, ...incomplete } = owner.TABLES;
-  assert.throws(() => check({ ...owner, TABLES: incomplete }), assert.AssertionError);
+  check(historicalOwner);
+  assert.equal(historicalOwner.COLUMN_DEFINITIONS.group_model_overrides.session_group.pk, true);
+  assert.equal(historicalOwner.COLUMN_DEFINITIONS.group_model_overrides.runtime.pk, true);
+  const { origin_sync_cursors, ...incomplete } = historicalOwner.TABLES;
+  assert.throws(() => check({ ...historicalOwner, TABLES: incomplete }), assert.AssertionError);
   db.exec('ALTER TABLE origin_sync_cursors DROP COLUMN checkpoint_id');
-  assert.throws(() => guardDatabase(db, owner), /checkpoint_id/);
+  assert.throws(() => guardDatabase(db, historicalOwner), /checkpoint_id/);
 });
 
 test('copied skill refuses import when its explicit Core dependency is absent, without opening a database', t => {

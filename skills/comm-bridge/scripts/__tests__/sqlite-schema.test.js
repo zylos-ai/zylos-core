@@ -41,8 +41,8 @@ test('known C4 legacy fields/backfill/retag migrate together and only once',t=>{
  const reopened=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(reopened.prepare('SELECT raw_content FROM control_queue').get().raw_content,null);reopened.close();
 });
 test('future versions are rejected before write pragmas and migration',t=>{
- const root=fixture(t),file=path.join(root,'future.db');const db=new Database(file);db.exec(sql);db.pragma('user_version=3');db.close();const before=fs.readFileSync(file);
- const actual=new Database(file);assert.throws(()=>guardDatabase(actual,{...c4,migrate(){assert.fail('migration');}}),/version 3/);actual.close();assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(file+'-wal'),false);
+ const root=fixture(t),file=path.join(root,'future.db');const db=new Database(file);db.exec(sql);db.pragma(`user_version=${c4.SUPPORTED_SCHEMA_VERSION+1}`);db.close();const before=fs.readFileSync(file);
+ const actual=new Database(file);assert.throws(()=>guardDatabase(actual,{...c4,migrate(){assert.fail('migration');}}),new RegExp(`version ${c4.SUPPORTED_SCHEMA_VERSION+1}`));actual.close();assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(file+'-wal'),false);
 });
 test('version-zero adoption preserves an unknown legacy table while building the required baseline',()=>{
  const db=new Database(':memory:');assert.throws(()=>guardDatabase(db,{...wc,migrate(){assert.fail('migration');}},{readonly:true}),/missing/);
@@ -88,8 +88,8 @@ test('first-adoption absence and empty active root permit schema initialization 
 test('web-console rejects future C4 before stale session cleanup',t=>{
  const root=fixture(t);
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();const wc=openDb();wc.prepare('INSERT INTO sessions VALUES(?,?,?)').run('stale',1,1);wc.close();`);
- const c4db=new Database(path.join(root,'comm-bridge/c4.db'));c4db.pragma('user_version=3');c4db.close();
- const child=spawnSync(process.execPath,['skills/web-console/scripts/server.js'],{cwd:repo,env:{...process.env,ZYLOS_DIR:root},encoding:'utf8',timeout:5000});assert.notEqual(child.status,0);assert.match(child.stderr,/schema version 3/);
+ const c4db=new Database(path.join(root,'comm-bridge/c4.db'));c4db.pragma(`user_version=${c4.SUPPORTED_SCHEMA_VERSION+1}`);c4db.close();
+ const child=spawnSync(process.execPath,['skills/web-console/scripts/server.js'],{cwd:repo,env:{...process.env,ZYLOS_DIR:root},encoding:'utf8',timeout:5000});assert.notEqual(child.status,0);assert.match(child.stderr,new RegExp(`schema version ${c4.SUPPORTED_SCHEMA_VERSION+1}`));
  const wcdb=new Database(path.join(root,'web-console/web-console.db'),{readonly:true});assert.equal(wcdb.prepare('SELECT COUNT(*) AS n FROM sessions').get().n,1);wcdb.close();
 });
 

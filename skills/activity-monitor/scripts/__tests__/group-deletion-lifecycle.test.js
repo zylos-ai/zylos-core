@@ -7,8 +7,9 @@ import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { SupervisorAdmission } from '../supervisor-admission.js';
 import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 import { validateReply } from '../../../../cli/lib/am-sock-client.js';
-function fixture(t, { absent = false } = {}) {
-  const db = new Database(':memory:'); guardDatabase(db, owner); t.after(() => db.close());
+import { readyForConfigReclaim } from '../supervisor-request.js';
+function fixture(t, { absent = false, database, closeDatabase } = {}) {
+  const db = database ?? new Database(':memory:'); guardDatabase(db, owner); t.after(closeDatabase ?? (() => db.close()));
   const store = createStore(db, { validateComponent: () => true, readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
   let live = absent ? null : { sessionGroup: 'telegram', runId: 'runtime-old', sessionId: 'session-old', present: true, ready: true,
     processRunning: true, state: 'idle', idleSince: 0, runtime: 'claude', runDir: '/private/fixture', createdAt: 0 };
@@ -56,6 +57,17 @@ test('deletion admission rejects Origin and open mode transitions without creati
   const f = fixture(t); assert.equal((await f.admission.handle({ ...request, sessionGroup: 'origin' })).reason, 'origin_forbidden');
   f.store.beginModeTransition('multi', 'single'); assert.equal((await f.admission.handle(request)).reason, 'transition_open'); assert.equal(f.db.prepare('SELECT count(*) AS n FROM group_deletion_audit').get().n, 0);
 });
+for (const unavailable of [{ ready: false }, { runId: null }, { runId: '' }]) {
+  test(`deletion admission rejects an existing runtime with unavailable identity ${JSON.stringify(unavailable)}`, async t => {
+    const f = fixture(t); Object.assign(f.live, unavailable);
+    const reply = await f.admission.handle(request);
+    assert.equal(reply.result, 'rejected'); assert.equal(reply.reason, 'identity_unavailable');
+    assert.equal(validateReply(request, reply), true);
+    assert.equal(f.store.getDrainFence('telegram'), null);
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM group_deletion_audit').get().n, 0);
+    assert.equal(f.state.requests.length, 0); assert.equal(f.state.stops.length, 0);
+  });
+}
 test('a replacement runtime cannot be stopped or marked as the deleting run', async t => {
   const f = fixture(t); await f.admission.handle(request); const fence = f.store.getDrainFence('telegram'); f.live.runId = 'replacement-run';
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context()), 'changed'); assert.equal(f.state.stops.length, 0); assert.equal(f.store.listRunEndings(['telegram']).length, 0); assert.equal(f.store.getDrainFence('telegram').reason, 'delete');
@@ -101,4 +113,55 @@ test('a post-stop replacement cannot become stopped evidence for deletion', asyn
   f.lifecycle.d.stop = () => { f.live.runId = 'replacement-run'; };
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context()), 'changed');
   assert.equal(f.store.listRunEndings(['telegram']).length, 0); assert.equal(f.store.getDrainFence('telegram').reason, 'delete');
+});
+
+// Real notification -> claim -> ready admission -> ack -> delete reclaim.
+// Uses the official runner's private C4 database; no tmux, service or model.
+test('a running configuration control can acknowledge through deletion and let its own run stop', async t => {
+  const core = await import('../../../comm-bridge/scripts/c4-db.js');
+  const f = fixture(t, { database: core.getDb(), closeDatabase: core.close });
+  f.live.launchConfig = { runtime: 'codex', mode: 'default' };
+  f.lifecycle.now = Date.now;
+  f.lifecycle.d.bindTarget = scene => JSON.stringify({ expectedRunId: scene.runId,
+    tmuxTarget: { serverGeneration: 'private', sessionId: '$1', paneId: '%1' } });
+  f.lifecycle.d.prompts = { CONFIG_RECLAIM_PROMPT: () => 'Complete the handoff and submit ready_for_config_reclaim, then finish this control.' };
+  await f.lifecycle.reconcileConfiguration(f.context());
+  const control = f.store.getNextPendingControl(Math.floor(Date.now() / 1000), { sessionGroups: ['telegram'] });
+  assert.ok(control);
+  assert.equal(f.store.claimControl(control.id), true);
+  assert.equal((await f.admission.handle(request)).result, 'accepted');
+  const fence = f.store.getDrainFence('telegram');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context()), 'waiting_inflight');
+
+  const response = await readyForConfigReclaim({ env: { ZYLOS_SESSION_GROUP: 'telegram', ZYLOS_RUN_ID: 'runtime-old' },
+    send: async message => {
+      const reply = await f.admission.handle(message);
+      assert.equal(validateReply(message, reply), true);
+      return { kind: reply.ok ? 'accepted' : 'rejected', sent: true, reply };
+    } });
+  assert.equal(response.ok, true, JSON.stringify(response));
+  assert.equal(response.data.result, 'already_accepted');
+  assert.deepEqual(f.store.getDrainFence('telegram'), fence);
+  assert.equal(f.store.getActiveDeletion('telegram').operationId, request.requestId);
+  core.ackControl(control.id);
+  assert.equal(f.db.prepare('SELECT status FROM control_queue WHERE id=?').get(control.id).status, 'done');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context()), 'done');
+  assert.deepEqual(f.state.stops, ['runtime-old']);
+  assert.equal(f.store.listRunEndings(['telegram'])[0].reason, 'delete');
+  assert.equal(f.store.listPendingContinuations().length, 0);
+  assert.deepEqual(f.store.getDrainFence('telegram'), fence);
+});
+
+test('configuration readiness cannot borrow a deletion fence from another run', async t => {
+  const f = fixture(t);
+  f.live.launchConfig = { runtime: 'claude', mode: 'default' };
+  await f.admission.handle(request);
+  const fence = f.store.getDrainFence('telegram');
+  const readiness = { version: 1, type: 'ready_for_config_reclaim', requestId: 'ready-replacement',
+    sessionGroup: 'telegram', expectedRunId: 'replacement-run' };
+  assert.equal((await f.admission.handle(readiness)).reason, 'run_changed');
+  f.live.runId = 'replacement-run';
+  assert.equal((await f.admission.handle(readiness)).reason, 'other_fence');
+  assert.deepEqual(f.store.getDrainFence('telegram'), fence);
+  assert.equal(f.state.stops.length, 0);
 });

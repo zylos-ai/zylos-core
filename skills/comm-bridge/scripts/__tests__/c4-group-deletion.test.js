@@ -47,9 +47,8 @@ test('finalization deletes terminal group data, releases capacity and retains qu
   const unbound = s.insertControl('keep new control', { sessionGroup: 'telegram', appendAckSuffix: false });
   s.insertControl('old control', { sessionGroup: 'telegram', targetBinding: binding('old-run'), appendAckSuffix: false });
   db.exec("INSERT INTO slot_occupancy VALUES('telegram','old-run','held',9999999999,1)");
-  const countsEstimated = s.markDeletionCleanup(options.operationId);
-  assert.equal(countsEstimated, false);
-  const audit = s.finalizeGroupDeletion('telegram', { operationId: options.operationId, countsEstimated,
+  s.markDeletionCleanup(options.operationId);
+  const audit = s.finalizeGroupDeletion('telegram', { operationId: options.operationId,
     counts: { messages: 90, attachments: 3, files: 9 }, cleanup: () => ({ attachments: 0, files: 0 }) });
   assert.equal(audit.status, 'done'); assert.equal(audit.counts.messages, 2);
   assert.equal(audit.counts.attachments, 0); assert.equal(audit.counts.files, 0); assert.equal(audit.countsEstimated, false);
@@ -125,6 +124,7 @@ test('migration chain reaches deletion schema from historical layouts with user 
     db.exec("CREATE TABLE local_notes(value TEXT); INSERT INTO local_notes VALUES('keep'); ALTER TABLE conversations ADD COLUMN local_tag TEXT");
     migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true });
     assert.equal(db.pragma('user_version', { simple: true }), 3);
+    assert.ok(db.prepare('PRAGMA table_info(group_deletion_audit)').all().some(row => row.name === 'cleanup_attempts'));
     assert.equal(db.prepare('SELECT value FROM local_notes').get().value, 'keep');
     assert.ok(db.prepare('PRAGMA table_info(conversations)').all().some(row => row.name === 'local_tag'));
     migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true }); assert.equal(db.pragma('user_version', { simple: true }), 3);
@@ -149,22 +149,45 @@ test('ending constraint rebuild preserves user columns, generated columns, index
   assert.equal(db.prepare('SELECT count(*) AS n FROM run_endings').get().n, 2);
 });
 
-test('ending constraint rebuild retains user rows with cascading foreign keys', t => {
+for (const foreignKeys of [0, 1]) test(`ending constraint rebuild refuses referencing foreign keys with enforcement ${foreignKeys}`, t => {
   const db = new Database(':memory:'); t.after(() => db.close());
-  seedV1(db); migrateToV2(db); db.pragma('user_version=2'); db.pragma('foreign_keys=ON');
+  seedV1(db); migrateToV2(db); db.pragma('user_version=2'); db.pragma(`foreign_keys=${foreignKeys}`);
   db.exec(`INSERT INTO run_endings(session_group,run_id,reason,ended_at) VALUES('telegram','old','ttl',1);
-    CREATE TABLE local_ending_notes(id INTEGER PRIMARY KEY,session_group TEXT REFERENCES run_endings(session_group) ON DELETE CASCADE,note TEXT);
+    CREATE TABLE local_ending_notes(id INTEGER PRIMARY KEY,session_group TEXT REFERENCES RUN_ENDINGS(session_group) ON DELETE CASCADE,note TEXT);
     INSERT INTO local_ending_notes VALUES(1,'telegram','retained user note');`);
+  assert.throws(() => migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true }), /table "local_ending_notes" has a foreign key referencing run_endings/);
+  assert.equal(db.pragma('user_version', { simple: true }), 2);
+  assert.equal(db.pragma('foreign_keys', { simple: true }), foreignKeys);
+  assert.equal(db.prepare('SELECT note FROM local_ending_notes WHERE id=1').get().note, 'retained user note');
+  assert.equal(db.prepare('SELECT run_id FROM run_endings').get().run_id, 'old');
+  assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='group_deletion_audit'").get(), undefined);
+});
+
+test('ending constraint rebuild leaves unrelated invalid foreign key data and enforcement unchanged', t => {
+  const db = new Database(':memory:'); t.after(() => db.close());
+  seedV1(db); migrateToV2(db); db.pragma('user_version=2'); db.pragma('foreign_keys=OFF');
+  db.exec(`CREATE TABLE local_parents(id INTEGER PRIMARY KEY);
+    CREATE TABLE local_children(parent_id INTEGER REFERENCES local_parents(id));
+    INSERT INTO local_children VALUES(99);`);
+  db.pragma('foreign_keys=ON');
   migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true });
   assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
   assert.equal(db.pragma('foreign_keys', { simple: true }), 1);
-  assert.equal(db.prepare('SELECT note FROM local_ending_notes WHERE id=1').get().note, 'retained user note');
-  assert.equal(db.prepare('PRAGMA foreign_key_check').get(), undefined);
-  // Restored enforcement still owns normal post-migration cascade behavior.
-  db.prepare('DELETE FROM run_endings WHERE session_group=?').run('telegram');
-  assert.equal(db.prepare('SELECT count(*) AS n FROM local_ending_notes').get().n, 0);
+  assert.equal(db.prepare('SELECT parent_id FROM local_children').get().parent_id, 99);
 });
 
+test('ending constraint rebuild refuses a user extension that references the same ending table', t => {
+  const db = new Database(':memory:'); t.after(() => db.close());
+  seedV1(db); migrateToV2(db); db.pragma('user_version=2'); db.pragma('foreign_keys=ON');
+  db.exec(`ALTER TABLE run_endings ADD COLUMN previous_group TEXT REFERENCES run_endings(session_group);
+    INSERT INTO run_endings(session_group,run_id,reason,ended_at,previous_group) VALUES('telegram','old','ttl',1,'telegram');`);
+  assert.throws(() => migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true }), /table "run_endings" has a foreign key referencing run_endings/);
+  assert.equal(db.pragma('user_version', { simple: true }), 2);
+  assert.equal(db.pragma('foreign_keys', { simple: true }), 1);
+  assert.equal(db.prepare('SELECT run_id,previous_group FROM run_endings').get().run_id, 'old');
+  assert.equal(db.prepare('SELECT previous_group FROM run_endings').get().previous_group, 'telegram');
+  assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='group_deletion_audit'").get(), undefined);
+});
 
 test('a reopened database resumes one audit and keeps fenced-era input for the next generation', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'delete-reopen-'));
@@ -174,14 +197,13 @@ test('a reopened database resumes one audit and keeps fenced-era input for the n
   first.store.insertConversation('out', 'telegram', 'room', 'old');
   first.store.beginGroupDeletion('telegram', options);
   const later = first.store.insertConversation('in', 'telegram', 'room', 'queued during deletion');
-  assert.equal(first.store.markDeletionCleanup(options.operationId), false);
+  first.store.markDeletionCleanup(options.operationId);
   first.db.close();
   const next = fixture(t, new Database(file));
   assert.equal(next.store.getActiveDeletion('telegram').operationId, options.operationId);
   assert.equal(next.store.claimConversation(later.id), false);
-  const countsEstimated = next.store.markDeletionCleanup(options.operationId);
-  assert.equal(countsEstimated, true);
-  const result = next.store.finalizeGroupDeletion('telegram', { operationId: options.operationId, countsEstimated });
+  next.store.markDeletionCleanup(options.operationId);
+  const result = next.store.finalizeGroupDeletion('telegram', { operationId: options.operationId });
   assert.equal(result.counts.attachments, 0); assert.equal(result.counts.files, 0); assert.equal(result.countsEstimated, true);
   assert.equal(next.db.prepare('SELECT count(*) AS n FROM group_deletion_audit').get().n, 1);
   assert.equal(next.store.claimConversation(later.id), true);
@@ -208,16 +230,17 @@ test('draft finalization rejects a mode transition that started after deletion b
 });
 
 test('cleanup confidence survives a failed file phase without filling counts from preview', t => {
-  const { store: s } = fixture(t);
+  const { db, store: s } = fixture(t);
   s.insertConversation('out', 'telegram', 'room', 'old');
   s.beginGroupDeletion('telegram', { ...options, preview: { messages: 900, attachments: 40, files: 80 } });
   assert.equal(s.getGroupDeletionAudit(options.operationId).countsEstimated, false);
-  assert.equal(s.markDeletionCleanup(options.operationId), false);
+  s.markDeletionCleanup(options.operationId);
   assert.throws(() => s.finalizeGroupDeletion('telegram', { operationId: options.operationId, cleanup() { throw new Error('interrupted after unlink'); } }), { code: 'DB_WRITE_FAILED' });
-  assert.equal(s.getGroupDeletionAudit(options.operationId).countsEstimated, true);
+  assert.equal(s.getGroupDeletionAudit(options.operationId).countsEstimated, false);
+  assert.equal(db.prepare('SELECT cleanup_attempts FROM group_deletion_audit WHERE operation_id=?').get(options.operationId).cleanup_attempts, 1);
   assert.equal(s.getGroupDeletionAudit(options.operationId).counts.files, 0);
-  const estimated = s.markDeletionCleanup(options.operationId);
-  const done = s.finalizeGroupDeletion('telegram', { operationId: options.operationId, countsEstimated: estimated, cleanup: () => ({ attachments: 0, files: 2 }) });
+  s.markDeletionCleanup(options.operationId);
+  const done = s.finalizeGroupDeletion('telegram', { operationId: options.operationId, cleanup: () => ({ attachments: 0, files: 2 }) });
   assert.equal(done.countsEstimated, true); assert.equal(done.counts.messages, 1); assert.equal(done.counts.attachments, 0); assert.equal(done.counts.files, 2);
   assert.equal(s.finalizeGroupDeletion('telegram', { operationId: options.operationId }).countsEstimated, true);
   assert.throws(() => s.markDeletionCleanup(options.operationId), { code: 'DELETION_OWNERSHIP_MISMATCH' });
@@ -226,11 +249,10 @@ test('cleanup confidence survives a failed file phase without filling counts fro
 test('draft counts report current cleanup only and retain uncertainty across an interruption', t => {
   const { store: s } = fixture(t);
   s.beginDraftDeletion('draft-id', { ...options, preview: { attachments: 100, files: 200 } });
-  assert.equal(s.markDeletionCleanup(options.operationId), false);
+  s.markDeletionCleanup(options.operationId);
   assert.throws(() => s.finalizeDraftDeletion('draft-id', { operationId: options.operationId, cleanup() { throw new Error('interrupted'); } }), { code: 'DB_WRITE_FAILED' });
-  const estimated = s.markDeletionCleanup(options.operationId);
-  const done = s.finalizeDraftDeletion('draft-id', { operationId: options.operationId, countsEstimated: estimated,
-    counts: { messages: 99, attachments: 100, files: 200 }, cleanup: () => ({ attachments: 0, files: 1 }) });
+  s.markDeletionCleanup(options.operationId);
+  const done = s.finalizeDraftDeletion('draft-id', { operationId: options.operationId,     counts: { messages: 99, attachments: 100, files: 200 }, cleanup: () => ({ attachments: 0, files: 1 }) });
   assert.equal(done.countsEstimated, true); assert.equal(done.counts.messages, 0); assert.equal(done.counts.attachments, 0); assert.equal(done.counts.files, 1);
 });
 
@@ -245,4 +267,63 @@ test('cleanup confidence marking requires an active owned group or unchanged dra
   s.insertConversation('in', 'dashboard', 'fresh-draft', 'new input', { groupName: 'fresh-draft' });
   assert.throws(() => s.markDeletionCleanup('draft-operation'), { code: 'DRAFT_BECAME_ACTIVE' });
   assert.equal(s.getGroupDeletionAudit('draft-operation').countsEstimated, false);
+});
+
+for (const target of ['group', 'draft']) {
+  test(`${target} cleanup cannot clear uncertainty from another caller after its storage commit and Core rollback`, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'delete-confidence-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const file = path.join(root, 'c4.db');
+    const first = fixture(t, new Database(file)), second = fixture(t, new Database(file));
+    const storage = new Database(path.join(root, 'dashboard.db'));
+    t.after(() => storage.close());
+    storage.exec('CREATE TABLE attachments(id INTEGER PRIMARY KEY); INSERT INTO attachments VALUES(1)');
+    const attachment = path.join(root, 'attachment.bin'); fs.writeFileSync(attachment, 'owned content');
+    const s = first.store, other = second.store;
+    const finalize = (store, values) => target === 'group' ? store.finalizeGroupDeletion('telegram', values) : store.finalizeDraftDeletion('draft-id', values);
+    if (target === 'group') {
+      s.insertConversation('out', 'telegram', 'room', 'old');
+      s.beginGroupDeletion('telegram', options);
+    } else s.beginDraftDeletion('draft-id', options);
+
+    // Caller A pauses between its durable mark and final writer transaction.
+    s.markDeletionCleanup(options.operationId);
+    other.markDeletionCleanup(options.operationId);
+    assert.throws(() => finalize(other, { operationId: options.operationId, cleanup() {
+      storage.transaction(() => { storage.prepare('DELETE FROM attachments').run(); fs.unlinkSync(attachment); })();
+      throw new Error('Core interrupted after Dashboard commit');
+    } }), { code: 'DB_WRITE_FAILED' });
+    assert.equal(storage.prepare('SELECT count(*) AS n FROM attachments').get().n, 0);
+    assert.equal(fs.existsSync(attachment), false);
+    assert.equal(s.getGroupDeletionAudit(options.operationId).status, 'started');
+    assert.equal(first.db.prepare('SELECT cleanup_attempts FROM group_deletion_audit').get().cleanup_attempts, 2);
+    if (target === 'group') {
+      assert.equal(s.getDrainFence('telegram').reason, 'delete');
+      assert.equal(first.db.prepare('SELECT count(*) AS n FROM conversations').get().n, 1);
+    }
+
+    // A resumes after the other attempt removed files and rolled back Core.
+    // The durable attempt count prevents confidently reporting zero.
+    const done = finalize(s, { operationId: options.operationId,
+      cleanup: () => ({ attachments: storage.prepare('DELETE FROM attachments').run().changes, files: Number(fs.existsSync(attachment)) }) });
+    assert.equal(done.status, 'done'); assert.equal(done.countsEstimated, true);
+    assert.equal(done.counts.attachments, 0); assert.equal(done.counts.files, 0);
+    assert.equal(done.counts.messages, target === 'group' ? 1 : 0);
+    assert.equal(first.db.prepare('SELECT count(*) AS n FROM group_deletion_audit').get().n, 1);
+    if (target === 'group') assert.equal(s.getDrainFence('telegram'), null);
+  });
+}
+
+test('a retracted pre-file attempt leaves the remaining cleanup count exact', t => {
+  const { store: s } = fixture(t);
+  s.beginDraftDeletion('draft-id', options);
+  s.markDeletionCleanup(options.operationId);
+  s.markDeletionCleanup(options.operationId);
+  s.retractDeletionCleanup(options.operationId);
+  const done = s.finalizeDraftDeletion('draft-id', { operationId: options.operationId,
+    cleanup: () => ({ attachments: 1, files: 1 }) });
+  assert.equal(done.countsEstimated, false);
+  assert.equal(done.counts.attachments, 1);
+  s.retractDeletionCleanup(options.operationId);
+  assert.equal(s.getGroupDeletionAudit(options.operationId).countsEstimated, false);
 });
