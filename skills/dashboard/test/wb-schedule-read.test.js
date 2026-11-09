@@ -499,7 +499,7 @@ test('all search includes paged completions and preserves tied timestamps across
   assert.equal(Object.hasOwn(noncompleted, 'timelineTasks'), false);
 });
 
-test('dense minute aliases and steps use one parsed boundary and match real zoned cron runs', () => {
+test('minute rules match real zoned cron runs and only eligible rules use arithmetic', () => {
   const cases = [
     ['*/1 * * * *', 'UTC', '2027-01-15T00:00:37Z'],
     ['*/2 * * * *', 'UTC', '2027-01-15T00:00:37Z'],
@@ -507,8 +507,11 @@ test('dense minute aliases and steps use one parsed boundary and match real zone
     ['0-59 * * * *', 'UTC', '2027-01-15T00:00:37Z'],
     ['*/7 * * * *', 'America/New_York', '2027-11-07T05:58:37Z'],
     ['*/7 * * * *', 'Australia/Lord_Howe', '2027-10-02T15:28:37Z'],
+    ['*/5 1 * * *', 'UTC', '2027-01-15T00:00:37Z', false],
+    ['0-59/2 * * * *', 'UTC', '2027-01-15T00:00:37Z', false],
+    ['*/7 * * * *', 'Asia/Kolkata', '2027-01-15T00:00:37Z'],
   ];
-  for (const [expression, tz, from] of cases) {
+  for (const [expression, tz, from, arithmetic = true] of cases) {
     const start = Date.parse(from) / 1000;
     let parsed = 0, advanced = 0;
     const cron = { createCronIterator(...args) {
@@ -519,7 +522,8 @@ test('dense minute aliases and steps use one parsed boundary and match real zone
     const actual = nextRuns({ status: 'pending', type: 'recurring', cron_expression: expression }, 5,
       start, tz, cron, { until: start + DAY });
     assert.equal(parsed, 1);
-    assert.equal(advanced, 1);
+    assert.equal(advanced, arithmetic ? 1 : actual.length);
+    if (expression === '0-59/2 * * * *') assert.equal(actual.length, 721);
     assert.ok(actual.length >= 5);
     assert.ok(actual.at(-1) > start + DAY);
     const reference = createCronIterator(expression, tz, new Date(start * 1000));

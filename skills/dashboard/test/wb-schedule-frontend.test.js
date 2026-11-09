@@ -655,20 +655,24 @@ test('legacy full task lists search locally and edit without a detail endpoint',
   const full = 'Legacy full prompt '.repeat(25) + 'uniquetail';
   const legacy = task({ id: 'legacy', status: 'completed', prompt: full, nextRuns: { runs: [], in24h: [] } });
   delete legacy.promptTruncated;
+  const unmatched = task({ id: 'unmatched-legacy', name: 'Unrelated legacy task', prompt: 'Different content' });
+  delete unmatched.promptTruncated;
   const h = harness(context, path => {
     if (path.includes('/history')) return { rows: [], next: null };
     assert.equal(path, '/api/workbench/schedule', 'legacy reads never request search or task detail');
-    const value = page([legacy]);
+    const value = page([legacy, unmatched]);
     delete value.counts;
     delete value.timelineTasks;
     return value;
   });
   await tick();
+  assert.equal(listRows(h).length, 2, 'both legacy tasks are initially loaded');
   const before = h.reads();
   const search = allNodes(h.root).find(node => node.type === 'search');
   search.value = 'uniquetail'; search.dispatch('change');
   assert.equal(h.reads(), before, 'legacy fulltext search uses the already loaded prompt');
   assert.equal(listRows(h).length, 1, 'legacy all search retains completed matches');
+  assert.equal(listRows(h).some(node => node.textContent.includes(unmatched.name)), false, 'unmatched legacy content is filtered out');
   listRows(h)[0].dispatch('click'); await tick();
   assert.equal(h.calls.some(call => call.path === '/api/workbench/schedule/legacy'), false);
   buttons(h.root, '编辑')[0].dispatch('click');
