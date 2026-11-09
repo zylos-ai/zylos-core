@@ -169,6 +169,8 @@ test('the status row stays quiet while a running group is waiting to be picked',
   assert.equal(observerNoticeHidden({ choosing: true, runningCount: 2 }), true);
   assert.equal(observerNoticeHidden({ choosing: true, runningCount: 0 }), false, 'nothing to pick: the row explains why');
   assert.equal(observerNoticeHidden({ choosing: false, runningCount: 2 }), false, 'a chosen group shows its connection state');
+  assert.equal(observerNoticeHidden({ historyMode: true, choosing: false, runningCount: 2 }), true, 'the history view does not show the live state');
+  assert.equal(observerNoticeHidden({ historyMode: true, choosing: true, runningCount: 0 }), true);
 });
 
 test('the folded size button shows the current size only when resizing is offered', () => {

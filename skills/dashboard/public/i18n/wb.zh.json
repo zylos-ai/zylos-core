@@ -289,6 +289,7 @@
   "wb.memory.noGroupFiles": "这个组还没有记忆目录。",
   "wb.memory.invalidGroup": "无效组名的目录和直接放在 session-groups 下的文件仍归共享。Core 无法保存这些文件。",
   "wb.memory.backlog": "各组待整理",
+  "wb.memory.overThreshold": "超过阈值",
   "wb.memory.syncing": "正在整理",
   "wb.memory.syncUnknown": "整理状态未知",
   "wb.memory.aged": "积压超过 6 小时",

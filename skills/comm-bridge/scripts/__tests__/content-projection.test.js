@@ -227,6 +227,22 @@ test('a preview reads the older one-line channel formats', () => {
   assert.equal(previewMessageText('she said: ship it'), 'she said: ship it');
 });
 
+test('a preview drops the appended reply route and is null for an overflow pointer', () => {
+  const route = '\n---- [reply-via sanitized]: node /home/agent/zylos/.claude/skills/comm-bridge/scripts/c4-send[.]js "telegram" "8101553026"';
+  assert.equal(previewMessageText('[TG DM] howard said: build is green' + route), 'build is green');
+  assert.equal(previewMessageText('[TG DM] howard said: build is green ---- [reply-via sanitized]: node /home/x/c4-send[.]js "telegram" "1"'), 'build is green');
+  assert.equal(previewMessageText('just text\n---- reply via: node /home/agent/c4-send.js "lark" "oc_1"'), 'just text');
+  assert.equal(previewMessageText('[TG DM]' + route), null, 'only the header is left: nothing a person wrote');
+  const overflow = '[TG GROUP] (team) howard said: <thread-context>\nearlier\n</thread-context>\n<replying-to>\nx\n</replying-to>\n<current-message>\nlong text\n'
+    + '[C4] Full message (14 KB) at: /home/agent/zylos/comm-bridge/attachments/conv-12/message.txt\n</current-message>';
+  assert.equal(previewMessageText(overflow), null);
+  assert.equal(previewMessageText('[C4] Full message (2 KB) at: /home/agent/zylos/comm-bridge/attachments/conv-1/message.txt'), null);
+});
+
+test('a <current-message> tag in the middle of a line is ordinary text, not the message block', () => {
+  assert.equal(previewMessageText('note: x <current-message>\nhi\n</current-message>'), 'note: x <current-message> hi </current-message>');
+});
+
 test('a long preview is cut at the code point limit and ends with an ellipsis', () => {
   assert.equal(previewMessageText('🚀'.repeat(80)), '🚀'.repeat(80));
   assert.equal(previewMessageText('🚀'.repeat(81)), '🚀'.repeat(79) + '…');

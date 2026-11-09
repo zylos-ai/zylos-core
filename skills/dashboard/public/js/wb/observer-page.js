@@ -69,9 +69,12 @@ export function observerTitleKey({ focus, hasTarget, multi } = {}) {
   return multi && !focus ? 'observer.title' : 'wb.observer.pageTitle';
 }
 
-/** Before a group is chosen the picker says what to do; the status row only speaks when there is nothing to pick. */
-export function observerNoticeHidden({ choosing, runningCount } = {}) {
-  return Boolean(choosing) && runningCount > 0;
+/**
+ * The status row speaks about the live connection, so the history view hides it. Before a group is chosen the
+ * picker says what to do; the row only speaks then when there is nothing to pick.
+ */
+export function observerNoticeHidden({ historyMode, choosing, runningCount } = {}) {
+  return Boolean(historyMode) || (Boolean(choosing) && runningCount > 0);
 }
 
 /** Text after the folded size button ("Size 120×40"); empty when the size form is not offered. */

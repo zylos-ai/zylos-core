@@ -153,3 +153,15 @@ test('resizing or turning the screen brings the current section back into view; 
   assert.equal(w.nav.scrollLeft, 0, 'same section and size: the row stays where the person scrolled it');
   w.watcher.destroy();
 });
+
+test('the row growing at the same width (longer labels, an added tab) brings the current section back into view', () => {
+  const w = watchedNav({ active: 4, width: 390 });
+  w.nav.scrollLeft = 0; w.watcher.fit();
+  assert.equal(w.nav.scrollLeft, 0, 'the person scrolled back to the start');
+  // Same visible width; the labels grow, so the current tab now sits further right.
+  Object.defineProperty(w.nav, 'scrollWidth', { get: () => 700 });
+  w.nav.tabs[4].getBoundingClientRect = () => ({ left: 500 - w.nav.scrollLeft, right: 610 - w.nav.scrollLeft });
+  w.watcher.fit();
+  assert.equal(w.nav.scrollLeft, 610 - (390 - 32), 'a wider row is a new size: the current section is revealed');
+  w.watcher.destroy();
+});

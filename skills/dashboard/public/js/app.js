@@ -12,9 +12,9 @@ import { mountChatSettings } from './wb/chat-settings.js?v=114';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=6';
 import { mountWorkbench } from './wb/shell.js?v=118';
 import { watchHeader } from './wb/header-fit.js?v=96';
-import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=106';
+import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=107';
 import { groupObservable, instanceStatusText, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=115';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from './wb/observer-page.js?v=117';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from './wb/observer-page.js?v=118';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=143';
 import { createUsagePage } from './wb/usage.js?v=118';
@@ -1079,7 +1079,7 @@ function renderObserverPage() {
   const frameShell = $('#observer-frame')?.parentElement;
   if (frameShell) frameShell.hidden = !observerFrameVisible({ historyMode: state.observer.historyMode, choosing: choose, idle, lease: state.observer.lease, noticeState: $('#observer-notice')?.dataset.state });
   const noticeRow = $('.wb-o-notice');
-  if (noticeRow) noticeRow.hidden = observerNoticeHidden({ choosing: choose, runningCount: runningObserverGroups(state.observer.groups).length });
+  if (noticeRow) noticeRow.hidden = observerNoticeHidden({ historyMode: state.observer.historyMode, choosing: choose, runningCount: runningObserverGroups(state.observer.groups).length });
   if (available && !state.observer.lease && !state.observer.historyMode) {
     if (choose) setObserverNotice(t(runningObserverGroups(state.observer.groups).length ? 'wb.observer.chooseGroup' : 'wb.observer.noRunningGroups'), 'idle');
     else if (idle && !state.observer.intent) setObserverNotice(t('wb.observer.noSession'), 'idle');

@@ -389,17 +389,18 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await page.locator('#wb-chat .conversation-sidebar').isVisible(), true, 'with the list remembered as collapsed, a phone still goes back to the list');
   assert.equal(await page.locator(`#wb-chat [data-conversation-id="${first.receipt.conversationId}"]`).isVisible(), true);
   await select();
-  // On phones the group detail covers the screen, and its actions show their names at the 40px phone height.
+  // On phones the group detail covers the screen. Its secondary actions are 40x40 icons named by their
+  // aria-label, as on desktop, so no English label is cut; "View conversation" keeps its words elsewhere.
   await groupInfo.click();
   await groupSide.waitFor({ state: 'visible' });
   const sideActions = await groupSide.locator('.wb-act').evaluateAll(buttons => buttons.map(button => {
-    const label = button.querySelector('.wb-act-label');
-    return { text: label?.textContent, labelWidth: label?.getBoundingClientRect().width ?? 0, height: button.getBoundingClientRect().height };
+    const label = button.querySelector('.wb-act-label'), box = button.getBoundingClientRect();
+    return { name: button.getAttribute('aria-label'), labelWidth: label?.getBoundingClientRect().width ?? 0, width: box.width, height: box.height };
   }));
-  assert.deepEqual(sideActions.map(action => action.text), ['Interrupt', 'Nudge', 'Restart']);
+  assert.deepEqual(sideActions.map(action => action.name), ['Interrupt', 'Nudge', 'Restart']);
   for (const action of sideActions) {
-    assert.ok(action.labelWidth > 0, `${action.text}: the group detail action shows its name on a phone`);
-    assert.ok(action.height >= 40, `${action.text}: the group detail action has a 40px phone height`);
+    assert.equal(action.labelWidth, 0, `${action.name}: the group detail action is an icon on a phone`);
+    assert.ok(action.width >= 40 && action.height >= 40, `${action.name}: the group detail action is a 40x40 phone target (${action.width}x${action.height})`);
   }
   for (const control of ['.wb-group-side-back', '[aria-label="Close"]']) {
     const box = await groupSide.locator(control).first().boundingBox();

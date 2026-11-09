@@ -425,6 +425,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       const age = memoryBacklogAge(row.firstAt);
       flags.append(element(document, 'span', age ? t(age.unit === 'days' ? 'wb.memory.agedDays' : 'wb.memory.agedHours', { count: age.count }) : t('wb.memory.aged'), 'wb-memory-bl-tag warn'));
     }
+    // Over the threshold is said in words too, not only by the bar's colour.
+    if (over) flags.append(element(document, 'span', t('wb.memory.overThreshold'), 'wb-memory-bl-tag warn'));
     if (row.syncing === true) flags.append(element(document, 'span', t('wb.memory.syncing'), 'wb-memory-bl-tag'));
     else if (row.syncing === null) flags.append(element(document, 'span', t('wb.memory.syncUnknown'), 'wb-memory-bl-tag'));
     if (row.ownThreshold != null) flags.append(element(document, 'span', t('wb.memory.threshold', { count: row.ownThreshold }), 'wb-memory-bl-tag'));
@@ -466,7 +468,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       view.threshold == null ? t('wb.memory.backlogHint') : t('wb.memory.thresholdHint', { count: view.threshold }));
     if (!backlog) progress.append(element(document, 'p', t('wb.unknown')));
     else {
-      const many = view.active.length + view.quiet.length > BACKLOG_FILTER_AT;
+      const many = view.active.length + view.quiet.length >= BACKLOG_FILTER_AT;
       if (many) { backlogSearch.placeholder = t('wb.memory.filterGroups'); backlogSearch.setAttribute('aria-label', t('wb.memory.filterGroups')); progress.append(backlogFilter); }
       else backlogQuery = backlogSearch.value = '';
       progress.append(backlogRows);

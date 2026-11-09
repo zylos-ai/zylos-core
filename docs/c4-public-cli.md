@@ -43,7 +43,8 @@ Each group's `preview` (the newest inbound message, or `null`) is
 `{timestamp, channel, endpoint, text, message}`: `text` is the model-facing projection
 of the whole message, and `message` is a one-line reader preview of what the person
 wrote (the `<current-message>` body without its sender prefix, an envelope's fallback
-text, at most 80 characters) or `null` when the message carries only channel wrapping.
+text, at most 80 characters, without the appended reply route) or `null` when the message
+carries only channel wrapping or is an overflow pointer to a stored file.
 
 `group-queues` is a read-only snapshot of the groups that have pending or running
 inbound messages or a drain fence. It returns `{groups, globalFence}`, and each group has

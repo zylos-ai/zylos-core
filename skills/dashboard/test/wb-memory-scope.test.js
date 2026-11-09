@@ -132,6 +132,8 @@ test('backlog card: threshold in the header, age as a mark on its row, quiet gro
   const mark = nodesOfClass(first, 'wb-memory-bl-tag')[0];
   assert.equal(mark.textContent, 'wb.memory.agedHours {"count":9}'); assert.match(mark.className, /\bwarn\b/);
   assert.equal(nodesOfClass(nodesOfClass(first, 'wb-memory-bl-head')[0], 'wb-memory-bl-tag').includes(mark), true, 'the mark sits with the name, not on a line of its own');
+  const over = nodesOfClass(first, 'wb-memory-bl-tag')[1];
+  assert.equal(over?.textContent, 'wb.memory.overThreshold', 'over the threshold is also said in words'); assert.match(over.className, /\bwarn\b/);
   const rest = nodesOfClass(card, 'wb-memory-rest')[0];
   assert.equal(rest.tagName, 'DETAILS'); assert.equal(rest.open, false);
   assert.match(rest.textContent, /wb.memory.restQuiet \{"count":12\}/);
@@ -148,6 +150,39 @@ test('backlog card: threshold in the header, age as a mark on its row, quiet gro
   filter.value = 'nothing'; filter.dispatch('input');
   assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.noMatch/);
   f.controller.destroy();
+});
+
+test('the backlog filter appears from twelve groups', async () => {
+  const filterWith = async count => {
+    const groups = Array.from({ length: count }, (_, i) => ({ sessionGroup: `telegram:dm-${i}`, count: i, threshold: 15, syncing: false }));
+    const f = fixture({ detail: () => 'technical', request: async () => ({ groups }) });
+    await f.controller.load();
+    const found = allNodes(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0]).some(node => node.tagName === 'INPUT');
+    f.controller.destroy();
+    return found;
+  };
+  assert.equal(await filterWith(11), false, 'eleven groups: no filter');
+  assert.equal(await filterWith(12), true, 'twelve groups: a filter');
+});
+
+test('only a count past the threshold is labelled over it', async () => {
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [
+    { sessionGroup: 'telegram:dm-at', count: 15, threshold: 15, syncing: false },
+    { sessionGroup: 'telegram:dm-past', count: 16, threshold: 15, syncing: false },
+  ] }) });
+  await f.controller.load();
+  const rows = nodesOfClass(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0], 'wb-memory-bl');
+  const said = row => nodesOfClass(row, 'wb-memory-bl-tag').map(node => node.textContent);
+  assert.deepEqual(said(rows[0]), ['wb.memory.overThreshold']);
+  assert.deepEqual(said(rows[1]), [], 'a count equal to the threshold is not over it');
+  f.controller.destroy();
+});
+
+test('the header threshold is the one most groups share, not the first or the smallest', () => {
+  const view = thresholds => memoryBacklogView(thresholds.map((threshold, i) => ({ sessionGroup: `g${i}`, count: 1, threshold, syncing: false }))).threshold;
+  assert.equal(view([30, 15, 15]), 15);
+  assert.equal(view([10, 15, 15]), 15);
+  assert.equal(view([15, 30]), 15, 'a tie goes to the smaller threshold');
 });
 
 test('a short backlog list has no filter and folds an all-quiet list under one line', async () => {

@@ -57,7 +57,13 @@ test('the preview shows what the person said, or nothing when the channel wrappi
 test('the preview drops credential values from links but keeps the link readable', () => {
   const said = { preview: { message: 'open https://x.test/a?token=abc123&page=2 and https://y.test/b?id=1&api_key=K-9.z#top', timestamp: 1, channel: 'lark' } };
   assert.equal(safePreview(said).text, 'open https://x.test/a?token=[REDACTED]&page=2 and https://y.test/b?id=1&api_key=[REDACTED]#top');
-  assert.equal(redactQuerySecrets('?access_token=t1;Signature=s2&X-Auth=a3&PASSWORD=p4'), '?access_token=[REDACTED];Signature=[REDACTED]&X-Auth=[REDACTED]&PASSWORD=[REDACTED]');
-  // Words that only look similar, and a key outside a query string, stay.
-  assert.equal(redactQuerySecrets('the token= field and monkey business ?page=2&keyboard=us'), 'the token= field and monkey business ?page=2&keyboard=us');
+  assert.equal(redactQuerySecrets('?access_token=t1&Signature=s2&X-Auth=a3&PASSWORD=p4'), '?access_token=[REDACTED]&Signature=[REDACTED]&X-Auth=[REDACTED]&PASSWORD=[REDACTED]');
+  // The value ends at whitespace, "&", "#" or the first non-ASCII character: the words after the link stay.
+  assert.equal(redactQuerySecrets('用?token=abc来连接'), '用?token=[REDACTED]来连接');
+  assert.equal(redactQuerySecrets('https://x.test/?key=a1 then more'), 'https://x.test/?key=[REDACTED] then more');
+  // Names are matched as whole words: these are not credentials.
+  assert.equal(redactQuerySecrets('https://x.test/?monkey=1&hotkey=2&keyboard=us&tokens2=3'), 'https://x.test/?monkey=1&hotkey=2&keyboard=us&tokens2=3');
+  // Only a URL query parameter counts: "token=" written in a sentence, or after another separator, stays.
+  assert.equal(redactQuerySecrets('the token=abc field and monkey business'), 'the token=abc field and monkey business');
+  assert.equal(redactQuerySecrets('a;token=abc and (key=abc)'), 'a;token=abc and (key=abc)');
 });

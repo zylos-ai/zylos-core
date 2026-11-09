@@ -83,6 +83,14 @@ function measure() {
     title: box('.wb-d-top .wb-d-title'), state: box('.wb-d-top .wb-d-sub > :first-child'), actions: box('.wb-d-top .wb-d-acts'), icon: box('.wb-d-top > .wb-ch'),
     // Button labels a person sees but that are cut short (ellipsis): none may be.
     clippedLabels: [...document.querySelectorAll('.wb-d-top .wb-d-acts > button span')].filter(span => visible(span) && span.scrollWidth > span.clientWidth + 1).map(span => span.textContent).slice(0, 5),
+    // Segmented-control options whose words do not fit inside the option or its control (cut or spilling).
+    clippedSegments: [...document.querySelectorAll('.wb-seg > button, .wb-seg2 > button, .wb-seg-sm > button')].filter(option => {
+      const box = visible(option);
+      if (!box) return false;
+      const range = document.createRange(); range.selectNodeContents(option);
+      const words = range.getBoundingClientRect(), control = option.parentElement.getBoundingClientRect();
+      return option.scrollWidth > option.clientWidth + 1 || (words.width > 0 && (words.left < Math.max(box.left, control.left) - 0.5 || words.right > Math.min(box.right, control.right) + 0.5));
+    }).map(option => option.textContent.trim()).slice(0, 5),
     titleClipped: (title => Boolean(title) && (title.scrollHeight > title.clientHeight + 1 || title.scrollWidth > title.clientWidth + 1))(document.querySelector('.wb-d-top .wb-d-title')),
     actionButtons: [...document.querySelectorAll('.wb-d-top .wb-d-acts > button')].map(button => { const b = visible(button); return b && { action: button.dataset.action ?? button.dataset.wbAction, top: b.top, bottom: b.bottom, left: b.left, right: b.right }; }).filter(Boolean),
   };
@@ -109,7 +117,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
     try { await fn(); } finally { await Promise.all([...live].map(context => context.close().catch(() => {}))); }
   });
 
-  async function open(width, height, route, options = {}) {
+  // `language` is set before every load of the page, so a reload keeps it.
+  async function open(width, height, route, options = {}, language = 'zh') {
     const phone = width < 761;
     const context = await browser.newContext({ viewport: { width, height }, locale: 'zh-CN', timezoneId: 'UTC',
       ...(phone ? { isMobile: true, hasTouch: true } : {}), ...options });
@@ -117,9 +126,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
     context.on('close', () => live.delete(context));
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', request => request.request().url().startsWith(base + '/') ? request.continue() : request.abort());
-    await context.addInitScript(() => {
-      try { localStorage.setItem('zylos-dashboard-locale', 'zh'); localStorage.setItem('zylos-dashboard-detail-level', 'plain'); } catch {}
-    });
+    await context.addInitScript(locale => {
+      try { localStorage.setItem('zylos-dashboard-locale', locale); localStorage.setItem('zylos-dashboard-detail-level', 'plain'); } catch {}
+    }, language);
     const page = await context.newPage();
     page.setDefaultTimeout(10_000);
     const errors = [];
@@ -288,15 +297,33 @@ export async function runWorkbenchBrowser(t, sandbox) {
     const sched = await check('schedule');
     assert.deepEqual(sched.kpiRows, [3, 3]);
 
-    // The same group header in English, whose labels are longer.
-    await page.evaluate(() => localStorage.setItem('zylos-dashboard-locale', 'en'));
-    await page.reload();
-    await page.locator('.tab[data-tab="overview"]').click();
-    await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
-    await page.locator('.wb-d-top .wb-d-sub').waitFor();
-    phoneHeader(await check('detail-english'), 'English');
     assert.deepEqual(errors, []);
     await context.close();
+
+    // The same screens in English, whose labels are longer: the page is loaded in English from the start.
+    const english = await open(390, 844, '/', {}, 'en');
+    const checkEnglish = async name => {
+      const layout = await english.page.evaluate(measure);
+      assert.equal(await english.page.evaluate(() => document.documentElement.lang), 'en', `${name}: the page is in English`);
+      assert.deepEqual(layout.small, [], `${name}: no control under 40px`);
+      assert.equal(layout.documentWidth, 390, `${name}: no sideways scrolling`);
+      assert.deepEqual(layout.clippedSegments, [], `${name}: no segmented option is cut`);
+      await english.shot(name);
+      return layout;
+    };
+    await english.page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
+    await english.page.locator('.wb-d-top .wb-d-sub').waitFor();
+    phoneHeader(await checkEnglish('detail-english'), 'English');
+    await english.page.keyboard.press('Escape');
+    await english.page.locator('.tab[data-tab="trends"]').click();
+    await english.page.locator('#wb-usage-range > button').first().waitFor();
+    assert.equal((await english.page.locator('#wb-usage-range > button').allTextContents()).length, 5, 'four ranges and the custom dates');
+    await checkEnglish('usage-english');
+    await english.page.locator('.tab[data-tab="memory"]').click();
+    await english.page.locator('#memory-tree .memory-file').first().waitFor();
+    await checkEnglish('memory-english');
+    assert.deepEqual(english.errors, []);
+    await english.context.close();
   });
 
   // A phone on its side keeps the phone layout with a screen shorter than the memory loading view, so opening a

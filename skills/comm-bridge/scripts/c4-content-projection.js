@@ -30,12 +30,18 @@ const SENDER = /^[^\n:]{1,80} said: /;
 const CHANNEL_HEADER = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?$/;
 // Older channels put the header and "<sender> said: " on one line, followed by the words.
 const HEADER_SENDER = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?[^\n:[\]]{1,80} said: /;
+// The routing line a channel appends, raw or as stored after sanitizing: it and everything after it is not
+// what the person said.
+const REPLY_ROUTE = /\s*---- (?:\[reply-via sanitized\]|reply via):[\s\S]*$/;
+// A message too long for the queue is stored as a pointer to a file; its preview would only show tags and paths.
+const OVERFLOW_POINTER = '[C4] Full message';
 
 /**
  * What the person said in an inbound message, for a one-line preview, never the model-facing projection:
  * the <current-message> body without its sender prefix; the words after an old one-line "header sender said:";
- * a C4 envelope's fallback text; invalid content's own fallback text. Null when there is nothing a person
- * wrote (channel wrapping only, invalid content without fallback text), so a reader shows channel and time.
+ * a C4 envelope's fallback text; invalid content's own fallback text. The appended reply route is dropped.
+ * Null when there is nothing a person wrote (channel wrapping only, invalid content without fallback text, an
+ * overflow pointer to a stored file), so a reader shows channel and time.
  * Whitespace is collapsed; longer text is cut to `limit` code points ending in "…".
  */
 export function previewMessageText(content, { limit = 80 } = {}) {
@@ -45,11 +51,13 @@ export function previewMessageText(content, { limit = 80 } = {}) {
   if (parsed.kind === 'envelope') text = parsed.envelope.fallbackText;
   else if (parsed.kind !== 'text') text = parsed.fallbackText;
   else {
-    const block = CURRENT_MESSAGE.exec(parsed.text);
+    if (parsed.text.includes(OVERFLOW_POINTER)) return null;
+    const body = parsed.text.replace(REPLY_ROUTE, '');
+    const block = CURRENT_MESSAGE.exec(body);
     if (block) text = block[1].replace(SENDER, '');
-    else if (HEADER_SENDER.test(parsed.text)) text = parsed.text.replace(HEADER_SENDER, '');
-    else if (CHANNEL_HEADER.test(parsed.text.split('\n', 1)[0].trim())) return null;
-    else text = parsed.text;
+    else if (HEADER_SENDER.test(body)) text = body.replace(HEADER_SENDER, '');
+    else if (CHANNEL_HEADER.test(body.split('\n', 1)[0].trim())) return null;
+    else text = body;
   }
   if (typeof text !== 'string') return null;
   text = text.replace(/\s+/g, ' ').trim();

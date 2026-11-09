@@ -23,14 +23,14 @@ function phoneRules(source) {
 }
 const phone = phoneRules(css);
 
-test('stylesheet: on phones every control a finger taps is at least 40px, icon-only buttons 40px wide', () => {
+test('stylesheet: on phones every control a finger taps is at least 40px, icon-only and short labelled buttons 40px wide', () => {
   const rule = phone.match(/:is\(([^)]*)\)\s*:is\(button, select, summary, a\.wb-btn, input[^{]*\{ min-height: 40px; \}/);
   assert.ok(rule, 'one rule sets the minimum height of tappable controls');
   for (const area of ['.app-header', '#fleet-view', '#tab-overview', '#tab-memory', '#tab-observer', '#tab-trends', '#tab-schedule', '#tab-settings', '.wb-modal']) {
     assert.ok(rule[1].split(',').map(item => item.trim()).includes(area), area + ' is covered');
   }
   assert.doesNotMatch(rule[1], /#tab-chat/, 'the conversation page keeps its own layout');
-  assert.match(phone, /:is\(\.app-header \.header-icon-btn, \.wb-icon-btn, \.memory-head \.memory-refresh\) \{ min-width: 40px; \}/);
+  assert.match(phone, /:is\(\.app-header \.header-icon-btn, \.wb-icon-btn, \.memory-head \.memory-refresh, \.wb-btn\) \{ min-width: 40px; \}/);
   assert.match(phone, /\.wb-switch-l \{ min-height: 40px; \}/);
   assert.match(phone, /\.wb-sched-timeline \.wb-sched-dot \{[^}]*width: 40px; height: 40px;/, 'timeline dots are 40px targets');
   assert.match(phone, /\.memory-file, \.wb-memory-group-h, \.wb-memory-section-h \{ min-height: 40px; \}/);
@@ -108,8 +108,10 @@ test('stylesheet: on phones usage ranges fill the row, custom dates fold onto on
   assert.match(phone, /\.wb-usage-table tbody th:first-child \{ white-space: normal; overflow-wrap: anywhere; \}/, 'long names wrap inside data tables');
 });
 
-test('stylesheet: memory backlog rows are one 40px line on phones, with names wrapping instead of cut', () => {
-  assert.match(phone, /\.wb-memory-bl \{ grid-template-columns: minmax\(0, 1fr\) minmax\(56px, 26%\) 2\.6em;[^}]*min-height: 40px; \}/);
+test('stylesheet: memory backlog rows are one 40px line on phones, with names wrapping and counts never cut', () => {
+  // The count column grows to its content ("Unknown" in English) instead of spilling out of the card.
+  assert.match(phone, /\.wb-memory-bl \{ grid-template-columns: minmax\(0, 1fr\) minmax\(56px, 26%\) minmax\(2\.6em, max-content\);[^}]*min-height: 40px; \}/);
+  assert.match(css, /^\.wb-memory-bl \{ grid-template-columns: minmax\(120px, 260px\) minmax\(60px, 1fr\) minmax\(3em, max-content\);/m, 'and on wide screens');
   assert.match(phone, /\.wb-memory-bl-head \.wb-memory-chart-label \{ white-space: normal; overflow-wrap: anywhere;/);
 });
 

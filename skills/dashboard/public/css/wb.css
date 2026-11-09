@@ -749,12 +749,11 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-threshold { position: absolute; top: -4px; bottom: -4px; border-left: 1.5px dashed var(--text-muted); }
 .wb-memory-flags { display: flex; flex-wrap: wrap; gap: 2px 8px; min-width: 0; font-size: 11.5px; }
 .wb-memory-flags:empty { display: none; }
-.wb-memory-sync, .wb-memory-source { color: var(--text-muted); }
-.wb-memory-sync:empty { display: none; }
+.wb-memory-source { color: var(--text-muted); }
 .wb-memory-source { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; }
 .wb-memory-diagnostic, .wb-memory-warning { color: var(--wb-wait); font-size: 11.5px; }
 /* Backlog rows: name and badges in one cell, then bar and count; one compact line per group. */
-.wb-memory-bl { grid-template-columns: minmax(120px, 260px) minmax(60px, 1fr) 3em; min-height: 32px; margin: 0; gap: 4px 12px; }
+.wb-memory-bl { grid-template-columns: minmax(120px, 260px) minmax(60px, 1fr) minmax(3em, max-content); min-height: 32px; margin: 0; gap: 4px 12px; }
 .wb-memory-bl-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .wb-memory-bl-head .wb-memory-chart-label { flex: 0 1 auto; }
 .wb-memory-bl .wb-memory-flags { flex: 0 0 auto; flex-wrap: nowrap; gap: 4px; }
@@ -840,7 +839,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
   .wb-memory-flags { grid-column: 1 / -1; }
   /* Phones: name, short bar and count on one 40px line; a long name wraps instead of being cut, and badges
      drop under the name only when they do not fit beside it. */
-  .wb-memory-bl { grid-template-columns: minmax(0, 1fr) minmax(56px, 26%) 2.6em; gap: 0 8px; min-height: 40px; }
+  .wb-memory-bl { grid-template-columns: minmax(0, 1fr) minmax(56px, 26%) minmax(2.6em, max-content); gap: 0 8px; min-height: 40px; }
   .wb-memory-bl-head { flex-wrap: wrap; column-gap: 6px; row-gap: 0; }
   .wb-memory-bl-head .wb-memory-chart-label { white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.3; }
   .wb-memory-bl .wb-memory-flags { grid-column: auto; margin-bottom: 4px; }
@@ -1380,7 +1379,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 @media (max-width: 760px) {
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
     :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: 40px; }
-  :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh) { min-width: 40px; }
+  /* A short label ("Edit" in English) must not leave a labelled button narrower than a fingertip either. */
+  :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh, .wb-btn) { min-width: 40px; }
   .wb-switch-l { min-height: 40px; }
   /* Segmented controls grow with their 40px buttons instead of clipping them. */
   :is(.wb-seg, .wb-seg2) { height: auto; }

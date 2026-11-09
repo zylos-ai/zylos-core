@@ -180,6 +180,21 @@ export async function runObserverBrowser(t, sandbox, signal) {
     assert.equal(await page.evaluate(() => window.__observerSockets.length), sockets, 'stale observation must not reconnect');
     assert.equal(await page.locator('.observer-frame-shell').isVisible(), false);
   });
+  // The status row describes the live connection: the history view hides it (the view switch re-renders the
+  // page), and going back to the live view shows it again.
+  await step('the history view hides the live status row', async page => {
+    await observing(page);
+    const row = page.locator('.wb-o-notice');
+    await row.waitFor({ state: 'visible' });
+    await page.locator('[data-observer-view="history"]').click();
+    await page.locator('#observer-history').waitFor({ state: 'visible' });
+    assert.equal(await row.isVisible(), false, 'history view: no live status row');
+    await page.locator('[data-observer-view="live"]').click();
+    await row.waitFor({ state: 'visible' });
+    await page.locator('[data-observer-view="history"]').click();
+    await page.locator('#observer-history').waitFor({ state: 'visible' });
+    assert.equal(await row.isVisible(), false, 'history view again: no live status row');
+  });
   scenario = 'pending-lease';
   await step('late lease acquisition cannot block selecting another group and is released', async page => {
     await page.locator('#observer-tab').click(); await select(page, GROUP); await until(() => heldLease, 'pending lease');
