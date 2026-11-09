@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as childProcess from 'node:child_process';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 // Imported under its own URL so the HTTP case below loads the server's copy with
 // the child-process spy in place.
 const { createSchedulerCli, createScheduleWrite, formToArgs } = await import('../src/lib/workbench/schedule-write.js?direct');

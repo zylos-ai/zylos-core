@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 
 const schedulerSource = fileURLToPath(new URL('../../../scheduler', import.meta.url));
 
