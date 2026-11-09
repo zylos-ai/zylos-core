@@ -112,15 +112,47 @@ test('real Router capacity gate uses the shared timer and ends it at slot acquis
 });
 
 for (const scope of ['group', 'global']) {
-  test(`a ${scope} drain fence prevents capacity timing and receipts`, async t => {
+  test(`a ${scope} drain fence arriving after the pending read clears capacity timing`, async t => {
     const f = routerFixture(t, { poolSize: 1 }); f.put('origin'); f.put('busy'); const row = f.add('waiting');
     const sent = []; f.deps.sendStatusNotice = async record => { sent.push(record); return { outcome: 'sent' }; };
-    if (scope === 'group') f.db.setDrainFence('waiting', { reason: 'evict', runId: 'old-run' });
-    else f.db.setDrainFence('*');
-    await f.create().initialize(); await f.rounds(3); f.advance(20000); await f.rounds(3);
-    assert.equal(f.events.filter(event => event.event === 'wait_capacity' && event.session_group === 'waiting').length, 0);
+    await f.create().initialize(); await f.rounds(3);
+    const starts = () => f.events.filter(event => event.event === 'wait_capacity' && event.session_group === 'waiting');
+    assert.equal(starts().length, 1);
+    const first = starts()[0], next = f.db.getNextPending, getFence = f.db.getDrainFence;
+    let installed = false;
+    const fenceChecks = [];
+    f.db.getNextPending = filter => {
+      const pending = next(filter);
+      if (!installed && pending?.id === row.id) {
+        // The real Store read is unfenced. Model a supervisor fence arriving
+        // before the lane resumes from await nextMessage(), not before queue
+        // enumeration where SQL would omit the group entirely.
+        if (scope === 'group') f.db.setDrainFence('waiting', { reason: 'evict', runId: 'old-run' });
+        else f.db.setDrainFence('*', { reason: 'manual_restart', runId: 'restart-run' });
+        installed = true; f.advance(20000);
+      }
+      return pending;
+    };
+    f.db.getDrainFence = group => {
+      if (installed) fenceChecks.push(group);
+      return getFence(group);
+    };
+    await f.rounds(1);
+    assert.equal(installed, true);
+    assert.ok(fenceChecks.includes(scope === 'group' ? 'waiting' : '*'), 'the scheduled lane checks the newly arrived fence');
     assert.equal(sent.length, 0); assert.equal(f.row(row.id).status, 'pending');
+    assert.equal(starts().length, 1);
     assert.equal(f.calls.filter(call => call[0] === 'launch').length, 0);
+    // Remove it before another scheduler sweep, so only the lane's fence
+    // branch can have cleared the earlier episode. Then prove a fresh clock.
+    if (scope === 'group') f.db.clearDrainFence('waiting');
+    else f.db.clearDrainFence('*', { expectedReason: 'manual_restart', expectedRunId: 'restart-run' });
+    f.advance(1000); await f.rounds(1);
+    assert.equal(starts().length, 2);
+    assert.equal(starts()[1].wait_started_at_ms, f.now());
+    assert.equal(starts()[1].wait_started_at_ms - first.wait_started_at_ms, 21000);
+    f.advance(10000); await f.rounds(1); assert.equal(sent.length, 0);
+    f.advance(1); await f.rounds(1); assert.equal(sent.length, 1);
   });
 }
 
