@@ -296,3 +296,32 @@ test('restore reports save failure after confirming the service is online',t=>{
  assert.equal(result.state,'failed');assert.equal(result.error.code,'registration_failed');
  assert.deepEqual(fs.readFileSync(path.join(f.dir,'pm2-calls'),'utf8').trim().split('\n').map(JSON.parse).map(args=>args[0]),['start','jlist','save']);
 });
+
+// PM2 keeps the start path of a service launched through a symlinked HOME or
+// ZYLOS_DIR, while the upgrade passes the real installation path.
+function linkedEntry(f, link) {
+ const entry=managedEntry(f), code=path.join(link,path.relative(f.dir,f.code));
+ return {...entry,pm2_env:{...entry.pm2_env,pm_exec_path:path.join(code,'src/index.js'),pm_cwd:code}};
+}
+test('restore accepts the managed entry recorded through a symlinked installation path',t=>{
+ const f=fixture(t),link=path.join(f.dir,'linked-zylos');fs.symlinkSync(f.dir,link,'dir');
+ pm2Result(f,[linkedEntry(f,link)]);
+ assert.deepEqual(restoreDashboardService({zylosDir:f.dir}),{state:'done'});
+ assert.deepEqual(fs.readFileSync(path.join(f.dir,'pm2-calls'),'utf8').trim().split('\n').map(JSON.parse).map(a=>a[0]),['start','jlist','save']);
+});
+test('verification follows the managed pid recorded through a symlinked installation path',async t=>{
+ const f=await healthFixture(t,(_req,res)=>healthy(res)),link=path.join(f.dir,'linked-zylos');fs.symlinkSync(f.dir,link,'dir');
+ pm2Result(f,[linkedEntry(f,link)]);
+ assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true},errors:[]});
+});
+test('a symlinked path that resolves to another Dashboard copy is not the managed entry',async t=>{
+ const f=await healthFixture(t,(_req,res)=>healthy(res)),other=path.join(f.dir,'other-zylos');
+ fs.mkdirSync(path.join(other,'.claude/skills/dashboard/src'),{recursive:true});
+ fs.writeFileSync(path.join(other,'.claude/skills/dashboard/src/index.js'),'');
+ const link=path.join(f.dir,'linked-other');fs.symlinkSync(other,link,'dir');
+ pm2Result(f,[linkedEntry(f,link)]);
+ assert.equal(restoreDashboardService({zylosDir:f.dir}).state,'failed');
+ let now=1000;t.mock.method(Date,'now',()=>{now+=10001;return now;});
+ assert.equal((await verifyDashboard({zylosDir:f.dir})).state,'degraded');
+ assert.deepEqual(f.requests,[]);
+});
