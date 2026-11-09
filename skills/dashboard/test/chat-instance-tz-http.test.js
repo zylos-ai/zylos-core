@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import test, { mock } from 'node:test';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';

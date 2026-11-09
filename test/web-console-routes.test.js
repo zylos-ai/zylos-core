@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterAll, afterEach, beforeEach, describe, expect, test } from '@jest/globals';
-import Database from '../skills/web-console/node_modules/better-sqlite3/lib/index.js';
+import Database from '../skills/comm-bridge/scripts/sqlite-driver.js';
 import WebSocket from '../skills/web-console/node_modules/ws/wrapper.mjs';
 
 const SERVER_PATH = path.resolve('skills/web-console/scripts/server.js');
-const SQLITE_MODULE = path.resolve('skills/web-console/node_modules/better-sqlite3/lib/index.js');
+const SQLITE_MODULE = path.resolve('skills/comm-bridge/scripts/sqlite-driver.js');
 
 let ctx;
 const testRoots = new Set();

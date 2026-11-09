@@ -5,7 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test, { mock } from 'node:test';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { generateApiKey, hashApiKey } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
 import { migrateSchema13 } from './fixtures/schema13.js';
@@ -436,7 +436,7 @@ test('/api/fleet self record includes cost tiers from DB (#174)', async () => {
   const { origin, server } = await makeServerWithDir(zylosDir);
   try {
     const dbPath = path.join(zylosDir, 'components', 'dashboard', 'dashboard.db');
-    const Database = (await import('better-sqlite3')).default;
+    const Database = (await import('../../comm-bridge/scripts/sqlite-driver.js')).default;
     const db = new Database(dbPath);
     const now = new Date().toISOString();
     db.prepare(`INSERT INTO metric_points (timestamp, metric_name, metric_value, dimensions, source, confidence)

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { collectStatus } from '../../../cli/lib/status-view.js';
 import { createGroupSnapshot, workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
 import { createCoreCli } from '../src/lib/workbench/core-cli.js';

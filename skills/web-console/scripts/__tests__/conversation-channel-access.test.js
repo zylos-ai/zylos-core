@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import express from 'express';
 import { createConversationHistoryHandler } from '../conversation-history.js';
 import * as c4Schema from '../../../comm-bridge/scripts/c4-schema.js';

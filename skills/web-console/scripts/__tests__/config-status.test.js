@@ -7,7 +7,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../../comm-bridge/scripts/c4-schema.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';

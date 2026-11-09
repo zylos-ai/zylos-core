@@ -126,7 +126,7 @@ for (const [name, scenario, accounts] of [
 // Run for native environment/evidence changes; absent integration gate skips.
 test('bounded Sync checkpoints retain a genuine startup route while full coverage removes it', { skip: !chatEnabled() }, async t => {
   const sandbox = createChatSandbox(t);
-  const { default: Database } = await import('better-sqlite3');
+  const { default: Database } = await import('../../comm-bridge/scripts/sqlite-driver.js');
   const { guardDatabase } = await import('../../comm-bridge/scripts/sqlite-schema.js');
   const schema = await import('../../comm-bridge/scripts/c4-schema.js');
   const { createStore } = await import('../../comm-bridge/scripts/c4-v2-store.js');
@@ -191,7 +191,7 @@ test('bounded Sync checkpoints retain a genuine startup route while full coverag
 
 test('TTL completion waits for the durable ending after the native identity disappears', { skip: !chatEnabled(), timeout: 5000 }, async t => {
   const sandbox = createChatSandbox(t);
-  const { default: Database } = await import('better-sqlite3');
+  const { default: Database } = await import('../../comm-bridge/scripts/sqlite-driver.js');
   const { guardDatabase } = await import('../../comm-bridge/scripts/sqlite-schema.js');
   const schema = await import('../../comm-bridge/scripts/c4-schema.js');
   const { createStore } = await import('../../comm-bridge/scripts/c4-v2-store.js');

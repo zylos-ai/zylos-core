@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
 import { completeUpgradeFinalization } from '../self-upgrade.js';
 import * as dashboardOwner from '../dashboard-install.js';
+import Database from '../../../skills/comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../../../skills/dashboard/src/lib/store.js';
 import { TARGET_SCHEMA_VERSION } from '../../../skills/dashboard/src/lib/schema.js';
 
@@ -144,7 +145,6 @@ test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard
   assert.equal(persisted.phase, 'upgrade_complete');
   assert.deepEqual(persisted.terminalEvidence, { verified: true, kind: 'code_data_services' });
   assert.equal(terminalCalls, 1);
-  const Database = createRequire(path.join(repo, 'skills/dashboard/package.json'))('better-sqlite3');
   const db = new Database(dbPath, { readonly: true });
   try {
     assert.equal(db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 13);

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 
 const root = fs.realpathSync(process.env.ZYLOS_CHAT_CONSUMER_ROOT);
 const instance = process.env.ZYLOS_DIR;

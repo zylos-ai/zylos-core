@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { ChatHistory } from '../src/lib/chat/history.js';
 import { ChatChangeObserver, parseChatSubscription } from '../src/lib/chat/change-observer.js';

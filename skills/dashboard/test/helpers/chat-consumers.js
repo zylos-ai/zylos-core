@@ -14,7 +14,7 @@ export async function runConsumerCase(t, sandbox) {
     assert.ok(fs.statSync(path.join(source, 'package.json')).isFile());
   }
   sandbox.assertIsolation();
-  const { default: Database } = await import('better-sqlite3');
+  const { default: Database } = await import('../../../comm-bridge/scripts/sqlite-driver.js');
   const database = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
   database.close();
   const env = { ...sandbox.env, PATH: path.dirname(process.execPath) + path.delimiter + sandbox.env.PATH,

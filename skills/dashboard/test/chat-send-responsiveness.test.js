@@ -10,7 +10,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { hashPassword } from '../src/lib/auth.js';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 

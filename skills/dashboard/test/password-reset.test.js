@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { provisionDashboardAuth } from '../src/lib/auth-provision.js';
 import { clearDashboardSessions } from '../src/lib/auth-sessions.js';
@@ -156,7 +156,7 @@ test('password reset revokes remembered browser and API sessions while preservin
     const lateMarker = path.join(f.root, 'late-session-created');
     // PM2 boundary inserts a session just before the old process would exit.
     // Clearing only before restart leaves this token valid and fails the test.
-    fs.writeFileSync(f.restartHook, `import Database from ${JSON.stringify(path.join(packageRoot, 'node_modules/better-sqlite3/lib/index.js'))};
+    fs.writeFileSync(f.restartHook, `import Database from ${JSON.stringify(path.join(packageRoot, 'skills/comm-bridge/scripts/sqlite-driver.js'))};
 import crypto from 'node:crypto'; import fs from 'node:fs';
 const db = new Database(${JSON.stringify(path.join(path.dirname(f.config), 'dashboard.db'))}, {fileMustExist:true,timeout:5000});
 try { const now=Date.now(); db.prepare('INSERT INTO auth_sessions(token_hash,created_at,last_activity_at,remember) VALUES(?,?,?,1)').run(crypto.createHash('sha256').update(${JSON.stringify(lateToken)}).digest('hex'),now,now); fs.writeFileSync(${JSON.stringify(lateMarker)},'created'); } finally { db.close(); }

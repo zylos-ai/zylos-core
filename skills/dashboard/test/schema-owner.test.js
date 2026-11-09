@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { execFileSync } from 'node:child_process';
 import { dashboardSchemaOwner as owner } from '../src/lib/schema-owner.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
@@ -143,8 +143,8 @@ test('readonly inspection includes committed WAL state without changing database
 test('too-new committed WAL is refused on a caller-owned readonly handle', t => {
   const file = fixture(t); legacy(file);
   // Exit with a live connection so committed WAL survives without a final checkpoint.
-  const writer = `const {createRequire}=await import('node:module');const Database=createRequire(process.argv[1])('better-sqlite3');const db=new Database(process.argv[2]);db.pragma('journal_mode=WAL');db.pragma('wal_autocheckpoint=0');db.exec('INSERT INTO schema_migrations(version) VALUES(99)');process.exit(0);`;
-  execFileSync(process.execPath, ['--input-type=module', '-e', writer, new URL('../package.json', import.meta.url).pathname, file]);
+  const writer = `const {default:Database}=await import(process.argv[1]);const db=new Database(process.argv[2]);db.pragma('journal_mode=WAL');db.pragma('wal_autocheckpoint=0');db.exec('INSERT INTO schema_migrations(version) VALUES(99)');process.exit(0);`;
+  execFileSync(process.execPath, ['--input-type=module', '-e', writer, new URL('../../comm-bridge/scripts/sqlite-driver.js', import.meta.url).href, file]);
   const mainBefore = fs.readFileSync(file), walBefore = fs.readFileSync(file + '-wal');
   assert.ok(walBefore.length > 0);
   const reader = new Database(file, {readonly:true,fileMustExist:true});

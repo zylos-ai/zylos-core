@@ -6,7 +6,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import Database from '../../../skills/web-console/node_modules/better-sqlite3/lib/index.js';
+import Database from '../../../skills/comm-bridge/scripts/sqlite-driver.js';
 import WebSocket from '../../../skills/web-console/node_modules/ws/wrapper.mjs';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));

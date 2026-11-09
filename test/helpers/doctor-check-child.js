@@ -52,7 +52,7 @@ console.error(`doctor isolation: ${JSON.stringify({ ...resolved,
   database: process.env.DOCTOR_TEST_MODE === 'multi' ? path.join(resolved.ZYLOS_DIR, 'comm-bridge', 'c4.db') : 'none', args: process.argv.slice(2) })}`);
 if (process.env.DOCTOR_TEST_MODE === 'multi' && process.env.DOCTOR_TEST_ORIGIN !== 'missing_db') {
   const [{ default: Database }, owner, { guardDatabase }] = await Promise.all([
-    import('better-sqlite3'), import('../../skills/comm-bridge/scripts/c4-schema.js'),
+    import('../../skills/comm-bridge/scripts/sqlite-driver.js'), import('../../skills/comm-bridge/scripts/c4-schema.js'),
     import('../../skills/comm-bridge/scripts/sqlite-schema.js'),
   ]);
   const dir = path.join(resolved.ZYLOS_DIR, 'comm-bridge');

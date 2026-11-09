@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { C4Reader } from '../../src/lib/c4-reader.js';
 import { ChatAttachments } from '../../src/lib/chat/attachments.js';
 

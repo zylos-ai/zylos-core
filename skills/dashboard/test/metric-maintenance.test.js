@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema13 } from './fixtures/schema13.js';

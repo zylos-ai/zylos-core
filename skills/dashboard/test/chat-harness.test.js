@@ -173,7 +173,7 @@ test('first counterexample stops recurring work and recovers private resources',
 // proof, a real private SQLite DB and synthetic auth file; all must be removed.
 test('a failing cleanup still closes SQLite and removes copied authentication files', { skip: !enabled }, async () => {
   const sandbox = createChatSandbox(null);
-  const { default: Database } = await import('better-sqlite3');
+  const { default: Database } = await import('../../comm-bridge/scripts/sqlite-driver.js');
   const database = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
   const credential = path.join(sandbox.paths.home, '.claude/.credentials.json');
   fs.writeFileSync(credential, '{"fixture":true}');
@@ -191,7 +191,7 @@ test('a failing cleanup still closes SQLite and removes copied authentication fi
 // never settles. The private DB/root must still be cleaned after a bounded wait.
 test('stalled child completion cannot prevent later cleanup or private root removal', { skip: !enabled, timeout: 15_000 }, async () => {
   const sandbox = createChatSandbox(null);
-  const { default: Database } = await import('better-sqlite3');
+  const { default: Database } = await import('../../comm-bridge/scripts/sqlite-driver.js');
   const database = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
   const child = sandbox.startChild(process.execPath, ['-e', 'process.exit(0)']);
   assert.equal((await child.completion).code, 0);

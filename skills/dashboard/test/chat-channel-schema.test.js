@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { registerQuestion } from '../src/lib/chat/questions.js';
 import { recordQuestionControl } from '../src/lib/chat/question-controls.js';

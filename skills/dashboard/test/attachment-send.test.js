@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { ChatConversations } from '../src/lib/chat/conversations.js';

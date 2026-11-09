@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import * as owner from '../schema.js';
 import { guardDatabase, migrateDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 

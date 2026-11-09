@@ -5,7 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import * as childProcess from 'node:child_process';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { StateEngine } from '../../src/lib/state-engine.js';
 import { AuthGate, hashApiKey } from '../../src/lib/auth.js';
 import { C4Reader } from '../../src/lib/c4-reader.js';

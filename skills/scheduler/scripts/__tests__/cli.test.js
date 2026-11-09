@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { dispatchTask } from '../daemon-dispatch.js';
 
 const CLI_PATH = fileURLToPath(new URL('../cli.js', import.meta.url));

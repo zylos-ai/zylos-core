@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import Database from 'better-sqlite3';
+import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { CoreLogImporter } from '../src/lib/core-log-importer.js';
@@ -25,7 +25,7 @@ function fixture(t) {
   const dbPath=path.join(root,'components/dashboard/dashboard.db');
   // Native dependencies are target-package dependencies; never install or touch host data.
   const dashboardRoot=path.resolve(import.meta.dirname,'..');
-  const nativeModules=path.dirname(path.dirname(require.resolve('better-sqlite3/package.json')));
+  const nativeModules=path.dirname(path.dirname(createRequire(path.join(repo,'skills/comm-bridge/package.json')).resolve('better-sqlite3/package.json')));
   for(const owner of ['comm-bridge','scheduler','web-console','dashboard']) {
     const skill=path.join(root,'.claude/skills',owner);fs.mkdirSync(skill,{recursive:true});
     fs.writeFileSync(path.join(skill,'package.json'),'{"type":"module"}');fs.symlinkSync(nativeModules,path.join(skill,'node_modules'));

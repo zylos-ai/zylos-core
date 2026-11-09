@@ -5,7 +5,7 @@ import path from 'node:path';
 import http from 'node:http';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../../src/lib/store.js';
 import { AuthGate } from '../../src/lib/auth.js';
 import { C4Reader } from '../../src/lib/c4-reader.js';

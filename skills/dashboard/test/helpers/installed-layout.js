@@ -7,7 +7,8 @@ import { createRequire } from 'node:module';
 // The installed layout of one Zylos host, built from this checkout:
 //   <root>/global/zylos                      the Core package as `npm install -g` leaves it, with its own node_modules
 //   <root>/home/zylos/.claude/skills/<name>  Core skills as init/upgrade copy them, each with its own node_modules
-// Every place gets its own copy of the SQLite driver (separate files, so separate inodes), as a real install has.
+// Every place gets its own copy of the SQLite driver (separate files, so separate inodes): the Core package and
+// comm-bridge as a real install has, and the Dashboard as an install made before it dropped its own driver leaves it.
 // Other dependencies are linked, not copied: only the driver's file identity matters here.
 const DRIVER_FILES = ['better-sqlite3', 'bindings', 'file-uri-to-path'];
 const SKIP = new Set(['node_modules', '__tests__', 'test', '.git']);
@@ -61,7 +62,8 @@ export function buildInstalledLayout(packageRoot) {
   for (const name of ['comm-bridge', 'dashboard']) {
     const source = path.join(packageRoot, 'skills', name);
     copySource(source, path.join(skills, name));
-    drivers[name] = installModules(source, path.join(source, 'node_modules'), path.join(skills, name, 'node_modules'));
+    drivers[name] = installModules(path.join(packageRoot, 'skills', 'comm-bridge'), path.join(source, 'node_modules'),
+      path.join(skills, name, 'node_modules'));
   }
   const inodes = new Set(Object.values(drivers).map(file => fs.statSync(file).ino));
   assert.equal(inodes.size, 3, 'each install place must hold its own driver file');
