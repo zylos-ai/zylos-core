@@ -786,11 +786,10 @@ export function createConversationState({
       for (const round of data.rounds) current.activity.rounds.set(round.key, round);
       for (const item of data.items) current.activity.items.set(item.id, item);
       emit();
-      // The first history read may finish after the live stream already chose its slow fallback.
+      // An activity read can discover live work after the stream already chose its slow fallback.
       // Only shorten that outstanding wait; keep an earlier poll or an error's retry deadline.
-      if (valid(e) && current === cell() && id === selectedId && currentTab === tab && visible()
-          && activityLive(current) && timer !== null && pollAt > now() + 2000
-          && (!updateError || retryAt <= now())) schedule(2000);
+      if (current === cell() && id === selectedId && currentTab === tab && activityLive(current)
+          && pollAt !== null && pollAt > now() + 2000 && !updateError) schedule(2000);
     } catch (err) {
       // Keep the last activity; the next poll asks again, unless this instance has no activity route at all.
       if (err?.status === 404 && valid(e)) current.activity.unsupported = true;

@@ -150,6 +150,30 @@ test('a delayed first activity read shortens the live fallback and settles follo
   assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'done', 'completion is read without a click or push hint');
 });
 
+test('a delayed first activity result that is already finished keeps the thirty-second fallback', async t => {
+  let resolveFirst, activityReads = 0;
+  const f = fixture(t, url => {
+    if (url.pathname.endsWith('/messages')) return followUpMessages(url);
+    if (url.pathname.endsWith('/activity')) {
+      activityReads++;
+      return new Promise(resolve => { resolveFirst = resolve; });
+    }
+  });
+  await f.open(); await f.event('chat_ready');
+  assert.equal(f.state.snapshot().streamState, 'live');
+  assert.equal(activityReads, 1);
+  const deadline = f.timer.now() + 30000;
+  const messages = f.reads().length;
+  await f.timer.advance(1000);
+  resolveFirst(followUpActivity(f.timer.now(), false)); await flush();
+  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'done');
+  await f.timer.advance(deadline - f.timer.now() - 1);
+  assert.equal(f.reads().length, messages, 'finished activity does not shorten the existing slow wait');
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, messages + 1);
+  assert.equal(activityReads, 1, 'the already finished round is not sampled again');
+});
+
 test('a delayed activity result keeps an already sooner poll deadline', async t => {
   let resolveFirst, activityReads = 0;
   const f = fixture(t, (url, _options, now) => {
@@ -218,6 +242,30 @@ test('a delayed first activity result preserves an active message-read retry dea
   await f.timer.advance(3999); assert.equal(f.reads().length, messages);
   await f.timer.advance(1);
   assert.equal(f.reads().length, messages + 1, 'activity cannot bypass the existing five-second error backoff');
+});
+
+test('a delayed activity result preserves failed post-send synchronization backoff', async t => {
+  let resolveFirst, failMessages = false;
+  const f = fixture(t, url => {
+    if (url.pathname.endsWith('/messages')) {
+      if (failMessages) throw { code: 'temporary_post_send_read_failure' };
+      return followUpMessages(url);
+    }
+    if (url.pathname.endsWith('/activity')) return new Promise(resolve => { resolveFirst = resolve; });
+  });
+  await f.open(); await f.event('chat_ready');
+  failMessages = true;
+  f.state.setInput('save the follow-up log');
+  await f.state.send();
+  assert.equal(f.calls.filter(call => call.u.pathname.endsWith('/send')).length, 1);
+  assert.equal(f.state.snapshot().updateError, 'temporary_post_send_read_failure');
+  const messages = f.reads().length;
+  resolveFirst(followUpActivity(f.timer.now())); await flush();
+  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'running');
+  await f.timer.advance(4999);
+  assert.equal(f.reads().length, messages, 'the post-send five-second retry is not shortened by late activity');
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, messages + 1, 'the failed post-send read retries at its original deadline');
 });
 
 test('old streams without ready retain five second polling after the bounded capability wait', async t => {

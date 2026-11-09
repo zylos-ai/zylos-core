@@ -11,7 +11,7 @@ import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { groupRunDir, RUN_FILES } from '../../../cli/lib/session-group-paths.js';
 import { createChatSandbox, chatEnabled } from './helpers/chat-integration-harness.js';
-import { startChatBrowser, until, pause } from './helpers/chat-push-browser-driver.js';
+import { startChatBrowser, until } from './helpers/chat-push-browser-driver.js';
 
 const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_BIN;
 const helper = fileURLToPath(new URL('./helpers/activity-poll-server.js', import.meta.url));
@@ -95,31 +95,24 @@ test('opening a conversation during follow-up work settles automatically after i
   const stoppedAt = Date.now();
   fs.appendFileSync(log, [event('post_tool', stoppedAt, { tool_name: 'Bash', tool_use_id: 'after' }), event('stop', stoppedAt)]
     .map(row => JSON.stringify(row) + '\n').join(''));
-  const slowObservation = process.env.ZYLOS_CHAT_POLL_EXPECT_SLOW === '1';
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
-  if (slowObservation) {
-    await pause(3000);
-    assert.match(await page.evaluate(`document.querySelector('${tail} .conversation-activity-head').textContent`), /回复后正在处理/);
-    if (evidence) await page.screenshot(path.join(evidence, 'original-zh-1280.png'));
-  }
-  await until(() => page.evaluate(`!!document.querySelector('${tail}:not(.conversation-activity-live) button')`), 'follow-up settles without any user action', slowObservation ? 35000 : 6500);
+  await until(() => page.evaluate(`!!document.querySelector('${tail}:not(.conversation-activity-live) button')`), 'follow-up settles without any user action', 6500);
   const elapsedMs = Date.now() - stoppedAt;
   assert.ok(importedAt !== null, 'the real importer observed the appended stop');
   assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM runtime_events WHERE source='core-log'").get().n, 5);
   assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM runtime_events WHERE event_type='stop' AND source='core-log'").get().n, 1);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM core_log_cursors WHERE stream=? AND byte_offset=?').get('events:' + group, fs.statSync(log).size).n, 1);
-  if (slowObservation) assert.ok(elapsedMs >= 15000, 'the original source reproduces its long initial polling interval');
-  else assert.ok(elapsedMs <= 5000, 'newly discovered running activity settles within a few seconds');
+  assert.ok(elapsedMs <= 5000, 'newly discovered running activity settles within a few seconds');
   const completedText = await page.evaluate(`document.querySelector('${tail} button').textContent`);
   assert.match(completedText, /回复后又处理.*1 步/);
-  if (evidence && !slowObservation) await page.screenshot(path.join(evidence, 'updated-zh-1280.png'));
+  if (evidence) await page.screenshot(path.join(evidence, 'updated-zh-1280.png'));
   assert.equal(browser.errors.length, 0, JSON.stringify(browser.errors));
   assert.equal(browser.external.length, 0, JSON.stringify(browser.external));
-  const result = { scenario: slowObservation ? 'original' : 'updated', stoppedAt, importedAt,
+  const result = { scenario: 'updated', stoppedAt, importedAt,
     elapsedMs, importToSettlementMs: stoppedAt + elapsedMs - importedAt, runningText, completedText,
     runtimeEventsSource: 'core-log', nativeLog: true, noActionAfterStop: true };
   console.info('activity-poll browser timing', JSON.stringify(result));
-  if (evidence) fs.writeFileSync(path.join(evidence, (slowObservation ? 'original' : 'updated') + '-timing.json'), JSON.stringify(result, null, 2));
+  if (evidence) fs.writeFileSync(path.join(evidence, 'updated-timing.json'), JSON.stringify(result, null, 2));
   await browser.close(); await sandbox.close();
 });
