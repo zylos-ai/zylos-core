@@ -195,6 +195,17 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.equal(mode(projectSettings), '600');
     });
 
+    test('instruction migration creates its settings temporary file owner-only', () => {
+      // The final chmod also restricts the file; this checks the temporary file is never created wider.
+      const writes = [];
+      const io = { writeFileSync: (file, content, options) => { writes.push({ file, options }); return fs.writeFileSync(file, content, options); } };
+      const result = reconcileAssemblerSettingsFile({ zylosDir: zylos, apply: true, io });
+      assert.equal(result.changed, true);
+      const temporary = writes.filter(({ file }) => file.startsWith(`${projectSettings}.tmp.`));
+      assert.equal(temporary.length, 1);
+      assert.equal(temporary[0].options?.mode, 0o600);
+    });
+
     test('instruction migration keeps the existing mode of non-settings files it rewrites', () => {
       const backupPath = path.join(root, 'migration-backup');
       fs.mkdirSync(backupPath, { recursive: true });
@@ -251,6 +262,15 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.deepEqual(setup.credentialFiles('claude'), [userSettings, claudeJson]);
       assert.deepEqual(setup.credentialFiles('codex'), [codexAuth]);
     });
+
+    // /dev/null is root-owned and writable by everyone: fchmod fails with EPERM, the write is harmless.
+    // Never run as root, where fchmod would succeed and change the device node's mode.
+    const devNull = (() => { try { return fs.statSync('/dev/null'); } catch { return null; } })();
+    test('a writable file that cannot be restricted is still written without an error',
+      { skip: !(devNull && process.getuid?.() !== 0 && devNull.uid !== process.getuid?.()) && 'needs a root-owned /dev/null and a non-root test user' }, () => {
+        assert.doesNotThrow(() => writePrivateFile('/dev/null', 'x'));
+        assert.equal(fs.statSync('/dev/null').mode, devNull.mode);
+      });
 
     test('a symbolic link is followed: its target is written and tightened', () => {
       const target = path.join(root, 'link-target.json'), link = path.join(root, 'link.json');
