@@ -49,7 +49,7 @@ Core 安装流程负责写入路由和启动/校验 PM2；不要手工把 Dashbo
 
 - Node.js 20 或更高版本。
 - 原生 Node HTTP 服务和零构建前端。
-- `better-sqlite3` 用于 Dashboard 自有存储及只读数据查询。
+- SQLite 驱动 `better-sqlite3` 由 comm-bridge 技能安装，Dashboard 自有存储及只读数据查询都经 `skills/comm-bridge/scripts/sqlite-driver.js` 加载这一份驱动；Dashboard 的 `package.json` 不再列出它。
 - Chart.js、date-fns 等依赖以 `package.json` 和 lockfile 为准。
 
 Dashboard 当前不运行 OTLP collector，也不要求 OpenTelemetry SDK。

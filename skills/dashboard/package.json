@@ -32,7 +32,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "better-sqlite3": "^12.9.0",
     "chart.js": "4.4.9",
     "chartjs-adapter-date-fns": "^3.0.0",
     "date-fns": "^4.1.0",

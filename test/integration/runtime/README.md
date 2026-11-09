@@ -191,12 +191,13 @@ for a scenario.
   `pm2/ecosystem.config.cjs` and asserts every service's script file exists in
   the cloned workspace, proving the post-init workspace is actually *usable*
   (skill paths resolve), not merely config-readable.
-- `service-health` — uses `createRequire(<skill>/package.json)` for
-  `scheduler`, `comm-bridge`, and `web-console`; asserts each
-  `better-sqlite3` resolves from that skill's own nested
-  `node_modules/better-sqlite3/`, then opens and writes a SQLite DB with that
-  skill-scoped module. A hoisted/global `better-sqlite3` must not make this
-  scenario pass.
+- `service-health` — asserts `better-sqlite3` resolves from the deployed
+  `comm-bridge` skill's own nested `node_modules/better-sqlite3/` and that
+  `scheduler` and `web-console` have no nested copy; then opens and writes a
+  SQLite DB for each of the three skills through the shared loader
+  (`comm-bridge/scripts/sqlite-driver.js`) and asserts the process maps exactly
+  one `better_sqlite3.node`, the comm-bridge copy. A hoisted/global
+  `better-sqlite3` must not make this scenario pass.
 - `real/claude-real-auth-ok` — opt-in live Claude auth smoke for
   `run.sh real-smoke`. It uses the real Claude CLI and runtime-injected
   credentials; no secret values belong in the scenario file.
