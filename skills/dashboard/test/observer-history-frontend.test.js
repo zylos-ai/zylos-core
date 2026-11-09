@@ -25,11 +25,11 @@ test('history Markdown escapes HTML and permits only http(s) links, without remo
   assert.equal(escapeHistory('"<>&\''), '&quot;&lt;&gt;&amp;&#39;');
 });
 
-test('history Markdown applies shared Chinese punctuation emphasis', () => {
+test('history Markdown uses CJK-friendly emphasis while preserving code and English', () => {
   const render = createHistoryMarkdown(globalThis.markdownit);
   assert.equal(render('**（粗体）**后文'), '<p><strong>（粗体）</strong>后文</p>\n');
-  assert.equal(render('前文__【粗体】__后文与_「斜体」_后文'), '<p>前文<strong>【粗体】</strong>后文与<em>「斜体」</em>后文</p>\n');
-  assert.equal(render('**粗体。**后文与*“斜体”*后文'), '<p><strong>粗体。</strong>后文与<em>“斜体”</em>后文</p>\n');
+  assert.equal(render('__【粗体】__后文'), '<p>__【粗体】__后文</p>\n');
+  assert.equal(render('前文_「斜体」_后文'), '<p>前文_「斜体」_后文</p>\n');
   assert.equal(render('`**（代码）**后文`'), '<p><code>**（代码）**后文</code></p>\n');
   assert.equal(render('**Bold** and *italic*'), '<p><strong>Bold</strong> and <em>italic</em></p>\n');
   assert.equal(createHistoryMarkdown(null)('<b>raw</b>'), '<pre>&lt;b&gt;raw&lt;/b&gt;</pre>');

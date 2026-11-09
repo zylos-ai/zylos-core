@@ -1,13 +1,13 @@
 import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=102';
-import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=2';
+import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=114';
 import { createPricingPanel } from './wb/settings-pricing.js?v=115';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=104';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=104';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=117';
 import { renderVersion } from './wb/settings-version.js?v=104';
-import { mountConversationPage } from './wb/conversation-page.js?v=131';
+import { mountConversationPage } from './wb/conversation-page.js?v=132';
 import { mountChatSettings } from './wb/chat-settings.js?v=113';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=5';
 import { mountWorkbench } from './wb/shell.js?v=116';
@@ -18,7 +18,7 @@ import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserv
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=104';
 import { createUsagePage } from './wb/usage.js?v=116';
-import { ObserverHistory } from './observer-history.js?v=4';
+import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
 import { fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=115';

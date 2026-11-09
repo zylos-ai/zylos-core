@@ -21,8 +21,8 @@ const row = `[data-conversation-id="${conversation}"]`;
 const body = '[data-message-id="2"] .chat-message-content';
 const href = 'https://example.invalid/**path**';
 const title = 'title **literal**';
-const chineseLead = '**（粗体）**后文，*“斜体”*后文；前文__【下划线】__后文，前文_「轻重」_后文。';
-const chinesePreview = '（粗体）后文，“斜体”后文；前文【下划线】后文，前文「轻重」后文。';
+const chineseLead = '**（粗体）**后文，*“斜体”*后文；前文**【重点】**后文，前文*「强调」*后文。';
+const chinesePreview = '（粗体）后文，“斜体”后文；前文【重点】后文，前文「强调」后文。';
 const englishLead = '**Bold text** and *italic text* keep ordinary formatting.';
 const englishPreview = 'Bold text and italic text keep ordinary formatting.';
 const source = locale => [locale === 'zh' ? chineseLead : englishLead,
@@ -87,7 +87,7 @@ async function fixture(t, locale, width) {
 }
 
 // Real createServer/login/history/body + server-generated previews. Run these
-// cases after shared Markdown rules, browser/server wiring or asset graph changes;
+// cases after the vendored Markdown library, entry wiring or asset graph changes;
 // unrelated runtime/backend changes may skip. The official runner and each case
 // prove fresh HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private tmux socket, both
 // databases and Chrome profile before use. Runtime CLIs are refused/fixture-only,
@@ -99,8 +99,8 @@ for (const [locale, width] of [['zh', 1280], ['zh', 390], ['en', 1280]]) {
     const f = await fixture(t, locale, width);
     const result = await f.page.evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(body)}),link=el.querySelector('a'),box=el.getBoundingClientRect();return {strong:[...el.querySelectorAll('strong')].map(n=>n.textContent),em:[...el.querySelectorAll('em')].map(n=>n.textContent),inline:el.querySelector('p code')?.textContent,fenced:el.querySelector('pre code')?.textContent,href:link?.getAttribute('href'),title:link?.getAttribute('title'),target:link?.getAttribute('target'),rel:link?.getAttribute('rel'),visible:box.width>0&&box.height>0};})()`);
     assert.equal(result.visible, true);
-    assert.deepEqual(result.strong, locale === 'zh' ? ['（粗体）', '【下划线】', '《链接》'] : ['Bold text', 'Linked bold']);
-    assert.deepEqual(result.em, locale === 'zh' ? ['“斜体”', '「轻重」'] : ['italic text']);
+    assert.deepEqual(result.strong, locale === 'zh' ? ['（粗体）', '【重点】', '《链接》'] : ['Bold text', 'Linked bold']);
+    assert.deepEqual(result.em, locale === 'zh' ? ['“斜体”', '「强调」'] : ['italic text']);
     assert.equal(result.inline, '**（行内代码）**后文');
     assert.equal(result.fenced, '**（代码块）**后文\n');
     assert.equal(result.href, href); assert.equal(result.title, title);

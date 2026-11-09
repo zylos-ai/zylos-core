@@ -3,7 +3,7 @@ import { renderChatContent, parseC4Content } from './chat-blocks.js?v=107';
 import { createChatAttachment } from './chat-attachments.js?v=4';
 import { applyChatView } from './chat-view.js?v=104';
 import { conversationChartResource } from './conversation-charts.js?v=106';
-import { cjkEmphasis } from '../markdown-cjk-emphasis.js?v=1';
+import cjkFriendly from '../markdown-it-cjk-friendly/index.js?v=1';
 export function conversationErrorKey(code) {
   if (['chat_auth_required', 'chat_conversation_forbidden', 'insufficient_scope'].includes(code)) {
     return 'chat.error.forbidden';
@@ -76,7 +76,7 @@ export function renderConversationContent({
       html: false,
       linkify: true,
       breaks: true
-    }).use(cjkEmphasis);
+    }).use(cjkFriendly);
     // Images are not part of this renderer's capability. Keep their descriptions as text.
     markdown.renderer.rules.image = (tokens, index) => markdown.utils.escapeHtml(tokens[index].content);
     for (const text of content.querySelectorAll('.chat-message-text')) {
