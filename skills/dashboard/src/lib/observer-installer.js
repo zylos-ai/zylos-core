@@ -8,7 +8,7 @@ import { observerPaths } from './observer-paths.js';
 
 const execFileAsync = promisify(execFile);
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
-const DOWNLOAD_TIMEOUT_MS = 60_000;
+const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 const RELEASE_API_ROOT = 'https://api.github.com/repos/zellij-org/zellij/releases';
 const RELEASE_HOSTS = new Set(['github.com', 'api.github.com', 'release-assets.githubusercontent.com']);
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -75,6 +75,16 @@ function downloadFailure(code, message, retryable = false) {
   return error;
 }
 
+function networkReason(error) {
+  for (let depth = 0; error && depth < 4; depth++, error = error.cause) {
+    for (const value of [error.code, error.errno]) {
+      const code = String(value ?? '');
+      if (/^[A-Za-z0-9_-]{1,64}$/.test(code)) return ` (${code})`;
+    }
+  }
+  return '';
+}
+
 function assertReleaseUrl(value) {
   let url;
   try { url = new URL(value); } catch {}
@@ -85,17 +95,18 @@ function assertReleaseUrl(value) {
   return url;
 }
 
-async function releaseRequest(url, { fetchImpl, signal, accept }) {
+async function releaseRequest(url, { fetchImpl, signal, accept, onActivity }) {
   for (let redirects = 0; redirects <= 5; redirects++) {
     signal.throwIfAborted();
     assertReleaseUrl(url);
     let response;
     try {
+      onActivity();
       response = await fetchImpl(url, {
         redirect: 'manual', signal, ...(accept ? { headers: { Accept: accept } } : {}),
       });
-    } catch {
-      throw downloadFailure('download_failed', 'network error', true);
+    } catch (error) {
+      throw downloadFailure('download_failed', `network error${networkReason(error)}`, true);
     }
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location');
@@ -115,15 +126,16 @@ async function releaseRequest(url, { fetchImpl, signal, accept }) {
   throw new ObserverInstallError('unsafe_redirect', 'Release download exceeded the redirect limit');
 }
 
-async function* responseChunks(response) {
+async function* responseChunks(response, onActivity) {
   const iterator = response.body[Symbol.asyncIterator]();
   try {
     for (;;) {
       let next;
-      try { next = await iterator.next(); } catch {
-        throw downloadFailure('download_failed', 'network error while reading response', true);
+      try { next = await iterator.next(); } catch (error) {
+        throw downloadFailure('download_failed', `network error while reading response${networkReason(error)}`, true);
       }
       if (next.done) return;
+      if (next.value.byteLength > 0) onActivity();
       yield Buffer.from(next.value);
     }
   } finally {
@@ -136,7 +148,7 @@ async function apiAssetResponse(artifact, options) {
     ...options, accept: 'application/vnd.github+json',
   });
   const chunks = [];
-  for await (const chunk of responseChunks(response)) {
+  for await (const chunk of responseChunks(response, options.onActivity)) {
     chunks.push(chunk);
   }
   let release;
@@ -154,8 +166,13 @@ async function apiAssetResponse(artifact, options) {
 
 async function downloadAttempt(artifact, destination, { fetchImpl, signal, onProgress }, useApi) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error('download_timeout')), DOWNLOAD_TIMEOUT_MS);
-  timeout.unref?.();
+  let timeout;
+  const onActivity = () => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => controller.abort(new Error('download_timeout')), DOWNLOAD_IDLE_TIMEOUT_MS);
+    timeout.unref?.();
+  };
+  onActivity();
   const abort = () => controller.abort(signal.reason);
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) abort();
@@ -164,7 +181,7 @@ async function downloadAttempt(artifact, destination, { fetchImpl, signal, onPro
   let response;
   try {
     controller.signal.throwIfAborted();
-    const options = { fetchImpl, signal: controller.signal };
+    const options = { fetchImpl, signal: controller.signal, onActivity };
     response = useApi ? await apiAssetResponse(artifact, options)
       : await releaseRequest(artifact.url, options);
     const lengthHeader = response.headers.get('content-length');
@@ -177,7 +194,7 @@ async function downloadAttempt(artifact, destination, { fetchImpl, signal, onPro
     created = true;
     const hash = crypto.createHash('sha256');
     let bytes = 0;
-    for await (const chunk of responseChunks(response)) {
+    for await (const chunk of responseChunks(response, onActivity)) {
       bytes += chunk.length;
       if (bytes > MAX_ARCHIVE_BYTES) {
         throw new ObserverInstallError('archive_too_large', 'Artifact archive exceeds the size limit');

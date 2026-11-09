@@ -2,6 +2,7 @@ import { validObserverBinding } from './observer-target.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ObserverContainmentError } from './observer-containment-error.js';
@@ -10,7 +11,45 @@ export { ObserverContainmentError };
 export const runCommand = promisify(execFile);
 export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
-export const socketParent = () => fs.realpath('/tmp');
+function socketPathsFit(socketRoot, nonce) {
+  return ['tmux', `observer-${nonce.slice(0, 16)}`]
+    .every((name) => Buffer.byteLength(path.join(socketRoot, name)) < 104);
+}
+function dataSocketRoot(dataDir, nonce) {
+  return path.join(dataDir, 'observer', 'sockets', `zobs2-${nonce.slice(0, 16)}`);
+}
+export async function observerSocketRoot(dataDir, nonce) {
+  const local = dataSocketRoot(dataDir, nonce);
+  await privateParents(path.dirname(local));
+  if (await exists(path.dirname(local))) await privatePath(path.dirname(local));
+  if (socketPathsFit(local, nonce)) return local;
+  const temporary = path.join(await fs.realpath(os.tmpdir()), `zobs-${process.getuid()}`, `zobs2-${nonce.slice(0, 16)}`);
+  if (socketPathsFit(temporary, nonce)) return temporary;
+  throw failure('observer_socket_path_too_long', 'Observer socket path too long; use a shorter data directory or TMPDIR');
+}
+
+async function validSocketRoot(state) {
+  const dataDir = path.resolve(state.root, '../../../..');
+  const local = dataSocketRoot(dataDir, state.nonce);
+  if (state.socketRoot === local && socketPathsFit(local, state.nonce)) {
+    await privateParents(path.dirname(local));
+    await privatePath(path.dirname(local));
+    return true;
+  }
+  const leaf = `zobs2-${state.nonce.slice(0, 16)}`;
+  if (typeof state.socketRoot !== 'string' || path.basename(state.socketRoot) !== leaf) return false;
+  if (path.basename(path.dirname(state.socketRoot)) === `zobs-${process.getuid()}`) {
+    if (state.socketRoot !== await observerSocketRoot(dataDir, state.nonce)) return false;
+    await privateParents(path.dirname(state.socketRoot));
+    await privatePath(path.dirname(state.socketRoot));
+    return true;
+  }
+  // Upgrade-only compatibility for schema 2 from before data-scoped sockets.
+  // Remove after the minimum supported upgrade source is the first release
+  // shipping data-scoped sockets or newer, and all older generations drained.
+  // Never select this historical location for a new generation.
+  return state.socketRoot === path.join(await fs.realpath('/tmp'), leaf);
+}
 export const finalName = /^g-\d+-[0-9a-f]{32}$/;
 export function failure(code, message) { return new ObserverContainmentError(code, message); }
 export async function exists(file) {
@@ -122,7 +161,7 @@ export async function validateState(root) {
   if (state.schema !== 2) throw failure('legacy_containment_state', 'Native Observer state requires old-version recovery');
   if ((state.startupRecovery !== undefined && state.startupRecovery !== 1) || !Number.isSafeInteger(state.generation) || state.generation < 0 || !/^[0-9a-f]{32}$/.test(state.nonce) ||
       path.basename(root) !== `g-${state.generation}-${state.nonce}` || state.root !== root ||
-      state.socketRoot !== path.join(await socketParent(), `zobs2-${state.nonce.slice(0, 16)}`) ||
+      !await validSocketRoot(state) ||
       state.outerSocket !== path.join(state.socketRoot, 'tmux') ||
       state.sessionName !== `observer-${state.nonce.slice(0, 16)}` ||
       !Number.isInteger(state.port) || state.port < 1 || state.port > 65535 ||

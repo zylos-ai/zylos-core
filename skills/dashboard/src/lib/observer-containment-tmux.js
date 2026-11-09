@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { command, delay, digest, exists, failure, finalName, fixedLayout, identity, mkdirPrivate, outerArgs,
   privateEnvironment, privatePath, processSnapshot, readJson, readReceipt, removePrivateTree,
-  socketParent, syncDirectory, targetArgs, validateState, writeAtomic, zellijArgs, tmuxConfigText, validRole } from './observer-tmux-state.js';
+  observerSocketRoot, syncDirectory, targetArgs, validateState, writeAtomic, zellijArgs, tmuxConfigText, validRole } from './observer-tmux-state.js';
 
 const workerPath = fileURLToPath(new URL('./observer-tmux-worker.js', import.meta.url));
 const defaultConfig = fileURLToPath(new URL('../../assets/observer/zellij-config.kdl', import.meta.url));
@@ -146,13 +146,15 @@ export class TmuxObserverContainment extends EventEmitter {
     if (!binaryStat.isFile() || binaryStat.isSymbolicLink() || !(binaryStat.mode & 0o111)) throw failure('unsafe_runtime_state', 'Invalid Observer binary');
     await mkdirPrivate(this.runtimeRoot);
     const nonce = crypto.randomBytes(16).toString('hex');
+    const socketRoot = await observerSocketRoot(this.dataDir, nonce);
+    await mkdirPrivate(path.dirname(socketRoot));
     const name = `g-${generation}-${nonce}`;
     const root = path.join(this.runtimeRoot, name);
     const staging = path.join(this.runtimeRoot, `.staging-${name}`);
     await fs.promises.mkdir(staging, { mode: 0o700 });
     await this.phase('staging-created', { root, staging });
     const state = { schema: 2, startupRecovery: 1, generation, nonce, root,
-      socketRoot: path.join(await socketParent(), `zobs2-${nonce.slice(0, 16)}`),
+      socketRoot,
       sessionName: `observer-${nonce.slice(0, 16)}`, port: await this.choosePort(), target, originRunId,
       ...(observerTarget ? { observerTarget } : {}),
       tmuxPath: this.tmuxPath, tmuxSocket, binaryPath,

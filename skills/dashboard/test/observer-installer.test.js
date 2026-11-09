@@ -7,6 +7,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { observerArtifactFor } from '../src/lib/observer-artifacts.js';
 import { ObserverInstaller } from '../src/lib/observer-installer.js';
+import { assertObserverTestIsolation } from './helpers/observer-isolation.js';
+
+assertObserverTestIsolation();
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -261,14 +264,14 @@ function fallbackFixture(t, direct, overrides = {}) {
     if (url === fixture.artifact.url) return direct(options);
     if (url === releaseApi) {
       assert.equal(options.headers.Accept, 'application/vnd.github+json');
-      return overrides.metadata?.() || Response.json({ assets: [
+      return overrides.metadata?.(options) || Response.json({ assets: [
         { name: 'other.tar.gz', url: 'https://untrusted.invalid/other' },
         { name: 'zellij.tar.gz', url: assetApi, digest: 'sha256:untrusted' },
       ] });
     }
     if (url === assetApi) {
       assert.equal(options.headers.Accept, 'application/octet-stream');
-      return overrides.asset?.() || new Response(null, { status: 302, headers: { location: assetStore } });
+      return overrides.asset?.(options) || new Response(null, { status: 302, headers: { location: assetStore } });
     }
     assert.equal(url, assetStore);
     return new Response(overrides.archive || fixture.archive);
@@ -289,14 +292,16 @@ for (const status of [500, 502, 504]) test(`HTTP ${status} falls back once throu
   assert.equal(record.archiveSha256, fixture.artifact.archiveSha256);
 });
 
-test('network failure falls back without disclosing the transport error', async (t) => {
-  const { installer, logs } = fallbackFixture(t, () => { throw new Error('private transport diagnostic'); });
+test('network failure preserves the cause code without disclosing the transport message', async (t) => {
+  const { installer, logs } = fallbackFixture(t, () => { throw new Error('private transport diagnostic', {
+    cause: Object.assign(new Error('private cause'), { code: 'ENOTFOUND' }),
+  }); });
   assert.equal((await installer.install()).state, 'installed');
-  assert.match(logs[0], /direct network error; API fallback download succeeded/);
+  assert.match(logs[0], /direct network error \(ENOTFOUND\); API fallback download succeeded/);
   assert.equal(logs[0].includes('private transport diagnostic'), false);
 });
 
-test('direct timeout falls back with a fresh deadline', async (t) => {
+test('direct idle timeout falls back with a fresh idle timer', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const { installer, logs } = fallbackFixture(t, ({ signal }) => {
     t.mock.timers.tick(60_001);
@@ -484,4 +489,146 @@ test('throwing failure logger preserves the download error and both path results
   await assert.rejects(installer.install(), (error) => error.code === 'download_failed' &&
     /direct HTTP 504; API HTTP 403/.test(error.message));
   assert.equal(calls.length, 3);
+});
+
+function timedResponse(t, bytes, signal, { gap = 45_000, stall = false, empty = false } = {}) {
+  return { ok: true, status: 200, headers: new Headers(), body: {
+    async *[Symbol.asyncIterator]() {
+      const mid = Math.ceil(bytes.length / 2);
+      for (const chunk of [bytes.subarray(0, mid), bytes.subarray(mid)]) {
+        t.mock.timers.tick(gap);
+        signal.throwIfAborted();
+        yield empty ? Buffer.alloc(0) : chunk;
+      }
+      if (stall) {
+        t.mock.timers.tick(60_001);
+        signal.throwIfAborted();
+      }
+    },
+    async cancel() {},
+  } };
+}
+
+for (const stage of ['direct', 'metadata', 'asset']) {
+  test(`${stage} download completes after more than a minute with continuous progress`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const fixture = makeArtifactFixture(t);
+    const metadata = Buffer.from(JSON.stringify({ assets: [{ name: 'zellij.tar.gz', url: assetApi }] }));
+    let reads = 0;
+    const installer = installerFor(t, fixture, { logger: { info() {}, warn() {} }, fetchImpl: async (url, { signal }) => {
+      if (url === fixture.artifact.url && stage !== 'direct') return new Response('', { status: 504 });
+      if (url === releaseApi && stage !== 'metadata') return new Response(metadata);
+      reads++;
+      return timedResponse(t, stage === 'metadata' && url === releaseApi ? metadata : fixture.archive, signal);
+    } });
+    assert.equal((await installer.install()).state, 'installed');
+    assert.ok(reads >= 1);
+    assert.equal(fs.readdirSync(installer.paths.staging).length, 0);
+  });
+
+  for (const gap of [60_001, 45_000]) test(`${stage} aborts on ${gap === 60_001 ? 'first-byte' : 'mid-stream'} inactivity`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const fixture = makeArtifactFixture(t);
+    const metadata = Buffer.from(JSON.stringify({ assets: [{ name: 'zellij.tar.gz', url: assetApi }] }));
+    let stalledSignal;
+    const installer = installerFor(t, fixture, { logger: { info() {}, warn() {} }, fetchImpl: async (url, { signal }) => {
+      if (stage !== 'direct' && url === fixture.artifact.url) return new Response('', { status: 504 });
+      if (stage === 'direct' && url === releaseApi) return new Response('', { status: 403 });
+      if (stage === 'asset' && url === releaseApi) return new Response(metadata);
+      stalledSignal = signal;
+      return timedResponse(t, stage === 'metadata' ? metadata : fixture.archive, signal, { gap, stall: true });
+    } });
+    await assert.rejects(installer.install(), error => /download timed out/.test(error.message) &&
+      error.code === (stage === 'direct' ? 'download_failed' : 'download_timeout'));
+    assert.equal(stalledSignal.aborted, true);
+    assert.equal(fs.existsSync(installer.paths.installedManifest), false);
+    assert.equal(fs.readdirSync(installer.paths.staging).length, 0);
+  });
+}
+
+test('empty response chunks cannot keep a stalled download alive', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { fixture, installer, logs } = fallbackFixture(t, () => new Response('', { status: 504 }));
+  const originalFetch = installer.fetchImpl;
+  installer.fetchImpl = async (url, options) => url === fixture.artifact.url
+    ? timedResponse(t, fixture.archive, options.signal, { empty: true }) : originalFetch(url, options);
+  assert.equal((await installer.install()).state, 'installed');
+  assert.match(logs[0], /direct download timed out/);
+});
+
+for (const stage of ['direct', 'metadata', 'asset']) for (const redirects of [5, 6]) {
+  test(`${stage} accepts five redirects and rejects a sixth with ${redirects} redirects offered`, async t => {
+    const fixture = makeArtifactFixture(t);
+    let requests = 0, cancelled = 0, total = 0;
+    const installer = installerFor(t, fixture, { logger: { info() {}, warn() {} }, fetchImpl: async url => {
+      total++;
+      assert.ok(total <= 9, 'requests remain bounded');
+      if (stage !== 'direct' && url === fixture.artifact.url) return new Response('', { status: 504 });
+      if (stage === 'asset' && url === releaseApi) return Response.json({ assets: [{ name: 'zellij.tar.gz', url: assetApi }] });
+      if (stage === 'metadata' && url === assetApi) return new Response(fixture.archive);
+      requests++;
+      if (requests <= redirects) return new Response(new ReadableStream({ cancel() { cancelled++; } }), {
+        status: 302, headers: { location: `https://api.github.com/redirect-${requests}` },
+      });
+      return stage === 'metadata' ? Response.json({ assets: [{ name: 'zellij.tar.gz', url: assetApi }] }) : new Response(fixture.archive);
+    } });
+    if (redirects === 5) assert.equal((await installer.install()).state, 'installed');
+    else await assert.rejects(installer.install(), { code: 'unsafe_redirect' });
+    assert.equal(requests, 6);
+    assert.equal(cancelled, redirects);
+    assert.equal(total, stage === 'direct' ? 6 : stage === 'metadata' && redirects === 5 ? 8 : stage === 'asset' ? 8 : 7);
+    assert.equal(fs.existsSync(installer.paths.installedManifest), redirects === 5);
+    assert.equal(fs.readdirSync(installer.paths.staging).length, 0);
+  });
+}
+
+for (const stream of [false, true]) test(`network ${stream ? 'stream' : 'request'} diagnostics retain bounded codes for both routes`, async t => {
+  const { fixture, installer, logs } = fallbackFixture(t, () => new Response('', { status: 504 }));
+  const originalFetch = installer.fetchImpl;
+  installer.fetchImpl = async (url, options) => {
+    if (url === releaseApi) return originalFetch(url, options);
+    const code = url === fixture.artifact.url ? 'ECONNRESET' : 'ENOTFOUND';
+    const error = new Error('https://private.invalid/secret response', { cause: Object.assign(new Error('secret'), { code }) });
+    if (!stream) throw error;
+    return new Response(new ReadableStream({ start(controller) { controller.error(error); } }));
+  };
+  await assert.rejects(installer.install(), error => error.code === 'download_failed' &&
+    /direct .*ECONNRESET.*API .*ENOTFOUND/.test(error.message) && !/private|secret|https:/.test(error.message));
+  assert.equal(logs.length, 1);
+});
+
+test('invalid or oversized transport codes never expose raw messages', async t => {
+  const { installer, logs } = fallbackFixture(t, () => { throw Object.assign(new Error('secret'), {
+    code: 'x'.repeat(65), cause: { code: 'https://private.invalid/token' },
+  }); });
+  assert.equal((await installer.install()).state, 'installed');
+  assert.match(logs[0], /direct network error; API fallback/);
+  assert.equal(logs[0].includes('secret'), false);
+});
+
+for (const outcome of ['success', 'failure', 'cancelled']) test(`download ${outcome} releases all idle timers`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timers = new Set();
+  const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback, ms) => {
+    const timer = set(() => { timers.delete(timer); callback(); }, ms);
+    timers.add(timer);
+    return timer;
+  });
+  t.mock.method(globalThis, 'clearTimeout', timer => { timers.delete(timer); return clear(timer); });
+  const { installer } = fallbackFixture(t, () => new Response('', { status: 503 }), {
+    metadata: () => new Response('', { status: 503 }),
+  });
+  if (outcome === 'success') {
+    const fixture = makeArtifactFixture(t);
+    const good = installerFor(t, fixture);
+    assert.equal((await good.install()).state, 'installed');
+  } else {
+    const controller = new AbortController();
+    if (outcome === 'cancelled') controller.abort();
+    await assert.rejects(installer.install({ signal: controller.signal }), {
+      code: outcome === 'cancelled' ? 'download_cancelled' : 'download_failed',
+    });
+  }
+  assert.equal(timers.size, 0);
 });

@@ -14,7 +14,9 @@ import { hashPassword } from '../src/lib/auth.js';
 // Dashboard startup changes; unrelated rendering changes may skip these cases.
 // Private paths and SQLite, stub PM2/tmux, owned loopback only; child cleanup is
 // registered before startup and request/output/child lifetimes are bounded.
-for (const failure of [null, 'missing', 'long']) test(failure ? `Dashboard listens when Observer socket path selection fails with ${failure} temporary storage`
+// Invalid persisted socket metadata exercises the containment startup failure
+// boundary; run for containment path/validation changes, skip for unrelated UI.
+for (const failure of [null, 'missing', 'long', 'state']) test(failure === 'state' ? 'Dashboard listens when persisted Observer socket metadata is invalid' : failure ? `Dashboard listens when Observer socket path selection fails with ${failure} temporary storage`
   : 'Dashboard listens while unavailable Observer ownership blocks admission', { timeout: 35_000 }, async (t) => {
   const runnerHome = fs.realpathSync(process.env.HOME);
   assert.notEqual(runnerHome, fs.realpathSync(os.userInfo().homedir));
@@ -25,7 +27,8 @@ for (const failure of [null, 'missing', 'long']) test(failure ? `Dashboard liste
   const temporaryRoot = fs.realpathSync(fs.existsSync('/dev/shm') ? '/dev/shm' : '/tmp');
   const root = fs.mkdtempSync(path.join(temporaryRoot, 'zds-'));
   fs.chmodSync(root, 0o700);
-  const zylosDir = path.join(root, failure ? 'data-'.repeat(25) : 'z');
+  const controlFailure = failure === 'missing' || failure === 'long';
+  const zylosDir = path.join(root, controlFailure ? 'data-'.repeat(25) : 'z');
   const dataDir = path.join(zylosDir, 'components', 'dashboard');
   const controlRoot = path.join(dataDir, 'observer', 'runtime', 'control');
   const candidate = path.join(controlRoot, 'control.sock');
@@ -46,10 +49,10 @@ for (const failure of [null, 'missing', 'long']) test(failure ? `Dashboard liste
       }
     }
   });
-  assert.equal(Buffer.byteLength(candidate) >= 104, !!failure, 'data candidate takes the intended branch');
+  assert.equal(Buffer.byteLength(candidate) >= 104, controlFailure, 'data candidate takes the intended branch');
   fs.mkdirSync(controlRoot, { recursive: true, mode: 0o700 });
   let lockPath, lockInode;
-  if (!failure) {
+  if (failure === null) {
     owner = new ObserverControlServer({ dataDir, onPreUninstall: async () => {} });
     await owner.acquire();
     lockPath = owner.lock.lockPath;
@@ -65,6 +68,15 @@ for (const failure of [null, 'missing', 'long']) test(failure ? `Dashboard liste
     port, host: '127.0.0.1', auth: { enabled: true, password: hashPassword('startup-test') },
     observer: { enabled: true, generation: 1 },
   }), { mode: 0o600 });
+  if (failure === 'state') {
+    const nonce = '0123456789abcdef0123456789abcdef';
+    const generationRoot = path.join(dataDir, 'observer', 'runtime', 'generations', `g-1-${nonce}`);
+    fs.mkdirSync(generationRoot, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(generationRoot, 'state.json'), JSON.stringify({
+      schema: 2, startupRecovery: 1, generation: 1, nonce, root: generationRoot,
+      socketRoot: path.join(root, 'unapproved-socket'),
+    }), { mode: 0o600 });
+  }
   const bin = path.join(root, 'test-bin');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'pm2'), "#!/bin/sh\nprintf '[]\\n'\n", { mode: 0o700 });
@@ -120,8 +132,9 @@ for (const failure of [null, 'missing', 'long']) test(failure ? `Dashboard liste
   assert.ok(fs.statSync(database).isFile(), 'the child opened the fixture Dashboard database');
   console.log('Dashboard startup isolation:', JSON.stringify({ ...readback, listener: base,
     database, tmux: 'stubbed; no server' }));
-  const errorCode = failure === 'missing' ? 'ENOENT' : failure === 'long' ? 'control_socket_path_too_long' : 'coordinator_active';
-  assert.match(logs, new RegExp(`${failure ? 'control startup' : 'startup'} failed: ${errorCode}`));
+  const errorCode = failure === 'missing' ? 'ENOENT' : failure === 'long' ? 'control_socket_path_too_long'
+    : failure === 'state' ? 'unsafe_runtime_state' : 'coordinator_active';
+  assert.match(logs, new RegExp(`${controlFailure ? 'control startup' : 'startup'} failed: ${errorCode}`));
   const login = await request('/login', {
     method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'password=startup-test',
@@ -135,10 +148,11 @@ for (const failure of [null, 'missing', 'long']) test(failure ? `Dashboard liste
   for (const endpoint of ['enable', 'leases', 'disable']) {
     const response = await request(`/api/observer/${endpoint}`, { method: 'POST', headers });
     assert.equal(response.status, 503, endpoint);
-    assert.equal((await response.json()).error, errorCode, endpoint);
+    const expectedError = failure === 'state' && endpoint === 'disable' ? 'teardown_failed' : errorCode;
+    assert.equal((await response.json()).error, expectedError, endpoint);
   }
   if (failure) {
-    assert.equal(fs.existsSync(candidate), false);
+    assert.equal(fs.existsSync(candidate), failure === 'state');
     if (failure === 'missing') assert.equal(fs.existsSync(temporary), false);
     else assert.equal(fs.readdirSync(temporary).length, 0);
     return;
