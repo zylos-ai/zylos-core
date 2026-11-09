@@ -106,13 +106,14 @@ export async function runRecordedQuotaBrowser(sandbox) {
       assert.equal(/记录|Recorded/.test(text), state === 'recorded');
       if (state === 'recorded') {
         const year = new Intl.DateTimeFormat('en', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(recordedAt);
-        assert.ok(text.includes(year)); assert.match(title, /最近一次记录|most recent recorded/);
+        assert.ok(!text.includes(year)); assert.match(title, /最近一次记录|most recent recorded/);
+        assert.match(title, /没有会话上报额度|No session is currently reporting quota/);
       }
       assert.equal(pageError, undefined, pageError); assert.equal(serverError, undefined, serverError);
-      const measured = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth,
-        width: innerWidth, strip: document.querySelector('#wb-instance').getBoundingClientRect().toJSON(),
+      const measured = await page.evaluate(() => ({
+        accounts: [...document.querySelectorAll('#wb-instance .wb-account')].map(node => ({ width: node.getBoundingClientRect().width, scrollWidth: node.scrollWidth })),
         records: [...document.querySelectorAll('.wb-quota-recorded')].map(node => ({ text: node.textContent, width: node.getBoundingClientRect().width, scrollWidth: node.scrollWidth })) }));
-      assert.ok(measured.scrollWidth <= width, JSON.stringify({ state, locale, width, theme, measured }));
+      for (const account of measured.accounts) assert.ok(account.scrollWidth <= account.width + 1, JSON.stringify({ state, locale, width, theme, account }));
       for (const record of measured.records) assert.ok(record.scrollWidth <= record.width + 1);
       if (evidence) await page.screenshot({ path: path.join(evidence, `quota-${state}-${locale}-${width}-${theme}.png`), fullPage: true });
       metrics.push({ state, locale, width, theme, text, title, ...measured });

@@ -21,7 +21,7 @@ const clock = at => formatZoned(at, undefined, { hour: '2-digit', minute: '2-dig
 export function quotaRecordedTime(usage, now = Date.now()) {
   if (usage?.live !== false || !Number.isFinite(usage.recordedAt)) return null;
   const sameDay = zonedDay(usage.recordedAt) === zonedDay(now);
-  return formatZoned(usage.recordedAt, undefined, { ...(sameDay ? {} : { year: 'numeric', month: '2-digit', day: '2-digit' }),
+  return formatZoned(usage.recordedAt, undefined, { ...(sameDay ? {} : { month: '2-digit', day: '2-digit' }),
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 }
 export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);

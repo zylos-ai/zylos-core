@@ -43,7 +43,7 @@ test('usage and host reads enforce auth and removed five-hour routes return unkn
   f.core.accountUsageRecord = { recordedAt: 1000, live: false };
   f.store.insertApiKey({ name: 'reader', keyHash: hashApiKey('zylos_ak_usage_fixture'), scope: 'read' });
   const headers = { Authorization: `Bearer ${exchangeApiKeyForToken('zylos_ak_usage_fixture').token}` };
-  for (const route of ['/api/workbench/usage', '/api/workbench/host', '/api/state']) {
+  for (const route of ['/api/workbench/usage', '/api/workbench/host', '/api/state', '/api/metrics/rate_limit_7d']) {
     assert.equal((await request(f.origin, route)).status, 401);
     assert.equal((await request(f.origin, route, { headers })).status, 200);
   }
@@ -58,7 +58,9 @@ test('usage and host reads enforce auth and removed five-hour routes return unkn
   assert.equal((await removed.json()).error, 'unknown_metric');
   const weekly = await request(f.origin, '/api/metrics/rate_limit_7d', { headers });
   assert.equal(weekly.status, 200);
-  assert.equal((await weekly.json()).value, 21);
+  const recordedMetric = await weekly.json();
+  assert.equal(recordedMetric.value, null);
+  assert.equal(recordedMetric.confidence, 'none');
   const state = await (await request(f.origin, '/api/state', { headers })).json();
   assert.equal(Object.hasOwn(state, 'rate_limit_pct'), false);
   assert.equal(state.rate_limit_7d_pct, 21);
@@ -68,9 +70,15 @@ test('usage and host reads enforce auth and removed five-hour routes return unkn
   const liveState = await (await request(f.origin, '/api/state', { headers })).json();
   assert.equal(liveState.rate_limit_7d_live, true);
   assert.equal(liveState.rate_limit_7d_recorded_at, 2000);
+  const liveMetric = await (await request(f.origin, '/api/metrics/rate_limit_7d', { headers })).json();
+  assert.equal(liveMetric.value, 21);
+  assert.equal(liveMetric.confidence, 'actual');
   f.core.accountUsage = null; f.core.accountUsageRecord = null;
   const emptyState = await (await request(f.origin, '/api/state', { headers })).json();
   for (const key of ['rate_limit_7d_pct', 'rate_limit_7d_live', 'rate_limit_7d_recorded_at']) assert.equal(emptyState[key], null);
+  const emptyMetric = await (await request(f.origin, '/api/metrics/rate_limit_7d', { headers })).json();
+  assert.equal(emptyMetric.value, null);
+  assert.equal(emptyMetric.confidence, 'none');
   assert.equal((await request(f.origin, '/api/workbench/groups/a/name', { method: 'PUT',
     body: JSON.stringify({ name: 'fixture' }), headers: { ...headers, 'content-type': 'application/json' } })).status, 403);
   assert.equal(f.store.queryMetrics({ name: 'account_quota' }).length, 0);

@@ -21,7 +21,8 @@ function businessSource(projected, observation, accountUsage, accountRecord) {
     contextPct: usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null),
     rateLimitPct: accountUsage?.five_hour?.used_percentage ?? accountUsage?.fiveHour?.usedPercentage ?? null,
     rateLimit7dPct: accountUsage?.seven_day?.used_percentage ?? accountUsage?.sevenDay?.usedPercentage ?? null,
-    accountRecord: accountRecord ? { recordedAt: accountRecord.recordedAt, live: accountRecord.live } : null,
+    accountRecord: accountRecord ? { live: accountRecord.live,
+      ...(accountRecord.live === false ? { recordedAt: accountRecord.recordedAt } : {}) } : null,
   });
 }
 export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitizer(process.env.ZYLOS_DIR || process.cwd()), facts = null, view = null) {

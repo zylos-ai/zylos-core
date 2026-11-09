@@ -26,7 +26,7 @@ export function readRecordedAccountUsage(runtime, env, now) {
       }
     } catch { /* An unreadable group cannot hide other recorded account samples. */ }
   }
-  if (runtime === 'claude') {
+  if (runtime === 'claude' && !latest) {
     const sample = readJsonSample(path.join(zylosRoot(env), 'activity-monitor', 'usage.json'), 'status');
     if (!sample.error) consider({ seven_day: { used_percentage: sample.value.weeklyAll?.percent,
       resets_at: sample.value.weeklyAll?.resets } }, Date.parse(sample.value.lastCheck));

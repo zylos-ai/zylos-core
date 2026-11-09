@@ -122,6 +122,42 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.equal(core.accountUsageRecord.live, false);
 });
 
+test('Core state ignores live sample timestamps and notifies recorded provenance changes', async t => {
+  let record = { value: { seven_day: { used_percentage: 21 } }, live: true, recordedAt: 1000 };
+  let changes = 0;
+  t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
+    if (name === 'session-state-reader.js') return {
+      readSessionState: async () => live(),
+      readAccountUsage: async () => structuredClone(record),
+    };
+    if (name === 'session-group-paths.js') return {};
+    assert.fail(`Unexpected core module ${name}`);
+  } } });
+  const { CoreState } = await import(`../src/lib/core-state.js?quota-notifications=${Date.now()}`);
+  const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
+  await core.refresh();
+  assert.equal(changes, 1);
+  record.recordedAt = 2000;
+  await core.refresh();
+  assert.equal(changes, 1, 'same live percentage with a new sample time does not broadcast');
+  assert.equal(core.accountUsageRecord.recordedAt, 2000, 'the current sample still updates');
+  record.live = false;
+  await core.refresh();
+  assert.equal(changes, 2, 'same percentage switching to recorded evidence broadcasts');
+  record.recordedAt = 3000;
+  await core.refresh();
+  assert.equal(changes, 3, 'recorded label time changes broadcast');
+  await core.refresh();
+  assert.equal(changes, 3, 'unchanged recorded evidence does not broadcast');
+  record.live = true;
+  await core.refresh();
+  assert.equal(changes, 4, 'switching back to live evidence broadcasts');
+  record.value.seven_day.used_percentage = 22;
+  await core.refresh();
+  assert.equal(changes, 5, 'live percentage changes still broadcast');
+});
+
 test('Origin states have matching detail, Fleet and action availability presentation', () => {
   const labels = defaultAgentFleetLabels();
   for (const state of ['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING']) {

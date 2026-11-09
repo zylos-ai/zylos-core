@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createSessionReader } from '../session-state-reader-async.js';
 import { UsageMonitor } from '../../../skills/activity-monitor/scripts/usage-monitor.js';
+import { readRecordedCodexSample } from '../session-usage-reader.js';
 
 const now = Date.parse('2026-11-10T00:10:00+08:00');
 const reset = now / 1000 + 86400;
@@ -33,12 +34,13 @@ test('live account values and mtime selection stay unchanged, with opt-in proven
   fs.utimesSync(a, 100, 100); fs.utimesSync(b, 200, 200); f.setLive(['origin', 'other']);
   const expected = { seven_day: { used_percentage: 12, resets_at: reset } };
   assert.deepEqual(await f.reader.readAccountUsage('claude'), expected);
+  assert.deepEqual(await f.reader.readAccountUsage('claude', null), expected);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1).toISOString(), weeklyAll: { percent: 99, resets: reset } });
   assert.deepEqual(await f.reader.readAccountUsage('claude', { allowRecorded: true }), { value: expected, recordedAt: now - 10000, live: true });
-  assert.deepEqual(f.counts(), [4, 4]);
+  assert.deepEqual(f.counts(), [6, 6]);
 });
 
-test('reclaimed groups retain the newest valid recorded quota, including account sampler timestamps', async t => {
+test('reclaimed groups prefer the newest valid group quota over a later sampler copy', async t => {
   const f = fixture(t); const file = f.status('origin', 4, now - 7200000);
   fs.utimesSync(file, now / 1000, now / 1000);
   f.status('other', 7, now - 3600000);
@@ -46,11 +48,54 @@ test('reclaimed groups retain the newest valid recorded quota, including account
   const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
   assert.equal(record.value.seven_day.used_percentage, 7); assert.equal(record.recordedAt, now - 3600000); assert.equal(record.live, false);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 9, resets: new Date(reset * 1000).toISOString() } });
-  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 9);
-  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).recordedAt, now - 1000);
+  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 7);
+  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).recordedAt, now - 3600000);
   f.status('newest', 11, now - 500);
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 11);
   assert.deepEqual(f.counts(), [0, 0], 'history does not open a tmux connection');
+});
+
+test('the account sampler is used only when all group samples are absent or invalid', async t => {
+  const f = fixture(t);
+  f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 8, resets: reset } });
+  f.status('expired', 20, now - 500, now / 1000 - 1);
+  f.write('activity-monitor/session-groups/broken/statusline.json', '{broken');
+  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 8);
+  f.status('valid', 20, now - 3600000);
+  const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
+  assert.equal(record.value.seven_day.used_percentage, 20);
+  assert.equal(record.recordedAt, now - 3600000);
+  assert.equal(await f.reader.readAccountUsage('claude', null), null);
+});
+
+test('invalid group directory names cannot hide a valid recorded group', async t => {
+  const f = fixture(t);
+  f.status('.tmp', 99, now - 1);
+  f.status('lost+found', 99, now - 1);
+  f.status('valid', 20, now - 1000);
+  const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
+  assert.equal(record.value.seven_day.used_percentage, 20);
+  assert.equal(record.recordedAt, now - 1000);
+});
+
+test('recorded Codex reads the newest valid run and stops before older rollouts', t => {
+  const f = fixture(t), group = 'codex:history';
+  const rollout = (name, percent, at) => f.write(`${name}.jsonl`, JSON.stringify({ timestamp: new Date(at).toISOString(), type: 'event_msg',
+    payload: { type: 'token_count', rate_limits: { secondary: { window_minutes: 10080, used_percent: percent, resets_at: reset } } } }) + '\n');
+  const oldFile = rollout('older', 10, now - 5000), newFile = rollout('newer', 20, now - 1000);
+  const event = (run, file, ts) => ({ v: 1, ts, event: 'session_start', runtime: 'codex', session_group: group,
+    run_id: run, session_id: run, transcript_path: file });
+  f.write(`activity-monitor/session-groups/${group}/events.jsonl`, [event('new', newFile, now - 2000), event('old', oldFile, now - 6000)]
+    .map(value => JSON.stringify(value)).join('\n') + '\n');
+  const opened = [];
+  const openSync = fs.openSync;
+  t.mock.method(fs, 'openSync', (file, ...args) => { opened.push(file); return openSync(file, ...args); });
+  const record = readRecordedCodexSample({ sessionGroup: group, env: { ZYLOS_DIR: f.root }, now });
+  assert.equal(record.sample.rateLimits.sevenDay.usedPercentage, 20);
+  assert.equal(record.sample.capturedAt, now - 1000);
+  assert.equal(opened.filter(file => file === newFile).length, 1);
+  assert.equal(opened.includes(oldFile), false, 'a valid newest run ends the historical scan');
+  assert.equal(opened.filter(file => String(file).endsWith('events.jsonl')).length, 1);
 });
 
 test('expired, malformed, future, undated and absent historical records stay unknown', async t => {

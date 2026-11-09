@@ -103,14 +103,17 @@ test('recorded quota shows its instance-local time in strip and both fleet views
     const box = accounts(strip(snapshot, locale, { now }))[0];
     assert.match(box.textContent, /93%/);
     assert.ok(box.textContent.includes(sameDay ? '00:09' : '23:10'));
-    if (!sameDay) assert.ok(box.textContent.includes('2026'));
+    if (!sameDay) assert.match(box.textContent, /11\/09/);
+    assert.doesNotMatch(box.textContent, /2026/);
     assert.ok(box.title.includes(t('wb.quotaRecordedHint')));
+    assert.match(box.title, /没有会话上报额度|No session is currently reporting quota/);
     const labels = Object.fromEntries(Object.entries(values).filter(([key]) => key.startsWith('wb.fleet.')).map(([key, value]) => [key.slice(9), value]));
     const self = fleetSelfFromSnapshot(snapshot);
     const html = renderAgentFleetHtml({ agents: [{ name: 'local', self: true, state: 'IDLE' },
       { name: 'remote', state: 'IDLE', rate_limit_7d_pct: 7, rate_limit_7d_recorded_at: recordedAt, rate_limit_7d_live: false }] }, { self, labels });
     assert.equal((html.match(/class="wb-quota-recorded"/g) ?? []).length, 4, 'local and remote in card and comparison');
     assert.ok(html.includes(t('wb.quotaRecordedHint')));
+    assert.doesNotMatch(html, /2026/);
     sample.live = true;
     assert.doesNotMatch(accounts(strip(snapshot, locale, { now }))[0].textContent, /Recorded|记录/);
     sample.live = false; sample.used_percentage = null;

@@ -48,6 +48,10 @@ export function readCodexSampleForIdentity({ sessionGroup, identity, env = proce
   if (events.error) return null;
   const event = completeRows(events.text).findLast(row => Number.isInteger(row.v) && row.v >= 1 && Number.isSafeInteger(row.ts) && row.ts >= 0 && row.event === 'session_start' && row.runtime === 'codex' &&
     row.session_group === (sessionGroup ?? 'origin') && row.run_id === identity.runId && row.session_id === identity.sessionId);
+  return readCodexEventSample(event, identity, account);
+}
+
+function readCodexEventSample(event, identity, account) {
   if (event?.v > 1) process.emitWarning('Reading known fields from a newer session event version');
   if (typeof event?.transcript_path !== 'string' || !path.isAbsolute(event.transcript_path)) return null;
   const rollout = readSnapshot(event.transcript_path);
@@ -86,19 +90,18 @@ export function readRecordedCodexSample({ sessionGroup, env = process.env, now =
   if (events.error) return null;
   const starts = completeRows(events.text).filter(row => row.v === 1 && row.event === 'session_start' &&
     row.runtime === 'codex' && row.session_group === sessionGroup && typeof row.run_id === 'string' &&
-    row.run_id && typeof row.session_id === 'string' && row.session_id);
-  let latest = null;
+    row.run_id && typeof row.session_id === 'string' && row.session_id && Number.isSafeInteger(row.ts) && row.ts >= 0);
+  // Runs are sequential within a group; avoid opening older rollouts once one is usable.
+  starts.sort((a, b) => b.ts - a.ts);
   const seen = new Set();
-  for (const event of starts.reverse()) {
+  for (const event of starts) {
     const key = JSON.stringify([event.run_id, event.session_id]);
     if (seen.has(key)) continue;
     seen.add(key);
-    const sample = readCodexSampleForIdentity({ sessionGroup, env, account: true,
-      identity: { present: true, ready: true, runtime: 'codex', runId: event.run_id, sessionId: event.session_id } });
-    if (sample && currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now) &&
-      (!latest || sample.sample.capturedAt > latest.sample.capturedAt)) latest = sample;
+    const sample = readCodexEventSample(event, { runId: event.run_id, sessionId: event.session_id }, true);
+    if (sample && currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now)) return sample;
   }
-  return latest;
+  return null;
 }
 
 export function sameIdentity(a, b) {

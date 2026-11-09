@@ -65,7 +65,8 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
     if (typeof resolve !== 'function') throw Object.assign(new Error('Session launch configuration resolver is unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
     return (await resolve({ sessionGroup, sessionMode: sessionGroup === null ? 'single' : 'multi' })).runtime;
   }
-  async function readAccountUsage(runtime, { allowRecorded = false } = {}) {
+  async function readAccountUsage(runtime, options) {
+    const { allowRecorded = false } = options ?? {};
     if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');
     const samples = [];
     for (const { sessionGroup } of await listSessions(connectionOptions)) {

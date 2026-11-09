@@ -1377,7 +1377,9 @@ async function handleApi(req, res, pathname, url) {
       await coreState.refresh();
       const current = buildApiStatePayload();
       const usage = coreState.getUsageObservation();
-      const value = current[{ context_pct: 'context_pct', rate_limit_7d: 'rate_limit_7d_pct' }[metricName]];
+      // Metric samples remain live-only; recorded account values belong to state/Fleet.
+      const recordedQuota = metricName === 'rate_limit_7d' && coreState.accountUsageRecord?.live === false;
+      const value = recordedQuota ? null : current[{ context_pct: 'context_pct', rate_limit_7d: 'rate_limit_7d_pct' }[metricName]];
       result = { value, selected_source: 'core-session-reader', freshness: usage.sampledAt ? (Date.now() - usage.sampledAt) / 1000 : null, confidence: value === null ? 'none' : 'actual', alternatives: [], fallback_reason: value === null ? usage.reason || 'missing' : null };
     } else result = metricResolver.resolve(metricName);
     sendJson(res, 200, result);
