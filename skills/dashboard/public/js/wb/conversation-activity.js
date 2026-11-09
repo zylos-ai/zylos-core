@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=103';
+import { element, icon } from './plain-text.js?v=104';
 
 /**
  * The agent's activity on the conversation page: tool steps, words said along the way and subtasks, folded into one

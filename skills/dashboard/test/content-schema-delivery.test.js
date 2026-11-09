@@ -85,7 +85,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const appUrl = origin + prefix + '/_assets/' + appPath;
     let parentUrl = appUrl;
     const activeModules = new Map();
-    for (const [name, version] of [['conversation-page', 120], ['conversation-content', 109], ['chat-blocks', 107]]) {
+    for (const [name, version] of [['conversation-page', 123], ['conversation-content', 109], ['chat-blocks', 107]]) {
       const parent = await moduleAt(parentUrl);
       const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
       const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=${version}`));
@@ -95,7 +95,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     }
     const pageUrl = activeModules.get('conversation-page');
     const page = await moduleAt(pageUrl);
-    for (const [name, version] of [['conversation-state', 119], ['chat-questions', 104]]) {
+    for (const [name, version] of [['conversation-state', 120], ['chat-questions', 104]]) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
         .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=${version}`));
       assert.ok(specifier, `${name} belongs to the active page graph`);

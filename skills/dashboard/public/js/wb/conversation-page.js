@@ -4,13 +4,13 @@ import { element, icon } from './plain-text.js?v=104';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon } from './board.js?v=115';
-import { createConversationState } from './conversation-state.js?v=119';
+import { createConversationState } from './conversation-state.js?v=120';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=104';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=109';
 import { createGroupSide } from './group-side.js?v=3';
-import { activityPlacement, createActivityArea } from './conversation-activity.js?v=100';
-import { createScrollGesture } from './scroll-gesture.js?v=100';
+import { activityPlacement, createActivityArea } from './conversation-activity.js?v=101';
+import { createScrollGesture } from './scroll-gesture.js?v=102';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
