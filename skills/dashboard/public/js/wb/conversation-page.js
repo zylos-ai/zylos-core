@@ -9,7 +9,7 @@ import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=104';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=109';
 import { createGroupSide } from './group-side.js?v=3';
-import { activityPlacement, createActivityArea } from './conversation-activity.js?v=101';
+import { activityPlacement, createActivityArea } from './conversation-activity.js?v=102';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 const laterThan = (left, right) => {
   const a = String(left),
@@ -621,12 +621,15 @@ export function mountConversationPage({
     });
     status.append(statusIcon, statusText, statusButton);
     const activitySlot = node('div', undefined, 'conversation-activity-slot');
-    body.append(meta, activitySlot, content, status);
+    const afterActivitySlot = node('div', undefined, 'conversation-activity-slot conversation-activity-after-reply-slot');
+    body.append(meta, activitySlot, content, afterActivitySlot, status);
     article.append(avatar, body);
     const record = {
       node: article,
       activitySlot,
       activityAreas: new Map(),
+      afterActivitySlot,
+      afterActivityAreas: new Map(),
       status,
       statusIcon,
       statusText,
@@ -902,22 +905,26 @@ export function mountConversationPage({
   function activityArea() {
     return createActivityArea({ document, t, onToggle: toggleActivity });
   }
-  /** Folded parts go above their replies; the live or trailing part follows the round's last loaded message. */
+  /** Reply work folds above it, finished follow-up work below it; unmatched or live parts keep their separate area. */
   function placeActivity(s, ordered) {
     const placement = activityPlacement(s.messages, s.tab === 'mine' ? s.activity : null);
     activityEntries.clear();
     for (const [id, record] of messages) {
       if (!record.activitySlot) continue;
-      const entries = placement.folded.get(Number(id)) ?? [];
-      const keys = new Set(entries.map(entry => entry.key));
-      for (const [key, area] of record.activityAreas) if (!keys.has(key)) { area.node.remove(); record.activityAreas.delete(key); }
-      entries.forEach((entry, index) => {
-        let area = record.activityAreas.get(entry.key);
-        if (!area) { area = activityArea(); record.activityAreas.set(entry.key, area); }
-        renderArea(entry, area, s);
-        if (record.activitySlot.children[index] !== area.node) record.activitySlot.insertBefore(area.node, record.activitySlot.children[index] ?? null);
-      });
-      record.activitySlot.hidden = !entries.length;
+      for (const [slot, areas, entries] of [
+        [record.activitySlot, record.activityAreas, placement.folded.get(Number(id)) ?? []],
+        [record.afterActivitySlot, record.afterActivityAreas, placement.afterReply.get(Number(id)) ?? []]
+      ]) {
+        const keys = new Set(entries.map(entry => entry.key));
+        for (const [key, area] of areas) if (!keys.has(key)) { area.node.remove(); areas.delete(key); }
+        entries.forEach((entry, index) => {
+          let area = areas.get(entry.key);
+          if (!area) { area = activityArea(); areas.set(entry.key, area); }
+          renderArea(entry, area, s);
+          if (slot.children[index] !== area.node) slot.insertBefore(area.node, slot.children[index] ?? null);
+        });
+        slot.hidden = !entries.length;
+      }
     }
     const keys = new Set(placement.trailing.map(entry => entry.key));
     for (const [key, item] of trailingActivity) if (!keys.has(key)) { item.node.remove(); trailingActivity.delete(key); }

@@ -965,5 +965,6 @@
   "wb.settings.timezone.restartFailed": "Some services could not restart: {services}. You can retry.",
   "wb.settings.timezone.confirmationRequired": "The restart confirmation is incomplete. Reload the service list and confirm again.",
   "wb.settings.timezone.restartError": "Could not restart the services. The saved time zone is kept; retry after checking the service list.",
-  "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied."
+  "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied.",
+  "chat.activity.afterReply": "After replying: {duration} · steps: {steps}"
 }

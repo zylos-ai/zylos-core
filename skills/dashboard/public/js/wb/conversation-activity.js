@@ -2,7 +2,7 @@ import { element, icon } from './plain-text.js?v=104';
 
 /**
  * The agent's activity on the conversation page: tool steps, words said along the way and subtasks, folded into one
- * line above each reply and open while the agent works. Activity nodes live outside message content, so copying,
+ * line above each reply, below it for follow-up work, and open while the agent works. Activity nodes live outside message content, so copying,
  * searching, notifications and naming never see them.
  */
 
@@ -33,13 +33,15 @@ export function stepText(step, t = key => key) {
 /**
  * Where each activity part goes. A part that ends with a reply folds above that reply when it has steps; the part
  * after the last reply is the live area while the round runs (shown before the first reply even with no steps, and
- * after a reply once something happens), and folds after the round's last message when the round ended with steps.
+ * after a reply once something happens). Finished trailing steps fold below their preceding loaded reply; without
+ * that reply they retain the separate area after the round's last loaded message.
  * The live area sits under the latest user message, including one sent moments ago that is still waiting to be routed.
  */
 export function activityPlacement(messages, activity) {
   const loaded = new Set(messages.map(row => row.id));
-  const folded = new Map(), trailing = [];
-  if (!activity) return { folded, trailing };
+  const loadedReplies = new Set(messages.filter(row => row.direction === 'out').map(row => row.id));
+  const folded = new Map(), afterReply = new Map(), trailing = [];
+  if (!activity) return { folded, afterReply, trailing };
   const seen = new Set();
   for (const row of messages) {
     if (row.direction !== 'in') continue;
@@ -58,11 +60,12 @@ export function activityPlacement(messages, activity) {
       const state = activity.items.get(later.id)?.state;
       if (state === undefined || state === 'pending') anchor = later.id;
     }
-    let replies = 0;
+    let replies = 0, precedingReply = null;
     for (const segment of round.segments) {
       const key = `${round.key}:${segment.replyId ?? 'tail'}`;
       if (segment.replyId !== null) {
         replies++;
+        precedingReply = segment.replyId;
         if (loaded.has(segment.replyId) && stepCount(segment)) {
           if (!folded.has(segment.replyId)) folded.set(segment.replyId, []);
           folded.get(segment.replyId).push({ key, round, segment, live: false });
@@ -71,10 +74,15 @@ export function activityPlacement(messages, activity) {
       }
       if (round.state === 'running') {
         if (!replies || segment.steps.length) trailing.push({ key, round, segment, live: true, anchor });
-      } else if (stepCount(segment)) trailing.push({ key, round, segment, live: false, anchor });
+      } else if (stepCount(segment)) {
+        if (precedingReply !== null && loadedReplies.has(precedingReply)) {
+          if (!afterReply.has(precedingReply)) afterReply.set(precedingReply, []);
+          afterReply.get(precedingReply).push({ key, round, segment, live: false, afterReply: true, replyId: precedingReply });
+        } else trailing.push({ key, round, segment, live: false, anchor });
+      }
     }
   }
-  return { folded, trailing };
+  return { folded, afterReply, trailing };
 }
 
 const STATUS_ICON = { running: 'loader', done: 'check', failed: 'alert', incomplete: 'alert', stopped: 'stop' };
@@ -105,15 +113,17 @@ export function createActivityArea({ document, t = key => key, onToggle }) {
     if (!head || root.classList.contains('conversation-activity-live') !== live) { build(live); structure = null; }
     const { segment, round } = entry;
     const expanded = live || open;
+    root.classList.toggle('conversation-activity-after-reply', entry.afterReply === true);
     if (expanded) root.dataset.open = ''; else delete root.dataset.open;
     root.dataset.activityKey = entry.key;
     const elapsed = (segment.end ?? now) - segment.start;
     const count = stepCount(segment);
     // A part that lost its oldest steps to the per-round limit counts as "N+" and says so at the top of its list.
-    const steps = t(count === 1 && !segment.truncated ? 'chat.activity.oneStep' : 'chat.activity.steps')
-      .replace('{count}', segment.truncated ? `${count}+` : String(count));
-    headText.textContent = t(live ? 'chat.activity.working' : 'chat.activity.worked')
-      .replace('{time}', formatDuration(elapsed, t)).replace('{steps}', steps);
+    const countText = segment.truncated ? `${count}+` : String(count);
+    const steps = t(count === 1 && !segment.truncated ? 'chat.activity.oneStep' : 'chat.activity.steps').replace('{count}', countText);
+    headText.textContent = entry.afterReply
+      ? t('chat.activity.afterReply').replace('{duration}', formatDuration(elapsed, t)).replace('{steps}', countText)
+      : t(live ? 'chat.activity.working' : 'chat.activity.worked').replace('{time}', formatDuration(elapsed, t)).replace('{steps}', steps);
     if (!live) {
       head.setAttribute('aria-expanded', String(expanded));
       head.setAttribute('aria-label', `${headText.textContent} · ${t(expanded ? 'chat.activity.hide' : 'chat.activity.show')}`);

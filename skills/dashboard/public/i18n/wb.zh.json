@@ -965,5 +965,6 @@
   "wb.settings.timezone.restartFailed": "部分服务重启失败：{services}，可以重试。",
   "wb.settings.timezone.confirmationRequired": "重启确认信息不完整，请重新读取服务清单并确认。",
   "wb.settings.timezone.restartError": "服务未能重启，已保存的时区会保留，请检查服务清单后重试。",
-  "wb.settings.timezone.restarted": "服务已重启，已保存的时区现已生效。"
+  "wb.settings.timezone.restarted": "服务已重启，已保存的时区现已生效。",
+  "chat.activity.afterReply": "回复后又处理 {duration} · {steps} 步"
 }

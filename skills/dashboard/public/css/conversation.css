@@ -1120,6 +1120,8 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-activity[data-open] { width:520px; }
 .conversation-activity-head { display:inline-flex; align-self:flex-start; align-items:center; gap:5px; max-width:100%; min-height:24px; margin:0; padding:2px 8px 2px 6px; border:1px solid transparent; border-radius:7px; background:none; font:inherit; font-size:12px; color:var(--text-muted); text-align:left; }
 .conversation-activity-head>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conversation-activity-after-reply .conversation-activity-head { padding-left:0; font-size:11.5px; }
+.conversation-activity-after-reply .conversation-activity-head>span { overflow:visible; text-overflow:clip; white-space:normal; overflow-wrap:anywhere; }
 button.conversation-activity-head { cursor:pointer; }
 button.conversation-activity-head:hover { background:var(--wb-hover, var(--wb-line)); color:var(--text-dim); }
 button.conversation-activity-head:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
@@ -1141,6 +1143,7 @@ button.conversation-activity-head:focus-visible { outline:2px solid var(--accent
    margins, so the line, its text size and the layout around it stay as they are. */
 @media(max-width:760px) {
   button.conversation-activity-head { position:relative; z-index:1; min-height:40px; padding-top:10px; padding-bottom:10px; margin-top:-8px; margin-bottom:-8px; }
+  .conversation-activity-after-reply button.conversation-activity-head { margin-top:0; margin-bottom:0; }
 }
 .conversation-activity-thinking { grid-column:1/-1; display:flex; align-items:center; gap:6px; min-height:24px; font-size:11.5px; color:var(--text-muted); }
 .conversation-activity-dots { display:inline-flex; gap:3px; }
