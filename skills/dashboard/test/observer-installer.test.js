@@ -582,6 +582,30 @@ for (const stage of ['direct', 'metadata', 'asset']) for (const redirects of [5,
   });
 }
 
+for (const stage of ['direct', 'metadata', 'asset']) test(`${stage} slow redirect chain resets inactivity before every request`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const fixture = makeArtifactFixture(t);
+  const metadata = Buffer.from(JSON.stringify({ assets: [{ name: 'zellij.tar.gz', url: assetApi }] }));
+  let requests = 0, cancelled = 0, total = 0;
+  const installer = installerFor(t, fixture, { logger: { info() {}, warn() {} }, fetchImpl: async (url, { signal }) => {
+    assert.ok(++total <= 8, 'request count remains bounded');
+    if (stage !== 'direct' && url === fixture.artifact.url) return new Response('', { status: 504 });
+    if (stage === 'asset' && url === releaseApi) return new Response(metadata);
+    if (stage === 'metadata' && url === assetApi) return new Response(fixture.archive);
+    t.mock.timers.tick(45_000);
+    signal.throwIfAborted();
+    if (++requests <= 5) return new Response(new ReadableStream({ cancel() { cancelled++; } }), {
+      status: 302, headers: { location: `https://api.github.com/slow-${requests}` },
+    });
+    return new Response(stage === 'metadata' ? metadata : fixture.archive);
+  } });
+  assert.equal((await installer.install()).state, 'installed');
+  assert.equal(requests, 6);
+  assert.equal(cancelled, 5);
+  assert.equal(total, stage === 'direct' ? 6 : 8);
+  assert.equal(fs.readdirSync(installer.paths.staging).length, 0);
+});
+
 for (const stream of [false, true]) test(`network ${stream ? 'stream' : 'request'} diagnostics retain bounded codes for both routes`, async t => {
   const { fixture, installer, logs } = fallbackFixture(t, () => new Response('', { status: 504 }));
   const originalFetch = installer.fetchImpl;

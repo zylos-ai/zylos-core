@@ -2,7 +2,6 @@ import { validObserverBinding } from './observer-target.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { ObserverContainmentError } from './observer-containment-error.js';
@@ -12,7 +11,7 @@ export const runCommand = promisify(execFile);
 export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 function socketPathsFit(socketRoot, nonce) {
-  return ['tmux', `observer-${nonce.slice(0, 16)}`]
+  return ['tmux', path.join('contract_version_1', `observer-${nonce.slice(0, 16)}`)]
     .every((name) => Buffer.byteLength(path.join(socketRoot, name)) < 104);
 }
 function dataSocketRoot(dataDir, nonce) {
@@ -23,9 +22,9 @@ export async function observerSocketRoot(dataDir, nonce) {
   await privateParents(path.dirname(local));
   if (await exists(path.dirname(local))) await privatePath(path.dirname(local));
   if (socketPathsFit(local, nonce)) return local;
-  const temporary = path.join(await fs.realpath(os.tmpdir()), `zobs-${process.getuid()}`, `zobs2-${nonce.slice(0, 16)}`);
+  const temporary = path.join(await fs.realpath('/tmp'), `zobs-${process.getuid()}`, `zobs2-${nonce.slice(0, 16)}`);
   if (socketPathsFit(temporary, nonce)) return temporary;
-  throw failure('observer_socket_path_too_long', 'Observer socket path too long; use a shorter data directory or TMPDIR');
+  throw failure('observer_socket_path_too_long', 'Observer socket path too long; use a shorter data directory');
 }
 
 async function validSocketRoot(state) {
@@ -33,15 +32,16 @@ async function validSocketRoot(state) {
   const local = dataSocketRoot(dataDir, state.nonce);
   if (state.socketRoot === local && socketPathsFit(local, state.nonce)) {
     await privateParents(path.dirname(local));
-    await privatePath(path.dirname(local));
+    if (await exists(path.dirname(local))) await privatePath(path.dirname(local));
     return true;
   }
   const leaf = `zobs2-${state.nonce.slice(0, 16)}`;
   if (typeof state.socketRoot !== 'string' || path.basename(state.socketRoot) !== leaf) return false;
   if (path.basename(path.dirname(state.socketRoot)) === `zobs-${process.getuid()}`) {
-    if (state.socketRoot !== await observerSocketRoot(dataDir, state.nonce)) return false;
+    const temporary = path.join(await fs.realpath('/tmp'), `zobs-${process.getuid()}`, leaf);
+    if (state.socketRoot !== temporary || !socketPathsFit(temporary, state.nonce)) return false;
     await privateParents(path.dirname(state.socketRoot));
-    await privatePath(path.dirname(state.socketRoot));
+    if (await exists(path.dirname(state.socketRoot))) await privatePath(path.dirname(state.socketRoot));
     return true;
   }
   // Upgrade-only compatibility for schema 2 from before data-scoped sockets.

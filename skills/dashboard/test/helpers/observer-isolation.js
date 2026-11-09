@@ -13,8 +13,8 @@ export function assertObserverTestIsolation() {
     assert.ok(process.env[key]?.startsWith(root + path.sep), `${key} is private`);
   }
   const tmp = fs.realpathSync(process.env.TMPDIR);
-  assert.ok(Buffer.byteLength(path.join(tmp, `zobs-${process.getuid()}`, 'zobs2-0123456789abcdef', 'observer-0123456789abcdef')) < 104,
-    'runner TMPDIR permits a complete private session socket');
+  assert.ok(Buffer.byteLength(path.join(tmp, 'test.sock')) < 104,
+    'runner TMPDIR permits private test sockets');
   console.log('Observer test isolation:', JSON.stringify({ HOME: home, ZYLOS_DIR: process.env.ZYLOS_DIR,
     PM2_HOME: process.env.PM2_HOME, TMPDIR: tmp, nativeCommands: 'no native tmux/Zellij; fixture functions and local tar/shell only',
     network: 'injected fetch; no external network', database: 'none' }));
