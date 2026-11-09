@@ -110,6 +110,116 @@ test('a live message stream still refreshes running activity every two seconds a
   assert.equal(activityReads, readyReads + 2, 'finished activity is no longer sampled');
 });
 
+function followUpActivity(now, running = true) {
+  return { now, items: [{ id: 1, state: 'round', round: '1' }], rounds: [{
+    key: '1', messageIds: [1], state: running ? 'running' : 'done', start: 0, end: running ? null : now,
+    segments: [{ replyId: 2, start: 0, end: 500, steps: [] },
+      { replyId: null, start: 500, end: running ? null : now,
+        steps: [{ kind: 'tool', label: { key: 'runCommand' }, status: running ? 'running' : 'done', start: 600, end: running ? null : now }] }]
+  }] };
+}
+function followUpMessages(url) {
+  return { items: url.searchParams.get('direction') === 'before' ? [
+    { id: 1, direction: 'in', content: 'hello', status: 'delivered' },
+    { id: 2, direction: 'out', content: 'reply already sent', status: 'delivered' }
+  ] : [], afterCursor: 'cursor', nextCursor: null };
+}
+
+test('a delayed first activity read shortens the live fallback and settles follow-up work on the next two-second poll', async t => {
+  let resolveFirst, running = true, activityReads = 0;
+  const f = fixture(t, (url, _options, now) => {
+    if (url.pathname.endsWith('/messages')) return followUpMessages(url);
+    if (!url.pathname.endsWith('/activity')) return;
+    activityReads++;
+    return activityReads === 1 ? new Promise(resolve => { resolveFirst = resolve; }) : followUpActivity(now, running);
+  });
+  await f.open();
+  assert.equal(activityReads, 1);
+  await f.event('chat_ready');
+  assert.equal(activityReads, 1, 'ready catchup does not duplicate the outstanding initial activity request');
+  assert.equal(f.state.snapshot().streamState, 'live');
+  await f.timer.advance(1000);
+  const messages = f.reads().length;
+  resolveFirst(followUpActivity(f.timer.now())); await flush();
+  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'running');
+  await f.timer.advance(1999); assert.equal(f.reads().length, messages);
+  running = false;
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, messages + 1, 'the first slow live fallback is replaced by a two-second wait');
+  assert.equal(activityReads, 2);
+  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'done', 'completion is read without a click or push hint');
+});
+
+test('a delayed activity result keeps an already sooner poll deadline', async t => {
+  let resolveFirst, activityReads = 0;
+  const f = fixture(t, (url, _options, now) => {
+    if (url.pathname.endsWith('/messages')) return followUpMessages(url);
+    if (!url.pathname.endsWith('/activity')) return;
+    return ++activityReads === 1 ? new Promise(resolve => { resolveFirst = resolve; }) : followUpActivity(now);
+  });
+  await f.open(); await f.event('chat_ready');
+  f.state.streamStatus('disconnected');
+  await f.timer.advance(3500);
+  const messages = f.reads().length;
+  resolveFirst(followUpActivity(f.timer.now())); await flush();
+  await f.timer.advance(1499); assert.equal(f.reads().length, messages);
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, messages + 1, 'the remaining 1.5-second wait is not reset to two seconds');
+});
+
+test('an old selection activity result cannot shorten the newly selected conversation fallback', async t => {
+  let resolveFirst;
+  const f = fixture(t, (url, _options, now) => {
+    if (url.pathname.endsWith('/messages')) return followUpMessages(url);
+    if (url.pathname === '/api/chat/conversations/g%3ABB') return { conversation: { id: 'g:BB', state: 'active' }, conversationId: 'g:BB', stored: true };
+    if (!url.pathname.endsWith('/activity')) return;
+    if (url.pathname.includes('g%3AAA')) return new Promise(resolve => { resolveFirst = resolve; });
+    return { now, items: [{ id: 1, state: 'none' }], rounds: [] };
+  });
+  await f.open(); await f.event('chat_ready');
+  await f.state.select('g:BB'); await f.event('chat_ready');
+  const messages = f.reads().length;
+  await f.timer.advance(1000);
+  resolveFirst(followUpActivity(f.timer.now())); await flush();
+  await f.timer.advance(2000);
+  assert.equal(f.reads().length, messages);
+  assert.equal(f.state.snapshot().selectedId, 'g:BB');
+  assert.equal(f.state.snapshot().activity.rounds.size, 0);
+});
+
+test('a first activity result arriving while hidden does not restart polling', async t => {
+  let resolveFirst;
+  const f = fixture(t, url => {
+    if (url.pathname.endsWith('/messages')) return followUpMessages(url);
+    if (url.pathname.endsWith('/activity')) return new Promise(resolve => { resolveFirst = resolve; });
+  });
+  await f.open(); await f.event('chat_ready'); await f.visible(false);
+  const messages = f.reads().length;
+  resolveFirst(followUpActivity(f.timer.now())); await flush();
+  assert.equal(f.timer.count(), 0);
+  await f.timer.advance(60000);
+  assert.equal(f.reads().length, messages);
+});
+
+test('a delayed first activity result preserves an active message-read retry deadline', async t => {
+  let resolveFirst, failMessages = false;
+  const f = fixture(t, url => {
+    if (url.pathname.endsWith('/messages')) {
+      if (failMessages) throw { code: 'temporary_read_failure' };
+      return followUpMessages(url);
+    }
+    if (url.pathname.endsWith('/activity')) return new Promise(resolve => { resolveFirst = resolve; });
+  });
+  await f.open(); failMessages = true; await f.event('chat_ready');
+  assert.equal(f.state.snapshot().updateError, 'temporary_read_failure');
+  await f.timer.advance(1000);
+  const messages = f.reads().length;
+  resolveFirst(followUpActivity(f.timer.now())); await flush();
+  await f.timer.advance(3999); assert.equal(f.reads().length, messages);
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, messages + 1, 'activity cannot bypass the existing five-second error backoff');
+});
+
 test('old streams without ready retain five second polling after the bounded capability wait', async t => {
   const f = fixture(t); await f.open();
   f.state.streamStatus('connecting');

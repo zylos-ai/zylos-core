@@ -27,6 +27,7 @@ export function createConversationState({
     selectedVersion = 0,
     refreshVersion = 0;
   let timer = null,
+    pollAt = null,
     polling = null,
     updateError = null,
     retryDelay = 5000,
@@ -114,6 +115,7 @@ export function createConversationState({
   const stopTimer = () => {
     if (timer !== null) cancel(timer);
     timer = null;
+    pollAt = null;
   };
   function schedule(wait) {
     stopTimer();
@@ -124,10 +126,13 @@ export function createConversationState({
     const interval = hasHistory && activityLive(current) ? 2000
       : streamState === 'live' ? 30000 : hasHistory ? fastUntil > now() ? 2000 : 5000 : 30000;
     const listWait = Math.max(0, lastListAt + 30000 - now());
+    const waitMs = wait ?? Math.min(interval, listWait);
+    pollAt = now() + waitMs;
     timer = delay(() => {
       timer = null;
+      pollAt = null;
       void poll();
-    }, wait ?? Math.min(interval, listWait));
+    }, waitMs);
     timer?.unref?.();
   }
   const accelerate = () => {
@@ -781,6 +786,11 @@ export function createConversationState({
       for (const round of data.rounds) current.activity.rounds.set(round.key, round);
       for (const item of data.items) current.activity.items.set(item.id, item);
       emit();
+      // The first history read may finish after the live stream already chose its slow fallback.
+      // Only shorten that outstanding wait; keep an earlier poll or an error's retry deadline.
+      if (valid(e) && current === cell() && id === selectedId && currentTab === tab && visible()
+          && activityLive(current) && timer !== null && pollAt > now() + 2000
+          && (!updateError || retryAt <= now())) schedule(2000);
     } catch (err) {
       // Keep the last activity; the next poll asks again, unless this instance has no activity route at all.
       if (err?.status === 404 && valid(e)) current.activity.unsupported = true;
