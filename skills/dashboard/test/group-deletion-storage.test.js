@@ -397,6 +397,44 @@ test('transcript budget expiry preserves raw files and committed batch progress 
   assert.equal(usageCount(), 3);
 });
 
+function twoClaudeMappings(f, group) {
+  const text = sid => JSON.stringify({ type: 'assistant', uuid: `${sid}-usage`, requestId: `${sid}-request`, sessionId: sid,
+    timestamp: new Date().toISOString(), message: { id: `${sid}-response`, role: 'assistant', model: 'claude-sonnet-4',
+      usage: { input_tokens: 100, output_tokens: 20 }, content: [{ type: 'text', text: 'private answer' }] } }) + '\n';
+  // Mappings import in transcript path order: the first session is imported first.
+  const files = ['budget-first', 'budget-second'].map(sid => { const content = text(sid); return { text: content, file: f.transcript(group, sid, 'claude', content) }; });
+  const usageCount = () => f.store.db.prepare("SELECT COUNT(*) n FROM metric_points WHERE session_group=? AND metric_name='usage_event'").get(group).n;
+  return { files, usageCount };
+}
+
+test('an import whose budget expired before it started reads no transcript and removes nothing', t => {
+  const f = fixture(t), group = 'dashboard:budget-expired-before-import';
+  const { files, usageCount } = twoClaudeMappings(f, group);
+  assert.throws(() => f.participant.finalizeTranscripts({ sessionGroup: group, processExited: true, deadlineAt: 20000, now: () => 20000 }),
+    { code: 'group_delete_usage_pending' });
+  assert.equal(usageCount(), 0);
+  for (const { file, text } of files) {
+    assert.equal(f.store.getUsageTranscript(file).status, 'active');
+    assert.equal(f.store.getUsageTranscript(file).byte_offset, 0);
+    assert.equal(fs.readFileSync(file, 'utf8'), text);
+  }
+});
+
+test('an import whose budget expires after one transcript finishes leaves the next transcript for retry', t => {
+  const f = fixture(t), group = 'dashboard:budget-expires-between-imports';
+  const { files: [first, second], usageCount } = twoClaudeMappings(f, group);
+  const now = () => f.store.getUsageTranscript(first.file).status === 'finished' ? 20000 : 0;
+  assert.throws(() => f.participant.finalizeTranscripts({ sessionGroup: group, processExited: true, deadlineAt: 20000, now }),
+    { code: 'group_delete_usage_pending' });
+  assert.equal(f.store.getUsageTranscript(first.file).status, 'finished');
+  assert.equal(f.store.getUsageTranscript(first.file).byte_offset, Buffer.byteLength(first.text));
+  assert.equal(f.store.getUsageTranscript(second.file).status, 'active');
+  for (const { file, text } of [first, second]) assert.equal(fs.readFileSync(file, 'utf8'), text);
+  f.participant.finalizeTranscripts({ sessionGroup: group, processExited: true, deadlineAt: 20000, now: () => 0 });
+  assert.equal(f.store.getUsageTranscript(second.file).status, 'finished');
+  assert.equal(usageCount(), 2);
+});
+
 test('question and answer child records are removed together while pending inputs and other groups remain', t => {
   const f = fixture(t), group = 'dashboard:questions';
   const old = f.message(group), pending = f.message(group, 'pending'), other = f.message('dashboard:other', 'pending');
