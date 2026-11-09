@@ -138,6 +138,23 @@ test('runtime cleanup preserves sid-only directories used by a different group m
   assert.deepEqual(f.store.getUsageTranscript(other), otherMapping);
 });
 
+test('runtime cleanup preserves sid-only directories referenced by a mapping with unknown group ownership', t => {
+  const f = fixture(t), group = 'telegram:shared-unknown', sid = 'shared-unknown-session';
+  const own = f.transcript(group, sid, 'claude', '{}\n');
+  const unknown = f.transcript(null, sid, 'codex', 'unattributed rollout bytes\n');
+  f.participant.finalizeTranscripts({ sessionGroup: group, processExited: true });
+  const sharedEnv = f.write(path.join(f.home, '.claude/session-env', sid, 'state'), 'unknown owner environment bytes');
+  const sharedSpill = f.write(path.join(f.tmpdir, 'zylos-shard-spill-123', sid, 'context'), 'unknown owner spill bytes');
+  const mapping = f.store.getUsageTranscript(unknown);
+  assert.equal(mapping.session_group, null);
+  f.participant.cleanup({ sessionGroup: group });
+  assert.equal(fs.existsSync(own), false);
+  assert.equal(fs.readFileSync(unknown, 'utf8'), 'unattributed rollout bytes\n');
+  assert.equal(fs.readFileSync(sharedEnv, 'utf8'), 'unknown owner environment bytes');
+  assert.equal(fs.readFileSync(sharedSpill, 'utf8'), 'unknown owner spill bytes');
+  assert.deepEqual(f.store.getUsageTranscript(unknown), mapping);
+});
+
 test('a confirmed cutoff preserves later messages and ambiguous group data while removing only proven old links', async t => {
   const f = fixture(t), group = 'dashboard:cutoff-storage'; f.register('cutoff-storage');
   const old = [f.message(group), f.message(group), f.message(group)];

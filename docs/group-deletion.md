@@ -18,11 +18,18 @@ Preview returns an `operationId`, `cutoffId`, `generationId` and `targetKey`.
 Core reads the group's maximum message ID and last completed deletion identity
 in one snapshot. `generationId: null` means the first generation, not any
 generation. `targetKey` binds the exact group, or draft namespace and local ID.
+The message count includes pending/running messages through the cutoff because
+those messages may complete before confirmation. Messages still pending/running
+at final cleanup remain, so the actual deletion count can be lower.
 Preview creates no audit or lock. A preview of an active deletion instead
 returns that operation's stored boundary.
 
-Confirmation must carry the same fields. Core checks the generation again in
-its admission writer transaction and stores the boundary in the existing audit.
+Deletion is an administrator-only interface, including the local CLI. Confirmation
+must carry the same fields. Both the coordinator before admission and the Core
+writer reject a cutoff above the group's current maximum message ID. Preview is
+stateless: a caller-supplied in-range cutoff cannot be distinguished from a real
+preview value. This boundary is not a substitute for administrator authorization.
+Core checks the generation again in its admission writer transaction and stores the boundary in the existing audit.
 Only terminal messages with `id <= cutoffId` are eligible. Message IDs use the
 existing AUTOINCREMENT allocator. If another deletion has completed since the
 preview, a different preview operation is stale, even if new messages have

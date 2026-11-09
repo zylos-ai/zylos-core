@@ -92,9 +92,9 @@ export function createGroupDeletion({
     }
   }
 
-  function messages(group, includeRunning = false, cutoffId = Number.MAX_SAFE_INTEGER) {
+  function messages(group, cutoffId = Number.MAX_SAFE_INTEGER) {
     return database.prepare(`SELECT id,direction,status,channel,endpoint_id,session_id FROM conversations
-      WHERE session_group=? AND id<=? AND (direction='out' OR direction='in' AND status NOT IN (${includeRunning ? "'pending'" : "'pending','running'"})) ORDER BY id`).all(group, cutoffId);
+      WHERE session_group=? AND id<=? ORDER BY id`).all(group, cutoffId);
   }
 
   function paths(group, rows, keepGroupSources = false) {
@@ -123,7 +123,7 @@ export function createGroupDeletion({
     const group = resolved.sessionGroup;
     const kept = group ? retained(group, boundary.cutoffId) : [];
     const extra = await participant.preview({ ...resolved, ...boundary, targetKey, hasRetainedMessages: kept.length > 0 });
-    const rows = group ? messages(group, true, boundary.cutoffId) : [];
+    const rows = group ? messages(group, boundary.cutoffId) : [];
     const files = (extra.files ?? 0) + (group ? paths(group, rows, kept.length > 0).reduce((n, [base, file]) => n + countFiles(base, file), 0) : 0);
     return { ok: true, ...resolved, ...boundary, targetKey, draft: !!resolved.draft, messages: rows.length, attachments: extra.attachments ?? 0,
       files, operationId: boundary.operationId ?? uuid() };
@@ -179,6 +179,8 @@ export function createGroupDeletion({
     const current = store.getDeletionPreviewBoundary(targetKey);
     if (!known && current.generationId !== generationId) throw error('DELETION_PREVIEW_STALE', 'The conversation changed; preview deletion again');
     const group = resolved.sessionGroup;
+    const maxId = group ? database.prepare('SELECT COALESCE(MAX(id),0) AS id FROM conversations WHERE session_group=?').get(group).id : 0;
+    if (cutoffId > maxId) throw error('DELETION_PREVIEW_STALE', 'The confirmed cutoff exceeds the conversation; preview deletion again');
     const keptBefore = group ? retained(group, cutoffId) : [];
     const extra = await participant.preview({ ...resolved, cutoffId, targetKey, hasRetainedMessages: keptBefore.length > 0 });
     if (!group) {
@@ -187,7 +189,7 @@ export function createGroupDeletion({
       if (audit.status === 'done') return { ok: true, pending: false, operationId: audit.operationId, counts: audit.counts, countsEstimated: audit.countsEstimated };
       const result = withCleanupAttempt(audit.operationId, onFilePhase => store.finalizeDraftDeletion(resolved.localId, { operationId: audit.operationId,
         cleanup: () => {
-          const removed = participant.cleanup({ ...resolved, cutoffId, hasRetainedMessages: false, retainedMessageIds: [], pendingMessageIds: [], onFilePhase });
+          const removed = participant.cleanup({ ...resolved, cutoffId, hasRetainedMessages: false, onFilePhase });
           onStage('files_removed', audit);
           return removed;
         } }));
@@ -197,7 +199,7 @@ export function createGroupDeletion({
     const existing = store.getActiveDeletion(group);
     if (existing && operationId !== existing.operationId) throw error('DELETION_OWNERSHIP_MISMATCH', 'Another deletion owns this conversation');
     const requestId = operationId ?? uuid();
-    const initialRows = messages(group, true, cutoffId);
+    const initialRows = messages(group, cutoffId);
     const initial = { messages: initialRows.length, attachments: extra.attachments ?? 0,
       files: (extra.files ?? 0) + paths(group, initialRows, keptBefore.length > 0).reduce((n, [base, file]) => n + countFiles(base, file), 0) };
     const admissionNow = now();
@@ -235,14 +237,12 @@ export function createGroupDeletion({
       cleanup: () => {
         // The Core writer lock also fences receives while Dashboard resolves
         // pending attachment links. Dashboard's writer serializes old imports.
-        const pendingMessageIds = database.prepare("SELECT id FROM conversations WHERE session_group=? AND direction='in' AND status='pending'").all(group).map(row => row.id);
         const toDelete = store.listDeletionMessages(group, { operationId: active.operationId });
-        const retainedMessageIds = retained(group, active.cutoffId);
-        const hasRetainedMessages = retainedMessageIds.length > 0;
+        const hasRetainedMessages = retained(group, active.cutoffId).length > 0;
         const groupSources = paths(group, toDelete, hasRetainedMessages);
         for (const [base, file] of groupSources) countFiles(base, file);
         let removed = 0;
-        const outcome = participant.cleanup({ ...resolved, cutoffId: active.cutoffId, hasRetainedMessages, retainedMessageIds, pendingMessageIds, onFilePhase,
+        const outcome = participant.cleanup({ ...resolved, cutoffId: active.cutoffId, hasRetainedMessages, onFilePhase,
           removeGroupSources: () => {
             for (const [base, file] of groupSources) removed += removeTree(base, file);
             onStage('files_removed', active);

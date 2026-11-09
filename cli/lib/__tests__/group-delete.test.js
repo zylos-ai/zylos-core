@@ -418,3 +418,38 @@ test('a draft route cannot acknowledge an unrelated completed group with the sam
   await assert.rejects(f.rawDelete({ draftLocalId: 'shared' }, { operationId: preview.operationId, confirmed: true, actor: 'owner' }), { code: 'DELETION_OWNERSHIP_MISMATCH' });
   assert.equal(f.cleanups(), 1);
 });
+
+test('a cutoff above the current group maximum rejects before admission without changing data', async t => {
+  let admissions = 0;
+  const f = fixture(t, { service: { requestStop: async () => { admissions++; throw new Error('unexpected admission'); } } });
+  const group = 'telegram:one';
+  f.insert(1, group, 'in', 'delivered');
+  const preview = await f.service.preview(group);
+  f.insert(2, group, 'out', 'delivered');
+  f.insert(10, 'telegram:other', 'out', 'delivered');
+  const directory = path.join(f.instance, 'memory/session-groups', group);
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, 'state.md');
+  fs.writeFileSync(file, 'unchanged group state');
+  const before = f.db.serialize();
+  for (const cutoffId of [3, Number.MAX_SAFE_INTEGER]) {
+    await assert.rejects(f.rawDelete(group, { ...preview, cutoffId, confirmed: true, actor: 'owner' }), { code: 'DELETION_PREVIEW_STALE' });
+    assert.equal(f.db.serialize().equals(before), true);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'unchanged group state');
+  }
+  assert.equal(admissions, 0);
+  assert.equal(f.cleanups(), 0);
+});
+
+test('preview counts pending messages through its cutoff that finish before confirmation', async t => {
+  const f = fixture(t), group = 'telegram:one';
+  f.insert(1, group, 'out', 'delivered');
+  f.insert(2, group, 'in', 'pending');
+  const preview = await f.service.preview(group);
+  assert.equal(preview.cutoffId, 2);
+  assert.equal(preview.messages, 2);
+  f.db.prepare("UPDATE conversations SET status='delivered' WHERE id=2").run();
+  const result = await f.rawDelete(group, { ...preview, confirmed: true, actor: 'owner' });
+  assert.equal(result.counts.messages, 2);
+  assert.equal(f.store.getGroupDeletionAudit(preview.operationId).preview.messages, 2);
+});

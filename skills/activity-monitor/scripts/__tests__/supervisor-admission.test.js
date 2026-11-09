@@ -41,6 +41,30 @@ test('restart empty writes only completion and steady single refuses', async t =
   f.state.transition = {phase:'gating'}; f.state.runs = [{runId:'legacy'}];
   assert.equal((await f.admission.handle(restart('during-transition'))).result, 'accepted');
 });
+
+test('active deletion admission rejects every changed ownership field before altering restart intent', async t => {
+  const f = fixture(t), sessionGroup = 'telegram:a';
+  await f.admission.handle(restart('queued-upgrade'));
+  const bytes = fs.readFileSync(f.file);
+  const active = { operationId: 'owned-delete', cutoffId: 4, generationId: null,
+    targetKey: JSON.stringify(['group', sessionGroup]), runId: 'r1', status: 'started' };
+  f.db.getGroupDeletionAudit = () => null;
+  f.db.getActiveDeletion = () => active;
+  f.db.beginGroupDeletion = () => { throw new Error('active deletion must not begin again'); };
+  const request = { version: 1, type: 'delete_group', requestId: 'delete-request', sessionGroup, actor: 'owner',
+    operationId: active.operationId, cutoffId: active.cutoffId, generationId: active.generationId, targetKey: active.targetKey };
+  for (const change of [{ operationId: 'different-delete' }, { cutoffId: 5 }, { generationId: 'different-generation' },
+    { targetKey: JSON.stringify(['group', 'telegram:b']) }]) {
+    const reply = await f.admission.handle({ ...request, ...change });
+    assert.equal(reply.ok, false);
+    assert.equal(reply.result, 'rejected');
+    assert.equal(reply.reason, 'DELETION_OWNERSHIP_MISMATCH');
+    assert.equal(fs.readFileSync(f.file).equals(bytes), true, 'rejection must preserve restart intent byte for byte');
+    assert.deepEqual(f.state.fences, new Map());
+  }
+  assert.equal((await f.admission.handle(request)).result, 'already_accepted');
+  assert.deepEqual(f.store.read()[0].runIds, ['r2', 'starting']);
+});
 test('invalid refuses admission without changing any byte', async t => {
   const f = fixture(t);
   const modeSwitch = new ModeSwitchCoordinator({ db:f.db, readRequests:()=>f.store.read(), readMode:()=>({mode:'single'}), legacyPresent:()=>false });

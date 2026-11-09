@@ -52,9 +52,11 @@ export function deletionFunctions({ read, write, snapshot, get, all, run, second
   }
   const generation = (c, targetKey) => get(c, "SELECT operation_id FROM group_deletion_audit WHERE target_key=? AND status='done' ORDER BY rowid DESC LIMIT 1", targetKey)?.operation_id ?? null;
   function boundary(c, targetKey, cutoffId, generationId) {
-    target(targetKey);
+    const key = target(targetKey);
     if (!count(cutoffId) || !(generationId === null || text(generationId))) throw dataError('INVALID_ARGS', 'A confirmed deletion boundary is required');
     if (generation(c, targetKey) !== generationId) throw dataError('DELETION_PREVIEW_STALE', 'The conversation changed; preview deletion again');
+    const maxId = key[0] === 'group' ? get(c, 'SELECT COALESCE(MAX(id),0) AS id FROM conversations WHERE session_group=?', key[1]).id : 0;
+    if (cutoffId > maxId) throw dataError('DELETION_PREVIEW_STALE', 'The confirmed cutoff exceeds the conversation; preview deletion again');
   }
   function draft(c, localId, targetKey) {
     const key = target(targetKey);

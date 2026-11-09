@@ -367,3 +367,28 @@ test('the final writer enforces a confirmed cutoff and preserves retained group-
   assert.deepEqual(db.prepare('SELECT * FROM conversations WHERE id=?').get(later.id), rowBefore);
   assert.equal(s.getDeletionPreviewBoundary(targetKey).generationId, options.operationId);
 });
+
+test('deletion admission rejects a cutoff beyond the group head without changing the database', t => {
+  const { db, store: s } = fixture(t), group = 'telegram';
+  const old = s.insertConversation('out', group, 'room', 'owned message');
+  s.insertConversation('out', 'other', 'room', 'unrelated later message');
+  const targetKey = JSON.stringify(['group', group]);
+  const snapshot = db.serialize();
+  for (const cutoffId of [old.id + 1, Number.MAX_SAFE_INTEGER]) {
+    assert.throws(() => s.beginGroupDeletion(group, { ...options, targetKey, cutoffId, generationId: null }),
+      { code: 'DELETION_PREVIEW_STALE' });
+    assert.equal(db.serialize().equals(snapshot), true, 'every database byte must remain unchanged');
+    assert.equal(s.getGroupDeletionAudit(options.operationId), null);
+    assert.equal(s.getDrainFence(group), null);
+  }
+});
+
+test('deletion admission rejects a canonical target key belonging to another group', t => {
+  const { db, store: s } = fixture(t), group = 'telegram';
+  const old = s.insertConversation('out', group, 'room', 'owned message');
+  s.insertConversation('out', 'other', 'room', 'unrelated message');
+  const snapshot = db.serialize();
+  assert.throws(() => s.beginGroupDeletion(group, { ...options, targetKey: JSON.stringify(['group', 'other']),
+    cutoffId: old.id, generationId: null }), { code: 'DELETION_OWNERSHIP_MISMATCH' });
+  assert.equal(db.serialize().equals(snapshot), true, 'the wrong target key must not create audit or fence state');
+});
