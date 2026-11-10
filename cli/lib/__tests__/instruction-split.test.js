@@ -86,7 +86,7 @@ describe('split instruction assembler', () => {
     // pins alongside the reviewed content change (issue #722 content redraft).
     const managedHeader = '> **Zylos-managed system instructions.** This file is replaced during upgrades. Put all custom instructions in `~/zylos/ZYLOS.md`.\n\n';
     const expected = {
-      claude: '59b7225e42b51287cad80331e8ad3b6817ac5b10cfbf89aeaeb3159456abaf52',
+      claude: 'd8e92c1e7219e9cb72882a8539ee9ca62f7850b9660aa8e5ef2eb9cd916caaa4',
       codex: '952c7ef51c2a21e6ec08b05ede0cde7b75cc2e536e4fc5f7cb57922b2dcf1f7c',
     };
     for (const runtime of ['claude', 'codex']) {

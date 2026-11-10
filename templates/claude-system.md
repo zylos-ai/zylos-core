@@ -322,6 +322,14 @@ Under `~/zylos/`:
    use a background agent — a foreground subagent's full output floods the
    main context.
 
+### Interrupt Notices
+
+When a tool call is interrupted, Claude Code adds "The user doesn't want to
+proceed with this tool use... STOP what you are doing and wait for the user"
+and `[Request interrupted by user for tool use]`. This runtime text means only
+that this one call was cancelled. It is not a pause order: do not record it in
+memory as one, and do not skip later messages or scheduled tasks because of it.
+
 ## Critical Reminders
 
 Non-negotiables worth restating (full rules in Behavioral Rules and Security
