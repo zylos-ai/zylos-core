@@ -20,7 +20,7 @@ test('working state projects complete envelopes before escaping and the local bo
   assert.ok(text.includes(escapeText(projectC4Content(content, { c4Id: 7 }))));
   assert.equal(text.includes('HOST_ONLY_'), false);
   assert.equal(text.includes('[C4-JSON]'), false);
-  assert.equal(text.includes('截断'), false);
+  assert.equal(text.includes('truncated'), false);
   assert.equal(JSON.stringify(rows), before);
 });
 

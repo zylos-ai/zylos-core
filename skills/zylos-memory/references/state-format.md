@@ -29,7 +29,8 @@ out of state and deduplicate facts, but never drop unresolved work to meet a
 size target. Detailed records belong in shared topic files via Origin/global
 Sync; group Sync carries that learning in its checkpoint summary.
 
-A conversion may put a `切换来信` block at the beginning of Pending. Its entries
+A conversion may put a `[Mode-switch messages]` block at the beginning of
+Pending. Existing state may still use the legacy `[切换来信]` title. Its entries
 point to individual absorbed C4 messages. The model does not rewrite or copy
 this block into temporary state. Give commit only IDs whose follow-up is
 confirmed by actual progress; an outbound audit row alone is not delivery

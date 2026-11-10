@@ -134,6 +134,7 @@ test('absorbed summaries recognize English output and existing Chinese state lin
   assert.ok(current); assert.equal(absorbedTitle.test(current), true);
   assert.equal(absorbedTitle.test(legacy), true);
   for (const title of [current, legacy]) {
+    assert.equal(absorbedTitle.test(title.replace('--absorbed-reply run-1', '--absorbed-reply other')), false);
     assert.equal(absorbedTitle.test(title.replace('--run-id run-1', '--run-id other')), false);
     assert.equal(absorbedTitle.test(title + ' extra'), false);
   }

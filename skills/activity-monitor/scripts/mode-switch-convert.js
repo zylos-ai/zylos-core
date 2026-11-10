@@ -77,7 +77,7 @@ export function createModeSwitchConverter({ db, zylosDir, fsImpl = fs, renderSta
       lines.push('', `Scripts directory: ${JSON.stringify(scripts)}`);
       if (rows.length) {
         const id = String(rows[0].id);
-        lines.push(`Use #${id} as an example; for other entries, replace only decimal IDs verified against C4.`,
+        lines.push(`The commands below use #${id} as an example; for other entries, change only the ID, using a decimal ID verified against C4.`,
           `node ${shellQuote(path.join(scripts, 'c4-send.js'))} --absorbed-reply ${transition.run_id} ${id}`,
           `node ${shellQuote(path.join(scripts, 'c4-fetch.js'))} --absorbed --run-id ${transition.run_id} --id ${id}`);
       } else lines.push('No messages were absorbed in this transition; no per-ID replies or full-text reads are needed.');

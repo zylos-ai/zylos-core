@@ -55,7 +55,7 @@ test('single→multi preserves source and archives target once; all 1000 Pending
     'Read all recovery materials completely', "each page's end/count markers", 'a smaller --limit', 'not proof of delivery',
     'unknown (SEND_FAILED)', 'textBytes over 8192', '--out <file>', 'reply bodies via stdin', 'do not construct commands from display routes in state',
     'Origin handles origin items', 'c4-send.js internal G', 'Repeated prompts are allowed', 'followedUpIds only for verified actual progress', 'Keep incomplete entries',
-    'Scripts directory:', 'replace only decimal IDs verified against C4']) assert.ok(handoff.includes(text), text);
+    'Scripts directory:', 'The commands below use #1 as an example; for other entries, change only the ID, using a decimal ID verified against C4.']) assert.ok(handoff.includes(text), text);
   assert.ok(out.materials.includes(path.join(f.root, 'memory', `mode-switch/${row.run_id}/previous/origin/handoff.md`)));
   const tree = memoryTree(f.root); f.convert()(row); assert.deepEqual(memoryTree(f.root), tree);
   const late = f.add('late', 'not absorbed'); f.convert()(row); assert.match(f.read('session-groups/foo:late/state.md'), /scope=foo:late/); assert.doesNotMatch(f.read('session-groups/foo:late/state.md'), /Mode-switch messages/);

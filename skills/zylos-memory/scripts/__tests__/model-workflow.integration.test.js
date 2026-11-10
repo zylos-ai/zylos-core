@@ -15,7 +15,7 @@ test('integration observer detects exact-line, title and outbound-evidence regre
   const block = extractAbsorbedBlock(f.before.state);
   assert.equal(block.entries.length, 1000);
   assert.ok(block.entries.some(entry => entry.raw.includes('\\u2028')));
-  assert.ok(block.entries.some(entry => entry.raw.includes('截断')));
+  assert.ok(block.entries.some(entry => entry.raw.includes('truncated')));
   const remaining = block.entries.filter(entry => !provenIds.includes(entry.id));
   const shell = renderStateSkeleton({ scope: f.scope, syncedAt: '2026-10-20T09:00:00Z' });
   const good = shell.replace('## Pending\n\n', '## Pending\n\n' + block.title + remaining.map(entry => entry.raw).join(''));
@@ -28,7 +28,7 @@ test('integration observer detects exact-line, title and outbound-evidence regre
     lengthDeletion: mutate(block.title, raw.slice(1)),
     rewrite: mutate(block.title, raw.map((line, i) => i === 0 ? line.replace('Please', 'Kindly') : line)),
     retruncate: mutate(block.title, raw.map((line, i) => i === 2 ? line.slice(0, 70) + '…\n' : line)),
-    recalculateTitle: mutate(block.title.replace('共 1000 条', '共 990 条'), raw),
+    recalculateTitle: mutate(block.title.replace('count=1000', 'count=990'), raw),
     prematureTitleDeletion: mutate('', raw),
     outboundIsCompletion: mutate(block.title, remaining.filter(entry => entry.id !== 11).map(entry => entry.raw)),
     failedSendIsCompletion: mutate(block.title, remaining.filter(entry => entry.id !== 12).map(entry => entry.raw)),
