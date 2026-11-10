@@ -134,8 +134,56 @@ for (const child of [
   const f = fixture();
   assert.throws(() => recoverBeforeUpgrade('/isolated', {maintenance:f.m, spawn() {return child;}}), error => {
     assert.equal(error.recovery_required, true);
-    assert.equal(typeof error.code, 'string');
+    assert.equal(error.code, 'UPGRADE_RECOVERY_REQUIRED');
+    if (child.error) assert.ok(error.message.includes(child.error.message));
     assert.match(error.next, /zylos recovery/);
+    return true;
+  });
+});
+
+test('recovery file validation keeps the upgrade recovery code and its original cause', () => {
+  const f = fixture();
+  f.m.validateRecoveryFiles = () => {
+    throw Object.assign(Error('ENOENT: fixture recovery runner is missing'), {code:'ENOENT'});
+  };
+  assert.throws(() => recoverBeforeUpgrade('/isolated', {maintenance:f.m,
+    spawn() { assert.fail('invalid recovery material started a child'); }}), error => {
+    assert.equal(error.code, 'UPGRADE_RECOVERY_REQUIRED');
+    assert.match(error.message, /ENOENT: fixture recovery runner is missing/);
+    assert.equal(error.recovery_required, true);
+    assert.match(error.next, /zylos recovery status.*zylos recovery resume/);
+    return true;
+  });
+});
+
+// Subprocess result boundary: successful JSON cannot override a failed process,
+// even if durable rediscovery would otherwise be clean. Run for exit/result
+// validation changes; no processes/services or real deployment paths are used.
+for (const child of [
+  {status:1, stdout:'{"recovery_required":false}'},
+  {status:null, signal:'SIGKILL', stdout:'{"recovery_required":false}'},
+]) test(`successful recovery JSON cannot hide subprocess ${child.signal ?? `status ${child.status}`}`, () => {
+  const f = fixture();
+  assert.throws(() => recoverBeforeUpgrade('/isolated', {maintenance:f.m, spawn() {
+    f.finish();
+    return child;
+  }}), error => {
+    assert.equal(error.code, 'UPGRADE_RECOVERY_REQUIRED');
+    assert.equal(error.recovery_required, true);
+    assert.ok(error.message.includes(child.signal ? `signal ${child.signal}` : `status ${child.status}`));
+    assert.match(error.next, /zylos recovery status.*zylos recovery resume/);
+    return true;
+  });
+});
+
+test('discovery errors retain their original code with recovery guidance', () => {
+  const f = fixture();
+  f.m.discover = () => { throw Object.assign(Error('EACCES: fixture discovery denied'), {code:'EACCES'}); };
+  assert.throws(() => recoverBeforeUpgrade('/isolated', {maintenance:f.m}), error => {
+    assert.equal(error.code, 'EACCES');
+    assert.equal(error.message, 'EACCES: fixture discovery denied');
+    assert.equal(error.recovery_required, true);
+    assert.match(error.next, /zylos recovery status.*zylos recovery resume/);
     return true;
   });
 });

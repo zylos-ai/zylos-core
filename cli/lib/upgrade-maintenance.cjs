@@ -1171,10 +1171,11 @@ function recoverBeforeUpgrade(root, deps = {}) {
     const {dir,journal} = found.candidates[0];
     const controller = path.join(dir,'controller.json');
     if (fs.existsSync(controller) && m.alive(m.read(controller))) reject('An upgrade controller is still running.');
-    m.validateRecoveryFiles(dir,journal);
+    try {m.validateRecoveryFiles(dir,journal);}
+    catch (error) {reject(error.message);}
     const child = (deps.spawn ?? cp.spawnSync)(process.execPath,[path.join(dir,'runner.cjs'),'resume','--transaction-dir',dir],
       {encoding:'utf8',env:{...process.env},maxBuffer:4*1024*1024});
-    if (child.error) throw child.error;
+    if (child.error) reject(child.error.message);
     const exit = child.signal ? 'signal '+child.signal : 'status '+child.status;
     let result;
     try {result=JSON.parse(child.stdout);}
@@ -1187,7 +1188,7 @@ function recoverBeforeUpgrade(root, deps = {}) {
     if (child.status !== 0 || result.recovery_required) reject(reasons || 'Transaction recovery did not complete ('+exit+').',
       typeof result.code==='string' && result.code ? result.code : 'UPGRADE_RECOVERY_REQUIRED');
     const after = m.discover(root);
-    if (result.complete === false || after.candidates.length || after.diagnostics.length || after.marker) {
+    if (after.candidates.length || after.diagnostics.length || after.marker) {
       reject([reasons,...after.diagnostics,'Transaction recovery still requires attention.'].filter(Boolean).join('; '),
         typeof result.code==='string' && result.code ? result.code : 'UPGRADE_RECOVERY_REQUIRED');
     }

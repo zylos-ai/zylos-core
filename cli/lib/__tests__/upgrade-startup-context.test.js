@@ -177,11 +177,14 @@ test('completed historical transactions with retained recovery files leave ordin
 test('startup observes a live published controller without executing its recovery runner', {skip:process.platform!=='linux'}, t => {
  t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
  t.mock.method(maintenance,'alive',()=>true);
- const f=publishedTransaction(t);
- maintenance.durable(path.join(f.dir,'controller.json'),maintenance.identity());
+ const f=publishedTransaction(t,{controller:true});
  const context=discoverUpgradeContext(f.root);
  assert.equal(context.controllerAlive,true);
  assert.equal(context.observing,true);
+ assert.equal(context.recovery_required,false);
+ for(const key of ['code','error','next'])assert.equal(Object.hasOwn(context,key),false,key);
+ assert.doesNotMatch(context.prompt,/"recovery_required"\s*:\s*true/);
+ assert.match(context.prompt,/Observe only/);
  assert.equal(fs.existsSync(f.executed),false);
 });
 

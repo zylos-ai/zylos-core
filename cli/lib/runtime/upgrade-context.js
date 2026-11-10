@@ -45,14 +45,16 @@ function hasRecoveryMaterials(root) {
     try { return fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   };
-  for (const relative of ['.zylos', '.zylos/upgrade']) {
-    const file = path.join(root, relative), stat = present(file);
-    if (!stat) continue;
-    if (stat.isSymbolicLink()) {
-      if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
-    } else if (!stat.isDirectory()) return true;
-  }
-  return !!present(path.join(root, '.zylos/upgrade/active.json'));
+  try {
+    for (const relative of ['.zylos', '.zylos/upgrade']) {
+      const file = path.join(root, relative), stat = present(file);
+      if (!stat) continue;
+      if (stat.isSymbolicLink()) {
+        if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
+      } else if (!stat.isDirectory()) return true;
+    }
+    return !!present(path.join(root, '.zylos/upgrade/active.json'));
+  } catch { return true; }
 }
 
 export function upgradeDiscoveryFailure({closed = false, error} = {}) {
@@ -79,7 +81,8 @@ export function discoverUpgradeContext(root, {recover = true} = {}) {
       if (!recover) return {active:true, ...found};
       const controller = path.join(found.candidates[0].dir, 'controller.json');
       if (maintenance.canRecognizeProcesses() && fs.existsSync(controller) && maintenance.alive(maintenance.read(controller))) {
-        return {...upgradeDiscoveryFailure(), blocked:found.blocked, controllerAlive:true, observing:true, recovery_required:false};
+        return {active:true, blocked:found.blocked, controllerAlive:true, observing:true, recovery_required:false,
+          prompt:'SYSTEM RECOVERY TASK: The upgrade controller is running. Observe only; do not start recovery concurrently.'};
       }
       // A transaction can be published before its stable bootstrap or active
       // marker. Its verified recovery closure owns interrupted installation.

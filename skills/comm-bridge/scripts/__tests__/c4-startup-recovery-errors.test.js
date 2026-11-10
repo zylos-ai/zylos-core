@@ -73,6 +73,29 @@ test('startup hook renders failure fields returned beside an older generic promp
   });
 });
 
+// Boundary: actual deployed bootstrap/maintenance plus the real hook must render
+// one diagnostic object. Run for bootstrap/hook formatting changes; skip routing.
+// This fixture has only file-only recovery modules, isolated HOME/ZYLOS_DIR/
+// PM2_HOME/short TMPDIR and a private tmux path; no DB, services or runner starts.
+test('startup hook does not duplicate diagnostics already rendered by the deployed bootstrap', t => {
+  const f = fixture(t, 'throw Error("bootstrap fixture must be replaced");\n');
+  for (const [source, target] of [['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['upgrade-maintenance.cjs', 'maintenance.cjs']]) {
+    fs.copyFileSync(new URL('../../../../cli/lib/' + source, import.meta.url), path.join(f.stable, target));
+    fs.chmodSync(path.join(f.stable, target), 0o600);
+  }
+  fs.writeFileSync(path.join(f.stable, 'active.json'), '{invalid', {mode:0o600});
+  const output = runHook(f);
+  for (const key of ['code', 'error', 'next']) {
+    assert.equal((output.match(new RegExp('"' + key + '"\\s*:', 'g')) || []).length, 1, key);
+  }
+  const line = output.split('\n').find(value => value.startsWith('{"recovery_required":true,'));
+  assert.ok(line, 'the bootstrap diagnostic remains visible');
+  const diagnostic = JSON.parse(line);
+  assert.equal(diagnostic.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.ok(diagnostic.error);
+  assert.match(diagnostic.next, /zylos recovery status.*zylos recovery resume/);
+});
+
 // Boundary: real file validation, not just a synthetic error object.
 // Run when the hook's stable-material validation or catch path changes.
 test('startup hook preserves a filesystem discovery failure and supplies a recovery next action', t => {
@@ -122,13 +145,15 @@ test('recovery documentation recommends resume and retains only the fixed read-o
   assert.match(document, /frozen recovery files and hashes/);
 });
 
-// Parent-path discovery must not replace an underlying stat error with a generic
-// validation failure. Run for file-discovery catch changes; no runner is loaded.
+// Parent-path discovery fails closed at validation after a dangling metadata link
+// is classified as possible recovery material. Run for discovery probe/validation
+// changes; no runner is loaded.
 test('startup hook preserves a dangling metadata directory discovery error', t=>{
   const f=fixture(t,'throw Error("bootstrap must not load");');
   fs.rmSync(path.join(f.root,'.zylos'),{recursive:true});
   fs.symlinkSync(path.join(f.root,'absent-metadata'),path.join(f.root,'.zylos'),'dir');
   const out=details(runHook(f));
-  assert.equal(out.code,'ENOENT');assert.match(out.error,/ENOENT/);
+  assert.equal(out.code,'UPGRADE_RECOVERY_REQUIRED');
+  assert.equal(out.error,'untrusted stable upgrade discovery directory');
   assert.match(out.next,/zylos recovery status/);
 });

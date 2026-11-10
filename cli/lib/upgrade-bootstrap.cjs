@@ -114,9 +114,9 @@ if (require.main === module) {
     if (i < 0 || !args[i + 1]) throw Error('--root is required');
     const allowed = new Set(['--status', '--once']);
     if (args.some((arg, index) => index !== i && index !== i + 1 && !allowed.has(arg))) {
-      throw Error('Usage: bootstrap.cjs --root <directory> [--status | --once]; runtime startup uses the existing boot chain');
+      throw Error('Usage: bootstrap.cjs --root <directory> [--status]; use zylos recovery resume to continue; runtime startup uses the existing boot chain');
     }
-    if (args.includes('--status') && args.includes('--once')) throw Error('select either --status or --once');
+    if (args.includes('--status') && args.includes('--once')) throw Error('Do not combine recovery execution with --status; use zylos recovery resume to continue.');
     const out = bootstrap(path.resolve(args[i + 1]), {
       once: args.includes('--once'), status: args.includes('--status')
     });

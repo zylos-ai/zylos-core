@@ -35,14 +35,16 @@ function hasRecoveryMaterials(root) {
     try { return fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   };
-  for (const relative of ['.zylos', '.zylos/upgrade']) {
-    const file = path.join(root, relative), stat = present(file);
-    if (!stat) continue;
-    if (stat.isSymbolicLink()) {
-      if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
-    } else if (!stat.isDirectory()) return true;
-  }
-  return !!present(path.join(root, '.zylos/upgrade/active.json'));
+  try {
+    for (const relative of ['.zylos', '.zylos/upgrade']) {
+      const file = path.join(root, relative), stat = present(file);
+      if (!stat) continue;
+      if (stat.isSymbolicLink()) {
+        if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
+      } else if (!stat.isDirectory()) return true;
+    }
+    return !!present(path.join(root, '.zylos/upgrade/active.json'));
+  } catch { return true; }
 }
 
 function recoveryContext() {
@@ -87,7 +89,12 @@ function recoveryBlock(context) {
   for (const [key, limit] of [['code', 128], ['error', 8192], ['next', 2048]]) {
     if (typeof context[key] === 'string' && context[key]) details[key] = recoveryText(context[key], limit);
   }
-  const diagnostic = Object.keys(details).length ? '\n' + JSON.stringify(details, null, 2) : '';
+  const fields = Object.entries(details);
+  const rendered = fields.every(([key, value]) => {
+    const literal = JSON.stringify(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(JSON.stringify(key) + '\\s*:\\s*' + literal).test(context.prompt);
+  });
+  const diagnostic = fields.length && !rendered ? '\n' + JSON.stringify(details, null, 2) : '';
   return `=== UPGRADE RECOVERY TASK ===\n${context.prompt}${diagnostic}\n=== END UPGRADE RECOVERY TASK ===`;
 }
 

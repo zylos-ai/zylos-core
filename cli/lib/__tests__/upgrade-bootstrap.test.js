@@ -146,14 +146,14 @@ for (const mode of ['crash', 'invalid', 'remaining', 'cleanup-warning']) test(`o
   }
 });
 
-// This exact historical module comes from 4489b6d1; it intentionally has no
-// recoverBeforeUpgrade export. The stable sibling module owns new execution.
+// The frozen-module stub intentionally has no recoverBeforeUpgrade export.
+// The stable sibling module must own execution, regardless of frozen exports.
 test('once uses its stable helper when frozen transaction maintenance predates that helper', {timeout:10000}, t => {
   const f = runnerFixture(t, 'remaining', {legacy:true});
   const legacyFile = path.join(f.dir, 'maintenance.cjs');
   const legacy = createRequire(import.meta.url)(legacyFile);
   assert.equal(legacy.recoverBeforeUpgrade, undefined);
-  assert.equal(f.m.hash(legacyFile), 'f5deca27ac261482b3173004a5dd20200f37cd723c8708213e0ab7038a0fb878');
+  assert.equal(typeof f.m.recoverBeforeUpgrade, 'function');
   const before = fs.readFileSync(path.join(f.dir, 'journal.json'), 'utf8');
   const out = f.api.bootstrap(f.root, {once:true});
   assert.equal(out.recovery_required, true);
@@ -295,7 +295,11 @@ test('retired runtime-launch option fails clearly and cannot run a supervisor', 
   const f = fixture(t);
   const out = spawnSync(process.execPath, [path.join(f.stable, 'bootstrap.cjs'), '--root', f.root, '--launch-runtime'], {encoding: 'utf8'});
   assert.equal(out.status, 1);
-  assert.match(JSON.parse(out.stdout).error, /existing boot chain/);
+  const error = JSON.parse(out.stdout).error;
+  assert.match(error, /existing boot chain/);
+  assert.match(error, /--status/);
+  assert.match(error, /zylos recovery resume/);
+  assert.doesNotMatch(error, /--once/);
 });
 
  test('Mac discovery only offers status/manual recovery and once cannot invoke runner', {skip:process.platform!=='darwin'}, t=>{
@@ -313,7 +317,7 @@ test('retired runtime-launch option fails clearly and cannot run a supervisor', 
 // no service, database, or installed package is touched. Run when recovery
 // cleanup or its caller changes. Mac refusal is covered separately above.
 test('once CLI reports a real runner cleanup failure with its cause and retained marker', {skip:process.platform!=='linux', timeout:10000}, t => {
-  const f = runnerFixture(t, 'remaining', {legacy:true});
+  const f = runnerFixture(t, 'remaining');
   fs.copyFileSync(new URL('../../../test/fixtures/recovery-cleanup-runner.cjs', import.meta.url), path.join(f.dir, 'runner.cjs'));
   fs.copyFileSync(new URL('../upgrade-recovery.cjs', import.meta.url), path.join(f.dir, 'product-runner.cjs'));
   for (const name of ['runner.cjs', 'product-runner.cjs']) fs.chmodSync(path.join(f.dir, name), 0o600);
