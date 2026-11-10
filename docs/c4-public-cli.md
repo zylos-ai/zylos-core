@@ -36,7 +36,9 @@ Other independent commands:
 - `c4-fetch.js --absorbed --run-id UUID [--summary [--scope-after GROUP] | --id ID [--field text|endpoint] [--out FILE] | --after ID] [--limit N] [--json]`
 
 `groups` filters are mutually exclusive. `--match` also searches message previews.
-`--key-match` matches group keys only and is meant for occasional searches.
+`--key-match` matches group keys only (any part, any letter case) and is meant for occasional
+searches. A group whose key equals the search text exactly comes first, then the others
+newest first.
 `--active-since` takes Unix milliseconds, stops at the first older group, and returns
 `{groups, hasOlder}`; the other forms return an array.
 Each group's `preview` (the newest inbound message, or `null`) is
@@ -68,8 +70,8 @@ preview that has a `messageSource`: the stored message's start for a technical v
 model-facing projection with line breaks kept, at most 2000 characters. A longer message is
 cut before a run of printable ASCII characters rather than inside it (where a credential or
 a link would be), other text is kept up to the limit, and it ends in `…`. To read one
-group's, use `--key-match KEY --raw` and take the row whose `sessionGroup` equals `KEY`
-(`--key-match` matches parts of keys, so a newer group can contain `KEY`). C4 does not redact
+group's, use `--key-match KEY --limit 1 --raw` and check that the row's `sessionGroup` equals
+`KEY` (when no group has that exact key, the row is another group containing it). C4 does not redact
 `messageRaw` (nor `text` or `message`); a reader that shows it redacts credentials first.
 
 `group-queues` is a read-only snapshot of the groups that have pending or running

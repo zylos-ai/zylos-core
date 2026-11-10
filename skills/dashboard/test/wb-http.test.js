@@ -88,7 +88,7 @@ test('workbench HTTP routes retain read authentication, method guards and source
   const token = `zylos_st_${'b'.repeat(64)}`, key = engine.store.insertApiKey({ name: 'fixture-read', keyHash: hashApiKey(`zylos_ak_${'c'.repeat(64)}`), scope: 'read' });
   engine.store.insertApiSession({ apiKeyId: Number(key.lastInsertRowid), tokenHash: crypto.createHash('sha256').update(token).digest('hex'), createdAt: Date.now(), scope: 'read', expiresAt: Date.now() + 60000 });
   const request = (route, options = {}) => fetch(origin + route, { signal: AbortSignal.timeout(3000), headers: { Authorization: `Bearer ${token}` }, ...options });
-  for (const route of ['/api/workbench/groups', '/api/workbench/groups/search?q=', '/api/workbench/activity?range=60m']) {
+  for (const route of ['/api/workbench/groups', '/api/workbench/groups/search?q=', '/api/workbench/activity?range=60m', '/api/workbench/groups/telegram%3Aa/raw']) {
     assert.equal((await request(route, { headers: {} })).status, 401, route);
     assert.equal((await request(route, { method: 'POST' })).status, 405, route);
   }
@@ -98,6 +98,9 @@ test('workbench HTTP routes retain read authentication, method guards and source
   }
   const empty = await request('/api/workbench/groups/search?q=');
   assert.equal(empty.status, 200); assert.deepEqual(await empty.json(), { rows: [], truncated: false });
+  // The server dispatches the per-group stored-message read; the fixture has no stored message for the group.
+  const stored = await request('/api/workbench/groups/telegram%3Aa/raw');
+  assert.equal(stored.status, 200); assert.deepEqual(await stored.json(), { raw: null });
   const activity = await request('/api/workbench/activity?range=60m');
   assert.equal(activity.status, 200); assert.equal((await activity.json()).groups['telegram:a'].cells.length, 60);
   // Exercise real collector.collect -> index _onUpdate -> counter and state engine.

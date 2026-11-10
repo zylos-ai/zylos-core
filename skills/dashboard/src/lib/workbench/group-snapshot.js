@@ -199,10 +199,10 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     activities.set(range, { at: now(), value });
     return value;
   }
-  // One group's stored message start, read only when someone opens it in the technical view. Key search matches
-  // parts of keys, so the exact row is taken from the bounded result.
+  // One group's stored message start, read only when someone opens it in the technical view. Key search puts the
+  // exact key first; a first row with another key means the group was not found.
   async function raw(key) {
-    const result = await cli.runC4Db(['groups', '--key-match', key, '--limit', '50', '--raw', '--json']);
+    const result = await cli.runC4Db(['groups', '--key-match', key, '--limit', '1', '--raw', '--json']);
     if (!result.ok) throw Object.assign(new Error('Group read failed'), { statusCode: 502, code: 'group_raw_failed', reason: 'c4_groups_failed' });
     return { raw: safeRaw(result.data.find(item => item.sessionGroup === key)?.preview?.messageRaw, sanitizer) };
   }

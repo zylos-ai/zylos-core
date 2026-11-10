@@ -899,15 +899,19 @@ test('group thresholds distinguish the default alias from a fixed version overri
 test('a group\'s stored message is read on request, for that exact group, redacted', async t => {
   const f = fixture(t), secret = 'sk-' + 'r'.repeat(32), reads = [];
   const stored = (sessionGroup, messageRaw) => ({ sessionGroup, preview: { message: 'x', messageSource: { kind: 'header' }, messageRaw } });
+  // Key search puts the exact key first; without one, its single row is a newer group containing the key.
+  const groups = { 'telegram:g1': stored('telegram:g1', '[Bot] line one\nuse ' + secret), origin: stored('origin', '[Scheduled Task: t1] check') };
   f.cli.runC4Db = async args => {
     reads.push(args);
-    // A newer group whose key contains the requested one comes first.
-    return { ok: true, readAt: f.now(), data: [stored('telegram:g10', 'other group'), stored('telegram:g1', '[Bot] line one\nuse ' + secret)] };
+    const key = args[args.indexOf('--key-match') + 1];
+    return { ok: true, readAt: f.now(), data: [groups[key] ?? stored(key + '0', 'other group')] };
   };
   const value = await workbenchResponse(f.service, '/api/workbench/groups/telegram%3Ag1/raw', new URLSearchParams());
   assert.deepEqual(value, { raw: '[Bot] line one\nuse [REDACTED]' });
-  assert.deepEqual(reads, [['groups', '--key-match', 'telegram:g1', '--limit', '50', '--raw', '--json']]);
+  assert.deepEqual(reads, [['groups', '--key-match', 'telegram:g1', '--limit', '1', '--raw', '--json']]);
   assert.deepEqual(await f.service.raw('telegram:g2'), { raw: null }, 'a group not found has no stored message');
+  // Scheduled tasks often land in the origin group, whose key is not a channel key.
+  assert.deepEqual(await workbenchResponse(f.service, '/api/workbench/groups/origin/raw', new URLSearchParams()), { raw: '[Scheduled Task: t1] check' });
   f.cli.runC4Db = async args => { reads.push(args); return { ok: false, reason: 'c4_groups_failed', readAt: f.now() }; };
   await assert.rejects(f.service.raw('telegram:g1'), { statusCode: 502, code: 'group_raw_failed' });
   const before = reads.length;

@@ -189,7 +189,9 @@ export function createStore(database, dependencies = {}) {
           const head = get(c, 'SELECT h.head_id,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id WHERE h.session_group=?', session_group);
           if (head) heads.push({ ...head, session_group });
         }
-        heads.sort((a, b) => b.head_id - a.head_id);
+        // A group whose key equals the search comes first, so one group can be read with limit 1; then newest first.
+        const exact = head => head.session_group === keyMatch;
+        heads.sort((a, b) => exact(b) - exact(a) || b.head_id - a.head_id);
         return heads.slice(0, limit).map(row);
       }
       const result = [];

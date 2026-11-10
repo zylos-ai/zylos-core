@@ -199,6 +199,30 @@ test('the stored message is read once when its fold opens and stays with that pr
   f.controller.destroy();
 });
 
+test('a stored message that could not be read is read again when its fold reopens', async () => {
+  const calls = [], stored = '[Bot] line one\nline two';
+  const current = row('review-bot:a', { state: { kind: 'idle' }, preview: { text: 'line one', channel: 'review-bot', timestamp: 1, source: { kind: 'channel' } } });
+  const f = detailFixture(async path => {
+    if (!path.endsWith('/raw')) return response(defaultRead(path));
+    calls.push(path);
+    return calls.length === 1 ? response({ error: 'group_raw_failed' }, 502) : response({ raw: stored });
+  }, { detail: () => 'technical' });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const fold = () => allNodes(f.root).find(node => node.classList?.contains('wb-now-raw'));
+  const pre = () => allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'pre');
+  fold().open = true; fold().dispatch('toggle');
+  await tick(); await tick();
+  assert.equal(calls.length, 1);
+  assert.match(fold().textContent, /wb.detail.rawUnavailable/);
+  assert.equal(pre(), undefined);
+  fold().open = false; fold().dispatch('toggle');
+  fold().open = true; fold().dispatch('toggle');
+  await tick(); await tick();
+  assert.equal(calls.length, 2, 'the failed read is tried again');
+  assert.equal(pre().textContent, stored);
+  f.controller.destroy();
+});
+
 test('overview recent activity and evidence are plain in plain view and raw only in technical detail', () => {
   const document = createDocument(), root = document.createElement('div');
   const iso = '2026-11-06T10:20:30.000Z';

@@ -49,6 +49,17 @@ test('key search is case insensitive and ordered by latest head without matching
   assert.equal(rows[0].componentName, 'feishu');
 });
 
+test('key search puts the group whose key equals the search first, ahead of many newer groups containing it', t => {
+  const { seed, store } = fixture(t);
+  seed('lark:oc_1', '2026-01-04 00:00:00', 'parent');
+  for (let i = 0; i < 60; i++) seed('lark:oc_1_thread_' + i, '2026-01-05 00:00:00', 'thread');
+  assert.deepEqual(store.queries.listGroups({ keyMatch: 'lark:oc_1', limit: 1 }).map(row => row.sessionGroup), ['lark:oc_1']);
+  const rows = store.queries.listGroups({ keyMatch: 'lark:oc_1', limit: 3 }).map(row => row.sessionGroup);
+  assert.deepEqual(rows, ['lark:oc_1', 'lark:oc_1_thread_59', 'lark:oc_1_thread_58'], 'the others stay newest first');
+  // Equality is exact; a search in other letter case has no exact group and returns the newest match.
+  assert.deepEqual(store.queries.listGroups({ keyMatch: 'LARK:OC_1', limit: 1 }).map(row => row.sessionGroup), ['lark:oc_1_thread_59']);
+});
+
 test('default and legacy matching output keep the previous reader\'s fields byte for byte and add only the preview message', t => {
   const { db: c, store } = fixture(t);
   const all = (db, sql, ...args) => db.prepare(sql).all(...args);
