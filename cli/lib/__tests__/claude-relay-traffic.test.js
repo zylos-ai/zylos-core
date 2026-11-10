@@ -28,7 +28,7 @@ const { saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice, syncClaudeRela
   saveApiKey, saveSetupToken } = await import('../runtime-setup.js');
 const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags, relayNoticeAfterSave,
   settingsOverrideAfterSave } = await import('../../commands/runtime.js');
-const { persistInitCredentials, runClaudeSubscriptionLogin } = await import('../../commands/init.js');
+const { persistInitCredentials, runClaudeSubscriptionLogin, verifySetupToken } = await import('../../commands/init.js');
 const setupToken = () => 'sk-ant-oat01-' + randomBytes(16).toString('hex');
 
 // A hand-configured settings.json, unusually formatted so any rewrite shows.
@@ -306,7 +306,7 @@ test('init login without a new base URL prints the kept-relay notice; a base URL
 const overrideKeys = message => {
   assert.ok(message, 'a warning is expected');
   assert.ok(message.includes(settingsFile), 'the warning names the settings.json path');
-  assert.match(message, /Claude Code uses those values instead of the ones zylos saved/);
+  assert.match(message, /Claude Code uses those values instead of the ones zylos gives it/);
   assert.match(message, /remove th(?:at key|ose keys) from .* by hand/);
   return message.match(/ sets (.+) in its env block/)[1].split(', ');
 };
@@ -434,4 +434,48 @@ test('init with a subscription login only (no base URL) names an API key left in
   assert.deepEqual(overrideKeys(warnings[0]), ['ANTHROPIC_API_KEY']);
   leaksNothing(lines.join('\n'), hand);
   settingsUnchanged(text);
+});
+
+// init checks a setup token with `claude -p` in this process before saving it;
+// Claude Code takes settings.json `env` over the process values there. A failed
+// check names any overriding key (read only); a passing one says nothing.
+// The claude here is a stand-in that only exits; no network.
+const checkSetupToken = (t, exit) => {
+  const bin = fs.mkdtempSync(path.join(root, 'bin-')), before = process.env.PATH;
+  fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\n${exit ? 'echo "401 unauthorized" >&2\n' : ''}exit ${exit}\n`, { mode: 0o755 });
+  t.after(() => { process.env.PATH = before; });
+  process.env.PATH = bin;
+  const lines = [], log = console.log;
+  console.log = line => lines.push(String(line));
+  try { return { result: verifySetupToken(), lines }; } finally { console.log = log; process.env.PATH = before; }
+};
+
+test('init: a failed setup token check names a settings.json key that overrides it', t => {
+  const hand = handSecret();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }));
+  assert.equal(saveSetupToken(setupToken()), true);
+  const { result, lines } = checkSetupToken(t, 1);
+  assert.equal(result.valid, false);
+  const warnings = lines.filter(line => line.includes('settings.json'));
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes('⚠'), 'printed as an init warning');
+  assert.deepEqual(overrideKeys(warnings[0]), ['ANTHROPIC_API_KEY']);
+  leaksNothing(lines.join('\n') + JSON.stringify(result), hand);
+  settingsUnchanged(text);
+});
+
+test('init: a setup token check reports nothing when it passes or when settings.json matches the checked token', t => {
+  writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: handSecret() } }));
+  assert.equal(saveSetupToken(setupToken()), true);
+  const passed = checkSetupToken(t, 0);
+  assert.equal(passed.result.valid, true);
+  assert.equal(passed.lines.some(line => line.includes('settings.json')), false, 'a passing check');
+  // settings.json holds the very token being checked: equal to the checked value
+  // (process env), although .env does not have it yet.
+  const token = setupToken();
+  writeSettings(JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: token } }));
+  assert.equal(saveSetupToken(token), true);
+  const failed = checkSetupToken(t, 1);
+  assert.equal(failed.result.valid, false);
+  assert.equal(failed.lines.some(line => line.includes('settings.json')), false, 'compared with the checked token, not .env');
 });

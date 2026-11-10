@@ -480,17 +480,22 @@ function verifyCodexApiKey(apiKey) {
  *
  * @returns {{ valid: boolean, authError?: boolean, message?: string }}
  */
-function verifySetupToken() {
+export function verifySetupToken() {
   try {
+    const env = { ...process.env };
     const result = spawnSync('claude', ['-p', 'hi', '--max-turns', '1'], {
       timeout: 30000,
-      env: { ...process.env },
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     if (result.status === 0) {
       return { valid: true };
     }
+    // Claude Code takes settings.json `env` over this env: name any key there
+    // that overrides the checked values (read only).
+    const override = claudeSettingsOverrideNotice(env);
+    if (override) console.log(`  ${warn(override)}`);
 
     const output = ((result.stdout?.toString() || '') + (result.stderr?.toString() || '')).trim();
     const lower = output.toLowerCase();
