@@ -31,7 +31,7 @@ export async function runPrivateFixture(scope, file, args = [], { nodeTest = fal
     PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, TMUX_TMPDIR: env.TMUX_TMPDIR,
     socket: path.join(env.TMPDIR, 'tm-XXXXXX/s'),
     database: path.join(env.ZYLOS_DIR, 'comm-bridge/c4.db'), pm2: 'not started' }));
-  const child = spawn(process.execPath, [...(nodeTest ? ['--test'] : []), file, ...args], {
+  const child = spawn(process.execPath, [...(nodeTest ? ['--test', '--test-reporter=tap'] : []), file, ...args], {
     env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '', bytes = 0, failure, launchError;
@@ -53,10 +53,10 @@ export async function runPrivateFixture(scope, file, args = [], { nodeTest = fal
   const deadline = setTimeout(() => { failure ??= 'fixture deadline exceeded'; stop(); }, timeout);
   try {
     const result = await completion;
-    if (output) console.log(output.trimEnd());
-    assert.equal(launchError, undefined);
-    assert.equal(failure, undefined, output);
-    assert.equal(result.code, 0, output || `fixture exited with ${result.signal}`);
+    if (launchError || failure || result.code !== 0) {
+      const reason = launchError?.message || failure || `fixture exited with ${result.code ?? result.signal}`;
+      assert.fail(output ? `${reason}\n${output.trimEnd()}` : reason);
+    }
   } finally {
     clearTimeout(deadline);
     stop();

@@ -91,40 +91,20 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(resolve=>listener.close(resolve));
   console.log('dashboard console target', JSON.stringify({address:'127.0.0.1',port,root,socket:fixture.socketPath}));
   const consoleChild=spawn(process.execPath,['skills/web-console/scripts/server.js'],{env:{...process.env,WEB_CONSOLE_PORT:String(port),WEB_CONSOLE_BIND:'127.0.0.1'},stdio:['ignore','pipe','pipe']});
-  let output='', outputBytes=0, consoleFailure;
-  const consoleDone=new Promise(resolve=>{
-    consoleChild.once('error',error=>{consoleFailure=error.message;});
-    consoleChild.once('close',resolve);
-  });
-  const collect=data=>{
-    outputBytes+=data.length;
-    if(outputBytes>65536){consoleFailure='web-console fixture output exceeded 65536 bytes';consoleChild.kill('SIGKILL');return;}
-    output+=data.toString();
-  };
-  consoleChild.stdout.on('data',collect);consoleChild.stderr.on('data',collect);
-  const consoleDeadline=setTimeout(()=>{consoleFailure='web-console fixture deadline exceeded';consoleChild.kill('SIGKILL');},15000);
-  t.after(async()=>{
-    clearTimeout(consoleDeadline);
-    consoleChild.kill('SIGTERM');
-    let timer;
-    try {
-      await Promise.race([consoleDone,new Promise(resolve=>{timer=setTimeout(resolve,1000);})]);
-      if(consoleChild.exitCode===null&&consoleChild.signalCode===null)consoleChild.kill('SIGKILL');
-      await consoleDone;
-    } finally {clearTimeout(timer);}
-  });
+  let output='';consoleChild.stdout.on('data',b=>output+=b);consoleChild.stderr.on('data',b=>output+=b);
+  t.after(async()=>{consoleChild.kill('SIGTERM');if(consoleChild.exitCode===null)await once(consoleChild,'exit');});
   const base=`http://127.0.0.1:${port}`;let online=false;
-  for(let n=0;n<100;n++){if(consoleFailure||consoleChild.exitCode!==null)throw Error(consoleFailure||output);try{online=(await fetch(base+'/api/health',{signal:AbortSignal.timeout(1000)})).ok;}catch{}if(online)break;await new Promise(resolve=>setTimeout(resolve,25));}
+  for(let n=0;n<100;n++){if(consoleChild.exitCode!==null)throw Error(output);try{online=(await fetch(base+'/api/health')).ok;}catch{}if(online)break;await new Promise(resolve=>setTimeout(resolve,25));}
   assert(online,output);
-  assert.equal((await (await fetch(base+'/api/status',{signal:AbortSignal.timeout(1000)})).json()).runId,'RC');
+  assert.equal((await (await fetch(base+'/api/status')).json()).runId,'RC');
   const consoleFile=path.join(runDir('clone-console'),'agent-status.json');fs.utimesSync(consoleFile,new Date(0),new Date(0));
-  assert.equal((await (await fetch(base+'/api/status',{signal:AbortSignal.timeout(1000)})).json()).reason,'stale');
-  write(consoleFile,'{broken');assert.equal((await (await fetch(base+'/api/status',{signal:AbortSignal.timeout(1000)})).json()).reason,'unparseable');
-  fixture.tmux('kill-session','-t','zylos-group-clone-console');assert.equal((await (await fetch(base+'/api/status',{signal:AbortSignal.timeout(1000)})).json()).state,'not_running');
+  assert.equal((await (await fetch(base+'/api/status')).json()).reason,'stale');
+  write(consoleFile,'{broken');assert.equal((await (await fetch(base+'/api/status')).json()).reason,'unparseable');
+  fixture.tmux('kill-session','-t','zylos-group-clone-console');assert.equal((await (await fetch(base+'/api/status')).json()).state,'not_running');
   write(path.join(root,'.zylos/config.json'),{});assert.deepEqual(readSessionMode(),{mode:null,keyPresent:false});
   const legacyState=await core.refresh();assert.equal(legacyState.runId,'R2');assert.equal(legacyState.sessionGroup,null);
   assert.equal((await core.currentTarget()).sessionGroup,null);assert.equal((await consoleStatus()).runId,'R2');
-  assert.equal((await (await fetch(base+'/api/status',{signal:AbortSignal.timeout(1000)})).json()).runId,'R2');
+  assert.equal((await (await fetch(base+'/api/status')).json()).runId,'R2');
 
   const socketPath=path.join(root,'activity-monitor/am.sock');let requests=0;let reply=false;
   fs.rmSync(socketPath,{force:true});
