@@ -35,13 +35,18 @@ function fixture(source) {
   const target = source === 'single' ? 'multi' : 'single';
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true }); fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: target }));
   const env = { ...process.env, HOME: root, ZYLOS_DIR: root, TMPDIR: root, ZYLOS_RUN_ID: 'fx-session-0' }; delete env.ZYLOS_SESSION_GROUP;
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  fs.symlinkSync('/bin/sh', path.join(bin, 'sh'));
+  env.PATH = bin; env.PM2_HOME = path.join(root, 'pm2'); env.TMUX_TMPDIR = root;
+  for (const key of Object.keys(env)) if (key === 'TMUX' || /(?:TOKEN|SECRET|PASSWORD|API_KEY)/.test(key)) delete env[key];
   const add = (body, endpoint, group = 'a') => store.insertConversation('in', 'demo', endpoint, body, { groupName: group });
   function convert() { const { runId } = store.beginModeTransition(source, target); store.setDrainFence('*'); store.absorbForTransition(runId); const row = store.getModeTransition(); const result = createModeSwitchConverter({ db: store, zylosDir: root })(row); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete'); return { row, ...result }; }
   function cli(name, args, { input = '', group, shell = false } = {}) {
     const childEnv = { ...env }; if (group && group !== '*') childEnv.ZYLOS_SESSION_GROUP = group;
     const script = path.join(skills, 'comm-bridge/scripts', name + '.js');
     const command = [process.execPath, script, ...args];
-    const result = shell ? spawnSync('sh', ['-c', command.map(shellQuote).join(' ')], { env: childEnv, input, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }) : spawnSync(command[0], command.slice(1), { env: childEnv, input, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+    const result = shell ? spawnSync('sh', ['-c', command.map(shellQuote).join(' ')], { env: childEnv, input, encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024 }) : spawnSync(command[0], command.slice(1), { env: childEnv, input, encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
     return result;
   }
   return { root, db, store, env, skills, argvFile, add, convert, cli, query: createQueryHandlers(store), api: { ...store, getDb: () => db, getConversationsByRange: (a, b) => db.prepare('SELECT * FROM conversations WHERE id>=? AND id<=? ORDER BY id').all(a,b) } };
@@ -76,8 +81,14 @@ async function commitProgress(f, scope, ids) {
   const after = fs.readFileSync(state, 'utf8'); return { before, after };
 }
 
+// Isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/tmux directory, private SQLite and
+// node/sh-only PATH, fixture channel/runtime providers; no real tmux/PM2/network.
+// Run these two cases for absorbed-send ownership/route changes; skip bulk
+// progress cases when Sync/progress algorithms are unchanged. CLI calls time out;
+// afterEach closes SQLite and removes all owned fixture paths.
 for (const source of ['single', 'multi']) test(`${source}: converted , replacement, real query/send CLI and guarded Sync preserve route/body bytes`, async () => {
   const f = fixture(source);
+  console.log('Mode followup isolation:', JSON.stringify(Object.fromEntries(['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','TMUX_TMPDIR','PATH'].map(key => [key, f.env[key]]))));
   const variants = [
     ['A', 'a'.repeat(65536), 'route-A'], ['H', 'hello', 'h'.repeat(20 * 1024)],
     ['I', 'hello', 'line\nback\\slash'], ['J', '\0'.repeat(8192), 'route-J'],
@@ -125,7 +136,9 @@ for (const source of ['single', 'multi']) test(`${source}: converted , replaceme
     const fullJson = f.cli('c4-fetch', [...args, '--json']); assert.equal(fullJson.status, 0, fullJson.stderr); assert.equal(JSON.parse(fullJson.stdout).data.data, row.content);
     if (['J','K'].includes(row.name)) { const fullText = f.cli('c4-fetch', args); assert.equal(fullText.status, 0); const encoded = fullText.stdout.split('\ndata: ')[1].split('\nend id=')[0]; assert.equal(decodeEscapes(encoded), row.content); }
     const priorArgv = argv(f).length, priorOut = f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n;
-    const sent = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: scope, shell: row.name.startsWith('N') });
+    const request = readAbsorbedReply(runId, String(row.id), f.api);
+    const responsible = f.store.resolveSessionGroup('out', request.channel, request.endpoint, request);
+    const sent = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: responsible, shell: row.name.startsWith('N') });
     if (row.name === 'O') {
       assert.equal(sent.status, 1); assert.match(sent.stderr, /ENDPOINT_NOT_PASSABLE/); assert.equal(argv(f).length, priorArgv); assert.equal(f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, priorOut); continue;
     }
@@ -166,7 +179,7 @@ for (const source of ['single','multi']) test(`B ${source}: 1000 converted entri
       const full = JSON.parse(f.query.absorbed({ runId, id, json: true })).data; assert.equal(full.data, 'x');
       // production path with the same real / transaction and argv child
       // as the CLI; avoids 1000 extra parent Node startups in the bulk case.
-      await sendExternal(readAbsorbedReply(runId, String(id), f.api), 'ack', { api: f.api, skillsDir: f.skills, env: f.env, appendFallback: async () => {} }); evidence.push(id);
+      await sendExternal(readAbsorbedReply(runId, String(id), f.api), 'ack', { api: f.api, skillsDir: f.skills, env: { ...f.env, ZYLOS_SESSION_GROUP: 'demo:a' }, appendFallback: async () => {} }); evidence.push(id);
     }
   }
   await handle(Array.from({ length: 10 }, (_, i) => i + 1));
