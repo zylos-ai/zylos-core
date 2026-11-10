@@ -97,7 +97,7 @@ export async function prepareInitRuntimeAssets({ result = { completed: [], faile
     try { ensureCodexHooksTrusted({ zylosDir: ZYLOS_DIR }); }
     catch (error) {
       // Init does not start Codex; each Codex launch repeats the trust step and does not start Codex until it succeeds.
-      throw new Error(`${error.message}. Codex will not start until hook trust succeeds; each Codex launch tries it again.`, { cause: error });
+      throw new Error(`${error.message.replace(/\.+$/, '')}. Codex will not start until hook trust succeeds; each Codex launch tries it again.`, { cause: error });
     }
   } }, exists = fs.existsSync } = {}) {
   for (const runtime of ['claude', 'codex']) {

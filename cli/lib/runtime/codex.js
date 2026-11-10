@@ -65,7 +65,8 @@ export class CodexAdapter extends SessionAdapter {
       // Trust failing stops the launch, so Codex is not running: say so, with the trust step's own report.
       let reason = cause;
       while (reason?.cause instanceof Error) reason = reason.cause;
-      const message = `Codex did not start: ${reason?.message || 'hook trust failed'}. ` +
+      const report = (reason?.message || 'hook trust failed').replace(/\.+$/, '');
+      const message = `Codex did not start: ${report}. ` +
         'Hook trust must succeed before Codex starts and is tried again at the next launch; ' +
         'run `zylos init` to retry it now and see the result.';
       process.stderr.write(`${message}\n`);

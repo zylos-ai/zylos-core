@@ -18,6 +18,9 @@ const CODEX_EVENT_KEYS = {
 };
 
 const DEFAULT_TRUST_TIMEOUT_MS = 15_000;
+// The trust helper keeps only this much of the app-server's stderr: enough context to redact the reported tail,
+// and far below spawnSync's 1 MiB output buffer, so a chatty Codex cannot turn the result into ENOBUFS.
+const TRUST_HELPER_STDERR_KEEP = 16_384;
 const DEFAULT_HOOK_TIMEOUT_SECONDS = 25;
 
 function sha256(text) {
@@ -390,7 +393,7 @@ const timer = setTimeout(() => {
   finish({ ok: false, reason: 'codex_app_server_timeout', stderr });
 }, ${timeoutMs});
 
-app.stderr.on('data', d => { stderr += d.toString(); });
+app.stderr.on('data', d => { stderr = (stderr + d.toString()).slice(-${TRUST_HELPER_STDERR_KEEP}); });
 app.on('error', err => {
   clearTimeout(timer);
   finish({ ok: false, reason: 'codex_app_server_error', error: String(err), stderr });
@@ -508,37 +511,66 @@ send('initialize', {
 
 const TRUST_ERROR_MESSAGE_LIMIT = 300;
 const TRUST_STDERR_TAIL_LIMIT = 600;
+const TRUST_ERROR_CODE_LIMIT = 40;
 
-// Credentials that a Codex error or its stderr could carry: bearer/basic values, OpenAI-style keys, JWTs and
-// values assigned to secret-looking names. The error's data field and stdout are never included.
+// Names whose values are secrets: any name containing one of these words, or ending in _key, -key or apikey.
+const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:secret|token|password|passwd|passphrase|credential|cookie|authorization)[A-Za-z0-9_.-]*|[A-Za-z0-9_.-]*(?:[_-]key|apikey)`;
+// A value: \"escaped-quoted\" (Rust debug output of JSON), "quoted" or 'quoted' with escapes, or a bare word.
+// A value an earlier rule already replaced is left alone.
+const SECRET_VALUE = String.raw`(?!\[redacted\])(?:\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;&"'}\]]+)`;
+const REDACTIONS = [
+  // Cookie headers carry several values: everything to the end of the line goes.
+  [/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1[redacted]'],
+  // An Authorization header, whatever its scheme.
+  [/\b((?:proxy-)?authorization\s*:\s*)(?:(?:Bearer|Basic|Digest|Token|Negotiate)\s+)?[^\s,;]+/gi, '$1[redacted]'],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1[redacted]'],
+  // Basic credentials only when the value looks like base64, so "basic validation failed" stays readable.
+  [/\b(Basic\s+)(?=[A-Za-z0-9+/=]{8,})(?=[A-Za-z0-9+/=]*(?:[0-9+/=]|[a-z][A-Z]))[A-Za-z0-9+/]+=*/g, '$1[redacted]'],
+  // JWTs, OpenAI-style keys and GitHub tokens, wherever they appear.
+  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]'],
+  [/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}/g, '[redacted]'],
+  [/\b(?:gh[opsur]_|github_pat_)[A-Za-z0-9_]{16,}/g, '[redacted]'],
+  // user:password@ in a URL.
+  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[redacted]@'],
+  // --api-key VALUE or --token=VALUE on a command line.
+  [new RegExp(String.raw`(--(?:${SECRET_NAME})(?:=|\s+))[^\s"']+`, 'gi'), '$1[redacted]'],
+  // name=value, name: value, "name": "value" and \"name\":\"value\".
+  [new RegExp(String.raw`((?:\\?["'])?\b(?:${SECRET_NAME})(?:\\?["'])?\s*[:=]\s*)${SECRET_VALUE}`, 'gi'), '$1[redacted]'],
+];
+
+// Credentials that a Codex error or its stderr could carry. The error's data field and stdout are never included.
 function redactTrustText(text) {
-  return String(text)
-    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [redacted]')
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]')
-    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}/g, '[redacted]')
-    .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|authorization|cookie|credentials?)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1[redacted]');
+  return REDACTIONS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), String(text));
 }
 
+// One log line: terminal escape sequences removed, line breaks shown as " | ", other control characters as spaces.
 function oneLine(text) {
-  return String(text).replace(/\s*\n\s*/g, ' | ').trim();
+  return String(text)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g, '')
+    .replace(/\s*(?:\r\n|\r|\n)\s*/g, ' | ')
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .trim();
 }
 
 /**
- * The parts of a failed trust attempt worth reporting: Codex's own error code and message, and the end of the
- * app-server's stderr, each capped and redacted.
+ * The parts of a failed trust attempt worth reporting: the exit code of a process that ended early, Codex's own
+ * error code and message, and the end of the app-server's stderr; each redacted before it is capped.
  */
 export function describeTrustFailure(trust = {}) {
   const parts = [];
+  const exit = Number.isInteger(trust.code) ? trust.code : Number.isInteger(trust.status) ? trust.status : null;
+  if (exit !== null) parts.push(`exit code ${exit}`);
   const error = trust.error;
   if (error !== undefined && error !== null) {
-    const code = typeof error === 'object' && error.code !== undefined ? String(error.code) : null;
+    const rawCode = typeof error === 'object' ? error.code : undefined;
+    const code = rawCode === undefined || rawCode === null ? null
+      : typeof rawCode === 'number' ? String(rawCode) : oneLine(redactTrustText(rawCode)).slice(0, TRUST_ERROR_CODE_LIMIT);
     const raw = typeof error === 'object' ? error.message ?? '' : error;
     const message = oneLine(redactTrustText(raw)).slice(0, TRUST_ERROR_MESSAGE_LIMIT);
     parts.push(`Codex error${code ? ` ${code}` : ''}: ${message || '(no message)'}`);
   }
   const stderr = typeof trust.stderr === 'string' ? trust.stderr.trim() : '';
   if (stderr) {
-    // Redact before cutting, so a cut never leaves part of a credential unrecognised.
     const tail = oneLine(redactTrustText(stderr));
     parts.push(`stderr${tail.length > TRUST_STDERR_TAIL_LIMIT ? ` (last ${TRUST_STDERR_TAIL_LIMIT} characters)` : ''}: ${tail.slice(-TRUST_STDERR_TAIL_LIMIT)}`);
   }

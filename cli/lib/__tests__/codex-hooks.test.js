@@ -11,6 +11,7 @@ import {
   codexProjectConfigPath,
   codexTrustMarkerPath,
   coreSessionStartCommands,
+  describeTrustFailure,
   ensureCodexHooksTrusted,
   ensureHooksFeatureInToml,
   extractTrustSnapshot,
@@ -374,6 +375,42 @@ describe('Codex hook trust backstop', () => {
     );
   });
 
+  // A stub app-server that logs to stderr and then refuses one request with an error; everything else succeeds.
+  function writeRefusingCodex(root, name, { method, stderr, error }) {
+    const codexBin = path.join(root, name);
+    fs.writeFileSync(codexBin, [
+      '#!/usr/bin/env node',
+      `const STDERR = ${JSON.stringify(stderr)};`,
+      `const ERROR = ${JSON.stringify(error)};`,
+      `const REFUSE = ${JSON.stringify(method)};`,
+      "let buf = '';",
+      "process.stdin.on('data', chunk => {",
+      '  buf += chunk.toString();',
+      "  const lines = buf.split('\\n');",
+      '  buf = lines.pop();',
+      '  for (const line of lines) {',
+      '    let msg;',
+      '    try { msg = JSON.parse(line); } catch { continue; }',
+      '    if (msg.method === REFUSE) {',
+      '      // Codex logs the failure before answering, as it does for a refused request.',
+      "      process.stderr.write(STDERR, () => setTimeout(() => process.stdout.write(JSON.stringify({ id: msg.id, error: ERROR }) + '\\n'), 50));",
+      "    } else if (msg.method === 'initialize') process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + '\\n');",
+      "    else if (msg.method === 'hooks/list') process.stdout.write(JSON.stringify({ id: msg.id, result: { data: [{ hooks: [",
+      "      { key: '/tmp/hooks.json:session_start:0:0', currentHash: 'sha256:h', isManaged: false }] }] } }) + '\\n');",
+      "    else if (msg.method === 'config/batchWrite') process.stdout.write(JSON.stringify({ id: msg.id, result: { status: 'ok' } }) + '\\n');",
+      '  }',
+      '});',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    return codexBin;
+  }
+  const trustFailure = args => {
+    let message;
+    assert.throws(() => ensureCodexHooksTrusted({ ...args, execFileSyncImpl: () => 'codex-cli 0.146.0\n' }),
+      thrown => { message = thrown.message; return true; });
+    return message;
+  };
+
   it('reports Codex\'s error code, message and the end of app-server stderr when the config write is refused', () => {
     const { root, homeDir, zylosDir } = makeEnv();
     installCoreCodexHook({ zylosDir });
@@ -387,35 +424,8 @@ describe('Codex hook trust backstop', () => {
       message: 'failed to persist config: Operation not permitted (os error 1) refresh_token="SECRETREFRESH"',
       data: { config: 'model_provider_secret = "SECRETDATA"' },
     };
-    const codexBin = path.join(root, 'fake-codex-refuses-write.js');
-    fs.writeFileSync(codexBin, [
-      '#!/usr/bin/env node',
-      `const STDERR = ${JSON.stringify(stderr)};`,
-      `const ERROR = ${JSON.stringify(error)};`,
-      "let buf = '';",
-      "process.stdin.on('data', chunk => {",
-      '  buf += chunk.toString();',
-      "  const lines = buf.split('\\n');",
-      '  buf = lines.pop();',
-      '  for (const line of lines) {',
-      '    let msg;',
-      '    try { msg = JSON.parse(line); } catch { continue; }',
-      "    if (msg.method === 'initialize') process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + '\\n');",
-      "    if (msg.method === 'hooks/list') process.stdout.write(JSON.stringify({ id: msg.id, result: { data: [{ hooks: [",
-      "      { key: '/tmp/hooks.json:session_start:0:0', currentHash: 'sha256:h', isManaged: false }] }] } }) + '\\n');",
-      "    if (msg.method === 'config/batchWrite') {",
-      '      // Codex logs the failure before answering, as it does for a refused config write.',
-      "      process.stderr.write(STDERR, () => setTimeout(() => process.stdout.write(JSON.stringify({ id: msg.id, error: ERROR }) + '\\n'), 50));",
-      '    }',
-      '  }',
-      '});',
-      '',
-    ].join('\n'), { mode: 0o755 });
-
-    let message;
-    assert.throws(() => ensureCodexHooksTrusted({
-      zylosDir, projectDir: zylosDir, homeDir, codexBin, execFileSyncImpl: () => 'codex-cli 0.146.0\n',
-    }), thrown => { message = thrown.message; return true; });
+    const codexBin = writeRefusingCodex(root, 'fake-codex-refuses-write.js', { method: 'config/batchWrite', stderr, error });
+    const message = trustFailure({ zylosDir, projectDir: zylosDir, homeDir, codexBin });
 
     assert.ok(message.startsWith('Codex hook trust failed (config_batch_write_error): Codex error -32603: ' +
       'failed to persist config: Operation not permitted (os error 1) refresh_token=[redacted]; '), message);
@@ -424,7 +434,7 @@ describe('Codex hook trust backstop', () => {
     const tail = message.slice(message.indexOf(label) + label.length);
     assert.equal(tail.length, 600);
     assert.ok(tail.includes('ERROR codex_core::config: write config.toml failed: Operation not permitted (os error 1) | ' +
-      'request header Authorization: '), tail);
+      'request header Authorization: [redacted] | '), tail);
     assert.ok(tail.endsWith('retrying with api_key=[redacted] and token: [redacted]'), tail);
     for (const leaked of ['STDERR-HEAD', 'SECRETBEARER', 'SECRETKEY', 'SECRETTOKEN', 'SECRETREFRESH', 'SECRETDATA']) {
       assert.equal(message.includes(leaked), false, `report must not contain ${leaked}`);
@@ -433,23 +443,86 @@ describe('Codex hook trust backstop', () => {
     assert.doesNotMatch(message, /SessionStart bootstrap may not run/);
   });
 
-  it('caps Codex\'s error message and labels stderr only when it was cut', () => {
+  it('keeps the reason, Codex\'s error and the stderr tail when Codex writes more than 1 MiB of stderr', () => {
+    const { root, homeDir, zylosDir } = makeEnv();
+    installCoreCodexHook({ zylosDir });
+    // As with RUST_LOG=debug: far more stderr than spawnSync's default 1 MiB output buffer.
+    const stderr = `${'debug codex_core::trace noise line\n'.repeat(36_000)}ERROR write failed: Operation not permitted END-OF-STDERR\n`;
+    assert.ok(stderr.length > 1024 * 1024);
+    const codexBin = writeRefusingCodex(root, 'fake-codex-loud.js', { method: 'config/batchWrite', stderr,
+      error: { code: -32603, message: 'failed to persist config' } });
+    const message = trustFailure({ zylosDir, projectDir: zylosDir, homeDir, codexBin });
+    assert.ok(message.startsWith('Codex hook trust failed (config_batch_write_error): Codex error -32603: failed to persist config; ' +
+      'stderr (last 600 characters): '), message.slice(0, 200));
+    assert.ok(message.endsWith('debug codex_core::trace noise line | ERROR write failed: Operation not permitted END-OF-STDERR'), message.slice(-200));
+  });
+
+  it('reports the stderr tail when Codex refuses to list hooks', () => {
+    const { root, homeDir, zylosDir } = makeEnv();
+    installCoreCodexHook({ zylosDir });
+    const codexBin = writeRefusingCodex(root, 'fake-codex-refuses-list.js', { method: 'hooks/list',
+      stderr: 'WARN hooks: cannot read hooks.json: Permission denied (os error 13)\n', error: { code: -32600, message: 'hooks unavailable' } });
+    assert.equal(trustFailure({ zylosDir, projectDir: zylosDir, homeDir, codexBin }),
+      'Codex hook trust failed (hooks_list_error): Codex error -32600: hooks unavailable; ' +
+      'stderr: WARN hooks: cannot read hooks.json: Permission denied (os error 13)');
+  });
+
+  it('caps Codex\'s error message and code, adds exit codes and labels stderr only when it was cut', () => {
     const { homeDir, zylosDir } = makeEnv();
     installCoreCodexHook({ zylosDir });
-    const refuse = (error, stderr) => () => ensureCodexHooksTrusted({
-      zylosDir, projectDir: zylosDir, homeDir, execFileSyncImpl: () => 'codex-cli 0.146.0\n',
-      spawnSyncImpl: () => ({ status: 0, stdout: JSON.stringify({ ok: false, reason: 'config_batch_write_error', error, stderr }) + '\n', stderr: '' }),
+    const refuse = (error, stderr) => trustFailure({ zylosDir, projectDir: zylosDir, homeDir,
+      spawnSyncImpl: () => ({ status: 0, stdout: JSON.stringify({ ok: false, reason: 'config_batch_write_error', error, stderr }) + '\n', stderr: '' }) });
+    assert.equal(refuse({ code: 'EPERM', message: `${'m'.repeat(300)}CUT-OFF` }, 'short stderr line\n'),
+      `Codex hook trust failed (config_batch_write_error): Codex error EPERM: ${'m'.repeat(300)}; stderr: short stderr line`);
+    assert.equal(refuse({ message: '' }, ''), 'Codex hook trust failed (config_batch_write_error): Codex error: (no message)');
+    assert.equal(refuse({ code: `${'C'.repeat(40)}LONGCODE`, message: 'x' }, ''),
+      `Codex hook trust failed (config_batch_write_error): Codex error ${'C'.repeat(40)}: x`);
+    assert.equal(describeTrustFailure({ reason: 'codex_app_server_exit', code: 3, stderr: 'panicked at config.rs' }),
+      'exit code 3; stderr: panicked at config.rs');
+    assert.equal(describeTrustFailure({ reason: 'trust_helper_exit', status: 9 }), 'exit code 9');
+    assert.equal(describeTrustFailure({ reason: 'codex_app_server_exit', code: null }), '');
+  });
+
+  it('removes terminal control sequences so the report cannot overwrite a log line', () => {
+    assert.equal(describeTrustFailure({ stderr: 'progress 10%\rprogress 99%\r\n\x1b[31mERROR\x1b[0m write failed\x07\x1b]0;title\x07 done' }),
+      'stderr: progress 10% | progress 99% | ERROR write failed  done');
+  });
+
+  // Each input below can be caught by one redaction rule only, so dropping or weakening that rule leaks it.
+  const redactionCases = [
+    ['Cookie header, several values', 'request Cookie: a=1; session=SECRETCOOKIE\nnext line', ['SECRETCOOKIE'], ['request Cookie: [redacted] | next line']],
+    ['Authorization header with a plain-looking value', 'sent Authorization: Basic zzsecretzz to proxy', ['zzsecretzz', 'Basic'], ['sent Authorization: [redacted] to proxy']],
+    ['bare Bearer value', 'retrying with Bearer abc.DEF-SECRETBEARER2 now', ['SECRETBEARER2'], ['retrying with Bearer [redacted] now']],
+    ['bare Basic value that looks like base64', 'got Basic dXNlcjpTRUNSRVQ= back', ['dXNlcjpTRUNSRVQ='], ['got Basic [redacted] back']],
+    ['ordinary words after basic', 'Basic validation failed; basic check skipped', [], ['Basic validation failed; basic check skipped']],
+    ['bare JWT', 'cached eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJTRUNSRVRKV1QifQ.c2lnbmF0dXJl ok', ['eyJzdWIiOiJTRUNSRVRKV1QifQ'], ['cached [redacted] ok']],
+    ['bare OpenAI-style key', 'using sk-proj-SECRETSK123456 for requests', ['SECRETSK123456'], ['using [redacted] for requests']],
+    ['bare GitHub token', 'remote ghp_SECRETGH1234567890abcd rejected', ['SECRETGH'], ['remote [redacted] rejected']],
+    ['URL userinfo', 'proxy http://user:SECRETURL@proxy:8080 refused', ['SECRETURL', 'user:'], ['proxy http://[redacted]@proxy:8080 refused']],
+    ['command-line flag', 'spawn tool --api-key SECRETFLAG --verbose', ['SECRETFLAG'], ['spawn tool --api-key [redacted] --verbose']],
+    ['upper-case environment name', 'env OPENAI_API_KEY=SECRETENV set', ['SECRETENV'], ['env OPENAI_API_KEY=[redacted] set']],
+    ['quoted value with spaces', 'parsed password: "has SECRETSPACE inside" from file', ['SECRETSPACE'], ['parsed password: [redacted] from file']],
+    ['quoted value with an escaped quote', '{"password": "ab\\"SECRETESC", "user": "felix"}', ['SECRETESC'], ['{"password": [redacted], "user": "felix"}']],
+    ['Rust debug-escaped JSON', 'config: "{\\"api_key\\":\\"SECRETRUST\\",\\"model\\":\\"gpt\\"}"', ['SECRETRUST'], ['config: "{\\"api_key\\":[redacted],\\"model\\":\\"gpt\\"}"']],
+    ['names that end in _key or contain secret', 'aws_secret_access_key=SECRETAWS SECRET_KEY=SECRETSK2 private_key: SECRETPK passphrase=SECRETPP region=us-east-1',
+      ['SECRETAWS', 'SECRETSK2', 'SECRETPK', 'SECRETPP'], ['aws_secret_access_key=[redacted] SECRET_KEY=[redacted] private_key: [redacted] passphrase=[redacted] region=us-east-1']],
+  ];
+  for (const [name, input, secrets, kept] of redactionCases) {
+    it(`redacts ${name} in Codex's error message and stderr`, () => {
+      for (const report of [describeTrustFailure({ stderr: input }), describeTrustFailure({ error: { code: 1, message: input } })]) {
+        for (const secret of secrets) assert.equal(report.includes(secret), false, `${report} must not contain ${secret}`);
+        for (const text of kept) assert.ok(report.includes(text), `${report} keeps ${text}`);
+      }
     });
-    const long = `${'m'.repeat(300)}CUT-OFF`;
-    assert.throws(refuse({ code: 'EPERM', message: long }, 'short stderr line\n'), thrown => {
-      assert.equal(thrown.message,
-        `Codex hook trust failed (config_batch_write_error): Codex error EPERM: ${'m'.repeat(300)}; stderr: short stderr line`);
-      return true;
-    });
-    assert.throws(refuse({ message: '' }, ''), thrown => {
-      assert.equal(thrown.message, 'Codex hook trust failed (config_batch_write_error): Codex error: (no message)');
-      return true;
-    });
+  }
+
+  it('redacts a JWT that straddles the message limit before cutting the message', () => {
+    const header = 'eyJhbGciOiJIUzI1NiJ9', payload = 'eyJzdWIiOiJTRUNSRVRKV1QiLCJuYW1lIjoiZmVsaXgifQ';
+    // The 300-character cut falls inside the payload.
+    const message = `${'x'.repeat(250)} ${header}.${payload}.c2lnbmF0dXJlc2lnbmF0dXJl tail`;
+    const report = describeTrustFailure({ error: { code: 1, message } });
+    assert.equal(report, `Codex error 1: ${'x'.repeat(250)} [redacted] tail`);
+    assert.equal(report.includes(header.slice(0, 12)) || report.includes(payload.slice(0, 12)), false);
   });
 
   it('fails closed when app-server succeeds but no matching trust snapshot is written', () => {

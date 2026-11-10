@@ -20,6 +20,10 @@ const { CodexAdapter } = await import('../codex.js');
 const version = 'codex-cli 0.146.0';
 const launchArgs = { sessionGroup: null, runId: 'trust-regression', sessionMode: 'single', launchConfig: { runtime: 'codex', mode: 'default' } };
 
+// Longest report: one stderr line (so its tail is plain to predict) and a message, each past its limit.
+const LONG_STDERR = Array.from({ length: 120 }, (_, i) => `chunk${String(i).padStart(3, '0')}`).join(' ') + ' api_key=SECRETLONG\n';
+const LONG_MESSAGE = Array.from({ length: 60 }, (_, i) => `word${String(i).padStart(2, '0')}`).join(' ');
+
 function fixture(t) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-launch-trust-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -59,14 +63,19 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (msg.method === 'hooks/list') {
     const file = path.join(process.cwd(), '.codex', 'hooks.json');
     const hash = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-    reply(msg.id, { data: [{ hooks: [{ key: file + ':session_start:0:0', currentHash: hash, isManaged: false }] }] });
+    // A Codex too old to report currentHash lists the hook without it.
+    const current = process.env.FAKE_CODEX_FAIL === 'hashless' ? {} : { currentHash: hash };
+    reply(msg.id, { data: [{ hooks: [{ key: file + ':session_start:0:0', ...current, isManaged: false }] }] });
   }
   if (msg.method === 'config/batchWrite') {
-    if (process.env.FAKE_CODEX_FAIL === '1') {
+    if (process.env.FAKE_CODEX_FAIL === '1' || process.env.FAKE_CODEX_FAIL === 'long') {
       fs.unlinkSync(busy); log('failure');
-      // Log first, then answer with an error carrying a code, as a refused config write does.
-      process.stderr.write('ERROR config write failed: Operation not permitted (os error 1) api_key=sk-proj-SECRETabcdef123\\n',
-        () => setTimeout(() => reply(msg.id, null, { code: -32603, message: 'injected trust failure' }), 50));
+      // Log first, then answer with an error carrying a code, as a refused config write does. 'long' gives the
+      // longest report: a message past its 300-character limit and stderr past its 600-character tail.
+      const long = process.env.FAKE_CODEX_FAIL === 'long';
+      const stderr = long ? ${JSON.stringify(LONG_STDERR)} : 'ERROR config write failed: Operation not permitted (os error 1) api_key=sk-proj-SECRETabcdef123\\n';
+      const message = long ? ${JSON.stringify(LONG_MESSAGE)} : 'injected trust failure';
+      process.stderr.write(stderr, () => setTimeout(() => reply(msg.id, null, { code: -32603, message }), 50));
       return;
     }
     setTimeout(() => {
@@ -88,15 +97,19 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   };
 }
 
-// The launch failure names the stopped start, carries Codex's own report through the trust worker, and says what
-// to do next; it is also written to the supervisor's stderr.
-function assertDidNotStart(error, stderrLines) {
+const NEXT_STEP = 'Hook trust must succeed before Codex starts and is tried again at the next launch; ' +
+  'run `zylos init` to retry it now and see the result.';
+const SHORT_REPORT = 'Codex hook trust failed (config_batch_write_error): Codex error -32603: ' +
+  'injected trust failure; stderr: ERROR config write failed: Operation not permitted (os error 1) api_key=[redacted]';
+const LONG_REPORT = 'Codex hook trust failed (config_batch_write_error): Codex error -32603: ' + LONG_MESSAGE.slice(0, 300) +
+  '; stderr (last 600 characters): ' + LONG_STDERR.trim().replace('SECRETLONG', '[redacted]').slice(-600);
+
+// The launch failure names the stopped start, carries Codex's whole report through the trust worker, and says
+// what to do next; it is also written to stderr of the process that launches Codex (the router, in c4-dispatcher).
+function assertDidNotStart(error, stderrLines, report = SHORT_REPORT) {
   assert.equal(error.code, 'LAUNCH_FAILED');
   assert.ok(error.cause instanceof Error);
-  const expected = 'Codex did not start: Codex hook trust failed (config_batch_write_error): Codex error -32603: ' +
-    'injected trust failure; stderr: ERROR config write failed: Operation not permitted (os error 1) api_key=[redacted]. ' +
-    'Hook trust must succeed before Codex starts and is tried again at the next launch; ' +
-    'run `zylos init` to retry it now and see the result.';
+  const expected = `Codex did not start: ${report}. ${NEXT_STEP}`;
   assert.equal(error.message, expected);
   assert.equal(stderrLines.filter(line => line === `${expected}\n`).length, 1);
   assert.equal(stderrLines.some(line => line.includes('SECRET')), false);
@@ -133,10 +146,10 @@ test('Codex launch refreshes changed hooks before the tmux launch boundary and s
 test('Codex trust failure rejects launch before any tmux/runtime launch', async t => {
   const f = fixture(t);
   const calls = baseLaunch(t);
-  f.env.FAKE_CODEX_FAIL = '1';
+  f.env.FAKE_CODEX_FAIL = 'long';
   const stderrLines = [];
   const write = t.mock.method(process.stderr, 'write', chunk => { stderrLines.push(String(chunk)); return true; });
-  await assert.rejects(f.adapter.launch(launchArgs), error => { assertDidNotStart(error, stderrLines); return true; });
+  await assert.rejects(f.adapter.launch(launchArgs), error => { assertDidNotStart(error, stderrLines, LONG_REPORT); return true; });
   write.mock.restore();
   assert.equal(calls.length, 0);
   assert.equal(fs.existsSync(codexTrustMarkerPath(f.root)), false);
@@ -146,6 +159,22 @@ test('Codex trust failure rejects launch before any tmux/runtime launch', async 
   assert.equal(calls.length, 1, 'a subsequent launch can retry after a trust failure');
   assert.equal(f.valid().valid, true);
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure', 'start', 'end']);
+});
+
+test('a trust report that ends a sentence is joined without a doubled full stop', async t => {
+  const f = fixture(t);
+  baseLaunch(t);
+  f.env.FAKE_CODEX_FAIL = 'hashless';
+  const stderrLines = [];
+  t.mock.method(process.stderr, 'write', chunk => { stderrLines.push(String(chunk)); return true; });
+  await assert.rejects(f.adapter.launch(launchArgs), error => {
+    assert.equal(error.code, 'LAUNCH_FAILED');
+    assert.equal(error.message, 'Codex did not start: Codex hook trust failed (missing_current_hash): Codex CLI "codex-cli 0.146.0" ' +
+      'does not report currentHash in hooks/list (field added in Codex CLI 0.129.0). Upgrade Codex CLI to 0.129.0 or later ' +
+      `(0.146+ recommended). ${NEXT_STEP}`);
+    return true;
+  });
+  assert.equal(stderrLines.some(line => line.includes('..')), false);
 });
 
 test('Codex trust uses the launch environment and custom CODEX_HOME without writing default home config', async t => {
