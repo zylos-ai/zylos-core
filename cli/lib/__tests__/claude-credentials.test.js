@@ -132,6 +132,16 @@ test('configuring a relay base URL turns the relay traffic setting on in .env, s
   assert.deepEqual(relayFlagState(), RELAY_ON);
 });
 
+test('configuring a relay base URL rewrites a wrong or duplicated existing value to a single 1', () => {
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  settings.env[relayFlag] = '0';
+  fs.writeFileSync(settingsFile, JSON.stringify(settings));
+  fs.writeFileSync(envFile, fs.readFileSync(envFile, 'utf8') + `${relayFlag}=0\nexport ${relayFlag}=1\n`);
+  assert.equal(saveClaudeBaseUrlToSettingsAndEnv('https://relay.example.test'), true);
+  assert.deepEqual(relayFlagState(), RELAY_ON);
+  assert.equal(parseDotEnv(fs.readFileSync(envFile)).KEEP, 'unchanged');
+});
+
 test('configuring the official base URL removes the relay traffic setting everywhere', () => {
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   settings.env[relayFlag] = '1';
