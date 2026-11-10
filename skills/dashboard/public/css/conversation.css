@@ -1215,6 +1215,9 @@ button.conversation-internal-peer {
 }
 button.conversation-internal-peer:hover { background:var(--wb-panel); }
 button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+@media(max-width:760px) {
+  button.conversation-internal-peer { position:relative; z-index:1; min-width:40px; min-height:40px; padding-top:12px; padding-bottom:12px; margin-top:-12px; margin-bottom:-12px; }
+}
 .conversation-internal-missing { font-size:10px; }
 .conversation-internal-raw { font-size:11px; color:var(--text-muted); }
 .conversation-internal-raw summary { cursor:pointer; }

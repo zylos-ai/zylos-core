@@ -151,6 +151,8 @@ export async function runInternalConversationBrowser(t, sandbox) {
           const text = article.querySelector('.chat-message-text');
           const meta = article.querySelector('.conversation-message-meta');
           const time = meta?.querySelector('time');
+          const spacer = article.querySelector('.conversation-internal-spacer');
+          const peer = article.querySelector('button.conversation-internal-peer')?.getBoundingClientRect();
           if (!body || !bubble || !text || !meta || !time) throw Error('ordinary-compatible internal bubble and timestamp structure required');
           const column = article.closest('.conversation-message-list').getBoundingClientRect();
           const box = bubble.getBoundingClientRect();
@@ -166,10 +168,17 @@ export async function runInternalConversationBrowser(t, sandbox) {
             timeMargin:timeStyle.margin, timeFontSize:timeStyle.fontSize,
             metaHeight:metaBox.height, timeCenterOffset:(timeBox.top + timeBox.bottom - metaBox.top - metaBox.bottom) / 2,
             timeSide:timeBox.right <= authorBox.left + 1 ? 'left' : timeBox.left >= authorBox.right - 1 ? 'right' : 'overlap',
+            spacerVisibility:spacer ? getComputedStyle(spacer).visibility : null,
+            peerHeight:peer?.height ?? null, peerWidth:peer?.width ?? null,
           };
         };
         const internal = await row(message.id).evaluate(measure, direction);
         const reference = await ordinary.evaluate(measure, direction);
+        assert.equal(internal.spacerVisibility, 'hidden', 'internal avatar spacer remains invisible');
+        if (width === 390) {
+          assert.ok(internal.peerHeight >= 40, 'mobile peer button target is at least 40px high');
+          assert.ok(internal.peerWidth >= 40, 'mobile peer button target is at least 40px wide');
+        }
         const edge = direction === 'in' ? 'right' : 'left';
         const opposite = direction === 'in' ? 'left' : 'right';
         const difference = Math.abs(internal[edge] - reference[edge]);
