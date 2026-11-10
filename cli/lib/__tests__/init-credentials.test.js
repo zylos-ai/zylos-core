@@ -530,6 +530,16 @@ for (const [where, baseUrl, leftoverKey, expected] of [
   });
 }
 
+for (const [where, baseUrl] of [['without a base URL', undefined], ['on the official API', 'https://api.anthropic.com']]) {
+  test(`zylos init --auth-token ${where} turns the relay traffic setting on`, t => {
+    const state = seedRelayFlag(t, isolatedCredentials(t), baseUrl);
+    fs.writeFileSync(path.join(ZYLOS_DIR, '.env'), `KEEP=unchanged\n${baseUrl ? `ANTHROPIC_BASE_URL=${baseUrl}\n` : ''}`);
+    delete process.env[relayFlag];
+    assert.equal(persistInitCredentials({ authToken: 'bearer-' + crypto.randomUUID() }), true);
+    assert.deepEqual(state(), ON);
+  });
+}
+
 test('init saving only a base URL recomputes the setting (relay on, then official off)', t => {
   const state = seedRelayFlag(t, isolatedCredentials(t), undefined);
   fs.writeFileSync(path.join(ZYLOS_DIR, '.env'), 'KEEP=unchanged\n');

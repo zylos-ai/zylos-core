@@ -24,7 +24,8 @@ console.log('Claude credential isolation: ' + JSON.stringify({ HOME: home, ZYLOS
   PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, settingsFile, envFile }));
 const { saveApiKey, saveApiKeyToEnv, saveAuthToken, saveAuthTokenToEnv,
   saveSetupToken, saveSetupTokenToEnv, isValidBaseUrl,
-  saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice } = await import('../runtime-setup.js');
+  saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice, syncClaudeRelayTraffic } = await import('../runtime-setup.js');
+const { launchEnvironment } = await import('../runtime/session-command.js');
 const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags } = await import('../../commands/runtime.js');
 const { executeAuth } = await import('../../commands/auth.js');
 const { readEnvFile } = await import('../env.js');
@@ -202,6 +203,17 @@ test('a saved API key wins over a claude.ai login file: --save-apikey then --sav
   assert.deepEqual(relayFlagState(), RELAY_ON, 'after --save-base-url https://api.anthropic.com');
   assert.ok(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_API_KEY, 'the API key is still saved');
 });
+
+for (const [form, officialLine] of [['an export line', `export ANTHROPIC_BASE_URL=${officialUrl}`], ['a KEY: value line', `ANTHROPIC_BASE_URL: ${officialUrl}`]]) {
+  test(`the setting reads .env as the session does: a relay line followed by an official URL in ${form} keeps the relay and the setting on`, () => {
+    fs.writeFileSync(settingsFile, JSON.stringify({ env: { KEEP: 'unchanged' } }));
+    fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_BASE_URL=${relayUrl}\n${officialLine}\n`);
+    delete process.env[relayFlag];
+    assert.equal(launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtime: 'claude' }).ANTHROPIC_BASE_URL, relayUrl, 'the session uses the relay');
+    assert.equal(syncClaudeRelayTraffic(), true);
+    assert.deepEqual(relayFlagState(), RELAY_ON);
+  });
+}
 
 test('an API key kept only in settings.json env still counts (Claude Code reads it there)', () => {
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));

@@ -44,7 +44,12 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
   }
   return args;
 }
-export function launchEnvironment(root, processEnv = process.env, { runtime } = {}) {
+/**
+ * <root>/.env as a new runtime session reads it: plain KEY=VALUE lines,
+ * surrounding quotes removed, later lines win, anything else skipped. The
+ * relay traffic setting is computed from the same read. Empty when absent.
+ */
+export function readLaunchDotenv(root) {
   const dotenvVars = {};
   try {
     for (const line of fs.readFileSync(path.join(root,'.env'),'utf8').split('\n')) {
@@ -52,6 +57,10 @@ export function launchEnvironment(root, processEnv = process.env, { runtime } = 
       if (m) dotenvVars[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
     }
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  return dotenvVars;
+}
+export function launchEnvironment(root, processEnv = process.env, { runtime } = {}) {
+  const dotenvVars = readLaunchDotenv(root);
   const {env} = dotenvVars.ZYLOS_CLEAN_ENV === 'false'
     ? buildCompatEnv({processEnv, dotenvVars})
     : buildCleanEnv({processEnv, dotenvVars, manifest:loadRuntimeEnvManifest(root), uid:process.getuid?.()});

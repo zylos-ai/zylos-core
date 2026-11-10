@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { parse as parseDotEnv } from 'dotenv';
+import { readLaunchDotenv } from './runtime/session-command.js';
 import { CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from './config.js';
 import { writeEnvFile } from './env.js';
 import { checkPrivateFile, writePrivateFile } from './private-file.js';
@@ -399,10 +400,13 @@ export function claudeCredentialIn(values) {
   return 'none';
 }
 
-/** Saved Claude base URL and credential: .env first, then the settings.json env fallback Claude Code also reads. */
+/**
+ * Saved Claude base URL and credential: .env read exactly as a new session
+ * reads it, then the settings.json env fallback Claude Code also reads.
+ */
 function savedClaudeState() {
   let dotenv = {}, settingsEnv = {};
-  try { dotenv = parseDotEnv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'))); } catch {}
+  try { dotenv = readLaunchDotenv(ZYLOS_DIR); } catch {}
   try { settingsEnv = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'))?.env || {}; } catch {}
   const values = {};
   for (const key of [...CLAUDE_CREDENTIAL_KEYS, 'ANTHROPIC_BASE_URL']) values[key] = dotenv[key] || settingsEnv[key] || '';
