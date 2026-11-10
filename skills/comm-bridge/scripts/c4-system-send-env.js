@@ -1,4 +1,4 @@
-/** System notifications are not authored by an inherited runtime session. */
+/** System notifications and resident services have no runtime session identity. */
 export function systemSendEnvironment(env = process.env) {
   const childEnv = { ...env };
   delete childEnv.ZYLOS_RUN_ID;

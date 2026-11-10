@@ -156,6 +156,26 @@ test('an explicit subgroup cannot claim an endpoint received only by another gro
   sent(f, await sendExternal({ channel: 'chat', endpoint: 'recipient', groupName: 'a' }, body, f.options), 'chat:b');
 });
 
+test('a sender cannot claim ownership from its own outbound history', async t => {
+  const f = fixture(t); f.seed('a-home', 'a');
+  assert.equal(f.store.insertConversation('out', 'chat', 'recipient', 'previous send', { groupName: 'a' }).session_group, 'chat:a');
+  f.seed('recipient', 'b');
+  const before = f.snapshot();
+  await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'recipient', groupName: 'a' }, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
+  f.untouched(before);
+});
+
+test('whole-group replies reject a subgroup before hooks even when both received the endpoint', async t => {
+  const f = fixture(t); f.seed('recipient'); f.seed('recipient', 'a');
+  const before = f.snapshot();
+  await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'recipient', wholeGroup: true }, body, f.options), error => {
+    assert.equal(error.code, 'CROSS_SESSION_OUTBOUND');
+    assert.match(error.message, /handled by session chat;/);
+    return true;
+  });
+  f.untouched(before);
+});
+
 test('an explicit topic with its own endpoint inbound can reply despite a newer topic', async t => {
   const f = fixture(t); f.seed('recipient', 'a'); f.seed('recipient', 'b');
   sent(f, await sendExternal({ channel: 'chat', endpoint: 'recipient', groupName: 'a' }, body, f.options), 'chat:a');
