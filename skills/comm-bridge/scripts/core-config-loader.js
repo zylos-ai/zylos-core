@@ -42,7 +42,10 @@ function configFromInstallation(recordPath) {
 }
 
 function locationError(recordPath, explicit = false) {
-  return new Error(`Cannot locate the installed zylos-core cli/lib/config.js${explicit ? ' at ZYLOS_PACKAGE_ROOT' : ''}. ` +
+  if (explicit) return new Error('Cannot locate the installed zylos-core cli/lib/config.js at ZYLOS_PACKAGE_ROOT. ' +
+    'Correct or unset ZYLOS_PACKAGE_ROOT; it must point to the installed package directory containing cli/lib/config.js. ' +
+    'Installation-record and PATH fallbacks are not used while this override is set.');
+  return new Error('Cannot locate the installed zylos-core cli/lib/config.js. ' +
     'Set ZYLOS_PACKAGE_ROOT to the installed package directory containing cli/lib/config.js, or refresh ' +
     `${recordPath} by running /absolute/path/to/node /absolute/path/to/zylos/cli/zylos.js init. ` +
     'Alternatively, put the installed zylos executable or npm on PATH.');

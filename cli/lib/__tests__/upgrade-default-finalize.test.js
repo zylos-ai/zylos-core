@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
-import { runSelfUpgradeFinalize, resumeUpgradeFinalization } from '../self-upgrade.js';
+import { runSelfUpgradeFinalize, resumeUpgradeFinalization, step5_syncCoreSkills } from '../self-upgrade.js';
 import { LEGACY_CORE_DATABASES, createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from '../core-db-backup.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff } from '../upgrade-post-cutoff.js';
@@ -679,6 +679,32 @@ test('runtime CLI preparation failure stops before migration, cutoff and live pu
   assert.equal(f.read('CLAUDE.md'), 'old Claude output');
   assert.equal(f.calls.includes('start'), false);
   assertDataPreserved(f);
+});
+
+// Integration boundary: real step-5 location writer and protected finalizer
+// persist a warning in the real maintenance journal. Run for warning durability
+// or skill-publication changes; skip unrelated CLI/UI work. The official runner
+// isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; this fixture owns all copied code,
+// SQLite databases and journal state. Services/installers remain injected.
+test('Core package location warning survives successful protected finalization in the durable journal', async t => {
+  const f = fixture(t);
+  const record = path.join(f.root, '.claude/skills/comm-bridge/.zylos/core-package.json');
+  fs.mkdirSync(record, { recursive: true });
+  const result = await f.run({
+    syncSkills: ctx => step5_syncCoreSkills(ctx, {
+      zylosDir: f.root,
+      syncCoreSkills: () => ({ synced: [], added: [], merged: [], deleted: [], preserved: [],
+        conflicts: [], errors: [], pendingBaselines: [] }),
+    }),
+  });
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.corePackageWarnings.length, 1);
+  assert.equal(result.corePackageWarnings[0].code, 'CORE_PACKAGE_LOCATION_WRITE_FAILED');
+  assert.match(result.corePackageWarnings[0].message, /Unsafe Core package location record/);
+  const persisted = f.load();
+  assert.equal(persisted.phase, 'upgrade_complete');
+  assert.deepEqual(persisted.corePackageWarnings, result.corePackageWarnings);
+  assert.deepEqual(persisted.runtimeWarnings, []);
 });
 
 test('runtime warning survives a fresh process status and forward repair', async t => {

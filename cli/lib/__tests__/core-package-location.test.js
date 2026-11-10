@@ -57,6 +57,14 @@ test('location publication rejects symlink metadata instead of modifying another
   assert.equal(fs.readdirSync(outside).length, 0);
 });
 
+test('location publication records the real package root behind a symlink', t => {
+  const f = fixture(t), linkedRoot = path.join(f.root, 'package-link');
+  fs.symlinkSync(f.packageRoot, linkedRoot, 'dir');
+  writeCorePackageLocation({ skillDir: f.skillDir, packageRoot: linkedRoot });
+  assert.deepEqual(read(f.record), { v: 1, packageRoot: fs.realpathSync(f.packageRoot) });
+  assert.notEqual(read(f.record).packageRoot, linkedRoot);
+});
+
 const synced = () => ({ synced: [], added: [], merged: [], deleted: [], preserved: [], conflicts: [], errors: [], pendingBaselines: [] });
 
 // Integration boundary: real installed-package writer plus the real sync step,
@@ -139,6 +147,7 @@ test('initialization publishes the package that actually supplied its comm-bridg
   fs.unlinkSync(record); fs.mkdirSync(record);
   const failure = execFileSync(process.execPath, args, options);
   assert.match(failure, /Failed to sync.*comm-bridge/);
+  assert.match(failure, /Unsafe Core package location record/);
   assert.equal(JSON.parse(failure.trim().split('\n').at(-1)).updated.includes('comm-bridge'), false);
   assert.equal(fs.statSync(record).isDirectory(), true);
 });

@@ -6,6 +6,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { fixture } from './c4-v2-test-helpers.js';
 import { sendExternal } from '../c4-send-external.js';
+import { installSendSpawnFault } from './fixtures/send-spawn-fault.js';
 
 function setup(t) {
   const result = fixture(t, {}, true);
@@ -38,23 +39,28 @@ test('actual SQLite writer contention commits no audit, namespace or group and s
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 1);
 });
 
-test('real PATH ENOENT and EACCES retain committed audit without disclosing endpoint', async t => {
-  const { api, db, dir } = setup(t);
-  const bin = path.join(dir, 'bin');
-  fs.mkdirSync(bin);
-  const originalPath = process.env.PATH;
-  try {
-    process.env.PATH = bin;
-    for (const errno of ['ENOENT', 'EACCES']) {
-      if (errno === 'EACCES') fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\nexit 0\n', { mode: 0o600 });
+// Integration boundary: actual spawn errno + private SQLite audit, required for
+// sender launch changes. Other send paths may skip. The official runner owns
+// isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; this fixture owns the component and
+// fault executable. Failed children never start, and each spawn override is
+// restored before the next case. No live channels, tmux or services are used.
+test('real OS ENOENT and EACCES retain committed audit without disclosing endpoint', async t => {
+  const { api, db, dir, script, marker } = setup(t);
+  fs.mkdirSync(path.join(dir, 'bin'));
+  fs.writeFileSync(path.join(dir, 'bin', 'not-executable'), '#!/bin/sh\nexit 0\n', { mode: 0o600 });
+  for (const errno of ['ENOENT', 'EACCES']) {
+    const restore = installSendSpawnFault({ target: script, fault: errno, root: dir });
+    try {
       await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir }), error => {
         assert.equal(error.code, 'COMPONENT_SPAWN_FAILED');
         assert.ok(error.message.includes(errno));
         assert.ok(!error.message.includes(request.endpoint));
+        assert.match(error.message, /audit retained; not sent/);
         return true;
       });
-    }
-  } finally { process.env.PATH = originalPath; }
+      assert.equal(fs.existsSync(marker), false, 'component body must not execute');
+    } finally { restore(); }
+  }
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
 });
 

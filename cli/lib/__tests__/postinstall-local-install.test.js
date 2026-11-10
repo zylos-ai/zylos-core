@@ -49,6 +49,8 @@ function runPostinstall(zylosDir, npmEnv = {}, extraEnv = {}, scriptPath = POSTI
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_')));
   delete env.ZYLOS_PROTECTED_INSTALL;
   delete env.ZYLOS_SKIP_POSTINSTALL;
+  const tmp = path.join(path.dirname(zylosDir), 'tmp');
+  fs.mkdirSync(tmp, { recursive: true });
   return execFileSync(process.execPath, [scriptPath], {
     encoding: 'utf8',
     timeout: 30000,
@@ -59,6 +61,9 @@ function runPostinstall(zylosDir, npmEnv = {}, extraEnv = {}, scriptPath = POSTI
       CI: '',
       HOME: path.dirname(zylosDir),
       ZYLOS_DIR: zylosDir,
+      PM2_HOME: path.join(path.dirname(zylosDir), '.pm2'),
+      TMPDIR: tmp,
+      TMUX_TMPDIR: tmp,
       ...npmEnv,
       ...extraEnv,
     },
@@ -105,8 +110,77 @@ describe('postinstall local install guard', () => {
     const record = path.join(zylosDir, '.claude/skills/comm-bridge/.zylos/core-package.json');
     fs.unlinkSync(record); fs.mkdirSync(record);
     const output = runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, script);
-    assert.match(output, /Warning: Failed to update comm-bridge: Unsafe Core package location record/);
+    assert.match(output, /Warning: Core package location record was not updated: Unsafe Core package location record/);
+    assert.match(output, /Set ZYLOS_PACKAGE_ROOT.*rerun zylos init/);
+    assert.doesNotMatch(output, /Failed to update comm-bridge/);
     assert.equal(fs.statSync(record).isDirectory(), true);
+  });
+
+  // Integration: real three-way documentation conflict and failed record write.
+  // Run for postinstall result/publication ordering; skip unrelated services.
+  // Package copies, deployment, backup and blocked record are fixture-owned;
+  // the bounded absolute-Node child never installs packages or starts services.
+  it('reports the successful merge and conflict backup before a location publication warning', () => {
+    const zylosDir = fixtureZylosDir(), script = installedPostinstallPath();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, script);
+    const skill = path.join(zylosDir, '.claude/skills/comm-bridge');
+    const deployed = path.join(skill, 'SKILL.md');
+    const source = path.join(path.dirname(path.dirname(script)), 'skills/comm-bridge/SKILL.md');
+    const alterLine = (text, value) => { const lines = text.split('\n'); lines[2] = value; return lines.join('\n'); };
+    const local = alterLine(fs.readFileSync(deployed, 'utf8'), 'description: local documentation change');
+    fs.writeFileSync(deployed, local);
+    fs.writeFileSync(source, alterLine(fs.readFileSync(source, 'utf8'), 'description: upstream documentation change'));
+    const record = path.join(skill, '.zylos/core-package.json');
+    fs.unlinkSync(record); fs.mkdirSync(record);
+    const output = runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, script);
+    assert.match(output, /~ comm-bridge \(1 conflicts\)/);
+    const backup = /Conflict backup: (.+\/comm-bridge\/SKILL\.md)/.exec(output)?.[1];
+    assert.ok(backup, 'the overwritten local document must have a visible backup path');
+    assert.ok(backup.startsWith(path.join(path.dirname(zylosDir), 'tmp') + path.sep));
+    assert.equal(fs.readFileSync(backup, 'utf8'), local);
+    assert.match(fs.readFileSync(deployed, 'utf8'), /upstream documentation change/);
+    const warning = output.indexOf('Warning: Core package location record was not updated:');
+    assert.ok(warning > output.indexOf('Conflict backup:'));
+    assert.match(output, /Core Skills: 0 added, 1 updated,/);
+    assert.doesNotMatch(output, /Failed to update comm-bridge/);
+    assert.equal(fs.statSync(record).isDirectory(), true);
+  });
+
+  // Integration: a fresh skill copies successfully but brings a blocked metadata
+  // target from a private package fixture. Run for first-sync warning/counting;
+  // skip unrelated hooks. All files and child resources stay under private roots.
+  it('counts a freshly copied skill even when its location record cannot be published', () => {
+    const zylosDir = fixtureZylosDir(), script = installedPostinstallPath();
+    const packageRoot = path.dirname(path.dirname(script));
+    fs.mkdirSync(path.join(packageRoot, 'skills/comm-bridge/.zylos/core-package.json'), { recursive: true });
+    const output = runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, script);
+    assert.match(output, /\+ comm-bridge/);
+    assert.match(output, /Warning: Core package location record was not updated:/);
+    assert.ok(output.indexOf('+ comm-bridge') < output.indexOf('Warning: Core package location record was not updated:'));
+    assert.doesNotMatch(output, /Failed to sync comm-bridge/);
+    const totalSkills = fs.readdirSync(path.join(packageRoot, 'skills'), { withFileTypes: true }).filter(entry => entry.isDirectory()).length;
+    assert.ok(output.includes(`Core Skills: ${totalSkills} added, 0 updated, 0 unchanged.`));
+    assert.equal(fs.existsSync(path.join(zylosDir, '.claude/skills/comm-bridge/SKILL.md')), true);
+  });
+
+  // Integration: real smartSync gets an OS file/directory collision while another
+  // document updates. Run for merge-error publication guards; skip other hooks.
+  // Two owned package copies and one private deployment; no services/installers.
+  it('does not advance the location record when skill merging reports an error', () => {
+    const zylosDir = fixtureZylosDir(), first = installedPostinstallPath(), second = installedPostinstallPath();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, first);
+    const skill = path.join(zylosDir, '.claude/skills/comm-bridge');
+    const record = path.join(skill, '.zylos/core-package.json');
+    const before = fs.readFileSync(record);
+    const source = path.join(path.dirname(path.dirname(second)), 'skills/comm-bridge');
+    fs.appendFileSync(path.join(source, 'SKILL.md'), '\nAdditional package documentation.\n');
+    fs.writeFileSync(path.join(source, 'publication-check.txt'), 'new package document\n');
+    fs.mkdirSync(path.join(skill, 'publication-check.txt'));
+    const output = runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, second);
+    assert.match(output, /~ comm-bridge \([^\n]*1 errors\)/);
+    assert.equal(fs.readFileSync(record).equals(before), true);
+    assert.notEqual(JSON.parse(before).packageRoot, fs.realpathSync(path.dirname(path.dirname(second))));
+    assert.equal(fs.statSync(path.join(skill, 'publication-check.txt')).isDirectory(), true);
   });
 
   it('prints recovery and normal upgrade commands after direct npm installation on an initialized machine', () => {

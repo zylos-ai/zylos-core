@@ -12,6 +12,7 @@ import { createStore } from '../c4-v2-store.js';
 import { sendExternal } from '../c4-send-external.js';
 
 const scripts = fileURLToPath(new URL('../', import.meta.url));
+const spawnFault = new URL('./fixtures/send-spawn-fault.js', import.meta.url).href;
 const packageRoot = path.resolve(scripts, '../../..');
 
 // Real installed CLI + private SQLite + fixture-owned receiver. Required for
@@ -61,9 +62,10 @@ function setup(t, { stdin = true, source } = {}) {
   assert.deepEqual(fs.readdirSync(bin), ['node']);
   console.log('Transport isolation:', JSON.stringify({ ...Object.fromEntries(
     ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'PATH'].map(key => [key, env[key]])), db: filename }));
-  return { db, env, root, capture, bin, skillsDir, invoke: (content, endpoint = 'private-endpoint') => spawnSync(process.execPath,
-    [path.join(installed, 'scripts', 'c4-send.js'), 'example', ...(endpoint === null ? [] : [endpoint]), '--stdin'],
-    { cwd: root, env, input: content, encoding: 'utf8', timeout: 5000, maxBuffer: 65536 }) };
+  return { db, env, root, capture, bin, skillsDir, invoke: (content, endpoint = 'private-endpoint', { fault } = {}) => spawnSync(process.execPath,
+    [...(fault ? ['--import', spawnFault] : []), path.join(installed, 'scripts', 'c4-send.js'), 'example', ...(endpoint === null ? [] : [endpoint]), '--stdin'],
+    { cwd: root, env: { ...env, ...(fault ? { C4_TEST_SPAWN_TARGET: path.join(channel, 'scripts', 'send.js'),
+      C4_TEST_SPAWN_FAULT: fault } : {}) }, input: content, encoding: 'utf8', timeout: 5000, maxBuffer: 65536 }) };
 }
 
 function retained(f, count = 1) {
@@ -123,14 +125,26 @@ test('a receiver closing stdin cannot turn a broken pipe into success', { timeou
   retained(f);
 });
 
+// Real OS launch faults are selected only for the test-owned receiver. Run for
+// send executable/transport changes; unrelated UI may skip. The preload keeps
+// the real CLI, private DB and native spawn events, and every child has the
+// fixture's timeout and isolated environment. No PATH-node assumption is used.
 test('stdin receiver spawn failure keeps the stored row without claiming delivery', { timeout: 10000 }, t => {
   const f = setup(t);
-  fs.renameSync(path.join(f.bin, 'node'), path.join(f.bin, 'node.saved'));
-  const result = f.invoke('body');
-  assert.ifError(result.error); assert.equal(result.status, 1);
-  assert.match(result.stderr, /COMPONENT_SPAWN_FAILED/);
-  assert.doesNotMatch(result.stdout, /Message sent/);
-  retained(f);
+  const faultBin = path.join(f.env.ZYLOS_DIR, 'bin');
+  fs.mkdirSync(faultBin);
+  fs.writeFileSync(path.join(faultBin, 'not-executable'), '#!/bin/sh\nexit 0\n', { mode: 0o600 });
+  for (const [index, fault] of ['ENOENT', 'EACCES'].entries()) {
+    const result = f.invoke('body', 'private-endpoint', { fault });
+    assert.ifError(result.error); assert.equal(result.status, 1);
+    assert.match(result.stderr, /COMPONENT_SPAWN_FAILED/);
+    assert.ok(result.stderr.includes(fault));
+    assert.doesNotMatch(result.stderr, /private-endpoint/);
+    assert.match(result.stderr, /audit retained; not sent/);
+    assert.doesNotMatch(result.stdout, /Message sent/);
+    assert.equal(fs.existsSync(f.capture), false, 'receiver body must not execute');
+    retained(f, index + 1);
+  }
 });
 
 test('identical sends deliver their own committed C4 identities', { timeout: 10000 }, t => {

@@ -814,8 +814,8 @@ export function syncCoreSkills() {
       saveMergeBaseline(destDir, srcDir, manifest);
       if (entry.name === 'comm-bridge') writeCorePackageLocation({ skillDir: destDir, packageRoot: PACKAGE_ROOT });
       (isNew ? installed : updated).push(entry.name);
-    } catch {
-      console.log(`  ${warn(`Failed to sync ${bold(entry.name)}`)}`);
+    } catch (err) {
+      console.log(`  ${warn(`Failed to sync ${bold(entry.name)}: ${err.message}`)}`);
     }
   }
 

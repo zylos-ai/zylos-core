@@ -54,7 +54,7 @@ function run(fx, source, env = {}) {
     import fs from 'node:fs';
     const { loadCoreConfig, resolveCoreConfigModule } = await import(${JSON.stringify(pathToFileURL(fx.loader).href)});
     ${source}
-  `], { env: { ...fx.env, ...env }, encoding: 'utf8', timeout: 10000 });
+  `], { cwd: fx.root, env: { ...fx.env, ...env }, encoding: 'utf8', timeout: 10000 });
 }
 
 function assertLoaded(fx, expectedRoot, env) {
@@ -118,7 +118,12 @@ test('invalid explicit root rejects without trying valid alternatives', t => {
   copyCore(fx.deployed);
   copyCore(path.join(fx.npmRoot, 'zylos'));
   writeRecord(fx, { v: 1, packageRoot: copyCore(path.join(fx.root, 'recorded')) });
-  const result = run(fx, `await assert.rejects(loadCoreConfig(), /Cannot locate.*ZYLOS_PACKAGE_ROOT/);`,
+  const result = run(fx, `await assert.rejects(loadCoreConfig(), error => {
+    assert.match(error.message, /Cannot locate.*ZYLOS_PACKAGE_ROOT/);
+    assert.match(error.message, /Correct or unset ZYLOS_PACKAGE_ROOT/);
+    assert.doesNotMatch(error.message, /refresh|cli\\/zylos.js init/);
+    return true;
+  });`,
     { ZYLOS_PACKAGE_ROOT: path.join(fx.root, 'absent') });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fx.count(), 0);
@@ -171,6 +176,12 @@ for (const fault of ['missing', 'malformed', 'version', 'relative', 'unrelated',
   test('invalid installation record preserves PATH and npm fallbacks and actionable failure: ' + fault, t => {
     const fx = fixture(t);
     const recorded = copyCore(path.join(fx.root, 'recorded'));
+    // The child runs in fx.root, so ./recorded is a real, loadable Core. Only
+    // the absolute-path contract can reject it in favor of the PATH package.
+    if (fault === 'relative') {
+      const probe = run(fx, `assert.ok(fs.statSync('./recorded/cli/lib/config.js').isFile());`);
+      assert.equal(probe.status, 0, probe.stderr);
+    }
     if (fault !== 'missing') {
       writeRecord(fx, fault === 'malformed' ? '{' : {
         v: fault === 'version' ? 2 : 1,

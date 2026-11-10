@@ -228,6 +228,43 @@ test('downloaded executable keeps malformed JSON classified as invalid handoff',
   assert.deepEqual(result.persisted,[]);
 });
 
+// Integration boundary: spawn the actual downloaded entry as main and exercise
+// its JSON/stdout and warning/stderr path. Run for direct upgrade output changes;
+// skip unrelated finalizer/service work. Runner HOME/ZYLOS_DIR/PM2_HOME/TMPDIR
+// are isolated, and the child receives fixture-owned paths plus a private tmux
+// namespace. Product entry files are copied unchanged; native module mocks stop
+// installer/protection/DB work. The bounded child cannot invoke npm or services.
+test('downloaded executable prints Core package location warnings separately from runtime warnings', t => {
+  const input = fixture(t), root = path.dirname(input.tempDir), source = path.resolve('.');
+  const filter = file => !file.split(path.sep).includes('__tests__') && !file.split(path.sep).includes('node_modules');
+  fs.cpSync(path.join(source, 'cli/lib'), path.join(input.tempDir, 'cli/lib'), { recursive: true, filter });
+  const admission = 'skills/comm-bridge/scripts/upgrade-admission.js';
+  fs.mkdirSync(path.dirname(path.join(input.tempDir, admission)), { recursive: true });
+  fs.copyFileSync(path.join(source, admission), path.join(input.tempDir, admission));
+  const warning = { code: 'CORE_PACKAGE_LOCATION_WRITE_FAILED', message: 'Record publication denied; set ZYLOS_PACKAGE_ROOT or rerun zylos init.' };
+  const result = { success: true, warnings: [], corePackageWarnings: [warning] };
+  // Only the finalizer boundary is inert; the product CLI's main block,
+  // handoff validation, pipeline and output statements execute in the child.
+  fs.mkdirSync(path.join(input.installedRoot, 'cli/lib'), { recursive: true });
+  fs.writeFileSync(path.join(input.installedRoot, 'cli/lib/self-upgrade.js'),
+    `export function runSelfUpgradeFinalize() { return ${JSON.stringify(result)}; }\n`);
+  const bin = path.join(root, 'prefix/bin'), npmCli = path.join(root, 'npm-cli.js');
+  fs.writeFileSync(npmCli, 'throw Error("the fixture must never launch npm");\n');
+  fs.symlinkSync(npmCli, path.join(bin, 'npm'));
+  const home = path.join(root, 'home'), tmp = path.join(root, 'tmp');
+  fs.mkdirSync(home); fs.mkdirSync(tmp);
+  const child = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--import',
+    path.resolve('cli/lib/__tests__/fixtures/upgrade-entry-output.js'), path.join(input.tempDir, 'cli/lib/upgrade-entry.js')], {
+    input: JSON.stringify(input), encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
+    env: { ...process.env, UPGRADE_ENTRY_FIXTURE_ROOT: root, HOME: home, ZYLOS_DIR: input.zylosDir,
+      PM2_HOME: path.join(home, '.pm2'), TMPDIR: tmp, TMUX_TMPDIR: tmp, PATH: bin },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  assert.deepEqual(JSON.parse(child.stdout), result);
+  assert.ok(child.stderr.split('\n').includes(`Core package location warning: ${warning.message}`));
+  assert.doesNotMatch(child.stderr, /Runtime warning|the fixture must never launch npm/);
+});
+
 test('downloaded executable redacts paths from its main-block failure', t => {
   const privatePath=path.join(fixture(t).zylosDir,'private-handoff.json');
   const child=spawnSync(process.execPath,[path.resolve('cli/lib/upgrade-entry.js')],{input:privatePath,encoding:'utf8'});
