@@ -8,6 +8,36 @@ import {serviceRestartFixture} from './helpers/service-restart-fixture.js';
 const require = createRequire(import.meta.url);
 const m = require('../upgrade-maintenance.cjs');
 
+// Real recovery entry points and bounded PM2 children in a private fixture.
+// Run for maintenance restart env changes; unrelated upgrade paths can skip.
+// Fixture reads HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/private PATH before launch; no
+// native daemon, tmux, database or network, and teardown restores/removes paths.
+test('maintenance service restarts omit session identity and retain unrelated environment', t => {
+  const f = serviceRestartFixture(t); f.custom();
+  const injected = { ZYLOS_RUN_ID: 'caller-run', ZYLOS_SESSION_GROUP: 'chat:caller', SERVICE_SENTINEL: 'preserved' };
+  const previous = Object.fromEntries(Object.keys(injected).map(key => [key, process.env[key]]));
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  Object.assign(process.env, injected);
+  console.log('Maintenance isolation:', JSON.stringify(f.env));
+  m.restartService('custom-service');
+  m.start(f.j);
+  const children = f.environments().filter(row => ['restart', 'startOrRestart'].includes(row.args[0]));
+  assert.equal(children.length, 3);
+  assert.equal(children.filter(row => row.args[0] === 'startOrRestart').length, 1);
+  for (const row of children) {
+    assert.equal(Object.hasOwn(row.env, 'ZYLOS_RUN_ID'), false);
+    assert.equal(Object.hasOwn(row.env, 'ZYLOS_SESSION_GROUP'), false);
+    assert.equal(row.env.SERVICE_SENTINEL, 'preserved');
+    for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'PATH']) assert.equal(row.env[key], f.env[key]);
+  }
+  assert.equal(process.env.ZYLOS_RUN_ID, 'caller-run');
+  assert.equal(process.env.ZYLOS_SESSION_GROUP, 'chat:caller');
+});
+
 test('fake PM2 filters ecosystem names and reports success for zero matches without starting them', t => {
   const f = serviceRestartFixture(t);
   const result = spawnSync(f.pm2,['startOrRestart',f.file,'--only','custom-service','--update-env']);

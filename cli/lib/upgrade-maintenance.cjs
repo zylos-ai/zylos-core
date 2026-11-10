@@ -740,8 +740,15 @@ function validateSavedServices(j, saved) {
     names.add(service.name);
   }
 }
+function systemSendEnvironment() {
+  // Same rule as c4-system-send-env.js; this frozen recovery copy is builtin-only.
+  const env = {...process.env};
+  delete env.ZYLOS_RUN_ID;
+  delete env.ZYLOS_SESSION_GROUP;
+  return env;
+}
 function restartService(name) {
-  command('pm2', ['restart', name, '--update-env']);
+  command('pm2', ['restart', name, '--update-env'], {env: systemSendEnvironment()});
 }
 function serviceRequirements(j, {ecosystemPath, allowUpdatedEcosystem = false} = {}) {
   const original = j.originalServices || [];
@@ -772,7 +779,7 @@ function start(j) {
     if (optional.has(saved.name)) {
       try { restartService(saved.name); } catch { /* Final verification decides whether to warn. */ }
     } else if (j.initialIdentity?.ecosystemHash === null) restartService(saved.name);
-    else command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env']);
+    else command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env'], {env: systemSendEnvironment()});
   }
 }
 function verifyServices(j) {

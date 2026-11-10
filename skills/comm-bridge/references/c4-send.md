@@ -90,7 +90,13 @@ that fall back to the namespace remain allowed; empty migration groups do not
 assign ownership. Ownership matches endpoint strings exactly; another `|msg:N`
 suffix, different case or whitespace is a different recipient with no shared
 ownership history. System notification callers and Core PM2 service startup
-paths clear both session variables.
+paths clear both session variables from the invoking environment, including
+`zylos start`, init, ecosystem restarts, component registration and upgrade
+recovery. PM2 `--update-env` merges values into each service's saved environment;
+omitting keys does not remove them from an already contaminated service record.
+Such records require `pm2 delete <name>` followed by a fresh start to clear the
+saved session identity. This is a per-service record limitation, not leakage
+from the PM2 daemon's own environment. No automatic record deletion is added.
 The write transaction checks again if ownership changes during a channel hook.
 OpenMax's direct `comm.send`/`comm.ask` bypass C4 and are outside this guard.
 
