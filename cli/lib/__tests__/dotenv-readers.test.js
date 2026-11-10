@@ -7,8 +7,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { ClaudeAdapter } from '../runtime/claude.js';
 import { resolveCodexBypassPermissions } from '../runtime-setup.js';
-import { readEnvTimezone, needsBypassAcceptance, ensureWebConsolePassword, printWebConsoleInfo, getCoreServiceNames, resetManagedState } from '../../commands/init.js';
-import { ZYLOS_DIR, SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR } from '../config.js';
+import { readEnvTimezone, needsBypassAcceptance, ensureWebConsolePassword, printWebConsoleInfo } from '../../commands/init.js';
+import { ZYLOS_DIR } from '../config.js';
+import { createPrivateFixture, runPrivateFixture } from '../../../test/helpers/private-instance-fixture.js';
 import { readEnvFile, writeEnvEntries } from '../env.js';
 
 function fixture(t) {
@@ -177,72 +178,22 @@ for (const deployed of [false, true]) test(`PM2 template reads dotenv from an is
   }
 });
 
-// Integration boundary: init must propagate the real deployed template failure.
-// Run when template/service discovery changes; skip otherwise. The runner isolates
-// all instance paths; no PM2, tmux, native runtime or database is started.
-test('init service discovery propagates deployed template loading errors', t => {
-  assertIsolatedEnvironment();
-  const file = path.join(ZYLOS_DIR, '.env');
-  const pm2 = path.join(ZYLOS_DIR, 'pm2');
-  assert.equal(fs.existsSync(file), false);
-  assert.equal(fs.existsSync(pm2), false);
-  assert.deepEqual(getCoreServiceNames(), []);
-  fs.mkdirSync(pm2);
-  const template = path.join(pm2, 'ecosystem.config.cjs');
-  t.after(() => {
-    delete createRequire(import.meta.url).cache[template];
-    fs.rmSync(file, { force: true });
-    fs.rmSync(pm2, { recursive: true, force: true });
-  });
-  fs.copyFileSync(fileURLToPath(new URL('../../../templates/pm2/ecosystem.config.cjs', import.meta.url)), template);
-  fs.writeFileSync(file, 'CODEX_BYPASS_PERMISSIONS=false\n');
-  console.log('isolated init discovery', JSON.stringify({ template, root: ZYLOS_DIR, home: process.env.HOME, pm2: process.env.PM2_HOME, tmp: process.env.TMPDIR, tmux: 'not used', database: 'not used' }));
-  assert.throws(() => getCoreServiceNames(), { code: 'MODULE_NOT_FOUND' });
-});
-
-// Integration boundary: reset an incomplete fixture installation with a real
-// deployed template and missing skills. Run when reset/service discovery changes;
-// skip otherwise. The runner isolates all paths; no PM2, tmux or DB is started.
-test('init reset warns and cleans managed state when deployed skills are missing', t => {
-  assertIsolatedEnvironment();
-  const file = path.join(ZYLOS_DIR, '.env');
-  const pm2 = path.join(ZYLOS_DIR, 'pm2');
-  const template = path.join(pm2, 'ecosystem.config.cjs');
-  const managed = [SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, pm2];
-  assert.equal(fs.existsSync(SKILLS_DIR), false);
-  assert.equal(fs.existsSync(file), false);
-  for (const dir of [CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, pm2]) {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'fixture-marker'), 'managed');
+// Integration boundary: real init discovery/reset with a deployed template and
+// missing skills. Run for template/service discovery/reset changes; skip otherwise.
+// Each child gets its own HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR before config imports;
+// no PM2, tmux, runtime or database starts. Output/deadline are bounded and all
+// private state is removed before the next case, never from the shared runner root.
+for (const [mode, title] of [
+  ['discovery', 'init service discovery propagates deployed template loading errors'],
+  ['reset', 'init reset warns and cleans managed state when deployed skills are missing'],
+]) test(title, { timeout: 15000 }, async t => {
+  const scope = createPrivateFixture(t);
+  try {
+    await runPrivateFixture(scope, fileURLToPath(new URL('../../../test/fixtures/dotenv-init-fixture.js', import.meta.url)), [mode]);
+  } finally {
+    scope.remove();
   }
-  const content = 'CODEX_BYPASS_PERMISSIONS=false\n';
-  fs.writeFileSync(file, content);
-  fs.copyFileSync(fileURLToPath(new URL('../../../templates/pm2/ecosystem.config.cjs', import.meta.url)), template);
-  const preserved = ['memory', 'logs', 'workspace'].map(name => path.join(ZYLOS_DIR, name));
-  for (const dir of preserved) {
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'fixture-marker'), 'user data');
-  }
-  const warn = console.warn;
-  const warnings = [];
-  t.after(() => {
-    console.warn = warn;
-    delete createRequire(import.meta.url).cache[template];
-    fs.rmSync(file, { force: true });
-    for (const dir of [...managed, ...preserved]) fs.rmSync(dir, { recursive: true, force: true });
-  });
-  console.log('isolated init reset', JSON.stringify({ template, managed, preserved, root: ZYLOS_DIR,
-    home: process.env.HOME, pm2: process.env.PM2_HOME, tmp: process.env.TMPDIR,
-    tmux: 'not used', database: 'not used' }));
-  assert.throws(() => getCoreServiceNames(), { code: 'MODULE_NOT_FOUND' });
-  console.warn = (...args) => warnings.push(args.join(' '));
-  assert.doesNotThrow(() => resetManagedState());
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Could not read the Core service list; skipping pm2 delete/);
-  assert.equal(warnings[0].includes('\n'), false);
-  for (const dir of managed) assert.equal(fs.existsSync(dir), false, dir);
-  assert.equal(fs.readFileSync(file, 'utf8'), content);
-  for (const dir of preserved) assert.equal(fs.readFileSync(path.join(dir, 'fixture-marker'), 'utf8'), 'user data');
+  assert.equal(fs.existsSync(scope.root), false, 'init fixture directory is clean after the child exits');
 });
 
 // Integration boundary: the deployed template must reject unreadable settings
