@@ -36,6 +36,27 @@ Lark        ───┘
 
 ## Sending Messages
 
+External sends must come from the session responsible for that recipient.
+Core resolves the outgoing session using the same routing rules as C4 recording
+(including `--session-group` and absorbed replies). If it differs from your
+inherited `ZYLOS_SESSION_GROUP` (`origin` when only `ZYLOS_RUN_ID` is present),
+Core refuses with `CROSS_SESSION_OUTBOUND` before channel BeforeSend hooks,
+recording or delivery. The error names the responsible session and includes a
+copyable `c4-send.js internal` heredoc command. Use it to ask that session to
+relay the destination, message and necessary context; never override your sender
+environment to bypass the check. This also applies to scheduled reminders.
+For a run-only Origin identity, the supplied command explicitly sets `origin`
+for the internal CLI, preserving the sender Core already inferred.
+Normal replies in the same session, sends without any session identity, and
+new recipients with no inbound record that fall back to a channel namespace
+keep their existing behavior. An explicit existing subgroup is responsible even
+when that recipient has no inbound record yet.
+
+This check covers Core's external send path. OpenMax's direct `comm.send` and
+`comm.ask` calls do not pass through C4 and are outside its coverage. Internal
+handoffs do not automatically register a waiting sender, copy later replies,
+or add a request to forward replies back.
+
 ```bash
 # Send to Telegram DM
 cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 8101553026

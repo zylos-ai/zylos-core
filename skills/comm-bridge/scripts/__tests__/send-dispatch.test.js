@@ -12,6 +12,9 @@ const packageRoot = path.resolve(scripts, '../../..');
 function setup(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'send-dispatch-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (const name of ['home', 'tmp', 'bin', '.zylos']) fs.mkdirSync(path.join(dir, name));
+  fs.symlinkSync(process.execPath, path.join(dir, 'bin', 'node'));
+  fs.writeFileSync(path.join(dir, '.zylos', 'config.json'), '{"runtime":"claude","session_mode":"multi"}');
   const installed = path.join(dir, '.claude/skills/comm-bridge');
   fs.mkdirSync(path.join(installed, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(scripts, '../package.json'), path.join(installed, 'package.json'));
@@ -21,7 +24,9 @@ function setup(t) {
     fs.copyFileSync(path.join(scripts, file), path.join(installed, 'scripts', file));
   }
   return { dir, installed, cli: path.join(installed, 'scripts/c4-send.js'),
-    env: { ...process.env, ZYLOS_DIR: dir, ZYLOS_PACKAGE_ROOT: packageRoot, ZYLOS_SESSION_GROUP: 'origin' } };
+    env: { HOME: path.join(dir, 'home'), ZYLOS_DIR: dir, PM2_HOME: path.join(dir, 'pm2'),
+      TMPDIR: path.join(dir, 'tmp'), TMUX_TMPDIR: path.join(dir, 'tmp'), PATH: path.join(dir, 'bin'),
+      ZYLOS_PACKAGE_ROOT: packageRoot, ZYLOS_SESSION_GROUP: 'origin' } };
 }
 
 function runDatabase(fixture, body) {
@@ -103,8 +108,13 @@ test('installed external and void commands dispatch through installed component 
   assert.equal(invoke(['void', 'handoff', '--stdin']).status, 0);
 });
 
-test('#6b installed CLI reads original absorbed route and queues internal targets through the real module', t => {
+// Installed CLI/private DB, fake channel only, HOME/PM2/tmp/tmux directory and
+// PATH isolated; no tmux executable or network channel. Run for absorbed-send
+// routing/ownership/internal dispatch changes, otherwise may skip. All child
+// calls have timeouts; teardown removes fixture paths after children exit.
+test('installed CLI checks absorbed external ownership and queues internal targets', t => {
   const fixture = setup(t);
+  console.log('Absorbed isolation:', JSON.stringify(fixture.env));
   const component = path.join(fixture.dir, '.claude/skills/demo/scripts');
   fs.mkdirSync(component, { recursive: true });
   runDatabase(fixture, "db.insertConversation('in','demo','target','seed',{groupName:'target'});");
@@ -120,9 +130,14 @@ console.log(JSON.stringify({id:String(row.id),runId})); db.close();
   const { id, runId } = JSON.parse(create.stdout.trim().split('\n').at(-1));
   const output = path.join(fixture.dir, 'absorbed.json');
   fs.writeFileSync(path.join(component, 'send.js'), `require('node:fs').writeFileSync(${JSON.stringify(output)},JSON.stringify(process.argv.slice(2)))`);
-  const invoke = () => spawnSync(process.execPath, [fixture.cli, '--absorbed-reply', runId, id],
-    { env: fixture.env, input: 'reply\n', encoding: 'utf8', timeout: 3000 });
-  const external = invoke();
+  const invoke = (sender = 'origin') => spawnSync(process.execPath, [fixture.cli, '--absorbed-reply', runId, id],
+    { env: { ...fixture.env, ZYLOS_SESSION_GROUP: sender }, input: 'reply\n', encoding: 'utf8', timeout: 3000 });
+  const denied = invoke();
+  assert.equal(denied.status, 1, denied.stderr);
+  assert.match(denied.stderr, /CROSS_SESSION_OUTBOUND.*demo:room/);
+  assert.equal(fs.existsSync(output), false);
+  assert.equal(runDatabase(fixture, `console.log(db.getDb().prepare("SELECT count(*) AS n FROM conversations WHERE direction='out'").get().n);`), 0);
+  const external = invoke('demo:room');
   assert.equal(external.status, 0, external.stderr);
   assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['a\'"$`\\\nroute', 'reply']);
   const update = spawnSync(process.execPath, ['--input-type=module', '-e', `
