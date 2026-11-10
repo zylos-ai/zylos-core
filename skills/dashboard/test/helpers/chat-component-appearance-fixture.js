@@ -106,6 +106,29 @@ const columnsRow = { id: 40, direction: 'out', content: CONTENT_PREFIX + JSON.st
   attachments: [{ id: 'comparison-file', name: '方案资料.pdf', kind: 'file', available: true, size: 84 }] };
 if (parseC4Content(columnsRow.content).kind !== 'envelope') throw new Error('Invalid columns fixture');
 appendContent('columns', columnsRow);
+const spacingMarkdown = (id, text) => ({ id, type: 'markdown', schemaVersion: 1, data: { text } });
+const spacingCard = id => ({ id, type: 'breakdown', schemaVersion: 1, fallbackText: '完成14，评审5',
+  data: { title: '交付进度', parts: [{ key: 'done', label: '完成', value: 14 }, { key: 'review', label: '评审', value: 5 }] } });
+const spacingFile = { id: 'spacing-file', type: 'x-zylos.file', schemaVersion: 1, fallbackText: '交付资料',
+  data: { attachmentId: 'spacing-report', nameSnapshot: '交付资料.pdf' } };
+const spacingAttachment = { id: 'spacing-report', name: '交付资料.pdf', kind: 'file', available: true, size: 84 };
+for (const [index, [id, parts, stack]] of [
+  ['stack-view', [spacingMarkdown('stack-intro', '交付记录：下面按顺序列出完成情况与核对资料。'), spacingCard('stack-card'),
+    spacingMarkdown('stack-summary', '请保留说明与附件之间清晰、一致的阅读间距。'), spacingFile], true],
+  ['markdown-first', [spacingMarkdown('flow-intro', '交付记录从正文开始，首块应与头像和消息内容区顶部对齐。'), spacingFile], false],
+  ['card-ending', [spacingMarkdown('ending-intro', '最后一块是进度卡片，卡片底部应与消息内容区底部对齐。'), spacingCard('ending-card')], false],
+].entries()) {
+  const envelope = { version: 1, kind: 'message', messageId: id, fallbackText: '交付进度与资料', blocks: parts,
+    ...(stack ? { metadata: { view: { schemaVersion: 1, root: 'spacing-root', nodes: [
+      { id: 'spacing-root', type: 'stack', children: parts.map((_, i) => 'spacing-node-' + i) },
+      ...parts.map((block, i) => ({ id: 'spacing-node-' + i, type: 'block', blockId: block.id })),
+    ] } } } : {}),
+  };
+  const row = { id: 50 + index, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(envelope),
+    attachments: parts.includes(spacingFile) ? [spacingAttachment] : [] };
+  if (parseC4Content(row.content).kind !== 'envelope') throw new Error('Invalid spacing fixture');
+  appendContent(id, row);
+}
 const errorsTray = document.createElement('div'); errorsTray.className = 'conversation-upload-tray'; errorsTray.id = 'tray-errors'; document.querySelector('main').append(errorsTray);
 for (const status of ['ready', 'failed', 'expired']) {
   const resource = createChatAttachment({ document, t, mode: 'tray', attachment: { name: status + '.txt', kind: 'file', status }, onRetry: () => {}, onRemove: () => {} });

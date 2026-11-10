@@ -1091,14 +1091,15 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-page .conversation-message-body:has(> .chat-message-content > :is(.chat-block-choice, .chat-block-confirmation, .chat-block-form_intent, .chat-block-time_series, .chat-block-breakdown, .chat-block-category_series)) > .chat-message-content { width: 100%; }
 
 /* Card surfaces */
-.conversation-page .chat-block { max-width: 100%; }
+.conversation-page .chat-block { max-width: 100%; margin: 0 0 12px; }
 .conversation-page .chat-block:has(> .chat-attachment) { padding: 0; border: 0; background: transparent; }
 .conversation-page .chat-block > .chat-attachment { margin: 0; }
 .conversation-page .chat-block:not(.chat-block-markdown):not(:has(> .chat-attachment)) {
-  margin: 0 0 12px; padding: var(--c-pad);
+  padding: var(--c-pad);
   border: 0; border-radius: var(--c-r-lg); background: var(--c-surface); box-shadow: var(--c-shadow-card);
 }
 .conversation-page .chat-block:last-child { margin-bottom: 0; }
+.conversation-page :is(.conversation-view-stack, .conversation-view-columns) > .chat-block { margin: 0; }
 .conversation-page .chat-block-title { margin: 0; font-size: 15px; line-height: 24px; font-weight: 600; letter-spacing: -0.006em; color: var(--c-ink); }
 .conversation-page .chat-block-text { margin: 0; font-size: 14px; line-height: 22px; color: var(--c-ink-2); }
 
@@ -1372,7 +1373,6 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-page .chat-attachment {
   margin: 8px 0; width: 480px; max-width: 100%; min-width: 0; overflow: hidden; border: 0; border-radius: var(--c-r-lg); background: var(--c-surface); box-shadow: var(--c-shadow-card);
 }
-.conversation-page .chat-block + .chat-block:has(> .chat-attachment):not(.conversation-view-columns > *) { margin-top: 8px; }
 .conversation-page .chat-attachment-info { position: relative; display: flex; align-items: center; min-width: 0; gap: 12px; padding: 12px; min-height: 64px; box-sizing: border-box; }
 /* The icon mask sits over a separate sunken tile. */
 .conversation-page .chat-attachment-info::before {

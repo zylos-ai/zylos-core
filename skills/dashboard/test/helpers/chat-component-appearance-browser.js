@@ -70,7 +70,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     catch (error) { throw new Error(error.message + '; errors=' + errors.join('; ') + '; missing=' + missing.join('; ')); }
     await page.locator('#image .chat-attachment-image-content').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.querySelector('#image .chat-attachment-image-content').naturalWidth === 160 && document.querySelector('#tray .chat-attachment-image-content').naturalWidth === 160);
-    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 6);
+    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 8);
     await page.evaluate(() => document.fonts.ready);
     const failedImage = page.locator('#tray-failed-image');
     await failedImage.scrollIntoViewIfNeeded();
@@ -86,6 +86,9 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       fs.mkdirSync(output, { recursive: true });
       fs.writeFileSync(path.join(output, `tray-failed-image-${width}-${theme}.png`), failedImageShot);
       await page.locator('#columns').screenshot({ path: path.join(output, `columns-file-${width}-${theme}.png`), animations: 'disabled', scale: 'css' });
+      for (const id of ['stack-view', 'markdown-first', 'card-ending']) {
+        await page.locator('#' + id).screenshot({ path: path.join(output, `${id}-${width}-${theme}.png`), animations: 'disabled', scale: 'css' });
+      }
     }
     const actual = await page.evaluate(() => {
       const answer = document.querySelector('#answered .chat-question-answer'), list = document.querySelector('#answered .chat-choice-options');
@@ -109,6 +112,16 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
           labels: labels.map(item => ({ text: item.label, y: item.options.translation[1], height: item.font.lineHeight })),
         };
       });
+      const spacing = Object.fromEntries(['stack-view', 'markdown-first', 'card-ending'].map(id => {
+        const content = document.querySelector('#' + id + ' .chat-message-content');
+        const stack = content.querySelector('.conversation-view-stack');
+        const nodes = [...(stack || content).children].filter(node => node.classList.contains('chat-block'));
+        const contentBox = content.getBoundingClientRect();
+        const bounds = nodes.map(node => { const b = node.getBoundingClientRect(); return { top: b.top, bottom: b.bottom }; });
+        return [id, { firstTopOffset: bounds[0].top - contentBox.top, lastBottomOffset: contentBox.bottom - bounds.at(-1).bottom,
+          rowGap: stack ? parseFloat(getComputedStyle(stack).rowGap) : null,
+          gaps: bounds.slice(1).map((b, i) => b.top - bounds[i].bottom), count: nodes.length }];
+      }));
       const columns = [...document.querySelector('#columns .conversation-view-columns').children].map(node => { const b = node.getBoundingClientRect(); return { left: b.left, top: b.top, width: b.width, bottom: b.bottom }; });
       const errorStyles = Object.fromEntries(['ready', 'failed', 'expired'].map(state => {
         const item = document.querySelector('#tray-errors [data-upload-state="' + state + '"]'), status = item.querySelector('.chat-attachment-status'), style = getComputedStyle(item);
@@ -117,7 +130,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       }));
       const dangerProbe = document.createElement('span'); dangerProbe.style.color = 'var(--c-danger-ink)'; document.querySelector('main').append(dangerProbe);
       const dangerInk = getComputedStyle(dangerProbe).color, dangerRgb = rgba(dangerInk); dangerProbe.remove();
-      return { categoryGeometry, columns, errorStyles, dangerInk, dangerRgb, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
+      return { categoryGeometry, columns, spacing, errorStyles, dangerInk, dangerRgb, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
         dotAnimation: dot.animationName, dotWidth: dot.width, categoryAxis: chart('category').options.scales.x.display,
         breakdownAxis: chart('breakdown').options.scales.x.display, categoryColor: chart('category').data.datasets[0].backgroundColor[0],
         imageRatio: document.querySelector('.chat-attachment-image-frame').style.aspectRatio,
@@ -140,6 +153,18 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
         widths: [...document.querySelectorAll('.chat-block-choice,.chat-block-confirmation,.chat-block-form_intent,.chat-block-breakdown,.chat-block-category_series')].map(node => node.getBoundingClientRect().width),
         viewport: innerWidth, scroll: document.documentElement.scrollWidth };
     });
+    console.info('rich spacing geometry', JSON.stringify({ width, theme, ...actual.spacing }));
+    if (output) fs.writeFileSync(path.join(output, `spacing-${width}-${theme}.json`), JSON.stringify(actual.spacing, null, 2));
+    assert.equal(actual.spacing['stack-view'].count, 4, 'stack keeps markdown, card, markdown and file');
+    for (const gap of actual.spacing['stack-view'].gaps) {
+      assert.ok(Math.abs(gap - actual.spacing['stack-view'].rowGap) <= 1, 'stack spacing comes only from its row gap: ' + JSON.stringify(actual.spacing['stack-view']));
+    }
+    for (const id of ['stack-view', 'markdown-first']) {
+      assert.ok(Math.abs(actual.spacing[id].firstTopOffset) <= 1, id + ' first block aligns with message content top');
+    }
+    assert.equal(actual.spacing['markdown-first'].gaps.length, 1, 'ordinary markdown and file remain adjacent');
+    assert.ok(Math.abs(actual.spacing['markdown-first'].gaps[0] - 12) <= 1, 'ordinary markdown-to-file flow keeps its 12px gap');
+    assert.ok(Math.abs(actual.spacing['card-ending'].lastBottomOffset) <= 1, 'last card aligns with message content bottom');
     actual.failedImagePixel = failedImagePixel;
     actual.pressed = await pressedContrast(page, context);
     assert.match(actual.answerText, /你的回答/); assert.match(actual.answerText, /LRU/);
