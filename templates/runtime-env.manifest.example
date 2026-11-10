@@ -26,10 +26,6 @@
 # Recommended: keeps shell tools and date output in local time.
 env TZ
 
-# ── Claude relay ──────────────────────────────────────────────────────────────
-# zylos writes this to .env only while ANTHROPIC_BASE_URL is a relay; absent otherwise.
-env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
-
 # ── Agent permissions ─────────────────────────────────────────────────────────
 # env CLAUDE_BYPASS_PERMISSIONS
 

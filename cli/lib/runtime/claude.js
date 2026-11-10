@@ -21,36 +21,13 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
-import { CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from '../config.js';
+import { CLAUDE_BUILTIN_ENV_KEYS, ZYLOS_DIR } from '../config.js';
+import { dropClaudeCredentialsForNativeAuth, launchEnvironment } from './session-command.js';
 import { writePrivateFile } from '../private-file.js';
 
 
 const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
 
-// .env variables the auth probe injects: every credential `zylos init` can
-// write (including ANTHROPIC_AUTH_TOKEN for relays) plus the endpoint.
-const DOTENV_AUTH_VARS = [...CLAUDE_CREDENTIAL_KEYS, 'ANTHROPIC_BASE_URL'];
-
-// Non-credential .env settings the probe also carries so it runs in the same
-// environment as the session. Never a credential: keep out of CLAUDE_CREDENTIAL_KEYS.
-const DOTENV_PROBE_PASSTHROUGH = ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'];
-
-/**
- * Parse a value from a .env file, tolerating common formatting variations:
- *   - Spaces/tabs around key and `=`  (e.g. `KEY = value`)
- *   - Single/double quotes around value (e.g. `KEY="value"`)
- *   - Trailing whitespace
- *
- * @param {string} content - Full .env file content
- * @param {string} key     - Variable name to extract
- * @returns {string}       - Trimmed, unquoted value, or empty string if not found
- */
-function _parseEnvValue(content, key) {
-  const re = new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm');
-  const m = content.match(re);
-  if (!m) return '';
-  return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
-}
 
 // Missing or malformed configuration starts empty; filesystem errors remain
 // best-effort failures handled independently for each confirmation file.
@@ -141,18 +118,24 @@ export class ClaudeAdapter extends SessionAdapter {
    * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
-    // Build subprocess env: inherit current env, inject .env API keys (same as launch()).
-    const injectedEnv = { ...(this.options.env || process.env) };
-    try {
-      const envContent = fs.readFileSync(path.join(this.options.root || ZYLOS_DIR, '.env'), 'utf8');
-      for (const key of [...DOTENV_AUTH_VARS, ...DOTENV_PROBE_PASSTHROUGH]) {
-        const value = _parseEnvValue(envContent, key);
-        if (value) injectedEnv[key] = value;
+    // Build subprocess env: inherit current env, but take the built-in Claude
+    // variables (CLAUDE_BUILTIN_ENV_KEYS) exactly as session launch builds them.
+    const baseEnv = this.options.env || process.env;
+    const injectedEnv = { ...baseEnv };
+    let sessionEnv = null;
+    try { sessionEnv = launchEnvironment(this.options.root || ZYLOS_DIR, baseEnv, { runtime: 'claude' }); }
+    catch { /* unreadable .env — session launch fails too; probe the inherited env */ }
+    if (sessionEnv) {
+      for (const key of CLAUDE_BUILTIN_ENV_KEYS) {
+        if (Object.hasOwn(sessionEnv, key)) injectedEnv[key] = sessionEnv[key];
+        else delete injectedEnv[key];
       }
-    } catch { /* .env absent — no keys to inject */ }
+    }
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
+    // Native (subscription) login: drop the same credentials the session drops.
+    await dropClaudeCredentialsForNativeAuth(injectedEnv.CLAUDE_BIN || 'claude', injectedEnv);
 
     // Live CLI probe — `claude -p ping --max-turns 1`.
     // End-to-end validation: works with all credential types (API keys, setup tokens,

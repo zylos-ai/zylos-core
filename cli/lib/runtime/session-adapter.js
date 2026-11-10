@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeAdapter } from './base.js';
-import { adapterError, runtimeExecutable, runtimeHelpAsync, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, hasNativeClaudeAuthAsync } from './session-command.js';
+import { adapterError, runtimeExecutable, runtimeHelpAsync, validateLaunchConfig, buildRuntimeArgs, launchEnvironment, writeSessionLaunchScript, dropClaudeCredentialsForNativeAuth } from './session-command.js';
 import { settleLaunch } from './session-launch.js';
 import { applyUpgradePrompt, discoverUpgradeContext } from './upgrade-context.js';
 import { ZYLOS_DIR } from '../config.js';
@@ -132,11 +132,8 @@ export class SessionAdapter extends RuntimeAdapter {
       validateLaunchConfig(this.runtimeId,launchConfig,help);
       if (!runId || !['single','multi'].includes(sessionMode) || (sessionMode === 'single') !== (sessionGroup === null)) throw adapterError('LAUNCH_FAILED','Invalid launch arguments','error');
       const root = await fs.realpath(this.options.root || ZYLOS_DIR);
-      const cleanEnv = launchEnvironment(root,env);
-      if (this.runtimeId === 'claude' && (Object.hasOwn(cleanEnv, 'ANTHROPIC_API_KEY') || Object.hasOwn(cleanEnv, 'CLAUDE_CODE_OAUTH_TOKEN')) && await hasNativeClaudeAuthAsync(command, cleanEnv)) {
-        delete cleanEnv.ANTHROPIC_API_KEY;
-        delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN;
-      }
+      const cleanEnv = launchEnvironment(root,env,{runtime:this.runtimeId});
+      if (this.runtimeId === 'claude') await dropClaudeCredentialsForNativeAuth(command, cleanEnv);
       let args = buildRuntimeArgs(this.runtimeId, launchConfig, {root, help});
       const upgrade = discoverUpgradeContext(root);
       if (upgrade.blocked || (upgrade.active && !upgrade.controllerAlive && upgrade.prompt)) {

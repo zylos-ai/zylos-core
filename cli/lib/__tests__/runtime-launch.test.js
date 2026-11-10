@@ -35,7 +35,8 @@ function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', h
   const command = path.join(dir, "runtime with ' quote");
   const helpLog = path.join(dir, 'help-log');
   const report = path.join(dir, 'runtime-report.json');
-  fs.writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');\n${codexAppServerFixtureSource()}\nif (process.argv.includes('--version')) { console.log('codex-fixture'); process.exit(0); } else if (process.argv[2] === 'app-server') { process.exit(2); } else if (process.argv.includes('--help')) { fs.appendFileSync(${JSON.stringify(helpLog)}, 'help\\n'); ${helpFails ? 'process.exit(2);' : `console.log(${JSON.stringify(help)});`} } else if (process.argv[2] === 'auth' && process.argv[3] === 'status') { console.log(JSON.stringify({ loggedIn: ${nativeAuth}, authMethod: 'claude.ai' })); } else { fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({pid:process.pid,args:process.argv,env:process.env,cwd:process.cwd(),exe:fs.realpathSync(process.execPath)})); setInterval(() => {}, 1000); }\n`, { mode: 0o700 });
+  const probeReport = path.join(dir, 'probe-report.json');
+  fs.writeFileSync(command, `#!${process.execPath}\nconst fs = require('node:fs');\n${codexAppServerFixtureSource()}\nif (process.argv.includes('--version')) { console.log('codex-fixture'); process.exit(0); } else if (process.argv[2] === 'app-server') { process.exit(2); } else if (process.argv.includes('--help')) { fs.appendFileSync(${JSON.stringify(helpLog)}, 'help\\n'); ${helpFails ? 'process.exit(2);' : `console.log(${JSON.stringify(help)});`} } else if (process.argv[2] === 'auth' && process.argv[3] === 'status') { console.log(JSON.stringify({ loggedIn: ${nativeAuth}, authMethod: 'claude.ai' })); } else if (process.argv[2] === '-p') { fs.writeFileSync(${JSON.stringify(probeReport)}, JSON.stringify({env:process.env})); console.log('pong'); } else { fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({pid:process.pid,args:process.argv,env:process.env,cwd:process.cwd(),exe:fs.realpathSync(process.execPath)})); setInterval(() => {}, 1000); }\n`, { mode: 0o700 });
   fs.writeFileSync(path.join(root, '.env'), `ANTHROPIC_API_KEY=${secret}\n`);
   const env = { HOME: home, PM2_HOME: pm2Home, TMPDIR: tmpdir, ZYLOS_DIR: root,
     PATH: process.env.PATH, USER: process.env.USER || 'test',
@@ -58,7 +59,12 @@ function setup(t, Cls, { help = ' --model MODEL --effort EFFORT --no-daemon ', h
     assert.equal(observed.pid, Number(pid), 'self-report must come from the target pane process');
     return { result, ...observed, pid };
   }
-  return { root, home, command, env, adapter, input, launch, tmux, helpLog };
+  async function probe() {
+    fs.rmSync(probeReport, { force: true });
+    const outcome = await adapter.checkAuth();
+    return { outcome, ...JSON.parse(fs.readFileSync(probeReport, 'utf8')) };
+  }
+  return { root, home, command, env, adapter, input, launch, probe, tmux, helpLog };
 }
 
 function publishStartupRecovery(root, { succeed = false, controller = false } = {}) {
@@ -279,6 +285,48 @@ for(const [auth,title] of [
   assert.equal(p.env.ANTHROPIC_API_KEY,auth==='none'?secret:undefined);
   assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN,auth==='none'?'synthetic-oauth-token':undefined);
   if(auth==='none')assert.deepEqual(f.env,originalEnv);
+});
+
+// Built-in Claude passthrough: Claude auth variables set in .env reach the
+// session without any runtime-env.manifest line, and the auth probe sees the
+// same values. Real tmux on a private socket; the model CLI is a stand-in.
+// Run when session launch env, the probe env or the built-in list changes.
+const builtinKeys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'];
+const builtinCases = {
+  relay: { ANTHROPIC_BASE_URL: 'https://relay.example.test', ANTHROPIC_AUTH_TOKEN: 'synthetic-relay-token', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+  'API key': { ANTHROPIC_API_KEY: secret },
+  'setup token': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-synthetic-setup-token' },
+};
+async function launchAndProbe(t, dotenv, { compat = false, nativeAuth = false } = {}) {
+  const f = setup(t, ClaudeAdapter, { nativeAuth });
+  fs.mkdirSync(path.join(f.root, '.zylos'));
+  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), '');
+  fs.writeFileSync(path.join(f.root, '.env'), (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
+    + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+  f.env.ANTHROPIC_BASE_URL = 'https://stale-process.example.test';
+  const session = await f.launch(), probe = await f.probe();
+  assert.equal(probe.outcome.status, 'success');
+  for (const key of builtinKeys) assert.equal(session.env[key], probe.env[key], `session and probe agree on ${key}`);
+  return { session: session.env, probe: probe.env };
+}
+for (const compat of [false, true]) for (const [name, dotenv] of Object.entries(builtinCases)) {
+  test(`Claude ${name} credentials only in .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async t => {
+    const { session, probe } = await launchAndProbe(t, dotenv, { compat });
+    for (const [key, value] of Object.entries(dotenv)) {
+      assert.equal(session[key], value, `session ${key}`);
+      assert.equal(probe[key], value, `probe ${key}`);
+    }
+    if (!dotenv.ANTHROPIC_BASE_URL) assert.equal(session.ANTHROPIC_BASE_URL, compat ? 'https://stale-process.example.test' : undefined);
+  });
+}
+test('Claude subscription login keeps API key and setup token out of session and probe', async t => {
+  const dotenv = { ...builtinCases.relay, ...builtinCases['API key'], ...builtinCases['setup token'] };
+  const { session, probe } = await launchAndProbe(t, dotenv, { nativeAuth: true });
+  for (const env of [session, probe]) {
+    assert.equal(env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+    assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+  }
 });
 
 // Preserve native-auth precedence and daemon isolation through the target API.

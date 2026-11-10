@@ -6,7 +6,10 @@ import { promisify } from 'node:util';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest } from './tmux-env.js';
 import { buildKickPrompt } from './kick-prompt.js';
 import { adapterError } from './tmux-protocol.js';
+import { CLAUDE_BUILTIN_ENV_KEYS } from '../config.js';
 export { adapterError } from './tmux-protocol.js';
+// With native (subscription) login these would override it, so they are not carried.
+export const CLAUDE_NATIVE_AUTH_CONFLICT_KEYS = Object.freeze(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
 export const shellQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
 export function runtimeExecutable(runtime, env = process.env) {
   const name = env[`${runtime.toUpperCase()}_BIN`] || runtime;
@@ -52,8 +55,7 @@ export async function hasNativeClaudeAuthAsync(command, env) {
   }
   try {
     const nativeEnv = { ...env };
-    delete nativeEnv.ANTHROPIC_API_KEY;
-    delete nativeEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    for (const key of CLAUDE_NATIVE_AUTH_CONFLICT_KEYS) delete nativeEnv[key];
     const { stdout } = await promisify(execFile)(command, ['auth', 'status'], {
       env:nativeEnv, cwd:env.ZYLOS_DIR, encoding:'utf8', timeout:10000, killSignal:'SIGKILL',
     });
@@ -61,7 +63,14 @@ export async function hasNativeClaudeAuthAsync(command, env) {
     return status?.loggedIn === true && status?.authMethod === 'claude.ai';
   } catch { return false; }
 }
-export function launchEnvironment(root, processEnv = process.env) {
+/** Drop the conflicting Claude credentials when native (subscription) login is active. */
+export async function dropClaudeCredentialsForNativeAuth(command, env) {
+  if (CLAUDE_NATIVE_AUTH_CONFLICT_KEYS.some(key => Object.hasOwn(env, key)) && await hasNativeClaudeAuthAsync(command, env)) {
+    for (const key of CLAUDE_NATIVE_AUTH_CONFLICT_KEYS) delete env[key];
+  }
+  return env;
+}
+export function launchEnvironment(root, processEnv = process.env, { runtime } = {}) {
   const dotenvVars = {};
   try {
     for (const line of fs.readFileSync(path.join(root,'.env'),'utf8').split('\n')) {
@@ -72,6 +81,11 @@ export function launchEnvironment(root, processEnv = process.env) {
   const {env} = dotenvVars.ZYLOS_CLEAN_ENV === 'false'
     ? buildCompatEnv({processEnv, dotenvVars})
     : buildCleanEnv({processEnv, dotenvVars, manifest:loadRuntimeEnvManifest(root), uid:process.getuid?.()});
+  // Built-in Claude passthrough, independent of runtime-env.manifest: applied
+  // after the manifest (clean and compat mode) so a manifest cannot drop it.
+  if (runtime === 'claude') {
+    for (const key of CLAUDE_BUILTIN_ENV_KEYS) if (dotenvVars[key]) env[key] = dotenvVars[key];
+  }
   for (const key of ['ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG','CLAUDECODE','CLAUDE_CODE_ENTRYPOINT']) delete env[key];
   env.ZYLOS_DIR = root;
   return env;

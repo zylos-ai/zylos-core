@@ -497,20 +497,6 @@ describe('buildCompatEnv', () => {
 
 // ── deployManifestTemplate ────────────────────────────────────────────────
 
-describe('runtime-env.manifest template', () => {
-  it('forwards the relay traffic setting from .env into sessions', () => {
-    const template = fs.readFileSync(new URL('../../../templates/runtime-env.manifest.example', import.meta.url), 'utf8');
-    const manifest = parseRuntimeEnvManifest(template);
-    assert.ok(manifest.envNames.includes('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'));
-    const { env } = buildCleanEnv({ processEnv: { HOME: '/home/test', PATH: '/usr/bin' },
-      dotenvVars: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }, manifest, platform: 'linux', uid: 1000 });
-    assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
-    const { env: official } = buildCleanEnv({ processEnv: { HOME: '/home/test', PATH: '/usr/bin' },
-      dotenvVars: {}, manifest, platform: 'linux', uid: 1000 });
-    assert.equal(Object.hasOwn(official, 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'), false);
-  });
-});
-
 describe('deployManifestTemplate', () => {
   it('creates manifest from template when missing', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-deploy-'));
