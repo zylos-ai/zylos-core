@@ -544,6 +544,9 @@ describe('Codex hook trust backstop', () => {
     assert.equal(describeTrustFailure({ stderr: `${'k'.repeat(9000)} end` }), 'stderr: [cut]');
     assert.equal(describeTrustFailure({ error: { code: 1, message: `first line\nstart ${'k'.repeat(5000)}` } }), 'Codex error 1: first line | [cut]');
     assert.equal(describeTrustFailure({ error: { code: 1, message: `start ${'k'.repeat(5000)}` } }), 'Codex error 1: [cut]');
+    // A lone carriage return ends a line too.
+    assert.equal(describeTrustFailure({ stderr: `${'k'.repeat(9000)}\rlast line` }), 'stderr: [cut] | last line');
+    assert.equal(describeTrustFailure({ error: { code: 1, message: `first line\rstart ${'k'.repeat(5000)}` } }), 'Codex error 1: first line | [cut]');
     // Inputs that make backtracking patterns slow: lines that each fill almost all of the part that is redacted
     // (8000 characters of stderr, 4000 of a message), repeated to about 1 MiB.
     const runs = (unit, length) => `${unit.repeat(Math.ceil(length / unit.length)).slice(0, length)}\n`.repeat(Math.ceil((1 << 20) / length));
@@ -586,6 +589,31 @@ describe('Codex hook trust backstop', () => {
       const report = describeTrustFailure(trust);
       assert.equal(report, expected);
       assert.equal(report.includes(secret) || report.includes(secret.slice(0, 6)), false);
+    });
+  }
+
+  // A secret whose name and value are on different lines, with the cut between them or past the closing quote.
+  const lineCases = [
+    ['the name ends the stderr line the cut goes through, the value is on the next line',
+      { stderr: `start\n${'x'.repeat(9000)} my_password =\nSECRETE1xyz\ndone` }, 'stderr: [cut] | [redacted] | done', 'SECRETE1xyz'],
+    ['a quoted name ends the stderr line the cut goes through, the quoted value is on the next line',
+      { stderr: `start\r\n${'w '.repeat(4500)}"api_key":\r\n  "SECRETE2xyz"\r\ndone` }, 'stderr: [cut] | [redacted] | done', 'SECRETE2xyz'],
+    ['a double-quoted message value goes on past a line break and past the cut',
+      { error: { code: 1, message: `write failed: password="SECRETD1xyz\n${'y'.repeat(4100)}"` } },
+      'Codex error 1: write failed: password=[redacted]', 'SECRETD1xyz'],
+    ['a double-quoted message value goes on past a CRLF and past the cut',
+      { error: { code: 1, message: `write failed: token="SECRETD2xyz\r\n${'y'.repeat(4100)}"` } },
+      'Codex error 1: write failed: token=[redacted]', 'SECRETD2xyz'],
+    ['a single-quoted message value goes on past a carriage return and past the cut',
+      { error: { code: 1, message: `write failed: api_key='SECRETD3xyz\r${'y'.repeat(4100)}'` } },
+      'Codex error 1: write failed: api_key=[redacted]', 'SECRETD3xyz'],
+  ];
+  for (const [name, trust, expected, secret] of lineCases) {
+    it(`redacts a secret split over lines at the cut: ${name}`, () => {
+      const report = describeTrustFailure(trust);
+      assert.equal(report, expected);
+      // No four characters of the value appear anywhere in the report.
+      for (let i = 0; i + 4 <= secret.length; i += 1) assert.equal(report.includes(secret.slice(i, i + 4)), false, secret.slice(i, i + 4));
     });
   }
 

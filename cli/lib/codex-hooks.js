@@ -524,9 +524,10 @@ const NAME = String.raw`(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])`;
 const isSecretName = name => /secret|token|password|passwd|passphrase|credential|cookie|authorization/i.test(name)
   || /(?:[_-]key|apikey)$/i.test(name);
 // A value: \"escaped-quoted\" (Rust debug output of JSON, where a JSON-escaped quote shows as \\\" and a
-// backslash as \\\\), "quoted" or 'quoted' with escapes, or a bare word. A value an earlier rule already
-// replaced is left alone.
-const SECRET_VALUE = String.raw`(?!\[redacted\])(?:\\"(?:\\\\\\"|\\\\\\\\|\\\\[^\\]|\\[^"\\]|[^\\])*?\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;&"'}\]]+)`;
+// backslash as \\\\), "quoted" or 'quoted' with escapes, or a bare word. A quoted value whose closing quote is
+// not in the text (it was cut off) runs to the end of the text. A value an earlier rule already replaced is left
+// alone.
+const SECRET_VALUE = String.raw`(?!\[redacted\])(?:\\"(?:\\\\\\"|\\\\\\\\|\\\\[^\\]|\\[^"\\]|[^\\])*?\\"|"(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*(?:'|$)|[^\s,;&"'}\]]+)`;
 const REDACTIONS = [
   // Cookie headers carry several values: everything to the end of the line goes.
   [/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1[redacted]'],
@@ -574,19 +575,20 @@ function redactTrustText(text) {
   return redactNameValues(redacted.replace(SECRET_FLAG, (match, name, separator) => (isSecretName(name) ? `${name}${separator}[redacted]` : match)));
 }
 
-// The line a cut goes through is never reported: a cut can take a secret's name and leave its value, or open a
-// quoted value it does not close, and redaction no longer recognises either. [cut] stands for that line. The head
-// ends at the last line break before the cut and the tail starts at the first one after it; with none, the whole
-// part is [cut].
+// The line a cut goes through is never reported: a cut can leave part of a secret that redaction no longer
+// recognises, such as a value without its name. [cut] stands for that line. The head ends at the last line break
+// before the cut and the tail starts at the first one after it; with none, the whole part is [cut].
 const headForRedaction = (text) => {
   if (text.length <= TRUST_REDACT_MESSAGE_LIMIT) return text;
   const head = text.slice(0, TRUST_REDACT_MESSAGE_LIMIT);
   const end = Math.max(head.lastIndexOf('\n'), head.lastIndexOf('\r')) + 1;
   return `${head.slice(0, end)}[cut]`;
 };
-const tailForRedaction = (text) => {
-  if (text.length <= TRUST_REDACT_STDERR_LIMIT) return text;
-  const tail = text.slice(-TRUST_REDACT_STDERR_LIMIT);
+// The tail is redacted together with the line the cut goes through, so a secret name on that line still covers
+// its value on the next line; the cut line is dropped after that.
+const redactTail = (text) => {
+  if (text.length <= TRUST_REDACT_STDERR_LIMIT) return redactTrustText(text);
+  const tail = redactTrustText(text.slice(-TRUST_REDACT_STDERR_LIMIT));
   const start = tail.search(/[\r\n]/);
   return start === -1 ? '[cut]' : `[cut]${tail.slice(start)}`;
 };
@@ -622,7 +624,7 @@ export function describeTrustFailure(trust = {}) {
   }
   const stderr = typeof trust.stderr === 'string' ? trust.stderr.trim() : '';
   if (stderr) {
-    const tail = oneLine(redactTrustText(tailForRedaction(stderr)));
+    const tail = oneLine(redactTail(stderr));
     parts.push(`stderr${tail.length > TRUST_STDERR_TAIL_LIMIT ? ` (last ${TRUST_STDERR_TAIL_LIMIT} characters)` : ''}: ${tail.slice(-TRUST_STDERR_TAIL_LIMIT)}`);
   }
   return parts.join('; ');
