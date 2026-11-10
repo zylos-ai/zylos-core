@@ -31,7 +31,7 @@ test('confirmed Claude subscription login recomputes the relay traffic setting b
       syncRelayTraffic: state => { order.push(['sync', state]); return true; },
       notifyRecovery: () => { order.push(['notify']); return true; } });
     assert.equal(result.ok, true);
-    assert.deepEqual(order, runtime === 'claude' ? [['sync', { credential: 'subscription' }], ['notify']] : [['notify']]);
+    assert.deepEqual(order, runtime === 'claude' ? [['sync', undefined], ['notify']] : [['notify']]);
   }
   for (const native of [{ status: 1 }, { signal: 'SIGINT' }]) {
     let synced = 0;

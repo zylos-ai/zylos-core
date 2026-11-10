@@ -513,15 +513,32 @@ async function subscriptionLogin() {
   return result;
 }
 
-for (const [where, baseUrl, expected] of [['without a base URL', undefined, OFF], ['on the official API', 'https://api.anthropic.com', OFF], ['behind a saved relay', 'https://relay.example', ON]]) {
-  test(`init subscription login ${where} leaves the relay traffic setting ${expected === ON ? 'on' : 'off'}, even with a leftover API key`, async t => {
-    const state = seedRelayFlag(t, isolatedCredentials(t), baseUrl, `ANTHROPIC_API_KEY=sk-ant-api03-${crypto.randomUUID()}\n`);
+for (const [where, baseUrl, leftoverKey, expected] of [
+  ['without a base URL, with a leftover API key', undefined, true, ON],
+  ['on the official API, with a leftover API key', 'https://api.anthropic.com', true, ON],
+  ['behind a saved relay, with a leftover API key', 'https://relay.example', true, ON],
+  ['without a base URL or saved credential', undefined, false, OFF],
+  ['on the official API without a saved credential', 'https://api.anthropic.com', false, OFF],
+  ['behind a saved relay without a saved credential', 'https://relay.example', false, ON],
+]) {
+  test(`init subscription login ${where} leaves the relay traffic setting ${expected === ON ? 'on' : 'off'}`, async t => {
+    const state = seedRelayFlag(t, isolatedCredentials(t), baseUrl, leftoverKey ? `ANTHROPIC_API_KEY=sk-ant-api03-${crypto.randomUUID()}\n` : '');
     const result = await subscriptionLogin();
     assert.equal(persistInitCredentials({ setupToken: result.pendingSetupToken, subscriptionLogin: result.subscriptionLogin,
       claudeBaseUrl: result.pendingClaudeBaseUrl }), true);
     assert.deepEqual(state(), expected);
   });
 }
+
+test('init saving only a base URL recomputes the setting (relay on, then official off)', t => {
+  const state = seedRelayFlag(t, isolatedCredentials(t), undefined);
+  fs.writeFileSync(path.join(ZYLOS_DIR, '.env'), 'KEEP=unchanged\n');
+  delete process.env[relayFlag];
+  assert.equal(persistInitCredentials({ claudeBaseUrl: 'https://relay.example' }), true);
+  assert.deepEqual(state(), ON, 'zylos init --base-url <relay> on a logged-in machine');
+  assert.equal(persistInitCredentials({ claudeBaseUrl: 'https://api.anthropic.com' }), true);
+  assert.deepEqual(state(), OFF);
+});
 
 test('init setup token and API key on the official API: setup token off, API key on, relay in the same run on', t => {
   const state = seedRelayFlag(t, isolatedCredentials(t), 'https://api.anthropic.com');

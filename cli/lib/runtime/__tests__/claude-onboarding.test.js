@@ -188,3 +188,16 @@ test('Claude launch trusts the real startup directory when root is a symlink', a
   assert.equal(config.projects[realRoot].hasCompletedProjectOnboarding, true);
   assert.equal(Object.hasOwn(config.projects, linkedRoot), false);
 });
+
+test('Claude launch pre-approves a .env API key on an already onboarded and trusted install', async t => {
+  const f = fixture(t);
+  f.config.customApiKeyResponses = { approved: ['older-approved-suffix'], rejected: [] };
+  f.write();
+  const key = 'sk-ant-api03-synthetic-onboarded-install-key';
+  fs.writeFileSync(path.join(f.root, '.env'), `ANTHROPIC_API_KEY=${key}\n`);
+  await f.launch();
+  const saved = JSON.parse(fs.readFileSync(f.files.config, 'utf8'));
+  assert.deepEqual(saved.customApiKeyResponses.approved, ['older-approved-suffix', key.slice(-20)]);
+  assert.equal(saved.userConfigKey[0], 'keep');
+  assert.equal(saved.projects[f.root].userProjectKey, 'keep');
+});

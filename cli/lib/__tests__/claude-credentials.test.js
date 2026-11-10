@@ -26,6 +26,7 @@ const { saveApiKey, saveApiKeyToEnv, saveAuthToken, saveAuthTokenToEnv,
   saveSetupToken, saveSetupTokenToEnv, isValidBaseUrl,
   saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice } = await import('../runtime-setup.js');
 const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags } = await import('../../commands/runtime.js');
+const { executeAuth } = await import('../../commands/auth.js');
 const { readEnvFile } = await import('../env.js');
 const modes = [
   ['API key', 'ANTHROPIC_API_KEY', saveApiKey, saveApiKeyToEnv],
@@ -113,8 +114,9 @@ test('saving any credential keeps CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC in se
   }
 });
 
-// The relay traffic setting pairs with the Claude endpoint: on behind a relay
-// base URL, absent with the official API or after subscription/setup-token login.
+// The relay traffic setting, computed from the saved state only: on behind a relay
+// base URL or with an API key / Bearer token; absent for a setup token or no saved
+// credential (subscription login) on the official API. Saved credentials win.
 const relayFlagState = () => ({
   env: parseDotEnv(fs.readFileSync(envFile))[relayFlag],
   envLines: fs.readFileSync(envFile, 'utf8').split('\n').filter(line => line.includes(relayFlag + '=')).length,
@@ -133,11 +135,11 @@ const seedRelayFlagOn = () => {
   process.env[relayFlag] = '1';
 };
 
-test('pairing rule: relay or API credential on; subscription, setup token or none on the official API off', () => {
+test('pairing rule: relay or API credential on; setup token or no credential on the official API off', () => {
   for (const [baseUrl, credential, on] of [
     [officialUrl, 'apiKey', true], [officialUrl, 'authToken', true], [undefined, 'apiKey', true],
-    [officialUrl, 'setupToken', false], [officialUrl, 'subscription', false], [officialUrl, 'none', false], [undefined, undefined, false],
-    ...['apiKey', 'authToken', 'setupToken', 'subscription', 'none'].map(credential => [relayUrl, credential, true]),
+    [officialUrl, 'setupToken', false], [officialUrl, 'none', false], [undefined, undefined, false],
+    ...['apiKey', 'authToken', 'setupToken', 'none'].map(credential => [relayUrl, credential, true]),
   ]) assert.equal(computeRelayTraffic({ baseUrl, credential }), on, `${baseUrl} ${credential}`);
 });
 
@@ -190,14 +192,40 @@ test('zylos runtime: switching base URL and credential recomputes the setting ea
   }
 });
 
-test('a claude.ai login with a leftover API key counts as subscription when the official URL is saved', t => {
+test('a saved API key wins over a claude.ai login file: --save-apikey then --save-base-url official keeps the setting on', t => {
   const loginFile = path.join(home, '.claude', '.credentials.json');
   t.after(() => fs.rmSync(loginFile, { force: true }));
-  assert.equal(applyCredentials('claude', { apiKey: 'sk-ant-api03-' + secret() }), true);
   fs.writeFileSync(loginFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh' } }));
+  assert.equal(applyCredentials('claude', { apiKey: 'sk-ant-api03-' + secret() }), true);
+  assert.deepEqual(relayFlagState(), RELAY_ON, 'after --save-apikey');
   assert.equal(applyBaseUrl('claude', officialUrl), true);
-  assert.deepEqual(relayFlagState(), RELAY_OFF);
+  assert.deepEqual(relayFlagState(), RELAY_ON, 'after --save-base-url https://api.anthropic.com');
+  assert.ok(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_API_KEY, 'the API key is still saved');
 });
+
+test('an API key kept only in settings.json env still counts (Claude Code reads it there)', () => {
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  settings.env.ANTHROPIC_API_KEY = 'sk-ant-api03-' + secret();
+  fs.writeFileSync(settingsFile, JSON.stringify(settings));
+  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_API_KEY, undefined, 'no API key in .env');
+  assert.deepEqual(relayFlagState(), RELAY_ON);
+});
+
+for (const [leftover, expected] of [[true, 'on'], [false, 'off']]) {
+  test(`zylos auth claude subscription login on the official API ${leftover ? 'with' : 'without'} a leftover .env API key leaves the setting ${expected}`, async t => {
+    const loginFile = path.join(home, '.claude', '.credentials.json');
+    t.after(() => fs.rmSync(loginFile, { force: true }));
+    assert.equal(applyBaseUrl('claude', officialUrl), true);
+    if (leftover) fs.appendFileSync(envFile, `ANTHROPIC_API_KEY=sk-ant-api03-${secret()}\n`);
+    seedRelayFlagOn();
+    const result = await executeAuth(['claude'], { exists: () => true,
+      spawn: () => { fs.writeFileSync(loginFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh' } })); return { status: 0 }; },
+      adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), notifyRecovery: () => true });
+    assert.equal(result.ok, true);
+    assert.deepEqual(relayFlagState(), leftover ? RELAY_ON : RELAY_OFF);
+  });
+}
 
 test('a login behind a saved relay keeps the relay and gets a notice with the command to go direct', () => {
   assert.equal(applyBaseUrl('claude', relayUrl), true);

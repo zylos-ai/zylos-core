@@ -1880,8 +1880,7 @@ export function persistInitCredentials({ apiKey, authToken, setupToken, subscrip
     }
     if (codexBaseUrl && saveCodexConfig(ZYLOS_DIR, { openaiBaseUrl: codexBaseUrl }) !== true) throw new Error('credential persistence failed');
     // Recompute the relay traffic setting from the resulting Claude state.
-    const credential = authToken ? 'authToken' : apiKey ? 'apiKey' : setupToken ? 'setupToken' : subscriptionLogin ? 'subscription' : undefined;
-    if ((credential || claudeBaseUrl) && syncRelayTraffic({ credential }) !== true) throw new Error('credential persistence failed');
+    if ((authToken || apiKey || setupToken || subscriptionLogin || claudeBaseUrl) && syncRelayTraffic() !== true) throw new Error('credential persistence failed');
     if ((setupToken || subscriptionLogin) && !claudeBaseUrl) {
       const relay = notice();
       if (relay) log(`  ${warn(relay)}`);

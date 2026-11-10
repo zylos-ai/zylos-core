@@ -365,7 +365,7 @@ for (const compat of [false, true]) test(`Codex: only OpenAI variables from .env
   }
 });
 
-// Preserve native-auth precedence and daemon isolation through the target API.
+// Preserve daemon isolation through the target API.
 test('Codex default launch retains supported daemon isolation', async t => {
   const f = setup(t, CodexAdapter);
   const p = await f.launch();

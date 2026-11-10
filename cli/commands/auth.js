@@ -38,8 +38,8 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
     catch { checked = { status: 'uncertain' }; }
     if (checked.status !== 'success') return { ok: false, error: { code: checked.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED',
       message: 'Authentication was not confirmed', persisted: null, configChanged: false } };
-    // Subscription login: recompute the relay traffic setting before the session restarts.
-    if (runtime === 'claude' && !syncRelayTraffic({ credential: 'subscription' })) {
+    // Subscription login: recompute the relay traffic setting from the saved state before the session restarts.
+    if (runtime === 'claude' && !syncRelayTraffic()) {
       return { ok: false, error: { code: 'CREDENTIAL_SAVE_FAILED',
         message: 'Authenticated, but CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC could not be updated', persisted: null, configChanged: false } };
     }

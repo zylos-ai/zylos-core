@@ -121,14 +121,14 @@ export function applyCredentials(target, creds, warnings = []) {
     if (creds.setupToken) {
       if (!saveSetupToken(creds.setupToken)) return false;
       saveSetupTokenToEnv(creds.setupToken);
-      if (!syncClaudeRelayTraffic({ credential: 'setupToken' })) return false;
+      if (!syncClaudeRelayTraffic()) return false;
       warnUnrestrictedCredentialFiles(target, warnings);
       return true;
     }
     if (creds.apiKey) {
       if (!saveApiKey(creds.apiKey)) return false;
       saveApiKeyToEnv(creds.apiKey);
-      if (!syncClaudeRelayTraffic({ credential: 'apiKey' })) return false;
+      if (!syncClaudeRelayTraffic()) return false;
       warnUnrestrictedCredentialFiles(target, warnings);
       return true;
     }

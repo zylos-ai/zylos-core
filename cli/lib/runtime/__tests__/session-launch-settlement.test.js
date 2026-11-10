@@ -86,27 +86,25 @@ test('duplicate session is NAME_CONFLICT and retains the original pane', async t
 });
 
 for (const key of [null,'ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN']) {
-  test(`Claude launch auth status: ${key || 'neither variable'} ${key ? 'queries and strips native-auth conflicts' : 'skips the subprocess'}`,async t=>{
+  test(`Claude launch: ${key || 'neither variable'} ${key ? 'stays in the session environment' : 'is added'} and no auth status subprocess runs`,async t=>{
     const f=await setupLaunch(t);
     const {SessionAdapter}=await import('../session-adapter.js');
     class Adapter extends SessionAdapter {get runtimeId(){return 'claude';}}
     const command=path.join(f.dir,'runtime'),report=path.join(f.dir,'runtime.json'),authReport=path.join(f.dir,'auth.json');
     await fs.writeFile(command,`#!${process.execPath}\nconst fs=require('node:fs');const report={argv:process.argv.slice(2),env:process.env};if(process.argv[2]==='auth'){fs.writeFileSync(${JSON.stringify(authReport)},JSON.stringify(report));console.log('{"loggedIn":true,"authMethod":"claude.ai"}');}else{fs.writeFileSync(${JSON.stringify(report)},JSON.stringify(report));setInterval(()=>{},1000);}\n`,{mode:0o700});
     // Exercise the cleaned launch environment, including an explicitly empty
-    // variable: presence, not truthiness, controls whether auth is queried.
+    // variable. .env credentials are always passed, even when a subscription
+    // login would report claude.ai, so launch never queries auth status.
     await fs.writeFile(path.join(f.dir,'.env'),`ZYLOS_TMUX_ENV=ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN\n${key ? `${key}=${key==='ANTHROPIC_API_KEY' ? 'fixture-api-key' : ''}\n` : ''}`);
     const adapter=new Adapter({root:f.dir,env:{PATH:process.env.PATH,HOME:f.dir,CLAUDE_BIN:command},tmux:{binary,socketPath:f.socketPath,configFile:'/dev/null'}});
     await adapter.launch({sessionGroup:null,runId:'auth-condition-run',sessionMode:'single',launchConfig:{runtime:'claude',mode:'default'}});
     for(let i=0;i<100;i++){try{await fs.access(report);break;}catch{}await delay(10);}
     const observed=JSON.parse(await fs.readFile(report,'utf8'));
-    assert.equal(Object.hasOwn(observed.env,'ANTHROPIC_API_KEY'),false);
-    assert.equal(Object.hasOwn(observed.env,'CLAUDE_CODE_OAUTH_TOKEN'),false);
-    if(key){
-      const auth=JSON.parse(await fs.readFile(authReport,'utf8'));
-      assert.deepEqual(auth.argv,['auth','status']);
-      assert.equal(Object.hasOwn(auth.env,'ANTHROPIC_API_KEY'),false);
-      assert.equal(Object.hasOwn(auth.env,'CLAUDE_CODE_OAUTH_TOKEN'),false);
-    }else await assert.rejects(fs.stat(authReport),{code:'ENOENT'});
+    for(const name of ['ANTHROPIC_API_KEY','CLAUDE_CODE_OAUTH_TOKEN']){
+      if(name===key)assert.equal(observed.env[name],key==='ANTHROPIC_API_KEY' ? 'fixture-api-key' : '');
+      else assert.equal(Object.hasOwn(observed.env,name),false);
+    }
+    await assert.rejects(fs.stat(authReport),{code:'ENOENT'});
   });
 }
 
