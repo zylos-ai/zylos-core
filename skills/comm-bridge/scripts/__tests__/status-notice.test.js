@@ -17,7 +17,7 @@ test('scoped status notice forwards a local group without changing component arg
   const channel = path.join(root, '.claude/skills/fake/scripts');
   fs.mkdirSync(channel, { recursive: true });
   const marker = path.join(root, 'sent.json');
-  fs.writeFileSync(path.join(channel, 'send.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify(process.argv.slice(2)))`);
+  fs.writeFileSync(path.join(channel, 'send.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify({argv:process.argv.slice(2),runId:process.env.ZYLOS_RUN_ID,sessionGroup:process.env.ZYLOS_SESSION_GROUP}))`);
   const code = `
     import * as db from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
     import {reserveStatusNotice,sendStatusNotice} from ${JSON.stringify(new URL('../status-notice.js', import.meta.url).href)};
@@ -28,13 +28,16 @@ test('scoped status notice forwards a local group without changing component arg
     const row=db.getDb().prepare("SELECT session_group FROM conversations WHERE direction='out'").get();
     console.log(JSON.stringify({result,row}));db.close();`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
-    env: { ...process.env, ZYLOS_DIR: root }, encoding: 'utf8', timeout: 5000,
+    env: { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'stale-system-run', ZYLOS_SESSION_GROUP: 'fake:unrelated' }, encoding: 'utf8', timeout: 5000,
   });
   assert.equal(result.status, 0, result.stderr);
   const data = JSON.parse(result.stdout.trim());
   assert.equal(data.result.outcome, 'sent');
   assert.equal(data.row.session_group, 'fake:wanted');
-  assert.deepEqual(JSON.parse(fs.readFileSync(marker)), ['room', 'notice']);
+  const captured = JSON.parse(fs.readFileSync(marker));
+  assert.deepEqual(captured.argv, ['room', 'notice']);
+  assert.equal(captured.runId, undefined);
+  assert.equal(captured.sessionGroup, undefined);
 });
 
 test('invalid sender channel is rejected before opening any database or spawning', async () => {

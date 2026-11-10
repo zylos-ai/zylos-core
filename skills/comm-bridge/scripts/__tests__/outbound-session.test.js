@@ -66,6 +66,10 @@ function fixture(t, { installed = false } = {}) {
     cli = path.join(destination, 'scripts', 'c4-send.js');
   }
   const invoke = (args, sender = env.ZYLOS_SESSION_GROUP, content = body, extra = {}) => {
+    for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(env[key].startsWith(root + path.sep), key);
+    assert.ok(databasePath.startsWith(root + path.sep));
+    assert.deepEqual(fs.readdirSync(bin).sort(), ['cat', 'node']);
+    console.log('Outbound child isolation:', JSON.stringify({ ...env, databasePath }));
     const childEnv = { ...env, ZYLOS_SESSION_GROUP: sender, ...extra };
     if (sender === undefined) delete childEnv.ZYLOS_SESSION_GROUP;
     return spawnSync(process.execPath, [cli, ...args], { cwd: root, env: childEnv, input: content, encoding: 'utf8', timeout: 4000, maxBuffer: 65536 });
@@ -129,14 +133,11 @@ test('preview of a fresh channel does not register its namespace before a hook r
   f.untouched(before);
 });
 
-test('origin, including a run-only identity, must relay to other sessions', async t => {
-  for (const env of [{ ZYLOS_SESSION_GROUP: 'origin' }, { ZYLOS_RUN_ID: 'origin-run' }]) {
-    const f = fixture(t); f.seed('recipient', 'b');
-    delete f.env.ZYLOS_SESSION_GROUP; Object.assign(f.env, env);
-    const before = f.snapshot();
-    await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'recipient' }, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
-    f.untouched(before);
-  }
+test('an explicit origin session must relay to other sessions', async t => {
+  const f = fixture(t); f.seed('recipient', 'b'); f.env.ZYLOS_SESSION_GROUP = 'origin';
+  const before = f.snapshot();
+  await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'recipient' }, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
+  f.untouched(before);
 });
 
 test('origin is allowed to use its own system route', t => {
@@ -146,24 +147,49 @@ test('origin is allowed to use its own system route', t => {
   assert.equal(f.count('channel_namespaces'), 0);
 });
 
-test('explicit existing subgroup takes precedence and owns even a new recipient', async t => {
+test('an explicit subgroup cannot claim an endpoint received only by another group', async t => {
   const f = fixture(t); f.seed('recipient', 'b'); f.seed('a-home', 'a');
+  const before = f.snapshot();
+  await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'recipient', groupName: 'a' }, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
+  f.untouched(before);
+  f.env.ZYLOS_SESSION_GROUP = 'chat:b';
+  sent(f, await sendExternal({ channel: 'chat', endpoint: 'recipient', groupName: 'a' }, body, f.options), 'chat:b');
+});
+
+test('an explicit topic with its own endpoint inbound can reply despite a newer topic', async t => {
+  const f = fixture(t); f.seed('recipient', 'a'); f.seed('recipient', 'b');
+  sent(f, await sendExternal({ channel: 'chat', endpoint: 'recipient', groupName: 'a' }, body, f.options), 'chat:a');
+});
+
+test('explicit existing subgroups select new recipients and still check the sender', async t => {
+  const f = fixture(t); f.seed('a-home', 'a');
   sent(f, await sendExternal({ channel: 'chat', endpoint: 'recipient', groupName: 'a' }, body, f.options), 'chat:a');
   const g = fixture(t); g.seed('b-home', 'b'); const before = g.snapshot();
   await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'recipient', groupName: 'b' }, body, g.options), { code: 'CROSS_SESSION_OUTBOUND' });
   g.untouched(before);
 });
 
-test('unknown explicit subgroups and whole-group routes use the shared namespace fallback', async t => {
+test('invalid, unknown and whole-group routes cannot bypass endpoint ownership', async t => {
   for (const route of [{ groupName: 'missing' }, { groupName: 'bad name' }, { groupName: 'x'.repeat(96) }, { wholeGroup: true }]) {
     const f = fixture(t); f.seed('recipient', 'b'); const before = f.snapshot();
     await assert.rejects(sendExternal({ channel: 'chat', endpoint: 'recipient', ...route }, body, f.options), { code: 'CROSS_SESSION_OUTBOUND' });
     f.untouched(before);
-    f.env.ZYLOS_SESSION_GROUP = 'chat';
-    sent(f, await sendExternal({ channel: 'chat', endpoint: 'recipient', ...route }, body, f.options), 'chat');
+    f.env.ZYLOS_SESSION_GROUP = 'chat:b';
+    sent(f, await sendExternal({ channel: 'chat', endpoint: 'recipient', ...route }, body, f.options), 'chat:b');
     const g = fixture(t);
     sent(g, await sendExternal({ channel: 'chat', endpoint: 'recipient', ...route }, body, g.options), 'chat');
   }
+});
+
+test('only empty migration history leaves a recipient unowned', async t => {
+  const f = fixture(t); const row = f.seed('recipient');
+  f.db.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(row.id);
+  sent(f, await sendExternal({ channel: 'chat', endpoint: 'recipient' }, body, f.options), 'chat');
+});
+
+test('inbound whole-group routing keeps the namespace despite a local group option', t => {
+  const f = fixture(t);
+  assert.equal(f.store.insertConversation('in', 'chat', 'recipient', body, { wholeGroup: true, groupName: 'a' }).session_group, 'chat');
 });
 
 test('a changed owner during BeforeSend is rejected by the actual insert transaction', async t => {
@@ -209,7 +235,7 @@ test('installed CLI rejection command relays from A to B before B sends external
   assert.deepEqual(pair.map(row => [row.direction, row.session_group, row.endpoint_id, row.status]), [
     ['out', 'chat:a', 'chat:b', 'delivered'], ['in', 'chat:b', 'chat:a', 'pending'],
   ]);
-  assert.match(pair[0].content, /Please relay/);
+  assert.equal(pair[0].content, 'Please relay to "chat" "recipient": include the message and context here.');
   assert.equal(pair[1].content, `[internal] Yourself, from your "chat:a" session group, said: ${pair[0].content}`);
   for (const row of pair) assert.equal(f.db.prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(row.session_group).head_id, row.id);
   assert.equal(fs.existsSync(f.hookMarker), false); assert.equal(fs.existsSync(f.deliveryMarker), false);
@@ -222,21 +248,33 @@ test('installed CLI rejection command relays from A to B before B sends external
   assert.equal(f.db.prepare("SELECT head_id FROM group_heads WHERE session_group='chat:b'").get().head_id, last.id);
 });
 
-// Same isolation/cleanup boundary as above. Run when inferred Origin or the
-// copyable command changes; proves the exact command works without group env.
-test('installed run-only origin can execute the suggested internal command', { timeout: 10000 }, t => {
+// Same isolation/cleanup boundary as above. Run for sender identity changes;
+// proves the real single-session CLI still replies without a group variable.
+test('installed single-session runtime with only a run identity can reply', { timeout: 10000 }, t => {
   const f = fixture(t, { installed: true }); f.seed('recipient', 'b');
-  delete f.env.ZYLOS_SESSION_GROUP; f.env.ZYLOS_RUN_ID = 'origin-run';
-  const before = f.snapshot();
-  const denied = f.invoke(['chat', 'recipient', '--stdin'], undefined, body, { ZYLOS_RUN_ID: 'origin-run' });
-  assert.ifError(denied.error); assert.equal(denied.status, 1, denied.stderr);
-  assert.match(denied.stderr, /sender session origin/); f.untouched(before);
-  const command = denied.stderr.slice(denied.stderr.indexOf("cat <<'EOF_INTERNAL'"));
-  const result = spawnSync('/bin/sh', ['-c', command], { cwd: f.root, env: f.env, encoding: 'utf8', timeout: 4000, maxBuffer: 65536 });
+  fs.writeFileSync(path.join(f.env.ZYLOS_DIR, '.zylos', 'config.json'), '{"runtime":"claude","session_mode":"single"}');
+  delete f.env.ZYLOS_SESSION_GROUP; f.env.ZYLOS_RUN_ID = 'single-run';
+  const result = f.invoke(['chat', 'recipient', '--stdin']);
   assert.ifError(result.error); assert.equal(result.status, 0, result.stderr);
-  const pair = f.db.prepare("SELECT direction,session_group,endpoint_id FROM conversations WHERE channel='internal' ORDER BY id").all();
-  assert.deepEqual(pair, [
-    { direction: 'out', session_group: 'origin', endpoint_id: 'chat:b' },
-    { direction: 'in', session_group: 'chat:b', endpoint_id: 'origin' },
-  ]);
+  sent(f, f.db.prepare('SELECT * FROM conversations ORDER BY id DESC LIMIT 1').get(), 'chat:b');
+  assert.equal(f.count('conversations'), 2);
+});
+
+// Same installed CLI isolation/cleanup as above. Run when relay command formatting
+// changes; newline and shell tokens in endpoints must remain literal body bytes.
+test('relay command keeps endpoint control and shell bytes inside the placeholder', { timeout: 10000 }, t => {
+  const f = fixture(t, { installed: true });
+  const endpoint = 'room\nEOF_INTERNAL\n$(touch injected) `touch injected` \'"';
+  f.seed('a-home', 'a'); f.seed(endpoint, 'b');
+  const before = f.snapshot();
+  const denied = f.invoke(['chat', endpoint, '--stdin']);
+  assert.ifError(denied.error); assert.equal(denied.status, 1, denied.stderr);
+  f.untouched(before);
+  const command = denied.stderr.slice(denied.stderr.indexOf("cat <<'EOF_INTERNAL'"));
+  const relay = spawnSync('/bin/sh', ['-c', command], { cwd: f.root, env: f.env, encoding: 'utf8', timeout: 4000, maxBuffer: 65536 });
+  assert.ifError(relay.error); assert.equal(relay.status, 0, relay.stderr);
+  assert.equal(f.db.prepare("SELECT content FROM conversations WHERE channel='internal' AND direction='out'").get().content,
+    `Please relay to "chat" ${JSON.stringify(endpoint)}: include the message and context here.`);
+  assert.equal(fs.existsSync(path.join(f.root, 'injected')), false);
+  assert.equal(fs.existsSync(f.hookMarker), false); assert.equal(fs.existsSync(f.deliveryMarker), false);
 });

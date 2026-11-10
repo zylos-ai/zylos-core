@@ -5,6 +5,7 @@ import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { parseSessionGroup } from './c4-session-group.js';
 import { messageForStatus } from './status-notice-templates.js';
 import { logStatusNotice } from './status-notice.js';
+import { systemSendEnvironment } from './c4-system-send-env.js';
 
 export { normalizeStatusEndpoint } from './status-endpoint.js';
 export const STATUS_NOTICE_TTL_SECONDS = 600;
@@ -54,7 +55,7 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
       const finish = result => { if (done) return; done = true; clearTimeout(timer); resolve(result); };
       const stop = () => { try { child.kill('SIGKILL'); } catch {} };
       try {
-        child = spawn(process.execPath, argv, { stdio: ['pipe', 'ignore', 'ignore'] });
+        child = spawn(process.execPath, argv, { stdio: ['pipe', 'ignore', 'ignore'], env: systemSendEnvironment() });
         started = Boolean(child.pid);
         child.once('spawn', () => { started = true; });
         child.once('error', error => {

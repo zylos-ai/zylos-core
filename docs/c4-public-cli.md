@@ -8,16 +8,20 @@ These commands do not send messages to channels.
 
 `c4-send.js <channel> [endpoint] --stdin [--session-group LOCAL_GROUP]`
 uses the shared C4 outgoing route resolver, including the latest inbound group
-for that recipient or an explicit existing subgroup. Before channel BeforeSend,
+for that recipient. An explicit group can select a topic that received inbound
+for the same channel and endpoint; otherwise the latest inbound group wins.
+Without nonempty inbound history, an explicit existing subgroup selects the
+outgoing group. Before channel BeforeSend,
 Core compares that route with the sender's inherited `ZYLOS_SESSION_GROUP`
-(`origin` if only `ZYLOS_RUN_ID` is present). Cross-session sends fail with
+(including explicit `origin`). A run identity alone is a single-session runtime
+and does not activate the check. Cross-session sends fail with
 `CROSS_SESSION_OUTBOUND`: no outbound record, fallback event or delivery occurs,
 and the channel hook is not invoked. The error names the responsible session
 and gives a complete, shell-quoted command with a placeholder body:
 
 ```sh
 cat <<'EOF_INTERNAL' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js internal 'telegram:recipient-session'
-Please relay this message. Include the external destination, body and context.
+Please relay to "telegram" "recipient": include the message and context here.
 EOF_INTERNAL
 ```
 
@@ -26,10 +30,12 @@ the sender environment. Internal success means queued, not read or delivered
 externally. The responsible session makes the external send. No waiting-sender
 registry, automatic reply copies or return-reply instruction is added.
 
-Same-session replies (including `origin`), processes without a session identity,
+Same-session replies (including `origin`), processes without a session group,
 and new recipients with no inbound history whose route falls back to the channel
 namespace remain allowed. Explicit existing subgroups are checked even without
-recipient history; unknown subgroups retain the resolver's namespace fallback.
+recipient history; unknown subgroups fall back to the namespace only without
+nonempty inbound history. Empty migration groups do not assign ownership.
+System notification callers clear both session variables before spawning C4.
 The guard also covers absorbed external replies and scheduled reminders.
 
 The route is checked again in the outbound insert transaction in case an inbound
