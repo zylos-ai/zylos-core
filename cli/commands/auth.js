@@ -3,6 +3,8 @@ import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { notifyAuthCompleted } from '../lib/am-sock-client.js';
 import { claudeSettingsOverrideNotice, relayLoginNotice, syncClaudeRelayTraffic } from '../lib/runtime-setup.js';
+import { claudeProbeEnvironment } from '../lib/runtime/session-command.js';
+import { ZYLOS_DIR } from '../lib/config.js';
 
 export function runNativeAuth(runtime, args) {
   return new Promise(resolve => {
@@ -36,8 +38,14 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
     let checked;
     try { checked = await adapter(runtime).checkAuth(); }
     catch { checked = { status: 'uncertain' }; }
-    if (checked.status !== 'success') return { ok: false, error: { code: checked.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED',
-      message: 'Authentication was not confirmed', persisted: null, configChanged: false } };
+    if (checked.status !== 'success') {
+      // The failed check ran Claude Code, which takes settings.json `env` over the
+      // values zylos passed: name any key there that overrides them (read only).
+      const override = runtime === 'claude' ? claudeSettingsOverrideNotice(claudeProbeEnvironment(ZYLOS_DIR, process.env)) : null;
+      return { ok: false, error: { code: checked.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED',
+        message: 'Authentication was not confirmed', persisted: null, configChanged: false,
+        ...(override ? { warnings: [{ code: 'CLAUDE_SETTINGS_OVERRIDE', message: override }] } : {}) } };
+    }
     // Subscription login: recompute the relay traffic setting from the saved state before the session restarts.
     if (runtime === 'claude' && !syncRelayTraffic()) {
       return { ok: false, error: { code: 'CREDENTIAL_SAVE_FAILED',
@@ -62,7 +70,10 @@ export async function authCommand(args, dependencies) {
     for (const warning of result.data.warnings) console.error(`Warning [${warning.code}]: ${warning.message}`);
     if (!result.data.recoveryNotified) console.log('Recovery will resume on the next message or when the cooldown expires.');
   }
-  else console.error(`Error [${result.error.code}]: ${result.error.message}`);
+  else {
+    for (const warning of result.error.warnings ?? []) console.error(`Warning [${warning.code}]: ${warning.message}`);
+    console.error(`Error [${result.error.code}]: ${result.error.message}`);
+  }
   if (!result.ok) process.exitCode = 1;
   return result;
 }

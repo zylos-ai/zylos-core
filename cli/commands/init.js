@@ -1952,7 +1952,15 @@ export async function runInitAuthentication(opts, {
     return { ...snapshot(), failed: true, exitCode: 1 };
   };
   const login = (...args) => { activateBase(selectedRuntime); return nativeLogin(...args); };
-  const verifySetup = () => { activateBase('claude'); return setupVerify(); };
+  const verifySetup = () => {
+    activateBase('claude');
+    const result = setupVerify();
+    // The failed check ran Claude Code with this process env; settings.json `env`
+    // overrides it there: name any key that does (read only).
+    const override = result.valid ? null : claudeSettingsOverrideNotice(process.env);
+    if (override) log(`  ${warn(override)}`);
+    return result;
+  };
   if (selectedRuntime === 'codex') {
     // ── Step 6 (Codex): auth + startup config ────────────────────────────
     if (exists('codex')) {

@@ -27,8 +27,8 @@ const { saveApiKey, saveApiKeyToEnv, saveAuthToken, saveAuthTokenToEnv,
   saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice, syncClaudeRelayTraffic } = await import('../runtime-setup.js');
 const { launchEnvironment } = await import('../runtime/session-command.js');
 const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags, executeRuntimeSwitch, runtimeCommand } = await import('../../commands/runtime.js');
-const { executeAuth } = await import('../../commands/auth.js');
-const { persistInitCredentials } = await import('../../commands/init.js');
+const { executeAuth, authCommand } = await import('../../commands/auth.js');
+const { persistInitCredentials, runInitAuthentication } = await import('../../commands/init.js');
 const { readEnvFile } = await import('../env.js');
 const modes = [
   ['API key', 'ANTHROPIC_API_KEY', saveApiKey, saveApiKeyToEnv],
@@ -347,7 +347,7 @@ const OVERRIDE = 'CLAUDE_SETTINGS_OVERRIDE';
 const overrideKeys = message => {
   assert.ok(message, 'a warning is expected');
   assert.ok(message.includes(settingsFile), 'the warning names the settings.json path');
-  assert.match(message, /Claude Code uses those values instead of the ones zylos saved/);
+  assert.match(message, /Claude Code uses those values instead of the ones zylos gives it/);
   assert.match(message, /remove th(?:at key|ose keys) from .* by hand/);
   return message.match(/ sets (.+) in its env block/)[1].split(', ');
 };
@@ -544,4 +544,96 @@ test('init with a subscription login only (no base URL) names an API key left in
   assert.deepEqual(overrideKeys(warnings[0]), ['ANTHROPIC_API_KEY']);
   leaksNothing(lines.join('\n'), hand);
   settingsUnchanged(text);
+});
+
+// When a Claude auth check fails, the check itself ran Claude Code, which takes
+// settings.json `env` over the values zylos passed. The failure names any key
+// there that overrides the values the check used (read only), even though
+// nothing was saved yet. Codex and successful checks are unchanged.
+const failedLogin = (runtime = 'claude', status = 'failure') => executeAuth([runtime], { exists: () => true, spawn: () => ({ status: 0 }),
+  adapter: () => ({ checkAuth: async () => ({ status }) }), notifyRecovery: () => true });
+const failureOverrides = result => {
+  assert.equal(result.ok, false);
+  return (result.error.warnings ?? []).filter(item => item.code === OVERRIDE);
+};
+
+for (const [status, code] of [['failure', 'AUTH_FAILED'], ['uncertain', 'AUTH_NOT_CONFIRMED']]) {
+  test(`zylos auth claude: a ${status} check names a settings.json key that overrides the checked values`, async () => {
+    const saved = 'sk-ant-api03-' + secret(), hand = handSecret();
+    fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_API_KEY=${saved}\n`);
+    const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }));
+    const result = await failedLogin('claude', status);
+    assert.equal(result.error.code, code);
+    const warnings = failureOverrides(result);
+    assert.equal(warnings.length, 1);
+    assert.deepEqual(overrideKeys(warnings[0].message), ['ANTHROPIC_API_KEY']);
+    leaksNothing(JSON.stringify(result), hand, saved);
+    settingsUnchanged(text);
+  });
+}
+
+test('zylos auth claude text output prints the settings.json warning before the error', async () => {
+  const saved = 'sk-ant-api03-' + secret(), hand = handSecret();
+  fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_API_KEY=${saved}\n`);
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }));
+  const errors = [], logs = [], original = { error: console.error, log: console.log }, exitCode = process.exitCode;
+  console.error = line => errors.push(String(line)); console.log = line => logs.push(String(line));
+  try { await authCommand(['claude'], { exists: () => true, spawn: () => ({ status: 0 }), adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) }); }
+  finally { console.error = original.error; console.log = original.log; assert.equal(process.exitCode, 1, 'the exit code stays 1'); process.exitCode = exitCode; }
+  const warning = errors.findIndex(line => line.startsWith(`Warning [${OVERRIDE}]: `));
+  assert.ok(warning >= 0, 'the warning is printed on stderr');
+  assert.ok(errors.findIndex(line => line.startsWith('Error [AUTH_FAILED]: ')) > warning, 'the warning comes before the error');
+  leaksNothing([...errors, ...logs].join('\n'), hand, saved);
+  settingsUnchanged(text);
+});
+
+test('zylos auth claude: a failed check with no overriding key, or a Codex check, reports no settings.json warning', async t => {
+  const saved = 'sk-ant-api03-' + secret();
+  fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_API_KEY=${saved}\n`);
+  writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: saved, KEEP: 'x' } }));
+  assert.deepEqual(failureOverrides(await failedLogin()), [], 'equal value');
+  // The check's values, not .env: in compat mode the check inherits a base URL
+  // from the process that .env does not set; the same URL in settings.json is equal.
+  const inherited = 'https://inherited-relay.example.test', before = process.env.ANTHROPIC_BASE_URL;
+  t.after(() => { if (before === undefined) delete process.env.ANTHROPIC_BASE_URL; else process.env.ANTHROPIC_BASE_URL = before; });
+  process.env.ANTHROPIC_BASE_URL = inherited;
+  fs.writeFileSync(envFile, `ZYLOS_CLEAN_ENV=false\nANTHROPIC_API_KEY=${saved}\n`);
+  writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: saved, ANTHROPIC_BASE_URL: inherited } }));
+  assert.deepEqual(failureOverrides(await failedLogin()), [], 'compared with the values the check used');
+  writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: handSecret() } }));
+  assert.deepEqual(failureOverrides(await failedLogin('codex')), [], 'zylos auth codex');
+});
+
+// init: a setup token is checked with `claude -p` in this process before it is
+// saved; settings.json `env` overrides the process values there.
+const setupCheck = (result, lines) => runInitAuthentication({ setupToken: 'sk-ant-oat01-' + secret() }, {
+  runtime: 'claude', quiet: true, skipConfirm: true, exists: () => true, claudeStatus: () => false,
+  setupVerify: () => result, log: line => lines.push(String(line)), reportError: line => lines.push(String(line)) });
+
+test('init: a failed setup token check names a settings.json key that overrides it', async () => {
+  const hand = handSecret();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }));
+  const lines = [];
+  const result = await setupCheck({ valid: false, authError: true }, lines);
+  assert.equal(result.claudeAuthenticated, false);
+  const warnings = lines.filter(line => line.includes('settings.json'));
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes('⚠'), 'printed as an init warning');
+  assert.deepEqual(overrideKeys(warnings[0]), ['ANTHROPIC_API_KEY']);
+  leaksNothing(lines.join('\n'), hand);
+  settingsUnchanged(text);
+});
+
+test('init: a setup token check reports nothing when it passes or when settings.json matches the checked token', async () => {
+  writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: handSecret() } }));
+  const passed = [];
+  await setupCheck({ valid: true }, passed);
+  assert.equal(passed.some(line => line.includes('settings.json')), false, 'a passing check');
+  // settings.json holds the very token being checked: equal to the checked value
+  // (process env), although .env does not have it yet.
+  const token = 'sk-ant-oat01-' + secret(), lines = [];
+  writeSettings(JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: token } }));
+  await runInitAuthentication({ setupToken: token }, { runtime: 'claude', quiet: true, skipConfirm: true, exists: () => true,
+    claudeStatus: () => false, setupVerify: () => ({ valid: false, authError: true }), log: line => lines.push(String(line)), reportError: line => lines.push(String(line)) });
+  assert.equal(lines.some(line => line.includes('settings.json')), false, 'compared with the checked token, not .env');
 });
