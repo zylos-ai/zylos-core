@@ -1004,6 +1004,6 @@
   "wb.usage.deletedConversations": "删除的对话不再计入消息数，token 用量与费用仍会保留。",
   "chat.internal.sent": "内部 →",
   "chat.internal.received": "内部 ←",
-  "chat.internal.unavailable": "（会话已不存在）",
+  "chat.internal.unavailable": "（会话不可用）",
   "chat.internal.original": "原始消息"
 }
