@@ -166,7 +166,9 @@ test('matching and stale run identities persist exact session_id or NULL in comm
   const { api, db, dir } = setup(t);
   const runDir = path.join(dir,'activity-monitor/session-groups/demo:room');
   fs.mkdirSync(runDir,{recursive:true});
-  const env = {ZYLOS_DIR:dir,ZYLOS_RUN_ID:'own-run',ZYLOS_SESSION_GROUP:'demo:room'};
+  const bin = path.join(dir, 'bin'); fs.mkdirSync(bin);
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  const env = {PATH:bin,ZYLOS_DIR:dir,ZYLOS_RUN_ID:'own-run',ZYLOS_SESSION_GROUP:'demo:room'};
   for (const [runId, expected] of [['other-run',null],['own-run','own-session']]) {
     fs.writeFileSync(path.join(runDir,'current-session.json'),JSON.stringify({runId,sessionId:'own-session'}));
     const row = await sendExternal(request,'body',{api,env,skillsDir:dir});
