@@ -70,7 +70,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     catch (error) { throw new Error(error.message + '; errors=' + errors.join('; ') + '; missing=' + missing.join('; ')); }
     await page.locator('#image .chat-attachment-image-content').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.querySelector('#image .chat-attachment-image-content').naturalWidth === 160 && document.querySelector('#tray .chat-attachment-image-content').naturalWidth === 160);
-    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 2);
+    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 3);
     await page.evaluate(() => document.fonts.ready);
     const actual = await page.evaluate(() => {
       const answer = document.querySelector('#answered .chat-question-answer'), list = document.querySelector('#answered .chat-choice-options');
@@ -100,9 +100,17 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
         availableColumnWidth: document.querySelector('#waiting .conversation-message-body').getBoundingClientRect().width,
         trayFrameHeight: trayFrame.getBoundingClientRect().height, trayImageHeight: trayImage.getBoundingClientRect().height,
         localFont: [...document.fonts].some(font => font.family === 'Inter' && font.status === 'loaded'),
-        widths: [...document.querySelectorAll('.chat-block')].map(node => node.getBoundingClientRect().width),
+        plainTextWidth: document.querySelector('#long-text .chat-message-text').getBoundingClientRect().width,
+        attachedTextWidth: document.querySelector('#long-text-file .chat-message-text').getBoundingClientRect().width,
+        attachedFileWidth: document.querySelector('#long-text-file .chat-attachment').getBoundingClientRect().width,
+        markdownPlainTextWidth: document.querySelector('#markdown-only .chat-message-text').getBoundingClientRect().width,
+        markdownFileTextWidth: document.querySelector('#markdown-file .chat-message-text').getBoundingClientRect().width,
+        markdownFileBodyWidth: document.querySelector('#markdown-file .conversation-message-body').getBoundingClientRect().width,
+        chartFileBodyWidth: document.querySelector('#markdown-chart-file .conversation-message-body').getBoundingClientRect().width,
+        widths: [...document.querySelectorAll('.chat-block-choice,.chat-block-confirmation,.chat-block-form_intent,.chat-block-breakdown,.chat-block-category_series')].map(node => node.getBoundingClientRect().width),
         viewport: innerWidth, scroll: document.documentElement.scrollWidth };
     });
+    actual.pressed = await pressedContrast(page, context);
     assert.match(actual.answerText, /你的回答/); assert.match(actual.answerText, /LRU/);
     assert.ok(actual.answerTop < actual.choicesTop, 'accepted answer is visually before readonly options');
     assert.equal(actual.dotAnimation, 'none', 'waiting indicator remains static'); assert.equal(actual.dotWidth, '6px', 'waiting dot remains visible');
@@ -116,6 +124,8 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.ok(actual.checkboxCardContrast >= 3, 'selected boolean fill contrasts with the card at least 3:1');
       assert.ok(actual.checkboxSelectedRowContrast >= 3, 'selected fill contrasts with selected rows at least 3:1');
     }
+    assert.ok(actual.pressed.primary.ratio >= 4.5, 'primary pressed text meets AA');
+    assert.ok(actual.pressed.danger.ratio >= 4.5, 'danger pressed text meets AA');
     assert.ok(actual.primaryTextContrast >= 4.5, 'primary text meets AA');
     assert.ok(actual.dangerTextContrast >= 4.5, 'danger text meets AA');
     const expectedImageWidth = width === 1280 ? 480 : actual.availableColumnWidth;
@@ -123,6 +133,13 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     assert.ok(Math.abs(actual.imageBodyWidth - expectedImageWidth) <= 1, 'attachment message owns a deterministic column');
     assert.ok(actual.trayFrameHeight > 0 && actual.trayFrameHeight <= 72, 'tray frame stays compact');
     assert.ok(actual.trayImageHeight > 0 && actual.trayImageHeight <= 72, 'tray image stays compact');
+    assert.ok(Math.abs(actual.attachedTextWidth - actual.plainTextWidth) <= 1, 'adding a file preserves the full plain text width');
+    assert.ok(Math.abs(actual.markdownFileTextWidth - actual.markdownPlainTextWidth) <= 1, 'markdown and file preserves the equivalent text width');
+    if (width === 1280) {
+      assert.equal(actual.plainTextWidth, 900, 'long plain text retains its maximum width');
+      assert.equal(actual.attachedFileWidth, 480, 'mixed plain text keeps its file card width');
+      assert.equal(actual.chartFileBodyWidth, 720, 'markdown chart and file share the rich content width');
+    }
     assert.ok(actual.widths.every(value => value <= 720), 'rich cards stay within the shared width');
     assert.ok(actual.scroll <= width, 'no horizontal overflow');
     assert.equal(errors.length, 0, errors.join('; ')); assert.equal(outside.length, 0, outside.join('; ')); assert.equal(missing.length, 0, missing.join('; '));
@@ -131,4 +148,29 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
   } finally {
     await browser?.close(); server.closeAllConnections(); if (server.listening) await new Promise(resolve => server.close(resolve));
   }
+}
+
+async function pressedContrast(page, context) {
+  const cdp = await context.newCDPSession(page);
+  try {
+    await cdp.send('DOM.enable'); await cdp.send('CSS.enable');
+    const { root } = await cdp.send('DOM.getDocument');
+    const selectors = { primary: '#primary', danger: '#danger .wb-btn-danger' };
+    for (const selector of Object.values(selectors)) {
+      const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector });
+      await cdp.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: ['active'] });
+    }
+    await page.waitForTimeout(200);
+    return await page.evaluate(selectors => {
+      const rgba = value => { const c = document.createElement('canvas'); c.width = c.height = 1; const ctx = c.getContext('2d'); ctx.fillStyle = value; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data]; };
+      const blend = (a, b) => { const opacity = a[3] / 255; return a.slice(0, 3).map((v, i) => v * opacity + b[i] * (1 - opacity)).concat(255); };
+      const surface = node => !node ? [255, 255, 255, 255] : blend(rgba(getComputedStyle(node).backgroundColor), surface(node.parentElement));
+      const luminance = rgb => rgb.slice(0, 3).map(v => { v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+      return Object.fromEntries(Object.entries(selectors).map(([key, selector]) => {
+        const node = document.querySelector(selector), style = getComputedStyle(node), background = surface(node), foreground = blend(rgba(style.color), background);
+        const a = luminance(foreground), b = luminance(background);
+        return [key, { background, foreground, cssBackground: style.backgroundColor, ratio: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) }];
+      }));
+    }, selectors);
+  } finally { await cdp.detach(); }
 }

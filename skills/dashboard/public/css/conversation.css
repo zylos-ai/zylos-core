@@ -1085,8 +1085,6 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-markdown pre code { padding: 0; background: none; }
 
 /* Attachment and structured content widths */
-.conversation-page .conversation-message-body:where(:has(> .chat-message-content > .chat-attachment), :has(> .chat-message-content > .chat-block > .chat-attachment)) { width: min(480px, calc(100% - 38px)); }
-.conversation-page .conversation-message-body:where(:has(> .chat-message-content > .chat-attachment), :has(> .chat-message-content > .chat-block > .chat-attachment)) > .chat-message-content { width: 100%; }
 
 .conversation-page .conversation-message-body:has(> .chat-message-content > :is(.chat-block-choice, .chat-block-confirmation, .chat-block-form_intent, .chat-block-time_series, .chat-block-breakdown, .chat-block-category_series)),
 .conversation-page .conversation-message-body-wide { width: min(var(--c-max), calc(100% - 38px)); }
@@ -1373,7 +1371,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 
 /* File / image cards */
 .conversation-page .chat-attachment {
-  margin: 8px 0; width: min(100%, 480px); min-width: 0; overflow: hidden; border: 0; border-radius: var(--c-r-lg); background: var(--c-surface); box-shadow: var(--c-shadow-card);
+  margin: 8px 0; width: 480px; max-width: 100%; min-width: 0; overflow: hidden; border: 0; border-radius: var(--c-r-lg); background: var(--c-surface); box-shadow: var(--c-shadow-card);
 }
 .conversation-page .chat-block + .chat-block:has(> .chat-attachment) { margin-top: 8px; }
 .conversation-page .chat-attachment-info { position: relative; display: flex; align-items: center; min-width: 0; gap: 12px; padding: 12px; min-height: 64px; box-sizing: border-box; }
@@ -1422,7 +1420,6 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 /* Phone layout */
 @media (max-width: 760px) {
   :root { --c-pad: 16px; --c-h: 40px; --c-input-fs: 16px; }
-  .conversation-page .conversation-message-body:where(:has(> .chat-message-content > .chat-attachment), :has(> .chat-message-content > .chat-block > .chat-attachment)) { width: calc(100% - 35px); }
   .conversation-page .conversation-message-body:has(> .chat-message-content > :is(.chat-block-choice, .chat-block-confirmation, .chat-block-form_intent, .chat-block-time_series, .chat-block-breakdown, .chat-block-category_series)),
   .conversation-page .conversation-message-body-wide { width: calc(100% - 35px); }
   .conversation-page .chat-block:not(.chat-block-markdown):not(:has(> .chat-attachment)) { padding: var(--c-pad); }

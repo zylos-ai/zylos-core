@@ -100,7 +100,7 @@
   --c-primary-press: color-mix(in srgb, var(--accent) 85%, var(--bg));
   --c-danger: var(--wb-err);
   --c-danger-hover: color-mix(in srgb, var(--wb-err) 86%, var(--text));
-  --c-danger-press: color-mix(in srgb, var(--wb-err) 82%, var(--bg));
+  --c-danger-press: color-mix(in srgb, var(--wb-err) 78%, var(--text));
   --c-on-fill: var(--wb-on-fill);
   --c-sunken: color-mix(in srgb, var(--bg) 55%, var(--c-surface));
   --c-raised: color-mix(in srgb, var(--text) 7%, var(--c-surface));
