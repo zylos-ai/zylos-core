@@ -17,6 +17,7 @@ const fs = require('fs');
 fs.writeFileSync(process.env.FAKE_CLAUDE_ENV_OUT, JSON.stringify({
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
   CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
+  ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN || '',
   ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL || '',
   CLAUDECODE: process.env.CLAUDECODE || '',
   CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT || ''
@@ -112,6 +113,39 @@ describe('Claude auth checks', () => {
     assert.equal(env.ANTHROPIC_BASE_URL, 'https://claude-proxy.example.com');
     assert.equal(env.CLAUDECODE, '');
     assert.equal(env.CLAUDE_CODE_ENTRYPOINT, '');
+  });
+
+  it('injects ANTHROPIC_AUTH_TOKEN with the base URL for a relay-only .env (#1130)', async () => {
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    fs.writeFileSync(
+      path.join(fakeZylosDir, '.env'),
+      [
+        'ANTHROPIC_BASE_URL=https://relay.example.test',
+        'ANTHROPIC_AUTH_TOKEN=relay-bearer-test',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+    // The probe must get these from .env, not from the test runner's own environment.
+    const authNames = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(authNames.map(name => [name, process.env[name]]));
+    for (const name of authNames) delete process.env[name];
+
+    try {
+      const result = await new ClaudeAdapter({}).checkAuth();
+      const env = JSON.parse(fs.readFileSync(envCapturePath, 'utf8'));
+
+      assert.equal(result.status, 'success');
+      assert.equal(env.ANTHROPIC_BASE_URL, 'https://relay.example.test');
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'relay-bearer-test');
+      assert.equal(env.ANTHROPIC_API_KEY, '');
+      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, '');
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   it('returns failure for explicit logged-out and authentication-error signals', async () => {

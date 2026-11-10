@@ -347,6 +347,34 @@ describe('Claude launch — new session', () => {
   });
 });
 
+describe('Claude launch — relay credentials from .env', () => {
+  it('spec.env carries ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN from .env (#1130)', async () => {
+    tmuxSessionExists = false;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const authNames = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(authNames.map(name => [name, process.env[name]]));
+    for (const name of authNames) delete process.env[name];
+    fs.writeFileSync(dotenvPath, [
+      'ANTHROPIC_BASE_URL=https://relay.example.test',
+      'ANTHROPIC_AUTH_TOKEN=relay-bearer-test',
+    ].join('\n'));
+    try {
+      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+      const env = readSpecEnv();
+      assert.ok(env, 'spec should be written');
+      assert.equal(env.ANTHROPIC_BASE_URL, 'https://relay.example.test');
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'relay-bearer-test');
+    } finally {
+      fs.writeFileSync(dotenvPath, original);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
 describe('Claude launch — existing session', () => {
   it('does not create a new tmux session', async () => {
     tmuxSessionExists = true;

@@ -53,6 +53,11 @@ const DEFAULT_BYPASS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
 const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' ');
 
+// Anthropic auth and endpoint variables read from ~/zylos/.env. launch() and
+// checkAuth() both use this list, so the auth probe authenticates exactly the
+// way the session does (e.g. a relay with ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN).
+const DOTENV_AUTH_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+
 const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
 const C4_CONTROL_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
 
@@ -71,6 +76,22 @@ function _parseEnvValue(content, key) {
   const m = content.match(re);
   if (!m) return '';
   return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
+}
+
+/**
+ * Read the non-empty DOTENV_AUTH_VARS values from ~/zylos/.env.
+ * @returns {Record<string, string>} Empty object when .env is absent.
+ */
+function _readDotenvAuthVars() {
+  const vars = {};
+  try {
+    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+    for (const key of DOTENV_AUTH_VARS) {
+      const value = _parseEnvValue(envContent, key);
+      if (value) vars[key] = value;
+    }
+  } catch { /* .env absent — no keys to inject */ }
+  return vars;
 }
 
 // ── ClaudeAdapter ─────────────────────────────────────────────────────────────
@@ -106,19 +127,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
    */
   async checkAuth() {
     // Build subprocess env: inherit current env, inject .env API keys (same as launch()).
-    const injectedEnv = { ...process.env };
-    let envApiKey = '';
-    let envOauthToken = '';
-    let envBaseUrl = '';
-    try {
-      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-      envApiKey = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
-      envOauthToken = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
-      envBaseUrl = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
-      if (envApiKey) injectedEnv.ANTHROPIC_API_KEY = envApiKey;
-      if (envOauthToken) injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = envOauthToken;
-      if (envBaseUrl) injectedEnv.ANTHROPIC_BASE_URL = envBaseUrl;
-    } catch { /* .env absent — no keys to inject */ }
+    const injectedEnv = { ...process.env, ..._readDotenvAuthVars() };
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
@@ -251,9 +260,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // 3. Detect auth method to avoid "Auth conflict" errors
     const useCredentialsFile = _hasCredentialsFile();
     let hasNativeAuth = useCredentialsFile;
-    let apiKeyValue = '';
-    let oauthTokenValue = '';
-    let baseUrlValue = '';
+    let dotenvAuthVars = {};
 
     if (!hasNativeAuth) {
       try {
@@ -268,15 +275,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
     }
 
     if (!hasNativeAuth) {
-      try {
-        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        apiKeyValue = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
-        oauthTokenValue = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
-        baseUrlValue = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
-      } catch { }
+      dotenvAuthVars = _readDotenvAuthVars();
 
-      if (apiKeyValue) _approveApiKey(apiKeyValue);
-      if (oauthTokenValue) _approveApiKey(oauthTokenValue);
+      if (dotenvAuthVars.ANTHROPIC_API_KEY) _approveApiKey(dotenvAuthVars.ANTHROPIC_API_KEY);
+      if (dotenvAuthVars.CLAUDE_CODE_OAUTH_TOKEN) _approveApiKey(dotenvAuthVars.CLAUDE_CODE_OAUTH_TOKEN);
     }
 
     // 4. Build the claude command string (for existing-session path)
@@ -313,9 +315,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
         delete env.ANTHROPIC_API_KEY;
         delete env.CLAUDE_CODE_OAUTH_TOKEN;
       } else {
-        if (apiKeyValue) env.ANTHROPIC_API_KEY = apiKeyValue;
-        if (oauthTokenValue) env.CLAUDE_CODE_OAUTH_TOKEN = oauthTokenValue;
-        if (baseUrlValue) env.ANTHROPIC_BASE_URL = baseUrlValue;
+        Object.assign(env, dotenvAuthVars);
       }
 
       // Build launch spec
