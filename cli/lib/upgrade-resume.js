@@ -22,6 +22,7 @@ export function finalizeStatus(journal) {
     core:{state:failedItems.length?'failed':journal.phase==='upgrade_complete'?'done':hooks?.state==='done'?'pending':hooks?.state || 'pending',failedItems,warnings:hooks?.warnings || []},
     dashboard:{state:'degraded',errors},
     warnings:journal.runtimeWarnings || [],
+    ...(journal.serviceWarnings?.length ? {serviceWarnings:journal.serviceWarnings} : {}),
     corePackageWarnings:journal.corePackageWarnings || [],
     next:journal.phase==='upgrade_complete'?null:'Repair the reported failure, then run zylos upgrade --resume-finalize.'
   };
@@ -101,7 +102,7 @@ export async function resumeFinalize(root,{status=false}={},deps={}) {
       dbManifest:verified.dbManifest,maintenance:m,originalServices:current.originalServices,from:current.from,to:current.to};
     const result=await finalize(ctx);
     const saved=m.transaction(root,candidate.dir),data=finalizeStatus(saved);
-    for(const key of ['completion','sessionRestart','checkpointAudit','modeStatus','preparationWarnings','warnings','corePackageWarnings']) {
+    for(const key of ['completion','sessionRestart','checkpointAudit','modeStatus','preparationWarnings','warnings','corePackageWarnings','serviceWarnings']) {
       if(Object.hasOwn(result,key)) data[key]=result[key];
     }
     // Only this invocation's runtime verification can establish readiness.

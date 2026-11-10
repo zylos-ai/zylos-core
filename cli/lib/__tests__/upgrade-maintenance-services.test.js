@@ -43,7 +43,7 @@ for(const defect of ['missing','changed','symlink'])test(`present ecosystem ${de
 test('mixed ecosystem and custom services restart through their respective paths and remain in verification',t=>{
   const f=serviceRestartFixture(t);f.custom();
   m.start(f.j);m.verifyServices(f.j);
-  assert.deepEqual(f.calls(),[['jlist'],['startOrRestart',f.file,'--only','scheduler','--update-env'],['restart','custom-service','--update-env'],['jlist'],['save']]);
+  assert.deepEqual(f.calls(),[['jlist'],['startOrRestart',f.file,'--only','scheduler','--update-env'],['restart','custom-service','--update-env'],['jlist'],['jlist'],['save']]);
   assert.ok(f.records().every(record=>record.pm2_env.status==='online'));
 });
 test('new-code ready verification allows intentional regenerated ecosystem bytes',t=>{
@@ -78,11 +78,12 @@ test('ecosystem loading observes changed exports without polluting the parent re
 });
 test('external restart failure does not delete a PM2 record or retry via ecosystem',t=>{
   const f=serviceRestartFixture(t,{names:[]});f.fail();
-  assert.throws(()=>m.start(f.j),/restart failed/);
+  assert.doesNotThrow(()=>m.start(f.j));
   assert.deepEqual(f.calls(),[['jlist'],['restart','scheduler','--update-env']]);
 });
-test('verification does not exclude a saved custom service that remains stopped',t=>{
-  const f=serviceRestartFixture(t);f.custom();f.records([f.record('scheduler','online'),f.record('custom-service')]);f.listLimit(1);
-  assert.throws(()=>m.verifyServices(f.j),/list unavailable/);
-  assert.deepEqual(f.calls(),[['jlist'],['jlist']]);
+test('verification warns for a saved custom service that remains stopped',t=>{
+  const f=serviceRestartFixture(t);f.custom();f.records([f.record('scheduler','online'),f.record('custom-service')]);
+  m.verifyServices(f.j);
+  assert.match(f.j.serviceWarnings[0],/custom-service/);
+  assert.deepEqual(f.calls(),[['jlist'],['jlist'],['save']]);
 });

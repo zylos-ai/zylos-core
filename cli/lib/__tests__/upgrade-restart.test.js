@@ -179,7 +179,7 @@ test('core restart starts ecosystem and saved custom services before strict veri
 });
 
 for(const source of ['throw Error("broken config")',"throw 'bad config'",'throw null','module.exports={}'])test(`core restart refuses invalid ecosystem configuration ${source}`,t=>{
-  const f=serviceRestartFixture(t);fs.writeFileSync(f.file,source);
+  const f=serviceRestartFixture(t);fs.writeFileSync(f.file,source);f.j.initialIdentity.ecosystemHash=maintenance.hash(f.file);
   const result=step11_startCoreServices({journal:f.j,servicesWereRunning:['scheduler']},{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
   assert.equal(result.status,'failed');
   assert.match(result.error,/ecosystem.*load|load.*ecosystem/i);
@@ -224,8 +224,8 @@ for(const defect of ['missing','changed','outside','duplicate-saved','duplicate-
 test('core custom restart failure preserves its original PM2 record without ecosystem retry',t=>{
   const f=serviceRestartFixture(t,{names:[]});f.fail();
   const result=step11_startCoreServices({journal:f.j,servicesWereRunning:['scheduler']},{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
-  assert.equal(result.status,'failed');
-  assert.deepEqual(f.calls(),[['jlist'],['restart','scheduler','--update-env']]);
+  assert.equal(result.status,'done');
+  assert.deepEqual(f.calls(),[['jlist'],['restart','scheduler','--update-env'],['save']]);
 });
 
 test('resume-finalize runs real service restart and verification for an app absent from ecosystem',async t=>{

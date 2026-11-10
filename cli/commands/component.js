@@ -231,6 +231,7 @@ export function formatSelfUpgradeCompletion(data) {
   for (const warning of data.corePackageWarnings || []) {
     lines.push(`Core package location warning: ${warning.message || warning.code}`);
   }
+  for (const warning of data.serviceWarnings || []) lines.push(`Service warning: ${warning}`);
   for (const warning of data.warnings || []) {
     lines.push(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}`);
   }

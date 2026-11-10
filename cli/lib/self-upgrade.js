@@ -618,23 +618,39 @@ export function step11_startCoreServices(ctx, deps = {}) {
 
   const started = [];
   const failed = [];
-  let ecosystemNames, external;
+  let ecosystemNames, external, originalEcosystemMissing;
   try {
-    ecosystemNames = new Set(fsApi.existsSync(ecosystemPath) ? maintenance.ecosystemServiceNames(ecosystemPath) : []);
     const saved = ctx.journal?.originalServices;
-    external = ctx.servicesWereRunning.filter(name => !ecosystemNames.has(name)).map(name => {
-      const records = saved?.filter(service => service.name === name);
-      if (records?.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
+    const selected = ctx.servicesWereRunning.map(name => {
+      if (!saved) return {name};
+      const records = saved.filter(service => service.name === name);
+      if (records.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
       return records[0];
     });
+    const serviceJournal = ctx.journal ? {...ctx.journal, originalServices:selected} : {
+      zylosDir, originalServices:selected,
+      initialIdentity:{ecosystemHash:fsApi.existsSync(ecosystemPath) ? maintenance.hash(ecosystemPath) : null},
+    };
+    // Preserve forward-start configuration admission without trusting a newly
+    // generated file to downgrade originally unclassified saved services.
+    if (serviceJournal.initialIdentity.ecosystemHash === null && fsApi.existsSync(ecosystemPath)) {
+      maintenance.privatePath(ecosystemPath);
+      maintenance.ecosystemServiceNames(ecosystemPath);
+    }
+    const requirements = maintenance.serviceRequirements(serviceJournal, {ecosystemPath, allowUpdatedEcosystem:true});
+    external = requirements.external;
+    ecosystemNames = new Set(requirements.required.map(service => service.name));
     if (external.length) maintenance.validateSavedServices(ctx.journal, external);
+    originalEcosystemMissing = serviceJournal.initialIdentity.ecosystemHash === null;
+    if (originalEcosystemMissing) maintenance.validateSavedServices(serviceJournal, selected);
+    ctx.serviceEcosystemPath = ecosystemPath;
   } catch (error) {
     return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
   }
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      if (!ecosystemNames.has(name)) maintenance.restartService(name);
+      if (originalEcosystemMissing || !ecosystemNames.has(name)) maintenance.restartService(name);
       else restartFn(name, {
         ecosystemPath,
         stdio: 'pipe',
@@ -642,10 +658,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
       });
       started.push(name);
     } catch {
-      if (!ecosystemNames.has(name)) {
-        failed.push(name);
-        continue;
-      }
+      if (!ecosystemNames.has(name)) continue;
       // A timed-out PM2 command may have committed its start before it died.
       try {
         const processes=JSON.parse(exec('pm2 jlist 2>/dev/null',{encoding:'utf8',stdio:'pipe'}));
@@ -703,6 +716,23 @@ export function step12_verifyServices(ctx, deps = {}) {
     return { step: 12, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
   }
 
+  const maintenance = maintenanceFor(ctx);
+  let required = ctx.servicesWereRunning, external = [];
+  try {
+    if (ctx.journal) {
+      const selected = ctx.servicesWereRunning.map(name => {
+        const matches = ctx.journal.originalServices.filter(service => service.name === name);
+        if (matches.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
+        return matches[0];
+      });
+      const requirements = maintenance.serviceRequirements({...ctx.journal, originalServices:selected}, {
+        ecosystemPath:ctx.serviceEcosystemPath, allowUpdatedEcosystem:true,
+      });
+      required = requirements.required.map(service => service.name);
+      external = requirements.external;
+      if (external.length) maintenance.validateSavedServices(ctx.journal, external);
+    }
+  } catch (error) { return {step:12,name:'verify_services',status:'failed',error:error.message,duration:Date.now()-startTime}; }
   const POLL_INTERVAL_MS = 2000;
   const execute = deps.execSync ?? execSync;
   const TIMEOUT_MS = 30000;
@@ -717,12 +747,19 @@ export function step12_verifyServices(ctx, deps = {}) {
       const output = execute('pm2 jlist 2>/dev/null', { encoding: 'utf8',timeout:30000 });
       const processes = JSON.parse(output);
 
-      const notOnline = ctx.servicesWereRunning.filter(name => {
+      const notOnline = required.filter(name => {
         const proc = processes.find(p => p.name === name);
         return !proc || proc.pm2_env?.status !== 'online';
       });
 
       if (notOnline.length === 0) {
+        const warnings = [...new Set(external.filter(service => !processes.some(item => item.name === service.name && item.pm2_env?.status === 'online' && item.pid > 0)).map(service => service.name))]
+          .map(name => `Service ${name} is not online; restart it manually.`);
+        ctx.serviceWarnings = warnings;
+        if (ctx.journal) {
+          ctx.journal.serviceWarnings = warnings;
+          if (ctx.transactionDir) maintenance.update(ctx.transactionDir, ctx.journal, {serviceWarnings:warnings});
+        }
         return { step: 12, name: 'verify_services', status: 'done', duration: Date.now() - startTime };
       }
 
@@ -768,6 +805,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
       success: false,
       ...protectionResult(ctx),
       warnings: ctx.runtimeWarnings || [],
+      ...(ctx.serviceWarnings?.length ? {serviceWarnings:ctx.serviceWarnings} : {}),
       corePackageWarnings: ctx.corePackageWarnings || [],
       dashboard: ctx.dashboard || {state:'degraded',errors:[]},
       upgradeProtected:true,
@@ -791,6 +829,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     success: true,
     ...protectionResult(ctx),
     warnings: ctx.runtimeWarnings || [],
+    ...(ctx.serviceWarnings?.length ? {serviceWarnings:ctx.serviceWarnings} : {}),
     corePackageWarnings: ctx.corePackageWarnings || [],
     from: ctx.from,
     to: ctx.to,
@@ -893,6 +932,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(coreCtx));
     } finally {
       ctx.journal=coreCtx.journal;
+      ctx.serviceWarnings=coreCtx.serviceWarnings || [];
     }
   } catch(error) {return fail(error);}
 
@@ -1096,6 +1136,7 @@ function publishedSettingsChanged(preparation) {
 export async function resumeUpgradeFinalization(ctx, deps = {}) {
   ctx.steps ||= [];
   ctx.runtimeWarnings ||= ctx.journal.runtimeWarnings || [];
+  ctx.serviceWarnings = ctx.journal.serviceWarnings || [];
   ctx.corePackageWarnings ||= ctx.journal.corePackageWarnings || [];
   ctx.from ||= ctx.journal.from;
   ctx.to ||= ctx.journal.to;
