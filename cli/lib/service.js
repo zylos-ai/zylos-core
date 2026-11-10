@@ -3,6 +3,7 @@
  */
 
 import { savePm2ProcessList } from './pm2-save.js';
+import { systemSendEnvironment } from '../../skills/comm-bridge/scripts/c4-system-send-env.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
@@ -43,11 +44,13 @@ export function registerService({ name, entry, skillDir, type }) {
       execSync(`pm2 start "${ecosystemPath}"`, {
         stdio: 'pipe',
         timeout: 30000,
+        env: systemSendEnvironment(),
       });
     } else {
       execSync(`pm2 start "${scriptPath}" --name "${serviceName}"`, {
         stdio: 'pipe',
         timeout: 30000,
+        env: systemSendEnvironment(),
       });
     }
 

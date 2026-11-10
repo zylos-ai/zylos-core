@@ -4,6 +4,7 @@ import { applyDashboardRoute } from '../lib/dashboard-install.js';
 import { printDashboardInfo } from '../lib/dashboard-access.js';
 import { provisionDashboardAuth } from '../../skills/dashboard/src/lib/auth-provision.js';
 import { savePm2ProcessList } from '../lib/pm2-save.js';
+import { systemSendEnvironment } from '../../skills/comm-bridge/scripts/c4-system-send-env.js';
 import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
 import { githubUrl } from '../lib/upstreams.js';
 import { githubRequestSync } from '../lib/github-http.js';
@@ -1055,7 +1056,7 @@ export async function startCoreServices(webPassword = null, dashboardAccess = nu
     for (const name of serviceNames) {
       try { execSync(`pm2 delete "${name}"`, { stdio: 'pipe' }); } catch {}
     }
-    execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', timeout: 30000 });
+    execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', timeout: 30000, env: systemSendEnvironment() });
     savePm2ProcessList({save: () => execSync('pm2 save', { stdio: 'pipe' })});
   } catch (err) {
     console.log(`  ${warn(`Failed to start services: ${err.message}`)}`);

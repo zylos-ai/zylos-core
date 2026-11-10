@@ -3,12 +3,21 @@ import { describe, it } from 'node:test';
 
 import { createPm2Helpers } from '../pm2.js';
 
+function recordCall(calls, cmd, opts) {
+  if (cmd.startsWith('pm2 start ')) {
+    assert.equal(Object.hasOwn(opts.env, 'ZYLOS_RUN_ID'), false);
+    assert.equal(Object.hasOwn(opts.env, 'ZYLOS_SESSION_GROUP'), false);
+    const { env, ...rest } = opts;
+    calls.push({ cmd, opts: rest });
+  } else calls.push({ cmd, opts });
+}
+
 describe('PM2 ecosystem restart helpers', () => {
   it('restarts all named services through ecosystem config', () => {
     const calls = [];
     const { restartFromEcosystem } = createPm2Helpers({
       exists: (file) => file === '/tmp/ecosystem.config.cjs',
-      exec: (cmd, opts) => calls.push({ cmd, opts }),
+      exec: (cmd, opts) => recordCall(calls, cmd, opts),
     });
 
     restartFromEcosystem(['activity-monitor', 'c4-dispatcher'], {
@@ -51,7 +60,7 @@ describe('PM2 ecosystem restart helpers', () => {
     const calls = [];
     const { restartManagedProcess } = createPm2Helpers({
       exists: (file) => file === '/tmp/component-ecosystem.config.cjs',
-      exec: (cmd, opts) => calls.push({ cmd, opts }),
+      exec: (cmd, opts) => recordCall(calls, cmd, opts),
     });
 
     restartManagedProcess('zylos-wecom', {
@@ -71,7 +80,7 @@ describe('PM2 ecosystem restart helpers', () => {
     const calls = [];
     const { restartManagedProcess } = createPm2Helpers({
       exists: () => false,
-      exec: (cmd, opts) => calls.push({ cmd, opts }),
+      exec: (cmd, opts) => recordCall(calls, cmd, opts),
     });
 
     restartManagedProcess('zylos-custom', {
@@ -107,7 +116,7 @@ describe('PM2 ecosystem restart helpers', () => {
     const { restartManagedProcess } = createPm2Helpers({
       exists: (file) => file === '/tmp/core-ecosystem.config.cjs',
       exec: (cmd, opts) => {
-        calls.push({ cmd, opts });
+        recordCall(calls, cmd, opts);
         if (cmd.includes('pm2 start "/tmp/core-ecosystem.config.cjs"')) {
           startAttempts += 1;
         }
