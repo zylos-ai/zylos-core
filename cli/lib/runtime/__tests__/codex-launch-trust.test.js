@@ -63,7 +63,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   }
   if (msg.method === 'config/batchWrite') {
     if (process.env.FAKE_CODEX_FAIL === '1') {
-      fs.unlinkSync(busy); log('failure'); reply(msg.id, null, { message: 'injected trust failure' }); return;
+      fs.unlinkSync(busy); log('failure');
+      // Log first, then answer with an error carrying a code, as a refused config write does.
+      process.stderr.write('ERROR config write failed: Operation not permitted (os error 1) api_key=sk-proj-SECRETabcdef123\\n',
+        () => setTimeout(() => reply(msg.id, null, { code: -32603, message: 'injected trust failure' }), 50));
+      return;
     }
     setTimeout(() => {
       config.hooks ||= {}; config.hooks.state ||= {};
@@ -82,6 +86,20 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     events: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [],
     valid: () => isCodexTrustValid({ zylosDir: root, homeDir: home, codexVersion: version }),
   };
+}
+
+// The launch failure names the stopped start, carries Codex's own report through the trust worker, and says what
+// to do next; it is also written to the supervisor's stderr.
+function assertDidNotStart(error, stderrLines) {
+  assert.equal(error.code, 'LAUNCH_FAILED');
+  assert.ok(error.cause instanceof Error);
+  const expected = 'Codex did not start: Codex hook trust failed (config_batch_write_error): Codex error -32603: ' +
+    'injected trust failure; stderr: ERROR config write failed: Operation not permitted (os error 1) api_key=[redacted]. ' +
+    'Hook trust must succeed before Codex starts and is tried again at the next launch; ' +
+    'run `zylos init` to retry it now and see the result.';
+  assert.equal(error.message, expected);
+  assert.equal(stderrLines.filter(line => line === `${expected}\n`).length, 1);
+  assert.equal(stderrLines.some(line => line.includes('SECRET')), false);
 }
 
 function baseLaunch(t, check = () => {}) {
@@ -116,12 +134,10 @@ test('Codex trust failure rejects launch before any tmux/runtime launch', async 
   const f = fixture(t);
   const calls = baseLaunch(t);
   f.env.FAKE_CODEX_FAIL = '1';
-  await assert.rejects(f.adapter.launch(launchArgs), error => {
-    assert.equal(error.code, 'LAUNCH_FAILED');
-    assert.match(error.message, /trust failed/i);
-    assert.ok(error.cause instanceof Error);
-    return true;
-  });
+  const stderrLines = [];
+  const write = t.mock.method(process.stderr, 'write', chunk => { stderrLines.push(String(chunk)); return true; });
+  await assert.rejects(f.adapter.launch(launchArgs), error => { assertDidNotStart(error, stderrLines); return true; });
+  write.mock.restore();
   assert.equal(calls.length, 0);
   assert.equal(fs.existsSync(codexTrustMarkerPath(f.root)), false);
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure']);
@@ -248,12 +264,7 @@ test('Codex rejects failed trust without lock capability before runtime launch',
   const warnings = [];
   t.mock.method(process.stderr, 'write', chunk => { warnings.push(String(chunk)); return true; });
   const calls = baseLaunch(t);
-  await assert.rejects(f.adapter.launch(launchArgs), error => {
-    assert.equal(error.code, 'LAUNCH_FAILED');
-    assert.match(error.message, /trust failed/i);
-    assert.ok(error.cause instanceof Error);
-    return true;
-  });
+  await assert.rejects(f.adapter.launch(launchArgs), error => { assertDidNotStart(error, warnings); return true; });
   assert.equal(calls.length, 0, 'failed unlocked worker must not enter runtime launch');
   assert.deepEqual(f.events().map(e => e.event), ['start', 'failure']);
   assert.equal(fs.existsSync(codexTrustMarkerPath(f.root)), false);
@@ -261,7 +272,7 @@ test('Codex rejects failed trust without lock capability before runtime launch',
   assert.equal(detect.mock.callCount(), 1, 'adapter must consume the injected no-lock capability');
   assert.equal(detect.mock.calls[0].result, null);
   assert.deepEqual(detect.mock.calls[0].arguments[0].env, env);
-  assert.equal(warnings.length, 1);
+  assert.equal(warnings.length, 2);
   assert.match(warnings[0], /Warning: Codex hook trust lock unavailable/);
 });
 

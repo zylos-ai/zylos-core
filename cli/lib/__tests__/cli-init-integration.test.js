@@ -94,6 +94,20 @@ test('init template generator prepares dual hooks and assets report unavailable 
   assert.equal(fs.readFileSync(configPath, 'utf8'), config);
 });
 
+// Integration boundary: real default init Codex hook step with HOME/ZYLOS_DIR in a temp dir, an empty PATH and a
+// missing CODEX_BIN, so no Codex, PM2 or tmux is reached. Run it when init's Codex hook step or its wording changes.
+test('init reports a Codex hook trust failure as blocking later launches, not as a stopped start', t => {
+  const context = fixture(t);
+  const result = run(context, `
+    import { prepareInitRuntimeAssets } from ${JSON.stringify(initUrl)};
+    console.log(JSON.stringify(await prepareInitRuntimeAssets({ instruction: () => ${JSON.stringify(context.root)} })));
+  `);
+  const codex = result.failed.filter(failure => failure.item === 'codex.hooks');
+  assert.equal(codex.length, 1);
+  assert.match(codex[0].message,
+    /^spawnSync \S*unavailable-codex ENOENT\. Codex will not start until hook trust succeeds; each Codex launch tries it again\.$/);
+});
+
 test('init template sync never restarts or invokes the wrapper CLI', async t => {
   const { home, root } = fixture(t);
   const wrapperLog = path.join(home, 'wrapper.jsonl'), restartLog = path.join(home, 'restart.jsonl');

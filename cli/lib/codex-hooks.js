@@ -393,7 +393,7 @@ const timer = setTimeout(() => {
 app.stderr.on('data', d => { stderr += d.toString(); });
 app.on('error', err => {
   clearTimeout(timer);
-  finish({ ok: false, reason: 'codex_app_server_error', error: String(err) });
+  finish({ ok: false, reason: 'codex_app_server_error', error: String(err), stderr });
 });
 app.on('exit', code => {
   if (!finished) {
@@ -420,7 +420,7 @@ app.stdout.on('data', chunk => {
     if (msg.id === 1) {
       if (msg.error) {
         clearTimeout(timer);
-        finish({ ok: false, reason: 'hooks_list_error', error: msg.error });
+        finish({ ok: false, reason: 'hooks_list_error', error: msg.error, stderr });
         return;
       }
 
@@ -452,7 +452,7 @@ app.stdout.on('data', chunk => {
     if (msg.id === 2) {
       clearTimeout(timer);
       if (msg.error) {
-        finish({ ok: false, reason: 'config_batch_write_error', error: msg.error });
+        finish({ ok: false, reason: 'config_batch_write_error', error: msg.error, stderr });
       } else {
         finish({
           ok: true,
@@ -506,6 +506,45 @@ send('initialize', {
   }
 }
 
+const TRUST_ERROR_MESSAGE_LIMIT = 300;
+const TRUST_STDERR_TAIL_LIMIT = 600;
+
+// Credentials that a Codex error or its stderr could carry: bearer/basic values, OpenAI-style keys, JWTs and
+// values assigned to secret-looking names. The error's data field and stdout are never included.
+function redactTrustText(text) {
+  return String(text)
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [redacted]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]')
+    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}/g, '[redacted]')
+    .replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|authorization|cookie|credentials?)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1[redacted]');
+}
+
+function oneLine(text) {
+  return String(text).replace(/\s*\n\s*/g, ' | ').trim();
+}
+
+/**
+ * The parts of a failed trust attempt worth reporting: Codex's own error code and message, and the end of the
+ * app-server's stderr, each capped and redacted.
+ */
+export function describeTrustFailure(trust = {}) {
+  const parts = [];
+  const error = trust.error;
+  if (error !== undefined && error !== null) {
+    const code = typeof error === 'object' && error.code !== undefined ? String(error.code) : null;
+    const raw = typeof error === 'object' ? error.message ?? '' : error;
+    const message = oneLine(redactTrustText(raw)).slice(0, TRUST_ERROR_MESSAGE_LIMIT);
+    parts.push(`Codex error${code ? ` ${code}` : ''}: ${message || '(no message)'}`);
+  }
+  const stderr = typeof trust.stderr === 'string' ? trust.stderr.trim() : '';
+  if (stderr) {
+    // Redact before cutting, so a cut never leaves part of a credential unrecognised.
+    const tail = oneLine(redactTrustText(stderr));
+    parts.push(`stderr${tail.length > TRUST_STDERR_TAIL_LIMIT ? ` (last ${TRUST_STDERR_TAIL_LIMIT} characters)` : ''}: ${tail.slice(-TRUST_STDERR_TAIL_LIMIT)}`);
+  }
+  return parts.join('; ');
+}
+
 export function ensureCodexHooksTrusted({
   zylosDir,
   projectDir = zylosDir,
@@ -524,13 +563,13 @@ export function ensureCodexHooksTrusted({
   ensureHooksFeature({ projectDir, homeDir, codexHome });
   const trust = trustCodexHooksWithAppServer({ zylosDir, codexBin, spawnSyncImpl });
   if (!trust.ok) {
-    throw new Error(`Codex hook trust failed (${trust.reason || 'unknown'}). Native SessionStart bootstrap may not run.`);
+    const detail = describeTrustFailure(trust);
+    throw new Error(`Codex hook trust failed (${trust.reason || 'unknown'})${detail ? `: ${detail}` : ''}`);
   }
   if (trust.trusted === 0 && trust.missingHash > 0) {
     throw new Error(
       `Codex hook trust failed (missing_current_hash): Codex CLI "${codexVersion}" does not report currentHash in hooks/list ` +
-      '(field added in Codex CLI 0.129.0). Upgrade Codex CLI to 0.129.0 or later (0.146+ recommended). ' +
-      'Native SessionStart bootstrap may not run.'
+      '(field added in Codex CLI 0.129.0). Upgrade Codex CLI to 0.129.0 or later (0.146+ recommended).'
     );
   }
 
@@ -539,7 +578,7 @@ export function ensureCodexHooksTrusted({
   const hooksContent = fs.readFileSync(hooksPath, 'utf8');
   const trustSnapshot = extractTrustSnapshot(readHooksState(globalConfig), hooksPath);
   if (Object.keys(trustSnapshot).length === 0) {
-    throw new Error('Codex hook trust failed (empty_trust_snapshot). Native SessionStart bootstrap may not run.');
+    throw new Error('Codex hook trust failed (empty_trust_snapshot)');
   }
   writeTrustMarker(codexTrustMarkerPath(zylosDir), {
     hooksHash: sha256(hooksContent),

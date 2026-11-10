@@ -374,6 +374,84 @@ describe('Codex hook trust backstop', () => {
     );
   });
 
+  it('reports Codex\'s error code, message and the end of app-server stderr when the config write is refused', () => {
+    const { root, homeDir, zylosDir } = makeEnv();
+    installCoreCodexHook({ zylosDir });
+    // Older diagnostic lines first, so only a capped tail of stderr can reach the report.
+    const stderr = `STDERR-HEAD ${'early diagnostic '.repeat(60)}\n` +
+      'ERROR codex_core::config: write config.toml failed: Operation not permitted (os error 1)\n' +
+      'request header Authorization: Bearer abc.def-SECRETBEARER\n' +
+      'retrying with api_key=sk-proj-SECRETKEYabcdef1234 and token: SECRETTOKEN\n';
+    const error = {
+      code: -32603,
+      message: 'failed to persist config: Operation not permitted (os error 1) refresh_token="SECRETREFRESH"',
+      data: { config: 'model_provider_secret = "SECRETDATA"' },
+    };
+    const codexBin = path.join(root, 'fake-codex-refuses-write.js');
+    fs.writeFileSync(codexBin, [
+      '#!/usr/bin/env node',
+      `const STDERR = ${JSON.stringify(stderr)};`,
+      `const ERROR = ${JSON.stringify(error)};`,
+      "let buf = '';",
+      "process.stdin.on('data', chunk => {",
+      '  buf += chunk.toString();',
+      "  const lines = buf.split('\\n');",
+      '  buf = lines.pop();',
+      '  for (const line of lines) {',
+      '    let msg;',
+      '    try { msg = JSON.parse(line); } catch { continue; }',
+      "    if (msg.method === 'initialize') process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + '\\n');",
+      "    if (msg.method === 'hooks/list') process.stdout.write(JSON.stringify({ id: msg.id, result: { data: [{ hooks: [",
+      "      { key: '/tmp/hooks.json:session_start:0:0', currentHash: 'sha256:h', isManaged: false }] }] } }) + '\\n');",
+      "    if (msg.method === 'config/batchWrite') {",
+      '      // Codex logs the failure before answering, as it does for a refused config write.',
+      "      process.stderr.write(STDERR, () => setTimeout(() => process.stdout.write(JSON.stringify({ id: msg.id, error: ERROR }) + '\\n'), 50));",
+      '    }',
+      '  }',
+      '});',
+      '',
+    ].join('\n'), { mode: 0o755 });
+
+    let message;
+    assert.throws(() => ensureCodexHooksTrusted({
+      zylosDir, projectDir: zylosDir, homeDir, codexBin, execFileSyncImpl: () => 'codex-cli 0.146.0\n',
+    }), thrown => { message = thrown.message; return true; });
+
+    assert.ok(message.startsWith('Codex hook trust failed (config_batch_write_error): Codex error -32603: ' +
+      'failed to persist config: Operation not permitted (os error 1) refresh_token=[redacted]; '), message);
+    const label = 'stderr (last 600 characters): ';
+    assert.ok(message.includes(label), message);
+    const tail = message.slice(message.indexOf(label) + label.length);
+    assert.equal(tail.length, 600);
+    assert.ok(tail.includes('ERROR codex_core::config: write config.toml failed: Operation not permitted (os error 1) | ' +
+      'request header Authorization: '), tail);
+    assert.ok(tail.endsWith('retrying with api_key=[redacted] and token: [redacted]'), tail);
+    for (const leaked of ['STDERR-HEAD', 'SECRETBEARER', 'SECRETKEY', 'SECRETTOKEN', 'SECRETREFRESH', 'SECRETDATA']) {
+      assert.equal(message.includes(leaked), false, `report must not contain ${leaked}`);
+    }
+    assert.equal(message.includes('\n'), false, 'the report stays on one log line');
+    assert.doesNotMatch(message, /SessionStart bootstrap may not run/);
+  });
+
+  it('caps Codex\'s error message and labels stderr only when it was cut', () => {
+    const { homeDir, zylosDir } = makeEnv();
+    installCoreCodexHook({ zylosDir });
+    const refuse = (error, stderr) => () => ensureCodexHooksTrusted({
+      zylosDir, projectDir: zylosDir, homeDir, execFileSyncImpl: () => 'codex-cli 0.146.0\n',
+      spawnSyncImpl: () => ({ status: 0, stdout: JSON.stringify({ ok: false, reason: 'config_batch_write_error', error, stderr }) + '\n', stderr: '' }),
+    });
+    const long = `${'m'.repeat(300)}CUT-OFF`;
+    assert.throws(refuse({ code: 'EPERM', message: long }, 'short stderr line\n'), thrown => {
+      assert.equal(thrown.message,
+        `Codex hook trust failed (config_batch_write_error): Codex error EPERM: ${'m'.repeat(300)}; stderr: short stderr line`);
+      return true;
+    });
+    assert.throws(refuse({ message: '' }, ''), thrown => {
+      assert.equal(thrown.message, 'Codex hook trust failed (config_batch_write_error): Codex error: (no message)');
+      return true;
+    });
+  });
+
   it('fails closed when app-server succeeds but no matching trust snapshot is written', () => {
     const { homeDir, zylosDir } = makeEnv();
     installCoreCodexHook({ zylosDir });
