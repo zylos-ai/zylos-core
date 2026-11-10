@@ -103,6 +103,7 @@ test('saved overall groups and legacy channel-only routes do not query', t => {
     dispatchTask(f.db, task, { ...f.deps, sendViaC4: (message, destination) => { actual = destination; return f.send(message, destination); } });
     assert.equal(actual.sessionGroupName, null);
     assert.equal(actual.replyChannel, 'telegram');
+    assert.deepEqual(pair(f.read(task.id)), pair(task), 'legacy overall and incomplete routes keep their saved columns');
   }
   assert.equal(f.queries().length, 0);
   const inbound = f.c4.prepare("SELECT session_group FROM conversations WHERE direction='in' ORDER BY id").all();
@@ -164,20 +165,39 @@ for (const category of ['C', 'U', 'T', 'R']) test(`delivery ${category} error ov
   assert.deepEqual(pair(f.read(task.id)), [null, null]);
 });
 
-for (const edit of ['reply route', 'saved group']) test(`concurrent ${edit} edit makes CAS miss but dispatch keeps the claimed route and queried group`, t => {
+for (const edit of ['reply route', 'saved group', 'saved overall group']) test(`concurrent ${edit} edit makes CAS miss but dispatch keeps the claimed route and queried group`, t => {
   const f = schedulerQueryFixture(t); f.install({ 'chat-old': { output: 'old-group\n' } });
   const task = f.legacy({ last_error: 'unchanged' }); let actual; const logs = [];
   dispatchTask(f.db, task, { ...delivery(f, (_message, destination) => { actual = destination; return { category: 'success' }; }),
     query(target) {
       const answer = f.query(target);
       if (edit === 'reply route') f.db.prepare("UPDATE tasks SET reply_endpoint='changed' WHERE id=?").run(task.id);
-      else f.db.prepare("UPDATE tasks SET session_component='telegram',session_group_name='changed-group' WHERE id=?").run(task.id);
+      else f.db.prepare("UPDATE tasks SET session_component='telegram',session_group_name=? WHERE id=?")
+        .run(edit === 'saved group' ? 'changed-group' : null, task.id);
       return answer;
     }, diagnostic: message => logs.push(message) });
   assert.equal(f.queries().length, 1); assert.equal(actual.replyEndpoint, 'chat-old'); assert.equal(actual.sessionGroupName, 'old-group');
   assert.equal(f.read(task.id).reply_endpoint, edit === 'reply route' ? 'changed' : 'chat-old');
-  assert.deepEqual(pair(f.read(task.id)), edit === 'reply route' ? [null, null] : ['telegram', 'changed-group']);
+  assert.deepEqual(pair(f.read(task.id)), edit === 'reply route' ? [null, null] : ['telegram', edit === 'saved group' ? 'changed-group' : null]);
   assert.equal(f.read(task.id).last_error, 'unchanged'); assert.equal(f.history(task.id)[0].error, null); assert.equal(logs.length, 0);
+});
+
+test('history warning write failure still dispatches the temporary overall group', t => {
+  const f = schedulerQueryFixture(t); f.install({}, 'telegram', { exit: 4 });
+  const task = f.legacy({ last_error: 'unchanged' }), logs = [];
+  f.db.exec("CREATE TRIGGER refuse_warning BEFORE UPDATE OF error ON task_history WHEN NEW.error='SESSION_GROUP_QUERY_FAILED' BEGIN SELECT RAISE(ABORT,'fixture warning blocked'); END");
+  const result = dispatchTask(f.db, task, { ...f.deps, diagnostic: message => logs.push(message) });
+  assert.equal(result.category, 'success');
+  assert.equal(f.c4.prepare("SELECT count(*) n FROM conversations WHERE direction='in' AND session_group='telegram'").get().n, 1);
+  assert.deepEqual(pair(f.read(task.id)), [null, null]);
+  assert.equal(f.read(task.id).last_error, 'unchanged');
+  assert.equal(f.history(task.id)[0].status, 'started');
+  assert.equal(f.history(task.id)[0].error, null);
+  assert.equal(logs.length, 2);
+  assert.ok(logs.every(line => line.includes(task.id) && !/[\r\n]/.test(line) && line.length < 1000));
+  assert.match(logs[1], /could not record session group query warning.*fixture warning blocked/);
+  f.cliData(['done', task.id]);
+  assert.equal(f.history(task.id)[0].status, 'success');
 });
 
 test('database writeback error logs once and dispatches queried group without altering last_error', t => {

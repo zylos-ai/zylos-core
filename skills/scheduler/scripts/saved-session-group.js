@@ -1,11 +1,16 @@
 import { parseSessionGroup, validateGroupName, dataError } from '../../comm-bridge/scripts/c4-session-group.js';
 import { getComponentByNamespace } from '../../comm-bridge/scripts/c4-db.js';
 import { validateChannel } from '../../comm-bridge/scripts/c4-validate.js';
-import { resolveReplySessionGroup } from './reply-session-group.js';
-import { fixedAddressSessionGroup } from '../../comm-bridge/scripts/c4-component-session-group.js';
+import { queryComponentSessionGroup, fixedAddressSessionGroup } from '../../comm-bridge/scripts/c4-component-session-group.js';
 
 const has = (value, name) => Object.hasOwn(value, name);
 const empty = () => ({ session_component: null, session_group_name: null });
+
+function resolveReplySessionGroup(target, explicitGroup, { query = queryComponentSessionGroup } = {}) {
+  if (fixedAddressSessionGroup(target.component, target.endpoint)) return empty();
+  const groupName = explicitGroup === undefined ? query(target).groupName : explicitGroup;
+  return { session_component: target.component, session_group_name: groupName };
+}
 
 export function validateReplyTarget(options, { validate = validateChannel, replyEndpoint = options['reply-endpoint'] } = {}) {
   if (has(options, 'reply-session-group') && fixedAddressSessionGroup(options['reply-channel'], replyEndpoint)) {

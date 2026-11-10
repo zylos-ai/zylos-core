@@ -13,6 +13,7 @@ import * as c4 from '../../../comm-bridge/scripts/c4-db.js';
 import { guardDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { dispatchTask, executionMarker } from '../daemon-dispatch.js';
 import { sendViaC4 } from '../runtime.js';
+import { queryComponentSessionGroup } from '../../../comm-bridge/scripts/c4-component-session-group.js';
 import { mainLoop, handleMissedTasks, runSchedulerIteration } from '../daemon-dispatch.js';
 import { handleStaleRunningTasks, processCompletedTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
 import { realReceive } from './fixtures/real-receive.js';
@@ -411,7 +412,9 @@ for (const origin of ['window', 'dispatch']) test(`rescheduled ${origin} failure
   assert.equal(updated.task.failed_at, null); assert.equal(updated.task.last_error, null);
   assert.deepEqual(f.read(id).history, history);
   const sends = [];
-  const dependencies = { ...base, sendViaC4(message, route) { sends.push({ message, route }); return { category: 'success' }; } };
+  const dependencies = { ...base,
+    query: target => queryComponentSessionGroup(target, { skillsDir: path.join(f.env.ZYLOS_DIR, '.claude/skills'), env: f.env }),
+    sendViaC4(message, route) { sends.push({ message, route }); return { category: 'success' }; } };
   runSchedulerIteration(f.db, dependencies); assert.equal(sends.length, 0);
   t.mock.timers.enable({ apis: ['Date'], now: updated.task.next_run_at * 1000 });
   runSchedulerIteration(f.db, dependencies);

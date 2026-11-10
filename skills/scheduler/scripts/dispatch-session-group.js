@@ -1,9 +1,9 @@
 import { queryComponentSessionGroup, fixedAddressSessionGroup } from '../../comm-bridge/scripts/c4-component-session-group.js';
 
 /** Resolve a claimed execution's saved destination without changing its snapshot. */
-export function resolveDispatchSessionGroup(db, task, historyId, { query = queryComponentSessionGroup, fixedAddress = fixedAddressSessionGroup, diagnostic = console.error } = {}) {
+export function resolveDispatchSessionGroup(db, task, historyId, { query = queryComponentSessionGroup, diagnostic = console.error } = {}) {
   const target = { component: task.reply_channel, endpoint: task.reply_endpoint };
-  if (fixedAddress(target.component, target.endpoint)) return { ...task, session_component: null, session_group_name: null };
+  if (fixedAddressSessionGroup(target.component, target.endpoint)) return { ...task, session_component: null, session_group_name: null };
   if (task.session_component != null || task.session_group_name != null || !target.component || !target.endpoint) return task;
 
   let groupName;
@@ -12,8 +12,12 @@ export function resolveDispatchSessionGroup(db, task, historyId, { query = query
   } catch (error) {
     if (error.code !== 'SESSION_GROUP_QUERY_FAILED') throw error;
     diagnostic(`[Scheduler] Task ${task.id}: SESSION_GROUP_QUERY_FAILED; using component overall group (${String(error.message).replace(/[\r\n]/g, ' ').slice(0, 600)})`);
-    db.prepare("UPDATE task_history SET error=? WHERE id=? AND task_id=? AND status='started'")
-      .run('SESSION_GROUP_QUERY_FAILED', historyId, task.id);
+    try {
+      db.prepare("UPDATE task_history SET error=? WHERE id=? AND task_id=? AND status='started'")
+        .run('SESSION_GROUP_QUERY_FAILED', historyId, task.id);
+    } catch (writeError) {
+      diagnostic(`[Scheduler] Task ${task.id}: could not record session group query warning (${String(writeError.message).replace(/[\r\n]/g, ' ').slice(0, 200)})`);
+    }
     return { ...task, session_component: target.component, session_group_name: null };
   }
 
