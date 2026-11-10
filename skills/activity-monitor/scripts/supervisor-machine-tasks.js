@@ -13,12 +13,12 @@ const number = (value, fallback) => Number.isFinite(Number(value)) && Number(val
 const enabled = (value, fallback) => value === undefined ? fallback : value === true || value === 'true';
 const MAX_ERROR_LENGTH=500;
 const truncate=text=>text.length>MAX_ERROR_LENGTH?`${text.slice(0,MAX_ERROR_LENGTH)}…`:text;
-/** A failed script rejects with its own stderr (truncated) as the message, so the log shows why, not only the exit code. */
+/** Preserve stderr as the failure message; state and log each bound the original text once. */
 function runScript(script, timeoutMs) {
   return new Promise((resolve,reject)=>execFile(process.execPath,[script],{encoding:'utf8',timeout:timeoutMs,maxBuffer:1024*1024},(error,stdout,stderr)=>{
     if(!error)return resolve(stdout);
     const detail=String(stderr??'').trim();
-    reject(detail?new Error(truncate(`${error.killed?'timed out: ':''}${detail}`)):error);
+    reject(detail?new Error(`${error.killed?'timed out: ':''}${detail}`):error);
   }));
 }
 const healthPrompt = 'System health check. Use the health-check skill sanitized helper for PM2 services; never run or print raw pm2 jlist output. Check disk space (df -h) and memory (free -m). If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with. Log results to ~/zylos/logs/health.log.';
@@ -35,7 +35,7 @@ export class SupervisorMachineTasks {
   write(name,value) {durableJson(path.join(this.zylosDir,'activity-monitor',name+'.json'),value);}
   schedule(key,operation) {
     if(this.stopped||this.pending.has(key))return false;
-    const promise=Promise.resolve().then(operation).catch(error=>this.log(`${key}: ${error.code??error.message}`)).finally(()=>{if(this.pending.get(key)===promise)this.pending.delete(key);});
+    const promise=Promise.resolve().then(operation).catch(error=>this.log(`${key}: ${truncate(String(error.code??error.message))}`)).finally(()=>{if(this.pending.get(key)===promise)this.pending.delete(key);});
     this.pending.set(key,promise);return true;
   }
   async control(content,priority=3) {

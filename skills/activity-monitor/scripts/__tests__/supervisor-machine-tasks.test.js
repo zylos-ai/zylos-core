@@ -127,3 +127,19 @@ test('only the memory commit records a failed run for the day; a failed upgrade 
   assert.deepEqual(f.calls.scripts,['daily-commit.js','upgrade-check.js','upgrade-check.js']);
   assert.equal(f.tasks.state('upgrade-check-state'),null);
 });
+
+// The injected executor can fail before runScript; the state/log boundaries
+// must therefore bound raw errors without relying on child normalization.
+test('daily memory failure bounds errors from an injected executor in state and log',async t=>{
+  const f=fixture(t),logs=[];
+  f.tasks.log=line=>logs.push(line);
+  f.tasks.execute=async()=>{throw new Error('x'.repeat(700));};
+  await f.tick();await settle(f.tasks);
+  const expected='x'.repeat(500)+'…';
+  assert.equal(f.tasks.state('daily-memory-commit-state').last_error,expected);
+  assert.equal(logs.length,1);
+  const detail=logs[0].slice('daily-memory-commit-state: '.length);
+  assert.equal(detail,expected);
+  assert.equal(detail.length,501);
+  assert.equal(detail.split('…').length-1,1);
+});
