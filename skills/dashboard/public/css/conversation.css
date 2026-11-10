@@ -837,8 +837,6 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-view-header,.conversation-view-body,.conversation-view-actions { min-width: 0; }
 .conversation-view-body { flex: 1; }
 .conversation-view-actions { margin-top: auto; }
-.conversation-view-section .chat-block { margin: 0 0 8px; }
-.conversation-view-columns > .chat-block { margin: 0; }
 
 @container (max-width: 560px) {
   .conversation-view-columns,.conversation-view-columns[data-layout="sidebar"] { grid-template-columns: minmax(0, 1fr); }
@@ -1098,6 +1096,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   padding: var(--c-pad);
   border: 0; border-radius: var(--c-r-lg); background: var(--c-surface); box-shadow: var(--c-shadow-card);
 }
+.conversation-page .conversation-view-section .chat-block { margin: 0 0 8px; }
 .conversation-page .chat-block:last-child { margin-bottom: 0; }
 .conversation-page :is(.conversation-view-stack, .conversation-view-columns) > .chat-block { margin: 0; }
 .conversation-page .chat-block-title { margin: 0; font-size: 15px; line-height: 24px; font-weight: 600; letter-spacing: -0.006em; color: var(--c-ink); }

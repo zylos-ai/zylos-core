@@ -129,6 +129,26 @@ for (const [index, [id, parts, stack]] of [
   if (parseC4Content(row.content).kind !== 'envelope') throw new Error('Invalid spacing fixture');
   appendContent(id, row);
 }
+const sectionParts = [
+  spacingMarkdown('section-heading', '**交付分区：完成情况与后续资料**'),
+  spacingMarkdown('section-intro', '正文区先说明当前状态，再展示进度卡片和核对资料。'),
+  spacingCard('section-card'), spacingFile,
+  spacingMarkdown('section-actions', '下一步：请核对资料后确认交付。'),
+];
+const sectionEnvelope = { version: 1, kind: 'message', messageId: 'section-message', fallbackText: '交付分区与资料', blocks: sectionParts,
+  metadata: { view: { schemaVersion: 1, root: 'section-root', nodes: [
+    { id: 'section-root', type: 'section', header: ['section-heading-node'],
+      body: ['section-intro-node', 'section-card-node', 'section-file-node'], actions: ['section-actions-node'] },
+    { id: 'section-heading-node', type: 'block', blockId: 'section-heading' },
+    { id: 'section-intro-node', type: 'block', blockId: 'section-intro' },
+    { id: 'section-card-node', type: 'block', blockId: 'section-card' },
+    { id: 'section-file-node', type: 'block', blockId: 'spacing-file' },
+    { id: 'section-actions-node', type: 'block', blockId: 'section-actions' },
+  ] } },
+};
+const sectionRow = { id: 60, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(sectionEnvelope), attachments: [spacingAttachment] };
+if (parseC4Content(sectionRow.content).kind !== 'envelope') throw new Error('Invalid section fixture');
+appendContent('section-view', sectionRow);
 const errorsTray = document.createElement('div'); errorsTray.className = 'conversation-upload-tray'; errorsTray.id = 'tray-errors'; document.querySelector('main').append(errorsTray);
 for (const status of ['ready', 'failed', 'expired']) {
   const resource = createChatAttachment({ document, t, mode: 'tray', attachment: { name: status + '.txt', kind: 'file', status }, onRetry: () => {}, onRemove: () => {} });

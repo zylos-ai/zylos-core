@@ -70,7 +70,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     catch (error) { throw new Error(error.message + '; errors=' + errors.join('; ') + '; missing=' + missing.join('; ')); }
     await page.locator('#image .chat-attachment-image-content').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.querySelector('#image .chat-attachment-image-content').naturalWidth === 160 && document.querySelector('#tray .chat-attachment-image-content').naturalWidth === 160);
-    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 8);
+    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 9);
     await page.evaluate(() => document.fonts.ready);
     const failedImage = page.locator('#tray-failed-image');
     await failedImage.scrollIntoViewIfNeeded();
@@ -86,7 +86,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       fs.mkdirSync(output, { recursive: true });
       fs.writeFileSync(path.join(output, `tray-failed-image-${width}-${theme}.png`), failedImageShot);
       await page.locator('#columns').screenshot({ path: path.join(output, `columns-file-${width}-${theme}.png`), animations: 'disabled', scale: 'css' });
-      for (const id of ['stack-view', 'markdown-first', 'card-ending']) {
+      for (const id of ['stack-view', 'markdown-first', 'card-ending', 'section-view']) {
         await page.locator('#' + id).screenshot({ path: path.join(output, `${id}-${width}-${theme}.png`), animations: 'disabled', scale: 'css' });
       }
     }
@@ -122,6 +122,16 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
           rowGap: stack ? parseFloat(getComputedStyle(stack).rowGap) : null,
           gaps: bounds.slice(1).map((b, i) => b.top - bounds[i].bottom), count: nodes.length }];
       }));
+      const section = document.querySelector('#section-view .conversation-view-section');
+      const sectionSlots = [...section.children];
+      const sectionBodyBlocks = [...section.querySelector('.conversation-view-body').children];
+      const blockBounds = sectionBodyBlocks.map(node => node.getBoundingClientRect());
+      const slotBounds = sectionSlots.map(node => node.getBoundingClientRect());
+      const sectionSpacing = { rowGap: parseFloat(getComputedStyle(section).rowGap), bodyCount: sectionBodyBlocks.length,
+        bodyGaps: blockBounds.slice(1).map((box, i) => box.top - blockBounds[i].bottom),
+        slotGaps: slotBounds.slice(1).map((box, i) => box.top - slotBounds[i].bottom),
+        lastMargins: sectionSlots.map(slot => getComputedStyle(slot.lastElementChild).marginBottom),
+      };
       const columns = [...document.querySelector('#columns .conversation-view-columns').children].map(node => { const b = node.getBoundingClientRect(); return { left: b.left, top: b.top, width: b.width, bottom: b.bottom }; });
       const errorStyles = Object.fromEntries(['ready', 'failed', 'expired'].map(state => {
         const item = document.querySelector('#tray-errors [data-upload-state="' + state + '"]'), status = item.querySelector('.chat-attachment-status'), style = getComputedStyle(item);
@@ -130,7 +140,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       }));
       const dangerProbe = document.createElement('span'); dangerProbe.style.color = 'var(--c-danger-ink)'; document.querySelector('main').append(dangerProbe);
       const dangerInk = getComputedStyle(dangerProbe).color, dangerRgb = rgba(dangerInk); dangerProbe.remove();
-      return { categoryGeometry, columns, spacing, errorStyles, dangerInk, dangerRgb, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
+      return { categoryGeometry, columns, spacing, sectionSpacing, errorStyles, dangerInk, dangerRgb, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
         dotAnimation: dot.animationName, dotWidth: dot.width, categoryAxis: chart('category').options.scales.x.display,
         breakdownAxis: chart('breakdown').options.scales.x.display, categoryColor: chart('category').data.datasets[0].backgroundColor[0],
         imageRatio: document.querySelector('.chat-attachment-image-frame').style.aspectRatio,
@@ -155,6 +165,16 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     });
     console.info('rich spacing geometry', JSON.stringify({ width, theme, ...actual.spacing }));
     if (output) fs.writeFileSync(path.join(output, `spacing-${width}-${theme}.json`), JSON.stringify(actual.spacing, null, 2));
+    console.info('section spacing geometry', JSON.stringify({ width, theme, ...actual.sectionSpacing }));
+    if (output) fs.writeFileSync(path.join(output, `section-spacing-${width}-${theme}.json`), JSON.stringify(actual.sectionSpacing, null, 2));
+    assert.equal(actual.sectionSpacing.bodyCount, 3, 'section body keeps markdown, card and file');
+    for (const gap of actual.sectionSpacing.bodyGaps) {
+      assert.ok(Math.abs(gap - actual.sectionSpacing.rowGap) <= 1, 'section body spacing matches its row gap: ' + JSON.stringify(actual.sectionSpacing));
+    }
+    for (const gap of actual.sectionSpacing.slotGaps) {
+      assert.ok(Math.abs(gap - actual.sectionSpacing.rowGap) <= 1, 'section slots keep their shared row gap');
+    }
+    assert.ok(actual.sectionSpacing.lastMargins.every(margin => margin === '0px'), 'last block in each section slot has no bottom margin');
     assert.equal(actual.spacing['stack-view'].count, 4, 'stack keeps markdown, card, markdown and file');
     for (const gap of actual.spacing['stack-view'].gaps) {
       assert.ok(Math.abs(gap - actual.spacing['stack-view'].rowGap) <= 1, 'stack spacing comes only from its row gap: ' + JSON.stringify(actual.spacing['stack-view']));

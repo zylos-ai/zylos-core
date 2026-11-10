@@ -75,7 +75,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    assert.match(pageText, /css\/conversation\.css\?v=139"/, 'the entry page invalidates the conversation stylesheet cache');
+    assert.match(pageText, /css\/conversation\.css\?v=140"/, 'the entry page invalidates the conversation stylesheet cache');
     const appPath = appReference(pageText);
     assert.equal(appPath, currentAppPath, 'delivery preserves the current entry page application cache version');
     const cache = new Map();
