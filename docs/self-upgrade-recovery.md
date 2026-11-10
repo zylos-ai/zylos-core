@@ -65,18 +65,30 @@ zylos recovery resume
 ```
 
 Status only reads recovery material. Startup checks and explicit recovery resume
-may execute recovery. During maintenance, use the stable file-only entry if the
-normal command cannot load:
+may execute recovery. Use `zylos recovery resume` to continue an interrupted
+transaction. If the normal command cannot load during maintenance, the stable
+file-only entry remains available for read-only diagnosis:
 
 ```sh
 node "$HOME/zylos/.zylos/upgrade/bootstrap.cjs" --root "$HOME/zylos" --status
-node "$HOME/zylos/.zylos/upgrade/bootstrap.cjs" --root "$HOME/zylos" --once
 ```
 
 Substitute the actual deployment root. A live controller prevents another from
 taking over. Data-ready transactions resume validation and preserve subsequent
 business writes; verified terminal transactions retry only cleanup. Failed
 validation after restored data-ready never replaces databases again.
+
+Recovery steps run in a child process, followed by a fresh check of the recovery
+materials. A failed child, incomplete cleanup or remaining active marker is a
+failure. Startup and resume failures report an error code, the underlying reason
+and the next action. Transactions past the compensation cutoff still require
+`zylos upgrade --resume-finalize`, as described above.
+
+The internal legacy recovery path remains for compatibility; removing it requires
+a separate change after older interrupted transactions no longer need it. These
+safeguards take effect when a subsequent upgrade deploys the new stable bootstrap
+and its matching maintenance module. Installing a package does not rewrite an
+already deployed bootstrap or a transaction's frozen recovery files and hashes.
 
 ## Retained material and limits
 

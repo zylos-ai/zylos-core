@@ -79,3 +79,63 @@ test('closed recovery failure directs the caller to forward finalization', () =>
     return true;
   });
 });
+
+// Boundary: the shared recovery executor runs real product validation while the
+// subprocess result is injected. Run when recovery execution/result handling
+// changes; unrelated upgrade installation work does not require these cases.
+test('preinstall abort is successful after clean rediscovery even when completed is false', () => {
+  const f = fixture();
+  const out = recoverBeforeUpgrade('/isolated', {maintenance:f.m, spawn() {
+    f.finish();
+    return {status:0, stdout:JSON.stringify({completed:false, recovery_required:false})};
+  }});
+  assert.equal(out.result.completed, false);
+  assert.equal(out.active, true);
+});
+
+for (const kind of ['candidate', 'marker', 'diagnostic']) test(`successful child cannot bypass remaining ${kind} evidence`, () => {
+  const f = fixture();
+  let reads = 0;
+  const initial = f.m.discover();
+  f.m.discover = () => ++reads === 1 ? initial : {
+    candidates:kind === 'candidate' ? initial.candidates : [],
+    marker:kind === 'marker' ? {transactionId:'still-active'} : null,
+    diagnostics:kind === 'diagnostic' ? ['post-recovery evidence unavailable'] : [],
+  };
+  assert.throws(() => recoverBeforeUpgrade('/isolated', {maintenance:f.m, spawn() {
+    return {status:0, stdout:JSON.stringify({completed:false, recovery_required:false})};
+  }}), error => {
+    assert.equal(error.code, 'UPGRADE_RECOVERY_REQUIRED');
+    assert.equal(error.recovery_required, true);
+    assert.match(error.next, /zylos recovery/);
+    return true;
+  });
+  assert.equal(reads, 2);
+});
+
+test('cleanup warnings survive the shared executor final-state failure', () => {
+  const f = fixture();
+  assert.throws(() => recoverBeforeUpgrade('/isolated', {maintenance:f.m, spawn() {
+    return {status:0, stdout:JSON.stringify({completed:false, complete:false, recovery_required:false,
+      warnings:['Code cleanup pending: EACCES: fixture code removal denied']})};
+  }}), error => {
+    assert.equal(error.code, 'UPGRADE_RECOVERY_REQUIRED');
+    assert.match(error.message, /EACCES: fixture code removal denied/);
+    assert.match(error.next, /zylos recovery status.*zylos recovery resume/);
+    return true;
+  });
+});
+
+for (const child of [
+  {status:23, stdout:'', stderr:'fixture child crashed'},
+  {status:0, stdout:'{broken'},
+  {status:null, stdout:'', error:Object.assign(Error('fixture recovery could not start'), {code:'EACCES'})},
+]) test(`shared executor rejects an unsuccessful subprocess result (${child.error ? 'spawn' : child.status})`, () => {
+  const f = fixture();
+  assert.throws(() => recoverBeforeUpgrade('/isolated', {maintenance:f.m, spawn() {return child;}}), error => {
+    assert.equal(error.recovery_required, true);
+    assert.equal(typeof error.code, 'string');
+    assert.match(error.next, /zylos recovery/);
+    return true;
+  });
+});

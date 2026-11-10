@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Before upgrading from 0.9.x to 1.0**: if the standalone Dashboard component is installed, run `zylos uninstall dashboard --yes` first. Its data is retained; Zylos 1.0 includes Dashboard. If it remains installed, `zylos upgrade --self --yes` stops before changing the installed package or data, reports `DASHBOARD_STILL_INSTALLED` ("Uninstall standalone Dashboard before upgrading."), and directs you to that uninstall command.
 
 ### Fixed
+- **Interrupted upgrade recovery safeguards**: recommend `zylos recovery resume` as the recovery entry while retaining the stable file-only status command for diagnosis. The internal legacy recovery path shares child-process execution and post-recovery validation with upgrade admission, rejects incomplete cleanup, and preserves failure codes, reasons and next actions in startup and resume output. The new safeguards apply after an upgrade deploys the matching bootstrap and maintenance module; existing deployed or frozen recovery files and hashes are not rewritten. The legacy path remains until a separate compatibility removal.
 - **Fixed upgrade bridge guidance**: keep the minimum upgrade source at stable 0.9.3 and direct older installations to `zylos upgrade --self --branch release/0.9.3`, then verify Core 0.9.3 with `zylos --version` and rerun the original upgrade command. Later sources, including 0.9.4 and 0.9.5, remain supported.
 
 ## [0.9.5] - 2026-11-03

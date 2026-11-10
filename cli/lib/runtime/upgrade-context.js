@@ -45,27 +45,24 @@ function hasRecoveryMaterials(root) {
     try { return fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   };
-  try {
-    for (const relative of ['.zylos', '.zylos/upgrade']) {
-      const file = path.join(root, relative), stat = present(file);
-      if (!stat) continue;
-      if (stat.isSymbolicLink()) {
-        if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
-      } else if (!stat.isDirectory()) return true;
-    }
-    return !!present(path.join(root, '.zylos/upgrade/active.json'));
-  } catch { return true; }
+  for (const relative of ['.zylos', '.zylos/upgrade']) {
+    const file = path.join(root, relative), stat = present(file);
+    if (!stat) continue;
+    if (stat.isSymbolicLink()) {
+      if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
+    } else if (!stat.isDirectory()) return true;
+  }
+  return !!present(path.join(root, '.zylos/upgrade/active.json'));
 }
 
-export function upgradeDiscoveryFailure({closed = false} = {}) {
-  return {
-    active: true,
-    blocked: true,
-    recovery_required: true,
-    prompt: closed
-      ? 'SYSTEM RECOVERY TASK: Compensation is closed. Keep normal C4/database access isolated. Use zylos upgrade --resume-finalize to finish the transaction; use zylos upgrade --resume-finalize --status first to inspect it. Do not use zylos recovery resume for this transaction.'
-      : 'SYSTEM RECOVERY TASK: Upgrade discovery failed. Keep normal C4/database access isolated. Use only the fixed file-only upgrade status entry after verifying its ownership and permissions. Preserve transaction materials; report recovery_required if trusted discovery remains unavailable. Do not query C4 or execute journal command strings.',
-  };
+export function upgradeDiscoveryFailure({closed = false, error} = {}) {
+  const details = maintenance.recoveryFailureDetails(error, {next:closed
+    ? 'Run zylos upgrade --resume-finalize to finish the transaction; use zylos upgrade --resume-finalize --status first to inspect it.'
+    : undefined});
+  const prompt = closed
+    ? 'SYSTEM RECOVERY TASK: Compensation is closed. Keep normal C4/database access isolated. Use zylos upgrade --resume-finalize to finish the transaction; use zylos upgrade --resume-finalize --status first to inspect it. Do not use zylos recovery resume for this transaction.'
+    : 'SYSTEM RECOVERY TASK: Upgrade discovery failed. Keep normal C4/database access isolated. Use only the fixed file-only upgrade status entry after verifying its ownership and permissions. Preserve transaction materials; report recovery_required if trusted discovery remains unavailable. Do not query C4 or execute journal command strings.';
+  return {active:true, blocked:true, ...details, prompt:prompt+'\n'+JSON.stringify(details)};
 }
 
 // Validate every module imported during discovery before executing any code.
@@ -76,9 +73,9 @@ export function discoverUpgradeContext(root, {recover = true} = {}) {
     root = fs.realpathSync(root);
     if (hasTransactionHistory(root)) {
       const found = maintenance.discover(root);
-      const failed = () => ({...upgradeDiscoveryFailure({closed:isClosedRecovery(found, maintenance)}),
+      const failed = error => ({...upgradeDiscoveryFailure({closed:isClosedRecovery(found, maintenance), error}),
         blocked:maintenance.hasRecoveryMaterials(root) ? maintenance.discoverActive(root).blocked : true});
-      if (found.diagnostics.length || found.candidates.length !== 1) return failed();
+      if (found.diagnostics.length || found.candidates.length !== 1) return failed(new Error(found.diagnostics.join('; ') || 'transaction attribution is not unique'));
       if (!recover) return {active:true, ...found};
       const controller = path.join(found.candidates[0].dir, 'controller.json');
       if (maintenance.canRecognizeProcesses() && fs.existsSync(controller) && maintenance.alive(maintenance.read(controller))) {
@@ -94,7 +91,7 @@ export function discoverUpgradeContext(root, {recover = true} = {}) {
         return maintenance.discover(deployment);
       }};
       try { recoverBeforeUpgrade(root, {maintenance:recoveryMaintenance}); }
-      catch { return failed(); }
+      catch (error) { return failed(error); }
       return {active:false, blocked:false};
     }
     if (!hasRecoveryMaterials(root)) return { active: false, blocked: false };
@@ -120,8 +117,8 @@ export function discoverUpgradeContext(root, {recover = true} = {}) {
     delete require.cache[entry];
     delete require.cache[path.join(directory, 'maintenance.cjs')];
     return require(entry).bootstrap(root, {status:!recover});
-  } catch {
-    return upgradeDiscoveryFailure();
+  } catch (error) {
+    return upgradeDiscoveryFailure({error});
   }
 }
 

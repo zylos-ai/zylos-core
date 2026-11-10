@@ -23,6 +23,11 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url);
 
+function recoveryText(value, limit) {
+  const text = String(value);
+  return text.length > limit ? text.slice(0, limit - 12) + ' [truncated]' : text;
+}
+
 // Ordinary entrypoints only consult the explicit active marker. Historical
 // transactions are inspected by upgrade admission and explicit recovery tools.
 function hasRecoveryMaterials(root) {
@@ -30,16 +35,14 @@ function hasRecoveryMaterials(root) {
     try { return fs.lstatSync(file); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   };
-  try {
-    for (const relative of ['.zylos', '.zylos/upgrade']) {
-      const file = path.join(root, relative), stat = present(file);
-      if (!stat) continue;
-      if (stat.isSymbolicLink()) {
-        if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
-      } else if (!stat.isDirectory()) return true;
-    }
-    return !!present(path.join(root, '.zylos/upgrade/active.json'));
-  } catch { return true; }
+  for (const relative of ['.zylos', '.zylos/upgrade']) {
+    const file = path.join(root, relative), stat = present(file);
+    if (!stat) continue;
+    if (stat.isSymbolicLink()) {
+      if (relative !== '.zylos' || !fs.statSync(file).isDirectory()) return true;
+    } else if (!stat.isDirectory()) return true;
+  }
+  return !!present(path.join(root, '.zylos/upgrade/active.json'));
 }
 
 function recoveryContext() {
@@ -65,16 +68,27 @@ function recoveryContext() {
     }
     const context = require(entry).bootstrap(root);
     return context.active ? context : null;
-  } catch {
+  } catch (error) {
+    const code = typeof error?.code === 'string' && error.code ? recoveryText(error.code, 128) : 'UPGRADE_RECOVERY_REQUIRED';
+    const reason = recoveryText(error?.message || error, 8192);
+    const next = typeof error?.next === 'string' && error.next
+      ? recoveryText(error.next, 2048)
+      : 'Run zylos recovery status, then zylos recovery resume; preserve ambiguous materials for inspection.';
     return {
       active: true, blocked: true, recovery_required: true,
+      code, error: reason, next,
       prompt: 'SYSTEM RECOVERY TASK: Upgrade discovery failed. Keep normal C4/database access isolated. Use only the fixed file-only upgrade status entry after verifying its ownership and permissions. Preserve transaction materials; report recovery_required if trusted discovery remains unavailable. Do not query C4 or execute journal command strings.',
     };
   }
 }
 
 function recoveryBlock(context) {
-  return `=== UPGRADE RECOVERY TASK ===\n${context.prompt}\n=== END UPGRADE RECOVERY TASK ===`;
+  const details = {};
+  for (const [key, limit] of [['code', 128], ['error', 8192], ['next', 2048]]) {
+    if (typeof context[key] === 'string' && context[key]) details[key] = recoveryText(context[key], limit);
+  }
+  const diagnostic = Object.keys(details).length ? '\n' + JSON.stringify(details, null, 2) : '';
+  return `=== UPGRADE RECOVERY TASK ===\n${context.prompt}${diagnostic}\n=== END UPGRADE RECOVERY TASK ===`;
 }
 
 function needsRecoveryCue(context) {

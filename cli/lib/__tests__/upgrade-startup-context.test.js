@@ -41,14 +41,14 @@ test('unmarked historical transactions do not require stable startup helpers', t
  }
 });
 
-function publishedTransaction(t, {fail = false, controller = false} = {}) {
+function publishedTransaction(t, {fail = false, controller = false, failure} = {}) {
  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-startup-published-')));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const dir = path.join(root,'.backup/self-upgrade/tx');
  fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const executed = path.join(root,'recovery-executed');
  for (const [source,name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs'],['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-recovery.cjs','recovery.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
- fs.writeFileSync(path.join(dir,'runner.cjs'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(executed)},JSON.stringify(process.argv.slice(2)));${fail?'process.exit(9);':`fs.rmSync(${JSON.stringify(dir)},{recursive:true});console.log(JSON.stringify({recovery_required:false,stage:'aborted_before_install'}));`}`);
+ fs.writeFileSync(path.join(dir,'runner.cjs'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(executed)},JSON.stringify(process.argv.slice(2)));${failure ? `console.log(${JSON.stringify(JSON.stringify(failure))});process.exit(1);` : fail?'process.exit(9);':`fs.rmSync(${JSON.stringify(dir)},{recursive:true});console.log(JSON.stringify({recovery_required:false,stage:'aborted_before_install'}));`}`);
  const journal={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:false,initialIdentity:{},recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(dir,name))]))};
  if(controller){
   const digest='a'.repeat(64);
@@ -77,6 +77,50 @@ test('failed startup recovery preserves history and returns the recovery prompt'
  assert.match(context.prompt,/SYSTEM RECOVERY TASK/);
  assert.deepEqual(JSON.parse(fs.readFileSync(f.executed,'utf8')),['resume','--transaction-dir',f.dir]);
  assert.equal(fs.existsSync(f.dir),true);
+});
+
+
+// Real discovery/runner boundary shared by startup, recovery resume and upgrade.
+// Run for recovery propagation changes. Official runner isolates all instance
+// roots; the fixture runner only prints a failure, with no PM2/DB/tmux access.
+// Linux exercises actual automatic recovery; Mac refusal has separate coverage.
+test('startup and recovery resume preserve the same failure code cause and next action as upgrade', {skip:process.platform!=='linux', timeout:15000}, async t => {
+  t.mock.method(maintenance,'canRecognizeProcesses',()=>true);
+  const failure={code:'UPGRADE_RECOVERY_REQUIRED',error:'EACCES: cleanup code denied',recovery_required:true};
+  const f=publishedTransaction(t,{failure});
+  const startup=discoverUpgradeContext(f.root);
+  assert.equal(startup.recovery_required,true);
+  assert.equal(startup.code,failure.code);
+  assert.equal(startup.error,failure.error);
+  for(const value of [startup.code,startup.error,startup.next]) assert.ok(startup.prompt.includes(value));
+  const output=[],log=console.log,exitCode=process.exitCode;
+  console.log=value=>output.push(JSON.parse(value));
+  try {
+    await recoveryCommand(['resume'],{root:f.root});
+    assert.equal(process.exitCode,1);
+  } finally {console.log=log;process.exitCode=exitCode;}
+  const {upgradeSelfCore}=await import('../../commands/component.js');
+  const upgrade=[];
+  assert.equal(await upgradeSelfCore({skipConfirm:true,jsonOutput:true},{zylosDir:f.root,
+    checkForCoreUpdates(){assert.fail('failed recovery must not check updates');},
+    console:{log(value){upgrade.push(JSON.parse(value));}}
+  }),false);
+  assert.equal(output.length,1);assert.equal(upgrade.length,1);
+  for(const key of ['code','error','next']) {
+    assert.equal(output[0][key],startup[key]);assert.equal(upgrade[0][key],startup[key]);
+  }
+  assert.equal(fs.existsSync(f.dir),true);
+});
+
+// Discovery-only failure still reaches the actual displayed startup prompt.
+// No subprocess or service is needed on either platform.
+test('startup prompt preserves the filesystem error rather than replacing it with generic discovery failure', t=>{
+  const root=path.join(os.tmpdir(),'missing-recovery-root-'+process.pid);
+  assert.equal(fs.existsSync(root),false);
+  const context=discoverUpgradeContext(root);
+  assert.equal(context.code,'ENOENT');assert.equal(context.recovery_required,true);
+  assert.match(context.error,/ENOENT/);
+  for(const value of [context.code,context.error,context.next])assert.ok(context.prompt.includes(value));
 });
 
 test('read-only discovery preserves published recovery material without executing the runner', t => {
@@ -391,4 +435,29 @@ test('Mac runtime startup recovery prompt permits status and manual recovery onl
  fs.writeFileSync(path.join(stable,'active.json'),'{broken',{mode:0o600});
  const prompt=upgradeStartupPrompt(root);
  assert.match(prompt,/manual recovery/);assert.match(prompt,/--status/);assert.match(prompt,/do not run automatic resume/);assert.doesNotMatch(prompt,/--once/);
+});
+
+// Legacy fallback calls a trusted stable bootstrap, without transaction protocol
+// files that would select the modern runner. Run when recovery CLI fallback or
+// exception formatting changes. No services, databases or tmux are invoked.
+test('recovery resume fallback preserves a stable bootstrap exception as a nonzero structured result', async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'resume-fallback-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
+  fs.writeFileSync(path.join(stable,'active.json'),'{}',{mode:0o600});
+  fs.writeFileSync(path.join(stable,'maintenance.cjs'),'module.exports={};',{mode:0o600});
+  fs.writeFileSync(path.join(stable,'bootstrap.cjs'),`exports.bootstrap=(_root,{once}={})=>{
+    if(once)throw Object.assign(Error('EACCES: stable resume denied'),{code:'EACCES',next:'Run zylos recovery status.'});
+    return {active:true,blocked:true,prompt:'pending legacy recovery'};
+  };`,{mode:0o600});
+  const output=[],log=console.log,exitCode=process.exitCode;
+  console.log=value=>output.push(JSON.parse(value));
+  try{
+    await recoveryCommand(['resume'],{root});
+    assert.equal(process.exitCode,1);
+  }finally{console.log=log;process.exitCode=exitCode;}
+  assert.equal(output.length,1);
+  assert.equal(output[0].code,'EACCES');assert.equal(output[0].error,'EACCES: stable resume denied');
+  assert.equal(output[0].next,'Run zylos recovery status.');
+  for(const key of ['code','error','next'])assert.ok(output[0].prompt.includes(output[0][key]));
 });

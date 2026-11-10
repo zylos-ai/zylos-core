@@ -85,7 +85,7 @@ test('self-upgrade CLI prints recovery guidance only to stderr and exits one', t
   });
   assert.equal(child.status,1,child.stderr);
   assert.equal(child.stdout,'');
-  assert.match(child.stderr,/^Error: Upgrade recovery materials are ambiguous; preserve them for inspection\.\n/);
+  assert.match(child.stderr,/^Error: Upgrade recovery materials are ambiguous; preserve them for inspection\. unsafe transaction entry: unsafe-entry\n/);
   assert.match(child.stderr,/Next: Run zylos recovery status, then zylos recovery resume; preserve ambiguous materials for inspection\.\n$/);
 });
 
