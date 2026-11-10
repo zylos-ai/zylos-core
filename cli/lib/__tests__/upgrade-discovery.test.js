@@ -141,6 +141,25 @@ for (const child of [
   });
 });
 
+// Valid JSON is not necessarily a recovery result object. Run for result-shape
+// validation changes; the injected child leaves a clean final state, so only
+// the malformed result can explain failure. No services or child processes run.
+for (const stdout of ['[]', '5', '"ok"', 'true']) {
+  test(`shared executor rejects non-object recovery JSON ${stdout}`, () => {
+    const f = fixture();
+    assert.throws(() => recoverBeforeUpgrade('/isolated', {maintenance:f.m, spawn() {
+      f.finish();
+      return {status:0, stdout};
+    }}), error => {
+      assert.equal(error.code, 'UPGRADE_RECOVERY_REQUIRED');
+      assert.equal(error.recovery_required, true);
+      assert.match(error.message, /invalid result \(status 0\)/);
+      assert.match(error.next, /zylos recovery/);
+      return true;
+    });
+  });
+}
+
 test('recovery file validation keeps the upgrade recovery code and its original cause', () => {
   const f = fixture();
   f.m.validateRecoveryFiles = () => {
