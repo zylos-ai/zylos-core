@@ -7,7 +7,7 @@ import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/set
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=105';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=119';
 import { renderVersion } from './wb/settings-version.js?v=105';
-import { mountConversationPage } from './wb/conversation-page.js?v=141';
+import { mountConversationPage } from './wb/conversation-page.js?v=142';
 import { mountChatSettings } from './wb/chat-settings.js?v=114';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=6';
 import { mountWorkbench } from './wb/shell.js?v=119';

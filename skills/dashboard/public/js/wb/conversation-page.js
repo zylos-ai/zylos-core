@@ -60,6 +60,7 @@ export function mountConversationPage({
   onStreamSubscription = () => {},
   storage = globalThis.localStorage
 } = {}) {
+  let autoSelectPending = false, opened = false, selectionIdentity;
   let destroyed = false,
     currentSnapshot,
     selectedKey = null,
@@ -205,9 +206,15 @@ export function mountConversationPage({
   };
   async function selectFirstDesktop() {
     const current = state.snapshot();
-    if (!destroyed && !current.blocked && !current.selectedId && current.items.length && view?.innerWidth > 760) {
-      await state.select(current.items[0].id);
+    if (destroyed || !autoSelectPending) return;
+    if (current.blocked || current.selectedId || !(view?.innerWidth > 760)) {
+      autoSelectPending = false;
+      return;
     }
+    if (!current.items.length) return;
+    // A stream catch-up may provide the first list after open() has already returned.
+    autoSelectPending = false;
+    await state.select(current.items[0].id);
   }
   const page = node('div', undefined, 'conversation-page');
   const sidebar = node('aside', undefined, 'conversation-sidebar');
@@ -219,6 +226,7 @@ export function mountConversationPage({
   for (const tab of ['mine', 'external']) {
     const button = action(tab, async () => {
       mobileDetail(false);
+      autoSelectPending = true;
       await state.setTab(tab);
       await selectFirstDesktop();
     }, tab === 'mine' ? 'monitor' : 'msg');
@@ -1150,6 +1158,7 @@ export function mountConversationPage({
         button.append(symbol, body);
         button.addEventListener('click', () => {
           mobileDetail(true);
+          autoSelectPending = false;
           void state.select(item.id);
         });
         const remove = action('chat.delete.button', () => deletion.remove(item), 'trash', 'wb-icon-btn conversation-delete');
@@ -1341,13 +1350,17 @@ export function mountConversationPage({
     streamSubscriptionKey = next;
     onStreamSubscription(subscription);
   };
-  const unsubscribe = state.subscribe(() => { redraw(); notifyStreamSubscription(); });
+  const unsubscribe = state.subscribe(() => { redraw(); notifyStreamSubscription(); void selectFirstDesktop(); });
   redraw();
   return {
     streamSubscription: state.streamSubscription,
     streamStatus: state.streamStatus,
     streamEvent: state.streamEvent,
     async open(...args) {
+      const nextIdentity = typeof identity === 'function' ? identity() : identity;
+      if (!opened || nextIdentity !== selectionIdentity) autoSelectPending = true;
+      opened = true;
+      selectionIdentity = nextIdentity;
       page.hidden = false;
       scheduleFit();
       await state.open(...args);
@@ -1359,6 +1372,9 @@ export function mountConversationPage({
       if (typeof sessionGroup !== 'string' || !sessionGroup) {
         return false;
       }
+      autoSelectPending = false;
+      opened = true;
+      selectionIdentity = typeof identity === 'function' ? identity() : identity;
       page.hidden = false;
       await state.open();
       const tab = (channel ?? sessionGroup.split(':')[0]) === 'dashboard' ? 'mine' : 'external';
@@ -1375,6 +1391,8 @@ export function mountConversationPage({
       return !state.snapshot().error;
     },
     close() {
+      autoSelectPending = false;
+      opened = false;
       deletion.invalidate();
       deletionResult = null;
       groupSide?.close({ focus: false });
