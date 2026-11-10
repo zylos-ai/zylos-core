@@ -1097,6 +1097,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   border: 0; border-radius: var(--c-r-lg); background: var(--c-surface); box-shadow: var(--c-shadow-card);
 }
 .conversation-page .conversation-view-section .chat-block { margin: 0 0 8px; }
+.conversation-page .conversation-view-body > :is(.conversation-view-stack, .conversation-view-columns, .conversation-view-section):not(:last-child) { margin-bottom: 8px; }
 .conversation-page .chat-block:last-child { margin-bottom: 0; }
 .conversation-page :is(.conversation-view-stack, .conversation-view-columns) > .chat-block { margin: 0; }
 .conversation-page .chat-block-title { margin: 0; font-size: 15px; line-height: 24px; font-weight: 600; letter-spacing: -0.006em; color: var(--c-ink); }
