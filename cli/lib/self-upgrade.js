@@ -1365,21 +1365,27 @@ export function step11_startCoreServices(ctx, deps = {}) {
   const started = [];
   const failed = [];
   const serviceMaintenance = maintenanceFor(ctx);
-  let ecosystemNames;
+  let externalNames = new Set(), plainRestartNames = new Set();
   try {
-    ecosystemNames = new Set(ctx.preInstallProtection && fsApi.existsSync(ecosystemPath)
-      ? serviceMaintenance.ecosystemServiceNames(ecosystemPath)
-      : []);
-    const externalNames = ctx.preInstallProtection
-      ? ctx.servicesWereRunning.filter(name => !ecosystemNames.has(name)) : [];
-    if (externalNames.length) {
-      const savedJournal = serviceMaintenance.read(path.join(ctx.transactionDir, 'journal.json'));
-      const external = externalNames.map(name => {
-        const records = (savedJournal.originalServices || []).filter(service => service.name === name);
-        if (records.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
-        return records[0];
-      });
-      serviceMaintenance.validateSavedServices(savedJournal, external);
+    if (ctx.preInstallProtection) {
+      ctx.journal = serviceMaintenance.read(path.join(ctx.transactionDir, 'journal.json'));
+      for (const name of ctx.servicesWereRunning) {
+        if (!(ctx.journal.originalServices || []).some(service => service.name === name)) throw Error('original PM2 service record missing or changed: ' + name);
+      }
+      const {external} = serviceMaintenance.serviceRequirements(ctx.journal);
+      if (ctx.journal.initialIdentity?.ecosystemHash === null) {
+        // Forward startup admits the newly deployed template above. Apply its
+        // env/args/script to members, but keep all original availability fatal.
+        const names = new Set(fsApi.existsSync(ecosystemPath)
+          ? serviceMaintenance.ecosystemServiceNames(ecosystemPath) : []);
+        const outside = ctx.journal.originalServices.filter(service => !names.has(service.name));
+        if (outside.length) serviceMaintenance.validateSavedServices(ctx.journal, outside);
+        plainRestartNames = new Set(outside.map(service => service.name));
+      } else {
+        if (external.length) serviceMaintenance.validateSavedServices(ctx.journal, external);
+        externalNames = new Set(external.map(service => service.name));
+        plainRestartNames = externalNames;
+      }
     }
   } catch (error) {
     return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
@@ -1387,7 +1393,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      if (!ctx.preInstallProtection || ecosystemNames.has(name)) {
+      if (!plainRestartNames.has(name)) {
         restartFn(name, {
           ecosystemPath,
           stdio: 'pipe',
@@ -1396,7 +1402,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
       } else serviceMaintenance.restartService(name);
       started.push(name);
     } catch {
-      failed.push(name);
+      if (!externalNames.has(name)) failed.push(name);
     }
   }
 
@@ -1441,7 +1447,18 @@ export function step11_startCoreServices(ctx, deps = {}) {
  * Some services (e.g. component bots) take longer than 2 s to start after
  * PM2 restarts them — a one-shot check caused spurious rollbacks.
  */
-function step12_verifyServices(ctx) {
+export function step12_verifyServices(ctx) {
+  if (ctx.preInstallProtection) {
+    const startTime = Date.now();
+    try {
+      maintenanceFor(ctx).verifyServices(ctx.journal);
+      ctx.serviceWarnings = ctx.journal.serviceWarnings || [];
+      maintenanceFor(ctx).update(ctx.transactionDir, ctx.journal, {serviceWarnings:ctx.serviceWarnings});
+      return {step:12,name:'verify_services',status:'done',duration:Date.now()-startTime};
+    } catch (error) {
+      return {step:12,name:'verify_services',status:'failed',error:error.message,duration:Date.now()-startTime};
+    }
+  }
   const startTime = Date.now();
 
   if (ctx.servicesWereRunning.length === 0) {
@@ -1611,6 +1628,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
   if (failedStep) {
     return {
       action: 'self_upgrade',
+      ...(ctx.serviceWarnings?.length ? {serviceWarnings:ctx.serviceWarnings} : {}),
       success: false,
       ...backupOnlyResult(ctx, true),
       preInstallProtection:!!ctx.preInstallProtection,
@@ -1645,6 +1663,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
 
   return {
     action: 'self_upgrade',
+    ...(ctx.serviceWarnings?.length ? {serviceWarnings:ctx.serviceWarnings} : {}),
     success: true,
     ...backupOnlyResult(ctx, false),
     from: ctx.from,
@@ -1824,6 +1843,8 @@ export function runSelfUpgradeFinalize(state = {}, deps = {}) {
 
   if (ctx.preInstallProtection && ctx.targetOwned) {
     maintenance.verifyServices(ctx.journal);
+    ctx.serviceWarnings = ctx.journal.serviceWarnings || [];
+    maintenance.update(ctx.transactionDir, ctx.journal, {serviceWarnings:ctx.serviceWarnings});
     prepareTargetData(ctx, {}, {ready: true});
   }
   if(ctx.preInstallProtection)protectedSuccess(ctx);
