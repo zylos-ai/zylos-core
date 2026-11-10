@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest } from './tmux-env.js';
 import { buildKickPrompt } from './kick-prompt.js';
 import { adapterError } from './tmux-protocol.js';
-import { RUNTIME_BUILTIN_ENV_KEYS } from '../config.js';
+import { CLAUDE_BUILTIN_ENV_KEYS } from '../config.js';
 export { adapterError } from './tmux-protocol.js';
 export const shellQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
 export function runtimeExecutable(runtime, env = process.env) {
@@ -64,23 +64,25 @@ export function launchEnvironment(root, processEnv = process.env, { runtime } = 
   const {env} = dotenvVars.ZYLOS_CLEAN_ENV === 'false'
     ? buildCompatEnv({processEnv, dotenvVars})
     : buildCleanEnv({processEnv, dotenvVars, manifest:loadRuntimeEnvManifest(root), uid:process.getuid?.()});
-  // Built-in runtime passthrough, independent of runtime-env.manifest: applied
+  // Built-in Claude passthrough, independent of runtime-env.manifest: applied
   // after the manifest (clean and compat mode) so a manifest cannot drop it.
-  for (const key of RUNTIME_BUILTIN_ENV_KEYS[runtime] ?? []) if (dotenvVars[key]) env[key] = dotenvVars[key];
+  if (runtime === 'claude') {
+    for (const key of CLAUDE_BUILTIN_ENV_KEYS) if (dotenvVars[key]) env[key] = dotenvVars[key];
+  }
   for (const key of ['ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG','CLAUDECODE','CLAUDE_CODE_ENTRYPOINT']) delete env[key];
   env.ZYLOS_DIR = root;
   return env;
 }
 /**
- * Auth probe environment: the inherited env, with the built-in passthrough
- * variables taken exactly as a new session of `runtime` gets them.
+ * Claude auth probe environment: the inherited env, with the built-in Claude
+ * variables taken exactly as a new Claude session gets them.
  */
-export function probeEnvironment(root, processEnv, runtime) {
+export function claudeProbeEnvironment(root, processEnv) {
   const env = { ...processEnv };
   let sessionEnv;
-  try { sessionEnv = launchEnvironment(root, processEnv, { runtime }); }
+  try { sessionEnv = launchEnvironment(root, processEnv, { runtime: 'claude' }); }
   catch { return env; /* unreadable .env: session launch fails too; probe the inherited env */ }
-  for (const key of RUNTIME_BUILTIN_ENV_KEYS[runtime] ?? []) {
+  for (const key of CLAUDE_BUILTIN_ENV_KEYS) {
     if (Object.hasOwn(sessionEnv, key)) env[key] = sessionEnv[key];
     else delete env[key];
   }

@@ -62,7 +62,7 @@ describe('.env file permissions', { skip: !posix && 'POSIX permission bits only'
   for (const [name, key, value] of [
     ['saveApiKeyToEnv', 'ANTHROPIC_API_KEY', 'sk-ant-api03-example'],
     ['saveSetupTokenToEnv', 'CLAUDE_CODE_OAUTH_TOKEN', 'sk-ant-oat01-example'],
-    ['saveClaudeBaseUrlToSettingsAndEnv', 'ANTHROPIC_BASE_URL', 'https://relay.example.test'],
+    ['saveClaudeBaseUrlToEnv', 'ANTHROPIC_BASE_URL', 'https://relay.example.test'],
     ['saveCodexApiKeyToEnv', 'OPENAI_API_KEY', 'sk-openai-example'],
     ['saveCodexBaseUrlToEnv', 'OPENAI_BASE_URL', 'https://openai-relay.example.test/v1'],
   ]) {

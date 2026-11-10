@@ -153,8 +153,8 @@ describe('runtime base URL support', () => {
     assert.match(envContent, /ANTHROPIC_BASE_URL=https:\/\/claude-proxy\.example\.com/);
     assert.match(envContent, /OPENAI_BASE_URL=https:\/\/codex-proxy\.example\.com\/v1/);
 
-    const claudeSettings = JSON.parse(fs.readFileSync(path.join(tmpRoot, '.claude', 'settings.json'), 'utf8'));
-    assert.equal(claudeSettings.env.ANTHROPIC_BASE_URL, 'https://claude-proxy.example.com');
+    // The Claude base URL goes to ~/zylos/.env only; ~/.claude/settings.json is not written.
+    assert.equal(fs.existsSync(path.join(tmpRoot, '.claude', 'settings.json')), false);
 
     const codexConfig = fs.readFileSync(path.join(tmpRoot, '.codex', 'config.toml'), 'utf8');
     assert.match(codexConfig, /openai_base_url = "https:\/\/codex-proxy\.example\.com\/v1"/);

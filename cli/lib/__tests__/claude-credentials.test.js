@@ -28,6 +28,7 @@ const { saveApiKey, saveApiKeyToEnv, saveAuthToken, saveAuthTokenToEnv,
 const { launchEnvironment } = await import('../runtime/session-command.js');
 const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags } = await import('../../commands/runtime.js');
 const { executeAuth } = await import('../../commands/auth.js');
+const { persistInitCredentials } = await import('../../commands/init.js');
 const { readEnvFile } = await import('../env.js');
 const modes = [
   ['API key', 'ANTHROPIC_API_KEY', saveApiKey, saveApiKeyToEnv],
@@ -37,9 +38,14 @@ const modes = [
 const secret = () => randomBytes(24).toString('hex');
 const sameSecret = (actual, expected) => assert.equal(actual === expected, true, 'credential value round-trips without being logged');
 
+// A hand-configured settings.json with its own credentials and relay address,
+// unusually formatted so any rewrite shows. zylos must never change it.
+const SETTINGS_TEXT = JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://hand-relay.example.test', ANTHROPIC_API_KEY: 'sk-ant-api03-hand-configured',
+  CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-hand-configured', KEEP: 'unchanged' }, permissions: { allow: ['Read'] }, theme: 'dark' }, null, 4) + '\n\n';
+const settingsUntouched = () => fs.readFileSync(settingsFile, 'utf8') === SETTINGS_TEXT;
 beforeEach(() => {
   for (const key of [...keys, relayFlag]) delete process.env[key];
-  fs.writeFileSync(settingsFile, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://relay.example.test', KEEP: 'unchanged' }, permissions: { allow: ['Read'] }, theme: 'dark' }));
+  fs.writeFileSync(settingsFile, SETTINGS_TEXT);
   fs.writeFileSync(envFile, '# Other settings\nKEEP=unchanged\nANTHROPIC_BASE_URL=https://relay.example.test\n');
 });
 after(() => {
@@ -50,21 +56,14 @@ after(() => {
 });
 
 for (const [label, selected, save, saveEnv] of modes) {
-  test(`${label} replaces competing settings and process credentials without touching unrelated settings`, () => {
-    const value = secret(), settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    for (const key of keys) { settings.env[key] = secret(); process.env[key] = secret(); }
-    fs.writeFileSync(settingsFile, JSON.stringify(settings));
+  test(`${label} replaces competing process credentials and leaves settings.json byte-identical`, () => {
+    const value = secret();
+    for (const key of keys) process.env[key] = secret();
     const beforeEnv = fs.readFileSync(envFile, 'utf8');
     assert.equal(save(value), true);
-    const stored = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    assert.deepEqual(Object.keys(stored.env).filter(key => keys.includes(key)), [selected]);
-    sameSecret(stored.env[selected], value);
     assert.deepEqual(keys.filter(key => process.env[key] !== undefined), [selected]);
     sameSecret(process.env[selected], value);
-    assert.equal(stored.env.KEEP, 'unchanged');
-    assert.equal(stored.env.ANTHROPIC_BASE_URL, 'https://relay.example.test');
-    assert.deepEqual(stored.permissions.allow, ['Read']);
-    assert.equal(stored.theme, 'dark');
+    assert.equal(settingsUntouched(), true, 'settings.json, with its own credentials, is not rewritten');
     assert.equal(fs.readFileSync(envFile, 'utf8') === beforeEnv, true, 'pre-template save must not write a partial Zylos env');
   });
   test(`${label} env save removes all duplicate, exported and spaced competing assignments`, () => {
@@ -93,20 +92,17 @@ for (const [label, selected, save, saveEnv] of modes) {
   });
 }
 
-test('saving any credential keeps CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC in settings, env and process', () => {
+test('saving any credential keeps CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC in .env and process and leaves settings.json alone', () => {
   // The setting is passed to the auth probe beside the credentials but is not one;
   // replacing a credential must never remove it.
   const name = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', saved = process.env[name];
   try {
     for (const [label, , save, saveEnv] of modes) {
-      const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-      settings.env[name] = '1';
-      fs.writeFileSync(settingsFile, JSON.stringify(settings));
       fs.writeFileSync(envFile, fs.readFileSync(envFile, 'utf8') + `${name}=1\n`);
       process.env[name] = '1';
       assert.equal(save(secret()), true);
       assert.equal(saveEnv(secret()), true);
-      assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env[name], '1', `${label}: settings keeps it`);
+      assert.equal(settingsUntouched(), true, `${label}: settings.json untouched`);
       assert.equal(parseDotEnv(fs.readFileSync(envFile))[name], '1', `${label}: .env keeps it`);
       assert.equal(process.env[name], '1', `${label}: process env keeps it`);
     }
@@ -118,20 +114,18 @@ test('saving any credential keeps CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC in se
 // The relay traffic setting, computed from the saved state only: on behind a relay
 // base URL or with an API key / Bearer token; absent for a setup token or no saved
 // credential (subscription login) on the official API. Saved credentials win.
+// Only ~/zylos/.env and the process change; settings.json stays byte-identical.
 const relayFlagState = () => ({
   env: parseDotEnv(fs.readFileSync(envFile))[relayFlag],
   envLines: fs.readFileSync(envFile, 'utf8').split('\n').filter(line => line.includes(relayFlag + '=')).length,
-  settings: JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env?.[relayFlag],
   process: process.env[relayFlag],
+  settingsUntouched: settingsUntouched(),
 });
-const RELAY_ON = { env: '1', envLines: 1, settings: '1', process: '1' };
-const RELAY_OFF = { env: undefined, envLines: 0, settings: undefined, process: undefined };
+const RELAY_ON = { env: '1', envLines: 1, process: '1', settingsUntouched: true };
+const RELAY_OFF = { env: undefined, envLines: 0, process: undefined, settingsUntouched: true };
 
 const officialUrl = 'https://api.anthropic.com', relayUrl = 'https://relay.example.test';
 const seedRelayFlagOn = () => {
-  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  settings.env[relayFlag] = '1';
-  fs.writeFileSync(settingsFile, JSON.stringify(settings));
   fs.writeFileSync(envFile, fs.readFileSync(envFile, 'utf8') + `export ${relayFlag}=1\n${relayFlag} = 1\n`);
   process.env[relayFlag] = '1';
 };
@@ -144,7 +138,7 @@ test('pairing rule: relay or API credential on; setup token or no credential on 
   ]) assert.equal(computeRelayTraffic({ baseUrl, credential }), on, `${baseUrl} ${credential}`);
 });
 
-test('configuring a relay base URL turns the relay traffic setting on in .env, settings and process', () => {
+test('configuring a relay base URL turns the relay traffic setting on in .env and process', () => {
   assert.deepEqual(relayFlagState(), RELAY_OFF);
   assert.equal(applyBaseUrl('claude', relayUrl + '/v1'), true);
   assert.deepEqual(relayFlagState(), RELAY_ON);
@@ -153,16 +147,13 @@ test('configuring a relay base URL turns the relay traffic setting on in .env, s
 });
 
 test('configuring a relay base URL rewrites a wrong or duplicated existing value to a single 1', () => {
-  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  settings.env[relayFlag] = '0';
-  fs.writeFileSync(settingsFile, JSON.stringify(settings));
   fs.writeFileSync(envFile, fs.readFileSync(envFile, 'utf8') + `${relayFlag}=0\nexport ${relayFlag}=1\n`);
   assert.equal(applyBaseUrl('claude', relayUrl), true);
   assert.deepEqual(relayFlagState(), RELAY_ON);
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).KEEP, 'unchanged');
 });
 
-test('configuring the official base URL without a credential removes the relay traffic setting everywhere', () => {
+test('configuring the official base URL without a credential removes the relay traffic setting from .env and process', () => {
   seedRelayFlagOn();
   assert.equal(applyBaseUrl('claude', officialUrl), true);
   assert.deepEqual(relayFlagState(), RELAY_OFF);
@@ -206,7 +197,6 @@ test('a saved API key wins over a claude.ai login file: --save-apikey then --sav
 
 for (const [form, officialLine] of [['an export line', `export ANTHROPIC_BASE_URL=${officialUrl}`], ['a KEY: value line', `ANTHROPIC_BASE_URL: ${officialUrl}`]]) {
   test(`the setting reads .env as the session does: a relay line followed by an official URL in ${form} keeps the relay and the setting on`, () => {
-    fs.writeFileSync(settingsFile, JSON.stringify({ env: { KEEP: 'unchanged' } }));
     fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_BASE_URL=${relayUrl}\n${officialLine}\n`);
     delete process.env[relayFlag];
     assert.equal(launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtime: 'claude' }).ANTHROPIC_BASE_URL, relayUrl, 'the session uses the relay');
@@ -215,13 +205,50 @@ for (const [form, officialLine] of [['an export line', `export ANTHROPIC_BASE_UR
   });
 }
 
-test('an API key kept only in settings.json env still counts (Claude Code reads it there)', () => {
-  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  settings.env.ANTHROPIC_API_KEY = 'sk-ant-api03-' + secret();
-  fs.writeFileSync(settingsFile, JSON.stringify(settings));
+test('the setting ignores settings.json: its API key and relay address do not count when .env has none', () => {
+  fs.writeFileSync(envFile, `KEEP=unchanged\n${relayFlag}=1\n`);
+  process.env[relayFlag] = '1';
+  assert.equal(syncClaudeRelayTraffic(), true);
+  assert.deepEqual(relayFlagState(), RELAY_OFF, 'settings.json has a relay base URL and an API key, .env has neither');
   assert.equal(applyBaseUrl('claude', officialUrl), true);
-  assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_API_KEY, undefined, 'no API key in .env');
-  assert.deepEqual(relayFlagState(), RELAY_ON);
+  assert.deepEqual(relayFlagState(), RELAY_OFF, 'official URL saved, settings.json API key ignored');
+});
+
+// Every Claude save entry point, against an existing settings.json and with none:
+// settings.json stays byte-identical, and none is created.
+async function saveEverything() {
+  const quiet = { log: () => {}, reportError: () => {} };
+  assert.equal(saveApiKey('sk-ant-api03-' + secret()), true);
+  assert.equal(saveAuthToken('bearer-' + secret()), true);
+  assert.equal(saveSetupToken('sk-ant-oat01-' + secret()), true);
+  assert.equal(saveClaudeBaseUrl(relayUrl), true);
+  assert.equal(applyCredentials('claude', { apiKey: 'sk-ant-api03-' + secret() }), true);
+  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.equal(persistInitCredentials({ authToken: 'bearer-' + secret(), claudeBaseUrl: relayUrl }, quiet), true);
+  assert.equal(persistInitCredentials({ apiKey: 'sk-ant-api03-' + secret() }, quiet), true);
+  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + secret() }, quiet), true);
+  assert.equal(persistInitCredentials({ subscriptionLogin: true, claudeBaseUrl: officialUrl }, quiet), true);
+  const auth = await executeAuth(['claude'], { exists: () => true, spawn: () => ({ status: 0 }),
+    adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), notifyRecovery: () => true });
+  assert.equal(auth.ok, true);
+  assert.equal(syncClaudeRelayTraffic(), true);
+}
+
+for (const [what, text] of [['a hand-configured settings.json', SETTINGS_TEXT], ['a settings.json without env', '{"theme":"dark"}']]) {
+  test(`every Claude save entry point leaves ${what} byte-identical`, async () => {
+    fs.writeFileSync(settingsFile, text);
+    await saveEverything();
+    assert.equal(fs.readFileSync(settingsFile, 'utf8'), text);
+  });
+}
+
+test('no Claude save entry point creates settings.json', async () => {
+  fs.rmSync(settingsFile);
+  await saveEverything();
+  assert.equal(fs.existsSync(settingsFile), false);
+  fs.writeFileSync(settingsFile, SETTINGS_TEXT);
 });
 
 for (const [leftover, expected] of [[true, 'on'], [false, 'off']]) {
@@ -249,7 +276,7 @@ test('a login behind a saved relay keeps the relay and gets a notice with the co
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_BASE_URL, relayUrl, 'the relay URL is not removed');
 });
 
-test('`zylos runtime claude --save-base-url https://api.anthropic.com` sets the official URL everywhere and turns the switch off', () => {
+test('`zylos runtime claude --save-base-url https://api.anthropic.com` sets the official URL in .env and the process and turns the switch off', () => {
   assert.equal(applyBaseUrl('claude', relayUrl), true);
   assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
   assert.deepEqual(relayFlagState(), RELAY_ON);
@@ -257,7 +284,6 @@ test('`zylos runtime claude --save-base-url https://api.anthropic.com` sets the 
   assert.equal(validateRuntimeFlags('claude', parsed), null);
   assert.equal(applyBaseUrl('claude', parsed.baseUrl), true);
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_BASE_URL, officialUrl);
-  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_BASE_URL, officialUrl);
   assert.equal(process.env.ANTHROPIC_BASE_URL, officialUrl);
   assert.deepEqual(relayFlagState(), RELAY_OFF);
   assert.equal(relayLoginNotice(), null);
@@ -273,13 +299,13 @@ test('the process-only base URL used during init follows the pairing rule', () =
   assert.equal(process.env[relayFlag], '1', 'API key + official');
 });
 
-test('changing from Bearer to API key and setup token leaves one selected method in both stores', () => {
+test('changing from Bearer to API key and setup token leaves one selected method in .env and the process', () => {
   for (const [, key, save, saveEnv] of [modes[1], modes[0], modes[2], modes[1]]) {
     const value = secret();
     assert.equal(save(value), true); assert.equal(saveEnv(value), true);
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-    assert.deepEqual(Object.keys(settings.env).filter(name => keys.includes(name)), [key]);
-    sameSecret(settings.env[key], value);
+    assert.deepEqual(keys.filter(name => process.env[name] !== undefined), [key]);
+    sameSecret(process.env[key], value);
+    assert.equal(settingsUntouched(), true);
     const authNames = [...fs.readFileSync(envFile, 'utf8').matchAll(/^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)=/gm)].map(match => match[1]);
     assert.deepEqual(authNames, [key]);
   }
@@ -290,7 +316,7 @@ test('printable credentials round-trip through dotenv and native env readers wit
   for (const [, key, save, saveEnv] of modes) for (const suffix of suffixes) {
     const value = secret() + suffix;
     assert.equal(save(value), true); assert.equal(saveEnv(value), true);
-    sameSecret(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env[key], value);
+    sameSecret(process.env[key], value);
     sameSecret(parseDotEnv(fs.readFileSync(envFile))[key], value);
     sameSecret(readEnvFile().get(key), value);
   }

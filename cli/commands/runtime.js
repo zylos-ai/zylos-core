@@ -28,7 +28,7 @@ import {
   isValidBaseUrl,
   saveApiKey,
   saveApiKeyToEnv,
-  saveClaudeBaseUrlToSettingsAndEnv,
+  saveClaudeBaseUrlToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
@@ -144,7 +144,7 @@ export function applyCredentials(target, creds, warnings = []) {
 
 export function applyBaseUrl(target, baseUrl, warnings = []) {
   if (target === 'claude') {
-    if (!saveClaudeBaseUrlToSettingsAndEnv(baseUrl)) return false;
+    if (!saveClaudeBaseUrlToEnv(baseUrl)) return false;
     if (!syncClaudeRelayTraffic()) return false;
     warnUnrestrictedCredentialFiles(target, warnings);
     return true;

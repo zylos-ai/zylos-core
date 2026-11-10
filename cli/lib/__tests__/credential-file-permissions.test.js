@@ -62,27 +62,27 @@ beforeEach(() => {
 });
 
 describe('owner-only credential files', { skip: !posix && 'POSIX permission bits only' }, () => {
-  describe('Claude credential writers (~/.claude/settings.json and ~/.claude.json)', () => {
+  describe('Claude credential writers (~/.claude.json; ~/.claude/settings.json is not written)', () => {
     for (const [label, save, key] of [
       ['saveApiKey', setup.saveApiKey, 'ANTHROPIC_API_KEY'],
       ['saveAuthToken', setup.saveAuthToken, 'ANTHROPIC_AUTH_TOKEN'],
       ['saveSetupToken', setup.saveSetupToken, 'CLAUDE_CODE_OAUTH_TOKEN'],
     ]) {
-      test(`${label} creates both files owner-only`, () => {
+      test(`${label} creates ~/.claude.json owner-only and does not create settings.json`, () => {
         assert.equal(save('credential-value-new-file-0001'), true);
-        assert.equal(mode(userSettings), '600');
         assert.equal(mode(claudeJson), '600');
-        assert.equal(readJson(userSettings).env[key], 'credential-value-new-file-0001');
+        assert.equal(fs.existsSync(userSettings), false);
+        assert.equal(process.env[key], 'credential-value-new-file-0001');
       });
 
-      test(`${label} tightens existing world-readable files`, () => {
-        worldReadable(userSettings, { theme: 'dark' });
+      test(`${label} tightens an existing world-readable ~/.claude.json and leaves settings.json unchanged`, () => {
+        worldReadable(userSettings, { theme: 'dark', env: { [key]: 'hand-configured' } });
         worldReadable(claudeJson, { keep: true });
+        const settingsBefore = fs.readFileSync(userSettings, 'utf8');
         assert.equal(save('credential-value-existing-0002'), true);
-        assert.equal(mode(userSettings), '600');
         assert.equal(mode(claudeJson), '600');
-        assert.equal(readJson(userSettings).theme, 'dark');
         assert.equal(readJson(claudeJson).keep, true);
+        assert.equal(fs.readFileSync(userSettings, 'utf8'), settingsBefore);
       });
     }
 
@@ -95,13 +95,13 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.equal(readJson(claudeJson).keep, true);
     });
 
-    test('saveClaudeBaseUrlToSettingsAndEnv creates settings owner-only and tightens existing settings', () => {
-      assert.equal(setup.saveClaudeBaseUrlToSettingsAndEnv('https://relay.example.test'), true);
-      assert.equal(mode(userSettings), '600');
-      worldReadable(userSettings, { env: { ANTHROPIC_API_KEY: 'credential-value-0005' } });
-      assert.equal(setup.saveClaudeBaseUrlToSettingsAndEnv('https://relay2.example.test'), true);
-      assert.equal(mode(userSettings), '600');
-      assert.equal(readJson(userSettings).env.ANTHROPIC_API_KEY, 'credential-value-0005');
+    test('saveClaudeBaseUrlToEnv neither creates nor rewrites settings.json', () => {
+      assert.equal(setup.saveClaudeBaseUrlToEnv('https://relay.example.test'), true);
+      assert.equal(fs.existsSync(userSettings), false);
+      worldReadable(userSettings, { env: { ANTHROPIC_API_KEY: 'credential-value-0005', ANTHROPIC_BASE_URL: 'https://hand.example.test' } });
+      const before = fs.readFileSync(userSettings, 'utf8');
+      assert.equal(setup.saveClaudeBaseUrlToEnv('https://relay2.example.test'), true);
+      assert.equal(fs.readFileSync(userSettings, 'utf8'), before);
     });
 
     test('init terms pre-acceptance creates both files owner-only', () => {
@@ -118,16 +118,19 @@ describe('owner-only credential files', { skip: !posix && 'POSIX permission bits
       assert.equal(mode(claudeJson), '600');
     });
 
-    test('init setup-token rollback tightens the settings it rewrites', async () => {
-      // The rollback only rewrites an existing file; the injected save leaves a world-readable one.
+    test('init setup-token rollback clears the process token and leaves settings.json unchanged', async () => {
+      // A hand-configured, world-readable settings.json holding a token must not be rewritten.
+      worldReadable(userSettings, { env: { CLAUDE_CODE_OAUTH_TOKEN: 'hand-configured-token' } });
+      const before = fs.readFileSync(userSettings, 'utf8');
       const result = await runInitAuthentication({ setupToken: 'credential-value-0007' }, {
         runtime: 'claude', quiet: true, skipConfirm: true, exists: () => true, claudeStatus: () => false,
-        setupSave: () => { worldReadable(userSettings, { env: { CLAUDE_CODE_OAUTH_TOKEN: 'credential-value-0007' } }); return true; },
+        setupSave: () => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'credential-value-0007'; return true; },
         setupVerify: () => ({ valid: false, authError: true }), log: () => {}, reportError: () => {},
       });
       assert.equal(result.claudeAuthenticated, false);
-      assert.equal(readJson(userSettings).env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-      assert.equal(mode(userSettings), '600');
+      assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+      assert.equal(fs.readFileSync(userSettings, 'utf8'), before);
+      assert.equal(mode(userSettings), '644');
     });
 
     test('runtime base URL save leaves settings owner-only without warnings', () => {

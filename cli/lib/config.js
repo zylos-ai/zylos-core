@@ -24,23 +24,13 @@ export const CADDY_BIN = path.join(BIN_DIR, 'caddy');
 // auth probe reads the same names, so a new credential type cannot be missed.
 export const CLAUDE_CREDENTIAL_KEYS = Object.freeze(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']);
 
-// Built-in runtime passthrough: Zylos Core carries these from ~/zylos/.env into
-// that runtime's sessions and auth probe without a runtime-env.manifest line.
-// The manifest only filters other variables and cannot drop these. Each
-// runtime gets only its own variables.
+// Built-in Claude passthrough: Zylos Core carries these from ~/zylos/.env into
+// Claude sessions and the Claude auth probe without a runtime-env.manifest
+// line. The manifest only filters other variables and cannot drop these.
 // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is a setting, not a credential.
-// Codex ignores both of its variables today (measured with codex-cli 0.166.0):
-// OPENAI_API_KEY is never sent as a credential by `codex exec`, the interactive
-// session or `codex login status`; it only pre-fills the API-key option on the
-// interactive sign-in screen when ~/.codex/auth.json is missing. OPENAI_BASE_URL
-// is ignored without a warning; only openai_base_url in ~/.codex/config.toml
-// changes the endpoint. They are carried for consistency.
-export const RUNTIME_BUILTIN_ENV_KEYS = Object.freeze({
-  claude: Object.freeze([
-    ...CLAUDE_CREDENTIAL_KEYS, 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
-  ]),
-  codex: Object.freeze(['OPENAI_BASE_URL', 'OPENAI_API_KEY']),
-});
+export const CLAUDE_BUILTIN_ENV_KEYS = Object.freeze([
+  ...CLAUDE_CREDENTIAL_KEYS, 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+]);
 
 // ── Config file (config.json) ───────────────────────────────────
 

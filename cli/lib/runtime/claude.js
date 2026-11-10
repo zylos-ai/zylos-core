@@ -22,7 +22,7 @@ const execFileAsync = promisify(execFile);
 import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { ZYLOS_DIR } from '../config.js';
-import { probeEnvironment } from './session-command.js';
+import { claudeProbeEnvironment } from './session-command.js';
 import { writePrivateFile } from '../private-file.js';
 
 
@@ -105,7 +105,7 @@ export class ClaudeAdapter extends SessionAdapter {
   async launch(input) {
     const root = this.options.root || ZYLOS_DIR, env = this.options.env || process.env;
     let sessionEnv = {};
-    try { sessionEnv = probeEnvironment(root, env, 'claude'); } catch { /* launch reports an unreadable .env */ }
+    try { sessionEnv = claudeProbeEnvironment(root, env); } catch { /* launch reports an unreadable .env */ }
     await ensureOnboardingComplete(root, env, PRE_APPROVED_KEYS.map(key => sessionEnv[key]).filter(Boolean));
     return super.launch(input);
   }
@@ -135,9 +135,9 @@ export class ClaudeAdapter extends SessionAdapter {
    * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
-    // Build subprocess env: inherit current env, but take the built-in runtime
-    // variables (RUNTIME_BUILTIN_ENV_KEYS) exactly as a new session gets them.
-    const injectedEnv = probeEnvironment(this.options.root || ZYLOS_DIR, this.options.env || process.env, 'claude');
+    // Build subprocess env: inherit current env, but take the built-in Claude
+    // variables (CLAUDE_BUILTIN_ENV_KEYS) exactly as a new session gets them.
+    const injectedEnv = claudeProbeEnvironment(this.options.root || ZYLOS_DIR, this.options.env || process.env);
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];

@@ -56,7 +56,7 @@ import {
   saveAuthToken,
   saveAuthTokenToEnv,
   saveClaudeBaseUrl,
-  saveClaudeBaseUrlToSettingsAndEnv,
+  saveClaudeBaseUrlToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
@@ -511,21 +511,11 @@ function verifySetupToken() {
 }
 
 /**
- * Undo saveSetupToken(): remove CLAUDE_CODE_OAUTH_TOKEN from
- * ~/.claude/settings.json and the current process environment.
+ * Undo saveSetupToken(): remove CLAUDE_CODE_OAUTH_TOKEN from the current
+ * process environment. saveSetupToken() does not write settings.json, so
+ * there is nothing to undo there.
  */
 function rollbackSetupToken() {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    if (settings.env) {
-      delete settings.env.CLAUDE_CODE_OAUTH_TOKEN;
-    }
-    writePrivateFile(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch (err) {
-    console.error(`  ${warn(`Could not rollback setup token from settings.json: ${err.message}`)}`);
-  }
-
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 }
 
@@ -1839,11 +1829,11 @@ export async function authenticateClaudeApiCredential({ apiKey, authToken, baseU
     return false;
   }
   if (!(authToken ? saveToken(authToken) : saveKey(apiKey))) {
-    reportError(`  ${error('Failed to save Claude API credential to settings.json.')}`);
+    reportError(`  ${error('Failed to prepare the Claude API credential.')}`);
     return false;
   }
-  if (!quiet) log(result === true ? `  ${success('Claude API credential verified; settings saved. Environment persistence is pending.')}`
-    : `  ${warn('Claude API verification was inconclusive (network or server response). Settings saved; environment persistence and runtime verification are still required.')}`);
+  if (!quiet) log(result === true ? `  ${success('Claude API credential verified. Saving it to ~/zylos/.env is pending.')}`
+    : `  ${warn('Claude API verification was inconclusive (network or server response). Saving it to ~/zylos/.env and runtime verification are still required.')}`);
   return true;
 }
 
@@ -1870,7 +1860,7 @@ export async function authenticateCodexApiCredential(apiKey, {
 export function persistInitCredentials({ apiKey, authToken, setupToken, subscriptionLogin = false, claudeBaseUrl, codexBaseUrl }, {
   saveKeyEnv = saveApiKeyToEnv, saveTokenEnv = saveAuthTokenToEnv, saveSetupEnv = saveSetupTokenToEnv,
   syncRelayTraffic = syncClaudeRelayTraffic, notice = relayLoginNotice, log = console.log,
-  saveClaudeBase = saveClaudeBaseUrlToSettingsAndEnv, saveCodexBase = saveCodexBaseUrlToEnv,
+  saveClaudeBase = saveClaudeBaseUrlToEnv, saveCodexBase = saveCodexBaseUrlToEnv,
   saveCodexConfig = writeCodexConfig, reportError = console.error,
 } = {}) {
   try {
