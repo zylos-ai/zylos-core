@@ -1,5 +1,6 @@
 import { migrateModelThresholds } from '../lib/model-rotation-thresholds.js';
 import { applyDashboardRoute } from '../lib/dashboard-install.js';
+import { generateWebConsoleRoute } from '../lib/web-console-route.js';
 import { printDashboardInfo } from '../lib/dashboard-access.js';
 import { provisionDashboardAuth } from '../../skills/dashboard/src/lib/auth-provision.js';
 import { savePm2ProcessList } from '../lib/pm2-save.js';
@@ -1414,7 +1415,7 @@ export function isLocalAddress(addr) {
  * @param {string} [protocol='https'] - 'https' (bare domain, auto-cert) or 'http'
  * @param {number} [port] - Optional port override (used for local addresses)
  */
-function generateCaddyfile(domain, protocol = 'https', port) {
+export function generateCaddyfile(domain, protocol = 'https', port) {
   const publicDir = path.join(HTTP_DIR, 'public');
   fs.mkdirSync(publicDir, { recursive: true });
 
@@ -1450,11 +1451,7 @@ ${siteAddress} {
     }
 
     # Web Console (core built-in)
-    redir /console /console/ permanent
-    handle /console/* {
-        uri strip_prefix /console
-        reverse_proxy localhost:3456
-    }
+${generateWebConsoleRoute()}
 
     log {
         output file ${HTTP_DIR}/caddy-access.log {

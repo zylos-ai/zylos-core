@@ -114,6 +114,47 @@ test('tail preserves W1 and follows F1, W7, services, restart and audit order',a
   assert.deepEqual(calls,['thresholds','ensure','rotate','start','verify','dashboard','mode','transition','restart','audit']);
   assert.equal(fs.readFileSync(path.join(ctx.zylosDir,'memory/state.md'),'utf8'),state);
 });
+
+test('Web Console migration runs after Core verification and before Dashboard on each finalization',async t=>{
+  const ctx=fixture(t),calls=[];
+  const first={status:'manual_required',caddyfile:path.join(ctx.zylosDir,'http/Caddyfile'),
+    message:'Custom route needs inspection.',instructions:['Add header_up X-Forwarded-Prefix /console to the Web Console reverse_proxy block.']};
+  let current=first;
+  const options=deps(calls,{migrateWebConsoleRoute:input=>{
+    assert.deepEqual(input,{zylosDir:ctx.zylosDir});calls.push('web-console');return current;
+  }});
+  const initial=await completeUpgradeFinalization(ctx,options);
+  assert.equal(initial.success,true);
+  assert.deepEqual(JSON.parse(JSON.stringify(initial)).webConsoleMigration,first);
+  assert.ok(calls.indexOf('verify')<calls.indexOf('web-console'));
+  assert.ok(calls.indexOf('web-console')<calls.indexOf('dashboard'));
+  current={status:'unchanged',caddyfile:first.caddyfile};calls.length=0;
+  const resumed=await completeUpgradeFinalization(ctx,options);
+  assert.deepEqual(resumed.webConsoleMigration,current);
+  assert.equal(calls.filter(call=>call==='web-console').length,1);
+});
+
+test('unexpected Web Console failure is actionable without failing Core finalization',async t=>{
+  const ctx=fixture(t),calls=[];
+  const result=await completeUpgradeFinalization(ctx,deps(calls,{migrateWebConsoleRoute(){throw Error('cannot inspect route');}}));
+  assert.equal(result.success,true);
+  assert.equal(result.webConsoleMigration.status,'manual_required');
+  assert.match(result.webConsoleMigration.message,/cannot inspect route/);
+  assert.match(result.webConsoleMigration.instructions.join('\n'),/header_up X-Forwarded-Prefix \/console/);
+  assert.match(result.webConsoleMigration.instructions.join('\n'),/validate.*--adapter caddyfile/);
+  assert.deepEqual(result.warnings,[]);
+  assert.ok(calls.includes('dashboard'));
+});
+
+test('failed Core verification does not inspect or migrate Web Console routing',async t=>{
+  const ctx=fixture(t);
+  const result=await completeUpgradeFinalization(ctx,deps([],{
+    verifyServices(){return {status:'failed',error:'Core unavailable'};},
+    migrateWebConsoleRoute(){assert.fail('migration must wait for Core verification');},
+  }));
+  assert.equal(result.success,false);
+  assert.equal(result.webConsoleMigration,null);
+});
 test('session-mode status adapter invokes only the read-only command with its own timeout and root',()=>{
   const observation={ok:true,data:{sessionMode:'multi',transition:null}};
   assert.deepEqual(readUpgradeModeStatus('/isolated/root',{execute:(node,args,options)=>{

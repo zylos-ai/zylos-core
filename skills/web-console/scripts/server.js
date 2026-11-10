@@ -39,6 +39,7 @@ import { loadConsoleStatusReader } from './session-status.js';
 import { createConversationHistoryHandler } from './conversation-history.js';
 import { getDb as getC4Db, getChannelNamespace } from '../../comm-bridge/scripts/c4-db.js';
 import { preflightDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
+import { setSessionCookie, clearSessionCookie } from './session-cookie.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -660,8 +661,7 @@ app.post('/api/auth', (req, res) => {
   }
 
   const token = sessionStore.create();
-  const maxAge = remember !== false ? `; Max-Age=${sessionStore.maxAgeSec}` : '';
-  res.setHeader('Set-Cookie', `wc_session=${token}; Path=/; HttpOnly; SameSite=Strict${maxAge}`);
+  setSessionCookie(req, res, token, { remember, maxAgeSec: sessionStore.maxAgeSec });
   res.json({ success: true, timezone: ENV.TZ || null });
 });
 
@@ -671,7 +671,7 @@ app.post('/api/auth', (req, res) => {
 app.post('/api/logout', (req, res) => {
   const cookies = parseCookies(req.headers.cookie);
   if (cookies.wc_session) sessionStore.delete(cookies.wc_session);
-  res.setHeader('Set-Cookie', 'wc_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+  clearSessionCookie(req, res);
   res.json({ success: true });
 });
 

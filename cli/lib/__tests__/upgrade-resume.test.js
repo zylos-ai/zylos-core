@@ -116,6 +116,18 @@ for(const success of [false,true]) test(`resume retains structured runtime warni
   assert.deepEqual(JSON.parse(JSON.stringify(result)).data.warnings,warnings);
 });
 
+test('forward repair returns the current Web Console migration instructions',async t=>{
+  const f=fixture(t);
+  const webConsoleMigration={status:'manual_required',caddyfile:path.join(f.root,'http/Caddyfile'),
+    message:'Custom route needs inspection.',instructions:['Add header_up X-Forwarded-Prefix /console.']};
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
+    f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete',resumePhase:'compensation_closed'});
+    return {success:true,webConsoleMigration};
+  }});
+  assert.equal(result.ok,true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)).data.webConsoleMigration,webConsoleMigration);
+});
+
 test('snapshot hash drift is rejected before any modifications even when closed facts agree',async t=>{
   const f=fixture(t);fs.appendFileSync(path.join(f.db,'manifest.json'),' ');
   await assert.rejects(resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux'}),{code:'CUTOFF_UNTRUSTED'});

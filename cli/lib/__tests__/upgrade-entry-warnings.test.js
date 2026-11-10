@@ -9,7 +9,7 @@ import {pathToFileURL} from 'node:url';
 import {guardDatabase} from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as c4Schema from '../../../skills/comm-bridge/scripts/c4-schema.js';
 
-for(const mode of ['none','runtime','incomplete-audit']) test(`downloaded upgrade entry emits only returned terminal diagnostics (${mode})`,t=>{
+for(const mode of ['none','runtime','incomplete-audit','web-console']) test(`downloaded upgrade entry emits only returned terminal diagnostics (${mode})`,t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-entry-warnings-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const target=path.join(root,'target'),prefix=path.join(root,'npm-prefix'),installed=path.join(prefix,'lib/node_modules/zylos'),deployment=path.join(root,'deployment');
@@ -45,6 +45,7 @@ for(const mode of ['none','runtime','incomplete-audit']) test(`downloaded upgrad
       probeCoreDbVersions:()=>({databases:[{},{},{}],needsMigration:false}),preflightCoreDbUpgrade(){}}});
     mock.module(${JSON.stringify(url('upgrade-package.js'))},{namedExports:{...packages,saveOriginalPackage(){}}});
     mock.module(${JSON.stringify(pathToFileURL(path.join(installed,'cli/lib/self-upgrade.js')).href)},{namedExports:{runSelfUpgradeFinalize:()=>({success:true,
+      ${mode === 'web-console' ? "webConsoleMigration:{status:'manual_required',caddyfile:'/private/http/Caddyfile',reason:'Inspect custom console route.',instructions:['At /private/http/Caddyfile:8 add header_up X-Forwarded-Prefix /console to the Web Console reverse_proxy block.','Validate, reload Caddy, log in and verify cookie Path.']}," : ''}
       warnings:${mode === 'runtime' ? "[{runtime:'codex',code:'RUNTIME_CLI_UNAVAILABLE',message:'optional CLI unavailable'}]" : '[]'},
       checkpointAudit:${mode === 'incomplete-audit' ? "{state:'incomplete',error:'DB_BUSY'}" : "{state:'complete',items:[]}"}})}});
     process.argv[1]=${JSON.stringify(path.join(target,'cli/lib/upgrade-entry.js'))};
@@ -56,6 +57,12 @@ for(const mode of ['none','runtime','incomplete-audit']) test(`downloaded upgrad
   });
   assert.equal(child.status,0,child.stderr+child.stdout);
   assert.equal(JSON.parse(child.stdout).success,true);
+  if(mode === 'web-console') {
+    const migration=JSON.parse(child.stdout).webConsoleMigration;
+    assert.equal(migration.status,'manual_required');
+    assert.match(child.stderr,/Web Console: Inspect custom console route\./);
+    for(const instruction of migration.instructions) assert.ok(child.stderr.includes(instruction));
+  } else assert.doesNotMatch(child.stderr,/Web Console:/);
   if(mode === 'runtime') assert.match(child.stderr,/^Runtime warning \(codex\): RUNTIME_CLI_UNAVAILABLE: optional CLI unavailable$/m);
   else assert.doesNotMatch(child.stderr,/Runtime warning/);
   if(mode === 'incomplete-audit') assert.match(child.stderr,/^Checkpoint audit warning: audit incomplete; checkpoint consistency could not be verified\.$/m);

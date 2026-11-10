@@ -29,6 +29,7 @@ import { classifyCutoff, commitCutoff } from './upgrade-cutoff.js';
 import { preparePostCutoff, publishPostCutoff } from './upgrade-post-cutoff.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runtime-preparation.js';
 import { upgradeFailureCode } from './upgrade-admission.js';
+import { migrateWebConsoleRoute } from './web-console-route.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -758,6 +759,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
       success: false,
       ...protectionResult(ctx),
       warnings: ctx.runtimeWarnings || [],
+      webConsoleMigration: ctx.webConsoleMigration || null,
       dashboard: ctx.dashboard || {state:'degraded',errors:[]},
       upgradeProtected:true,
       from: ctx.from,
@@ -780,6 +782,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     success: true,
     ...protectionResult(ctx),
     warnings: ctx.runtimeWarnings || [],
+    webConsoleMigration: ctx.webConsoleMigration || null,
     from: ctx.from,
     to: ctx.to,
     steps: ctx.steps,
@@ -883,6 +886,22 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       ctx.journal=coreCtx.journal;
     }
   } catch(error) {return fail(error);}
+
+  try {
+    ctx.webConsoleMigration = await (deps.migrateWebConsoleRoute || migrateWebConsoleRoute)({zylosDir:root});
+  } catch(error) {
+    // Routing repair is independent of Core publication; root-path login still works.
+    const caddyfile = path.join(root, 'http/Caddyfile');
+    ctx.webConsoleMigration = {
+      status:'manual_required', caddyfile, reason:'migration_failed',
+      message:`Web Console route inspection failed: ${error.message}`,
+      instructions:[
+        `Inspect ${caddyfile}. In the /console/* handler's Web Console reverse_proxy localhost:3456 block, add header_up X-Forwarded-Prefix /console.`,
+        `Validate with ${path.join(root, 'bin/caddy')} validate --config ${caddyfile} --adapter caddyfile before reloading Caddy with pm2 reload caddy.`,
+        'Log in again and verify wc_session has Path=/console and is absent from /pages and /dashboard requests.',
+      ],
+    };
+  }
 
   let dashboard;
   const dashboardErrors=[];
