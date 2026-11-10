@@ -752,7 +752,7 @@ function serviceRequirements(j, {ecosystemPath, allowUpdatedEcosystem = false} =
   // Forward startup follows the deployment's existing symlink, as PM2 does.
   // Recovery still requires the original nonsymlink path and verified bytes.
   if (allowUpdatedEcosystem) ecosystem = fs.realpathSync(ecosystem);
-  privatePath(ecosystem);
+  else privatePath(ecosystem);
   // Finalization has already verified publication and intentionally deploys the
   // new template. Recovery must instead retain the verified original bytes.
   const published = allowUpdatedEcosystem && classifyCutoff(j) === 'closed' && j.postCutoff?.items?.hooks?.state === 'done';
