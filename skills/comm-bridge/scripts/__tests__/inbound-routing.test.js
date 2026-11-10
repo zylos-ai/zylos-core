@@ -21,7 +21,7 @@ function setup(t) {
   const events = [], order = [];
   const dependencies = { db: f.store,
     queryRoute: async () => pending,
-    appendEntryEvent: async event => { assert.ok(f.db.prepare('SELECT id FROM conversations WHERE id=?').get(event.conversation_id)); order.push('event'); events.push(event); return true; },
+    appendEntryEvent: async event => { assert.ok(f.db.prepare('SELECT id FROM conversations WHERE id=?').get(event.conversation_id)); order.push(event.event); events.push(event); return true; },
     reserveStatusNotice: (_channel, _endpoint, route) => { assert.ok(f.db.prepare('SELECT id FROM conversations WHERE session_group=?').get(route.sessionGroup)); order.push('reserve'); return { suppressed: false }; },
     sendStatusNotice: () => { order.push('send'); return { outcome: 'sent' }; }, diagnostic: () => {} };
   return { ...f, events, order, dependencies };
@@ -77,9 +77,18 @@ test('auth final group and failure category survive event/cooldown/send failures
     assert.equal(reply.action, 'auth_rejected'); assert.equal(reply.reasonLogged, true);
     const row = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(reply.id);
     assert.equal(row.status, 'failed'); assert.equal(row.delivery_action, 'auth_rejected');
-    assert.equal(f.events.at(-1).reason_code, 'auth_check_' + result);
+    const [arrival, rejection] = f.events.slice(-2);
+    assert.deepEqual({ ...arrival, received_at_ms: 0 }, {
+      event: 'message_received', conversation_id: reply.id, channel: 'chat',
+      endpoint: 'room|msg:1', session_group: 'chat:Team', runtime: 'codex',
+      reason_code: 'auth_rejected', received_at_ms: 0, detail: '',
+    });
+    assert.ok(Number.isFinite(arrival.received_at_ms));
+    assert.equal(rejection.event, 'auth_rejected');
+    assert.equal(rejection.conversation_id, reply.id);
+    assert.equal(rejection.reason_code, 'auth_check_' + result);
   }
-  assert.deepEqual(f.order, ['event', 'reserve', 'event', 'reserve']);
+  assert.deepEqual(f.order, ['message_received', 'auth_rejected', 'reserve', 'message_received', 'auth_rejected', 'reserve']);
   f.dependencies.queryRoute = async () => auth('failed');
   f.dependencies.appendEntryEvent = async () => false;
   const noReply = await receive([...input, '--no-reply'], f.dependencies);
@@ -99,13 +108,21 @@ test('real rollback/DB_BUSY prevent and cooldown; postcommit uncertainty preserv
   const other = new Database(f.filename); t.after(() => other.close()); f.db.pragma('busy_timeout=10'); other.exec('BEGIN IMMEDIATE');
   try { await assert.rejects(receive(input, f.dependencies), { code: 'DB_BUSY', persisted: [] }); }
   finally { other.exec('ROLLBACK'); }
-  assert.equal(f.events.length, 0);
+  assert.equal(f.events.length, 0); assert.equal(f.order.length, 0);
   f.dependencies.sendStatusNotice = () => ({ outcome: 'uncertain' });
   await assert.rejects(receive(input, f.dependencies), { code: 'UNHEALTHY_NOTIFY_UNCERTAIN', persisted: ['D1'] });
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE status='failed'").get().n, 1);
-  assert.deepEqual(f.order, ['event', 'reserve']);
+  assert.deepEqual(f.order, ['message_received', 'auth_rejected', 'reserve']);
+  assert.deepEqual(f.events.map(event => event.event), ['message_received', 'auth_rejected']);
+  const row = f.db.prepare("SELECT * FROM conversations WHERE status='failed'").get();
+  assert.equal(f.events[0].conversation_id, row.id);
+  assert.equal(f.events[0].session_group, row.session_group);
+  assert.equal(f.events[0].reason_code, 'auth_rejected');
+  assert.ok(Number.isFinite(f.events[0].received_at_ms));
   f.dependencies.db = { ...f.store, insertConversation: () => { throw new Error('unknown commit'); } };
   await assert.rejects(receive(input, f.dependencies), { code: 'INTERNAL_ERROR', persisted: null });
+  assert.deepEqual(f.order, ['message_received', 'auth_rejected', 'reserve']);
+  assert.equal(f.events.length, 2, 'an unknown commit must not append events or reserve another notice');
 });
 
 test('preserves data-layer contract errors and marks unexpected postcommit errors unknown', async t => {

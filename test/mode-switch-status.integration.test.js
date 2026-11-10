@@ -152,16 +152,27 @@ test('public status CLI connects once to real am.sock and transmits zero request
   } finally { for (const peer of peers) peer.destroy(); await new Promise(resolve => server.close(resolve)); }
 });
 
+// Public CLI integration covers read-only access to a historical schema. Run for
+// status/schema changes; unrelated UI work may skip. The runner supplies isolated
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; publicStatus uses this private DB and a
+// recording PM2 fixture. No tmux is launched; owned directories are removed.
 test('public status leaves a pending schema migration byte-identical instead of upgrading the database', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-status-old-schema-')); roots.push(root);
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   const filename = path.join(root, 'comm-bridge', 'c4.db');
   const database = new Database(filename);
   database.exec(fs.readFileSync(new URL('../skills/comm-bridge/scripts/__tests__/fixtures/migration-history/c4-v0.9.0-v1.sql', import.meta.url), 'utf8'));
-  expect(database.pragma('user_version', { simple: true })).toBe(schema.SUPPORTED_SCHEMA_VERSION - 1);
-  expect(planDatabaseMigration(database, schema, { strict: false }).steps.map(step => [step.from, step.to])).toEqual([[1, 2]]);
+  const fixtureVersion = 1;
+  expect(database.pragma('user_version', { simple: true })).toBe(fixtureVersion);
+  const expectedSteps = Array.from({ length: schema.SUPPORTED_SCHEMA_VERSION - fixtureVersion },
+    (_, index) => [fixtureVersion + index, fixtureVersion + index + 1]);
+  expect(planDatabaseMigration(database, schema, { strict: false }).steps.map(step => [step.from, step.to])).toEqual(expectedSteps);
   database.close();
   const before = fs.readFileSync(filename); const filesBefore = fs.readdirSync(path.dirname(filename)).sort();
+  console.log('Status migration isolation:', JSON.stringify({ HOME: root, ZYLOS_DIR: root,
+    PM2_HOME: path.join(root, 'private-pm2'), TMPDIR: process.env.TMPDIR,
+    TMUX_TMPDIR: process.env.TMUX_TMPDIR, database: filename,
+    amSocket: path.join(root, 'activity-monitor/am.sock'), tmux: 'not launched' }));
   const result = await publicStatus(root);
   // Assert the no-write invariant before the error contract, so an accidental
   // migration fails for its data change even if it also makes the query succeed.
