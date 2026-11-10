@@ -80,9 +80,13 @@ function readStdinSource() {
   });
 }
 
-const prompt = [
+const startupPrompt = scope => [
   'reply to your human partner if they are waiting for your reply,',
-  'then continue your ongoing tasks using the injected core context and C4 context; read the supplied handoff in full before resuming work, and read working-memory paths on demand,',
+  'then continue your ongoing tasks using the injected core context and C4 context;',
+  scope.memoryDir && fs.existsSync(path.join(scope.memoryDir, 'handoff.md'))
+    ? 'read the supplied handoff in full before resuming work,'
+    : 'no handoff is available for this scope;',
+  'and read working-memory paths on demand,',
   'and do not query c4.db for recent conversations unless explicitly required.'
 ].join(' ');
 
@@ -131,7 +135,7 @@ export async function enqueueStartupPrompt(source, {
   if (onboardingPending()) return { skipped: true, reason: 'onboarding_pending', startupControlIds: [] };
   const scope = await scopeReader();
 
-  const activePrompt = migrationPending() ? migrationPrompt : prompt;
+  const activePrompt = migrationPending() ? migrationPrompt : startupPrompt(scope);
 
   // Async execFile (not execFileSync): keeps the event loop free so this step
   // genuinely runs in parallel with the foreground step, and so the

@@ -172,9 +172,12 @@ export async function emitC4Conversations(payload, budget = null, {
         ? await db.getUnsummarizedRange(scope.sessionGroup)
         : await db.getGlobalUnsummarizedRange();
     } catch { unsummarized = null; }
+    const handoffPath = path.join(scope.memoryDir, 'handoff.md');
     const instructions = [
       `Scope: ${scope.scope}. Working memory is not injected. Read the complete snapshot with: node ${path.join(scope.root, '.claude/skills/zylos-memory/scripts/read-work-memory.js')} --json`,
-      `Before resuming work, read ${path.join(scope.memoryDir, 'handoff.md')} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`,
+      fs.existsSync(handoffPath)
+        ? `Before resuming work, read ${handoffPath} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`
+        : `No handoff file is available for this scope (${handoffPath}).`,
     ];
     if (!isSubsession(payload)) instructions.push(await alertTargetInstruction());
     if (!isSubsession(payload) && (scope.scope === '*' || scope.scope === 'origin')) {

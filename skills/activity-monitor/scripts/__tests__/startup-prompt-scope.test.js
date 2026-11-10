@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { enqueueStartupPrompt, isMigrationPending } from '../session-start-prompt.js';
 
 test('migration is pending only when readable prompt content remains', () => {
@@ -10,13 +13,19 @@ test('migration is pending only when readable prompt content remains', () => {
   assert.equal(isMigrationPending({ readFileSync() { throw Object.assign(Error('missing'), { code: 'ENOENT' }); } }), false);
 });
 
-for (const sessionGroup of [null, 'origin', 'telegram:g-100123']) {
-  test(`startup prompt targets its current scope: ${sessionGroup ?? 'single'}`, async () => {
+for (const sessionGroup of [null, 'origin', 'telegram:g-100123']) for (const handoff of [false, true]) {
+  test(`startup prompt targets its current scope ${sessionGroup ?? 'single'} with handoff ${handoff ? 'present' : 'absent'}`, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-prompt-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const memoryDir = path.join(root, 'scope'); fs.mkdirSync(memoryDir);
+    // An unrelated scope's handoff must not make the current scope read one.
+    fs.writeFileSync(path.join(root, 'handoff.md'), 'other scope');
+    if (handoff) fs.writeFileSync(path.join(memoryDir, 'handoff.md'), 'unfinished work');
     let call;
     const result = await enqueueStartupPrompt('startup', {
       onboardingPending: () => false,
       migrationPending: () => false,
-      scopeReader: async () => ({ sessionGroup }),
+      scopeReader: async () => ({ sessionGroup, memoryDir }),
       execFile: async (...args) => { call = args; return { stdout: '{"ok":true,"id":7}' }; },
     });
     assert.deepEqual(result.startupControlIds, [7]);
@@ -24,7 +33,13 @@ for (const sessionGroup of [null, 'origin', 'telegram:g-100123']) {
     assert.equal(argv.filter(arg => arg === '--group').length, sessionGroup ? 1 : 0);
     if (sessionGroup) assert.equal(argv[argv.indexOf('--group') + 1], sessionGroup);
     const prompt = argv[argv.indexOf('--content') + 1];
-    assert.match(prompt, /read the supplied handoff in full before resuming work/);
+    if (handoff) {
+      assert.match(prompt, /read the supplied handoff in full before resuming work/);
+      assert.doesNotMatch(prompt, /no handoff is available/);
+    } else {
+      assert.match(prompt, /no handoff is available for this scope/);
+      assert.doesNotMatch(prompt, /read the supplied handoff/);
+    }
     assert.match(prompt, /read working-memory paths on demand/);
     assert.doesNotMatch(prompt, /read the supplied handoff and working-memory paths on demand/);
     assert.doesNotMatch(prompt, /startup memory.*already injected/);

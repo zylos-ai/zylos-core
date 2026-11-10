@@ -205,14 +205,25 @@ test('a folded part is a toggle with its own time; failed and stopped steps say 
   area.update(entry, { open: true, now: s(500) });
   assert.equal(area.node.dataset.open, '');
   assert.deepEqual(area.node.querySelectorAll('.conversation-activity-time').map(node => node.textContent),
-    ['没有完成 · 30 秒', '已停止 · 10 秒', '没有完成 · 1 秒']);
+    ['出错 · 30 秒', '已停止 · 10 秒', '没有完成 · 1 秒']);
+});
+
+test('failed and incomplete steps keep distinct labels in both languages', () => {
+  for (const [words, expected] of [[zh, ['出错 · 1 秒', '没有完成 · 1 秒']], [en, ['Error · 1 s', 'Did not finish · 1 s']]]) {
+    const area = createActivityArea({ document: createDocument(), t: key => words[key] });
+    area.update({ key: '1:tail', live: false, round: { state: 'done' },
+      segment: { start: s(0), end: s(3), steps: [tool(0, 1, 'failed'), tool(1, 2, 'incomplete')] } }, { open: true, now: s(3) });
+    const rows = area.node.querySelectorAll('.conversation-activity-step');
+    assert.deepEqual(rows.map(row => row.dataset.status), ['failed', 'incomplete']);
+    assert.deepEqual(area.node.querySelectorAll('.conversation-activity-time').map(node => node.textContent), expected);
+  }
 });
 
 test('after-reply work uses the localized follow-up summary and retains failed step expansion', () => {
   const entry = { key: '1:tail', replyId: 2, afterReply: true, live: false, round: { state: 'done' },
     segment: { replyId: null, start: s(59), end: s(65), steps: [tool(60, 64, 'failed')] } };
-  for (const [words, summary, failure] of [[zh, '回复后又处理 6 秒 · 1 步', '没有完成 · 4 秒'],
-    [en, 'Worked 6 s more after replying · 1 step', 'Did not finish · 4 s']]) {
+  for (const [words, summary, failure] of [[zh, '回复后又处理 6 秒 · 1 步', '出错 · 4 秒'],
+    [en, 'Worked 6 s more after replying · 1 step', 'Error · 4 s']]) {
     const document = createDocument(), toggled = [];
     const area = createActivityArea({ document, t: key => words[key], onToggle: key => toggled.push(key) });
     area.update(entry, { open: false, now: s(500) });
@@ -365,7 +376,7 @@ test('finished follow-up work stays below the reply body with no extra AI articl
   area.querySelector('button').dispatch('click');
   assert.equal(area.querySelector('.conversation-activity-steps').hidden, false);
   assert.equal(area.querySelector('.conversation-activity-step').dataset.status, 'failed');
-  assert.equal(area.querySelector('.conversation-activity-time').textContent, '没有完成 · 4 秒');
+  assert.equal(area.querySelector('.conversation-activity-time').textContent, '出错 · 4 秒');
   f.page.redraw();
   assert.equal(reply.querySelector('.conversation-activity-after-reply-slot .conversation-activity'), area, 'the mounted activity node is retained');
   assert.equal(area.querySelector('button').getAttribute('aria-expanded'), 'true');

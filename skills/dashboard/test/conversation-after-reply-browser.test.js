@@ -141,7 +141,7 @@ for (const locale of ['zh', 'en']) for (const width of [1280, 390]) {
     await clickHead(f, tail + ' button', width);
     await until(() => f.page.evaluate(`document.querySelector('${tail} button')?.getAttribute('aria-expanded')==='true'`), 'real pointer click expands follow-up steps');
     const failed = await f.page.evaluate(`document.querySelector('${tail} [data-status=failed]')?.textContent`);
-    assert.match(failed, locale === 'zh' ? /没有完成.*5 秒/ : /Did not finish.*5 s/i);
+    assert.match(failed, locale === 'zh' ? /出错.*5 秒/ : /Error.*5 s/i);
     await screenshot(f.page, `${locale}-${width}-expanded`);
     await f.page.evaluate(`document.querySelector('${reply} .conversation-activity-slot button').click()`);
     await until(() => f.page.evaluate(`!!document.querySelector('${reply} .conversation-activity-slot [data-status=done]')`), 'original folded activity still expands');

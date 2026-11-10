@@ -12,7 +12,7 @@ const CHECKPOINT_PATH = fileURLToPath(new URL('../c4-checkpoint.js', import.meta
 function cli(args, env = {}) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
     env: { ...process.env, ...env },
-    encoding: 'utf8'
+    encoding: 'utf8', timeout: 15000
   });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
@@ -28,7 +28,7 @@ function receive(args, env = {}) {
     const row = store.insertConversation('in', ${JSON.stringify(channel)}, ${JSON.stringify(endpoint)}, ${JSON.stringify(content)}, {});
     store.claimConversation(row.id); store.markDelivered(row.id, {sessionId:'fixture'});
     db.close();
-  `], { env: { ...process.env, ...env }, encoding: 'utf8' });
+  `], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 15000 });
   assert.equal(delivered.status, 0, delivered.stderr);
   return delivered;
 }
@@ -36,13 +36,18 @@ function receive(args, env = {}) {
 function checkpoint(args, env = {}) {
   return spawnSync('node', [CHECKPOINT_PATH, ...args], {
     env: { ...process.env, ...env },
-    encoding: 'utf8'
+    encoding: 'utf8', timeout: 15000
   });
 }
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-session-init-'));
-  const env = { ZYLOS_DIR: tmpDir };
+  const env = { HOME: path.join(tmpDir, 'home'), ZYLOS_DIR: tmpDir, PM2_HOME: path.join(tmpDir, 'pm2'),
+    TMPDIR: path.join(tmpDir, 'tmp'), TMUX_TMPDIR: path.join(tmpDir, 'tmp'),
+    ZYLOS_PACKAGE_ROOT: fileURLToPath(new URL('../../../../', import.meta.url)) };
+  for (const directory of [env.HOME, env.PM2_HOME, env.TMPDIR]) fs.mkdirSync(directory);
+  console.log('Session init isolation:', JSON.stringify({ ...env, database: path.join(tmpDir, 'comm-bridge/c4.db'),
+    amSocket: path.join(tmpDir, 'activity-monitor/am.sock'), tmux: 'not launched', pm2: 'not launched' }));
   // Warm up DB
   checkpoint(['latest'], env);
   try {
@@ -55,13 +60,30 @@ function withTmpDir(fn) {
 // -- basic behavior --
 
 describe('c4-session-init', () => {
+  // Actual CLI -> private C4 database. Run for startup-context/handoff changes;
+  // UI-only edits may skip. Private paths are logged before bounded children;
+  // no PM2/tmux/runtime starts, and withTmpDir always removes the fixture root.
   it('reports no new conversations on fresh DB', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli([], env);
       assert.equal(status, 0);
       assert.ok(stdout.includes('read-work-memory.js'));
-      assert.ok(stdout.includes('handoff.md'));
+      assert.ok(stdout.includes('No handoff file is available for this scope'));
+      assert.doesNotMatch(stdout, /Before resuming work, read .*handoff/);
       assert.ok(!stdout.includes('ACTION REQUIRED'));
+    });
+  });
+
+  it('requires a complete handoff read only when the scope file exists', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const file = path.join(tmpDir, 'memory/handoff.md');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'unfinished task');
+      const { stdout, status } = cli([], env);
+      assert.equal(status, 0);
+      assert.ok(stdout.includes(`Before resuming work, read ${file} in full`));
+      assert.doesNotMatch(stdout, /No handoff file is available/);
+      assert.equal(fs.readFileSync(file, 'utf8'), 'unfinished task');
     });
   });
 

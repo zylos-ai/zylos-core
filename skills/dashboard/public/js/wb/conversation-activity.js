@@ -162,7 +162,7 @@ export function createActivityArea({ document, t = key => key, onToggle }) {
       // A step still open in a part that already ended (the round is settling) counts no further than its part.
       const until = step.end ?? (segment.end != null ? Math.min(now, segment.end) : now);
       const duration = formatDuration(until - step.start, t);
-      const text = step.status === 'failed' || step.status === 'incomplete' ? `${t('chat.activity.failed')} · ${duration}`
+      const text = step.status === 'failed' || step.status === 'incomplete' ? `${t(`chat.activity.${step.status}`)} · ${duration}`
         : step.status === 'stopped' ? `${t('chat.activity.stopped')} · ${duration}` : duration;
       if (time.textContent !== text) time.textContent = text;
     });
