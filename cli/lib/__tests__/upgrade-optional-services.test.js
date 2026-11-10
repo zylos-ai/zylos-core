@@ -40,15 +40,22 @@ function mixed(t) {
   console.info('optional service isolation',JSON.stringify({...paths,socket:path.join(f.root,'tmux/socket'),databases:m.DB_PATHS.map(source=>path.join(f.root,source))}));
   return f;
 }
-for(const mode of ['restart-error','stays-stopped','online'])test(`upgrade finalizer completes when external service is ${mode}`,t=>{
-  const f=mixed(t);f.j.phase='new_data_ready';f.save();
+for(const targetOwned of [false,true])for(const mode of ['restart-error','stays-stopped','online'])test(`upgrade finalizer completes when external service is ${mode} (${targetOwned?'target owned':'standard'})`,t=>{
+  const f=mixed(t);f.j.phase='new_data_ready';
+  const packageRoot=fs.realpathSync(path.resolve('.'));
+  if(targetOwned) {
+    f.j.targetOwned=true;f.j.to=JSON.parse(fs.readFileSync(path.join(packageRoot,'package.json'),'utf8')).version;
+    f.j.compensationCutoff={formatVersion:1,closed:true,transactionId:'tx',from:f.j.from,to:f.j.to,snapshotManifestHash:f.j.snapshotManifestHash};
+  }
+  f.save();
   if(mode!=='online')fs.writeFileSync(path.join(f.root,mode==='restart-error'?'fail-restart':'stay-stopped'),'custom');
   const state={schemaVersion:2,preInstallProtection:true,zylosDir:f.root,ecosystemPath:f.file,
-    transactionId:'tx',transactionDir:f.dir,servicesWereRunning:['custom','scheduler'],from:'1',to:'2',databaseMode:'unchanged'};
+    transactionId:'tx',transactionDir:f.dir,servicesWereRunning:['custom','scheduler'],from:'1',to:f.j.to,databaseMode:'unchanged',targetOwned,packageRoot};
   const statePath=path.join(f.root,'state.json');fs.writeFileSync(statePath,JSON.stringify(state));
   const child=spawnSync(process.execPath,['cli/lib/__tests__/helpers/optional-service-finalizer.js',statePath],{env:f.env,encoding:'utf8',timeout:20000});
   assert.equal(child.status,0,child.stderr);const result=JSON.parse(child.stdout);
   assert.equal(result.success,true,JSON.stringify(result));
+  if(targetOwned)assert.equal(f.commands().filter(args=>args[0]==='save').length,3,'target-owned second service verification runs before completion');
   assert.equal(f.readRecords().find(record=>record.name==='scheduler').pm2_env.status,'online');
   const calls=f.commands(), externalRestart=calls.findIndex(args=>args[0]==='restart'&&args[1]==='custom');
   const coreRestart=calls.findIndex(args=>['start','startOrRestart'].includes(args[0])&&args.includes('scheduler'));
