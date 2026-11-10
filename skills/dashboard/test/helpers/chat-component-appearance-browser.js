@@ -79,7 +79,9 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(bytes), c => c.charCodeAt(0))], { type: 'image/png' }));
       const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
       const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0); bitmap.close();
-      return [...context.getImageData(Math.floor(canvas.width / 2), 0, 1, 1).data];
+      // Element screenshots round fractional CSS bounds to device pixels. The
+      // one-pixel outline can occupy either of the first two raster rows.
+      return [0, 1].map(y => [...context.getImageData(Math.floor(canvas.width / 2), y, 1, 1).data]);
     }, failedImageShot.toString('base64'));
     const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     if (output) {
@@ -294,7 +296,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.equal(actual.errorStyles[state].statusColor, actual.dangerInk, state + ' status text uses danger ink');
       assert.ok(actual.errorStyles[state].status, state + ' tray item retains the status text');
     }
-    assert.ok(failedImagePixel.slice(0, 3).every((value, i) => Math.abs(value - actual.dangerRgb[i]) <= 12), 'failed image top-edge midpoint remains visible danger ink above its placeholder: ' + JSON.stringify({ pixel: failedImagePixel, expected: actual.dangerRgb }));
+    assert.ok(failedImagePixel.some(pixel => pixel.slice(0, 3).every((value, i) => Math.abs(value - actual.dangerRgb[i]) <= 12)), 'failed image top-edge midpoint remains visible danger ink above its placeholder: ' + JSON.stringify({ pixel: failedImagePixel, expected: actual.dangerRgb }));
     assert.ok(actual.widths.every(value => value <= 720), 'rich cards stay within the shared width');
     assert.ok(actual.scroll <= width, 'no horizontal overflow');
     assert.equal(errors.length, 0, errors.join('; ')); assert.equal(outside.length, 0, outside.join('; ')); assert.equal(missing.length, 0, missing.join('; '));

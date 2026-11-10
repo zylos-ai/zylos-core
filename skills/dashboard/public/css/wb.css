@@ -581,6 +581,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-inst-item { padding: 3px 10px 3px 0; white-space: nowrap; }
   .wb-inst-item + .wb-inst-item { border-left: 0; }
   .wb-inst-item .wb-meter { display: none; }
+  .wb-inst-item .wb-pool-meter { display: inline-block; }
   #wb-attention { padding: 8px 12px; }
   .wb-attention-item { align-items: flex-start; }
   .wb-attention-text { white-space: normal; }
