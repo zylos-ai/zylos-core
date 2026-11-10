@@ -393,18 +393,24 @@ export async function runConversationVisual(t, sandbox) {
   // aria-label, as on desktop, so no English label is cut; "View conversation" keeps its words elsewhere.
   await groupInfo.click();
   await groupSide.waitFor({ state: 'visible' });
-  const sideActions = await groupSide.locator('.wb-act').evaluateAll(buttons => buttons.map(button => {
-    const label = button.querySelector('.wb-act-label'), box = button.getBoundingClientRect();
-    return { name: button.getAttribute('aria-label'), labelWidth: label?.getBoundingClientRect().width ?? 0, width: box.width, height: box.height };
-  }));
-  assert.deepEqual(sideActions.map(action => action.name), ['Interrupt', 'Nudge', 'Restart']);
-  for (const action of sideActions) {
+  // The detail redraws its header, replacing these buttons, whenever one of its reads arrives. A locator finds
+  // elements in one call and measures them in the next, so a redraw in between leaves it measuring removed
+  // buttons (0x0). The panel itself stays, so the buttons on screen are found and measured in one call on it.
+  const sideTargets = await groupSide.evaluate(side => {
+    const size = element => { const box = element?.getBoundingClientRect(); return box ? { width: box.width, height: box.height } : null; };
+    return {
+      actions: [...side.querySelectorAll('.wb-act')].map(button => ({ name: button.getAttribute('aria-label'),
+        labelWidth: button.querySelector('.wb-act-label')?.getBoundingClientRect().width ?? 0, ...size(button) })),
+      controls: ['.wb-group-side-back', '[aria-label="Close"]'].map(selector => ({ selector, box: size(side.querySelector(selector)) })),
+    };
+  });
+  assert.deepEqual(sideTargets.actions.map(action => action.name), ['Interrupt', 'Nudge', 'Restart']);
+  for (const action of sideTargets.actions) {
     assert.equal(action.labelWidth, 0, `${action.name}: the group detail action is an icon on a phone`);
     assert.ok(action.width >= 40 && action.height >= 40, `${action.name}: the group detail action is a 40x40 phone target (${action.width}x${action.height})`);
   }
-  for (const control of ['.wb-group-side-back', '[aria-label="Close"]']) {
-    const box = await groupSide.locator(control).first().boundingBox();
-    assert.ok(box && box.height >= 40, `${control} has a usable phone target in the group detail`);
+  for (const { selector, box } of sideTargets.controls) {
+    assert.ok(box && box.height >= 40, `${selector} has a usable phone target in the group detail`);
   }
   await screenshot('group-detail-390-english');
   await groupSide.locator('.wb-group-side-back').click();
