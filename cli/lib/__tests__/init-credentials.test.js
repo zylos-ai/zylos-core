@@ -535,6 +535,26 @@ test('init setup token and API key on the official API: setup token off, API key
   assert.deepEqual(state(), ON, 'setup token + relay in the same run');
 });
 
+test('init login without a new base URL prints the kept-relay notice; a base URL in the same run suppresses it', t => {
+  seedRelayFlag(t, isolatedCredentials(t), 'https://relay.example');
+  for (const [values, expected] of [
+    [{ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }, true],
+    [{ subscriptionLogin: true }, true],
+    [{ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://relay.example' }, false],
+    [{ apiKey: 'sk-ant-api03-' + crypto.randomUUID() }, false],
+  ]) {
+    const lines = [];
+    assert.equal(persistInitCredentials(values, { log: line => lines.push(line) }), true);
+    const notice = lines.find(line => line.includes('Still using the relay https://relay.example'));
+    assert.equal(!!notice, expected, JSON.stringify(Object.keys(values)));
+    if (expected) assert.match(notice, /zylos runtime claude --save-base-url https:\/\/api\.anthropic\.com/);
+  }
+  const official = [];
+  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://api.anthropic.com' }), true);
+  assert.equal(persistInitCredentials({ subscriptionLogin: true }, { log: line => official.push(line) }), true);
+  assert.deepEqual(official, [], 'no notice on the official API');
+});
+
 test('init relay-traffic recompute failure stops initialization', () => {
   const output = [];
   assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }, {

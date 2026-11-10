@@ -158,3 +158,26 @@ test('real writer preserves concurrent keys and returns the lock-time baseline',
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('Claude setup-token save without a new base URL warns that the saved relay stays in use', async () => {
+  const token = 'sk-ant-oat01-' + 'a'.repeat(40);
+  for (const [flags, notice, expected] of [
+    [['--save-setup-token', token], 'Still using the relay https://relay.example', true],
+    [['--save-setup-token', token], null, false],
+    [['--save-setup-token', token, '--save-base-url', 'https://relay.example'], 'Still using the relay https://relay.example', false],
+  ]) {
+    let asked = 0;
+    const deps = { read: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), mode: () => ({ mode: 'multi' }),
+      adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), exists: () => true, credentials: () => true, baseUrl: () => true,
+      hooksReady: () => ({ ready: true, pendingMigration: false }),
+      write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: false }),
+      observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }),
+      relayNotice: () => { asked++; return notice; } };
+    const result = await executeRuntimeSwitch('claude', flags, deps);
+    assert.equal(result.ok, true, JSON.stringify(result.error));
+    const warning = result.data.warnings.find(item => item.code === 'RELAY_BASE_URL_KEPT');
+    assert.equal(!!warning, expected, flags.join(' '));
+    if (expected) assert.equal(warning.message, notice);
+    if (flags.includes('--save-base-url')) assert.equal(asked, 0);
+  }
+});

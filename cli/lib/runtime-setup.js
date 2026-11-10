@@ -469,6 +469,20 @@ export function syncClaudeRelayTraffic({ credential } = {}) {
   return setClaudeRelayTrafficFlag(computeRelayTraffic({ baseUrl: saved.baseUrl, credential: credential ?? saved.credential }));
 }
 
+/** The command that switches Claude back to the official API. */
+export const DIRECT_CLAUDE_BASE_URL_COMMAND = 'zylos runtime claude --save-base-url https://api.anthropic.com';
+
+/**
+ * After a subscription or setup-token login that gave no new base URL: a
+ * notice when a saved relay base URL stays in use (it is never removed).
+ * @returns {string|null}
+ */
+export function relayLoginNotice() {
+  const { baseUrl } = savedClaudeState();
+  if (!isClaudeRelayBaseUrl(baseUrl)) return null;
+  return `Still using the relay ${baseUrl}: the login token will pass through it. To connect directly to Anthropic, run: ${DIRECT_CLAUDE_BASE_URL_COMMAND}`;
+}
+
 // ── Codex credential helpers ───────────────────────────────────────────────
 
 const CODEX_PROJECT_HEADER = [

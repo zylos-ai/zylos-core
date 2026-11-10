@@ -22,12 +22,17 @@ const execFileAsync = promisify(execFile);
 import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
 import { ZYLOS_DIR } from '../config.js';
-import { dropClaudeCredentialsForNativeAuth, probeEnvironment } from './session-command.js';
+import { probeEnvironment } from './session-command.js';
 import { writePrivateFile } from '../private-file.js';
 
 
 const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
 
+// Credentials from .env are always passed to Claude, also when a subscription
+// login exists (the subscription is used only when .env has none). Claude Code
+// asks interactively, default No, before using an environment API key it has
+// not seen, so these are pre-approved whenever the session carries them.
+const PRE_APPROVED_KEYS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
 
 // Missing or malformed configuration starts empty; filesystem errors remain
 // best-effort failures handled independently for each confirmation file.
@@ -41,7 +46,7 @@ function readConfirmationConfig(file) {
   }
 }
 
-async function ensureOnboardingComplete(projectDir, env) {
+async function ensureOnboardingComplete(projectDir, env, preApprove = []) {
   const home = env.HOME || os.homedir();
   const claudeJsonPath = path.join(home, '.claude.json');
   try {
@@ -60,6 +65,15 @@ async function ensureOnboardingComplete(projectDir, env) {
       config.lastOnboardingVersion = version;
     }
     if (!config.effortCalloutDismissed) fill(config, 'effortCalloutDismissed', true);
+    if (preApprove.length) {
+      const responses = config.customApiKeyResponses;
+      if (!responses || typeof responses !== 'object' || Array.isArray(responses)) config.customApiKeyResponses = { approved: [], rejected: [] };
+      if (!Array.isArray(config.customApiKeyResponses.approved)) config.customApiKeyResponses.approved = [];
+      for (const value of preApprove) {
+        const suffix = value.slice(-20);
+        if (!config.customApiKeyResponses.approved.includes(suffix)) { config.customApiKeyResponses.approved.push(suffix); changed = true; }
+      }
+    }
     if (!config.projects || typeof config.projects !== 'object' || Array.isArray(config.projects)) config.projects = {};
     let project = path.resolve(projectDir);
     try { project = await fs.promises.realpath(project); } catch { /* Keep confirmation repair best-effort if realpath is unavailable. */ }
@@ -89,7 +103,10 @@ export class ClaudeAdapter extends SessionAdapter {
   get runtimeId() { return 'claude'; }
 
   async launch(input) {
-    await ensureOnboardingComplete(this.options.root || ZYLOS_DIR, this.options.env || process.env);
+    const root = this.options.root || ZYLOS_DIR, env = this.options.env || process.env;
+    let sessionEnv = {};
+    try { sessionEnv = probeEnvironment(root, env, 'claude'); } catch { /* launch reports an unreadable .env */ }
+    await ensureOnboardingComplete(root, env, PRE_APPROVED_KEYS.map(key => sessionEnv[key]).filter(Boolean));
     return super.launch(input);
   }
 
@@ -124,8 +141,6 @@ export class ClaudeAdapter extends SessionAdapter {
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
-    // Native (subscription) login: drop the same credentials the session drops.
-    await dropClaudeCredentialsForNativeAuth(injectedEnv.CLAUDE_BIN || 'claude', injectedEnv);
 
     // Live CLI probe — `claude -p ping --max-turns 1`.
     // End-to-end validation: works with all credential types (API keys, setup tokens,

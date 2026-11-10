@@ -267,11 +267,11 @@ for(const [mode,title,help,cycles] of [
   if(mode==='override')assert.equal(fs.existsSync(path.join(f.root,'.zylos/first-start-done')),false);
 });
 
-// Preserve both manifest-based native-auth paths and explicit-token fallback.
+// .env credentials are passed with or without a subscription login and are pre-approved.
 for(const [auth,title] of [
-  ['credentials','Claude native auth strips dotenv tokens from actual runtime environment'],
-  ['status','Claude native auth status strips dotenv tokens without credential file'],
-  ['none','Claude without native auth retains explicitly allowed dotenv tokens'],
+  ['credentials','Claude subscription login file keeps dotenv tokens in actual runtime environment'],
+  ['status','Claude subscription login status keeps dotenv tokens in actual runtime environment'],
+  ['none','Claude without a subscription login retains dotenv tokens'],
 ]) test(title,async t=>{
   const f=setup(t,ClaudeAdapter,{nativeAuth:auth==='status'});
   fs.mkdirSync(path.join(f.root,'.zylos'));
@@ -282,9 +282,11 @@ for(const [auth,title] of [
   }
   fs.appendFileSync(path.join(f.root,'.env'),'CLAUDE_CODE_OAUTH_TOKEN=synthetic-oauth-token\n');
   const originalEnv={...f.env},p=await f.launch();
-  assert.equal(p.env.ANTHROPIC_API_KEY,auth==='none'?secret:undefined);
-  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN,auth==='none'?'synthetic-oauth-token':undefined);
-  if(auth==='none')assert.deepEqual(f.env,originalEnv);
+  assert.equal(p.env.ANTHROPIC_API_KEY,secret);
+  assert.equal(p.env.CLAUDE_CODE_OAUTH_TOKEN,'synthetic-oauth-token');
+  const approved=JSON.parse(fs.readFileSync(path.join(f.home,'.claude.json'),'utf8')).customApiKeyResponses.approved;
+  for(const value of [secret,'synthetic-oauth-token'])assert.ok(approved.includes(value.slice(-20)),'pre-approved');
+  assert.deepEqual(f.env,originalEnv);
 });
 
 // Built-in runtime passthrough: each runtime's auth variables set in .env reach
@@ -303,6 +305,11 @@ const builtinCases = {
 };
 async function launchAndProbe(t, dotenv, { compat = false, nativeAuth = false } = {}) {
   const f = setup(t, ClaudeAdapter, { nativeAuth });
+  if (nativeAuth) {
+    // Subscription login as both a login file and `claude auth status`.
+    fs.mkdirSync(path.join(f.home, '.claude'));
+    fs.writeFileSync(path.join(f.home, '.claude/.credentials.json'), JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh-token' } }));
+  }
   fs.mkdirSync(path.join(f.root, '.zylos'));
   fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), '');
   fs.writeFileSync(path.join(f.root, '.env'), (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
@@ -315,7 +322,7 @@ async function launchAndProbe(t, dotenv, { compat = false, nativeAuth = false } 
     assert.equal(session.env[key], undefined, `Claude session must not carry ${key}`);
     assert.equal(probe.env[key], undefined, `Claude probe must not carry ${key}`);
   }
-  return { session: session.env, probe: probe.env };
+  return { session: session.env, probe: probe.env, home: f.home };
 }
 for (const compat of [false, true]) for (const [name, dotenv] of Object.entries(builtinCases)) {
   test(`Claude ${name} credentials only in .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async t => {
@@ -327,14 +334,14 @@ for (const compat of [false, true]) for (const [name, dotenv] of Object.entries(
     if (!dotenv.ANTHROPIC_BASE_URL) assert.equal(session.ANTHROPIC_BASE_URL, compat ? 'https://stale-process.example.test' : undefined);
   });
 }
-test('Claude subscription login keeps API key and setup token out of session and probe', async t => {
-  const dotenv = { ...builtinCases.relay, ...builtinCases['API key'], ...builtinCases['setup token'] };
-  const { session, probe } = await launchAndProbe(t, dotenv, { nativeAuth: true });
-  for (const env of [session, probe]) {
-    assert.equal(env.ANTHROPIC_API_KEY, undefined);
-    assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-    assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
-  }
+for (const name of ['API key', 'setup token']) test(`Claude subscription login: the .env ${name} reaches session and probe and is pre-approved`, async t => {
+  const dotenv = builtinCases[name];
+  const { session, probe, home } = await launchAndProbe(t, dotenv, { nativeAuth: true });
+  const [[key, value]] = Object.entries(dotenv);
+  assert.equal(session[key], value);
+  assert.equal(probe[key], value);
+  const approved = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).customApiKeyResponses.approved;
+  assert.ok(approved.includes(value.slice(-20)), `${name} must be pre-approved`);
 });
 
 for (const compat of [false, true]) test(`Codex: only OpenAI variables from .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async t => {

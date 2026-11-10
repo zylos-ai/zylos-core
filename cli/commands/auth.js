@@ -2,7 +2,7 @@ import { spawn as spawnChild } from 'node:child_process';
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { notifyAuthCompleted } from '../lib/am-sock-client.js';
-import { syncClaudeRelayTraffic } from '../lib/runtime-setup.js';
+import { relayLoginNotice, syncClaudeRelayTraffic } from '../lib/runtime-setup.js';
 
 export function runNativeAuth(runtime, args) {
   return new Promise(resolve => {
@@ -20,7 +20,7 @@ export function runNativeAuth(runtime, args) {
 }
 
 export async function executeAuth(args, { exists = commandExists, adapter = getSessionAdapter, spawn = runNativeAuth,
-  notifyRecovery = notifyAuthCompleted, syncRelayTraffic = syncClaudeRelayTraffic } = {}) {
+  notifyRecovery = notifyAuthCompleted, syncRelayTraffic = syncClaudeRelayTraffic, relayNotice = relayLoginNotice } = {}) {
   const runtime = args[0];
   const deviceCode = args.includes('--device-code');
   const invalid = args.slice(1).some(arg => !['--json', '--device-code'].includes(arg)) ||
@@ -43,9 +43,11 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
       return { ok: false, error: { code: 'CREDENTIAL_SAVE_FAILED',
         message: 'Authenticated, but CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC could not be updated', persisted: null, configChanged: false } };
     }
+    const relay = runtime === 'claude' ? relayNotice() : null;
     let recoveryNotified = false;
     try { recoveryNotified = await notifyRecovery(runtime) === true; } catch {}
-    return { ok: true, data: { runtime, authStatus: 'success', recoveryNotified } };
+    return { ok: true, data: { runtime, authStatus: 'success', recoveryNotified,
+      warnings: relay ? [{ code: 'RELAY_BASE_URL_KEPT', message: relay }] : [] } };
   } catch (error) { return { ok: false, error: { code: 'AUTH_FAILED', message: error.message, persisted: null, configChanged: false } }; }
 }
 
@@ -54,6 +56,7 @@ export async function authCommand(args, dependencies) {
   if (args.includes('--json')) console.log(JSON.stringify(result));
   else if (result.ok) {
     console.log(`OK: ${result.data.runtime} authenticated`);
+    for (const warning of result.data.warnings) console.error(`Warning [${warning.code}]: ${warning.message}`);
     if (!result.data.recoveryNotified) console.log('Recovery will resume on the next message or when the cooldown expires.');
   }
   else console.error(`Error [${result.error.code}]: ${result.error.message}`);

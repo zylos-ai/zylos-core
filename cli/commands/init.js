@@ -60,6 +60,7 @@ import {
   saveSetupToken,
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
+  relayLoginNotice,
   saveCodexBaseUrl,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
@@ -1868,7 +1869,7 @@ export async function authenticateCodexApiCredential(apiKey, {
 /** Persist post-template auth values; a partial write must stop init before services start. */
 export function persistInitCredentials({ apiKey, authToken, setupToken, subscriptionLogin = false, claudeBaseUrl, codexBaseUrl }, {
   saveKeyEnv = saveApiKeyToEnv, saveTokenEnv = saveAuthTokenToEnv, saveSetupEnv = saveSetupTokenToEnv,
-  syncRelayTraffic = syncClaudeRelayTraffic,
+  syncRelayTraffic = syncClaudeRelayTraffic, notice = relayLoginNotice, log = console.log,
   saveClaudeBase = saveClaudeBaseUrlToSettingsAndEnv, saveCodexBase = saveCodexBaseUrlToEnv,
   saveCodexConfig = writeCodexConfig, reportError = console.error,
 } = {}) {
@@ -1881,6 +1882,10 @@ export function persistInitCredentials({ apiKey, authToken, setupToken, subscrip
     // Recompute the relay traffic setting from the resulting Claude state.
     const credential = authToken ? 'authToken' : apiKey ? 'apiKey' : setupToken ? 'setupToken' : subscriptionLogin ? 'subscription' : undefined;
     if ((credential || claudeBaseUrl) && syncRelayTraffic({ credential }) !== true) throw new Error('credential persistence failed');
+    if ((setupToken || subscriptionLogin) && !claudeBaseUrl) {
+      const relay = notice();
+      if (relay) log(`  ${warn(relay)}`);
+    }
     return true;
   } catch {
     reportError(`  ${error('Failed to persist runtime credentials or API endpoint. Initialization stopped before starting services; repair credential storage and retry.')}`);

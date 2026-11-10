@@ -24,8 +24,8 @@ console.log('Claude credential isolation: ' + JSON.stringify({ HOME: home, ZYLOS
   PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, settingsFile, envFile }));
 const { saveApiKey, saveApiKeyToEnv, saveAuthToken, saveAuthTokenToEnv,
   saveSetupToken, saveSetupTokenToEnv, isValidBaseUrl,
-  saveClaudeBaseUrl, computeRelayTraffic } = await import('../runtime-setup.js');
-const { applyBaseUrl, applyCredentials } = await import('../../commands/runtime.js');
+  saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice } = await import('../runtime-setup.js');
+const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags } = await import('../../commands/runtime.js');
 const { readEnvFile } = await import('../env.js');
 const modes = [
   ['API key', 'ANTHROPIC_API_KEY', saveApiKey, saveApiKeyToEnv],
@@ -197,6 +197,30 @@ test('a claude.ai login with a leftover API key counts as subscription when the 
   fs.writeFileSync(loginFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh' } }));
   assert.equal(applyBaseUrl('claude', officialUrl), true);
   assert.deepEqual(relayFlagState(), RELAY_OFF);
+});
+
+test('a login behind a saved relay keeps the relay and gets a notice with the command to go direct', () => {
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
+  assert.deepEqual(relayFlagState(), RELAY_ON, 'the switch follows the kept relay');
+  const notice = relayLoginNotice();
+  assert.match(notice, /Still using the relay https:\/\/relay\.example\.test/);
+  assert.match(notice, /zylos runtime claude --save-base-url https:\/\/api\.anthropic\.com/);
+  assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_BASE_URL, relayUrl, 'the relay URL is not removed');
+});
+
+test('`zylos runtime claude --save-base-url https://api.anthropic.com` sets the official URL everywhere and turns the switch off', () => {
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + secret() }), true);
+  assert.deepEqual(relayFlagState(), RELAY_ON);
+  const parsed = parseRuntimeFlags(['--save-base-url', 'https://api.anthropic.com']);
+  assert.equal(validateRuntimeFlags('claude', parsed), null);
+  assert.equal(applyBaseUrl('claude', parsed.baseUrl), true);
+  assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_BASE_URL, officialUrl);
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_BASE_URL, officialUrl);
+  assert.equal(process.env.ANTHROPIC_BASE_URL, officialUrl);
+  assert.deepEqual(relayFlagState(), RELAY_OFF);
+  assert.equal(relayLoginNotice(), null);
 });
 
 test('the process-only base URL used during init follows the pairing rule', () => {

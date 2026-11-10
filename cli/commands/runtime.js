@@ -32,6 +32,7 @@ import {
   saveSetupToken,
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
+  relayLoginNotice,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
   writeCodexConfig,
@@ -306,7 +307,7 @@ async function reclaimSingleRuntime(live, group, warnings, { send, lookup, reque
 export async function executeRuntimeSwitch(target, flags, { read = readZylosConfigStrict, mode = readSessionMode,
   exists = commandExists, adapter = getSessionAdapter, credentials = applyCredentials, baseUrl = applyBaseUrl,
   hooksReady = runtimeHooksReady, write = updateZylosConfigLocked, observe = observeRuntimeGroups,
-  identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest,
+  identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest, relayNotice = relayLoginNotice,
   requestId = () => `cli-rt-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
   const credentialsSaved = [], warnings = [];
   const fail = (code, message, extra = {}) => ({ ok: false, error: { code, message, persisted: [...credentialsSaved], ...extra } });
@@ -336,6 +337,10 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
         if (value) { if (!await save()) return fail('CREDENTIAL_SAVE_FAILED', `Could not save ${key}`); credentialsSaved.push(key); }
       }
     } catch (error) { return fail('CREDENTIAL_SAVE_FAILED', error.message); }
+    if (target === 'claude' && parsed.setupToken && !parsed.baseUrl) {
+      const relay = relayNotice();
+      if (relay) warnings.push({ code: 'RELAY_BASE_URL_KEPT', message: relay });
+    }
     try {
       const ready = await hooksReady(target);
       if (!ready.ready) return fail('HOOKS_NOT_READY', 'Runtime hooks/instructions not ready; run zylos init');

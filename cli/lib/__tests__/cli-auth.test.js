@@ -5,8 +5,24 @@ import { executeAuth, authCommand } from '../../commands/auth.js';
 const authenticated = {
   exists: () => true, spawn: () => ({ status: 0 }),
   adapter: () => ({ checkAuth: () => ({ status: 'success' }) }),
-  syncRelayTraffic: () => true,
+  syncRelayTraffic: () => true, relayNotice: () => null,
 };
+
+test('Claude subscription login behind a saved relay reports the kept relay with the command to go direct', async () => {
+  const notice = 'Still using the relay https://relay.example: ...';
+  const claude = await executeAuth(['claude'], { ...authenticated, relayNotice: () => notice, notifyRecovery: () => true });
+  assert.deepEqual(claude.data.warnings, [{ code: 'RELAY_BASE_URL_KEPT', message: notice }]);
+  const none = await executeAuth(['claude'], { ...authenticated, notifyRecovery: () => true });
+  assert.deepEqual(none.data.warnings, []);
+  let asked = 0;
+  const codex = await executeAuth(['codex'], { ...authenticated, relayNotice: () => { asked++; return notice; }, notifyRecovery: () => true });
+  assert.deepEqual(codex.data.warnings, []); assert.equal(asked, 0);
+  const lines = [], errors = [], log = console.log, err = console.error;
+  console.log = line => lines.push(line); console.error = line => errors.push(line);
+  try { await authCommand(['claude'], { ...authenticated, relayNotice: () => notice, notifyRecovery: () => true }); }
+  finally { console.log = log; console.error = err; }
+  assert.ok(errors.includes(`Warning [RELAY_BASE_URL_KEPT]: ${notice}`));
+});
 
 test('confirmed Claude subscription login recomputes the relay traffic setting before notifying', async () => {
   for (const runtime of ['claude', 'codex']) {
@@ -104,7 +120,7 @@ test('native auth stdio is interactive with stdout reserved; only confirmed auth
         spawn: (command, args, options) => {
           calls++; assert.equal(command, runtime); assert.deepEqual(args, runtime === 'claude' ? ['auth', 'login'] : ['login']);
           assert.deepEqual(options.stdio, ['inherit', 2, 2]); return { status: 0 };
-        }, adapter: () => ({ checkAuth: async () => ({ status }) }), syncRelayTraffic: () => true });
+        }, adapter: () => ({ checkAuth: async () => ({ status }) }), syncRelayTraffic: () => true, relayNotice: () => null });
       assert.equal(calls, 1); assert.equal(result.ok, status === 'success');
       if (!result.ok) {
         assert.equal(result.error.persisted, null); assert.equal(result.error.configChanged, false);

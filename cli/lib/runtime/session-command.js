@@ -8,8 +8,6 @@ import { buildKickPrompt } from './kick-prompt.js';
 import { adapterError } from './tmux-protocol.js';
 import { RUNTIME_BUILTIN_ENV_KEYS } from '../config.js';
 export { adapterError } from './tmux-protocol.js';
-// With native (subscription) login these would override it, so they are not carried.
-export const CLAUDE_NATIVE_AUTH_CONFLICT_KEYS = Object.freeze(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
 export const shellQuote = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
 export function runtimeExecutable(runtime, env = process.env) {
   const name = env[`${runtime.toUpperCase()}_BIN`] || runtime;
@@ -45,30 +43,6 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
     args.push(buildKickPrompt());
   }
   return args;
-}
-export async function hasNativeClaudeAuthAsync(command, env) {
-  if (env.HOME && !env.CLAUDE_CONFIG_DIR) {
-    try {
-      const data = JSON.parse(await fs.promises.readFile(path.join(env.HOME, '.claude', '.credentials.json'), 'utf8'));
-      if (data?.claudeAiOauth?.refreshToken) return true;
-    } catch { /* Missing/unreadable credentials may still use native status. */ }
-  }
-  try {
-    const nativeEnv = { ...env };
-    for (const key of CLAUDE_NATIVE_AUTH_CONFLICT_KEYS) delete nativeEnv[key];
-    const { stdout } = await promisify(execFile)(command, ['auth', 'status'], {
-      env:nativeEnv, cwd:env.ZYLOS_DIR, encoding:'utf8', timeout:10000, killSignal:'SIGKILL',
-    });
-    const status = JSON.parse(stdout);
-    return status?.loggedIn === true && status?.authMethod === 'claude.ai';
-  } catch { return false; }
-}
-/** Drop the conflicting Claude credentials when native (subscription) login is active. */
-export async function dropClaudeCredentialsForNativeAuth(command, env) {
-  if (CLAUDE_NATIVE_AUTH_CONFLICT_KEYS.some(key => Object.hasOwn(env, key)) && await hasNativeClaudeAuthAsync(command, env)) {
-    for (const key of CLAUDE_NATIVE_AUTH_CONFLICT_KEYS) delete env[key];
-  }
-  return env;
 }
 export function launchEnvironment(root, processEnv = process.env, { runtime } = {}) {
   const dotenvVars = {};
