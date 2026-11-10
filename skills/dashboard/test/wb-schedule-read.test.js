@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createScheduleRead, scheduleReadResponse, nextRuns } from '../src/lib/workbench/schedule-read.js';
+import { createScheduleRead, scheduleReadResponse, nextRuns, readTaskNames } from '../src/lib/workbench/schedule-read.js';
 import { createScheduleTz, localToOffsetIso } from '../src/lib/workbench/schedule-tz.js';
 import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
 import { migrateSchema } from '../../scheduler/scripts/migrations.js';
@@ -319,6 +319,51 @@ test('target groups follow the dispatch rule using the group snapshot without na
   assert.deepEqual(failing.tasks.find(task => task.id === grouped.id).target, { kind: 'raw', text: 'telegram:dm-1001' });
 });
 
+test('a group whose last message came from the scheduler is labelled with the task name; the id stays out of the label', async t => {
+  const f = fixture(t);
+  const named = f.task({ name: 'watch-dispatched-cards' });
+  const blank = f.task({ name: '  ' });
+  assert.deepEqual(readTaskNames(f.zylosDir, [named.id, blank.id, 'task-gone', named.id]), new Map([[named.id, 'watch-dispatched-cards']]));
+  assert.deepEqual(readTaskNames(path.join(f.root, 'elsewhere'), [named.id]), new Map(), 'no scheduler database: no names');
+  const preview = (taskId, message) => ({ timestamp: NOW_MS, channel: 'scheduler', endpoint: null, message,
+    text: `[Scheduled Task: ${taskId} #4] ${message}`, messageSource: { kind: 'scheduled_task', taskId } });
+  // A group older than the snapshot window, found only by search.
+  const older = { sessionGroup: 'scheduler:old', componentName: 'scheduler', lastActivityAt: NOW_MS - 30 * 86400000, preview: preview(named.id, 'older run') };
+  const groups = [
+    { sessionGroup: 'scheduler:a', componentName: 'scheduler', lastActivityAt: NOW_MS, preview: preview(named.id, 'check the new cards') },
+    { sessionGroup: 'scheduler:b', componentName: 'scheduler', lastActivityAt: NOW_MS, preview: preview('task-gone', 'nightly digest') },
+    { sessionGroup: 'lark:oc_1', componentName: 'lark', lastActivityAt: NOW_MS, preview: { timestamp: NOW_MS, channel: 'lark', endpoint: 'oc_1',
+      message: 'Review ready', text: '[Review bot] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab', messageSource: { kind: 'header' } } },
+  ];
+  const snapshot = createGroupSnapshot({ zylosDir: f.zylosDir, now: () => NOW_MS,
+    store: { latestEventByType: () => null, queryEvents: () => [] },
+    cli: {
+      runC4Db: async args => ({ ok: true, readAt: NOW_MS, data: args.includes('--key-match') ? [older]
+        : args[0] === 'groups' ? { groups, hasOlder: false } : { groups: [], globalFence: null } }),
+      readOverrides: async () => ({ ok: true, readAt: NOW_MS, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }),
+    },
+    loadCoreModule: async name => {
+      if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
+      if (name === 'session-state-reader.js') return { readAccountUsage: async () => null, readSessionState: async () => null };
+      return { collectStatus: async () => ({ view: 'multi', origin: { presence: 'not_running' }, groups: [], groupListError: null, runtimeHealth: {} }) };
+    },
+  });
+  const rows = new Map((await snapshot.getSnapshot()).rows.map(row => [row.sessionGroup, row.preview]));
+  assert.equal(rows.get('scheduler:a').text, 'watch-dispatched-cards');
+  assert.deepEqual(rows.get('scheduler:a').source, { kind: 'scheduled_task' });
+  assert.equal(rows.get('scheduler:b').text, 'nightly digest', 'a task the scheduler no longer has keeps the prompt line');
+  assert.deepEqual(rows.get('scheduler:b').source, { kind: 'scheduled_task' });
+  assert.equal(rows.get('lark:oc_1').text, 'Review ready');
+  assert.deepEqual(rows.get('lark:oc_1').source, { kind: 'channel' });
+  const found = (await snapshot.search('scheduler:old')).rows.find(row => row.sessionGroup === 'scheduler:old');
+  assert.equal(found.preview.text, 'watch-dispatched-cards', 'search names the task for a group outside the snapshot');
+  for (const key of ['scheduler:a', 'scheduler:b', 'lark:oc_1']) {
+    const value = rows.get(key);
+    assert.equal(Object.hasOwn(value, 'messageSource'), false);
+    assert.equal(Object.hasOwn(value.source, 'taskId'), false);
+    assert.equal(Object.hasOwn(value, 'raw'), false, 'the stored message is read per group, not polled');
+  }
+});
 
 test('upcoming cron runs parse once and stop after five runs and the full day', () => {
   for (const [expression, expected] of [['0 8 * * *', 5], ['0 * * * *', 25], ['* * * * *', 1441]]) {

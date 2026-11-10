@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=105';
+import { element, icon } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';

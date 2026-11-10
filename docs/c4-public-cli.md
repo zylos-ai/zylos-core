@@ -24,7 +24,7 @@ Other independent commands:
 - `c4-control.js expire --id ID` expires only a pending/running control.
 - `c4-db.js namespace get|ensure COMPONENT`; `namespace register COMPONENT NAMESPACE`
 - `c4-db.js session-group COMPONENT [--session-group LOCAL_GROUP]`
-- `c4-db.js groups [--match TEXT | --active-since MS | --key-match TEXT] [--limit N] [--json]`
+- `c4-db.js groups [--match TEXT | --active-since MS | --key-match TEXT] [--limit N] [--raw] [--json]`
 - `c4-db.js group-queues [--json]`
 - `c4-db.js mode-transition show [--run-id UUID] [--json]`
 - `c4-db.js origin-sync backlog [--json]`
@@ -36,15 +36,43 @@ Other independent commands:
 - `c4-fetch.js --absorbed --run-id UUID [--summary [--scope-after GROUP] | --id ID [--field text|endpoint] [--out FILE] | --after ID] [--limit N] [--json]`
 
 `groups` filters are mutually exclusive. `--match` also searches message previews.
-`--key-match` matches group keys only and is meant for occasional searches.
+`--key-match` matches group keys only (any part, any letter case) and is meant for occasional
+searches. A group whose key equals the search text exactly (same letter case) comes first,
+then the others newest first.
 `--active-since` takes Unix milliseconds, stops at the first older group, and returns
 `{groups, hasOlder}`; the other forms return an array.
 Each group's `preview` (the newest inbound message, or `null`) is
-`{timestamp, channel, endpoint, text, message}`: `text` is the model-facing projection
-of the whole message, and `message` is a one-line reader preview of what the person
-wrote (the `<current-message>` body without its sender prefix, an envelope's fallback
-text, at most 80 characters, without the appended reply route) or `null` when the message
-carries only channel wrapping or is an overflow pointer to a stored file.
+`{timestamp, channel, endpoint, text, message, messageSource?, messageRaw?}` (`messageRaw` only with `--raw`): `text` is the model-facing
+projection of the whole message, and `message` is a one-line reader preview, at most 80
+characters, without the appended reply route, or `null` when the message carries only
+channel wrapping or is an overflow pointer to a stored file. `message` is, in this order:
+
+- for a C4 envelope, its `fallbackText`. A component that wants a summary of its own in
+  previews sends an envelope; `fallbackText` is required, 1 to 16000 characters, and
+  previews show its first 80 characters with whitespace collapsed;
+- for a channel message, the `<current-message>` body without its sender prefix;
+- for a task dispatched by core's scheduler, the first line of the task prompt, with
+  `messageSource: {kind: "scheduled_task", taskId}` so a reader can look up the task name;
+- for any other message that starts with bracketed tags (a source core does not know), its
+  first line without those tags, with `messageSource: {kind: "header"}`; a reader labels it
+  with the channel. This does not apply on channels `dashboard` and `web-console`, core's own
+  channels that store what a person typed as is: there a leading `[…]` (including a Markdown
+  link `[text](url)`) is the person's words and stays;
+- otherwise the message itself.
+
+Previews from the scheduler or another source's header also drop long identifiers (UUIDs,
+`task-…` ids containing a digit, runs of 16 or more hex digits), together with an id's own
+label (`id: …`, `Task ID: …`, `id=…`) and a `(by …)`-style group the id leaves empty.
+`messageSource` is absent for a person's own words and envelopes.
+
+`--raw` (off by default, so list and polling output stay small) adds `messageRaw` to each
+preview that has a `messageSource`: the stored message's start for a technical view, the
+model-facing projection with line breaks kept, at most 2000 characters. A longer message is
+cut before a run of printable ASCII characters rather than inside it (where a credential or
+a link would be), other text is kept up to the limit, and it ends in `…`. To read one
+group's, use `--key-match KEY --limit 1 --raw` and check that the row's `sessionGroup` equals
+`KEY` (when no group has that exact key, the row is another group containing it). C4 does not redact
+`messageRaw` (nor `text` or `message`); a reader that shows it redacts credentials first.
 
 `group-queues` is a read-only snapshot of the groups that have pending or running
 inbound messages or a drain fence. It returns `{groups, globalFence}`, and each group has

@@ -1,4 +1,4 @@
-import { fallbackName } from './plain-text.js?v=105';
+import { fallbackName } from './plain-text.js?v=106';
 
 /** Why the observer needs recovery before it can be used again, or null when it does not. */
 export function observerRecoveryReason(status) {

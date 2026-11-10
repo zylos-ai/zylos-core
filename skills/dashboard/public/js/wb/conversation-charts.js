@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=105';
+import { element } from './plain-text.js?v=106';
 import { formatZoned, instanceZone, zonedInputValue } from './instance-zone.js?v=100';
 import { formatDuration } from './duration-format.js?v=1';
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from '../public/js/origin-lock.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
-import { renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } from '../public/js/wb/detail-overview.js';
+import { rawKey, renderOverview, detailNumbers, activeSubagents, detailEvidence, sampleAge, toolEventLabel, configStatus, configText, groupEventCount } from '../public/js/wb/detail-overview.js';
 import { createTimelineLoader, attributeMessages, renderTimeline } from '../public/js/wb/detail-timeline.js';
 import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGroupConfig, modelChoices, effortChoices, startingPair } from '../public/js/wb/group-config.js';
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
@@ -137,6 +137,90 @@ test('event, end reason and time labels are plain words in plain view and raw va
   assert.equal(displayTime(iso, 'technical'), iso);
   assert.equal(displayTime(iso, 'plain', 'en-US'), new Date(iso).toLocaleString('en-US', { timeZone: ZONE }));
   assert.equal(displayTime('2026-11-06 10:20:30', 'plain', 'en-US'), new Date(iso).toLocaleString('en-US', { timeZone: ZONE }));
+});
+
+test('a labelled last message offers its stored text, folded, only in technical detail', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const stored = '[Multica follow-up] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab\nRequested by: howard · Task ID: 01a1c33d-7d4e-7a1b-9c2d-0123456789ab';
+  const current = row('a', { state: { kind: 'idle' }, preview: { text: 'Review ready', channel: 'multica', timestamp: 1, source: { kind: 'channel' } } });
+  const opened = [];
+  const fold = () => allNodes(root).find(node => node.classList?.contains('wb-now-raw'));
+  renderOverview(root, current, {}, { document, t, level: 'plain', onRaw: open => opened.push(open) });
+  assert.match(root.textContent, /Review ready/);
+  assert.equal(fold(), undefined);
+  renderOverview(root, current, {}, { document, t, level: 'technical', onRaw: open => opened.push(open) });
+  assert.equal(fold().tagName.toLowerCase(), 'details');
+  assert.equal(fold().open, false, 'folded until asked for');
+  assert.equal(allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'summary').textContent, 'wb.detail.rawMessage');
+  assert.equal(allNodes(fold()).some(node => node.tagName?.toLowerCase() === 'pre'), false, 'nothing read yet');
+  fold().open = true; fold().dispatch('toggle');
+  assert.deepEqual(opened, [true]);
+  const key = rawKey(current), draw = raw => renderOverview(root, current, { raw }, { document, t, level: 'technical' });
+  draw({ key, open: true, status: 'loading', text: null });
+  assert.equal(fold().open, true); assert.match(fold().textContent, /wb.detail.rawLoading/);
+  draw({ key, open: true, status: 'ok', text: stored });
+  assert.equal(allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'pre').textContent, stored, 'the whole stored text, line breaks kept');
+  for (const raw of [{ key, open: true, status: 'error', text: null }, { key, open: true, status: 'ok', text: null }]) {
+    draw(raw); assert.match(fold().textContent, /wb.detail.rawUnavailable/);
+  }
+  draw({ key: rawKey({ ...current, preview: { ...current.preview, timestamp: 2 } }), open: true, status: 'ok', text: stored });
+  assert.equal(fold().open, false, 'a read for an earlier message is not shown');
+  renderOverview(root, { ...current, preview: { text: 'hi', channel: 'telegram', timestamp: 1 } }, {}, { document, t, level: 'technical' });
+  assert.equal(fold(), undefined, 'a person\'s own words have no fold');
+});
+
+test('the stored message is read once when its fold opens and stays with that preview', async () => {
+  const calls = [], stored = '[Bot] line one\nline two';
+  const preview = timestamp => ({ text: 'line one', channel: 'review-bot', timestamp, source: { kind: 'channel' } });
+  const current = row('review-bot:a', { state: { kind: 'idle' }, preview: preview(1) });
+  const f = detailFixture(async path => {
+    calls.push(path);
+    return path.endsWith('/raw') ? response({ raw: stored }) : response(defaultRead(path));
+  }, { detail: () => 'technical' });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const fold = () => allNodes(f.root).find(node => node.classList?.contains('wb-now-raw'));
+  const reads = () => calls.filter(path => path.endsWith('/raw'));
+  assert.deepEqual(reads(), [], 'opening the detail reads no stored message');
+  fold().open = true; fold().dispatch('toggle');
+  await tick(); await tick();
+  assert.deepEqual(reads(), ['/api/workbench/groups/review-bot%3Aa/raw']);
+  assert.equal(allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'pre').textContent, stored);
+  fold().dispatch('toggle');
+  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+  assert.equal(fold().open, true, 'a poll keeps the fold open');
+  assert.equal(allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'pre').textContent, stored);
+  fold().open = false; fold().dispatch('toggle');
+  fold().open = true; fold().dispatch('toggle');
+  await tick();
+  assert.equal(reads().length, 1, 'reopening shows what was read');
+  const newer = { ...current, preview: preview(2) };
+  await f.controller.updateSnapshot({ rows: [newer], listKnown: true });
+  assert.equal(fold().open, false, 'a new message folds again');
+  f.controller.destroy();
+});
+
+test('a stored message that could not be read is read again when its fold reopens', async () => {
+  const calls = [], stored = '[Bot] line one\nline two';
+  const current = row('review-bot:a', { state: { kind: 'idle' }, preview: { text: 'line one', channel: 'review-bot', timestamp: 1, source: { kind: 'channel' } } });
+  const f = detailFixture(async path => {
+    if (!path.endsWith('/raw')) return response(defaultRead(path));
+    calls.push(path);
+    return calls.length === 1 ? response({ error: 'group_raw_failed' }, 502) : response({ raw: stored });
+  }, { detail: () => 'technical' });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  const fold = () => allNodes(f.root).find(node => node.classList?.contains('wb-now-raw'));
+  const pre = () => allNodes(fold()).find(node => node.tagName?.toLowerCase() === 'pre');
+  fold().open = true; fold().dispatch('toggle');
+  await tick(); await tick();
+  assert.equal(calls.length, 1);
+  assert.match(fold().textContent, /wb.detail.rawUnavailable/);
+  assert.equal(pre(), undefined);
+  fold().open = false; fold().dispatch('toggle');
+  fold().open = true; fold().dispatch('toggle');
+  await tick(); await tick();
+  assert.equal(calls.length, 2, 'the failed read is tried again');
+  assert.equal(pre().textContent, stored);
+  f.controller.destroy();
 });
 
 test('overview recent activity and evidence are plain in plain view and raw only in technical detail', () => {

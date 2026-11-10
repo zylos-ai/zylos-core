@@ -173,6 +173,39 @@ test('auth protects API and renders proxy-prefixed login URLs', async () => {
   }
 });
 
+test('the login page takes its colours from the Dashboard theme files and picks the theme before the body', async () => {
+  const { origin, server } = await makeServer();
+  try {
+    const login = await fetch(`${origin}/login`);
+    assert.equal(login.status, 200);
+    // No content security policy applies to this page, so its inline theme script and style run as before.
+    assert.equal(login.headers.get('content-security-policy'), null);
+    const html = await login.text();
+    assert.doesNotMatch(html, /http-equiv="Content-Security-Policy"/i);
+    const script = html.indexOf('<script>'), style = html.indexOf('<style>'), body = html.indexOf('<body>');
+    assert.ok(script > 0 && script < style && style < body, 'the saved theme is applied in the head, before the first paint');
+    assert.match(html.slice(script, style), /localStorage\.getItem\('zylos-dashboard-theme'\)/);
+    const css = html.slice(style, html.indexOf('</style>'));
+    const darkRules = css.slice(css.indexOf(':root[data-theme="dark"]'));
+    const darkDeclarations = fs.readFileSync(new URL('../public/themes/dark.css', import.meta.url), 'utf8').match(/--[a-z-]+:\s*[^;]+;/g);
+    const lightDeclarations = fs.readFileSync(new URL('../public/themes/light.css', import.meta.url), 'utf8').match(/--[a-z-]+:\s*[^;]+;/g);
+    assert.ok(darkDeclarations.length > 10 && lightDeclarations.length > 10);
+    for (const declaration of lightDeclarations) assert.ok(css.includes(declaration), declaration);
+    // Dark applies for a saved dark choice and, without a saved light choice, for a dark system setting.
+    const media = darkRules.indexOf('@media (prefers-color-scheme: dark) { :root:not([data-theme="light"])');
+    assert.ok(media > 0);
+    for (const declaration of darkDeclarations) {
+      assert.ok(darkRules.slice(0, media).includes(declaration), declaration);
+      assert.ok(darkRules.slice(media).includes(declaration), declaration);
+    }
+    // The page's own rules use the theme variables only, so no colour stays light in dark.
+    const ownRules = css.slice(css.indexOf('body {'));
+    assert.doesNotMatch(ownRules, /#[0-9a-f]{3,8}\b|rgba?\(/i);
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test('login sets secure cookie and authenticated requests can reach API and SSE', async () => {
   const { origin, server } = await makeServer();
   try {

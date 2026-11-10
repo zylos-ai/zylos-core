@@ -8,7 +8,7 @@ export function searchTerm(q) {
 }
 
 export async function searchGroups(q, { now = Date.now(), runC4Db, getSnapshot,
-  displayNames = { search: () => [], listAll: () => new Map() }, sanitizer } = {}) {
+  displayNames = { search: () => [], listAll: () => new Map() }, sanitizer, namesOfTasks = async () => new Map() } = {}) {
   const term = searchTerm(q);
   if (term.none) return { rows: [], truncated: false };
   const result = term.keyable ? await runC4Db(['groups', '--key-match', term.term, '--limit', '50', '--json']) : { ok: true, data: [] };
@@ -17,8 +17,9 @@ export async function searchGroups(q, { now = Date.now(), runC4Db, getSnapshot,
   const snapshot = await getSnapshot(now), byKey = new Map(result.data.map(item => [item.sessionGroup, item]));
   const keys = [...new Set([...byKey.keys(), ...matches.map(item => item.sessionGroup)])];
   const live = new Map(snapshot.rows.map(row => [row.sessionGroup, row]));
+  const taskNames = await namesOfTasks(keys.filter(key => !live.has(key)).map(key => byKey.get(key)));
   const rows = keys.map(key => live.get(key) ?? olderRow(key, {
-    meta: c4Meta(byKey.get(key)), preview: safePreview(byKey.get(key), sanitizer),
+    meta: c4Meta(byKey.get(key)), preview: safePreview(byKey.get(key), sanitizer, taskNames),
     name: names.get(key) ?? null, listKnown: snapshot.listKnown,
   }));
   return { rows, truncated: result.data.length === 50 || matches.length === 50 };

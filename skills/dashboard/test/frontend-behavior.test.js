@@ -7,7 +7,7 @@ import { afterSentence, buildAgentFleetView, fleetSelfFromSnapshot, handleFleetC
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
-import { tabForPath } from '../public/js/wb/view-mode.js';
+import { markCurrentTab, tabForPath } from '../public/js/wb/view-mode.js';
 import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from '../public/js/wb/observer-page.js';
 
 function deferred() {
@@ -62,6 +62,8 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
   const tabs = ['overview', 'trends', 'memory', 'observer'].map((name) => ({
     dataset: { tab: name },
     classList: { toggle(_className, active) { this.active = active; } },
+    setAttribute(name, value) { this[name] = value; },
+    removeAttribute(name) { delete this[name]; },
     addEventListener(event, handler) { this[event] = handler; }
   }));
   const panels = tabs.map(({ dataset }) => ({
@@ -103,6 +105,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     validObserverSize,
     validAgentSize,
     tabForPath,
+    markCurrentTab,
     observerPageUsable,
     observerRecoveryReason,
     handleFleetClick,

@@ -1,6 +1,6 @@
-import { element, icon } from './plain-text.js?v=105';
+import { element, icon } from './plain-text.js?v=106';
 import { createFetchGuard } from './fetch-guard.js?v=85';
-import { dateField } from './date-field.js?v=105';
+import { dateField } from './date-field.js?v=106';
 
 const pad = value => String(value).padStart(2, '0');
 

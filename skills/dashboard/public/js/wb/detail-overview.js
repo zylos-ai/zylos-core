@@ -1,6 +1,6 @@
-import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=105';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=116';
-import { toolLabel, waitText } from './view-mode.js?v=115';
+import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=117';
+import { toolLabel, waitText } from './view-mode.js?v=116';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=91';
 import { recentRows } from './timeline-rows.js?v=108';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
@@ -155,7 +155,7 @@ export function configText(row, level = 'plain', t = key => key) {
   return [runtimeName(value.runtime), model, effort ? t('wb.term.effort') + ' ' + effort : null].filter(Boolean).join(' · ');
 }
 
-function nowCard(document, row, data, { level, t, snapshot }) {
+function nowCard(document, row, data, { level, t, snapshot, onRaw }) {
   const kind = row.state?.kind ?? 'unknown';
   const card = element(document, 'div', undefined, 'wb-now-card');
   const title = element(document, 'div', undefined, 'wb-now-title');
@@ -195,6 +195,20 @@ function nowCard(document, row, data, { level, t, snapshot }) {
     }
   }
   if (level === 'technical') {
+    // A preview labelled with its source offers the stored message, folded: headers, ids and line breaks included.
+    // It is read when opened (`onRaw`); `data.raw` holds that read for this group's current preview.
+    if (row.preview?.source) {
+      const stored = data.raw?.key === rawKey(row) ? data.raw : null;
+      const raw = element(document, 'details', undefined, 'wb-now-raw');
+      raw.open = Boolean(stored?.open);
+      const summary = element(document, 'summary');
+      summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.rawMessage')));
+      raw.append(summary);
+      if (stored?.open) raw.append(stored.status === 'ok' && stored.text != null ? element(document, 'pre', stored.text, 'wb-mono')
+        : element(document, 'p', t(stored.status === 'loading' ? 'wb.detail.rawLoading' : 'wb.detail.rawUnavailable'), 'wb-now-raw-note'));
+      raw.addEventListener('toggle', () => onRaw(raw.open));
+      card.append(raw);
+    }
     const evidence = detailEvidence(row, snapshot);
     const details = element(document, 'details', undefined, 'wb-detail-evidence');
     details.open = false;
@@ -217,8 +231,14 @@ function nowCard(document, row, data, { level, t, snapshot }) {
   return card;
 }
 
+/** Which read of a stored message belongs to this row: the group and its current preview's time. */
+export function rawKey(row) {
+  return `${row.sessionGroup ?? 'origin'}\n${row.preview?.timestamp ?? ''}`;
+}
+
 export function renderOverview(root, row, data = {}, { document = root.ownerDocument, t = key => key,
-  level = 'plain', snapshot = {}, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {}, onObserve = null, currentTime = Date.now() } = {}) {
+  level = 'plain', snapshot = {}, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {}, onObserve = null, onRaw = () => {},
+  currentTime = Date.now() } = {}) {
   root.replaceChildren();
   const section = (key, className, glyph) => {
     const node = element(document, 'section', undefined, 'wb-detail-section ' + className);
@@ -226,7 +246,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     node.append(head); root.append(node); return node;
   };
   const now = section('wb.detail.now', 'wb-detail-now', 'activity');
-  const card = nowCard(document, row, data, { level, t, snapshot });
+  const card = nowCard(document, row, data, { level, t, snapshot, onRaw });
   now.append(card);
   const agents = activeSubagents(data.currentEvents ?? [], row.live?.runId);
   if (agents.length) {

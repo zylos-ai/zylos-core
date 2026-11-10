@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=105';
+import { element } from './plain-text.js?v=106';
 
 export const ORIGINAL_GROUP_NAME_PATH = '~/zylos/.claude/skills/dashboard/scripts/group-name.js';
 export const NAME_PROMPT = `请给 Dashboard 里还没有名字的会话组起个名字：

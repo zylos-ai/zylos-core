@@ -11,6 +11,7 @@ export class Node {
   addEventListener(name, handler) { const list = this.listeners.get(name) ?? []; list.push(handler); this.listeners.set(name, list); }
   removeEventListener(name, handler) { this.listeners.set(name, (this.listeners.get(name) ?? []).filter(fn => fn !== handler)); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  removeAttribute(name) { delete this.attributes[name]; }
   dispatch(name, event = {}) { this.listeners.get(name)?.forEach(fn => fn(event)); }
   focus() { this.focused = true; }
 }

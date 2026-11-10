@@ -582,6 +582,34 @@ export async function runWorkbenchBrowser(t, sandbox) {
     }
   });
 
+  await step('the nav marks the current page for screen readers, and the usage page starts with its controls', async () => {
+    for (const width of [390, 1280]) for (const theme of ['light', 'dark']) {
+      const { page, context, errors, shot } = await open(width, width === 390 ? 844 : 900, '/');
+      if (theme === 'dark') { await page.evaluate(() => localStorage.setItem('zylos-dashboard-theme', 'dark')); await page.reload(); }
+      const current = () => page.evaluate(() => [...document.querySelectorAll('.app-header .tab[aria-current]')]
+        .map(tab => `${tab.dataset.tab}=${tab.getAttribute('aria-current')}`));
+      await page.locator('#wb-board .wb-row').first().waitFor();
+      assert.deepEqual(await current(), ['overview=page'], `${width}: overview is current`);
+      await page.locator('.tab[data-tab="trends"]').click();
+      await page.locator('#wb-usage-range > button').first().waitFor();
+      assert.deepEqual(await current(), ['trends=page'], `${width}: usage is current`);
+      const top = await page.evaluate(() => {
+        const usage = document.querySelector('.wb-usage-page');
+        return { headings: usage.querySelectorAll('h1, h2').length, first: usage.firstElementChild.className,
+          gap: Math.round(usage.querySelector('.wb-usage-controls').getBoundingClientRect().top - document.querySelector('.app-header').getBoundingClientRect().bottom) };
+      });
+      assert.equal(top.headings, 0, `${width}: no page heading repeats the nav`);
+      assert.match(top.first, /wb-usage-controls/);
+      assert.ok(top.gap >= 8 && top.gap <= 40, `${width}: the controls sit just under the header (${top.gap}px)`);
+      await shot(`usage-top-${theme}`);
+      await page.locator('#wb-settings-btn').click();
+      await page.locator('#tab-settings.active').waitFor();
+      assert.deepEqual(await current(), ['settings=page'], `${width}: settings is current`);
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
   // Unanswered reads are listed so a page change that needs a new answer is visible, not silently empty.
   if (unserved.size) console.log('Workbench browser case left unanswered:', [...unserved].sort().join(', '));
 }

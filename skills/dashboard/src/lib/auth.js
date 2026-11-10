@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { browserBaseFromRequest, browserPath, browserRoot, isPathWithinBase } from './browser-base.js';
 import { mutateConfig } from './config-mutation.js';
 import { sendHtml, sendJson, sendText } from './http.js';
@@ -222,6 +223,27 @@ function htmlEscape(value) {
     .replace(/>/g, '&gt;');
 }
 
+// The login page uses the Dashboard's own theme colours: the declarations of public/themes/{light,dark}.css,
+// read once. Light is the base; dark applies when the person chose dark in the Dashboard, or when they chose
+// nothing or "system" and the system is dark (CSS alone, so it follows the system live and needs no script).
+let loginThemeCss = null;
+function loginTheme() {
+  if (loginThemeCss) return loginThemeCss;
+  const declarations = name => {
+    const css = fs.readFileSync(new URL(`../../public/themes/${name}.css`, import.meta.url), 'utf8');
+    return css.slice(css.indexOf('{') + 1, css.lastIndexOf('}')).trim();
+  };
+  const light = declarations('light'), dark = declarations('dark');
+  loginThemeCss = `:root { color-scheme: light; ${light} }
+      :root[data-theme="dark"] { ${dark} }
+      @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { ${dark} } }`;
+  return loginThemeCss;
+}
+
+// Runs before the first paint: a light or dark choice saved by the Dashboard (localStorage, same origin) wins
+// over the system setting. Anything else, or no storage, leaves the system setting to the stylesheet.
+const LOGIN_THEME_SCRIPT = "try{var s=localStorage.getItem('zylos-dashboard-theme');if(s==='light'||s==='dark')document.documentElement.dataset.theme=s}catch(e){}";
+
 function loginPageHtml(base, error = '', next = '', configured = true) {
   const safeNext = next && isPathWithinBase(next, base) ? next : '';
   return `<!doctype html>
@@ -230,20 +252,22 @@ function loginPageHtml(base, error = '', next = '', configured = true) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Login - Zylos Dashboard</title>
+    <script>${LOGIN_THEME_SCRIPT}</script>
     <style>
-      body { font-family: system-ui, -apple-system, sans-serif; background: #f7faf9; color: #101827; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+      ${loginTheme()}
+      body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
       .login-shell { width: 100%; max-width: 380px; padding: 1rem; }
-      .login-panel { background: rgba(255,255,255,0.88); backdrop-filter: blur(12px); border-radius: 12px; padding: 2.5rem 2rem; box-shadow: 0 18px 42px rgba(15,23,42,0.08), inset 0 1px 0 rgba(255,255,255,0.9); border: 1px solid rgba(15,118,110,0.1); }
-      .eyebrow { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.15em; color: #0d9488; margin: 0 0 0.25rem; font-weight: 600; }
-      h1 { margin: 0 0 1.5rem; font-size: 1.5rem; font-weight: 600; color: #101827; }
-      .login-error { color: #dc2626; font-size: 0.85rem; margin: 0 0 1rem; }
-      .login-label { display: block; font-size: 0.85rem; color: #526170; margin-bottom: 0.5rem; }
-      .login-input { width: 100%; padding: 0.6rem 0.75rem; border: 1px solid rgba(15,118,110,0.16); border-radius: 8px; background: #fff; color: #101827; font-size: 1rem; box-sizing: border-box; transition: border-color 200ms, box-shadow 200ms; outline: none; }
-      .login-input:focus { border-color: #0d9488; box-shadow: 0 0 0 3px rgba(13,148,136,0.12); }
-      .login-remember { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.85rem; color: #526170; cursor: pointer; }
-      .login-remember input { accent-color: #0d9488; cursor: pointer; }
-      .login-button { width: 100%; padding: 0.7rem; margin-top: 1rem; border: none; border-radius: 8px; background: #0d9488; color: #fff; font-size: 1rem; font-weight: 500; cursor: pointer; transition: background 200ms; }
-      .login-button:hover { background: #0f766e; }
+      .login-panel { background: var(--bg-card); backdrop-filter: blur(12px); border-radius: 12px; padding: 2.5rem 2rem; box-shadow: var(--shadow-card); border: 1px solid var(--border); }
+      .eyebrow { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.15em; color: var(--accent); margin: 0 0 0.25rem; font-weight: 600; }
+      h1 { margin: 0 0 1.5rem; font-size: 1.5rem; font-weight: 600; color: var(--text); }
+      .login-error { color: var(--state-stuck); font-size: 0.85rem; margin: 0 0 1rem; }
+      .login-label { display: block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.5rem; }
+      .login-input { width: 100%; padding: 0.6rem 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); color: var(--text); font-size: 1rem; box-sizing: border-box; transition: border-color 200ms, box-shadow 200ms; outline: none; }
+      .login-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+      .login-remember { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.85rem; color: var(--text-dim); cursor: pointer; }
+      .login-remember input { accent-color: var(--accent); cursor: pointer; }
+      .login-button { width: 100%; padding: 0.7rem; margin-top: 1rem; border: none; border-radius: 8px; background: var(--accent); color: var(--bg); font-size: 1rem; font-weight: 500; cursor: pointer; transition: background 200ms; }
+      .login-button:hover { background: var(--accent-hover); }
     </style>
   </head>
   <body>

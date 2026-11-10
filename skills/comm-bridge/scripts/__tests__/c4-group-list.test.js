@@ -49,6 +49,17 @@ test('key search is case insensitive and ordered by latest head without matching
   assert.equal(rows[0].componentName, 'feishu');
 });
 
+test('key search puts the group whose key equals the search first, ahead of many newer groups containing it', t => {
+  const { seed, store } = fixture(t);
+  seed('lark:oc_1', '2026-01-04 00:00:00', 'parent');
+  for (let i = 0; i < 60; i++) seed('lark:oc_1_thread_' + i, '2026-01-05 00:00:00', 'thread');
+  assert.deepEqual(store.queries.listGroups({ keyMatch: 'lark:oc_1', limit: 1 }).map(row => row.sessionGroup), ['lark:oc_1']);
+  const rows = store.queries.listGroups({ keyMatch: 'lark:oc_1', limit: 3 }).map(row => row.sessionGroup);
+  assert.deepEqual(rows, ['lark:oc_1', 'lark:oc_1_thread_59', 'lark:oc_1_thread_58'], 'the others stay newest first');
+  // Equality is exact; a search in other letter case has no exact group and returns the newest match.
+  assert.deepEqual(store.queries.listGroups({ keyMatch: 'LARK:OC_1', limit: 1 }).map(row => row.sessionGroup), ['lark:oc_1_thread_59']);
+});
+
 test('default and legacy matching output keep the previous reader\'s fields byte for byte and add only the preview message', t => {
   const { db: c, store } = fixture(t);
   const all = (db, sql, ...args) => db.prepare(sql).all(...args);
@@ -75,9 +86,55 @@ test('default and legacy matching output keep the previous reader\'s fields byte
   for (const options of [{}, { limit: 2 }, { match: 'preview' }, { match: 'LARK:OC_', limit: 1 }, { match: 'missing' }]) {
     const rows = store.queries.listGroups(options);
     for (const row of rows) if (row.preview) assert.ok(Object.hasOwn(row.preview, 'message'), 'every preview carries the reader message');
-    const withoutMessage = rows.map(row => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => key !== 'message')) } : row);
+    const withoutMessage = rows.map(row => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => !['message', 'messageSource', 'messageRaw'].includes(key))) } : row);
     assert.equal(JSON.stringify(withoutMessage), JSON.stringify(legacyListGroups(options)));
   }
+});
+
+test('a group preview names where a message came from when it is not a person\'s own words', t => {
+  const { seed, store } = fixture(t);
+  seed('scheduler:main', '2026-02-01 00:00:00', '[Scheduled Task: task-ab12cd34 #2]\nnightly digest\n\n---- After completing this task, run: node cli.js done task-ab12cd34');
+  seed('lark:oc_tags', '2026-02-01 00:01:00', '[Release bot] build 01a1c33d-7d4e-7a1b-9c2d-0123456789ab shipped');
+  const rows = Object.fromEntries(store.queries.listGroups({ limit: 4 }).map(row => [row.sessionGroup, row.preview]));
+  assert.equal(rows['scheduler:main'].message, 'nightly digest');
+  assert.deepEqual(rows['scheduler:main'].messageSource, { kind: 'scheduled_task', taskId: 'task-ab12cd34' });
+  assert.equal(rows['lark:oc_tags'].message, 'build shipped');
+  assert.deepEqual(rows['lark:oc_tags'].messageSource, { kind: 'header' });
+  assert.equal(Object.hasOwn(rows['origin'], 'messageSource'), false);
+  assert.equal(rows['lark:recent2'].message, '🙂'.repeat(79) + '…');
+  assert.equal(Object.hasOwn(rows['lark:recent2'], 'messageSource'), false);
+  // The stored start comes only on request.
+  for (const key of ['scheduler:main', 'lark:oc_tags']) assert.equal(Object.hasOwn(rows[key], 'messageRaw'), false);
+  const raw = Object.fromEntries(store.queries.listGroups({ limit: 4, raw: true }).map(row => [row.sessionGroup, row.preview]));
+  // Labelled previews carry the stored start, line breaks kept; a person's own words carry none.
+  assert.equal(raw['scheduler:main'].messageRaw, '[Scheduled Task: task-ab12cd34 #2]\nnightly digest\n\n---- After completing this task, run: node cli.js done task-ab12cd34');
+  assert.equal(raw['lark:oc_tags'].messageRaw, '[Release bot] build 01a1c33d-7d4e-7a1b-9c2d-0123456789ab shipped');
+  assert.equal(raw['scheduler:main'].message, rows['scheduler:main'].message);
+  for (const key of ['origin', 'lark:recent2']) assert.equal(Object.hasOwn(raw[key], 'messageRaw'), false);
+  for (const value of [1, 'yes', null]) assert.throws(() => store.queries.listGroups({ raw: value }), { code: 'INVALID_ARGS' });
+});
+
+test('a long labelled message keeps at most 2000 characters of its start, without a cut token', t => {
+  const { seed, store } = fixture(t);
+  const secret = 'sk-' + 'w'.repeat(40);
+  seed('lark:oc_long', '2026-02-01 00:00:00', '[Report bot] daily\n' + 'b'.repeat(1975) + ' ' + secret + ' end');
+  const preview = store.queries.listGroups({ limit: 1, raw: true })[0].preview;
+  assert.equal(preview.messageRaw, '[Report bot] daily\n' + 'b'.repeat(1975) + '…');
+  assert.equal(preview.messageRaw.includes('sk-'), false);
+  assert.equal(Object.hasOwn(store.queries.listGroups({ limit: 1 })[0].preview, 'messageRaw'), false);
+});
+
+test('on core\'s own direct channels a stored message starting with brackets stays the person\'s words', t => {
+  const { db, store } = fixture(t);
+  const insert = db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group,timestamp) VALUES('in',?,?,'delivered',?,'2026-02-01 00:00:00')");
+  const head = db.prepare('INSERT INTO group_heads VALUES(?,?)');
+  head.run('dashboard:c1', insert.run('dashboard', '[urgent] call me back', 'dashboard:c1').lastInsertRowid);
+  head.run('multica:t1', insert.run('multica', '[urgent] call me back', 'multica:t1').lastInsertRowid);
+  const rows = Object.fromEntries(store.queries.listGroups({ limit: 2 }).map(row => [row.sessionGroup, row.preview]));
+  assert.equal(rows['dashboard:c1'].message, '[urgent] call me back');
+  assert.equal(Object.hasOwn(rows['dashboard:c1'], 'messageSource') || Object.hasOwn(rows['dashboard:c1'], 'messageRaw'), false);
+  assert.equal(rows['multica:t1'].message, 'call me back');
+  assert.deepEqual(rows['multica:t1'].messageSource, { kind: 'header' });
 });
 
 test('store rejects invalid and conflicting filters before reading', t => {

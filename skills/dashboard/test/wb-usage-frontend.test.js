@@ -6,6 +6,7 @@ import { cachePath, renderUsage, createUsagePage, usagePath, formatUsageCount, b
 import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+import { markCurrentTab } from '../public/js/wb/view-mode.js';
 
 // Direct modules with injected DOM, charts and reads; no browser, network, storage or processes.
 const fixture = () => {
@@ -326,4 +327,20 @@ test('beyond the seven days of runtime events the unknown cards take full rows a
   assert.ok(tokens.classList.contains('wb-usage-wide'));
   const cost = cards.find(node => node.textContent.includes('wb.usage.cost'));
   assert.equal(cost.classList.contains('wb-usage-wide'), false);
+});
+
+test('the usage page starts with its range controls; the nav button says which page is current', async () => {
+  const f = fixture();
+  const page = createUsagePage({ ...f, read: async () => value });
+  await page.open();
+  assert.equal(f.root.children[0].classList.contains('wb-usage-controls'), true);
+  assert.equal(allNodes(f.root).some(node => /^H[12]$/.test(node.tagName)), false, 'no page heading repeats the nav');
+  assert.equal(allNodes(f.root).some(node => node.textContent === 'wb.nav.usage'), false);
+  page.destroy();
+  const tabs = ['overview', 'trends', 'settings'].map(name => { const tab = f.document.createElement('button'); tab.dataset.tab = name; return tab; });
+  tabs[0].setAttribute('aria-current', 'page');
+  markCurrentTab(tabs, 'trends');
+  assert.deepEqual(tabs.map(tab => tab.attributes['aria-current'] ?? null), [null, 'page', null]);
+  markCurrentTab(tabs, 'settings');
+  assert.deepEqual(tabs.map(tab => tab.attributes['aria-current'] ?? null), [null, null, 'page']);
 });

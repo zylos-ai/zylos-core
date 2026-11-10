@@ -1273,7 +1273,7 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(pathname)) {
+  if (['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(pathname) || /^\/api\/workbench\/groups\/[^/]+\/raw$/.test(pathname)) {
     try { sendJson(res, 200, await workbenchResponse(workbench, pathname, url.searchParams)); }
     catch (error) {
       sendJson(res, error.statusCode ?? 500, { error: error.statusCode ? error.code : 'internal_error',

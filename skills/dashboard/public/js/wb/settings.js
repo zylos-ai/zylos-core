@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=105';
+import { element, icon } from './plain-text.js?v=106';
 import { createSettingsDrawer } from './settings-drawer.js?v=104';
 
 export const settingsSections = ['defaults', 'pricing', 'keys', 'fleet', 'observer', 'ui'];

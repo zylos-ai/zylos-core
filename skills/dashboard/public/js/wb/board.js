@@ -1,6 +1,6 @@
-import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js?v=105';
-import { toolLabel, waitText } from './view-mode.js?v=115';
-import { activityStrip } from './activity-strip.js?v=105';
+import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js?v=106';
+import { toolLabel, waitText } from './view-mode.js?v=116';
+import { activityStrip } from './activity-strip.js?v=106';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
   (a.mode === 'default' || (a.model === b.model && a.effort === b.effort));

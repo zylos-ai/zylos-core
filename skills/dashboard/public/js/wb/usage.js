@@ -1,6 +1,6 @@
-import { element, icon } from './plain-text.js?v=105';
-import { money } from './instance-strip.js?v=118';
-import { dateField } from './date-field.js?v=105';
+import { element, icon } from './plain-text.js?v=106';
+import { money } from './instance-strip.js?v=119';
+import { dateField } from './date-field.js?v=106';
 import { instantFromInput } from './instance-zone.js?v=100';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];
@@ -262,7 +262,6 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
   document = root.ownerDocument, t = key => key, chartFactory = defaultChart } = {}) {
   let generation = 0, active = false, owner = null, data = null, rendered = null, range = '7d', cacheRate = null;
   root.classList?.add('wb-usage-page');
-  const title = element(document, 'h2', t('wb.nav.usage'), 'wb-usage-title');
   const controls = element(document, 'div', undefined, 'wb-usage-controls');
   // Fixed ranges are a segmented control; the custom dates stay visible and apply on their own.
   const seg = element(document, 'div', undefined, 'wb-seg'); seg.id = 'wb-usage-range';
@@ -289,7 +288,7 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
   controls.append(seg, custom);
   const status = element(document, 'p', undefined, 'wb-usage-status'); status.id = 'wb-usage-status'; status.setAttribute('role', 'status');
   const deletionNotice = element(document, 'p', t('wb.usage.deletedConversations'), 'wb-usage-deletion-note');
-  const body = element(document, 'div'); body.id = 'wb-usage-body'; root.replaceChildren(title, controls, deletionNotice, status, body);
+  const body = element(document, 'div'); body.id = 'wb-usage-body'; root.replaceChildren(controls, deletionNotice, status, body);
   const mark = () => {
     choices.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.range === range)));
     const open = customOpen || range === 'custom';
@@ -297,7 +296,6 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     controls.classList.toggle('wb-usage-custom-open', open);
   };
   const draw = () => {
-    title.textContent = t('wb.nav.usage');
     deletionNotice.textContent = t('wb.usage.deletedConversations');
     for (const button of choices) button.textContent = t('wb.usage.range.' + button.dataset.range);
     customToggle.textContent = t('wb.usage.range.custom');

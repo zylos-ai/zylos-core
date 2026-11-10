@@ -347,8 +347,8 @@ test('read-scoped API authentication permits new routes while unauthenticated re
     cleanupSessions() {}, cleanupExpiredApiSessions() {},
   });
   t.after(() => clearInterval(gate._cleanupTimer));
-  const service = { getSnapshot: async () => ({ rows: [] }), search: async () => ({ rows: [] }) };
-  for (const pathname of ['/api/workbench/groups', '/api/workbench/groups/search']) {
+  const service = { getSnapshot: async () => ({ rows: [] }), search: async () => ({ rows: [] }), raw: async () => ({ raw: null }) };
+  for (const pathname of ['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/groups/telegram%3Ag0/raw']) {
     for (const authorized of [false, true]) {
       const res = { headers: {}, setHeader(key, value) { this.headers[key] = value; }, getHeader(key) { return this.headers[key]; },
         writeHead(status) { this.status = status; }, end(body) { this.body = body; } };
@@ -892,4 +892,37 @@ test('group thresholds distinguish the default alias from a fixed version overri
   const rows = (await f.service.getSnapshot()).rows;
   assert.equal(rows.find(row => row.sessionGroup === 'telegram:alias').rotationThreshold, 30);
   assert.equal(rows.find(row => row.sessionGroup === 'telegram:fixed').rotationThreshold, 40);
+});
+
+// Injected Core CLI and owned temporary root (fixture); no live DB/PM2/tmux/network. Run for changes to the
+// per-group stored-message read or its route; skip rendering-only edits.
+test('a group\'s stored message is read on request, for that exact group, redacted', async t => {
+  const f = fixture(t), secret = 'sk-' + 'r'.repeat(32), reads = [];
+  const stored = (sessionGroup, messageRaw) => ({ sessionGroup, preview: { message: 'x', messageSource: { kind: 'header' }, messageRaw } });
+  // Key search puts the exact key first; without one, its single row is a newer group containing the key.
+  const groups = { 'telegram:g1': stored('telegram:g1', '[Bot] line one\nuse ' + secret), origin: stored('origin', '[Scheduled Task: t1] check') };
+  f.cli.runC4Db = async args => {
+    reads.push(args);
+    const key = args[args.indexOf('--key-match') + 1];
+    return { ok: true, readAt: f.now(), data: [groups[key] ?? stored(key + '0', 'other group')] };
+  };
+  const value = await workbenchResponse(f.service, '/api/workbench/groups/telegram%3Ag1/raw', new URLSearchParams());
+  assert.deepEqual(value, { raw: '[Bot] line one\nuse [REDACTED]' });
+  assert.deepEqual(reads, [['groups', '--key-match', 'telegram:g1', '--limit', '1', '--raw', '--json']]);
+  assert.deepEqual(await f.service.raw('telegram:g2'), { raw: null }, 'a group not found has no stored message');
+  // Scheduled tasks often land in the origin group, whose key is not a channel key.
+  assert.deepEqual(await workbenchResponse(f.service, '/api/workbench/groups/origin/raw', new URLSearchParams()), { raw: '[Scheduled Task: t1] check' });
+  f.cli.runC4Db = async args => { reads.push(args); return { ok: false, reason: 'c4_groups_failed', readAt: f.now() }; };
+  await assert.rejects(f.service.raw('telegram:g1'), { statusCode: 502, code: 'group_raw_failed' });
+  const before = reads.length;
+  for (const bad of ['%E0%A4%A', '--x', 'a%20b', 'tg%3A']) {
+    await assert.rejects(workbenchResponse(f.service, `/api/workbench/groups/${bad}/raw`, new URLSearchParams()), { statusCode: 400, code: 'SESSION_GROUP_INVALID' });
+  }
+  assert.equal(reads.length, before, 'invalid keys never reach the CLI');
+  // The polled snapshot never asks for stored messages.
+  const polled = [];
+  f.cli.runC4Db = async args => { polled.push(args); return { ok: true, readAt: f.now(), data: args[0] === 'groups' ? { groups: [], hasOlder: false } : { groups: [], globalFence: null } }; };
+  f.advance(5000);
+  await f.service.getSnapshot();
+  assert.ok(polled.length > 0 && polled.every(args => !args.includes('--raw')));
 });

@@ -43,6 +43,14 @@ const tools = {
 export const toolLabel = (name, level = 'plain', t) => level === 'plain'
   ? (t ? t('wb.tool.' + (name in tools ? name : 'unknown')) : tools[name] ?? '使用工具') : name;
 
+/** The nav button of the page on screen is the current page for assistive technology; no other button is. */
+export function markCurrentTab(tabs, name) {
+  for (const tab of tabs) {
+    if (tab.dataset.tab === name) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  }
+}
+
 export function resolveTheme(stored, matchMedia = globalThis.matchMedia) {
   if (stored === 'system') return matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   return ['light', 'dark'].includes(stored) ? stored : 'light';

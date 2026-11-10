@@ -1,6 +1,6 @@
 import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=104';
-import { element } from './plain-text.js?v=105';
-import { attachmentDisplayText } from './chat-attachments.js?v=5';
+import { element } from './plain-text.js?v=106';
+import { attachmentDisplayText } from './chat-attachments.js?v=6';
 import { formatDuration } from './duration-format.js?v=1';
 
 export { parseC4Content };

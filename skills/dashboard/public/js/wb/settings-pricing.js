@@ -1,5 +1,5 @@
-import { element, icon, runtimeName } from './plain-text.js?v=105';
-import { money } from './instance-strip.js?v=118';
+import { element, icon, runtimeName } from './plain-text.js?v=106';
+import { money } from './instance-strip.js?v=119';
 import { priceWithEditedBaseRates } from '../pricing-form.js';
 
 const fields = ['input', 'output', 'cacheRead', 'cacheCreation'];

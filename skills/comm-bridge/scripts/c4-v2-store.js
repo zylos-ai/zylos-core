@@ -1,4 +1,4 @@
-import { previewMessageText, projectC4Content } from './c4-content-projection.js';
+import { messageStart, previewMessage, projectC4Content } from './c4-content-projection.js';
 import { writeSync } from 'node:fs';
 import { composeSessionGroup, parseSessionGroup, requireGroup, validNamespace, dataError, isDataError } from './c4-session-group.js';
 import { configFunctions } from './c4-store-config.js';
@@ -144,21 +144,29 @@ export function createStore(database, dependencies = {}) {
   const transitions = transitionFunctions({ ...context, ...progress });
   Object.assign(api, deletionFunctions(context), deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
   api.buildTargetBinding = createTargetBindingBuilder({ ...context, baseline: config.baseline, resolveTarget: dependencies.resolveTarget });
-  function listGroups({ match, limit, activeSince, keyMatch } = {}) {
+  function listGroups({ match, limit, activeSince, keyMatch, raw } = {}) {
     if (match !== undefined && typeof match !== 'string') throw dataError('INVALID_ARGS', 'match must be a string');
     if (keyMatch !== undefined && (typeof keyMatch !== 'string' || !keyMatch.trim())) throw dataError('INVALID_ARGS', 'keyMatch must be a nonempty string');
     if (activeSince !== undefined && (!Number.isSafeInteger(activeSince) || activeSince < 0)) throw dataError('INVALID_ARGS', 'activeSince must be nonnegative integer milliseconds');
     if ([match, activeSince, keyMatch].filter(value => value !== undefined).length > 1) throw dataError('INVALID_ARGS', 'Group filters are mutually exclusive');
     if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) throw dataError('INVALID_ARGS', 'limit must be positive');
+    if (raw !== undefined && typeof raw !== 'boolean') throw dataError('INVALID_ARGS', 'raw must be a boolean');
     return snapshot(c => {
       const millis = value => Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
       function row(head) {
         const preview = get(c, "SELECT id,timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
-        const text = preview ? [...projectC4Content(preview.content, { c4Id: preview.id })].slice(0, 80).join('') : null;
+        const projection = preview ? projectC4Content(preview.content, { c4Id: preview.id }) : null;
+        const text = preview ? [...projection].slice(0, 80).join('') : null;
         if (match !== undefined && !head.session_group.toLowerCase().includes(match.toLowerCase()) && !(text ?? '').toLowerCase().includes(match.toLowerCase())) return null;
         const parsed = parseSessionGroup(head.session_group);
         const componentName = parsed && parsed.namespace !== 'origin' ? get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', parsed.namespace)?.component_name ?? null : null;
-        return { sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text, message: previewMessageText(preview.content) } : null };
+        return { sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? previewOf(preview, text, projection) : null };
+      }
+      function previewOf(preview, text, projection) {
+        const { text: message, source } = previewMessage(preview.content, { channel: preview.channel });
+        // On request, a message that is not a person's own words also carries its stored start, for a technical view.
+        return { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text, message,
+          ...(source ? { messageSource: source, ...(raw ? { messageRaw: messageStart(projection) } : {}) } : {}) };
       }
       const headsSql = 'SELECT h.session_group,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id ORDER BY h.head_id DESC';
       if (activeSince !== undefined) {
@@ -181,7 +189,9 @@ export function createStore(database, dependencies = {}) {
           const head = get(c, 'SELECT h.head_id,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id WHERE h.session_group=?', session_group);
           if (head) heads.push({ ...head, session_group });
         }
-        heads.sort((a, b) => b.head_id - a.head_id);
+        // A group whose key equals the search comes first, so one group can be read with limit 1; then newest first.
+        const exact = head => head.session_group === keyMatch;
+        heads.sort((a, b) => exact(b) - exact(a) || b.head_id - a.head_id);
         return heads.slice(0, limit).map(row);
       }
       const result = [];

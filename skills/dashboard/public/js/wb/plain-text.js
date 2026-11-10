@@ -50,14 +50,19 @@ export function chatKind(row) {
 }
 /**
  * What the group last received, for one line: the person's words, or, when the message carried only channel
- * wrapping (no readable text), the channel and the time it arrived. Empty without a preview.
+ * wrapping (no readable text), the channel and the time it arrived. Text that is not a person's own words starts
+ * with where it came from: "Scheduled task · <name>", or the channel for a header core does not know. Empty
+ * without a preview.
  */
 export function lastReceived(row, t = key => key, { now = Date.now(), locale = globalThis.document?.documentElement?.lang || undefined, key = 'wb.board.lastReceived' } = {}) {
   const preview = row.preview;
   if (!preview) return '';
-  if (preview.text) return t(key, { text: preview.text });
   const component = preview.channel ?? platformOf(row);
   const channel = ['telegram', 'lark', 'feishu', 'web-console', 'openmax', 'wechat', 'dashboard'].includes(component) ? t('wb.platform.' + component) : component;
+  if (preview.text) {
+    const source = preview.source?.kind === 'scheduled_task' ? t('wb.board.sourceScheduled') : preview.source?.kind === 'channel' ? channel : null;
+    return t(key, { text: source ? t('wb.board.sourceText', { source, text: preview.text }) : preview.text });
+  }
   const date = preview.timestamp == null ? null : new Date(preview.timestamp);
   if (!date || !Number.isFinite(date.getTime())) return t('wb.board.lastReceivedFrom', { channel });
   const when = formatZoned(date, locale, zonedDay(date) === zonedDay(now) ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
