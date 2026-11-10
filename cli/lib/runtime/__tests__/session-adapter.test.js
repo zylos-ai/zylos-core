@@ -83,7 +83,7 @@ test('auth checks use injected home/environment/executor without production auth
   try {
     const claude=new ClaudeAdapter({root:home,env,execFile:async (_,__,options)=>{assert.equal(options.env.HOME,home);return {stdout:'ok'};}});
     assert.equal((await claude.checkAuth()).status,'success');
-    const codex=new CodexAdapter({env,execFile:async (_,__,options)=>{assert.equal(options.env,env);return {stderr:'Not logged in'};}});
+    const codex=new CodexAdapter({root:home,env,execFile:async (_,__,options)=>{assert.deepEqual(options.env,env);return {stderr:'Not logged in'};}});
     assert.equal((await codex.checkAuth()).status,'failure');
   } finally {await fs.rm(home,{recursive:true,force:true});}
 });

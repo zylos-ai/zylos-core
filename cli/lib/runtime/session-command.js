@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest } from './tmux-env.js';
 import { buildKickPrompt } from './kick-prompt.js';
 import { adapterError } from './tmux-protocol.js';
-import { CLAUDE_BUILTIN_ENV_KEYS } from '../config.js';
+import { RUNTIME_BUILTIN_ENV_KEYS } from '../config.js';
 export { adapterError } from './tmux-protocol.js';
 // With native (subscription) login these would override it, so they are not carried.
 export const CLAUDE_NATIVE_AUTH_CONFLICT_KEYS = Object.freeze(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
@@ -81,13 +81,28 @@ export function launchEnvironment(root, processEnv = process.env, { runtime } = 
   const {env} = dotenvVars.ZYLOS_CLEAN_ENV === 'false'
     ? buildCompatEnv({processEnv, dotenvVars})
     : buildCleanEnv({processEnv, dotenvVars, manifest:loadRuntimeEnvManifest(root), uid:process.getuid?.()});
-  // Built-in Claude passthrough, independent of runtime-env.manifest: applied
+  // Built-in runtime passthrough, independent of runtime-env.manifest: applied
   // after the manifest (clean and compat mode) so a manifest cannot drop it.
-  if (runtime === 'claude') {
-    for (const key of CLAUDE_BUILTIN_ENV_KEYS) if (dotenvVars[key]) env[key] = dotenvVars[key];
+  if (runtime) {
+    for (const key of RUNTIME_BUILTIN_ENV_KEYS) if (dotenvVars[key]) env[key] = dotenvVars[key];
   }
   for (const key of ['ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG','CLAUDECODE','CLAUDE_CODE_ENTRYPOINT']) delete env[key];
   env.ZYLOS_DIR = root;
+  return env;
+}
+/**
+ * Auth probe environment: the inherited env, with the built-in passthrough
+ * variables taken exactly as a new session of `runtime` gets them.
+ */
+export function probeEnvironment(root, processEnv, runtime) {
+  const env = { ...processEnv };
+  let sessionEnv;
+  try { sessionEnv = launchEnvironment(root, processEnv, { runtime }); }
+  catch { return env; /* unreadable .env: session launch fails too; probe the inherited env */ }
+  for (const key of RUNTIME_BUILTIN_ENV_KEYS) {
+    if (Object.hasOwn(sessionEnv, key)) env[key] = sessionEnv[key];
+    else delete env[key];
+  }
   return env;
 }
 /** Shell exec works on the minimum Node release too: no resident Node parent. */

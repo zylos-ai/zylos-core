@@ -26,7 +26,7 @@ import { buildInstructionFile } from './instruction-builder.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ZYLOS_DIR } from '../config.js';
 import { ensureLaunchHooksTrusted } from './codex-launch-trust.js';
-import { adapterError, launchEnvironment, runtimeExecutable } from './session-command.js';
+import { adapterError, launchEnvironment, probeEnvironment, runtimeExecutable } from './session-command.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -106,7 +106,9 @@ export class CodexAdapter extends SessionAdapter {
    * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
-    const env = this.options.env || process.env;
+    // The inherited env, with the built-in runtime variables (OPENAI_BASE_URL,
+    // OPENAI_API_KEY, ...) taken exactly as a new Codex session gets them.
+    const env = probeEnvironment(this.options.root || ZYLOS_DIR, this.options.env || process.env, 'codex');
     // Read auth.json to determine the auth mode.
     let authMode = null;
     let apiKey = '';
