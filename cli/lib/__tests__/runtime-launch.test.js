@@ -287,12 +287,15 @@ for(const [auth,title] of [
   if(auth==='none')assert.deepEqual(f.env,originalEnv);
 });
 
-// Built-in runtime passthrough: runtime auth variables set in .env reach the
-// session without any runtime-env.manifest line, and the auth probe sees the
-// same values. Real tmux on a private socket; the model CLI is a stand-in.
+// Built-in runtime passthrough: each runtime's auth variables set in .env reach
+// its session without any runtime-env.manifest line, its auth probe sees the
+// same values, and the other runtime's variables in the same .env reach neither. Real tmux on a private socket; the model CLI is a stand-in.
 // Run when session launch env, the probe env or the built-in list changes.
 const builtinKeys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'OPENAI_BASE_URL', 'OPENAI_API_KEY'];
+const openaiVars = { OPENAI_BASE_URL: 'https://openai-relay.example.test/v1', OPENAI_API_KEY: 'sk-synthetic-openai-key' };
+const anthropicVars = { ANTHROPIC_BASE_URL: 'https://relay.example.test', ANTHROPIC_AUTH_TOKEN: 'synthetic-relay-token',
+  ANTHROPIC_API_KEY: secret, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-synthetic', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
 const builtinCases = {
   relay: { ANTHROPIC_BASE_URL: 'https://relay.example.test', ANTHROPIC_AUTH_TOKEN: 'synthetic-relay-token', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
   'API key': { ANTHROPIC_API_KEY: secret },
@@ -303,11 +306,15 @@ async function launchAndProbe(t, dotenv, { compat = false, nativeAuth = false } 
   fs.mkdirSync(path.join(f.root, '.zylos'));
   fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), '');
   fs.writeFileSync(path.join(f.root, '.env'), (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
-    + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+    + Object.entries({ ...dotenv, ...openaiVars }).map(([key, value]) => `${key}=${value}\n`).join(''));
   f.env.ANTHROPIC_BASE_URL = 'https://stale-process.example.test';
   const session = await f.launch(), probe = await f.probe();
   assert.equal(probe.outcome.status, 'success');
   for (const key of builtinKeys) assert.equal(session.env[key], probe.env[key], `session and probe agree on ${key}`);
+  for (const key of Object.keys(openaiVars)) {
+    assert.equal(session.env[key], undefined, `Claude session must not carry ${key}`);
+    assert.equal(probe.env[key], undefined, `Claude probe must not carry ${key}`);
+  }
   return { session: session.env, probe: probe.env };
 }
 for (const compat of [false, true]) for (const [name, dotenv] of Object.entries(builtinCases)) {
@@ -330,13 +337,13 @@ test('Claude subscription login keeps API key and setup token out of session and
   }
 });
 
-for (const compat of [false, true]) test(`Codex OpenAI variables only in .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async t => {
+for (const compat of [false, true]) test(`Codex: only OpenAI variables from .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async t => {
   const f = setup(t, CodexAdapter);
-  const dotenv = { OPENAI_BASE_URL: 'https://openai-relay.example.test/v1', OPENAI_API_KEY: 'sk-synthetic-openai-key' };
+  const dotenv = openaiVars;
   fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), '');
   fs.writeFileSync(path.join(f.root, '.env'), (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
-    + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+    + Object.entries({ ...dotenv, ...anthropicVars }).map(([key, value]) => `${key}=${value}\n`).join(''));
   f.env.OPENAI_BASE_URL = 'https://stale-process.example.test/v1';
   const session = (await f.launch()).env, probe = await f.probe();
   assert.equal(probe.outcome.status, 'success');
@@ -345,6 +352,10 @@ for (const compat of [false, true]) test(`Codex OpenAI variables only in .env re
     assert.equal(probe.env[key], value, `probe ${key}`);
   }
   for (const key of builtinKeys) assert.equal(session[key], probe.env[key], `session and probe agree on ${key}`);
+  for (const key of Object.keys(anthropicVars)) {
+    assert.equal(session[key], undefined, `Codex session must not carry ${key}`);
+    assert.equal(probe.env[key], undefined, `Codex probe must not carry ${key}`);
+  }
 });
 
 // Preserve native-auth precedence and daemon isolation through the target API.

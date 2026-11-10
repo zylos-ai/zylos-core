@@ -83,9 +83,7 @@ export function launchEnvironment(root, processEnv = process.env, { runtime } = 
     : buildCleanEnv({processEnv, dotenvVars, manifest:loadRuntimeEnvManifest(root), uid:process.getuid?.()});
   // Built-in runtime passthrough, independent of runtime-env.manifest: applied
   // after the manifest (clean and compat mode) so a manifest cannot drop it.
-  if (runtime) {
-    for (const key of RUNTIME_BUILTIN_ENV_KEYS) if (dotenvVars[key]) env[key] = dotenvVars[key];
-  }
+  for (const key of RUNTIME_BUILTIN_ENV_KEYS[runtime] ?? []) if (dotenvVars[key]) env[key] = dotenvVars[key];
   for (const key of ['ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP','ZYLOS_MODEL_CONFIG','CLAUDECODE','CLAUDE_CODE_ENTRYPOINT']) delete env[key];
   env.ZYLOS_DIR = root;
   return env;
@@ -99,7 +97,7 @@ export function probeEnvironment(root, processEnv, runtime) {
   let sessionEnv;
   try { sessionEnv = launchEnvironment(root, processEnv, { runtime }); }
   catch { return env; /* unreadable .env: session launch fails too; probe the inherited env */ }
-  for (const key of RUNTIME_BUILTIN_ENV_KEYS) {
+  for (const key of RUNTIME_BUILTIN_ENV_KEYS[runtime] ?? []) {
     if (Object.hasOwn(sessionEnv, key)) env[key] = sessionEnv[key];
     else delete env[key];
   }
