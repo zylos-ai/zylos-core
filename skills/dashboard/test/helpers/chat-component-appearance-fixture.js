@@ -14,6 +14,17 @@ const blocks = [
   { id: 'breakdown', type: 'breakdown', data: { parts: [{ key: 'a', label: '完成', value: 14 }, { key: 'b', label: '评审', value: 5 }] } },
   { id: 'category', type: 'category_series', data: { points: [{ key: 'a', label: '告警项', value: 12, assessment: { status: 'critical' } }, { key: 'b', label: '正常项', value: 3 }], reference: { label: '告警线', value: 10 } } },
 ];
+blocks.push(
+  ...[[1, 'category-single'], [2, 'category-pair'], [4, 'category-reference']].map(([count, id]) => ({
+    id, type: 'category_series', data: { title: count + ' 项分类对比',
+      points: Array.from({ length: count }, (_, i) => ({ key: 'item_' + i, label: '分类 ' + (i + 1), value: [12, 8, 5, 3][i] })),
+      ...(count === 4 ? { reference: { label: '告警线', value: 10 } } : {}),
+    },
+  })),
+  { id: 'segmented', type: 'form_intent', data: { title: '登记主体信息', fields: [
+    { key: 'kind', label: '主体类型', type: 'single_select', required: true, defaultValue: 'company', options: [{ id: 'person', label: '个人' }, { id: 'company', label: '企业' }] },
+  ], action: { type: 'form.submit', target: 'answer.form' } } },
+);
 const resources = [];
 for (const [index, value] of blocks.entries()) {
   const block = { ...value, schemaVersion: 1, fallbackText: value.id };
@@ -48,7 +59,6 @@ const previewUrl = URL.createObjectURL(blob);
 const tray = createChatAttachment({ document, t, attachment: { name: 'a.png', kind: 'image', status: 'ready' }, mode: 'tray', localUrl: previewUrl });
 preview.append(tray.node); resources.push(tray); tray.mount();
 window.addEventListener('beforeunload', () => { resources.forEach(resource => resource.destroy()); URL.revokeObjectURL(previewUrl); });
-window.componentFixtureReady = true;
 
 function message(id) {
   const article = document.createElement('article'); article.className = 'chat-message conversation-message chat-out'; article.id = id;
@@ -81,3 +91,21 @@ function appendContent(id, row) {
   if (content.classList.contains('conversation-chart-content') || content.classList.contains('conversation-composed-content')) body.classList.add('conversation-message-body-wide');
   body.append(content); resources.push(content); content.mount();
 }
+
+const plans = ['方案甲', '方案乙', '方案丙'];
+const planBlocks = plans.map((title, i) => ({ id: 'plan-' + i, type: 'markdown', schemaVersion: 1, data: { text: title + '：按统一的成本、维护工作和交付周期比较。桌面应并排显示，手机依次阅读。' } }));
+const columnsEnvelope = { version: 1, kind: 'message', messageId: 'columns-message', fallbackText: '三个方案并排比较', blocks: planBlocks,
+  metadata: { view: { schemaVersion: 1, root: 'columns-root', nodes: [
+    { id: 'columns-root', type: 'columns', layout: 'balanced', children: plans.map((_, i) => 'plan-node-' + i) },
+    ...plans.map((_, i) => ({ id: 'plan-node-' + i, type: 'block', blockId: 'plan-' + i })),
+  ] } },
+};
+const columnsRow = { id: 40, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(columnsEnvelope) };
+if (parseC4Content(columnsRow.content).kind !== 'envelope') throw new Error('Invalid columns fixture');
+appendContent('columns', columnsRow);
+const errorsTray = document.createElement('div'); errorsTray.className = 'conversation-upload-tray'; errorsTray.id = 'tray-errors'; document.querySelector('main').append(errorsTray);
+for (const status of ['ready', 'failed', 'expired']) {
+  const resource = createChatAttachment({ document, t, mode: 'tray', attachment: { name: status + '.txt', kind: 'file', status }, onRetry: () => {}, onRemove: () => {} });
+  errorsTray.append(resource.node); resources.push(resource); resource.mount();
+}
+window.componentFixtureReady = true;

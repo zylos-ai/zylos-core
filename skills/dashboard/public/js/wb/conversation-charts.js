@@ -273,13 +273,18 @@ export function conversationChartConfig(block, { text = '#526170', muted = '#7a8
   } else if (block.type === 'category_series') {
     indexAxis = 'y'; labels = data.points.map(point => point.label);
     scales.x = { ...axis(data.xLabel, data.unit), beginAtZero: true, display: !!data.xLabel,
-      ticks: { display: false }, grid: { display: false }, border: { display: false } };
+      // The optional title owns exactly 32px: a 16px line and 8px above/below.
+      title: { display: !!data.xLabel, text: data.xLabel, color: text, font: { ...tickFont, lineHeight: '16px' }, padding: 8 },
+      ticks: { display: false }, grid: { display: false, drawTicks: false }, border: { display: false } };
     scales.y = { title: { display: !!data.yLabel, text: data.yLabel, color: text, font: tickFont },
-      ticks: { color: text, font: { family: font, size: 12 }, padding: 12, crossAlign: 'far' },
-      grid: { display: false }, border: { display: false } };
+      ticks: { color: text, font: { family: font, size: 12 }, padding: 12, crossAlign: 'far', autoSkip: false },
+      grid: { display: false }, border: { display: false },
+      // Offset category rows already leave half a row around the first/last label.
+      // Extra scale padding would subtract that space from the fixed row pitch.
+      afterFit(scale) { scale.paddingTop = 0; scale.paddingBottom = 0; } };
     datasets.push({ label: data.yLabel ?? data.title ?? '', data: data.points.map(point => point.value),
       backgroundColor: data.points.map(point => assessmentColors[point.assessment?.status] ?? colors[0]),
-      borderRadius: 4, borderSkipped: 'start', maxBarThickness: 20, categoryPercentage: 0.72, unit: data.unit });
+      borderRadius: 4, borderSkipped: 'start', barThickness: 20, categoryPercentage: 1, unit: data.unit });
     if (data.reference) datasets.push({ type: 'line', label: data.reference.label,
       data: data.points.map((point, index) => ({ x: data.reference.value, y: index })),
       borderColor: muted, borderDash: [4, 4], borderWidth: 1.25, pointRadius: 0, pointHoverRadius: 0, unit: data.unit });
@@ -302,7 +307,7 @@ export function conversationChartConfig(block, { text = '#526170', muted = '#7a8
   return { type, data: { ...(labels ? { labels } : {}), datasets }, plugins: [valueMarks], options: {
     indexAxis, locale, responsive: true, maintainAspectRatio: false, animation: false, color: text,
     font: { family: font }, layout: { autoPadding: block.type === 'time_series',
-      padding: { top: block.type === 'category_series' && data.reference ? 18 : block.type === 'breakdown' ? 0 : 6, right: 0, bottom: 0, left: 0 } },
+      padding: { top: block.type === 'category_series' ? (data.reference ? 18 : 0) : block.type === 'breakdown' ? 0 : 6, right: 0, bottom: 0, left: 0 } },
     interaction: type === 'line' ? { mode: 'index', intersect: false } : { mode: 'nearest', intersect: true },
     scales, plugins: { conversationValues: marks ?? false,
     legend: { display: block.type === 'time_series' && (multi || !data.title), align: 'start', onClick: null,
@@ -345,7 +350,7 @@ export function conversationChartResource({ document, block, fallback, t = key =
   canvas.setAttribute('aria-label', block.data.title ?? block.data.summary ?? block.fallbackText);
   plot.hidden = true; plot.append(canvas);
   if (block.type === 'category_series') plot.style.setProperty('--chat-plot-h',
-    `${block.data.points.length * 34 + (block.data.reference ? 18 : 0) + (block.data.xLabel ? 40 : 0)}px`);
+    `${block.data.points.length * 34 + (block.data.reference ? 18 : 0) + (block.data.xLabel ? 32 : 0)}px`);
   fallback.insertBefore(plot, fallback.querySelector('.chat-chart-series'));
   let chart, appearance, details, detailsSummary, legend, destroyed = false;
   return { node: fallback,

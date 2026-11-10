@@ -840,7 +840,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-view-section .chat-block { margin: 0 0 8px; }
 .conversation-view-columns > .chat-block { margin: 0; }
 
-@container (max-width: 740px) {
+@container (max-width: 560px) {
   .conversation-view-columns,.conversation-view-columns[data-layout="sidebar"] { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -1414,6 +1414,10 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 
 /* Composer previews remain compact inside the bounded upload tray. */
 .conversation-page .conversation-upload-tray .chat-attachment { width: 100%; margin: 0; align-self: start; }
+.conversation-page .conversation-upload-tray .chat-attachment:is([data-upload-state="failed"], [data-upload-state="expired"]) {
+  box-shadow: inset 0 0 0 1px var(--c-danger-ink), var(--c-shadow-card);
+}
+.conversation-page .conversation-upload-tray .chat-attachment:is([data-upload-state="failed"], [data-upload-state="expired"]) .chat-attachment-status { color: var(--c-danger-ink); }
 .conversation-page .conversation-upload-tray .chat-attachment-image-frame,
 .conversation-page .conversation-upload-tray .chat-attachment-image-frame[data-state="loaded"] > img { max-height: 72px; }
 
@@ -1429,7 +1433,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .chat-question-option { min-height: 48px; padding: 12px; }
   .conversation-page .chat-form-chip { height: 40px; }
   .conversation-page .chat-form-segments { width: 100%; box-sizing: border-box; }
-  .conversation-page .chat-question .chat-form-segment { flex: 1 1 0; font-size: 14px; }
+  .conversation-page .chat-question .chat-form-segment { flex: 1 1 0; height: var(--c-h); font-size: 14px; }
   .conversation-page .conversation-chart-plot { height: 184px; }
   .conversation-page .chat-block-category_series .conversation-chart-plot { height: var(--chat-plot-h, 184px); }
   .conversation-page .chat-block-breakdown .conversation-chart-plot { height: 24px; }

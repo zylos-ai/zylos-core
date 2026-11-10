@@ -175,7 +175,7 @@ export async function runVisualCase(t, sandbox) {
             assert.equal(await part.locator('[data-action="cancelAnswer"]').isEnabled(), true);
           } else if (block.type === 'form_intent') {
             assert.equal(await part.locator('.chat-question-field').count(), block.data.fields.length);
-            for (const field of block.data.fields) assert.equal(await part.getByLabel(field.label, { exact: true }).isEnabled(), true);
+            for (const field of block.data.fields) assert.equal(await part.getByLabel(field.label, { exact: true }).locator('visible=true').isEnabled(), true);
             assert.equal(await part.locator('[data-action="answer"]').isEnabled(), true);
           }
         }

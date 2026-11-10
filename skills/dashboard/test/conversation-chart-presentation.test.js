@@ -144,13 +144,30 @@ test('resource creates one HTML breakdown legend and updates its formatted value
   resource.destroy(); assert.equal(destroys, 1);
 });
 
-test('category resource height follows row count and reference label space', () => {
-  for (const count of [1, 2, 20]) {
-    const document = createDocument(), fallback = document.createElement('figure');
-    const block = category(Array.from({ length: count }, (_, index) => ({ label: String(index), value: index })));
-    block.data.reference = { label: 'Target', value: 1 };
-    const resource = conversationChartResource({ document, fallback, block });
-    assert.equal(fallback.querySelector('.conversation-chart-plot').style['--chat-plot-h'], `${count * 34 + 18}px`);
-    resource.destroy();
+test('category resources retain full row pitch and visible bars for short and long lists', t => {
+  for (const [count, reference, xLabel] of [[1, false], [2, false], [4, true], [20, true], [1, true, true], [4, true, true]]) {
+    for (const width of [700, 290]) {
+      const document = createDocument(), fallback = document.createElement('figure');
+      const block = category(Array.from({ length: count }, (_, index) => ({ label: `Channel ${index + 1}`, value: index + 1 })));
+      if (xLabel) block.data.xLabel = 'Requests';
+      if (reference) block.data.reference = { label: 'Target', value: 10 };
+      const resource = conversationChartResource({ document, fallback, block });
+      const height = parseFloat(fallback.querySelector('.conversation-chart-plot').style['--chat-plot-h']);
+      const { chart } = render(t, block, { width, height });
+      assert.ok(Math.abs(chart.chartArea.height - count * 34) < 0.01, `${count} rows ${width}px: chart area ${chart.chartArea.height}`);
+      const bars = chart.getDatasetMeta(0).data;
+      assert.equal(bars.length, count);
+      for (const [index, bar] of bars.entries()) {
+        assert.ok(Math.abs(bar.height - 20) < 0.01, `${count} rows: bar ${index} height ${bar.height}`);
+        if (index) assert.ok(Math.abs(bar.y - bars[index - 1].y - 34) < 0.01, `${count} rows: row pitch`);
+      }
+      assert.equal(chart.scales.y.getLabelItems().length, count, 'every category label remains visible');
+      const labels = chart.scales.y.getLabelItems();
+      for (let index = 1; index < labels.length; index++) {
+        const previous = labels[index - 1], current = labels[index];
+        assert.ok(current.options.translation[1] - previous.options.translation[1] >= current.font.lineHeight, 'category labels cannot overlap');
+      }
+      resource.destroy();
+    }
   }
 });

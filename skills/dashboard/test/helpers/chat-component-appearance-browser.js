@@ -70,7 +70,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     catch (error) { throw new Error(error.message + '; errors=' + errors.join('; ') + '; missing=' + missing.join('; ')); }
     await page.locator('#image .chat-attachment-image-content').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.querySelector('#image .chat-attachment-image-content').naturalWidth === 160 && document.querySelector('#tray .chat-attachment-image-content').naturalWidth === 160);
-    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 3);
+    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 6);
     await page.evaluate(() => document.fonts.ready);
     const actual = await page.evaluate(() => {
       const answer = document.querySelector('#answered .chat-question-answer'), list = document.querySelector('#answered .chat-choice-options');
@@ -87,7 +87,16 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       const probe = document.createElement('span'); probe.style.backgroundColor = 'var(--accent)'; document.body.append(probe); const accent = getComputedStyle(probe).backgroundColor; probe.remove();
       const image = document.querySelector('#image .chat-attachment'), body = document.querySelector('#image .conversation-message-body');
       const trayFrame = document.querySelector('#tray .chat-attachment-image-frame'), trayImage = trayFrame.querySelector('img');
-      return { answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
+      const categoryGeometry = ['category-single', 'category-pair', 'category-reference'].map(id => {
+        const c = chart(id), bars = c.getDatasetMeta(0).data, labels = c.scales.y.getLabelItems();
+        return { id, count: bars.length, area: c.chartArea.bottom - c.chartArea.top,
+          bars: bars.map(bar => ({ height: bar.height, y: bar.y })),
+          labels: labels.map(item => ({ text: item.label, y: item.options.translation[1], height: item.font.lineHeight })),
+        };
+      });
+      const columns = [...document.querySelector('#columns .conversation-view-columns').children].map(node => { const b = node.getBoundingClientRect(); return { left: b.left, top: b.top, width: b.width, bottom: b.bottom }; });
+      const errorStyles = Object.fromEntries(['ready', 'failed', 'expired'].map(state => { const item = document.querySelector('#tray-errors [data-upload-state="' + state + '"]'); return [state, { shadow: getComputedStyle(item).boxShadow, status: item.querySelector('.chat-attachment-status').textContent }]; }));
+      return { categoryGeometry, columns, errorStyles, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
         dotAnimation: dot.animationName, dotWidth: dot.width, categoryAxis: chart('category').options.scales.x.display,
         breakdownAxis: chart('breakdown').options.scales.x.display, categoryColor: chart('category').data.datasets[0].backgroundColor[0],
         imageRatio: document.querySelector('.chat-attachment-image-frame').style.aspectRatio,
@@ -125,6 +134,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.ok(actual.checkboxSelectedRowContrast >= 3, 'selected fill contrasts with selected rows at least 3:1');
     }
     assert.ok(actual.pressed.primary.ratio >= 4.5, 'primary pressed text meets AA');
+    assert.ok(actual.pressed.question.ratio >= 4.5, 'question primary pressed text meets AA');
     assert.ok(actual.pressed.danger.ratio >= 4.5, 'danger pressed text meets AA');
     assert.ok(actual.primaryTextContrast >= 4.5, 'primary text meets AA');
     assert.ok(actual.dangerTextContrast >= 4.5, 'danger text meets AA');
@@ -139,6 +149,28 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.equal(actual.plainTextWidth, 900, 'long plain text retains its maximum width');
       assert.equal(actual.attachedFileWidth, 480, 'mixed plain text keeps its file card width');
       assert.equal(actual.chartFileBodyWidth, 720, 'markdown chart and file share the rich content width');
+    }
+    for (const category of actual.categoryGeometry) {
+      assert.ok(Math.abs(category.area - category.count * 34) <= .5, category.id + ' plot reserves a 34px row per category');
+      assert.equal(category.labels.length, category.count, category.id + ' keeps every label');
+      for (const bar of category.bars) assert.ok(Math.abs(bar.height - 20) <= .5, category.id + ' bars are 20px high');
+      for (let i = 1; i < category.bars.length; i++) {
+        assert.ok(Math.abs(Math.abs(category.bars[i].y - category.bars[i - 1].y) - 34) <= .5, category.id + ' centers use 34px pitch');
+        assert.ok(Math.abs(category.labels[i].y - category.labels[i - 1].y) >= (category.labels[i].height + category.labels[i - 1].height) / 2, category.id + ' labels do not overlap');
+      }
+    }
+    assert.equal(actual.columns.length, 3, 'all comparison columns rendered');
+    if (width === 1280) {
+      assert.ok(actual.columns.every(column => Math.abs(column.top - actual.columns[0].top) <= 1), 'wide comparison stays side by side');
+      assert.ok(actual.columns[1].left > actual.columns[0].left && actual.columns[2].left > actual.columns[1].left, 'wide columns retain source order');
+    } else {
+      assert.ok(actual.segmentHeights.every(height => height >= 40), 'phone segments keep 40px touch targets');
+      for (let i = 1; i < actual.columns.length; i++) assert.ok(actual.columns[i].top >= actual.columns[i - 1].bottom, 'phone comparison stacks in source order');
+    }
+    for (const state of ['failed', 'expired']) {
+      assert.notEqual(actual.errorStyles[state].shadow, actual.errorStyles.ready.shadow, state + ' tray item has a distinct error ring');
+      assert.match(actual.errorStyles[state].shadow, /inset/, state + ' tray error uses an inner ring');
+      assert.ok(actual.errorStyles[state].status, state + ' tray item retains the status text');
     }
     assert.ok(actual.widths.every(value => value <= 720), 'rich cards stay within the shared width');
     assert.ok(actual.scroll <= width, 'no horizontal overflow');
@@ -155,7 +187,7 @@ async function pressedContrast(page, context) {
   try {
     await cdp.send('DOM.enable'); await cdp.send('CSS.enable');
     const { root } = await cdp.send('DOM.getDocument');
-    const selectors = { primary: '#primary', danger: '#danger .wb-btn-danger' };
+    const selectors = { primary: '#primary', question: '#waiting [data-action="answer"]', danger: '#danger .wb-btn-danger' };
     for (const selector of Object.values(selectors)) {
       const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector });
       await cdp.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: ['active'] });

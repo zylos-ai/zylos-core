@@ -96,6 +96,11 @@ export async function runDisplayRefinements(sandbox) {
       const invalid = document.querySelector('#invalid');
       const danger = document.querySelector('#destructive [data-action="confirmAnswer"]');
       const normal = document.querySelector('#normal [data-action="confirmAnswer"]');
+      const consequence = document.querySelector('#destructive .chat-question-description > .chat-block-title + .chat-block-text');
+      const tokenColor = token => {
+        const probe = document.createElement('span'); probe.style.backgroundColor = `var(${token})`;
+        consequence.append(probe); const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color;
+      };
       const canvas = document.querySelector('canvas'), chart = window.Chart.getChart(canvas);
       const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
       let painted = 0;
@@ -105,7 +110,9 @@ export async function runDisplayRefinements(sandbox) {
         notice: invalid.querySelector('.chat-notice')?.textContent,
         danger: danger && { background: getComputedStyle(danger).backgroundColor, color: getComputedStyle(danger).color, severity: danger.closest('.chat-question').dataset.severity },
         normal: normal && { background: getComputedStyle(normal).backgroundColor, severity: normal.closest('.chat-question').dataset.severity },
-        border: getComputedStyle(document.querySelector('#destructive .chat-block-confirmation')).borderInlineStartColor,
+        consequence: { background: getComputedStyle(consequence).backgroundColor, shadow: getComputedStyle(consequence).boxShadow,
+          icon: getComputedStyle(consequence, '::before').backgroundColor, soft: tokenColor('--c-danger-soft'), ink: tokenColor('--c-danger-ink') },
+        cardBorderWidth: getComputedStyle(document.querySelector('#destructive .chat-block-confirmation')).borderInlineStartWidth,
         table: document.querySelector('#duration .chat-chart-table')?.textContent,
         ticks: [59,3600,5400].map(value => chart.config.options.scales.y.ticks.callback(value)),
         generatedTicks: chart.scales.y.ticks.map(tick => ({ value: tick.value, label: tick.label })),
@@ -118,7 +125,11 @@ export async function runDisplayRefinements(sandbox) {
     assert.equal(result.notice, 'Some content could not be displayed.');
     assert.equal(result.danger?.severity, 'destructive'); assert.equal(result.normal?.severity, 'normal');
     assert.notEqual(result.danger.background, result.normal.background);
-    assert.equal(result.danger.background, result.border);
+    assert.equal(result.cardBorderWidth, '0px', 'destructive cards use the consequence callout without a left border');
+    assert.equal(result.consequence.background, result.consequence.soft, 'consequence uses the semantic danger tint');
+    assert.notEqual(result.consequence.background, 'rgba(0, 0, 0, 0)');
+    assert.ok(result.consequence.shadow.includes('inset'), 'consequence retains its danger inset ring');
+    assert.equal(result.consequence.icon, result.consequence.ink, 'warning icon uses the semantic danger ink');
     for (const duration of ['59s', '1h', '1h 30m']) assert.ok(result.table?.includes(duration), duration + ' is visible in the actual data table');
     assert.equal(result.ticks.join('|'), '59s|1h|1h 30m');
     assert.deepEqual(result.generatedTicks, [
