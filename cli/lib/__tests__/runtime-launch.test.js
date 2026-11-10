@@ -330,19 +330,22 @@ describe('Claude launch — new session', () => {
     }
   });
 
-  it('spec.env excludes auth tokens when native auth is detected', async () => {
+  it('with a subscription login, the .env API key still reaches spec.env and is pre-approved', async () => {
     tmuxSessionExists = false;
-    // Simulate native auth by writing a credentials file
+    // Simulate a subscription login by writing a credentials file
     const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    const claudeJson = path.join(fakeHome, '.claude.json');
     fs.writeFileSync(credFile, JSON.stringify({
       claudeAiOauth: { refreshToken: 'fake-refresh-token' },
     }));
+    fs.rmSync(claudeJson, { force: true });
     try {
       await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
       const env = readSpecEnv();
       assert.ok(env, 'spec should be written');
-      assert.equal(env.ANTHROPIC_API_KEY, undefined, 'ANTHROPIC_API_KEY must be stripped when native auth detected');
-      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'CLAUDE_CODE_OAUTH_TOKEN must be stripped when native auth detected');
+      assert.equal(env.ANTHROPIC_API_KEY, 'sk-ant-secret-test-key-do-not-expose');
+      const approved = JSON.parse(fs.readFileSync(claudeJson, 'utf8')).customApiKeyResponses.approved;
+      assert.ok(approved.includes('sk-ant-secret-test-key-do-not-expose'.slice(-20)), 'API key must be pre-approved');
     } finally {
       fs.unlinkSync(credFile);
     }
@@ -493,14 +496,19 @@ describe('Claude launch — built-in passthrough from .env', () => {
     });
   }
 
-  it('subscription login keeps API key and setup token out of session and probe', async () => {
-    const { session, probe } = await launchAndProbe({ ...cases.relay, ...cases['API key'], ...cases['setup token'] }, { nativeAuth: true });
-    for (const env of [session, probe]) {
-      assert.equal(env.ANTHROPIC_API_KEY, undefined);
-      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
-      assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
-    }
-  });
+  for (const name of ['API key', 'setup token']) {
+    it(`with a subscription login, the .env ${name} reaches session and probe and is pre-approved`, async () => {
+      const claudeJson = path.join(fakeHome, '.claude.json');
+      fs.rmSync(claudeJson, { force: true });
+      const dotenv = cases[name];
+      const { session, probe } = await launchAndProbe(dotenv, { nativeAuth: true });
+      const [[key, value]] = Object.entries(dotenv);
+      assert.equal(session[key], value);
+      assert.equal(probe[key], value);
+      const approved = JSON.parse(fs.readFileSync(claudeJson, 'utf8')).customApiKeyResponses.approved;
+      assert.ok(approved.includes(value.slice(-20)), `${name} must be pre-approved`);
+    });
+  }
 });
 
 describe('Claude launch — existing session', () => {
@@ -524,6 +532,22 @@ describe('Claude launch — existing session', () => {
 
     assert.ok(sent.length > 0, 'sendMessage should be called');
     assert.ok(sent.includes('claude'), 'sent command should reference claude');
+  });
+
+  it('does not strip .env credentials from the command when a subscription login exists', async () => {
+    tmuxSessionExists = true;
+    const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    fs.writeFileSync(credFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'fake-refresh-token' } }));
+    let sent = '';
+    const adapter = makeAdapter(ClaudeAdapter);
+    adapter.sendMessage = async (text) => { sent = text; };
+    try {
+      await adapter.launch({ bypassPermissions: false });
+    } finally {
+      fs.unlinkSync(credFile);
+    }
+    assert.ok(sent.includes('claude'));
+    assert.doesNotMatch(sent, /-u (ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)/);
   });
 });
 

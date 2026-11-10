@@ -21,8 +21,8 @@ process.env.HOME = home;
 process.env.ZYLOS_DIR = zylos;
 for (const key of touched.slice(2)) delete process.env[key];
 console.log('Claude relay setting isolation: ' + JSON.stringify({ HOME: home, ZYLOS_DIR: zylos, settingsFile, envFile }));
-const { saveClaudeBaseUrl, computeRelayTraffic } = await import('../runtime-setup.js');
-const { applyBaseUrl, applyCredentials } = await import('../../commands/runtime.js');
+const { saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice } = await import('../runtime-setup.js');
+const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags, relayNoticeAfterSave } = await import('../../commands/runtime.js');
 const { persistInitCredentials, runClaudeSubscriptionLogin } = await import('../../commands/init.js');
 const setupToken = () => 'sk-ant-oat01-' + randomBytes(16).toString('hex');
 
@@ -118,6 +118,33 @@ test('a claude.ai login with a leftover API key counts as subscription when the 
   assert.deepEqual(state(), OFF);
 });
 
+test('a login behind a saved relay keeps the relay and gets a notice with the command to go direct', () => {
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.equal(applyCredentials('claude', { setupToken: setupToken() }), true);
+  assert.deepEqual(state(), ON, 'the switch follows the kept relay');
+  assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_BASE_URL, relayUrl, 'the relay URL is not removed');
+  const notice = relayNoticeAfterSave('claude', { setupToken: 'x' });
+  assert.match(notice, /Still using the relay https:\/\/relay\.example\.test/);
+  assert.match(notice, /zylos runtime claude --save-base-url https:\/\/api\.anthropic\.com/);
+  assert.equal(relayNoticeAfterSave('claude', { setupToken: 'x', baseUrl: relayUrl }), null, 'a base URL in the same command');
+  assert.equal(relayNoticeAfterSave('claude', { apiKey: 'x' }), null, 'API key save');
+  assert.equal(relayNoticeAfterSave('codex', { setupToken: 'x' }), null);
+});
+
+test('`zylos runtime claude --save-base-url https://api.anthropic.com` sets the official URL everywhere and turns the switch off', () => {
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.equal(applyCredentials('claude', { setupToken: setupToken() }), true);
+  assert.deepEqual(state(), ON);
+  const parsed = parseRuntimeFlags(['--save-base-url', 'https://api.anthropic.com']);
+  assert.equal(validateRuntimeFlags('claude', parsed), null);
+  assert.equal(applyBaseUrl('claude', parsed.baseUrl), true);
+  assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_BASE_URL, officialUrl);
+  assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_BASE_URL, officialUrl);
+  assert.equal(process.env.ANTHROPIC_BASE_URL, officialUrl);
+  assert.deepEqual(state(), OFF);
+  assert.equal(relayLoginNotice(), null);
+});
+
 test('the process-only base URL used during init follows the pairing rule', () => {
   assert.equal(saveClaudeBaseUrl(relayUrl), true);
   assert.equal(process.env[flag], '1');
@@ -172,4 +199,24 @@ test('init setup token and API key on the official API: setup token off, API key
   assert.deepEqual(state(), OFF, 'back to setup token');
   persistInitCredentials({ subscriptionLogin: true, claudeBaseUrl: relayUrl });
   assert.deepEqual(state(), ON, 'subscription + relay in the same run');
+});
+
+test('init login without a new base URL prints the kept-relay notice; a base URL in the same run suppresses it', () => {
+  for (const [values, expected] of [
+    [{ setupToken: setupToken() }, true],
+    [{ subscriptionLogin: true }, true],
+    [{ setupToken: setupToken(), claudeBaseUrl: relayUrl }, false],
+    [{ apiKey: apiKey() }, false],
+  ]) {
+    seedPreviousInstall(relayUrl);
+    const lines = [];
+    persistInitCredentials(values, { log: line => lines.push(line) });
+    const notice = lines.find(line => line.includes(`Still using the relay ${relayUrl}`));
+    assert.equal(!!notice, expected, Object.keys(values).join());
+    if (expected) assert.match(notice, /zylos runtime claude --save-base-url https:\/\/api\.anthropic\.com/);
+  }
+  seedPreviousInstall(officialUrl);
+  const lines = [];
+  persistInitCredentials({ subscriptionLogin: true }, { log: line => lines.push(line) });
+  assert.deepEqual(lines, [], 'no notice on the official API');
 });

@@ -42,6 +42,7 @@ import {
   saveSetupToken,
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
+  relayLoginNotice,
   saveCodexBaseUrl,
   saveCodexApiKey,
   saveCodexApiKeyToEnv,
@@ -1886,7 +1887,7 @@ export function runClaudeSubscriptionLogin({
  * Claude state.
  */
 export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin = false,
-  codexApiKey, claudeBaseUrl, codexBaseUrl } = {}) {
+  codexApiKey, claudeBaseUrl, codexBaseUrl } = {}, { log = console.log } = {}) {
   if (apiKey) {
     saveApiKeyToEnv(apiKey);
   }
@@ -1906,6 +1907,10 @@ export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin =
   const credential = apiKey ? 'apiKey' : setupToken ? 'setupToken' : subscriptionLogin ? 'subscription' : undefined;
   if (credential || claudeBaseUrl) {
     syncClaudeRelayTraffic({ credential });
+  }
+  if ((setupToken || subscriptionLogin) && !claudeBaseUrl) {
+    const relay = relayLoginNotice();
+    if (relay) log(`  ${warn(relay)}`);
   }
 }
 

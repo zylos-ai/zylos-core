@@ -53,11 +53,11 @@ const DEFAULT_BYPASS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
 const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' ');
 
-// With native (subscription) login these would override it, so neither the
-// session nor the auth probe carries them.
-const NATIVE_AUTH_CONFLICT_KEYS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
-
-const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
+// Credentials from .env are always passed to Claude, also when a subscription
+// login exists (the subscription is used only when .env has none). Claude Code
+// asks interactively, default No, before using an environment API key it has
+// not seen, so these are pre-approved whenever .env sets them.
+const PRE_APPROVED_KEYS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
 const C4_CONTROL_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
 
 /**
@@ -129,7 +129,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // Build subprocess env: inherit current env, but take the built-in runtime
     // variables (RUNTIME_BUILTIN_ENV_KEYS) exactly as a new session gets them.
     const injectedEnv = { ...process.env };
-    const sessionEnv = _buildSessionEnv({ nativeAuth: await _hasNativeAuth() });
+    const sessionEnv = _buildSessionEnv();
     for (const key of RUNTIME_BUILTIN_ENV_KEYS.claude) {
       if (Object.hasOwn(sessionEnv, key)) injectedEnv[key] = sessionEnv[key];
       else delete injectedEnv[key];
@@ -263,21 +263,12 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // 1. Pre-accept onboarding/trust dialogs (all auth methods)
     _ensureOnboardingComplete(ZYLOS_DIR);
 
-    // 3. Detect auth method to avoid "Auth conflict" errors
-    const hasNativeAuth = await _hasNativeAuth();
-
-    if (!hasNativeAuth) {
-      const dotenvAuthVars = _readDotenvValues(NATIVE_AUTH_CONFLICT_KEYS);
-      if (dotenvAuthVars.ANTHROPIC_API_KEY) _approveApiKey(dotenvAuthVars.ANTHROPIC_API_KEY);
-      if (dotenvAuthVars.CLAUDE_CODE_OAUTH_TOKEN) _approveApiKey(dotenvAuthVars.CLAUDE_CODE_OAUTH_TOKEN);
-    }
+    // 3. Pre-approve .env credentials so an interactive start never stops on the approval prompt
+    for (const value of Object.values(_readDotenvValues(PRE_APPROVED_KEYS))) _approveApiKey(value);
 
     // 4. Build the claude command string (for existing-session path)
     const bypassFlag = bypassPermissions ? ' --dangerously-skip-permissions' : '';
-    const envStripFlags = hasNativeAuth
-      ? ' -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY'
-      : '';
-    const claudeCmd = `${ENV_CLEAN_PREFIX}${envStripFlags} ${CLAUDE_BIN}${bypassFlag}`;
+    const claudeCmd = `${ENV_CLEAN_PREFIX} ${CLAUDE_BIN}${bypassFlag}`;
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'claude-exit.log');
@@ -290,7 +281,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
       await this.sendMessage(cmd);
     } else {
       // New session — launcher pipeline
-      const env = _buildSessionEnv({ nativeAuth: hasNativeAuth });
+      const env = _buildSessionEnv();
 
       // Build launch spec
       const args = [];
@@ -371,10 +362,9 @@ function _readDotenvVars() {
 
 /**
  * Environment for a new Claude session; checkAuth() reuses it for the built-in keys.
- * @param {{ nativeAuth: boolean }} opts
  * @returns {Record<string, string>}
  */
-function _buildSessionEnv({ nativeAuth }) {
+function _buildSessionEnv() {
   const dotenvVars = _readDotenvVars();
   const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
   const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
@@ -389,35 +379,7 @@ function _buildSessionEnv({ nativeAuth }) {
   // Built-in runtime passthrough from .env, independent of runtime-env.manifest:
   // applied after the manifest (clean and compat mode) so a manifest cannot drop it.
   Object.assign(env, _readDotenvValues(RUNTIME_BUILTIN_ENV_KEYS.claude));
-  if (nativeAuth) {
-    for (const key of NATIVE_AUTH_CONFLICT_KEYS) delete env[key];
-  }
   return env;
-}
-
-/**
- * Native (subscription) login: a claude.ai credentials file, or `claude auth
- * status` reporting a claude.ai login. Shared by launch() and checkAuth().
- * @returns {Promise<boolean>}
- */
-async function _hasNativeAuth() {
-  if (_hasCredentialsFile()) return true;
-  try {
-    const { stdout } = await execFileAsync(CLAUDE_BIN, ['auth', 'status'], { encoding: 'utf8', timeout: 10_000 });
-    const status = JSON.parse(stdout);
-    return status?.loggedIn === true && status?.authMethod === 'claude.ai';
-  } catch {
-    return false;
-  }
-}
-
-function _hasCredentialsFile() {
-  try {
-    const data = JSON.parse(fs.readFileSync(CREDENTIALS_FILE, 'utf8'));
-    return !!(data.claudeAiOauth && data.claudeAiOauth.refreshToken);
-  } catch {
-    return false;
-  }
 }
 
 function _hasStartupHook() {
