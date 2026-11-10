@@ -139,18 +139,14 @@ export async function ensureInitMemoryMigration({ freshInstall = false,
  * Read service names from the deployed ecosystem.config.cjs.
  * Single source of truth — no hardcoded list needed.
  */
-function getCoreServiceNames() {
+export function getCoreServiceNames() {
   const ecosystemPath = path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
   if (!fs.existsSync(ecosystemPath)) return [];
-  try {
-    const require = createRequire(import.meta.url);
-    // Clear cache so re-reads pick up updates from deployTemplates()
-    delete require.cache[ecosystemPath];
-    const ecosystem = require(ecosystemPath);
-    return ecosystem.apps.map((app) => app.name);
-  } catch {
-    return [];
-  }
+  const require = createRequire(import.meta.url);
+  // Clear cache so re-reads pick up updates from deployTemplates()
+  delete require.cache[ecosystemPath];
+  const ecosystem = require(ecosystemPath);
+  return ecosystem.apps.map((app) => app.name);
 }
 
 // ── Prerequisite checks ─────────────────────────────────────────
@@ -941,18 +937,15 @@ function getNetworkIP() {
  * Displayed prominently so the user doesn't miss the password.
  * Always shown even in quiet mode (essential output).
  */
-function printWebConsoleInfo() {
+export function printWebConsoleInfo() {
   const config = getZylosConfig();
 
   const envPath = path.join(ZYLOS_DIR, '.env');
   let password = '';
   try {
     const content = fs.readFileSync(envPath, 'utf8');
-    // Read new name first, fall back to legacy
-    const matchNew = content.match(/^ZYLOS_WEB_PASSWORD=(.+)/m);
-    const matchOld = content.match(/^WEB_CONSOLE_PASSWORD=(.+)/m);
-    if (matchNew) password = matchNew[1].trim();
-    else if (matchOld) password = matchOld[1].trim();
+    const values = parseDotEnv(content);
+    password = values.ZYLOS_WEB_PASSWORD || values.WEB_CONSOLE_PASSWORD || '';
   } catch { /* */ }
 
   if (!password) return;

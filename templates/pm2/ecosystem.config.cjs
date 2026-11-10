@@ -24,15 +24,21 @@ const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 
 // Read a value with the same dotenv grammar used by session startup.
 function readEnvValue(key, defaultValue = '') {
+  let content;
   try {
-    const sourceLoader = path.join(__dirname, '../../skills/comm-bridge/scripts/core-config-loader.js');
-    const loader = fs.existsSync(sourceLoader) ? sourceLoader : path.join(SKILLS_DIR, 'comm-bridge/scripts/core-config-loader.js');
-    const { resolveCoreConfigModule } = require(loader);
-    const { parse } = createRequire(resolveCoreConfigModule())('dotenv');
-    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    return parse(content)[key] ?? defaultValue;
-  } catch {}
-  return defaultValue;
+    content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return defaultValue;
+    throw error;
+  }
+  const sourceRoot = path.resolve(__dirname, '../..');
+  const sourceLayout = __dirname === path.join(sourceRoot, 'templates', 'pm2');
+  const loader = sourceLayout
+    ? path.join(sourceRoot, 'skills/comm-bridge/scripts/core-config-loader.js')
+    : path.join(SKILLS_DIR, 'comm-bridge/scripts/core-config-loader.js');
+  const { resolveCoreConfigModule } = require(loader);
+  const { parse } = createRequire(resolveCoreConfigModule())('dotenv');
+  return parse(content)[key] ?? defaultValue;
 }
 
 // Build PATH: Claude locations + user's full shell PATH + PM2's own PATH

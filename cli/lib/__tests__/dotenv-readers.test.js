@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { ClaudeAdapter } from '../runtime/claude.js';
 import { resolveCodexBypassPermissions } from '../runtime-setup.js';
-import { readEnvTimezone, needsBypassAcceptance, ensureWebConsolePassword } from '../../commands/init.js';
+import { readEnvTimezone, needsBypassAcceptance, ensureWebConsolePassword, printWebConsoleInfo, getCoreServiceNames } from '../../commands/init.js';
 import { ZYLOS_DIR } from '../config.js';
 import { readEnvFile, writeEnvEntries } from '../env.js';
 
@@ -15,6 +15,17 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dotenv-readers-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
+}
+
+function assertIsolatedEnvironment() {
+  const home = fs.realpathSync(process.env.HOME);
+  const runnerRoot = path.dirname(home);
+  assert.match(path.basename(runnerRoot), /^zylos-tests-[^/]+$/);
+  const expected = { HOME: home, ZYLOS_DIR: path.join(home, 'zylos'), PM2_HOME: path.join(home, '.pm2'), TMPDIR: path.join(runnerRoot, 'tmp') };
+  for (const [key, target] of Object.entries(expected)) {
+    const actual = fs.existsSync(process.env[key]) ? fs.realpathSync(process.env[key]) : path.resolve(process.env[key]);
+    assert.equal(actual, target, key);
+  }
 }
 
 test('Claude auth probe uses dotenv values without contacting a runtime', async t => {
@@ -63,6 +74,7 @@ test('init reads timezone, bypass preference and existing password with dotenv',
       'TZ=obsolete', 'export TZ="UTC" # comment',
       'export CLAUDE_BYPASS_PERMISSIONS="false" # comment',
       'ZYLOS_WEB_PASSWORD=obsolete', "export ZYLOS_WEB_PASSWORD='fixture # password' # comment",
+      'WEB_CONSOLE_PASSWORD=fixture legacy later',
     ].join('\n'));
     const before = fs.readFileSync(file, 'utf8');
     assert.equal(readEnvTimezone(), 'UTC');
@@ -72,6 +84,33 @@ test('init reads timezone, bypass preference and existing password with dotenv',
     fs.writeFileSync(file, 'export WEB_CONSOLE_PASSWORD="fixture legacy" # comment\n');
     assert.equal(ensureWebConsolePassword(), 'fixture legacy');
   } finally { fs.rmSync(file, { force: true }); }
+});
+
+test('init displays the parsed login password with new-key priority and legacy fallback', () => {
+  const file = path.join(ZYLOS_DIR, '.env');
+  assert.equal(fs.existsSync(file), false);
+  const originalLog = console.log;
+  const lines = [];
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    for (const content of [
+      'ZYLOS_WEB_PASSWORD=obsolete\nexport ZYLOS_WEB_PASSWORD="fixture # displayed" # comment\nWEB_CONSOLE_PASSWORD=legacy later\n',
+      "export WEB_CONSOLE_PASSWORD='fixture # displayed' # comment\n",
+    ]) {
+      fs.writeFileSync(file, content);
+      lines.length = 0;
+      printWebConsoleInfo();
+      const output = lines.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
+      assert.match(output, /Password: +fixture # displayed /);
+      assert.equal(output.includes('obsolete'), false);
+      assert.equal(output.includes('legacy later'), false);
+      assert.equal(output.includes('# comment'), false);
+      assert.equal(fs.readFileSync(file, 'utf8'), content);
+    }
+  } finally {
+    console.log = originalLog;
+    fs.rmSync(file, { force: true });
+  }
 });
 
 test('environment entry writes recognize exported existing keys and remain append-only', () => {
@@ -109,13 +148,14 @@ for (const deployed of [false, true]) test(`PM2 template reads dotenv from an is
     fs.mkdirSync(path.join(skill, 'scripts'), { recursive: true });
     fs.mkdirSync(path.join(skill, '.zylos'));
     fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/scripts/core-config-loader.js'), path.join(skill, 'scripts/core-config-loader.js'));
+    fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/package.json'), path.join(skill, 'package.json'));
     fs.writeFileSync(path.join(skill, '.zylos/core-package.json'), JSON.stringify({ v: 1, packageRoot }));
     fs.mkdirSync(path.join(root, 'pm2'));
     fs.copyFileSync(template, path.join(root, 'pm2/ecosystem.config.cjs'));
     template = path.join(root, 'pm2/ecosystem.config.cjs');
   }
   try {
-    for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) assert.ok(process.env[key]?.startsWith('/dev/shm/') || process.env[key]?.includes('/zylos-tests-'), key);
+    assertIsolatedEnvironment();
     console.log('isolated PM2 template', JSON.stringify({ template, root, home: process.env.HOME, pm2: process.env.PM2_HOME, tmp: process.env.TMPDIR, tmux: 'not used', database: 'not used' }));
     process.env.ZYLOS_DIR = root;
     process.env.PATH = '/bin';
@@ -136,3 +176,72 @@ for (const deployed of [false, true]) test(`PM2 template reads dotenv from an is
     }
   }
 });
+
+// Integration boundary: init must propagate the real deployed template failure.
+// Run when template/service discovery changes; skip otherwise. The runner isolates
+// all instance paths; no PM2, tmux, native runtime or database is started.
+test('init service discovery propagates deployed template loading errors', t => {
+  assertIsolatedEnvironment();
+  const file = path.join(ZYLOS_DIR, '.env');
+  const pm2 = path.join(ZYLOS_DIR, 'pm2');
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.existsSync(pm2), false);
+  assert.deepEqual(getCoreServiceNames(), []);
+  fs.mkdirSync(pm2);
+  const template = path.join(pm2, 'ecosystem.config.cjs');
+  t.after(() => {
+    delete createRequire(import.meta.url).cache[template];
+    fs.rmSync(file, { force: true });
+    fs.rmSync(pm2, { recursive: true, force: true });
+  });
+  fs.copyFileSync(fileURLToPath(new URL('../../../templates/pm2/ecosystem.config.cjs', import.meta.url)), template);
+  fs.writeFileSync(file, 'CODEX_BYPASS_PERMISSIONS=false\n');
+  console.log('isolated init discovery', JSON.stringify({ template, root: ZYLOS_DIR, home: process.env.HOME, pm2: process.env.PM2_HOME, tmp: process.env.TMPDIR, tmux: 'not used', database: 'not used' }));
+  assert.throws(() => getCoreServiceNames(), { code: 'MODULE_NOT_FOUND' });
+});
+
+// Integration boundary: the deployed template must reject unreadable settings
+// and unavailable Core/parser locations. No PM2, tmux or database is started.
+// Run when template loading changes; skip otherwise. All paths use runner fixtures.
+for (const failure of ['missing installation', 'stale override', 'missing loader', 'unreadable env', 'missing env']) {
+  test(`deployed PM2 template handles ${failure} explicitly`, t => {
+    assertIsolatedEnvironment();
+    const root = fixture(t);
+    const instance = path.join(root, 'instance');
+    const skill = path.join(instance, '.claude/skills/comm-bridge');
+    const packageRoot = fileURLToPath(new URL('../../../', import.meta.url));
+    fs.mkdirSync(path.join(skill, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(instance, 'pm2'));
+    const template = path.join(instance, 'pm2/ecosystem.config.cjs');
+    fs.copyFileSync(path.join(packageRoot, 'templates/pm2/ecosystem.config.cjs'), template);
+    fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/package.json'), path.join(skill, 'package.json'));
+    if (failure !== 'missing loader') fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/scripts/core-config-loader.js'), path.join(skill, 'scripts/core-config-loader.js'));
+    // A neighboring source tree must never rescue a broken deployed instance.
+    const neighbor = path.join(root, 'skills/comm-bridge/scripts');
+    fs.mkdirSync(neighbor, { recursive: true });
+    fs.copyFileSync(path.join(packageRoot, 'skills/comm-bridge/scripts/core-config-loader.js'), path.join(neighbor, 'core-config-loader.js'));
+    if (failure === 'unreadable env') fs.mkdirSync(path.join(instance, '.env'));
+    else if (failure !== 'missing env') fs.writeFileSync(path.join(instance, '.env'), 'CLAUDE_BYPASS_PERMISSIONS=false\nCODEX_BYPASS_PERMISSIONS=false\n');
+    const before = { ZYLOS_DIR: process.env.ZYLOS_DIR, PATH: process.env.PATH, ZYLOS_PACKAGE_ROOT: process.env.ZYLOS_PACKAGE_ROOT };
+    const require = createRequire(import.meta.url);
+    console.log('isolated PM2 rejection', JSON.stringify({ template, instance, home: process.env.HOME, pm2: process.env.PM2_HOME, tmp: process.env.TMPDIR, path: '/empty', failure, tmux: 'not used', database: 'not used' }));
+    try {
+      process.env.ZYLOS_DIR = instance;
+      process.env.PATH = '/empty';
+      delete process.env.ZYLOS_PACKAGE_ROOT;
+      if (failure === 'stale override') process.env.ZYLOS_PACKAGE_ROOT = path.join(root, 'removed-package');
+      if (failure === 'missing env') {
+        const monitor = require(template).apps.find(app => app.name === 'activity-monitor');
+        assert.equal(monitor.env.CODEX_BYPASS_PERMISSIONS, 'true');
+      } else if (failure === 'unreadable env') assert.throws(() => require(template), { code: 'EISDIR' });
+      else if (failure === 'missing loader') assert.throws(() => require(template), { code: 'MODULE_NOT_FOUND' });
+      else assert.throws(() => require(template), failure === 'stale override' ? /at ZYLOS_PACKAGE_ROOT/ : /Cannot locate the installed zylos-core/);
+    } finally {
+      delete require.cache[template];
+      for (const [key, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+}
