@@ -26,7 +26,7 @@ const { saveApiKey, saveApiKeyToEnv, saveAuthToken, saveAuthTokenToEnv,
   saveSetupToken, saveSetupTokenToEnv, isValidBaseUrl,
   saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice, syncClaudeRelayTraffic } = await import('../runtime-setup.js');
 const { launchEnvironment } = await import('../runtime/session-command.js');
-const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags, executeRuntimeSwitch } = await import('../../commands/runtime.js');
+const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags, executeRuntimeSwitch, runtimeCommand } = await import('../../commands/runtime.js');
 const { executeAuth } = await import('../../commands/auth.js');
 const { persistInitCredentials } = await import('../../commands/init.js');
 const { readEnvFile } = await import('../env.js');
@@ -367,17 +367,18 @@ const handSecret = () => 'sk-ant-api03-hand-' + secret();
 // settings.json to 0600 (credential file permission check), separate from this warning.
 const PRIVATE = 0o600;
 // zylos runtime with its real credential and base URL saves; everything after the save is stubbed.
-const runtimeSave = flags => executeRuntimeSwitch('claude', flags, {
-  read: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), mode: () => ({ mode: 'multi' }),
+const runtimeDeps = (target = 'claude', changes = {}) => ({
+  read: () => ({ state: 'ok', config: { runtime: target, session_mode: 'multi' } }), mode: () => ({ mode: 'multi' }),
   adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), exists: () => true,
   hooksReady: () => ({ ready: true, pendingMigration: false }),
-  write: () => ({ previous: { runtime: 'claude' }, config: { runtime: 'claude', session_mode: 'multi' }, changed: false }),
-  observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }) });
+  write: () => ({ previous: { runtime: target }, config: { runtime: target, session_mode: 'multi' }, changed: false }),
+  observe: async () => ({ groups: [], groupsComplete: true, observationErrors: [] }), identity: async () => ({ present: false }), ...changes });
+const runtimeSave = (flags, { target = 'claude', ...changes } = {}) => executeRuntimeSwitch(target, flags, runtimeDeps(target, changes));
 const overrideWarnings = result => {
   assert.equal(result.ok, true, JSON.stringify(result.error));
   return result.data.warnings.filter(item => item.code === OVERRIDE);
 };
-const loginSave = () => executeAuth(['claude'], { exists: () => true, spawn: () => ({ status: 0 }),
+const loginSave = (runtime = 'claude') => executeAuth([runtime], { exists: () => true, spawn: () => ({ status: 0 }),
   adapter: () => ({ checkAuth: async () => ({ status: 'success' }) }), notifyRecovery: () => true });
 
 test('zylos runtime --save-apikey: a different settings.json API key is named once, without either value', async () => {
@@ -475,4 +476,72 @@ test('missing, env-less and unparseable settings.json print nothing and every sa
     if (text === null) assert.equal(fs.existsSync(settingsFile), false, 'settings.json is not created');
     else settingsUnchanged(text, PRIVATE);
   }
+});
+
+// The case the warning exists for: the auth probe runs Claude Code, which takes
+// the overriding settings.json key and fails. The save already happened, so the
+// failure result still carries the warning (error.warnings) and the text output
+// prints it before the error.
+for (const [name, changes, code] of [
+  ['the auth probe fails', { adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) }, 'AUTH_NOT_CONFIRMED'],
+  ['hooks are not ready', { hooksReady: () => ({ ready: false }) }, 'HOOKS_NOT_READY'],
+  ['the config write fails', { write: () => { throw Object.assign(new Error('config write failed'), { code: 'CONFIG_WRITE_FAILED' }); } }, 'CONFIG_WRITE_FAILED'],
+]) test(`zylos runtime --save-apikey keeps the settings.json warning when ${name} after the save`, async () => {
+  const hand = handSecret(), saved = 'sk-ant-api03-' + secret();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }), PRIVATE);
+  const result = await runtimeSave(['--save-apikey', saved], changes);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, code);
+  assert.deepEqual(result.error.persisted, ['apiKey']);
+  const warnings = (result.error.warnings ?? []).filter(item => item.code === OVERRIDE);
+  assert.equal(warnings.length, 1, 'exactly one settings.json warning on the failure result');
+  assert.deepEqual(overrideKeys(warnings[0].message), ['ANTHROPIC_API_KEY']);
+  leaksNothing(JSON.stringify(result), hand, saved);
+  settingsUnchanged(text, PRIVATE);
+});
+
+test('zylos runtime text output prints the settings.json warning before the error when the probe fails', async () => {
+  const hand = handSecret(), saved = 'sk-ant-api03-' + secret();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }), PRIVATE);
+  const failing = runtimeDeps('claude', { adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) });
+  const errors = [], logs = [], original = { error: console.error, log: console.log }, exitCode = process.exitCode;
+  console.error = line => errors.push(String(line)); console.log = line => logs.push(String(line));
+  let result;
+  try { result = await runtimeCommand(['claude', '--save-apikey', saved], { execute: (target, flags) => executeRuntimeSwitch(target, flags, failing) }); }
+  finally { console.error = original.error; console.log = original.log; process.exitCode = exitCode; }
+  assert.equal(result.ok, false);
+  const warning = errors.findIndex(line => line.startsWith(`Warning [${OVERRIDE}]: `));
+  const failure = errors.findIndex(line => line.startsWith('Error [AUTH_NOT_CONFIRMED]: '));
+  assert.ok(warning >= 0, 'the warning is printed on stderr');
+  assert.ok(failure > warning, 'the warning comes before the error');
+  assert.deepEqual(overrideKeys(errors[warning].slice(`Warning [${OVERRIDE}]: `.length)), ['ANTHROPIC_API_KEY']);
+  leaksNothing([...errors, ...logs].join('\n'), hand, saved);
+  settingsUnchanged(text, PRIVATE);
+});
+
+test('Codex saves never report the Claude settings.json warning', async () => {
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: handSecret(), ANTHROPIC_BASE_URL: 'https://hand-relay.example.test', [relayFlag]: '0' } }), PRIVATE);
+  const saved = await runtimeSave(['--save-apikey', 'sk-codex-' + secret()], { target: 'codex' });
+  assert.equal(saved.ok, true, JSON.stringify(saved.error));
+  assert.equal(saved.data.warnings.some(item => item.code === OVERRIDE), false, 'zylos runtime codex --save-apikey');
+  const failed = await runtimeSave(['--save-apikey', 'sk-codex-' + secret()], { target: 'codex', adapter: () => ({ checkAuth: async () => ({ status: 'failure' }) }) });
+  assert.equal(failed.ok, false);
+  assert.equal((failed.error.warnings ?? []).some(item => item.code === OVERRIDE), false, 'failed zylos runtime codex --save-apikey');
+  const login = await loginSave('codex');
+  assert.equal(login.ok, true, JSON.stringify(login.error));
+  assert.equal(login.data.warnings.some(item => item.code === OVERRIDE), false, 'zylos auth codex');
+  settingsUnchanged(text, PRIVATE);
+});
+
+test('init with a subscription login only (no base URL) names an API key left in settings.json', () => {
+  fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_BASE_URL=${officialUrl}\n`);
+  const hand = handSecret();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }));
+  const lines = [];
+  assert.equal(persistInitCredentials({ subscriptionLogin: true }, { log: line => lines.push(line), reportError: line => lines.push(line) }), true);
+  const warnings = lines.filter(line => line.includes('settings.json'));
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(overrideKeys(warnings[0]), ['ANTHROPIC_API_KEY']);
+  leaksNothing(lines.join('\n'), hand);
+  settingsUnchanged(text);
 });

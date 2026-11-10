@@ -65,7 +65,10 @@ export async function runtimeCommand(args, { execute = executeRuntimeSwitch } = 
   if (SUPPORTED_RUNTIMES.includes(sub)) {
     const result = await execute(sub, args.slice(1));
     if (args.includes('--json')) console.log(JSON.stringify(result));
-    else if (!result.ok) console.error(`Error [${result.error.code}]: ${result.error.message}`);
+    else if (!result.ok) {
+      for (const warning of result.error.warnings ?? []) console.error(`Warning [${warning.code}]: ${warning.message}`);
+      console.error(`Error [${result.error.code}]: ${result.error.message}`);
+    }
     else {
       const data = result.data;
       console.log(data.result === 'saved' ? `Baseline saved: ${data.previousBaseline} -> ${data.baseline}` : `Already on ${data.baseline} runtime.`);
@@ -311,7 +314,10 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
   identity = readLiveIdentity, send = submit, lookup = lookupRestartRequest, relayNotice = relayLoginNotice,
   requestId = () => `cli-rt-${Date.now()}-${randomBytes(6).toString('hex')}` } = {}) {
   const credentialsSaved = [], warnings = [];
-  const fail = (code, message, extra = {}) => ({ ok: false, error: { code, message, persisted: [...credentialsSaved], ...extra } });
+  // A failure after a save keeps the warnings collected so far (for example a
+  // settings.json key that overrides the saved credential and fails the probe).
+  const fail = (code, message, extra = {}) => ({ ok: false, error: { code, message, persisted: [...credentialsSaved],
+    ...(warnings.length ? { warnings: [...warnings] } : {}), ...extra } });
   const parsed = parseRuntimeFlags(flags);
   if (!SUPPORTED_RUNTIMES.includes(target)) return fail('RUNTIME_UNSUPPORTED', 'Unsupported runtime');
   const invalid = validateRuntimeFlags(target, parsed);
