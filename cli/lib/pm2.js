@@ -3,6 +3,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { ZYLOS_DIR } from './config.js';
 import { savePm2ProcessList } from './pm2-save.js';
+import { systemSendEnvironment } from '../../skills/comm-bridge/scripts/c4-system-send-env.js';
 
 export function getCoreEcosystemPath() {
   return path.join(ZYLOS_DIR, 'pm2', 'ecosystem.config.cjs');
@@ -22,7 +23,7 @@ export function createPm2Helpers({
     }
 
     for (const name of names) {
-      exec(`pm2 start "${ecosystemPath}" --only "${name}" --update-env 2>/dev/null`, { stdio });
+      exec(`pm2 start "${ecosystemPath}" --only "${name}" --update-env 2>/dev/null`, { stdio, env: systemSendEnvironment() });
     }
 
     // Persist only after every restart succeeded so callers don't save a
