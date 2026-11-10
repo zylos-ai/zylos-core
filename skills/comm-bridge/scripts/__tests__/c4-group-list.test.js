@@ -75,7 +75,7 @@ test('default and legacy matching output keep the previous reader\'s fields byte
   for (const options of [{}, { limit: 2 }, { match: 'preview' }, { match: 'LARK:OC_', limit: 1 }, { match: 'missing' }]) {
     const rows = store.queries.listGroups(options);
     for (const row of rows) if (row.preview) assert.ok(Object.hasOwn(row.preview, 'message'), 'every preview carries the reader message');
-    const withoutMessage = rows.map(row => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => key !== 'message' && key !== 'messageSource')) } : row);
+    const withoutMessage = rows.map(row => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => !['message', 'messageSource', 'messageRaw'].includes(key))) } : row);
     assert.equal(JSON.stringify(withoutMessage), JSON.stringify(legacyListGroups(options)));
   }
 });
@@ -92,6 +92,32 @@ test('a group preview names where a message came from when it is not a person\'s
   assert.equal(Object.hasOwn(rows['origin'], 'messageSource'), false);
   assert.equal(rows['lark:recent2'].message, '🙂'.repeat(79) + '…');
   assert.equal(Object.hasOwn(rows['lark:recent2'], 'messageSource'), false);
+  // Labelled previews carry the stored start, line breaks kept; a person's own words carry none.
+  assert.equal(rows['scheduler:main'].messageRaw, '[Scheduled Task: task-ab12cd34 #2]\nnightly digest\n\n---- After completing this task, run: node cli.js done task-ab12cd34');
+  assert.equal(rows['lark:oc_tags'].messageRaw, '[Release bot] build 01a1c33d-7d4e-7a1b-9c2d-0123456789ab shipped');
+  for (const key of ['origin', 'lark:recent2']) assert.equal(Object.hasOwn(rows[key], 'messageRaw'), false);
+});
+
+test('a long labelled message keeps at most 2000 characters of its start, without a cut token', t => {
+  const { seed, store } = fixture(t);
+  const secret = 'sk-' + 'w'.repeat(40);
+  seed('lark:oc_long', '2026-02-01 00:00:00', '[Report bot] daily\n' + 'b'.repeat(1975) + ' ' + secret + ' end');
+  const preview = store.queries.listGroups({ limit: 1 })[0].preview;
+  assert.equal(preview.messageRaw, '[Report bot] daily\n' + 'b'.repeat(1975) + '…');
+  assert.equal(preview.messageRaw.includes('sk-'), false);
+});
+
+test('on core\'s own direct channels a stored message starting with brackets stays the person\'s words', t => {
+  const { db, store } = fixture(t);
+  const insert = db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group,timestamp) VALUES('in',?,?,'delivered',?,'2026-02-01 00:00:00')");
+  const head = db.prepare('INSERT INTO group_heads VALUES(?,?)');
+  head.run('dashboard:c1', insert.run('dashboard', '[urgent] call me back', 'dashboard:c1').lastInsertRowid);
+  head.run('multica:t1', insert.run('multica', '[urgent] call me back', 'multica:t1').lastInsertRowid);
+  const rows = Object.fromEntries(store.queries.listGroups({ limit: 2 }).map(row => [row.sessionGroup, row.preview]));
+  assert.equal(rows['dashboard:c1'].message, '[urgent] call me back');
+  assert.equal(Object.hasOwn(rows['dashboard:c1'], 'messageSource') || Object.hasOwn(rows['dashboard:c1'], 'messageRaw'), false);
+  assert.equal(rows['multica:t1'].message, 'call me back');
+  assert.deepEqual(rows['multica:t1'].messageSource, { kind: 'header' });
 });
 
 test('store rejects invalid and conflicting filters before reading', t => {

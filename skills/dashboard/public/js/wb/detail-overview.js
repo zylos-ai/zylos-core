@@ -195,10 +195,13 @@ function nowCard(document, row, data, { level, t, snapshot }) {
     }
   }
   if (level === 'technical') {
-    // A preview labelled with its source keeps the stored message's own start here, headers and ids included.
+    // A preview labelled with its source keeps the stored message here, folded: headers, ids and line breaks included.
     if (row.preview?.raw) {
-      const raw = element(document, 'p', undefined, 'wb-now-raw');
-      raw.append(element(document, 'span', t('wb.detail.rawMessage')), element(document, 'span', row.preview.raw, 'wb-mono'));
+      const raw = element(document, 'details', undefined, 'wb-now-raw');
+      raw.open = false;
+      const summary = element(document, 'summary');
+      summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.rawMessage')));
+      raw.append(summary, element(document, 'pre', row.preview.raw, 'wb-mono'));
       card.append(raw);
     }
     const evidence = detailEvidence(row, snapshot);

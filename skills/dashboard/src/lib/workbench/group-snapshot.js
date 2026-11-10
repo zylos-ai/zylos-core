@@ -33,14 +33,10 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
   readPm2 = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids) } = {}) {
   let cache = null, inflight = null, accountsCache = null;
   const activities = new Map();
-  // A task name is shown, not trusted: it goes through the same sanitizer as the message it replaces.
   async function namesOfTasks(items) {
     const ids = previewTaskIds(items);
     if (!ids.length) return new Map();
-    try {
-      const names = await readTaskNames(ids);
-      return new Map([...names].map(([id, name]) => [id, sanitizer.safeSummary(name)]));
-    } catch { return new Map(); }
+    try { return await readTaskNames(ids); } catch { return new Map(); }
   }
   async function getSnapshot(at = now()) {
     if (inflight) return inflight;

@@ -9,18 +9,20 @@ export function c4Meta(item) {
 // so the page names the channel and time instead of protocol text. Older stores without `message` keep `text`.
 // A message that is not a person's own words carries where it came from: `source.kind` 'scheduled_task' (its text
 // is the task's name when the scheduler still has it) or 'channel' (another source's header; the page names the
-// channel). Those previews also carry `raw`, the stored message's start, for the technical view. The task id stays
-// on the server.
+// channel). Those previews also carry `raw` for the technical view: the stored message's start as C4 gives it (up
+// to 2000 characters, line breaks kept, headers and ids such as the task id included), with credentials redacted
+// over that whole text. The task id is not sent as a field of its own.
 export function safePreview(item, sanitizer = new Sanitizer(''), taskNames = new Map()) {
   if (!item?.preview) return null;
-  const { message, messageSource, ...preview } = item.preview;
+  const { message, messageSource, messageRaw, ...preview } = item.preview;
   const safe = value => value == null ? null : sanitizer.safeSummary(redactQuerySecrets(value));
   let text = message === undefined ? preview.text : message, source = null;
   if (messageSource?.kind === 'scheduled_task') {
     source = { kind: 'scheduled_task' };
     text = taskNames.get(messageSource.taskId) ?? text;
   } else if (messageSource?.kind === 'header') source = { kind: 'channel' };
-  return { ...preview, text: safe(text), ...(source ? { source, raw: safe(preview.text) } : {}) };
+  const raw = typeof messageRaw === 'string' ? sanitizer.redactCredentials(redactQuerySecrets(messageRaw)) : null;
+  return { ...preview, text: safe(text), ...(source ? { source, raw } : {}) };
 }
 
 /** Ids of the scheduler tasks that sent the groups' latest messages. */

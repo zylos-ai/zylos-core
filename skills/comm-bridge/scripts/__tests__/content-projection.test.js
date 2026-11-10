@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CONTENT_PREFIX, parseC4Content } from '../c4-content-schema.js';
-import { previewMessage, previewMessageText, projectC4Content } from '../c4-content-projection.js';
+import { messageStart, previewMessage, previewMessageText, projectC4Content } from '../c4-content-projection.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const encode = envelope => CONTENT_PREFIX + JSON.stringify(envelope);
@@ -187,12 +187,13 @@ test('a preview shows what the person said inside the channel wrapping, without 
   assert.equal(previewMessageText(wrapped), '这个卡片在手机上 看布局太乱了');
   assert.equal(previewMessageText('[Lark DM]\n<current-message>\ne1fg313c said: ok, 0.167.0\n</current-message>\n'), 'ok, 0.167.0');
   // Only a block on its own lines counts: a message quoting the tag inline is ordinary text.
-  assert.deepEqual(previewMessage('[Task] look at `<current-message>` handling'), { text: 'look at `<current-message>` handling', source: { kind: 'header' } });
+  for (const channel of ['dashboard', 'web-console']) assert.equal(previewMessageText('[Task] look at `<current-message>` handling', { channel }), '[Task] look at `<current-message>` handling');
 });
 
 test('a preview is null for channel wrapping without a current message, and plain text passes through', () => {
   assert.equal(previewMessageText('[OM-RUN r_1] [OPENMAX DM] (org: Enjoy)\n<org-context org-id="x"/>\n'), null);
   assert.equal(previewMessageText('[Lark DM]\nsomething internal'), null);
+  for (const channel of ['dashboard', 'web-console']) assert.equal(previewMessageText('[urgent] fix the build', { channel }), '[urgent] fix the build');
   assert.deepEqual(previewMessage('  hello\n\nthere '), { text: 'hello there' });
   assert.equal(previewMessageText('  hello\n\nthere '), 'hello there');
   assert.equal(previewMessageText(''), null);
@@ -301,4 +302,45 @@ test('channel messages and envelopes keep their previews and carry no source', (
     assert.equal(parseC4Content(envelope).kind, 'envelope');
     assert.deepEqual(previewMessage(envelope), { text: summary });
   }
+});
+
+test('on core\'s own direct channels a person\'s leading brackets are their words, not a header', () => {
+  const typed = ['[urgent] call me back', '[PR 1120](https://example.test/pull/1120) 帮我看下', '[urgent] check task-mw97s7nt-dctom6'];
+  for (const channel of ['dashboard', 'web-console']) {
+    for (const words of typed) assert.deepEqual(previewMessage(words, { channel }), { text: words }, `${channel}: ${words}`);
+  }
+  // Elsewhere the same text is another source's header.
+  assert.deepEqual(previewMessage(typed[0], { channel: 'multica' }), { text: 'call me back', source: { kind: 'header' } });
+  assert.deepEqual(previewMessage(typed[1], { channel: 'multica' }), { text: '帮我看下', source: { kind: 'header' } });
+  assert.deepEqual(previewMessage(typed[2]), { text: 'check', source: { kind: 'header' } });
+  // The scheduler is recognised by its own header on every channel it replies to.
+  for (const channel of ['dashboard', 'telegram', 'system']) {
+    assert.deepEqual(previewMessage('[Scheduled Task: task-x1 #1]\nnightly digest', { channel }), { text: 'nightly digest', source: { kind: 'scheduled_task', taskId: 'task-x1' } });
+  }
+});
+
+test('long ids go with their label and the brackets they leave empty; ordinary words stay', () => {
+  const uuid = '01a1c373-1c70-7ec4-9e0e-20c2910af2b0';
+  const header = text => previewMessage(text, { channel: 'other' }).text;
+  assert.equal(header('[Bot] run task-list then task-runner'), 'run task-list then task-runner');
+  assert.equal(header('[Bot] build ' + '0123456789abcdef' + ' done'), 'build done', '16 hex digits are an id');
+  assert.equal(header('[Bot] build ' + 'a'.repeat(31) + ' done'), 'build done');
+  assert.equal(header('[Bot] build ' + '0123456789abcde' + ' done'), 'build 0123456789abcde done', '15 hex digits stay');
+  assert.equal(header(`[Hub] New message (tags: none, id: ${uuid})`), 'New message (tags: none)');
+  assert.equal(header(`[Hub] Alice joined the thread (by ${uuid})`), 'Alice joined the thread');
+  assert.equal(header(`[Follow-up] Requested by: howard · Task ID: ${uuid}`), 'Requested by: howard');
+  assert.equal(header('[Bot] deploy · id=0123456789abcdef0123 · then (from ' + uuid + ') notify · ' + uuid), 'deploy · then notify');
+  assert.equal(previewMessage(`[Scheduled Task: task-x1 #2]\nsweep (id: ${uuid}) now`).text, 'sweep now');
+});
+
+test('a stored message start keeps line breaks and never ends inside a run of non-space characters', () => {
+  assert.equal(messageStart('line one\nline two'), 'line one\nline two');
+  assert.equal(messageStart('x'.repeat(2000)), 'x'.repeat(2000));
+  const secret = 'sk-' + 'q'.repeat(40);
+  const cut = messageStart('a'.repeat(1990) + ' ' + secret + ' tail');
+  assert.equal(cut, 'a'.repeat(1990) + '…');
+  assert.equal(messageStart('ab cd ef', { limit: 5 }), 'ab cd…', 'a word ending exactly at the cut stays');
+  assert.equal(messageStart('ab cdef', { limit: 5 }), 'ab…');
+  assert.equal(messageStart('🙂'.repeat(3) + ' x', { limit: 3 }), '🙂🙂🙂…', 'counts code points');
+  for (const empty of ['', '  \n', null, undefined, 5]) assert.equal(messageStart(empty), null);
 });

@@ -41,25 +41,38 @@ const SCHEDULED_TASK = /^\[Scheduled Task: ([A-Za-z0-9_-]{1,80})(?: #\d+)?\][ \t
 const SCHEDULER_DONE = /\s*---- After completing this task, run:[\s\S]*$/;
 // Any other source's own header: bracketed tags at the very start of the message, optionally "(…)" after them.
 const LEADING_TAGS = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?/;
+// Core's own channels that store what a person typed as is (Dashboard chat, web console): a message there that
+// starts with "[" is the person's words, not another source's header.
+const DIRECT_CHANNELS = new Set(['dashboard', 'web-console']);
 // Identifiers a reader cannot use: UUIDs, "task-…" ids with a digit, and runs of 16 or more hex digits.
-const LONG_ID = /\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|task-(?=[a-z0-9-]*[0-9])[a-z0-9]+(?:-[a-z0-9]+)*|[0-9a-f]{16,})\b/gi;
+const ID = String.raw`(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|task-(?=[a-z0-9-]*[0-9])[a-z0-9]+(?:-[a-z0-9]+)*|[0-9a-fA-F]{16,})`;
+const LONG_ID = new RegExp(String.raw`\b${ID}\b`, 'g');
+// An id's own label goes with it ("id: …", "Task ID: …", "id=…"), and so does a "(…)" holding only the id and
+// one word ("(by …)", "(from …)").
+const LABELLED_ID = new RegExp(String.raw`\b(?:[A-Z][A-Za-z]* )?(?:ID|Id|id)\s*[:=]\s*${ID}\b`, 'g');
+const ID_GROUP = new RegExp(String.raw`\s*\((?:[A-Za-z]+ )?${ID}\)`, 'g');
 
 const firstLine = text => text.split('\n').map(line => line.trim()).find(Boolean) ?? '';
-const withoutIds = text => text.replace(LONG_ID, ' ');
+// Removing an id leaves no empty "()", no comma before ")" or after "(", and no separator at either end.
+const withoutIds = text => text.replace(LABELLED_ID, '').replace(ID_GROUP, '').replace(LONG_ID, ' ')
+  .replace(/\s*,\s*(?=\))/g, '').replace(/\(\s*,\s*/g, '(').replace(/\s*\(\s*\)/g, '')
+  .replace(/·(?:\s*·)+/g, '·').replace(/^[\s·:,]+|[\s·:,]+$/g, '');
 
 /**
  * What an inbound message says, for a one-line preview, never the model-facing projection.
  * `text`: the <current-message> body without its sender prefix; the words after an old one-line
  * "header sender said:"; a C4 envelope's fallback text; invalid content's own fallback text. A message from core's
  * scheduler gives the first line of its prompt; one that starts with another source's bracketed header gives its
- * first line without those tags. Neither keeps long identifiers. The appended reply route is dropped. `text` is null
+ * first line without those tags. Neither keeps long identifiers (nor an id's label, nor a "(by …)" left empty).
+ * On `channel` 'dashboard' or 'web-console', core's own channels that store a person's words as typed, a leading
+ * "[…]" is the person's text and stays. The appended reply route is dropped. `text` is null
  * when there is nothing to read (wrapping only, invalid content without fallback text, an overflow pointer to a
  * stored file), so a reader shows channel and time. Whitespace is collapsed; longer text is cut to `limit` code
  * points ending in "…".
  * `source` says where text that is not a person's own words came from: `{kind: 'scheduled_task', taskId}` or
  * `{kind: 'header'}` (a header core does not know; a reader names the channel). It is absent otherwise.
  */
-export function previewMessage(content, { limit = 80 } = {}) {
+export function previewMessage(content, { limit = 80, channel } = {}) {
   if (typeof content !== 'string') return { text: null };
   const parsed = parseC4Content(content);
   let text, source;
@@ -78,7 +91,7 @@ export function previewMessage(content, { limit = 80 } = {}) {
       const body = parsed.text.replace(REPLY_ROUTE, '');
       if (HEADER_SENDER.test(body)) text = body.replace(HEADER_SENDER, '');
       else if (CHANNEL_HEADER.test(body.split('\n', 1)[0].trim())) return { text: null };
-      else if (LEADING_TAGS.test(body)) {
+      else if (!DIRECT_CHANNELS.has(channel) && LEADING_TAGS.test(body)) {
         source = { kind: 'header' };
         text = withoutIds(firstLine(body.replace(LEADING_TAGS, '')));
       } else text = body;
@@ -86,6 +99,20 @@ export function previewMessage(content, { limit = 80 } = {}) {
   }
   const result = source ? { text: cutPreview(text, limit), source } : { text: cutPreview(text, limit) };
   return result.text === null ? { text: null } : result;
+}
+
+/**
+ * The start of a stored message for a technical view: up to `limit` code points, line breaks kept. A cut never
+ * ends inside a run of non-space characters (that part is dropped, so a credential is never half kept) and ends
+ * in "…". Null when there is no text.
+ */
+export function messageStart(text, { limit = 2000 } = {}) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const chars = [...text];
+  if (chars.length <= limit) return text;
+  let cut = chars.slice(0, limit).join('');
+  if (/\S/.test(chars[limit])) cut = cut.replace(/\S+$/, '');
+  return cut.trimEnd() + '…';
 }
 
 /** The text of {@link previewMessage}. */

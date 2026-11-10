@@ -319,24 +319,28 @@ test('target groups follow the dispatch rule using the group snapshot without na
   assert.deepEqual(failing.tasks.find(task => task.id === grouped.id).target, { kind: 'raw', text: 'telegram:dm-1001' });
 });
 
-test('a group whose last message came from the scheduler is labelled with the task name, never its id', async t => {
+test('a group whose last message came from the scheduler is labelled with the task name; the id stays out of the label', async t => {
   const f = fixture(t);
   const named = f.task({ name: 'watch-dispatched-cards' });
   const blank = f.task({ name: '  ' });
   assert.deepEqual(readTaskNames(f.zylosDir, [named.id, blank.id, 'task-gone', named.id]), new Map([[named.id, 'watch-dispatched-cards']]));
   assert.deepEqual(readTaskNames(path.join(f.root, 'elsewhere'), [named.id]), new Map(), 'no scheduler database: no names');
   const preview = (taskId, message) => ({ timestamp: NOW_MS, channel: 'scheduler', endpoint: null, message,
-    text: `[Scheduled Task: ${taskId} #4] ${message}`, messageSource: { kind: 'scheduled_task', taskId } });
+    text: `[Scheduled Task: ${taskId} #4] ${message}`, messageSource: { kind: 'scheduled_task', taskId }, messageRaw: `[Scheduled Task: ${taskId} #4]\n${message}` });
+  // A group older than the snapshot window, found only by search.
+  const older = { sessionGroup: 'scheduler:old', componentName: 'scheduler', lastActivityAt: NOW_MS - 30 * 86400000, preview: preview(named.id, 'older run') };
   const groups = [
     { sessionGroup: 'scheduler:a', componentName: 'scheduler', lastActivityAt: NOW_MS, preview: preview(named.id, 'check the new cards') },
     { sessionGroup: 'scheduler:b', componentName: 'scheduler', lastActivityAt: NOW_MS, preview: preview('task-gone', 'nightly digest') },
     { sessionGroup: 'lark:oc_1', componentName: 'lark', lastActivityAt: NOW_MS, preview: { timestamp: NOW_MS, channel: 'lark', endpoint: 'oc_1',
-      message: 'Review ready', text: '[Review bot] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab', messageSource: { kind: 'header' } } },
+      message: 'Review ready', text: '[Review bot] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab', messageSource: { kind: 'header' },
+      messageRaw: '[Review bot] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab' } },
   ];
   const snapshot = createGroupSnapshot({ zylosDir: f.zylosDir, now: () => NOW_MS,
     store: { latestEventByType: () => null, queryEvents: () => [] },
     cli: {
-      runC4Db: async args => ({ ok: true, readAt: NOW_MS, data: args[0] === 'groups' ? { groups, hasOlder: false } : { groups: [], globalFence: null } }),
+      runC4Db: async args => ({ ok: true, readAt: NOW_MS, data: args.includes('--key-match') ? [older]
+        : args[0] === 'groups' ? { groups, hasOlder: false } : { groups: [], globalFence: null } }),
       readOverrides: async () => ({ ok: true, readAt: NOW_MS, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }),
     },
     loadCoreModule: async name => {
@@ -348,11 +352,13 @@ test('a group whose last message came from the scheduler is labelled with the ta
   const rows = new Map((await snapshot.getSnapshot()).rows.map(row => [row.sessionGroup, row.preview]));
   assert.equal(rows.get('scheduler:a').text, 'watch-dispatched-cards');
   assert.deepEqual(rows.get('scheduler:a').source, { kind: 'scheduled_task' });
-  assert.equal(rows.get('scheduler:a').raw, `[Scheduled Task: ${named.id} #4] check the new cards`, 'the technical view keeps the stored start');
+  assert.equal(rows.get('scheduler:a').raw, `[Scheduled Task: ${named.id} #4]\ncheck the new cards`, 'the technical view keeps the stored message, id included');
   assert.equal(rows.get('scheduler:b').text, 'nightly digest', 'a task the scheduler no longer has keeps the prompt line');
   assert.deepEqual(rows.get('scheduler:b').source, { kind: 'scheduled_task' });
   assert.equal(rows.get('lark:oc_1').text, 'Review ready');
   assert.deepEqual(rows.get('lark:oc_1').source, { kind: 'channel' });
+  const found = (await snapshot.search('scheduler:old')).rows.find(row => row.sessionGroup === 'scheduler:old');
+  assert.equal(found.preview.text, 'watch-dispatched-cards', 'search names the task for a group outside the snapshot');
   for (const key of ['scheduler:a', 'scheduler:b', 'lark:oc_1']) {
     const value = rows.get(key);
     assert.equal(Object.hasOwn(value, 'messageSource'), false);

@@ -40,7 +40,7 @@ Other independent commands:
 `--active-since` takes Unix milliseconds, stops at the first older group, and returns
 `{groups, hasOlder}`; the other forms return an array.
 Each group's `preview` (the newest inbound message, or `null`) is
-`{timestamp, channel, endpoint, text, message, messageSource?}`: `text` is the model-facing
+`{timestamp, channel, endpoint, text, message, messageSource?, messageRaw?}`: `text` is the model-facing
 projection of the whole message, and `message` is a one-line reader preview, at most 80
 characters, without the appended reply route, or `null` when the message carries only
 channel wrapping or is an overflow pointer to a stored file. `message` is, in this order:
@@ -53,12 +53,19 @@ channel wrapping or is an overflow pointer to a stored file. `message` is, in th
   `messageSource: {kind: "scheduled_task", taskId}` so a reader can look up the task name;
 - for any other message that starts with bracketed tags (a source core does not know), its
   first line without those tags, with `messageSource: {kind: "header"}`; a reader labels it
-  with the channel and keeps the full message for technical detail;
+  with the channel. This does not apply on channels `dashboard` and `web-console`, core's own
+  channels that store what a person typed as is: there a leading `[…]` (including a Markdown
+  link `[text](url)`) is the person's words and stays;
 - otherwise the message itself.
 
 Previews from the scheduler or another source's header also drop long identifiers (UUIDs,
-`task-…` ids, long hex strings). `messageSource` is absent for a person's own words and
-envelopes.
+`task-…` ids containing a digit, runs of 16 or more hex digits), together with an id's own
+label (`id: …`, `Task ID: …`, `id=…`) and a `(by …)`-style group the id leaves empty.
+`messageSource` is absent for a person's own words and envelopes. Whenever it is present,
+`messageRaw` holds the stored message's start for a technical view: the model-facing
+projection with line breaks kept, at most 2000 characters; a longer message is cut before a
+run of non-space characters rather than inside it, and ends in `…`. C4 does not redact
+it (nor `text` or `message`); a reader that shows it redacts credentials first.
 
 `group-queues` is a read-only snapshot of the groups that have pending or running
 inbound messages or a drain fence. It returns `{groups, globalFence}`, and each group has

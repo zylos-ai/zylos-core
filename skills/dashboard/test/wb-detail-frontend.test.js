@@ -139,16 +139,19 @@ test('event, end reason and time labels are plain words in plain view and raw va
   assert.equal(displayTime('2026-11-06 10:20:30', 'plain', 'en-US'), new Date(iso).toLocaleString('en-US', { timeZone: ZONE }));
 });
 
-test('a labelled last message shows its stored start only in technical detail', () => {
+test('a labelled last message shows its stored text, folded, only in technical detail', () => {
   const document = createDocument(), root = document.createElement('div');
-  const raw = '[Multica follow-up] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab';
+  const raw = '[Multica follow-up] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab\nRequested by: howard · Task ID: 01a1c33d-7d4e-7a1b-9c2d-0123456789ab';
   const current = row('a', { state: { kind: 'idle' }, preview: { text: 'Review ready', channel: 'multica', timestamp: 1, source: { kind: 'channel' }, raw } });
   renderOverview(root, current, {}, { document, t, level: 'plain' });
   assert.match(root.textContent, /Review ready/);
   assert.equal(root.textContent.includes(raw), false);
   renderOverview(root, current, {}, { document, t, level: 'technical' });
-  const line = allNodes(root).find(node => node.classList?.contains('wb-now-raw'));
-  assert.equal(line.textContent, 'wb.detail.rawMessage' + raw);
+  const folded = allNodes(root).find(node => node.classList?.contains('wb-now-raw'));
+  assert.equal(folded.tagName.toLowerCase(), 'details');
+  assert.equal(folded.open, false, 'folded until asked for');
+  assert.equal(allNodes(folded).find(node => node.tagName?.toLowerCase() === 'summary').textContent, 'wb.detail.rawMessage');
+  assert.equal(allNodes(folded).find(node => node.tagName?.toLowerCase() === 'pre').textContent, raw, 'the whole stored text, line breaks kept');
   renderOverview(root, { ...current, preview: { text: 'hi', channel: 'telegram', timestamp: 1 } }, {}, { document, t, level: 'technical' });
   assert.equal(allNodes(root).some(node => node.classList?.contains('wb-now-raw')), false, 'a person\'s own words have no second line');
 });
