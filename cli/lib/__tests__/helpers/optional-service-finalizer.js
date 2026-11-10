@@ -20,6 +20,21 @@ if (state.targetOwned) {
 }
 const result = runSelfUpgradeFinalize(state, {steps:[
   ctx => step11_startCoreServices(ctx, {zylosDir:state.zylosDir, ecosystemPath:state.ecosystemPath}),
-  step12_verifyServices,
+  ctx => {
+    const result = step12_verifyServices(ctx);
+    if (state.externalAfterFirstVerify) {
+      assert.equal(result.status, 'done');
+      const expectedFirst = state.externalAfterFirstVerify === 'online' ? 1 : 0;
+      assert.equal(ctx.serviceWarnings.length, expectedFirst, 'first verification observed the initial external state');
+      const file = state.zylosDir + '/records.json';
+      const records = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const external = records.find(record => record.name === 'custom');
+      assert.ok(external, 'transition changes the existing external PM2 record');
+      external.pid = state.externalAfterFirstVerify === 'online' ? 456 : 0;
+      external.pm2_env.status = state.externalAfterFirstVerify;
+      fs.writeFileSync(file, JSON.stringify(records));
+    }
+    return result;
+  },
 ]});
 process.stdout.write(JSON.stringify(result));

@@ -84,7 +84,7 @@ function abort(dir, j) {
       stage: j.phase,
       recovery_required: false,
       ...cleanup,
-    warnings: [...new Set([...(j.serviceWarnings || []), ...(cleanup.warnings || [])])]
+      warnings: [...new Set([...(j.serviceWarnings || []), ...(cleanup.warnings || [])])]
     };
   }
   if (!(j.phase === 'aborted_before_install' && j.installationIntent === false && j.terminalEvidence?.verified === true && j.terminalEvidence.kind === 'original_deployment_and_readonly_data')) originalVerified(dir, j);
@@ -339,7 +339,7 @@ function validateReady(dir, j) {
       stage: j.phase,
       recovery_required: false,
       ...cleanup,
-    warnings: [...new Set([...(j.serviceWarnings || []), ...(cleanup.warnings || [])])]
+      warnings: [...new Set([...(j.serviceWarnings || []), ...(cleanup.warnings || [])])]
     };
   } catch (e) {
     const saved = m.transaction(j.zylosDir, dir);

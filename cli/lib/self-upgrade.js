@@ -1365,7 +1365,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
   const started = [];
   const failed = [];
   const serviceMaintenance = maintenanceFor(ctx);
-  let externalNames = new Set(), savedRecordsOnly = false;
+  let externalNames = new Set(), plainRestartNames = new Set();
   try {
     if (ctx.preInstallProtection) {
       ctx.journal = serviceMaintenance.read(path.join(ctx.transactionDir, 'journal.json'));
@@ -1373,11 +1373,19 @@ export function step11_startCoreServices(ctx, deps = {}) {
         if ((ctx.journal.originalServices || []).filter(service => service.name === name).length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
       }
       const {external} = serviceMaintenance.serviceRequirements(ctx.journal);
-      savedRecordsOnly = ctx.journal.initialIdentity?.ecosystemHash === null;
-      if (savedRecordsOnly && fsApi.existsSync(ecosystemPath)) serviceMaintenance.ecosystemServiceNames(ecosystemPath);
-      if (savedRecordsOnly) serviceMaintenance.validateSavedServices(ctx.journal, ctx.journal.originalServices);
-      else if (external.length) serviceMaintenance.validateSavedServices(ctx.journal, external);
-      externalNames = new Set(external.map(service => service.name));
+      if (ctx.journal.initialIdentity?.ecosystemHash === null) {
+        // Forward startup admits the newly deployed template above. Apply its
+        // env/args/script to members, but keep all original availability fatal.
+        const names = new Set(fsApi.existsSync(ecosystemPath)
+          ? serviceMaintenance.ecosystemServiceNames(ecosystemPath) : []);
+        const outside = ctx.journal.originalServices.filter(service => !names.has(service.name));
+        if (outside.length) serviceMaintenance.validateSavedServices(ctx.journal, outside);
+        plainRestartNames = new Set(outside.map(service => service.name));
+      } else {
+        if (external.length) serviceMaintenance.validateSavedServices(ctx.journal, external);
+        externalNames = new Set(external.map(service => service.name));
+        plainRestartNames = externalNames;
+      }
     }
   } catch (error) {
     return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
@@ -1385,7 +1393,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      if (!savedRecordsOnly && !externalNames.has(name)) {
+      if (!plainRestartNames.has(name)) {
         restartFn(name, {
           ecosystemPath,
           stdio: 'pipe',

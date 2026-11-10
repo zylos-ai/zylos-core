@@ -37,15 +37,11 @@ function isNodeTest(file) {
   return false;
 }
 
-const requested = process.argv.slice(2);
-const testFiles = requested.length ? requested.map(file => {
-  const absolute = path.resolve(ROOT, file);
-  const relative = path.relative(ROOT, absolute);
-  if (!relative.endsWith('.test.js') || !isNodeTest(absolute) || !fs.statSync(absolute).isFile()) {
-    throw new Error('Expected an explicit Node .test.js path inside a supported test root: ' + file);
-  }
-  return relative;
-}) : TEST_ROOTS.flatMap(dir => walk(dir)).filter(isNodeTest).sort().map(file => path.relative(ROOT, file));
+const testFiles = TEST_ROOTS
+  .flatMap((dir) => walk(dir))
+  .filter(isNodeTest)
+  .sort()
+  .map((file) => path.relative(ROOT, file));
 
 if (testFiles.length === 0) {
   console.error('No Node test files found.');

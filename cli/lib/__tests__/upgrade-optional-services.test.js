@@ -11,7 +11,7 @@ const {step11_startCoreServices} = await import('../self-upgrade.js');
 
 // Integration boundary: real finalizer/recovery/start/verify and durable journal,
 // with a private PM2 shim only. Run for service availability or warning plumbing;
-// unrelated upgrades may skip. Outer official runner must supply private HOME,
+// unrelated upgrades may skip. Outer test launcher must supply private HOME,
 // ZYLOS_DIR, PM2_HOME, short TMPDIR/TMUX_TMPDIR; cases own their socket/DB paths.
 // Every child is synchronous with a deadline; fixture cleanup reclaims its root.
 function mixed(t) {
@@ -82,17 +82,27 @@ test('upgrade finalizer still fails when an ecosystem service cannot restart',t=
   assert.equal(result.success,false);assert.equal(result.failedStep,11);assert.match(result.error,/scheduler/);
   assert.notEqual(f.load().phase,'upgrade_complete');
 });
-for(const fails of [false,true])test(`originally missing ecosystem retains strict saved-record startup (${fails?'failure':'healthy'})`,t=>{
-  const f=mixed(t);f.j.phase='new_data_ready';f.j.initialIdentity.ecosystemHash=null;f.save();
-  if(fails)fs.writeFileSync(path.join(f.root,'fail-restart'),'custom');
-  const state={schemaVersion:2,preInstallProtection:true,zylosDir:f.root,ecosystemPath:f.file,
+for(const failedName of [null,'custom','scheduler'])test(`originally missing ecosystem applies the generated core configuration with strict failures (${failedName || 'healthy'})`,t=>{
+  const f=mixed(t);f.j.phase='new_data_ready';f.j.initialIdentity.ecosystemHash=null;
+  const tempDir=path.join(f.root,'download'),template=path.join(tempDir,'templates/pm2/ecosystem.config.cjs');
+  fs.mkdirSync(path.dirname(template),{recursive:true});
+  const script=f.j.originalServices.find(service=>service.name==='scheduler').script;
+  fs.writeFileSync(template,`module.exports={apps:[{name:'scheduler',script:${JSON.stringify(script)},env:{FRESH_CORE_ENV:'from-new-template'}}]};`);
+  fs.unlinkSync(f.file);f.save();
+  assert.equal(f.readRecords().find(record=>record.name==='scheduler').pm2_env.FRESH_CORE_ENV,undefined,'cached record lacks the new environment');
+  if(failedName)fs.writeFileSync(path.join(f.root,'fail-restart'),failedName);
+  const state={schemaVersion:2,preInstallProtection:true,zylosDir:f.root,ecosystemPath:f.file,tempDir,
     transactionId:'tx',transactionDir:f.dir,servicesWereRunning:['custom','scheduler'],from:'1',to:'2',databaseMode:'unchanged'};
   const statePath=path.join(f.root,'state.json');fs.writeFileSync(statePath,JSON.stringify(state));
   const child=spawnSync(process.execPath,['cli/lib/__tests__/helpers/optional-service-finalizer.js',statePath],{env:f.env,encoding:'utf8',timeout:20000});
   assert.equal(child.status,0,child.stderr);const result=JSON.parse(child.stdout);
-  assert.equal(result.success,!fails);assert.equal(result.serviceWarnings,undefined);
-  assert.ok(f.commands().some(args=>args[0]==='restart'&&args[1]==='scheduler'));
-  assert.equal(f.commands().filter(args=>['start','startOrRestart'].includes(args[0])).length,0);
+  assert.equal(result.success,failedName===null);assert.equal(result.serviceWarnings,undefined);
+  assert.ok(f.commands().some(args=>args[0]==='restart'&&args[1]==='custom'),'outside generated ecosystem retains saved-record restart');
+  assert.ok(f.commands().some(args=>['start','startOrRestart'].includes(args[0])&&args[1]===f.file&&args.includes('scheduler')),'generated ecosystem member uses fresh configuration');
+  assert.equal(f.commands().some(args=>args[0]==='restart'&&args[1]==='scheduler'),false,'Core does not reuse cached ordinary-restart environment');
+  assert.equal(f.load().ecosystemCreationIntent.originalMissing,true);
+  if(failedName) {assert.equal(result.failedStep,11);assert.match(result.error,new RegExp(failedName));}
+  else assert.equal(f.readRecords().find(record=>record.name==='scheduler').pm2_env.FRESH_CORE_ENV,'from-new-template');
 });
 test('required ecosystem service remaining stopped still fails verification',t=>{
   const f=mixed(t);f.records(f.readRecords().map(record=>({...record,pid:0,pm2_env:{...record.pm2_env,status:'stopped'}})));
@@ -115,4 +125,61 @@ test('PM2 provenance remains strict for optional services',t=>{
   const f=mixed(t);f.records(f.readRecords().filter(record=>record.name!=='custom'));
   assert.throws(()=>m.start(f.j),/original PM2 service record missing or changed/);
   assert.equal(f.commands().filter(args=>args[0]==='restart'||args[0]==='startOrRestart').length,0);
+});
+
+// The fixture changes PM2 state only after the real first verification returns.
+// The real finalizer's target-owned second verify must replace both result and
+// durable warnings; fixed-state cases cannot prove this freshness boundary.
+for(const finalStatus of ['online','stopped'])test(`target-owned completion uses the last external service status (${finalStatus})`,t=>{
+  const f=mixed(t),packageRoot=fs.realpathSync(path.resolve('.'));
+  f.j.phase='new_data_ready';f.j.targetOwned=true;
+  f.j.to=JSON.parse(fs.readFileSync(path.join(packageRoot,'package.json'),'utf8')).version;
+  f.j.compensationCutoff={formatVersion:1,closed:true,transactionId:'tx',from:f.j.from,to:f.j.to,snapshotManifestHash:f.j.snapshotManifestHash};
+  f.save();
+  if(finalStatus==='online')fs.writeFileSync(path.join(f.root,'stay-stopped'),'custom');
+  const state={schemaVersion:2,preInstallProtection:true,targetOwned:true,packageRoot,zylosDir:f.root,ecosystemPath:f.file,
+    transactionId:'tx',transactionDir:f.dir,servicesWereRunning:['custom','scheduler'],from:f.j.from,to:f.j.to,
+    databaseMode:'unchanged',externalAfterFirstVerify:finalStatus};
+  const statePath=path.join(f.root,'state.json');fs.writeFileSync(statePath,JSON.stringify(state));
+  const child=spawnSync(process.execPath,['cli/lib/__tests__/helpers/optional-service-finalizer.js',statePath],{env:f.env,encoding:'utf8',timeout:20000});
+  assert.equal(child.status,0,child.stderr);const result=JSON.parse(child.stdout);
+  assert.equal(result.success,true,JSON.stringify(result));
+  assert.equal(f.commands().filter(args=>args[0]==='save').length,3,'second service verification executed');
+  const expected=finalStatus==='online'?[]:['Service custom is not online; restart it manually, then run pm2 save.'];
+  assert.deepEqual(result.serviceWarnings,expected.length?expected:undefined,'result reflects second verification');
+  assert.deepEqual(f.load().serviceWarnings,expected,'journal reflects second verification rather than first');
+  assert.equal(f.load().phase,'upgrade_complete');
+});
+
+// Preinstall abort keeps original package/CLI/core identity checks real, with
+// unchanged database mode. Both first abort and terminal abort/reread retain the
+// named external warning without manufacturing an installed rollback result.
+test('preinstall abort returns external service warnings on first and terminal results',t=>{
+  const f=mixed(t);f.j.installationIntent=false;f.j.phase='offline';
+  const identity=f.j.initialIdentity;
+  fs.writeFileSync(identity.packageJson,JSON.stringify({name:'original-package',version:'1'}));
+  identity.packageHash=f.maintenance.hash(identity.packageJson);
+  fs.mkdirSync(identity.cliRoot,{recursive:true});fs.writeFileSync(path.join(identity.cliRoot,'original.js'),'// original CLI');
+  identity.cliHash=f.maintenance.treeHash(identity.cliRoot);
+  f.j.coreManifest=[{name:'absent-core',existedBefore:false,backedUp:false,originalHash:null}];
+  f.save();fs.writeFileSync(path.join(f.root,'stay-stopped'),'custom');
+  const result=f.runner.resume(f.dir);
+  assert.equal(result.attempted,false,JSON.stringify(result));assert.equal(result.completed,false);
+  assert.equal(result.recovery_required,false);assert.equal(result.stage,'aborted_before_install');
+  const expected=['Service custom is not online; restart it manually, then run pm2 save.'];
+  assert.deepEqual(result.warnings,expected,'initial abort includes latest unavailable external service');
+  assert.deepEqual(f.load().serviceWarnings,expected);
+  assert.equal(f.readRecords().find(record=>record.name==='scheduler').pm2_env.status,'online');
+  const terminalAbort=f.runner.abort(f.dir,f.load());
+  assert.deepEqual(terminalAbort.warnings,expected,'already terminal abort preserves the warning');
+  assert.deepEqual(f.runner.resume(f.dir).warnings,expected,'public terminal resume preserves it once');
+  assert.equal(f.maintenance.discover(f.root).marker,null);
+});
+
+for(const ecosystemSource of ['module.exports={apps:[]};','module.exports={};'])test(`empty original service set does not inspect changed ecosystem (${ecosystemSource})`,t=>{
+  const f=mixed(t);f.j.originalServices=[];f.j.serviceWarnings=['obsolete warning'];
+  fs.writeFileSync(f.file,ecosystemSource);
+  assert.doesNotThrow(()=>m.verifyServices(f.j));
+  assert.equal(f.commands().length,0,'no PM2 query or save is required without original services');
+  assert.deepEqual(f.j.serviceWarnings,[],'obsolete service warnings are cleared');
 });

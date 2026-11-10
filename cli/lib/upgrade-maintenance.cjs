@@ -684,6 +684,7 @@ function start(j) {
   }
 }
 function verifyServices(j) {
+  if (!(j.originalServices || []).length) { j.serviceWarnings = []; return; }
   const {required, external} = serviceRequirements(j);
   if (external.length) validateSavedServices(j, external);
   const deadline = Date.now() + 30000;
@@ -692,7 +693,7 @@ function verifyServices(j) {
     const online = service => all.some(item => item.name === service.name && item.status === 'online' && item.pid > 0);
     if (required.every(online)) {
       j.serviceWarnings = [...new Set(external.filter(service => !online(service)).map(service => service.name))]
-        .map(name => `Service ${name} is not online; restart it manually.`);
+        .map(name => `Service ${name} is not online; restart it manually, then run pm2 save.`);
       if ((j.originalServices || []).length) command('pm2', ['save']);
       return;
     }
