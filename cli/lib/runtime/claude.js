@@ -58,6 +58,10 @@ const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' '
 // way the session does (e.g. a relay with ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN).
 const DOTENV_AUTH_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
 
+// Non-credential .env settings that the session and the auth probe both carry,
+// so the probe runs in the same environment as the session. Never auth.
+const DOTENV_PROBE_PASSTHROUGH = ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'];
+
 const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
 const C4_CONTROL_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
 
@@ -79,14 +83,15 @@ function _parseEnvValue(content, key) {
 }
 
 /**
- * Read the non-empty DOTENV_AUTH_VARS values from ~/zylos/.env.
+ * Read the non-empty values of the given keys from ~/zylos/.env.
+ * @param {string[]} keys
  * @returns {Record<string, string>} Empty object when .env is absent.
  */
-function _readDotenvAuthVars() {
+function _readDotenvValues(keys) {
   const vars = {};
   try {
     const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    for (const key of DOTENV_AUTH_VARS) {
+    for (const key of keys) {
       const value = _parseEnvValue(envContent, key);
       if (value) vars[key] = value;
     }
@@ -127,7 +132,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
    */
   async checkAuth() {
     // Build subprocess env: inherit current env, inject .env API keys (same as launch()).
-    const injectedEnv = { ...process.env, ..._readDotenvAuthVars() };
+    const injectedEnv = {
+      ...process.env,
+      ..._readDotenvValues([...DOTENV_AUTH_VARS, ...DOTENV_PROBE_PASSTHROUGH]),
+    };
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
@@ -275,7 +283,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
     }
 
     if (!hasNativeAuth) {
-      dotenvAuthVars = _readDotenvAuthVars();
+      dotenvAuthVars = _readDotenvValues(DOTENV_AUTH_VARS);
 
       if (dotenvAuthVars.ANTHROPIC_API_KEY) _approveApiKey(dotenvAuthVars.ANTHROPIC_API_KEY);
       if (dotenvAuthVars.CLAUDE_CODE_OAUTH_TOKEN) _approveApiKey(dotenvAuthVars.CLAUDE_CODE_OAUTH_TOKEN);
@@ -317,6 +325,8 @@ export class ClaudeAdapter extends RuntimeAdapter {
       } else {
         Object.assign(env, dotenvAuthVars);
       }
+      // Non-credential settings shared with checkAuth(); carried with or without native auth.
+      Object.assign(env, _readDotenvValues(DOTENV_PROBE_PASSTHROUGH));
 
       // Build launch spec
       const args = [];

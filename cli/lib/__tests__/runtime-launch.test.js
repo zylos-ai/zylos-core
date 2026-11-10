@@ -375,6 +375,56 @@ describe('Claude launch — relay credentials from .env', () => {
   });
 });
 
+describe('Claude launch — non-credential passthrough from .env', () => {
+  const NAME = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+  const credentialNames = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
+
+  async function launchWith(dotenv, { nativeAuth = false } = {}) {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0; // readSpecEnv() reads the first tmux new-session call
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const names = [NAME, ...credentialNames, 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+    const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    if (nativeAuth) fs.writeFileSync(credFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'fake-refresh-token' } }));
+    fs.writeFileSync(dotenvPath, dotenv);
+    try {
+      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+      const env = readSpecEnv();
+      assert.ok(env, 'spec should be written');
+      return env;
+    } finally {
+      if (nativeAuth) fs.unlinkSync(credFile);
+      fs.writeFileSync(dotenvPath, original);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  }
+
+  it('spec.env carries CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC only when .env sets it', async () => {
+    const relay = 'ANTHROPIC_BASE_URL=https://relay.example.test\nANTHROPIC_AUTH_TOKEN=relay-bearer-test\n';
+    assert.equal((await launchWith(relay + `${NAME}=1\n`))[NAME], '1');
+    assert.equal((await launchWith(`${NAME}=1\n`, { nativeAuth: true }))[NAME], '1', 'carried with native auth too');
+    assert.equal((await launchWith(relay))[NAME], undefined);
+  });
+
+  it('a .env with only CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC injects or approves no credential', async () => {
+    const approved = () => {
+      try { return JSON.parse(fs.readFileSync(path.join(fakeHome, '.claude.json'), 'utf8')).customApiKeyResponses?.approved ?? []; }
+      catch { return []; }
+    };
+    const before = approved();
+    const env = await launchWith(`${NAME}=1\n`);
+    assert.equal(env[NAME], '1');
+    for (const name of credentialNames) assert.equal(env[name], undefined, `${name} must not be set`);
+    assert.deepEqual(approved(), before, 'the setting must not be approved as an API key');
+  });
+});
+
 describe('Claude launch — existing session', () => {
   it('does not create a new tmux session', async () => {
     tmuxSessionExists = true;
