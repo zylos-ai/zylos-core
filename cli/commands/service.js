@@ -15,6 +15,7 @@ import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } fr
 import { commandExists } from '../lib/shell-utils.js';
 import { getCoreEcosystemPath, restartFromEcosystem, restartManagedProcess } from '../lib/pm2.js';
 import { alertTargetNotice, formatAlertTargetNotice } from '../lib/alert-target-notice.js';
+import { systemSendEnvironment } from '../../skills/comm-bridge/scripts/c4-system-send-env.js';
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -179,7 +180,7 @@ export function startServices() {
   const ecosystemPath = getCoreEcosystemPath();
   if (fs.existsSync(ecosystemPath)) {
     try {
-      execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe' });
+      execSync(`pm2 start "${ecosystemPath}"`, { stdio: 'pipe', env: systemSendEnvironment() });
       savePm2ProcessList({save: () => execSync('pm2 save 2>/dev/null', { stdio: 'pipe' })});
       console.log(`  ${success('Started services from ecosystem.config.cjs')}`);
       console.log(`\n${green('Services started.')} Run ${dim('"zylos status"')} to check.`);
@@ -205,14 +206,14 @@ export function startServices() {
     }
     try {
       const envOpts = buildPm2EnvFlags(svc.env);
-      execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
+      execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe', env: systemSendEnvironment() });
       console.log(`  ${success(bold(svc.name))}`);
       started++;
     } catch (e) {
       try {
         try { execSync(`pm2 delete "${svc.name}" 2>/dev/null`, { stdio: 'pipe' }); } catch {}
         const envOpts = buildPm2EnvFlags(svc.env);
-        execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe' });
+        execSync(`pm2 start ${shellQuote(svc.script)} --name ${shellQuote(svc.name)} ${envOpts} 2>/dev/null`, { stdio: 'pipe', env: systemSendEnvironment() });
         console.log(`  ${success(`${bold(svc.name)} ${dim('(started after cleanup)')}`)}`);
         started++;
       } catch (e2) {

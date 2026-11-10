@@ -740,8 +740,15 @@ function validateSavedServices(j, saved) {
     names.add(service.name);
   }
 }
+function systemSendEnvironment() {
+  // Same rule as c4-system-send-env.js; this frozen recovery copy is builtin-only.
+  const env = {...process.env};
+  delete env.ZYLOS_RUN_ID;
+  delete env.ZYLOS_SESSION_GROUP;
+  return env;
+}
 function restartService(name) {
-  command('pm2', ['restart', name, '--update-env']);
+  command('pm2', ['restart', name, '--update-env'], {env: systemSendEnvironment()});
 }
 function start(j) {
   const original = j.originalServices || [];
@@ -763,7 +770,7 @@ function start(j) {
     const external = original.filter(service => !names.has(service.name));
     if (external.length) validateSavedServices(j, external);
     for (const saved of original) {
-      if (names.has(saved.name)) command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env']);
+      if (names.has(saved.name)) command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env'], {env: systemSendEnvironment()});
       else restartService(saved.name);
     }
   }
