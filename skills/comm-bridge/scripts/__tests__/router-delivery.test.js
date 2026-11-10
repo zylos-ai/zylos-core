@@ -222,27 +222,80 @@ test('byte delay and Claude fallback preserve baseline boundaries', () => {
   assert.equal(checkClaudeFallbackInputBox('──────────\n❯ text\n──────────'), 'has_content');
 });
 
-// delayed callback drain: independently held callback cannot outlive ledger.
-test('periodic Enter callback is drained before ledger; no delayed send survives settlement', async t => {
-  const f = setup(t), row = f.message(), pasteWait = deferred(), periodicStarted = deferred(), callbackWait = deferred();
+// Real delivery and private ledger; run for timer phase/drain changes, skip
+// unrelated UI. Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR;
+// no real tmux or model; teardown releases every held wait and stops delivery.
+test('periodic Enter callback during idle settlement drains before ledger', { timeout: 2000 }, async t => {
+  const f = setup(t), row = f.message(), periodicStarted = deferred(), hold = deferred(), callback = deferred();
+  row.require_idle = 1;
   f.deps.now = Date.now;
-  let firstDelay = true, firstVerify = true;
+  let periodic = false;
+  f.deps.diagnostic = (event, fields) => {
+    f.calls.push(['diagnostic', event, fields]);
+    if (event === 'enter_attempt' && fields.kind === 'periodic') periodic = true;
+  };
   f.deps.sleep = async ms => {
-    if (ms === 200 && firstDelay) { firstDelay = false; await pasteWait.promise; }
-    else if (ms === 1 && firstVerify) { firstVerify = false; await callbackWait.promise; }
+    if (ms === 31) await hold.promise;
+    else if (ms === 1 && periodic) await callback.promise;
   };
   const send = f.adapter.sendKeys;
-  f.adapter.sendKeys = async args => { await send(args); periodicStarted.resolve(); };
-  const d = f.create({ periodicEnabled: true, periodicIntervalMs: 5, periodicMaxAttempts: 1, verifyWaitMs: 1 });
+  f.adapter.sendKeys = async args => { await send(args); if (periodic) periodicStarted.resolve(); };
+  const d = f.create({ periodicEnabled: true, periodicIntervalMs: 5, periodicMaxAttempts: 1, verifyWaitMs: 1, idleHoldMs: 31 });
+  t.after(async () => { hold.resolve(); callback.resolve(); await d.stop(); });
   const pending = d.deliverConversation(row);
-  await periodicStarted.promise; pasteWait.resolve(); await new Promise(setImmediate);
+  await periodicStarted.promise; hold.resolve(); await new Promise(setImmediate);
   assert.equal(f.row(row.id).status, 'running'); assert(!f.calls.some(c => c[0] === 'close'));
-  callbackWait.resolve(); await pending; assert.equal(f.row(row.id).status, 'delivered');
+  callback.resolve(); await pending; assert.equal(f.row(row.id).status, 'delivered');
   const count = f.calls.filter(c => c[0] === 'keys').length;
   await new Promise(resolve => setTimeout(resolve, 15));
   assert.equal(f.calls.filter(c => c[0] === 'keys').length, count);
   assert(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'periodic_sent'));
 });
+
+// Real createDelivery, two same-group pastes, inherited deadline. Run when arm,
+// schedule or initial verification order changes; skip unrelated paths. Private
+// DB/env via official runner, injected terminal, bounded timer and stop cleanup.
+test('carried periodic deadline cannot send Enter between paste and initial Enter', { timeout: 2000 }, async t => {
+  const f = setup(t), first = f.message(); let clock = 0, secondPaste = false;
+  f.deps.now = () => clock;
+  f.deps.sleep = async ms => {
+    if (ms === 200 && secondPaste) { clock = 5000; await new Promise(resolve => setTimeout(resolve, 80)); }
+  };
+  const d = f.create({ periodicEnabled: true, periodicIntervalMs: 5000, verifyWaitMs: 1 });
+  t.after(() => d.stop());
+  await d.deliverConversation(first);
+  clock = 4950; const second = f.message(); const start = f.calls.length;
+  secondPaste = true; await d.deliverConversation(second);
+  assert.equal(f.row(first.id).status, 'delivered'); assert.equal(f.row(second.id).status, 'delivered');
+  const events = f.calls.slice(start);
+  assert.equal(events.filter(c => c[0] === 'paste').length, 1);
+  assert.deepEqual(events.filter(c => c[0] === 'diagnostic' && c[1] === 'enter_attempt').map(c => c[2].kind), ['initial']);
+  // The inherited deadline still applies after settlement, rather than being reset.
+  await d.maybePeriodicEnter(second.session_group);
+  assert.equal(f.calls.filter(c => c[0] === 'diagnostic' && c[1] === 'enter_attempt' && c[2].kind === 'initial').length, 2);
+  assert.equal(f.calls.filter(c => c[0] === 'diagnostic' && c[1] === 'periodic_sent').length, 1);
+});
+
+// Real group-shared delivery budget and actual control path; run for either
+// control reset/periodic changes, skip unrelated UI. Official runner isolates
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, private DB, injected terminal, stop cleanup.
+for (const [content, reason] of [['/clear', 'slash_control'], ['[KEYSTROKE]Down', 'keystroke']]) {
+  test(`${reason} clears the prior message periodic Enter budget`, async t => {
+    const f = setup(t), row = f.message(); let clock = 0;
+    f.deps.now = () => clock; f.deps.sleep = async () => {};
+    const d = f.create({ periodicEnabled: true, periodicIntervalMs: 5000, verifyWaitMs: 1 });
+    t.after(() => d.stop());
+    await d.deliverConversation(row);
+    assert.ok(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'periodic_armed'));
+    const control = f.control(content, { session_group: row.session_group });
+    clock = 4950; await d.deliverControl(control); assert.equal(control.status, 'done');
+    assert.ok(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'periodic_disarmed' && c[2].reason === reason));
+    const keys = f.calls.filter(c => c[0] === 'keys').length;
+    clock = 10000; await d.maybePeriodicEnter(row.session_group);
+    assert.equal(f.calls.filter(c => c[0] === 'keys').length, keys);
+    assert.equal(f.calls.filter(c => c[0] === 'diagnostic' && c[1] === 'periodic_sent').length, 0);
+  });
+}
 
 test('require_idle retains running row during hold while a second lane settles', async t => {
   const f = setup(t), a = f.message(), b = f.message('other'), hold = deferred(), holding = deferred(); a.require_idle = 1;

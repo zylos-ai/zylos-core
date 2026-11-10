@@ -36,6 +36,8 @@ export function createLane(context, group) {
     return { claimed: true, blocked: result?.blocked ?? false };
   }
   async function ready(live) {
+    await deps.maybePeriodicEnter?.(group);
+    if (stopped || state.stopped) return;
     const key = `${live.runId}\0${live.sessionId}`;
     if (startupIdentity !== key) { startupIdentity = key; startupLoaded = false; startupIds = []; }
     if (!startupLoaded) {
@@ -148,5 +150,5 @@ export function createLane(context, group) {
     }).finally(() => { working = null; });
     return working;
   }
-  return { kick, get working() { return working; }, stop() { stopped = true; }, nextMessage };
+  return { kick, get working() { return working; }, stop() { stopped = true; deps.clearPeriodicEnter?.(group); }, nextMessage };
 }

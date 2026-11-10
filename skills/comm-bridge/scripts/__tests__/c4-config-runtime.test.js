@@ -3,6 +3,9 @@ import { test } from 'node:test';
 
 test('periodic defaults on; capture and bracketed paste default off with explicit opt-in', async t => {
   const keys = ['C4_PERIODIC_ENTER_ENABLED', 'C4_ENTER_CAPTURE_ENABLED', 'C4_BRACKETED_PASTE_ENABLED'];
+  const interval = process.env.C4_PERIODIC_ENTER_INTERVAL_MS;
+  delete process.env.C4_PERIODIC_ENTER_INTERVAL_MS;
+  t.after(() => { if (interval !== undefined) process.env.C4_PERIODIC_ENTER_INTERVAL_MS = interval; });
   const previous = keys.map(key => process.env[key]);
   t.after(() => keys.forEach((key, i) => {
     if (previous[i] === undefined) delete process.env[key];
@@ -17,7 +20,7 @@ test('periodic defaults on; capture and bracketed paste default off with explici
     assert.equal(config.PERIODIC_ENTER_ENABLED, value === undefined || value === '1');
     assert.equal(config.ENTER_CAPTURE_ENABLED, value === '1');
     assert.equal(config.BRACKETED_PASTE_ENABLED, value === '1');
-    assert.equal(config.PERIODIC_ENTER_INTERVAL_MS, 60000);
+    assert.equal(config.PERIODIC_ENTER_INTERVAL_MS, 5000);
     assert.equal(config.PERIODIC_ENTER_MAX_ATTEMPTS, 3);
   }
 });

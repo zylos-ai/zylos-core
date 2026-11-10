@@ -10,14 +10,17 @@ export class PeriodicEnter {
     this.pending = null;
   }
 
+  // A new paste gets a fresh attempt budget, but an earlier item that is still
+  // pending keeps its deadline: text pasted on top of an unsubmitted message
+  // must not push that message's recovery back.
   arm(itemId, itemType) {
     if (!this.enabled) return this.reset('disabled');
-    this.pending = { itemId, itemType, attempts: 0, lastAt: this.now() };
-    this.emit('periodic_armed', { itemId, itemType });
-  }
-
-  entered() {
-    if (this.pending) this.pending.lastAt = this.now();
+    const previous = this.pending;
+    const carried = previous && previous.attempts < this.maxAttempts;
+    this.pending = { itemId, itemType, attempts: 0, lastAt: carried ? previous.lastAt : this.now() };
+    this.emit('periodic_armed', carried
+      ? { itemId, itemType, carriedFrom: previous.itemId }
+      : { itemId, itemType });
   }
 
   async tick({ eligible, send }) {

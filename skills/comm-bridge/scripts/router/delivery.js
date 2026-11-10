@@ -50,16 +50,70 @@ export function createDelivery(deps, configuration = {}) {
     idlePollMs: REQUIRE_IDLE_EXECUTION_POLL_MS, retryBaseMs: RETRY_BASE_MS,
     gateBackoffBaseMs: 1000, gateBackoffMaxMs: 30000, ...configuration };
   const now = deps.now ?? Date.now;
+  const periodicNow = deps.now ?? (() => performance.now());
   const sleep = deps.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }));
   const open = deps.openTmuxConnection ?? openTmuxConnection;
   const resolve = deps.resolveSessionTarget ?? resolveSessionTarget;
   const revalidate = deps.revalidateSessionTarget ?? revalidateSessionTarget;
   const active = new Set();
+  const periodicGroups = new Map();
   const waits = new Map();
   let stopped = false;
   const diagnostic = (event, fields) => {
     try { Promise.resolve(deps.diagnostic?.(event, fields)).catch(() => {}); } catch {}
   };
+  function groupPeriodic(group, fields) {
+    let entry = periodicGroups.get(group);
+    if (!entry) {
+      entry = { fields };
+      entry.timer = new PeriodicEnter({ enabled: options.periodicEnabled, intervalMs: options.periodicIntervalMs,
+        maxAttempts: options.periodicMaxAttempts, now: periodicNow,
+        emit: (event, details) => diagnostic(event, { ...entry.fields, ...details }) });
+      if (options.periodicEnabled && !stopped) periodicGroups.set(group, entry);
+    }
+    return entry.timer;
+  }
+  function clearPeriodicEnter(group, reason = 'lane_stopped') {
+    periodicGroups.get(group)?.timer.reset(reason);
+    periodicGroups.delete(group);
+  }
+  async function captureBound({ target, connection, adapter }, fields, phase, details = {}) {
+    if (!options.captureEnabled) return;
+    try {
+      const text = await adapter.captureScreen({ target, connection });
+      await revalidate({ target, connection });
+      const geometry = await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.geometry]);
+      const status = saveEnterCapture(text, phase, { ...fields, ...details, geometry: geometry.trim() });
+      if (status === 'capacity' || status === 'failed') diagnostic('capture_skipped', { ...fields, reason: status });
+    } catch (cause) {
+      if (isIdentityError(cause)) throw cause;
+      diagnostic('capture_failed', { ...fields, phase });
+    }
+  }
+  async function supplement(group) {
+    const entry = periodicGroups.get(group), periodic = entry?.timer;
+    if (stopped || !periodic?.pending) return;
+    if (periodic.pending.attempts >= options.periodicMaxAttempts) return clearPeriodicEnter(group, 'exhausted');
+    if (periodicNow() - periodic.pending.lastAt < options.periodicIntervalMs) return;
+    // A supplementary operation owns a fresh bound executor in the same lane.
+    // It never reuses a settled claim's connection or changes its ledger.
+    let connection;
+    await periodic.tick({ eligible: !stopped, send: async () => {
+      try {
+        connection = await open(options.tmux ?? {});
+        const target = await resolve({ sessionGroup: group, connection });
+        if (stopped || !target.ready || !['claude', 'codex'].includes(target.runtime)) throw failure('ENTER_UNVERIFIED');
+        entry.fields = { ...entry.fields, runId: target.runId, runtime: target.runtime };
+        const adapter = deps.getSessionAdapter(target.runtime);
+        await captureBound({ target, connection, adapter }, entry.fields, 'before', { kind: 'periodic' });
+        await revalidate({ target, connection });
+        await adapter.sendKeys({ target, connection, keys: ['Enter'] });
+        await sleep(options.verifyWaitMs);
+        await captureBound({ target, connection, adapter }, entry.fields, 'after', { kind: 'periodic' });
+      } finally { await connection?.close(); }
+    } });
+    if (periodic.pending?.attempts >= options.periodicMaxAttempts) clearPeriodicEnter(group, 'exhausted');
+  }
 
   const waitKey = (row, type) => `${type}:${row.id}`;
   function waitFields(wait) {
@@ -117,8 +171,7 @@ export function createDelivery(deps, configuration = {}) {
     const group = deps.getSessionMode() === 'single' ? null : row.session_group;
     const fields = { session_group: group, [type === 'control' ? 'control_id' : 'conversation_id']: row.id };
     const emit = (event, details = {}) => diagnostic(event, { ...fields, ...details });
-    const periodic = new PeriodicEnter({ enabled: options.periodicEnabled, intervalMs: options.periodicIntervalMs,
-      maxAttempts: options.periodicMaxAttempts, now, emit });
+    const periodic = groupPeriodic(group, fields);
     let connection, target, adapter, timer, draining = false, queue = Promise.resolve();
     let result = 'blocked', gateCode, gateReason, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false;
     const bound = () => ({ target, connection });
@@ -128,22 +181,12 @@ export function createDelivery(deps, configuration = {}) {
       return work;
     }
     async function capture(phase, details) {
-      if (!options.captureEnabled) return;
-      try {
-        const text = await adapter.captureScreen(bound());
-        await revalidate(bound());
-        const geometry = await connection.command([C.displayMessage, '-p', '-t', target.paneId, F.geometry]);
-        const status = saveEnterCapture(text, phase, { ...fields, ...details, geometry: geometry.trim() });
-        if (status === 'capacity' || status === 'failed') emit('capture_skipped', { reason: status });
-      } catch (cause) {
-        if (isIdentityError(cause)) throw cause;
-        emit('capture_failed', { phase });
-      }
+      return captureBound({ target, connection, adapter }, fields, phase, details);
     }
     async function enter(kind) {
       emit('enter_attempt', { kind });
       await adapter.sendKeys({ ...bound(), keys: ['Enter'] });
-      entered = true; periodic.entered(); emit('enter_sent', { kind });
+      entered = true; emit('enter_sent', { kind });
     }
     function schedulePeriodic() {
       if (draining || stopped || !periodic.pending || periodic.pending.attempts >= options.periodicMaxAttempts) return;
@@ -155,7 +198,7 @@ export function createDelivery(deps, configuration = {}) {
           await sleep(options.verifyWaitMs);
           await capture('after', { kind: 'periodic' });
         } })).finally(schedulePeriodic).catch(() => {});
-      }, options.periodicIntervalMs);
+      }, Math.max(0, options.periodicIntervalMs - (periodicNow() - periodic.pending.lastAt)));
     }
     async function readState() {
       let sample;
@@ -182,7 +225,7 @@ export function createDelivery(deps, configuration = {}) {
       if (verdict === 'has_content' && target.runtime === 'claude') {
         try {
           const fallback = checkClaudeFallbackInputBox(await adapter.captureScreen(bound()));
-          if (fallback !== 'indeterminate') verdict = fallback;
+          if (fallback !== 'indeterminate') verdict = fallback === 'empty' ? 'disputed_empty' : fallback;
         } catch (cause) { if (isIdentityError(cause)) throw cause; }
       }
       emit('input_check', { verdict });
@@ -190,13 +233,21 @@ export function createDelivery(deps, configuration = {}) {
     }
     async function verify() {
       await io(() => enter('initial'));
+      let disputeRetried = false, lastVerdict;
       for (let attempt = 0; attempt < options.verifyAttempts; attempt++) {
         await sleep(options.verifyWaitMs);
         let verdict = 'indeterminate';
         try {
           verdict = await io(async () => { await capture('after', { kind: 'normal_verify', attempt }); return inputState(); });
         } catch (cause) { if (isIdentityError(cause)) throw cause; }
+        lastVerdict = verdict;
         if (verdict === 'empty') return true;
+        if (verdict === 'disputed_empty') {
+          if (disputeRetried) return true;
+          disputeRetried = true;
+          await io(() => enter('dispute_retry'));
+          continue;
+        }
         if (verdict === 'has_content') await io(() => enter('verify_retry'));
         else {
           try {
@@ -206,7 +257,7 @@ export function createDelivery(deps, configuration = {}) {
           } catch (cause) { if (isIdentityError(cause)) throw cause; }
         }
       }
-      return false;
+      return lastVerdict === 'disputed_empty';
     }
     const idleWait = new AbortController();
     async function waitForIdle(ms) {
@@ -227,7 +278,7 @@ export function createDelivery(deps, configuration = {}) {
         await waitForIdle(options.idlePollMs);
       }
     }
-    const controller = { cancel: () => { draining = true; idleWait.abort(); clearTimeout(timer); periodic.reset('stop'); } };
+    const controller = { cancel: () => { draining = true; idleWait.abort(); clearTimeout(timer); } };
     active.add(controller);
     try {
       if (stopped) gateCode = 'delivery_stopped';
@@ -265,9 +316,11 @@ export function createDelivery(deps, configuration = {}) {
             confirmedActive: state.active_tools > 0 && Number.isFinite(state.last_api_activity) && now() / 1000 - state.last_api_activity < 60 })) {
             result = 'ack';
           } else if (isKeystrokeControl(item)) {
+            periodic.reset('keystroke');
             await io(() => adapter.sendKeys({ ...bound(), keys: [parseKeystrokeKey(content)] }));
             result = 'ack';
           } else {
+            if (type === 'control' && content.startsWith('/')) periodic.reset('slash_control');
             const message = type === 'conversation' ? deps.formatConversation(row) : content.startsWith('/') ? content : `Meanwhile, ${content}`;
             const sanitized = sanitizeMessage(message);
             await io(() => adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED }));
@@ -276,7 +329,11 @@ export function createDelivery(deps, configuration = {}) {
               try { Promise.resolve(deps.notifyDelivered({ conversationId: row.id, channel: row.channel,
                 sessionGroup: group, runId: target.runId, runtime: target.runtime, pastedAt })).catch(() => {}); } catch {}
             }
-            if (type === 'conversation' || !content.startsWith('/')) { periodic.arm(row.id, type); schedulePeriodic(); }
+            if (type === 'conversation' || !content.startsWith('/')) {
+              const entry = periodicGroups.get(group);
+              if (entry) entry.fields = fields;
+              periodic.arm(row.id, type);
+            }
             await sleep(getDeliveryDelay(Buffer.byteLength(sanitized, 'utf8')));
             let verified;
             try { verified = await verify(); }
@@ -291,6 +348,7 @@ export function createDelivery(deps, configuration = {}) {
               if (type === 'conversation' || ((after.proc?.alive === false || offline(after.state)) &&
                 !(isCodexExitLifecycleControl(item, target.runtime)))) throw failure('ENTER_UNVERIFIED');
             }
+            schedulePeriodic();
             result = type === 'conversation' ? 'delivered' : content.includes('---- ack via:') ? 'submitted' : 'ack';
             if (row.require_idle === 1) await idleSettlement();
           }
@@ -345,6 +403,12 @@ export function createDelivery(deps, configuration = {}) {
     task.finally(() => tasks.delete(task)).catch(() => {});
     return task;
   }
-  return { canAttempt, finishWait, sweepWaits, deliverConversation: row => run(row, 'conversation'), deliverControl: row => run(row, 'control'),
-    async stop() { stopped = true; for (const controller of active) controller.cancel(); await Promise.allSettled([...tasks]); waits.clear(); } };
+  return { canAttempt, finishWait, sweepWaits, clearPeriodicEnter,
+    maybePeriodicEnter(group) {
+      const task = supplement(group); tasks.add(task);
+      task.finally(() => tasks.delete(task)).catch(() => {}); return task;
+    },
+    deliverConversation: row => run(row, 'conversation'), deliverControl: row => run(row, 'control'),
+    async stop() { stopped = true; for (const controller of active) controller.cancel(); await Promise.allSettled([...tasks]);
+      for (const group of periodicGroups.keys()) clearPeriodicEnter(group); waits.clear(); } };
 }
