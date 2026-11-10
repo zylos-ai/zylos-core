@@ -92,12 +92,13 @@ test('category bars use assessment colors and direct signed or missing values wi
   assert.equal(config.options.plugins.tooltip.filter({ dataset: config.data.datasets[1] }), false);
 });
 
-test('category labels retain an axis title while all numeric ticks stay hidden', t => {
-  const block = category([{ label: 'A', value: 10 }]); block.data.xLabel = 'Requests';
+test('category numeric axis retains its title while all numeric ticks stay hidden', t => {
+  const block = category([{ label: 'A', value: 10 }]); block.data.xLabel = 'Channel'; block.data.yLabel = 'Requests';
   const { chart } = render(t, block);
   assert.equal(chart.scales.x.options.display, true);
   assert.equal(chart.scales.x.options.title.text, 'Requests');
   assert.equal(chart.scales.x.options.ticks.display, false);
+  assert.equal(chart.scales.y.options.title.display, false);
 });
 
 test('breakdown ends at the exact total, writes fitting shares and omits narrow shares', t => {
@@ -145,11 +146,11 @@ test('resource creates one HTML breakdown legend and updates its formatted value
 });
 
 test('category resources retain full row pitch and visible bars for short and long lists', t => {
-  for (const [count, reference, xLabel] of [[1, false], [2, false], [4, true], [20, true], [1, true, true], [4, true, true]]) {
+  for (const [count, reference, yLabel] of [[1, false], [2, false], [4, true], [20, true], [1, true, true], [4, true, true]]) {
     for (const width of [700, 290]) {
       const document = createDocument(), fallback = document.createElement('figure');
       const block = category(Array.from({ length: count }, (_, index) => ({ label: `Channel ${index + 1}`, value: index + 1 })));
-      if (xLabel) block.data.xLabel = 'Requests';
+      if (yLabel) block.data.yLabel = 'Requests';
       if (reference) block.data.reference = { label: 'Target', value: 10 };
       const resource = conversationChartResource({ document, fallback, block });
       const height = parseFloat(fallback.querySelector('.conversation-chart-plot').style['--chat-plot-h']);

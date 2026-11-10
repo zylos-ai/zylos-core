@@ -352,6 +352,7 @@ export function conversationChartResource({ document, block, fallback, t = key =
   if (block.type === 'category_series') plot.style.setProperty('--chat-plot-h',
     `${block.data.points.length * 34 + (block.data.reference ? 18 : 0) + (block.data.yLabel ? 32 : 0)}px`);
   fallback.insertBefore(plot, fallback.querySelector('.chat-chart-series'));
+  const axes = fallback.querySelector('.chat-chart-axes'), axisDescription = axes?.textContent;
   let chart, appearance, details, detailsSummary, legend, destroyed = false;
   return { node: fallback,
     mount() {
@@ -399,14 +400,15 @@ export function conversationChartResource({ document, block, fallback, t = key =
         const entries = [...fallback.querySelectorAll('.chat-chart-series, .chat-chart-baseline')];
         for (const entry of entries) details.append(entry);
         if (entries.length) fallback.append(details);
-        const axes = fallback.querySelector('.chat-chart-axes');
-        if (axes) axes.hidden = true;
+        if (axes) {
+          if (block.type === 'category_series') axes.textContent = block.data.xLabel ?? '';
+          axes.hidden = block.type !== 'category_series' || !block.data.xLabel;
+        }
         fallback.classList.add('conversation-chart-enhanced');
       } catch {
         try { (chart ?? Chart.getChart?.(canvas))?.destroy(); } catch { /* Keep the static data available. */ }
         chart = undefined; appearance = undefined; plot.hidden = true;
-        const axes = fallback.querySelector('.chat-chart-axes');
-        if (axes) axes.hidden = false;
+        if (axes) { axes.textContent = axisDescription; axes.hidden = false; }
         legend?.remove(); legend = undefined;
         if (details) {
           for (const entry of [...details.querySelectorAll('.chat-chart-series, .chat-chart-baseline')]) fallback.insertBefore(entry, plot);
