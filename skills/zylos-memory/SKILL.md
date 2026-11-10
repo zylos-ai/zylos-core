@@ -137,7 +137,7 @@ worked example in `examples/`:
 
 - `session-start-inject.js`: prints core memory context blocks for hooks.
 - `rotate-session.js`: rotates `sessions/current.md` at day boundary.
-- `daily-commit.js`: local git snapshot for `memory/` if changed.
+- `daily-commit.js`: local git snapshot for `memory/` if changed; files over 50 MB are left out and listed in its output.
 - `consolidate.js`: JSON consolidation report (sizes, age, budget checks).
   Use for deliberate memory maintenance, or for scheduler-triggered
   consolidation when such a task is configured. Review the report and apply

@@ -55,11 +55,14 @@ export class TaskScheduler {
     if (state?.last_date === today) return false;
 
     const ok = task.execute(snapshot) !== false;
-    if (!ok) return false;
+    // recordFailure: a failed run also counts as today's attempt (next try tomorrow).
+    if (!ok && !task.recordFailure) return false;
 
-    task.writeState?.(today);
-    this.deps.log?.(`${task.id}: executed (date=${today})`);
-    return true;
+    task.writeState?.(today, ok);
+    this.deps.log?.(ok
+      ? `${task.id}: executed (date=${today})`
+      : `${task.id}: failed, next attempt tomorrow (date=${today})`);
+    return ok;
   }
 
   #maybeRunInterval(task, snapshot) {
