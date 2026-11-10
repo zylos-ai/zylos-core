@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { queryComponentSessionGroup, fixedAddressSessionGroup } from '../c4-component-session-group.js';
 
@@ -140,13 +141,42 @@ test('query times out after five seconds and reaps the child before rejecting', 
   const start = Date.now();
   assert.throws(() => f.query('address'), failed(/timed out after 5 s/));
   assert.ok(Date.now() - start >= 4900);
+  assert.ok(Date.now() - start < 6500);
   reaped(f.pidFile);
 });
 
-test('query reports an unavailable node executable as a start failure', async t => {
+test('query reports a component spawn failure independently of PATH', async t => {
   const f = fixture(t, "process.stdout.write('room');");
-  f.env.PATH = path.join(f.root, 'missing-bin');
+  f.env.ZYLOS_DIR = f.root;
+  f.env.NODE_OPTIONS = `--import=${fileURLToPath(new URL('./fixtures/send-spawn-fault.js', import.meta.url))}`;
+  f.env.C4_TEST_SPAWN_TARGET = f.script;
+  f.env.C4_TEST_SPAWN_FAULT = 'ENOENT';
   assert.throws(() => f.query('address'), failed(/could not start: ENOENT/));
+});
+
+test('query accepts path-safe legacy component names and refuses traversal', t => {
+  const f = fixture(t);
+  for (const component of ['Demo', 'a'.repeat(33)]) {
+    assert.deepEqual(queryComponentSessionGroup({ component, endpoint: 'address' }, { skillsDir: f.root, env: f.env }), { groupName: null });
+    const directory = path.join(f.root, component, 'scripts');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'session-group.js'), "process.stdout.write('room');");
+    assert.deepEqual(queryComponentSessionGroup({ component, endpoint: 'address' }, { skillsDir: f.root, env: f.env }), { groupName: 'room' });
+  }
+  for (const component of ['', '..', '../demo', 'a/b', 'a\\b', 'a\0b']) {
+    assert.throws(() => queryComponentSessionGroup({ component, endpoint: 'address' }, { skillsDir: f.root, env: f.env }), failed(/invalid component/));
+  }
+});
+
+// Boundary: a test-owned preload retains only the runner's event loop. The
+// synchronous caller must kill it even after the component already exited.
+test('query bounds a runner that remains alive after component completion', { timeout: 10000 }, t => {
+  const f = fixture(t, "process.stdout.write('room');");
+  f.env.NODE_OPTIONS = `--import=${fileURLToPath(new URL('./fixtures/query-runner-linger.js', import.meta.url))}`;
+  const start = Date.now();
+  assert.throws(() => f.query('address'), failed(/could not start: ETIMEDOUT/));
+  assert.ok(Date.now() - start >= 6400);
+  assert.ok(Date.now() - start < 8000);
 });
 
 // Same private query boundary. An inherited pipe must not extend Core's timeout.
@@ -187,7 +217,7 @@ test('query timeout settles when a descendant retains inherited output pipes', {
   const start = Date.now();
   assert.throws(() => f.query('address'), failed(/timed out after 5 s/));
   assert.ok(Date.now() - start >= 4900);
-  assert.ok(Date.now() - start < 8000);
+  assert.ok(Date.now() - start < 6500);
   reaped(f.pidFile);
   await stopDescendant();
 });

@@ -14,7 +14,7 @@ function queryFailure(component, reason, stderr = '') {
 
 /** Query current component ownership without caching or choosing a failure policy. */
 export function queryComponentSessionGroup({ component, endpoint }, { skillsDir = SKILLS_DIR, env = process.env } = {}) {
-  if (typeof component !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/.test(component)) {
+  if (typeof component !== 'string' || !component || component.includes('..') || /[/\\\0]/.test(component)) {
     throw queryFailure('invalid', 'could not start: invalid component');
   }
   if (endpoint === null) return { groupName: null };
@@ -33,7 +33,7 @@ export function queryComponentSessionGroup({ component, endpoint }, { skillsDir 
   let result;
   try {
     result = spawnSync(process.execPath, [runner, script, endpoint], {
-      cwd: componentDir, env, input: '', encoding: 'utf8', maxBuffer: 32768, killSignal: 'SIGKILL',
+      cwd: componentDir, env, input: '', encoding: 'utf8', maxBuffer: 32768, timeout: 6500, killSignal: 'SIGKILL',
     });
   } catch (error) { throw queryFailure(component, `could not start: ${error.code || 'UNKNOWN'}`); }
   if (result.error || result.status !== 0) throw queryFailure(component, `could not start: ${result.error?.code || result.signal || result.status}`);
