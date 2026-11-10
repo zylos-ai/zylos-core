@@ -25,7 +25,7 @@ function setup(t, endpoint = 'route', options = { groupName: 'room' }) {
   return { ...result, dir, script, output, row, runId, api };
 }
 
-test('#6b rejects malformed run/id at parse boundary without coercing numeric input', () => {
+test('rejects malformed run/id at parse boundary without coercing numeric input', () => {
   const runId = '01234567-89ab-cdef-0123-456789abcdef';
   for (const id of ['0', '-1', '+1', '01', '1.0', '1e3', ' 1', '1\n', '12345678901234567890']) {
     assert.throws(() => parseSendArgs(['--absorbed-reply', runId, id]), { code: 'INVALID_ARGS' });
@@ -37,7 +37,7 @@ test('#6b rejects malformed run/id at parse boundary without coercing numeric in
   assert.throws(() => parseSendArgs(['--absorbed-reply', runId, '1', 'extra']), { code: 'INVALID_ARGS' });
 });
 
-test('#6b missing run, nonmembership and vanished row preserve D9 and never create out audit', t => {
+test('missing run, nonmembership and vanished row preserve transition state and never create out audit', t => {
   const { api, db, runId, row } = setup(t);
   const original = db.prepare('SELECT absorbed_ids FROM mode_transitions WHERE run_id=?').get(runId).absorbed_ids;
   assert.throws(() => readAbsorbedReply('00000000-0000-0000-0000-000000000000', String(row.id), api), { code: 'RUN_NOT_FOUND' });
@@ -48,7 +48,7 @@ test('#6b missing run, nonmembership and vanished row preserve D9 and never crea
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, 0);
 });
 
-test('#6b real component receives exact absorbed route bytes and null endpoint is omitted', async t => {
+test('real component receives exact absorbed route bytes and null endpoint is omitted', async t => {
   for (const endpoint of [null, 'a\'"$`\\\nroute', 'x'.repeat(131071)]) {
     const { api, db, runId, row, dir, output } = setup(t, endpoint);
     const request = readAbsorbedReply(runId, String(row.id), api);
@@ -59,7 +59,7 @@ test('#6b real component receives exact absorbed route bytes and null endpoint i
   }
 });
 
-test('#6b uninstalled component and unpassable original routes reject without new audit or source mutation', async t => {
+test('uninstalled component and unpassable original routes reject without new audit or source mutation', async t => {
   for (const endpoint of ['x\0y', 'x'.repeat(131072), 'route']) {
     const { api, db, runId, row, dir, script } = setup(t, endpoint);
     if (endpoint === 'route') fs.renameSync(script, script + '.removed');
@@ -79,7 +79,7 @@ test('#6b uninstalled component and unpassable original routes reject without ne
   }
 });
 
-test('#6b D9 and D1 reads share an actual WAL snapshot during a concurrent committed state change', t => {
+test('transition and conversation reads share an actual WAL snapshot during a concurrent committed state change', t => {
   const { api, db, filename, runId, row } = setup(t);
   const writer = new Database(filename);
   t.after(() => writer.close());
@@ -100,37 +100,37 @@ test('#6b D9 and D1 reads share an actual WAL snapshot during a concurrent commi
   assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_NOT_IN_RUN' });
 });
 
-test('#6b absorbed internal route is retained in full for the internal handler', t => {
+test('absorbed internal route is retained in full for the internal handler', t => {
   const { api, db, runId, row } = setup(t);
   const endpoint = 'peer:room-with-\'"$`\\\nbytes';
   db.prepare("UPDATE conversations SET channel='internal',endpoint_id=?,session_group='origin' WHERE id=?").run(endpoint, row.id);
   assert.deepEqual(readAbsorbedReply(runId, String(row.id), api),
-    { kind: 'external', channel: 'internal', endpoint, id: String(row.id), wholeGroup: true });
+    { kind: 'external', channel: 'internal', endpoint, id: row.id, runId });
 });
 
-test('#6b whole component absorbed route keeps whole-group audit despite later endpoint subgroup history', async t => {
+test('whole component absorbed route keeps whole-group audit despite later endpoint subgroup history', async t => {
   const { api, db, store, runId, row, dir, output } = setup(t, 'route', {});
   store.insertConversation('in', 'demo', 'route', 'later subgroup message', { groupName: 'later' });
   const request = readAbsorbedReply(runId, String(row.id), api);
-  assert.deepEqual(request, { kind: 'external', channel: 'demo', endpoint: 'route', id: String(row.id), wholeGroup: true });
+  assert.deepEqual(request, { kind: 'external', channel: 'demo', endpoint: 'route', id: row.id, runId });
   const audit = await sendExternal(request, 'whole reply', { api, skillsDir: dir });
   assert.equal(audit.session_group, 'demo');
   assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').get(audit.id).session_group, 'demo');
   assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['route', 'whole reply']);
 });
 
-test('#6b legacy empty absorbed group follows ordinary endpoint group resolution', async t => {
+test('legacy empty absorbed group uses component ownership despite later endpoint history', async t => {
   const { api, db, store, runId, row, dir, output } = setup(t, 'route', {});
   db.prepare("UPDATE conversations SET session_group='' WHERE id=?").run(row.id);
   store.insertConversation('in', 'demo', 'route', 'later subgroup message', { groupName: 'later' });
   const request = readAbsorbedReply(runId, String(row.id), api);
-  assert.deepEqual(request, { kind: 'external', channel: 'demo', endpoint: 'route', id: String(row.id) });
+  assert.deepEqual(request, { kind: 'external', channel: 'demo', endpoint: 'route', id: row.id, runId });
   const audit = await sendExternal(request, 'legacy reply', { api, skillsDir: dir });
-  assert.equal(audit.session_group, 'demo:later');
+  assert.equal(audit.session_group, 'demo');
   assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['route', 'legacy reply']);
 });
 
-test('#6b unsafe numeric D9 id is refused rather than replying to a rounded neighboring id', t => {
+test('unsafe numeric absorbed id is refused rather than replying to a rounded neighboring id', t => {
   const { api, db, row, runId } = setup(t);
   const exact = '1000000000000000001';
   db.prepare('UPDATE conversations SET id=? WHERE id=?').run(BigInt(exact), row.id);

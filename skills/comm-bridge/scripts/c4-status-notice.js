@@ -2,7 +2,6 @@ import { spawn as spawnChild } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as defaultDb from './c4-db.js';
 import { normalizeStatusEndpoint } from './status-endpoint.js';
-import { parseSessionGroup } from './c4-session-group.js';
 import { messageForStatus } from './status-notice-templates.js';
 import { logStatusNotice } from './status-notice.js';
 import { systemSendEnvironment } from './c4-system-send-env.js';
@@ -48,8 +47,6 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
     } catch (error) { warn('reserve', record, error); return { outcome: 'failed', code: 'UNHEALTHY_NOTIFY_FAILED' }; }
     if (claim.suppressed) return { outcome: 'suppressed', key: claim.key };
     const argv = [script, record.channel, record.endpoint_id];
-    const group = parseSessionGroup(record.session_group);
-    if (record.channel !== 'internal' && group?.groupName) argv.push('--session-group', group.groupName);
     const result = await new Promise(resolve => {
       let child, done = false, started = false, timer;
       const finish = result => { if (done) return; done = true; clearTimeout(timer); resolve(result); };

@@ -29,11 +29,11 @@ export function setupChannelFixture(t) {
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   fs.writeFileSync(path.join(zylos, '.zylos/config.json'), JSON.stringify({ runtime: 'codex', session_mode: 'multi' }));
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'pm2'), TMPDIR: tmp,
-    TMUX_TMPDIR: tmp, PATH: bin, ZYLOS_PACKAGE_ROOT: core, ZYLOS_SESSION_GROUP: 'origin', ZYLOS_DATA_DIR: dataDir,
+    TMUX_TMPDIR: tmp, PATH: bin, ZYLOS_PACKAGE_ROOT: core, ZYLOS_DATA_DIR: dataDir,
     CHANNEL_SEND_LOG: path.join(root, 'sends'), CHANNEL_HTTP_LOG: path.join(root, 'http'),
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import=${observer}` };
   for (const key of Object.keys(env)) if (key === 'TMUX' || /TOKEN|SECRET|PASSWORD|API_KEY/.test(key)
-    || ['ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID'].includes(key)) delete env[key];
+    || ['ZYLOS_SESSION_GROUP', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID'].includes(key)) delete env[key];
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'ZYLOS_DATA_DIR']) assert.ok(env[key].startsWith(root + path.sep), key);
   assert.notEqual(zylos, path.join(home, 'zylos'));
   for (const filename of [c4Path, dashboardPath]) assert.ok(filename.startsWith(root + path.sep));

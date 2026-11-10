@@ -14,6 +14,7 @@ const barrier=fileURLToPath(new URL('./fixtures/internal-send-barrier.js',import
 function setup(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'send-internal-'));
   fs.mkdirSync(path.join(root,'comm-bridge'));fs.mkdirSync(path.join(root,'.zylos'));
+  fs.mkdirSync(path.join(root,'.claude/skills/chat'),{recursive:true});
   fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({session_mode:'multi',runtime:'claude'}));
   const f=fixture(t,{},path.join(root,'comm-bridge/c4.db'));
   f.db.pragma('journal_mode=WAL');
@@ -57,7 +58,6 @@ test('rejects all invalid send forms without changing conversations or heads',as
     {env:{ZYLOS_SESSION_GROUP:'chat:unknown'},code:'UNKNOWN_SENDER_GROUP'},
     {args:['internal',''],code:'UNKNOWN_TARGET_GROUP'},
     {args:['internal','*'],code:'UNKNOWN_TARGET_GROUP'},
-    {args:['internal','chat:missing'],code:'UNKNOWN_TARGET_GROUP'},
     {args:['internal','Chat:b'],code:'UNKNOWN_TARGET_GROUP'},
     {args:['internal','chat:a'],code:'SELF_TARGET'},
     {body:' \t\n',code:'EMPTY_CONTENT'},
@@ -73,6 +73,14 @@ test('empty stdin never calls the store or identity reader, even without a sende
   let calls=0;const forbidden=()=>{calls++;throw new Error('must not be called');};
   await assert.rejects(sendInternal(['internal','chat:b'],async()=> '\n \t',{env:{},insertMessage:forbidden,readIdentity:forbidden}),{code:'EMPTY_CONTENT'});
   assert.equal(calls,0);
+});
+
+test('an installed component can receive an internal message in a new group',async t=>{
+  const f=setup(t);
+  assert.equal(f.db.prepare('SELECT 1 FROM group_heads WHERE session_group=?').get('chat:missing'),undefined);
+  const result=await run(f,['internal','chat:missing'],'new group');
+  assert.equal(result.code,0,result.stderr);
+  assertPair(f,'new group','chat:a','chat:missing');
 });
 
 test('origin and inherited background group work without a mode or target-health gate',async t=>{

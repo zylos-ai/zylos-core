@@ -28,6 +28,7 @@ test('default supervisor alert delivery clears inherited session identity', { ti
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), '{"runtime":"claude","session_mode":"multi"}');
+  fs.writeFileSync(path.join(channel, 'session-group.js'), "process.stdout.write('responsible\\n')");
   fs.writeFileSync(path.join(channel, 'send.js'), `import fs from 'node:fs';
     fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({
       argv: process.argv.slice(2),

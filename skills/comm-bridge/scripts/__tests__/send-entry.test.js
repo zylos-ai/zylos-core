@@ -8,7 +8,6 @@ import { createRequire } from 'node:module';
 import { fixture } from './c4-v2-test-helpers.js';
 import { parseSendArgs } from '../c4-send-args.js';
 import { sendExternal, recordVoid, senderSessionId, readAbsorbedReply } from '../c4-send-external.js';
-import { appendOutGroupFallback } from '../c4-outbound-events.js';
 
 function setup(t) {
   const { db, store, filename } = fixture(t, {}, true);
@@ -24,10 +23,12 @@ function setup(t) {
 }
 const request = { channel: 'demo', endpoint: 'endpoint' };
 
-test('legacy argument precedence and trailing group option preserve content', () => {
+test('legacy trailing group option is discarded while preserving content', () => {
   for (const isTTY of [true, false]) {
     assert.deepEqual(parseSendArgs(['demo', 'ep', 'body', '--session-group', 'group'], { isTTY }),
-      { kind: 'external', channel: 'demo', endpoint: 'ep', message: 'body', groupName: 'group', stdin: false });
+      { kind: 'external', channel: 'demo', endpoint: 'ep', message: 'body', stdin: false });
+    assert.deepEqual(parseSendArgs(['demo', 'ep', '--stdin', '--session-group', 'ignored'], { isTTY }),
+      { kind: 'external', channel: 'demo', endpoint: 'ep', stdin: true });
   }
   assert.equal(parseSendArgs(['demo', '--stdin'], { isTTY: true }).endpoint, null);
   assert.equal(parseSendArgs(['demo', '-100|msg:2'], { isTTY: false }).endpoint, '-100|msg:2');
@@ -88,7 +89,7 @@ test('audit rollback prevents component; actual exit failure preserves audit', a
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 1);
 });
 
-test('#6b absorbed reply reads actual D9 and D1 in one transaction and preserves original routing', t => {
+test('absorbed reply reads transition and message atomically without reusing the stored group', t => {
   const { api, store, db } = setup(t);
   const endpoint = 'a\'"$`\\\nroute';
   const row = store.insertConversation('in', 'demo', endpoint, 'incoming', { groupName: 'group' });
@@ -96,7 +97,7 @@ test('#6b absorbed reply reads actual D9 and D1 in one transaction and preserves
   store.setDrainFence('*'); store.absorbForTransition(runId);
   const original = api.getModeTransition;
   api.getModeTransition = options => { assert.equal(db.inTransaction, true); return original(options); };
-  assert.deepEqual(readAbsorbedReply(runId, String(row.id), api), { kind: 'external', channel: 'demo', endpoint, id: String(row.id), groupName: 'group' });
+  assert.deepEqual(readAbsorbedReply(runId, String(row.id), api), { kind: 'external', channel: 'demo', endpoint, id: row.id, runId });
   assert.throws(() => readAbsorbedReply(runId, '2', api), { code: 'ABSORBED_NOT_IN_RUN' });
   db.prepare("UPDATE conversations SET status='failed' WHERE id=?").run(row.id);
   assert.throws(() => readAbsorbedReply(runId, String(row.id), api), { code: 'ABSORBED_MISMATCH' });
@@ -117,55 +118,54 @@ test('real component receives maximum endpoint and preserves shell metacharacter
   assert.equal(db.prepare('SELECT count(*) n FROM conversations').get().n, 2);
 });
 
-test('actual E2BIG and script deletion after audit preserve delivered rows', async t => {
+test('actual E2BIG and a component disappearing before delivery preserve delivered rows', { timeout: 15000 }, async t => {
   const { api, dir, script, marker, db } = setup(t);
-  const argMax = Number(execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8' }).trim());
+  const argMax = Number(execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8', timeout: 5000 }).trim());
   assert.ok(Number.isSafeInteger(argMax) && argMax > 0, 'getconf must report a positive argument limit');
   // Exceed the platform's entire argv budget, not Linux's per-argument limit.
   await assert.rejects(sendExternal(request, 'x'.repeat(argMax + 1), { api, skillsDir: dir }),
     error => error.code === 'COMPONENT_SPAWN_FAILED' && error.message.includes('E2BIG'));
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 1);
   assert.equal(fs.existsSync(marker), false);
-  await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir,
-    appendFallback: () => fs.renameSync(script, script + '.removed') }), { code: 'SEND_FAILED' });
+  fs.writeFileSync(path.join(dir, 'demo', 'SKILL.md'), `---
+c4:
+  before_send:
+    hook_id: disappear
+    entry: scripts/before-send.js
+    timeout_ms: 1000
+---
+`);
+  fs.writeFileSync(path.join(dir, 'demo', 'scripts', 'before-send.js'), `
+    require('node:fs').renameSync(${JSON.stringify(script)}, ${JSON.stringify(script + '.removed')});
+    process.stdout.write(JSON.stringify({version:1, decision:'continue'}));
+  `);
+  await assert.rejects(sendExternal(request, 'body', { api, skillsDir: dir }), { code: 'SEND_FAILED' });
   assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE status='delivered'").get().n, 2);
   assert.equal(fs.existsSync(script + '.removed'), true);
   assert.equal(fs.existsSync(marker), false);
 });
 
-test('actual outbound history and explicit group resolution log only committed fallback records', async t => {
+test('component query owns outbound routing despite history and legacy request groups', async t => {
   const { api, store, db, dir } = setup(t);
   store.registerChannelNamespace('demo', 'namespace');
   store.insertConversation('in', 'demo', 'endpoint', 'old', {groupName:'old'});
   store.insertConversation('in', 'demo', 'other', 'unrelated', {groupName:'other'});
   store.insertConversation('in', 'demo', 'endpoint', 'new', {groupName:'new'});
-  const events = [];
-  const options = {api, skillsDir:dir, appendFallback: async (record, groupName) => {
-    assert.equal(db.inTransaction, false);
-    assert.deepEqual(db.prepare('SELECT * FROM conversations WHERE id=?').get(record.id), record);
-    await appendOutGroupFallback(record, groupName, {now:()=>123, createJsonlStream:() => ({append:event=>events.push(event)})});
-  }};
-  assert.equal((await sendExternal(request, 'history', options)).session_group, 'namespace:new');
-  assert.equal((await sendExternal({...request,groupName:'old'}, 'explicit', options)).session_group, 'namespace:old');
-  assert.equal(events.length, 0);
-  for (const [groupName, reason] of [['missing','SESSION_GROUP_NOT_FOUND'],['bad name','SESSION_GROUP_INVALID'],['x'.repeat(96),'SESSION_GROUP_TOO_LONG']]) {
-    const owned = await sendExternal({...request,groupName}, 'owned route', options);
-    assert.equal(owned.session_group, 'namespace:new');
-    const row = await sendExternal({...request,endpoint:'new-recipient',groupName}, 'fallback', options);
-    assert.equal(row.session_group, 'namespace');
-    assert.deepEqual(events.at(-1), {v:1,ts:123,event:'out_group_fallback',conversation_id:row.id,
-      channel:'demo',endpoint:'new-recipient',session_group:'namespace',runtime:'',reason_code:reason,detail:''});
+  fs.writeFileSync(path.join(dir, 'demo', 'scripts', 'session-group.js'), `process.stdout.write(${JSON.stringify('queried\n')})`);
+  const options = { api, skillsDir: dir, env: { ...process.env } };
+  for (const legacy of [{}, { groupName: 'old' }, { groupName: 'bad name' }, { wholeGroup: true }]) {
+    const row = await sendExternal({ ...request, ...legacy }, 'query route', options);
+    assert.equal(row.session_group, 'namespace:queried');
+    assert.equal(row.status, 'delivered');
+    assert.equal(db.prepare('SELECT session_group FROM conversations WHERE id=?').get(row.id).session_group, 'namespace:queried');
   }
-  assert.equal(events.length, 3);
-  let diagnostics = 0;
-  const row = await sendExternal({...request,endpoint:'new-recipient',groupName:'missing'}, 'log failure', {...options,
-    appendFallback:(record,groupName)=>appendOutGroupFallback(record,groupName,{diagnostic:()=>diagnostics++,
-      createJsonlStream:()=>({append:()=>{throw new Error('disk failure');}})})});
-  assert.equal(row.status, 'delivered'); assert.equal(diagnostics, 1);
+  assert.equal(db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, 4);
 });
 
 test('matching and stale run identities persist exact session_id or NULL in committed audit', async t => {
-  const { api, db, dir } = setup(t);
+  const { api, db, dir, store } = setup(t);
+  store.insertConversation('in', 'demo', request.endpoint, 'owner', { groupName: 'room' });
+  fs.writeFileSync(path.join(dir, 'demo', 'scripts', 'session-group.js'), `process.stdout.write(${JSON.stringify('room\n')})`);
   const runDir = path.join(dir,'activity-monitor/session-groups/demo:room');
   fs.mkdirSync(runDir,{recursive:true});
   const bin = path.join(dir, 'bin'); fs.mkdirSync(bin);

@@ -41,7 +41,7 @@ for(const kind of ['registry','github','local','file'])test(`reserved names reje
 test('thread recognition stays in both system templates and sending rules remain in skill',()=>{
   for(const name of ['claude','codex']){
     const source=fs.readFileSync(path.join(repository,`templates/${name}-system.md`),'utf8');
-    for(const text of ['[internal] Yourself, from your "<session group>" session group, said:','not from a user','never by messaging your own users','not an order',"that person's",'explicitly bridged'])assert.ok(source.includes(text),`${name}: ${text}`);
+    for(const text of ['[internal] Yourself, from your "<session group>" session group, said:','not from a user','not an order',"that person's",'explicitly bridged','deliver only what was asked, and add nothing from your own conversation','Send directly only to addresses your own thread handles','send an internal message to the owning thread'])assert.ok(source.includes(text),`${name}: ${text}`);
   }
   const skill=fs.readFileSync(path.join(repository,'skills/comm-bridge/SKILL.md'),'utf8');
   for(const text of ['c4-db.js groups --match','c4-send.js internal','body is stdin only','could not contact the target','no `--session-group`','queued, not read','no broadcast','control queue',"other thread's files"])

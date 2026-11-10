@@ -104,12 +104,13 @@ test('namespace, group discovery and ordinary fetch preserve safe literal reply 
   const row=store.insertConversation('in','chat',endpoint,'incoming',{groupName:'A:b'});
   assert.equal(data('c4-db.js',['groups','--match','incoming'])[0].sessionGroup,'chat:A:b');
   const result=cli('c4-fetch.js',['--begin',String(row.id),'--end',String(row.id)]).stdout;
-  assert.ok(result.includes("'"+endpoint+"' --session-group A:b"));
+  assert.ok(result.includes("'"+endpoint+"'"));
+  assert.equal(result.includes('--session-group'), false);
   const command=result.split('\n').find(x=>x.startsWith('---- reply via: ')).slice(16);
   // Substitute just the executable/script with a local argv printer; no real channel is invoked.
   const argv=command.slice(command.indexOf(" 'chat'"));
   const parsed=spawnSync('/bin/sh',['-c',`printf '%s\\n'${argv}`],{encoding:'utf8'});
-  assert.equal(parsed.stdout,`chat\n${endpoint}\n--session-group\nA:b\n`);
+  assert.equal(parsed.stdout,`chat\n${endpoint}\n`);
 });
 test('absorbed real CLI pages and full fields reject integrity errors without partial output', t => {
   const { store, data, cli, database }=fixture(t);

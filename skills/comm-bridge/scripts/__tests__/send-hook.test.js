@@ -48,12 +48,13 @@ function setup(t, { installed = false } = {}) {
   db = new Database(path.join(zylos, 'comm-bridge', 'c4.db'));
   guardDatabase(db, schema);
   const store = createStore(db, { validateComponent: name => ['x', 'y'].includes(name), readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
-  const calls = { insert: 0, fallback: 0 };
-  const api = { ...store, insertConversation: (...args) => { calls.insert++; return store.insertConversation(...args); } };
+  const calls = { insert: 0 };
+  const api = { ...store, getDb: () => db,
+    insertConversation: (...args) => { calls.insert++; return store.insertConversation(...args); } };
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(home, '.pm2'), TMPDIR: tmp, TMUX_TMPDIR: tmp,
-    PATH: bin, ZYLOS_PACKAGE_ROOT: packageRoot, ZYLOS_SESSION_GROUP: 'origin' };
+    PATH: bin, ZYLOS_PACKAGE_ROOT: packageRoot };
   for (const key of Object.keys(env)) {
-    if (key === 'TMUX' || /(?:TOKEN|SECRET|PASSWORD|API_KEY)/.test(key) || ['ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID'].includes(key)) delete env[key];
+    if (key === 'TMUX' || /(?:TOKEN|SECRET|PASSWORD|API_KEY)/.test(key) || ['ZYLOS_SESSION_GROUP', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID'].includes(key)) delete env[key];
   }
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(env[key].startsWith(`${root}${path.sep}`));
   let cli;
@@ -68,7 +69,7 @@ function setup(t, { installed = false } = {}) {
     console.log('Installed send isolation:', JSON.stringify(Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'PATH'].map(key => [key, env[key]]))));
   }
   return { root, x, y, db, api, calls, env, skillsDir, markers, cli, processRecords,
-    options: { api, skillsDir, env, appendFallback: async () => { calls.fallback++; } },
+    options: { api, skillsDir, env },
     manifest: source => fs.writeFileSync(path.join(x, 'SKILL.md'), source),
     invoke: (channel = 'x', args = []) => spawnSync(process.execPath, [cli, channel, 'private-endpoint', '--stdin', ...args], {
       cwd: root, env, input: `${message}\n`, encoding: 'utf8', timeout: 3000, maxBuffer: 65536
@@ -78,7 +79,6 @@ function setup(t, { installed = false } = {}) {
 function noSendSideEffects(f) {
   for (const table of tables) assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0, table);
   assert.equal(f.calls.insert, 0);
-  assert.equal(f.calls.fallback, 0);
   assert.equal(fs.existsSync(f.markers.x), false);
   const outbound = path.join(f.env.ZYLOS_DIR, 'comm-bridge', 'receive-events.jsonl');
   assert.equal(fs.existsSync(outbound), false);
@@ -197,7 +197,7 @@ test('a declaration in another channel cannot block an undeclared channel', asyn
   const record = await sendExternal({ channel: 'y', endpoint: 'private-endpoint' }, message, f.options);
   assert.equal(record.channel, 'y');
   assert.equal(record.content, message);
-  assert.equal(f.calls.insert, 1); assert.equal(f.calls.fallback, 1);
+  assert.equal(f.calls.insert, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.markers.y, 'utf8')), ['private-endpoint', message]);
   assert.equal(fs.existsSync(path.join(f.root, 'x-hook-started')), false);
   assert.equal(fs.existsSync(path.join(f.root, 'y-hook-started')), false);
@@ -239,7 +239,10 @@ test('continue preserves original route and content, with Core IDs and stdin-onl
   hook(f, `import fs from 'node:fs'; let input=''; for await (const chunk of process.stdin) input+=chunk;
     fs.writeFileSync(${JSON.stringify(captured)},JSON.stringify({input:JSON.parse(input),argv:process.argv.slice(2),cwd:process.cwd(),environment:process.env.SEND_HOOK_SENTINEL}));
     ${output({ version: 1, decision: 'continue' })}`);
-  f.env.ZYLOS_SESSION_GROUP = 'origin';
+  f.api.insertConversation('in', 'x', 'original-endpoint', 'owner', { groupName: 'room' });
+  f.calls.insert = 0;
+  fs.writeFileSync(path.join(f.x, 'scripts', 'session-group.js'), `process.stdout.write(${JSON.stringify('room\n')})`);
+  f.env.ZYLOS_SESSION_GROUP = 'x:room';
   f.env.ZYLOS_RUN_ID = 'sender-run';
   f.env.ZYLOS_MODEL_CONFIG = JSON.stringify({ runtime: 'codex', mode: 'default' });
   f.env.CODEX_SESSION_ID = 'sender-codex';
@@ -251,11 +254,9 @@ test('continue preserves original route and content, with Core IDs and stdin-onl
       hook_id: 'forged-hook', request_id: 'forged-request', invocation_id: 'forged-invocation', context: { component: 'y' } };
     const originalInsert = f.api.insertConversation;
     f.api.insertConversation = (...args) => {
-      assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, index);
-      if (index === 0) {
-        assert.equal(f.db.prepare('SELECT count(*) AS n FROM group_heads').get().n, 0);
-        assert.equal(f.db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n, 0);
-      }
+      assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, index + 1);
+      assert.equal(f.db.prepare('SELECT count(*) AS n FROM group_heads').get().n, 1);
+      assert.equal(f.db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n, 1);
       return originalInsert(...args);
     };
     const record = await sendExternal(request, message, f.options);
@@ -270,15 +271,15 @@ test('continue preserves original route and content, with Core IDs and stdin-onl
       assert.equal(ids.has(capture.input[key]), false);
       ids.add(capture.input[key]);
     }
-    assert.deepEqual(capture.input.request, { channel: 'x', endpoint: 'original-endpoint', content: message, options: { groupName: 'not-created' } });
-    assert.deepEqual(capture.input.context, { component: 'x', session_group: 'origin', run_id: 'sender-run', runtime: 'codex', session_id: 'sender-codex' });
+    assert.deepEqual(capture.input.request, { channel: 'x', endpoint: 'original-endpoint', content: message, options: { groupName: 'room', wholeGroup: false } });
+    assert.deepEqual(capture.input.context, { component: 'x', session_group: 'x:room', run_id: 'sender-run', runtime: 'codex', session_id: 'sender-codex' });
     assert.deepEqual(capture.argv, []);
     assert.equal(capture.cwd, fs.realpathSync(f.x));
     assert.equal(capture.environment, 'unchanged');
     assert.equal(record.channel, 'x'); assert.equal(record.endpoint_id, 'original-endpoint'); assert.equal(record.content, message);
     assert.deepEqual(JSON.parse(fs.readFileSync(f.markers.x, 'utf8')), ['original-endpoint', message]);
   }
-  assert.equal(f.calls.insert, 2); assert.equal(f.calls.fallback, 2);
+  assert.equal(f.calls.insert, 2);
   assert.equal(fs.existsSync(path.join(f.root, 'y-hook-started')), false);
 });
 
@@ -338,7 +339,7 @@ test('continue retains the original sender failure and its committed audit', asy
   const f = setup(t); hook(f, output({ version: 1, decision: 'continue' }));
   fs.writeFileSync(path.join(f.x, 'scripts', 'send.js'), 'process.exitCode=7;');
   await assert.rejects(sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options), { code: 'SEND_FAILED', exitCode: 7 });
-  assert.equal(f.calls.insert, 1); assert.equal(f.calls.fallback, 1);
+  assert.equal(f.calls.insert, 1);
   const row = f.db.prepare('SELECT * FROM conversations').get();
   assert.equal(row.channel, 'x'); assert.equal(row.content, message); assert.equal(row.status, 'delivered');
 });
@@ -365,6 +366,7 @@ test('installed abort reports the normalized single line and machine result with
 // SKILL files must not intercept either operation. Same isolated child boundary.
 test('installed internal and void paths ignore component hook declarations', { timeout: 5000 }, t => {
   const f = setup(t, { installed: true });
+  f.env.ZYLOS_SESSION_GROUP = 'origin';
   for (const channel of ['internal', 'void']) {
     const directory = path.join(f.skillsDir, channel);
     fs.mkdirSync(directory);
@@ -389,7 +391,7 @@ test('valid exact-limit stdout and oversized stderr preserve the original send',
     const f = setup(t); hook(f, source, 1500);
     const record = await sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options);
     assert.equal(record.channel, 'x'); assert.equal(record.content, message);
-    assert.equal(f.calls.insert, 1); assert.equal(f.calls.fallback, 1);
+    assert.equal(f.calls.insert, 1);
     assert.deepEqual(JSON.parse(fs.readFileSync(f.markers.x, 'utf8')), ['private-endpoint', message]);
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM conversations').get().n, 1);
   }
@@ -434,7 +436,7 @@ test('a normal hook leader with an unref stdout descendant continues without tim
     child.unref(); ${output({ version: 1, decision: 'continue' })}`, 10000);
   const record = await boundedHook(f, sendExternal({ channel: 'x', endpoint: 'private-endpoint' }, message, f.options));
   assert.equal(record.content, message);
-  assert.equal(f.calls.insert, 1); assert.equal(f.calls.fallback, 1);
+  assert.equal(f.calls.insert, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(f.markers.x, 'utf8')), ['private-endpoint', message]);
   const childPid = JSON.parse(fs.readFileSync(file, 'utf8')).pids[0];
   for (let i = 0; i < 50 && processAlive(childPid); i++) await new Promise(resolve => setTimeout(resolve, 10));

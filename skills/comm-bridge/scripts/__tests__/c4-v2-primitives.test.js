@@ -21,9 +21,9 @@ test('namespace and message transaction rolls back allocation on invalid group a
   assert.equal(s.ensureChannelNamespace('origin').namespace, 'origin-2');
   assert.equal(s.getComponentByNamespace('foo'), 'Foo');
   assert.throws(() => s.registerChannelNamespace('Other', 'foo'), { code: 'NAMESPACE_CONFLICT' });
-  assert.equal(s.insertConversation('out', 'Foo', 'e', 'reply').session_group, 'foo:A');
-  assert.equal(s.insertConversation('out', 'Foo', 'e', 'reply', { groupName: 'unknown' }).session_group, 'foo:A');
-  assert.equal(s.insertConversation('out', 'Foo', 'new-endpoint', 'reply', { groupName: 'unknown' }).session_group, 'foo');
+  assert.equal(s.insertConversation('out', 'Foo', 'e', 'reply').session_group, 'foo');
+  assert.equal(s.insertConversation('out', 'Foo', 'e', 'reply', { groupName: 'unknown' }).session_group, 'foo:unknown');
+  assert.equal(s.insertConversation('out', 'Foo', 'new-endpoint', 'reply', { groupName: 'unknown' }).session_group, 'foo:unknown');
 });
 test('claim fence and late callback guards, atomic failure increments', t => {
   const { store: s } = fixture(t);
@@ -39,7 +39,7 @@ test('claim fence and late callback guards, atomic failure increments', t => {
   assert.deepEqual(s.failDelivery(a.id), { changed: false, status: 'failed', retryCount: 2 });
 });
 test('internal messages commit both directions and heads, or roll back everything', t => {
-  const { db, store: s } = fixture(t);
+  const { db, store: s } = fixture(t, { validateComponent: name => name !== 'missing' });
   const before = s.insertConversation('in', 'foo', 'e', 'seed');
   const pair = s.insertInternalMessage('origin', 'foo', 'hello\nworld', { sessionId: 'sid' });
   assert.equal(pair.outRow.content, 'hello\nworld');
@@ -69,7 +69,52 @@ test('ordinary message APIs cannot create internal or final inbound states or ac
     assert.throws(() => s.insertConversation('in', 'foo', null, 'x', options), { code: 'INVALID_ARGS' });
   }
   assert.throws(() => s.insertConversation('out', 'foo', null, 'x', { status: 'pending' }), { code: 'INVALID_ARGS' });
+  assert.throws(() => s.insertConversation('out', 'foo', null, 'x', { senderGroup: 'origin' }), { code: 'INVALID_ARGS' });
   assert.throws(() => s.insertConversation('in', 'internal', 'origin', 'x'), { code: 'INVALID_ARGS' });
   assert.equal(db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n, 0);
   assert.equal(s.insertConversation('in', 'foo', null, 'x', { status: 'failed' }).status, 'failed');
+});
+
+test('internal messages create new targets only for installed namespace owners', t => {
+  const installed = new Set(['chat', 'fresh', 'renamed']);
+  const { db, store: s } = fixture(t, { validateComponent: name => installed.has(name) });
+  s.ensureChannelNamespace('chat');
+  const pair = s.insertInternalMessage('origin', 'chat:new-person', 'deliver this');
+  assert.equal(pair.inRow.session_group, 'chat:new-person');
+  assert.equal(pair.inRow.status, 'pending');
+  assert.equal(s.getNextPending({ sessionGroups: ['chat:new-person'] }).id, pair.inRow.id);
+  assert.equal(s.listGroupHeads().some(head => head.sessionGroup === 'chat:new-person'), true);
+  const fresh = s.insertInternalMessage('origin', 'fresh:person', 'first contact');
+  assert.equal(s.getChannelNamespace('fresh').namespace, 'fresh');
+  assert.equal(fresh.inRow.session_group, 'fresh:person');
+  const count = () => db.prepare('SELECT count(*) AS n FROM conversations').get().n;
+  const before = count();
+  installed.delete('chat');
+  for (const group of ['chat:new-person', 'unknown:x', '', '*', 'fresh:-bad']) {
+    assert.throws(() => s.insertInternalMessage('origin', group, 'refused'), { code: 'UNKNOWN_TARGET_GROUP' });
+  }
+  s.registerChannelNamespace('renamed', 'custom');
+  assert.throws(() => s.insertInternalMessage('origin', 'renamed:new', 'refused'), { code: 'UNKNOWN_TARGET_GROUP' });
+  assert.equal(s.getChannelNamespace('renamed').namespace, 'custom');
+  assert.equal(count(), before);
+});
+
+test('new internal target allocation rolls back if its second row fails', t => {
+  const { db, store: s } = fixture(t, { validateComponent: name => name === 'fresh' });
+  db.exec("CREATE TRIGGER reject_new_internal BEFORE INSERT ON conversations WHEN NEW.direction='in' AND NEW.channel='internal' BEGIN SELECT RAISE(ABORT,'fixture'); END");
+  assert.throws(() => s.insertInternalMessage('origin', 'fresh:new', 'hello'), { code: 'DB_WRITE_FAILED' });
+  for (const table of ['conversations', 'group_heads', 'channel_namespaces']) {
+    assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0, table);
+  }
+});
+
+test('dashboard origin is a fixed address in both directions without topic registration', t => {
+  const { db, store: s } = fixture(t, { validateComponent: name => name === 'dashboard' });
+  for (const direction of ['in', 'out']) {
+    const record = s.insertConversation(direction, 'dashboard', 'origin', 'origin message', { groupName: 'origin' });
+    assert.equal(record.session_group, 'origin');
+  }
+  assert.equal(db.prepare('SELECT count(*) AS n FROM channel_namespaces').get().n, 0);
+  assert.equal(s.listGroupHeads().some(head => head.sessionGroup === 'dashboard:origin'), false);
+  assert.equal(s.insertConversation('in', 'dashboard', 'other', 'ordinary', { groupName: 'other' }).session_group, 'dashboard:other');
 });

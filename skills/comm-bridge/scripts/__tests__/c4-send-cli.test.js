@@ -32,7 +32,7 @@ function dbRecent(env, limit = 10) {
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-send-cli-'));
-  const env = { ZYLOS_DIR: tmpDir, ZYLOS_SESSION_GROUP: 'origin' };
+  const env = { ZYLOS_DIR: tmpDir };
   try {
     return fn({ tmpDir, env });
   } finally {
@@ -63,6 +63,16 @@ function setupMockChannel(tmpDir, channelName) {
 // -- basic send --
 
 describe('c4-send basic', () => {
+  it('refuses origin sending into another component before delivery or recording', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const sentFile = setupMockChannel(tmpDir, 'mock-channel');
+      const result = cli(['mock-channel', 'endpoint1', 'Hello!'], { ...env, ZYLOS_SESSION_GROUP: 'origin' });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /CROSS_SESSION_OUTBOUND/);
+      assert.equal(fs.existsSync(sentFile), false);
+      assert.deepEqual(dbRecent(env), []);
+    });
+  });
   it('sends message via mock channel with endpoint', () => {
     withTmpDir(({ tmpDir, env }) => {
       const sentFile = setupMockChannel(tmpDir, 'mock-channel');
@@ -149,7 +159,7 @@ describe('c4-send void channel', () => {
 
   it('records the message in c4.db and exits 0 without a skill directory', () => {
     withTmpDir(({ env }) => {
-      const { stdout, status } = cli(['void', 'session-handoff', 'handoff summary'], env);
+      const { stdout, status } = cli(['void', 'session-handoff', 'handoff summary'], { ...env, ZYLOS_SESSION_GROUP: 'origin' });
       assert.equal(status, 0);
       assert.ok(stdout.includes('recorded on void channel'));
       assert.ok(!stdout.includes('Message sent via'));
@@ -168,7 +178,7 @@ describe('c4-send void channel', () => {
     withTmpDir(({ tmpDir, env }) => {
       const sentFile = setupMockChannel(tmpDir, 'void');
 
-      const { status } = cli(['void', 'session-handoff', 'handoff summary'], env);
+      const { status } = cli(['void', 'session-handoff', 'handoff summary'], { ...env, ZYLOS_SESSION_GROUP: 'origin' });
       assert.equal(status, 0);
       assert.ok(!fs.existsSync(sentFile), 'void must never dispatch to a send script');
     });
@@ -177,7 +187,7 @@ describe('c4-send void channel', () => {
   it('supports stdin/heredoc message input', () => {
     withTmpDir(({ env }) => {
       const message = 'multi-line handoff\nwith "quotes" and $vars';
-      const { stdout, status } = cli(['void', 'session-handoff'], env, message);
+      const { stdout, status } = cli(['void', 'session-handoff'], { ...env, ZYLOS_SESSION_GROUP: 'origin' }, message);
       assert.equal(status, 0);
       assert.ok(stdout.includes('recorded on void channel'));
 

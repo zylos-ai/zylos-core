@@ -162,18 +162,20 @@ test('first and later messages retain the registered endpoint and group through 
   assert.equal(f.db.open, true, 'receive must not close its caller database');
 });
 
-test('interleaved conversations and legacy group-less replies never route a reply into another conversation', async t => {
+test('explicit local groups keep interleaved replies separate and group-less storage ignores history', async t => {
   const f = fixture(t), a = await activate(f, 'A'), b = await activate(f, 'B');
   await f.sender.send(a.id, { content: 'A again' });
   await f.sender.send(b.id, { content: 'B again' });
   for (const rename of [false, true]) {
     if (rename) f.conversations.rename(a.draft.localId, 'A after TTL');
     const beforeB = f.rows(b.draft.localId).length;
-    const out = f.c4.insertConversation('out', 'dashboard', a.draft.localId, 'startup history reply without group');
+    const out = f.c4.insertConversation('out', 'dashboard', a.draft.localId, 'reply with component local group', { groupName: a.draft.localId });
     assert.equal(out.session_group, `${a.receipt.namespace}:${a.draft.localId}`);
+    const ungrouped = f.c4.insertConversation('out', 'dashboard', a.draft.localId, 'no queried local group');
+    assert.equal(ungrouped.session_group, a.receipt.namespace, 'storage never infers a local group from inbound history');
     assert.equal(f.rows(b.draft.localId).length, beforeB);
   }
-  assert.equal(f.count('group_heads'), 2);
+  assert.equal(f.count('group_heads'), 3);
 });
 
 test('invalid content and foreign or forged conversation identities make no receive call', async t => {

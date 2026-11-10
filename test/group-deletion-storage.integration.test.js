@@ -27,8 +27,7 @@ function attachmentMessage(id, name) {
 async function setup(t, channel) {
   const localId = 'storage-cycle', group = `${channel}:${localId}`;
   const f = await createGroupDeletionFixture(t, { group });
-  // Core's channel launcher intentionally resolves "node" from PATH. Keep its
-  // SQLite ABI identical to this official-runner process in the private case.
+  // Keep all private fixture commands on this official runner's Node runtime.
   f.env.PATH = path.dirname(process.execPath) + path.delimiter + f.env.PATH;
   const skills = path.join(f.root, '.claude/skills'); fs.mkdirSync(skills, { recursive: true });
   for (const name of ['dashboard', 'comm-bridge']) fs.symlinkSync(path.join(repo, 'skills', name), path.join(skills, name), 'dir');
@@ -37,6 +36,7 @@ async function setup(t, channel) {
   if (channel !== 'dashboard') {
     write(path.join(skills, channel, 'package.json'), '{"type":"module"}');
     write(path.join(skills, channel, 'SKILL.md'), '---\nname: telegram\ntype: communication\n---\n');
+    write(path.join(skills, channel, 'scripts/session-group.js'), `process.stdout.write(${JSON.stringify(localId)});\n`);
     write(path.join(skills, channel, 'scripts/send.js'), 'import fs from "node:fs";import path from "node:path";fs.appendFileSync(path.join(process.env.ZYLOS_DIR,"external-replies.jsonl"),JSON.stringify(process.argv.slice(2))+"\\n");\n');
   }
   f.store.registerChannelNamespace(channel, channel);
