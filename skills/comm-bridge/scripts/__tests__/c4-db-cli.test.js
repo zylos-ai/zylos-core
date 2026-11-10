@@ -101,8 +101,16 @@ describe('group query CLI', () => {
       assert.equal(JSON.parse(active.stdout).data.hasOlder, false);
       const search = dbCli(['groups', '--key-match', 'ORIG', '--json'], env);
       assert.equal(search.status, 0); assert.equal(JSON.parse(search.stdout).data[0].sessionGroup, 'origin');
+      // A labelled preview carries its stored start only with --raw.
+      assert.equal(dbCli(['insert', 'in', 'system', 'null', '[Report bot] daily\nline two', '--json'], env).status, 0);
+      const plain = JSON.parse(dbCli(['groups', '--key-match', 'origin', '--json'], env).stdout).data[0].preview;
+      assert.equal(plain.message, 'daily'); assert.equal(Object.hasOwn(plain, 'messageRaw'), false);
+      const raw = dbCli(['groups', '--key-match', 'origin', '--raw', '--json'], env);
+      assert.equal(raw.status, 0, raw.stderr);
+      assert.equal(JSON.parse(raw.stdout).data[0].preview.messageRaw, '[Report bot] daily\nline two');
       assert.match(dbCli(['--help'], env).stdout, /group-queues/);
       assert.match(dbCli(['--help'], env).stdout, /active-since/);
+      assert.match(dbCli(['--help'], env).stdout, /--raw/);
     });
   });
   it('rejects positional, unknown, missing, duplicate, invalid and conflicting options', () => {
@@ -117,7 +125,7 @@ describe('group query CLI', () => {
         ['groups', '--active-since', '1e3'],
         ['groups', '--active-since', '9007199254740992'], ['groups', '--active-since'],
         ['groups', '--active-since', '0', '--active-since', '1'], ['groups', '--limit', '0'],
-        ['groups', 'extra'], ['groups', '--bogus'],
+        ['groups', 'extra'], ['groups', '--bogus'], ['groups', '--raw', '--raw'],
       ]) {
         const result = dbCli([...args, '--json'], env);
         assert.equal(result.status, 1, JSON.stringify({ args, ...result }));

@@ -103,6 +103,8 @@
   "wb.detail.startedAt": "started {time}",
   "wb.detail.evidence": "Evidence",
   "wb.detail.rawMessage": "Original",
+  "wb.detail.rawLoading": "Loading…",
+  "wb.detail.rawUnavailable": "Original text unavailable",
   "wb.detail.evidenceNoRule": "nothing unusual",
   "wb.detail.subagent": "Subagent",
   "wb.detail.fullTimeline": "Full timeline ({events} events, {runs} runs)",

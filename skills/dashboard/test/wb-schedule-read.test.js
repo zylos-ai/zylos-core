@@ -326,15 +326,14 @@ test('a group whose last message came from the scheduler is labelled with the ta
   assert.deepEqual(readTaskNames(f.zylosDir, [named.id, blank.id, 'task-gone', named.id]), new Map([[named.id, 'watch-dispatched-cards']]));
   assert.deepEqual(readTaskNames(path.join(f.root, 'elsewhere'), [named.id]), new Map(), 'no scheduler database: no names');
   const preview = (taskId, message) => ({ timestamp: NOW_MS, channel: 'scheduler', endpoint: null, message,
-    text: `[Scheduled Task: ${taskId} #4] ${message}`, messageSource: { kind: 'scheduled_task', taskId }, messageRaw: `[Scheduled Task: ${taskId} #4]\n${message}` });
+    text: `[Scheduled Task: ${taskId} #4] ${message}`, messageSource: { kind: 'scheduled_task', taskId } });
   // A group older than the snapshot window, found only by search.
   const older = { sessionGroup: 'scheduler:old', componentName: 'scheduler', lastActivityAt: NOW_MS - 30 * 86400000, preview: preview(named.id, 'older run') };
   const groups = [
     { sessionGroup: 'scheduler:a', componentName: 'scheduler', lastActivityAt: NOW_MS, preview: preview(named.id, 'check the new cards') },
     { sessionGroup: 'scheduler:b', componentName: 'scheduler', lastActivityAt: NOW_MS, preview: preview('task-gone', 'nightly digest') },
     { sessionGroup: 'lark:oc_1', componentName: 'lark', lastActivityAt: NOW_MS, preview: { timestamp: NOW_MS, channel: 'lark', endpoint: 'oc_1',
-      message: 'Review ready', text: '[Review bot] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab', messageSource: { kind: 'header' },
-      messageRaw: '[Review bot] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab' } },
+      message: 'Review ready', text: '[Review bot] Review ready for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab', messageSource: { kind: 'header' } } },
   ];
   const snapshot = createGroupSnapshot({ zylosDir: f.zylosDir, now: () => NOW_MS,
     store: { latestEventByType: () => null, queryEvents: () => [] },
@@ -352,7 +351,6 @@ test('a group whose last message came from the scheduler is labelled with the ta
   const rows = new Map((await snapshot.getSnapshot()).rows.map(row => [row.sessionGroup, row.preview]));
   assert.equal(rows.get('scheduler:a').text, 'watch-dispatched-cards');
   assert.deepEqual(rows.get('scheduler:a').source, { kind: 'scheduled_task' });
-  assert.equal(rows.get('scheduler:a').raw, `[Scheduled Task: ${named.id} #4]\ncheck the new cards`, 'the technical view keeps the stored message, id included');
   assert.equal(rows.get('scheduler:b').text, 'nightly digest', 'a task the scheduler no longer has keeps the prompt line');
   assert.deepEqual(rows.get('scheduler:b').source, { kind: 'scheduled_task' });
   assert.equal(rows.get('lark:oc_1').text, 'Review ready');
@@ -363,6 +361,7 @@ test('a group whose last message came from the scheduler is labelled with the ta
     const value = rows.get(key);
     assert.equal(Object.hasOwn(value, 'messageSource'), false);
     assert.equal(Object.hasOwn(value.source, 'taskId'), false);
+    assert.equal(Object.hasOwn(value, 'raw'), false, 'the stored message is read per group, not polled');
   }
 });
 

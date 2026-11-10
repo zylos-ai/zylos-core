@@ -144,12 +144,13 @@ export function createStore(database, dependencies = {}) {
   const transitions = transitionFunctions({ ...context, ...progress });
   Object.assign(api, deletionFunctions(context), deliveryFunctions(context), config.api, progress.api, controlFunctions({ ...context, baseline: config.baseline }), transitions.api);
   api.buildTargetBinding = createTargetBindingBuilder({ ...context, baseline: config.baseline, resolveTarget: dependencies.resolveTarget });
-  function listGroups({ match, limit, activeSince, keyMatch } = {}) {
+  function listGroups({ match, limit, activeSince, keyMatch, raw } = {}) {
     if (match !== undefined && typeof match !== 'string') throw dataError('INVALID_ARGS', 'match must be a string');
     if (keyMatch !== undefined && (typeof keyMatch !== 'string' || !keyMatch.trim())) throw dataError('INVALID_ARGS', 'keyMatch must be a nonempty string');
     if (activeSince !== undefined && (!Number.isSafeInteger(activeSince) || activeSince < 0)) throw dataError('INVALID_ARGS', 'activeSince must be nonnegative integer milliseconds');
     if ([match, activeSince, keyMatch].filter(value => value !== undefined).length > 1) throw dataError('INVALID_ARGS', 'Group filters are mutually exclusive');
     if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) throw dataError('INVALID_ARGS', 'limit must be positive');
+    if (raw !== undefined && typeof raw !== 'boolean') throw dataError('INVALID_ARGS', 'raw must be a boolean');
     return snapshot(c => {
       const millis = value => Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
       function row(head) {
@@ -163,9 +164,9 @@ export function createStore(database, dependencies = {}) {
       }
       function previewOf(preview, text, projection) {
         const { text: message, source } = previewMessage(preview.content, { channel: preview.channel });
-        // A message that is not a person's own words also carries its stored start, for a technical view.
+        // On request, a message that is not a person's own words also carries its stored start, for a technical view.
         return { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text, message,
-          ...(source ? { messageSource: source, messageRaw: messageStart(projection) } : {}) };
+          ...(source ? { messageSource: source, ...(raw ? { messageRaw: messageStart(projection) } : {}) } : {}) };
       }
       const headsSql = 'SELECT h.session_group,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id ORDER BY h.head_id DESC';
       if (activeSince !== undefined) {

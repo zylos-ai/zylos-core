@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeGroups, redactQuerySecrets, safePreview } from '../src/lib/workbench/group-merge.js';
+import { mergeGroups, redactQuerySecrets, safePreview, safeRaw } from '../src/lib/workbench/group-merge.js';
 const live = (sessionGroup, presence = 'running') => ({ sessionGroup, presence });
 const status = { view: 'multi', origin: live('origin', 'not_running'), groups: [live('a')], groupListError: null };
 const group = sessionGroup => ({ sessionGroup, componentName: 'telegram', sessionGroupName: sessionGroup, lastActivityAt: 100 });
@@ -54,23 +54,23 @@ test('the preview shows what the person said, or nothing when the channel wrappi
   assert.ok(!JSON.stringify(rows).includes(secret) && !JSON.stringify(rows).includes('OM-RUN'));
 });
 
-test('a preview that is not a person\'s words names its source and keeps the stored start for the technical view', () => {
+test('a preview that is not a person\'s words names its source, and the stored message is redacted as a whole when read', () => {
   const secret = 'sk-' + 'z'.repeat(32);
-  const stored = '[Scheduled Task: task-ab12cd34 #2]\nrotate the key\n' + 'step '.repeat(30) + '\nuse ' + secret + ' and https://x.test/?token=abc';
-  const scheduled = { preview: { text: [...stored].slice(0, 80).join(''), message: 'rotate the key', timestamp: 1, channel: 'scheduler',
-    messageSource: { kind: 'scheduled_task', taskId: 'task-ab12cd34' }, messageRaw: stored } };
-  const named = safePreview(scheduled, undefined, new Map([['task-ab12cd34', 'Key rotation ' + secret]]));
-  assert.deepEqual(named, { timestamp: 1, channel: 'scheduler', text: 'Key rotation [REDACTED]', source: { kind: 'scheduled_task' },
-    raw: stored.replace(secret, '[REDACTED]').replace('token=abc', 'token=[REDACTED]') });
-  assert.ok(named.raw.includes('\nrotate the key\n'), 'line breaks stay');
+  const scheduled = { preview: { text: '[Scheduled Task: task-ab12cd34 #2]\nrotate the key', message: 'rotate the key', timestamp: 1, channel: 'scheduler',
+    messageSource: { kind: 'scheduled_task', taskId: 'task-ab12cd34' } } };
+  assert.deepEqual(safePreview(scheduled, undefined, new Map([['task-ab12cd34', 'Key rotation ' + secret]])),
+    { timestamp: 1, channel: 'scheduler', text: 'Key rotation [REDACTED]', source: { kind: 'scheduled_task' } });
   assert.equal(safePreview(scheduled).text, 'rotate the key', 'without a name the prompt line stays');
-  const header = { preview: { text: '[Bot] see https://x.test/?token=abc', message: 'see https://x.test/?token=abc', timestamp: 2, channel: 'lark',
-    messageSource: { kind: 'header' }, messageRaw: '[Bot] see https://x.test/?token=abc' } };
-  assert.deepEqual(safePreview(header), { timestamp: 2, channel: 'lark', text: 'see https://x.test/?token=[REDACTED]', source: { kind: 'channel' }, raw: '[Bot] see https://x.test/?token=[REDACTED]' });
+  const header = { preview: { text: '[Bot] see https://x.test/?token=abc', message: 'see https://x.test/?token=abc', timestamp: 2, channel: 'lark', messageSource: { kind: 'header' } } };
+  assert.deepEqual(safePreview(header), { timestamp: 2, channel: 'lark', text: 'see https://x.test/?token=[REDACTED]', source: { kind: 'channel' } });
   const person = { preview: { text: '[TG DM] howard said: hi', message: 'hi', timestamp: 3, channel: 'telegram' } };
   assert.deepEqual(safePreview(person), { timestamp: 3, channel: 'telegram', text: 'hi' });
-  // A source this reader does not know is shown as a person's words, without a label or stored start.
-  assert.deepEqual(safePreview({ preview: { ...person.preview, messageSource: { kind: 'future' }, messageRaw: 'raw' } }), { timestamp: 3, channel: 'telegram', text: 'hi' });
+  // A source this reader does not know is shown as a person's words, without a label.
+  assert.deepEqual(safePreview({ preview: { ...person.preview, messageSource: { kind: 'future' } } }), { timestamp: 3, channel: 'telegram', text: 'hi' });
+  // The stored message: line breaks kept, nothing cut, credentials redacted past the first 80 characters too.
+  const stored = '[Scheduled Task: task-ab12cd34 #2]\nrotate the key\n' + 'step '.repeat(30) + '\nuse ' + secret + ' and https://x.test/?token=abc';
+  assert.equal(safeRaw(stored), stored.replace(secret, '[REDACTED]').replace('token=abc', 'token=[REDACTED]'));
+  for (const missing of [undefined, null, 5]) assert.equal(safeRaw(missing), null);
 });
 
 test('the preview drops credential values from links but keeps the link readable', () => {

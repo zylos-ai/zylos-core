@@ -158,13 +158,11 @@ test('naming candidates carry only the redacted preview text, never the reader m
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const secret = 'sk-' + 'q'.repeat(32);
   const groups = [{ sessionGroup: 'telegram:a', componentName: 'telegram', lastActivityAt: 5,
-    preview: { timestamp: 5, channel: 'telegram', endpoint: 'a', text: 'please use ' + secret, message: 'please use ' + secret, messageSource: { kind: 'scheduled_task', taskId: 'task-ab12cd34' },
-      messageRaw: '[Scheduled Task: task-ab12cd34]\nplease use ' + secret } }];
+    preview: { timestamp: 5, channel: 'telegram', endpoint: 'a', text: 'please use ' + secret, message: 'please use ' + secret, messageSource: { kind: 'scheduled_task', taskId: 'task-ab12cd34' } } }];
   const names = createDisplayNames({ store, zylosDir: root, runC4Db: async () => ({ ok: true, data: groups }) });
   const [row] = await names.listNames();
   assert.equal(row.preview.text, 'please use [REDACTED]');
   assert.equal(Object.hasOwn(row.preview, 'message'), false);
   assert.equal(Object.hasOwn(row.preview, 'messageSource'), false);
-  assert.equal(Object.hasOwn(row.preview, 'messageRaw'), false);
   assert.equal(JSON.stringify(row).includes(secret) || JSON.stringify(row).includes('task-ab12cd34'), false);
 });

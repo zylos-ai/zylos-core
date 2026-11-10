@@ -2,13 +2,14 @@ import { readThresholdPolicy, sessionThreshold } from '../session-threshold.js';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
 import { createCoreCli } from './core-cli.js';
-import { mergeGroups, previewTaskIds } from './group-merge.js';
+import { mergeGroups, previewTaskIds, safeRaw } from './group-merge.js';
 import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
 import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
 import { buildAttention, createChannelDownCounter } from './attention.js';
 import { activityBuckets } from './activity-buckets.js';
 import { searchGroups } from './group-search.js';
+import { validKey } from './display-names.js';
 
 const emptyNames = { listAll: () => new Map(), search: () => [] };
 const activationTypes = ['activate_new', 'start_always', 'activate_failed', 'activate_timeout'];
@@ -198,11 +199,20 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     activities.set(range, { at: now(), value });
     return value;
   }
-  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, activity, channelDownCounter,
+  // One group's stored message start, read only when someone opens it in the technical view. Key search matches
+  // parts of keys, so the exact row is taken from the bounded result.
+  async function raw(key) {
+    const result = await cli.runC4Db(['groups', '--key-match', key, '--limit', '50', '--raw', '--json']);
+    if (!result.ok) throw Object.assign(new Error('Group read failed'), { statusCode: 502, code: 'group_raw_failed', reason: 'c4_groups_failed' });
+    return { raw: safeRaw(result.data.find(item => item.sessionGroup === key)?.preview?.messageRaw, sanitizer) };
+  }
+  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, activity, channelDownCounter, raw,
     search: (q, at = now()) => searchGroups(q, { now: at, runC4Db: cli.runC4Db, getSnapshot, displayNames, sanitizer, namesOfTasks }) };
 }
 
 function source({ ok, reason, detail, readAt }) { return { ok, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}), readAt }; }
+
+const WORKBENCH_RAW = /^\/api\/workbench\/groups\/([^/]+)\/raw$/;
 
 /** Shared by the HTTP routes; authentication is owned by the existing API gate. */
 export async function workbenchResponse(service, pathname, searchParams) {
@@ -213,5 +223,12 @@ export async function workbenchResponse(service, pathname, searchParams) {
   }
   if (pathname === '/api/workbench/groups/search') return service.search(searchParams.get('q'));
   if (pathname === '/api/workbench/activity') return service.activity(searchParams.get('range'));
+  const raw = pathname.match(WORKBENCH_RAW);
+  if (raw) {
+    let key;
+    try { key = decodeURIComponent(raw[1]); } catch {}
+    if (key !== 'origin' && !validKey(key)) throw Object.assign(new Error('Invalid session group'), { statusCode: 400, code: 'SESSION_GROUP_INVALID' });
+    return service.raw(key);
+  }
   return null;
 }

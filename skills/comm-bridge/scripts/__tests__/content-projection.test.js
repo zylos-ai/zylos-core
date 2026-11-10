@@ -331,6 +331,12 @@ test('long ids go with their label and the brackets they leave empty; ordinary w
   assert.equal(header(`[Follow-up] Requested by: howard · Task ID: ${uuid}`), 'Requested by: howard');
   assert.equal(header('[Bot] deploy · id=0123456789abcdef0123 · then (from ' + uuid + ') notify · ' + uuid), 'deploy · then notify');
   assert.equal(previewMessage(`[Scheduled Task: task-x1 #2]\nsweep (id: ${uuid}) now`).text, 'sweep now');
+  // Only a capitalised word before "id" is part of the label.
+  assert.equal(header(`[Bot] New thread id: ${uuid} opened`), 'New thread opened');
+  // Ids in any letter case.
+  assert.equal(header(`[Bot] build ${uuid.toUpperCase()} and ${'ABCDEF0123456789'} and TASK-AB12CD34-X1 done`), 'build and and done');
+  // A colon left at the end stays: it is text, not a separator.
+  assert.equal(header(`[Bot] Requested by: ${uuid}`), 'Requested by:');
 });
 
 test('a stored message start keeps line breaks and never ends inside a run of non-space characters', () => {
@@ -342,5 +348,10 @@ test('a stored message start keeps line breaks and never ends inside a run of no
   assert.equal(messageStart('ab cd ef', { limit: 5 }), 'ab cd…', 'a word ending exactly at the cut stays');
   assert.equal(messageStart('ab cdef', { limit: 5 }), 'ab…');
   assert.equal(messageStart('🙂'.repeat(3) + ' x', { limit: 3 }), '🙂🙂🙂…', 'counts code points');
+  // Only a printable ASCII run (where a credential or link would be) is dropped at the cut; other text is kept.
+  const report = '[Report bot] 日报\n' + '今天完成了评审和测试，'.repeat(300);
+  assert.equal(messageStart(report), [...report].slice(0, 2000).join('') + '…');
+  assert.equal(messageStart('日报：key=sk-' + 'q'.repeat(30), { limit: 10 }), '日报：…');
+  assert.equal(messageStart('日报今天完成了评审', { limit: 4 }), '日报今天…');
   for (const empty of ['', '  \n', null, undefined, 5]) assert.equal(messageStart(empty), null);
 });

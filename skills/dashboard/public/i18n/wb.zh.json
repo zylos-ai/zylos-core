@@ -103,6 +103,8 @@
   "wb.detail.startedAt": "{time} 开始",
   "wb.detail.evidence": "依据",
   "wb.detail.rawMessage": "原文",
+  "wb.detail.rawLoading": "读取中…",
+  "wb.detail.rawUnavailable": "读不到原文",
   "wb.detail.evidenceNoRule": "没有特别原因",
   "wb.detail.subagent": "子代理",
   "wb.detail.fullTimeline": "完整时间线（{events} 条，{runs} 段运行）",

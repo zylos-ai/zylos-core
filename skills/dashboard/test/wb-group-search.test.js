@@ -69,13 +69,12 @@ test('an older group whose last message came from the scheduler is found under t
   const f = fixture(), asked = [];
   const scheduled = { sessionGroup: 'scheduler:nightly', componentName: 'scheduler', sessionGroupName: 'nightly', lastActivityAt: 1,
     preview: { timestamp: 1, channel: 'scheduler', text: '[Scheduled Task: task-ab12cd34 #3]\nsweep the queue', message: 'sweep the queue',
-      messageSource: { kind: 'scheduled_task', taskId: 'task-ab12cd34' }, messageRaw: '[Scheduled Task: task-ab12cd34 #3]\nsweep the queue' } };
+      messageSource: { kind: 'scheduled_task', taskId: 'task-ab12cd34' } } };
   const deps = { ...f.deps, runC4Db: async () => ({ ok: true, data: [{ sessionGroup: 'tg:live', preview: scheduled.preview }, scheduled] }),
     namesOfTasks: async items => { asked.push(...items.map(item => item.sessionGroup)); return new Map([['task-ab12cd34', 'Nightly sweep']]); } };
   const value = await searchGroups('scheduler', deps);
   const row = value.rows.find(item => item.sessionGroup === 'scheduler:nightly');
   assert.equal(row.preview.text, 'Nightly sweep');
   assert.deepEqual(row.preview.source, { kind: 'scheduled_task' });
-  assert.equal(row.preview.raw, '[Scheduled Task: task-ab12cd34 #3]\nsweep the queue');
   assert.deepEqual(asked, ['scheduler:nightly'], 'a group already in the snapshot is not looked up again');
 });

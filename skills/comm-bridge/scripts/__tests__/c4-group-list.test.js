@@ -92,19 +92,25 @@ test('a group preview names where a message came from when it is not a person\'s
   assert.equal(Object.hasOwn(rows['origin'], 'messageSource'), false);
   assert.equal(rows['lark:recent2'].message, '🙂'.repeat(79) + '…');
   assert.equal(Object.hasOwn(rows['lark:recent2'], 'messageSource'), false);
+  // The stored start comes only on request.
+  for (const key of ['scheduler:main', 'lark:oc_tags']) assert.equal(Object.hasOwn(rows[key], 'messageRaw'), false);
+  const raw = Object.fromEntries(store.queries.listGroups({ limit: 4, raw: true }).map(row => [row.sessionGroup, row.preview]));
   // Labelled previews carry the stored start, line breaks kept; a person's own words carry none.
-  assert.equal(rows['scheduler:main'].messageRaw, '[Scheduled Task: task-ab12cd34 #2]\nnightly digest\n\n---- After completing this task, run: node cli.js done task-ab12cd34');
-  assert.equal(rows['lark:oc_tags'].messageRaw, '[Release bot] build 01a1c33d-7d4e-7a1b-9c2d-0123456789ab shipped');
-  for (const key of ['origin', 'lark:recent2']) assert.equal(Object.hasOwn(rows[key], 'messageRaw'), false);
+  assert.equal(raw['scheduler:main'].messageRaw, '[Scheduled Task: task-ab12cd34 #2]\nnightly digest\n\n---- After completing this task, run: node cli.js done task-ab12cd34');
+  assert.equal(raw['lark:oc_tags'].messageRaw, '[Release bot] build 01a1c33d-7d4e-7a1b-9c2d-0123456789ab shipped');
+  assert.equal(raw['scheduler:main'].message, rows['scheduler:main'].message);
+  for (const key of ['origin', 'lark:recent2']) assert.equal(Object.hasOwn(raw[key], 'messageRaw'), false);
+  for (const value of [1, 'yes', null]) assert.throws(() => store.queries.listGroups({ raw: value }), { code: 'INVALID_ARGS' });
 });
 
 test('a long labelled message keeps at most 2000 characters of its start, without a cut token', t => {
   const { seed, store } = fixture(t);
   const secret = 'sk-' + 'w'.repeat(40);
   seed('lark:oc_long', '2026-02-01 00:00:00', '[Report bot] daily\n' + 'b'.repeat(1975) + ' ' + secret + ' end');
-  const preview = store.queries.listGroups({ limit: 1 })[0].preview;
+  const preview = store.queries.listGroups({ limit: 1, raw: true })[0].preview;
   assert.equal(preview.messageRaw, '[Report bot] daily\n' + 'b'.repeat(1975) + '…');
   assert.equal(preview.messageRaw.includes('sk-'), false);
+  assert.equal(Object.hasOwn(store.queries.listGroups({ limit: 1 })[0].preview, 'messageRaw'), false);
 });
 
 test('on core\'s own direct channels a stored message starting with brackets stays the person\'s words', t => {

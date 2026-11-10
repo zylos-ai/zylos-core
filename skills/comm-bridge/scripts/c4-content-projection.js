@@ -45,18 +45,19 @@ const LEADING_TAGS = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?/;
 // starts with "[" is the person's words, not another source's header.
 const DIRECT_CHANNELS = new Set(['dashboard', 'web-console']);
 // Identifiers a reader cannot use: UUIDs, "task-…" ids with a digit, and runs of 16 or more hex digits.
-const ID = String.raw`(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|task-(?=[a-z0-9-]*[0-9])[a-z0-9]+(?:-[a-z0-9]+)*|[0-9a-fA-F]{16,})`;
+// Any letter case; spelled out so the label below can stay case-sensitive.
+const ID = String.raw`(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[Tt][Aa][Ss][Kk]-(?=[A-Za-z0-9-]*[0-9])[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*|[0-9a-fA-F]{16,})`;
 const LONG_ID = new RegExp(String.raw`\b${ID}\b`, 'g');
-// An id's own label goes with it ("id: …", "Task ID: …", "id=…"), and so does a "(…)" holding only the id and
-// one word ("(by …)", "(from …)").
+// An id's own label goes with it ("id: …", "Task ID: …", "id=…"; a capitalised word before "id" belongs to the label,
+// a lower-case one is text), and so does a "(…)" holding only the id and one word ("(by …)", "(from …)").
 const LABELLED_ID = new RegExp(String.raw`\b(?:[A-Z][A-Za-z]* )?(?:ID|Id|id)\s*[:=]\s*${ID}\b`, 'g');
 const ID_GROUP = new RegExp(String.raw`\s*\((?:[A-Za-z]+ )?${ID}\)`, 'g');
 
 const firstLine = text => text.split('\n').map(line => line.trim()).find(Boolean) ?? '';
-// Removing an id leaves no empty "()", no comma before ")" or after "(", and no separator at either end.
+// Removing an id leaves no empty "()", no comma before ")" or after "(", no repeated "·", and no "·" or "," at either end.
 const withoutIds = text => text.replace(LABELLED_ID, '').replace(ID_GROUP, '').replace(LONG_ID, ' ')
   .replace(/\s*,\s*(?=\))/g, '').replace(/\(\s*,\s*/g, '(').replace(/\s*\(\s*\)/g, '')
-  .replace(/·(?:\s*·)+/g, '·').replace(/^[\s·:,]+|[\s·:,]+$/g, '');
+  .replace(/·(?:\s*·)+/g, '·').replace(/^[\s·,]+|[\s·,]+$/g, '');
 
 /**
  * What an inbound message says, for a one-line preview, never the model-facing projection.
@@ -103,15 +104,16 @@ export function previewMessage(content, { limit = 80, channel } = {}) {
 
 /**
  * The start of a stored message for a technical view: up to `limit` code points, line breaks kept. A cut never
- * ends inside a run of non-space characters (that part is dropped, so a credential is never half kept) and ends
- * in "…". Null when there is no text.
+ * ends inside a run of printable ASCII characters, where a credential or link would be (that run is dropped, so a
+ * credential is never half kept); other text, such as Chinese, is kept up to the limit. It ends in "…". Null when
+ * there is no text.
  */
 export function messageStart(text, { limit = 2000 } = {}) {
   if (typeof text !== 'string' || !text.trim()) return null;
   const chars = [...text];
   if (chars.length <= limit) return text;
   let cut = chars.slice(0, limit).join('');
-  if (/\S/.test(chars[limit])) cut = cut.replace(/\S+$/, '');
+  if (/[!-~]/.test(chars[limit])) cut = cut.replace(/[!-~]+$/, '');
   return cut.trimEnd() + '…';
 }
 

@@ -1,7 +1,7 @@
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=117';
-import { groupEventCount, renderOverview } from './detail-overview.js?v=118';
+import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=118';
 import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=118';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=115';
@@ -189,6 +189,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (state.tab === 'overview') {
       const sections = renderOverview(body, row, state, { document, t, level: getLevel(), snapshot: state.snapshot, currentTime: now(),
         onTimeline: () => { void selectTab('timeline'); }, onMemory: () => onMemory(row.sessionGroup), onObserve: observe,
+        onRaw: open => { void openRaw(row, open); },
         onConfig: async () => {
           if (state.configOpen) { state.configOpen = false; draw(); return; }
           state.configOpen = true; draw();
@@ -219,6 +220,27 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (state.error) header.append(element(document, 'p', t('wb.readFailed') + ' · ' + state.error, 'wb-detail-error'));
     if (state.actionResult) header.append(element(document, 'p', state.actionResult, 'wb-action-result'));
     root.hidden = false;
+  }
+  // The stored message of a labelled preview is read when its fold opens, once per preview; a failed read is retried
+  // on the next opening.
+  async function openRaw(row, open) {
+    const key = rawKey(row);
+    if (state.raw?.key !== key) state.raw = { key, open: false, status: 'idle', text: null };
+    const raw = state.raw;
+    if (raw.open === open) return;
+    raw.open = open;
+    if (!open) return;
+    if (raw.status !== 'error' && raw.status !== 'idle') { draw(); return; }
+    raw.status = 'loading'; draw();
+    try {
+      const value = await request(`/api/workbench/groups/${encodeURIComponent(row.sessionGroup ?? 'origin')}/raw`);
+      if (state.raw !== raw) return;
+      raw.status = 'ok'; raw.text = typeof value?.raw === 'string' ? value.raw : null;
+    } catch (error) {
+      if (error.name === 'AbortError' || state.raw !== raw) return;
+      raw.status = 'error';
+    }
+    draw();
   }
   async function act(action) {
     if (!state.row || state.actionBusy || groupActionButtons(state.row, getWritable()).find(item => item.action === action)?.disabled) return;
