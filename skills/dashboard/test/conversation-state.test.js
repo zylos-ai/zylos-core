@@ -1063,14 +1063,24 @@ test('incremental list updates use the server human preview rather than attachme
   f.state.destroy();
 });
 // Pure controller with fake requests/clock; validates the actual frontend preview
-// projection from complete saved envelopes, without HTTP/DB/runtime resources.
-test('incremental answer previews strip only the exact envelope prefix instead of displaying the server protocol preview', async () => {
+// precedence from complete saved envelopes, without HTTP/DB/runtime resources.
+test('incremental answer list updates preserve the server human preview', async () => {
   for (const example of savedAnswerCases) {
     const f = await selected(u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after' ? {
-      items: [{ id: 11, direction: 'in', content: CONTENT_PREFIX + JSON.stringify(example.envelope), preview: example.envelope.fallbackText }], afterCursor: 'after11'
+      items: [{ id: 11, direction: 'in', content: CONTENT_PREFIX + JSON.stringify(example.envelope), preview: example.preview }], afterCursor: 'after11'
     } : undefined);
     await f.timer.advance(5000);
     assert.equal(f.state.snapshot().items.find(item => item.id === 'g:A').preview, example.preview, example.name);
+    f.state.destroy();
+  }
+});
+test('incremental answers without a server preview retain exact-prefix browser fallback', async () => {
+  for (const example of savedAnswerCases) {
+    const f = await selected(u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after' ? {
+      items: [{ id: 11, direction: 'in', content: CONTENT_PREFIX + JSON.stringify(example.envelope) }], afterCursor: 'after11'
+    } : undefined);
+    await f.timer.advance(5000);
+    assert.equal(f.state.snapshot().items.find(item => item.id === 'g:A').preview, Array.from(example.answer).slice(0, 160).join(''), example.name);
     f.state.destroy();
   }
 });

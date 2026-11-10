@@ -151,13 +151,11 @@ export function createConversationState({
     const latest = current.messages.findLast(row => row.channel !== 'internal');
     if (!latest) return;
     const timestamp = asDate(latest.timestamp);
-    const parsed = parseC4Content(latest.content);
-    const answer = parsed.kind === 'envelope' && parsed.envelope.kind === 'answer';
     const stamp = timestamp ? timestamp.getTime() / 86400000 + 2440587.5 : null;
     items = items.map(row => row.id === id ? {
       ...row,
       previewDirection: latest.direction,
-      preview: !answer && typeof latest.preview === 'string' ? latest.preview : Array.from(preview(latest.content)).slice(0, 160).join(''),
+      preview: typeof latest.preview === 'string' ? latest.preview : Array.from(preview(latest.content)).slice(0, 160).join(''),
       ...(stamp === null ? {} : {
         stamp
       })

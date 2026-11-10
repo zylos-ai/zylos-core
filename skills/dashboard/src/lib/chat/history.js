@@ -40,7 +40,10 @@ function attachmentPreview(content, { external = false, locale = 'zh' } = {}, fo
   };
   if (parsed.kind === 'invalid') return body(parsed.fallbackText ?? labels.invalid, true);
   if (parsed.kind === 'envelope') {
-    if (parsed.envelope.kind === 'answer') return body(answerDisplay(parsed.envelope).answer, true);
+    if (parsed.envelope.kind === 'answer') {
+      const display = answerDisplay(parsed.envelope);
+      return body(display.answer, display.matchedPrefix);
+    }
     const blocks = parsed.envelope.blocks ?? [];
     if (!blocks.some(block => block.type !== 'markdown')) {
       return body(parsed.envelope.fallbackText);

@@ -5,7 +5,7 @@ import { savedAnswerCases } from './fixtures/saved-answers.js';
 
 // Read-only production projection with shared browser fixtures. No HTTP, DB,
 // processes or runtime resources; the official runner isolates module loading.
-test('saved answer list previews use the same exact prefix and Unicode bound as browser previews', () => {
+test('saved answer previews retain matched literal answers and flatten legacy Markdown within the Unicode bound', () => {
   for (const example of savedAnswerCases) {
     const content = CONTENT_PREFIX + JSON.stringify(example.envelope);
     assert.equal(chatAttachmentPreview(content), example.answer, example.name);
