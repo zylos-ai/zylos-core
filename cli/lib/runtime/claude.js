@@ -3,7 +3,7 @@
  *
  * Encapsulates all Claude Code-specific logic:
  *   - tmux session management
- *   - Auth detection (credentials.json, claude auth status, .env tokens)
+ *   - Auth: .env credentials (pre-approved) passed to the session; auth probe
  *   - Onboarding/trust pre-acceptance
  *   - Instruction file generation (CLAUDE.md)
  *
