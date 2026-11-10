@@ -146,7 +146,7 @@ export function createConversationState({
     return parsed.kind === 'text' ? parsed.text : parsed.kind === 'envelope' ? parsed.envelope.fallbackText : parsed.fallbackText ?? t('chat.invalidContent');
   };
   function updateCurrentItem(current, id) {
-    const latest = current.messages.at(-1);
+    const latest = current.messages.findLast(row => row.channel !== 'internal');
     if (!latest) return;
     const timestamp = asDate(latest.timestamp);
     const stamp = timestamp ? timestamp.getTime() / 86400000 + 2440587.5 : null;
@@ -644,8 +644,8 @@ export function createConversationState({
     const attachmentUpdates = new Map((data.attachmentUpdates || []).map(row => [row.id, row.attachments]));
     current.messages = current.messages.map(row => attachmentUpdates.has(row.id) ? { ...row, attachments: attachmentUpdates.get(row.id) } : row);
     const newer = added.filter(row => row.id > previousNewest);
-    if (newer.some(row => row.direction === 'out')) fastUntil = 0;
-    if (trackQuestions && newer.length) current.pendingQuestionRefresh = true;
+    if (newer.some(row => row.channel !== 'internal' && row.direction === 'out')) fastUntil = 0;
+    if (trackQuestions && newer.some(row => row.channel !== 'internal')) current.pendingQuestionRefresh = true;
     updateCurrentItem(current, id);
     return added.length;
   }
@@ -695,7 +695,7 @@ export function createConversationState({
   }
   async function statuses(current, id, currentTab, e) {
     if (currentTab !== 'mine') return;
-    const ids = current.messages.filter(row => row.direction === 'in' && ['pending', 'running', 'pending_reconciliation'].includes(messageState(row))).slice(-100).map(row => row.id);
+    const ids = current.messages.filter(row => row.channel !== 'internal' && row.direction === 'in' && ['pending', 'running', 'pending_reconciliation'].includes(messageState(row))).slice(-100).map(row => row.id);
     if (!ids.length) return;
     const data = await request(`${pathFor(id)}/status?${query({
       tab: currentTab,
@@ -764,7 +764,7 @@ export function createConversationState({
   function activityIds(current) {
     const ids = [];
     for (const row of current.messages) {
-      if (row.direction !== 'in') continue;
+      if (row.channel === 'internal' || row.direction !== 'in') continue;
       const item = current.activity.items.get(row.id);
       if (!item || item.state === 'pending' || item.state === 'round' && roundOpen(current.activity.rounds.get(item.round))) ids.push(row.id);
     }

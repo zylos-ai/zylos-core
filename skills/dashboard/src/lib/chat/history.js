@@ -6,6 +6,8 @@ import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../com
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const visible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin','*')
   AND c.channel <> '' AND c.channel NOT IN ('void','internal','system','scheduler','control')`;
+const messageVisible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin','*')
+  AND c.channel <> '' AND c.channel NOT IN ('void','system','scheduler','control')`;
 const identity = `CASE WHEN c.session_group = '' THEN 'l:' || hex(c.channel) || ':' || hex(c.endpoint_id)
   ELSE 'g:' || hex(c.session_group) END`;
 
@@ -226,16 +228,36 @@ export class ChatHistory {
     return range;
   }
 
+  _messageRange(tab, id, range = this._conversation(tab, id)) {
+    if (!range.parameters.group) return range;
+    return { ...range, where: `(${range.where} OR (c.session_group=@group AND c.channel='internal'))` };
+  }
+
+  _internalPeer(group) {
+    const own = this._scope('mine', 'c.session_group=@group', { group });
+    const external = this._scope('external', 'c.session_group=@group', { group });
+    const row = this._query(`SELECT c.channel FROM conversations c
+      WHERE ${visible} AND ((${own.where}) OR (${external.where}))
+      ORDER BY c.id DESC LIMIT 1`, { group })[0];
+    const registered = this.conversations?.findByGroup(group);
+    return {
+      peerSessionGroup: group,
+      peerDisplayName: this.conversations?.store.getGroupDisplayName(group)?.display_name ?? registered?.displayName ?? group,
+      peerExists: !!row,
+      peerChannel: row?.channel ?? null,
+    };
+  }
+
   messages(id, { tab = 'mine', limit, cursor, direction = 'before', recheckIds, locale = 'zh' } = {}) {
     limit = this._limit(limit);
     if (!['before', 'after'].includes(direction)) throw fail('invalid_chat_direction');
     if (direction === 'after' && cursor == null) throw fail('invalid_chat_cursor');
-    const range = this._conversation(tab, id);
+    const range = this._messageRange(tab, id);
     const recheck = recheckIds === undefined ? [] : this._messageIds(recheckIds);
     const position = this._cursor(cursor, `messages:${tab}:${id}:${direction}`);
     const rows = this._query(`SELECT c.id, c.timestamp, c.direction, c.channel,
       c.endpoint_id, c.session_group, c.content, c.status, c.delivery_action FROM conversations c
-      WHERE ${visible} AND ${range.where} AND (@position IS NULL OR c.id ${direction === 'before' ? '<' : '>'} @position)
+      WHERE ${messageVisible} AND ${range.where} AND (@position IS NULL OR c.id ${direction === 'before' ? '<' : '>'} @position)
       ORDER BY c.id ${direction === 'before' ? 'DESC' : 'ASC'} LIMIT @limit`, {
       ...range.parameters, position: position?.id ?? null, limit: limit + 1,
     });
@@ -243,23 +265,33 @@ export class ChatHistory {
     const page = rows.slice(0, limit);
     const next = page.at(-1)?.id;
     const rechecked = recheck.length ? this._rowsByIds(range, recheck,
-      'c.id,c.direction,c.channel,c.endpoint_id,c.session_group,c.content') : [];
+      'c.id,c.direction,c.channel,c.endpoint_id,c.session_group,c.content', messageVisible) : [];
     const batch = [...new Map([...page, ...rechecked].map(row => [row.id, row])).values()];
     const metadata = new Map();
     if (tab === 'mine' && this.attachments) {
-      for (let offset = 0; offset < batch.length; offset += 100) {
-        for (const [rowId, values] of this.attachments.metadata(batch.slice(offset, offset + 100))) {
+      const externalRows = batch.filter(row => row.channel !== 'internal');
+      for (let offset = 0; offset < externalRows.length; offset += 100) {
+        for (const [rowId, values] of this.attachments.metadata(externalRows.slice(offset, offset + 100))) {
           metadata.set(rowId, values);
         }
       }
     }
-    const rowAttachments = row => tab === 'external'
+    const rowAttachments = row => row.channel === 'internal' ? [] : tab === 'external'
       ? splitContentAndAttachments(row.content).attachments.map(attachment => ({
         name: attachment.name, kind: attachment.kind, sizeLabel: attachment.sizeLabel,
         available: false, external: true,
       })) : metadata.get(row.id) ?? [];
-    const items = (direction === 'before' ? page.reverse() : page).map(row => ({ ...row,
-      deliveryState: deliveryState(row), preview: conversationPreview(row.content, { external: tab === 'external', locale }), attachments: rowAttachments(row) }));
+    const peers = new Map();
+    const items = (direction === 'before' ? page.reverse() : page).map(row => {
+      if (row.channel === 'internal') {
+        if (!peers.has(row.endpoint_id)) peers.set(row.endpoint_id, this._internalPeer(row.endpoint_id));
+        const prefix = `[internal] Yourself, from your "${row.endpoint_id}" session group, said: `;
+        const content = row.direction === 'in' && row.content.startsWith(prefix) ? row.content.slice(prefix.length) : row.content;
+        return { ...row, internal: { ...peers.get(row.endpoint_id), content }, attachments: [] };
+      }
+      return { ...row, deliveryState: deliveryState(row),
+        preview: conversationPreview(row.content, { external: tab === 'external', locale }), attachments: rowAttachments(row) };
+    });
     const newest = items.at(-1)?.id ?? position?.id ?? 0;
     return { items, nextCursor: more ? this._token({ scope: `messages:${tab}:${id}:${direction}`, id: next }) : null,
       afterCursor: this._token({ scope: `messages:${tab}:${id}:after`, id: newest }),
@@ -276,11 +308,11 @@ export class ChatHistory {
     return unique;
   }
 
-  _rowsByIds(range, unique, columns) {
+  _rowsByIds(range, unique, columns, visibility = visible) {
     const parameters = { ...range.parameters, limit: unique.length };
     unique.forEach((value, index) => { parameters[`id${index}`] = value; });
     const rows = this._query(`SELECT ${columns} FROM conversations c
-      WHERE ${visible} AND ${range.where} AND c.id IN (${unique.map((_, index) => `@id${index}`).join(',')}) LIMIT @limit`, parameters);
+      WHERE ${visibility} AND ${range.where} AND c.id IN (${unique.map((_, index) => `@id${index}`).join(',')}) LIMIT @limit`, parameters);
     if (rows.length !== unique.length) throw fail('chat_message_not_found', 404);
     return rows;
   }
@@ -301,8 +333,9 @@ export class ChatHistory {
         ORDER BY c.id LIMIT 1`, { afterId: afterId ?? highwater, highwater });
       let latestId = null, delivery = [];
       if (range) {
+        const messages = this._messageRange(tab, conversationId, range);
         latestId = this._query(`SELECT c.id FROM conversations c
-          WHERE ${visible} AND ${range.where} ORDER BY c.id DESC LIMIT 1`, range.parameters)[0]?.id ?? null;
+          WHERE ${messageVisible} AND ${messages.where} ORDER BY c.id DESC LIMIT 1`, messages.parameters)[0]?.id ?? null;
         if (tab === 'mine') {
           // Each fixed-status seek returns at most 100 rows from the existing
           // group/direction/status index, then keep the newest 100 overall.

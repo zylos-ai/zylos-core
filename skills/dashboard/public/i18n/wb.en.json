@@ -1001,5 +1001,9 @@
   "chat.delete.error": "Could not finish deletion. Retry to continue the same operation.",
   "chat.delete.retained": "{count} messages remain; conversation memory has been retained.",
   "chat.delete.estimated": "Conversation deleted. Counts are estimates after an interrupted cleanup.",
-  "wb.usage.deletedConversations": "Deleted conversations no longer count toward message totals. Their token usage and costs are retained."
+  "wb.usage.deletedConversations": "Deleted conversations no longer count toward message totals. Their token usage and costs are retained.",
+  "chat.internal.sent": "Internal →",
+  "chat.internal.received": "Internal ←",
+  "chat.internal.unavailable": "(conversation unavailable)",
+  "chat.internal.original": "Original message"
 }

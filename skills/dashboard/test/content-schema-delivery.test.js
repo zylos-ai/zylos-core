@@ -110,7 +110,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const pageUrl = activeModules.get('conversation-page');
     assert.match(importLine(await moduleAt(activeModules.get('conversation-content')), 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\.\/markdown-it-cjk-friendly\/index\.js\?v=1['"]/);
     const page = await moduleAt(pageUrl);
-    for (const [name, version] of [['conversation-state', 131], ['chat-questions', 108], ['conversation-activity', 105], ['conversation-delete', 4]]) {
+    for (const [name, version] of [['conversation-state', 132], ['chat-questions', 108], ['conversation-activity', 105], ['conversation-delete', 4], ['conversation-internal', 1]]) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
         .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=${version}`));
       assert.ok(specifier, `${name} belongs to the active page graph`);
