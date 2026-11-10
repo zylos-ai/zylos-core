@@ -422,3 +422,16 @@ test('missing, env-less and unparseable settings.json print nothing and saving s
     else settingsUnchanged(text);
   }
 });
+
+test('init with a subscription login only (no base URL) names an API key left in settings.json', () => {
+  fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_BASE_URL=${officialUrl}\n`);
+  const hand = handSecret();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand } }));
+  const lines = [];
+  persistInitCredentials({ subscriptionLogin: true }, { log: line => lines.push(line) });
+  const warnings = lines.filter(line => line.includes('settings.json'));
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(overrideKeys(warnings[0]), ['ANTHROPIC_API_KEY']);
+  leaksNothing(lines.join('\n'), hand);
+  settingsUnchanged(text);
+});
