@@ -8,7 +8,7 @@ import { progressFunctions } from './c4-store-progress.js';
 import { controlFunctions } from './c4-store-control.js';
 import { transitionFunctions } from './c4-store-transition.js';
 import { createTargetBindingBuilder } from './c4-target-binding.js';
-import { assertOutboundSession } from './c4-outbound-session.js';
+import { fixedAddressSessionGroup } from './c4-fixed-address.js';
 
 // Dependencies are private implementation inputs, never business API options.
 export function createStore(database, dependencies = {}) {
@@ -67,7 +67,7 @@ export function createStore(database, dependencies = {}) {
     } catch (cause) { throw dataError('INVALID_ARGS', `invalid channel: ${name}`, { cause }); }
   }
   const binding = (c, name) => get(c, 'SELECT component_name AS componentName,namespace FROM channel_namespaces WHERE component_name=?', name) ?? null;
-  function ensure(c, name, persist = true) {
+  function ensure(c, name) {
     installed(name);
     const old = binding(c, name); if (old) return old;
     let base = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
@@ -77,11 +77,11 @@ export function createStore(database, dependencies = {}) {
       const suffix = i === 1 ? '' : `-${i}`;
       const namespace = base.slice(0, 32 - suffix.length) + suffix;
       if (!validNamespace(namespace) || get(c, 'SELECT 1 FROM channel_namespaces WHERE namespace=?', namespace)) continue;
-      if (persist) run(c, 'INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)', namespace, name);
+      run(c, 'INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)', namespace, name);
       return { componentName: name, namespace };
     }
   }
-  function resolve(c, direction, channel, endpointId, { groupName, handoffGroup, wholeGroup } = {}, persistNamespace = true) {
+  function resolve(c, direction, channel, endpointId, { groupName, handoffGroup, wholeGroup } = {}) {
     if (!['in', 'out'].includes(direction) || channel === 'internal') throw dataError('INVALID_ARGS', 'Invalid message source');
     if (channel === 'void' && direction === 'out') {
       if (!handoffGroup) throw dataError('NO_SESSION_ENV', 'The recording session is required');
@@ -90,27 +90,25 @@ export function createStore(database, dependencies = {}) {
     }
     if (handoffGroup !== undefined) throw dataError('INVALID_ARGS', 'handoffGroup is reserved for Core void output');
     if (channel === 'system') return 'origin';
-    const { namespace } = ensure(c, channel, persistNamespace);
-    if (direction === 'in') return wholeGroup ? namespace : composeSessionGroup(namespace, groupName);
-    let explicitGroup;
-    if (wholeGroup) explicitGroup = namespace;
-    else if (groupName !== undefined) {
-      explicitGroup = namespace;
-      try { const group = composeSessionGroup(namespace, groupName); if (exists(c, group)) explicitGroup = group; } catch (error) { if (!['SESSION_GROUP_INVALID','SESSION_GROUP_TOO_LONG'].includes(error.code)) throw error; }
-    }
-    const latest = get(c, "SELECT session_group FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group<>'' ORDER BY id DESC LIMIT 1", channel, endpointId)?.session_group;
-    // An explicit route may select a topic that received this endpoint, but
-    // cannot claim another session's recipient merely by naming its own group.
-    if (latest && explicitGroup && get(c, "SELECT 1 FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group=? LIMIT 1", channel, endpointId, explicitGroup)) return explicitGroup;
-    return latest ?? explicitGroup ?? namespace;
+    const fixed = fixedAddressSessionGroup(channel, endpointId);
+    if (fixed) { installed(channel); return fixed; }
+    const { namespace } = ensure(c, channel);
+    return wholeGroup ? namespace : composeSessionGroup(namespace, groupName);
   }
-  function checkOutboundSession(c, channel, endpointId, options, senderGroup) {
-    if (!senderGroup) return;
-    const group = resolve(c, 'out', channel, endpointId, options, false);
-    // A namespace fallback alone does not assign a new recipient to a session.
-    const hasInbound = !!get(c, "SELECT 1 FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group<>'' LIMIT 1", channel, endpointId);
-    const owner = channel === 'system' || group.includes(':') || hasInbound ? group : null;
-    assertOutboundSession(senderGroup, owner, channel, endpointId);
+  function internalTarget(c, targetGroup) {
+    const parsed = parseSessionGroup(targetGroup);
+    if (!parsed) throw dataError('UNKNOWN_TARGET_GROUP', 'Unknown target session group');
+    if (targetGroup === 'origin') return;
+    const owner = get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', parsed.namespace)?.component_name;
+    try {
+      installed(owner ?? parsed.namespace);
+    } catch (cause) {
+      throw dataError('UNKNOWN_TARGET_GROUP', 'Unknown target session group', { cause });
+    }
+    if (owner) return;
+    if (binding(c, parsed.namespace) || ensure(c, parsed.namespace).namespace !== parsed.namespace) {
+      throw dataError('UNKNOWN_TARGET_GROUP', 'Unknown target session group');
+    }
   }
   function insert(c, direction, channel, endpointId, content, group, options = {}) {
     const result = run(c, `INSERT INTO conversations(direction,channel,endpoint_id,content,status,delivery_action,priority,require_idle,session_group,session_id)
@@ -133,23 +131,18 @@ export function createStore(database, dependencies = {}) {
       return { componentName: name, namespace };
     }),
     resolveSessionGroup: (direction, channel, endpointId, options) => write(c => resolve(c, direction, channel, endpointId, options)),
-    checkOutboundSession: (channel, endpointId, options, senderGroup) => snapshot(c => checkOutboundSession(c, channel, endpointId, options, senderGroup)),
     insertConversation: (direction, channel, endpointId, content, options = {}) => write(c => {
       if (!options || typeof options !== 'object' || Array.isArray(options)) throw dataError('INVALID_ARGS', 'Expected message options');
       if (typeof content !== 'string') throw dataError('INVALID_ARGS', 'Message content must be a string');
-      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'senderGroup']);
+      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
-      if (options.senderGroup !== undefined) {
-        if (direction !== 'out' || channel === 'void' || typeof options.senderGroup !== 'string' || !options.senderGroup) throw dataError('INVALID_ARGS', 'senderGroup requires an external outbound message and a session group');
-        checkOutboundSession(c, channel, endpointId, options, options.senderGroup);
-      }
       return insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
     }),
     insertInternalMessage: (senderGroup, targetGroup, content, { sessionId } = {}) => write(c => {
       if (!senderGroup) throw dataError('NO_SENDER_GROUP', 'Sender session group is required');
       if (!parseSessionGroup(senderGroup) || !exists(c, senderGroup)) throw dataError('UNKNOWN_SENDER_GROUP', 'Unknown sender session group');
-      if (!parseSessionGroup(targetGroup) || !exists(c, targetGroup)) throw dataError('UNKNOWN_TARGET_GROUP', 'Unknown target session group');
+      internalTarget(c, targetGroup);
       if (senderGroup === targetGroup) throw dataError('SELF_TARGET', 'Cannot send to the sender session group');
       if (typeof content !== 'string' || !content.trim()) throw dataError('EMPTY_CONTENT', 'Message content is empty');
       const outRow = insert(c, 'out', 'internal', targetGroup, content, senderGroup, { sessionId });

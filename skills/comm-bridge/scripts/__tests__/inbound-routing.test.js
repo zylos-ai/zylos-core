@@ -27,6 +27,22 @@ function setup(t) {
   return { ...f, events, order, dependencies };
 }
 
+test('dashboard origin uses the fixed group before routing and while storing', async t => {
+  const f = setup(t);
+  fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'dashboard'), { recursive: true });
+  let calls = 0;
+  f.dependencies.queryRoute = async request => {
+    calls++;
+    assert.equal(request.sessionGroup, 'origin');
+    return pending;
+  };
+  const reply = await receive(['--channel', 'dashboard', '--endpoint', 'origin', '--session-group', 'origin', '--content', 'hello origin'], f.dependencies);
+  assert.equal(calls, 1);
+  assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(reply.id).session_group, 'origin');
+  assert.equal(f.store.getChannelNamespace('dashboard'), null);
+  assert.equal(f.store.listGroupHeads().some(head => head.sessionGroup === 'dashboard:origin'), false);
+});
+
 test('validates before route/; name/group errors emit one and ordinary argument errors none', async t => {
   const f = setup(t); let routed = 0, events = 0;
   f.dependencies.queryRoute = async () => { routed++; return pending; };
@@ -79,7 +95,9 @@ test('auth final group and failure category survive event/cooldown/send failures
     assert.equal(row.status, 'failed'); assert.equal(row.delivery_action, 'auth_rejected');
     assert.equal(f.events.at(-1).reason_code, 'auth_check_' + result);
   }
-  assert.deepEqual(f.order, ['event', 'reserve', 'event', 'reserve']);
+  assert.deepEqual(f.order, ['event', 'event', 'reserve', 'event', 'event', 'reserve']);
+  assert.equal(f.events.filter(event => event.event === 'message_received').length, 2);
+  assert.equal(f.events.filter(event => event.event === 'auth_rejected').length, 2);
   f.dependencies.queryRoute = async () => auth('failed');
   f.dependencies.appendEntryEvent = async () => false;
   const noReply = await receive([...input, '--no-reply'], f.dependencies);
@@ -103,7 +121,9 @@ test('real rollback/DB_BUSY prevent and cooldown; postcommit uncertainty preserv
   f.dependencies.sendStatusNotice = () => ({ outcome: 'uncertain' });
   await assert.rejects(receive(input, f.dependencies), { code: 'UNHEALTHY_NOTIFY_UNCERTAIN', persisted: ['D1'] });
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE status='failed'").get().n, 1);
-  assert.deepEqual(f.order, ['event', 'reserve']);
+  assert.deepEqual(f.order, ['event', 'event', 'reserve']);
+  assert.equal(f.events[0].event, 'message_received');
+  assert.equal(f.events[1].event, 'auth_rejected');
   f.dependencies.db = { ...f.store, insertConversation: () => { throw new Error('unknown commit'); } };
   await assert.rejects(receive(input, f.dependencies), { code: 'INTERNAL_ERROR', persisted: null });
 });

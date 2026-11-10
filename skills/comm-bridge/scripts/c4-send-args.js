@@ -12,20 +12,19 @@ export function parseSendArgs(args, { isTTY = false } = {}) {
   const positional = args.filter(arg => arg !== '--stdin');
   const stdinAvailable = !isTTY || positional.length !== args.length;
   const groupIndex = positional.indexOf('--session-group');
-  let groupName;
   if (groupIndex !== -1) {
     if (positional[0] === 'void' || groupIndex !== positional.length - 2 ||
         positional.lastIndexOf('--session-group') !== groupIndex || !positional[groupIndex + 1] ||
         positional[groupIndex + 1].startsWith('--')) {
       throw sendError('INVALID_ARGS', 'Place --session-group <L> last; use stdin for content containing option tokens');
     }
-    groupName = positional.splice(groupIndex, 2)[1];
+    positional.splice(groupIndex, 2);
   }
   if (positional.some(arg => ['--group', '--absorbed-reply', '--session-group'].includes(arg))) {
     throw sendError('INVALID_ARGS', 'Reserved option token; use stdin for literal content');
   }
   if (groupIndex !== -1 && positional.length > 3) throw sendError('INVALID_ARGS', 'Extra arguments; use stdin');
-  const result = { kind: positional[0] === 'void' ? 'void' : 'external', channel: positional[0], endpoint: null, groupName };
+  const result = { kind: positional[0] === 'void' ? 'void' : 'external', channel: positional[0], endpoint: null };
   if (stdinAvailable && positional.length <= 2) {
     if (!positional.length) throw sendError('INVALID_ARGS', 'Channel is required');
     return { ...result, endpoint: positional[1] ?? null, stdin: true };

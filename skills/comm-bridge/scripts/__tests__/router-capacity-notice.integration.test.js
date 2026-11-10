@@ -119,7 +119,7 @@ fs.appendFileSync(file,JSON.stringify({argv:process.argv.slice(2),body})+'\\n');
     await rounds();
     const captured = fs.readFileSync(capture, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(captured.length, 1);
-    assert.deepEqual(captured[0].argv, [channel, 'original-room', '--session-group', 'waiting']);
+    assert.deepEqual(captured[0].argv, [channel, 'original-room']);
     assert.match(captured[0].body, /消息已收到。目前同时处理的对话较多，正在排队，空出位置后马上处理。/);
     assert.equal(captured[0].body, messageForStatus({ context: 'capacity', noticeCode: 'capacity_wait' }, {}));
     assert.deepEqual(notices, ['sent']);

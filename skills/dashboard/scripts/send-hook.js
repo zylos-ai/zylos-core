@@ -7,7 +7,7 @@ import { withChatAttachments } from '../src/lib/chat/attachments.js';
 
 const abort = message => ({ version: 1, decision: 'abort', message });
 const registerAgain = () => abort('Attachment reference unavailable. Please register again on the target machine and use the returned attachment ID.');
-const replyVia = () => abort('Invalid attachment destination. Send using the original reply-via command, including --session-group.');
+const replyVia = () => abort('Invalid attachment destination. Send using the original reply-via command.');
 const attachment = block => block && ['x-zylos.image', 'x-zylos.file'].includes(block.type);
 
 /** Validate Dashboard output before C4 storage without performing registration. */

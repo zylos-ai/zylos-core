@@ -58,9 +58,9 @@ test('plain attachment annotations survive projection and general agent history 
   assert.equal(databaseOpens, 0);
 });
 
-test('Dashboard inbound attachment hint retains the exact original reply route and session group', t => {
+test('Dashboard inbound attachment hint retains the exact original reply route without a group flag', t => {
   const original = replyVia(row, sendPath);
-  assert.ok(original.endsWith('--session-group original:dialog'));
+  assert.equal(original.includes('--session-group'), false);
   const output = formatConversation(row, { ownerName: () => 'the owner' });
   const directory = path.join(ATTACHMENTS_DIR, `conv-${row.id}`);
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

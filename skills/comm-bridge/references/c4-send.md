@@ -55,41 +55,35 @@ C4MSG
 
 ## Session Groups
 
-An explicit group name goes last, after the channel and optional endpoint:
+Core asks `<skillsDir>/<channel>/scripts/session-group.js <endpoint>` which
+group handles the address before BeforeSend, recording or delivery. The script
+runs through Node argv without a shell, with closed stdin, component cwd and the
+send environment. Queries run for every send, without caching, under a five-second
+timeout and 4 KiB stdout limit. Core removes only one final LF/CRLF; empty output,
+a missing script or NULL endpoint means the overall namespace. Nonempty output
+must match the group-name grammar and 95-character limit. Failure, timeout,
+oversized output or invalid output refuses with `SESSION_GROUP_QUERY_FAILED`,
+without hooks, messages, sends or a fallback. The fixed `dashboard origin`
+address belongs to `origin` for both directions and never queries the script.
 
-```bash
-cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js telegram 8101553026 --stdin --session-group team
-Report ready.
-EOF
-```
+Core compares this one result with inherited `ZYLOS_SESSION_GROUP` when the key
+exists. Empty or unknown sender values fail `UNKNOWN_GROUP`; `origin` is checked
+like any group. Different groups fail `CROSS_SESSION_OUTBOUND`, even for a first
+message to a new recipient or a group not yet in history. The error supplies the
+responsible group and an internal command with destination/text/reason placeholders;
+it does not echo the endpoint. Ask the owning thread to deliver the message and
+judge the request; never change your environment to bypass the check. A missing
+namespace binding may be created for this command, but no message is recorded.
 
-Without `--session-group`, the audit row uses the latest inbound group for the
-same channel and endpoint, or the channel's overall group when no history exists.
-When nonempty inbound history exists, an explicit group is selected only if it
-received inbound for the same channel and endpoint; otherwise the latest inbound
-group wins. This permits multiple topics for one endpoint to reply individually.
-Without such history, an unknown or invalid explicit group falls back to the
-channel's overall group and records an `out_group_fallback` diagnostic.
-This diagnostic describes the final route: any explicit group ending at the
-channel's overall group records it, including an existing explicit group
-overridden by namespace inbound history. `SESSION_GROUP_NOT_FOUND` is the
-generic reason for a syntactically valid group in this case; it does not prove
-that group is absent. Routing to another subgroup records no fallback event.
-The endpoint passed to the
-component stays unchanged. `--group` is not accepted. Use stdin when literal
-content contains reserved option tokens.
+Without the sender key, the comparison is skipped and the message is still
+queried and recorded under the component's answer. A `ZYLOS_RUN_ID` alone does
+not activate the check. Message history never chooses ownership. The answer is
+used once for checking, hook options and recording; the transaction does not
+recheck. Legacy trailing `--session-group NAME` is silently accepted and discarded,
+while malformed placement still fails `INVALID_ARGS`. Generated reply-via omits
+it. `--group` is not accepted. Use stdin for literal option tokens in content.
 
-Core compares the outgoing group with inherited `ZYLOS_SESSION_GROUP` before
-BeforeSend hooks, recording or delivery. A different responsible group causes
-`CROSS_SESSION_OUTBOUND`, with no send effects and a copyable internal command
-containing the channel and endpoint. Ask that session to relay the message and
-context; do not change sender identity to bypass the check. Explicit `origin`
-is checked too. A `ZYLOS_RUN_ID` alone means single-session and is not checked.
-Processes without a group and new recipients with no nonempty inbound history
-that fall back to the namespace remain allowed; empty migration groups do not
-assign ownership. Ownership matches endpoint strings exactly; another `|msg:N`
-suffix, different case or whitespace is a different recipient with no shared
-ownership history. System notification callers and Core PM2 service startup
+System notification callers and Core PM2 service startup
 paths clear both session variables from the invoking environment, including
 `zylos start`, init, ecosystem restarts, component registration and upgrade
 recovery. PM2 `--update-env` merges values into each service's saved environment;
@@ -97,7 +91,6 @@ omitting keys does not remove them from an already contaminated service record.
 Such records require `pm2 delete <name>` followed by a fresh start to clear the
 saved session identity. This is a per-service record limitation, not leakage
 from the PM2 daemon's own environment. No automatic record deletion is added.
-The write transaction checks again if ownership changes during a channel hook.
 OpenMax's direct `comm.send`/`comm.ask` bypass C4 and are outside this guard.
 
 ## Absorbed Replies
@@ -111,7 +104,10 @@ EOF
 This reads the absorbed message's original route from the database. Supply the
 transition UUID and positive decimal message id; do not copy the endpoint from
 message text. The message must still belong to that transition's absorbed set.
-Internal routes delegate to the internal handler.
+Internal routes delegate to the internal handler. External absorbed replies use
+the same component query and sender check as ordinary sends, rather than the
+absorbed row's old group. If refused, relay the reply text and exact absorbed
+command to the responsible group; do not reconstruct its endpoint.
 
 ## Internal Messages
 
@@ -121,7 +117,9 @@ Please check the current status.
 EOF
 ```
 
-The sender comes from `ZYLOS_SESSION_GROUP`; the target is a full existing group.
+The sender comes from `ZYLOS_SESSION_GROUP`; the target is a full group. A target
+may be new if its namespace belongs to an installed component; sending creates
+its message/head so its thread can start. Unknown or uninstalled namespaces fail.
 Content is stdin-only. Extra arguments, `--session-group`, and `--group` are
 rejected. A successful command reports that the message was queued.
 
@@ -151,6 +149,11 @@ Origin. The group must exist. `void` does not accept `--session-group`.
 Channels are skills installed in `~/zylos/.claude/skills/`. Each channel must provide:
 
 - **Send script**: `~/zylos/.claude/skills/<channel>/scripts/send.js <endpoint_id> <message>`
+- **Optional group query**: `scripts/session-group.js <endpoint_id>` returns the
+  same group name that the component uses for inbound messages. It must be a
+  regular file and follow the bounded query protocol above; no query means the
+  whole component namespace. Dashboard's query refuses `origin`, which Core
+  handles through the shared fixed-address rule.
 - **Config**: `~/zylos/<channel>/config.json` (for data like `primary_dm`)
 
 The send script must return exit code 0 on success, non-zero on failure.

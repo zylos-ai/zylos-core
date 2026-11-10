@@ -170,7 +170,7 @@ test('stdin packet preserves leading and trailing whitespace exactly as stored',
     readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }) });
   const content = ' \t\n  Unicode 中 😀 \"quoted\"\n trailing \t\n ';
   const row = await sendExternal({ channel: 'example', endpoint: 'private-endpoint' }, content,
-    { api, skillsDir: f.skillsDir, env: f.env, appendFallback: null });
+    { api, skillsDir: f.skillsDir, env: f.env });
   const { packet, argv } = JSON.parse(fs.readFileSync(f.capture, 'utf8'));
   const stored = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(row.id);
   assert.equal(packet.content, content);
