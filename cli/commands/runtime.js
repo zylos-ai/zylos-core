@@ -27,6 +27,7 @@ import {
   saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
+  clearClaudeRelayTrafficFlag,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
   saveCodexApiKeyToEnv,
@@ -97,12 +98,14 @@ export function prepareRuntimeInstruction(target, { zylosDir = ZYLOS_DIR } = {})
  * @param {{ apiKey?: string, setupToken?: string }} creds
  * @returns {boolean}
  */
-function applyCredentials(target, creds) {
+export function applyCredentials(target, creds) {
   if (target === 'claude') {
     if (creds.setupToken) {
       if (!saveSetupToken(creds.setupToken)) return false;
       saveSetupTokenToEnv(creds.setupToken);
-      return true;
+      // Setup-token login does not use a relay; a --save-base-url relay in the
+      // same command is applied afterwards and turns the setting back on.
+      return clearClaudeRelayTrafficFlag();
     }
     if (creds.apiKey) {
       if (!saveApiKey(creds.apiKey)) return false;

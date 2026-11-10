@@ -41,6 +41,7 @@ import {
   saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
+  clearClaudeRelayTrafficFlag,
   saveCodexBaseUrl,
   saveCodexApiKey,
   saveCodexApiKeyToEnv,
@@ -1996,6 +1997,7 @@ export async function initCommand(args) {
   let codexAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
+  let subscriptionLogin = false; // set after a successful subscription (browser) login in this run
   let pendingCodexApiKey = null; // set if codex api key provided, written to .env after templates
   let pendingClaudeBaseUrl = null;
   let pendingCodexBaseUrl = null;
@@ -2222,6 +2224,7 @@ export async function initCommand(args) {
           for (const l of sigintListeners) process.on('SIGINT', l);
           claudeAuthenticated = isClaudeAuthenticated();
           if (claudeAuthenticated) {
+            subscriptionLogin = true;
             console.log(`\n  ${success('Claude Code authenticated')}`);
           } else {
             console.log(`\n  ${warn('Authentication not completed.')}`);
@@ -2343,6 +2346,11 @@ export async function initCommand(args) {
     if (pendingSetupToken) {
       saveSetupTokenToEnv(pendingSetupToken);
     }
+    // Subscription or setup-token login drops the relay traffic setting; a relay
+    // base URL saved next in this run turns it back on.
+    if (pendingSetupToken || subscriptionLogin) {
+      clearClaudeRelayTrafficFlag();
+    }
     if (pendingCodexApiKey) {
       saveCodexApiKeyToEnv(pendingCodexApiKey);
     }
@@ -2451,6 +2459,11 @@ export async function initCommand(args) {
   }
   if (pendingSetupToken) {
     saveSetupTokenToEnv(pendingSetupToken);
+  }
+  // Subscription or setup-token login drops the relay traffic setting; a relay
+  // base URL saved next in this run turns it back on.
+  if (pendingSetupToken || subscriptionLogin) {
+    clearClaudeRelayTrafficFlag();
   }
   if (pendingCodexApiKey) {
     saveCodexApiKeyToEnv(pendingCodexApiKey);

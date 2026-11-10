@@ -260,6 +260,8 @@ export function saveSetupTokenToEnv(token) {
 export function saveClaudeBaseUrl(baseUrl) {
   try {
     process.env.ANTHROPIC_BASE_URL = baseUrl;
+    if (isClaudeRelayBaseUrl(baseUrl)) process.env[CLAUDE_RELAY_TRAFFIC_FLAG] = '1';
+    else delete process.env[CLAUDE_RELAY_TRAFFIC_FLAG];
     return true;
   } catch {
     return false;
@@ -301,10 +303,72 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
     content = upsertEnvValue(content, 'ANTHROPIC_BASE_URL', baseUrl, 'Anthropic base URL for Claude Code (set by zylos init)');
     fs.writeFileSync(envPath, content);
     process.env.ANTHROPIC_BASE_URL = baseUrl;
+    return syncClaudeRelayTrafficFlag(baseUrl);
+  } catch {
+    return false;
+  }
+}
+
+// ── Relay traffic setting ───────────────────────────────────────────────────
+// Claude Code runs with CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 behind a relay
+// (non-official ANTHROPIC_BASE_URL) and without it otherwise. It is a setting,
+// not a credential.
+export const CLAUDE_RELAY_TRAFFIC_FLAG = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+const CLAUDE_RELAY_TRAFFIC_COMMENT = 'Required with a relay ANTHROPIC_BASE_URL (set by zylos)';
+
+/** True when a Claude base URL points anywhere other than the official API. */
+export function isClaudeRelayBaseUrl(baseUrl) {
+  if (!baseUrl) return false;
+  try { return new URL(baseUrl).hostname !== 'api.anthropic.com'; }
+  catch { return true; }
+}
+
+/** Turn the relay setting on or off in .env, Claude settings.json and process.env. */
+function setClaudeRelayTrafficFlag(on) {
+  const name = CLAUDE_RELAY_TRAFFIC_FLAG;
+  const assignment = new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?${name}[^\\S\\r\\n]*=.*(?:\\r?\\n|$)`, 'gm');
+  try {
+    const envPath = path.join(ZYLOS_DIR, '.env');
+    let content = null;
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const current = content?.match(assignment) ?? [];
+    const alreadyOn = current.length === 1 && /^CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\r?\n?$/.test(current[0]);
+    if (on ? !alreadyOn : current.length > 0) {
+      let next = (content ?? '').replace(assignment, '')
+        .split('\n').filter(line => line.trim() !== `# ${CLAUDE_RELAY_TRAFFIC_COMMENT}`).join('\n');
+      next = on ? upsertEnvValue(next, name, '1', CLAUDE_RELAY_TRAFFIC_COMMENT) : next.replace(/\n+$/, '\n');
+      fs.writeFileSync(envPath, next);
+    }
+
+    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    let settings = null;
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
+    const hasSetting = settings?.env?.[name] !== undefined;
+    if (on ? settings?.env?.[name] !== '1' : hasSetting) {
+      settings = settings && typeof settings === 'object' ? settings : {};
+      if (!settings.env) settings.env = {};
+      if (on) settings.env[name] = '1';
+      else delete settings.env[name];
+      fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    }
+
+    if (on) process.env[name] = '1';
+    else delete process.env[name];
     return true;
   } catch {
     return false;
   }
+}
+
+/** Pair the relay setting with the Claude base URL being configured. */
+export function syncClaudeRelayTrafficFlag(baseUrl) {
+  return setClaudeRelayTrafficFlag(isClaudeRelayBaseUrl(baseUrl));
+}
+
+/** Subscription or setup-token login does not use a relay: remove the setting. */
+export function clearClaudeRelayTrafficFlag() {
+  return setClaudeRelayTrafficFlag(false);
 }
 
 // ── Codex credential helpers ───────────────────────────────────────────────
