@@ -6,7 +6,6 @@ import { SKILLS_DIR, DATA_DIR } from './c4-config.js';
 import { reserveStatusNoticeCooldown, clearStatusNoticeCooldownReservation } from './c4-db.js';
 import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
-import { parseSessionGroup } from './c4-session-group.js';
 import { systemSendEnvironment } from './c4-system-send-env.js';
 export { normalizeStatusEndpoint } from './status-endpoint.js';
 
@@ -71,9 +70,7 @@ export async function sendStatusNotice(claim, message, route = {}, { spawn = spa
       resolve({ status, signal, error, pid: child?.pid, stdout, stderr });
     };
     try {
-      const groupName = parseSessionGroup(claim.sessionGroup ?? route.sessionGroup)?.groupName;
-      child = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin']),
-        ...(groupName ? ['--session-group', groupName] : [])], {
+      child = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin'])], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: systemSendEnvironment(),
       });

@@ -100,12 +100,16 @@ test('installed external and void commands dispatch through installed component 
   fs.mkdirSync(component, { recursive: true });
   const output = path.join(fixture.dir, 'argv.json');
   fs.writeFileSync(path.join(component, 'send.js'), `require('node:fs').writeFileSync(${JSON.stringify(output)},JSON.stringify(process.argv.slice(2)))`);
-  const invoke = args => spawnSync(process.execPath, [fixture.cli, ...args],
-    { env: fixture.env, input: 'body\n', encoding: 'utf8', timeout: 3000 });
-  const external = invoke(['demo', 'a\'"$`\\\nroute', '--stdin']);
+  const externalEnv = { ...fixture.env };
+  delete externalEnv.ZYLOS_SESSION_GROUP;
+  const invoke = (args, env = fixture.env) => spawnSync(process.execPath, [fixture.cli, ...args],
+    { env, input: 'body\n', encoding: 'utf8', timeout: 3000 });
+  const external = invoke(['demo', 'a\'"$`\\\nroute', '--stdin'], externalEnv);
   assert.equal(external.status, 0, external.stderr);
   assert.deepEqual(JSON.parse(fs.readFileSync(output)), ['a\'"$`\\\nroute', 'body']);
   assert.equal(invoke(['void', 'handoff', '--stdin']).status, 0);
+  const rows = runDatabase(fixture, `console.log(JSON.stringify(db.getDb().prepare("SELECT channel,session_group FROM conversations ORDER BY id").all()));`);
+  assert.deepEqual(rows, [{ channel: 'demo', session_group: 'demo' }, { channel: 'void', session_group: 'origin' }]);
 });
 
 // Installed CLI/private DB, fake channel only, HOME/PM2/tmp/tmux directory and
@@ -130,6 +134,7 @@ console.log(JSON.stringify({id:String(row.id),runId})); db.close();
   const { id, runId } = JSON.parse(create.stdout.trim().split('\n').at(-1));
   const output = path.join(fixture.dir, 'absorbed.json');
   fs.writeFileSync(path.join(component, 'send.js'), `require('node:fs').writeFileSync(${JSON.stringify(output)},JSON.stringify(process.argv.slice(2)))`);
+  fs.writeFileSync(path.join(component, 'session-group.js'), `process.stdout.write(${JSON.stringify('room\n')})`);
   const invoke = (sender = 'origin') => spawnSync(process.execPath, [fixture.cli, '--absorbed-reply', runId, id],
     { env: { ...fixture.env, ZYLOS_SESSION_GROUP: sender }, input: 'reply\n', encoding: 'utf8', timeout: 3000 });
   const denied = invoke();

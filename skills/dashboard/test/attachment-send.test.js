@@ -150,13 +150,13 @@ test('attachment hook uses the destination without business writes; SQLite bookk
     { endpoint: 'missing_conversation', options: { groupName: 'missing_conversation' } }]) {
     const result = f.hook(value, change);
     assert.equal(result.decision, 'abort');
-    assert.match(result.message, /original reply-via.*--session-group/);
+    assert.match(result.message, /original reply-via command/);
     assert.doesNotMatch(result.message, /register/);
   }
   f.core.prepare('DELETE FROM group_heads WHERE session_group=?').run(`dash:${f.a.localId}`);
   const missingGroup = f.hook(value);
   assert.equal(missingGroup.decision, 'abort');
-  assert.match(missingGroup.message, /original reply-via.*--session-group/);
+  assert.match(missingGroup.message, /original reply-via command/);
 });
 
 test('attachment hook reserves registration advice for invalid attachment data and references', async t => {
@@ -474,7 +474,7 @@ test('attachment hook keeps the destination hint when the Dashboard binding is a
   }), { code: 'invalid_chat_attachment_destination' });
   const result = f.hook(value);
   assert.equal(result.decision, 'abort');
-  assert.match(result.message, /original reply-via.*--session-group/);
+  assert.match(result.message, /original reply-via command/);
   assert.doesNotMatch(result.message, /register|service unavailable/);
   assertAudit(f, before);
 });

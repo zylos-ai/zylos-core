@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from './core-config-loader.js';
 import { sendError } from './c4-send-args.js';
 import { safeEntryId } from './c4-entry-id.js';
-import { appendOutGroupFallback } from './c4-outbound-events.js';
+import { queryComponentSessionGroup, fixedAddressSessionGroup } from './c4-component-session-group.js';
+import { assertOutboundSession } from './c4-outbound-session.js';
 import { readChannelHookMetadata, runBeforeSendHook } from './c4-channel-hooks.js';
 
 const pathsModule = path.join(path.dirname(resolveCoreConfigModule()), 'session-group-paths.js');
@@ -34,9 +35,8 @@ export function readAbsorbedReply(runId, id, api) {
     if (!run.absorbed_ids.includes(exactId)) throw sendError('ABSORBED_NOT_IN_RUN', 'Conversation is not absorbed in this run');
     const [record] = api.getConversationsByRange(exactId, exactId);
     if (!record || record.status !== 'switch_absorbed') throw sendError('ABSORBED_MISMATCH', 'Absorbed conversation is missing or has changed state');
-    const colon = record.session_group?.indexOf(':') ?? -1;
     return { kind: 'external', channel: record.channel, endpoint: record.endpoint_id,
-      id, ...(colon >= 0 ? { groupName: record.session_group.slice(colon + 1) } : record.session_group ? { wholeGroup: true } : {}) };
+      id: exactId, runId };
   })();
 }
 
@@ -48,9 +48,11 @@ export function assertEndpointPassable(endpoint, id) {
   }
 }
 
-export async function sendExternal(request, message, { api, skillsDir, env = process.env,
-  appendFallback = appendOutGroupFallback } = {}) {
-  const { channel, endpoint, groupName, wholeGroup } = request;
+export async function sendExternal(request, message, { api, skillsDir, env = process.env } = {}) {
+  const { channel, endpoint } = request;
+  if (typeof channel !== 'string' || !channel || channel.includes('..') || /[/\\\0]/.test(channel)) {
+    throw sendError('INVALID_ARGS', 'Invalid channel');
+  }
   const script = path.join(skillsDir, channel, 'scripts', 'send.js');
   try {
     if (!fs.statSync(script, { throwIfNoEntry: false })?.isFile()) throw new Error('Channel script not found');
@@ -58,14 +60,33 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
     throw sendError('INVALID_ARGS', 'Invalid channel: Channel script not found or component unavailable');
   }
   assertEndpointPassable(endpoint, request.id);
+  const hasSender = Object.hasOwn(env, 'ZYLOS_SESSION_GROUP');
   const senderGroup = env.ZYLOS_SESSION_GROUP;
-  // Resolve without registering anything, before any channel hook can run.
-  if (senderGroup) api.checkOutboundSession(channel, endpoint, { groupName, wholeGroup }, senderGroup);
+  if (hasSender && (typeof senderGroup !== 'string' || !senderGroup ||
+      (senderGroup !== 'origin' && !api.getDb().prepare('SELECT 1 FROM group_heads WHERE session_group=?').get(senderGroup)))) {
+    throw sendError('UNKNOWN_GROUP', 'Unknown sender session group');
+  }
+  const fixed = fixedAddressSessionGroup(channel, endpoint);
+  let groupName = fixed || undefined;
+  if (!fixed) {
+    try {
+      groupName = queryComponentSessionGroup({ component: channel, endpoint }, { skillsDir, env }).groupName ?? undefined;
+    } catch (error) {
+      if (error.code !== 'SESSION_GROUP_QUERY_FAILED') throw error;
+      throw Object.assign(sendError(error.code,
+        `${error.message}. Nothing was sent or recorded. This is a component bug or an environment problem: tell your user the message was not sent and report the error. Do not retry through another thread.`),
+      { reason: error.reason, stderr: error.stderr });
+    }
+  }
+  const route = { groupName, wholeGroup: groupName === undefined };
+  if (hasSender) {
+    const ownerGroup = fixed || api.resolveSessionGroup('out', channel, endpoint, route);
+    assertOutboundSession(senderGroup, ownerGroup, request);
+  }
   const stdinDelivery = readChannelHookMetadata(channel, { skillsDir })?.delivery === 'stdin';
-  await runBeforeSendHook(request, message, { skillsDir, env });
+  await runBeforeSendHook({ ...request, ...route }, message, { skillsDir, env });
   const record = api.insertConversation('out', channel, endpoint, message,
-    { status: 'delivered', groupName, wholeGroup, sessionId: senderSessionId(env), ...(senderGroup ? { senderGroup } : {}) });
-  await appendFallback?.(record, groupName);
+    { status: 'delivered', ...route, sessionId: senderSessionId(env) });
   return new Promise((resolve, reject) => {
     let child;
     let inputError;

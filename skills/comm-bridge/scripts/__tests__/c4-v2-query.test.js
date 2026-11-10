@@ -272,7 +272,7 @@ test('reply-via survives real POSIX shell parsing byte-for-byte', t => {
   const path = join(dir, 'send.cjs'); writeFileSync(path, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
   for (const endpoint of ['$(printf ROUTE_CHANGED)', '`printf ROUTE_CHANGED`', 'a"b\'c\\d', 'x; printf INJECTED', '']) {
     const command = replyVia({ id: 1, channel: 'foo', endpoint_id: endpoint, session_group: 'foo:A:b' }, path).replace('---- reply via: ', '');
-    assert.deepEqual(JSON.parse(execFileSync('/bin/sh', ['-c', command], { encoding: 'utf8' })), ['foo', endpoint, '--session-group', 'A:b']);
+    assert.deepEqual(JSON.parse(execFileSync('/bin/sh', ['-c', command], { encoding: 'utf8' })), ['foo', endpoint]);
   }
   for (const endpoint of ['\0', '\n', '\x7f', 'x'.repeat(131072)]) assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: endpoint }, path), /不可用/);
   assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: 'e' }, path + '\n'), /Core 路径含控制字符/);
@@ -296,7 +296,7 @@ test('ordering uses latest head while matching/preview use latest external input
   const { store, query } = fixture(t);
   store.insertConversation('in', 'Foo', 'e1', '研发群', { groupName: 'a' });
   store.insertConversation('in', 'bar', 'e2', 'other');
-  store.insertConversation('out', 'Foo', 'e1', 'outgoing');
+  store.insertConversation('out', 'Foo', 'e1', 'outgoing', { groupName: 'a' });
   const groups = query.groups();
   assert.equal(groups[0].sessionGroup, 'foo:a'); assert.equal(groups[0].componentName, 'Foo'); assert.equal(groups[0].sessionGroupName, 'a');
   assert.equal(groups[0].preview.text, '研发群');

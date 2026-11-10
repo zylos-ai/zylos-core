@@ -62,10 +62,10 @@ Dashboard capabilities together; an older argv-only Core cannot deliver this
 channel. This declaration does not add a separate service or registration step.
 
 Send plain text through the C4 send entry, using the original conversation ID as
-the endpoint and its local group name when replying within that group:
+the endpoint. Core queries Dashboard for its local group name:
 
 ```bash
-cat <<'EOF_MESSAGE' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js dashboard conversation_a --session-group conversation_a
+cat <<'EOF_MESSAGE' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js dashboard conversation_a
 Your plain-text reply.
 EOF_MESSAGE
 ```
@@ -250,7 +250,7 @@ node ~/zylos/.claude/skills/dashboard/scripts/components.js validate message.txt
 `list` reports only catalog entries implemented by this Core. `describe` returns
 its parameters (including transitive definitions in `parameters.$defs`) and generated model instructions; `example` prints a complete
 `[C4-JSON]` message suitable for stdin to the original reply-via command. Keep
-that command's routing and session-group arguments unchanged. `example --json`
+that command's routing and absorbed-reply form unchanged. `example --json`
 returns `{ok:true,data:<message>}` for inspection; send the raw example, not this
 wrapper. No command sends a message or contacts another instance. This static
 list describes the installed Core, not the version of a remote fleet browser.
@@ -402,7 +402,8 @@ fails, explain the failure in plain text instead of sending an attachment block.
 The block contains no source path, URL, bytes, size or MIME claims. Send the
 complete envelope through
 the **original reply-via command unchanged**, with content on stdin; preserve
-all original flags, including `--session-group` and absorbed-reply routing.
+its absorbed-reply form. Core queries the component to determine the group;
+generated reply commands do not include `--session-group`.
 There is no attachment send subcommand. Plain `[MEDIA:...]` text does not
 register or copy a file. Registration alone does not send a message; follow the
 original send-result contract before deciding whether to retry. A failed send

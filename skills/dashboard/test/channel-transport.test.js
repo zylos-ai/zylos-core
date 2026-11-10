@@ -36,7 +36,7 @@ function setup(t) {
     else fs.cpSync(path.join(source, 'src/lib'), path.join(dest, 'src/lib'), { recursive: true });
   }
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(root, 'pm2'), TMPDIR: tmp,
-    TMUX_TMPDIR: tmp, PATH: bin, ZYLOS_PACKAGE_ROOT: core, ZYLOS_SESSION_GROUP: 'origin',
+    TMUX_TMPDIR: tmp, PATH: bin, ZYLOS_PACKAGE_ROOT: core,
     CHANNEL_SEND_LOG: path.join(root, 'sends'), CHANNEL_HTTP_LOG: path.join(root, 'http'),
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import=${observer}` };
   for (const key of Object.keys(env)) if (key === 'TMUX' || /TOKEN|SECRET|PASSWORD|API_KEY/.test(key) || ['ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID'].includes(key)) delete env[key];

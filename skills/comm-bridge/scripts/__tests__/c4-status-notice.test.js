@@ -105,11 +105,11 @@ test('real child gets original argv and shared template stdin without inherited 
   process.env.ZYLOS_SESSION_GROUP = 'chat:unrelated';
   const config = { language: 'en', brand: 'Test Brand', templates: { inbound: { unavailable: { zh: '自定义不可用。', en: 'Custom unavailable.' } } } };
   const send = sender({ spawn, script, render: rt => messageForStatus(rt, config) });
-  for (const [channel, group, tail] of [['chat', 'chat:a:b', ['--session-group', 'a:b']], ['chat', 'chat', []], ['chat', null, []], ['internal', 'chat:a', []]]) {
+  for (const [channel, group] of [['chat', 'chat:a:b'], ['chat', 'chat'], ['chat', null], ['internal', 'chat:a']]) {
     const record = row({ channel, session_group: group, endpoint_id: `it's $(literal) \`literal\` a"b\\c\n${sequence}` });
     assert.equal((await send(record, route)).outcome, 'sent');
     const captured = JSON.parse(fs.readFileSync(output));
-    assert.deepEqual(captured.argv, [channel, record.endpoint_id, ...tail]);
+    assert.deepEqual(captured.argv, [channel, record.endpoint_id]);
     assert.equal(captured.body, messageForStatus(route, config));
     assert.equal(captured.runId, undefined);
     assert.equal(captured.sessionGroup, undefined);
@@ -137,7 +137,7 @@ test('capacity wait sends the shared receipt to the original channel and endpoin
   } });
   assert.equal((await send(record, routing)).outcome, 'sent');
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].argv.slice(1), ['telegram', 'original-room', '--session-group', 'original']);
+  assert.deepEqual(calls[0].argv.slice(1), ['telegram', 'original-room']);
   assert.equal(calls[0].message, messageForStatus(routing, {}));
   assert.match(calls[0].message, /消息已收到。目前同时处理的对话较多，正在排队/);
   assert.equal((await send({ ...record, id: record.id + 1 }, routing)).outcome, 'suppressed');
