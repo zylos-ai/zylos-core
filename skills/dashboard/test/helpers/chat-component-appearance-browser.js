@@ -72,6 +72,21 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     await page.waitForFunction(() => document.querySelector('#image .chat-attachment-image-content').naturalWidth === 160 && document.querySelector('#tray .chat-attachment-image-content').naturalWidth === 160);
     await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 6);
     await page.evaluate(() => document.fonts.ready);
+    const failedImage = page.locator('#tray-failed-image');
+    await failedImage.scrollIntoViewIfNeeded();
+    const failedImageShot = await failedImage.screenshot({ animations: 'disabled', scale: 'css' });
+    const failedImagePixel = await page.evaluate(async bytes => {
+      const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(bytes), c => c.charCodeAt(0))], { type: 'image/png' }));
+      const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
+      const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0); bitmap.close();
+      return [...context.getImageData(Math.floor(canvas.width / 2), 0, 1, 1).data];
+    }, failedImageShot.toString('base64'));
+    const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
+    if (output) {
+      fs.mkdirSync(output, { recursive: true });
+      fs.writeFileSync(path.join(output, `tray-failed-image-${width}-${theme}.png`), failedImageShot);
+      await page.locator('#columns').screenshot({ path: path.join(output, `columns-file-${width}-${theme}.png`), animations: 'disabled', scale: 'css' });
+    }
     const actual = await page.evaluate(() => {
       const answer = document.querySelector('#answered .chat-question-answer'), list = document.querySelector('#answered .chat-choice-options');
       const dot = getComputedStyle(document.querySelector('#waiting .chat-question-status'), '::before');
@@ -95,8 +110,14 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
         };
       });
       const columns = [...document.querySelector('#columns .conversation-view-columns').children].map(node => { const b = node.getBoundingClientRect(); return { left: b.left, top: b.top, width: b.width, bottom: b.bottom }; });
-      const errorStyles = Object.fromEntries(['ready', 'failed', 'expired'].map(state => { const item = document.querySelector('#tray-errors [data-upload-state="' + state + '"]'); return [state, { shadow: getComputedStyle(item).boxShadow, status: item.querySelector('.chat-attachment-status').textContent }]; }));
-      return { categoryGeometry, columns, errorStyles, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
+      const errorStyles = Object.fromEntries(['ready', 'failed', 'expired'].map(state => {
+        const item = document.querySelector('#tray-errors [data-upload-state="' + state + '"]'), status = item.querySelector('.chat-attachment-status'), style = getComputedStyle(item);
+        return [state, { outline: style.outlineStyle, outlineWidth: style.outlineWidth, outlineOffset: style.outlineOffset,
+          outlineColor: style.outlineColor, status: status.textContent, statusColor: getComputedStyle(status).color }];
+      }));
+      const dangerProbe = document.createElement('span'); dangerProbe.style.color = 'var(--c-danger-ink)'; document.querySelector('main').append(dangerProbe);
+      const dangerInk = getComputedStyle(dangerProbe).color, dangerRgb = rgba(dangerInk); dangerProbe.remove();
+      return { categoryGeometry, columns, errorStyles, dangerInk, dangerRgb, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
         dotAnimation: dot.animationName, dotWidth: dot.width, categoryAxis: chart('category').options.scales.x.display,
         breakdownAxis: chart('breakdown').options.scales.x.display, categoryColor: chart('category').data.datasets[0].backgroundColor[0],
         imageRatio: document.querySelector('.chat-attachment-image-frame').style.aspectRatio,
@@ -119,6 +140,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
         widths: [...document.querySelectorAll('.chat-block-choice,.chat-block-confirmation,.chat-block-form_intent,.chat-block-breakdown,.chat-block-category_series')].map(node => node.getBoundingClientRect().width),
         viewport: innerWidth, scroll: document.documentElement.scrollWidth };
     });
+    actual.failedImagePixel = failedImagePixel;
     actual.pressed = await pressedContrast(page, context);
     assert.match(actual.answerText, /你的回答/); assert.match(actual.answerText, /LRU/);
     assert.ok(actual.answerTop < actual.choicesTop, 'accepted answer is visually before readonly options');
@@ -165,13 +187,18 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.ok(actual.columns[1].left > actual.columns[0].left && actual.columns[2].left > actual.columns[1].left, 'wide columns retain source order');
     } else {
       assert.ok(actual.segmentHeights.every(height => height >= 40), 'phone segments keep 40px touch targets');
-      for (let i = 1; i < actual.columns.length; i++) assert.ok(actual.columns[i].top >= actual.columns[i - 1].bottom, 'phone comparison stacks in source order');
+      for (let i = 1; i < actual.columns.length; i++) assert.ok(Math.abs(actual.columns[i].top - actual.columns[i - 1].bottom - 12) <= 1, 'phone comparison keeps the shared 12px column gap');
     }
     for (const state of ['failed', 'expired']) {
-      assert.notEqual(actual.errorStyles[state].shadow, actual.errorStyles.ready.shadow, state + ' tray item has a distinct error ring');
-      assert.match(actual.errorStyles[state].shadow, /inset/, state + ' tray error uses an inner ring');
+      assert.notEqual(actual.errorStyles[state].outline, actual.errorStyles.ready.outline, state + ' tray error remains distinct from a ready item');
+      assert.equal(actual.errorStyles[state].outline, 'solid', state + ' tray error has a solid outline above child backgrounds');
+      assert.equal(actual.errorStyles[state].outlineWidth, '1px', state + ' error outline is one pixel');
+      assert.equal(actual.errorStyles[state].outlineOffset, '-1px', state + ' error outline stays inside the card');
+      assert.equal(actual.errorStyles[state].outlineColor, actual.dangerInk, state + ' error outline uses danger ink');
+      assert.equal(actual.errorStyles[state].statusColor, actual.dangerInk, state + ' status text uses danger ink');
       assert.ok(actual.errorStyles[state].status, state + ' tray item retains the status text');
     }
+    assert.ok(failedImagePixel.slice(0, 3).every((value, i) => Math.abs(value - actual.dangerRgb[i]) <= 12), 'failed image top-edge midpoint remains visible danger ink above its placeholder: ' + JSON.stringify({ pixel: failedImagePixel, expected: actual.dangerRgb }));
     assert.ok(actual.widths.every(value => value <= 720), 'rich cards stay within the shared width');
     assert.ok(actual.scroll <= width, 'no horizontal overflow');
     assert.equal(errors.length, 0, errors.join('; ')); assert.equal(outside.length, 0, outside.join('; ')); assert.equal(missing.length, 0, missing.join('; '));

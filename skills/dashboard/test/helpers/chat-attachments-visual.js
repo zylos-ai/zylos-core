@@ -205,10 +205,12 @@ export async function runAttachmentVisual(t, sandbox) {
     assert.ok((await composer().innerText()).includes('支持粘贴、拖入'));
     const trayLayout = await trayItems().evaluateAll(cards => cards.map(card => {
       const info = card.querySelector('.chat-attachment-info'), buttons = [...card.querySelectorAll('button')];
-      const probe = document.createElement('span'); probe.style.boxShadow = 'inset 0 0 0 1px var(--c-danger-ink)';
-      card.append(probe); const expectedErrorRing = getComputedStyle(probe).boxShadow; probe.remove();
+      const probe = document.createElement('span'); probe.style.color = 'var(--c-danger-ink)';
+      card.append(probe); const dangerInk = getComputedStyle(probe).color; probe.remove();
+      const style = getComputedStyle(card), statusColor = getComputedStyle(card.querySelector('.chat-attachment-status')).color;
       return { name: card.querySelector('.chat-attachment-name').textContent, infoHeight: info.getBoundingClientRect().height,
-        icon: !!info.querySelector('.wb-ico-image,.wb-ico-file'), state: card.dataset.uploadState, shadow: getComputedStyle(card).boxShadow, expectedErrorRing,
+        icon: !!info.querySelector('.wb-ico-image,.wb-ico-file'), state: card.dataset.uploadState, dangerInk, statusColor,
+        outline: style.outlineStyle, outlineColor: style.outlineColor, outlineWidth: style.outlineWidth, outlineOffset: style.outlineOffset,
         buttons: buttons.map(button => ({ wb: button.classList.contains('wb-btn'), width: button.getBoundingClientRect().width,
           height: button.getBoundingClientRect().height, marginStart: getComputedStyle(button).marginInlineStart })) };
     }));
@@ -216,10 +218,10 @@ export async function runAttachmentVisual(t, sandbox) {
     const errorItems = trayLayout.filter(card => ['failed', 'expired'].includes(card.state));
     assert.equal(errorItems.length, 2, 'both failed and expired tray states are present');
     assert.ok(errorItems.every(card => {
-      const ring = card.shadow.split(/,(?![^()]*\))/)[0];
-      return ring.trim() === card.expectedErrorRing && ring.includes('inset') && ring.includes('0px 0px 0px 1px')
-        && card.shadow !== trayLayout.find(other => other.state === 'ready').shadow;
-    }), 'failed/expired tray items retain a distinct inset error ring');
+      return card.outline === 'solid' && card.outlineWidth === '1px' && card.outlineOffset === '-1px'
+        && card.outlineColor === card.dangerInk && card.statusColor === card.dangerInk
+        && card.outline !== trayLayout.find(other => other.state === 'ready').outline;
+    }), 'failed/expired tray items retain an inside danger outline and danger status text');
     measurements.push({ width, theme, trayLayout });
     const sizes = await composer().locator('button:visible').evaluateAll(nodes => nodes.map(node => ({ action: node.dataset.action, width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })));
     if (width === 390) assert.ok(sizes.every(box => box.width >= 40 && box.height >= 40), 'phone attachment controls have 40px targets');

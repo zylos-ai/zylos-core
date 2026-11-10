@@ -93,14 +93,17 @@ function appendContent(id, row) {
 }
 
 const plans = ['方案甲', '方案乙', '方案丙'];
-const planBlocks = plans.map((title, i) => ({ id: 'plan-' + i, type: 'markdown', schemaVersion: 1, data: { text: title + '：按统一的成本、维护工作和交付周期比较。桌面应并排显示，手机依次阅读。' } }));
+const planBlocks = plans.map((title, i) => i === 1
+  ? { id: 'plan-' + i, type: 'x-zylos.file', schemaVersion: 1, fallbackText: '比较资料', data: { attachmentId: 'comparison-file', nameSnapshot: '方案资料.pdf' } }
+  : { id: 'plan-' + i, type: 'markdown', schemaVersion: 1, data: { text: title + '：按统一的成本、维护工作和交付周期比较。桌面应并排显示，手机依次阅读。' } });
 const columnsEnvelope = { version: 1, kind: 'message', messageId: 'columns-message', fallbackText: '三个方案并排比较', blocks: planBlocks,
   metadata: { view: { schemaVersion: 1, root: 'columns-root', nodes: [
     { id: 'columns-root', type: 'columns', layout: 'balanced', children: plans.map((_, i) => 'plan-node-' + i) },
     ...plans.map((_, i) => ({ id: 'plan-node-' + i, type: 'block', blockId: 'plan-' + i })),
   ] } },
 };
-const columnsRow = { id: 40, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(columnsEnvelope) };
+const columnsRow = { id: 40, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(columnsEnvelope),
+  attachments: [{ id: 'comparison-file', name: '方案资料.pdf', kind: 'file', available: true, size: 84 }] };
 if (parseC4Content(columnsRow.content).kind !== 'envelope') throw new Error('Invalid columns fixture');
 appendContent('columns', columnsRow);
 const errorsTray = document.createElement('div'); errorsTray.className = 'conversation-upload-tray'; errorsTray.id = 'tray-errors'; document.querySelector('main').append(errorsTray);
@@ -108,4 +111,6 @@ for (const status of ['ready', 'failed', 'expired']) {
   const resource = createChatAttachment({ document, t, mode: 'tray', attachment: { name: status + '.txt', kind: 'file', status }, onRetry: () => {}, onRemove: () => {} });
   errorsTray.append(resource.node); resources.push(resource); resource.mount();
 }
+const failedImage = createChatAttachment({ document, t, mode: 'tray', attachment: { name: 'failed-image.png', kind: 'image', status: 'failed' }, onRetry: () => {}, onRemove: () => {} });
+failedImage.node.id = 'tray-failed-image'; errorsTray.append(failedImage.node); resources.push(failedImage); failedImage.mount();
 window.componentFixtureReady = true;
