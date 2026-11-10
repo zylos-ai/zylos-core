@@ -83,7 +83,7 @@ describe('void channel migration (#689)', () => {
 
 describe('group query CLI', () => {
   it('returns queue and filtered group envelopes through the actual CLI', () => {
-    withTmpDir(({ env }) => {
+    withTmpDir(({ tmpDir, env }) => {
       const inserted = dbCli(['insert', 'in', 'system', 'null', 'hello', '--json'], env);
       assert.equal(inserted.status, 0, inserted.stderr);
       const queues = dbCli(['group-queues', '--json'], env);
@@ -108,6 +108,13 @@ describe('group query CLI', () => {
       const raw = dbCli(['groups', '--key-match', 'origin', '--raw', '--json'], env);
       assert.equal(raw.status, 0, raw.stderr);
       assert.equal(JSON.parse(raw.stdout).data[0].preview.messageRaw, '[Report bot] daily\nline two');
+      // A key search lists the group whose key equals the search (same letter case) first, ahead of newer groups
+      // whose keys contain it in any case, so one group is read with --limit 1.
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'telegram'), { recursive: true });
+      for (const name of ['Ab', 'ab_1']) assert.equal(dbCli(['insert', 'in', 'telegram', 'null', 'hi', '--session-group', name, '--json'], env).status, 0);
+      const keys = args => JSON.parse(dbCli(['groups', '--key-match', ...args, '--json'], env).stdout).data.map(row => row.sessionGroup);
+      assert.deepEqual(keys(['telegram:ab', '--limit', '5']), ['telegram:ab_1', 'telegram:Ab'], 'other groups stay newest first');
+      assert.deepEqual(keys(['telegram:Ab', '--limit', '1']), ['telegram:Ab']);
       assert.match(dbCli(['--help'], env).stdout, /group-queues/);
       assert.match(dbCli(['--help'], env).stdout, /active-since/);
       assert.match(dbCli(['--help'], env).stdout, /--raw/);

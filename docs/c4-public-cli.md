@@ -37,8 +37,8 @@ Other independent commands:
 
 `groups` filters are mutually exclusive. `--match` also searches message previews.
 `--key-match` matches group keys only (any part, any letter case) and is meant for occasional
-searches. A group whose key equals the search text exactly comes first, then the others
-newest first.
+searches. A group whose key equals the search text exactly (same letter case) comes first,
+then the others newest first.
 `--active-since` takes Unix milliseconds, stops at the first older group, and returns
 `{groups, hasOlder}`; the other forms return an array.
 Each group's `preview` (the newest inbound message, or `null`) is
