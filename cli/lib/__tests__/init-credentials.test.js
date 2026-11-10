@@ -504,7 +504,7 @@ function seedRelayFlag(t, home, baseUrl, extraEnv = '') {
   });
   fs.writeFileSync(envFile, `KEEP=unchanged\n${baseUrl ? `ANTHROPIC_BASE_URL=${baseUrl}\n` : ''}${relayFlag}=1\n${extraEnv}`);
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  const settingsText = JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://hand-relay.example', ANTHROPIC_API_KEY: 'sk-ant-api03-hand' } }, null, 4) + '\n\n';
+  const settingsText = JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://hand-relay.example', ANTHROPIC_API_KEY: 'sk-ant-api03-hand', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } }, null, 4) + '\n\n';
   fs.writeFileSync(settingsFile, settingsText);
   process.env[relayFlag] = '1';
   return () => ({

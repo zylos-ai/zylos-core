@@ -41,7 +41,7 @@ const sameSecret = (actual, expected) => assert.equal(actual === expected, true,
 // A hand-configured settings.json with its own credentials and relay address,
 // unusually formatted so any rewrite shows. zylos must never change it.
 const SETTINGS_TEXT = JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://hand-relay.example.test', ANTHROPIC_API_KEY: 'sk-ant-api03-hand-configured',
-  CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-hand-configured', KEEP: 'unchanged' }, permissions: { allow: ['Read'] }, theme: 'dark' }, null, 4) + '\n\n';
+  CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-hand-configured', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', KEEP: 'unchanged' }, permissions: { allow: ['Read'] }, theme: 'dark' }, null, 4) + '\n\n';
 const settingsUntouched = () => fs.readFileSync(settingsFile, 'utf8') === SETTINGS_TEXT;
 beforeEach(() => {
   for (const key of [...keys, relayFlag]) delete process.env[key];

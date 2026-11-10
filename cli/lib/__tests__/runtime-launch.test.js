@@ -337,6 +337,24 @@ for (const name of ['API key', 'setup token']) test(`Claude subscription login: 
   assert.ok(approved.includes(value.slice(-20)), `${name} must be pre-approved`);
 });
 
+// The built-in passthrough is Claude-only: a Codex session launched through
+// SessionAdapter, with every Claude variable in .env and an empty manifest,
+// must not carry any of them (otherwise commands the Codex agent runs could read
+// the Claude credentials). Real tmux on a private socket; the model CLI is a stand-in.
+// Run when session launch env, the runtime passed by SessionAdapter.launch, or
+// the built-in list changes; skip for changes to credential saving or notices only.
+for (const compat of [false, true]) test(`Codex session gets none of the Claude variables from .env with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async t => {
+  const f = setup(t, CodexAdapter);
+  fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(f.root, '.zylos/runtime-env.manifest'), '');
+  const dotenv = { ...builtinCases.relay, ...builtinCases['API key'], ...builtinCases['setup token'] };
+  assert.deepEqual(Object.keys(dotenv).sort(), [...builtinKeys].sort(), 'every Claude built-in variable is present in .env');
+  fs.writeFileSync(path.join(f.root, '.env'), (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
+    + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+  const { env } = await f.launch();
+  for (const key of builtinKeys) assert.equal(env[key], undefined, `Codex session must not carry ${key}`);
+});
+
 // Preserve daemon isolation through the target API.
 test('Codex default launch retains supported daemon isolation', async t => {
   const f = setup(t, CodexAdapter);
