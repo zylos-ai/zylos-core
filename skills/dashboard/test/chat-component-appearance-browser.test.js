@@ -4,12 +4,12 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_MODULE && !!process.env.ZYLOS_CHAT_BROWSER_BIN;
 // Boundary: real Content/question/chart renderers plus shipped CSS in Chrome;
 // no Dashboard backend, database, tmux, PM2 or model is opened. Run after rich
-// component presentation/styles change; unrelated backend/runtime work may skip.
+// component presentation/styles, attachment widths or theme palette change; unrelated backend/runtime work may skip.
 // The opt-in sandbox proves HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private socket
 // and both unused DB paths before opening fixture HTTP and spawning the lifecycle-owned Chrome group.
 // Timeout, abort and failure reap Chrome, fixture HTTP, contexts and the private root.
 for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
-  test(`rich components preserve answer order and static status in ${theme} at ${width}`, {
+  test(`rich components preserve theme contrast, layout and answer state in ${theme} at ${width}`, {
     skip: !enabled, timeout: 45_000,
   }, async t => {
     const sandbox = createChatSandbox(t);

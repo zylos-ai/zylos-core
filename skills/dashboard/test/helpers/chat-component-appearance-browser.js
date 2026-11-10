@@ -68,19 +68,38 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     await page.goto(origin);
     try { await page.waitForFunction(() => window.componentFixtureReady === true); }
     catch (error) { throw new Error(error.message + '; errors=' + errors.join('; ') + '; missing=' + missing.join('; ')); }
-    await page.locator('.chat-attachment-image-content').scrollIntoViewIfNeeded();
-    await page.waitForFunction(() => document.querySelector('.chat-attachment-image-content').naturalWidth === 160);
+    await page.locator('#image .chat-attachment-image-content').scrollIntoViewIfNeeded();
+    await page.waitForFunction(() => document.querySelector('#image .chat-attachment-image-content').naturalWidth === 160 && document.querySelector('#tray .chat-attachment-image-content').naturalWidth === 160);
     await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 2);
     await page.evaluate(() => document.fonts.ready);
     const actual = await page.evaluate(() => {
       const answer = document.querySelector('#answered .chat-question-answer'), list = document.querySelector('#answered .chat-choice-options');
       const dot = getComputedStyle(document.querySelector('#waiting .chat-question-status'), '::before');
       const chart = id => Chart.getChart(document.querySelector('#' + id + ' canvas'));
+      const rgba = value => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1; const ctx = canvas.getContext('2d'); ctx.fillStyle = value; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data]; };
+      const blend = (top, bottom) => { const a = top[3] / 255; return top.slice(0, 3).map((v, i) => v * a + bottom[i] * (1 - a)).concat(255); };
+      const surface = node => !node ? [255, 255, 255, 255] : blend(rgba(getComputedStyle(node).backgroundColor), surface(node.parentElement));
+      const luminance = color => color.slice(0, 3).map(v => { v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }).reduce((n, v, i) => n + v * [.2126, .7152, .0722][i], 0);
+      const contrast = (a, b) => { const x = luminance(a), y = luminance(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+      const textContrast = selector => { const n = document.querySelector(selector); return contrast(blend(rgba(getComputedStyle(n).color), surface(n)), surface(n)); };
+      const checkbox = document.querySelector('#boolean input[type="checkbox"]');
+      const selected = document.querySelector('#waiting input:checked').closest('.chat-question-option');
+      const probe = document.createElement('span'); probe.style.backgroundColor = 'var(--accent)'; document.body.append(probe); const accent = getComputedStyle(probe).backgroundColor; probe.remove();
+      const image = document.querySelector('#image .chat-attachment'), body = document.querySelector('#image .conversation-message-body');
+      const trayFrame = document.querySelector('#tray .chat-attachment-image-frame'), trayImage = trayFrame.querySelector('img');
       return { answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
         dotAnimation: dot.animationName, dotWidth: dot.width, categoryAxis: chart('category').options.scales.x.display,
         breakdownAxis: chart('breakdown').options.scales.x.display, categoryColor: chart('category').data.datasets[0].backgroundColor[0],
         imageRatio: document.querySelector('.chat-attachment-image-frame').style.aspectRatio,
-        primary: getComputedStyle(document.querySelector('#primary')).backgroundColor, localFont: [...document.fonts].some(font => font.family === 'Inter' && font.status === 'loaded'),
+        primary: getComputedStyle(document.querySelector('#primary')).backgroundColor, accent,
+        checkboxChecked: checkbox.checked,
+        checkboxCardContrast: contrast(surface(checkbox), surface(checkbox.closest('.chat-block'))),
+        checkboxSelectedRowContrast: contrast(surface(checkbox), surface(selected)),
+        primaryTextContrast: textContrast('#primary'), dangerTextContrast: textContrast('#danger .wb-btn-danger'),
+        imageWidth: image.getBoundingClientRect().width, imageBodyWidth: body.getBoundingClientRect().width,
+        availableColumnWidth: document.querySelector('#waiting .conversation-message-body').getBoundingClientRect().width,
+        trayFrameHeight: trayFrame.getBoundingClientRect().height, trayImageHeight: trayImage.getBoundingClientRect().height,
+        localFont: [...document.fonts].some(font => font.family === 'Inter' && font.status === 'loaded'),
         widths: [...document.querySelectorAll('.chat-block')].map(node => node.getBoundingClientRect().width),
         viewport: innerWidth, scroll: document.documentElement.scrollWidth };
     });
@@ -91,7 +110,19 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     assert.equal(actual.categoryColor, '#e06b83', 'critical assessment uses rose');
     assert.equal(actual.imageRatio, '160 / 90', 'loaded image uses intrinsic aspect ratio');
     assert.equal(actual.localFont, true, 'shipped local Inter is loaded');
-    assert.equal(actual.primary, 'rgb(15, 118, 110)', 'page primary shares approved color');
+    assert.equal(actual.primary, theme === 'light' ? 'rgb(15, 118, 110)' : actual.accent, 'page primary follows its theme');
+    assert.equal(actual.checkboxChecked, true, 'selected boolean marker is rendered');
+    if (theme === 'dark') {
+      assert.ok(actual.checkboxCardContrast >= 3, 'selected boolean fill contrasts with the card at least 3:1');
+      assert.ok(actual.checkboxSelectedRowContrast >= 3, 'selected fill contrasts with selected rows at least 3:1');
+    }
+    assert.ok(actual.primaryTextContrast >= 4.5, 'primary text meets AA');
+    assert.ok(actual.dangerTextContrast >= 4.5, 'danger text meets AA');
+    const expectedImageWidth = width === 1280 ? 480 : actual.availableColumnWidth;
+    assert.ok(Math.abs(actual.imageWidth - expectedImageWidth) <= 1, 'short image filename does not shrink its card');
+    assert.ok(Math.abs(actual.imageBodyWidth - expectedImageWidth) <= 1, 'attachment message owns a deterministic column');
+    assert.ok(actual.trayFrameHeight > 0 && actual.trayFrameHeight <= 72, 'tray frame stays compact');
+    assert.ok(actual.trayImageHeight > 0 && actual.trayImageHeight <= 72, 'tray image stays compact');
     assert.ok(actual.widths.every(value => value <= 720), 'rich cards stay within the shared width');
     assert.ok(actual.scroll <= width, 'no horizontal overflow');
     assert.equal(errors.length, 0, errors.join('; ')); assert.equal(outside.length, 0, outside.join('; ')); assert.equal(missing.length, 0, missing.join('; '));

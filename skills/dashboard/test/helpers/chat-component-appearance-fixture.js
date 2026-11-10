@@ -1,10 +1,14 @@
 import { renderConversationContent } from '/js/wb/conversation-content.js';
+import { createChatAttachment } from '/js/wb/chat-attachments.js';
+import { icon } from '/js/wb/plain-text.js';
 import { renderQuestion } from '/js/wb/chat-questions.js';
 import { CONTENT_PREFIX, makeQuestionSummary, parseC4Content } from '/chat-schema.js';
 
 const words = await (await fetch('/i18n/wb.zh.json')).json();
 const t = key => words[key] ?? key;
 const blocks = [
+  { id: 'boolean', type: 'form_intent', data: { title: '提醒设置', fields: [{ key: 'remind', label: '值班前一天提醒我', type: 'boolean', defaultValue: true }], action: { type: 'form.submit', target: 'answer.form' } } },
+  { id: 'danger', type: 'confirmation', data: { title: '删除测试群组？', severity: 'destructive', body: '删除后无法恢复。', action: { type: 'confirmation.respond', target: 'answer.confirm' } } },
   { id: 'waiting', type: 'choice', data: { prompt: '缓存方案', options: [{ id: 'a', label: 'Redis' }, { id: 'b', label: 'LRU' }], action: { type: 'choice.select', target: 'answer.choice' } } },
   { id: 'answered', type: 'choice', data: { prompt: '缓存方案', options: [{ id: 'a', label: 'Redis' }, { id: 'b', label: 'LRU' }], action: { type: 'choice.select', target: 'answer.choice' } } },
   { id: 'breakdown', type: 'breakdown', data: { parts: [{ key: 'a', label: '完成', value: 14 }, { key: 'b', label: '评审', value: 5 }] } },
@@ -14,10 +18,10 @@ const resources = [];
 for (const [index, value] of blocks.entries()) {
   const block = { ...value, schemaVersion: 1, fallbackText: value.id };
   const envelope = { version: 1, kind: 'message', messageId: 'message-' + block.id, fallbackText: block.id, blocks: [block] };
-  const interactive = block.type === 'choice';
+  const interactive = ['choice', 'form_intent', 'confirmation'].includes(block.type);
   if (interactive) {
     envelope.interruptId = 'question-' + block.id;
-    envelope.interrupt = { blockId: block.id, reason: 'input_required' };
+    envelope.interrupt = { blockId: block.id, reason: block.type === 'confirmation' ? 'confirmation' : 'input_required' };
     envelope.questionSummary = makeQuestionSummary(envelope);
   }
   const row = { id: index + 1, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(envelope) };
@@ -29,15 +33,26 @@ for (const [index, value] of blocks.entries()) {
     question.action = { id: question.answerId, protocolVersion: '0.1', type: block.data.action.type, target: block.data.action.target,
       context: { messageId: envelope.messageId, blockId: block.id }, payload: { selected: ['b'] } };
   }
-  const article = document.createElement('article'); article.className = 'conversation-message chat-out'; article.id = block.id;
-  const body = document.createElement('div'); body.className = 'conversation-message-body'; article.append(body); document.querySelector('main').append(article);
-  const content = renderConversationContent({ document, row, t, renderQuestion: args => renderQuestion({ ...args, document, question, t, canWrite: true, onSubmit: async () => {} }) });
+  const { body } = message(block.id);
+  const content = renderConversationContent({ document, row, t, renderQuestion: args => renderQuestion({ ...args, document, question, t, canWrite: true, formState: block.id === 'waiting' ? { selected: ['b'] } : {}, onSubmit: async () => {} }) });
   body.append(content); resources.push(content); content.mount();
 }
-// A local SVG fixture has a 16:9 intrinsic ratio, different from the 4:3 loading ratio.
-const attachment = renderConversationContent({ document, t, row: { id: 5, direction: 'out', content: '', attachments: [
-  { id: 'image', name: 'sample.svg', kind: 'image', available: true },
+// A short filename must not determine the image's display width.
+const attachment = renderConversationContent({ document, t, row: { id: 20, direction: 'out', content: '', attachments: [
+  { id: 'image', name: 'a.png', kind: 'image', available: true },
 ] }, attachmentContext: { conversationId: 'fixture' } });
-document.querySelector('main').append(attachment); resources.push(attachment); attachment.mount();
-window.addEventListener('beforeunload', () => resources.forEach(resource => resource.destroy()));
+message('image').body.append(attachment); resources.push(attachment); attachment.mount();
+const preview = document.createElement('div'); preview.className = 'conversation-upload-tray'; preview.id = 'tray'; document.querySelector('main').append(preview);
+const blob = new Blob(['<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#0f766e"/></svg>'], { type: 'image/svg+xml' });
+const previewUrl = URL.createObjectURL(blob);
+const tray = createChatAttachment({ document, t, attachment: { name: 'a.png', kind: 'image', status: 'ready' }, mode: 'tray', localUrl: previewUrl });
+preview.append(tray.node); resources.push(tray); tray.mount();
+window.addEventListener('beforeunload', () => { resources.forEach(resource => resource.destroy()); URL.revokeObjectURL(previewUrl); });
 window.componentFixtureReady = true;
+
+function message(id) {
+  const article = document.createElement('article'); article.className = 'chat-message conversation-message chat-out'; article.id = id;
+  const avatar = document.createElement('span'); avatar.className = 'conversation-avatar'; avatar.append(icon(document, 'bot'));
+  const body = document.createElement('div'); body.className = 'conversation-message-body'; article.append(avatar, body); document.querySelector('main').append(article);
+  return { article, body };
+}
