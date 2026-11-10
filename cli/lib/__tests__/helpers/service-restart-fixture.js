@@ -7,7 +7,8 @@ import {createRequire} from 'node:module';
 const maintenance = createRequire(import.meta.url)('../../upgrade-maintenance.cjs');
 
 export function serviceRestartFixture(t, {ecosystem = true, names = ['scheduler']} = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usr-')));
+  // Linux test runners may use noexec shared memory; PM2 stand-ins need exec.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === 'linux' ? '/tmp' : os.tmpdir(), 'usr-')));
   const env = {HOME:path.join(root,'h'), ZYLOS_DIR:path.join(root,'h/zylos'), PM2_HOME:path.join(root,'p'),
     TMPDIR:path.join(root,'t'), TMUX_TMPDIR:path.join(root,'x'), XDG_CONFIG_HOME:path.join(root,'h/.config'),
     CODEX_HOME:path.join(root,'h/.codex'), PATH:path.join(root,'bin')+path.delimiter+process.env.PATH};
@@ -29,7 +30,7 @@ export function serviceRestartFixture(t, {ecosystem = true, names = ['scheduler'
     fs.mkdirSync(path.dirname(file),{recursive:true});
     fs.writeFileSync(file,`module.exports={apps:${JSON.stringify(names.map(name => ({name,script:scripts[name]})))}};`,{mode:0o600});
   }
-  const state = path.join(root,'state.json'), calls = path.join(root,'calls.jsonl'), failure = path.join(root,'failure'), listLimit=path.join(root,'list-limit');
+  const state = path.join(root,'state.json'), calls = path.join(root,'calls.jsonl'), environments = path.join(root,'environments.jsonl'), failure = path.join(root,'failure'), listLimit=path.join(root,'list-limit');
   const record = (name,status = 'stopped') => ({name,pid:status==='online'?123:0,pm2_env:{status,pm_exec_path:scripts[name]}});
   fs.writeFileSync(state,JSON.stringify([record('scheduler'),record('custom-service')]));
   fs.mkdirSync(path.join(root,'bin'));
@@ -37,6 +38,7 @@ export function serviceRestartFixture(t, {ecosystem = true, names = ['scheduler'
   fs.writeFileSync(pm2,`#!${process.execPath}
 const fs=require('node:fs');const args=process.argv.slice(2),state=${JSON.stringify(state)};
 fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+'\\n');
+fs.appendFileSync(${JSON.stringify(environments)},JSON.stringify({args,env:Object.fromEntries(['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','PATH','SERVICE_SENTINEL','ZYLOS_RUN_ID','ZYLOS_SESSION_GROUP'].filter(key=>Object.hasOwn(process.env,key)).map(key=>[key,process.env[key]]))})+'\\n');
 let records=JSON.parse(fs.readFileSync(state));
 if(args[0]==='jlist'){
  if(fs.existsSync(${JSON.stringify(listLimit)})&&fs.readFileSync(${JSON.stringify(calls)},'utf8').trim().split('\\n').map(JSON.parse).filter(args=>args[0]==='jlist').length>Number(fs.readFileSync(${JSON.stringify(listLimit)}))){console.error('list unavailable');process.exit(1);}
@@ -59,6 +61,7 @@ fs.writeFileSync(state,JSON.stringify(records));
   return {root,env,skillsDir,scripts,file,j,pm2,
     records(next) {if(next)fs.writeFileSync(state,JSON.stringify(next));return JSON.parse(fs.readFileSync(state));},
     calls:() => fs.existsSync(calls)?fs.readFileSync(calls,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[],
+    environments:() => fs.readFileSync(environments,'utf8').trim().split('\n').map(JSON.parse),
     fail:() => fs.writeFileSync(failure,'fail'),listLimit:count=>fs.writeFileSync(listLimit,String(count)),record,
     custom() {j.originalServices.push({name:'custom-service',script:scripts['custom-service']});return j;},
   };
