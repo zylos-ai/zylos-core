@@ -1,4 +1,4 @@
-import { element, icon, runtimeName } from './plain-text.js?v=105';
+import { element, icon, runtimeName } from './plain-text.js?v=106';
 import { recoveryTime } from './cooldown.js?v=89';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 // Account quota samples are passed through as each runtime reports them: Claude uses

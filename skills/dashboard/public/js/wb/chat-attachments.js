@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=105';
+import { element, icon } from './plain-text.js?v=106';
 
 const displayName = name => String(name || '').split(/[/\\]/).at(-1).replace(/[\x00-\x1f\x7f]/g, '_').slice(0, 160);
 const sizeLabel = value => !Number.isFinite(value) || value < 0 ? '' : value < 1024 ? `${value} B`

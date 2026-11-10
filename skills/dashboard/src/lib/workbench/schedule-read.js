@@ -153,6 +153,26 @@ function openDb(dbFile) {
   }
 }
 
+/**
+ * The names of scheduler tasks, by id, for labelling what they sent. Read-only; a missing or unreadable scheduler
+ * database, or a task without a name, leaves the id out, so a reader falls back to the prompt's first line.
+ */
+export function readTaskNames(zylosDir, ids) {
+  const wanted = [...new Set(ids)].filter(id => typeof id === 'string').slice(0, 500);
+  const dbFile = path.join(zylosDir, 'scheduler', 'scheduler.db');
+  if (!wanted.length || !fs.existsSync(dbFile)) return new Map();
+  let db;
+  try {
+    db = openDb(dbFile);
+    const rows = db.prepare(`SELECT id, name FROM tasks WHERE id IN (${wanted.map(() => '?').join(',')})`).all(...wanted);
+    return new Map(rows.filter(row => typeof row.name === 'string' && row.name.trim()).map(row => [row.id, row.name]));
+  } catch {
+    return new Map();
+  } finally {
+    db?.close();
+  }
+}
+
 /** Task delivery target, resolved with the same rule the scheduler uses to dispatch. */
 export function deliveryTarget(task, snapshotRows, names = new Map()) {
   const component = task.session_component ?? task.reply_channel ?? null;

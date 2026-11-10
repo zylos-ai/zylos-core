@@ -5,8 +5,8 @@ import { createCoreCli } from './core-cli.js';
 const error = (code, message) => Object.assign(new Error(message), { code });
 const platforms = { telegram: 'Telegram', lark: 'Lark', feishu: '飞书', 'web-console': '网页控制台', openmax: 'OpenMax', wechat: '微信' };
 const project = (key, row) => ({ sessionGroup: key, displayName: row?.display_name ?? null, source: row?.source ?? null });
-// Naming reads the redacted preview text only; the unredacted current-message field is not passed on.
-const withoutMessage = ({ message, ...preview }) => preview;
+// Naming reads the redacted preview text only; the unredacted current-message field and its source are not passed on.
+const withoutMessage = ({ message, messageSource, ...preview }) => preview;
 
 export function validKey(key) { return key !== 'origin' && parseSessionGroup(key) !== null; }
 export function validName(name) {

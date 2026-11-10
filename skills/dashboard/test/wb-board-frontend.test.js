@@ -246,6 +246,22 @@ test('an unnamed Dashboard conversation shows as an untitled conversation with i
   assert.equal(unnamedConversation({ sessionGroup: id, c4: { componentName: 'dashboard', lastActivityAt: at } }, t), 'chat.unnamed', 'without a session time it is just untitled');
 });
 
+test('a last-received line starts with its source when the words are not a person\'s own', async () => {
+  const { lastReceived } = await import('../public/js/wb/plain-text.js');
+  const { packTranslator } = await import('./fixtures/schedule-env.js');
+  for (const [locale, scheduled, channel, person] of [
+    ['zh', '最近收到：定时任务 · watch-dispatched-cards', '最近收到：Lark · Review ready', '最近收到：看一下'],
+    ['en', 'Last received: Scheduled task · watch-dispatched-cards', 'Last received: Lark · Review ready', 'Last received: 看一下'],
+  ]) {
+    const t = packTranslator(locale);
+    assert.equal(lastReceived({ sessionGroup: 'scheduler', preview: { text: 'watch-dispatched-cards', channel: 'scheduler', source: { kind: 'scheduled_task' } } }, t), scheduled);
+    assert.equal(lastReceived({ sessionGroup: 'lark:oc_1', preview: { text: 'Review ready', channel: 'lark', source: { kind: 'channel' } } }, t), channel);
+    assert.equal(lastReceived({ sessionGroup: 'lark:oc_1', preview: { text: '看一下', channel: 'lark' } }, t), person);
+  }
+  // A channel the page has no name for is shown by its key.
+  assert.equal(lastReceived({ sessionGroup: 'multica:x', preview: { text: 'Review ready', channel: 'multica', source: { kind: 'channel' } } }, (key, vars) => key === 'wb.board.sourceText' ? `${vars.source} · ${vars.text}` : vars?.text ?? key), 'multica · Review ready');
+});
+
 test('a last-received line without words names the channel, with the date when the message is not from today', async () => {
   const { lastReceived } = await import('../public/js/wb/plain-text.js');
   setInstanceZone('UTC');

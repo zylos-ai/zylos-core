@@ -1,6 +1,6 @@
-import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=105';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=116';
-import { toolLabel, waitText } from './view-mode.js?v=115';
+import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=117';
+import { toolLabel, waitText } from './view-mode.js?v=116';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=91';
 import { recentRows } from './timeline-rows.js?v=108';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
@@ -195,6 +195,12 @@ function nowCard(document, row, data, { level, t, snapshot }) {
     }
   }
   if (level === 'technical') {
+    // A preview labelled with its source keeps the stored message's own start here, headers and ids included.
+    if (row.preview?.raw) {
+      const raw = element(document, 'p', undefined, 'wb-now-raw');
+      raw.append(element(document, 'span', t('wb.detail.rawMessage')), element(document, 'span', row.preview.raw, 'wb-mono'));
+      card.append(raw);
+    }
     const evidence = detailEvidence(row, snapshot);
     const details = element(document, 'details', undefined, 'wb-detail-evidence');
     details.open = false;

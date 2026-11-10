@@ -2,7 +2,8 @@ import { readThresholdPolicy, sessionThreshold } from '../session-threshold.js';
 import { loadCoreModule as defaultLoadCoreModule } from '../core-modules.js';
 import { Sanitizer } from '../sanitizer.js';
 import { createCoreCli } from './core-cli.js';
-import { mergeGroups } from './group-merge.js';
+import { mergeGroups, previewTaskIds } from './group-merge.js';
+import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
 import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
 import { buildAttention, createChannelDownCounter } from './attention.js';
@@ -29,9 +30,18 @@ function queryAllEvents(store, filter) {
 export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule = defaultLoadCoreModule,
   now = Date.now, cli = createCoreCli({ zylosDir }), sanitizer = new Sanitizer(zylosDir),
   displayNames = emptyNames, readConfigRuntime = () => null, channelDownCounter = createChannelDownCounter(),
-  readPm2 = () => null } = {}) {
+  readPm2 = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids) } = {}) {
   let cache = null, inflight = null, accountsCache = null;
   const activities = new Map();
+  // A task name is shown, not trusted: it goes through the same sanitizer as the message it replaces.
+  async function namesOfTasks(items) {
+    const ids = previewTaskIds(items);
+    if (!ids.length) return new Map();
+    try {
+      const names = await readTaskNames(ids);
+      return new Map([...names].map(([id, name]) => [id, sanitizer.safeSummary(name)]));
+    } catch { return new Map(); }
+  }
   async function getSnapshot(at = now()) {
     if (inflight) return inflight;
     if (cache && at - cache.builtAt < 2000) return cache.value;
@@ -65,7 +75,8 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       cli.runC4Db(['group-queues', '--json']),
     ]);
     sources.c4 = source(c4); sources.q = source(q);
-    const { rows, hasOlder } = mergeGroups({ status, c4, q, names: await displayNames.listAll(), statusError }, sanitizer);
+    const taskNames = c4.ok ? await namesOfTasks(c4.data.groups) : new Map();
+    const { rows, hasOlder } = mergeGroups({ status, c4, q, names: await displayNames.listAll(), taskNames, statusError }, sanitizer);
     const ov = await cli.readOverrides([...new Set([...rows.map(row => row.sessionGroup).filter(group => group !== null), 'origin'])]);
     sources.ov = source(ov);
     let baselineRuntime = null;
@@ -192,7 +203,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     return value;
   }
   return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, activity, channelDownCounter,
-    search: (q, at = now()) => searchGroups(q, { now: at, runC4Db: cli.runC4Db, getSnapshot, displayNames, sanitizer }) };
+    search: (q, at = now()) => searchGroups(q, { now: at, runC4Db: cli.runC4Db, getSnapshot, displayNames, sanitizer, namesOfTasks }) };
 }
 
 function source({ ok, reason, detail, readAt }) { return { ok, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}), readAt }; }

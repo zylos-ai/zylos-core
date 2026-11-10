@@ -1,4 +1,4 @@
-import { element, icon } from './plain-text.js?v=105';
+import { element, icon } from './plain-text.js?v=106';
 
 /**
  * A styled date-time field over a hidden native `datetime-local` input. The native field shows its

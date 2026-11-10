@@ -1,4 +1,4 @@
-import { element, fallbackName, icon } from './plain-text.js?v=105';
+import { element, fallbackName, icon } from './plain-text.js?v=106';
 import { recoveryTime } from './cooldown.js?v=89';
 import { formatZoned } from './instance-zone.js?v=100';
 const clock = at => formatZoned(at, undefined, { hour: '2-digit', minute: '2-digit' });

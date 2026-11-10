@@ -1,4 +1,4 @@
-import { element } from './plain-text.js?v=105';
+import { element } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
 const CLOCK_SECONDS = { hour: 'numeric', minute: '2-digit', second: '2-digit' };
 export function activityStrip(document, data, { inboundUnknown = false, t = key => key } = {}) {

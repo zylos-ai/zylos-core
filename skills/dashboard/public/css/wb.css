@@ -323,6 +323,9 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-now-err .wb-now-title > .wb-ico { color: var(--wb-err); }
 .wb-push { margin-left: auto; }
 .wb-now-sub { margin: 4px 0 0; color: var(--text-dim); font-size: 13px; }
+.wb-now-raw { display: flex; gap: 6px; margin: 6px 0 0; color: var(--text-dim); font-size: 12px; min-width: 0; }
+.wb-now-raw > :first-child { flex: none; white-space: nowrap; }
+.wb-now-raw .wb-mono { min-width: 0; overflow-wrap: anywhere; }
 .wb-args { margin-top: 8px; padding: 6px 8px; border: 1px solid var(--wb-line); border-radius: 6px; background: var(--bg); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-detail-evidence { margin-top: 10px; font-size: 12px; }
 .wb-detail-evidence summary { display: flex; align-items: center; gap: 6px; color: var(--text-dim); cursor: pointer; list-style: none; }
@@ -860,7 +863,6 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 
 /* ─── Usage and cost: centred page, one summary card, chart cards in two columns ─── */
 .wb-usage-page { max-width: 1180px; margin: 0 auto; padding: 4px 0 24px; }
-.wb-usage-title { margin: 0 0 12px; font-size: 18px; font-weight: 650; letter-spacing: -.01em; }
 .wb-usage-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .wb-usage-controls .wb-input { height: var(--wb-h); width: 196px; }
 .wb-date { position: relative; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-variant-numeric: tabular-nums; }
