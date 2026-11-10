@@ -7,6 +7,7 @@ import { reserveStatusNoticeCooldown, clearStatusNoticeCooldownReservation } fro
 import { normalizeStatusEndpoint } from './status-endpoint.js';
 import { validateChannel, validateEndpoint } from './c4-validate.js';
 import { parseSessionGroup } from './c4-session-group.js';
+import { systemSendEnvironment } from './c4-system-send-env.js';
 export { normalizeStatusEndpoint } from './status-endpoint.js';
 
 export const STATUS_NOTICE_TTL_SECONDS = 600;
@@ -74,6 +75,7 @@ export async function sendStatusNotice(claim, message, route = {}, { spawn = spa
       child = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin']),
         ...(groupName ? ['--session-group', groupName] : [])], {
         stdio: ['pipe', 'pipe', 'pipe'],
+        env: systemSendEnvironment(),
       });
       // Keep draining both pipes after the diagnostic prefix is full.
       child.stdout.setEncoding('utf8');

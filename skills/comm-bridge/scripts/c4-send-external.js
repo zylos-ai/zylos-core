@@ -58,7 +58,7 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
     throw sendError('INVALID_ARGS', 'Invalid channel: Channel script not found or component unavailable');
   }
   assertEndpointPassable(endpoint, request.id);
-  const senderGroup = env.ZYLOS_SESSION_GROUP || (env.ZYLOS_RUN_ID ? 'origin' : undefined);
+  const senderGroup = env.ZYLOS_SESSION_GROUP;
   // Resolve without registering anything, before any channel hook can run.
   if (senderGroup) api.checkOutboundSession(channel, endpoint, { groupName, wholeGroup }, senderGroup);
   const stdinDelivery = readChannelHookMetadata(channel, { skillsDir })?.delivery === 'stdin';

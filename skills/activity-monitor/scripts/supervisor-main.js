@@ -19,6 +19,7 @@ import { RestartRequestStore } from './restart-request-store.js';
 import { findMatchingToolRule } from './tool-rules.js';
 import { PoolCapacity } from './pool-capacity.js';
 import { messageForStatus } from '../../comm-bridge/scripts/status-notice-templates.js';
+import { systemSendEnvironment } from '../../comm-bridge/scripts/c4-system-send-env.js';
 const { readSessionMode, readZylosConfigOrThrow } = await loadCoreModule('config.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
@@ -62,7 +63,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   const pendingAlerts=new Set(),pendingNotices=new Set();
   const sendAlert=overrides.sendAlert ?? ((target,message)=>new Promise((resolve,reject)=>{
     const child=execFile(process.execPath,[fileURLToPath(new URL('../../comm-bridge/scripts/c4-send.js',import.meta.url)),target.channel,target.endpoint],
-      {env,timeout:30000,maxBuffer:1024*1024},error=>error?reject(error):resolve(true));
+      {env:systemSendEnvironment(env),timeout:30000,maxBuffer:1024*1024},error=>error?reject(error):resolve(true));
     child.stdin.on('error',reject);child.stdin.end(message+'\n');
   }));
   const guard=new SupervisorServerHealth({readAlertTarget:()=>parseServerAlertTarget(configuration?.alert_target),sendAlert,log});

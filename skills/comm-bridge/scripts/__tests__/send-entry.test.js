@@ -149,14 +149,16 @@ test('actual outbound history and explicit group resolution log only committed f
   assert.equal((await sendExternal({...request,groupName:'old'}, 'explicit', options)).session_group, 'namespace:old');
   assert.equal(events.length, 0);
   for (const [groupName, reason] of [['missing','SESSION_GROUP_NOT_FOUND'],['bad name','SESSION_GROUP_INVALID'],['x'.repeat(96),'SESSION_GROUP_TOO_LONG']]) {
-    const row = await sendExternal({...request,groupName}, 'fallback', options);
+    const owned = await sendExternal({...request,groupName}, 'owned route', options);
+    assert.equal(owned.session_group, 'namespace:new');
+    const row = await sendExternal({...request,endpoint:'new-recipient',groupName}, 'fallback', options);
     assert.equal(row.session_group, 'namespace');
     assert.deepEqual(events.at(-1), {v:1,ts:123,event:'out_group_fallback',conversation_id:row.id,
-      channel:'demo',endpoint:'endpoint',session_group:'namespace',runtime:'',reason_code:reason,detail:''});
+      channel:'demo',endpoint:'new-recipient',session_group:'namespace',runtime:'',reason_code:reason,detail:''});
   }
   assert.equal(events.length, 3);
   let diagnostics = 0;
-  const row = await sendExternal({...request,groupName:'missing'}, 'log failure', {...options,
+  const row = await sendExternal({...request,endpoint:'new-recipient',groupName:'missing'}, 'log failure', {...options,
     appendFallback:(record,groupName)=>appendOutGroupFallback(record,groupName,{diagnostic:()=>diagnostics++,
       createJsonlStream:()=>({append:()=>{throw new Error('disk failure');}})})});
   assert.equal(row.status, 'delivered'); assert.equal(diagnostics, 1);
