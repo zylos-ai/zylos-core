@@ -141,3 +141,26 @@ test('a response from a closed page cannot auto-select, and reopening can select
   f.setIdentity('remote'); const reopened = f.page.open(); await flush(); await f.resolveList(1); await reopened;
   assert.deepEqual(f.selected(), ['g:AA']); assert.ok(f.detailReads.length >= 1); assert.ok(f.detailReads.every(id => id === 'g:AA'));
 });
+
+test('switching instances without closing selects the new first conversation', { timeout: 2000 }, async t => {
+  const f = fixture(t), opening = f.page.open(); await flush(); await f.resolveList(0, ['g:AA']); await opening;
+  assert.deepEqual(f.selected(), ['g:AA']);
+  const previousReads = f.detailReads.length;
+  f.setIdentity('remote');
+  const switched = f.page.open(); await flush();
+  assert.deepEqual(f.selected(), [], 'the previous instance selection is cleared');
+  await f.resolveList(1, ['g:BB']); await switched;
+  assert.deepEqual(f.selected(), ['g:BB']);
+  assert.ok(f.detailReads.length > previousReads);
+  assert.ok(f.detailReads.slice(previousReads).every(id => id === 'g:BB'));
+});
+
+test('reopening the same instance selects its first newly available conversation', { timeout: 2000 }, async t => {
+  const f = fixture(t), opening = f.page.open(); await flush(); await f.resolveList(0, []); await opening;
+  assert.deepEqual(f.selected(), []);
+  f.page.close();
+  const reopened = f.page.open(); await flush(); await f.resolveList(1, ['g:BB']); await reopened;
+  assert.deepEqual(f.selected(), ['g:BB']);
+  assert.ok(f.detailReads.length > 0);
+  assert.ok(f.detailReads.every(id => id === 'g:BB'));
+});
