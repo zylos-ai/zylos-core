@@ -5,7 +5,9 @@ export class Node {
   get textContent() { return (this.text ?? '') + this.children.map(child => child.textContent).join(''); }
   set className(value) { this.classes = new Set(value.split(' ').filter(Boolean)); }
   get className() { return [...(this.classes ?? [])].join(' '); }
-  get classList() { return { add: (...values) => { this.classes ??= new Set(); values.forEach(v => this.classes.add(v)); }, contains: value => this.classes?.has(value) ?? false, toggle: (value, flag) => { this.classes ??= new Set(); const enabled = flag ?? !this.classes.has(value); if (enabled) this.classes.add(value); else this.classes.delete(value); } }; }
+  get classList() { return { add: (...values) => { this.classes ??= new Set(); values.forEach(v => this.classes.add(v)); }, contains: value => this.classes?.has(value) ?? false, remove: (...values) => values.forEach(v => this.classes?.delete(v)), toggle: (value, flag) => { this.classes ??= new Set(); const enabled = flag ?? !this.classes.has(value); if (enabled) this.classes.add(value); else this.classes.delete(value); } }; }
+  // Nothing is laid out here, so no node has a box on screen.
+  getClientRects() { return []; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.text = ''; this.children = children; }
   addEventListener(name, handler) { const list = this.listeners.get(name) ?? []; list.push(handler); this.listeners.set(name, list); }

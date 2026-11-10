@@ -15,7 +15,7 @@ const MEMORY_SHARE = 0.81;
 
 // The real page, stylesheets and modules, served the way the dashboard serves them, with fixed API answers
 // (fixtures/workbench-browser-api.js). Dashboard actions are recorded and answered as done; nothing runs.
-async function startPage(sandbox) {
+export async function startPage(sandbox) {
   const actions = [], unserved = new Set(), reads = new Map();
   const now = Date.now();
   const server = http.createServer((req, res) => {

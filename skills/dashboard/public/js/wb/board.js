@@ -133,7 +133,10 @@ export function renderDistribution(root, snapshot, { document = root.ownerDocume
     const count = counts[kind] ?? 0;
     if (!count) continue;
     const item = element(document, 'span', undefined, 'wb-dist-item wb-' + kind);
-    item.append(element(document, 'i', undefined, 'wb-dot'), element(document, 'span', level === 'technical' ? count : `${count} ${t('wb.state.' + kind)}`));
+    // The state word is always in the label's accessible text. The technical view shows only the number;
+    // the plain view drops the word visually when the row has to be compact (see label-fit.js).
+    item.append(element(document, 'i', undefined, 'wb-dot'), element(document, 'span', String(count), 'wb-dist-n'),
+      element(document, 'span', ' ' + t('wb.state.' + kind), level === 'technical' ? 'wb-dist-word wb-vh' : 'wb-dist-word'));
     item.title = `${t('wb.state.' + kind)} ${count}`;
     root.append(item);
   }

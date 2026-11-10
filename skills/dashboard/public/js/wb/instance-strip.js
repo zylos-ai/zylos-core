@@ -129,8 +129,10 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   poolItem.title = t('wb.inst.poolHint');
   root.append(poolItem);
   cost = costSummary?.today?.total ?? cost;
-  const expense = item(document, icon(document, 'dollar', 'xs'), element(document, 'span', technical ? t('wb.inst.costTech') + ' ' + t('wb.inst.today') : t('wb.cost')),
-    element(document, 'b', money(cost)));
+  const costLabel = technical ? t('wb.inst.costTech') + ' ' + t('wb.inst.today') : t('wb.cost');
+  const expense = item(document, icon(document, 'dollar', 'xs'), element(document, 'span', costLabel), element(document, 'b', money(cost)));
+  // The scope chip leaves the screen in the compact strip; the title keeps it, so the cost never reads as one group's.
+  expense.title = costLabel + ' · ' + t('wb.usage.allGroups');
   if (technical) {
     expense.append(element(document, 'span', '· ' + t('wb.usage.range.7d')), element(document, 'b', costSummary == null ? '—' : money(costSummary.sevenDay?.total)));
     const bars = element(document, 'span', undefined, 'wb-spark');

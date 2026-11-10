@@ -193,8 +193,13 @@ test('board header counts listed groups by state; plain view names each state', 
   renderDistribution(root, { rows: [row('a'), row('b'), row('c')], counts: { busy: 2, idle: 1, waiting: 0 } }, { document, t });
   assert.equal(root.children[0].textContent, 'wb.board.groups3');
   assert.deepEqual(root.children.slice(1).map(node => node.textContent), ['2 wb.state.busy', '1 wb.state.idle']);
+  // The state word is its own node: shown in the plain view unless the row is compact, never shown in the
+  // technical view, and always part of the label's text so screen readers read it.
+  const words = () => root.children.slice(1).map(node => node.children.find(child => child.classList.contains('wb-dist-word')));
+  assert.deepEqual(words().map(word => word.className), ['wb-dist-word', 'wb-dist-word']);
   renderDistribution(root, { rows: [row('a')], counts: { busy: 1 } }, { document, t, level: 'technical' });
-  assert.equal(root.children[1].textContent, '1'); assert.equal(root.children[1].title, 'wb.state.busy 1');
+  assert.equal(root.children[1].textContent, '1 wb.state.busy'); assert.equal(root.children[1].title, 'wb.state.busy 1');
+  assert.deepEqual(words().map(word => word.className), ['wb-dist-word wb-vh']);
 });
 test('attention shows an all-clear line, with sample age only in technical detail', () => {
   const document = createDocument(), root = document.createElement('div');

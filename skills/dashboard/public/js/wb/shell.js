@@ -7,6 +7,7 @@ import { createGroupDetail } from './detail.js?v=150';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
 import { createHostPanel } from './host-panel.js?v=106';
 import { element, icon } from './plain-text.js?v=106';
+import { watchRows } from './label-fit.js?v=1';
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
   endpoint = path => path, identity = () => endpoint('/api/workbench/groups'),
@@ -23,6 +24,8 @@ export function mountWorkbench({ document = globalThis.document, window = global
   let groupDetail = null, hostPanel = null, nameRequest = null;
   const nameButton = document.querySelector('#wb-auto-name');
   const nameDialog = document.querySelector('#wb-auto-name-dialog');
+  // State counts and the instance strip keep each label whole: compact first, then whole labels wrap.
+  const labels = watchRows([document.querySelector('#wb-dist'), document.querySelector('#wb-instance')], { document, window });
   let snapshot = null, searchRows = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
     range = '60m', activityGen = 0, cost = null, transition = null, owner = identity(), stopped = false;
   try {
@@ -107,6 +110,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     if (!snapshot) return;
     instanceStrip(document.querySelector('#wb-instance'), snapshot, { document, t, costSummary: cost, level,
       hostOpen: Boolean(hostPanel?.active), onHost: () => { if (hostPanel.active) hostPanel.close(); else { void hostPanel.open(); redraw(); } } });
+    labels.fit();
     const fresh = new Map(snapshot.rows.map(row => [row.sessionGroup, row]));
     const rows = searchRows?.map(row => fresh.get(row.sessionGroup) ?? row) ?? snapshot.rows;
     renderBoard(board, snapshot, {
@@ -329,6 +333,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     controller.stop();
     groupDetail.destroy();
     hostPanel.destroy();
+    labels.destroy();
     nameRequest?.abort();
     nameButton?.removeEventListener('click', autoName);
     clearInterval(modeTimer);
