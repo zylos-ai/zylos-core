@@ -91,21 +91,26 @@ export function createStore(database, dependencies = {}) {
     if (handoffGroup !== undefined) throw dataError('INVALID_ARGS', 'handoffGroup is reserved for Core void output');
     if (channel === 'system') return 'origin';
     const { namespace } = ensure(c, channel, persistNamespace);
-    if (wholeGroup) return namespace;
-    if (direction === 'in') return composeSessionGroup(namespace, groupName);
-    if (groupName !== undefined) {
-      try { const group = composeSessionGroup(namespace, groupName); if (exists(c, group)) return group; } catch (error) { if (!['SESSION_GROUP_INVALID','SESSION_GROUP_TOO_LONG'].includes(error.code)) throw error; }
-      return namespace;
+    if (direction === 'in') return wholeGroup ? namespace : composeSessionGroup(namespace, groupName);
+    let explicitGroup;
+    if (wholeGroup) explicitGroup = namespace;
+    else if (groupName !== undefined) {
+      explicitGroup = namespace;
+      try { const group = composeSessionGroup(namespace, groupName); if (exists(c, group)) explicitGroup = group; } catch (error) { if (!['SESSION_GROUP_INVALID','SESSION_GROUP_TOO_LONG'].includes(error.code)) throw error; }
     }
-    return get(c, "SELECT session_group FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group<>'' ORDER BY id DESC LIMIT 1", channel, endpointId)?.session_group ?? namespace;
+    const latest = get(c, "SELECT session_group FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group<>'' ORDER BY id DESC LIMIT 1", channel, endpointId)?.session_group;
+    // An explicit route may select a topic that received this endpoint, but
+    // cannot claim another session's recipient merely by naming its own group.
+    if (latest && explicitGroup && get(c, "SELECT 1 FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group=? LIMIT 1", channel, endpointId, explicitGroup)) return explicitGroup;
+    return latest ?? explicitGroup ?? namespace;
   }
   function checkOutboundSession(c, channel, endpointId, options, senderGroup) {
     if (!senderGroup) return;
     const group = resolve(c, 'out', channel, endpointId, options, false);
     // A namespace fallback alone does not assign a new recipient to a session.
-    const hasInbound = !!get(c, "SELECT 1 FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' LIMIT 1", channel, endpointId);
+    const hasInbound = !!get(c, "SELECT 1 FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group<>'' LIMIT 1", channel, endpointId);
     const owner = channel === 'system' || group.includes(':') || hasInbound ? group : null;
-    assertOutboundSession(senderGroup, owner);
+    assertOutboundSession(senderGroup, owner, channel, endpointId);
   }
   function insert(c, direction, channel, endpointId, content, group, options = {}) {
     const result = run(c, `INSERT INTO conversations(direction,channel,endpoint_id,content,status,delivery_action,priority,require_idle,session_group,session_id)

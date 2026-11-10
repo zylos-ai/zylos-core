@@ -15,7 +15,8 @@ async function run(t, mode) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'send-'));
   const home = path.join(root, 'h'), zylos = path.join(home, 'z'), tmp = path.join(root, 't');
   const env = { ...process.env, HOME: home, ZYLOS_DIR: zylos, PM2_HOME: path.join(home, 'p'),
-    TMPDIR: tmp, TMUX_TMPDIR: tmp, ALERT_TRANSPORT_MODE: mode, ALERT_TRANSPORT_RECORDS: path.join(root, 'sends.jsonl') };
+    TMPDIR: tmp, TMUX_TMPDIR: tmp, ALERT_TRANSPORT_MODE: mode, ALERT_TRANSPORT_RECORDS: path.join(root, 'sends.jsonl'),
+    ZYLOS_RUN_ID: 'stale-system-run', ZYLOS_SESSION_GROUP: 'telegram:unrelated' };
   for (const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','TMUX_TMPDIR']) {
     fs.mkdirSync(env[key], { recursive: true });
     assert.ok(env[key].startsWith(root + '/'));
@@ -65,7 +66,11 @@ async function run(t, mode) {
   assert.ok(result.at - stoppedAt < 1500, `Natural process exit took ${result.at - stoppedAt}ms after stop`);
   const records = fs.readFileSync(env.ALERT_TRANSPORT_RECORDS, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.ok(records.length >= 1 && records.length <= 2);
-  for (const record of records) assert.equal(record.message, expected, 'Factory stdin reached real c4-send and the recording channel unchanged');
+  for (const record of records) {
+    assert.equal(record.message, expected, 'Factory stdin reached real c4-send and the recording channel unchanged');
+    assert.equal(record.runId, undefined);
+    assert.equal(record.sessionGroup, undefined);
+  }
   assert.deepEqual(records.map(record => [record.channel, record.endpoint]),
     ['configured','destination_hangs'].includes(mode) ? [['telegram','fixture-owner']] : [['telegram','fixture-owner'],['web-console','console']]);
   t.diagnostic(JSON.stringify({ mode, processExitAfterStopMs: result.at - stoppedAt, deliveries: records.length }));
