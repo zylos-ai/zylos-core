@@ -131,6 +131,14 @@ test('an API key saved next to a setup token wins (Claude Code precedence): the 
   assert.deepEqual(state(), ON);
 });
 
+test('a Bearer token saved in .env keeps the setting on with the official base URL', () => {
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: { KEEP: 'unchanged' } }));
+  fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_AUTH_TOKEN=${apiKey()}\n`);
+  delete process.env[flag];
+  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.deepEqual(state(), ON);
+});
+
 test('an API key kept only in settings.json env still counts (Claude Code reads it there)', () => {
   fs.writeFileSync(settingsFile, JSON.stringify({ env: { KEEP: 'unchanged', ANTHROPIC_API_KEY: apiKey() } }));
   fs.writeFileSync(envFile, 'KEEP=unchanged\n');

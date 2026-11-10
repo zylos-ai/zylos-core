@@ -38,7 +38,7 @@ import {
   getProcessName,
   hasChildProcess,
 } from './tmux-helpers.js';
-import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
+import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, parseZylosDotenv, writeLaunchSpec } from './tmux-env.js';
 import { classifyCodexLoginStatus } from '../auth-parsers.js';
 import { ensureCodexHooksTrusted } from '../codex-hooks.js';
 import { resumeUpgradeForStartup, shellArgument } from './upgrade-context.js';
@@ -406,18 +406,8 @@ function _buildSessionEnv() {
 }
 
 function _readDotenvVars() {
-  const vars = {};
   try {
-    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx < 1) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      const val = trimmed.slice(eqIdx + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
-      vars[key] = val;
-    }
+    return parseZylosDotenv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8'));
   } catch { /* .env absent */ }
-  return vars;
+  return {};
 }

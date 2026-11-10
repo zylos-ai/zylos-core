@@ -17,10 +17,6 @@ const EMPTY_MANIFEST = Object.freeze({
 });
 
 /**
- * Parse runtime-env.manifest content into structured directives.
- * Line-based format: env NAME, inherit NAME, path_prepend PATH, path_append PATH.
- */
-/**
  * Parse ~/zylos/.env the way a new runtime session reads it: KEY=VALUE lines,
  * surrounding quotes removed, later lines win, comments and other lines skipped.
  * The relay traffic setting is computed from the same parse.
@@ -41,6 +37,10 @@ export function parseZylosDotenv(content) {
   return vars;
 }
 
+/**
+ * Parse runtime-env.manifest content into structured directives.
+ * Line-based format: env NAME, inherit NAME, path_prepend PATH, path_append PATH.
+ */
 export function parseRuntimeEnvManifest(content, warnings = []) {
   const result = { envNames: [], inheritNames: [], pathPrepend: [], pathAppend: [] };
   if (!content) return result;
