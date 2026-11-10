@@ -1,4 +1,4 @@
-import { previewMessageText, projectC4Content } from './c4-content-projection.js';
+import { previewMessage, projectC4Content } from './c4-content-projection.js';
 import { writeSync } from 'node:fs';
 import { composeSessionGroup, parseSessionGroup, requireGroup, validNamespace, dataError, isDataError } from './c4-session-group.js';
 import { configFunctions } from './c4-store-config.js';
@@ -158,7 +158,11 @@ export function createStore(database, dependencies = {}) {
         if (match !== undefined && !head.session_group.toLowerCase().includes(match.toLowerCase()) && !(text ?? '').toLowerCase().includes(match.toLowerCase())) return null;
         const parsed = parseSessionGroup(head.session_group);
         const componentName = parsed && parsed.namespace !== 'origin' ? get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', parsed.namespace)?.component_name ?? null : null;
-        return { sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text, message: previewMessageText(preview.content) } : null };
+        return { sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? previewOf(preview, text) : null };
+      }
+      function previewOf(preview, text) {
+        const { text: message, source } = previewMessage(preview.content);
+        return { timestamp: millis(preview.timestamp), channel: preview.channel, endpoint: preview.endpoint_id, text, message, ...(source ? { messageSource: source } : {}) };
       }
       const headsSql = 'SELECT h.session_group,c.timestamp FROM group_heads h JOIN conversations c ON c.id=h.head_id ORDER BY h.head_id DESC';
       if (activeSince !== undefined) {

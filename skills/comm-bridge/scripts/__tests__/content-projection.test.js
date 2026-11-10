@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CONTENT_PREFIX, parseC4Content } from '../c4-content-schema.js';
-import { previewMessageText, projectC4Content } from '../c4-content-projection.js';
+import { previewMessage, previewMessageText, projectC4Content } from '../c4-content-projection.js';
 
 const fixtures = JSON.parse(fs.readFileSync(new URL('../../../../test/fixtures/c4-content-protocol.json', import.meta.url), 'utf8'));
 const encode = envelope => CONTENT_PREFIX + JSON.stringify(envelope);
@@ -187,13 +187,13 @@ test('a preview shows what the person said inside the channel wrapping, without 
   assert.equal(previewMessageText(wrapped), '这个卡片在手机上 看布局太乱了');
   assert.equal(previewMessageText('[Lark DM]\n<current-message>\ne1fg313c said: ok, 0.167.0\n</current-message>\n'), 'ok, 0.167.0');
   // Only a block on its own lines counts: a message quoting the tag inline is ordinary text.
-  assert.equal(previewMessageText('[Task] look at `<current-message>` handling'), '[Task] look at `<current-message>` handling');
+  assert.deepEqual(previewMessage('[Task] look at `<current-message>` handling'), { text: 'look at `<current-message>` handling', source: { kind: 'header' } });
 });
 
 test('a preview is null for channel wrapping without a current message, and plain text passes through', () => {
   assert.equal(previewMessageText('[OM-RUN r_1] [OPENMAX DM] (org: Enjoy)\n<org-context org-id="x"/>\n'), null);
   assert.equal(previewMessageText('[Lark DM]\nsomething internal'), null);
-  assert.equal(previewMessageText('[urgent] fix the build'), '[urgent] fix the build');
+  assert.deepEqual(previewMessage('  hello\n\nthere '), { text: 'hello there' });
   assert.equal(previewMessageText('  hello\n\nthere '), 'hello there');
   assert.equal(previewMessageText(''), null);
   assert.equal(previewMessageText(null), null);
@@ -264,4 +264,41 @@ test('a long preview keeps a word that ends exactly at the cut, and cuts a very 
   assert.equal(previewMessageText('a ' + 'x'.repeat(40), { limit: 30 }), 'a ' + 'x'.repeat(27) + '…');
   // Within 20 characters: end at the space.
   assert.equal(previewMessageText('a '.repeat(3) + 'x'.repeat(40), { limit: 20 }), 'a a a…');
+});
+
+test('a scheduled task previews as the first line of its prompt and names the task for the reader', () => {
+  const done = '\n\n---- After completing this task, run: node ~/zylos/.claude/skills/scheduler/scripts/cli.js done task-mw97s7nt-dctom6';
+  const current = '[Scheduled Task: task-mw97s7nt-dctom6 #12]\nwatch-dispatched-cards: check task-ab12cd34 and 01a1c33d-7d4e-7a1b-9c2d-0123456789ab\nsecond line' + done;
+  assert.deepEqual(previewMessage(current), { text: 'watch-dispatched-cards: check and', source: { kind: 'scheduled_task', taskId: 'task-mw97s7nt-dctom6' } });
+  const older = '[Scheduled Task: task-mw97s7nt-dctom6] watch-dispatched-cards：看一下新卡' + done;
+  assert.deepEqual(previewMessage(older), { text: 'watch-dispatched-cards：看一下新卡', source: { kind: 'scheduled_task', taskId: 'task-mw97s7nt-dctom6' } });
+  assert.equal(previewMessageText(older), 'watch-dispatched-cards：看一下新卡');
+  // Only the scheduler's completion instruction and the task id are left: nothing to read, no source.
+  assert.deepEqual(previewMessage('[Scheduled Task: task-mw97s7nt-dctom6 #3]' + done), { text: null });
+  const long = previewMessage('[Scheduled Task: task-x1]\n' + '定'.repeat(100));
+  assert.equal(long.text, '定'.repeat(79) + '…');
+  assert.equal(long.source.taskId, 'task-x1');
+});
+
+test('a message with a header core does not know previews its first line without the tags or long ids', () => {
+  const followUp = '[Multica follow-up] Review round 2 for 01a1c33d-7d4e-7a1b-9c2d-0123456789ab is ready\n'
+    + 'Requested by: Another agent (Jinglever) · Task ID: 01a1c33d-7d4e-7a1b-9c2d-0123456789ab\nmore detail';
+  assert.deepEqual(previewMessage(followUp), { text: 'Review round 2 for is ready', source: { kind: 'header' } });
+  assert.deepEqual(previewMessage('[Deploy] [prod] (eu) rolled out build 9f86d081884c7d659a2feaa0c55ad015\nlog follows'), { text: 'rolled out build', source: { kind: 'header' } });
+  // The tags and ids alone are nothing to read.
+  assert.deepEqual(previewMessage('[Watcher] 01a1c33d-7d4e-7a1b-9c2d-0123456789ab'), { text: null });
+});
+
+test('channel messages and envelopes keep their previews and carry no source', () => {
+  const telegram = '[TG GROUP] (team) howard said: <current-message>\n[urgent] build 01a1c33d-7d4e-7a1b-9c2d-0123456789ab is red\n</current-message>\n---- reply via: node x.js "telegram" "-1"';
+  assert.deepEqual(previewMessage(telegram), { text: '[urgent] build 01a1c33d-7d4e-7a1b-9c2d-0123456789ab is red' });
+  assert.deepEqual(previewMessage('[Lark DM]\n<current-message>\ne1fg313c said: [Scheduled Task: task-ab12cd34] is late\n</current-message>\n'), { text: '[Scheduled Task: task-ab12cd34] is late' });
+  assert.deepEqual(previewMessage('[TG DM] howard said: build is green'), { text: 'build is green' });
+  assert.deepEqual(previewMessage('[OM-RUN r_1] [OPENMAX DM] (org: Enjoy)\n<org-context org-id="x"/>\n<current-message>\nhoward said: 看看\n</current-message>\n'), { text: '看看' });
+  // A component's own summary wins, even when it starts with tags or names a task.
+  for (const summary of ['[Multica] Review ready for task-ab12cd34', '[Scheduled Task: task-ab12cd34] summary']) {
+    const envelope = encode({ version: 1, kind: 'message', messageId: 'm1', fallbackText: summary, blocks: [{ id: 'b1', type: 'markdown', schemaVersion: 1, data: { text: 'x' } }] });
+    assert.equal(parseC4Content(envelope).kind, 'envelope');
+    assert.deepEqual(previewMessage(envelope), { text: summary });
+  }
 });

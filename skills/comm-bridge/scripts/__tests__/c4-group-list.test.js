@@ -75,9 +75,23 @@ test('default and legacy matching output keep the previous reader\'s fields byte
   for (const options of [{}, { limit: 2 }, { match: 'preview' }, { match: 'LARK:OC_', limit: 1 }, { match: 'missing' }]) {
     const rows = store.queries.listGroups(options);
     for (const row of rows) if (row.preview) assert.ok(Object.hasOwn(row.preview, 'message'), 'every preview carries the reader message');
-    const withoutMessage = rows.map(row => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => key !== 'message')) } : row);
+    const withoutMessage = rows.map(row => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => key !== 'message' && key !== 'messageSource')) } : row);
     assert.equal(JSON.stringify(withoutMessage), JSON.stringify(legacyListGroups(options)));
   }
+});
+
+test('a group preview names where a message came from when it is not a person\'s own words', t => {
+  const { seed, store } = fixture(t);
+  seed('scheduler:main', '2026-02-01 00:00:00', '[Scheduled Task: task-ab12cd34 #2]\nnightly digest\n\n---- After completing this task, run: node cli.js done task-ab12cd34');
+  seed('lark:oc_tags', '2026-02-01 00:01:00', '[Release bot] build 01a1c33d-7d4e-7a1b-9c2d-0123456789ab shipped');
+  const rows = Object.fromEntries(store.queries.listGroups({ limit: 4 }).map(row => [row.sessionGroup, row.preview]));
+  assert.equal(rows['scheduler:main'].message, 'nightly digest');
+  assert.deepEqual(rows['scheduler:main'].messageSource, { kind: 'scheduled_task', taskId: 'task-ab12cd34' });
+  assert.equal(rows['lark:oc_tags'].message, 'build shipped');
+  assert.deepEqual(rows['lark:oc_tags'].messageSource, { kind: 'header' });
+  assert.equal(Object.hasOwn(rows['origin'], 'messageSource'), false);
+  assert.equal(rows['lark:recent2'].message, '🙂'.repeat(79) + '…');
+  assert.equal(Object.hasOwn(rows['lark:recent2'], 'messageSource'), false);
 });
 
 test('store rejects invalid and conflicting filters before reading', t => {

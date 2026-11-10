@@ -35,33 +35,65 @@ const HEADER_SENDER = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?[^\n:[\
 const REPLY_ROUTE = /\s*---- (?:\[reply-via sanitized\]|reply via):[\s\S]*$/;
 // A message too long for the queue is stored as a pointer to a file; its preview would only show tags and paths.
 const OVERFLOW_POINTER = '[C4] Full message';
+// Core's scheduler opens each dispatched task with "[Scheduled Task: <task id> #<run>]" on its own line (older
+// runs: "[Scheduled Task: <task id>] <words>" on one line) and appends its completion instruction.
+const SCHEDULED_TASK = /^\[Scheduled Task: ([A-Za-z0-9_-]{1,80})(?: #\d+)?\][ \t]*/;
+const SCHEDULER_DONE = /\s*---- After completing this task, run:[\s\S]*$/;
+// Any other source's own header: bracketed tags at the very start of the message, optionally "(…)" after them.
+const LEADING_TAGS = /^(?:\[[^\]\n]{1,80}\]\s*)+(?:\([^)\n]{0,80}\)\s*)?/;
+// Identifiers a reader cannot use: UUIDs, "task-…" ids with a digit, and runs of 16 or more hex digits.
+const LONG_ID = /\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|task-(?=[a-z0-9-]*[0-9])[a-z0-9]+(?:-[a-z0-9]+)*|[0-9a-f]{16,})\b/gi;
+
+const firstLine = text => text.split('\n').map(line => line.trim()).find(Boolean) ?? '';
+const withoutIds = text => text.replace(LONG_ID, ' ');
 
 /**
- * What the person said in an inbound message, for a one-line preview, never the model-facing projection:
- * the <current-message> body without its sender prefix; the words after an old one-line "header sender said:";
- * a C4 envelope's fallback text; invalid content's own fallback text. The appended reply route is dropped.
- * Null when there is nothing a person wrote (channel wrapping only, invalid content without fallback text, an
- * overflow pointer to a stored file), so a reader shows channel and time.
- * Whitespace is collapsed; longer text is cut to `limit` code points ending in "…".
+ * What an inbound message says, for a one-line preview, never the model-facing projection.
+ * `text`: the <current-message> body without its sender prefix; the words after an old one-line
+ * "header sender said:"; a C4 envelope's fallback text; invalid content's own fallback text. A message from core's
+ * scheduler gives the first line of its prompt; one that starts with another source's bracketed header gives its
+ * first line without those tags. Neither keeps long identifiers. The appended reply route is dropped. `text` is null
+ * when there is nothing to read (wrapping only, invalid content without fallback text, an overflow pointer to a
+ * stored file), so a reader shows channel and time. Whitespace is collapsed; longer text is cut to `limit` code
+ * points ending in "…".
+ * `source` says where text that is not a person's own words came from: `{kind: 'scheduled_task', taskId}` or
+ * `{kind: 'header'}` (a header core does not know; a reader names the channel). It is absent otherwise.
  */
-export function previewMessageText(content, { limit = 80 } = {}) {
-  if (typeof content !== 'string') return null;
+export function previewMessage(content, { limit = 80 } = {}) {
+  if (typeof content !== 'string') return { text: null };
   const parsed = parseC4Content(content);
-  let text;
+  let text, source;
   if (parsed.kind === 'envelope') text = parsed.envelope.fallbackText;
   else if (parsed.kind !== 'text') text = parsed.fallbackText;
   else {
-    if (parsed.text.includes(OVERFLOW_POINTER)) return null;
+    if (parsed.text.includes(OVERFLOW_POINTER)) return { text: null };
     // The block comes first: what the person wrote may itself quote a reply route, which then stays.
     const block = CURRENT_MESSAGE.exec(parsed.text);
+    const task = block ? null : SCHEDULED_TASK.exec(parsed.text);
     if (block) text = block[1].replace(SENDER, '');
-    else {
+    else if (task) {
+      source = { kind: 'scheduled_task', taskId: task[1] };
+      text = withoutIds(firstLine(parsed.text.slice(task[0].length).replace(SCHEDULER_DONE, '').replace(REPLY_ROUTE, '')));
+    } else {
       const body = parsed.text.replace(REPLY_ROUTE, '');
       if (HEADER_SENDER.test(body)) text = body.replace(HEADER_SENDER, '');
-      else if (CHANNEL_HEADER.test(body.split('\n', 1)[0].trim())) return null;
-      else text = body;
+      else if (CHANNEL_HEADER.test(body.split('\n', 1)[0].trim())) return { text: null };
+      else if (LEADING_TAGS.test(body)) {
+        source = { kind: 'header' };
+        text = withoutIds(firstLine(body.replace(LEADING_TAGS, '')));
+      } else text = body;
     }
   }
+  const result = source ? { text: cutPreview(text, limit), source } : { text: cutPreview(text, limit) };
+  return result.text === null ? { text: null } : result;
+}
+
+/** The text of {@link previewMessage}. */
+export function previewMessageText(content, options) {
+  return previewMessage(content, options).text;
+}
+
+function cutPreview(text, limit) {
   if (typeof text !== 'string') return null;
   text = text.replace(/\s+/g, ' ').trim();
   if (!text) return null;
