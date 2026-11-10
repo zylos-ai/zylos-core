@@ -59,7 +59,7 @@ import {
   saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
-  clearClaudeRelayTrafficFlag,
+  syncClaudeRelayTraffic,
   saveCodexBaseUrl,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
@@ -1868,19 +1868,19 @@ export async function authenticateCodexApiCredential(apiKey, {
 /** Persist post-template auth values; a partial write must stop init before services start. */
 export function persistInitCredentials({ apiKey, authToken, setupToken, subscriptionLogin = false, claudeBaseUrl, codexBaseUrl }, {
   saveKeyEnv = saveApiKeyToEnv, saveTokenEnv = saveAuthTokenToEnv, saveSetupEnv = saveSetupTokenToEnv,
-  clearRelayTraffic = clearClaudeRelayTrafficFlag,
+  syncRelayTraffic = syncClaudeRelayTraffic,
   saveClaudeBase = saveClaudeBaseUrlToSettingsAndEnv, saveCodexBase = saveCodexBaseUrlToEnv,
   saveCodexConfig = writeCodexConfig, reportError = console.error,
 } = {}) {
   try {
-    // Subscription or setup-token login drops the relay traffic setting; a relay
-    // base URL configured in the same run turns it back on when it is saved next.
-    const leftRelay = !!(setupToken || subscriptionLogin);
     for (const [value, save] of [[authToken, saveTokenEnv], [apiKey, saveKeyEnv], [setupToken, saveSetupEnv],
-      [leftRelay, () => clearRelayTraffic()], [claudeBaseUrl, saveClaudeBase], [codexBaseUrl, saveCodexBase]]) {
+      [claudeBaseUrl, saveClaudeBase], [codexBaseUrl, saveCodexBase]]) {
       if (value && save(value) !== true) throw new Error('credential persistence failed');
     }
     if (codexBaseUrl && saveCodexConfig(ZYLOS_DIR, { openaiBaseUrl: codexBaseUrl }) !== true) throw new Error('credential persistence failed');
+    // Recompute the relay traffic setting from the resulting Claude state.
+    const credential = authToken ? 'authToken' : apiKey ? 'apiKey' : setupToken ? 'setupToken' : subscriptionLogin ? 'subscription' : undefined;
+    if ((credential || claudeBaseUrl) && syncRelayTraffic({ credential }) !== true) throw new Error('credential persistence failed');
     return true;
   } catch {
     reportError(`  ${error('Failed to persist runtime credentials or API endpoint. Initialization stopped before starting services; repair credential storage and retry.')}`);

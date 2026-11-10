@@ -484,17 +484,18 @@ test('unexpected authentication dependency errors propagate instead of becoming 
 });
 
 const relayFlag = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
-// Seed a relay install with the setting on in .env, settings.json and process.env.
-function seedRelayFlag(t, home) {
+// Seed an install with the setting on in .env, settings.json and process.env,
+// with the given saved Claude base URL (none when omitted) and optional extra .env lines.
+function seedRelayFlag(t, home, baseUrl, extraEnv = '') {
   const envFile = path.join(ZYLOS_DIR, '.env'), settingsFile = path.join(home, '.claude', 'settings.json');
   const previous = fs.existsSync(envFile) ? fs.readFileSync(envFile) : null, previousFlag = process.env[relayFlag];
   t.after(() => {
     if (previous) fs.writeFileSync(envFile, previous); else fs.rmSync(envFile, { force: true });
     if (previousFlag === undefined) delete process.env[relayFlag]; else process.env[relayFlag] = previousFlag;
   });
-  fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_BASE_URL=https://relay.example\n${relayFlag}=1\n`);
+  fs.writeFileSync(envFile, `KEEP=unchanged\n${baseUrl ? `ANTHROPIC_BASE_URL=${baseUrl}\n` : ''}${relayFlag}=1\n${extraEnv}`);
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  fs.writeFileSync(settingsFile, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://relay.example', [relayFlag]: '1' } }));
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: { ...(baseUrl ? { ANTHROPIC_BASE_URL: baseUrl } : {}), [relayFlag]: '1' } }));
   process.env[relayFlag] = '1';
   return () => ({
     env: fs.readFileSync(envFile, 'utf8').includes(relayFlag),
@@ -502,24 +503,43 @@ function seedRelayFlag(t, home) {
     process: process.env[relayFlag],
   });
 }
-
-test('init subscription login removes the relay traffic setting when no relay is configured', async t => {
-  const state = seedRelayFlag(t, isolatedCredentials(t)); let statusCalls = 0, logins = 0;
+const ON = { env: true, settings: '1', process: '1' }, OFF = { env: false, settings: undefined, process: undefined };
+async function subscriptionLogin() {
+  let statusCalls = 0, logins = 0;
   const result = await runInitAuthentication(parseInitFlags([]), { runtime: 'claude', quiet: true, exists: () => true,
     claudeStatus: () => statusCalls++ > 0, choose: async () => 1, nativeLogin: () => { logins += 1; }, log: () => {},
   });
   assert.equal(logins, 1); assert.equal(result.claudeAuthenticated, true); assert.equal(result.subscriptionLogin, true);
-  assert.equal(persistInitCredentials({ setupToken: result.pendingSetupToken, subscriptionLogin: result.subscriptionLogin,
-    claudeBaseUrl: result.pendingClaudeBaseUrl }), true);
-  assert.deepEqual(state(), { env: false, settings: undefined, process: undefined });
+  return result;
+}
+
+for (const [where, baseUrl, expected] of [['without a base URL', undefined, OFF], ['on the official API', 'https://api.anthropic.com', OFF], ['behind a saved relay', 'https://relay.example', ON]]) {
+  test(`init subscription login ${where} leaves the relay traffic setting ${expected === ON ? 'on' : 'off'}, even with a leftover API key`, async t => {
+    const state = seedRelayFlag(t, isolatedCredentials(t), baseUrl, `ANTHROPIC_API_KEY=sk-ant-api03-${crypto.randomUUID()}\n`);
+    const result = await subscriptionLogin();
+    assert.equal(persistInitCredentials({ setupToken: result.pendingSetupToken, subscriptionLogin: result.subscriptionLogin,
+      claudeBaseUrl: result.pendingClaudeBaseUrl }), true);
+    assert.deepEqual(state(), expected);
+  });
+}
+
+test('init setup token and API key on the official API: setup token off, API key on, relay in the same run on', t => {
+  const state = seedRelayFlag(t, isolatedCredentials(t), 'https://api.anthropic.com');
+  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }), true);
+  assert.deepEqual(state(), OFF, 'setup token + official');
+  assert.equal(persistInitCredentials({ apiKey: 'sk-ant-api03-' + crypto.randomUUID() }), true);
+  assert.deepEqual(state(), ON, 'API key + official');
+  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }), true);
+  assert.deepEqual(state(), OFF, 'back to setup token');
+  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://relay.example' }), true);
+  assert.deepEqual(state(), ON, 'setup token + relay in the same run');
 });
 
-test('init setup-token login removes the relay traffic setting; a relay base URL in the same run keeps it on', t => {
-  const state = seedRelayFlag(t, isolatedCredentials(t));
-  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }), true);
-  assert.deepEqual(state(), { env: false, settings: undefined, process: undefined });
-  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://relay.example' }), true);
-  assert.deepEqual(state(), { env: true, settings: '1', process: '1' });
+test('init relay-traffic recompute failure stops initialization', () => {
+  const output = [];
+  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }, {
+    saveSetupEnv: () => true, syncRelayTraffic: () => false, reportError: message => output.push(message) }), false);
+  assert.match(output.join(''), /Initialization stopped before starting services/);
 });
 
 test('Claude authentication menu uses the baseline API-key label when no address was selected', async t => {

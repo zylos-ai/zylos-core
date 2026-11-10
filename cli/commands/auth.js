@@ -2,6 +2,7 @@ import { spawn as spawnChild } from 'node:child_process';
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { notifyAuthCompleted } from '../lib/am-sock-client.js';
+import { syncClaudeRelayTraffic } from '../lib/runtime-setup.js';
 
 export function runNativeAuth(runtime, args) {
   return new Promise(resolve => {
@@ -19,7 +20,7 @@ export function runNativeAuth(runtime, args) {
 }
 
 export async function executeAuth(args, { exists = commandExists, adapter = getSessionAdapter, spawn = runNativeAuth,
-  notifyRecovery = notifyAuthCompleted } = {}) {
+  notifyRecovery = notifyAuthCompleted, syncRelayTraffic = syncClaudeRelayTraffic } = {}) {
   const runtime = args[0];
   const deviceCode = args.includes('--device-code');
   const invalid = args.slice(1).some(arg => !['--json', '--device-code'].includes(arg)) ||
@@ -37,6 +38,11 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
     catch { checked = { status: 'uncertain' }; }
     if (checked.status !== 'success') return { ok: false, error: { code: checked.status === 'failure' ? 'AUTH_FAILED' : 'AUTH_NOT_CONFIRMED',
       message: 'Authentication was not confirmed', persisted: null, configChanged: false } };
+    // Subscription login: recompute the relay traffic setting before the session restarts.
+    if (runtime === 'claude' && !syncRelayTraffic({ credential: 'subscription' })) {
+      return { ok: false, error: { code: 'CREDENTIAL_SAVE_FAILED',
+        message: 'Authenticated, but CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC could not be updated', persisted: null, configChanged: false } };
+    }
     let recoveryNotified = false;
     try { recoveryNotified = await notifyRecovery(runtime) === true; } catch {}
     return { ok: true, data: { runtime, authStatus: 'success', recoveryNotified } };

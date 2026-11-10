@@ -321,7 +321,7 @@ export function saveSetupTokenToEnv(token) {
 export function saveClaudeBaseUrl(baseUrl) {
   try {
     process.env.ANTHROPIC_BASE_URL = baseUrl;
-    if (isClaudeRelayBaseUrl(baseUrl)) process.env[CLAUDE_RELAY_TRAFFIC_FLAG] = '1';
+    if (computeRelayTraffic({ baseUrl, credential: claudeCredentialIn(process.env) })) process.env[CLAUDE_RELAY_TRAFFIC_FLAG] = '1';
     else delete process.env[CLAUDE_RELAY_TRAFFIC_FLAG];
     return true;
   } catch {
@@ -364,7 +364,7 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
     content = upsertEnvValue(content, 'ANTHROPIC_BASE_URL', baseUrl, 'Anthropic base URL for Claude Code (set by zylos init)');
     writeEnvFile(envPath, content);
     process.env.ANTHROPIC_BASE_URL = baseUrl;
-    return syncClaudeRelayTrafficFlag(baseUrl);
+    return true;
   } catch {
     return false;
   }
@@ -372,10 +372,47 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
 
 // ── Relay traffic setting ───────────────────────────────────────────────────
 // Claude Code runs with CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 behind a relay
-// (non-official ANTHROPIC_BASE_URL) and without it otherwise. It is a setting,
-// not a credential: keep it out of CLAUDE_CREDENTIAL_KEYS.
+// (non-official ANTHROPIC_BASE_URL) or with an Anthropic API credential. It is
+// absent only for subscription login, a setup token or no credential on the
+// official API. It is a setting, not a credential: keep it out of CLAUDE_CREDENTIAL_KEYS.
 export const CLAUDE_RELAY_TRAFFIC_FLAG = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
-const CLAUDE_RELAY_TRAFFIC_COMMENT = 'Required with a relay ANTHROPIC_BASE_URL (set by zylos)';
+const CLAUDE_RELAY_TRAFFIC_COMMENT = 'Required with a relay ANTHROPIC_BASE_URL or an Anthropic API key (set by zylos)';
+const CREDENTIALS_WITHOUT_RELAY_TRAFFIC = new Set(['subscription', 'setupToken', 'none']);
+
+/**
+ * The pairing rule.
+ * @param {{ baseUrl?: string, credential?: 'apiKey'|'authToken'|'setupToken'|'subscription'|'none' }} state
+ * @returns {boolean} true when the setting must be on
+ */
+export function computeRelayTraffic({ baseUrl, credential = 'none' } = {}) {
+  return isClaudeRelayBaseUrl(baseUrl) || !CREDENTIALS_WITHOUT_RELAY_TRAFFIC.has(credential);
+}
+
+/** The Claude credential a set of variables selects, in Claude Code's precedence order. */
+export function claudeCredentialIn(values) {
+  if (values.ANTHROPIC_AUTH_TOKEN) return 'authToken';
+  if (values.ANTHROPIC_API_KEY) return 'apiKey';
+  if (values.CLAUDE_CODE_OAUTH_TOKEN) return 'setupToken';
+  return 'none';
+}
+
+/** Saved Claude base URL and credential: .env first, then settings.json env. */
+function savedClaudeState() {
+  let dotenv = {}, settingsEnv = {};
+  try { dotenv = parseDotEnv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'))); } catch {}
+  try { settingsEnv = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'))?.env || {}; } catch {}
+  const values = {};
+  for (const key of [...CLAUDE_CREDENTIAL_KEYS, 'ANTHROPIC_BASE_URL']) values[key] = dotenv[key] || settingsEnv[key] || '';
+  let credential = claudeCredentialIn(values);
+  // A claude.ai login file wins over an API key or setup token, as at session launch.
+  if (credential === 'apiKey' || credential === 'setupToken') {
+    try {
+      const login = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', '.credentials.json'), 'utf8'));
+      if (login?.claudeAiOauth?.refreshToken) credential = 'subscription';
+    } catch {}
+  }
+  return { baseUrl: values.ANTHROPIC_BASE_URL, credential };
+}
 
 /** True when a Claude base URL points anywhere other than the official API. */
 export function isClaudeRelayBaseUrl(baseUrl) {
@@ -420,14 +457,16 @@ function setClaudeRelayTrafficFlag(on) {
   }
 }
 
-/** Pair the relay setting with the Claude base URL being configured. */
-export function syncClaudeRelayTrafficFlag(baseUrl) {
-  return setClaudeRelayTrafficFlag(isClaudeRelayBaseUrl(baseUrl));
-}
-
-/** Subscription or setup-token login does not use a relay: remove the setting. */
-export function clearClaudeRelayTrafficFlag() {
-  return setClaudeRelayTrafficFlag(false);
+/**
+ * Recompute the setting from the saved Claude state. Call once after every
+ * save of a Claude credential, base URL or login. `credential` names the
+ * credential the caller just established (e.g. 'subscription' after a
+ * subscription login); otherwise it is read from the saved state.
+ * @returns {boolean}
+ */
+export function syncClaudeRelayTraffic({ credential } = {}) {
+  const saved = savedClaudeState();
+  return setClaudeRelayTrafficFlag(computeRelayTraffic({ baseUrl: saved.baseUrl, credential: credential ?? saved.credential }));
 }
 
 // ── Codex credential helpers ───────────────────────────────────────────────

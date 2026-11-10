@@ -5,7 +5,29 @@ import { executeAuth, authCommand } from '../../commands/auth.js';
 const authenticated = {
   exists: () => true, spawn: () => ({ status: 0 }),
   adapter: () => ({ checkAuth: () => ({ status: 'success' }) }),
+  syncRelayTraffic: () => true,
 };
+
+test('confirmed Claude subscription login recomputes the relay traffic setting before notifying', async () => {
+  for (const runtime of ['claude', 'codex']) {
+    const order = [];
+    const result = await executeAuth([runtime], { ...authenticated,
+      syncRelayTraffic: state => { order.push(['sync', state]); return true; },
+      notifyRecovery: () => { order.push(['notify']); return true; } });
+    assert.equal(result.ok, true);
+    assert.deepEqual(order, runtime === 'claude' ? [['sync', { credential: 'subscription' }], ['notify']] : [['notify']]);
+  }
+  for (const native of [{ status: 1 }, { signal: 'SIGINT' }]) {
+    let synced = 0;
+    await executeAuth(['claude'], { ...authenticated, spawn: () => native, syncRelayTraffic: () => { synced++; return true; } });
+    assert.equal(synced, 0, 'no recompute without a confirmed login');
+  }
+  let notified = 0;
+  const failed = await executeAuth(['claude'], { ...authenticated, syncRelayTraffic: () => false, notifyRecovery: () => { notified++; return true; } });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error.code, 'CREDENTIAL_SAVE_FAILED');
+  assert.equal(notified, 0);
+});
 
 test('confirmed native authentication notifies the supervisor for the authenticated runtime', async () => {
   for (const runtime of ['claude', 'codex']) {
@@ -82,7 +104,7 @@ test('native auth stdio is interactive with stdout reserved; only confirmed auth
         spawn: (command, args, options) => {
           calls++; assert.equal(command, runtime); assert.deepEqual(args, runtime === 'claude' ? ['auth', 'login'] : ['login']);
           assert.deepEqual(options.stdio, ['inherit', 2, 2]); return { status: 0 };
-        }, adapter: () => ({ checkAuth: async () => ({ status }) }) });
+        }, adapter: () => ({ checkAuth: async () => ({ status }) }), syncRelayTraffic: () => true });
       assert.equal(calls, 1); assert.equal(result.ok, status === 'success');
       if (!result.ok) {
         assert.equal(result.error.persisted, null); assert.equal(result.error.configChanged, false);
