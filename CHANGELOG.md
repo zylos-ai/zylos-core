@@ -7,8 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-11-11
+
+### Upgrade prerequisite
+
+**The 0.9.6 target-owned upgrade requires Core 0.9.3 or later.** On an older
+instance, run `zylos upgrade --self --branch release/0.9.3` and then
+`zylos --version`; continue to the target release only after it reports 0.9.3.
+Skip this bridge operation when already on 0.9.3, 0.9.4 or 0.9.5. No database
+schema migration is required for this release.
+
 ### Fixed
+- **Claude auth probe with a relay**: the auth probe and the Claude session now take the same variables from `~/zylos/.env` (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`) without a `runtime-env.manifest` line. A relay configured with `ANTHROPIC_AUTH_TOKEN` no longer leaves health at `auth_failed` while the session works. Credentials in `.env` are always passed and pre-approved; a subscription login is used only when `.env` has none. `.env` is read with dotenv rules, so `export KEY=value` and `KEY=value # note` give the expected value, and saves rewrite such lines instead of adding duplicates. (#1130, #1131)
+- **Relay traffic setting**: `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is set when Claude uses a relay or the saved credential is an API key or Bearer token, and removed for a setup token or subscription login on the official API. `zylos init` and `zylos runtime claude --save-*` recompute it after each save. A login that keeps a saved relay prints the command to go direct. (#1135, #1131)
+- **No Claude credential writes to `~/.claude/settings.json`**: Claude credentials, the base URL and the relay setting are saved only to `~/zylos/.env`. Existing values in `settings.json` are left as they are; after a save, zylos warns (key names only) when `settings.json` would override a saved value. (#1131)
+- **Message left in the input box**: the periodic Enter keeps the deadline of an earlier stuck message instead of restarting it for each new one, and the default interval is now 5 s (`C4_PERIODIC_ENTER_INTERVAL_MS`, previously 60 s). When Claude's two empty-input checks disagree, delivery sends one more Enter and re-checks instead of re-pasting, which could duplicate the message. (#795, #1072)
+- **Codex `CODEX_HOME`**: Codex authentication and base URL configuration are read from `CODEX_HOME` when it is set, and from `~/.codex` otherwise. (#1149)
+- **Daily memory commit**: a failed run is recorded for the day and retried the next day instead of on every tick, so failed adds of very large files no longer fill the disk with temporary pack files. Files over 50 MB are left out of the commit and listed in the log; a path that git reports twice is listed once. (#1102, #1146, #1151)
+- **Upgrade and rollback with unavailable external services**: PM2 services that are not in the ecosystem file and cannot restart are reported as service warnings instead of failing the upgrade or rollback verification. Ecosystem services must still come online. (#970, #1143)
 - **Interrupt notices are not pause orders**: the Claude system instructions now say that Claude Code's "STOP ... wait for the user" interrupt text only cancels that one call, must not be recorded in memory as a pause, and does not stop later messages or scheduled tasks. (#987)
+
+### Upgrade notice
+- Values already in `~/.claude/settings.json` are not migrated or removed. Claude Code applies its `env` block over the environment zylos passes, so a stale key there still wins; the warning above names it.
 
 ## [0.9.5] - 2026-11-03
 
