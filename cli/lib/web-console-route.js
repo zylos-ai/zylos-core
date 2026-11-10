@@ -70,10 +70,32 @@ export function inspectWebConsoleRoute(content) {
   catch (error) { return { status: 'manual_required', reason: error.message, lines: markerLines }; }
   const routes = [];
   const ambiguousLines = [];
+  const consolePath = word => word === '/console' || word.startsWith('/console/') || word.startsWith('/console*');
+  // A path-confined handler cannot receive console requests; its nested
+  // matchers are irrelevant even when they rewrite paths after selection.
+  function excludesConsole(node) {
+    if (!['handle', 'handle_path', 'route'].includes(node.words?.[0])) return false;
+    const matcher = node.words[1];
+    if (!matcher?.startsWith('/')) return false;
+    if (!matcher.includes('*')) return !consolePath(matcher);
+    const prefix = matcher.split('*')[0];
+    return !'/console/'.startsWith(prefix) && !prefix.startsWith('/console');
+  }
+  function collect(node) {
+    if (excludesConsole(node)) return;
+    if (['handle', 'handle_path', 'path'].includes(node.words?.[0]) && node.words.slice(1).some(consolePath)) routes.push(node);
+    for (const child of node.children) collect(child);
+  }
+  collect(tree);
+  const sites = new Set(routes.map(route => {
+    let site = route;
+    while (site.parent && site.parent !== tree) site = site.parent;
+    return site;
+  }));
   // Allow only the init template's header-only Markdown handler; arbitrary
   // named matcher handlers may shadow the console proxy.
   const nonConsoleMatchers = new Map();
-  for (const site of tree.children) {
+  for (const site of sites) {
     const safe = new Set();
     const counts = new Map();
     for (const node of site.children) counts.set(node.words[0], (counts.get(node.words[0]) || 0) + 1);
@@ -88,13 +110,15 @@ export function inspectWebConsoleRoute(content) {
   }
   let unknown = false;
   function visit(node) {
+    if (excludesConsole(node)) return;
     if (node.words?.[0] === 'import') unknown = true;
     if (node.words) {
       let site = node;
       while (site.parent && site.parent !== tree) site = site.parent;
-      const consolePath = node.words.slice(1).some(word => word === '/console' || word.startsWith('/console/') || word.startsWith('/console*'));
-      if (['handle', 'handle_path', 'path'].includes(node.words[0]) && consolePath) routes.push(node);
-      else if (consolePath && !['redir', 'uri', 'header_up'].includes(node.words[0])) ambiguousLines.push(node.start + 1);
+      const hasConsolePath = node.words.slice(1).some(consolePath);
+      if (hasConsolePath && !['handle', 'handle_path', 'path', 'redir', 'uri', 'header_up'].includes(node.words[0])) ambiguousLines.push(node.start + 1);
+      if (['handle', 'handle_path', 'route'].includes(node.words[0])
+          && node.words[1]?.startsWith('/') && !hasConsolePath) ambiguousLines.push(node.start + 1);
       if (['handle', 'handle_path', 'route', 'reverse_proxy'].includes(node.words[0])
           && node.words.slice(1).some(word => word.startsWith('@') && !(
             nonConsoleMatchers.get(site)?.has(word) && node.parent === site
@@ -105,7 +129,7 @@ export function inspectWebConsoleRoute(content) {
     }
     for (const child of node.children) visit(child);
   }
-  visit(tree);
+  for (const site of sites) visit(site);
   const locations = [...new Set([...markerLines, ...routes.map(route => route.start + 1), ...ambiguousLines])];
   const manual = reason => ({ status: 'manual_required', reason, lines: locations });
   if (unknown) return manual('Caddy imports make Web Console route uniqueness unverifiable');
@@ -146,12 +170,10 @@ export function inspectWebConsoleRoute(content) {
   return { status: 'ready', content: [...lines.slice(0, start), generateWebConsoleRoute(), ...lines.slice(end + 1)].join('\n'), lines: locations };
 }
 
-export function migrateWebConsoleRoute({ zylosDir = ZYLOS_DIR, ...deps } = {}) {
+export function manualWebConsoleRouteResult({ zylosDir = ZYLOS_DIR, reason, lines = [] } = {}) {
   const caddyfile = path.join(zylosDir, 'http/Caddyfile');
   const caddyBin = path.join(zylosDir, 'bin/caddy');
-  const configFile = path.join(zylosDir, '.zylos/config.json');
-  const read = deps.readFileSync || fs.readFileSync;
-  const manual = (reason, lines = []) => ({
+  return {
     status: 'manual_required', caddyfile, reason, lines,
     instructions: [
       `Inspect ${caddyfile}${lines.length ? ` at lines ${lines.join(', ')}` : ''}; preserve custom routes and leave exactly one /console/* route to localhost:3456.`,
@@ -159,14 +181,25 @@ export function migrateWebConsoleRoute({ zylosDir = ZYLOS_DIR, ...deps } = {}) {
       `Validate with ${caddyBin} validate --config ${caddyfile} --adapter caddyfile before running pm2 reload caddy.`,
       'Log in again, verify wc_session Path=/console and that /pages and /dashboard requests omit it, then verify logout clears it.',
     ],
-  });
+  };
+}
+
+export function migrateWebConsoleRoute({ zylosDir = ZYLOS_DIR, ...deps } = {}) {
+  const caddyfile = path.join(zylosDir, 'http/Caddyfile');
+  const caddyBin = path.join(zylosDir, 'bin/caddy');
+  const configFile = path.join(zylosDir, '.zylos/config.json');
+  const read = deps.readFileSync || fs.readFileSync;
+  const manual = (reason, lines = []) => manualWebConsoleRouteResult({ zylosDir, reason, lines });
   try {
     const config = readConfigStrict(configFile, { readFileSync: read });
     if (config.state === 'error') return manual(`Cannot read ${configFile}: ${config.error.message}`);
     let original;
-    try { original = read(caddyfile, 'utf8'); }
+    try {
+      const bytes = read(caddyfile);
+      original = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(typeof bytes === 'string' ? Buffer.from(bytes) : bytes);
+    }
     catch (error) {
-      if (error.code === 'ENOENT' && !config.config?.domain && !(deps.existsSync || fs.existsSync)(caddyBin)) {
+      if (error.code === 'ENOENT' && !config.config?.domain) {
         return { status: 'not_applicable' };
       }
       return manual(`Cannot read Caddyfile: ${error.message}`);

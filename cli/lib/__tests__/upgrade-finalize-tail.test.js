@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { completeUpgradeFinalization, readUpgradeModeStatus, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
 import {serviceRestartFixture} from './helpers/service-restart-fixture.js';
+import {manualWebConsoleRouteResult} from '../web-console-route.js';
 
 const maintenance=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 
@@ -139,7 +140,9 @@ test('unexpected Web Console failure is actionable without failing Core finaliza
   const result=await completeUpgradeFinalization(ctx,deps(calls,{migrateWebConsoleRoute(){throw Error('cannot inspect route');}}));
   assert.equal(result.success,true);
   assert.equal(result.webConsoleMigration.status,'manual_required');
-  assert.match(result.webConsoleMigration.message,/cannot inspect route/);
+  assert.deepEqual(result.webConsoleMigration, manualWebConsoleRouteResult({
+    zylosDir: ctx.zylosDir, reason: 'Web Console route inspection failed: cannot inspect route',
+  }));
   assert.match(result.webConsoleMigration.instructions.join('\n'),/header_up X-Forwarded-Prefix \/console/);
   assert.match(result.webConsoleMigration.instructions.join('\n'),/validate.*--adapter caddyfile/);
   assert.deepEqual(result.warnings,[]);

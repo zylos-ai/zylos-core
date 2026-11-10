@@ -39,7 +39,7 @@ import { loadConsoleStatusReader } from './session-status.js';
 import { createConversationHistoryHandler } from './conversation-history.js';
 import { getDb as getC4Db, getChannelNamespace } from '../../comm-bridge/scripts/c4-db.js';
 import { preflightDatabase, assertCoreDatabaseAvailable } from '../../comm-bridge/scripts/sqlite-schema.js';
-import { setSessionCookie, clearSessionCookie } from './session-cookie.js';
+import { setSessionCookie, clearSessionCookie, logoutSessionTokens } from './session-cookie.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -669,8 +669,7 @@ app.post('/api/auth', (req, res) => {
  * Logout
  */
 app.post('/api/logout', (req, res) => {
-  const cookies = parseCookies(req.headers.cookie);
-  if (cookies.wc_session) sessionStore.delete(cookies.wc_session);
+  for (const token of logoutSessionTokens(req.headers.cookie)) sessionStore.delete(token);
   clearSessionCookie(req, res);
   res.json({ success: true });
 });

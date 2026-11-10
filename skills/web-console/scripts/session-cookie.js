@@ -35,5 +35,14 @@ export function setSessionCookie(req, res, token, { remember, maxAgeSec }) {
 
 export function clearSessionCookie(req, res) {
   const cookiePath = sessionCookiePath(req.headers['x-forwarded-prefix']);
+  if (cookiePath !== '/') appendSetCookie(res, cookie(req, '', '/', 0));
   appendSetCookie(res, cookie(req, '', cookiePath, 0));
+}
+
+export function logoutSessionTokens(cookieHeader) {
+  if (typeof cookieHeader !== 'string') return [];
+  return cookieHeader.split(';').flatMap(pair => {
+    const [name, ...value] = pair.trim().split('=');
+    return name === 'wc_session' && value.join('=') ? [value.join('=')] : [];
+  });
 }

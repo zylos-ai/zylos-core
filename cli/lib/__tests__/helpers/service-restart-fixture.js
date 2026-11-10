@@ -7,7 +7,8 @@ import {createRequire} from 'node:module';
 const maintenance = createRequire(import.meta.url)('../../upgrade-maintenance.cjs');
 
 export function serviceRestartFixture(t, {ecosystem = true, names = ['scheduler']} = {}) {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usr-')));
+  // Linux runners may use noexec shared memory; the private PM2 stand-in needs exec.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === 'linux' ? '/tmp' : os.tmpdir(), 'usr-')));
   const env = {HOME:path.join(root,'h'), ZYLOS_DIR:path.join(root,'h/zylos'), PM2_HOME:path.join(root,'p'),
     TMPDIR:path.join(root,'t'), TMUX_TMPDIR:path.join(root,'x'), XDG_CONFIG_HOME:path.join(root,'h/.config'),
     CODEX_HOME:path.join(root,'h/.codex'), PATH:path.join(root,'bin')+path.delimiter+process.env.PATH};

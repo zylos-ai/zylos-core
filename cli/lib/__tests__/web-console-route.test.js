@@ -42,7 +42,7 @@ test('unique correct custom formatting and unmarked routes are already complete'
 test('duplicate, missing, custom, wrong upstream and commented headers require manual work', () => {
   const fixed = generateWebConsoleRoute();
   for (const content of [
-    site('respond 200'), site(`${stock}\n${fixed}`), site(`${fixed}\n${fixed}`),
+    site('respond 200'), site(`${stock}\n${stock}`), site(`${stock}\n${fixed}`), site(`${fixed}\n${fixed}`),
     site(stock.replace('localhost:3456', 'localhost:9999')),
     site(stock.replace('uri strip_prefix /console', 'uri strip_prefix /elsewhere')),
     site(stock.replace('reverse_proxy localhost:3456', '# header_up X-Forwarded-Prefix /console\n        reverse_proxy localhost:3456')),
@@ -84,6 +84,7 @@ test('alternate named matchers and shorthand proxies prevent migration or silent
       'reverse_proxy /console* localhost:3456',
       'route /console/* {\n reverse_proxy localhost:3456\n}',
       'handle @unresolved {\n reverse_proxy localhost:3456\n}',
+      'handle /c* {\n reverse_proxy localhost:3456\n}',
       '@markdown path *.md\nroute {\n handle @markdown {\n uri strip_prefix /console\n reverse_proxy localhost:3456\n }\n}',
       '@markdown path *.md\nhandle @markdown {\n reverse_proxy localhost:3456\n}',
     ]) {
@@ -91,6 +92,25 @@ test('alternate named matchers and shorthand proxies prevent migration or silent
       assert.equal(result.status, 'manual_required', alternate);
       assert.ok(result.lines.length);
       assert.equal(Object.hasOwn(result, 'content'), false);
+    }
+  }
+});
+
+test('named matchers confined to unrelated paths or other sites do not shadow console routes', () => {
+  const nested = `handle_path /x/* {
+    @relay remote_ip 100.64.0.23
+    reverse_proxy @relay 127.0.0.1:8787
+}`;
+  const otherSite = `http://localhost:9090 {
+    import custom-routes
+    handle @unresolved {
+        reverse_proxy localhost:8787
+    }
+}`;
+  for (const [block, status] of [[stock, 'ready'], [generateWebConsoleRoute(), 'unchanged']]) {
+    for (const unrelated of [nested, nested.replace('handle_path', 'handle')]) {
+      assert.equal(inspectWebConsoleRoute(site(`${block}\n${unrelated}`)).status, status);
+      assert.equal(inspectWebConsoleRoute(`${site(block)}\n${otherSite}`).status, status);
     }
   }
 });
@@ -128,6 +148,9 @@ test('true absence is silent but configured missing files and config read errors
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-absence-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.deepEqual(migrateWebConsoleRoute({ zylosDir: root }), { status: 'not_applicable' });
+  fs.mkdirSync(path.join(root, 'bin'));
+  fs.writeFileSync(path.join(root, 'bin/caddy'), 'fixture binary');
+  assert.deepEqual(migrateWebConsoleRoute({ zylosDir: root }), { status: 'not_applicable' });
   fs.mkdirSync(path.join(root, '.zylos'));
   const config = path.join(root, '.zylos/config.json');
   fs.writeFileSync(config, '{"domain":"example.com"}');
@@ -135,6 +158,24 @@ test('true absence is silent but configured missing files and config read errors
   fs.writeFileSync(config, '{bad');
   assert.match(migrateWebConsoleRoute({ zylosDir: root }).reason, /Cannot read.*config.json/);
   assert.equal(migrateWebConsoleRoute({ zylosDir: root, readFileSync: () => { throw new Error('permission denied'); } }).status, 'manual_required');
+});
+
+// Filesystem migration boundary only: official runner isolates HOME/ZYLOS_DIR,
+// and this fixture creates no service, child, database or socket. Run for route
+// decoding/deployment changes; unrelated cookie/UI work can skip it.
+test('invalid UTF-8 Caddyfiles remain byte-identical and never reach deployment', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-bytes-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'http'));
+  const filename = path.join(root, 'http/Caddyfile');
+  const bytes = Buffer.concat([Buffer.from(site(stock)), Buffer.from([0x23, 0xff, 0x0a])]);
+  fs.writeFileSync(filename, bytes);
+  const result = migrateWebConsoleRoute({ zylosDir: root,
+    validateAndDeploy: () => assert.fail('invalid UTF-8 must not reach deployment'),
+  });
+  assert.equal(result.status, 'manual_required');
+  assert.match(result.reason, /encoded data|encoding/i);
+  assert.equal(fs.readFileSync(filename).equals(bytes), true);
 });
 
 test('deployment errors become nonfatal actionable results', () => {

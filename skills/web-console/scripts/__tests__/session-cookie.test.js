@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  sessionCookiePath, isLocalHttpsProxy, appendSetCookie, setSessionCookie, clearSessionCookie
+  sessionCookiePath, isLocalHttpsProxy, appendSetCookie, setSessionCookie, clearSessionCookie, logoutSessionTokens
 } from '../session-cookie.js';
 
 function request(...values) {
@@ -83,7 +83,15 @@ test('logout uses the same validated path and retains unrelated cookies', () => 
   for (const [prefix, expected] of [['/console', '/console'], ['/a/b', '/a/b'], ['/bad;', '/']]) {
     const res = response(['other=one']);
     clearSessionCookie(request(prefix), res);
-    assert.deepEqual(res.getHeader(), ['other=one',
+    assert.deepEqual(res.getHeader(), ['other=one', ...(expected === '/' ? [] : [
+      'wc_session=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0']),
       `wc_session=; Path=${expected}; HttpOnly; SameSite=Strict; Secure; Max-Age=0`]);
   }
+});
+
+test('logout reads every same-name session token without changing token bytes', () => {
+  assert.deepEqual(logoutSessionTokens('wc_session=scoped; other=ignored; wc_session=root=token; wc_session='),
+    ['scoped', 'root=token']);
+  assert.deepEqual(logoutSessionTokens(undefined), []);
+  assert.deepEqual(logoutSessionTokens('other=value; not_wc_session=token'), []);
 });

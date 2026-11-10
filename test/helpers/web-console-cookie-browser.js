@@ -10,6 +10,7 @@ import { pathToFileURL } from 'node:url';
 import Database from '../../skills/comm-bridge/scripts/sqlite-driver.js';
 import * as c4Schema from '../../skills/comm-bridge/scripts/c4-schema.js';
 import { guardDatabase } from '../../skills/comm-bridge/scripts/sqlite-schema.js';
+import { generateWebConsoleRoute } from '../../cli/lib/web-console-route.js';
 
 const repository = path.resolve(import.meta.dirname, '../..');
 
@@ -117,11 +118,7 @@ export async function runCookieBrowser(t) {
 }
 https://127.0.0.1:${tlsPort} {
   tls ${cert} ${key}
-  handle_path /console/* {
-    reverse_proxy 127.0.0.1:${wcPort} {
-      header_up X-Forwarded-Prefix /console
-    }
-  }
+${generateWebConsoleRoute().replace('localhost:3456', `127.0.0.1:${wcPort}`)}
   handle {
     reverse_proxy 127.0.0.1:${capture.address().port}
   }
@@ -169,16 +166,26 @@ https://127.0.0.1:${tlsPort} {
       }), { base, prefix });
     }
     let checks = 0;
+    async function legacyLogin(context) {
+      const result = await context.request.post(httpBase + '/api/auth', {
+        data: { password: 'cookie-fixture-password', remember: true },
+      });
+      assert.equal(result.status(), 200);
+      const legacy = (await context.cookies()).find(cookie => cookie.name === 'wc_session' && cookie.path === '/');
+      assert.ok(legacy, 'real server issued a valid root session');
+      assert.equal(legacy.secure, false, 'legacy shape has no Secure attribute');
+      return legacy;
+    }
     for (const remember of [true, false]) {
       const { context, page } = await open(tlsBase);
       try {
-        await context.addCookies([{ name: 'wc_session', value: 'legacy-fixture-token', domain: '127.0.0.1',
-          path: '/', secure: true, httpOnly: true, sameSite: 'Strict' }]);
         await page.goto(tlsBase + '/console/');
         assert.equal(await apiStatus(page, '/console'), 401);
         assert.equal(await socketResult(page, tlsBase, '/console'), 'rejected');
         const wrong = await auth(page, '/console/api/auth', 'wrong-password', remember);
         assert.equal(wrong.status, 401);
+        await legacyLogin(context);
+        assert.equal(await apiStatus(page, '/console'), 200, 'old root session remains valid until login/logout');
         await page.locator('#login-password').fill('cookie-fixture-password');
         await page.locator('#login-remember').setChecked(remember);
         await page.locator('#login-form button[type=submit]').click();
@@ -208,6 +215,32 @@ https://127.0.0.1:${tlsPort} {
         checks++;
       } finally { await context.close(); }
     }
+    for (const duplicate of [false, true]) {
+      const { context, page } = await open(tlsBase);
+      try {
+        await page.goto(tlsBase + '/console/');
+        if (duplicate) assert.equal((await auth(page, '/console/api/auth', 'cookie-fixture-password', true)).status, 200);
+        await legacyLogin(context);
+        const cookies = (await context.cookies()).filter(cookie => cookie.name === 'wc_session');
+        assert.equal(cookies.length, duplicate ? 2 : 1);
+        assert.equal(await apiStatus(page, '/console'), 200);
+        assert.equal(await page.evaluate(async () => (await fetch('/console/api/logout', { method: 'POST' })).status), 200);
+        assert.equal((await context.cookies()).filter(cookie => cookie.name === 'wc_session').length, 0);
+        assert.equal(await apiStatus(page, '/console'), 401);
+        for (const cookie of cookies) {
+          const response = await context.request.get(tlsBase + '/console/api/status', {
+            headers: { Cookie: `wc_session=${cookie.value}` },
+          });
+          assert.equal(response.status(), 401, 'every submitted same-name token was invalidated');
+        }
+        await page.evaluate(() => fetch('/pages/logout-check'));
+        assert.equal(observed.at(-1).url, '/pages/logout-check');
+        assert.ok(!observed.at(-1).cookie.includes('wc_session='));
+        console.log('Cookie logout readback:', JSON.stringify({ duplicate, validSessionsBefore: cookies.length,
+          nonSecureLegacyRoot: true, cookieJarAfter: 0, allSubmittedTokensRejected: true, pagesCookieAbsent: true }));
+        checks++;
+      } finally { await context.close(); }
+    }
     const { context, page } = await open(httpBase);
     try {
       await page.goto(httpBase + '/');
@@ -222,7 +255,7 @@ https://127.0.0.1:${tlsPort} {
         sessionCookie: true, authenticatedApi: 200, logoutRemoved: true }));
       checks++;
     } finally { await context.close(); }
-    assert.equal(checks, 3);
+    assert.equal(checks, 5);
   } finally {
     t.signal.removeEventListener('abort', abort);
     await cleanup();
