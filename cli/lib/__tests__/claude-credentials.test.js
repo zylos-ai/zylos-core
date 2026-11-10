@@ -88,6 +88,28 @@ for (const [label, selected, save, saveEnv] of modes) {
   });
 }
 
+test('saving any credential keeps CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC in settings, env and process', () => {
+  // The setting is passed to the auth probe beside the credentials but is not one;
+  // replacing a credential must never remove it.
+  const name = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', saved = process.env[name];
+  try {
+    for (const [label, , save, saveEnv] of modes) {
+      const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+      settings.env[name] = '1';
+      fs.writeFileSync(settingsFile, JSON.stringify(settings));
+      fs.writeFileSync(envFile, fs.readFileSync(envFile, 'utf8') + `${name}=1\n`);
+      process.env[name] = '1';
+      assert.equal(save(secret()), true);
+      assert.equal(saveEnv(secret()), true);
+      assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env[name], '1', `${label}: settings keeps it`);
+      assert.equal(parseDotEnv(fs.readFileSync(envFile))[name], '1', `${label}: .env keeps it`);
+      assert.equal(process.env[name], '1', `${label}: process env keeps it`);
+    }
+  } finally {
+    if (saved === undefined) delete process.env[name]; else process.env[name] = saved;
+  }
+});
+
 test('changing from Bearer to API key and setup token leaves one selected method in both stores', () => {
   for (const [, key, save, saveEnv] of [modes[1], modes[0], modes[2], modes[1]]) {
     const value = secret();
