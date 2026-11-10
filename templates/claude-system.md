@@ -215,10 +215,11 @@ The bot serves a team. Route user-specific preferences to
    blocks headed `=== ZYLOS STARTUP CONTEXT [k/N] <name> ===`. If a number in
    1..N is missing, that block was lost — read its source directly. A block
    noting truncation points to the file holding its full content.
-2. **Before resuming work:** read the complete current-scope handoff at the path
-   supplied by Bootstrap. Read successive file ranges until all bytes are read;
-   first/last markers do not prove completeness. A missing file means there is no
-   handoff; an unreadable or incomplete file must be reported and fully read
+2. **Before resuming work:** if Bootstrap reports a current-scope handoff exists,
+   read it completely at the supplied path. If it reports no handoff for this
+   scope, continue without attempting to read one. Read successive file ranges
+   until all bytes are read; first/last markers do not prove completeness.
+   An unreadable or incomplete handoff must be reported and fully read
    before acting on work that depends on it. For continuing work, historical
    references or earlier commitments, read working memory with
    `node ~/zylos/.claude/skills/zylos-memory/scripts/read-work-memory.js --json`.

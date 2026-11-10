@@ -87,6 +87,41 @@ describe('c4-session-init', () => {
     });
   });
 
+  // Actual multi-session CLI scope/path selection, with the opposite root-file
+  // condition as a decoy. Run for handoff/scope changes; unrelated UI may skip.
+  // withTmpDir logs the private environment, database and socket before bounded
+  // children; no terminal/service starts and the fixture root is always removed.
+  for (const present of [true, false]) it(`multi-session startup uses its own handoff when ${present ? 'present' : 'absent'}`, () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const group = 'telegram:handoff-check';
+      const groupFile = path.join(tmpDir, 'memory/session-groups', group, 'handoff.md');
+      const rootFile = path.join(tmpDir, 'memory/handoff.md');
+      fs.mkdirSync(path.join(tmpDir, '.zylos'));
+      fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi' }));
+      fs.mkdirSync(path.dirname(groupFile), { recursive: true });
+      if (present) fs.writeFileSync(groupFile, 'unfinished group task');
+      else fs.writeFileSync(rootFile, 'unrelated root task');
+      assert.equal(fs.existsSync(groupFile), present);
+      assert.equal(fs.existsSync(rootFile), !present);
+
+      const { stdout, status } = cli([], { ...env, ZYLOS_SESSION_GROUP: group });
+      assert.equal(status, 0);
+      assert.ok(stdout.includes(`Scope: ${group}. Working memory is not injected.`));
+      if (present) {
+        assert.ok(stdout.includes(`Before resuming work, read ${groupFile} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`));
+        assert.doesNotMatch(stdout, /No handoff file is available/);
+        assert.equal(fs.readFileSync(groupFile, 'utf8'), 'unfinished group task');
+      } else {
+        assert.ok(stdout.includes(`No handoff file is available for this scope (${groupFile}).`));
+        assert.doesNotMatch(stdout, /Before resuming work, read .*handoff/);
+        assert.equal(fs.readFileSync(rootFile, 'utf8'), 'unrelated root task');
+      }
+      assert.ok(!stdout.includes(`read ${rootFile} in full`), 'root handoff never supplies the group instruction');
+      assert.equal(fs.existsSync(groupFile), present);
+      assert.equal(fs.existsSync(rootFile), !present);
+    });
+  });
+
   it('loads delivered tail after coverage without checkpoint summary', () => {
     withTmpDir(({ env }) => {
       receive(['--channel', 'system', '--no-reply', '--content', 'msg1'], env);
