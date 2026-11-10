@@ -29,6 +29,7 @@ import {
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
   relayLoginNotice,
+  claudeSettingsOverrideNotice,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
   saveCodexApiKeyToEnv,
@@ -122,6 +123,11 @@ export function applyCredentials(target, creds) {
 /** Setup-token login with no new base URL: the notice that a saved relay stays in use, or null. */
 export function relayNoticeAfterSave(target, { setupToken, baseUrl }, notice = relayLoginNotice) {
   return target === 'claude' && setupToken && !baseUrl ? notice() : null;
+}
+
+/** After a Claude save in this run: settings.json keys that would override it (read only). */
+export function settingsOverrideAfterSave(target, { apiKey, setupToken, baseUrl }, notice = claudeSettingsOverrideNotice) {
+  return target === 'claude' && (apiKey || setupToken || baseUrl) ? notice() : null;
 }
 
 export function applyBaseUrl(target, baseUrl) {
@@ -307,6 +313,8 @@ async function switchRuntime(target, flags) {
 
   const relayNotice = relayNoticeAfterSave(target, { setupToken, baseUrl });
   if (relayNotice) console.log(`  Note: ${relayNotice}`);
+  const overrideNotice = settingsOverrideAfterSave(target, { apiKey, setupToken, baseUrl });
+  if (overrideNotice) console.error(`  ${yellow(`Warning: ${overrideNotice}`)}`);
 
   // Step 2b: Write Codex headless config (trust dir, suppress all interactive prompts).
   // Done before auth check so config is present when checkAuth spawns `codex login status`.

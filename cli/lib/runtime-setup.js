@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { parseZylosDotenv } from './runtime/tmux-env.js';
-import { ZYLOS_DIR } from './config.js';
+import { ZYLOS_DIR, CLAUDE_BUILTIN_ENV_KEYS } from './config.js';
 import { commandExists } from './shell-utils.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
 import { installCoreCodexHook } from './codex-hooks.js';
@@ -308,9 +308,13 @@ export function claudeCredentialIn(values) {
  * new session reads it). ~/.claude/settings.json is not consulted.
  */
 function savedClaudeState() {
-  let values = {};
-  try { values = parseZylosDotenv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8')); } catch {}
+  const values = savedClaudeEnv();
   return { baseUrl: values.ANTHROPIC_BASE_URL, credential: claudeCredentialIn(values) };
+}
+
+/** ~/zylos/.env parsed as a new session reads it; empty when unreadable. */
+function savedClaudeEnv() {
+  try { return parseZylosDotenv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8')); } catch { return {}; }
 }
 
 /** True when a Claude base URL points anywhere other than the official API. */
@@ -365,6 +369,27 @@ export function relayLoginNotice() {
   const { baseUrl } = savedClaudeState();
   if (!isClaudeRelayBaseUrl(baseUrl)) return null;
   return `Still using the relay ${baseUrl}: the login token will pass through it. To connect directly to Anthropic, run: ${DIRECT_CLAUDE_BASE_URL_COMMAND}`;
+}
+
+/**
+ * After zylos saves Claude auth or relay settings to ~/zylos/.env: a warning
+ * naming the built-in keys whose ~/.claude/settings.json `env` value would
+ * override what zylos saved (set there with a different value, or set there
+ * while .env does not set it). Claude Code applies that file's `env` over the
+ * environment zylos passes, so the new setting would silently not apply.
+ * settings.json is only read, never written. Values are never included.
+ * Missing, env-less or unparseable settings.json: no warning.
+ * @returns {string|null}
+ */
+export function claudeSettingsOverrideNotice() {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  let env;
+  try { env = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))?.env; } catch { return null; }
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return null;
+  const saved = savedClaudeEnv();
+  const keys = CLAUDE_BUILTIN_ENV_KEYS.filter(key => Object.hasOwn(env, key) && String(env[key] ?? '') !== (saved[key] ?? ''));
+  if (keys.length === 0) return null;
+  return `${settingsPath} sets ${keys.join(', ')} in its env block. Claude Code uses those values instead of the ones zylos saved in ${path.join(ZYLOS_DIR, '.env')}, so the new setting will not take effect until you remove ${keys.length === 1 ? 'that key' : 'those keys'} from ${settingsPath} by hand.`;
 }
 
 // ── Codex credential helpers ───────────────────────────────────────────────

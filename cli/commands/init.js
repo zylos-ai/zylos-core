@@ -43,6 +43,7 @@ import {
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
   relayLoginNotice,
+  claudeSettingsOverrideNotice,
   saveCodexBaseUrl,
   saveCodexApiKey,
   saveCodexApiKeyToEnv,
@@ -1901,6 +1902,11 @@ export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin =
   if ((setupToken || subscriptionLogin) && !claudeBaseUrl) {
     const relay = relayLoginNotice();
     if (relay) log(`  ${warn(relay)}`);
+  }
+  // settings.json values that would override what was just saved (read only).
+  if (apiKey || setupToken || subscriptionLogin || claudeBaseUrl) {
+    const override = claudeSettingsOverrideNotice();
+    if (override) log(`  ${warn(override)}`);
   }
 }
 

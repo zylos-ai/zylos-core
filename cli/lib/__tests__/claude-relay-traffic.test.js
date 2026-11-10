@@ -26,7 +26,8 @@ for (const key of touched.slice(2)) delete process.env[key];
 console.log('Claude relay setting isolation: ' + JSON.stringify({ HOME: home, ZYLOS_DIR: zylos, settingsFile, envFile }));
 const { saveClaudeBaseUrl, computeRelayTraffic, relayLoginNotice, syncClaudeRelayTraffic,
   saveApiKey, saveSetupToken } = await import('../runtime-setup.js');
-const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags, relayNoticeAfterSave } = await import('../../commands/runtime.js');
+const { applyBaseUrl, applyCredentials, parseRuntimeFlags, validateRuntimeFlags, relayNoticeAfterSave,
+  settingsOverrideAfterSave } = await import('../../commands/runtime.js');
 const { persistInitCredentials, runClaudeSubscriptionLogin } = await import('../../commands/init.js');
 const setupToken = () => 'sk-ant-oat01-' + randomBytes(16).toString('hex');
 
@@ -295,5 +296,129 @@ test('init login without a new base URL prints the kept-relay notice; a base URL
   seedPreviousInstall(officialUrl);
   const lines = [];
   persistInitCredentials({ subscriptionLogin: true }, { log: line => lines.push(line) });
-  assert.deepEqual(lines, [], 'no notice on the official API');
+  assert.equal(lines.some(line => line.includes('Still using the relay')), false, 'no kept-relay notice on the official API');
+});
+
+// settings.json override warning: after a Claude save, zylos reads (never writes)
+// ~/.claude/settings.json and names the built-in keys whose value there would
+// override what it just saved to .env. Key names only, never values; one warning
+// per command run; nothing for a missing, env-less or unparseable file.
+const overrideKeys = message => {
+  assert.ok(message, 'a warning is expected');
+  assert.ok(message.includes(settingsFile), 'the warning names the settings.json path');
+  assert.match(message, /Claude Code uses those values instead of the ones zylos saved/);
+  assert.match(message, /remove th(?:at key|ose keys) from .* by hand/);
+  return message.match(/ sets (.+) in its env block/)[1].split(', ');
+};
+// No 8-character slice of any secret may appear in the output.
+const leaksNothing = (output, ...secrets) => {
+  for (const secret of secrets) for (let i = 0; i + 8 <= secret.length; i++) {
+    if (output.includes(secret.slice(i, i + 8))) assert.fail(`output contains part of a secret (offset ${i})`);
+  }
+};
+const writeSettings = (text, mode = 0o644) => { fs.writeFileSync(settingsFile, text); fs.chmodSync(settingsFile, mode); return text; };
+const settingsUnchanged = (text, mode = 0o644) => {
+  assert.equal(fs.readFileSync(settingsFile, 'utf8'), text, 'settings.json is byte-identical');
+  assert.equal(fs.statSync(settingsFile).mode & 0o777, mode, 'settings.json mode is unchanged');
+};
+const handSecret = () => 'sk-ant-api03-hand-' + randomBytes(16).toString('hex');
+
+test('zylos runtime --save-apikey: a different settings.json API key is named, without either value', () => {
+  const hand = handSecret(), saved = apiKey();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand, KEEP: 'x' } }));
+  assert.equal(applyCredentials('claude', { apiKey: saved }), true);
+  const message = settingsOverrideAfterSave('claude', { apiKey: saved });
+  assert.deepEqual(overrideKeys(message), ['ANTHROPIC_API_KEY']);
+  leaksNothing(message, hand, saved);
+  settingsUnchanged(text);
+});
+
+test('zylos runtime --save-setup-token: settings.json credentials zylos does not set are named', () => {
+  const hand = handSecret(), oldToken = setupToken(), saved = setupToken();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand, CLAUDE_CODE_OAUTH_TOKEN: oldToken } }));
+  assert.equal(applyCredentials('claude', { setupToken: saved }), true);
+  const message = settingsOverrideAfterSave('claude', { setupToken: saved });
+  assert.deepEqual(overrideKeys(message), ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
+  leaksNothing(message, hand, oldToken, saved);
+  settingsUnchanged(text);
+});
+
+test('zylos runtime --save-base-url: a different settings.json relay address and switch are named', () => {
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://hand-relay.example.test', [flag]: '0' } }));
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.equal(parseDotEnv(fs.readFileSync(envFile))[flag], '1', 'zylos turned the switch on');
+  assert.deepEqual(overrideKeys(settingsOverrideAfterSave('claude', { baseUrl: relayUrl })), ['ANTHROPIC_BASE_URL', flag]);
+  settingsUnchanged(text);
+});
+
+test('going direct while settings.json keeps a relay and the switch on: both are named', () => {
+  assert.equal(applyCredentials('claude', { setupToken: setupToken() }), true);
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_BASE_URL: relayUrl, [flag]: '1' } }));
+  const parsed = parseRuntimeFlags(['--save-base-url', officialUrl]);
+  assert.equal(applyBaseUrl('claude', parsed.baseUrl), true);
+  assert.equal(parseDotEnv(fs.readFileSync(envFile))[flag], undefined, 'zylos turned the switch off');
+  assert.deepEqual(overrideKeys(settingsOverrideAfterSave('claude', parsed)), ['ANTHROPIC_BASE_URL', flag]);
+  settingsUnchanged(text);
+});
+
+test('the switch alone: left on in settings.json while zylos turns it off is named; equal is not', () => {
+  const text = writeSettings(JSON.stringify({ env: { [flag]: '1' } }));
+  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.equal(parseDotEnv(fs.readFileSync(envFile))[flag], undefined);
+  assert.deepEqual(overrideKeys(settingsOverrideAfterSave('claude', { baseUrl: officialUrl })), [flag]);
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.equal(settingsOverrideAfterSave('claude', { baseUrl: relayUrl }), null, 'zylos turned it on: same value');
+  settingsUnchanged(text);
+});
+
+test('init persistence warns once, on the init warning stream, naming every overriding key', () => {
+  const hand = handSecret(), saved = apiKey();
+  const text = writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: hand, ANTHROPIC_BASE_URL: 'https://hand-relay.example.test', [flag]: '1' } }), 0o600);
+  for (const values of [{ apiKey: saved, claudeBaseUrl: relayUrl }, { setupToken: setupToken() }, { subscriptionLogin: true, claudeBaseUrl: officialUrl }]) {
+    const lines = [];
+    persistInitCredentials(values, { log: line => lines.push(line) });
+    const warnings = lines.filter(line => line.includes('settings.json'));
+    assert.equal(warnings.length, 1, `one warning per run: ${Object.keys(values).join()}`);
+    assert.ok(warnings[0].includes('⚠'), 'printed as an init warning');
+    assert.ok(overrideKeys(warnings[0]).length > 0);
+    leaksNothing(lines.join('\n'), hand, saved);
+  }
+  settingsUnchanged(text, 0o600);
+});
+
+test('init: a Codex-only save or values equal to .env print no settings.json warning', () => {
+  writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: handSecret() } }));
+  const lines = [];
+  persistInitCredentials({ codexApiKey: 'sk-codex-' + randomBytes(8).toString('hex') }, { log: line => lines.push(line) });
+  assert.equal(lines.some(line => line.includes('settings.json')), false, 'nothing Claude was saved');
+  const saved = apiKey();
+  persistInitCredentials({ apiKey: saved, claudeBaseUrl: relayUrl }, { log: () => {} });
+  writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: saved, ANTHROPIC_BASE_URL: relayUrl, [flag]: '1', OTHER: 'x' } }));
+  persistInitCredentials({ apiKey: saved, claudeBaseUrl: relayUrl }, { log: line => lines.push(line) });
+  assert.equal(lines.some(line => line.includes('settings.json')), false, 'equal values');
+});
+
+test('one warning for a run that saves a credential and a base URL; none for Codex', () => {
+  writeSettings(JSON.stringify({ env: { ANTHROPIC_API_KEY: handSecret(), ANTHROPIC_BASE_URL: 'https://hand-relay.example.test' } }));
+  const saved = apiKey();
+  assert.equal(applyCredentials('claude', { apiKey: saved }), true);
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  const message = settingsOverrideAfterSave('claude', { apiKey: saved, baseUrl: relayUrl });
+  assert.deepEqual(overrideKeys(message), ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL']);
+  assert.equal(message.match(/settings\.json sets/g).length, 1, 'a single message');
+  assert.equal(settingsOverrideAfterSave('codex', { apiKey: saved }), null);
+  assert.equal(settingsOverrideAfterSave('claude', {}), null, 'nothing saved in this run');
+});
+
+test('missing, env-less and unparseable settings.json print nothing and saving still succeeds', () => {
+  for (const text of [null, '{"theme":"dark"}', '{"env":null}', '{"env":["ANTHROPIC_API_KEY"]}', '{"env": {"ANTHROPIC_API_KEY": "x"', 'not json']) {
+    if (text === null) fs.rmSync(settingsFile, { force: true }); else writeSettings(text);
+    assert.equal(applyCredentials('claude', { apiKey: apiKey() }), true);
+    assert.equal(settingsOverrideAfterSave('claude', { apiKey: 'x' }), null, String(text));
+    const lines = [];
+    persistInitCredentials({ apiKey: apiKey() }, { log: line => lines.push(line) });
+    assert.equal(lines.length, 0, String(text));
+    if (text === null) assert.equal(fs.existsSync(settingsFile), false, 'settings.json is not created');
+    else settingsUnchanged(text);
+  }
 });
