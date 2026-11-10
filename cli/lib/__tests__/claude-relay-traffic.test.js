@@ -6,8 +6,9 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { parse as parseDotEnv } from 'dotenv';
 
-// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC pairs with the Claude endpoint: on behind
-// a relay base URL, absent with the official API or after setup-token login.
+// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC pairing rule: on behind a relay base URL
+// or with an Anthropic API key; absent for subscription login, setup token or no
+// credential on the official API.
 // Runs only under a fresh HOME/ZYLOS_DIR; no runtime, network, PM2, tmux or database.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-relay-traffic-'));
 const flag = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
@@ -20,7 +21,7 @@ process.env.HOME = home;
 process.env.ZYLOS_DIR = zylos;
 for (const key of touched.slice(2)) delete process.env[key];
 console.log('Claude relay setting isolation: ' + JSON.stringify({ HOME: home, ZYLOS_DIR: zylos, settingsFile, envFile }));
-const { saveClaudeBaseUrl, saveClaudeBaseUrlToSettingsAndEnv } = await import('../runtime-setup.js');
+const { saveClaudeBaseUrl, computeRelayTraffic } = await import('../runtime-setup.js');
 const { applyBaseUrl, applyCredentials } = await import('../../commands/runtime.js');
 const { persistInitCredentials, runClaudeSubscriptionLogin } = await import('../../commands/init.js');
 const setupToken = () => 'sk-ant-oat01-' + randomBytes(16).toString('hex');
@@ -46,11 +47,22 @@ after(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+const officialUrl = 'https://api.anthropic.com', relayUrl = 'https://relay.example.test';
+const apiKey = () => 'sk-ant-api03-' + randomBytes(16).toString('hex');
+
+test('pairing rule: relay or API credential on; subscription, setup token or none on the official API off', () => {
+  for (const [baseUrl, credential, on] of [
+    [officialUrl, 'apiKey', true], [officialUrl, 'authToken', true], [undefined, 'apiKey', true],
+    [officialUrl, 'setupToken', false], [officialUrl, 'subscription', false], [officialUrl, 'none', false], [undefined, undefined, false],
+    ...['apiKey', 'authToken', 'setupToken', 'subscription', 'none'].map(credential => [relayUrl, credential, true]),
+  ]) assert.equal(computeRelayTraffic({ baseUrl, credential }), on, `${baseUrl} ${credential}`);
+});
+
 test('configuring a relay base URL turns the relay traffic setting on in .env, settings and process', () => {
   assert.deepEqual(state(), OFF);
-  assert.equal(saveClaudeBaseUrlToSettingsAndEnv('https://relay.example.test/v1'), true);
+  assert.equal(applyBaseUrl('claude', relayUrl + '/v1'), true);
   assert.deepEqual(state(), ON);
-  assert.equal(saveClaudeBaseUrlToSettingsAndEnv('https://relay.example.test/v1'), true, 'saving the same relay again is safe');
+  assert.equal(applyBaseUrl('claude', relayUrl + '/v1'), true, 'saving the same relay again is safe');
   assert.deepEqual(state(), ON);
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).theme, 'dark');
 });
@@ -58,42 +70,62 @@ test('configuring a relay base URL turns the relay traffic setting on in .env, s
 test('configuring a relay base URL rewrites a wrong or duplicated existing value to a single 1', () => {
   fs.writeFileSync(settingsFile, JSON.stringify({ env: { KEEP: 'unchanged', [flag]: '0' } }));
   fs.writeFileSync(envFile, `KEEP=unchanged\n${flag}=0\nexport ${flag}=1\n`);
-  assert.equal(saveClaudeBaseUrlToSettingsAndEnv('https://relay.example.test'), true);
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
   assert.deepEqual(state(), ON);
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).KEEP, 'unchanged');
 });
 
-test('configuring the official base URL removes the relay traffic setting everywhere', () => {
+test('configuring the official base URL without a credential removes the relay traffic setting everywhere', () => {
   fs.writeFileSync(settingsFile, JSON.stringify({ env: { KEEP: 'unchanged', [flag]: '1' } }));
   fs.writeFileSync(envFile, `KEEP=unchanged\n${flag}=1\nexport ${flag}=1\n`);
   process.env[flag] = '1';
-  assert.equal(saveClaudeBaseUrlToSettingsAndEnv('https://api.anthropic.com'), true);
+  assert.equal(applyBaseUrl('claude', officialUrl), true);
   assert.deepEqual(state(), OFF);
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).KEEP, 'unchanged');
   assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.KEEP, 'unchanged');
 });
 
-test('zylos runtime base URL changes relay, official, relay keep the setting in step', () => {
-  for (const [url, expected] of [['https://relay.example.test', ON], ['https://api.anthropic.com/', OFF], ['https://relay-2.example.test/api', ON]]) {
-    assert.equal(applyBaseUrl('claude', url), true);
-    assert.deepEqual(state(), expected, url);
+test('zylos runtime: API key on the official API turns the setting on; setup token turns it off', () => {
+  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.deepEqual(state(), OFF);
+  assert.equal(applyCredentials('claude', { apiKey: apiKey() }), true);
+  assert.deepEqual(state(), ON, 'API key + official');
+  assert.equal(applyCredentials('claude', { setupToken: setupToken() }), true);
+  assert.deepEqual(state(), OFF, 'setup token + official');
+});
+
+test('zylos runtime: switching base URL and credential recomputes the setting each time', () => {
+  for (const [step, expected] of [
+    [() => applyBaseUrl('claude', relayUrl), ON],
+    [() => applyCredentials('claude', { setupToken: setupToken() }), ON],
+    [() => applyBaseUrl('claude', officialUrl), OFF],
+    [() => applyCredentials('claude', { apiKey: apiKey() }), ON],
+    [() => applyBaseUrl('claude', 'https://relay-2.example.test/api'), ON],
+    [() => applyCredentials('claude', { setupToken: setupToken() }), ON],
+    [() => applyBaseUrl('claude', officialUrl + '/'), OFF],
+  ]) {
+    assert.equal(step(), true);
+    assert.deepEqual(state(), expected, step.toString());
   }
 });
 
-test('the process-only base URL used during init follows relay and official endpoints', () => {
-  assert.equal(saveClaudeBaseUrl('https://relay.example.test'), true);
-  assert.equal(process.env[flag], '1');
-  assert.equal(saveClaudeBaseUrl('https://api.anthropic.com'), true);
-  assert.equal(process.env[flag], undefined);
+test('a claude.ai login with a leftover API key counts as subscription when the official URL is saved', t => {
+  const loginFile = path.join(home, '.claude', '.credentials.json');
+  t.after(() => fs.rmSync(loginFile, { force: true }));
+  assert.equal(applyCredentials('claude', { apiKey: apiKey() }), true);
+  fs.writeFileSync(loginFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'synthetic-refresh' } }));
+  assert.equal(applyBaseUrl('claude', officialUrl), true);
+  assert.deepEqual(state(), OFF);
 });
 
-test('setup-token login through zylos runtime removes the setting; a relay base URL turns it back on', () => {
-  assert.equal(applyBaseUrl('claude', 'https://relay.example.test'), true);
-  assert.deepEqual(state(), ON);
-  assert.equal(applyCredentials('claude', { setupToken: 'sk-ant-oat01-' + randomBytes(16).toString('hex') }), true);
-  assert.deepEqual(state(), OFF);
-  assert.equal(applyBaseUrl('claude', 'https://relay.example.test'), true);
-  assert.deepEqual(state(), ON);
+test('the process-only base URL used during init follows the pairing rule', () => {
+  assert.equal(saveClaudeBaseUrl(relayUrl), true);
+  assert.equal(process.env[flag], '1');
+  assert.equal(saveClaudeBaseUrl(officialUrl), true);
+  assert.equal(process.env[flag], undefined);
+  process.env.ANTHROPIC_API_KEY = apiKey();
+  assert.equal(saveClaudeBaseUrl(officialUrl), true);
+  assert.equal(process.env[flag], '1', 'API key + official');
 });
 
 // init: subscription login and setup-token login, then the post-template save step.
@@ -104,33 +136,40 @@ const loginStub = authenticated => {
   assert.deepEqual(launches, [['claude']]);
   return result;
 };
+// A previous install: the setting on, the given saved base URL and a leftover API key.
+const seedPreviousInstall = baseUrl => {
+  const saved = baseUrl ? { ANTHROPIC_BASE_URL: baseUrl } : {};
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: { KEEP: 'unchanged', ...saved, [flag]: '1' } }));
+  fs.writeFileSync(envFile, `KEEP=unchanged\n${baseUrl ? `ANTHROPIC_BASE_URL=${baseUrl}\n` : ''}ANTHROPIC_API_KEY=${apiKey()}\n${flag}=1\n`);
+  process.env[flag] = '1';
+};
 
-test('init subscription login that succeeds removes the relay traffic setting', () => {
-  assert.equal(applyBaseUrl('claude', 'https://relay.example.test'), true);
-  const login = loginStub(true);
-  assert.deepEqual(login, { claudeAuthenticated: true, subscriptionLogin: true });
-  persistInitCredentials({ subscriptionLogin: login.subscriptionLogin });
-  assert.deepEqual(state(), OFF);
-});
+for (const [where, baseUrl, expected] of [['without a base URL', undefined, OFF], ['on the official API', officialUrl, OFF], ['behind a saved relay', relayUrl, ON]]) {
+  test(`init subscription login ${where} leaves the relay traffic setting ${expected === ON ? 'on' : 'off'}, even with a leftover API key`, () => {
+    seedPreviousInstall(baseUrl);
+    const login = loginStub(true);
+    assert.deepEqual(login, { claudeAuthenticated: true, subscriptionLogin: true });
+    persistInitCredentials({ subscriptionLogin: login.subscriptionLogin });
+    assert.deepEqual(state(), expected);
+  });
+}
 
 test('init subscription login that does not complete leaves the relay traffic setting alone', () => {
-  assert.equal(applyBaseUrl('claude', 'https://relay.example.test'), true);
+  seedPreviousInstall(officialUrl);
   const login = loginStub(false);
   assert.deepEqual(login, { claudeAuthenticated: false, subscriptionLogin: false });
   persistInitCredentials({ subscriptionLogin: login.subscriptionLogin });
   assert.deepEqual(state(), ON);
 });
 
-test('init setup-token login removes the relay traffic setting', () => {
-  assert.equal(applyBaseUrl('claude', 'https://relay.example.test'), true);
+test('init setup token and API key on the official API: setup token off, API key on, relay in the same run on', () => {
+  seedPreviousInstall(officialUrl);
   persistInitCredentials({ setupToken: setupToken() });
-  assert.deepEqual(state(), OFF);
-});
-
-test('init login with a relay base URL in the same run keeps the relay traffic setting on', () => {
-  for (const login of [{ setupToken: setupToken() }, { subscriptionLogin: true }]) {
-    assert.equal(applyBaseUrl('claude', 'https://relay.example.test'), true);
-    persistInitCredentials({ ...login, claudeBaseUrl: 'https://relay.example.test' });
-    assert.deepEqual(state(), ON, Object.keys(login)[0]);
-  }
+  assert.deepEqual(state(), OFF, 'setup token + official');
+  persistInitCredentials({ apiKey: apiKey() });
+  assert.deepEqual(state(), ON, 'API key + official');
+  persistInitCredentials({ setupToken: setupToken() });
+  assert.deepEqual(state(), OFF, 'back to setup token');
+  persistInitCredentials({ subscriptionLogin: true, claudeBaseUrl: relayUrl });
+  assert.deepEqual(state(), ON, 'subscription + relay in the same run');
 });

@@ -41,7 +41,7 @@ import {
   saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
-  clearClaudeRelayTrafficFlag,
+  syncClaudeRelayTraffic,
   saveCodexBaseUrl,
   saveCodexApiKey,
   saveCodexApiKeyToEnv,
@@ -1882,9 +1882,8 @@ export function runClaudeSubscriptionLogin({
 
 /**
  * Write the credentials and base URLs chosen during init, after templates are
- * deployed. Subscription or setup-token login drops the relay traffic setting
- * first; a relay Claude base URL from the same run is saved afterwards and
- * turns it back on.
+ * deployed, then recompute the relay traffic setting from the resulting
+ * Claude state.
  */
 export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin = false,
   codexApiKey, claudeBaseUrl, codexBaseUrl } = {}) {
@@ -1893,9 +1892,6 @@ export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin =
   }
   if (setupToken) {
     saveSetupTokenToEnv(setupToken);
-  }
-  if (setupToken || subscriptionLogin) {
-    clearClaudeRelayTrafficFlag();
   }
   if (codexApiKey) {
     saveCodexApiKeyToEnv(codexApiKey);
@@ -1906,6 +1902,10 @@ export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin =
   if (codexBaseUrl) {
     saveCodexBaseUrlToEnv(codexBaseUrl);
     writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: codexBaseUrl });
+  }
+  const credential = apiKey ? 'apiKey' : setupToken ? 'setupToken' : subscriptionLogin ? 'subscription' : undefined;
+  if (credential || claudeBaseUrl) {
+    syncClaudeRelayTraffic({ credential });
   }
 }
 

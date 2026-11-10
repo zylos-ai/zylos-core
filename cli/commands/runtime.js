@@ -27,7 +27,7 @@ import {
   saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
-  clearClaudeRelayTrafficFlag,
+  syncClaudeRelayTraffic,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
   saveCodexApiKeyToEnv,
@@ -103,14 +103,12 @@ export function applyCredentials(target, creds) {
     if (creds.setupToken) {
       if (!saveSetupToken(creds.setupToken)) return false;
       saveSetupTokenToEnv(creds.setupToken);
-      // Setup-token login does not use a relay; a --save-base-url relay in the
-      // same command is applied afterwards and turns the setting back on.
-      return clearClaudeRelayTrafficFlag();
+      return syncClaudeRelayTraffic({ credential: 'setupToken' });
     }
     if (creds.apiKey) {
       if (!saveApiKey(creds.apiKey)) return false;
       saveApiKeyToEnv(creds.apiKey);
-      return true;
+      return syncClaudeRelayTraffic({ credential: 'apiKey' });
     }
   } else if (target === 'codex') {
     if (creds.apiKey) {
@@ -122,7 +120,8 @@ export function applyCredentials(target, creds) {
 
 export function applyBaseUrl(target, baseUrl) {
   if (target === 'claude') {
-    return saveClaudeBaseUrlToSettingsAndEnv(baseUrl);
+    if (!saveClaudeBaseUrlToSettingsAndEnv(baseUrl)) return false;
+    return syncClaudeRelayTraffic();
   }
   if (target === 'codex') {
     if (!saveCodexBaseUrlToEnv(baseUrl)) return false;
