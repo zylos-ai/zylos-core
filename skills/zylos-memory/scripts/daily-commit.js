@@ -53,7 +53,7 @@ function changedPaths() {
     // A rename or copy is followed by its source path.
     if (/[RC]/.test(entry.slice(0, 2))) i++;
   }
-  return paths;
+  return [...new Set(paths)];
 }
 
 /** Changed regular files above MAX_FILE_BYTES, with their sizes. */
