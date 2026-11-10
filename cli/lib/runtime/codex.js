@@ -25,7 +25,7 @@ import { RuntimeAdapter } from './base.js';
 import { assertInstructionReady, buildInstructionFile } from './instruction-builder.js';
 import { CodexContextMonitor } from './codex-context-monitor.js';
 import { createCodexProbe } from '../heartbeat/codex-probe.js';
-import { ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../config.js';
+import { RUNTIME_BUILTIN_ENV_KEYS, ZYLOS_DIR, SKILLS_DIR, getZylosConfig } from '../config.js';
 import {
   tmuxHasSession,
   tmuxGetPanePid,
@@ -50,7 +50,7 @@ import { resolveCodexBypassPermissions, writeCodexProjectConfig } from '../runti
 const SESSION = 'codex-main';
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 
-function getCodexApiBaseUrl() {
+function getCodexApiBaseUrl(env = process.env) {
   try {
     const configPath = path.join(os.homedir(), '.codex', 'config.toml');
     const config = fs.readFileSync(configPath, 'utf8');
@@ -60,8 +60,8 @@ function getCodexApiBaseUrl() {
     }
   } catch { /* ignore missing config */ }
 
-  if (process.env.OPENAI_BASE_URL) {
-    return process.env.OPENAI_BASE_URL.replace(/\/+$/, '');
+  if (env.OPENAI_BASE_URL) {
+    return env.OPENAI_BASE_URL.replace(/\/+$/, '');
   }
 
   return 'https://api.openai.com/v1';
@@ -105,6 +105,15 @@ export class CodexAdapter extends RuntimeAdapter {
    * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
+    // Probe env: inherit current env, but take the built-in runtime variables
+    // (RUNTIME_BUILTIN_ENV_KEYS) exactly as a new Codex session gets them.
+    const probeEnv = { ...process.env };
+    const sessionEnv = _buildSessionEnv();
+    for (const key of RUNTIME_BUILTIN_ENV_KEYS) {
+      if (Object.hasOwn(sessionEnv, key)) probeEnv[key] = sessionEnv[key];
+      else delete probeEnv[key];
+    }
+
     // Read auth.json to determine the auth mode.
     let authMode = null;
     let apiKey = '';
@@ -128,7 +137,7 @@ export class CodexAdapter extends RuntimeAdapter {
       // The status line is written to STDERR (stdout is empty), so combine streams.
       try {
         const { stdout, stderr } = await execFileAsync(CODEX_BIN, ['login', 'status'], {
-          stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
+          env: probeEnv, stdio: 'pipe', encoding: 'utf8', timeout: 10_000,
         });
         const status = classifyCodexLoginStatus((stdout || '') + (stderr || ''));
         if (status === 'success') return { status: 'success', reason: 'codex_login_status' };
@@ -142,7 +151,7 @@ export class CodexAdapter extends RuntimeAdapter {
     // Guard against corrupted auth.json (mode set to "apikey" but key missing).
     if (!apiKey) return { status: 'failure', reason: 'apikey_mode_but_no_key' };
     try {
-      const baseUrl = getCodexApiBaseUrl();
+      const baseUrl = getCodexApiBaseUrl(probeEnv);
       const res = await fetch(`${baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(10_000),
@@ -296,13 +305,7 @@ export class CodexAdapter extends RuntimeAdapter {
       await this.sendMessage(cmd);
     } else {
       // New session — launcher pipeline
-      const dotenvVars = _readDotenvVars();
-      const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
-      const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
-
-      const { env } = useCleanEnv
-        ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
-        : buildCompatEnv({ processEnv: process.env, dotenvVars });
+      const env = _buildSessionEnv();
 
       // Build launch spec — Codex reads auth from ~/.codex/auth.json via HOME
       const args = [...launchArgs, kickPrompt];
@@ -380,6 +383,27 @@ export class CodexAdapter extends RuntimeAdapter {
 
 
 // ── Private helpers ────────────────────────────────────────────────────────
+
+/**
+ * Environment for a new Codex session; checkAuth() reuses it for the built-in keys.
+ * @returns {Record<string, string>}
+ */
+function _buildSessionEnv() {
+  const dotenvVars = _readDotenvVars();
+  const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
+  const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
+
+  const { env } = useCleanEnv
+    ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
+    : buildCompatEnv({ processEnv: process.env, dotenvVars });
+
+  // Built-in runtime passthrough from .env, independent of runtime-env.manifest:
+  // applied after the manifest (clean and compat mode) so a manifest cannot drop it.
+  for (const key of RUNTIME_BUILTIN_ENV_KEYS) {
+    if (dotenvVars[key]) env[key] = dotenvVars[key];
+  }
+  return env;
+}
 
 function _readDotenvVars() {
   const vars = {};

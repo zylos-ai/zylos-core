@@ -683,6 +683,54 @@ describe('Codex launch — new session', () => {
   });
 });
 
+describe('Codex launch — built-in passthrough from .env', () => {
+  // OPENAI_BASE_URL / OPENAI_API_KEY set in .env reach the new Codex session
+  // without any runtime-env.manifest line, and the Codex auth probe sees the same values.
+  const builtinKeys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'OPENAI_BASE_URL', 'OPENAI_API_KEY'];
+  const dotenv = { OPENAI_BASE_URL: 'https://openai-relay.example.test/v1', OPENAI_API_KEY: 'sk-synthetic-openai-key' };
+  const manifestPath = path.join(fakeZylosDir, '.zylos', 'runtime-env.manifest');
+
+  for (const compat of [false, true]) {
+    it(`OpenAI variables only in .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async () => {
+      tmuxSessionExists = false;
+      calls.execFileSync.length = 0;
+      calls.execFile.length = 0;
+      const dotenvPath = path.join(fakeZylosDir, '.env');
+      const original = fs.readFileSync(dotenvPath, 'utf8');
+      const saved = Object.fromEntries(builtinKeys.map(name => [name, process.env[name]]));
+      for (const name of builtinKeys) delete process.env[name];
+      process.env.OPENAI_BASE_URL = 'https://stale-process.example.test/v1';
+      fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+      fs.writeFileSync(manifestPath, '');
+      fs.writeFileSync(dotenvPath, (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
+        + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+      try {
+        const adapter = makeAdapter(CodexAdapter);
+        await adapter.launch({ bypassPermissions: false });
+        const session = readSpecEnv();
+        assert.ok(session, 'spec should be written');
+        await adapter.checkAuth();
+        const probeCall = calls.execFile.find(c => c.args[0] === 'login' && c.args[1] === 'status');
+        assert.ok(probeCall, 'codex login status should run');
+        const probe = probeCall.opts.env;
+        for (const [key, value] of Object.entries(dotenv)) {
+          assert.equal(session[key], value, `session ${key}`);
+          assert.equal(probe[key], value, `probe ${key}`);
+        }
+        for (const key of builtinKeys) assert.equal(session[key], probe[key], `session and probe agree on ${key}`);
+      } finally {
+        fs.rmSync(manifestPath, { force: true });
+        fs.writeFileSync(dotenvPath, original);
+        for (const [name, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    });
+  }
+});
+
 describe('Codex launch — persistent permissions', () => {
   for (const exists of [false, true]) {
     it(`applies explicit bypass opt-in and withdrawal (existing tmux: ${exists})`, async () => {
