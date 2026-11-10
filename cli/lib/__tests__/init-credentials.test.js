@@ -589,7 +589,7 @@ test('init login without a new base URL prints the kept-relay notice; a base URL
   const official = [];
   assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://api.anthropic.com' }), true);
   assert.equal(persistInitCredentials({ subscriptionLogin: true }, { log: line => official.push(line) }), true);
-  assert.deepEqual(official, [], 'no notice on the official API');
+  assert.equal(official.some(line => line.includes('Still using the relay')), false, 'no kept-relay notice on the official API');
 });
 
 test('init relay-traffic recompute failure stops initialization', () => {

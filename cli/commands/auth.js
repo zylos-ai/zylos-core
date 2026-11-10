@@ -2,7 +2,7 @@ import { spawn as spawnChild } from 'node:child_process';
 import { getSessionAdapter, SUPPORTED_RUNTIMES } from '../lib/runtime/index.js';
 import { commandExists } from '../lib/shell-utils.js';
 import { notifyAuthCompleted } from '../lib/am-sock-client.js';
-import { relayLoginNotice, syncClaudeRelayTraffic } from '../lib/runtime-setup.js';
+import { claudeSettingsOverrideNotice, relayLoginNotice, syncClaudeRelayTraffic } from '../lib/runtime-setup.js';
 
 export function runNativeAuth(runtime, args) {
   return new Promise(resolve => {
@@ -44,10 +44,13 @@ export async function executeAuth(args, { exists = commandExists, adapter = getS
         message: 'Authenticated, but CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC could not be updated', persisted: null, configChanged: false } };
     }
     const relay = runtime === 'claude' ? relayNotice() : null;
+    // settings.json values that would override the recomputed setting (read only).
+    const override = runtime === 'claude' ? claudeSettingsOverrideNotice() : null;
     let recoveryNotified = false;
     try { recoveryNotified = await notifyRecovery(runtime) === true; } catch {}
     return { ok: true, data: { runtime, authStatus: 'success', recoveryNotified,
-      warnings: relay ? [{ code: 'RELAY_BASE_URL_KEPT', message: relay }] : [] } };
+      warnings: [...(relay ? [{ code: 'RELAY_BASE_URL_KEPT', message: relay }] : []),
+        ...(override ? [{ code: 'CLAUDE_SETTINGS_OVERRIDE', message: override }] : [])] } };
   } catch (error) { return { ok: false, error: { code: 'AUTH_FAILED', message: error.message, persisted: null, configChanged: false } }; }
 }
 

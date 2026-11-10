@@ -14,7 +14,7 @@ import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { parse as parseDotEnv } from 'dotenv';
 import { readLaunchDotenv } from './runtime/session-command.js';
-import { CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from './config.js';
+import { CLAUDE_BUILTIN_ENV_KEYS, CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from './config.js';
 import { writeEnvFile } from './env.js';
 import { checkPrivateFile, writePrivateFile } from './private-file.js';
 import { commandExists } from './shell-utils.js';
@@ -379,9 +379,34 @@ export function claudeCredentialIn(values) {
  * as a new session reads it. ~/.claude/settings.json is not consulted.
  */
 function savedClaudeState() {
-  let values = {};
-  try { values = readLaunchDotenv(ZYLOS_DIR); } catch {}
+  const values = savedClaudeEnv();
   return { baseUrl: values.ANTHROPIC_BASE_URL, credential: claudeCredentialIn(values) };
+}
+
+/** ~/zylos/.env read exactly as a new session reads it; empty when unreadable. */
+function savedClaudeEnv() {
+  try { return readLaunchDotenv(ZYLOS_DIR); } catch { return {}; }
+}
+
+/**
+ * After zylos saves Claude auth or relay settings to ~/zylos/.env: a warning
+ * naming the built-in keys whose ~/.claude/settings.json `env` value would
+ * override what zylos saved (set there with a different value, or set there
+ * while .env does not set it). Claude Code applies that file's `env` over the
+ * environment zylos passes, so the new setting would silently not apply.
+ * settings.json is only read, never written. Values are never included.
+ * Missing, env-less or unparseable settings.json: no warning.
+ * @returns {string|null}
+ */
+export function claudeSettingsOverrideNotice() {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  let env;
+  try { env = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))?.env; } catch { return null; }
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return null;
+  const saved = savedClaudeEnv();
+  const keys = CLAUDE_BUILTIN_ENV_KEYS.filter(key => Object.hasOwn(env, key) && String(env[key] ?? '') !== (saved[key] ?? ''));
+  if (keys.length === 0) return null;
+  return `${settingsPath} sets ${keys.join(', ')} in its env block. Claude Code uses those values instead of the ones zylos saved in ${path.join(ZYLOS_DIR, '.env')}, so the new setting will not take effect until you remove ${keys.length === 1 ? 'that key' : 'those keys'} from ${settingsPath} by hand.`;
 }
 
 /** True when a Claude base URL points anywhere other than the official API. */

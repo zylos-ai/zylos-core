@@ -33,6 +33,7 @@ import {
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
   relayLoginNotice,
+  claudeSettingsOverrideNotice,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
   writeCodexConfig,
@@ -340,6 +341,11 @@ export async function executeRuntimeSwitch(target, flags, { read = readZylosConf
     if (target === 'claude' && parsed.setupToken && !parsed.baseUrl) {
       const relay = relayNotice();
       if (relay) warnings.push({ code: 'RELAY_BASE_URL_KEPT', message: relay });
+    }
+    // settings.json values that would override what this run saved (read only).
+    if (target === 'claude' && credentialsSaved.length) {
+      const override = claudeSettingsOverrideNotice();
+      if (override) warnings.push({ code: 'CLAUDE_SETTINGS_OVERRIDE', message: override });
     }
     try {
       const ready = await hooksReady(target);
