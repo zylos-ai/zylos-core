@@ -1,11 +1,11 @@
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=150';
 import { boardController, renderBoard, renderDistribution } from './board.js?v=151';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip } from './instance-strip.js?v=151';
+import { instanceStrip } from './instance-strip.js?v=157';
 import { renderAttention } from './attention-bar.js?v=150';
 import { createGroupDetail } from './detail.js?v=151';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
-import { createHostPanel } from './host-panel.js?v=107';
+import { createHostPanel } from './host-panel.js?v=157';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=1';
 
