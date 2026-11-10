@@ -100,6 +100,25 @@ export async function runInternalConversationBrowser(t, sandbox) {
     && url.searchParams.get('tab') === side && url.searchParams.get('direction') === 'after' && url.searchParams.has('cursor');
   const selected = async id => page.waitForFunction(id => document.querySelector('#wb-chat [aria-current="true"]')?.dataset.conversationId === id, id);
   const row = id => page.locator(`#wb-chat [data-message-id="${id}"]`);
+  const checkPeerHits = async (peer, horizontal = false) => {
+    await peer.scrollIntoViewIfNeeded();
+    const target = await peer.evaluate(button => {
+      const box = button.getBoundingClientRect();
+      const x = (box.left + box.right) / 2, y = (box.top + box.bottom) / 2;
+      const points = [
+        ['top', x, box.top + 2], ['bottom', x, box.bottom - 2],
+        ['left', box.left + 2, y], ['right', box.right - 2, y],
+      ];
+      return { width: box.width, height: box.height, hits: points.map(([edge, x, y]) => {
+        const hit = document.elementFromPoint(x, y);
+        return { edge, hit: hit !== null && button.contains(hit) };
+      }) };
+    });
+    for (const point of target.hits.slice(0, horizontal ? 4 : 2)) {
+      assert.equal(point.hit, true, `mobile peer button ${point.edge} inner edge receives pointer hits`);
+    }
+    return target;
+  };
   const openMine = async () => {
     if (await page.locator('#wb-chat .conversation-back').isVisible()) await page.locator('#wb-chat .conversation-back').click();
     await page.locator('#wb-chat [data-action="mine"]').click();
@@ -178,6 +197,7 @@ export async function runInternalConversationBrowser(t, sandbox) {
         if (width === 390) {
           assert.ok(internal.peerHeight >= 40, 'mobile peer button target is at least 40px high');
           assert.ok(internal.peerWidth >= 40, 'mobile peer button target is at least 40px wide');
+          await checkPeerHits(row(message.id).locator('button.conversation-internal-peer'));
         }
         const edge = direction === 'in' ? 'right' : 'left';
         const opposite = direction === 'in' ? 'left' : 'right';
@@ -269,6 +289,15 @@ export async function runInternalConversationBrowser(t, sandbox) {
       width: node.clientWidth, scroll: node.scrollWidth })));
   for (const box of longBoxes) { assert.ok(box.left >= 0 && box.right <= 391); assert.ok(box.scroll <= box.width + 1); }
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  fixture.store.writeGroupDisplayName(mineGroup, 'A', 'human');
+  const shortPair = fixture.c4.insertInternalMessage(mineGroup, externalGroup, 'Short peer name');
+  const shortPeer = row(shortPair.inRow.id).locator('button.conversation-internal-peer');
+  await shortPeer.waitFor();
+  assert.equal(await shortPeer.innerText(), 'A');
+  const shortTarget = await checkPeerHits(shortPeer, true);
+  assert.ok(shortTarget.width >= 40, 'short-name mobile peer button target is at least 40px wide');
+  assert.ok(shortTarget.height >= 40, 'short-name mobile peer button target is at least 40px high');
+  t.diagnostic(`short-name mobile peer button: ${shortTarget.width}x${shortTarget.height}, four inner edges receive pointer hits`);
   assert.equal(errors.length, 0, errors[0]);
   assert.equal(layouts.length, 16, 'both directions checked in all eight screenshot views');
   if (output) fs.writeFileSync(path.join(output, 'internal-browser.json'), JSON.stringify({ shots, layouts, reads: reads.length, events: events.map(event => ({ name: event.name, conversationId: event.data.conversationId })),
