@@ -108,7 +108,9 @@ export function createChatAttachment({ document, attachment = {}, t = key => key
     const transferFailed = mode === 'tray' && ['failed', 'expired'].includes(attachment.status);
     const collapsed = transferFailed || imageState === 'failed';
     frame.dataset.state = collapsed ? 'failed' : imageState;
-    frame.style.aspectRatio = collapsed ? '' : '4 / 3';
+    const ratio = imageState === 'loaded' && image.naturalWidth > 0 && image.naturalHeight > 0
+      ? `${image.naturalWidth} / ${image.naturalHeight}` : '4 / 3';
+    frame.style.aspectRatio = collapsed ? '' : ratio;
     image.hidden = collapsed; placeholder.hidden = !collapsed;
     imageRetry.hidden = imageState !== 'failed' || transferFailed || kind !== 'image';
   }

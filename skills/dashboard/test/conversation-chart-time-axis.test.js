@@ -38,14 +38,15 @@ test('duration axes choose whole seconds, minutes and hours for their data range
   }
 });
 
-test('duration steps apply to horizontal, stacked and separate unit axes without changing source values', () => {
+test('duration values retain their units on direct labels and separate unit axes', () => {
   const category = { type: 'category_series', data: { format: { style: 'duration' },
     points: [59, 3600, 5400].map(value => ({ label: String(value), value })) } };
   const breakdown = { type: 'breakdown', data: { format: { style: 'duration' },
     parts: [{ label: 'First', value: 1800 }, { label: 'Second', value: 3600 }] } };
   for (const block of [category, breakdown]) {
     const config = conversationChartConfig(block, { locale: 'en' });
-    assert.deepEqual(numericAxis(config, 900, 'x').values, [0, 1800, 3600, 5400]);
+    assert.equal(config.options.scales.x.display, false);
+    assert.equal(config.options.plugins.conversationValues.format(5400), '1h 30m');
   }
   const block = durationBlock([59, 3600, 5400]);
   block.data.series[0].unit = 'first';
@@ -55,12 +56,12 @@ test('duration steps apply to horizontal, stacked and separate unit axes without
   assert.deepEqual(numericAxis(config, 900, 'y1').values, [0, 15, 30, 45, 60]);
 });
 
-test('ordinary and percent numeric axes keep their existing tick selection', () => {
+test('ordinary numeric axes use sparse ticks while percent axes retain quarter steps', () => {
   const ordinary = durationBlock([59, 3600, 5400]);
   delete ordinary.data.format;
   const normal = conversationChartConfig(ordinary, { locale: 'en' });
   assert.equal(normal.options.scales.y.afterDataLimits, undefined);
-  assert.deepEqual(numericAxis(normal, 900).values, [0, 1000, 2000, 3000, 4000, 5000, 6000]);
+  assert.deepEqual(numericAxis(normal, 900).values, [0, 2000, 4000, 6000]);
   const percent = durationBlock([0, 0.5, 1]);
   percent.data.format.style = 'percent';
   const config = conversationChartConfig(percent, { locale: 'en' });
@@ -177,7 +178,7 @@ test('weekly points tick exactly on their own dates, not on the days between the
 test('date tick labels use the page text colour', () => {
   const config = conversationChartConfig(block('date', days(7)), { locale: 'en', text: '#123456', grid: '#abcdef' });
   assert.equal(config.options.scales.x.ticks.color, '#123456');
-  assert.equal(config.options.scales.x.grid.color, '#abcdef');
+  assert.equal(config.options.scales.x.grid.display, false);
 });
 
 test('without an instance time zone a daily point keeps its calendar day west and east of UTC', t => {

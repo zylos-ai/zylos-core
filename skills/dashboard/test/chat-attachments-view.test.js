@@ -272,3 +272,16 @@ test('plain history metadata patches add replace and remove only owned media res
   assert.equal(root.querySelector('.chat-message-text'), body); assert.equal(layouts >= 3, true);
   root.destroy(); root.updateAttachments([record()]); assert.equal(root.querySelector('.chat-attachment'), null);
 });
+
+
+test('loaded images use natural portrait and landscape ratios and collapse after failure', t => {
+  for (const [width, height] of [[800, 1200], [1800, 600]]) {
+    const f = render(t), image = f.node.querySelector('img'), frame = f.node.querySelector('.chat-attachment-image-frame');
+    f.mount(); assert.equal(frame.style.aspectRatio, '4 / 3');
+    image.naturalWidth = width; image.naturalHeight = height; image.dispatch('load');
+    assert.equal(frame.style.aspectRatio, `${width} / ${height}`);
+    image.dispatch('error'); assert.equal(frame.style.aspectRatio, '');
+    f.node.querySelector('[data-action="retryAttachment"]').dispatch('click');
+    assert.equal(frame.style.aspectRatio, '4 / 3');
+  }
+});

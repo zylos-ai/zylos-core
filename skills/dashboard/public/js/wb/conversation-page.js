@@ -1,13 +1,13 @@
 import { createUploadTray } from './chat-upload-tray.js?v=2';
-import { createChatAttachment } from './chat-attachments.js?v=6';
+import { createChatAttachment } from './chat-attachments.js?v=151';
 import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon } from './board.js?v=150';
 import { createConversationState } from './conversation-state.js?v=132';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
-import { renderQuestion } from './chat-questions.js?v=108';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=116';
+import { renderQuestion } from './chat-questions.js?v=151';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=151';
 import { createGroupSide } from './group-side.js?v=150';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=105';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
@@ -777,6 +777,21 @@ export function mountConversationPage({
         q.node = fresh;
         continue;
       }
+      q.node.dataset.lifecycle = fresh.dataset.lifecycle;
+      // Keep the live header and accepted answer in sync without replacing focused editing controls.
+      const previousStatus = [...q.node.children].find(child => child.classList.contains('chat-question-status'));
+      const currentStatus = [...fresh.children].find(child => child.classList.contains('chat-question-status'));
+      if (currentStatus) {
+        currentStatus.setAttribute('role', 'status'); currentStatus.setAttribute('aria-live', 'polite');
+        if (previousStatus) previousStatus.replaceWith(currentStatus);
+        else q.node.prepend(currentStatus);
+      } else previousStatus?.remove();
+      const previousAnswer = q.node.querySelector('.chat-question-answer');
+      const currentAnswer = fresh.querySelector('.chat-question-answer');
+      if (currentAnswer) {
+        if (previousAnswer) previousAnswer.replaceWith(currentAnswer);
+        else q.node.append(currentAnswer);
+      } else previousAnswer?.remove();
       // Lifecycle changes announce on the existing card; user's editing controls stay mounted.
       let announcement = q.node.querySelector('.conversation-question-announcement');
       if (!announcement) {
@@ -789,7 +804,7 @@ export function mountConversationPage({
       const joined = messages.map(child => child.textContent).filter(Boolean).join(' · ');
       text(announcement, joined);
       for (const child of [...q.node.children]) {
-        if (child !== announcement && !child.classList.contains('chat-form-draft-status') && !child.classList.contains('chat-form-error') && child.matches('p.chat-question-status,p.chat-notice,p.chat-message-status')) {
+        if (child !== announcement && child !== currentStatus && !child.classList.contains('chat-form-draft-status') && !child.classList.contains('chat-form-error') && child.matches('p.chat-question-status,p.chat-notice,p.chat-message-status')) {
           child.hidden = true;
         }
       }
@@ -815,6 +830,7 @@ export function mountConversationPage({
       if (retry) {
         announcement.append(retry);
       }
+      announcement.hidden = !joined && !retry;
     }
   }
   function captureHistory() {

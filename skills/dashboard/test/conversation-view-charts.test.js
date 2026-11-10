@@ -166,7 +166,8 @@ test('breakdown uses one nonnegative stack with part legends and value formattin
     parts: [{ label: 'A', value: 0.3 }, { label: 'B', value: 0.7 }] } });
   assert.equal(config.options.indexAxis, 'y'); assert.equal(config.options.scales.x.stacked, true);
   assert.equal(config.data.datasets.length, 2); assert.equal(config.data.datasets[1].label, 'B');
-  assert.equal(config.options.scales.x.ticks.callback(0.3), '30%');
+  assert.equal(config.options.scales.x.display, false);
+  assert.equal(config.options.plugins.conversationValues.format(0.3), '30%');
 });
 
 function chartRoot(Chart) {

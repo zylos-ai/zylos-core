@@ -497,7 +497,7 @@ async function mountedQuestions(testContext, { mode = 'multi', saved = false, re
   } });
   testContext.after(() => page.destroy());
   await page.open(); visibleNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click'); await tick(); await tick();
-  return { root, posts, page, questionReads: () => questionReads, failQueries() { queryFailed = true; } };
+  return { root, posts, page, questionReads: () => questionReads, failQueries() { queryFailed = true; }, accept() { saved = true; } };
 }
 
 test('mounted single-mode page displays the question but has no answer or retry controls', async testContext => {
@@ -572,4 +572,88 @@ test('other-answer disclosure is created by the question renderer and keeps the 
   assert.equal(f.requests[0].action.payload.freeText, 'My own answer');
   const normal = fixture();
   assert.equal(normal.nodes().some(node => node.tagName === 'DETAILS'), false);
+});
+
+
+// Injected DOM only: no network, storage, listeners or child processes.
+// Run when changing question presentation or form controls; unrelated backend changes may skip.
+test('question lifecycle is exposed and accepted answers use safe option labels', () => {
+  const f = fixture({ status: 'answered', mutateQuestion(q) {
+    q.answerId = 'accepted';
+    q.action = { id: q.answerId, protocolVersion: '0.1', type: 'choice.select', target: 'answer.choice',
+      context: { messageId: q.messageId, blockId: 'question' }, payload: { selected: ['b'] } };
+  } });
+  assert.equal(f.root.dataset.lifecycle, 'answered');
+  const answer = f.root.querySelector('.chat-question-answer');
+  assert.ok(answer);
+  assert.equal(answer.children[0].className, 'chat-question-answer-label');
+  assert.equal(answer.children[0].textContent, 'chat.question.yourAnswer');
+  assert.equal(answer.children[1].textContent, 'Second');
+  assert.equal(fixture().root.dataset.lifecycle, 'paused');
+  assert.equal(fixture({ missing: true }).root.dataset.lifecycle, 'unavailable');
+});
+
+test('accepted free text and confirmation answers retain literal text and validated authority', () => {
+  for (const [type, payload, expected] of [
+    ['choice', { freeText: '<img src=x>' }, '<img src=x>'],
+    ['confirmation', { outcome: 'cancel' }, 'chat.question.cancel'],
+  ]) {
+    const f = fixture({ type, status: 'answered', mutateQuestion(q) {
+      q.answerId = 'accepted';
+      q.action = { id: q.answerId, protocolVersion: '0.1', ...q.constraints.block.data.action,
+        context: { messageId: q.messageId, blockId: 'question' }, payload };
+    } });
+    assert.equal(f.root.querySelector('.chat-question-answer').children[1].textContent, expected);
+    assert.equal(f.root.querySelector('img'), null);
+    f.question.action.id = 'untrusted';
+    assert.equal(f.render().querySelector('.chat-question-answer'), null);
+  }
+});
+
+test('form chips share typed select values, disabled state and cleared drafts', async () => {
+  const fields = [{ key: 'many', label: 'Many', type: 'multi_select', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], defaultValue: ['a'] },
+    { key: 'count', label: 'Count', type: 'integer', unit: 'requests', required: true }];
+  const f = fixture({ type: 'form_intent', data: { fields } });
+  const select = f.root.querySelector('select'), chips = f.root.querySelectorAll('.chat-form-chip');
+  assert.equal(select.hidden, true); assert.equal(chips.length, 2);
+  f.formState.fieldErrors = [{ key: 'many', reason: 'required' }]; f.root.updateFormState();
+  const fieldError = f.root.querySelector('.chat-field-error');
+  for (const chip of chips) {
+    assert.equal(chip.children[0].getAttribute('aria-describedby'), fieldError.id);
+    assert.equal(chip.children[0].getAttribute('aria-invalid'), 'true');
+  }
+  assert.equal(chips[0].children[0].checked, true); assert.equal(chips[1].children[0].checked, false);
+  chips[1].children[0].checked = true; chips[1].children[0].dispatch('change');
+  assert.deepEqual(f.formState.values.many, ['a', 'b']);
+  assert.ok(chips.every(chip => chip.children[0].getAttribute('aria-invalid') === 'false'));
+  const count = f.nodes().find(node => node.getAttribute('aria-label') === 'Count');
+  change(count, '3'); f.button('answer').dispatch('click'); await tick();
+  assert.deepEqual(f.requests[0].action.payload.values, { many: ['a', 'b'], count: 3 });
+  assert.equal(f.root.querySelector('.chat-field-unit').textContent, 'requests');
+  assert.equal(f.root.querySelector('.chat-field-required').textContent, '*');
+  delete f.formState.values.many; f.root.clearRemovedValues();
+  assert.ok(chips.every(chip => chip.children[0].checked === false));
+  const busy = fixture({ type: 'form_intent', data: { fields }, formState: { sending: true } });
+  assert.ok(busy.root.querySelectorAll('.chat-form-chip').every(chip => chip.children[0].disabled));
+});
+
+
+test('mounted lifecycle refresh keeps editing nodes while updating the accepted header and answer', async testContext => {
+  const f = await mountedQuestions(testContext);
+  const card = f.root.querySelector('.chat-question');
+  const draft = card.querySelector('textarea');
+  draft.value = 'Unsent draft'; draft.focus();
+  assert.equal(card.dataset.lifecycle, 'paused');
+  f.accept();
+  visibleNodes(f.root).find(node => node.dataset.action === 'refreshStatus').dispatch('click');
+  await tick(); await tick();
+  assert.equal(f.root.querySelector('.chat-question'), card);
+  assert.equal(card.querySelector('textarea'), draft);
+  assert.equal(draft.value, 'Unsent draft');
+  assert.equal(card.dataset.lifecycle, 'answered');
+  const status = card.querySelector('.chat-question-status');
+  assert.equal(status.hidden, false);
+  assert.equal(status.textContent, 'chat.question.answered');
+  assert.equal(card.querySelector('.chat-question-answer').children[1].textContent, 'chat.question.confirm');
+  assert.equal(card.querySelectorAll('.chat-question-answer').length, 1);
 });

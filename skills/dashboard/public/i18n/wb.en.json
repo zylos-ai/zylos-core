@@ -415,6 +415,7 @@
   "chat.question.confirm": "Confirm",
   "chat.question.cancel": "Cancel",
   "chat.question.choose": "Choose…",
+  "chat.question.yourAnswer": "Your answer: ",
   "chat.question.otherAnswer": "Answer in your own words",
   "chat.question.submitOther": "Submit written answer",
   "chat.block.state.resolved": "Resolved",

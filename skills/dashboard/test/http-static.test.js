@@ -71,6 +71,16 @@ for (const url of ['/themes/dark.css', '/_assets/themes/dark.css']) {
   });
 }
 
+// Pure static-file streaming, no listener or service. Run for font asset/MIME changes.
+test('static handler serves the local variable font with its browser MIME type', async () => {
+  const res = response();
+  assert.equal(serveStatic({ url: '/_assets/fonts/InterVariable.woff2' }, res, root), true);
+  await finished(res);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers['content-type'], 'font/woff2');
+  assert.equal(res.headers['cache-control'], 'public, max-age=60');
+});
+
 // HTTP integration: real createServer page dispatch and index rendering. Run for
 // local page routes or browser-base changes; skip component-only styling edits.
 // Runner supplies private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and tmux namespace.

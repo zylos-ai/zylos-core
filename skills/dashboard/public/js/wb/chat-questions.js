@@ -21,6 +21,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
   const lifecycle = valid && ['paused', 'answered', 'stopped', 'superseded'].includes(question.status)
     ? question.status : 'unavailable';
   root.dataset.interruptId = envelope?.interruptId || '';
+  root.dataset.lifecycle = lifecycle;
   if (readOnlyExternal) root.append(node('p', t('chat.question.externalReadOnly'), 'chat-question-status'));
   else {
     if (statePendingPage && !question) root.append(node('p', t('chat.question.stateNotLoaded'), 'chat-question-status'));
@@ -75,6 +76,18 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         context: { messageId: envelope.messageId, blockId: block.id }, payload };
     void submit(action);
   };
+  if (lifecycle === 'answered' && !actionUnavailable && question.action?.payload) {
+    const payload = question.action.payload, data = block.data;
+    const shown = payload.freeText !== undefined ? payload.freeText
+      : payload.selected ? payload.selected.map(id => data.options?.find(option => option.id === id)?.label ?? id).join('、')
+      : payload.outcome ? (payload.outcome === 'confirm' ? data.confirmLabel || t('chat.question.confirm') : data.cancelLabel || t('chat.question.cancel'))
+      : null;
+    if (shown) {
+      const line = node('p', undefined, 'chat-question-answer');
+      line.append(node('span', t('chat.question.yourAnswer'), 'chat-question-answer-label'), node('span', shown));
+      root.append(line);
+    }
+  }
   const retryAccepted = lifecycle === 'answered' && question.answerId === formState.action?.id && receipt?.retryAllowed === true;
   if (writable && formState.action && validateAnswer(formState.action, envelope) && retryAccepted) {
     root.append(button(t('chat.retry'), () => { void submit(formState.action, true); }, 'retryAnswer'), status);
@@ -122,6 +135,10 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         entry.error.textContent = error ? t('chat.question.field.' + error.reason) : '';
         entry.error.hidden = !error;
         entry.input.setAttribute('aria-invalid', error ? 'true' : 'false');
+        for (const { box, option } of entry.chips || []) {
+          box.checked = Array.isArray(formState.values[key]) && formState.values[key].includes(option.value);
+          box.setAttribute('aria-invalid', error ? 'true' : 'false');
+        }
         for (const segment of entry.segments || []) segment.setAttribute('aria-pressed', segment.value === formState.values[key] ? 'true' : 'false');
       }
       draftHint.textContent = formState.draftStatus ? t('chat.question.draft.' + formState.draftStatus) : '';
@@ -143,7 +160,12 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
       if (!Object.hasOwn(formState.values, field.key) && field.defaultValue !== undefined) formState.values[field.key] = clone(field.defaultValue);
       if (!Object.hasOwn(formState.values, field.key) && field.type === 'boolean' && field.required === true) formState.values[field.key] = false;
       const segmented = field.type === 'single_select' && field.required && field.options.length >= 2 && field.options.length <= 4;
-      const label = node(segmented ? 'div' : 'label', undefined, 'chat-question-field'); label.dataset.fieldKey = field.key; label.append(node('span', field.label + (field.required ? ' *' : '')));
+      const chips = field.type === 'multi_select';
+      const label = node(segmented || chips ? 'div' : 'label', undefined, 'chat-question-field');
+      label.dataset.fieldKey = field.key; label.dataset.fieldType = field.type;
+      const caption = node('span', field.label, 'chat-field-label');
+      if (field.required) caption.append(node('span', '*', 'chat-field-required'));
+      label.append(caption);
       let input;
       const storedValue = formState.values[field.key];
       // Storage is untrusted; rendering guards do not replace shared submission validation.
@@ -179,7 +201,7 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
       input.setAttribute('aria-label', field.label); input.disabled = !!formState.sending;
       const save = () => {
         if (field.type === 'boolean') formState.values[field.key] = input.checked;
-        else if (field.type === 'multi_select') formState.values[field.key] = [...input.selectedOptions].map(option => option.value);
+        else if (field.type === 'multi_select') formState.values[field.key] = Array.from(input.selectedOptions ?? Array.from(input.options ?? input.children ?? []).filter(option => option.selected)).map(option => option.value);
         else if (input.value === '' && !['text', 'multiline_text'].includes(field.type)) delete formState.values[field.key];
         else if (['number', 'integer'].includes(field.type)) formState.values[field.key] = Number(input.value);
         else if (field.type === 'datetime') { const at = instantFromInput(input.value, timeZone); formState.values[field.key] = Number.isFinite(at) ? new Date(at).toISOString() : input.value; }
@@ -193,7 +215,25 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
         refresh();
       };
       input.addEventListener('input', save); input.addEventListener('change', save);
-      controls.push(input); label.append(input);
+      controls.push(input);
+      if (field.unit && ['number', 'integer'].includes(field.type)) {
+        const wrap = node('span', undefined, 'chat-field-control');
+        wrap.append(input, node('span', field.unit, 'chat-field-unit')); label.append(wrap);
+      } else label.append(input);
+      const chipControls = [];
+      if (chips) {
+        input.hidden = true;
+        const group = node('div', undefined, 'chat-form-chips');
+        group.setAttribute('role', 'group'); group.setAttribute('aria-label', field.label);
+        for (const option of Array.from(input.options ?? input.children ?? [])) {
+          const chip = node('label', undefined, 'chat-form-chip'), box = node('input');
+          box.type = 'checkbox'; box.checked = option.selected; box.disabled = input.disabled;
+          box.addEventListener('change', () => { option.selected = box.checked; save(); });
+          controls.push(box); chipControls.push({ box, option });
+          chip.append(box, node('span', option.textContent)); group.append(chip);
+        }
+        label.append(group);
+      }
       if (field.help) label.append(node('span', field.help, 'chat-notice'));
       const segments = [];
       if (segmented) {
@@ -211,7 +251,8 @@ export function renderQuestion({ document, envelope, block, row, question, canWr
       const fieldError = node('span', '', 'chat-field-error'); fieldError.setAttribute('role', 'alert');
       fieldError.id = 'field-error-' + envelope.messageId + '-' + block.id + '-' + field.key;
       input.setAttribute('aria-describedby', fieldError.id);
-      label.append(fieldError); fieldNodes.set(field.key, { label, input, error: fieldError, segments });
+      for (const { box } of chipControls) box.setAttribute('aria-describedby', fieldError.id);
+      label.append(fieldError); fieldNodes.set(field.key, { label, input, error: fieldError, segments, chips: chipControls });
       form.append(label);
     }
     root.append(form, draftHint, button(data.submitLabel || t('chat.question.submit'), () => {

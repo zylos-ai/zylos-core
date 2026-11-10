@@ -1,3 +1,12 @@
+/* Inter 4.1, SIL Open Font License; served locally with the dashboard assets. */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../fonts/InterVariable.woff2") format("woff2");
+}
+
 :root {
   --radius: 12px;
   --radius-sm: 8px;
@@ -8,7 +17,7 @@
   --space-lg: 24px;
   --space-xl: 32px;
   color-scheme: light;
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", system-ui, sans-serif;
   font-size: 14px;
   line-height: 1.5;
 }
@@ -326,9 +335,9 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
   font-weight: 600;
 }
 .memory-action.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: white;
+  border-color: var(--c-primary);
+  background: var(--c-primary);
+  color: var(--c-on-fill);
 }
 .memory-action:disabled,
 .memory-mode:disabled {

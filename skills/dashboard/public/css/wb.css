@@ -27,6 +27,103 @@
   --wb-on-fill: var(--bg);
 }
 :root[data-theme="dark"] { --wb-quota-lightness: 68%; --wb-quota-fill-saturation: 75%; --wb-quota-fill-lightness: 68%; --wb-quota-outline: none; --wb-scrim: color-mix(in srgb, var(--bg) 72%, transparent); }
+/* Tokens */
+:root {
+  /* layout */
+  --c-max: 720px;
+  --c-pad: 20px;
+  --c-h: 36px;
+  --c-r-sm: 6px;   /* only for a control nested in a padded control (segment thumb) */
+  --c-r: 8px;      /* controls, option rows, inner panels */
+  --c-r-lg: 12px;  /* cards */
+  --c-input-fs: 14px;
+  --c-ease: cubic-bezier(.2, 0, 0, 1);
+  --c-dur: 150ms;
+
+  /* surfaces — light: white card floats on the tinted page; sunken = 3.5% ink */
+  --c-surface: var(--wb-panel);
+  --c-sunken: color-mix(in srgb, var(--text) 3.5%, var(--c-surface));
+  --c-raised: var(--wb-panel);
+  --c-input-bg: var(--c-surface);
+  --c-fill: color-mix(in srgb, var(--text) 3.5%, transparent);
+  --c-fill-hover: color-mix(in srgb, var(--text) 6%, transparent);
+  --c-fill-press: color-mix(in srgb, var(--text) 9%, transparent);
+  --c-line: color-mix(in srgb, var(--text) 8%, transparent);
+  --c-line-input: color-mix(in srgb, var(--text) 15%, transparent);
+  --c-line-input-hover: color-mix(in srgb, var(--text) 26%, transparent);
+  --c-control-edge: var(--text-muted);                      /* radio/checkbox outline, 3.7:1 */
+
+  /* ink */
+  --c-ink: var(--text);
+  --c-ink-2: var(--text-dim);
+  --c-ink-meta: color-mix(in srgb, var(--text-dim) 60%, var(--text-muted)); /* 5.1:1 on card; --text-muted alone is 3.7:1 */
+
+  /* Semantic fills and inks. */
+  --c-primary: #0f766e;
+  --c-on-fill: #f7faf9;
+  --c-primary-hover: color-mix(in srgb, var(--c-primary) 86%, black);
+  --c-primary-press: color-mix(in srgb, var(--c-primary) 76%, black);
+  --c-accent-ink: var(--accent-hover);
+  --c-accent-soft: color-mix(in srgb, var(--accent) 9%, transparent);
+  --c-accent-line: color-mix(in srgb, var(--accent) 45%, transparent);
+  --c-accent-halo: color-mix(in srgb, var(--accent) 22%, transparent);
+  --c-danger: #b84545;
+  --c-danger-hover: color-mix(in srgb, var(--c-danger) 90%, black);
+  --c-danger-press: color-mix(in srgb, var(--c-danger) 80%, black);
+  --c-danger-ink: color-mix(in srgb, var(--wb-err) 75%, var(--text));
+  --c-danger-soft: color-mix(in srgb, var(--wb-err) 8%, transparent);
+  --c-danger-line: color-mix(in srgb, var(--wb-err) 22%, transparent);
+  --c-success-ink: color-mix(in srgb, var(--wb-work) 70%, var(--text));
+  --c-success-soft: color-mix(in srgb, var(--wb-work) 9%, transparent);
+
+  /* elevation: a 1px ring + soft falloff replaces the grey border */
+  --c-shadow-card: 0 0 0 1px color-mix(in srgb, var(--text) 7%, transparent),
+    0 1px 2px color-mix(in srgb, var(--text) 4%, transparent),
+    0 4px 12px -4px color-mix(in srgb, var(--text) 6%, transparent);
+  --c-shadow-xs: 0 1px 2px color-mix(in srgb, var(--text) 5%, transparent);
+  --c-shadow-btn: 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent), 0 1px 2px color-mix(in srgb, var(--text) 5%, transparent);
+  --c-shadow-fill: inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent), 0 1px 2px color-mix(in srgb, var(--text) 14%, transparent);
+  --c-shadow-thumb: 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent), 0 1px 3px color-mix(in srgb, var(--text) 10%, transparent);
+  --c-focus: 0 0 0 2px var(--c-surface), 0 0 0 4px color-mix(in srgb, var(--accent) 75%, transparent);
+
+  /* icons: the page's line set (Lucide geometry, stroke 1.75), drawn through masks */
+  --c-ico-chev: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><path d='m9 18 6-6-6-6'/></svg>");
+  --c-ico-alert: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><path d='m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z'/><path d='M12 9v4M12 17h.01'/></svg>");
+  --c-ico-check: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
+  --c-ico-check-circle: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='10'/><path d='m9 12 2 2 4-4'/></svg>");
+}
+
+/* Dark: real layers — page (--bg) < sunken wells < card (--bg-elevated) < raised thumb/tooltip. */
+:root[data-theme="dark"] {
+  --c-sunken: color-mix(in srgb, var(--bg) 55%, var(--c-surface));
+  --c-raised: color-mix(in srgb, var(--text) 7%, var(--c-surface));
+  --c-input-bg: var(--c-sunken);
+  --c-fill: color-mix(in srgb, var(--text) 4.5%, transparent);
+  --c-fill-hover: color-mix(in srgb, var(--text) 7.5%, transparent);
+  --c-fill-press: color-mix(in srgb, var(--text) 11%, transparent);
+  --c-line: color-mix(in srgb, var(--text) 9%, transparent);
+  --c-line-input: color-mix(in srgb, var(--text) 13%, transparent);
+  --c-line-input-hover: color-mix(in srgb, var(--text) 24%, transparent);
+  --c-ink-meta: var(--text-muted);
+  --c-accent-ink: var(--accent);
+  --c-accent-soft: color-mix(in srgb, var(--accent) 13%, transparent);
+  --c-accent-line: color-mix(in srgb, var(--accent) 50%, transparent);
+  --c-accent-halo: color-mix(in srgb, var(--accent) 28%, transparent);
+  --c-danger-ink: color-mix(in srgb, var(--wb-err) 60%, var(--text));
+  --c-danger-soft: color-mix(in srgb, var(--wb-err) 14%, transparent);
+  --c-danger-line: color-mix(in srgb, var(--wb-err) 30%, transparent);
+  --c-success-ink: color-mix(in srgb, var(--wb-work) 60%, var(--text));
+  --c-success-soft: color-mix(in srgb, var(--wb-work) 15%, transparent);
+  --c-shadow-card: 0 0 0 1px color-mix(in srgb, var(--text) 8%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent),
+    0 1px 2px rgb(0 0 0 / .3), 0 6px 16px -6px rgb(0 0 0 / .45);
+  --c-shadow-xs: 0 1px 2px rgb(0 0 0 / .25);
+  --c-shadow-btn: 0 0 0 1px color-mix(in srgb, var(--text) 13%, transparent), 0 1px 2px rgb(0 0 0 / .25);
+  --c-shadow-fill: inset 0 1px 0 color-mix(in srgb, #fff 18%, transparent), 0 1px 2px rgb(0 0 0 / .3);
+  --c-shadow-thumb: 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent), 0 1px 3px rgb(0 0 0 / .4);
+}
+
+
 .wb-mono, .wb-key.wb-mono, .wb-args { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
 .wb-sub, .wb-note { color: var(--text-dim); }
 .wb-note { font-size: 12px; margin: 8px 0 0; }
@@ -39,10 +136,14 @@
 .wb-btn:disabled { opacity: .5; cursor: not-allowed; }
 .wb-btn[hidden], .wb-icon-btn[hidden] { display: none; }
 .wb-btn-sm { height: 26px; padding: 0 9px; font-size: 12px; }
-.wb-btn-primary { background: var(--accent); border-color: var(--accent); color: var(--wb-on-fill); }
-.wb-btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-.wb-btn-danger { background: var(--wb-err); border-color: var(--wb-err); color: var(--wb-on-fill); }
-.wb-btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--wb-err) 86%, var(--text)); }
+.wb-btn-primary { background: var(--c-primary); border-color: var(--c-primary); color: var(--c-on-fill); }
+.wb-btn-primary:hover:not(:disabled) { background: var(--c-primary-hover); border-color: var(--c-primary-hover); }
+.wb-btn-primary:active:not(:disabled) { background: var(--c-primary-press); border-color: var(--c-primary-press); }
+.wb-btn-primary:focus-visible { outline: none; box-shadow: var(--c-focus); }
+.wb-btn-danger { background: var(--c-danger); border-color: var(--c-danger); color: var(--c-on-fill); }
+.wb-btn-danger:hover:not(:disabled) { background: var(--c-danger-hover); border-color: var(--c-danger-hover); }
+.wb-btn-danger:active:not(:disabled) { background: var(--c-danger-press); border-color: var(--c-danger-press); }
+.wb-btn-danger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--c-surface), 0 0 0 4px var(--c-danger); }
 .wb-icon-btn { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); cursor: pointer; transition: background .14s, color .14s; }
 .wb-icon-btn:hover:not(:disabled) { background: var(--wb-hover); color: var(--text); }
 .wb-icon-btn:disabled { opacity: .38; cursor: not-allowed; }

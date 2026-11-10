@@ -415,6 +415,7 @@
   "chat.question.confirm": "确认",
   "chat.question.cancel": "取消",
   "chat.question.choose": "请选择…",
+  "chat.question.yourAnswer": "你的回答：",
   "chat.question.otherAnswer": "用自己的话回答",
   "chat.question.submitOther": "提交文字回答",
   "chat.block.state.resolved": "已回答",
