@@ -3,9 +3,11 @@ import { createChatAttachment } from '/js/wb/chat-attachments.js';
 import { icon } from '/js/wb/plain-text.js';
 import { renderQuestion } from '/js/wb/chat-questions.js';
 import { CONTENT_PREFIX, makeQuestionSummary, parseC4Content } from '/chat-schema.js';
+import { createActivityArea } from '/js/wb/conversation-activity.js';
+import { instanceStrip } from '/js/wb/instance-strip.js';
 
 const words = await (await fetch('/i18n/wb.zh.json')).json();
-const t = key => words[key] ?? key;
+const t = (key, values = {}) => (words[key] ?? key).replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(values, name) ? String(values[name]) : match);
 const blocks = [
   { id: 'boolean', type: 'form_intent', data: { title: '提醒设置', fields: [{ key: 'remind', label: '值班前一天提醒我', type: 'boolean', defaultValue: true }], action: { type: 'form.submit', target: 'answer.form' } } },
   { id: 'danger', type: 'confirmation', data: { title: '删除测试群组？', severity: 'destructive', body: '删除后无法恢复。', action: { type: 'confirmation.respond', target: 'answer.confirm' } } },
@@ -16,7 +18,7 @@ const blocks = [
 ];
 blocks.push(
   ...[[1, 'category-single'], [2, 'category-pair'], [4, 'category-reference']].map(([count, id]) => ({
-    id, type: 'category_series', data: { title: count + ' 项分类对比',
+    id, type: 'category_series', data: { title: count + ' 项分类对比', xLabel: '状态', yLabel: '数量',
       points: Array.from({ length: count }, (_, i) => ({ key: 'item_' + i, label: '分类 ' + (i + 1), value: [12, 8, 5, 3][i] })),
       ...(count === 4 ? { reference: { label: '告警线', value: 10 } } : {}),
     },
@@ -173,4 +175,26 @@ for (const status of ['ready', 'failed', 'expired']) {
 }
 const failedImage = createChatAttachment({ document, t, mode: 'tray', attachment: { name: 'failed-image.png', kind: 'image', status: 'failed' }, onRetry: () => {}, onRemove: () => {} });
 failedImage.node.id = 'tray-failed-image'; errorsTray.append(failedImage.node); resources.push(failedImage); failedImage.mount();
+// Real presentation modules with fixed data; no backend, runtime or task runs.
+const activity = createActivityArea({ document, t });
+activity.update({ key: 'handoff-status', live: false, round: { state: 'done' }, segment: {
+  start: 0, end: 2000, steps: [
+    { kind: 'tool', status: 'failed', start: 0, end: 1000, label: { key: 'read', arg: 'handoff.md' } },
+    { kind: 'tool', status: 'incomplete', start: 1000, end: 2000, label: { key: 'described', arg: '等待后续工作' } },
+  ] } }, { open: true, now: 2000 });
+message('handoff-status').body.append(activity.node);
+for (const capacity of [2, 256]) {
+  const { body } = message('pool-' + capacity);
+  const strip = document.createElement('div'); strip.className = 'wb-instance-strip'; body.append(strip);
+  instanceStrip(strip, { mode: 'multi', baselineRuntime: 'claude', rows: [], instance: {
+    pool: { used: 1, capacity, waiting: 0, capacityRecord: { valid: true, fresh: true, source: 'auto' } },
+    accounts: { claude: { used_percentage: 30 } } } }, { document, t, level: 'technical' });
+}
+appendContent('answer-card', { id: 999, direction: 'in', content: CONTENT_PREFIX + JSON.stringify({
+  version: 1, kind: 'answer', messageId: 'answer-card-id', interruptId: 'private-interrupt-id', questionSummary: '选择缓存方案？',
+  fallbackText: '回答了 interruptId=private-interrupt-id（问题：选择缓存方案？）：采用 LRU 缓存，先保留现有容量。',
+  action: { protocolVersion: '0.1', id: 'answer-card-id', type: 'choice.select', target: 'answer.choice',
+    context: { messageId: 'cache-question', blockId: 'question' }, payload: { selected: ['lru'] } },
+  metadata: { zylos: { answerId: 'answer-card-id' } }
+}) });
 window.componentFixtureReady = true;
