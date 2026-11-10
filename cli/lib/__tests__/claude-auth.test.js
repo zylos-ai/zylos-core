@@ -144,6 +144,44 @@ describe('Claude auth checks', () => {
     assert.equal(calls[0].env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
   });
 
+  describe('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC passthrough', () => {
+    const NAME = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+    // Behaves like Claude Code: without a credential in its env it is not logged in.
+    async function probe(dotenv) {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-claude-passthrough-'));
+      tmpDirs.push(root);
+      fs.writeFileSync(path.join(root, '.env'), dotenv, 'utf8');
+      const calls = [];
+      const execFile = async (file, args, options) => {
+        calls.push(options.env);
+        const hasCredential = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'].some(k => options.env[k]);
+        return { stdout: hasCredential ? 'pong' : 'Not logged in', stderr: '' };
+      };
+      const result = await new ClaudeAdapter({ root, env: { PATH: process.env.PATH, HOME: root }, execFile }).checkAuth();
+      assert.equal(calls.length, 1);
+      return { result, env: calls[0] };
+    }
+
+    it('injects it into the probe env only when .env sets it', async () => {
+      const relay = 'ANTHROPIC_BASE_URL=https://relay.example.test\nANTHROPIC_AUTH_TOKEN=relay-bearer-test\n';
+      const withSetting = await probe(relay + `${NAME}=1\n`);
+      assert.equal(withSetting.result.status, 'success');
+      assert.equal(withSetting.env[NAME], '1');
+
+      const without = await probe(relay);
+      assert.equal(without.result.status, 'success');
+      assert.equal(Object.hasOwn(without.env, NAME), false);
+    });
+
+    it('does not make a credential-less .env count as authenticated', async () => {
+      const { result, env } = await probe(`${NAME}=1\n`);
+      assert.equal(env[NAME], '1');
+      for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) assert.equal(env[k], undefined);
+      assert.equal(result.status, 'failure');
+      assert.equal(result.reason, 'cli_probe_not_logged_in');
+    });
+  });
+
   it('returns failure for explicit logged-out and authentication-error signals', async () => {
     const adapter = new ClaudeAdapter({});
 

@@ -31,6 +31,10 @@ const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
 // write (including ANTHROPIC_AUTH_TOKEN for relays) plus the endpoint.
 const DOTENV_AUTH_VARS = [...CLAUDE_CREDENTIAL_KEYS, 'ANTHROPIC_BASE_URL'];
 
+// Non-credential .env settings the probe also carries so it runs in the same
+// environment as the session. Never a credential: keep out of CLAUDE_CREDENTIAL_KEYS.
+const DOTENV_PROBE_PASSTHROUGH = ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'];
+
 /**
  * Parse a value from a .env file, tolerating common formatting variations:
  *   - Spaces/tabs around key and `=`  (e.g. `KEY = value`)
@@ -141,7 +145,7 @@ export class ClaudeAdapter extends SessionAdapter {
     const injectedEnv = { ...(this.options.env || process.env) };
     try {
       const envContent = fs.readFileSync(path.join(this.options.root || ZYLOS_DIR, '.env'), 'utf8');
-      for (const key of DOTENV_AUTH_VARS) {
+      for (const key of [...DOTENV_AUTH_VARS, ...DOTENV_PROBE_PASSTHROUGH]) {
         const value = _parseEnvValue(envContent, key);
         if (value) injectedEnv[key] = value;
       }
