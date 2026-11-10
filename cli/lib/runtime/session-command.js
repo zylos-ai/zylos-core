@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { parse as parseDotenv } from 'dotenv';
 import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest } from './tmux-env.js';
 import { buildKickPrompt } from './kick-prompt.js';
 import { adapterError } from './tmux-protocol.js';
@@ -45,17 +46,13 @@ export function buildRuntimeArgs(runtime, config, {root, help = '', bypassPermis
   return args;
 }
 /**
- * <root>/.env as a new runtime session reads it: plain KEY=VALUE lines,
- * surrounding quotes removed, later lines win, anything else skipped. The
- * relay traffic setting is computed from the same read. Empty when absent.
+ * Read <root>/.env with the shared dotenv grammar, including exports, comments
+ * and colon assignments. Later assignments win. Empty when absent.
  */
 export function readLaunchDotenv(root) {
-  const dotenvVars = {};
+  let dotenvVars = {};
   try {
-    for (const line of fs.readFileSync(path.join(root,'.env'),'utf8').split('\n')) {
-      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-      if (m) dotenvVars[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
-    }
+    dotenvVars = parseDotenv(fs.readFileSync(path.join(root, '.env'), 'utf8'));
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
   return dotenvVars;
 }

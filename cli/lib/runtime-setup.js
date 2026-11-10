@@ -221,9 +221,8 @@ const CLAUDE_CREDENTIAL_COMMENTS = {
 
 function credentialEnvValue(value) {
   if (typeof value !== 'string' || !value || /[\x00-\x1f\x7f]/.test(value)) return null;
-  // Both dotenv and the runtime's literal .env readers must recover the exact
-  // credential. Escaping quotes would add bytes in those readers, so use only a
-  // lossless representation and reject unrepresentable input before writing.
+  // Preserve the exact credential without adding escape bytes. Use only a
+  // lossless dotenv representation and reject unrepresentable input before writing.
   for (const candidate of [value, `'${value}'`, `"${value}"`]) {
     const literal = candidate.trim().replace(/^(['"])(.*)\1$/, '$2');
     if (literal === value && parseDotEnv(`CREDENTIAL=${candidate}\n`).CREDENTIAL === value) return candidate;
@@ -536,9 +535,8 @@ export function resolveCodexBypassPermissions(projectDir, opts = {}) {
     return process.env.CODEX_BYPASS_PERMISSIONS !== 'false';
   }
   try {
-    const env = fs.readFileSync(path.join(projectDir, '.env'), 'utf8');
-    const match = env.match(/^\s*CODEX_BYPASS_PERMISSIONS\s*=\s*(.+)$/m);
-    if (match) return match[1].trim().replace(/^(['"])(.*)\1$/, '$2') !== 'false';
+    const env = parseDotEnv(fs.readFileSync(path.join(projectDir, '.env'), 'utf8'));
+    if (env.CODEX_BYPASS_PERMISSIONS !== undefined) return env.CODEX_BYPASS_PERMISSIONS !== 'false';
   } catch (err) { if (err.code !== 'ENOENT') throw err; }
   return true;
 }

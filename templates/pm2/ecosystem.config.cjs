@@ -10,6 +10,7 @@ const path = require('path');
 const os = require('os');
 
 const fs = require('fs');
+const { createRequire } = require('module');
 
 const HOME = os.homedir();
 // Match the CLI instance root (cli/lib/config.js), including non-default installs.
@@ -21,12 +22,15 @@ const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 const BIN_DIR = path.join(ZYLOS_DIR, 'bin');
 const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 
-// Read a value from .env file (tolerates quotes and spaces around =)
+// Read a value with the same dotenv grammar used by session startup.
 function readEnvValue(key, defaultValue = '') {
   try {
+    const sourceLoader = path.join(__dirname, '../../skills/comm-bridge/scripts/core-config-loader.js');
+    const loader = fs.existsSync(sourceLoader) ? sourceLoader : path.join(SKILLS_DIR, 'comm-bridge/scripts/core-config-loader.js');
+    const { resolveCoreConfigModule } = require(loader);
+    const { parse } = createRequire(resolveCoreConfigModule())('dotenv');
     const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    const match = content.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm'));
-    if (match) return match[1].trim().replace(/^(['"])(.*)\1$/, '$2');
+    return parse(content)[key] ?? defaultValue;
   } catch {}
   return defaultValue;
 }
@@ -42,9 +46,8 @@ const ENHANCED_PATH = [...new Set([
   ...(process.env.PATH || '').split(':').filter(Boolean),
 ])].join(':');
 
-// Whether Claude should run with --dangerously-skip-permissions
+// Whether each runtime should bypass its permission prompts.
 const CLAUDE_BYPASS_PERMISSIONS = readEnvValue('CLAUDE_BYPASS_PERMISSIONS', 'true');
-// Whether Codex should run with --dangerously-bypass-approvals-and-sandbox
 const CODEX_BYPASS_PERMISSIONS = readEnvValue('CODEX_BYPASS_PERMISSIONS', 'true');
 
 // Resolve the zylos package root so deployed skills can import CLI modules.

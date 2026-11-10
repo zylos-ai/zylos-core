@@ -308,12 +308,11 @@ function isValidTimezone(tz) {
  * Read the current TZ value from .env.
  * @returns {string|null} TZ value or null if not set
  */
-function readEnvTimezone() {
+export function readEnvTimezone() {
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
     const content = fs.readFileSync(envPath, 'utf8');
-    const match = content.match(/^TZ=(.+)$/m);
-    return match ? match[1].trim() : null;
+    return parseDotEnv(content).TZ || null;
   } catch {
     return null;
   }
@@ -524,13 +523,12 @@ function rollbackSetupToken() {
  * Check if Claude bypass permissions needs first-time acceptance.
  * Returns true if bypass is enabled and hasn't been accepted yet.
  */
-function needsBypassAcceptance() {
+export function needsBypassAcceptance() {
   // Check if bypass is disabled in .env
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
     const content = fs.readFileSync(envPath, 'utf8');
-    const match = content.match(/^CLAUDE_BYPASS_PERMISSIONS=(.+)$/m);
-    if (match && match[1].trim() === 'false') return false;
+    if (parseDotEnv(content).CLAUDE_BYPASS_PERMISSIONS === 'false') return false;
   } catch {}
 
   // Check if already pre-accepted via settings.json
@@ -857,7 +855,7 @@ function installSkillDependencies() {
  * @param {string|null} explicitPassword - Password from --web-password flag or env var
  * @returns {string} The password (existing or newly generated)
  */
-function ensureWebConsolePassword(explicitPassword = null) {
+export function ensureWebConsolePassword(explicitPassword = null) {
   const envPath = path.join(ZYLOS_DIR, '.env');
   const newKey = 'ZYLOS_WEB_PASSWORD';
   const oldKey = 'WEB_CONSOLE_PASSWORD';
@@ -879,11 +877,9 @@ function ensureWebConsolePassword(explicitPassword = null) {
   }
 
   // Check new name first, then legacy
-  const matchNew = content.match(new RegExp(`^${newKey}=(.+)`, 'm'));
-  if (matchNew) return matchNew[1].trim();
-
-  const matchOld = content.match(new RegExp(`^${oldKey}=(.+)`, 'm'));
-  if (matchOld) return matchOld[1].trim();
+  const values = parseDotEnv(content);
+  if (values[newKey]) return values[newKey];
+  if (values[oldKey]) return values[oldKey];
 
   // Generate new password
   const password = crypto.randomBytes(12).toString('base64url').slice(0, 16);
