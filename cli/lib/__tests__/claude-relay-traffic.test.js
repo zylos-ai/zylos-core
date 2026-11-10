@@ -32,7 +32,7 @@ const setupToken = () => 'sk-ant-oat01-' + randomBytes(16).toString('hex');
 
 // A hand-configured settings.json, unusually formatted so any rewrite shows.
 const SETTINGS_TEXT = JSON.stringify({ env: { ANTHROPIC_API_KEY: 'sk-ant-api03-hand-configured', ANTHROPIC_BASE_URL: 'https://hand-relay.example.test',
-  KEEP: 'unchanged' }, theme: 'dark' }, null, 4) + '\n\n';
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', KEEP: 'unchanged' }, theme: 'dark' }, null, 4) + '\n\n';
 const state = () => ({
   env: parseDotEnv(fs.readFileSync(envFile))[flag],
   envLines: fs.readFileSync(envFile, 'utf8').split('\n').filter(line => line.includes(flag + '=')).length,
