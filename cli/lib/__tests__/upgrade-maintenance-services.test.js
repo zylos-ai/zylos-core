@@ -56,7 +56,7 @@ test('external services use saved restart instead of a silently filtered ecosyst
   m.start(f.j);
   m.verifyServices(f.j);
   assert.equal(f.readRecords()[0].pm2_env.status,'online');
-  assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env'],['jlist'],['save']]);
+  assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env'],['jlist'],['jlist'],['save']]);
 });
 
 for (const changed of ['missing','outside','changed','duplicate','saved-duplicate']) {
@@ -115,11 +115,13 @@ test('ecosystem module loads in a fresh child without parent cache or stdout pol
   assert.deepEqual(m.ecosystemServiceNames(f.file),['changed']);
 });
 
-test('external restart failure has no delete or ecosystem fallback', t => {
+test('external restart failure remains best effort without delete or ecosystem fallback', t => {
   const f = serviceFixture(t,{ecosystem:true,names:[]});
   fs.writeFileSync(path.join(f.root,'fail-restart'),'yes');
-  assert.throws(() => m.start(f.j),/exited 8/);
-  assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env']]);
+  assert.doesNotThrow(() => m.start(f.j));
+  m.verifyServices(f.j);
+  assert.match(f.j.serviceWarnings[0],/scheduler.*manually/);
+  assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env'],['jlist'],['jlist'],['save']]);
 });
 
 test('fake PM2 preserves the zero-success filtered-start premise', t => {
@@ -129,12 +131,13 @@ test('fake PM2 preserves the zero-success filtered-start premise', t => {
   assert.equal(f.readRecords()[0].pm2_env.status,'stopped');
 });
 
-test('strict service verification refuses an external service remaining stopped', t => {
+test('service verification warns for an external service remaining stopped', t => {
   const f = serviceFixture(t,{ecosystem:true,names:[]});
   let elapsed=0;
   t.mock.method(Date,'now',()=>elapsed+=40000);
-  assert.throws(()=>m.verifyServices(f.j),/original services did not become online/);
-  assert.deepEqual(f.commands(),[['jlist']]);
+  m.verifyServices(f.j);
+  assert.match(f.j.serviceWarnings[0],/scheduler.*manually/);
+  assert.deepEqual(f.commands(),[['jlist'],['jlist'],['save']]);
 });
 
 test('mixed service recovery keeps the external service in complete verification', t => {
@@ -145,5 +148,5 @@ test('mixed service recovery keeps the external service in complete verification
   m.start(f.j);
   m.verifyServices(f.j);
   assert.ok(f.readRecords().every(record=>record.pm2_env.status==='online'));
-  assert.deepEqual(f.commands(),[['jlist'],['startOrRestart',f.file,'--only','scheduler','--update-env'],['restart','custom','--update-env'],['jlist'],['save']]);
+  assert.deepEqual(f.commands(),[['jlist'],['startOrRestart',f.file,'--only','scheduler','--update-env'],['restart','custom','--update-env'],['jlist'],['jlist'],['save']]);
 });

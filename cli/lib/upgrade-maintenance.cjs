@@ -656,36 +656,43 @@ function validateSavedServices(j, saved) {
 function restartService(name) {
   command('pm2', ['restart', name, '--update-env']);
 }
+// Only a verified ecosystem can lower an original service's availability gate.
+function serviceRequirements(j) {
+  const original = j.originalServices || [];
+  const originalHash = j.initialIdentity?.ecosystemHash;
+  const ecosystem = path.join(j.zylosDir, 'pm2', 'ecosystem.config.cjs');
+  if (originalHash === null) return {required:original, external:[]};
+  if (typeof originalHash !== 'string' || !/^[a-f0-9]{64}$/.test(originalHash)) throw Error('original ecosystem evidence missing');
+  privatePath(ecosystem);
+  if (!['new_data_ready', 'new_verifying', 'upgrade_complete'].includes(j.phase) && hash(ecosystem) !== originalHash) throw Error('original ecosystem identity changed');
+  const names = new Set(ecosystemServiceNames(ecosystem));
+  return {required:original.filter(service => names.has(service.name)), external:original.filter(service => !names.has(service.name))};
+}
 function start(j) {
   const original = j.originalServices || [];
   if (!original.length) return;
+  const {external} = serviceRequirements(j);
+  const externalNames = new Set(external.map(service => service.name));
+  if (j.initialIdentity?.ecosystemHash === null) validateSavedServices(j, original);
+  else if (external.length) validateSavedServices(j, external);
   const ecosystem = path.join(j.zylosDir, 'pm2', 'ecosystem.config.cjs');
-  const originalHash = j.initialIdentity?.ecosystemHash;
-  if (originalHash === null) {
-    // PM2 already owns these saved records. Restart by verified name, never
-    // execute script paths supplied by the journal or synthesize new records.
-    validateSavedServices(j, original);
-    for (const saved of original) restartService(saved.name);
-  } else {
-    if (typeof originalHash !== 'string' || !/^[a-f0-9]{64}$/.test(originalHash)) throw Error('original ecosystem evidence missing');
-    privatePath(ecosystem);
-    // The new finalizer may intentionally regenerate the ecosystem. Abort and
-    // restored deployments must use the byte-verified original configuration.
-    if (!['new_data_ready', 'new_verifying', 'upgrade_complete'].includes(j.phase) && hash(ecosystem) !== originalHash) throw Error('original ecosystem identity changed');
-    const names = new Set(ecosystemServiceNames(ecosystem));
-    const external = original.filter(service => !names.has(service.name));
-    if (external.length) validateSavedServices(j, external);
-    for (const saved of original) {
-      if (names.has(saved.name)) command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env']);
-      else restartService(saved.name);
-    }
+  for (const saved of original) {
+    if (externalNames.has(saved.name)) {
+      try { restartService(saved.name); } catch { /* Availability is decided by final verification. */ }
+    } else if (j.initialIdentity?.ecosystemHash === null) restartService(saved.name);
+    else command('pm2', ['startOrRestart', ecosystem, '--only', saved.name, '--update-env']);
   }
 }
 function verifyServices(j) {
+  const {required, external} = serviceRequirements(j);
+  if (external.length) validateSavedServices(j, external);
   const deadline = Date.now() + 30000;
   do {
     const all = services(j);
-    if ((j.originalServices || []).every(p => all.some(a => a.name === p.name && a.status === 'online' && a.pid > 0))) {
+    const online = service => all.some(item => item.name === service.name && item.status === 'online' && item.pid > 0);
+    if (required.every(online)) {
+      j.serviceWarnings = [...new Set(external.filter(service => !online(service)).map(service => service.name))]
+        .map(name => `Service ${name} is not online; restart it manually.`);
       if ((j.originalServices || []).length) command('pm2', ['save']);
       return;
     }
@@ -1060,6 +1067,7 @@ module.exports = {
   stop,
   stopBackupOnly,
   ecosystemServiceNames,
+  serviceRequirements,
   validateSavedServices,
   restartService,
   start,

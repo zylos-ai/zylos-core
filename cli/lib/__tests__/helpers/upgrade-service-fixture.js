@@ -25,13 +25,16 @@ const fs=require('node:fs');
 const args=process.argv.slice(2), state=${JSON.stringify(state)}, log=${JSON.stringify(log)};
 fs.appendFileSync(log,JSON.stringify(args)+'\\n');
 let records=JSON.parse(fs.readFileSync(state,'utf8'));
-if(args[0]==='jlist') console.log(JSON.stringify(records));
+if(args[0]==='jlist') {if(fs.existsSync(${JSON.stringify(path.join(root,'fail-jlist'))}))process.exit(10);console.log(JSON.stringify(records));}
 else if(args[0]==='save') {}
 else if(['restart','start','startOrRestart'].includes(args[0])) {
-  if(fs.existsSync(${JSON.stringify(path.join(root, 'fail-restart'))})) process.exit(8);
   let names;
   if(args[0]==='restart') names=[args[1]];
   else {const config=require(args[1]);names=config.apps.filter(app=>app.name===args[args.indexOf('--only')+1]).map(app=>app.name);}
+  const failed=${JSON.stringify(path.join(root, 'fail-restart'))};
+  if(fs.existsSync(failed)) {const target=fs.readFileSync(failed,'utf8');if(target==='yes'||names.includes(target))process.exit(8);}
+  const stopped=${JSON.stringify(path.join(root, 'stay-stopped'))};
+  if(fs.existsSync(stopped)&&names.includes(fs.readFileSync(stopped,'utf8')))process.exit(0);
   for(const record of records) if(names.includes(record.name)) {record.pid=123;record.pm2_env.status='online';}
   fs.writeFileSync(state,JSON.stringify(records));
 } else process.exit(9);

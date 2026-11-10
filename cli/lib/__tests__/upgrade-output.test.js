@@ -75,3 +75,9 @@ test('Mac compensation output distinguishes observed failure from interrupted ta
  assert.match(text,/Rollback attempted=true completed=true stage=restored_complete/);
  assert.match(text,/Recovery required: no/);
 });
+
+test('human and C4 upgrade output name services requiring manual restart',()=>{
+ const data={success:true,serviceWarnings:['Service custom is not online; restart it manually.']};
+ assert.match(formatSelfUpgradeProtection(data),/Service warning: Service custom.*manually/);
+ assert.match(formatC4Reply('self-upgrade',data),/Service warning: Service custom.*manually/);
+});

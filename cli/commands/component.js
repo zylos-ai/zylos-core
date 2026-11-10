@@ -288,6 +288,7 @@ export function formatSelfUpgradeProtection(data) {
   }else if(data.preInstallProtection&&data.success)lines.push('Rollback attempted=false completed=false stage=upgrade_complete');
   const required=data.recovery_required??rb?.recovery_required??(data.preInstallProtection&&data.success?false:undefined);
   if(typeof required==='boolean')lines.push(`Recovery required: ${required?'yes; maintenance remains active':'no'}`);
+  for(const warning of new Set(data.serviceWarnings || []))lines.push(`Service warning: ${warning}`);
   const warnings=[...(data.cleanupWarnings||[]),...(rb?.warnings||[])];
   for(const warning of new Set(warnings))lines.push(`Cleanup warning: ${warning}`);
   return lines.join('\n');

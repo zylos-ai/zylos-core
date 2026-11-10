@@ -10,6 +10,7 @@ const m = createRequire(import.meta.url)('../upgrade-maintenance.cjs');
 function context(f) {
   const dir = path.join(f.root, 'transaction');
   fs.mkdirSync(dir, {recursive:true, mode:0o700});
+  f.j.phase='new_verifying';
   m.durable(path.join(dir, 'journal.json'), f.j);
   return {tempDir:null,servicesWereRunning:f.j.originalServices.map(service=>service.name),
     preInstallProtection:true,transactionDir:dir};
@@ -42,12 +43,12 @@ for(const defect of ['missing','changed','outside','duplicate','saved-duplicate'
   assert.ok(f.commands().every(args=>args[0]==='jlist'));
 });
 
-test('step11 external restart failure cannot delete its PM2 record or save success',t=>{
+test('step11 external restart failure remains best effort without deleting its PM2 record',t=>{
   const f=serviceFixture(t,{ecosystem:true,names:[]});
   fs.writeFileSync(path.join(f.root,'fail-restart'),'yes');
   const result=step11_startCoreServices(context(f),{ecosystemPath:f.file,zylosDir:f.root});
-  assert.equal(result.status,'failed');
-  assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env']]);
+  assert.equal(result.status,'done');
+  assert.deepEqual(f.commands(),[['jlist'],['restart','scheduler','--update-env'],['save']]);
   assert.equal(f.readRecords()[0].pm2_env.status,'stopped');
 });
 
