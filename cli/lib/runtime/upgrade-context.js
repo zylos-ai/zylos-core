@@ -58,9 +58,7 @@ function hasRecoveryMaterials(root) {
 }
 
 export function upgradeDiscoveryFailure({closed = false, error} = {}) {
-  const details = maintenance.recoveryFailureDetails(error, {next:closed
-    ? 'Run zylos upgrade --resume-finalize to finish the transaction; use zylos upgrade --resume-finalize --status first to inspect it.'
-    : undefined});
+  const details = maintenance.recoveryFailureDetails(error);
   const prompt = closed
     ? 'SYSTEM RECOVERY TASK: Compensation is closed. Keep normal C4/database access isolated. Use zylos upgrade --resume-finalize to finish the transaction; use zylos upgrade --resume-finalize --status first to inspect it. Do not use zylos recovery resume for this transaction.'
     : 'SYSTEM RECOVERY TASK: Upgrade discovery failed. Keep normal C4/database access isolated. Use only the fixed file-only upgrade status entry after verifying its ownership and permissions. Preserve transaction materials; report recovery_required if trusted discovery remains unavailable. Do not query C4 or execute journal command strings.';

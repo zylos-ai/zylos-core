@@ -219,6 +219,10 @@ test('startup diagnostics preserve active READY availability despite unrelated d
  const unrelated=path.join(f.root,'.backup/self-upgrade/old');fs.mkdirSync(unrelated);fs.writeFileSync(path.join(unrelated,'journal.json'),'{');
  const context=discoverUpgradeContext(f.root);
  assert.equal(context.active,true);assert.equal(context.blocked,false);assert.equal(context.recovery_required,true);
+ assert.equal(context.code,'UPGRADE_RECOVERY_REQUIRED');
+ assert.match(context.error,/JSON/);
+ assert.notEqual(context.error,'Upgrade discovery failed.');
+ assert.match(context.next,/zylos recovery/);
  assert.equal(fs.existsSync(f.executed),false);
 });
 

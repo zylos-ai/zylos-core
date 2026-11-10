@@ -136,6 +136,10 @@ for (const child of [
     assert.equal(error.recovery_required, true);
     assert.equal(error.code, 'UPGRADE_RECOVERY_REQUIRED');
     if (child.error) assert.ok(error.message.includes(child.error.message));
+    if (child.stderr) {
+      assert.ok(error.message.includes(child.stderr));
+      assert.match(error.message, /status 23/);
+    }
     assert.match(error.next, /zylos recovery/);
     return true;
   });

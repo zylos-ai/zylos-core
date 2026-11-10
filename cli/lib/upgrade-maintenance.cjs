@@ -1185,12 +1185,10 @@ function recoverBeforeUpgrade(root, deps = {}) {
     if (!result || typeof result !== 'object' || Array.isArray(result)) reject('Transaction recovery returned an invalid result ('+exit+').');
     const reasons = [result.error,result.reason,...(Array.isArray(result.warnings) ? result.warnings : [])]
       .filter(value=>typeof value==='string' && value.trim()).join('; ');
-    if (child.status !== 0 || result.recovery_required) reject(reasons || 'Transaction recovery did not complete ('+exit+').',
-      typeof result.code==='string' && result.code ? result.code : 'UPGRADE_RECOVERY_REQUIRED');
+    if (child.status !== 0 || result.recovery_required) reject(reasons || 'Transaction recovery did not complete ('+exit+').');
     const after = m.discover(root);
     if (after.candidates.length || after.diagnostics.length || after.marker) {
-      reject([reasons,...after.diagnostics,'Transaction recovery still requires attention.'].filter(Boolean).join('; '),
-        typeof result.code==='string' && result.code ? result.code : 'UPGRADE_RECOVERY_REQUIRED');
+      reject([reasons,...after.diagnostics,'Transaction recovery still requires attention.'].filter(Boolean).join('; '));
     }
     return {active:true,result};
   } catch (error) {
