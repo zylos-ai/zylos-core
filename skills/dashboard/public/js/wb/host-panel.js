@@ -1,6 +1,6 @@
 import { element, icon } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
-import { poolExplanation, poolSource } from './instance-strip.js?v=151';
+import { poolExplanation, poolSource } from './instance-strip.js?v=157';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);

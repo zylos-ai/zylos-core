@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes } from './fixtures/workbench-dom.js';
 import { CONTENT_PREFIX, makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { savedAnswerCases } from './fixtures/saved-answers.js';
 
 // Resolve the browser alias to the same shared source; never evaluate source text.
 const browserSchema = new URL('../public/chat-schema.js', import.meta.url).pathname;
@@ -40,6 +41,19 @@ function render(value, options = {}) {
 const choices = selection => block('choice', { prompt: 'Choose a plan', selection, options: [{ id: 'a', label: 'Plan A', description: 'Fast' }, { id: 'b', label: 'Plan B' }], action: action('choice.select') });
 const confirmation = () => block('confirmation', { title: 'Confirm change', body: 'Check these facts', severity: 'normal', details: [{ label: 'Count', value: 3 }], action: action('confirmation.respond') });
 const form = () => block('form_intent', { title: 'Profile', purpose: 'Tell us more', fields: [{ key: 'name', type: 'text', label: 'Name', help: 'Public name' }, { key: 'category', type: 'single_select', label: 'Category', options: [{ id: 'a', label: 'First' }] }], action: action('form.submit') });
+
+// Browser renderer and injected DOM only; no network, database or runtime.
+test('saved answers show a question and literal answer card without the exact protocol prefix', () => {
+  for (const example of savedAnswerCases) {
+    const root = render(example.envelope), nodes = allNodes(root);
+    const card = nodes.find(node => node.className === 'chat-answer-card');
+    assert.ok(card, example.name);
+    assert.deepEqual(card.children.map(node => [node.className, node.textContent]), [
+      ['chat-answer-question', example.envelope.questionSummary], ['chat-answer-text', example.answer]
+    ], example.name);
+    assert.equal(nodes.some(node => ['SCRIPT', 'IMG', 'BUTTON', 'INPUT'].includes(node.tagName)), false);
+  }
+});
 
 test('historical answered messages retain their saved readable answer with legacy question definitions', () => {
   for (const [item, payload, original] of [

@@ -12,7 +12,7 @@ const CHECKPOINT_PATH = fileURLToPath(new URL('../c4-checkpoint.js', import.meta
 function cli(args, env = {}) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
     env: { ...process.env, ...env },
-    encoding: 'utf8'
+    encoding: 'utf8', timeout: 15000
   });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
@@ -28,7 +28,7 @@ function receive(args, env = {}) {
     const row = store.insertConversation('in', ${JSON.stringify(channel)}, ${JSON.stringify(endpoint)}, ${JSON.stringify(content)}, {});
     store.claimConversation(row.id); store.markDelivered(row.id, {sessionId:'fixture'});
     db.close();
-  `], { env: { ...process.env, ...env }, encoding: 'utf8' });
+  `], { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 15000 });
   assert.equal(delivered.status, 0, delivered.stderr);
   return delivered;
 }
@@ -36,13 +36,18 @@ function receive(args, env = {}) {
 function checkpoint(args, env = {}) {
   return spawnSync('node', [CHECKPOINT_PATH, ...args], {
     env: { ...process.env, ...env },
-    encoding: 'utf8'
+    encoding: 'utf8', timeout: 15000
   });
 }
 
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-session-init-'));
-  const env = { ZYLOS_DIR: tmpDir };
+  const env = { HOME: path.join(tmpDir, 'home'), ZYLOS_DIR: tmpDir, PM2_HOME: path.join(tmpDir, 'pm2'),
+    TMPDIR: path.join(tmpDir, 'tmp'), TMUX_TMPDIR: path.join(tmpDir, 'tmp'),
+    ZYLOS_PACKAGE_ROOT: fileURLToPath(new URL('../../../../', import.meta.url)) };
+  for (const directory of [env.HOME, env.PM2_HOME, env.TMPDIR]) fs.mkdirSync(directory);
+  console.log('Session init isolation:', JSON.stringify({ ...env, database: path.join(tmpDir, 'comm-bridge/c4.db'),
+    amSocket: path.join(tmpDir, 'activity-monitor/am.sock'), tmux: 'not launched', pm2: 'not launched' }));
   // Warm up DB
   checkpoint(['latest'], env);
   try {
@@ -55,13 +60,65 @@ function withTmpDir(fn) {
 // -- basic behavior --
 
 describe('c4-session-init', () => {
+  // Actual CLI -> private C4 database. Run for startup-context/handoff changes;
+  // UI-only edits may skip. Private paths are logged before bounded children;
+  // no PM2/tmux/runtime starts, and withTmpDir always removes the fixture root.
   it('reports no new conversations on fresh DB', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli([], env);
       assert.equal(status, 0);
       assert.ok(stdout.includes('read-work-memory.js'));
-      assert.ok(stdout.includes('handoff.md'));
+      assert.ok(stdout.includes('No handoff file is available for this scope'));
+      assert.doesNotMatch(stdout, /Before resuming work, read .*handoff/);
       assert.ok(!stdout.includes('ACTION REQUIRED'));
+    });
+  });
+
+  it('requires a complete handoff read only when the scope file exists', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const file = path.join(tmpDir, 'memory/handoff.md');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'unfinished task');
+      const { stdout, status } = cli([], env);
+      assert.equal(status, 0);
+      assert.ok(stdout.includes(`Before resuming work, read ${file} in full`));
+      assert.doesNotMatch(stdout, /No handoff file is available/);
+      assert.equal(fs.readFileSync(file, 'utf8'), 'unfinished task');
+    });
+  });
+
+  // Actual multi-session CLI scope/path selection, with the opposite root-file
+  // condition as a decoy. Run for handoff/scope changes; unrelated UI may skip.
+  // withTmpDir logs the private environment, database and socket before bounded
+  // children; no terminal/service starts and the fixture root is always removed.
+  for (const present of [true, false]) it(`multi-session startup uses its own handoff when ${present ? 'present' : 'absent'}`, () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const group = 'telegram:handoff-check';
+      const groupFile = path.join(tmpDir, 'memory/session-groups', group, 'handoff.md');
+      const rootFile = path.join(tmpDir, 'memory/handoff.md');
+      fs.mkdirSync(path.join(tmpDir, '.zylos'));
+      fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ session_mode: 'multi' }));
+      fs.mkdirSync(path.dirname(groupFile), { recursive: true });
+      if (present) fs.writeFileSync(groupFile, 'unfinished group task');
+      else fs.writeFileSync(rootFile, 'unrelated root task');
+      assert.equal(fs.existsSync(groupFile), present);
+      assert.equal(fs.existsSync(rootFile), !present);
+
+      const { stdout, status } = cli([], { ...env, ZYLOS_SESSION_GROUP: group });
+      assert.equal(status, 0);
+      assert.ok(stdout.includes(`Scope: ${group}. Working memory is not injected.`));
+      if (present) {
+        assert.ok(stdout.includes(`Before resuming work, read ${groupFile} in full, using successive file ranges when needed. Reading does not consume it; retain unfinished items.`));
+        assert.doesNotMatch(stdout, /No handoff file is available/);
+        assert.equal(fs.readFileSync(groupFile, 'utf8'), 'unfinished group task');
+      } else {
+        assert.ok(stdout.includes(`No handoff file is available for this scope (${groupFile}).`));
+        assert.doesNotMatch(stdout, /Before resuming work, read .*handoff/);
+        assert.equal(fs.readFileSync(rootFile, 'utf8'), 'unrelated root task');
+      }
+      assert.ok(!stdout.includes(`read ${rootFile} in full`), 'root handoff never supplies the group instruction');
+      assert.equal(fs.existsSync(groupFile), present);
+      assert.equal(fs.existsSync(rootFile), !present);
     });
   });
 

@@ -249,10 +249,7 @@ main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 .wb-qbar > .wb-quota-recorded { grid-column: 1 / -1; text-align: right; overflow-wrap: anywhere; }
 .wb-meter.wb-warn i { background: var(--wb-wait); }
 .wb-meter.wb-err i { background: var(--wb-err); }
-.wb-pips { display: inline-flex; gap: 2px; }
-.wb-slot { width: 7px; height: 10px; border-radius: 2px; background: var(--wb-off); }
-.wb-slot.wb-on { background: var(--text-dim); }
-.wb-pips.wb-full .wb-slot.wb-on { background: var(--wb-wait); }
+.wb-pool-meter { flex: none; }
 .wb-spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
 .wb-spark i { width: 4px; border-radius: 1px; background: color-mix(in srgb, var(--text) 22%, transparent); }
 .wb-spark i:last-child { background: var(--text-dim); }
@@ -584,6 +581,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-inst-item { padding: 3px 10px 3px 0; white-space: nowrap; }
   .wb-inst-item + .wb-inst-item { border-left: 0; }
   .wb-inst-item .wb-meter { display: none; }
+  .wb-inst-item .wb-pool-meter { display: inline-block; }
   #wb-attention { padding: 8px 12px; }
   .wb-attention-item { align-items: flex-start; }
   .wb-attention-text { white-space: normal; }

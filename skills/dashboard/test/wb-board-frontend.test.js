@@ -132,7 +132,7 @@ test('search debounces, clears and rejects stale results independently from snap
   const one = timers[1].fn(); search.input('new'); const two = timers[2].fn(); second.resolve({ rows: ['new'] }); await two; first.resolve({ rows: ['old'] }); await one;
   assert.equal(shown[0], 'new'); search.input(''); assert.equal(clears, 1); assert.equal(search.query(), ''); search.destroy();
 });
-test('instance strip renders pool unknown or used slots, runtime union, quota and same-sample services', () => {
+test('instance strip renders pool unknown or occupancy, runtime union, quota and same-sample services', () => {
   const document = createDocument(), root = document.createElement('div');
   instanceStrip(root, { mode: 'unreadable', baselineRuntime: 'claude', rows: [{ launchConfig: { runtime: 'codex' } }],
     instance: { pool: { ready: 3, starting: 0, used: 3, waiting: 1 }, runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'auth_failed' } },
@@ -142,14 +142,15 @@ test('instance strip renders pool unknown or used slots, runtime union, quota an
   assert.match(root.textContent, /wb.inst.pool3wb.inst.inUse/, 'an unknown capacity shows only the used count'); assert.match(root.textContent, /77%/);
   assert.match(root.textContent, /wb.inst.authFailedTech/); assert.match(root.textContent, /4 \/ 5/);
   assert.match(root.textContent, /wb.inst.queuedTech1/);
-  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 3);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-pool-meter')).length, 0);
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: 2, capacity: 4 } } }, { document, t, level: 'technical' });
-  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 4, 'a known capacity draws free slots too');
+  const poolMeter = allNodes(root).find(node => node.classList.contains('wb-pool-meter'));
+  assert.equal(poolMeter.children.length, 1); assert.equal(poolMeter.children[0].style.width, '50%');
   assert.match(root.textContent, /2 \/ 4/);
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: null } } }, { document, t });
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-mode-chip')).length, 0, 'the raw mode chip is technical only');
   assert.match(root.textContent, /^wb.inst.modeMulti/, 'the plain view still names the run mode');
-  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 0); assert.match(root.textContent, /wb.poolwb.unknown/);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-pool-meter')).length, 0); assert.match(root.textContent, /wb.poolwb.unknown/);
   assert.equal(root.children.at(-1).id, 'wb-host-open', 'host status stays at the right end');
 });
 test('attention shows both problems and recovery reminders with text-safe technical reasons', () => {
@@ -332,14 +333,14 @@ test('single and unreadable instance strips retain sampled counts without capaci
     instanceStrip(root, { mode, instance: { pool } }, { document, t, level });
     const empty = root.children[1];
     assert.equal(empty.textContent, t(level === 'technical' ? 'wb.inst.pool' : 'wb.pool') + t('wb.unknown'));
-    assert.equal(allNodes(empty).some(node => node.classList.contains('wb-slot')), false);
+    assert.equal(allNodes(empty).some(node => node.classList.contains('wb-pool-meter')), false);
     instanceStrip(root, { mode, instance: { pool: { ...pool, ready: 2, starting: 1, waiting: 4 } } }, { document, t, level });
     const sampled = root.children[1];
     assert.ok(sampled.textContent.includes('3'));
     assert.ok(sampled.textContent.includes(t(level === 'technical' ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: 4 })));
     assert.equal(sampled.textContent.includes(t('wb.inst.inUse')), level === 'technical');
     assert.doesNotMatch(sampled.textContent, /119|\/|按 .*运行|running with|内存只够|Memory fits/);
-    assert.equal(allNodes(sampled).filter(node => node.classList.contains('wb-slot')).length, level === 'technical' ? 3 : 0);
+    assert.equal(allNodes(sampled).filter(node => node.classList.contains('wb-pool-meter')).length, 0, 'unknown capacity has no made-up proportion');
   }
 });
 
@@ -348,8 +349,9 @@ test('pool renders actual occupancy above capacity and preserves sampled waiting
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: 4, capacity: 3, waiting: 7,
     capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
   assert.match(root.textContent, /4 \/ 3/); assert.match(root.textContent, /7 排队/);
-  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 4);
-  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-on')).length, 4);
+  const meter = allNodes(root).find(node => node.classList.contains('wb-pool-meter'));
+  assert.equal(meter.children.length, 1); assert.equal(meter.children[0].style.width, '100%');
+  assert.equal(meter.classList.contains('wb-warn'), true);
   const pool = root.children.find(node => node.textContent.includes('4 / 3'));
   // Whole parts wrap inside the item; the item itself is not made to break inside its labels.
   assert.equal(pool.style.flexWrap, 'wrap'); assert.notEqual(pool.style.whiteSpace, 'normal');
@@ -358,8 +360,33 @@ test('pool renders actual occupancy above capacity and preserves sampled waiting
     capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
   assert.match(root.textContent, /未知/);
   assert.match(root.textContent, /按内存自动/);
-  assert.equal(allNodes(root).some(node => node.classList.contains('wb-full')), false);
+  assert.equal(allNodes(root).some(node => node.classList.contains('wb-pool-meter')), false);
 });
+
+for (const capacity of [2, 256]) for (const used of [0, 1, capacity]) {
+  test(`technical pool meter shows ${used} of ${capacity} without growing with capacity`, () => {
+    const document = createDocument(), root = document.createElement('div');
+    instanceStrip(root, { mode: 'multi', baselineRuntime: 'claude', instance: {
+      accounts: { claude: { used_percentage: 25 } }, pool: { used, capacity }
+    } }, { document, t: poolTranslator('zh'), level: 'technical' });
+    const pool = allNodes(root).find(node => node.classList.contains('wb-pool'));
+    const bars = allNodes(pool).filter(node => node.classList.contains('wb-pool-meter'));
+    assert.equal(bars.length, 1);
+    const bar = bars[0], fill = bar.children[0];
+    assert.equal(bar.classList.contains('wb-meter'), true, 'pool and account use the same meter shape');
+    assert.equal(bar.children.length, 1, 'capacity does not allocate one node per slot');
+    assert.equal(fill.style.width, used / capacity * 100 + '%');
+    assert.equal(fill.style.minWidth, used > 0 ? '2px' : '0', 'any occupied pool stays visible while an empty one stays empty');
+    assert.equal(bar.classList.contains('wb-warn'), used >= capacity);
+    assert.match(pool.textContent, new RegExp(`${used} / ${capacity}在用`));
+    assert.equal(allNodes(pool).some(node => node.classList.contains('wb-slot')), false);
+    const account = allNodes(root).find(node => node.classList.contains('wb-account'));
+    const quota = allNodes(account).find(node => node.classList.contains('wb-meter'));
+    assert.equal(quota.children[0].style.width, '75%', 'pool occupancy does not alter account quota');
+    instanceStrip(root, { mode: 'multi', instance: { pool: { used, capacity } } }, { document, t: poolTranslator('zh') });
+    assert.equal(allNodes(root).some(node => node.classList.contains('wb-pool-meter')), false, 'the plain view keeps its existing text-only pool');
+  });
+}
 
 test('pool explanations show only usable published values in the host panel, not in the strip', () => {
   const document = createDocument(), root = document.createElement('div'), GiB = 1073741824;

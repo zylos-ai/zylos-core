@@ -86,7 +86,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       fs.mkdirSync(output, { recursive: true });
       fs.writeFileSync(path.join(output, `tray-failed-image-${width}-${theme}.png`), failedImageShot);
       await page.locator('#columns').screenshot({ path: path.join(output, `columns-file-${width}-${theme}.png`), animations: 'disabled', scale: 'css' });
-      for (const id of ['stack-view', 'markdown-first', 'card-ending', 'section-view', 'nested-section']) {
+      for (const id of ['stack-view', 'markdown-first', 'card-ending', 'section-view', 'nested-section', 'handoff-status', 'answer-card', 'category-single', 'category-pair', 'category-reference', 'pool-2', 'pool-256']) {
         await page.locator('#' + id).screenshot({ path: path.join(output, `${id}-${width}-${theme}.png`), animations: 'disabled', scale: 'css' });
       }
     }
@@ -108,6 +108,10 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       const categoryGeometry = ['category-single', 'category-pair', 'category-reference'].map(id => {
         const c = chart(id), bars = c.getDatasetMeta(0).data, labels = c.scales.y.getLabelItems();
         return { id, count: bars.length, area: c.chartArea.bottom - c.chartArea.top,
+          valueTitle: c.scales.x.options.title.text, valueTitleVisible: c.scales.x.options.title.display,
+          valueAxisTop: c.scales.x.top, categoryTitleVisible: c.scales.y.options.title.display,
+          axesHidden: document.querySelector('#' + id + ' .chat-chart-axes').hidden,
+          axesText: document.querySelector('#' + id + ' .chat-chart-axes').textContent,
           bars: bars.map(bar => ({ height: bar.height, y: bar.y })),
           labels: labels.map(item => ({ text: item.label, y: item.options.translation[1], height: item.font.lineHeight })),
         };
@@ -150,9 +154,16 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
         return [state, { outline: style.outlineStyle, outlineWidth: style.outlineWidth, outlineOffset: style.outlineOffset,
           outlineColor: style.outlineColor, status: status.textContent, statusColor: getComputedStyle(status).color }];
       }));
+      const poolGeometry = [2, 256].map(capacity => {
+        const card = document.querySelector('#pool-' + capacity), meter = card.querySelector('.wb-pool-meter');
+        return { capacity, width: meter.getBoundingClientRect().width, fill: meter.firstElementChild.getBoundingClientRect().width,
+          count: meter.children.length, text: card.textContent, right: card.getBoundingClientRect().right };
+      });
+      const answerCard = document.querySelector('#answer-card .chat-answer-card');
+      const handoffSteps = [...document.querySelectorAll('#handoff-status .conversation-activity-step')].map(node => ({ status: node.dataset.status, text: node.textContent }));
       const dangerProbe = document.createElement('span'); dangerProbe.style.color = 'var(--c-danger-ink)'; document.querySelector('main').append(dangerProbe);
       const dangerInk = getComputedStyle(dangerProbe).color, dangerRgb = rgba(dangerInk); dangerProbe.remove();
-      return { categoryGeometry, columns, spacing, sectionSpacing, nestedSpacing, errorStyles, dangerInk, dangerRgb, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
+      return { poolGeometry, handoffSteps, answerCardText: answerCard?.textContent, categoryGeometry, columns, spacing, sectionSpacing, nestedSpacing, errorStyles, dangerInk, dangerRgb, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
         dotAnimation: dot.animationName, dotWidth: dot.width, categoryAxis: chart('category').options.scales.x.display,
         breakdownAxis: chart('breakdown').options.scales.x.display, categoryColor: chart('category').data.datasets[0].backgroundColor[0],
         imageRatio: document.querySelector('.chat-attachment-image-frame').style.aspectRatio,
@@ -175,6 +186,18 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
         widths: [...document.querySelectorAll('.chat-block-choice,.chat-block-confirmation,.chat-block-form_intent,.chat-block-breakdown,.chat-block-category_series')].map(node => node.getBoundingClientRect().width),
         viewport: innerWidth, scroll: document.documentElement.scrollWidth };
     });
+    assert.match(actual.answerCardText, /选择缓存方案？/);
+    assert.match(actual.answerCardText, /采用 LRU 缓存/);
+    assert.doesNotMatch(actual.answerCardText, /interruptId|private-interrupt-id/);
+    assert.match(actual.handoffSteps.find(step => step.status === 'failed').text, /出错/);
+    assert.match(actual.handoffSteps.find(step => step.status === 'incomplete').text, /没有完成/);
+    for (const pool of actual.poolGeometry) {
+      assert.equal(pool.width, 52, 'pool capacity does not change fixed meter width');
+      assert.equal(pool.count, 1, 'pool has one proportional fill');
+      assert.ok(Math.abs(pool.fill - Math.max(2, 52 / pool.capacity)) <= 1, 'pool fill reflects occupancy with a visible minimum');
+      assert.ok(pool.right <= width, 'pool fits the viewport');
+      assert.match(pool.text, new RegExp('1 / ' + pool.capacity));
+    }
     console.info('rich spacing geometry', JSON.stringify({ width, theme, ...actual.spacing }));
     if (output) fs.writeFileSync(path.join(output, `spacing-${width}-${theme}.json`), JSON.stringify(actual.spacing, null, 2));
     console.info('section spacing geometry', JSON.stringify({ width, theme, ...actual.sectionSpacing }));
@@ -241,6 +264,13 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.equal(actual.chartFileBodyWidth, 720, 'markdown chart and file share the rich content width');
     }
     for (const category of actual.categoryGeometry) {
+      assert.equal(category.valueTitle, '数量', category.id + ' numeric axis uses yLabel');
+      assert.equal(category.valueTitleVisible, true);
+      assert.equal(category.categoryTitleVisible, false, 'categories have no vertical title');
+      assert.equal(category.axesHidden, false, 'enhanced chart retains the category axis description');
+      assert.equal(category.axesText, '状态', 'only the duplicated numeric axis description is removed');
+      for (const label of category.labels) assert.ok(label.y + label.height / 2 <= category.valueAxisTop,
+        category.id + ' category label is above the numeric axis title region');
       assert.ok(Math.abs(category.area - category.count * 34) <= .5, category.id + ' plot reserves a 34px row per category');
       assert.equal(category.labels.length, category.count, category.id + ' keeps every label');
       for (const bar of category.bars) assert.ok(Math.abs(bar.height - 20) <= .5, category.id + ' bars are 20px high');

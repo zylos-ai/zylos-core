@@ -117,10 +117,12 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   // explanations live in the host panel's pool section; the title keeps them for hover.
   poolItem.classList.add('wb-pool');
   poolItem.style.flexWrap = 'wrap'; poolItem.style.maxWidth = '100%';
-  if (technical && used != null) {
-    const pips = element(document, 'span', undefined, 'wb-pips' + (full ? ' wb-full' : ''));
-    for (let i = 0; i < Math.max(used, capacity ?? 0); i++) pips.append(element(document, 'i', undefined, i < used ? 'wb-slot wb-on' : 'wb-slot'));
-    poolItem.append(pips);
+  if (technical && used != null && capacity > 0) {
+    const bar = element(document, 'span', undefined, 'wb-meter wb-pool-meter' + (full ? ' wb-warn' : ''));
+    const fill = element(document, 'i');
+    fill.style.width = Math.max(0, Math.min(100, used / capacity * 100)) + '%';
+    fill.style.minWidth = used > 0 ? '2px' : '0';
+    bar.append(fill); poolItem.append(bar);
   }
   const amount = used == null ? t('wb.unknown') : capacity == null ? String(used) : `${used} / ${capacity}`;
   poolItem.append(element(document, 'b', amount, full ? 'wb-txt-warn' : undefined));

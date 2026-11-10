@@ -2,6 +2,7 @@ import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?
 import { element } from './plain-text.js?v=106';
 import { attachmentDisplayText } from './chat-attachments.js?v=155';
 import { formatDuration } from './duration-format.js?v=1';
+import { answerDisplay } from './chat-answer.js?v=1';
 
 export { parseC4Content };
 export { validateAnswer } from '../../chat-schema.js?v=104';
@@ -37,6 +38,12 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
   }
   if (parsed.kind !== 'envelope') { root.append(error(parsed.fallbackText)); return root; }
   const envelope = parsed.envelope;
+  if (envelope.kind === 'answer') {
+    const display = answerDisplay(envelope), card = node('section', undefined, 'chat-answer-card');
+    card.append(node('p', display.question, 'chat-answer-question'), node('p', display.answer, 'chat-answer-text'));
+    root.append(card);
+    return root;
+  }
   if (envelope.kind !== 'message' || !envelope.blocks.length) {
     root.append(node('p', envelope.fallbackText, 'chat-message-text')); return root;
   }

@@ -272,11 +272,11 @@ export function conversationChartConfig(block, { text = '#526170', muted = '#7a8
     if (!category) marks = { kind: 'line' };
   } else if (block.type === 'category_series') {
     indexAxis = 'y'; labels = data.points.map(point => point.label);
-    scales.x = { ...axis(data.xLabel, data.unit), beginAtZero: true, display: !!data.xLabel,
+    scales.x = { ...axis(data.yLabel, data.unit), beginAtZero: true, display: !!data.yLabel,
       // The optional title owns exactly 32px: a 16px line and 8px above/below.
-      title: { display: !!data.xLabel, text: data.xLabel, color: text, font: { ...tickFont, lineHeight: '16px' }, padding: 8 },
+      title: { display: !!data.yLabel, text: data.yLabel, color: text, font: { ...tickFont, lineHeight: '16px' }, padding: 8 },
       ticks: { display: false }, grid: { display: false, drawTicks: false }, border: { display: false } };
-    scales.y = { title: { display: !!data.yLabel, text: data.yLabel, color: text, font: tickFont },
+    scales.y = { title: { display: false },
       ticks: { color: text, font: { family: font, size: 12 }, padding: 12, crossAlign: 'far', autoSkip: false },
       grid: { display: false }, border: { display: false },
       // Offset category rows already leave half a row around the first/last label.
@@ -350,8 +350,9 @@ export function conversationChartResource({ document, block, fallback, t = key =
   canvas.setAttribute('aria-label', block.data.title ?? block.data.summary ?? block.fallbackText);
   plot.hidden = true; plot.append(canvas);
   if (block.type === 'category_series') plot.style.setProperty('--chat-plot-h',
-    `${block.data.points.length * 34 + (block.data.reference ? 18 : 0) + (block.data.xLabel ? 32 : 0)}px`);
+    `${block.data.points.length * 34 + (block.data.reference ? 18 : 0) + (block.data.yLabel ? 32 : 0)}px`);
   fallback.insertBefore(plot, fallback.querySelector('.chat-chart-series'));
+  const axes = fallback.querySelector('.chat-chart-axes'), axisDescription = axes?.textContent;
   let chart, appearance, details, detailsSummary, legend, destroyed = false;
   return { node: fallback,
     mount() {
@@ -399,10 +400,15 @@ export function conversationChartResource({ document, block, fallback, t = key =
         const entries = [...fallback.querySelectorAll('.chat-chart-series, .chat-chart-baseline')];
         for (const entry of entries) details.append(entry);
         if (entries.length) fallback.append(details);
+        if (axes) {
+          if (block.type === 'category_series') axes.textContent = block.data.xLabel ?? '';
+          axes.hidden = block.type !== 'category_series' || !block.data.xLabel;
+        }
         fallback.classList.add('conversation-chart-enhanced');
       } catch {
         try { (chart ?? Chart.getChart?.(canvas))?.destroy(); } catch { /* Keep the static data available. */ }
         chart = undefined; appearance = undefined; plot.hidden = true;
+        if (axes) { axes.textContent = axisDescription; axes.hidden = false; }
         legend?.remove(); legend = undefined;
         if (details) {
           for (const entry of [...details.querySelectorAll('.chat-chart-series, .chat-chart-baseline')]) fallback.insertBefore(entry, plot);

@@ -2,6 +2,7 @@ import { markdownPreview } from './markdown-preview.js';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../comm-bridge/scripts/attachment-annotations.js';
+import { answerDisplay } from '../../../public/js/wb/chat-answer.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const visible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin','*')
@@ -39,6 +40,10 @@ function attachmentPreview(content, { external = false, locale = 'zh' } = {}, fo
   };
   if (parsed.kind === 'invalid') return body(parsed.fallbackText ?? labels.invalid, true);
   if (parsed.kind === 'envelope') {
+    if (parsed.envelope.kind === 'answer') {
+      const display = answerDisplay(parsed.envelope);
+      return body(display.answer, display.matchedPrefix);
+    }
     const blocks = parsed.envelope.blocks ?? [];
     if (!blocks.some(block => block.type !== 'markdown')) {
       return body(parsed.envelope.fallbackText);

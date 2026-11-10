@@ -2,6 +2,7 @@ import { parseC4Content, evaluateFormState } from '../../chat-schema.js?v=104';
 import { messageState } from './chat-delivery-state.js?v=100';
 import { asDate } from './conversation-time.js?v=99';
 import { normalizeChatSubscription, chatSubscriptionKey, matchesChatEvent } from './conversation-push.js?v=1';
+import { answerDisplay } from './chat-answer.js?v=1';
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
 const base = '/api/chat/conversations';
 const pathFor = id => `${base}/${encodeURIComponent(id)}`;
@@ -143,6 +144,7 @@ export function createConversationState({
   };
   const preview = content => {
     const parsed = parseC4Content(content);
+    if (parsed.kind === 'envelope' && parsed.envelope.kind === 'answer') return answerDisplay(parsed.envelope).answer;
     return parsed.kind === 'text' ? parsed.text : parsed.kind === 'envelope' ? parsed.envelope.fallbackText : parsed.fallbackText ?? t('chat.invalidContent');
   };
   function updateCurrentItem(current, id) {

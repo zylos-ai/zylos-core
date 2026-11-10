@@ -154,11 +154,14 @@ for (const xType of ['number', 'date', 'datetime']) test(`${xType} time series $
 });
 
 test('category series shows horizontal signed bars and a labeled reference', () => {
-  const config = conversationChartConfig({ type: 'category_series', data: { title: 'Change', unit: 'USD',
+  const config = conversationChartConfig({ type: 'category_series', data: { title: 'Change', unit: 'USD', xLabel: 'Category', yLabel: 'Amount',
     points: [{ label: 'A', value: -5 }, { label: 'B', value: null }], reference: { label: 'Target', value: 1 } } });
   assert.equal(config.options.indexAxis, 'y'); assert.equal(config.data.datasets[0].data[0], -5);
   assert.equal(config.data.datasets[0].data[1], null); assert.equal(config.data.datasets[1].label, 'Target');
   assert.equal(config.data.datasets[1].data[1].x, 1); assert.equal(config.data.datasets[1].data[1].y, 1);
+  assert.equal(config.options.scales.x.title.text, 'Amount');
+  assert.equal(config.options.scales.x.title.display, true);
+  assert.equal(config.options.scales.y.title.display, false);
 });
 
 test('breakdown uses one nonnegative stack with part legends and value formatting', () => {
@@ -170,9 +173,9 @@ test('breakdown uses one nonnegative stack with part legends and value formattin
   assert.equal(config.options.plugins.conversationValues.format(0.3), '30%');
 });
 
-function chartRoot(Chart) {
+function chartRoot(Chart, block = seriesBlock()) {
   const document = createDocument(); document.defaultView = { Chart };
-  const envelope = { version: 1, kind: 'message', messageId: 'chart-message', fallbackText: 'Traffic', blocks: [seriesBlock()] };
+  const envelope = { version: 1, kind: 'message', messageId: 'chart-message', fallbackText: 'Traffic', blocks: [block] };
   const content = renderConversationContent({ document, row: row(envelope), t });
   return { document, content };
 }
@@ -187,6 +190,7 @@ test('Chart.js initializes only after mount and repeated mounts resize without d
   assert.equal(calls.filter(([kind]) => kind === 'resize').length, 1);
   assert.equal(content.querySelector('.conversation-chart-plot').hidden, false);
   assert.equal(content.querySelector('.conversation-chart-data').querySelectorAll('table').length, 2);
+  assert.equal(content.querySelector('.chat-chart-axes').hidden, true, 'rendered charts omit the repeated axis description');
   content.destroy(); content.destroy(); content.mount();
   assert.equal(calls.filter(([kind]) => kind === 'destroy').length, 1);
   assert.equal(calls.filter(([kind]) => kind === 'create').length, 1);
@@ -197,14 +201,70 @@ test('missing Chart.js preserves readable static data without loading code', () 
   assert.equal(content.querySelector('.conversation-chart-plot').hidden, true);
   assert.ok(content.textContent.includes('RequestsTime · RequestsA')); assert.ok(content.textContent.includes('6,100 req'));
   assert.equal(content.querySelector('details'), null);
+  assert.notEqual(content.querySelector('.chat-chart-axes').hidden, true, 'plain fallback keeps axis descriptions');
 });
 
 test('constructor failure disposes partial instance while retaining fallback', () => {
   let disposed = 0;
   class Chart { constructor() { throw new Error('Canvas unavailable'); } static getChart() { return { destroy() { disposed++; } }; } }
   const { content } = chartRoot(Chart); content.mount(); content.destroy(); content.destroy();
+  assert.notEqual(content.querySelector('.chat-chart-axes').hidden, true, 'failed chart rendering keeps axis descriptions');
   assert.equal(disposed, 1); assert.equal(content.querySelector('.conversation-chart-plot').hidden, true);
   assert.ok(content.textContent.includes('4,200 req')); assert.equal(content.querySelector('details'), null);
+});
+
+for (const [name, labels, description] of [
+  ['category title only', { xLabel: 'Channel' }, 'Channel'],
+  ['numeric title only', { yLabel: 'Requests' }, 'Requests'],
+  ['both axis titles', { xLabel: 'Channel', yLabel: 'Requests' }, 'Channel · Requests']
+]) test(`enhanced category charts retain the category description with ${name}`, t => {
+  const block = { id: 'channels', type: 'category_series', schemaVersion: 1, fallbackText: 'Channel data',
+    data: { ...labels, points: [{ key: 'web', label: 'Web', value: 10 }] } };
+  const { content } = chartRoot(class { resize() {} destroy() {} }, block);
+  t.after(() => content.destroy());
+  const axes = content.querySelector('.chat-chart-axes');
+  assert.equal(axes.textContent, description, 'the unenhanced fallback retains every axis title');
+  content.mount();
+  assert.equal(content.querySelector('.conversation-chart-plot').hidden, false);
+  assert.equal(axes.textContent, labels.xLabel ?? '');
+  assert.equal(axes.hidden, !labels.xLabel, 'only the repeated numeric title is omitted');
+});
+
+test('a resize failure after a successful render restores the static axis description and data', t => {
+  let disposed = 0;
+  class Chart { resize() { throw new Error('Canvas resize unavailable'); } destroy() { disposed++; } }
+  const { content } = chartRoot(Chart);
+  t.after(() => content.destroy());
+  const axes = content.querySelector('.chat-chart-axes');
+  content.mount();
+  assert.equal(axes.hidden, true);
+  assert.equal(content.querySelector('.conversation-chart-plot').hidden, false);
+  content.mount();
+  assert.equal(axes.hidden, false);
+  assert.equal(axes.textContent, 'Time · Requests');
+  assert.equal(content.querySelector('.conversation-chart-plot').hidden, true);
+  assert.equal(content.querySelector('details'), null);
+  assert.equal(content.querySelectorAll('table').length, 2);
+  assert.ok(content.textContent.includes('4,200 req'));
+  assert.equal(disposed, 1);
+});
+
+test('a category chart update failure restores both original axis titles', t => {
+  let disposed = 0;
+  class Chart { resize() {} update() { throw new Error('Canvas update unavailable'); } destroy() { disposed++; } }
+  const block = { id: 'channels', type: 'category_series', schemaVersion: 1, fallbackText: 'Channel data',
+    data: { xLabel: 'Channel', yLabel: 'Requests', points: [{ key: 'web', label: 'Web', value: 10 }] } };
+  const { document, content } = chartRoot(Chart, block);
+  t.after(() => content.destroy());
+  const axes = content.querySelector('.chat-chart-axes');
+  document.documentElement.lang = 'en'; content.mount();
+  assert.equal(axes.textContent, 'Channel'); assert.equal(axes.hidden, false);
+  document.documentElement.lang = 'zh'; content.mount();
+  assert.equal(axes.textContent, 'Channel · Requests'); assert.equal(axes.hidden, false);
+  assert.equal(content.querySelector('.conversation-chart-plot').hidden, true);
+  assert.equal(content.querySelector('details'), null);
+  assert.equal(content.querySelectorAll('table').length, 1);
+  assert.equal(disposed, 1);
 });
 
 test('detached resources defer initialization and teardown survives a throwing Chart destroy', () => {

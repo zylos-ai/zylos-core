@@ -70,7 +70,14 @@ async function fixture(t, locale, width, { beforeSteps = true, running = false, 
     }
   });
   await until(() => protocolError || origin || child.exitCode !== null, 'real Dashboard HTTP server starts', 10000);
-  assert.equal(protocolError, undefined); assert.ok(origin);
+  assert.equal(protocolError, undefined);
+  if (!origin) {
+    const result = await child.completion;
+    assert.fail(`Dashboard fixture exited before ready (${result.code}): ${result.stderr.slice(-2000)}`);
+  }
+  const login = await fetch(origin + '/login', { signal: AbortSignal.timeout(3000) });
+  assert.equal(login.status, 200, 'private Dashboard login is available before browser navigation');
+  await login.text();
   const browser = await startChatBrowser(t, sandbox, origin, { expectedBlockedHosts: ['fonts.googleapis.com'] });
   const page = await browser.page({ width, pathname: '/login', ready: '!!document.querySelector("input[name=password]")' });
   await page.evaluate(`localStorage.setItem('zylos-dashboard-locale',${JSON.stringify(locale)});document.querySelector('input[name=password]').value='private-after-reply-password';document.querySelector('form').submit()`);
@@ -141,7 +148,7 @@ for (const locale of ['zh', 'en']) for (const width of [1280, 390]) {
     await clickHead(f, tail + ' button', width);
     await until(() => f.page.evaluate(`document.querySelector('${tail} button')?.getAttribute('aria-expanded')==='true'`), 'real pointer click expands follow-up steps');
     const failed = await f.page.evaluate(`document.querySelector('${tail} [data-status=failed]')?.textContent`);
-    assert.match(failed, locale === 'zh' ? /没有完成.*5 秒/ : /Did not finish.*5 s/i);
+    assert.match(failed, locale === 'zh' ? /出错.*5 秒/ : /Error.*5 s/i);
     await screenshot(f.page, `${locale}-${width}-expanded`);
     await f.page.evaluate(`document.querySelector('${reply} .conversation-activity-slot button').click()`);
     await until(() => f.page.evaluate(`!!document.querySelector('${reply} .conversation-activity-slot [data-status=done]')`), 'original folded activity still expands');

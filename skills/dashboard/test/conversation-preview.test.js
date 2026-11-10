@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chatAttachmentPreview, conversationPreview } from '../src/lib/chat/history.js';
+import { savedAnswerCases } from './fixtures/saved-answers.js';
+
+// Read-only production projection with shared browser fixtures. No HTTP, DB,
+// processes or runtime resources; the official runner isolates module loading.
+test('saved answer previews retain matched literal answers and flatten legacy Markdown within the Unicode bound', () => {
+  for (const example of savedAnswerCases) {
+    const content = CONTENT_PREFIX + JSON.stringify(example.envelope);
+    assert.equal(chatAttachmentPreview(content), example.answer, example.name);
+    assert.equal(conversationPreview(content), example.preview, example.name);
+    assert.equal(conversationPreview(content, { locale: 'en' }), example.preview, example.name);
+  }
+});
 import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 // Pure text/schema path only. No history database or network is opened.
 const packet = text => CONTENT_PREFIX + JSON.stringify({version:1,kind:'message',messageId:'readable-preview',fallbackText:text,blocks:[{id:'body',type:'markdown',schemaVersion:1,fallbackText:text,data:{text:'body'}}]});

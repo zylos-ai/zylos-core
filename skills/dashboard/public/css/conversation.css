@@ -1102,6 +1102,12 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-page :is(.conversation-view-stack, .conversation-view-columns) > .chat-block { margin: 0; }
 .conversation-page .chat-block-title { margin: 0; font-size: 15px; line-height: 24px; font-weight: 600; letter-spacing: -0.006em; color: var(--c-ink); }
 .conversation-page .chat-block-text { margin: 0; font-size: 14px; line-height: 22px; color: var(--c-ink-2); }
+.conversation-page .chat-answer-card {
+  max-width: 100%; padding: 12px 16px; border-radius: var(--c-r-lg);
+  background: var(--c-surface); box-shadow: var(--c-shadow-card); overflow-wrap: anywhere;
+}
+.conversation-page .chat-answer-question { margin: 0 0 8px; font-size: 12px; line-height: 18px; color: var(--c-ink-meta); }
+.conversation-page .chat-answer-text { margin: 0; font-size: 14px; line-height: 24px; color: var(--c-ink); white-space: pre-wrap; }
 
 /* Question cards: title and status share the header row. */
 .conversation-page :is(.chat-block-choice, .chat-block-confirmation, .chat-block-form_intent) {

@@ -139,7 +139,7 @@ export const COMPONENT_CATALOG = [
     "schemaVersion": 1,
     "dataSchema": "categorySeriesData",
     "interactive": false,
-    "description": "One to twenty-four keyed, labeled category values, including signed numbers or null for unavailable values.",
+    "description": "One to twenty-four keyed, labeled category values, including signed numbers or null for unavailable values. yLabel names the numeric value axis, shown below horizontal bars; category labels identify each row.",
     "example": {
       "version": 1,
       "kind": "message",
