@@ -36,7 +36,7 @@ function item(document, ...children) {
 }
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const gib = bytes => Number((bytes / 1073741824).toFixed(2));
-function poolSource(pool, t) {
+export function poolSource(pool, t) {
   if (pool.capacity == null) return '';
   const record = pool.capacityRecord;
   if (record?.valid !== true) return t('wb.inst.poolUnavailable', { capacity: pool.capacity });
@@ -47,7 +47,7 @@ function poolSource(pool, t) {
   if (record.source === 'fallback') return t('wb.inst.poolFallback');
   return '';
 }
-function poolExplanation(record, t) {
+export function poolExplanation(record, t) {
   const parts = [], memory = record?.memory, model = record?.model;
   if (memory && typeof memory === 'object') {
     const fields = [];
@@ -113,7 +113,10 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   const capacity = multi ? pool.capacity ?? null : null;
   const full = used != null && capacity != null && used >= capacity;
   const poolItem = item(document, icon(document, 'layers', 'xs'), element(document, 'span', technical ? t('wb.inst.pool') : t('wb.pool')));
-  poolItem.style.flexWrap = 'wrap'; poolItem.style.whiteSpace = 'normal'; poolItem.style.maxWidth = '100%';
+  // The capacity and queue stay whole and the source note wraps only between words. The longer capacity
+  // explanations live in the host panel's pool section; the title keeps them for hover.
+  poolItem.classList.add('wb-pool');
+  poolItem.style.flexWrap = 'wrap'; poolItem.style.maxWidth = '100%';
   if (technical && used != null) {
     const pips = element(document, 'span', undefined, 'wb-pips' + (full ? ' wb-full' : ''));
     for (let i = 0; i < Math.max(used, capacity ?? 0); i++) pips.append(element(document, 'i', undefined, i < used ? 'wb-slot wb-on' : 'wb-slot'));
@@ -123,10 +126,10 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   poolItem.append(element(document, 'b', amount, full ? 'wb-txt-warn' : undefined));
   if ((technical || multi) && used != null) poolItem.append(element(document, 'span', t('wb.inst.inUse')));
   const source = multi ? poolSource(pool, t) : '';
-  if (source) poolItem.append(element(document, 'span', ' · ' + source, 'wb-sub'));
-  if (technical && multi) for (const text of poolExplanation(pool.capacityRecord, t)) poolItem.append(element(document, 'span', ' · ' + text, 'wb-sub'));
+  const details = technical && multi ? poolExplanation(pool.capacityRecord, t) : [];
+  if (source) poolItem.append(element(document, 'span', ' · ' + source, 'wb-sub wb-pool-note'));
   if (pool.waiting) poolItem.append(element(document, 'span', ' · ' + t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: pool.waiting }), 'wb-txt-warn'));
-  poolItem.title = t('wb.inst.poolHint');
+  poolItem.title = [t('wb.inst.poolHint'), source, ...details].filter(Boolean).join(' · ');
   root.append(poolItem);
   cost = costSummary?.today?.total ?? cost;
   const costLabel = technical ? t('wb.inst.costTech') + ' ' + t('wb.inst.today') : t('wb.cost');

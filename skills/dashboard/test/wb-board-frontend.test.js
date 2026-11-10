@@ -5,6 +5,7 @@ import { renderBoard, renderRow, modelCell, pendingModel, boardController, rende
 import { createBoardSearch } from '../public/js/wb/board-search.js';
 import { activityStrip } from '../public/js/wb/activity-strip.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
+import { renderHostPool } from '../public/js/wb/host-panel.js';
 import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { waitText } from '../public/js/wb/view-mode.js';
 import { renderOverview } from '../public/js/wb/detail-overview.js';
@@ -350,7 +351,9 @@ test('pool renders actual occupancy above capacity and preserves sampled waiting
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 4);
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-on')).length, 4);
   const pool = root.children.find(node => node.textContent.includes('4 / 3'));
-  assert.equal(pool.style.flexWrap, 'wrap'); assert.equal(pool.style.whiteSpace, 'normal');
+  // Whole parts wrap inside the item; the item itself is not made to break inside its labels.
+  assert.equal(pool.style.flexWrap, 'wrap'); assert.notEqual(pool.style.whiteSpace, 'normal');
+  assert.equal(pool.classList.contains('wb-pool'), true);
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: null, capacity: 3,
     capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
   assert.match(root.textContent, /未知/);
@@ -358,27 +361,77 @@ test('pool renders actual occupancy above capacity and preserves sampled waiting
   assert.equal(allNodes(root).some(node => node.classList.contains('wb-full')), false);
 });
 
-test('pool technical explanations show only usable published values without recalculating advice', () => {
+test('pool explanations show only usable published values in the host panel, not in the strip', () => {
   const document = createDocument(), root = document.createElement('div'), GiB = 1073741824;
+  const section = document.createElement('section');
   const capacityRecord = { valid: true, fresh: true, source: 'fixed', kMemory: 0, reason: 'floor',
     memory: { source: 'host', limitBytes: 4 * GiB, usedBytes: 3.7 * GiB, reserveBytes: 0.5 * GiB },
     model: { state: 'fitted', slopeBytes: 0.5 * GiB, interceptBytes: 1.3 * GiB, windowDays: 7 } };
   const snapshot = { mode: 'multi', instance: { pool: { used: 2, capacity: 6, capacityRecord } } };
+  const view = { mode: snapshot.mode, pool: snapshot.instance.pool };
+  const phrases = ['未设内存上限，按整机内存', '内存上限 4 GiB', '已用 3.7 GiB', '保底 0.5 GiB',
+    '每会话约 0.5 GiB', '固定开销约 1.3 GiB', '近 7 天', '内存只够系统助手'];
   instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'plain' });
   assert.match(root.textContent, /手动设定 6（按内存建议 0）/);
   assert.doesNotMatch(root.textContent, /内存上限|固定开销|内存只够/);
+  // The strip keeps the source note in both views; the explanations stay out of it and only the title carries them.
   instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'technical' });
-  for (const phrase of ['未设内存上限，按整机内存', '内存上限 4 GiB', '已用 3.7 GiB', '保底 0.5 GiB',
-    '每会话约 0.5 GiB', '固定开销约 1.3 GiB', '近 7 天', '内存只够系统助手']) assert.ok(root.textContent.includes(phrase), phrase);
+  assert.match(root.textContent, /手动设定 6（按内存建议 0）/);
+  const poolNode = root.children.find(node => node.classList.contains('wb-pool'));
+  for (const phrase of phrases) assert.equal(poolNode.textContent.includes(phrase), false, phrase);
+  assert.doesNotMatch(root.textContent, /内存上限|固定开销|内存只够/);
+  assert.equal(allNodes(poolNode).filter(node => node.classList.contains('wb-pool-note')).length, 1);
+  assert.ok(poolNode.title.startsWith(poolTranslator('zh')('wb.inst.poolHint')));
+  for (const phrase of phrases) assert.ok(poolNode.title.includes(phrase), phrase);
+  // The host panel's pool section shows slots, source and every explanation as a whole sentence.
+  renderHostPool(section, view, { document, t: poolTranslator('zh') });
+  assert.equal(section.hidden, false);
+  assert.ok(section.textContent.includes('会话池'));
+  assert.ok(section.textContent.includes('名额2 / 6'));
+  assert.ok(section.textContent.includes('来源手动设定 6（按内存建议 0）'));
+  const items = allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent);
+  assert.deepEqual(items, ['未设内存上限，按整机内存 · 内存上限 4 GiB · 已用 3.7 GiB · 保底 0.5 GiB',
+    '每会话约 0.5 GiB · 固定开销约 1.3 GiB · 近 7 天', '内存只够系统助手，同时运行上限按 1 运行']);
   capacityRecord.kMemory = -2; capacityRecord.reason = null;
   capacityRecord.memory = { source: 'darwin', limitBytes: '4', usedBytes: null, reserveBytes: NaN };
   capacityRecord.model = { state: 'default', slopeBytes: 0.5 * GiB, interceptBytes: 'bad', windowDays: undefined };
-  instanceStrip(root, snapshot, { document, t: poolTranslator('en'), level: 'technical' });
-  assert.match(root.textContent, /memory recommendation: -2/);
-  assert.match(root.textContent, /Using host memory \(macOS\)/);
-  assert.match(root.textContent, /Still gathering data/);
-  assert.match(root.textContent, /about 0.5 GiB per session/);
-  assert.doesNotMatch(root.textContent, /Memory limit|fixed overhead|NaN|undefined|last .* days|Memory fits/);
+  renderHostPool(section, view, { document, t: poolTranslator('en') });
+  assert.match(section.textContent, /memory recommendation: -2/);
+  assert.match(section.textContent, /Using host memory \(macOS\)/);
+  assert.match(section.textContent, /Still gathering data/);
+  assert.match(section.textContent, /about 0.5 GiB per session/);
+  assert.doesNotMatch(section.textContent, /Memory limit|fixed overhead|NaN|undefined|last .* days|Memory fits/);
+});
+
+test('the host panel pool section shows slots and source only for the record a missing record file gives', () => {
+  // In multi mode the server always sends a record; a missing or invalid record file gives { valid: false, fresh: false }.
+  const document = createDocument(), section = document.createElement('section');
+  for (const [capacity, slots, source] of [[3, '1 / 3', '上限数据不可用，按 3 运行'], [null, '1', null]]) {
+    renderHostPool(section, { mode: 'multi', pool: { used: 1, capacity, capacityRecord: { valid: false, fresh: false } } },
+      { document, t: poolTranslator('zh') });
+    assert.equal(section.hidden, false, `capacity ${capacity}`);
+    const values = allNodes(section).filter(node => node.tagName === 'B' || node.tagName === 'SPAN').map(node => node.textContent);
+    assert.ok(section.textContent.includes('名额' + slots), section.textContent);
+    if (capacity == null) assert.equal(values.includes('1 / 3'), false);
+    if (source) assert.ok(section.textContent.includes('来源' + source), section.textContent);
+    else assert.equal(section.textContent.includes('来源'), false, section.textContent);
+    assert.equal(allNodes(section).some(node => node.tagName === 'UL' || node.tagName === 'LI'), false, 'no explanation list');
+  }
+});
+
+test('the host panel pool section stays hidden outside multi mode and without a record', () => {
+  const document = createDocument(), section = document.createElement('section'), t = poolTranslator('zh');
+  const record = { valid: true, fresh: true, source: 'auto' };
+  for (const view of [null, { mode: 'single', pool: { used: 1, capacity: 3, capacityRecord: record } },
+    { mode: 'unreadable', pool: { used: 1, capacity: 3, capacityRecord: record } },
+    { mode: 'multi', pool: { used: 1, capacity: 3 } }, { mode: 'multi', pool: { used: 1, capacity: 3, capacityRecord: null } },
+    { mode: 'multi', pool: { used: 1, capacity: 3, capacityRecord: {} } }, { mode: 'multi' }]) {
+    renderHostPool(section, { mode: 'multi', pool: { used: 1, capacity: 3, capacityRecord: record } }, { document, t });
+    assert.equal(section.hidden, false);
+    renderHostPool(section, view, { document, t });
+    assert.equal(section.hidden, true, JSON.stringify(view));
+    assert.equal(section.children.length, 0);
+  }
 });
 
 // Pool presentation integration: run when pool fields, wait rendering or reminder

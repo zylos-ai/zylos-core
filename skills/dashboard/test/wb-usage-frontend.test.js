@@ -116,6 +116,23 @@ test('host plain current values and technical curves preserve null gaps and peak
   renderHost(f.root,data,f);assert.equal(f.configs.length,0);assert.ok(f.root.textContent.includes('2 / 3'));assert.ok(f.root.textContent.includes('10.0%'));
   const view=renderHost(f.root,data,{...f,level:'technical'});assert.equal(f.configs.length,3);assert.deepEqual(f.configs[0].data.datasets[0].data,[10,null]);assert.equal(f.configs[0].data.datasets[0].spanGaps,false);assert.ok(f.root.textContent.includes('40.0%'));view.destroy();assert.equal(f.destroyed(),3);
 });
+test('host panel shows the board snapshot pool in both views and follows a new snapshot on redraw', async () => {
+  const f = fixture(), data = { current: {}, pm2: { online: 1, total: 1 }, series: [] }; let level = 'plain';
+  let view = { mode: 'multi', pool: { used: 2, capacity: 3, capacityRecord: { valid: true, fresh: true, source: 'auto', reason: 'floor' } } };
+  const panel = createHostPanel({ ...f, read: async () => data, detail: () => level, pool: () => view });
+  const section = () => allNodes(f.root).find(node => node.classList.contains('wb-host-pool'));
+  await panel.open();
+  assert.equal(section().hidden, false); assert.ok(section().textContent.includes('2 / 3'));
+  assert.ok(section().textContent.includes('wb.inst.poolAuto')); assert.ok(section().textContent.includes('wb.inst.poolFloor'));
+  level = 'technical'; panel.setViewDetail(); assert.equal(f.configs.length, 3);
+  assert.equal(section().hidden, false); assert.ok(section().textContent.includes('wb.inst.poolFloor'));
+  // The shell redraws the open panel on every board snapshot (setViewDetail); the section reads the pool then.
+  view = { mode: 'multi', pool: { ...view.pool, used: 3 } }; panel.setViewDetail();
+  assert.ok(section().textContent.includes('3 / 3'));
+  view = { mode: 'single', pool: view.pool }; panel.setViewDetail();
+  assert.equal(section().hidden, true); assert.equal(section().children.length, 0);
+  panel.destroy();
+});
 test('host close callback Escape and late reads preserve lifecycle', async () => {
   const f=fixture(),pending=deferred();let opened=0;const panel=createHostPanel({...f,onOpen:()=>opened++,read:()=>pending.promise});
   const opening=panel.open();assert.equal(opened,1);f.document.dispatch('keydown',{key:'Escape'});pending.resolve({});await opening;assert.equal(panel.active,false);assert.equal(f.root.hidden,true);panel.destroy();

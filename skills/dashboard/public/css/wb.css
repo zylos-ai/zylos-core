@@ -306,6 +306,8 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-search { height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text-muted); cursor: text; }
 .wb-search:focus-within { border-color: var(--accent); outline: 2px solid var(--wb-accent-line); }
 .wb-search input { width: 130px; min-width: 0; border: 0; outline: 0; padding: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; letter-spacing: 0; }
+/* The pool's source note is a sentence: it wraps, but only between words. */
+.wb-pool .wb-pool-note { white-space: normal; word-break: keep-all; }
 /* The auto-name button may wrap, but only between words: keep-all keeps "自动起名" whole, English breaks at spaces. */
 #wb-auto-name { font-size: 12px; letter-spacing: 0; word-break: keep-all; }
 .wb-row { position: relative; width: 100%; min-height: 58px; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--wb-line); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .14s; }
@@ -517,6 +519,12 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-kvs b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .wb-ip-card .wb-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .wb-host-svc { margin: 0 0 8px; }
+.wb-host-pool { margin-top: 10px; }
+/* The pool's source and explanations are sentences: they wrap, but only between words. */
+.wb-host-pool .wb-kvs, .wb-host-pool-notes { word-break: keep-all; }
+.wb-host-pool .wb-kvs > * { min-width: 0; }
+.wb-host-pool-notes { margin: 8px 0 0; padding-left: 16px; }
+.wb-host-pool-notes li + li { margin-top: 2px; }
 .wb-host-chart + .wb-host-chart { margin-top: 6px; }
 .wb-host-chart h5 { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--text-dim); font-size: 12px; font-weight: 550; }
 .wb-host-chart h5 b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }

@@ -1,5 +1,6 @@
 import { element, icon } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
+import { poolExplanation, poolSource } from './instance-strip.js?v=151';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
@@ -63,9 +64,33 @@ function rangeControl(document, range, onRange, t) {
   return seg;
 }
 
-// Only host observations belong in this panel; runtime and group data stay out.
+// The session pool from the board's own snapshot: slots, where the limit comes from, and every explanation in
+// full. In multi mode the server always sends a capacity record (at least its valid/fresh flags), so the section
+// is shown; when the record file is missing or stale it has only the slots and the source. Single and unreadable
+// modes have no pool section.
+export function renderHostPool(section, view, { document = section.ownerDocument, t = key => key } = {}) {
+  section.replaceChildren();
+  const pool = view?.mode === 'multi' ? view.pool ?? null : null, record = pool?.capacityRecord;
+  section.hidden = !(record && typeof record === 'object' && Object.keys(record).length);
+  if (section.hidden) return;
+  const title = element(document, 'h4'); title.append(icon(document, 'layers', 'xs'), element(document, 'span', t('wb.host.pool')));
+  const grid = element(document, 'div', undefined, 'wb-kvs');
+  const used = pool.used ?? null, capacity = pool.capacity ?? null;
+  grid.append(element(document, 'span', t('wb.host.poolSlots')),
+    element(document, 'b', used == null ? t('wb.unknown') : capacity == null ? String(used) : `${used} / ${capacity}`));
+  const source = poolSource(pool, t);
+  if (source) grid.append(element(document, 'span', t('wb.host.poolSource')), element(document, 'span', source));
+  section.append(title, grid);
+  const notes = poolExplanation(record, t);
+  if (!notes.length) return;
+  const list = element(document, 'ul', undefined, 'wb-host-pool-notes');
+  for (const text of notes) list.append(element(document, 'li', text));
+  section.append(list);
+}
+
+// Only host observations and the session pool belong in this panel; group data stays out.
 export function renderHost(root, value, { document = root.ownerDocument, t = key => key,
-  level = 'plain', range = '6h', meta = null, onRange = () => {}, onClose = () => {}, onUsage = () => {}, chartFactory = defaultChart } = {}) {
+  level = 'plain', range = '6h', meta = null, pool = null, onRange = () => {}, onClose = () => {}, onUsage = () => {}, chartFactory = defaultChart } = {}) {
   root.replaceChildren();
   const charts = [], header = element(document, 'header', undefined, 'wb-detail-header');
   const top = element(document, 'div', undefined, 'wb-d-top');
@@ -81,7 +106,10 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   const body = element(document, 'div', undefined, 'wb-detail-body wb-host-body'); root.append(body);
   const card = element(document, 'section', undefined, 'wb-ip-card');
   const title = element(document, 'h4'); title.append(icon(document, 'server', 'xs'), element(document, 'span', t('wb.host.machine')));
-  card.append(title); body.append(card);
+  card.append(title);
+  const poolSection = element(document, 'section', undefined, 'wb-ip-card wb-host-pool');
+  renderHostPool(poolSection, pool, { document, t });
+  body.append(card, poolSection);
   const pm2 = value?.pm2;
   if (level !== 'technical') {
     const grid = element(document, 'div', undefined, 'wb-kvs');
@@ -128,11 +156,11 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   return { destroy() { charts.forEach(chart => chart.destroy()); } };
 }
 
-export function createHostPanel({ root, read, identity = () => '', detail = () => 'plain', meta = () => null,
+export function createHostPanel({ root, read, identity = () => '', detail = () => 'plain', meta = () => null, pool = () => null,
   document = root.ownerDocument, t = key => key, onOpen = () => {}, onClose = () => {}, onUsage = () => {}, chartFactory } = {}) {
   let active = false, generation = 0, owner = null, data = null, rendered = null, range = '6h', failure = null;
   const draw = () => {
-    rendered?.destroy(); rendered = renderHost(root, data, { document, t, level: detail(), range, meta: meta(), onClose: close,
+    rendered?.destroy(); rendered = renderHost(root, data, { document, t, level: detail(), range, meta: meta(), pool: pool(), onClose: close,
       onUsage: () => { close(); onUsage(); }, onRange: next => { range = next; void refresh(); }, chartFactory });
     if (failure) root.append(element(document, 'p', t('wb.readFailed') + (detail() === 'technical' ? ' · ' + failure : ''), 'wb-detail-error'));
     root.hidden = false;

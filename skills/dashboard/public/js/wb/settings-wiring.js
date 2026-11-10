@@ -1,4 +1,4 @@
-import { confirmDialog } from './detail.js?v=150';
+import { confirmDialog } from './detail.js?v=151';
 import { renderKeyTable } from './settings-access.js?v=106';
 import { renderDefaults } from './settings-defaults.js?v=118';
 
