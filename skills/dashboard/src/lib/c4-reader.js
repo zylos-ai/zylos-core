@@ -52,6 +52,17 @@ export class C4Reader {
     }
   }
 
+  listSlotOccupancy(now = Date.now()) {
+    const failure = () => new Error('Pool occupancy unavailable');
+    const db = this._open();
+    if (!db) throw failure();
+    try {
+      return db.prepare(`SELECT session_group AS sessionGroup, run_id AS runId, state,
+        held_until AS heldUntil, created_at AS createdAt FROM slot_occupancy
+        WHERE state='running' OR held_until > ? ORDER BY session_group COLLATE BINARY`).all(Math.floor(now / 1000));
+    } catch { throw failure(); }
+  }
+
   getTodayStats() {
     const db = this._open();
     if (!db) return null;

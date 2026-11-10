@@ -101,6 +101,11 @@ export function waitText(wait, level = 'plain', t, now = Date.now()) {
   const reason = wait.kind ?? wait.reason ?? 'unknown';
   const at = recoveryTime(wait.cooldownUntil, now);
   const until = at === null ? '' : formatZoned(at, undefined, CLOCK_SECONDS);
+  if (reason === 'pool_wait') {
+    const position = Number.isSafeInteger(wait.position) && wait.position > 0 ? wait.position : '—';
+    if (t) return t('wb.wait.pool_wait', { position }) + (level === 'technical' ? ' · ' + t('wb.wait.poolSnapshot') : '');
+    return `等池位 · 第 ${position} 个` + (level === 'technical' ? ' · 按当前快照估计' : '');
+  }
   if (level === 'technical') return [reason, wait.reasonCode ?? wait.reason, until].filter(Boolean).join(' · ');
   if (t) {
     const key = ['rate_wait', 'auth_wait', 'queued', 'starting', 'fenced', 'start_failed'].includes(reason) ? reason : 'unknown';

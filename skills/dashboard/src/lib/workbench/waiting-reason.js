@@ -7,7 +7,7 @@ export function fenceLabel(reason) {
   return { ttl: 'TTL', evict: '驱逐', upgrade: '升级', model_config: '配置', manual_restart: '手工重启', mode_switch: '模式切换', auth: '认证' }[reason];
 }
 
-export function waitingReason(row, { runtimeHealth = {}, activations = [], now = Date.now() }) {
+export function waitingReason(row, { runtimeHealth = {}, activations = [], now = Date.now(), pool, position, ownsSlot = false }) {
   const queue = row.queue;
   if (queue.known !== false && row.fence != null) return { kind: 'fenced', fenceReason: row.fence.reason ?? 'mode_switch', since: row.fence.createdAt };
   const starting = () => ({ kind: 'starting', since: row.createdAt });
@@ -23,13 +23,17 @@ export function waitingReason(row, { runtimeHealth = {}, activations = [], now =
   if (health !== 'ok') return { kind: 'unknown', reason: 'no_rule', health };
   if (row.presence === 'starting') return starting();
   if (row.presence === 'not_running') {
+    const capacityUnknown = pool?.used == null;
+    if (!capacityUnknown && pool.capacity != null && pool.used >= pool.capacity && !ownsSlot && position != null) {
+      return { kind: 'pool_wait', position };
+    }
     const events = activations.filter(event => event.session_group === row.sessionGroup && timestamp(event.timestamp) >= now - 1800000 && timestamp(event.timestamp) <= now)
       .sort((a, b) => timestamp(b.timestamp) - timestamp(a.timestamp) || (b.event_seq ?? 0) - (a.event_seq ?? 0));
     const last = events[0];
     if (last && ['activate_failed', 'activate_timeout'].includes(last.event_type)) return {
       kind: 'start_failed', count30m: events.filter(event => ['activate_failed', 'activate_timeout'].includes(event.event_type)).length,
       lastAt: last.timestamp, reasonCode: sanitizer.safeSummary(last.metadata?.reason) };
-    return { kind: 'unknown', reason: 'pool_capacity_missing' };
+    return { kind: 'unknown', reason: capacityUnknown ? 'pool_occupancy_unreadable' : 'no_rule' };
   }
   if (row.presence === 'running' && row.live.status.valid && row.live.status.state === 'busy') return { kind: 'queued' };
   return { kind: 'unknown', reason: 'no_rule' };

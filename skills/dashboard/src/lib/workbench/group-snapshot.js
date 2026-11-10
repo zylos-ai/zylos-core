@@ -10,6 +10,7 @@ import { buildAttention, createChannelDownCounter } from './attention.js';
 import { activityBuckets } from './activity-buckets.js';
 import { searchGroups } from './group-search.js';
 import { validKey } from './display-names.js';
+import { readPool, poolPositions } from './pool-capacity.js';
 
 const emptyNames = { listAll: () => new Map(), search: () => [] };
 const activationTypes = ['activate_new', 'start_always', 'activate_failed', 'activate_timeout'];
@@ -86,8 +87,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (ov.ok) baselineRuntime = ov.data.baseline.runtime;
     else { try { baselineRuntime = await readConfigRuntime() ?? null; } catch {} }
     const sample = store.latestEventByType('pool_sample')?.metadata;
-    const pool = Object.fromEntries(['ready', 'starting', 'reclaiming', 'waiting'].map(key => [key, sample?.[key] ?? null]));
-    pool.capacity = null; pool.used = pool.ready === null ? null : pool.ready + pool.starting;
+    const { occupancy, ...pool } = await readPool({ now: at, sample, c4Reader, loadCoreModule });
     const activations = queryAllEvents(store, { since: new Date(at - 30 * 60000).toISOString(), types: activationTypes });
     if (!accountsCache || at - accountsCache.at >= 30000) {
       const accounts = {}, accountSources = {};
@@ -138,7 +138,12 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       row.rotationThreshold = observation?.status?.reason === 'identity_changed' ? null : sessionThreshold(thresholdPolicy, { runtime: row.target.runtime,
         usage: usage?.valid ? usage.value : null, launchConfig: row.launchConfig,
         ...(running ? {} : { desiredModel: selectedModel?.model ?? thresholdPolicy.defaultModels[row.target.runtime] }) });
-      row.wait = waitingReason(row, { runtimeHealth, activations, now: at });
+    }
+    const positions = poolPositions(rows, occupancy);
+    const owners = new Set((occupancy ?? []).map(slot => slot.sessionGroup));
+    for (const row of rows) {
+      row.wait = waitingReason(row, { runtimeHealth, activations, now: at, pool,
+        position: positions.get(row.sessionGroup), ownsSlot: owners.has(row.sessionGroup) });
       row.state = classify(row, { statusError });
       const events = row.state.kind === 'busy' && row.live?.runId ? queryAllEvents(store, {
         sessionGroup: row.sessionGroup, runId: row.live.runId, types: ['user_prompt_submit', 'stop'], until: new Date(at).toISOString(),

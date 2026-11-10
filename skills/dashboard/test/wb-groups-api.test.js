@@ -212,7 +212,8 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
     storage: 'injected, no DB/PM2/tmux/network opened' }));
   const value = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams());
   assert.equal(value.listKnown, true); assert.equal(value.baselineRuntime, 'claude');
-  assert.equal(value.instance.pool.used, 3); assert.equal(value.instance.pool.capacity, null);
+  assert.equal(value.instance.pool.used, null); assert.equal(value.instance.pool.capacity, null);
+  assert.equal(value.instance.pool.reason, 'pool_occupancy_unreadable');
   assert.equal(value.instance.accounts.claude.used_percentage, 23); assert.equal(value.instance.accounts.codex, null);
   assert.equal(value.instance.accounts.claude.live, false);
   assert.equal(value.instance.accounts.claude.recordedAt, f.now() - 3600000);
@@ -225,7 +226,7 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
   assert.match(row.preview.text, /REDACTED/); assert.match(row.tools[0].detail, /REDACTED/);
   const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
   assert.deepEqual(Object.keys(summary).sort(), ['counts', 'hasOlder', 'mode', 'pool', 'readAt', 'view']);
-  assert.deepEqual(summary.pool, { used: 3, capacity: null });
+  assert.deepEqual(summary.pool, { used: null, capacity: null });
 });
 
 // Integration: shared PM2 snapshot projection and attention boundary. Run for

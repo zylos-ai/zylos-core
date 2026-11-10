@@ -54,3 +54,23 @@ test('an observed service disappearing from PM2 counts consecutive offline sampl
   counter.update(missing); assert.equal(attention().ok, true);
   counter.update(missing); assert.equal(attention().problems[0].kind, 'channel_down');
 });
+
+test('full pool produces one reminder counting current pool waits rather than sampled waiting', () => {
+  const snap = snapshot([
+    { ...row('b', 'claude', 'not_running'), wait: { kind: 'pool_wait', position: 1 } },
+    { ...row('c', 'claude', 'not_running'), wait: { kind: 'pool_wait', position: 2 } },
+    { ...row('auth', 'claude', 'not_running'), wait: { kind: 'auth_wait' } },
+  ]);
+  snap.instance.pool = { used: 4, capacity: 3, waiting: 99 };
+  const result = buildAttention(snap);
+  assert.equal(result.problems.length, 0);
+  assert.deepEqual(result.reminders, [{ kind: 'pool_full', waiting: 2 }]);
+  assert.equal(result.ok, false);
+  for (const pool of [{ used: null, capacity: 3 }, { used: 2, capacity: 3 }, { used: 3, capacity: null }]) {
+    snap.instance.pool = pool;
+    assert.equal(buildAttention(snap).reminders.length, 0);
+  }
+  snap.instance.pool = { used: 3, capacity: 3, waiting: 99 };
+  snap.rows = snap.rows.slice(2);
+  assert.equal(buildAttention(snap).reminders.length, 0);
+});
