@@ -115,3 +115,15 @@ test('account alert timing is independent of absent sessions and uses active hou
   f.setNow(new Date(2026,9,25,8).getTime());await f.tick();await settle(f.tasks);
   assert.deepEqual(samples,['claude','codex']);assert.equal(f.calls.controls.length,0);
 });
+test('only the memory commit records a failed run for the day; a failed upgrade check retries next round',async t=>{
+  const f=fixture(t,{hour:6});f.setNow(new Date(2026,9,25,3).getTime());
+  f.tasks.execute=async script=>{f.calls.scripts.push(path.basename(script));throw new Error(`${path.basename(script)} failed`);};
+  await f.tick();await settle(f.tasks);await f.tick();await settle(f.tasks);
+  assert.deepEqual(f.calls.scripts,['daily-commit.js']);
+  assert.equal(f.tasks.state('daily-memory-commit-state').last_status,'failed');
+  assert.equal(f.tasks.state('daily-memory-commit-state').last_error,'daily-commit.js failed');
+  f.setNow(new Date(2026,9,25,6).getTime());
+  await f.tick();await settle(f.tasks);await f.tick();await settle(f.tasks);
+  assert.deepEqual(f.calls.scripts,['daily-commit.js','upgrade-check.js','upgrade-check.js']);
+  assert.equal(f.tasks.state('upgrade-check-state'),null);
+});

@@ -109,6 +109,6 @@ not an improvised Sync write.
 
 `memory-status.js` and `consolidate.js` are read-only diagnostics; they do not
 replace Sync or its progress commits. `daily-commit.js` is an independent local
-Git backup. `rotate-session.js` is only a one-time legacy-log migration during
+Git backup; files over 50 MB are left out of it and listed in its output. `rotate-session.js` is only a one-time legacy-log migration during
 upgrade; it is not a Sync step. Existing format/example files in `references/`
 and `examples/` document each shared knowledge category.

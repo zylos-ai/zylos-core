@@ -11,8 +11,15 @@ const { readRuntimeHealth, readAccountUsage } = await loadCoreModule('session-st
 const { zylosRoot } = await loadCoreModule('session-group-paths.js');
 const number = (value, fallback) => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : fallback;
 const enabled = (value, fallback) => value === undefined ? fallback : value === true || value === 'true';
+const MAX_ERROR_LENGTH=500;
+const truncate=text=>text.length>MAX_ERROR_LENGTH?`${text.slice(0,MAX_ERROR_LENGTH)}…`:text;
+/** A failed script rejects with its own stderr (truncated) as the message, so the log shows why, not only the exit code. */
 function runScript(script, timeoutMs) {
-  return new Promise((resolve,reject)=>execFile(process.execPath,[script],{encoding:'utf8',timeout:timeoutMs,maxBuffer:1024*1024},(error,stdout)=>error?reject(error):resolve(stdout)));
+  return new Promise((resolve,reject)=>execFile(process.execPath,[script],{encoding:'utf8',timeout:timeoutMs,maxBuffer:1024*1024},(error,stdout,stderr)=>{
+    if(!error)return resolve(stdout);
+    const detail=String(stderr??'').trim();
+    reject(detail?new Error(truncate(`${error.killed?'timed out: ':''}${detail}`)):error);
+  }));
 }
 const healthPrompt = 'System health check. Use the health-check skill sanitized helper for PM2 services; never run or print raw pm2 jlist output. Check disk space (df -h) and memory (free -m). If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with. Log results to ~/zylos/logs/health.log.';
 
@@ -35,9 +42,19 @@ export class SupervisorMachineTasks {
     const result=await this.enqueue(['enqueue','--content',content,'--priority',String(priority),'--no-ack-suffix'],{readMode:this.readMode});
     if(!result.ok)throw new Error(result.output);return result;
   }
-  daily(id,hour,parts,operation,{catchUp=false}={}) {
+  /** recordFailure: a failed run is recorded for the day too (last_status/last_error); the next attempt is the next day. */
+  daily(id,hour,parts,operation,{catchUp=false,recordFailure=false}={}) {
     if((catchUp?parts.hour<hour:parts.hour!==hour)||this.state(id)?.last_date===parts.date)return;
-    this.schedule(id,async()=>{if(await operation()===false)return;this.write(id,{last_date:parts.date,updated_at:new Date(this.now()).toISOString()});});
+    this.schedule(id,async()=>{
+      let result;
+      try{result=await operation();}
+      catch(error){
+        if(recordFailure)this.write(id,{last_date:parts.date,last_status:'failed',last_error:truncate(String(error?.message??error)),updated_at:new Date(this.now()).toISOString()});
+        throw error;
+      }
+      if(result===false)return;
+      this.write(id,{last_date:parts.date,...(recordFailure?{last_status:'ok'}:{}),updated_at:new Date(this.now()).toISOString()});
+    });
   }
   monitor(runtime,config,hour) {
     let monitor=this.monitors.get(runtime);
@@ -58,7 +75,11 @@ export class SupervisorMachineTasks {
     if(this.stopped||!context)return;
     const config=await this.readConfig();const now=this.now(),seconds=Math.floor(now/1000);
     const date=new Date(now),parts={hour:date.getHours(),date:`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`};
-    this.daily('daily-memory-commit-state',3,parts,()=>this.execute(fileURLToPath(new URL('../../zylos-memory/scripts/daily-commit.js',import.meta.url)),30000));
+    // Retrying cannot fix what makes a commit fail (a large or unreadable file, a full disk) and each retry repeats the work.
+    this.daily('daily-memory-commit-state',3,parts,async()=>{
+      const output=String(await this.execute(fileURLToPath(new URL('../../zylos-memory/scripts/daily-commit.js',import.meta.url)),30000)??'').trim();
+      if(output)this.log(`daily-memory-commit-state: ${output}`);
+    },{recordFailure:true});
     if(context.transition)return;
     const dailyDue=(id,hour)=>parts.hour>=hour && this.state(id)?.last_date!==parts.date && !this.pending.has(id);
     const upgradeDue=enabled(config.upgrade_check_enabled,true) && dailyDue('upgrade-check-state',6);

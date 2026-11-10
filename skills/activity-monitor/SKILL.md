@@ -226,8 +226,9 @@ The activity monitor runs a daily git commit of the `memory/` directory.
 - **Timezone**: Same as daily upgrade (from `~/zylos/.env` TZ)
 - **Persisted state**: `~/zylos/activity-monitor/daily-memory-commit-state.json`
 - **Script**: Calls `zylos-memory/scripts/daily-commit.js` directly (no C4, no Claude needed)
-- **Once per day**: Date-based deduplication
+- **Once per day, also when it fails**: Date-based deduplication. A failed run is recorded for the day (`last_status: "failed"`, `last_error` truncated) and the next attempt is the next day, not the next round
 - **Idempotent**: If no memory changes exist, the script skips the commit
+- **Large files**: Files over 50 MB are left out of the commit (untracked ones stay untracked, later changes to tracked ones are not committed) and listed in the activity monitor log
 
 ## Timing Guarantees
 
