@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { parse as parseDotenv } from 'dotenv';
 
 const VALID_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -17,24 +18,15 @@ const EMPTY_MANIFEST = Object.freeze({
 });
 
 /**
- * Parse ~/zylos/.env the way a new runtime session reads it: KEY=VALUE lines,
- * surrounding quotes removed, later lines win, comments and other lines skipped.
- * The relay traffic setting is computed from the same parse.
+ * Parse ~/zylos/.env the way a new runtime session reads it, with dotenv (as
+ * the rest of zylos does): `export ` prefixes and trailing ` # comments` are
+ * handled, quotes removed, later lines win. The relay traffic setting and the
+ * settings.json override check use the same parse.
  * @param {string} content
  * @returns {Record<string, string>}
  */
 export function parseZylosDotenv(content) {
-  const vars = {};
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx < 1) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    const val = trimmed.slice(eqIdx + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
-    vars[key] = val;
-  }
-  return vars;
+  return parseDotenv(content);
 }
 
 /**

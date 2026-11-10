@@ -538,6 +538,49 @@ describe('Claude launch — .env read the same way by the session and the relay 
   }
 });
 
+describe('Claude launch — export-prefixed .env lines', () => {
+  // `export KEY=value # comment` in .env: the new session, the auth probe, the
+  // relay setting and the settings.json check all read the same value.
+  const NAME = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+  const relay = 'https://relay.example.test';
+  it('session, probe, relay setting and settings.json check see the export-prefixed base URL', async () => {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0;
+    calls.execFile.length = 0;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const settingsPath = path.join(fakeHome, '.claude', 'settings.json');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const originalSettings = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath) : null;
+    const names = [NAME, 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+    fs.writeFileSync(dotenvPath, `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-synthetic-setup-token\nexport ANTHROPIC_BASE_URL=${relay} # relay\n`);
+    fs.writeFileSync(settingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: relay } }));
+    try {
+      const { syncClaudeRelayTraffic, claudeSettingsOverrideNotice } = await import('../runtime-setup.js');
+      assert.equal(claudeSettingsOverrideNotice(), null, 'settings.json holds the same base URL as .env');
+      syncClaudeRelayTraffic();
+      const adapter = makeAdapter(ClaudeAdapter);
+      await adapter.launch({ bypassPermissions: false });
+      const session = readSpecEnv();
+      assert.ok(session, 'spec should be written');
+      assert.equal(session.ANTHROPIC_BASE_URL, relay);
+      assert.equal(session[NAME], '1', 'relay setting on for the relay base URL');
+      await adapter.checkAuth();
+      const probe = calls.execFile.find(c => c.args[0] === '-p');
+      assert.ok(probe, 'probe should run');
+      assert.equal(probe.opts.env.ANTHROPIC_BASE_URL, relay);
+    } finally {
+      if (originalSettings) fs.writeFileSync(settingsPath, originalSettings); else fs.rmSync(settingsPath, { force: true });
+      fs.writeFileSync(dotenvPath, original);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
 describe('Claude launch — existing session', () => {
   it('does not create a new tmux session', async () => {
     tmuxSessionExists = true;
