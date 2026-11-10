@@ -60,7 +60,7 @@ for (const script of [
 
 // ── Mock child_process ───────────────────────────────────────────────────────
 
-const calls = { execSync: [], execFileSync: [] };
+const calls = { execSync: [], execFileSync: [], execFile: [] };
 let tmuxSessionExists = false;
 const resolvedCodex = "/selected codex/it's/bin/codex";
 let codexHelp = '  --no-daemon  Run without the shared background server';
@@ -113,6 +113,7 @@ mock.module('node:child_process', {
       };
     }),
     execFile: mock.fn((...fnArgs) => {
+      calls.execFile.push({ file: fnArgs[0], args: Array.isArray(fnArgs[1]) ? [...fnArgs[1]] : [], opts: fnArgs.find(a => a && typeof a === 'object' && !Array.isArray(a)) });
       const cb = fnArgs.find(a => typeof a === 'function');
       if (cb) process.nextTick(() => cb(null, '', ''));
       return { on: () => {}, stdout: null, stderr: null, pid: 0 };
@@ -138,6 +139,7 @@ after(() => {
 beforeEach(() => {
   calls.execSync.length = 0;
   calls.execFileSync.length = 0;
+  calls.execFile.length = 0;
   tmuxSessionExists = false;
   codexHelp = '  --no-daemon  Run without the shared background server';
   codexHelpError = null;
@@ -422,6 +424,76 @@ describe('Claude launch — non-credential passthrough from .env', () => {
     assert.equal(env[NAME], '1');
     for (const name of credentialNames) assert.equal(env[name], undefined, `${name} must not be set`);
     assert.deepEqual(approved(), before, 'the setting must not be approved as an API key');
+  });
+});
+
+describe('Claude launch — built-in passthrough from .env', () => {
+  // Runtime auth variables set in .env reach the new session without any
+  // runtime-env.manifest line, and the auth probe sees the same values.
+  const builtinKeys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'OPENAI_BASE_URL', 'OPENAI_API_KEY'];
+  const cases = {
+    relay: { ANTHROPIC_BASE_URL: 'https://relay.example.test', ANTHROPIC_AUTH_TOKEN: 'synthetic-relay-token', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+    'API key': { ANTHROPIC_API_KEY: 'sk-ant-synthetic-builtin-key' },
+    'setup token': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-synthetic-setup-token' },
+  };
+  const manifestPath = path.join(fakeZylosDir, '.zylos', 'runtime-env.manifest');
+
+  async function launchAndProbe(dotenv, { compat = false, nativeAuth = false } = {}) {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0;
+    calls.execFile.length = 0;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const saved = Object.fromEntries(builtinKeys.map(name => [name, process.env[name]]));
+    for (const name of builtinKeys) delete process.env[name];
+    process.env.ANTHROPIC_BASE_URL = 'https://stale-process.example.test';
+    const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    if (nativeAuth) fs.writeFileSync(credFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'fake-refresh-token' } }));
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, '');
+    fs.writeFileSync(dotenvPath, (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
+      + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+    try {
+      const adapter = makeAdapter(ClaudeAdapter);
+      await adapter.launch({ bypassPermissions: false });
+      const session = readSpecEnv();
+      assert.ok(session, 'spec should be written');
+      await adapter.checkAuth();
+      const probeCall = calls.execFile.find(c => c.args[0] === '-p');
+      assert.ok(probeCall, 'probe should run');
+      const probe = probeCall.opts.env;
+      for (const key of builtinKeys) assert.equal(session[key], probe[key], `session and probe agree on ${key}`);
+      return { session, probe };
+    } finally {
+      if (nativeAuth) fs.unlinkSync(credFile);
+      fs.rmSync(manifestPath, { force: true });
+      fs.writeFileSync(dotenvPath, original);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  }
+
+  for (const compat of [false, true]) for (const [name, dotenv] of Object.entries(cases)) {
+    it(`${name} credentials only in .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async () => {
+      const { session, probe } = await launchAndProbe(dotenv, { compat });
+      for (const [key, value] of Object.entries(dotenv)) {
+        assert.equal(session[key], value, `session ${key}`);
+        assert.equal(probe[key], value, `probe ${key}`);
+      }
+      if (!dotenv.ANTHROPIC_BASE_URL) assert.equal(session.ANTHROPIC_BASE_URL, compat ? 'https://stale-process.example.test' : undefined);
+    });
+  }
+
+  it('subscription login keeps API key and setup token out of session and probe', async () => {
+    const { session, probe } = await launchAndProbe({ ...cases.relay, ...cases['API key'], ...cases['setup token'] }, { nativeAuth: true });
+    for (const env of [session, probe]) {
+      assert.equal(env.ANTHROPIC_API_KEY, undefined);
+      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+      assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+    }
   });
 });
 
