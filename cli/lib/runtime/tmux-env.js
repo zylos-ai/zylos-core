@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { parse as parseDotenv } from 'dotenv';
 
 const VALID_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -15,6 +16,20 @@ const PROXY_VARS = [
 const EMPTY_MANIFEST = Object.freeze({
   envNames: [], inheritNames: [], pathPrepend: [], pathAppend: [],
 });
+
+/**
+ * Parse ~/zylos/.env the way a new Claude session reads it, with dotenv (as
+ * the scheduler, zylos-memory and web-console skills do): `export ` prefixes
+ * are dropped, an unquoted value ends at its first `#`, quotes are removed
+ * (`\n` in double quotes becomes a newline, and double quotes may span lines),
+ * later lines win. The relay traffic setting and the settings.json override
+ * check use the same parse.
+ * @param {string} content
+ * @returns {Record<string, string>}
+ */
+export function parseZylosDotenv(content) {
+  return parseDotenv(content);
+}
 
 /**
  * Parse runtime-env.manifest content into structured directives.

@@ -38,9 +38,12 @@ import {
   saveApiKey,
   saveApiKeyToEnv,
   saveClaudeBaseUrl,
-  saveClaudeBaseUrlToSettingsAndEnv,
+  saveClaudeBaseUrlToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
+  syncClaudeRelayTraffic,
+  relayLoginNotice,
+  claudeSettingsOverrideNotice,
   saveCodexBaseUrl,
   saveCodexApiKey,
   saveCodexApiKeyToEnv,
@@ -407,7 +410,7 @@ function ensureBinInPath() {
 // ── End Codex helpers ──────────────────────────────────────────────────────
 
 /**
- * Save an Anthropic API key to ~/.claude/settings.json and process.env.
+ * Save an Anthropic API key to process.env (and pre-approve it).
  * Does NOT write to ~/zylos/.env here — that happens after template
  * deployment via saveApiKeyToEnv() to avoid creating a partial .env
  * that blocks template deployment on fresh installs.
@@ -477,17 +480,22 @@ function verifyCodexApiKey(apiKey) {
  *
  * @returns {{ valid: boolean, authError?: boolean, message?: string }}
  */
-function verifySetupToken() {
+export function verifySetupToken() {
   try {
+    const env = { ...process.env };
     const result = spawnSync('claude', ['-p', 'hi', '--max-turns', '1'], {
       timeout: 30000,
-      env: { ...process.env },
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     if (result.status === 0) {
       return { valid: true };
     }
+    // Claude Code takes settings.json `env` over this env: name any key there
+    // that overrides the checked values (read only).
+    const override = claudeSettingsOverrideNotice(env);
+    if (override) console.log(`  ${warn(override)}`);
 
     const output = ((result.stdout?.toString() || '') + (result.stderr?.toString() || '')).trim();
     const lower = output.toLowerCase();
@@ -504,21 +512,11 @@ function verifySetupToken() {
 }
 
 /**
- * Undo saveSetupToken(): remove CLAUDE_CODE_OAUTH_TOKEN from
- * ~/.claude/settings.json and the current process environment.
+ * Undo saveSetupToken(): remove CLAUDE_CODE_OAUTH_TOKEN from the current
+ * process environment. saveSetupToken() does not write settings.json, so
+ * there is nothing to undo there.
  */
 function rollbackSetupToken() {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    if (settings.env) {
-      delete settings.env.CLAUDE_CODE_OAUTH_TOKEN;
-    }
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch (err) {
-    console.error(`  ${warn(`Could not rollback setup token from settings.json: ${err.message}`)}`);
-  }
-
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 }
 
@@ -1844,6 +1842,79 @@ Note: --setup-token and --api-key values are visible in process listings.
 
 // ── Main init command ───────────────────────────────────────────
 
+/**
+ * Subscription (browser) login: run Claude Code interactively, then report
+ * whether it is now authenticated and whether that came from this login.
+ */
+export function runClaudeSubscriptionLogin({
+  launch = spawnSync, status = isClaudeAuthenticated, platform = process.platform, log = console.log,
+} = {}) {
+  log(`\n  ${cyan('Starting Claude Code for authentication...')}`);
+  log(`  ${dim('After login, type /exit to return to zylos init.')}\n`);
+  const sigintListeners = process.rawListeners('SIGINT');
+  process.removeAllListeners('SIGINT');
+  process.on('SIGINT', () => {});
+  try {
+    // On macOS, spawning Claude from a curl|bash pipeline leaves stdin
+    // in a state where ink's TUI can't receive keyboard input — even with
+    // /dev/tty redirects. Use `script` to allocate a fresh pseudo-terminal
+    // that gives Claude full terminal control.
+    if (platform === 'darwin') {
+      launch('script', ['-q', '/dev/null', 'claude'], { stdio: 'inherit' });
+    } else {
+      launch('claude', [], { stdio: 'inherit' });
+    }
+  } catch { /* user may Ctrl+C */ }
+  process.removeAllListeners('SIGINT');
+  for (const l of sigintListeners) process.on('SIGINT', l);
+  const claudeAuthenticated = status();
+  if (claudeAuthenticated) {
+    log(`\n  ${success('Claude Code authenticated')}`);
+  } else {
+    log(`\n  ${warn('Authentication not completed.')}`);
+    log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
+  }
+  return { claudeAuthenticated, subscriptionLogin: claudeAuthenticated };
+}
+
+/**
+ * Write the credentials and base URLs chosen during init, after templates are
+ * deployed, then recompute the relay traffic setting from the resulting
+ * Claude state.
+ */
+export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin = false,
+  codexApiKey, claudeBaseUrl, codexBaseUrl } = {}, { log = console.log } = {}) {
+  if (apiKey) {
+    saveApiKeyToEnv(apiKey);
+  }
+  if (setupToken) {
+    saveSetupTokenToEnv(setupToken);
+  }
+  if (codexApiKey) {
+    saveCodexApiKeyToEnv(codexApiKey);
+  }
+  if (claudeBaseUrl) {
+    saveClaudeBaseUrlToEnv(claudeBaseUrl);
+  }
+  if (codexBaseUrl) {
+    saveCodexBaseUrlToEnv(codexBaseUrl);
+    writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: codexBaseUrl });
+  }
+  // Recompute the relay traffic setting from the saved Claude state.
+  if (apiKey || setupToken || subscriptionLogin || claudeBaseUrl) {
+    syncClaudeRelayTraffic();
+  }
+  if ((setupToken || subscriptionLogin) && !claudeBaseUrl) {
+    const relay = relayLoginNotice();
+    if (relay) log(`  ${warn(relay)}`);
+  }
+  // settings.json values that would override what was just saved (read only).
+  if (apiKey || setupToken || subscriptionLogin || claudeBaseUrl) {
+    const override = claudeSettingsOverrideNotice();
+    if (override) log(`  ${warn(override)}`);
+  }
+}
+
 export async function initCommand(args) {
   const opts = parseInitFlags(args);
 
@@ -1996,6 +2067,7 @@ export async function initCommand(args) {
   let codexAuthenticated = false;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
+  let subscriptionLogin = false; // set after a successful subscription (browser) login in this run
   let pendingCodexApiKey = null; // set if codex api key provided, written to .env after templates
   let pendingClaudeBaseUrl = null;
   let pendingCodexBaseUrl = null;
@@ -2202,31 +2274,7 @@ export async function initCommand(args) {
 
         if (authChoice === 1) {
           // Option 1: Subscription login (existing flow)
-          console.log(`\n  ${cyan('Starting Claude Code for authentication...')}`);
-          console.log(`  ${dim('After login, type /exit to return to zylos init.')}\n`);
-          const sigintListeners = process.rawListeners('SIGINT');
-          process.removeAllListeners('SIGINT');
-          process.on('SIGINT', () => {});
-          try {
-            // On macOS, spawning Claude from a curl|bash pipeline leaves stdin
-            // in a state where ink's TUI can't receive keyboard input — even with
-            // /dev/tty redirects. Use `script` to allocate a fresh pseudo-terminal
-            // that gives Claude full terminal control.
-            if (process.platform === 'darwin') {
-              spawnSync('script', ['-q', '/dev/null', 'claude'], { stdio: 'inherit' });
-            } else {
-              spawnSync('claude', [], { stdio: 'inherit' });
-            }
-          } catch { /* user may Ctrl+C */ }
-          process.removeAllListeners('SIGINT');
-          for (const l of sigintListeners) process.on('SIGINT', l);
-          claudeAuthenticated = isClaudeAuthenticated();
-          if (claudeAuthenticated) {
-            console.log(`\n  ${success('Claude Code authenticated')}`);
-          } else {
-            console.log(`\n  ${warn('Authentication not completed.')}`);
-            console.log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
-          }
+          ({ claudeAuthenticated, subscriptionLogin } = runClaudeSubscriptionLogin());
         } else if (authChoice === 2) {
           // Option 2: API key
           console.log(`\n  ${dim('Paste your Anthropic API key (starts with sk-ant-):')}`);
@@ -2337,22 +2385,8 @@ export async function initCommand(args) {
     migrateWebConsolePassword();
 
     // Write auth credentials to .env if entered during this run
-    if (pendingApiKey) {
-      saveApiKeyToEnv(pendingApiKey);
-    }
-    if (pendingSetupToken) {
-      saveSetupTokenToEnv(pendingSetupToken);
-    }
-    if (pendingCodexApiKey) {
-      saveCodexApiKeyToEnv(pendingCodexApiKey);
-    }
-    if (pendingClaudeBaseUrl) {
-      saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
-    }
-    if (pendingCodexBaseUrl) {
-      saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
-      writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
-    }
+    persistInitCredentials({ apiKey: pendingApiKey, setupToken: pendingSetupToken, subscriptionLogin,
+      codexApiKey: pendingCodexApiKey, claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl });
 
     // Timezone: use resolved value or show current
     if (!quiet) console.log(heading('Checking timezone...'));
@@ -2446,22 +2480,8 @@ export async function initCommand(args) {
   migrateWebConsolePassword();
 
   // Write auth credentials to .env now that templates have been deployed
-  if (pendingApiKey) {
-    saveApiKeyToEnv(pendingApiKey);
-  }
-  if (pendingSetupToken) {
-    saveSetupTokenToEnv(pendingSetupToken);
-  }
-  if (pendingCodexApiKey) {
-    saveCodexApiKeyToEnv(pendingCodexApiKey);
-  }
-  if (pendingClaudeBaseUrl) {
-    saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
-  }
-  if (pendingCodexBaseUrl) {
-    saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
-    writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
-  }
+  persistInitCredentials({ apiKey: pendingApiKey, setupToken: pendingSetupToken, subscriptionLogin,
+    codexApiKey: pendingCodexApiKey, claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl });
   // Step 8: Configure timezone
   if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);
   await configureTimezone(skipConfirm, false, opts.timezone, quiet);

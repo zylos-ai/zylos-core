@@ -24,9 +24,12 @@ import {
   isValidBaseUrl,
   saveApiKey,
   saveApiKeyToEnv,
-  saveClaudeBaseUrlToSettingsAndEnv,
+  saveClaudeBaseUrlToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
+  syncClaudeRelayTraffic,
+  relayLoginNotice,
+  claudeSettingsOverrideNotice,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
   saveCodexApiKeyToEnv,
@@ -97,17 +100,17 @@ export function prepareRuntimeInstruction(target, { zylosDir = ZYLOS_DIR } = {})
  * @param {{ apiKey?: string, setupToken?: string }} creds
  * @returns {boolean}
  */
-function applyCredentials(target, creds) {
+export function applyCredentials(target, creds) {
   if (target === 'claude') {
     if (creds.setupToken) {
       if (!saveSetupToken(creds.setupToken)) return false;
       saveSetupTokenToEnv(creds.setupToken);
-      return true;
+      return syncClaudeRelayTraffic();
     }
     if (creds.apiKey) {
       if (!saveApiKey(creds.apiKey)) return false;
       saveApiKeyToEnv(creds.apiKey);
-      return true;
+      return syncClaudeRelayTraffic();
     }
   } else if (target === 'codex') {
     if (creds.apiKey) {
@@ -117,9 +120,20 @@ function applyCredentials(target, creds) {
   return false;
 }
 
+/** Setup-token login with no new base URL: the notice that a saved relay stays in use, or null. */
+export function relayNoticeAfterSave(target, { setupToken, baseUrl }, notice = relayLoginNotice) {
+  return target === 'claude' && setupToken && !baseUrl ? notice() : null;
+}
+
+/** After a Claude save in this run: settings.json keys that would override it (read only). */
+export function settingsOverrideAfterSave(target, { apiKey, setupToken, baseUrl }, notice = claudeSettingsOverrideNotice) {
+  return target === 'claude' && (apiKey || setupToken || baseUrl) ? notice() : null;
+}
+
 export function applyBaseUrl(target, baseUrl) {
   if (target === 'claude') {
-    return saveClaudeBaseUrlToSettingsAndEnv(baseUrl);
+    if (!saveClaudeBaseUrlToEnv(baseUrl)) return false;
+    return syncClaudeRelayTraffic();
   }
   if (target === 'codex') {
     if (!saveCodexBaseUrlToEnv(baseUrl)) return false;
@@ -296,6 +310,11 @@ async function switchRuntime(target, flags) {
     }
     console.log(`  ${green('✓')} base URL saved`);
   }
+
+  const relayNotice = relayNoticeAfterSave(target, { setupToken, baseUrl });
+  if (relayNotice) console.log(`  Note: ${relayNotice}`);
+  const overrideNotice = settingsOverrideAfterSave(target, { apiKey, setupToken, baseUrl });
+  if (overrideNotice) console.error(`  ${yellow(`Warning: ${overrideNotice}`)}`);
 
   // Step 2b: Write Codex headless config (trust dir, suppress all interactive prompts).
   // Done before auth check so config is present when checkAuth spawns `codex login status`.

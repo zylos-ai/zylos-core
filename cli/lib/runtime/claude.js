@@ -3,7 +3,7 @@
  *
  * Encapsulates all Claude Code-specific logic:
  *   - tmux session management
- *   - Auth detection (credentials.json, claude auth status, .env tokens)
+ *   - Auth: .env credentials (pre-approved) passed to the session; auth probe
  *   - Onboarding/trust pre-acceptance
  *   - Instruction file generation (CLAUDE.md)
  *
@@ -23,7 +23,7 @@ import { RuntimeAdapter } from './base.js';
 import { assertInstructionReady, buildInstructionFile } from './instruction-builder.js';
 import { ClaudeContextMonitor } from './claude-context-monitor.js';
 import { createClaudeProbe } from '../heartbeat/claude-probe.js';
-import { ZYLOS_DIR } from '../config.js';
+import { CLAUDE_BUILTIN_ENV_KEYS, ZYLOS_DIR } from '../config.js';
 import {
   tmuxHasSession,
   tmuxGetPanePid,
@@ -34,7 +34,7 @@ import {
   getProcessName,
   hasChildProcess,
 } from './tmux-helpers.js';
-import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
+import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, parseZylosDotenv, writeLaunchSpec } from './tmux-env.js';
 
 import { upgradeStartupPrompt, shellArgument } from './upgrade-context.js';
 
@@ -53,25 +53,12 @@ const DEFAULT_BYPASS = process.env.CLAUDE_BYPASS_PERMISSIONS !== 'false';
 const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
 const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' ');
 
-const CREDENTIALS_FILE = path.join(os.homedir(), '.claude', '.credentials.json');
+// Credentials from .env are always passed to Claude, also when a subscription
+// login exists (the subscription is used only when .env has none). Claude Code
+// asks interactively, default No, before using an environment API key it has
+// not seen, so these are pre-approved whenever .env sets them.
+const PRE_APPROVED_KEYS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
 const C4_CONTROL_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-
-/**
- * Parse a value from a .env file, tolerating common formatting variations:
- *   - Spaces/tabs around key and `=`  (e.g. `KEY = value`)
- *   - Single/double quotes around value (e.g. `KEY="value"`)
- *   - Trailing whitespace
- *
- * @param {string} content - Full .env file content
- * @param {string} key     - Variable name to extract
- * @returns {string}       - Trimmed, unquoted value, or empty string if not found
- */
-function _parseEnvValue(content, key) {
-  const re = new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm');
-  const m = content.match(re);
-  if (!m) return '';
-  return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
-}
 
 // ── ClaudeAdapter ─────────────────────────────────────────────────────────────
 
@@ -105,20 +92,14 @@ export class ClaudeAdapter extends RuntimeAdapter {
    * @returns {Promise<{status: 'success'|'failure'|'uncertain', reason: string}>}
    */
   async checkAuth() {
-    // Build subprocess env: inherit current env, inject .env API keys (same as launch()).
+    // Build subprocess env: inherit current env, but take the built-in runtime
+    // variables (CLAUDE_BUILTIN_ENV_KEYS) exactly as a new session gets them.
     const injectedEnv = { ...process.env };
-    let envApiKey = '';
-    let envOauthToken = '';
-    let envBaseUrl = '';
-    try {
-      const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-      envApiKey = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
-      envOauthToken = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
-      envBaseUrl = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
-      if (envApiKey) injectedEnv.ANTHROPIC_API_KEY = envApiKey;
-      if (envOauthToken) injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = envOauthToken;
-      if (envBaseUrl) injectedEnv.ANTHROPIC_BASE_URL = envBaseUrl;
-    } catch { /* .env absent — no keys to inject */ }
+    const sessionEnv = _buildSessionEnv();
+    for (const key of CLAUDE_BUILTIN_ENV_KEYS) {
+      if (Object.hasOwn(sessionEnv, key)) injectedEnv[key] = sessionEnv[key];
+      else delete injectedEnv[key];
+    }
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
     for (const v of ENV_VARS_TO_STRIP) delete injectedEnv[v];
@@ -248,43 +229,13 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // 1. Pre-accept onboarding/trust dialogs (all auth methods)
     _ensureOnboardingComplete(ZYLOS_DIR);
 
-    // 3. Detect auth method to avoid "Auth conflict" errors
-    const useCredentialsFile = _hasCredentialsFile();
-    let hasNativeAuth = useCredentialsFile;
-    let apiKeyValue = '';
-    let oauthTokenValue = '';
-    let baseUrlValue = '';
-
-    if (!hasNativeAuth) {
-      try {
-        const out = execFileSync(CLAUDE_BIN, ['auth', 'status'], {
-          encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        const status = JSON.parse(out);
-        if (status?.loggedIn === true && status?.authMethod === 'claude.ai') {
-          hasNativeAuth = true;
-        }
-      } catch { }
-    }
-
-    if (!hasNativeAuth) {
-      try {
-        const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-        apiKeyValue = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
-        oauthTokenValue = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
-        baseUrlValue = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
-      } catch { }
-
-      if (apiKeyValue) _approveApiKey(apiKeyValue);
-      if (oauthTokenValue) _approveApiKey(oauthTokenValue);
-    }
+    // 3. Pre-approve .env credentials so an interactive start never stops on the approval prompt
+    const dotenvVars = _readDotenvVars();
+    for (const key of PRE_APPROVED_KEYS) if (dotenvVars[key]) _approveApiKey(dotenvVars[key]);
 
     // 4. Build the claude command string (for existing-session path)
     const bypassFlag = bypassPermissions ? ' --dangerously-skip-permissions' : '';
-    const envStripFlags = hasNativeAuth
-      ? ' -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY'
-      : '';
-    const claudeCmd = `${ENV_CLEAN_PREFIX}${envStripFlags} ${CLAUDE_BIN}${bypassFlag}`;
+    const claudeCmd = `${ENV_CLEAN_PREFIX} ${CLAUDE_BIN}${bypassFlag}`;
 
     const monitorDir = path.join(ZYLOS_DIR, 'activity-monitor');
     const exitLogFile = path.join(monitorDir, 'claude-exit.log');
@@ -297,26 +248,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
       await this.sendMessage(cmd);
     } else {
       // New session — launcher pipeline
-      const dotenvVars = _readDotenvVars();
-      const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
-      const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
-
-      const { env } = useCleanEnv
-        ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
-        : buildCompatEnv({ processEnv: process.env, dotenvVars });
-
-      // Strip vars that cause Claude to refuse startup ("already running" detection)
-      for (const v of ENV_VARS_TO_STRIP) delete env[v];
-
-      // Inject auth tokens
-      if (hasNativeAuth) {
-        delete env.ANTHROPIC_API_KEY;
-        delete env.CLAUDE_CODE_OAUTH_TOKEN;
-      } else {
-        if (apiKeyValue) env.ANTHROPIC_API_KEY = apiKeyValue;
-        if (oauthTokenValue) env.CLAUDE_CODE_OAUTH_TOKEN = oauthTokenValue;
-        if (baseUrlValue) env.ANTHROPIC_BASE_URL = baseUrlValue;
-      }
+      const env = _buildSessionEnv();
 
       // Build launch spec
       const args = [];
@@ -379,29 +311,34 @@ export class ClaudeAdapter extends RuntimeAdapter {
 // ── Private helpers ────────────────────────────────────────────────────────
 
 function _readDotenvVars() {
-  const vars = {};
   try {
-    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx < 1) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      const val = trimmed.slice(eqIdx + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
-      vars[key] = val;
-    }
+    return parseZylosDotenv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8'));
   } catch { /* .env absent */ }
-  return vars;
+  return {};
 }
 
-function _hasCredentialsFile() {
-  try {
-    const data = JSON.parse(fs.readFileSync(CREDENTIALS_FILE, 'utf8'));
-    return !!(data.claudeAiOauth && data.claudeAiOauth.refreshToken);
-  } catch {
-    return false;
+/**
+ * Environment for a new Claude session; checkAuth() reuses it for the built-in keys.
+ * @returns {Record<string, string>}
+ */
+function _buildSessionEnv() {
+  const dotenvVars = _readDotenvVars();
+  const useCleanEnv = dotenvVars.ZYLOS_CLEAN_ENV !== 'false';
+  const manifest = useCleanEnv ? loadRuntimeEnvManifest(ZYLOS_DIR) : undefined;
+
+  const { env } = useCleanEnv
+    ? buildCleanEnv({ processEnv: process.env, dotenvVars, manifest, uid: process.getuid?.() })
+    : buildCompatEnv({ processEnv: process.env, dotenvVars });
+
+  // Strip vars that cause Claude to refuse startup ("already running" detection)
+  for (const v of ENV_VARS_TO_STRIP) delete env[v];
+
+  // Built-in runtime passthrough from .env, independent of runtime-env.manifest:
+  // applied after the manifest (clean and compat mode) so a manifest cannot drop it.
+  for (const key of CLAUDE_BUILTIN_ENV_KEYS) {
+    if (dotenvVars[key]) env[key] = dotenvVars[key];
   }
+  return env;
 }
 
 function _hasStartupHook() {

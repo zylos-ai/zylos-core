@@ -12,16 +12,31 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
-import { ZYLOS_DIR } from './config.js';
+import { parseZylosDotenv } from './runtime/tmux-env.js';
+import { ZYLOS_DIR, CLAUDE_BUILTIN_ENV_KEYS } from './config.js';
 import { commandExists } from './shell-utils.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 
+/**
+ * Every .env line that sets `key`, as dotenv reads it: `KEY=value` or
+ * `KEY: value`, optionally after `export ` and leading spaces, each with its
+ * line break.
+ */
+function envAssignments(key) {
+  return new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?${key}(?:[^\\S\\r\\n]*=|:(?=\\s|$)).*(?:\\r?\\n|$)`, 'gm');
+}
+
+/** Set `key` on its first existing line (any form envAssignments matches) and drop any later ones; append if absent. */
 function upsertEnvValue(content, key, value, comment = null) {
   const line = `${key}=${value}`;
-  if (content.match(new RegExp(`^${key}=.*$`, 'm'))) {
-    return content.replace(new RegExp(`^${key}=.*$`, 'm'), line);
-  }
+  let found = false;
+  const next = content.replace(envAssignments(key), match => {
+    if (found) return '';
+    found = true;
+    return line + (match.endsWith('\n') ? '\n' : '');
+  });
+  if (found) return next;
   const prefix = comment ? `\n\n# ${comment}\n` : '\n';
   return content.trimEnd() + `${prefix}${line}\n`;
 }
@@ -174,26 +189,20 @@ export function approveApiKey(keyOrToken) {
 }
 
 /**
- * Save an Anthropic API key to ~/.claude/settings.json and pre-approve it.
+ * Pre-approve an Anthropic API key and set it in process.env for this run.
+ * The key is persisted only to ~/zylos/.env (saveApiKeyToEnv); zylos does not
+ * write Claude credentials into ~/.claude/settings.json.
  * @param {string} apiKey - The API key (sk-ant-api...)
  * @returns {boolean}
  */
 export function saveApiKey(apiKey) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
   try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.ANTHROPIC_API_KEY = apiKey;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    approveApiKey(apiKey);
+    process.env.ANTHROPIC_API_KEY = apiKey;
+    return true;
   } catch {
     return false;
   }
-  approveApiKey(apiKey);
-  process.env.ANTHROPIC_API_KEY = apiKey;
-  return true;
 }
 
 /**
@@ -211,28 +220,20 @@ export function saveApiKeyToEnv(apiKey) {
 }
 
 /**
- * Save a Claude Code setup token to ~/.claude/settings.json and pre-approve it.
- * Removes any existing API key to avoid having both.
+ * Pre-approve a Claude Code setup token and set it in process.env for this run.
+ * The token is persisted only to ~/zylos/.env (saveSetupTokenToEnv); zylos
+ * does not write Claude credentials into ~/.claude/settings.json.
  * @param {string} token - The setup token (sk-ant-oat...)
  * @returns {boolean}
  */
 export function saveSetupToken(token) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
   try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-    delete settings.env.ANTHROPIC_API_KEY;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    approveApiKey(token);
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    return true;
   } catch {
     return false;
   }
-  approveApiKey(token);
-  process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-  return true;
 }
 
 /**
@@ -247,7 +248,7 @@ export function saveSetupTokenToEnv(token) {
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     content = upsertEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN', token, 'Claude Code setup token (set by zylos init)');
     content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
-    content = content.replace(/^\s*ANTHROPIC_API_KEY\s*=.*\n?/m, '');
+    content = content.replace(envAssignments('ANTHROPIC_API_KEY'), '');
     fs.writeFileSync(envPath, content);
   } catch {}
 }
@@ -260,6 +261,8 @@ export function saveSetupTokenToEnv(token) {
 export function saveClaudeBaseUrl(baseUrl) {
   try {
     process.env.ANTHROPIC_BASE_URL = baseUrl;
+    if (computeRelayTraffic({ baseUrl, credential: claudeCredentialIn(process.env) })) process.env[CLAUDE_RELAY_TRAFFIC_FLAG] = '1';
+    else delete process.env[CLAUDE_RELAY_TRAFFIC_FLAG];
     return true;
   } catch {
     return false;
@@ -267,35 +270,14 @@ export function saveClaudeBaseUrl(baseUrl) {
 }
 
 /**
- * Write ANTHROPIC_BASE_URL to Claude settings.json.
+ * Write ANTHROPIC_BASE_URL to ~/zylos/.env and process.env.
+ * ~/.claude/settings.json is not touched.
  * @param {string} baseUrl
  * @returns {boolean}
  */
-function saveClaudeBaseUrlToSettings(baseUrl) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
-  try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.ANTHROPIC_BASE_URL = baseUrl;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Write ANTHROPIC_BASE_URL to Claude settings.json and ~/zylos/.env.
- * @param {string} baseUrl
- * @returns {boolean}
- */
-export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
+export function saveClaudeBaseUrlToEnv(baseUrl) {
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
-    if (!saveClaudeBaseUrlToSettings(baseUrl)) return false;
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     content = upsertEnvValue(content, 'ANTHROPIC_BASE_URL', baseUrl, 'Anthropic base URL for Claude Code (set by zylos init)');
@@ -305,6 +287,125 @@ export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
   } catch {
     return false;
   }
+}
+
+// ── Relay traffic setting ───────────────────────────────────────────────────
+// Claude Code runs with CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 behind a relay
+// (non-official ANTHROPIC_BASE_URL) or with an Anthropic API credential
+// (ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN). It is absent only for a setup
+// token or no saved credential (subscription login) on the official API. It is
+// computed from the saved credentials alone: credentials saved for Claude always
+// win over a subscription login. It is a setting, not a credential.
+export const CLAUDE_RELAY_TRAFFIC_FLAG = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+const CLAUDE_RELAY_TRAFFIC_COMMENT = 'Required with a relay ANTHROPIC_BASE_URL or an Anthropic API key (set by zylos)';
+const CREDENTIALS_WITHOUT_RELAY_TRAFFIC = new Set(['setupToken', 'none']);
+
+/**
+ * The pairing rule.
+ * @param {{ baseUrl?: string, credential?: 'apiKey'|'authToken'|'setupToken'|'none' }} state
+ * @returns {boolean} true when the setting must be on
+ */
+export function computeRelayTraffic({ baseUrl, credential = 'none' } = {}) {
+  return isClaudeRelayBaseUrl(baseUrl) || !CREDENTIALS_WITHOUT_RELAY_TRAFFIC.has(credential);
+}
+
+/** The Claude credential a set of variables selects, in Claude Code's precedence order. */
+export function claudeCredentialIn(values) {
+  if (values.ANTHROPIC_AUTH_TOKEN) return 'authToken';
+  if (values.ANTHROPIC_API_KEY) return 'apiKey';
+  if (values.CLAUDE_CODE_OAUTH_TOKEN) return 'setupToken';
+  return 'none';
+}
+
+/**
+ * Saved Claude base URL and credential, from ~/zylos/.env only (parsed as a
+ * new session reads it). ~/.claude/settings.json is not consulted.
+ */
+function savedClaudeState() {
+  const values = savedClaudeEnv();
+  return { baseUrl: values.ANTHROPIC_BASE_URL, credential: claudeCredentialIn(values) };
+}
+
+/** ~/zylos/.env parsed as a new session reads it; empty when unreadable. */
+function savedClaudeEnv() {
+  try { return parseZylosDotenv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8')); } catch { return {}; }
+}
+
+/** True when a Claude base URL points anywhere other than the official API. */
+export function isClaudeRelayBaseUrl(baseUrl) {
+  if (!baseUrl) return false;
+  try { return new URL(baseUrl).hostname !== 'api.anthropic.com'; }
+  catch { return true; }
+}
+
+/** Turn the relay setting on or off in ~/zylos/.env and process.env. */
+function setClaudeRelayTrafficFlag(on) {
+  const name = CLAUDE_RELAY_TRAFFIC_FLAG;
+  const assignment = envAssignments(name);
+  try {
+    const envPath = path.join(ZYLOS_DIR, '.env');
+    let content = null;
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const current = content?.match(assignment) ?? [];
+    const alreadyOn = current.length === 1 && /^CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\r?\n?$/.test(current[0]);
+    if (on ? !alreadyOn : current.length > 0) {
+      let next = (content ?? '').replace(assignment, '')
+        .split('\n').filter(line => line.trim() !== `# ${CLAUDE_RELAY_TRAFFIC_COMMENT}`).join('\n');
+      next = on ? upsertEnvValue(next, name, '1', CLAUDE_RELAY_TRAFFIC_COMMENT) : next.replace(/\n+$/, '\n');
+      fs.writeFileSync(envPath, next);
+    }
+    if (on) process.env[name] = '1';
+    else delete process.env[name];
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Recompute the setting from the saved Claude state alone. Call once after
+ * every save of a Claude credential or base URL, and after a login.
+ * @returns {boolean}
+ */
+export function syncClaudeRelayTraffic() {
+  return setClaudeRelayTrafficFlag(computeRelayTraffic(savedClaudeState()));
+}
+
+/** The command that switches Claude back to the official API. */
+export const DIRECT_CLAUDE_BASE_URL_COMMAND = 'zylos runtime claude --save-base-url https://api.anthropic.com';
+
+/**
+ * After a subscription or setup-token login that gave no new base URL: a
+ * notice when a saved relay base URL stays in use (it is never removed).
+ * @returns {string|null}
+ */
+export function relayLoginNotice() {
+  const { baseUrl } = savedClaudeState();
+  if (!isClaudeRelayBaseUrl(baseUrl)) return null;
+  return `Still using the relay ${baseUrl}: the login token will pass through it. To connect directly to Anthropic, run: ${DIRECT_CLAUDE_BASE_URL_COMMAND}`;
+}
+
+/**
+ * A warning naming the built-in keys whose ~/.claude/settings.json `env` value
+ * would override the Claude values zylos gives Claude Code (set there with a
+ * different value, or set there while zylos does not set it). Claude Code
+ * applies that file's `env` over the environment zylos passes, so the zylos
+ * setting would silently not apply. Called after zylos saves Claude auth or
+ * relay settings (compared with ~/zylos/.env, the default), and when a Claude
+ * auth check fails (compared with the values that check used).
+ * settings.json is only read, never written. Values are never included.
+ * Missing, env-less or unparseable settings.json: no warning.
+ * @param {Record<string, string|undefined>} [values] - the Claude values to compare with
+ * @returns {string|null}
+ */
+export function claudeSettingsOverrideNotice(values = savedClaudeEnv()) {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  let env;
+  try { env = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))?.env; } catch { return null; }
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return null;
+  const keys = CLAUDE_BUILTIN_ENV_KEYS.filter(key => Object.hasOwn(env, key) && String(env[key] ?? '') !== (values[key] ?? ''));
+  if (keys.length === 0) return null;
+  return `${settingsPath} sets ${keys.join(', ')} in its env block. Claude Code uses those values instead of the ones zylos gives it, so the zylos setting will not take effect until you remove ${keys.length === 1 ? 'that key' : 'those keys'} from ${settingsPath} by hand.`;
 }
 
 // ── Codex credential helpers ───────────────────────────────────────────────

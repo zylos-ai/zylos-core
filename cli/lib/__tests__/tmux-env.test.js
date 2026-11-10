@@ -7,7 +7,7 @@ import { afterEach, describe, it } from 'node:test';
 const {
   buildCleanEnv, buildCompatEnv, parseManifest, parsePathManifest,
   parseRuntimeEnvManifest, loadRuntimeEnvManifest, deployManifestTemplate,
-  writeLaunchSpec, readAndDeleteSpec,
+  writeLaunchSpec, readAndDeleteSpec, parseZylosDotenv,
 } = await import('../runtime/tmux-env.js');
 
 const tmpFiles = [];
@@ -554,5 +554,35 @@ describe('writeLaunchSpec / readAndDeleteSpec', () => {
     tmpFiles.pop(); // already deleted
     assert.deepEqual(read, spec);
     assert.ok(!fs.existsSync(specPath), 'File should be deleted after read');
+  });
+});
+
+// ~/zylos/.env as a new Claude session and the settings.json check read it
+// (dotenv rules, the same as the scheduler, zylos-memory and web-console skills).
+describe('parseZylosDotenv', () => {
+  it('drops an export prefix from the key', () => {
+    assert.equal(parseZylosDotenv('export ANTHROPIC_BASE_URL=https://relay.example.test\n').ANTHROPIC_BASE_URL, 'https://relay.example.test');
+  });
+
+  it('drops a trailing comment from an unquoted value', () => {
+    assert.equal(parseZylosDotenv('ANTHROPIC_BASE_URL=https://relay.example.test # my relay\n').ANTHROPIC_BASE_URL, 'https://relay.example.test');
+  });
+
+  it('keeps a # inside single quotes and drops the comment after them', () => {
+    assert.equal(parseZylosDotenv("TOKEN='abc # kept' # note\n").TOKEN, 'abc # kept');
+  });
+
+  it('keeps a # inside double quotes and drops the comment after them', () => {
+    assert.equal(parseZylosDotenv('TOKEN="abc # kept" # note\n').TOKEN, 'abc # kept');
+  });
+
+  it('a later line wins, also when it has an export prefix', () => {
+    assert.equal(parseZylosDotenv('ANTHROPIC_BASE_URL=https://first.example.test\nexport ANTHROPIC_BASE_URL=https://second.example.test\n').ANTHROPIC_BASE_URL,
+      'https://second.example.test');
+  });
+
+  it('skips blank and comment lines and returns only the assignments', () => {
+    const content = '\n# Anthropic\n   # indented comment\n\nexport A=1\n\n# B=commented-out\nC=3 # three\n';
+    assert.deepEqual({ ...parseZylosDotenv(content) }, { A: '1', C: '3' });
   });
 });

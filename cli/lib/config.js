@@ -18,6 +18,15 @@ export const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 export const CADDYFILE = path.join(HTTP_DIR, 'Caddyfile');
 export const CADDY_BIN = path.join(BIN_DIR, 'caddy');
 
+// Built-in Claude passthrough: Zylos Core carries these from ~/zylos/.env into
+// Claude sessions and the Claude auth probe without a runtime-env.manifest
+// line. The manifest only filters other variables and cannot drop these.
+// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is a setting, not a credential.
+export const CLAUDE_BUILTIN_ENV_KEYS = Object.freeze([
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+]);
+
 // ── Config file (config.json) ───────────────────────────────────
 
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');

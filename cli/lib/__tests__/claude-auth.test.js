@@ -17,6 +17,8 @@ const fs = require('fs');
 fs.writeFileSync(process.env.FAKE_CLAUDE_ENV_OUT, JSON.stringify({
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
   CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || '',
+  ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN || '',
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ?? null,
   ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL || '',
   CLAUDECODE: process.env.CLAUDECODE || '',
   CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT || ''
@@ -24,6 +26,12 @@ fs.writeFileSync(process.env.FAKE_CLAUDE_ENV_OUT, JSON.stringify({
 const mode = process.env.FAKE_CLAUDE_MODE || 'success';
 if (mode === 'success') {
   console.log('pong');
+  process.exit(0);
+}
+if (mode === 'require_credentials') {
+  const hasCredential = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']
+    .some(name => process.env[name]);
+  console.log(hasCredential ? 'pong' : 'Not logged in');
   process.exit(0);
 }
 if (mode === 'not_logged_in_stdout') {
@@ -112,6 +120,85 @@ describe('Claude auth checks', () => {
     assert.equal(env.ANTHROPIC_BASE_URL, 'https://claude-proxy.example.com');
     assert.equal(env.CLAUDECODE, '');
     assert.equal(env.CLAUDE_CODE_ENTRYPOINT, '');
+  });
+
+  it('injects ANTHROPIC_AUTH_TOKEN with the base URL for a relay-only .env (#1130)', async () => {
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    fs.writeFileSync(
+      path.join(fakeZylosDir, '.env'),
+      [
+        'ANTHROPIC_BASE_URL=https://relay.example.test',
+        'ANTHROPIC_AUTH_TOKEN=relay-bearer-test',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+    // The probe must get these from .env, not from the test runner's own environment.
+    const authNames = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(authNames.map(name => [name, process.env[name]]));
+    for (const name of authNames) delete process.env[name];
+
+    try {
+      const result = await new ClaudeAdapter({}).checkAuth();
+      const env = JSON.parse(fs.readFileSync(envCapturePath, 'utf8'));
+
+      assert.equal(result.status, 'success');
+      assert.equal(env.ANTHROPIC_BASE_URL, 'https://relay.example.test');
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'relay-bearer-test');
+      assert.equal(env.ANTHROPIC_API_KEY, '');
+      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, '');
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  it('carries CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC into the probe only when .env sets it', async () => {
+    process.env.FAKE_CLAUDE_MODE = 'success';
+    const saved = process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
+    delete process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const relay = 'ANTHROPIC_BASE_URL=https://relay.example.test\nANTHROPIC_AUTH_TOKEN=relay-bearer-test\n';
+    try {
+      fs.writeFileSync(dotenvPath, relay + 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n', 'utf8');
+      await new ClaudeAdapter({}).checkAuth();
+      let env = JSON.parse(fs.readFileSync(envCapturePath, 'utf8'));
+      assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+
+      fs.writeFileSync(dotenvPath, relay, 'utf8');
+      await new ClaudeAdapter({}).checkAuth();
+      env = JSON.parse(fs.readFileSync(envCapturePath, 'utf8'));
+      assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, null);
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
+      else process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = saved;
+    }
+  });
+
+  it('does not treat CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC as a credential', async () => {
+    process.env.FAKE_CLAUDE_MODE = 'require_credentials';
+    fs.writeFileSync(path.join(fakeZylosDir, '.env'), 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n', 'utf8');
+    const names = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'];
+    const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+    try {
+      const result = await new ClaudeAdapter({}).checkAuth();
+      const env = JSON.parse(fs.readFileSync(envCapturePath, 'utf8'));
+
+      assert.equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+      assert.equal(env.ANTHROPIC_API_KEY, '');
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, '');
+      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, '');
+      assert.equal(result.status, 'failure');
+      assert.equal(result.reason, 'cli_probe_not_logged_in');
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   it('returns failure for explicit logged-out and authentication-error signals', async () => {

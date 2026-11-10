@@ -60,7 +60,7 @@ for (const script of [
 
 // ── Mock child_process ───────────────────────────────────────────────────────
 
-const calls = { execSync: [], execFileSync: [] };
+const calls = { execSync: [], execFileSync: [], execFile: [] };
 let tmuxSessionExists = false;
 const resolvedCodex = "/selected codex/it's/bin/codex";
 let codexHelp = '  --no-daemon  Run without the shared background server';
@@ -113,6 +113,7 @@ mock.module('node:child_process', {
       };
     }),
     execFile: mock.fn((...fnArgs) => {
+      calls.execFile.push({ file: fnArgs[0], args: Array.isArray(fnArgs[1]) ? [...fnArgs[1]] : [], opts: fnArgs.find(a => a && typeof a === 'object' && !Array.isArray(a)) });
       const cb = fnArgs.find(a => typeof a === 'function');
       if (cb) process.nextTick(() => cb(null, '', ''));
       return { on: () => {}, stdout: null, stderr: null, pid: 0 };
@@ -138,6 +139,7 @@ after(() => {
 beforeEach(() => {
   calls.execSync.length = 0;
   calls.execFileSync.length = 0;
+  calls.execFile.length = 0;
   tmuxSessionExists = false;
   codexHelp = '  --no-daemon  Run without the shared background server';
   codexHelpError = null;
@@ -328,21 +330,291 @@ describe('Claude launch — new session', () => {
     }
   });
 
-  it('spec.env excludes auth tokens when native auth is detected', async () => {
+  it('with a subscription login, the .env API key still reaches spec.env and is pre-approved', async () => {
     tmuxSessionExists = false;
-    // Simulate native auth by writing a credentials file
+    // Simulate a subscription login by writing a credentials file
     const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    const claudeJson = path.join(fakeHome, '.claude.json');
     fs.writeFileSync(credFile, JSON.stringify({
       claudeAiOauth: { refreshToken: 'fake-refresh-token' },
     }));
+    fs.rmSync(claudeJson, { force: true });
     try {
       await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
       const env = readSpecEnv();
       assert.ok(env, 'spec should be written');
-      assert.equal(env.ANTHROPIC_API_KEY, undefined, 'ANTHROPIC_API_KEY must be stripped when native auth detected');
-      assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'CLAUDE_CODE_OAUTH_TOKEN must be stripped when native auth detected');
+      assert.equal(env.ANTHROPIC_API_KEY, 'sk-ant-secret-test-key-do-not-expose');
+      const approved = JSON.parse(fs.readFileSync(claudeJson, 'utf8')).customApiKeyResponses.approved;
+      assert.ok(approved.includes('sk-ant-secret-test-key-do-not-expose'.slice(-20)), 'API key must be pre-approved');
     } finally {
       fs.unlinkSync(credFile);
+    }
+  });
+});
+
+describe('Claude launch — relay credentials from .env', () => {
+  it('spec.env carries ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN from .env (#1130)', async () => {
+    tmuxSessionExists = false;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const authNames = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(authNames.map(name => [name, process.env[name]]));
+    for (const name of authNames) delete process.env[name];
+    fs.writeFileSync(dotenvPath, [
+      'ANTHROPIC_BASE_URL=https://relay.example.test',
+      'ANTHROPIC_AUTH_TOKEN=relay-bearer-test',
+    ].join('\n'));
+    try {
+      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+      const env = readSpecEnv();
+      assert.ok(env, 'spec should be written');
+      assert.equal(env.ANTHROPIC_BASE_URL, 'https://relay.example.test');
+      assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'relay-bearer-test');
+    } finally {
+      fs.writeFileSync(dotenvPath, original);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
+describe('Claude launch — non-credential passthrough from .env', () => {
+  const NAME = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+  const credentialNames = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
+
+  async function launchWith(dotenv, { nativeAuth = false } = {}) {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0; // readSpecEnv() reads the first tmux new-session call
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const names = [NAME, ...credentialNames, 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+    const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    if (nativeAuth) fs.writeFileSync(credFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'fake-refresh-token' } }));
+    fs.writeFileSync(dotenvPath, dotenv);
+    try {
+      await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+      const env = readSpecEnv();
+      assert.ok(env, 'spec should be written');
+      return env;
+    } finally {
+      if (nativeAuth) fs.unlinkSync(credFile);
+      fs.writeFileSync(dotenvPath, original);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  }
+
+  it('spec.env carries CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC only when .env sets it', async () => {
+    const relay = 'ANTHROPIC_BASE_URL=https://relay.example.test\nANTHROPIC_AUTH_TOKEN=relay-bearer-test\n';
+    assert.equal((await launchWith(relay + `${NAME}=1\n`))[NAME], '1');
+    assert.equal((await launchWith(`${NAME}=1\n`, { nativeAuth: true }))[NAME], '1', 'carried with native auth too');
+    assert.equal((await launchWith(relay))[NAME], undefined);
+  });
+
+  it('a .env with only CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC injects or approves no credential', async () => {
+    const approved = () => {
+      try { return JSON.parse(fs.readFileSync(path.join(fakeHome, '.claude.json'), 'utf8')).customApiKeyResponses?.approved ?? []; }
+      catch { return []; }
+    };
+    const before = approved();
+    const env = await launchWith(`${NAME}=1\n`);
+    assert.equal(env[NAME], '1');
+    for (const name of credentialNames) assert.equal(env[name], undefined, `${name} must not be set`);
+    assert.deepEqual(approved(), before, 'the setting must not be approved as an API key');
+  });
+});
+
+describe('Claude launch — built-in passthrough from .env', () => {
+  // Claude variables set in .env reach the new session without any
+  // runtime-env.manifest line, and the auth probe sees the same values.
+  const builtinKeys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+    'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'];
+  const cases = {
+    relay: { ANTHROPIC_BASE_URL: 'https://relay.example.test', ANTHROPIC_AUTH_TOKEN: 'synthetic-relay-token', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
+    'API key': { ANTHROPIC_API_KEY: 'sk-ant-synthetic-builtin-key' },
+    'setup token': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-synthetic-setup-token' },
+  };
+  const manifestPath = path.join(fakeZylosDir, '.zylos', 'runtime-env.manifest');
+
+  async function launchAndProbe(dotenv, { compat = false, nativeAuth = false } = {}) {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0;
+    calls.execFile.length = 0;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const saved = Object.fromEntries(builtinKeys.map(name => [name, process.env[name]]));
+    for (const name of builtinKeys) delete process.env[name];
+    process.env.ANTHROPIC_BASE_URL = 'https://stale-process.example.test';
+    const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    if (nativeAuth) fs.writeFileSync(credFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'fake-refresh-token' } }));
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, '');
+    fs.writeFileSync(dotenvPath, (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
+      + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+    try {
+      const adapter = makeAdapter(ClaudeAdapter);
+      await adapter.launch({ bypassPermissions: false });
+      const session = readSpecEnv();
+      assert.ok(session, 'spec should be written');
+      await adapter.checkAuth();
+      const probeCall = calls.execFile.find(c => c.args[0] === '-p');
+      assert.ok(probeCall, 'probe should run');
+      const probe = probeCall.opts.env;
+      for (const key of builtinKeys) assert.equal(session[key], probe[key], `session and probe agree on ${key}`);
+      return { session, probe };
+    } finally {
+      if (nativeAuth) fs.unlinkSync(credFile);
+      fs.rmSync(manifestPath, { force: true });
+      fs.writeFileSync(dotenvPath, original);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  }
+
+  for (const compat of [false, true]) for (const [name, dotenv] of Object.entries(cases)) {
+    it(`${name} credentials only in .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async () => {
+      const { session, probe } = await launchAndProbe(dotenv, { compat });
+      for (const [key, value] of Object.entries(dotenv)) {
+        assert.equal(session[key], value, `session ${key}`);
+        assert.equal(probe[key], value, `probe ${key}`);
+      }
+      if (!dotenv.ANTHROPIC_BASE_URL) assert.equal(session.ANTHROPIC_BASE_URL, compat ? 'https://stale-process.example.test' : undefined);
+    });
+  }
+
+  for (const name of ['API key', 'setup token']) {
+    it(`with a subscription login, the .env ${name} reaches session and probe and is pre-approved`, async () => {
+      const claudeJson = path.join(fakeHome, '.claude.json');
+      fs.rmSync(claudeJson, { force: true });
+      const dotenv = cases[name];
+      const { session, probe } = await launchAndProbe(dotenv, { nativeAuth: true });
+      const [[key, value]] = Object.entries(dotenv);
+      assert.equal(session[key], value);
+      assert.equal(probe[key], value);
+      const approved = JSON.parse(fs.readFileSync(claudeJson, 'utf8')).customApiKeyResponses.approved;
+      assert.ok(approved.includes(value.slice(-20)), `${name} must be pre-approved`);
+    });
+  }
+});
+
+describe('Claude launch — .env read the same way by the session and the relay setting', () => {
+  // A hand-edited .env with two ANTHROPIC_BASE_URL lines: the session and the
+  // relay traffic setting must both use the same (last) one.
+  const NAME = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+  for (const [first, last, on] of [['https://relay.example.test', 'https://api.anthropic.com', false], ['https://api.anthropic.com', 'https://relay.example.test', true]]) {
+    it(`two ANTHROPIC_BASE_URL lines (${first} then ${last}): session uses ${last}, setting ${on ? 'on' : 'off'}`, async () => {
+      tmuxSessionExists = false;
+      calls.execFileSync.length = 0;
+      const dotenvPath = path.join(fakeZylosDir, '.env');
+      const original = fs.readFileSync(dotenvPath, 'utf8');
+      const names = [NAME, 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+      const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+      for (const name of names) delete process.env[name];
+      fs.writeFileSync(dotenvPath, `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-synthetic-setup-token\nANTHROPIC_BASE_URL=${first}\nANTHROPIC_BASE_URL=${last}\n`);
+      try {
+        const { syncClaudeRelayTraffic } = await import('../runtime-setup.js');
+        assert.equal(syncClaudeRelayTraffic(), true);
+        await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+        const env = readSpecEnv();
+        assert.ok(env, 'spec should be written');
+        assert.equal(env.ANTHROPIC_BASE_URL, last);
+        assert.equal(env[NAME], on ? '1' : undefined);
+      } finally {
+        fs.writeFileSync(dotenvPath, original);
+        for (const [name, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    });
+  }
+});
+
+describe('Claude launch — export-prefixed .env lines', () => {
+  // `export KEY=value # comment` in .env: the new session, the auth probe, the
+  // relay setting and the settings.json check all read the same value.
+  const NAME = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+  const relay = 'https://relay.example.test';
+  it('session, probe, relay setting and settings.json check see the export-prefixed base URL', async () => {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0;
+    calls.execFile.length = 0;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const settingsPath = path.join(fakeHome, '.claude', 'settings.json');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const originalSettings = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath) : null;
+    const names = [NAME, 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+    fs.writeFileSync(dotenvPath, `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-synthetic-setup-token\nexport ANTHROPIC_BASE_URL=${relay} # relay\n`);
+    fs.writeFileSync(settingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: relay } }));
+    try {
+      const { syncClaudeRelayTraffic, claudeSettingsOverrideNotice } = await import('../runtime-setup.js');
+      assert.equal(claudeSettingsOverrideNotice(), null, 'settings.json holds the same base URL as .env');
+      syncClaudeRelayTraffic();
+      const adapter = makeAdapter(ClaudeAdapter);
+      await adapter.launch({ bypassPermissions: false });
+      const session = readSpecEnv();
+      assert.ok(session, 'spec should be written');
+      assert.equal(session.ANTHROPIC_BASE_URL, relay);
+      assert.equal(session[NAME], '1', 'relay setting on for the relay base URL');
+      await adapter.checkAuth();
+      const probe = calls.execFile.find(c => c.args[0] === '-p');
+      assert.ok(probe, 'probe should run');
+      assert.equal(probe.opts.env.ANTHROPIC_BASE_URL, relay);
+    } finally {
+      if (originalSettings) fs.writeFileSync(settingsPath, originalSettings); else fs.rmSync(settingsPath, { force: true });
+      fs.writeFileSync(dotenvPath, original);
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
+describe('Claude launch — saving a setup token over an export-prefixed API key', () => {
+  it('`zylos runtime claude --save-setup-token` removes `export ANTHROPIC_API_KEY=`: session and probe have no API key', async () => {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0;
+    calls.execFile.length = 0;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const claudeJson = path.join(fakeHome, '.claude.json');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const originalClaudeJson = fs.existsSync(claudeJson) ? fs.readFileSync(claudeJson) : null;
+    const names = ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+    const token = 'sk-ant-oat01-synthetic-new-setup-token';
+    fs.writeFileSync(dotenvPath, 'KEEP=unchanged\n  export ANTHROPIC_API_KEY=sk-ant-api03-synthetic-stale-key\n');
+    try {
+      const { applyCredentials } = await import('../../commands/runtime.js');
+      applyCredentials('claude', { setupToken: token });
+      assert.equal(fs.readFileSync(dotenvPath, 'utf8').includes('ANTHROPIC_API_KEY'), false, 'the API key line is removed from .env');
+      const adapter = makeAdapter(ClaudeAdapter);
+      await adapter.launch({ bypassPermissions: false });
+      const session = readSpecEnv();
+      assert.ok(session, 'spec should be written');
+      assert.equal(session.ANTHROPIC_API_KEY, undefined, 'session has no API key');
+      await adapter.checkAuth();
+      const probe = calls.execFile.find(c => c.args[0] === '-p');
+      assert.ok(probe, 'probe should run');
+      assert.equal(probe.opts.env.ANTHROPIC_API_KEY, undefined, 'probe has no API key');
+    } finally {
+      fs.writeFileSync(dotenvPath, original);
+      if (originalClaudeJson) fs.writeFileSync(claudeJson, originalClaudeJson); else fs.rmSync(claudeJson, { force: true });
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
     }
   });
 });
@@ -368,6 +640,22 @@ describe('Claude launch — existing session', () => {
 
     assert.ok(sent.length > 0, 'sendMessage should be called');
     assert.ok(sent.includes('claude'), 'sent command should reference claude');
+  });
+
+  it('does not strip .env credentials from the command when a subscription login exists', async () => {
+    tmuxSessionExists = true;
+    const credFile = path.join(fakeHome, '.claude', '.credentials.json');
+    fs.writeFileSync(credFile, JSON.stringify({ claudeAiOauth: { refreshToken: 'fake-refresh-token' } }));
+    let sent = '';
+    const adapter = makeAdapter(ClaudeAdapter);
+    adapter.sendMessage = async (text) => { sent = text; };
+    try {
+      await adapter.launch({ bypassPermissions: false });
+    } finally {
+      fs.unlinkSync(credFile);
+    }
+    assert.ok(sent.includes('claude'));
+    assert.doesNotMatch(sent, /-u (ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)/);
   });
 });
 
