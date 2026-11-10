@@ -33,7 +33,7 @@ Give a failed one-time task a new time (`--in`, `--at`, `--cron` or `--every`) t
 
 `--clear-session-group` empties the saved execution group. Where the next run goes depends on the reply configuration:
 
-- With a reply target, it goes to the overall group of the reply channel, not to Origin. For example, a task saved as `telegram`/`g-1` with a Telegram reply target goes to the Telegram overall group.
+- With a reply target, the next execution queries that endpoint and saves its group again. A missing script or empty answer selects the component overall group. A failed query uses the overall group for that run without saving it. The fixed `dashboard` + `origin` address executes in Origin without querying.
 - Without a reply target, it goes to Origin.
 
 To send a task to Origin, add `--clear-reply` as well. The task then has no reply target. Running a task in Origin while keeping an external reply target is not supported.
@@ -44,7 +44,7 @@ With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[
 
 Use `--json` whenever you need to know the outcome. Without it, some validation errors still exit 0, so the exit code alone does not prove the update was applied.
 
-Error codes: `INVALID_ARGS`, `TASK_NOT_FOUND`, `TASK_AMBIGUOUS` (`matches` lists the task IDs), `NO_UPDATES`, `RESCHEDULE_NOT_FUTURE`, `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `DB_WRITE_FAILED`, `INTERNAL_ERROR`, and the timezone errors.
+Error codes: `INVALID_ARGS`, `TASK_NOT_FOUND`, `TASK_AMBIGUOUS` (`matches` lists the task IDs), `NO_UPDATES`, `RESCHEDULE_NOT_FUTURE`, `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `SESSION_GROUP_QUERY_FAILED`, `DB_WRITE_FAILED`, `INTERNAL_ERROR`, and the timezone errors.
 
 ## Examples
 
@@ -70,7 +70,7 @@ cli.js update task-abc --every "2 hours"
 # Re-enable a failed one-time task
 cli.js update task-abc --in "30 minutes" --json
 
-# Clear the execution group; with a reply target the task goes to that channel's overall group
+# Clear the execution group; the next run queries the reply target again
 cli.js update task-abc --clear-session-group
 
 # Send the task to Origin; it no longer has a reply target
@@ -79,6 +79,6 @@ cli.js update task-abc --clear-session-group --clear-reply
 
 ## Saved execution group
 
-A changed reply target recomputes the saved component/group; omitted L selects the component's overall group, not the prior group. Supplying L requires `--reply-channel` in this same command. Explicit channels are checked read-only against installed component directories, without requiring `send.js`; rejection leaves the task unchanged. Endpoint-only edits reuse the existing channel and select its overall group. After merging the supplied reply fields with the existing route, channel and endpoint must both have values or both be NULL. An endpoint-only edit without an existing channel returns `INVALID_ARGS` and leaves every task field unchanged. `--clear-reply` clears both reply columns and preserves the saved group, including an empty saved group; schedule/prompt/priority-only edits preserve it too. The editor's session never retargets an existing task.
+A changed reply target recomputes the saved component/group; omitted L queries the resulting reply endpoint. A missing query script or empty answer selects the component's overall group; query failure rejects the update with `SESSION_GROUP_QUERY_FAILED` and leaves every task field unchanged. Supplying L requires `--reply-channel` in this same command. Explicit channels are checked read-only against installed component directories, without requiring `send.js`; rejection leaves the task unchanged. Endpoint-only edits reuse the existing channel and query the new endpoint. The fixed `dashboard` + `origin` address saves no group, skips querying, and rejects explicit L with `INVALID_ARGS`. After merging the supplied reply fields with the existing route, channel and endpoint must both have values or both be NULL. An endpoint-only edit without an existing channel returns `INVALID_ARGS` and leaves every task field unchanged. `--clear-reply` clears both reply columns and preserves the saved group, including an empty saved group; schedule/prompt/priority-only edits preserve it too. The editor's session never retargets an existing task.
 
 For target discovery and copying Core reply-via, see [Target group and replies](../SKILL.md#target-group-and-replies).

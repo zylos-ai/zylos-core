@@ -30,7 +30,7 @@ Creates a new scheduled task. Exactly one timing option is required.
 | `--json` | Print a single-line result: `{"ok":true,"data":{"task":{...}}}`, or `{"ok":false,"error":{"code":"...","message":"..."}}` with exit 1. Use it whenever you need to know the outcome: without it, some validation errors still exit 0 | off |
 | `--reply-channel "<source>"` | Reply channel (e.g., "telegram", "lark") | none |
 | `--reply-endpoint "<endpoint>"` | Reply endpoint (e.g., user ID) | none |
-| `--reply-session-group "<L>"` | Group-local name; requires explicit `--reply-channel` | component overall group |
+| `--reply-session-group "<L>"` | Group-local name; requires explicit `--reply-channel` | queried from reply endpoint |
 
 ## Examples
 
@@ -85,7 +85,7 @@ Endpoint structure depends on channel implementation. Can contain multiple space
 
 ### Saving the execution group
 
-An explicit `--reply-channel X` must name an installed component directory (no `send.js` requirement). It stores X and optional `--reply-session-group L` without allocating a namespace. This target takes precedence over the creating session. Without X, creation uses only `ZYLOS_SESSION_GROUP`: a known namespace is reverse-mapped read-only; origin or no variable saves no group. Unknown namespaces and malformed groups fail without creating a task. A target need not already have messages.
+An explicit `--reply-channel X` must name an installed component directory (no `send.js` requirement). With an explicit `--reply-session-group L`, it saves X/L without querying. Otherwise it queries the reply endpoint and saves the returned group-local name; a missing query script or empty output saves the overall group. Query failure returns `SESSION_GROUP_QUERY_FAILED` and creates no task. This does not allocate a namespace. The fixed `dashboard` + `origin` address saves no group and rejects an explicit L with `INVALID_ARGS`. This target takes precedence over the creating session. Without X, creation uses only `ZYLOS_SESSION_GROUP`: a known namespace is reverse-mapped read-only; origin or no variable saves no group. Unknown namespaces and malformed groups fail without creating a task. A target need not already have messages.
 
 For target discovery and copying Core reply-via, see [Target group and replies](../SKILL.md#target-group-and-replies).
 

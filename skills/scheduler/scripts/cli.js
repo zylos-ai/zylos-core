@@ -89,7 +89,7 @@ Update Options (same as Add, plus):
                           Legacy alias: --no-require-idle
   --clear-reply           Clear reply configuration
   --clear-session-group   Clear the execution group, keeping reply configuration;
-                          with a reply target, runs go to that channel's overall group
+                          with a reply target, the next run queries its execution group
 
 Write Options (add/update/remove/pause/resume/done):
   --json                  Single-line success/error envelope; JSON errors exit 1
