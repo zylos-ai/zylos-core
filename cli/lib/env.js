@@ -6,6 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { parse as parseDotenv } from 'dotenv';
 import { ENV_FILE } from './config.js';
 import { checkPrivateFile, writePrivateFile } from './private-file.js';
 
@@ -43,21 +44,7 @@ export function readEnvFile() {
   if (!fs.existsSync(ENV_FILE)) return env;
 
   const content = fs.readFileSync(ENV_FILE, 'utf8');
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx === -1) continue;
-    const key = trimmed.slice(0, eqIdx).trim();
-    // Strip surrounding quotes from value
-    let value = trimmed.slice(eqIdx + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    env.set(key, value);
-  }
-  return env;
+  return new Map(Object.entries(parseDotenv(content)));
 }
 
 /**
