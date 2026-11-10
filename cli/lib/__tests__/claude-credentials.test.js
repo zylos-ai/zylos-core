@@ -66,9 +66,12 @@ for (const [label, selected, save, saveEnv] of modes) {
     assert.equal(settingsUntouched(), true, 'settings.json, with its own credentials, is not rewritten');
     assert.equal(fs.readFileSync(envFile, 'utf8') === beforeEnv, true, 'pre-template save must not write a partial Zylos env');
   });
-  test(`${label} env save removes all duplicate, exported and spaced competing assignments`, () => {
-    const value = secret(), unrelated = '# Other settings\nKEEP=unchanged\nANTHROPIC_BASE_URL=https://relay.example.test\n';
-    const stale = keys.flatMap(key => [`${key}=${secret()}`, ` export ${key} = ${secret()}`, `\t${key}\t=\t${secret()}\r`, `\u00a0${key}\u00a0=\u00a0${secret()}`, `\u00a0export\u00a0${key}\u00a0=\u00a0${secret()}`]);
+  test(`${label} env save removes duplicate, exported, colon and spaced competing assignments`, () => {
+    const value = secret(), unrelated = '# Other settings\nKEEP=unchanged\nANTHROPIC_BASE_URL=https://relay.example.test\n'
+      + '# ANTHROPIC_API_KEY: keep-comment\nANTHROPIC_API_KEY_EXTRA: keep-other-key\n'
+      + 'ANTHROPIC_API_KEY:invalid-without-space\n';
+    const stale = keys.flatMap(key => [`${key}=${secret()}`, ` export ${key} = ${secret()}`, `\t${key}\t=\t${secret()}\r`, `\u00a0${key}\u00a0=\u00a0${secret()}`, `\u00a0export\u00a0${key}\u00a0=\u00a0${secret()}`,
+      `${key}: ${secret()}`, `export ${key}: '${secret()}' # old credential`, `\u00a0export\u00a0${key}:\u00a0${secret()}\r`]);
     fs.writeFileSync(envFile, unrelated + stale.join('\n'));
     assert.deepEqual(Object.keys(parseDotEnv(fs.readFileSync(envFile))).filter(key => keys.includes(key)), keys, 'dotenv recognizes the seeded Unicode-spaced credential assignments');
     assert.equal(saveEnv(value), true);
@@ -77,11 +80,16 @@ for (const [label, selected, save, saveEnv] of modes) {
     const authLines = content.split(/\r?\n/).filter(line => /^[^\S\r\n]*(?:export[^\S\r\n]+)?(?:ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN)[^\S\r\n]*=/.test(line));
     assert.equal(authLines.length, 1);
     assert.deepEqual(Object.keys(parseDotEnv(content)).filter(key => keys.includes(key)), [selected]);
+    sameSecret(parseDotEnv(content)[selected], value);
+    const launched = launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtime: 'claude' });
+    assert.deepEqual(keys.filter(key => launched[key] !== undefined), [selected]);
+    sameSecret(launched[selected], value);
     sameSecret(authLines[0], `${selected}=${value}`);
     assert.equal(saveEnv(value), true, 'repeating persistence is safe');
     assert.equal(fs.readFileSync(envFile, 'utf8').split('\n').filter(line => line.startsWith(selected + '=')).length, 1);
   });
   test(`${label} rejects credential line breaks before either settings or env is changed`, () => {
+    fs.appendFileSync(envFile, 'export ANTHROPIC_API_KEY: stale-fixture\n');
     for (const suffix of ['\nINJECTED=1', '\rINJECTED=1', '\0', '\x1b']) {
       const settingsBefore = fs.readFileSync(settingsFile, 'utf8'), envBefore = fs.readFileSync(envFile, 'utf8');
       assert.equal(save(secret() + suffix), false);
@@ -196,12 +204,12 @@ test('a saved API key wins over a claude.ai login file: --save-apikey then --sav
 });
 
 for (const [form, officialLine] of [['an export line', `export ANTHROPIC_BASE_URL=${officialUrl}`], ['a KEY: value line', `ANTHROPIC_BASE_URL: ${officialUrl}`]]) {
-  test(`the setting reads .env as the session does: a relay line followed by an official URL in ${form} keeps the relay and the setting on`, () => {
+  test(`the setting reads .env as the session does: a later official URL in ${form} turns the relay setting off`, () => {
     fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_BASE_URL=${relayUrl}\n${officialLine}\n`);
     delete process.env[relayFlag];
-    assert.equal(launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtime: 'claude' }).ANTHROPIC_BASE_URL, relayUrl, 'the session uses the relay');
+    assert.equal(launchEnvironment(zylos, { PATH: bin, HOME: home }, { runtime: 'claude' }).ANTHROPIC_BASE_URL, officialUrl, 'the session uses the later official URL');
     assert.equal(syncClaudeRelayTraffic(), true);
-    assert.deepEqual(relayFlagState(), RELAY_ON);
+    assert.deepEqual(relayFlagState(), RELAY_OFF);
   });
 }
 

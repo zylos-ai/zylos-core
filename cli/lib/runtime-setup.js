@@ -261,10 +261,10 @@ function saveClaudeCredentialToEnv(key, value) {
   try {
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
-    // Remove all assignments, including exported, spaced and duplicate entries.
+    // Remove all assignments, including exported, colon, spaced and duplicate entries.
     // Keeping an older duplicate would let a later loader select the wrong auth method.
     const names = CLAUDE_CREDENTIAL_KEYS.join('|');
-    content = content.replace(new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?(?:${names})[^\\S\\r\\n]*=.*(?:\\r?\\n|$)`, 'gm'), '');
+    content = content.replace(new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?(?:${names})(?:[^\\S\\r\\n]*=|:[^\\S\\r\\n]+).*(?:\\r?\\n|$)`, 'gm'), '');
     for (const comment of Object.values(CLAUDE_CREDENTIAL_COMMENTS)) {
       content = content.split('\n').filter(line => line.trim() !== '# ' + comment).join('\n');
     }
