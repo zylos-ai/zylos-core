@@ -8,6 +8,7 @@ import { progressFunctions } from './c4-store-progress.js';
 import { controlFunctions } from './c4-store-control.js';
 import { transitionFunctions } from './c4-store-transition.js';
 import { createTargetBindingBuilder } from './c4-target-binding.js';
+import { assertOutboundSession } from './c4-outbound-session.js';
 
 // Dependencies are private implementation inputs, never business API options.
 export function createStore(database, dependencies = {}) {
@@ -66,7 +67,7 @@ export function createStore(database, dependencies = {}) {
     } catch (cause) { throw dataError('INVALID_ARGS', `invalid channel: ${name}`, { cause }); }
   }
   const binding = (c, name) => get(c, 'SELECT component_name AS componentName,namespace FROM channel_namespaces WHERE component_name=?', name) ?? null;
-  function ensure(c, name) {
+  function ensure(c, name, persist = true) {
     installed(name);
     const old = binding(c, name); if (old) return old;
     let base = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
@@ -76,11 +77,11 @@ export function createStore(database, dependencies = {}) {
       const suffix = i === 1 ? '' : `-${i}`;
       const namespace = base.slice(0, 32 - suffix.length) + suffix;
       if (!validNamespace(namespace) || get(c, 'SELECT 1 FROM channel_namespaces WHERE namespace=?', namespace)) continue;
-      run(c, 'INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)', namespace, name);
+      if (persist) run(c, 'INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)', namespace, name);
       return { componentName: name, namespace };
     }
   }
-  function resolve(c, direction, channel, endpointId, { groupName, handoffGroup, wholeGroup } = {}) {
+  function resolve(c, direction, channel, endpointId, { groupName, handoffGroup, wholeGroup } = {}, persistNamespace = true) {
     if (!['in', 'out'].includes(direction) || channel === 'internal') throw dataError('INVALID_ARGS', 'Invalid message source');
     if (channel === 'void' && direction === 'out') {
       if (!handoffGroup) throw dataError('NO_SESSION_ENV', 'The recording session is required');
@@ -89,7 +90,7 @@ export function createStore(database, dependencies = {}) {
     }
     if (handoffGroup !== undefined) throw dataError('INVALID_ARGS', 'handoffGroup is reserved for Core void output');
     if (channel === 'system') return 'origin';
-    const { namespace } = ensure(c, channel);
+    const { namespace } = ensure(c, channel, persistNamespace);
     if (wholeGroup) return namespace;
     if (direction === 'in') return composeSessionGroup(namespace, groupName);
     if (groupName !== undefined) {
@@ -97,6 +98,14 @@ export function createStore(database, dependencies = {}) {
       return namespace;
     }
     return get(c, "SELECT session_group FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' AND session_group<>'' ORDER BY id DESC LIMIT 1", channel, endpointId)?.session_group ?? namespace;
+  }
+  function checkOutboundSession(c, channel, endpointId, options, senderGroup) {
+    if (!senderGroup) return;
+    const group = resolve(c, 'out', channel, endpointId, options, false);
+    // A namespace fallback alone does not assign a new recipient to a session.
+    const hasInbound = !!get(c, "SELECT 1 FROM conversations WHERE channel=? AND endpoint_id IS ? AND direction='in' LIMIT 1", channel, endpointId);
+    const owner = channel === 'system' || group.includes(':') || hasInbound ? group : null;
+    assertOutboundSession(senderGroup, owner);
   }
   function insert(c, direction, channel, endpointId, content, group, options = {}) {
     const result = run(c, `INSERT INTO conversations(direction,channel,endpoint_id,content,status,delivery_action,priority,require_idle,session_group,session_id)
@@ -119,12 +128,17 @@ export function createStore(database, dependencies = {}) {
       return { componentName: name, namespace };
     }),
     resolveSessionGroup: (direction, channel, endpointId, options) => write(c => resolve(c, direction, channel, endpointId, options)),
+    checkOutboundSession: (channel, endpointId, options, senderGroup) => snapshot(c => checkOutboundSession(c, channel, endpointId, options, senderGroup)),
     insertConversation: (direction, channel, endpointId, content, options = {}) => write(c => {
       if (!options || typeof options !== 'object' || Array.isArray(options)) throw dataError('INVALID_ARGS', 'Expected message options');
       if (typeof content !== 'string') throw dataError('INVALID_ARGS', 'Message content must be a string');
-      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId']);
+      const allowed = new Set(['status', 'priority', 'requireIdle', 'deliveryAction', 'groupName', 'handoffGroup', 'wholeGroup', 'sessionId', 'senderGroup']);
       if (Object.keys(options).some(key => !allowed.has(key))) throw dataError('INVALID_ARGS', 'Unknown message option');
       if (options.status !== undefined && !(direction === 'in' ? ['pending', 'failed'] : ['delivered']).includes(options.status)) throw dataError('INVALID_ARGS', 'Invalid initial message status');
+      if (options.senderGroup !== undefined) {
+        if (direction !== 'out' || channel === 'void' || typeof options.senderGroup !== 'string' || !options.senderGroup) throw dataError('INVALID_ARGS', 'senderGroup requires an external outbound message and a session group');
+        checkOutboundSession(c, channel, endpointId, options, options.senderGroup);
+      }
       return insert(c, direction, channel, endpointId, content, resolve(c, direction, channel, endpointId, options), options);
     }),
     insertInternalMessage: (senderGroup, targetGroup, content, { sessionId } = {}) => write(c => {

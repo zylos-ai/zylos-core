@@ -4,6 +4,43 @@ The database CLI, checkpoint CLI and fetch CLI share strict argument parsing and
 use the current C4 schema and store. Use an isolated `ZYLOS_DIR` for development.
 These commands do not send messages to channels.
 
+## External sends and session handoffs
+
+`c4-send.js <channel> [endpoint] --stdin [--session-group LOCAL_GROUP]`
+uses the shared C4 outgoing route resolver, including the latest inbound group
+for that recipient or an explicit existing subgroup. Before channel BeforeSend,
+Core compares that route with the sender's inherited `ZYLOS_SESSION_GROUP`
+(`origin` if only `ZYLOS_RUN_ID` is present). Cross-session sends fail with
+`CROSS_SESSION_OUTBOUND`: no outbound record, fallback event or delivery occurs,
+and the channel hook is not invoked. The error names the responsible session
+and gives a complete, shell-quoted command with a placeholder body:
+
+```sh
+cat <<'EOF_INTERNAL' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js internal 'telegram:recipient-session'
+Please relay this message. Include the external destination, body and context.
+EOF_INTERNAL
+```
+
+Use the target and installed script path supplied by the error. Do not override
+the sender environment. Internal success means queued, not read or delivered
+externally. The responsible session makes the external send. No waiting-sender
+registry, automatic reply copies or return-reply instruction is added.
+
+Same-session replies (including `origin`), processes without a session identity,
+and new recipients with no inbound history whose route falls back to the channel
+namespace remain allowed. Explicit existing subgroups are checked even without
+recipient history; unknown subgroups retain the resolver's namespace fallback.
+The guard also covers absorbed external replies and scheduled reminders.
+
+The route is checked again in the outbound insert transaction in case an inbound
+arrives while the asynchronous hook is running. A route that becomes crossed
+at that point is refused before recording/delivery; its hook has already run.
+Preflight route resolution does not register a namespace or change C4 state.
+OpenMax's direct `comm.send` / `comm.ask` platform calls bypass C4 and are outside
+this check, as are low-level database inserts without sender context.
+
+## Database and query examples
+
 ```sh
 node skills/comm-bridge/scripts/c4-db.js insert out system null 'diagnostic note'
 node skills/comm-bridge/scripts/c4-db.js unsummarized --json
