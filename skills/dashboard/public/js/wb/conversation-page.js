@@ -1,13 +1,13 @@
 import { createUploadTray } from './chat-upload-tray.js?v=2';
-import { createChatAttachment } from './chat-attachments.js?v=154';
+import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon } from './board.js?v=150';
 import { createConversationState } from './conversation-state.js?v=132';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
-import { renderQuestion } from './chat-questions.js?v=154';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=154';
+import { renderQuestion } from './chat-questions.js?v=155';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=155';
 import { createGroupSide } from './group-side.js?v=150';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=105';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
