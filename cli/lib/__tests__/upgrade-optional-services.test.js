@@ -95,6 +95,21 @@ for (const fails of [false, true]) test(`upgrade keeps Core available and return
   assert.equal(ctx.servicesWereRunning.length, 2);
 });
 
+// Run when forward verification or saved external-service admission changes;
+// unrelated changes may skip. The fixture's PM2 records remain private.
+test('service verification rejects an external script changed after successful startup',t=>{
+  const f=fixture(t),ctx=context(f);
+  const started=step11_startCoreServices(ctx,{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
+  assert.equal(started.status,'done',JSON.stringify(started));
+  f.records(f.records().map(record=>record.name==='custom-service'
+    ? {...record,pm2_env:{...record.pm2_env,pm_exec_path:path.join(f.skillsDir,'custom-service/changed.js')}}
+    : record));
+  const verified=step12_verifyServices(ctx,{execSync:poll(f)});
+  assert.equal(verified.status,'failed',JSON.stringify(verified));
+  assert.match(verified.error,/original PM2 service record missing or changed: custom-service/);
+  assert.equal(ctx.serviceWarnings,undefined);assert.equal(ctx.journal.serviceWarnings,undefined);
+});
+
 for (const failedName of [null, 'custom-service', 'scheduler', 'changed-record', 'custom-stopped']) test(`new ecosystem after an absent original applies configuration with strict failures (${failedName || 'healthy'})`, t => {
   const f = fixture(t, {ecosystem:false});
   const tempDir=path.join(f.root,'download'),template=path.join(tempDir,'templates/pm2/ecosystem.config.cjs');
