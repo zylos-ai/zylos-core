@@ -663,8 +663,10 @@ function serviceRequirements(j) {
   const ecosystem = path.join(j.zylosDir, 'pm2', 'ecosystem.config.cjs');
   if (originalHash === null) return {required:original, external:[]};
   if (typeof originalHash !== 'string' || !/^[a-f0-9]{64}$/.test(originalHash)) throw Error('original ecosystem evidence missing');
-  privatePath(ecosystem);
-  if (!['new_data_ready', 'new_verifying', 'upgrade_complete'].includes(j.phase) && hash(ecosystem) !== originalHash) throw Error('original ecosystem identity changed');
+  if (!['new_data_ready', 'new_verifying', 'upgrade_complete'].includes(j.phase)) {
+    privatePath(ecosystem);
+    if (hash(ecosystem) !== originalHash) throw Error('original ecosystem identity changed');
+  }
   const names = new Set(ecosystemServiceNames(ecosystem));
   return {required:original.filter(service => names.has(service.name)), external:original.filter(service => !names.has(service.name))};
 }

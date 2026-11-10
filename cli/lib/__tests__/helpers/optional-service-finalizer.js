@@ -21,7 +21,12 @@ if (state.targetOwned) {
 const result = runSelfUpgradeFinalize(state, {steps:[
   ctx => step11_startCoreServices(ctx, {zylosDir:state.zylosDir, ecosystemPath:state.ecosystemPath}),
   ctx => {
-    const result = step12_verifyServices(ctx);
+    // Exercise the real deadline outcome without waiting 30 seconds in a child.
+    const now = Date.now;
+    let clock = 0, result;
+    if (state.expireServiceWait) Date.now = () => (clock += 40000);
+    try { result = step12_verifyServices(ctx); }
+    finally { Date.now = now; }
     if (state.externalAfterFirstVerify) {
       assert.equal(result.status, 'done');
       const expectedFirst = state.externalAfterFirstVerify === 'online' ? 1 : 0;

@@ -82,7 +82,7 @@ test('upgrade finalizer still fails when an ecosystem service cannot restart',t=
   assert.equal(result.success,false);assert.equal(result.failedStep,11);assert.match(result.error,/scheduler/);
   assert.notEqual(f.load().phase,'upgrade_complete');
 });
-for(const failedName of [null,'custom','scheduler'])test(`originally missing ecosystem applies the generated core configuration with strict failures (${failedName || 'healthy'})`,t=>{
+for(const failedName of [null,'custom','scheduler','custom-stopped'])test(`originally missing ecosystem applies the generated core configuration with strict failures (${failedName || 'healthy'})`,t=>{
   const f=mixed(t);f.j.phase='new_data_ready';f.j.initialIdentity.ecosystemHash=null;
   const tempDir=path.join(f.root,'download'),template=path.join(tempDir,'templates/pm2/ecosystem.config.cjs');
   fs.mkdirSync(path.dirname(template),{recursive:true});
@@ -90,9 +90,10 @@ for(const failedName of [null,'custom','scheduler'])test(`originally missing eco
   fs.writeFileSync(template,`module.exports={apps:[{name:'scheduler',script:${JSON.stringify(script)},env:{FRESH_CORE_ENV:'from-new-template'}}]};`);
   fs.unlinkSync(f.file);f.save();
   assert.equal(f.readRecords().find(record=>record.name==='scheduler').pm2_env.FRESH_CORE_ENV,undefined,'cached record lacks the new environment');
-  if(failedName)fs.writeFileSync(path.join(f.root,'fail-restart'),failedName);
+  if(failedName==='custom-stopped')fs.writeFileSync(path.join(f.root,'stay-stopped'),'custom');
+  else if(failedName)fs.writeFileSync(path.join(f.root,'fail-restart'),failedName);
   const state={schemaVersion:2,preInstallProtection:true,zylosDir:f.root,ecosystemPath:f.file,tempDir,
-    transactionId:'tx',transactionDir:f.dir,servicesWereRunning:['custom','scheduler'],from:'1',to:'2',databaseMode:'unchanged'};
+    transactionId:'tx',transactionDir:f.dir,servicesWereRunning:['custom','scheduler'],from:'1',to:'2',databaseMode:'unchanged',expireServiceWait:failedName==='custom-stopped'};
   const statePath=path.join(f.root,'state.json');fs.writeFileSync(statePath,JSON.stringify(state));
   const child=spawnSync(process.execPath,['cli/lib/__tests__/helpers/optional-service-finalizer.js',statePath],{env:f.env,encoding:'utf8',timeout:20000});
   assert.equal(child.status,0,child.stderr);const result=JSON.parse(child.stdout);
@@ -101,7 +102,10 @@ for(const failedName of [null,'custom','scheduler'])test(`originally missing eco
   assert.ok(f.commands().some(args=>['start','startOrRestart'].includes(args[0])&&args[1]===f.file&&args.includes('scheduler')),'generated ecosystem member uses fresh configuration');
   assert.equal(f.commands().some(args=>args[0]==='restart'&&args[1]==='scheduler'),false,'Core does not reuse cached ordinary-restart environment');
   assert.equal(f.load().ecosystemCreationIntent.originalMissing,true);
-  if(failedName) {assert.equal(result.failedStep,11);assert.match(result.error,new RegExp(failedName));}
+  if(failedName==='custom-stopped') {
+    assert.equal(result.failedStep,12);assert.match(result.error,/did not become online/);
+    assert.equal(f.readRecords().find(record=>record.name==='custom').pm2_env.status,'stopped');
+  } else if(failedName) {assert.equal(result.failedStep,11);assert.match(result.error,new RegExp(failedName));}
   else assert.equal(f.readRecords().find(record=>record.name==='scheduler').pm2_env.FRESH_CORE_ENV,'from-new-template');
 });
 test('required ecosystem service remaining stopped still fails verification',t=>{
@@ -182,4 +186,20 @@ for(const ecosystemSource of ['module.exports={apps:[]};','module.exports={};'])
   assert.doesNotThrow(()=>m.verifyServices(f.j));
   assert.equal(f.commands().length,0,'no PM2 query or save is required without original services');
   assert.deepEqual(f.j.serviceWarnings,[],'obsolete service warnings are cleared');
+});
+
+// Forward finalization follows the trusted deployed link; restored recovery
+// still verifies the original nonsymlink path before restarting any service.
+test('protected upgrade completes with a trusted ecosystem symlink',t=>{
+  const f=mixed(t);f.j.phase='new_data_ready';
+  const target=path.join(f.root,'deployed-ecosystem.cjs');fs.renameSync(f.file,target);fs.symlinkSync(target,f.file);f.save();
+  const state={schemaVersion:2,preInstallProtection:true,zylosDir:f.root,ecosystemPath:f.file,
+    transactionId:'tx',transactionDir:f.dir,servicesWereRunning:['custom','scheduler'],from:'1',to:'2',databaseMode:'unchanged'};
+  const statePath=path.join(f.root,'state.json');fs.writeFileSync(statePath,JSON.stringify(state));
+  const child=spawnSync(process.execPath,['cli/lib/__tests__/helpers/optional-service-finalizer.js',statePath],{env:f.env,encoding:'utf8',timeout:20000});
+  assert.equal(child.status,0,child.stderr);const result=JSON.parse(child.stdout);
+  assert.equal(result.success,true,JSON.stringify(result));assert.equal(result.serviceWarnings,undefined);
+  assert.equal(f.load().phase,'upgrade_complete');
+  assert.equal(f.readRecords().find(record=>record.name==='scheduler').pm2_env.status,'online');
+  assert.throws(()=>m.start({...f.load(),phase:'restored_verifying'}),/unsafe recovery path/);
 });
