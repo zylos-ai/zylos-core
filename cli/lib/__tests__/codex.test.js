@@ -31,16 +31,23 @@ afterEach(() => {
 });
 
 let originalHome;
+let originalCodexHome;
 let originalFetch;
 
 beforeEach(() => {
   originalHome = process.env.HOME;
+  originalCodexHome = process.env.CODEX_HOME;
+  // Default-path cases must not inherit a different credential/config directory.
+  delete process.env.CODEX_HOME;
   originalFetch = global.fetch;
 });
 
 afterEach(() => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
 
   if (originalFetch === undefined) delete global.fetch;
   else global.fetch = originalFetch;
@@ -143,6 +150,41 @@ describe('Codex auth checks', () => {
 
     assert.equal(result.status, 'uncertain');
     assert.equal(result.reason, 'http_probe_network_error');
+  });
+
+  // Covers actual auth/config path selection with private files and a bounded
+  // fetch observation. Run for Codex auth-directory changes; unrelated launch
+  // changes may skip. No real credentials, network, PM2 or tmux are used.
+  it('reads API key credentials and base URL from a custom Codex home', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-codex-auth-test-'));
+    tmpDirs.push(tmpHome);
+    process.env.HOME = tmpHome;
+    const defaultDirectory = path.join(tmpHome, '.codex');
+    const customDirectory = path.join(tmpHome, 'custom-codex');
+    for (const [directory, key, baseUrl] of [
+      [defaultDirectory, 'home-fixture-key', 'https://home.example.test/v1'],
+      [customDirectory, 'custom-fixture-key', 'https://custom.example.test/v1'],
+    ]) {
+      fs.mkdirSync(directory);
+      fs.writeFileSync(path.join(directory, 'auth.json'), JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: key }));
+      fs.writeFileSync(path.join(directory, 'config.toml'), `openai_base_url = "${baseUrl}"\n`);
+    }
+    process.env.CODEX_HOME = customDirectory;
+    let request, calls = 0;
+    global.fetch = async (url, options) => {
+      assert.equal(++calls, 1, 'Auth check must make exactly one HTTP probe');
+      request = { url: String(url), authorization: options.headers.Authorization };
+      return { status: 200 };
+    };
+
+    const result = await new CodexAdapter({}).checkAuth();
+
+    assert.equal(result.status, 'success');
+    assert.equal(result.reason, 'http_probe_200');
+    assert.equal(calls, 1);
+    assert.deepEqual(request, {
+      url: 'https://custom.example.test/v1/models', authorization: 'Bearer custom-fixture-key',
+    });
   });
 
   // Keep the zero-exit logged-out fallback: a non-throwing execFile call alone
