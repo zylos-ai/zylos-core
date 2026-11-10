@@ -26,9 +26,23 @@ const bad = error => Number(error.statusCode ?? error.status) >= 400;
 
 function fixture(t, withAuth = false) {
   assert.ok(process.env.ZYLOS_DIR && process.env.ZYLOS_DIR !== '/home/agent/zylos');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-history-'));
+  const temporary = fs.realpathSync(os.tmpdir());
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME']) {
+    const directory = process.env[key];
+    assert.ok(directory && path.isAbsolute(directory), `${key} must be explicit`);
+    const canonical = fs.existsSync(directory) ? fs.realpathSync(directory)
+      : path.join(fs.realpathSync(path.dirname(directory)), path.basename(directory));
+    assert.ok(canonical.startsWith(path.dirname(temporary) + path.sep),
+      `${key} must belong to the official runner's private root`);
+  }
+  const root = fs.mkdtempSync(path.join(temporary, 'chat-history-'));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
-  const db = new Database(path.join(root, 'comm-bridge/c4.db'));
+  const filename = path.join(root, 'comm-bridge/c4.db');
+  assert.equal(fs.realpathSync(path.dirname(filename)), path.dirname(filename));
+  assert.ok(filename.startsWith(temporary + path.sep), 'C4 fixture DB must stay inside private TMPDIR');
+  console.log('History case isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: temporary, database: filename, tmux: 'not launched' }));
+  const db = new Database(filename);
   migrateSchema(db, { isNew: true });
   migrateToV2(db);
   db.prepare('INSERT INTO channel_namespaces VALUES (?,?)').run('dash-owned', 'dashboard');
@@ -547,6 +561,36 @@ test('internal rows preserve raw facts and project peers on both histories witho
   assert.throws(() => f.history.messages(groupId('internal:only'), { tab: 'external' }), bad);
   assert.throws(() => f.history.status(groupId('dash-owned:one'), { tab: 'mine', ids: [3] }), bad);
   assert.equal(Object.hasOwn(external[1], 'deliveryState'), false);
+});
+
+// Real SQLite/history projection under the official runner's isolated paths.
+// Run for received-prefix changes; skip for layout-only work. fixture() owns
+// the private DB and closes/removes it; no HTTP, model, PM2 or tmux launch.
+test('received internal prefixes match the exact endpoint in both stored formats and retain raw content', t => {
+  const f = fixture(t);
+  f.add({ id: 1 });
+  const endpoint = 'dash:peer.[one]';
+  const cases = [
+    ['in', `[internal] Yourself, from your "${endpoint}" session group, said: modern body`, 'modern body'],
+    ['in', `[internal] ${endpoint} said: legacy body`, 'legacy body'],
+    ['in', '[internal] wrong:peer said: literal'],
+    ['in', '[internal] dash:peerXone said: literal'],
+    ['in', '[internal] Yourself, from your "wrong:peer" session group, said: literal'],
+    ['in', `[internal] ${endpoint} said:missing space`],
+    ['in', `quoted [internal] ${endpoint} said: literal`],
+    ['out', `[internal] ${endpoint} said: outgoing literal`],
+    ['out', `[internal] Yourself, from your "${endpoint}" session group, said: outgoing literal`],
+  ];
+  for (const [index, [direction, content]] of cases.entries()) {
+    f.add({ id: index + 2, channel: 'internal', endpoint_id: endpoint, direction, content });
+  }
+  const rows = f.history.messages(groupId('tg:a'), { tab: 'external' }).items.slice(1);
+  assert.equal(rows.length, cases.length);
+  for (const [index, [direction, raw, display = raw]] of cases.entries()) {
+    assert.equal(rows[index].direction, direction);
+    assert.equal(rows[index].content, raw, 'stored message remains available as raw detail');
+    assert.equal(rows[index].internal.content, display);
+  }
 });
 
 // Same runner/private database lifecycle as above. Run for internal pagination,

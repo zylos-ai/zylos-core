@@ -36,7 +36,7 @@ for (const locale of ['en', 'zh']) for (const direction of ['out', 'in']) {
       assert.equal(resource.node.querySelector(selector), null, selector);
     }
     resource.update(row, { showTechnicalDetails: true });
-    assert.equal(resource.node.querySelector('.conversation-internal-raw').hidden, false);
+    assert.equal(resource.node.querySelector('.conversation-internal-raw').hidden, direction === 'out');
     assert.equal(resource.node.querySelector('pre').textContent, row.content);
     resource.update(row);
     assert.equal(resource.node.querySelector('.conversation-internal-raw').hidden, true);
@@ -93,11 +93,13 @@ test('mounted conversation peer links navigate both tabs and retain raw technica
   technical = true; page.redraw();
   assert.equal(root.querySelector('.conversation-internal'), note);
   assert.equal(note.querySelector('pre').textContent, mineRow.content);
-  assert.equal(note.querySelector('.conversation-internal-raw').hidden, false);
+  assert.equal(note.querySelector('.conversation-internal-raw').hidden, true, 'outbound raw content would duplicate the body');
   note.querySelector('.conversation-internal-peer').dispatch('click');
   await tick(); await tick();
   assert.ok(calls.some(path => path.includes(encodeURIComponent(external.id) + '/messages?') && path.includes('tab=external')));
   assert.equal(root.querySelector('.conversation-internal-peer').textContent, mine.displayName);
+  assert.equal(root.querySelector('.conversation-internal-raw').hidden, false, 'received raw content stays available');
+  assert.equal(root.querySelector('pre').textContent, externalRow.content);
   const beforeReturn = calls.length;
   root.querySelector('.conversation-internal-peer').dispatch('click');
   await tick(); await tick();
@@ -105,3 +107,17 @@ test('mounted conversation peer links navigate both tabs and retain raw technica
   assert.equal(root.querySelector('.conversation-internal-peer').textContent, 'Peer room');
   assert.equal(allNodes(root).filter(node => node.classList.contains('conversation-internal')).length, 1);
 });
+
+for (const locale of ['en', 'zh']) for (const peerExists of [false, true]) {
+  test(`origin internal peer uses the system assistant name without an unavailable warning in ${locale} (${peerExists})`, () => {
+    const document = createDocument(), words = translations(locale), row = relay(), opened = [];
+    row.internal = { ...row.internal, peerSessionGroup: 'origin', peerDisplayName: 'origin', peerExists };
+    const resource = renderInternalMessage({ document, row, t: key => words[key], onOpenPeer: (...args) => opened.push(args) });
+    const peer = resource.node.querySelector('.conversation-internal-peer');
+    assert.equal(peer.textContent, words['wb.term.origin']);
+    assert.equal(resource.node.querySelector('.conversation-internal-missing').hidden, true);
+    assert.equal(peer.tagName, 'SPAN', 'origin has no conversation target, as in the workbench group detail');
+    peer.dispatch('click');
+    assert.equal(opened.length, 0);
+  });
+}

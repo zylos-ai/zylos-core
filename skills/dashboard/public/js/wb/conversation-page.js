@@ -12,7 +12,7 @@ import { createGroupSide } from './group-side.js?v=6';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=105';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=4';
-import { renderInternalMessage } from './conversation-internal.js?v=1';
+import { renderInternalMessage } from './conversation-internal.js?v=2';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);

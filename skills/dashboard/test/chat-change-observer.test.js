@@ -363,6 +363,49 @@ test('one conversation stream discovers new pending inputs and observes terminal
   assert.equal(stream.events.length, count, 'retiring terminal rows does not create an extra hint');
 });
 
+// Real SQLite/history/observer integration. Run for pending-delivery visibility
+// or internal-message invalidation changes; rendering-only work may skip.
+// fixture() proves private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB before
+// access and owns DB/timer cleanup; no HTTP, model, PM2 or tmux launch.
+test('selected mine internal inputs change history but never enter pending delivery snapshots or hints', gate, t => {
+  const f = fixture(t);
+  f.write({ id: 1, status: 'delivered' });
+  const options = { tab: 'mine', conversationId: idFor('dash:one') };
+  const stream = f.subscribe(options);
+  assert.equal(stream.events.length, 1);
+  assert.equal(stream.events[0].data.ids.length, 0);
+  f.write({ id: 2, channel: 'internal', endpoint: 'telegram:peer' });
+  f.timers.tick();
+  assert.equal(stream.events.length, 2);
+  assert.equal(stream.events[1].event, 'chat_messages_changed', 'internal inbound is visible in selected history');
+  const pending = () => f.history.chatChangeSnapshot(options).delivery.map(row => row.id);
+  assert.deepEqual(pending(), [], 'selected mine pending internal row is excluded');
+  assert.equal(f.history.messages(options.conversationId, { tab: 'mine' }).items.at(-1).id, 2);
+  for (const status of ['running', 'delivered']) {
+    const count = stream.events.length;
+    f.writer.prepare('UPDATE conversations SET status=? WHERE id=2').run(status);
+    f.timers.tick();
+    assert.equal(stream.events.length, count, 'internal status transitions never dirty delivery');
+    assert.deepEqual(pending(), []);
+  }
+  f.write({ id: 3 });
+  f.timers.tick();
+  assert.deepEqual(pending(), [3], 'ordinary selected mine inbound is monitored');
+  assert.equal(stream.events.at(-1).event, 'chat_delivery_changed');
+  assert.deepEqual(stream.events.at(-1).data.ids, [3]);
+  f.write({ id: 4, channel: 'internal', endpoint: 'telegram:peer' });
+  f.timers.tick();
+  assert.equal(stream.events.at(-1).event, 'chat_messages_changed');
+  assert.deepEqual(pending(), [3], 'mixed internal and external pending rows retain only external delivery truth');
+  assert.equal(stream.events.filter(row => row.event === 'chat_delivery_changed').length, 1);
+  const count = stream.events.length;
+  f.writer.prepare("UPDATE conversations SET status='running' WHERE id=3").run();
+  f.timers.tick();
+  assert.equal(stream.events.length, count + 1);
+  assert.equal(stream.events.at(-1).event, 'chat_delivery_changed', 'ordinary status updates still dirty delivery');
+  assert.deepEqual(stream.events.at(-1).data.ids, [3]);
+});
+
 test('server pending discovery retains the newest hundred scoped inbound rows with bounded indexed reads', gate, t => {
   const f = fixture(t);
   f.writer.transaction(() => {

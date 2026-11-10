@@ -73,7 +73,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
     const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(pageText)?.[1];
-    assert.equal(appPath, 'js/app.js?v=147', 'the entry page invalidates the application module cache');
+    assert.equal(appPath, 'js/app.js?v=148', 'the entry page invalidates the application module cache');
     const cache = new Map();
     async function moduleAt(url) {
       if (cache.has(url)) return cache.get(url);
@@ -99,7 +99,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(await moduleAt(pluginUrl), fs.readFileSync(path.join(publicRoot, 'js/markdown-it-cjk-friendly/index.js'), 'utf8'));
     let parentUrl = appUrl;
     const activeModules = new Map();
-    for (const [name, version] of [['conversation-page', 143], ['conversation-content', 116], ['chat-blocks', 111]]) {
+    for (const [name, version] of [['conversation-page', 144], ['conversation-content', 116], ['chat-blocks', 111]]) {
       const parent = await moduleAt(parentUrl);
       const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
       const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=${version}`));
@@ -110,7 +110,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const pageUrl = activeModules.get('conversation-page');
     assert.match(importLine(await moduleAt(activeModules.get('conversation-content')), 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\.\/markdown-it-cjk-friendly\/index\.js\?v=1['"]/);
     const page = await moduleAt(pageUrl);
-    for (const [name, version] of [['conversation-state', 132], ['chat-questions', 108], ['conversation-activity', 105], ['conversation-delete', 4], ['conversation-internal', 1]]) {
+    for (const [name, version] of [['conversation-state', 132], ['chat-questions', 108], ['conversation-activity', 105], ['conversation-delete', 4], ['conversation-internal', 2]]) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
         .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=${version}`));
       assert.ok(specifier, `${name} belongs to the active page graph`);

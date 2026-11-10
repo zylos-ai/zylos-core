@@ -285,8 +285,12 @@ export class ChatHistory {
     const items = (direction === 'before' ? page.reverse() : page).map(row => {
       if (row.channel === 'internal') {
         if (!peers.has(row.endpoint_id)) peers.set(row.endpoint_id, this._internalPeer(row.endpoint_id));
-        const prefix = `[internal] Yourself, from your "${row.endpoint_id}" session group, said: `;
-        const content = row.direction === 'in' && row.content.startsWith(prefix) ? row.content.slice(prefix.length) : row.content;
+        const prefixes = [
+          `[internal] Yourself, from your "${row.endpoint_id}" session group, said: `,
+          `[internal] ${row.endpoint_id} said: `,
+        ];
+        const prefix = row.direction === 'in' && prefixes.find(value => row.content.startsWith(value));
+        const content = prefix ? row.content.slice(prefix.length) : row.content;
         return { ...row, internal: { ...peers.get(row.endpoint_id), content }, attachments: [] };
       }
       return { ...row, deliveryState: deliveryState(row),

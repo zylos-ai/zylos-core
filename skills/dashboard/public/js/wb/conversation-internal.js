@@ -24,7 +24,8 @@ export function renderInternalMessage({ document, row, t = key => key, onOpenPee
   function update(next, { showTechnicalDetails: technical = false } = {}) {
     current = next;
     const info = next.internal ?? {};
-    const canNavigate = info.peerExists === true && typeof info.peerSessionGroup === 'string' && !!info.peerSessionGroup;
+    const isOrigin = info.peerSessionGroup === 'origin';
+    const canNavigate = !isOrigin && info.peerExists === true && typeof info.peerSessionGroup === 'string' && !!info.peerSessionGroup;
     if (!peer || canNavigate !== navigable) {
       navigable = canNavigate;
       peer = element(document, canNavigate ? 'button' : 'span', undefined, 'conversation-internal-peer');
@@ -38,13 +39,13 @@ export function renderInternalMessage({ document, row, t = key => key, onOpenPee
       peerSlot.replaceChildren(peer);
     }
     label.textContent = t(next.direction === 'out' ? 'chat.internal.sent' : 'chat.internal.received');
-    peer.textContent = info.peerDisplayName || info.peerSessionGroup || t('chat.unnamed');
+    peer.textContent = isOrigin ? t('wb.term.origin') : info.peerDisplayName || info.peerSessionGroup || t('chat.unnamed');
     missing.textContent = t('chat.internal.unavailable');
-    missing.hidden = canNavigate;
+    missing.hidden = isOrigin || canNavigate;
     content.textContent = typeof info.content === 'string' ? info.content : next.content;
     summary.textContent = t('chat.internal.original');
     original.textContent = next.content;
-    raw.hidden = !technical;
+    raw.hidden = !technical || next.direction === 'out';
   }
   update(row, { showTechnicalDetails });
   return { node: article, time, update };

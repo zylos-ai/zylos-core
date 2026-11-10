@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { createChatApiFixture } from './chat-integration-api.js';
 import { ChatChangeObserver } from '../../src/lib/chat/change-observer.js';
@@ -46,6 +47,8 @@ export async function runInternalConversationBrowser(t, sandbox) {
   const outgoing = fixture.c4.insertInternalMessage(mineGroup, externalGroup, '请确认发布安排。');
   fixture.addOutbound(mine.draft.localId, '正在与发布会话确认安排。');
   fixture.c4.insertConversation('out', 'telegram', 'relay-browser', '收到，我来核对。', { groupName: 'relay-browser' });
+  const hostile = '<img src=x onerror="window.internalHtmlExecuted=true"> **literal markdown**';
+  const htmlPair = fixture.c4.insertInternalMessage(mineGroup, externalGroup, hostile);
   const incoming = fixture.c4.insertInternalMessage(externalGroup, mineGroup, '安排已确认，稍后发出通知。');
   fixture.c4.insertInternalMessage(mineGroup, externalGroup, '谢谢，请保留通知链接。');
   const { chromium } = await import(pathToFileURL(modulePath));
@@ -58,11 +61,43 @@ export async function runInternalConversationBrowser(t, sandbox) {
   await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: fixture.cookie, domain: '127.0.0.1', path: '/', secure: true }]);
   const page = await context.newPage(); page.setDefaultTimeout(8000);
   page.on('pageerror', error => { if (!errors.length) errors.push(error.message); });
-  page.on('request', request => {
-    if (new URL(request.url()).pathname.endsWith('/messages')) {
-      assert.ok(reads.length < 300, 'bounded message request capture'); reads.push(request.url());
+  // Chromium's transport events identify the actual EventSource, including receipt
+  // of chat_ready. A live badge from the previous selection cannot satisfy this.
+  const transport = await context.newCDPSession(page);
+  const requests = new Map(), pending = new Set(), received = [], completed = [];
+  let sequence = 0;
+  await transport.send('Network.enable');
+  transport.on('Network.requestWillBeSent', ({ requestId, request }) => {
+    const url = new URL(request.url);
+    if (url.origin !== fixture.base) return;
+    requests.set(requestId, url);
+    if (url.pathname.startsWith('/api/chat/')) pending.add(requestId);
+    if (url.pathname.endsWith('/messages')) {
+      assert.ok(reads.length < 300, 'bounded message request capture');
+      reads.push({ url: request.url, requestId, sequence: ++sequence });
     }
   });
+  transport.on('Network.eventSourceMessageReceived', ({ requestId, eventName, data }) => {
+    if (!eventName.startsWith('chat_')) return;
+    assert.ok(received.length < 200, 'bounded browser SSE capture');
+    received.push({ requestId, name: eventName, data: JSON.parse(data), sequence: ++sequence });
+  });
+  transport.on('Network.loadingFinished', ({ requestId }) => {
+    pending.delete(requestId);
+    const url = requests.get(requestId);
+    if (url?.pathname.endsWith('/messages')) completed.push({ requestId, url, sequence: ++sequence });
+    requests.delete(requestId);
+  });
+  transport.on('Network.loadingFailed', ({ requestId }) => { pending.delete(requestId); requests.delete(requestId); });
+  const waitUntil = async (predicate, message) => {
+    const deadline = Date.now() + 8000;
+    while (!await predicate()) {
+      assert.ok(Date.now() < deadline, message);
+      await delay(20);
+    }
+  };
+  const historyRead = (url, id, side) => url.pathname === `/api/chat/conversations/${encodeURIComponent(id)}/messages`
+    && url.searchParams.get('tab') === side && url.searchParams.get('direction') === 'after' && url.searchParams.has('cursor');
   const selected = async id => page.waitForFunction(id => document.querySelector('#wb-chat [aria-current="true"]')?.dataset.conversationId === id, id);
   const row = id => page.locator(`#wb-chat [data-message-id="${id}"]`);
   const openMine = async () => {
@@ -90,10 +125,24 @@ export async function runInternalConversationBrowser(t, sandbox) {
       assert.equal(await row(received.id).locator('.conversation-internal-content').innerText(), side === 'mine' ? '安排已确认，稍后发出通知。' : '请确认发布安排。');
       assert.equal(await row(received.id).locator('.conversation-internal-raw').isVisible(), false);
       assert.equal(await row(out.id).locator('.conversation-message-status, .conversation-message-author').count(), 0);
+      assert.equal(await row(out.id).locator('.conversation-internal-raw').evaluate(raw => raw.hidden), true, 'outbound detail does not repeat the body');
+      const html = row(side === 'mine' ? htmlPair.outRow.id : htmlPair.inRow.id).locator('.conversation-internal-content');
+      assert.equal(await html.innerText(), hostile);
+      assert.equal(await html.locator('*').count(), 0, 'HTML body creates no elements');
+      assert.equal(await page.evaluate(() => window.internalHtmlExecuted), undefined);
       await page.locator('#wb-chat .chat-notice').filter({ hasText: '正在读取问题状态…' }).waitFor({ state: 'hidden' });
       await page.evaluate(() => document.fonts.ready);
       assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), theme);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no document overflow');
+      for (const message of [out, received]) {
+        const geometry = await row(message.id).locator('.conversation-internal-body').evaluate(body => {
+          const column = body.closest('.conversation-message-list').getBoundingClientRect();
+          const box = body.getBoundingClientRect();
+          return { center: (box.left + box.right) / 2, columnCenter: (column.left + column.right) / 2 };
+        });
+        assert.ok(Math.abs(geometry.center - geometry.columnCenter) <= 2,
+          `${side} ${width} ${theme}: internal body centered in message column (${JSON.stringify(geometry)})`);
+      }
       const boxes = await page.locator('.conversation-internal-body').evaluateAll(nodes => nodes.map(node => ({ left: node.getBoundingClientRect().left, right: node.getBoundingClientRect().right, width: node.clientWidth, scroll: node.scrollWidth })));
       for (const box of boxes) { assert.ok(box.left >= 0 && box.right <= width + 1); assert.ok(box.scroll <= box.width + 1); }
       if (output) { const file = path.join(output, `internal-${side}-${width}-${theme}.png`); await page.screenshot({ path: file }); shots.push(file); }
@@ -105,13 +154,30 @@ export async function runInternalConversationBrowser(t, sandbox) {
   // Both selected histories must consume a real observer hint and then read authoritative rows.
   for (const side of ['mine', 'external']) {
     const id = side === 'mine' ? mine.receipt.conversationId : externalId;
-    await page.waitForFunction(() => document.querySelector('.conversation-push-status')?.dataset.streamState === 'live');
-    const eventCount = events.length, readCount = reads.length;
+    await selected(id);
+    let ready;
+    await waitUntil(async () => {
+      ready = received.findLast(event => event.name === 'chat_ready' && event.data.conversationId === id && event.data.tab === side
+        && requests.get(event.requestId)?.searchParams.get('chat_conversation') === id
+        && requests.get(event.requestId)?.searchParams.get('chat_tab') === side);
+      if (!ready || pending.size || !completed.some(read => read.sequence > ready.sequence && historyRead(read.url, id, side))) return false;
+      const live = await page.evaluate(async id => {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return document.querySelector('#wb-chat [aria-current="true"]')?.dataset.conversationId === id
+          && document.querySelector('.conversation-push-status')?.dataset.streamState === 'live';
+      }, id);
+      return live && pending.size === 0;
+    }, `${side}: new subscription received chat_ready and initial/admission reads settled`);
+    const eventCount = events.length, readCount = reads.length, receivedCount = received.length;
     const pair = fixture.c4.insertInternalMessage(mineGroup, externalGroup, `实时传话 ${side}`);
     await row(side === 'mine' ? pair.outRow.id : pair.inRow.id).waitFor({ timeout: 4000 });
-    assert.ok(events.slice(eventCount).some(event => event.name === 'chat_messages_changed' && event.data.conversationId === id), 'real SSE selected-history hint');
-    assert.ok(reads.slice(readCount).some(value => new URL(value).searchParams.get('direction') === 'after'
-      && new URL(value).searchParams.has('cursor')), 'hint triggers authoritative after-cursor read');
+    const hint = received.slice(receivedCount).find(event => event.requestId === ready.requestId
+      && event.name === 'chat_messages_changed' && event.data.conversationId === id && event.data.tab === side);
+    assert.ok(hint, 'selected subscription receives real SSE history hint');
+    assert.ok(events.slice(eventCount).some(event => event.name === hint.name && event.data.conversationId === id
+      && event.data.tab === side), 'real observer emitted selected-history hint');
+    assert.ok(reads.slice(readCount).some(read => read.sequence > hint.sequence && historyRead(new URL(read.url), id, side)),
+      'selected subscription hint triggers authoritative after-cursor read');
     if (side === 'mine') await row(pair.outRow.id).locator('button.conversation-internal-peer').click();
   }
   // Imported malformed prefixes remain literal; non-navigable peers remain inert.
@@ -139,6 +205,7 @@ export async function runInternalConversationBrowser(t, sandbox) {
   for (const box of longBoxes) { assert.ok(box.left >= 0 && box.right <= 391); assert.ok(box.scroll <= box.width + 1); }
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   assert.equal(errors.length, 0, errors[0]);
-  if (output) fs.writeFileSync(path.join(output, 'internal-browser.json'), JSON.stringify({ shots, reads: reads.length, events: events.map(event => ({ name: event.name, conversationId: event.data.conversationId })), errors }, null, 2));
+  if (output) fs.writeFileSync(path.join(output, 'internal-browser.json'), JSON.stringify({ shots, reads: reads.length, events: events.map(event => ({ name: event.name, conversationId: event.data.conversationId })),
+    received: received.map(event => ({ requestId: event.requestId, name: event.name, tab: event.data.tab, conversationId: event.data.conversationId, sequence: event.sequence })), errors }, null, 2));
   t.diagnostic(`internal browser: ${shots.length} screenshots, ${reads.length} message reads, both histories navigate and receive live SSE`);
 }
