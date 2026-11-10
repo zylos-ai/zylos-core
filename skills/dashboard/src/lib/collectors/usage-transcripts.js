@@ -24,9 +24,8 @@ export class UsageTranscripts {
     this.config = config;
     this.getSnapshot = getSnapshot;
     this.getSnapshotKey = getSnapshotKey;
-    this._lifecycleSequence = store.db.prepare(`SELECT event_seq,id FROM runtime_events
-      WHERE source='core-log' AND event_type IN (${SESSION_LIFECYCLE_EVENTS.map(() => '?').join(',')})
-      ORDER BY event_seq DESC LIMIT 1`);
+    this._lifecycleSequence = null;
+    this._lastLiveSnapshotKey = null;
     this.now = now;
     this._lastDiscovery = null;
     this._round = null;
@@ -123,30 +122,42 @@ export class UsageTranscripts {
     if (this._snapshotAt == null || at < this._snapshotAt ||
         at - this._snapshotAt >= SNAPSHOT_FALLBACK_MS || snapshotKey !== this._snapshotKey) {
       snapshot = null;
+      let matchedKey;
       try {
         const candidate = await this.getSnapshot?.(at) ?? null;
-        // A lifecycle change while the read was pending must not authorize
-        // either generation with a snapshot captured for the other one.
-        if (snapshotKey !== null && candidate?.listKnown === true && snapshotKey === this._readSnapshotKey()) snapshot = candidate;
+        const latestKey = this._readSnapshotKey();
+        if (candidate?.listKnown === true) {
+          // A signal change does not invalidate a successful read. Suppressing
+          // it would drop assistant events while their transcript cursor advances.
+          snapshot = candidate;
+          if (snapshotKey !== null && latestKey !== null && snapshotKey === latestKey) matchedKey = snapshotKey;
+        }
       } catch { /* Failed snapshots cannot authorize current-session events or finishing. */ }
       this.snapshot = snapshot;
       this._snapshotAt = snapshot ? at : null;
-      this._snapshotKey = snapshot ? snapshotKey : undefined;
+      this._snapshotKey = matchedKey; // An unmatched key forces the next round to refresh.
     }
     return { at, snapshot, rows: this.store.activeUsageTranscripts(50) };
   }
 
   _readSnapshotKey() {
-    let liveKey = null;
-    try { liveKey = this.getSnapshotKey?.() ?? null; }
+    try {
+      const liveKey = this.getSnapshotKey?.();
+      // An unavailable observation is not a new identity. Lifecycle events and
+      // the fallback still detect changes while the live signal is absent.
+      if (liveKey != null) this._lastLiveSnapshotKey = liveKey;
+    }
     catch { /* The persisted lifecycle signal and fallback remain available. */ }
     try {
+      this._lifecycleSequence ??= this.store.db.prepare(`SELECT event_seq,id FROM runtime_events
+        WHERE source='core-log' AND event_type IN (${SESSION_LIFECYCLE_EVENTS.map(() => '?').join(',')})
+        ORDER BY event_seq DESC LIMIT 1`);
       const event = this._lifecycleSequence.get(...SESSION_LIFECYCLE_EVENTS);
       // Deletion can reduce/reuse event_seq; the event ID also distinguishes a
       // newly imported lifecycle observation at a previously used sequence.
-      return JSON.stringify([liveKey, event?.event_seq ?? null, event?.id ?? null]);
+      return JSON.stringify([this._lastLiveSnapshotKey, event?.event_seq ?? null, event?.id ?? null]);
     }
-    catch { return null; } // Unreadable lifecycle storage cannot authorize a snapshot.
+    catch { return null; } // Unknown signals force another read; they do not veto valid Core facts.
   }
 
   collect(runtime, callback, at = this.now()) {

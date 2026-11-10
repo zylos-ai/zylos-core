@@ -425,18 +425,33 @@ for (const signal of ['stuck', 'null', 'throws']) {
   });
 }
 
-test('signal loss refreshes immediately and accepts a stable actual snapshot', async t => {
-  const f = fixture(t), p = f.file('signal-loss'); f.start(p, 'origin');
-  let key = 'running', calls = 0;
-  f.inventory.getSnapshotKey = () => key;
-  f.inventory.getSnapshot = async () => { calls++; return { listKnown: true, rows: [] }; };
-  await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
-  key = null; f.advance(5000);
-  await f.inventory.collect('claude', (row, current) => { assert.equal(current, false); return { byteOffset: 0 }; });
-  assert.equal(calls, 2); assert.equal(f.inventory.snapshot.listKnown, true);
-  f.advance(5000); await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
-  assert.equal(calls, 2);
-});
+for (const unavailable of ['null', 'throws']) {
+  test(`temporary ${unavailable} live signals reuse the last identity until fallback or a real change`, async t => {
+    const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
+    const f = fixture(t, snapshot), p = f.file('signal-loss'); f.start(p, 'origin');
+    let key = 'running', calls = 0;
+    f.inventory.getSnapshotKey = () => {
+      if (key === null && unavailable === 'throws') throw new Error('signal unavailable');
+      return key;
+    };
+    f.inventory.getSnapshot = async () => { calls++; return structuredClone(snapshot); };
+    const poll = current => f.inventory.collect('claude', (row, actual) => {
+      assert.equal(actual, current); return { byteOffset: 0 };
+    });
+    await poll(true);
+    for (let round = 0; round < 6; round++) {
+      key = round % 2 === 0 ? null : 'running'; f.advance(5000);
+      await poll(true);
+      assert.equal(calls, 1, `temporary signal loss on poll ${round}`);
+    }
+    key = 'ended'; snapshot.rows[0].live = null; f.advance(5000);
+    await poll(false); assert.equal(calls, 2);
+    key = null; f.advance(5000);
+    await poll(false); assert.equal(calls, 2);
+    f.advance(595000);
+    await poll(false); assert.equal(calls, 3);
+  });
+}
 
 test('clock rollback refreshes the snapshot without waiting for fallback', async t => {
   const f = fixture(t); let calls = 0;
@@ -449,9 +464,8 @@ test('clock rollback refreshes the snapshot without waiting for fallback', async
 
 for (const staleRun of ['run-origin', 'ended-run']) {
   for (const signal of ['live key', 'persisted lifecycle']) {
-    test(`identity changing during snapshot read rejects ${staleRun} evidence from ${signal} and retries next poll`, { timeout: 1000 }, async t => {
+    test(`identity changing during snapshot read accepts ${staleRun} evidence from ${signal} and retries next poll`, { timeout: 1000 }, async t => {
       const f = fixture(t), p = f.file('transition'); f.start(p, 'origin');
-      fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
       let key = 'before', calls = 0, release, began;
       const entered = new Promise(resolve => { began = resolve; });
       const ready = new Promise(resolve => { release = resolve; });
@@ -465,12 +479,16 @@ for (const staleRun of ['run-origin', 'ended-run']) {
         if (calls === 1) { began(); await ready; }
         return candidate;
       };
-      const first = f.inventory.collect('claude', (row, current) => { assert.equal(current, false); return { byteOffset: 0 }; });
+      const first = f.inventory.collect('claude', (row, current) => {
+        assert.equal(current, staleRun === 'run-origin'); return { byteOffset: 0 };
+      });
       await entered;
       if (signal === 'live key') key = 'after';
       else lifecycleEvent(f, 'rotate_done');
       release(); await first;
-      assert.equal(f.inventory.snapshot, null); assert.equal(f.inventory._snapshotAt, null);
+      assert.equal(f.inventory.snapshot.rows[0].live.runId, staleRun);
+      assert.equal(f.inventory._snapshotAt, f.now());
+      assert.equal(f.inventory._snapshotKey, undefined);
       assert.equal(f.store.getUsageTranscript(p).status, 'active');
       f.advance(5000);
       await f.inventory.collect('claude', (row, current) => { assert.equal(current, true); return { byteOffset: 0 }; });
@@ -537,39 +555,67 @@ test('tool turn pool and non-Core lifecycle events do not refresh run snapshots'
   }
 });
 
+// Real Store/collector integration: unreadable scheduling metadata cannot veto
+// valid Core facts or discard assistant messages as cursors advance. Run for
+// lifecycle-key error handling or snapshot acceptance changes; skip UI changes.
+// Runner/fixtures isolate all files and databases; no services, tmux or children.
 for (const failureAt of ['before snapshot', 'after snapshot']) {
-  test(`unreadable lifecycle storage ${failureAt} rejects snapshots until the next healthy poll`, async t => {
+  test(`unreadable lifecycle storage ${failureAt} accepts valid snapshots and retries until the key recovers`, async t => {
     const f = fixture(t), p = f.file('unreadable-lifecycle'); f.start(p, 'origin');
-    fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
     let calls = 0, readError = false;
+    assert.ok(f.inventory._lifecycleSequence == null, 'lifecycle statement is prepared only on the first read');
+    f.inventory.getSnapshotKey = () => null;
+    f.inventory.getSnapshot = async () => {
+      calls++;
+      if (calls === 2 && failureAt === 'after snapshot') readError = true;
+      return { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
+    };
+    const collector = new ConversationCollector(f.store, { homeDir: f.root, zylosDir: f.root }, { transcripts: f.inventory });
+    const poll = async id => {
+      fs.appendFileSync(p, JSON.stringify({ type: 'assistant', uuid: id, requestId: id,
+        sessionId: 'session-origin', timestamp: new Date(f.now()).toISOString(),
+        message: { model: 'claude-example', content: [{ type: 'text', text: id }],
+          usage: { input_tokens: 10, output_tokens: 2 } } }) + '\n');
+      fs.utimesSync(p, new Date(f.now()), new Date(f.now()));
+      await collector.collect();
+      const message = f.store.queryEvents({ types: ['assistant_message'] }).find(row => row.summary === id);
+      assert.ok(message, `valid current snapshot preserves ${id}`);
+      assert.equal(message.session_id, 'session-origin');
+      assert.equal(message.run_id, 'run-origin');
+      const usage = f.store.queryMetrics({ name: 'usage_event' }).find(row => row.dimensions.request_id === id);
+      assert.ok(usage, `usage retained for ${id}`);
+      assert.equal(usage.session_id, 'session-origin');
+      assert.equal(usage.dimensions.run_id, 'run-origin');
+      assert.equal(f.store.getUsageTranscript(p).byte_offset, fs.statSync(p).size);
+    };
+    await poll('before-storage-error');
     const statement = f.inventory._lifecycleSequence;
     const get = statement.get.bind(statement);
     t.mock.method(statement, 'get', (...args) => {
       if (readError) throw new Error('lifecycle storage unavailable');
       return get(...args);
     });
-    f.inventory.getSnapshotKey = () => null;
-    f.inventory.getSnapshot = async () => {
-      calls++;
-      if (calls === 2 && failureAt === 'after snapshot') readError = true;
-      return { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: calls === 1 ? 'run-origin' : 'ended-run' } }] };
-    };
-    await f.inventory.collect('claude', (row, current) => { assert.equal(current, true); return { byteOffset: 0 }; });
     if (failureAt === 'before snapshot') readError = true;
     else lifecycleEvent(f, 'reclaim_done');
     for (let round = 0; round < 2; round++) {
-      f.advance(5000);
-      await f.inventory.collect('claude', (row, current) => { assert.equal(current, false); return { byteOffset: 0 }; });
-      assert.equal(f.inventory.snapshot, null);
-      assert.equal(f.inventory._snapshotAt, null);
+      f.advance(5000); await poll(`during-storage-error-${round + 1}`);
+      assert.equal(f.inventory.snapshot.listKnown, true);
+      assert.equal(f.inventory._snapshotAt, f.now());
+      assert.equal(f.inventory._snapshotKey, undefined);
       assert.equal(f.store.getUsageTranscript(p).status, 'active');
       assert.equal(calls, round + 2);
     }
-    readError = false; f.advance(5000);
-    await f.inventory.collect('claude', (row, current) => { assert.equal(current, false); return { byteOffset: 0 }; });
+    readError = false; f.advance(5000); await poll('after-storage-recovery');
     assert.equal(calls, 4);
     assert.equal(f.inventory.snapshot.listKnown, true);
-    assert.equal(f.store.getUsageTranscript(p).status, 'finished');
+    assert.notEqual(f.inventory._snapshotKey, undefined);
+    f.advance(5000); await poll('after-cached-recovery');
+    assert.equal(calls, 4, 'healthy matching key caches the recovered snapshot');
+    const messages = f.store.queryEvents({ types: ['assistant_message'] });
+    for (const id of ['before-storage-error', 'during-storage-error-1', 'during-storage-error-2',
+      'after-storage-recovery', 'after-cached-recovery']) {
+      assert.ok(messages.some(row => row.summary === id), `retained message ${id}`);
+    }
   });
 }
 
@@ -605,6 +651,64 @@ test('session rotation keeps old and new usage on their own runs and authorizes 
     assert.equal(row.session_id, oldRun ? 'session-origin' : 'next-session');
     assert.equal(row.dimensions.run_id, oldRun ? 'run-origin' : 'next-run');
   }
+});
+
+// Real Store/collector integration covers cursor advancement while unrelated Core
+// lifecycle events arrive during every snapshot read. Run for snapshot acceptance,
+// retry scheduling or assistant attribution changes; skip unrelated UI changes.
+// The runner and fixture isolate all paths; no services, tmux or children are used.
+test('continuous unrelated lifecycle changes preserve every Origin assistant message and each run usage', async t => {
+  const snapshot = { listKnown: true, rows: [
+    { sessionGroup: 'origin', live: { runId: 'run-origin' } },
+    { sessionGroup: 'other-group', live: { runId: 'run-other-group' } },
+  ] };
+  const f = fixture(t, snapshot), origin = f.file('continuous-origin'), other = f.file('continuous-other');
+  f.start(origin, 'origin'); f.start(other, 'other-group');
+  let calls = 0, churn = true;
+  f.inventory.getSnapshotKey = () => 'unchanged-live-identity';
+  f.inventory.getSnapshot = async () => {
+    calls++;
+    const candidate = structuredClone(snapshot);
+    await Promise.resolve();
+    if (churn) lifecycleEvent(f, calls % 2 ? 'session_start' : 'reclaim_done');
+    return candidate;
+  };
+  const append = (file, group, id) => {
+    fs.appendFileSync(file, JSON.stringify({ type: 'assistant', uuid: id, requestId: id,
+      sessionId: `session-${group}`, timestamp: new Date(f.now()).toISOString(),
+      message: { model: 'claude-example', content: [{ type: 'text', text: id }],
+        usage: { input_tokens: 10, output_tokens: 2 } } }) + '\n');
+    fs.utimesSync(file, new Date(f.now()), new Date(f.now()));
+  };
+  const collector = new ConversationCollector(f.store, { homeDir: f.root, zylosDir: f.root }, { transcripts: f.inventory });
+  const expected = ['steady', ...Array.from({ length: 6 }, (_, index) => `during-change-${index + 1}`), 'final'];
+  for (const [index, id] of expected.entries()) {
+    churn = id !== 'final';
+    append(origin, 'origin', `origin-${id}`); append(other, 'other-group', `other-${id}`);
+    await collector.collect();
+    assert.equal(calls, index + 1, `fresh snapshot for ${id}`);
+    const messages = f.store.queryEvents({ types: ['assistant_message'] });
+    const message = messages.find(row => row.summary === `origin-${id}`);
+    assert.ok(message, `Origin message survives the pending-read change: ${id}`);
+    assert.equal(message.session_id, 'session-origin');
+    assert.equal(message.run_id, 'run-origin');
+    assert.equal(f.store.getUsageTranscript(origin).byte_offset, fs.statSync(origin).size);
+    f.advance(5000);
+  }
+  const messages = f.store.queryEvents({ types: ['assistant_message'] });
+  const usage = f.store.queryMetrics({ name: 'usage_event' });
+  assert.equal(usage.length, expected.length * 2);
+  for (const id of expected) {
+    assert.ok(messages.some(row => row.summary === `origin-${id}`), `retained Origin message ${id}`);
+    for (const [prefix, group] of [['origin', 'origin'], ['other', 'other-group']]) {
+      const row = usage.find(item => item.dimensions.request_id === `${prefix}-${id}`);
+      assert.ok(row, `usage row ${prefix}-${id}`);
+      assert.equal(row.session_id, `session-${group}`);
+      assert.equal(row.dimensions.run_id, `run-${group}`);
+    }
+  }
+  await collector.collect();
+  assert.equal(calls, expected.length, 'stable final candidate is cached');
 });
 
 test('discovery refreshes a recovered snapshot before reading a new Origin transcript', async t => {
