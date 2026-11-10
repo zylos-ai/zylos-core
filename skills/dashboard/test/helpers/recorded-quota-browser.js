@@ -26,7 +26,7 @@ export async function runRecordedQuotaBrowser(sandbox) {
       listSessions: async () => state === 'live' ? [{ sessionGroup: 'origin' }] : [] });
     const snapshot = createGroupSnapshot({ zylosDir: root, now: () => now,
       store: { latestEventByType: () => ({ metadata: { ready: state === 'live' ? 1 : 0, starting: 0, reclaiming: 0, waiting: 0 } }), queryEvents: () => [] },
-      c4Reader: { getInboundTimes: () => [] }, readPm2: () => ({ processes: [] }),
+      c4Reader: { getInboundTimes: () => [], listSlotOccupancy: () => [] }, readPm2: () => ({ processes: [] }),
       cli: { runC4Db: async args => ({ ok: true, data: args[0] === 'groups' ? { groups: [], hasOlder: false } : { groups: [], globalFence: null } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
       loadCoreModule: async name => name === 'config.js' ? { readSessionMode: () => ({ mode: 'multi' }) }
