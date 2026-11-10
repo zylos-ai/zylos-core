@@ -1,7 +1,9 @@
+import { queryComponentSessionGroup, fixedAddressSessionGroup } from '../../comm-bridge/scripts/c4-component-session-group.js';
+
 /** Resolve a claimed execution's saved destination without changing its snapshot. */
-export function resolveDispatchSessionGroup(db, task, historyId, { query, isOrigin, diagnostic = console.error }) {
+export function resolveDispatchSessionGroup(db, task, historyId, { query = queryComponentSessionGroup, fixedAddress = fixedAddressSessionGroup, diagnostic = console.error } = {}) {
   const target = { component: task.reply_channel, endpoint: task.reply_endpoint };
-  if (isOrigin(target)) return { ...task, session_component: null, session_group_name: null };
+  if (fixedAddress(target.component, target.endpoint)) return { ...task, session_component: null, session_group_name: null };
   if (task.session_component != null || task.session_group_name != null || !target.component || !target.endpoint) return task;
 
   let groupName;
@@ -9,7 +11,7 @@ export function resolveDispatchSessionGroup(db, task, historyId, { query, isOrig
     ({ groupName } = query(target));
   } catch (error) {
     if (error.code !== 'SESSION_GROUP_QUERY_FAILED') throw error;
-    diagnostic(`[Scheduler] Task ${task.id}: SESSION_GROUP_QUERY_FAILED; using component overall group (${String(error.reason ?? error.message).slice(0, 400)})`);
+    diagnostic(`[Scheduler] Task ${task.id}: SESSION_GROUP_QUERY_FAILED; using component overall group (${String(error.message).replace(/[\r\n]/g, ' ').slice(0, 600)})`);
     db.prepare("UPDATE task_history SET error=? WHERE id=? AND task_id=? AND status='started'")
       .run('SESSION_GROUP_QUERY_FAILED', historyId, task.id);
     return { ...task, session_component: target.component, session_group_name: null };
@@ -21,7 +23,7 @@ export function resolveDispatchSessionGroup(db, task, historyId, { query, isOrig
       AND reply_channel IS ? AND reply_endpoint IS ?`)
       .run(target.component, groupName, task.id, target.component, target.endpoint);
   } catch (error) {
-    diagnostic(`[Scheduler] Task ${task.id}: could not save queried session group (${String(error.message).slice(0, 200)})`);
+    diagnostic(`[Scheduler] Task ${task.id}: could not save queried session group (${String(error.message).replace(/[\r\n]/g, ' ').slice(0, 200)})`);
   }
   // A concurrent edit belongs to the next execution. CAS misses do not retarget
   // this already claimed execution, retry, or produce a warning.

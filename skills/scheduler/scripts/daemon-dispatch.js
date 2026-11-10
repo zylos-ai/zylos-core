@@ -2,6 +2,7 @@
 import { now, cleanupHistory } from './database.js';
 import { updateNextRunTime, processCompletedTasks, handleStaleRunningTasks } from './daemon-tasks.js';
 import { sendViaC4 } from './runtime.js';
+import { resolveDispatchSessionGroup } from './dispatch-session-group.js';
 import { getRecentConversations, getConversationsByRange } from '../../comm-bridge/scripts/c4-db.js';
 
 export const executionMarker = (taskId, historyId) => `[Scheduled Task: ${taskId} #${historyId}]`;
@@ -35,8 +36,9 @@ export function dispatchTask(db, candidate, dependencies = {}) {
     result = { category: 'T', code: 'CONVERSATION_BOUND_UNAVAILABLE' };
   }
   if (!result) {
+    const destination = resolveDispatchSessionGroup(db, task, historyId, dependencies);
     result = send(prompt, { priority: task.priority, requireIdle: task.require_idle === 1,
-      sessionComponent: task.session_component, sessionGroupName: task.session_group_name,
+      sessionComponent: destination.session_component, sessionGroupName: destination.session_group_name,
       replyChannel: task.reply_channel, replyEndpoint: task.reply_endpoint });
     if (result.category === 'U') {
       try {

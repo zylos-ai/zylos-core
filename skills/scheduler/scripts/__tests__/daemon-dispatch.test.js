@@ -416,7 +416,7 @@ for (const origin of ['window', 'dispatch']) test(`rescheduled ${origin} failure
   t.mock.timers.enable({ apis: ['Date'], now: updated.task.next_run_at * 1000 });
   runSchedulerIteration(f.db, dependencies);
   assert.equal(sends.length, 1); assert.ok(sends[0].message.includes(updated.task.prompt));
-  assert.equal(sends[0].route.sessionComponent, null); assert.equal(sends[0].route.sessionGroupName, null);
+  assert.equal(sends[0].route.sessionComponent, 'telegram'); assert.equal(sends[0].route.sessionGroupName, null);
   assert.equal(sends[0].route.replyChannel, 'telegram'); assert.equal(sends[0].route.replyEndpoint, '1001');
   const after = f.read(id); assert.equal(after.task.status, 'running');
   assert.deepEqual(after.history.slice(0, 2), history);

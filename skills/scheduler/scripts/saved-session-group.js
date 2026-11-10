@@ -1,11 +1,16 @@
 import { parseSessionGroup, validateGroupName, dataError } from '../../comm-bridge/scripts/c4-session-group.js';
 import { getComponentByNamespace } from '../../comm-bridge/scripts/c4-db.js';
 import { validateChannel } from '../../comm-bridge/scripts/c4-validate.js';
+import { resolveReplySessionGroup } from './reply-session-group.js';
+import { fixedAddressSessionGroup } from '../../comm-bridge/scripts/c4-component-session-group.js';
 
 const has = (value, name) => Object.hasOwn(value, name);
 const empty = () => ({ session_component: null, session_group_name: null });
 
-export function validateReplyTarget(options, { validate = validateChannel } = {}) {
+export function validateReplyTarget(options, { validate = validateChannel, replyEndpoint = options['reply-endpoint'] } = {}) {
+  if (has(options, 'reply-session-group') && fixedAddressSessionGroup(options['reply-channel'], replyEndpoint)) {
+    throw dataError('INVALID_ARGS', 'Dashboard Origin does not accept --reply-session-group');
+  }
   if (has(options, 'reply-session-group') && !has(options, 'reply-channel')) {
     throw dataError('INVALID_ARGS', '--reply-session-group requires --reply-channel');
   }
@@ -35,13 +40,14 @@ function validateReplyPair(channel, endpoint) {
 }
 
 /** Resolve only supplied routing facts. Never allocate a namespace or consult a session. */
-export function resolveSavedSessionGroup(options, { env = process.env, lookup = getComponentByNamespace, validate = validateChannel } = {}) {
+export function resolveSavedSessionGroup(options, { env = process.env, lookup = getComponentByNamespace, validate = validateChannel, ...deps } = {}) {
   validateReplyTarget(options, { validate });
   if (has(options, 'reply-channel') !== has(options, 'reply-endpoint')) {
     throw dataError('INVALID_ARGS', '--reply-channel and --reply-endpoint must be supplied together');
   }
   validateReplyPair(options['reply-channel'], options['reply-endpoint']);
-  if (has(options, 'reply-channel')) return { session_component: options['reply-channel'], session_group_name: options['reply-session-group'] ?? null };
+  if (has(options, 'reply-channel')) return resolveReplySessionGroup(
+    { component: options['reply-channel'], endpoint: options['reply-endpoint'] }, options['reply-session-group'], deps);
   const group = env.ZYLOS_SESSION_GROUP;
   if (group === undefined) return empty();
   const parsed = parseSessionGroup(group);
@@ -53,12 +59,12 @@ export function resolveSavedSessionGroup(options, { env = process.env, lookup = 
 }
 
 export function updatedReplyTarget(task, options, deps = {}) {
-  validateReplyTarget(options, deps);
+  validateReplyTarget(options, { ...deps, replyEndpoint: has(options, 'reply-endpoint') ? options['reply-endpoint'] : task.reply_endpoint });
   if (options['clear-reply']) return { reply_channel: null, reply_endpoint: null };
   if (!['reply-channel', 'reply-endpoint', 'reply-session-group'].some(key => has(options, key))) return {};
   const channel = has(options, 'reply-channel') ? options['reply-channel'] : task.reply_channel;
   const endpoint = has(options, 'reply-endpoint') ? options['reply-endpoint'] || null : task.reply_endpoint;
   validateReplyPair(channel, endpoint);
-  const saved = { session_component: channel, session_group_name: options['reply-session-group'] ?? null };
+  const saved = resolveReplySessionGroup({ component: channel, endpoint }, options['reply-session-group'], deps);
   return { reply_channel: channel, reply_endpoint: endpoint, ...saved };
 }

@@ -1,8 +1,9 @@
 import { dataError } from '../../comm-bridge/scripts/c4-session-group.js';
+import { queryComponentSessionGroup, fixedAddressSessionGroup } from '../../comm-bridge/scripts/c4-component-session-group.js';
 
 /** Resolve an explicit reply destination before an add/update can write it. */
-export function resolveReplySessionGroup(target, explicitGroup, { query, isOrigin }) {
-  if (isOrigin(target)) {
+export function resolveReplySessionGroup(target, explicitGroup, { query = queryComponentSessionGroup, fixedAddress = fixedAddressSessionGroup } = {}) {
+  if (fixedAddress(target.component, target.endpoint)) {
     if (explicitGroup !== undefined) throw dataError('INVALID_ARGS', 'Dashboard Origin does not accept --reply-session-group');
     return { session_component: null, session_group_name: null };
   }
