@@ -18,7 +18,7 @@ const pending = (sessionGroup, priority, id, extra = {}) => ({ sessionGroup,
   pending: { count: 1, oldestAt: NOW - 5000, head: { priority, id } }, running: { count: 0 }, fence: null, ...extra });
 
 function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = [], globalFence = null, events = [],
-  mode = 'multi', sample = { ready: 10, starting: 20, reclaiming: 30, waiting: 40 } } = {}) {
+  mode = 'multi', statusMode, sample = { ready: 10, starting: 20, reclaiming: 30, waiting: 40 } } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-pool-'));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   fs.mkdirSync(path.join(root, 'activity-monitor'));
@@ -64,7 +64,7 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
     if (name === 'config.js') return { readSessionMode: readMode };
     if (name === 'session-state-reader.js') return sessionReader;
     if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
-      mode: readMode, list: () => groups, resolveRoot: () => root,
+      mode: statusMode ? () => ({ mode: statusMode }) : readMode, list: () => groups, resolveRoot: () => root,
       configIssue: () => null, facts: async () => ({ originNeed: null }), health: () => ({ missing: true }), now: () => clock }) };
     throw new Error('Unexpected Core module: ' + name);
   };
@@ -88,7 +88,11 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
 for (const mode of ['single', 'unreadable']) for (const hasSample of [true, false]) {
   test(`${mode} snapshot preserves sampled pool display without reading capacity or occupancy${hasSample ? '' : ' when no sample exists'}`, async t => {
     const sample = hasSample ? { ready: 10, starting: 20, reclaiming: 30, waiting: 40 } : null;
-    const f = fixture(t, { mode, sample, record: freshRecord({ k: 17 }), slots: [{ group: 'occupied' }] });
+    const waitingGroup = mode === 'single' ? null : 'waiting';
+    // Mode and status are independent observations: a failed mode read must not
+    // turn an otherwise known stopped group's missing sample into a DB error.
+    const f = fixture(t, { mode, statusMode: mode === 'unreadable' ? 'multi' : undefined,
+      sample, queues: [pending(waitingGroup, 1, 1)], record: freshRecord({ k: 17 }), slots: [{ group: 'occupied' }] });
     const snapshot = await f.service.getSnapshot();
     assert.equal(snapshot.mode, mode);
     assert.equal(f.calls(), 0);
@@ -97,6 +101,10 @@ for (const mode of ['single', 'unreadable']) for (const hasSample of [true, fals
       ? { ...sample, capacity: null, used: 30 }
       : { ready: null, starting: null, reclaiming: null, waiting: null, capacity: null, used: null });
     assert.equal(snapshot.attention.reminders.some(reminder => reminder.kind === 'pool_full'), false);
+    const waiting = snapshot.rows.find(row => row.sessionGroup === waitingGroup);
+    assert.equal(waiting.presence, 'not_running');
+    assert.equal(waiting.queue.pending.count, 1);
+    assert.deepEqual(waiting.wait, { kind: 'unknown', reason: 'no_rule' });
   });
 }
 

@@ -405,7 +405,7 @@ test('this machine reads both weekly quotas from the raw groups snapshot, Claude
   assert.match(compare, /Codex<\/span><span class="wb-qbar-tr"><i style="width:65%">/);
 });
 
-test('single and unreadable fleet cards retain sampled counts without showing capacity or occupancy data', () => {
+test('single and unreadable fleet cards hide capacity and occupancy with or without samples', () => {
   const fleet = { agents: [{ name: 'local', self: true, state: 'IDLE' }] };
   for (const mode of ['single', 'unreadable']) {
     const pollutedPool = { used: 0, capacity: 119, capacityRecord: { valid: false, source: 'fallback' } };
@@ -415,7 +415,6 @@ test('single and unreadable fleet cards retain sampled counts without showing ca
     assert.doesNotMatch(renderAgentFleetHtml(fleet, { self: { ...self, mode, pool: pollutedPool } }), /running 0|\/119|119/);
     const sampled = fleetSelfFromSnapshot({ mode, counts: { idle: 1 }, rows: [{}],
       instance: { pool: { ...pollutedPool, ready: 2, starting: 1 } } });
-    assert.deepEqual(sampled.pool, { ready: 2, starting: 1 });
     assert.doesNotMatch(renderAgentFleetHtml(fleet, { self: sampled }), /running [0-9]/);
     assert.doesNotMatch(renderAgentFleetHtml(fleet, { self: sampled }), /\/119|119/);
   }

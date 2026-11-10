@@ -95,7 +95,7 @@ test('owned slots bypass capacity while retaining startup failure and other guar
 });
 
 test('unreadable occupancy falls through startup failure and never manufactures a queue position', () => {
-  const context = { ...ctx('ok'), pool: { used: null, capacity: 3 }, position: 1 };
+  const context = { ...ctx('ok'), pool: { used: null, capacity: 3, reason: 'pool_occupancy_unreadable' }, position: 1 };
   assert.deepEqual(waitingReason(row(), context), { kind: 'unknown', reason: 'pool_occupancy_unreadable' });
   const event = { session_group: 'a', timestamp: now, event_type: 'activate_failed', metadata: {} };
   assert.equal(waitingReason(row(), { ...context, activations: [event] }).kind, 'start_failed');
