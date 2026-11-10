@@ -109,7 +109,7 @@ export class CodexAdapter extends RuntimeAdapter {
     // (RUNTIME_BUILTIN_ENV_KEYS) exactly as a new Codex session gets them.
     const probeEnv = { ...process.env };
     const sessionEnv = _buildSessionEnv();
-    for (const key of RUNTIME_BUILTIN_ENV_KEYS) {
+    for (const key of RUNTIME_BUILTIN_ENV_KEYS.codex) {
       if (Object.hasOwn(sessionEnv, key)) probeEnv[key] = sessionEnv[key];
       else delete probeEnv[key];
     }
@@ -399,7 +399,7 @@ function _buildSessionEnv() {
 
   // Built-in runtime passthrough from .env, independent of runtime-env.manifest:
   // applied after the manifest (clean and compat mode) so a manifest cannot drop it.
-  for (const key of RUNTIME_BUILTIN_ENV_KEYS) {
+  for (const key of RUNTIME_BUILTIN_ENV_KEYS.codex) {
     if (dotenvVars[key]) env[key] = dotenvVars[key];
   }
   return env;

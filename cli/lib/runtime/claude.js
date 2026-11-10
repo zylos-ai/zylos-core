@@ -130,7 +130,7 @@ export class ClaudeAdapter extends RuntimeAdapter {
     // variables (RUNTIME_BUILTIN_ENV_KEYS) exactly as a new session gets them.
     const injectedEnv = { ...process.env };
     const sessionEnv = _buildSessionEnv({ nativeAuth: await _hasNativeAuth() });
-    for (const key of RUNTIME_BUILTIN_ENV_KEYS) {
+    for (const key of RUNTIME_BUILTIN_ENV_KEYS.claude) {
       if (Object.hasOwn(sessionEnv, key)) injectedEnv[key] = sessionEnv[key];
       else delete injectedEnv[key];
     }
@@ -388,7 +388,7 @@ function _buildSessionEnv({ nativeAuth }) {
 
   // Built-in runtime passthrough from .env, independent of runtime-env.manifest:
   // applied after the manifest (clean and compat mode) so a manifest cannot drop it.
-  Object.assign(env, _readDotenvValues(RUNTIME_BUILTIN_ENV_KEYS));
+  Object.assign(env, _readDotenvValues(RUNTIME_BUILTIN_ENV_KEYS.claude));
   if (nativeAuth) {
     for (const key of NATIVE_AUTH_CONFLICT_KEYS) delete env[key];
   }

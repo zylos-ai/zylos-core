@@ -428,8 +428,9 @@ describe('Claude launch — non-credential passthrough from .env', () => {
 });
 
 describe('Claude launch — built-in passthrough from .env', () => {
-  // Runtime auth variables set in .env reach the new session without any
-  // runtime-env.manifest line, and the auth probe sees the same values.
+  // Claude variables set in .env reach the new session without any
+  // runtime-env.manifest line, the auth probe sees the same values, and
+  // Codex variables in the same .env reach neither.
   const builtinKeys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
     'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'OPENAI_BASE_URL', 'OPENAI_API_KEY'];
   const cases = {
@@ -438,6 +439,7 @@ describe('Claude launch — built-in passthrough from .env', () => {
     'setup token': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-synthetic-setup-token' },
   };
   const manifestPath = path.join(fakeZylosDir, '.zylos', 'runtime-env.manifest');
+  const openaiVars = { OPENAI_BASE_URL: 'https://openai-relay.example.test/v1', OPENAI_API_KEY: 'sk-synthetic-openai-key' };
 
   async function launchAndProbe(dotenv, { compat = false, nativeAuth = false } = {}) {
     tmuxSessionExists = false;
@@ -453,7 +455,7 @@ describe('Claude launch — built-in passthrough from .env', () => {
     fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
     fs.writeFileSync(manifestPath, '');
     fs.writeFileSync(dotenvPath, (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
-      + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+      + Object.entries({ ...dotenv, ...openaiVars }).map(([key, value]) => `${key}=${value}\n`).join(''));
     try {
       const adapter = makeAdapter(ClaudeAdapter);
       await adapter.launch({ bypassPermissions: false });
@@ -464,6 +466,10 @@ describe('Claude launch — built-in passthrough from .env', () => {
       assert.ok(probeCall, 'probe should run');
       const probe = probeCall.opts.env;
       for (const key of builtinKeys) assert.equal(session[key], probe[key], `session and probe agree on ${key}`);
+      for (const key of Object.keys(openaiVars)) {
+        assert.equal(session[key], undefined, `Claude session must not carry ${key}`);
+        assert.equal(probe[key], undefined, `Claude probe must not carry ${key}`);
+      }
       return { session, probe };
     } finally {
       if (nativeAuth) fs.unlinkSync(credFile);
@@ -685,14 +691,17 @@ describe('Codex launch — new session', () => {
 
 describe('Codex launch — built-in passthrough from .env', () => {
   // OPENAI_BASE_URL / OPENAI_API_KEY set in .env reach the new Codex session
-  // without any runtime-env.manifest line, and the Codex auth probe sees the same values.
+  // without any runtime-env.manifest line, the Codex auth probe sees the same
+  // values, and Claude variables in the same .env reach neither.
   const builtinKeys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL',
     'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'OPENAI_BASE_URL', 'OPENAI_API_KEY'];
   const dotenv = { OPENAI_BASE_URL: 'https://openai-relay.example.test/v1', OPENAI_API_KEY: 'sk-synthetic-openai-key' };
+  const anthropicVars = { ANTHROPIC_BASE_URL: 'https://relay.example.test', ANTHROPIC_AUTH_TOKEN: 'synthetic-relay-token',
+    ANTHROPIC_API_KEY: 'sk-ant-synthetic-builtin-key', CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-synthetic', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
   const manifestPath = path.join(fakeZylosDir, '.zylos', 'runtime-env.manifest');
 
   for (const compat of [false, true]) {
-    it(`OpenAI variables only in .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async () => {
+    it(`only OpenAI variables from .env reach session and probe with an empty manifest (${compat ? 'compat' : 'clean'} env)`, async () => {
       tmuxSessionExists = false;
       calls.execFileSync.length = 0;
       calls.execFile.length = 0;
@@ -704,7 +713,7 @@ describe('Codex launch — built-in passthrough from .env', () => {
       fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
       fs.writeFileSync(manifestPath, '');
       fs.writeFileSync(dotenvPath, (compat ? 'ZYLOS_CLEAN_ENV=false\n' : '')
-        + Object.entries(dotenv).map(([key, value]) => `${key}=${value}\n`).join(''));
+        + Object.entries({ ...dotenv, ...anthropicVars }).map(([key, value]) => `${key}=${value}\n`).join(''));
       try {
         const adapter = makeAdapter(CodexAdapter);
         await adapter.launch({ bypassPermissions: false });
@@ -719,6 +728,10 @@ describe('Codex launch — built-in passthrough from .env', () => {
           assert.equal(probe[key], value, `probe ${key}`);
         }
         for (const key of builtinKeys) assert.equal(session[key], probe[key], `session and probe agree on ${key}`);
+        for (const key of Object.keys(anthropicVars)) {
+          assert.equal(session[key], undefined, `Codex session must not carry ${key}`);
+          assert.equal(probe[key], undefined, `Codex probe must not carry ${key}`);
+        }
       } finally {
         fs.rmSync(manifestPath, { force: true });
         fs.writeFileSync(dotenvPath, original);
