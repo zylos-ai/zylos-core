@@ -138,10 +138,18 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     });
     // narrowTo(box, items): each item's min-content width (its widest piece that may not break) and max-content
     // width (its one-line width), as this browser lays them out, and a set() that narrows the box to half the widest
-    // item but never below the widest min-content width plus the box's padding and border (edges).
+    // item but never below the widest min-content width plus the box's padding and border (edges). Each item is
+    // measured with overflow-wrap: normal for that moment: an inherited overflow-wrap: anywhere (the side panel has
+    // one) makes the browser report one glyph as min-content, not the widest piece word-break leaves whole.
     await context.addInitScript(() => {
       window.narrowTo = (box, items) => {
-        const width = (el, value) => { const old = el.style.width; el.style.width = value; const result = el.getBoundingClientRect().width; el.style.width = old; return result; };
+        const width = (el, value) => {
+          const old = [el.style.width, el.style.overflowWrap];
+          el.style.width = value; el.style.overflowWrap = 'normal';
+          const result = el.getBoundingClientRect().width;
+          [el.style.width, el.style.overflowWrap] = old;
+          return result;
+        };
         const content = items.map(el => ({ el, min: width(el, 'min-content'), max: width(el, 'max-content') }));
         const style = getComputedStyle(box);
         content.edges = ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth'].reduce((sum, key) => sum + parseFloat(style[key]), 0);
@@ -412,9 +420,10 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
   });
 
   // No test width makes an explanation wider than the list at a line break inside a word, so the page narrows the
-  // list: to half its widest explanation, but never below the widest min-content width (the widest piece that may
-  // not break, as the browser lays it out) plus the list's padding and border. An explanation wraps exactly when
-  // it is wider than the room left, and at least one is.
+  // list: to half its widest explanation, but never below the widest min-content width plus the list's padding and
+  // border. Min-content is measured with overflow-wrap: normal, so it is the widest piece word-break: keep-all
+  // leaves whole as the browser lays it out (the panel's overflow-wrap: anywhere would report one glyph). An
+  // explanation wraps exactly when it is wider than the room left, and at least one is.
   for (const language of ['zh', 'en']) {
     await t.test(`the host panel pool explanations wrap between words inside a box narrower than they are (${language})`, async () => {
       const { page, context } = await open(1280, language, 'plain', { pool: RICH_POOL });
