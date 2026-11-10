@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { SupervisorMachineTasks } from '../supervisor-machine-tasks.js';
@@ -211,7 +212,7 @@ describe('daily memory commit', () => {
     assert.ok(skipped.length > 500);
     // The actual child runner must preserve raw stderr. Otherwise truncating
     // again at state/log sinks is idempotent and output-only checks miss it.
-    await assert.rejects(run.tasks.execute(path.resolve('skills/zylos-memory/scripts/daily-commit.js'), 30000), error => {
+    await assert.rejects(run.tasks.execute(fileURLToPath(new URL('../../../zylos-memory/scripts/daily-commit.js', import.meta.url)), 30000), error => {
       assert.ok(error.message.length > 501, 'runner passes the original long stderr to its caller');
       assert.ok(error.message.startsWith(skipped));
       return true;
