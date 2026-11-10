@@ -70,6 +70,11 @@ received inbound for the same channel and endpoint; otherwise the latest inbound
 group wins. This permits multiple topics for one endpoint to reply individually.
 Without such history, an unknown or invalid explicit group falls back to the
 channel's overall group and records an `out_group_fallback` diagnostic.
+This diagnostic describes the final route: any explicit group ending at the
+channel's overall group records it, including an existing explicit group
+overridden by namespace inbound history. `SESSION_GROUP_NOT_FOUND` is the
+generic reason for a syntactically valid group in this case; it does not prove
+that group is absent. Routing to another subgroup records no fallback event.
 The endpoint passed to the
 component stays unchanged. `--group` is not accepted. Use stdin when literal
 content contains reserved option tokens.
@@ -82,7 +87,10 @@ context; do not change sender identity to bypass the check. Explicit `origin`
 is checked too. A `ZYLOS_RUN_ID` alone means single-session and is not checked.
 Processes without a group and new recipients with no nonempty inbound history
 that fall back to the namespace remain allowed; empty migration groups do not
-assign ownership. System notification callers clear both session variables.
+assign ownership. Ownership matches endpoint strings exactly; another `|msg:N`
+suffix, different case or whitespace is a different recipient with no shared
+ownership history. System notification callers and Core PM2 service startup
+paths clear both session variables.
 The write transaction checks again if ownership changes during a channel hook.
 OpenMax's direct `comm.send`/`comm.ask` bypass C4 and are outside this guard.
 
