@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { spawn } from 'node:child_process';
 import { queryComponentSessionGroup, fixedAddressSessionGroup } from '../c4-component-session-group.js';
 
 function fixture(t, source) {
@@ -170,13 +171,50 @@ test('query accepts path-safe legacy component names and refuses traversal', t =
 
 // Boundary: a test-owned preload retains only the runner's event loop. The
 // synchronous caller must kill it even after the component already exited.
-test('query bounds a runner that remains alive after component completion', { timeout: 10000 }, t => {
+test('query bounds a runner that remains alive after component completion', { timeout: 12000 }, async t => {
   const f = fixture(t, "process.stdout.write('room');");
   f.env.NODE_OPTIONS = `--import=${fileURLToPath(new URL('./fixtures/query-runner-linger.js', import.meta.url))}`;
-  const start = Date.now();
-  assert.throws(() => f.query('address'), failed(/could not start: ETIMEDOUT/));
-  assert.ok(Date.now() - start >= 6400);
-  assert.ok(Date.now() - start < 8000);
+  const child = spawn(process.execPath, [
+    fileURLToPath(new URL('./fixtures/query-timeout-probe.js', import.meta.url)), f.root,
+  ], { env: f.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const stop = () => {
+    try { process.kill(-child.pid, 'SIGKILL'); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+  };
+  let output = '';
+  let diagnostic = '';
+  try {
+    const result = await new Promise((resolve, reject) => {
+      // This deadline stays responsive even if the real synchronous query hangs.
+      const deadline = setTimeout(() => {
+        stop();
+        reject(new Error('query probe exceeded 9500 ms'));
+      }, 9500);
+      const append = target => chunk => {
+        if (output.length + diagnostic.length + chunk.length > 4096) {
+          stop();
+          clearTimeout(deadline);
+          reject(new Error('query probe output exceeded 4096 bytes'));
+        } else if (target === 'stdout') output += chunk;
+        else diagnostic += chunk;
+      };
+      child.stdout.on('data', append('stdout'));
+      child.stderr.on('data', append('stderr'));
+      child.once('error', error => { clearTimeout(deadline); reject(error); });
+      child.once('close', (code, signal) => { clearTimeout(deadline); resolve({ code, signal }); });
+    });
+    assert.equal(result.code, 0, diagnostic);
+    const response = JSON.parse(output);
+    assert.ok(response.error, 'the query must reject');
+    failed(/could not start: ETIMEDOUT/)(response.error);
+    assert.ok(response.elapsed >= 6400);
+    assert.ok(response.elapsed < 8000);
+  } finally {
+    stop();
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise(resolve => child.once('close', resolve));
+    }
+  }
 });
 
 // Same private query boundary. An inherited pipe must not extend Core's timeout.
