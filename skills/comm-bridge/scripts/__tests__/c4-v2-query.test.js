@@ -48,7 +48,7 @@ test('absorbed pages default to 20 rows and advance by count across 1001 rows wi
         ids.forEach((m, i) => assert.equal(Number(m[2]), i + 1)); seen.push(...ids.map(m => Number(m[1])));
         const footer = output.match(/count=(\d+) next=(none|\d+)\n$/);
         assert.equal(Number(footer[1]), ids.length); assert.ok(ids.length <= 20);
-        if (after === 0) assert.match(output, / …<截断：原文 65536 B；全文 --id 1>/);
+        if (after === 0) assert.match(output, / …<truncated: original 65536 B; full text --id 1>/);
         after = footer[2] === 'none' ? null : Number(footer[2]);
       }
     } while (after !== null);
@@ -80,7 +80,7 @@ test('preview takes 300 Unicode code points, preserves complete characters and m
   assert.equal(previewLines.length, originals.length);
   previewLines.forEach((line, i) => {
     const item = json.items[i];
-    const annotation = item.textTruncated ? ` …<截断：原文 ${item.textBytes} B；全文 --id ${item.id}>` : '';
+    const annotation = item.textTruncated ? ` …<truncated: original ${item.textBytes} B; full text --id ${item.id}>` : '';
     assert.equal(line, 'text: ' + escapeText(item.text) + annotation);
   });
 });
@@ -274,8 +274,8 @@ test('reply-via survives real POSIX shell parsing byte-for-byte', t => {
     const command = replyVia({ id: 1, channel: 'foo', endpoint_id: endpoint, session_group: 'foo:A:b' }, path).replace('---- reply via: ', '');
     assert.deepEqual(JSON.parse(execFileSync('/bin/sh', ['-c', command], { encoding: 'utf8' })), ['foo', endpoint]);
   }
-  for (const endpoint of ['\0', '\n', '\x7f', 'x'.repeat(131072)]) assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: endpoint }, path), /不可用/);
-  assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: 'e' }, path + '\n'), /Core 路径含控制字符/);
+  for (const endpoint of ['\0', '\n', '\x7f', 'x'.repeat(131072)]) assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: endpoint }, path), /unavailable/);
+  assert.match(replyVia({ id: 2, channel: 'foo', endpoint_id: 'e' }, path + '\n'), /Core path contains control characters/);
 });
 test('global/group reads preserve scopes, checkpoint metadata and truncation upper bound', t => {
   const { store, query } = fixture(t);

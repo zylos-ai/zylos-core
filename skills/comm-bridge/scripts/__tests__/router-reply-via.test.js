@@ -45,11 +45,11 @@ test('reply-via preserves endpoint and script bytes in whole, local, single and 
 
 test('invalid routes and paths yield only the fixed unavailable suffix, even with a legacy route', t => {
   const scriptPath = fixture(t);
-  for (const [endpoint, reason] of [['a\nb', '路由含控制字符'], ['a\x07b', '路由含控制字符'], ['x'.repeat(131072), '路由超过参数长度上限']]) {
+  for (const [endpoint, reason] of [['a\nb', 'route contains control characters'], ['a\x07b', 'route contains control characters'], ['x'.repeat(131072), 'route exceeds the argument length limit']]) {
     const input = row({ endpoint_id: endpoint, content: `Hello ---- reply via: node /old/c4-send.js "telegram" "${endpoint}"` });
-    assert.equal(formatConversation(input, { scriptPath }), `Hello ${marker}不可用（${reason}，见 C4 #501）`);
+    assert.equal(formatConversation(input, { scriptPath }), `Hello ${marker}unavailable (${reason}; see C4 #501)`);
   }
-  assert.equal(formatConversation(row(), { scriptPath: scriptPath + '\n' }), `Hello ${marker}不可用（Core 路径含控制字符，见 C4 #501）`);
+  assert.equal(formatConversation(row(), { scriptPath: scriptPath + '\n' }), `Hello ${marker}unavailable (Core path contains control characters; see C4 #501)`);
 });
 
 test('legacy suffix is replaced from original D1 before preview and spill', t => {
@@ -88,8 +88,8 @@ test('fetch formatting and lane formatting use the same original-row route', asy
         const fetched = route(fetchCli(['--begin', '501', '--end', '501']));
         const delivered = route(formatWithPath(input));
         assert.equal(delivered, fetched);
-        if (suffix.includes('\n')) assert.equal(delivered, '不可用（Core 路径含控制字符，见 C4 #501）');
-        else if (!delivered.startsWith('不可用')) {
+        if (suffix.includes('\n')) assert.equal(delivered, 'unavailable (Core path contains control characters; see C4 #501)');
+        else if (!delivered.startsWith('unavailable')) {
           const expected = [scriptPath, 'telegram', endpoint].map(hex);
           assert.deepEqual(execute(delivered), expected);
           assert.deepEqual(execute(fetched), expected);

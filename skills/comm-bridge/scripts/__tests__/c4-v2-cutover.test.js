@@ -150,7 +150,7 @@ for (const suffix of ['', " space'quote", '\nline']) test(`reply route uses inst
   const installed = join(root, '.claude/skills/comm-bridge/scripts/c4-send.js');
   const quoted = "'" + installed.replaceAll("'", "'\\''") + "'";
   const expected = suffix.includes('\n')
-    ? `---- reply via: 不可用（Core 路径含控制字符，见 C4 #${row.id}）`
+    ? `---- reply via: unavailable (Core path contains control characters; see C4 #${row.id})`
     : `---- reply via: node ${quoted} 'chat' 'endpoint'`;
   for (const args of [['--unsummarized'], ['--begin', String(row.id), '--end', String(row.id)]]) {
     const text = cli('c4-fetch.js', args).stdout;

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseStateHeader, validateStateDocument, renderStateSkeleton, inboxSegmentName } from '../state-format.js';
+import { parseStateHeader, validateStateDocument, renderStateSkeleton, inboxSegmentName, absorbedTitle } from '../state-format.js';
 
 const scope = 'telegram:g-123';
 const syncedAt = '2026-10-19T05:30:02Z';
@@ -44,20 +44,20 @@ test('A/B: 64KiB body truncates locally; all 1000 sorted IDs survive determinist
   const text = render(rows), lines = text.split('\n').filter(line => line.startsWith('- #'));
   assert.equal(lines.length, 1000);
   assert.deepEqual(lines.map(line => Number(/^- #(\d+) /.exec(line)[1])), Array.from({ length: 1000 }, (_, i) => i + 1));
-  assert.match(lines.at(-1), /x{509}…（截断，全文见 #1000）$/);
+  assert.match(lines.at(-1), /x{509}… \(truncated; full text #1000\)$/);
   assert.equal(text, render(rows));
   assert.equal(rows[0].id, 1000); // no mutation of the caller's snapshot
-  assert.match(text, /共 1000 条（#1–#1000）/);
+  assert.match(text, /count=1000 \(#1–#1000\)/);
   assert.equal(validateStateDocument(text, { scope }), true);
 });
 
 test('C: empty rows omit block; empty source group uses caller scope origin without route prefix', () => {
-  assert.doesNotMatch(render([]), /切换来信/);
-  assert.doesNotMatch(renderStateSkeleton(base), /切换来信/);
+  assert.doesNotMatch(render([]), /Mode-switch messages/);
+  assert.doesNotMatch(renderStateSkeleton(base), /Mode-switch messages/);
   const rows = [row(1, '', { sessionGroup: '' })];
   const text = render(rows, { scope: 'origin' });
   assert.match(text, /scope=origin/);
-  assert.match(entry(text), /\[telegram -123\|msg:91\] （无正文）$/);
+  assert.match(entry(text), /\[telegram -123\|msg:91\] \(no body\)$/);
   assert.match(entry(render([row(1)], { scope: '*' })), /\[telegram:g-123 telegram /);
   assert.match(entry(render(rows, { scope: '*' })), /\[telegram -123/);
 });
@@ -67,7 +67,7 @@ test('D/E: UTF-8 route/body byte bounds preserve whole characters', () => {
   const route = /\[([^\]]+)\]/.exec(line)[1];
   assert.ok(Buffer.byteLength(route) <= 128);
   assert.match(route, /…$/);
-  assert.equal(line.split('] ')[1], '汉'.repeat(169) + '…（截断，全文见 #1）');
+  assert.equal(line.split('] ')[1], '汉'.repeat(169) + '… (truncated; full text #1)');
   assert.doesNotMatch(line, /�/);
 });
 
@@ -82,10 +82,10 @@ test('F: controls and backslashes render as reversible single-line tokens', () =
 
 test('G: escaped 512/513 bytes and truncation beside escape boundaries', () => {
   assert.ok(entry(render([row(1, 'a'.repeat(510) + '\n')])).endsWith('a'.repeat(510) + '\\n'));
-  assert.ok(entry(render([row(1, 'a'.repeat(511) + '\n')])).endsWith('a'.repeat(509) + '…（截断，全文见 #1）'));
+  assert.ok(entry(render([row(1, 'a'.repeat(511) + '\n')])).endsWith('a'.repeat(509) + '… (truncated; full text #1)'));
   for (const character of ['\n', '\\', '\x00', '\u2028', '🙂']) {
     const body = 'a'.repeat(508) + character + 'ending';
-    assert.ok(entry(render([row(1, body)])).endsWith('a'.repeat(508) + '…（截断，全文见 #1）'));
+    assert.ok(entry(render([row(1, body)])).endsWith('a'.repeat(508) + '… (truncated; full text #1)'));
   }
 });
 
@@ -108,7 +108,7 @@ test('absorbed title and rows appear at the start of Pending in the full documen
 
 ## Pending
 
-- [切换来信] run=run-1 共 2 条（#1–#2）；回复：c4-send.js --absorbed-reply run-1 <id>；全文：c4-fetch.js --absorbed --run-id run-1 --id <id>
+- [Mode-switch messages] run=run-1 count=2 (#1–#2); reply: c4-send.js --absorbed-reply run-1 <id>; full text: c4-fetch.js --absorbed --run-id run-1 --id <id>
 - #1 2026-10-19T05:30:02Z [telegram -123|msg:91] hello
 - #2 2026-10-19T05:30:02Z [telegram -123|msg:91] hello
 
@@ -126,4 +126,15 @@ test('inbox segment names match a complete filename and only positive suffixes',
   assert.equal(inboxSegmentName.test(`inbox.${segment}-01.md`), false);
   const zeroSuffixHeader = renderStateSkeleton(base).replace('inbox_committed= ', `inbox_committed=${segment}-0 `);
   assert.equal(parseStateHeader(zeroSuffixHeader, { scope }).valid, false);
+});
+
+test('absorbed summaries recognize English output and existing Chinese state lines', () => {
+  const current = render([row(1), row(2)]).split('\n').find(line => line.startsWith('- [Mode-switch messages]'));
+  const legacy = '- [切换来信] run=run-1 共 2 条（#1–#2）；回复：c4-send.js --absorbed-reply run-1 <id>；全文：c4-fetch.js --absorbed --run-id run-1 --id <id>';
+  assert.ok(current); assert.equal(absorbedTitle.test(current), true);
+  assert.equal(absorbedTitle.test(legacy), true);
+  for (const title of [current, legacy]) {
+    assert.equal(absorbedTitle.test(title.replace('--run-id run-1', '--run-id other')), false);
+    assert.equal(absorbedTitle.test(title + ' extra'), false);
+  }
 });

@@ -10,6 +10,11 @@ import { renderStateSkeleton } from '../skills/zylos-memory/scripts/state-format
 import { replyVia } from '../skills/comm-bridge/scripts/c4-query-format.js';
 import { writeModeSwitchFile, parseModeSwitchHeader } from '../cli/lib/mode-switch-files.js';
 
+// Integration boundary: real conversion/working-state files and private SQLite.
+// Run the affected handoff/render cases for prompt wording or heading parsing;
+// unrelated crash/recovery cases may skip for text-only changes. The outer
+// environment isolates HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR/TMUX_TMPDIR and
+// socket/DB paths; fixture cleanup closes DBs and removes its private roots.
 const cleanups = [];
 afterEach(() => { while (cleanups.length) cleanups.pop()(); });
 function fixture(source = 'single', suffix = '') {
@@ -42,12 +47,18 @@ test('single→multi preserves source and archives target once; all 1000 Pending
   assert.equal(f.read(`mode-switch/${row.run_id}/previous/foo:a/state.md`), 'old target');
   assert.equal(f.read(`mode-switch/${row.run_id}/previous/foo:a/inbox.20261027T090000000Z.md`), 'old segment');
   const state = f.read('session-groups/foo:a/state.md'); assert.equal(state.split('\n').filter(line => /^- #\d+ /.test(line)).length, 1000);
-  assert.match(state, /（无正文）/); assert.match(state, /截断，全文见 #1/); assert.ok(state.length > 50000);
+  assert.match(state, /\(no body\)/); assert.match(state, /truncated; full text #1/); assert.ok(state.length > 50000);
   assert.match(f.read('session-groups/origin/state.md'), /unscoped/);
   const header = parseModeSwitchHeader(fs.readFileSync(out.handoff, 'utf8')); assert.equal(header.runId, row.run_id); assert.equal(header.cutoff, row.cutoff);
+  const handoff = fs.readFileSync(out.handoff, 'utf8');
+  for (const text of ['# Mode Switch Handoff', 'Total absorbed: 1001', '## Absorbed Message Summary', '## Recovery Materials', '## Follow-up Requirements',
+    'Read all recovery materials completely', "each page's end/count markers", 'a smaller --limit', 'not proof of delivery',
+    'unknown (SEND_FAILED)', 'textBytes over 8192', '--out <file>', 'reply bodies via stdin', 'do not construct commands from display routes in state',
+    'Origin handles origin items', 'c4-send.js internal G', 'Repeated prompts are allowed', 'followedUpIds only for verified actual progress', 'Keep incomplete entries',
+    'Scripts directory:', 'replace only decimal IDs verified against C4']) assert.ok(handoff.includes(text), text);
   assert.ok(out.materials.includes(path.join(f.root, 'memory', `mode-switch/${row.run_id}/previous/origin/handoff.md`)));
   const tree = memoryTree(f.root); f.convert()(row); assert.deepEqual(memoryTree(f.root), tree);
-  const late = f.add('late', 'not absorbed'); f.convert()(row); assert.match(f.read('session-groups/foo:late/state.md'), /scope=foo:late/); assert.doesNotMatch(f.read('session-groups/foo:late/state.md'), /切换来信/);
+  const late = f.add('late', 'not absorbed'); f.convert()(row); assert.match(f.read('session-groups/foo:late/state.md'), /scope=foo:late/); assert.doesNotMatch(f.read('session-groups/foo:late/state.md'), /Mode-switch messages/);
   assert.equal(f.read('session-groups/foo:a/state.md'), state); assert.equal(f.store.getModeTransition().cutoff, row.cutoff); assert.equal(f.db.prepare('SELECT status FROM conversations WHERE id=?').get(late.id).status, 'pending');
 });
 
@@ -64,6 +75,7 @@ test('multi→single retains dormant source groups outside coverage snapshot and
   f.put('session-groups/origin/state.md', 'origin'); f.put('state.md', 'old global'); f.put('handoff.md', 'old global handoff');
   const row = f.begin(); assert.ok(!Object.hasOwn(row.coverage_snapshot, 'foo:sleep'));
   const out = f.convert()(row); assert.ok(out.materials.includes(old)); assert.equal(fs.readFileSync(old, 'utf8'), 'unfinished dormant handoff');
+  assert.ok(fs.readFileSync(out.handoff, 'utf8').includes('Write valid items to the global inbox in inbox format for the next Sync; note conflicts and do not concatenate state directly.'));
   assert.match(f.read('state.md'), /scope=\*/); assert.match(f.read('state.md'), /foo:active foo e/);
   assert.equal(f.read(`mode-switch/${row.run_id}/previous/_global/handoff.md`), 'old global handoff');
   const tree = memoryTree(f.root); f.convert()(row); assert.deepEqual(memoryTree(f.root), tree);
@@ -139,7 +151,7 @@ test('successive reverse conversions retain old handoff entrypoints without clai
   f.store.setModeTransitionPhase(first.run_id, 'cutover'); f.store.setModeTransitionPhase(first.run_id, 'complete');
   const secondRun = f.store.beginModeTransition('multi', 'single'); f.store.setDrainFence('*'); f.store.absorbForTransition(secondRun.runId); const second = f.store.getModeTransition();
   const b = f.convert()(second); assert.ok(b.materials.includes(a.handoff));
-  assert.match(fs.readFileSync(b.handoff, 'utf8'), /多代固定路径身份不明时报告人工核对/);
+  assert.match(fs.readFileSync(b.handoff, 'utf8'), /fixed paths from multiple generations have ambiguous identities/);
   assert.equal(f.read(`mode-switch/${second.run_id}/previous/_global/handoff.md`), 'uncompleted single handoff');
   const stable = memoryTree(f.root); f.convert()(second); assert.deepEqual(memoryTree(f.root), stable);
 });
@@ -222,6 +234,6 @@ test('W6 single ungrouped export excludes grouped rows inside the same cutoff', 
 test('empty absorbed set needs no command even when the Core path contains control characters', () => {
   const f = fixture('single', 'control\n'); const row = f.begin();
   const out = f.convert()(row); const handoff = fs.readFileSync(out.handoff, 'utf8');
-  assert.ok(handoff.includes('本次没有被吸收来信，无需按 id 回复或读取全文。'));
+  assert.ok(handoff.includes('No messages were absorbed in this transition; no per-ID replies or full-text reads are needed.'));
   assert.equal(handoff.split('\n').filter(line => line.startsWith('node ') || line.startsWith('---- reply via:')).length, 0);
 });

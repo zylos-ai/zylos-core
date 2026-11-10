@@ -195,7 +195,7 @@ for (const source of ['single','multi']) test(`B ${source}: 1000 converted entri
   const empty = await commitProgress(f, scope, []); assert.deepEqual(extractAbsorbedBlock(empty.after), remainder);
   await boot(f, scope, 'fx-b-replacement', converted.handoff);
   const rest = Array.from({ length: 990 }, (_, i) => i + 11); await handle(rest);
-  const final = await commitProgress(f, scope, rest); assert.equal(extractAbsorbedBlock(final.after).entries.length, 0); assert.doesNotMatch(final.after, /切换来信/);
+  const final = await commitProgress(f, scope, rest); assert.equal(extractAbsorbedBlock(final.after).entries.length, 0); assert.doesNotMatch(final.after, /Mode-switch messages/);
   assert.equal(argv(f).length, 1000); assert.deepEqual(inputSnapshot(f), before);
 }, 180000);
 

@@ -67,17 +67,17 @@ export function renderStateSkeleton({ scope, syncedAt, absorbed = null }) {
   let pending = '';
   if (rows.length) {
     const run = absorbed.runId;
-    pending = `- [切换来信] run=${run} 共 ${rows.length} 条（#${rows[0].id}–#${rows.at(-1).id}）；回复：c4-send.js --absorbed-reply ${run} <id>；全文：c4-fetch.js --absorbed --run-id ${run} --id <id>\n`;
+    pending = `- [Mode-switch messages] run=${run} count=${rows.length} (#${rows[0].id}–#${rows.at(-1).id}); reply: c4-send.js --absorbed-reply ${run} <id>; full text: c4-fetch.js --absorbed --run-id ${run} --id <id>\n`;
     pending += rows.map(row => {
       const route = `${scope === '*' && row.sessionGroup ? row.sessionGroup + ' ' : ''}${row.channel} ${row.endpointId ?? ''}`;
       const routeDisplay = displayText(route, 128, 125, '…');
-      const body = displayText(projectC4Content(row.content || '（无正文）', { c4Id: row.id }), 512, 509, `…（截断，全文见 #${row.id}）`);
+      const body = displayText(projectC4Content(row.content || '(no body)', { c4Id: row.id }), 512, 509, `… (truncated; full text #${row.id})`);
       return `- #${row.id} ${rowTime(row.timestamp)} [${routeDisplay}] ${body}`;
     }).join('\n') + '\n';
   }
   return `${header}\n\n# Working State\n\n## Headline\n\n## In Progress\n\n## Pending\n\n${pending}\n## Commitments\n`;
 }
 
-export const absorbedTitle = /^- \[切换来信\] run=(\S+) 共 \d+ 条（#\d+–#\d+）；回复：c4-send\.js --absorbed-reply \1 <id>；全文：c4-fetch\.js --absorbed --run-id \1 --id <id>$/;
+export const absorbedTitle = /^(?:- \[Mode-switch messages\] run=(\S+) count=\d+ \(#\d+–#\d+\); reply: c4-send\.js --absorbed-reply \1 <id>; full text: c4-fetch\.js --absorbed --run-id \1 --id <id>|- \[切换来信\] run=(\S+) 共 \d+ 条（#\d+–#\d+）；回复：c4-send\.js --absorbed-reply \2 <id>；全文：c4-fetch\.js --absorbed --run-id \2 --id <id>)$/;
 
 export const absorbedEntry = /^- #(\d+) \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z \[.*\] .*$/;

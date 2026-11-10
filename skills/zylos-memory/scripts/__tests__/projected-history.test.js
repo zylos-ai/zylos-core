@@ -30,7 +30,7 @@ test('working state contains only invalid-content references for marked damage a
   assert.equal(render([row(content)]).includes('HOST_ONLY_DAMAGED'), false);
   const plain = 'plain text\nwith \\ escapes';
   assert.ok(render([row(plain)]).includes(escapeText(plain)));
-  assert.ok(render([row('')]).includes('（无正文）'));
+  assert.ok(render([row('')]).includes('(no body)'));
 });
 
 // Actual memory-state formatter and shared fixtures; run for View/projection or
@@ -57,7 +57,7 @@ test('valid degraded and overdeep Views leave memory projection byte-identical',
       assert.equal(expected.includes('"nodes"'), false);
       if (parsed.viewError) assert.equal(expected.includes(parsed.viewError), false);
     }
-    assert.equal(expected.includes('截断，全文见 #7'), long);
+    assert.equal(expected.includes('truncated; full text #7'), long);
   }
 });
 

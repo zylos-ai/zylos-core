@@ -61,26 +61,26 @@ export function createModeSwitchConverter({ db, zylosDir, fsImpl = fs, renderSta
     return groups.flatMap(group => files(groupMemoryDir(group, env)));
   }
   function handoffBody(transition, rows, summaries, materials) {
-    const lines = ['# 模式切换交接', '', `吸收总数：${rows.length}`, '', '## 吸收来信摘要'];
+    const lines = ['# Mode Switch Handoff', '', `Total absorbed: ${rows.length}`, '', '## Absorbed Message Summary'];
     for (const item of summaries) lines.push(`- scope=${item.scope} count=${item.count} firstId=${item.firstId} lastId=${item.lastId}`);
-    lines.push('', '## 恢复材料', ...materials.map(file => `- material: ${JSON.stringify(file)}`), '',
-      '完整读取所有恢复材料，尤其是其中未完成的旧 handoff。多代固定路径身份不明时报告人工核对，不把文件存在当作恢复成功。', '',
-      '## 跟进要求', '被吸收来信以 C4 为准，state 中逐条列出、可能截断。按分页的 end/count 标记确认读完；工具输出截断时用更小 --limit 重读，不能把半页当作读完。',
-      '先读全文，再核对消息历史和实际进度；出站审计只是线索，不代表已送达。发送结果未知（SEND_FAILED）不得自动重发。',
-      'textBytes 超过 8192 的条目在全文命令后加 --out <file>，再用读文件工具读取。回复正文经 stdin 输入；不得从 state 中的显示路由拼接命令。');
-    if (transition.target_mode === 'multi') lines.push('Origin 处理 origin 事项并记入自己的 inbox；逐个其余 scope 经 c4-send.js internal G 提示对应组，核对实际进度，允许重复提示。');
-    else lines.push('把有效事项按 inbox 格式写入全局 inbox，交下次 Sync；注明冲突，不直接拼接 state。');
-    lines.push('Sync 只根据已核实的实际进度提交 followedUpIds；未完成条目保留，不能仅凭出站审计移出。');
+    lines.push('', '## Recovery Materials', ...materials.map(file => `- material: ${JSON.stringify(file)}`), '',
+      'Read all recovery materials completely, especially unfinished earlier handoffs. If fixed paths from multiple generations have ambiguous identities, report them for manual review; file existence does not mean recovery succeeded.', '',
+      '## Follow-up Requirements', 'C4 is authoritative for absorbed messages; state lists each message and may truncate it. Confirm completeness with each page\'s end/count markers. If tool output is truncated, reread with a smaller --limit; a partial page is not complete.',
+      'Read the full text first, then check message history and actual progress. Outbound audit records are only clues, not proof of delivery. Do not automatically resend when the send outcome is unknown (SEND_FAILED).',
+      'For entries with textBytes over 8192, append --out <file> to the full-text command, then read the file with a file-reading tool. Supply reply bodies via stdin; do not construct commands from display routes in state.');
+    if (transition.target_mode === 'multi') lines.push('Origin handles origin items and records them in its own inbox. For each other scope, use c4-send.js internal G to prompt the corresponding group and verify actual progress. Repeated prompts are allowed.');
+    else lines.push('Write valid items to the global inbox in inbox format for the next Sync; note conflicts and do not concatenate state directly.');
+    lines.push('Sync submits followedUpIds only for verified actual progress. Keep incomplete entries; do not remove them based solely on outbound audit records.');
     const scripts = path.join(zylosDir, '.claude', 'skills', 'comm-bridge', 'scripts');
-    if (/[\x00-\x1f\x7f]/.test(scripts)) lines.push(rows.length ? replyVia(rows[0], path.join(scripts, 'c4-send.js')) : '本次没有被吸收来信，无需按 id 回复或读取全文。');
+    if (/[\x00-\x1f\x7f]/.test(scripts)) lines.push(rows.length ? replyVia(rows[0], path.join(scripts, 'c4-send.js')) : 'No messages were absorbed in this transition; no per-ID replies or full-text reads are needed.');
     else {
-      lines.push('', `脚本目录：${JSON.stringify(scripts)}`);
+      lines.push('', `Scripts directory: ${JSON.stringify(scripts)}`);
       if (rows.length) {
         const id = String(rows[0].id);
-        lines.push(`以下以 #${id} 为例；处理其他条目时只替换经过 C4 核验的十进制 id。`,
+        lines.push(`Use #${id} as an example; for other entries, replace only decimal IDs verified against C4.`,
           `node ${shellQuote(path.join(scripts, 'c4-send.js'))} --absorbed-reply ${transition.run_id} ${id}`,
           `node ${shellQuote(path.join(scripts, 'c4-fetch.js'))} --absorbed --run-id ${transition.run_id} --id ${id}`);
-      } else lines.push('本次没有被吸收来信，无需按 id 回复或读取全文。');
+      } else lines.push('No messages were absorbed in this transition; no per-ID replies or full-text reads are needed.');
     }
     return lines.join('\n') + '\n';
   }

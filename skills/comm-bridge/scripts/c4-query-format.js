@@ -4,10 +4,10 @@ export const projectConversation = row => ({ ...row, content: projectC4Content(r
 export const ARG_PAYLOAD_MAX = 131071;
 export const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 export function replyVia(row, scriptPath) {
-  const unavailable = reason => `---- reply via: 不可用（${reason}，见 C4 #${row.id}）`;
-  if (/[\x00-\x1f\x7f]/.test(scriptPath)) return unavailable('Core 路径含控制字符');
-  if (/[\x00-\x1f\x7f]/.test(row.endpoint_id ?? '')) return unavailable('路由含控制字符');
-  if (Buffer.byteLength(row.endpoint_id ?? '') > ARG_PAYLOAD_MAX) return unavailable('路由超过参数长度上限');
+  const unavailable = reason => `---- reply via: unavailable (${reason}; see C4 #${row.id})`;
+  if (/[\x00-\x1f\x7f]/.test(scriptPath)) return unavailable('Core path contains control characters');
+  if (/[\x00-\x1f\x7f]/.test(row.endpoint_id ?? '')) return unavailable('route contains control characters');
+  if (Buffer.byteLength(row.endpoint_id ?? '') > ARG_PAYLOAD_MAX) return unavailable('route exceeds the argument length limit');
   return `---- reply via: node ${shellQuote(scriptPath)} ${shellQuote(row.channel)} ${shellQuote(row.endpoint_id ?? '')}`;
 }
 // Reversible single-line encoding used by the text query protocol.
@@ -40,7 +40,7 @@ export function formatAbsorbedPage({ transition, rows }, { group, after = 0, lim
   const data = { runId, scope: group ?? 'all', total: scoped.length, after, limit, items, count: items.length, next };
   if (json) return envelope(data);
   return `absorbed run=${runId} scope=${data.scope} total=${data.total} after=${after} limit=${limit}\n` + items.map(i =>
-    `#${i.id} [${i.k}] group=${i.group} time=${i.time} textBytes=${i.textBytes}\nreply: ${i.reply}\ntext: ${escapeText(i.text)}${i.textTruncated ? ` …<截断：原文 ${i.textBytes} B；全文 --id ${i.id}>` : ''}\n`
+    `#${i.id} [${i.k}] group=${i.group} time=${i.time} textBytes=${i.textBytes}\nreply: ${i.reply}\ntext: ${escapeText(i.text)}${i.textTruncated ? ` …<truncated: original ${i.textBytes} B; full text --id ${i.id}>` : ''}\n`
   ).join('') + `count=${items.length} next=${next ?? 'none'}\n`;
 }
 export function absorbedField({ transition, rows }, { id, field = 'text' } = {}) {

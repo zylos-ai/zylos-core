@@ -41,7 +41,26 @@ test('commit preserves original bytes/title and removes only supplied IDs, inclu
   assert.deepEqual(extractAbsorbedBlock(fs.readFileSync(f.state, 'utf8')), after);
   fs.writeFileSync(f.temporary, f.skeleton());
   await commit({ ...f.settings, input: { followedUpIds: [2, 3] } }, f.deps);
-  assert.doesNotMatch(fs.readFileSync(f.state, 'utf8'), /切换来信/);
+  assert.doesNotMatch(fs.readFileSync(f.state, 'utf8'), /Mode-switch messages/);
+});
+
+// Real guarded commit in a private working-memory directory. Run for absorbed
+// heading compatibility/commit changes; unrelated changes may skip. The outer
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and the fixture reclaims its root.
+test('commit preserves legacy Chinese absorbed summaries until all entries are followed up', async t => {
+  const f = await fixture(t), current = write(f);
+  const legacy = '- [切换来信] run=run-1 共 3 条（#1–#3）；回复：c4-send.js --absorbed-reply run-1 <id>；全文：c4-fetch.js --absorbed --run-id run-1 --id <id>';
+  const official = current.replace(/^- \[Mode-switch messages\].*$/m, legacy);
+  fs.writeFileSync(f.state, official);
+  const before = extractAbsorbedBlock(official);
+  assert.equal(before.entries.length, 3); assert.equal(before.title.trimEnd(), legacy);
+  await commit({ ...f.settings, input: { followedUpIds: [1] } }, f.deps);
+  const partial = extractAbsorbedBlock(fs.readFileSync(f.state, 'utf8'));
+  assert.equal(partial.title, before.title); assert.deepEqual(partial.entries.map(item => item.id), [2, 3]);
+  fs.writeFileSync(f.temporary, f.skeleton());
+  await commit({ ...f.settings, input: { followedUpIds: [2, 3] } }, f.deps);
+  const complete = fs.readFileSync(f.state, 'utf8');
+  assert.equal(extractAbsorbedBlock(complete).entries.length, 0); assert.equal(complete.includes('[切换来信]'), false);
 });
 
 test('commit uses body despite corrupt official header and strips temporary copies with warning', async t => {
