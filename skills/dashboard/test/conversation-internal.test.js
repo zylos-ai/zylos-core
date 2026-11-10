@@ -19,11 +19,17 @@ const relay = (direction = 'in') => ({ id: 5, channel: 'internal', direction,
 
 // Pure product render/controller paths on injected DOM and in-memory fetch. No browser/network/storage or child processes.
 for (const locale of ['en', 'zh']) for (const direction of ['out', 'in']) {
-  test(`internal ${direction} uses a dedicated localized note in ${locale}`, () => {
+  test(`internal ${direction} uses the normal directional bubble and a localized peer label in ${locale}`, () => {
     const document = createDocument(), words = translations(locale), row = relay(direction), opened = [];
     const resource = renderInternalMessage({ document, row, t: key => words[key], onOpenPeer: (...args) => opened.push(args),
       timeText: '12:34', timeIso: '2026-01-01T12:34:00.000Z' });
     assert.equal(resource.node.querySelector('.conversation-internal-label').textContent, words[`chat.internal.${direction === 'out' ? 'sent' : 'received'}`]);
+    assert.equal(resource.node.querySelector('.conversation-internal-label').textContent,
+      locale === 'zh' ? direction === 'out' ? '发给' : '来自' : direction === 'out' ? 'To' : 'From');
+    assert.equal(resource.node.classList.contains('chat-in'), direction === 'in');
+    assert.equal(resource.node.classList.contains('chat-out'), direction === 'out');
+    assert.ok(resource.node.querySelector('.conversation-message-body.conversation-internal-body'));
+    assert.ok(resource.node.querySelector('.chat-message-content>.chat-message-text.conversation-internal-content'));
     assert.equal(resource.node.querySelector('.conversation-internal-content').textContent, 'relay body');
     assert.equal(resource.node.querySelector('.conversation-internal-peer').textContent, 'Peer room');
     assert.equal(resource.node.querySelector('.conversation-internal-peer').tagName, 'BUTTON');
@@ -32,7 +38,11 @@ for (const locale of ['en', 'zh']) for (const direction of ['out', 'in']) {
     assert.equal(resource.node.querySelector('.conversation-internal-raw').hidden, true);
     assert.equal(visibleText(resource.node).includes('[internal] Yourself'), false);
     assert.equal(resource.node.querySelector('time').dateTime, '2026-01-01T12:34:00.000Z');
-    for (const selector of ['.chat-message-author', '.conversation-avatar', '[data-delivery-state]', 'input', 'textarea', 'canvas']) {
+    assert.equal(resource.node.querySelector('time').parentNode, resource.node.querySelector('.conversation-message-meta'));
+    const spacer = resource.node.querySelector('.conversation-avatar');
+    assert.equal(spacer.getAttribute('aria-hidden'), 'true');
+    assert.equal(spacer.textContent, '');
+    for (const selector of ['.chat-message-author', '.wb-ico', '[data-delivery-state]', 'input', 'textarea', 'canvas']) {
       assert.equal(resource.node.querySelector(selector), null, selector);
     }
     resource.update(row, { showTechnicalDetails: true });
@@ -54,10 +64,14 @@ test('internal peer updates preserve plain text and make missing counterparts in
   assert.equal(resource.node.querySelector('script'), null);
   const sameButton = resource.node.querySelector('.conversation-internal-peer');
   resource.update({ ...row, direction: 'out', internal: { ...row.internal, peerSessionGroup: 'dashboard:new', peerChannel: 'dashboard', peerDisplayName: 'New name' } });
+  assert.equal(resource.node.classList.contains('chat-out'), true);
+  assert.equal(resource.node.classList.contains('chat-in'), false);
   assert.equal(resource.node.querySelector('.conversation-internal-peer'), sameButton);
   sameButton.dispatch('click');
   assert.deepEqual(opened, [['dashboard:new', 'dashboard']]);
   resource.update({ ...row, internal: { ...row.internal, peerDisplayName: null, peerExists: false } });
+  assert.equal(resource.node.classList.contains('chat-in'), true);
+  assert.equal(resource.node.classList.contains('chat-out'), false);
   const missingPeer = resource.node.querySelector('.conversation-internal-peer');
   assert.equal(missingPeer.tagName, 'SPAN');
   assert.equal(missingPeer.textContent, 'telegram:peer');

@@ -15,7 +15,7 @@ export async function runInternalConversationBrowser(t, sandbox) {
   assert.ok(executablePath && fs.existsSync(executablePath));
   const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (output) fs.mkdirSync(output, { recursive: true });
-  const hub = new SseHub(1000), events = [], reads = [], errors = [], shots = [];
+  const hub = new SseHub(1000), events = [], reads = [], errors = [], shots = [], layouts = [];
   let observer;
   const send = hub.sendTo.bind(hub);
   hub.sendTo = (client, name, data) => {
@@ -120,11 +120,13 @@ export async function runInternalConversationBrowser(t, sandbox) {
       const out = side === 'mine' ? outgoing.outRow : incoming.outRow;
       const received = side === 'mine' ? incoming.inRow : outgoing.inRow;
       await row(out.id).waitFor(); await row(received.id).waitFor();
-      assert.match(await row(out.id).locator('.conversation-internal-label').innerText(), /内部.*→/);
-      assert.match(await row(received.id).locator('.conversation-internal-label').innerText(), /内部.*←/);
+      assert.equal(await row(out.id).locator('.conversation-internal-label').innerText(), '发给');
+      assert.equal(await row(received.id).locator('.conversation-internal-label').innerText(), '来自');
+      assert.doesNotMatch(await row(out.id).locator('.conversation-internal-heading').innerText(), /内部|→|←/);
+      assert.doesNotMatch(await row(received.id).locator('.conversation-internal-heading').innerText(), /内部|→|←/);
       assert.equal(await row(received.id).locator('.conversation-internal-content').innerText(), side === 'mine' ? '安排已确认，稍后发出通知。' : '请确认发布安排。');
       assert.equal(await row(received.id).locator('.conversation-internal-raw').isVisible(), false);
-      assert.equal(await row(out.id).locator('.conversation-message-status, .conversation-message-author').count(), 0);
+      assert.equal(await row(out.id).locator('.conversation-message-status, .chat-message-author').count(), 0);
       assert.equal(await row(out.id).locator('.conversation-internal-raw').evaluate(raw => raw.hidden), true, 'outbound detail does not repeat the body');
       const html = row(side === 'mine' ? htmlPair.outRow.id : htmlPair.inRow.id).locator('.conversation-internal-content');
       assert.equal(await html.innerText(), hostile);
@@ -134,14 +136,68 @@ export async function runInternalConversationBrowser(t, sandbox) {
       await page.evaluate(() => document.fonts.ready);
       assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), theme);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no document overflow');
-      for (const message of [out, received]) {
-        const geometry = await row(message.id).locator('.conversation-internal-body').evaluate(body => {
-          const column = body.closest('.conversation-message-list').getBoundingClientRect();
-          const box = body.getBoundingClientRect();
-          return { center: (box.left + box.right) / 2, columnCenter: (column.left + column.right) / 2 };
-        });
-        assert.ok(Math.abs(geometry.center - geometry.columnCenter) <= 2,
-          `${side} ${width} ${theme}: internal body centered in message column (${JSON.stringify(geometry)})`);
+      // The fixture contains ordinary input and output in both histories. Compare
+      // visible bubble edges, not a direction class or a centered wrapper alone.
+      // This also checks shared shape/width/timestamp layout and actual AA colors.
+      for (const [message, direction] of [[out, 'out'], [received, 'in']]) {
+        const ordinary = page.locator(`#wb-chat .conversation-message.chat-${direction}:not(.conversation-internal)`).first();
+        await ordinary.waitFor();
+        assert.ok((await ordinary.innerText()).includes(side === 'mine'
+          ? direction === 'in' ? '请整理需求，保留外部消息预览。' : '正在与发布会话确认安排。'
+          : direction === 'in' ? '请协调发布进度。' : '收到，我来核对。'), 'same-side ordinary reference is present');
+        const measure = (article, direction) => {
+          const body = article.querySelector('.conversation-message-body');
+          const bubble = article.querySelector(direction === 'in' ? '.chat-message-content' : '.chat-message-content > .chat-message-text');
+          const text = article.querySelector('.chat-message-text');
+          const meta = article.querySelector('.conversation-message-meta');
+          const time = meta?.querySelector('time');
+          if (!body || !bubble || !text || !meta || !time) throw Error('ordinary-compatible internal bubble and timestamp structure required');
+          const column = article.closest('.conversation-message-list').getBoundingClientRect();
+          const box = bubble.getBoundingClientRect();
+          const style = getComputedStyle(bubble), metaStyle = getComputedStyle(meta), timeStyle = getComputedStyle(time);
+          const metaBox = meta.getBoundingClientRect(), timeBox = time.getBoundingClientRect();
+          const authorBox = meta.firstElementChild.getBoundingClientRect();
+          return {
+            left:box.left - column.left, right:column.right - box.right,
+            maxWidth:getComputedStyle(body).maxWidth,
+            radius:style.borderRadius, padding:style.padding,
+            background:style.backgroundColor, color:getComputedStyle(text).color,
+            metaDirection:metaStyle.flexDirection, metaGap:metaStyle.gap,
+            timeMargin:timeStyle.margin, timeFontSize:timeStyle.fontSize,
+            metaHeight:metaBox.height, timeCenterOffset:(timeBox.top + timeBox.bottom - metaBox.top - metaBox.bottom) / 2,
+            timeSide:timeBox.right <= authorBox.left + 1 ? 'left' : timeBox.left >= authorBox.right - 1 ? 'right' : 'overlap',
+          };
+        };
+        const internal = await row(message.id).evaluate(measure, direction);
+        const reference = await ordinary.evaluate(measure, direction);
+        const edge = direction === 'in' ? 'right' : 'left';
+        const opposite = direction === 'in' ? 'left' : 'right';
+        const difference = Math.abs(internal[edge] - reference[edge]);
+        assert.ok(difference <= 2,
+          `${side} ${width} ${theme}: ${direction} bubble shares ordinary ${edge} margin (${JSON.stringify({internal, reference})})`);
+        assert.ok(internal[edge] < internal[opposite], `${direction} bubble is on the ${edge}, not centered`);
+        for (const key of ['maxWidth', 'radius', 'padding', 'metaDirection', 'metaGap', 'timeMargin', 'timeFontSize', 'timeSide']) {
+          assert.equal(internal[key], reference[key], `${side} ${direction}: ordinary ${key}`);
+        }
+        assert.equal(internal.timeSide, direction === 'in' ? 'left' : 'right', 'time keeps its ordinary side of the label');
+        assert.ok(Math.abs(internal.metaHeight - reference.metaHeight) <= 2, 'internal label keeps the ordinary metadata line height');
+        assert.ok(Math.abs(internal.timeCenterOffset - reference.timeCenterOffset) <= 2, 'time keeps ordinary vertical alignment in metadata');
+        assert.notEqual(internal.background, reference.background, 'internal bubble has its own background');
+        const channels = value => {
+          const components = value.match(/[\d.]+/g)?.map(Number);
+          assert.ok(components?.length >= 3, `resolved RGB color: ${value}`);
+          assert.ok(components.length === 3 || components[3] === 1, 'bubble colors are opaque');
+          return components.slice(0, 3);
+        };
+        const luminance = value => channels(value).map(component => {
+          const normalized = component / 255;
+          return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+        }).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+        const foreground = luminance(internal.color), background = luminance(internal.background);
+        const contrast = (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+        assert.ok(contrast >= 4.5, `${side} ${width} ${theme}: internal body text meets AA (${contrast.toFixed(2)})`);
+        assert.ok(layouts.length < 16, 'bounded geometry and contrast evidence');
+        layouts.push({side, width, theme, direction, marginDifference:difference, contrast, internal, reference});
       }
       const boxes = await page.locator('.conversation-internal-body').evaluateAll(nodes => nodes.map(node => ({ left: node.getBoundingClientRect().left, right: node.getBoundingClientRect().right, width: node.clientWidth, scroll: node.scrollWidth })));
       for (const box of boxes) { assert.ok(box.left >= 0 && box.right <= width + 1); assert.ok(box.scroll <= box.width + 1); }
@@ -205,7 +261,8 @@ export async function runInternalConversationBrowser(t, sandbox) {
   for (const box of longBoxes) { assert.ok(box.left >= 0 && box.right <= 391); assert.ok(box.scroll <= box.width + 1); }
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   assert.equal(errors.length, 0, errors[0]);
-  if (output) fs.writeFileSync(path.join(output, 'internal-browser.json'), JSON.stringify({ shots, reads: reads.length, events: events.map(event => ({ name: event.name, conversationId: event.data.conversationId })),
+  assert.equal(layouts.length, 16, 'both directions checked in all eight screenshot views');
+  if (output) fs.writeFileSync(path.join(output, 'internal-browser.json'), JSON.stringify({ shots, layouts, reads: reads.length, events: events.map(event => ({ name: event.name, conversationId: event.data.conversationId })),
     received: received.map(event => ({ requestId: event.requestId, name: event.name, tab: event.data.tab, conversationId: event.data.conversationId, sequence: event.sequence })), errors }, null, 2));
   t.diagnostic(`internal browser: ${shots.length} screenshots, ${reads.length} message reads, both histories navigate and receive live SSE`);
 }

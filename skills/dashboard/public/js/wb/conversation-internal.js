@@ -1,28 +1,36 @@
-import { element, icon } from './plain-text.js?v=105';
+import { element } from './plain-text.js?v=106';
 
 /** Internal relays are context between sessions, never user/AI replies or interactive content. */
 export function renderInternalMessage({ document, row, t = key => key, onOpenPeer, timeText, timeIso,
   showTechnicalDetails = false }) {
   const article = element(document, 'article', undefined, 'chat-message conversation-message conversation-internal');
   article.dataset.messageId = String(row.id);
-  const body = element(document, 'div', undefined, 'conversation-internal-body');
-  const heading = element(document, 'div', undefined, 'conversation-internal-heading');
+  const spacer = element(document, 'span', undefined, 'conversation-avatar conversation-internal-spacer');
+  spacer.setAttribute('aria-hidden', 'true');
+  const body = element(document, 'div', undefined, 'conversation-message-body conversation-internal-body');
+  const heading = element(document, 'div', undefined, 'conversation-message-meta conversation-internal-heading');
+  const route = element(document, 'span', undefined, 'conversation-internal-route');
   const label = element(document, 'span', undefined, 'conversation-internal-label');
   const peerSlot = element(document, 'span', undefined, 'conversation-internal-peer-slot');
   const missing = element(document, 'span', undefined, 'conversation-internal-missing');
-  const content = element(document, 'div', undefined, 'conversation-internal-content');
+  const bubble = element(document, 'div', undefined, 'chat-message-content');
+  const content = element(document, 'div', undefined, 'chat-message-text conversation-internal-content');
+  bubble.append(content);
   const raw = element(document, 'details', undefined, 'conversation-internal-raw');
   const summary = element(document, 'summary');
   const original = element(document, 'pre');
   raw.append(summary, original);
-  heading.append(icon(document, 'msg'), label, peerSlot, missing);
+  route.append(label, peerSlot, missing);
+  heading.append(route);
   const time = timeIso ? element(document, 'time', timeText) : null;
   if (time) { time.dateTime = timeIso; heading.append(time); }
-  body.append(heading, content, raw);
-  article.append(body);
+  body.append(heading, bubble, raw);
+  article.append(spacer, body);
   let current, peer, navigable;
   function update(next, { showTechnicalDetails: technical = false } = {}) {
     current = next;
+    article.classList.toggle('chat-in', next.direction !== 'out');
+    article.classList.toggle('chat-out', next.direction === 'out');
     const info = next.internal ?? {};
     const isOrigin = info.peerSessionGroup === 'origin';
     const canNavigate = !isOrigin && info.peerExists === true && typeof info.peerSessionGroup === 'string' && !!info.peerSessionGroup;

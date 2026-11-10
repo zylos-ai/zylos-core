@@ -1002,8 +1002,8 @@
   "chat.delete.retained": "{count} messages remain; conversation memory has been retained.",
   "chat.delete.estimated": "Conversation deleted. Counts are estimates after an interrupted cleanup.",
   "wb.usage.deletedConversations": "Deleted conversations no longer count toward message totals. Their token usage and costs are retained.",
-  "chat.internal.sent": "Internal →",
-  "chat.internal.received": "Internal ←",
+  "chat.internal.sent": "To",
+  "chat.internal.received": "From",
   "chat.internal.unavailable": "(conversation unavailable)",
   "chat.internal.original": "Original message"
 }
