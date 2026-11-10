@@ -1006,7 +1006,7 @@
   "chat.internal.received": "来自",
   "chat.internal.unavailable": "（会话不可用）",
   "chat.internal.original": "原始消息",
-  "wb.wait.pool_wait": "等池位 · 第 {position} 个",
+  "wb.wait.pool_wait": "排队中 · 第 {position} 个",
   "wb.wait.poolSnapshot": "按当前快照估计",
   "wb.attention.pool_full": "同时运行已满 · {waiting} 组在等名额",
   "wb.inst.poolAuto": "按内存自动",
@@ -1024,5 +1024,7 @@
   "wb.inst.poolModelSession": "每会话约 {amount} GiB",
   "wb.inst.poolModelFixed": "固定开销约 {amount} GiB",
   "wb.inst.poolModelWindow": "近 {days} 天",
-  "wb.inst.poolFloor": "内存只够系统助手，同时运行上限按 1 运行"
+  "wb.inst.poolFloor": "内存只够系统助手，同时运行上限按 1 运行",
+  "wb.wait.pool_waitTech": "等池位 · 第 {position} 个",
+  "chat.page.queueing": "排队中"
 }

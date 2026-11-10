@@ -1006,7 +1006,7 @@
   "chat.internal.received": "From",
   "chat.internal.unavailable": "(conversation unavailable)",
   "chat.internal.original": "Original message",
-  "wb.wait.pool_wait": "Waiting for a slot · position {position}",
+  "wb.wait.pool_wait": "Queueing · position {position}",
   "wb.wait.poolSnapshot": "estimated from the current snapshot",
   "wb.attention.pool_full": "Concurrent sessions full · {waiting} groups waiting",
   "wb.inst.poolAuto": "Automatic, based on memory",
@@ -1024,5 +1024,7 @@
   "wb.inst.poolModelSession": "about {amount} GiB per session",
   "wb.inst.poolModelFixed": "fixed overhead about {amount} GiB",
   "wb.inst.poolModelWindow": "over the last {days} days",
-  "wb.inst.poolFloor": "Memory fits only the system assistant; running with a limit of 1"
+  "wb.inst.poolFloor": "Memory fits only the system assistant; running with a limit of 1",
+  "wb.wait.pool_waitTech": "Waiting for a slot · position {position}",
+  "chat.page.queueing": "Queueing"
 }

@@ -330,7 +330,8 @@ export function fleetSelfFromSnapshot(snapshot) {
     mode: snapshot?.mode === 'multi' ? 'multi' : 'single',
     counts: snapshot?.counts ?? {},
     groups: snapshot?.rows?.length ?? null,
-    pool: snapshot?.instance?.pool ?? null,
+    pool: snapshot?.mode === 'multi' ? snapshot?.instance?.pool ?? null : {
+      ready: snapshot?.instance?.pool?.ready ?? null, starting: snapshot?.instance?.pool?.starting ?? null },
     runtimes: accountRuntimes(snapshot ?? {}),
     accountRecords: snapshot?.instance?.accounts ?? {},
     accounts: Object.fromEntries(['claude', 'codex'].map((runtime) => [runtime, accountUsedPercent(snapshot?.instance?.accounts?.[runtime])]))
@@ -362,7 +363,8 @@ function quotaBars(tile, labels) {
 function selfStates(tile, labels) {
   const self = tile.self, counts = self.counts || {};
   const active = ['busy', 'waiting', 'error'].filter((kind) => counts[kind]).map((kind) => `${counts[kind]} ${labels.groupStates[kind]}`);
-  const pool = self.pool?.used == null ? '' : ' · ' + fill(self.pool.capacity == null ? labels.pool : labels.poolOf, self.pool);
+  const usage = self.mode === 'multi' ? self.pool : { used: self.pool?.ready == null ? null : self.pool.ready + self.pool.starting, capacity: null };
+  const pool = usage?.used == null ? '' : ' · ' + fill(usage.capacity == null ? labels.pool : labels.poolOf, usage);
   const order = ['busy', 'waiting', 'error', 'idle', 'not_running'];
   const total = order.reduce((sum, kind) => sum + (counts[kind] || 0), 0);
   const bar = total ? `<div class="wb-gbar" title="${escapeHtml(order.filter((kind) => counts[kind]).map((kind) => `${labels.groupStates[kind]} ${counts[kind]}`).join(' · '))}">${order.filter((kind) => counts[kind]).map((kind) => `<i class="wb-gbar-${kind}" style="flex:${counts[kind]}"></i>`).join('')}</div>` : '';

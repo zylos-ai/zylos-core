@@ -87,7 +87,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (ov.ok) baselineRuntime = ov.data.baseline.runtime;
     else { try { baselineRuntime = await readConfigRuntime() ?? null; } catch {} }
     const sample = store.latestEventByType('pool_sample')?.metadata;
-    const { occupancy, ...pool } = await readPool({ now: at, sample, c4Reader, loadCoreModule });
+    const { occupancy, ...pool } = await readPool({ mode, now: at, sample, c4Reader, loadCoreModule });
     const activations = queryAllEvents(store, { since: new Date(at - 30 * 60000).toISOString(), types: activationTypes });
     if (!accountsCache || at - accountsCache.at >= 30000) {
       const accounts = {}, accountSources = {};

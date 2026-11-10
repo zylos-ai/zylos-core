@@ -17,7 +17,8 @@ const freshRecord = patch => ({ v: 1, k: 3, computedAt: NOW, source: 'auto',
 const pending = (sessionGroup, priority, id, extra = {}) => ({ sessionGroup,
   pending: { count: 1, oldestAt: NOW - 5000, head: { priority, id } }, running: { count: 0 }, fence: null, ...extra });
 
-function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = [], globalFence = null, events = [] } = {}) {
+function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = [], globalFence = null, events = [],
+  mode = 'multi', sample = { ready: 10, starting: 20, reclaiming: 30, waiting: 40 } } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-pool-'));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
   fs.mkdirSync(path.join(root, 'activity-monitor'));
@@ -37,8 +38,13 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
   for (const slot of slots) insert.run(slot.group, 'run-' + slot.group, slot.state ?? 'running', slot.until ?? null, NOW / 1000 - 10);
   const reader = new C4Reader(root);
   t.after(() => { reader.close(); db.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  const sample = { ready: 10, starting: 20, reclaiming: 30, waiting: 40 };
-  let clock = NOW, calls = 0;
+  let clock = NOW, calls = 0, occupancyCalls = 0;
+  const originalOccupancy = reader.listSlotOccupancy.bind(reader);
+  reader.listSlotOccupancy = now => { occupancyCalls++; return originalOccupancy(now); };
+  const readMode = () => {
+    if (mode === 'unreadable') throw new Error('Mode unavailable');
+    return { mode };
+  };
   const live = new Map(groups.map(group => [group.sessionGroup, group]));
   const sessionReader = {
     readSessionState: async key => {
@@ -55,10 +61,10 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
       calls++;
       return readPoolCapacity({ ...options, env: { HOME: root, ZYLOS_DIR: root } });
     } };
-    if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
+    if (name === 'config.js') return { readSessionMode: readMode };
     if (name === 'session-state-reader.js') return sessionReader;
     if (name === 'status-view.js') return { collectStatus: options => collectStatus({ ...options,
-      mode: () => ({ mode: 'multi' }), list: () => groups, resolveRoot: () => root,
+      mode: readMode, list: () => groups, resolveRoot: () => root,
       configIssue: () => null, facts: async () => ({ originNeed: null }), health: () => ({ missing: true }), now: () => clock }) };
     throw new Error('Unexpected Core module: ' + name);
   };
@@ -68,7 +74,8 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
     readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },
     store: { latestEventByType: () => ({ metadata: sample }), queryEvents: filter => events.filter(event => filter.types.includes(event.event_type)) } });
   return { root, db, reader, file, sample, loadCoreModule, service, publish, calls: () => calls,
-    advance: ms => { clock += ms; }, read: () => readPool({ now: clock, sample, c4Reader: reader, loadCoreModule }) };
+    occupancyCalls: () => occupancyCalls,
+    advance: ms => { clock += ms; }, read: () => readPool({ mode, now: clock, sample, c4Reader: reader, loadCoreModule }) };
 }
 
 // Integration boundary: Core's real capacity reader, a private SQLite occupancy
@@ -76,6 +83,23 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
 // queue-order or snapshot wiring changes; skip unrelated UI-only changes. The
 // official runner isolates HOME/ZYLOS_DIR; each fixture adds its own files/DB.
 // Core observations/CLI are injected; no sockets, PM2, tmux or child processes.
+// Mode boundary: run for mode/capacity routing changes, skip unrelated UI edits;
+// owned fixture files and DB only, with counters around both capacity readers.
+for (const mode of ['single', 'unreadable']) for (const hasSample of [true, false]) {
+  test(`${mode} snapshot preserves sampled pool display without reading capacity or occupancy${hasSample ? '' : ' when no sample exists'}`, async t => {
+    const sample = hasSample ? { ready: 10, starting: 20, reclaiming: 30, waiting: 40 } : null;
+    const f = fixture(t, { mode, sample, record: freshRecord({ k: 17 }), slots: [{ group: 'occupied' }] });
+    const snapshot = await f.service.getSnapshot();
+    assert.equal(snapshot.mode, mode);
+    assert.equal(f.calls(), 0);
+    assert.equal(f.occupancyCalls(), 0);
+    assert.deepEqual(snapshot.instance.pool, hasSample
+      ? { ...sample, capacity: null, used: 30 }
+      : { ready: null, starting: null, reclaiming: null, waiting: null, capacity: null, used: null });
+    assert.equal(snapshot.attention.reminders.some(reminder => reminder.kind === 'pool_full'), false);
+  });
+}
+
 test('snapshot joins real capacity and occupancy into inbound positions and one full reminder without writes', async t => {
   const f = fixture(t, { slots: [{ group: 'used-a' }, { group: 'used-b' }, { group: 'used-c' }],
     queues: [pending('c', 2, 2), pending('origin', 0, 1), pending('b', 1, 9)] });
@@ -86,8 +110,8 @@ test('snapshot joins real capacity and occupancy into inbound positions and one 
   assert.equal(snapshot.instance.pool.capacity, 3);
   assert.equal(snapshot.instance.pool.used, 3);
   assert.equal(snapshot.instance.pool.waiting, 40);
-  assert.equal(snapshot.instance.pool.f16.source, 'auto');
-  assert.equal(snapshot.instance.pool.f16.fresh, true);
+  assert.equal(snapshot.instance.pool.capacityRecord.source, 'auto');
+  assert.equal(snapshot.instance.pool.capacityRecord.fresh, true);
   assert.equal(Object.hasOwn(snapshot.instance.pool, 'occupancy'), false);
   assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'b').wait, { kind: 'pool_wait', position: 1 });
   assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'c').wait, { kind: 'pool_wait', position: 2 });
@@ -96,6 +120,7 @@ test('snapshot joins real capacity and occupancy into inbound positions and one 
   assert.equal(observer.pragma('data_version', { simple: true }), beforeVersion);
   assert.equal(fs.readFileSync(f.file).equals(beforeFile), true);
   assert.equal(f.calls(), 1);
+  assert.equal(f.occupancyCalls(), 1);
   await f.service.getSnapshot();
   assert.equal(f.calls(), 1);
   f.advance(2001); await f.service.getSnapshot();
@@ -153,15 +178,15 @@ test('shrinking capacity reports occupancy above the limit without clamping', as
   assert.equal(pool.capacity, 3); assert.equal(pool.used, 4);
 });
 
-// Integration: real Core freshness/baseline selection with preserved F16 fields.
+// Integration: real Core freshness/baseline selection with preserved publication fields.
 // Run for capacity adapter changes; skip UI-only work. Private files/DB only.
 test('stale records use Core effective limit while preserving publication source and explanation', async t => {
   const record = freshRecord({ k: 6, computedAt: NOW - 90000, kMemory: 3 });
   const f = fixture(t, { record });
   const pool = await f.read();
-  assert.equal(pool.capacity, 3); assert.equal(pool.f16.valid, true); assert.equal(pool.f16.fresh, false);
-  assert.equal(pool.f16.source, 'auto'); assert.deepEqual(pool.f16.memory, record.memory);
-  assert.equal(pool.f16.kMemory, 3);
+  assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.valid, true); assert.equal(pool.capacityRecord.fresh, false);
+  assert.equal(pool.capacityRecord.source, 'auto'); assert.deepEqual(pool.capacityRecord.memory, record.memory);
+  assert.equal(pool.capacityRecord.kMemory, 3);
 });
 
 // Integration: real Core missing/invalid record fallback with private baseline.
@@ -170,7 +195,7 @@ for (const [label, record] of [['missing', null], ['invalid JSON', '{'], ['inval
   test('Core baseline supplies capacity for ' + label, async t => {
     const f = fixture(t, { record });
     const pool = await f.read();
-    assert.equal(pool.capacity, 3); assert.equal(pool.f16.valid, false); assert.equal(pool.f16.fresh, false);
+    assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.valid, false); assert.equal(pool.capacityRecord.fresh, false);
   });
 }
 
@@ -179,11 +204,11 @@ for (const [label, record] of [['missing', null], ['invalid JSON', '{'], ['inval
 test('fresh fixed and fallback explanations are carried only from the publication', async t => {
   const f = fixture(t, { record: freshRecord({ source: 'fixed', k: 6, kMemory: 3 }) });
   const fixed = await f.read();
-  assert.equal(fixed.capacity, 6); assert.equal(fixed.f16.source, 'fixed'); assert.equal(fixed.f16.kMemory, 3);
+  assert.equal(fixed.capacity, 6); assert.equal(fixed.capacityRecord.source, 'fixed'); assert.equal(fixed.capacityRecord.kMemory, 3);
   f.publish(freshRecord({ source: 'fallback', k: 1, reason: 'memory_unreadable', memory: null, model: null }));
   const fallback = await f.read();
-  assert.equal(fallback.capacity, 1); assert.equal(fallback.f16.fresh, true); assert.equal(fallback.f16.source, 'fallback');
-  assert.equal(fallback.f16.memory, null);
+  assert.equal(fallback.capacity, 1); assert.equal(fallback.capacityRecord.fresh, true); assert.equal(fallback.capacityRecord.source, 'fallback');
+  assert.equal(fallback.capacityRecord.memory, null);
 });
 
 // Integration: repeated reads cross Core freshness without publication changes.
@@ -193,7 +218,7 @@ test('capacity is reevaluated for freshness without a Dashboard cache', async t 
   assert.equal((await f.read()).capacity, 6);
   f.advance(60001);
   const pool = await f.read();
-  assert.equal(pool.capacity, 3); assert.equal(pool.f16.fresh, false); assert.equal(f.calls(), 2);
+  assert.equal(pool.capacity, 3); assert.equal(pool.capacityRecord.fresh, false); assert.equal(f.calls(), 2);
 });
 
 // Integration: missing private table fails through real reader to snapshot and

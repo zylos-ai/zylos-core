@@ -1249,10 +1249,10 @@ export function mountConversationPage({
     const rateWait = s.groupWait?.kind === 'rate_wait';
     const healthLabel = { rate_limited: 'rateLimited', recovering: 'recovering', auth_failed: 'authFailed',
       unavailable: 'unavailable', down: 'down' }[s.groupHealth];
-    const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused',
+    const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused', pool_wait: 'queueing',
       starting: 'starting', start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
-    const waiting = s.groupHealth === 'ok' && s.groupWait?.kind === 'unknown';
-    const headerLabel = healthLabel ?? (waiting ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
+    const waiting = s.groupHealth === 'ok' && ['unknown', 'pool_wait'].includes(s.groupWait?.kind);
+    const headerLabel = healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
     const restricted = headerLabel !== 'running' && !waiting;
     running.hidden = s.groupPresence !== true && (!(restricted || waiting) || !healthLabel && !s.groupWait);
     running.classList.toggle('conversation-restricted', restricted);

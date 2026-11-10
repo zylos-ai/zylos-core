@@ -135,7 +135,7 @@ for (const locale of ['en', 'zh']) {
       assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
     });
   }
-  for (const [presence, reason] of [['not_running', 'pool_capacity_missing'], ['running', 'no_rule'],
+  for (const [presence, reason] of [['not_running', 'pool_occupancy_unreadable'], ['running', 'no_rule'],
     ['running', 'queue_summary_failed'], ['not_running', 'queue_summary_failed']]) {
     test(`healthy ${presence} group waiting for ${reason} has a neutral header in ${locale}`, { timeout: 2000 }, async t => {
       const f = healthPage(t, { locale, health: 'ok', presence, wait: { kind: 'unknown', reason } });
@@ -149,6 +149,17 @@ for (const locale of ['en', 'zh']) {
       assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
     });
   }
+  test(`a group waiting for capacity has a neutral queueing header in ${locale}`, { timeout: 2000 }, async t => {
+    const f = healthPage(t, { locale, health: 'ok', presence: 'not_running', wait: { kind: 'pool_wait', position: 2 } });
+    await f.page.openGroup(f.sessionGroup); await tick();
+    const header = f.root.querySelector('.conversation-running');
+    assert.equal(header.hidden, false);
+    assert.equal(header.classList.contains('conversation-restricted'), false);
+    assert.equal(header.classList.contains('conversation-waiting'), true);
+    assert.equal(header.textContent, locale === 'zh' ? '排队中' : 'Queueing');
+    assert.doesNotMatch(header.textContent, /pool|held|K|运行中|running/i);
+    assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
+  });
   for (const [health, label] of [['rate_limited', 'rateLimited'], ['recovering', 'recovering'],
     ['auth_failed', 'authFailed'], ['unavailable', 'unavailable'], ['down', 'down'], [null, 'healthUnknown'], ['future_health', 'healthUnknown']]) {
     test(`unknown wait retains ${health ?? 'unreadable'} health status in ${locale}`, { timeout: 2000 }, async t => {

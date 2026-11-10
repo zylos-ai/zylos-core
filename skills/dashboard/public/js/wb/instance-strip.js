@@ -38,7 +38,7 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
 const gib = bytes => Number((bytes / 1073741824).toFixed(2));
 function poolSource(pool, t) {
   if (pool.capacity == null) return '';
-  const record = pool.f16;
+  const record = pool.capacityRecord;
   if (record?.valid !== true) return t('wb.inst.poolUnavailable', { capacity: pool.capacity });
   if (record.fresh !== true) return t('wb.inst.poolExpired', { capacity: pool.capacity });
   if (record.source === 'fixed') return finite(record.kMemory) && pool.capacity > record.kMemory
@@ -108,7 +108,9 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
     }
     root.append(box);
   }
-  const pool = instance.pool ?? {}, used = pool.used, capacity = pool.capacity ?? null;
+  const pool = instance.pool ?? {}, multi = snapshot.mode === 'multi';
+  const used = multi ? pool.used : pool.ready == null ? null : pool.ready + pool.starting;
+  const capacity = multi ? pool.capacity ?? null : null;
   const full = used != null && capacity != null && used >= capacity;
   const poolItem = item(document, icon(document, 'layers', 'xs'), element(document, 'span', technical ? t('wb.inst.pool') : t('wb.pool')));
   poolItem.style.flexWrap = 'wrap'; poolItem.style.whiteSpace = 'normal'; poolItem.style.maxWidth = '100%';
@@ -119,10 +121,10 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   }
   const amount = used == null ? t('wb.unknown') : capacity == null ? String(used) : `${used} / ${capacity}`;
   poolItem.append(element(document, 'b', amount, full ? 'wb-txt-warn' : undefined));
-  if (used != null) poolItem.append(element(document, 'span', t('wb.inst.inUse')));
-  const source = poolSource(pool, t);
+  if ((technical || multi) && used != null) poolItem.append(element(document, 'span', t('wb.inst.inUse')));
+  const source = multi ? poolSource(pool, t) : '';
   if (source) poolItem.append(element(document, 'span', ' · ' + source, 'wb-sub'));
-  if (technical) for (const text of poolExplanation(pool.f16, t)) poolItem.append(element(document, 'span', ' · ' + text, 'wb-sub'));
+  if (technical && multi) for (const text of poolExplanation(pool.capacityRecord, t)) poolItem.append(element(document, 'span', ' · ' + text, 'wb-sub'));
   if (pool.waiting) poolItem.append(element(document, 'span', ' · ' + t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: pool.waiting }), 'wb-txt-warn'));
   poolItem.title = t('wb.inst.poolHint');
   root.append(poolItem);
