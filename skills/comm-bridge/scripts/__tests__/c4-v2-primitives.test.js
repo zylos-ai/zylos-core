@@ -22,7 +22,8 @@ test('namespace and message transaction rolls back allocation on invalid group a
   assert.equal(s.getComponentByNamespace('foo'), 'Foo');
   assert.throws(() => s.registerChannelNamespace('Other', 'foo'), { code: 'NAMESPACE_CONFLICT' });
   assert.equal(s.insertConversation('out', 'Foo', 'e', 'reply').session_group, 'foo:A');
-  assert.equal(s.insertConversation('out', 'Foo', 'e', 'reply', { groupName: 'unknown' }).session_group, 'foo');
+  assert.equal(s.insertConversation('out', 'Foo', 'e', 'reply', { groupName: 'unknown' }).session_group, 'foo:A');
+  assert.equal(s.insertConversation('out', 'Foo', 'new-endpoint', 'reply', { groupName: 'unknown' }).session_group, 'foo');
 });
 test('claim fence and late callback guards, atomic failure increments', t => {
   const { store: s } = fixture(t);

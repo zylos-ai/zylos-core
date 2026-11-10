@@ -18,6 +18,7 @@ import { createLifecycleProviders } from './lifecycle.js';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { messageForStatus } from '../status-notice-templates.js';
+import { systemSendEnvironment } from '../c4-system-send-env.js';
 
 // The supervisor owns the transport. Loading it on use allows the scheduler's
 // independent paths to be exercised without implementing a second protocol.
@@ -47,7 +48,7 @@ export function createDispatcher(overrides = {}, options = {}) {
   const alertController = new AbortController();
   const sendAlert = overrides.sendAlert ?? ((target, message) => new Promise((resolve, reject) => {
     const child = execFile(process.execPath, [fileURLToPath(new URL('../c4-send.js', import.meta.url)), target.channel, target.endpoint],
-      { env, signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
+      { env: systemSendEnvironment(env), signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
     child.stdin.on('error', reject); child.stdin.end(message + '\n');
   }));
   const alert = (event, fields) => {

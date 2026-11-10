@@ -4,7 +4,8 @@ import path from 'node:path';
 const channel = path.basename(path.dirname(path.dirname(process.argv[1])));
 const mode = process.env.ALERT_TRANSPORT_MODE;
 const [endpoint, message] = process.argv.slice(2);
-fs.appendFileSync(process.env.ALERT_TRANSPORT_RECORDS, JSON.stringify({ channel, endpoint, message, pid: process.pid }) + '\n');
+fs.appendFileSync(process.env.ALERT_TRANSPORT_RECORDS, JSON.stringify({ channel, endpoint, message, pid: process.pid,
+  runId: process.env.ZYLOS_RUN_ID, sessionGroup: process.env.ZYLOS_SESSION_GROUP }) + '\n');
 const hangs = mode === 'destination_hangs' && channel === 'telegram'
   || mode === 'console_hangs' && channel === 'web-console';
 if (hangs) {

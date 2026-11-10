@@ -65,10 +65,26 @@ EOF
 
 Without `--session-group`, the audit row uses the latest inbound group for the
 same channel and endpoint, or the channel's overall group when no history exists.
-An unknown or invalid explicit group falls back to the channel's overall group
-and records an `out_group_fallback` diagnostic. The endpoint passed to the
+When nonempty inbound history exists, an explicit group is selected only if it
+received inbound for the same channel and endpoint; otherwise the latest inbound
+group wins. This permits multiple topics for one endpoint to reply individually.
+Without such history, an unknown or invalid explicit group falls back to the
+channel's overall group and records an `out_group_fallback` diagnostic.
+The endpoint passed to the
 component stays unchanged. `--group` is not accepted. Use stdin when literal
 content contains reserved option tokens.
+
+Core compares the outgoing group with inherited `ZYLOS_SESSION_GROUP` before
+BeforeSend hooks, recording or delivery. A different responsible group causes
+`CROSS_SESSION_OUTBOUND`, with no send effects and a copyable internal command
+containing the channel and endpoint. Ask that session to relay the message and
+context; do not change sender identity to bypass the check. Explicit `origin`
+is checked too. A `ZYLOS_RUN_ID` alone means single-session and is not checked.
+Processes without a group and new recipients with no nonempty inbound history
+that fall back to the namespace remain allowed; empty migration groups do not
+assign ownership. System notification callers clear both session variables.
+The write transaction checks again if ownership changes during a channel hook.
+OpenMax's direct `comm.send`/`comm.ask` bypass C4 and are outside this guard.
 
 ## Absorbed Replies
 

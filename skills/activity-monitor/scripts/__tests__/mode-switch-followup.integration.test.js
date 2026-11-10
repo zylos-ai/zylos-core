@@ -136,9 +136,7 @@ for (const source of ['single', 'multi']) test(`${source}: converted , replaceme
     const fullJson = f.cli('c4-fetch', [...args, '--json']); assert.equal(fullJson.status, 0, fullJson.stderr); assert.equal(JSON.parse(fullJson.stdout).data.data, row.content);
     if (['J','K'].includes(row.name)) { const fullText = f.cli('c4-fetch', args); assert.equal(fullText.status, 0); const encoded = fullText.stdout.split('\ndata: ')[1].split('\nend id=')[0]; assert.equal(decodeEscapes(encoded), row.content); }
     const priorArgv = argv(f).length, priorOut = f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n;
-    const request = readAbsorbedReply(runId, String(row.id), f.api);
-    const responsible = f.store.resolveSessionGroup('out', request.channel, request.endpoint, request);
-    const sent = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: responsible, shell: row.name.startsWith('N') });
+    const sent = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: scope, shell: row.name.startsWith('N') });
     if (row.name === 'O') {
       assert.equal(sent.status, 1); assert.match(sent.stderr, /ENDPOINT_NOT_PASSABLE/); assert.equal(argv(f).length, priorArgv); assert.equal(f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, priorOut); continue;
     }
@@ -179,7 +177,7 @@ for (const source of ['single','multi']) test(`B ${source}: 1000 converted entri
       const full = JSON.parse(f.query.absorbed({ runId, id, json: true })).data; assert.equal(full.data, 'x');
       // production path with the same real / transaction and argv child
       // as the CLI; avoids 1000 extra parent Node startups in the bulk case.
-      await sendExternal(readAbsorbedReply(runId, String(id), f.api), 'ack', { api: f.api, skillsDir: f.skills, env: { ...f.env, ZYLOS_SESSION_GROUP: 'demo:a' }, appendFallback: async () => {} }); evidence.push(id);
+      await sendExternal(readAbsorbedReply(runId, String(id), f.api), 'ack', { api: f.api, skillsDir: f.skills, env: f.env, appendFallback: async () => {} }); evidence.push(id);
     }
   }
   await handle(Array.from({ length: 10 }, (_, i) => i + 1));
