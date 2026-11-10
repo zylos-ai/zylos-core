@@ -38,7 +38,7 @@ import {
   saveApiKey,
   saveApiKeyToEnv,
   saveClaudeBaseUrl,
-  saveClaudeBaseUrlToSettingsAndEnv,
+  saveClaudeBaseUrlToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
@@ -409,7 +409,7 @@ function ensureBinInPath() {
 // ── End Codex helpers ──────────────────────────────────────────────────────
 
 /**
- * Save an Anthropic API key to ~/.claude/settings.json and process.env.
+ * Save an Anthropic API key to process.env (and pre-approve it).
  * Does NOT write to ~/zylos/.env here — that happens after template
  * deployment via saveApiKeyToEnv() to avoid creating a partial .env
  * that blocks template deployment on fresh installs.
@@ -506,21 +506,11 @@ function verifySetupToken() {
 }
 
 /**
- * Undo saveSetupToken(): remove CLAUDE_CODE_OAUTH_TOKEN from
- * ~/.claude/settings.json and the current process environment.
+ * Undo saveSetupToken(): remove CLAUDE_CODE_OAUTH_TOKEN from the current
+ * process environment. saveSetupToken() does not write settings.json, so
+ * there is nothing to undo there.
  */
 function rollbackSetupToken() {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    if (settings.env) {
-      delete settings.env.CLAUDE_CODE_OAUTH_TOKEN;
-    }
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-  } catch (err) {
-    console.error(`  ${warn(`Could not rollback setup token from settings.json: ${err.message}`)}`);
-  }
-
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 }
 
@@ -1898,7 +1888,7 @@ export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin =
     saveCodexApiKeyToEnv(codexApiKey);
   }
   if (claudeBaseUrl) {
-    saveClaudeBaseUrlToSettingsAndEnv(claudeBaseUrl);
+    saveClaudeBaseUrlToEnv(claudeBaseUrl);
   }
   if (codexBaseUrl) {
     saveCodexBaseUrlToEnv(codexBaseUrl);

@@ -175,26 +175,20 @@ export function approveApiKey(keyOrToken) {
 }
 
 /**
- * Save an Anthropic API key to ~/.claude/settings.json and pre-approve it.
+ * Pre-approve an Anthropic API key and set it in process.env for this run.
+ * The key is persisted only to ~/zylos/.env (saveApiKeyToEnv); zylos does not
+ * write Claude credentials into ~/.claude/settings.json.
  * @param {string} apiKey - The API key (sk-ant-api...)
  * @returns {boolean}
  */
 export function saveApiKey(apiKey) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
   try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.ANTHROPIC_API_KEY = apiKey;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    approveApiKey(apiKey);
+    process.env.ANTHROPIC_API_KEY = apiKey;
+    return true;
   } catch {
     return false;
   }
-  approveApiKey(apiKey);
-  process.env.ANTHROPIC_API_KEY = apiKey;
-  return true;
 }
 
 /**
@@ -212,28 +206,20 @@ export function saveApiKeyToEnv(apiKey) {
 }
 
 /**
- * Save a Claude Code setup token to ~/.claude/settings.json and pre-approve it.
- * Removes any existing API key to avoid having both.
+ * Pre-approve a Claude Code setup token and set it in process.env for this run.
+ * The token is persisted only to ~/zylos/.env (saveSetupTokenToEnv); zylos
+ * does not write Claude credentials into ~/.claude/settings.json.
  * @param {string} token - The setup token (sk-ant-oat...)
  * @returns {boolean}
  */
 export function saveSetupToken(token) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
   try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-    delete settings.env.ANTHROPIC_API_KEY;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+    approveApiKey(token);
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+    return true;
   } catch {
     return false;
   }
-  approveApiKey(token);
-  process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-  return true;
 }
 
 /**
@@ -270,35 +256,14 @@ export function saveClaudeBaseUrl(baseUrl) {
 }
 
 /**
- * Write ANTHROPIC_BASE_URL to Claude settings.json.
+ * Write ANTHROPIC_BASE_URL to ~/zylos/.env and process.env.
+ * ~/.claude/settings.json is not touched.
  * @param {string} baseUrl
  * @returns {boolean}
  */
-function saveClaudeBaseUrlToSettings(baseUrl) {
-  const settingsDir = path.join(os.homedir(), '.claude');
-  const settingsPath = path.join(settingsDir, 'settings.json');
-  try {
-    fs.mkdirSync(settingsDir, { recursive: true });
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    if (!settings.env) settings.env = {};
-    settings.env.ANTHROPIC_BASE_URL = baseUrl;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Write ANTHROPIC_BASE_URL to Claude settings.json and ~/zylos/.env.
- * @param {string} baseUrl
- * @returns {boolean}
- */
-export function saveClaudeBaseUrlToSettingsAndEnv(baseUrl) {
+export function saveClaudeBaseUrlToEnv(baseUrl) {
   const envPath = path.join(ZYLOS_DIR, '.env');
   try {
-    if (!saveClaudeBaseUrlToSettings(baseUrl)) return false;
     let content = '';
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     content = upsertEnvValue(content, 'ANTHROPIC_BASE_URL', baseUrl, 'Anthropic base URL for Claude Code (set by zylos init)');
@@ -339,17 +304,12 @@ export function claudeCredentialIn(values) {
 }
 
 /**
- * Saved Claude base URL and credential: .env (parsed as a new session reads it),
- * then the settings.json env fallback that Claude Code also reads.
+ * Saved Claude base URL and credential, from ~/zylos/.env only (parsed as a
+ * new session reads it). ~/.claude/settings.json is not consulted.
  */
 function savedClaudeState() {
-  let dotenv = {}, settingsEnv = {};
-  try { dotenv = parseZylosDotenv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8')); } catch {}
-  try { settingsEnv = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'))?.env || {}; } catch {}
-  const values = {};
-  for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL']) {
-    values[key] = dotenv[key] || settingsEnv[key] || '';
-  }
+  let values = {};
+  try { values = parseZylosDotenv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8')); } catch {}
   return { baseUrl: values.ANTHROPIC_BASE_URL, credential: claudeCredentialIn(values) };
 }
 
@@ -360,7 +320,7 @@ export function isClaudeRelayBaseUrl(baseUrl) {
   catch { return true; }
 }
 
-/** Turn the relay setting on or off in .env, Claude settings.json and process.env. */
+/** Turn the relay setting on or off in ~/zylos/.env and process.env. */
 function setClaudeRelayTrafficFlag(on) {
   const name = CLAUDE_RELAY_TRAFFIC_FLAG;
   const assignment = new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?${name}[^\\S\\r\\n]*=.*(?:\\r?\\n|$)`, 'gm');
@@ -376,20 +336,6 @@ function setClaudeRelayTrafficFlag(on) {
       next = on ? upsertEnvValue(next, name, '1', CLAUDE_RELAY_TRAFFIC_COMMENT) : next.replace(/\n+$/, '\n');
       fs.writeFileSync(envPath, next);
     }
-
-    const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-    let settings = null;
-    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch {}
-    const hasSetting = settings?.env?.[name] !== undefined;
-    if (on ? settings?.env?.[name] !== '1' : hasSetting) {
-      settings = settings && typeof settings === 'object' ? settings : {};
-      if (!settings.env) settings.env = {};
-      if (on) settings.env[name] = '1';
-      else delete settings.env[name];
-      fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
-    }
-
     if (on) process.env[name] = '1';
     else delete process.env[name];
     return true;

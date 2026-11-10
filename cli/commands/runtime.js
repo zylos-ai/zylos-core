@@ -24,7 +24,7 @@ import {
   isValidBaseUrl,
   saveApiKey,
   saveApiKeyToEnv,
-  saveClaudeBaseUrlToSettingsAndEnv,
+  saveClaudeBaseUrlToEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
   syncClaudeRelayTraffic,
@@ -126,7 +126,7 @@ export function relayNoticeAfterSave(target, { setupToken, baseUrl }, notice = r
 
 export function applyBaseUrl(target, baseUrl) {
   if (target === 'claude') {
-    if (!saveClaudeBaseUrlToSettingsAndEnv(baseUrl)) return false;
+    if (!saveClaudeBaseUrlToEnv(baseUrl)) return false;
     return syncClaudeRelayTraffic();
   }
   if (target === 'codex') {

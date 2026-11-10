@@ -23,7 +23,7 @@ import { RuntimeAdapter } from './base.js';
 import { assertInstructionReady, buildInstructionFile } from './instruction-builder.js';
 import { ClaudeContextMonitor } from './claude-context-monitor.js';
 import { createClaudeProbe } from '../heartbeat/claude-probe.js';
-import { RUNTIME_BUILTIN_ENV_KEYS, ZYLOS_DIR } from '../config.js';
+import { CLAUDE_BUILTIN_ENV_KEYS, ZYLOS_DIR } from '../config.js';
 import {
   tmuxHasSession,
   tmuxGetPanePid,
@@ -93,10 +93,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
    */
   async checkAuth() {
     // Build subprocess env: inherit current env, but take the built-in runtime
-    // variables (RUNTIME_BUILTIN_ENV_KEYS) exactly as a new session gets them.
+    // variables (CLAUDE_BUILTIN_ENV_KEYS) exactly as a new session gets them.
     const injectedEnv = { ...process.env };
     const sessionEnv = _buildSessionEnv();
-    for (const key of RUNTIME_BUILTIN_ENV_KEYS.claude) {
+    for (const key of CLAUDE_BUILTIN_ENV_KEYS) {
       if (Object.hasOwn(sessionEnv, key)) injectedEnv[key] = sessionEnv[key];
       else delete injectedEnv[key];
     }
@@ -335,7 +335,7 @@ function _buildSessionEnv() {
 
   // Built-in runtime passthrough from .env, independent of runtime-env.manifest:
   // applied after the manifest (clean and compat mode) so a manifest cannot drop it.
-  for (const key of RUNTIME_BUILTIN_ENV_KEYS.claude) {
+  for (const key of CLAUDE_BUILTIN_ENV_KEYS) {
     if (dotenvVars[key]) env[key] = dotenvVars[key];
   }
   return env;
