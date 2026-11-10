@@ -3,6 +3,7 @@ const test = (name, fn) => nodeTest(name, { timeout: 2000 }, fn);
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import path from 'node:path';
+import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
 const sourceSchema = new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url).href;
 registerHooks({
@@ -1059,6 +1060,25 @@ test('incremental list updates use the server human preview rather than attachme
   assert.equal(preview, 'Readable text\n[文件] report.pdf');
   assert.equal(preview.includes('/private/'), false);
   f.state.destroy();
+});
+// Pure controller with fake requests/clock; validates the actual frontend preview
+// projection from complete saved envelopes, without HTTP/DB/runtime resources.
+test('incremental answer previews strip only the exact envelope prefix instead of displaying the server protocol preview', async () => {
+  const interruptId = 'interrupt-one', questionSummary = 'Choose a plan';
+  const prefix = `回答了 interruptId=${interruptId}（问题：${questionSummary}）：`;
+  for (const fallbackText of [`${prefix}Plan A`, '回答了 interruptId=other（问题：Choose a plan）：Plan B', `Before ${prefix}Plan A`]) {
+    const request = { id: 'answer-one', protocolVersion: '0.1', type: 'choice.select', target: 'test.answer',
+      context: { messageId: 'message-one', blockId: 'block-one' }, payload: { selected: ['a'] } };
+    const envelope = { version: 1, kind: 'answer', messageId: request.id, interruptId, questionSummary,
+      fallbackText, action: request, metadata: { zylos: { answerId: request.id } } };
+    const f = await selected(u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after' ? {
+      items: [{ id: 11, direction: 'in', content: CONTENT_PREFIX + JSON.stringify(envelope), preview: fallbackText }], afterCursor: 'after11'
+    } : undefined);
+    await f.timer.advance(5000);
+    assert.equal(f.state.snapshot().items.find(item => item.id === 'g:A').preview,
+      fallbackText.startsWith(prefix) ? 'Plan A' : fallbackText);
+    f.state.destroy();
+  }
 });
 test('conversation read failure immediately after storing a send cannot make delivery uncertain', async () => {
   let sent = false;

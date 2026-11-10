@@ -41,6 +41,39 @@ const choices = selection => block('choice', { prompt: 'Choose a plan', selectio
 const confirmation = () => block('confirmation', { title: 'Confirm change', body: 'Check these facts', severity: 'normal', details: [{ label: 'Count', value: 3 }], action: action('confirmation.respond') });
 const form = () => block('form_intent', { title: 'Profile', purpose: 'Tell us more', fields: [{ key: 'name', type: 'text', label: 'Name', help: 'Public name' }, { key: 'category', type: 'single_select', label: 'Category', options: [{ id: 'a', label: 'First' }] }], action: action('form.submit') });
 
+function savedAnswer(fallbackText, { interruptId = 'interrupt-one', questionSummary = 'Choose a plan' } = {}) {
+  const request = { id: 'answer-one', protocolVersion: '0.1', type: 'choice.select', target: 'test.answer',
+    context: { messageId: 'message-one', blockId: 'block-one' }, payload: { selected: ['a'] } };
+  return { version: 1, kind: 'answer', messageId: request.id, interruptId, questionSummary,
+    fallbackText, action: request, metadata: { zylos: { answerId: request.id } } };
+}
+
+// Browser renderer and injected DOM only; no network, database or runtime.
+test('saved answers show a question and literal answer card without the exact protocol prefix', () => {
+  const question = 'Choose a plan（fast）： <script>question</script>', answer = '<img src=x>\nKeep interruptId=user-text';
+  const source = savedAnswer(`回答了 interruptId=interrupt-one（问题：${question}）：${answer}`, { questionSummary: question });
+  const root = render(source), nodes = allNodes(root);
+  const card = nodes.find(node => node.className === 'chat-answer-card');
+  assert.ok(card);
+  assert.deepEqual(card.children.map(node => [node.className, node.textContent]), [
+    ['chat-answer-question', question], ['chat-answer-text', answer]
+  ]);
+  assert.equal(root.textContent.includes('回答了 interruptId=interrupt-one'), false);
+  assert.equal(nodes.some(node => ['SCRIPT', 'IMG', 'BUTTON', 'INPUT'].includes(node.tagName)), false);
+});
+
+test('saved answers preserve the complete fallback when any exact prefix field differs or is not at the start', () => {
+  for (const fallback of [
+    '回答了 interruptId=different（问题：Choose a plan）：Plan A',
+    '回答了 interruptId=interrupt-one（问题：Different question）：Plan A',
+    'Before 回答了 interruptId=interrupt-one（问题：Choose a plan）：Plan A',
+    'Original answer: Plan A'
+  ]) {
+    const root = render(savedAnswer(fallback));
+    assert.equal(allNodes(root).find(node => node.className === 'chat-answer-text').textContent, fallback);
+  }
+});
+
 test('historical answered messages retain their saved readable answer with legacy question definitions', () => {
   for (const [item, payload, original] of [
     [block('choice', { prompt: 'Decision', options: [{ id: 'a', label: 'Approve' }, { id: 'a', label: 'Reject' }], action: action('choice.select') }), { selected: ['a'] }, 'Original answer: Reject'],
