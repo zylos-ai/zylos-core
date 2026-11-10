@@ -1,5 +1,5 @@
 import { projectC4Content } from './c4-content-projection.js';
-import { dataError, parseSessionGroup } from './c4-session-group.js';
+import { dataError } from './c4-session-group.js';
 export const projectConversation = row => ({ ...row, content: projectC4Content(row.content, { c4Id: row.id }) });
 export const ARG_PAYLOAD_MAX = 131071;
 export const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
@@ -8,9 +8,7 @@ export function replyVia(row, scriptPath) {
   if (/[\x00-\x1f\x7f]/.test(scriptPath)) return unavailable('Core 路径含控制字符');
   if (/[\x00-\x1f\x7f]/.test(row.endpoint_id ?? '')) return unavailable('路由含控制字符');
   if (Buffer.byteLength(row.endpoint_id ?? '') > ARG_PAYLOAD_MAX) return unavailable('路由超过参数长度上限');
-  const parsed = parseSessionGroup(row.session_group);
-  const suffix = row.channel !== 'internal' && parsed?.groupName ? ` --session-group ${parsed.groupName}` : '';
-  return `---- reply via: node ${shellQuote(scriptPath)} ${shellQuote(row.channel)} ${shellQuote(row.endpoint_id ?? '')}${suffix}`;
+  return `---- reply via: node ${shellQuote(scriptPath)} ${shellQuote(row.channel)} ${shellQuote(row.endpoint_id ?? '')}`;
 }
 // Reversible single-line encoding used by the text query protocol.
 export function escapeText(value) {

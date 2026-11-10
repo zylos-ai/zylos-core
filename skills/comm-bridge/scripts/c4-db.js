@@ -429,7 +429,6 @@ export const getComponentByNamespace = (...args) => store.getComponentByNamespac
 export const ensureChannelNamespace = (...args) => store.ensureChannelNamespace(...args);
 export const registerChannelNamespace = (...args) => store.registerChannelNamespace(...args);
 export const resolveSessionGroup = (...args) => store.resolveSessionGroup(...args);
-export const checkOutboundSession = (...args) => store.checkOutboundSession(...args);
 export const insertConversation = (...args) => store.insertConversation(...args);
 export const insertInternalMessage = (...args) => store.insertInternalMessage(...args);
 export const buildTargetBinding = async (...args) => await store.buildTargetBinding(...args);

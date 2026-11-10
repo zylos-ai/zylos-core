@@ -35,7 +35,7 @@ test('reply-via preserves endpoint and script bytes in whole, local, single and 
   for (const endpoint of ['-100123|msg:88', "it's $(x)", '`id`', 'a"b\\c']) {
     for (const sessionGroup of ['telegram:g-100123:topic', 'telegram', null]) {
       const input = row({ endpoint_id: endpoint, session_group: sessionGroup });
-      const expected = [scriptPath, 'telegram', endpoint, ...(sessionGroup?.includes(':') ? ['--session-group', 'g-100123:topic'] : [])];
+      const expected = [scriptPath, 'telegram', endpoint];
       assert.deepEqual(execute(route(formatConversation(input, { scriptPath }))), expected.map(hex));
     }
   }
@@ -60,7 +60,7 @@ test('legacy suffix is replaced from original D1 before preview and spill', t =>
     const full = content.length > 800 ? fs.readFileSync(path.join(ATTACHMENTS_DIR, 'conv-501', 'message.txt'), 'utf8') : output;
     assert.equal(full, content.trimEnd() + ' ' + replyVia(input, scriptPath));
     assert.ok(!output.includes('/old/')); assert.ok(!full.includes('/old/'));
-    assert.deepEqual(execute(route(output)), [scriptPath, 'telegram', input.endpoint_id, '--session-group', 'g-100123:topic'].map(hex));
+    assert.deepEqual(execute(route(output)), [scriptPath, 'telegram', input.endpoint_id].map(hex));
     if (content.length > 800) assert.match(output, /MUST read the complete message file:/);
   }
   for (const endpoint_id of [null, '']) {
@@ -90,7 +90,7 @@ test('fetch formatting and lane formatting use the same original-row route', asy
         assert.equal(delivered, fetched);
         if (suffix.includes('\n')) assert.equal(delivered, '不可用（Core 路径含控制字符，见 C4 #501）');
         else if (!delivered.startsWith('不可用')) {
-          const expected = [scriptPath, 'telegram', endpoint, ...(group.includes(':') ? ['--session-group', 'g-100123:topic'] : [])].map(hex);
+          const expected = [scriptPath, 'telegram', endpoint].map(hex);
           assert.deepEqual(execute(delivered), expected);
           assert.deepEqual(execute(fetched), expected);
         }

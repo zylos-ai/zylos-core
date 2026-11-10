@@ -11,13 +11,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-test('scoped status notice forwards a local group without changing component argv', t => {
+test('status notice queries its destination group without inheriting session identity', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'notice-group-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const channel = path.join(root, '.claude/skills/fake/scripts');
   fs.mkdirSync(channel, { recursive: true });
   const marker = path.join(root, 'sent.json');
   fs.writeFileSync(path.join(channel, 'send.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify({argv:process.argv.slice(2),runId:process.env.ZYLOS_RUN_ID,sessionGroup:process.env.ZYLOS_SESSION_GROUP}))`);
+  fs.writeFileSync(path.join(channel, 'session-group.js'), "process.stdout.write('wanted\\n')");
   const code = `
     import * as db from ${JSON.stringify(new URL('../c4-db.js', import.meta.url).href)};
     import {reserveStatusNotice,sendStatusNotice} from ${JSON.stringify(new URL('../status-notice.js', import.meta.url).href)};

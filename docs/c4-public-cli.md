@@ -6,22 +6,29 @@ These commands do not send messages to channels.
 
 ## External sends and session handoffs
 
-`c4-send.js <channel> [endpoint] --stdin [--session-group LOCAL_GROUP]`
-uses the shared C4 outgoing route resolver, including the latest inbound group
-for that recipient. An explicit group can select a topic that received inbound
-for the same channel and endpoint; otherwise the latest inbound group wins.
-Without nonempty inbound history, an explicit existing subgroup selects the
-outgoing group. Before channel BeforeSend,
-Core compares that route with the sender's inherited `ZYLOS_SESSION_GROUP`
-(including explicit `origin`). A run identity alone is a single-session runtime
-and does not activate the check. Cross-session sends fail with
-`CROSS_SESSION_OUTBOUND`: no outbound record, fallback event or delivery occurs,
-and the channel hook is not invoked. The error names the responsible session
-and gives a complete, shell-quoted command with a placeholder body:
+`c4-send.js <channel> [endpoint] --stdin` asks the installed component's
+`scripts/session-group.js <endpoint>` for the group before BeforeSend or writing
+an outbound row. The query uses Node argv, closed stdin, the component directory
+as cwd, and the send environment. It has a five-second timeout and a 4 KiB stdout
+limit. One final LF or CRLF is removed; empty output, no script or a NULL endpoint
+means the whole component namespace. Nonempty output must be a valid group name
+of at most 95 characters. Failed, timed-out, oversized or invalid queries refuse
+with `SESSION_GROUP_QUERY_FAILED`; they do not fall back or send anything.
+`dashboard origin` has fixed group `origin` for both inbound and outbound and
+does not query the component.
+
+Core compares that one result with inherited `ZYLOS_SESSION_GROUP` when the key
+exists. Empty or unknown senders fail `UNKNOWN_GROUP`; `origin` is a normal
+sender. If the key is absent, Core still queries and records under the answer
+but skips the comparison. Cross-session sends fail `CROSS_SESSION_OUTBOUND`:
+no message, hook or delivery occurs, even when the target group has no history.
+A missing namespace binding may be allocated so the error can name the complete
+group; refusal does not create message rows. The error supplies a shell-quoted
+internal command with placeholders rather than echoing the endpoint:
 
 ```sh
 cat <<'EOF_INTERNAL' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js internal 'telegram:recipient-session'
-Please relay to "telegram" "recipient": include the message and context here.
+Please deliver to <channel> <address>: <text>. Why: <reason>.
 EOF_INTERNAL
 ```
 
@@ -30,20 +37,17 @@ the sender environment. Internal success means queued, not read or delivered
 externally. The responsible session makes the external send. No waiting-sender
 registry, automatic reply copies or return-reply instruction is added.
 
-Same-session replies (including `origin`), processes without a session group,
-and new recipients with no inbound history whose route falls back to the channel
-namespace remain allowed. Explicit existing subgroups are checked even without
-recipient history; unknown subgroups fall back to the namespace only without
-nonempty inbound history. Empty migration groups do not assign ownership.
-System notification callers clear both session variables before spawning C4.
-The guard also covers absorbed external replies and scheduled reminders.
-
-The route is checked again in the outbound insert transaction in case an inbound
-arrives while the asynchronous hook is running. A route that becomes crossed
-at that point is refused before recording/delivery; its hook has already run.
-Preflight route resolution does not register a namespace or change C4 state.
+Same-group replies pass. Message history and target-head existence never choose
+ownership. The query is not cached, and the group is neither queried nor checked
+again in the write transaction. A trailing legacy `--session-group NAME` is
+silently accepted and ignored; malformed placement remains `INVALID_ARGS`.
+Generated reply-via commands do not contain it. System notification callers clear
+both session variables before spawning C4. The guard also covers absorbed replies:
+relay the text and exact `--absorbed-reply R N` command to the responsible group,
+without reconstructing its private endpoint. Internal handoffs can create a new
+target group if its namespace belongs to an installed component.
 OpenMax's direct `comm.send` / `comm.ask` platform calls bypass C4 and are outside
-this check, as are low-level database inserts without sender context.
+this check. Scheduler's query/persistence integration is delivered separately.
 
 ## Database and query examples
 

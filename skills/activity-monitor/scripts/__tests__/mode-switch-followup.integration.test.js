@@ -31,6 +31,7 @@ function fixture(source) {
   const sender = path.join(skills, 'demo/scripts/send.js'); fs.mkdirSync(path.dirname(sender), { recursive: true });
   const argvFile = path.join(root, 'argv.jsonl');
   fs.writeFileSync(path.join(skills, 'demo/package.json'), JSON.stringify({ type: 'module' }));
+  fs.writeFileSync(path.join(skills, 'demo/scripts/session-group.js'), "process.stdout.write('a\\n');");
   fs.writeFileSync(sender, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2).map(x => Buffer.from(x).toString('hex'))) + '\\n'); process.exit(process.argv[2] === 'fail-route' ? 1 : 0);`);
   const target = source === 'single' ? 'multi' : 'single';
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true }); fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: target }));
@@ -136,7 +137,14 @@ for (const source of ['single', 'multi']) test(`${source}: converted , replaceme
     const fullJson = f.cli('c4-fetch', [...args, '--json']); assert.equal(fullJson.status, 0, fullJson.stderr); assert.equal(JSON.parse(fullJson.stdout).data.data, row.content);
     if (['J','K'].includes(row.name)) { const fullText = f.cli('c4-fetch', args); assert.equal(fullText.status, 0); const encoded = fullText.stdout.split('\ndata: ')[1].split('\nend id=')[0]; assert.equal(decodeEscapes(encoded), row.content); }
     const priorArgv = argv(f).length, priorOut = f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n;
-    const sent = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: scope, shell: row.name.startsWith('N') });
+    if (source === 'single' && scope === 'origin') {
+      const refused = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: scope });
+      assert.equal(refused.status, 1, refused.stderr);
+      assert.match(refused.stderr, /CROSS_SESSION_OUTBOUND/);
+      assert.equal(argv(f).length, priorArgv);
+      assert.equal(f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, priorOut);
+    }
+    const sent = f.cli('c4-send', ['--absorbed-reply', runId, String(row.id)], { input: 'handled ' + row.name, group: source === 'single' ? 'demo:a' : scope, shell: row.name.startsWith('N') });
     if (row.name === 'O') {
       assert.equal(sent.status, 1); assert.match(sent.stderr, /ENDPOINT_NOT_PASSABLE/); assert.equal(argv(f).length, priorArgv); assert.equal(f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, priorOut); continue;
     }
@@ -177,7 +185,7 @@ for (const source of ['single','multi']) test(`B ${source}: 1000 converted entri
       const full = JSON.parse(f.query.absorbed({ runId, id, json: true })).data; assert.equal(full.data, 'x');
       // production path with the same real / transaction and argv child
       // as the CLI; avoids 1000 extra parent Node startups in the bulk case.
-      await sendExternal(readAbsorbedReply(runId, String(id), f.api), 'ack', { api: f.api, skillsDir: f.skills, env: f.env, appendFallback: async () => {} }); evidence.push(id);
+      await sendExternal(readAbsorbedReply(runId, String(id), f.api), 'ack', { api: f.api, skillsDir: f.skills, env: f.env }); evidence.push(id);
     }
   }
   await handle(Array.from({ length: 10 }, (_, i) => i + 1));
