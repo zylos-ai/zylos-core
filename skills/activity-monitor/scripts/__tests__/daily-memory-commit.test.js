@@ -244,6 +244,53 @@ describe('daily memory commit', () => {
     assert.deepEqual(packFiles(), []);
   });
 
+  // Real git reports the removed-index path once as deleted and once as
+  // untracked. Run for changed-path parsing/exclusion changes; all git work and
+  // the real commit script stay in this suite's private lifecycle-owned root.
+  it('lists a removed-index oversized file only once and leaves its content out of the commit', () => {
+    const day = { date: '2026-11-10' };
+    const run = scheduler(day);
+    fs.writeFileSync(path.join(memory, 'big'), 'original small content\n');
+    assert.equal(run.tick(), 1);
+    assert.equal(commits(), '1');
+
+    day.date = '2026-11-11';
+    git('rm', '--cached', '--', 'big');
+    sparse('big', 60 * MB);
+    const entries = git('status', '--porcelain', '-z', '--untracked-files=all')
+      .split('\0').filter(entry => entry.slice(3) === 'big');
+    assert.deepEqual(entries, ['D  big', '?? big'], 'exercise both real porcelain records for the same path');
+    fs.writeFileSync(path.join(memory, 'state.md'), '# State\nchanged\n');
+
+    assert.equal(run.tick(), 1);
+    const skipped = run.logs.find(line => line.startsWith('Daily memory commit: Skipped '))?.split('\n')[0];
+    assert.equal(skipped, 'Daily memory commit: Skipped 1 file(s) over 50 MB, not committed: big (60 MB)');
+    assert.equal((skipped.match(/big \(60 MB\)/g) || []).length, 1);
+    assert.equal(commits(), '2');
+    assert.equal(git('show', 'HEAD:big'), 'original small content\n', 'the oversized working-tree content is not committed');
+    assert.equal(git('diff', '--name-only', 'HEAD^', 'HEAD').trim(), 'state.md');
+    assert.equal(git('show', 'HEAD:state.md'), '# State\nchanged\n');
+    assert.equal(fs.statSync(path.join(memory, 'big')).size, 60 * MB);
+    assert.equal(state().last_status, 'ok');
+  });
+
+  // A tracked deletion precedes untracked names in Git's status stream even
+  // when lexical order differs. Run with changed-path parsing/exclusion changes.
+  it('keeps the first-seen order of distinct skipped paths', () => {
+    const day = { date: '2026-11-10' }, run = scheduler(day);
+    fs.writeFileSync(path.join(memory, 'z-big'), 'small\n');
+    run.tick();day.date = '2026-11-11';
+    git('rm', '--cached', '--', 'z-big');
+    sparse('z-big', 60 * MB);sparse('a-big', 60 * MB);
+    const entries = git('status', '--porcelain', '-z', '--untracked-files=all').split('\0').filter(Boolean);
+    assert.deepEqual(entries, ['D  z-big', '?? a-big', '?? z-big']);
+    run.tick();
+    const skipped = run.logs.find(line => line.startsWith('Daily memory commit: Skipped '))?.split('\n')[0];
+    assert.equal(skipped, 'Daily memory commit: Skipped 2 file(s) over 50 MB, not committed: z-big (60 MB), a-big (60 MB)');
+    assert.equal(commits(), '1');
+    assert.equal(git('show', 'HEAD:z-big'), 'small\n');
+  });
+
   it('keeps the first 500 characters of a long error as last_error', () => {
     const day = { date: '2026-11-10' };
     const run = scheduler(day);
