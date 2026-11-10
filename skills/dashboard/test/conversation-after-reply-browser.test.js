@@ -11,9 +11,10 @@ import { hashPassword } from '../src/lib/auth.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { createChatSandbox, chatEnabled } from './helpers/chat-integration-harness.js';
-import { startChatBrowser, until } from './helpers/chat-push-browser-driver.js';
+import { until } from './helpers/chat-push-browser-driver.js';
+import { startAfterReplyBrowser } from './helpers/chat-after-reply-browser.js';
 
-const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_BIN;
+const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_BIN && !!process.env.ZYLOS_CHAT_BROWSER_MODULE;
 const helper = fileURLToPath(new URL('./helpers/chat-after-reply-server.js', import.meta.url));
 const group = 'dashboard-after-reply:private';
 const conversation = 'g:' + Buffer.from(group).toString('hex').toUpperCase();
@@ -70,11 +71,18 @@ async function fixture(t, locale, width, { beforeSteps = true, running = false, 
     }
   });
   await until(() => protocolError || origin || child.exitCode !== null, 'real Dashboard HTTP server starts', 10000);
-  assert.equal(protocolError, undefined); assert.ok(origin);
-  const browser = await startChatBrowser(t, sandbox, origin, { expectedBlockedHosts: ['fonts.googleapis.com'] });
+  assert.equal(protocolError, undefined);
+  if (!origin) {
+    const result = await child.completion;
+    assert.fail(`Dashboard fixture exited before ready (${result.code}): ${result.stderr.slice(-2000)}`);
+  }
+  const login = await fetch(origin + '/login', { signal: AbortSignal.timeout(3000) });
+  assert.equal(login.status, 200, 'private Dashboard login is available before browser navigation');
+  await login.text();
+  const browser = await startAfterReplyBrowser(t, sandbox, origin);
   const page = await browser.page({ width, pathname: '/login', ready: '!!document.querySelector("input[name=password]")' });
   await page.evaluate(`localStorage.setItem('zylos-dashboard-locale',${JSON.stringify(locale)});document.querySelector('input[name=password]').value='private-after-reply-password';document.querySelector('form').submit()`);
-  await until(() => page.evaluate('document.querySelector("#wb-chat")?.children.length>0'), 'full app mounts the real conversation page', 10000);
+  await page.waitFor('document.querySelector("#wb-chat")?.children.length>0');
   await page.evaluate('document.querySelector(".tab[data-tab=chat]").click()');
   await until(() => page.evaluate(`!!document.querySelector('[data-conversation-id="${conversation}"]')`), 'seeded conversation is listed', 5000);
   await page.evaluate(`document.querySelector('[data-conversation-id="${conversation}"]').click()`);
