@@ -149,6 +149,23 @@ const sectionEnvelope = { version: 1, kind: 'message', messageId: 'section-messa
 const sectionRow = { id: 60, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(sectionEnvelope), attachments: [spacingAttachment] };
 if (parseC4Content(sectionRow.content).kind !== 'envelope') throw new Error('Invalid section fixture');
 appendContent('section-view', sectionRow);
+const nestedParts = [
+  spacingMarkdown('nested-intro', '正文先说明结果，最后用堆叠展示详细说明与进度。'),
+  spacingMarkdown('nested-detail', '堆叠中的说明与卡片应保持独立的十二像素间距。'),
+  spacingCard('nested-card'),
+];
+const nestedEnvelope = { version: 1, kind: 'message', messageId: 'nested-section-message', fallbackText: '分区中的堆叠', blocks: nestedParts,
+  metadata: { view: { schemaVersion: 1, root: 'nested-section-root', nodes: [
+    { id: 'nested-section-root', type: 'section', body: ['nested-intro-node', 'nested-stack'] },
+    { id: 'nested-intro-node', type: 'block', blockId: 'nested-intro' },
+    { id: 'nested-stack', type: 'stack', children: ['nested-detail-node', 'nested-card-node'] },
+    { id: 'nested-detail-node', type: 'block', blockId: 'nested-detail' },
+    { id: 'nested-card-node', type: 'block', blockId: 'nested-card' },
+  ] } },
+};
+const nestedRow = { id: 61, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(nestedEnvelope) };
+if (parseC4Content(nestedRow.content).kind !== 'envelope') throw new Error('Invalid nested section fixture');
+appendContent('nested-section', nestedRow);
 const errorsTray = document.createElement('div'); errorsTray.className = 'conversation-upload-tray'; errorsTray.id = 'tray-errors'; document.querySelector('main').append(errorsTray);
 for (const status of ['ready', 'failed', 'expired']) {
   const resource = createChatAttachment({ document, t, mode: 'tray', attachment: { name: status + '.txt', kind: 'file', status }, onRetry: () => {}, onRemove: () => {} });
