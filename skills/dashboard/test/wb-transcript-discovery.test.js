@@ -724,14 +724,18 @@ for (const trigger of ['unrelated lifecycle', 'ten minute fallback']) {
   ]) {
     test(`${trigger} with ${degraded.name} retries after one minute and retains recovered Origin messages`, async t => {
       const f = fixture(t), p = f.file('origin-recovery'); f.start(p, 'origin');
+      const otherRows = [
+        { sessionGroup: 'g-stopped', presence: 'not_running', live: null },
+        { sessionGroup: 'g-unreadable', presence: 'unknown', live: { runId: null, error: { code: 'READ_FAILED' } } },
+      ];
       const healthy = { listKnown: true, rows: [{ sessionGroup: degraded.group,
-        presence: 'running', live: { runId: 'run-origin', presence: 'running' } }] };
+        presence: 'running', live: { runId: 'run-origin', presence: 'running' } }, ...otherRows] };
       let calls = 0;
       f.inventory.getSnapshotKey = () => 'stable-origin';
       f.inventory.getSnapshot = async () => {
         calls++;
         return calls === 2 ? { listKnown: true, rows: [{ sessionGroup: degraded.group,
-          presence: degraded.presence, live: structuredClone(degraded.live) }] } : structuredClone(healthy);
+          presence: degraded.presence, live: structuredClone(degraded.live) }, ...structuredClone(otherRows)] } : structuredClone(healthy);
       };
       const collector = new ConversationCollector(f.store, { homeDir: f.root, zylosDir: f.root }, { transcripts: f.inventory });
       const poll = async (id, retained) => {
@@ -772,7 +776,8 @@ for (const trigger of ['unrelated lifecycle', 'ten minute fallback']) {
         }
       }
       // A recovered snapshot must keep the healthy ten-minute cache, rather
-      // than permanently falling back to sixty-second reads after one error.
+      // than falling back to sixty-second reads because another group is
+      // stopped or unreadable, or because Origin had one earlier error.
       f.advance(failedAt + 60000 + 599999 - f.now());
       await poll('healthy-before-ten-minute-expiry', true);
       assert.equal(calls, 3);
