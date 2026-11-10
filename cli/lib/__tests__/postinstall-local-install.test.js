@@ -79,6 +79,36 @@ afterEach(() => {
 });
 
 describe('postinstall local install guard', () => {
+  // Integration: real npm postinstall publication across two private package
+  // locations. Run for installation-record writers; skip unrelated hooks. Owned
+  // temporary HOME/ZYLOS_DIR and package copies; no installer or service start.
+  it('publishes and refreshes the Core location while protected installs leave it unchanged', () => {
+    const zylosDir = fixtureZylosDir(), first = installedPostinstallPath(), second = installedPostinstallPath();
+    const record = path.join(zylosDir, '.claude/skills/comm-bridge/.zylos/core-package.json');
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, first);
+    assert.deepEqual(JSON.parse(fs.readFileSync(record, 'utf8')),
+      { v: 1, packageRoot: fs.realpathSync(path.dirname(path.dirname(first))) });
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, second);
+    assert.deepEqual(JSON.parse(fs.readFileSync(record, 'utf8')),
+      { v: 1, packageRoot: fs.realpathSync(path.dirname(path.dirname(second))) });
+    const before = fs.readFileSync(record);
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, { ZYLOS_PROTECTED_INSTALL: '1' }, first);
+    assert.equal(fs.readFileSync(record).equals(before), true);
+  });
+
+  // Integration: real postinstall reports failed optional record publication.
+  // Run for warning/record failure changes; skip unrelated services. The existing
+  // fixture owns all files and child execution is synchronous and time-bounded.
+  it('warns when the Core location cannot be published without replacing the blocked record', () => {
+    const zylosDir = fixtureZylosDir(), script = installedPostinstallPath();
+    runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, script);
+    const record = path.join(zylosDir, '.claude/skills/comm-bridge/.zylos/core-package.json');
+    fs.unlinkSync(record); fs.mkdirSync(record);
+    const output = runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, script);
+    assert.match(output, /Warning: Failed to update comm-bridge: Unsafe Core package location record/);
+    assert.equal(fs.statSync(record).isDirectory(), true);
+  });
+
   it('prints recovery and normal upgrade commands after direct npm installation on an initialized machine', () => {
     const zylosDir = fixtureZylosDir();
     const output = runPostinstall(zylosDir, { npm_lifecycle_event: 'postinstall' }, {}, installedPostinstallPath());

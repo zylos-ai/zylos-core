@@ -1,3 +1,4 @@
+import { writeCorePackageLocation } from '../lib/core-package-location.js';
 import { migrateModelThresholds } from '../lib/model-rotation-thresholds.js';
 import { applyDashboardRoute } from '../lib/dashboard-install.js';
 import { printDashboardInfo } from '../lib/dashboard-access.js';
@@ -788,7 +789,7 @@ function copyTree(src, dest) {
  * by zylos-core, like ecosystem.config.cjs). Preserves node_modules
  * and any extra files not in the package source.
  */
-function syncCoreSkills() {
+export function syncCoreSkills() {
   if (!fs.existsSync(CORE_SKILLS_SRC)) {
     return { installed: [], updated: [], error: 'Core Skills source not found' };
   }
@@ -811,6 +812,7 @@ function syncCoreSkills() {
       // into the ownership record (issue #715).
       const manifest = generateManifest(srcDir);
       saveMergeBaseline(destDir, srcDir, manifest);
+      if (entry.name === 'comm-bridge') writeCorePackageLocation({ skillDir: destDir, packageRoot: PACKAGE_ROOT });
       (isNew ? installed : updated).push(entry.name);
     } catch {
       console.log(`  ${warn(`Failed to sync ${bold(entry.name)}`)}`);

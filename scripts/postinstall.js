@@ -1,3 +1,4 @@
+import { writeCorePackageLocation } from '../cli/lib/core-package-location.js';
 /**
  * Postinstall script - runs after `npm install -g zylos`
  *
@@ -52,6 +53,7 @@ function syncSkills() {
         const manifest = generateManifest(destDir);
         saveManifest(destDir, manifest);
         saveOriginals(destDir, srcDir);
+        if (entry.name === 'comm-bridge') writeCorePackageLocation({ skillDir: destDir, packageRoot: path.join(__dirname, '..') });
         console.log(`  + ${entry.name}`);
         added++;
       } catch (err) {
@@ -64,6 +66,9 @@ function syncSkills() {
     try {
       const backupDir = path.join(backupBase, entry.name);
       const mergeResult = smartSync(srcDir, destDir, { backupDir });
+      if (entry.name === 'comm-bridge' && !mergeResult.errors?.length) {
+        writeCorePackageLocation({ skillDir: destDir, packageRoot: path.join(__dirname, '..') });
+      }
       const hasChanges = mergeResult.overwritten.length || mergeResult.added.length
         || mergeResult.merged.length || mergeResult.deleted.length || mergeResult.conflicts.length;
       if (hasChanges) {

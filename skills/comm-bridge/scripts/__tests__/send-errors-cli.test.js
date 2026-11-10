@@ -8,11 +8,18 @@ import Database from 'better-sqlite3';
 import { fixture } from './c4-v2-test-helpers.js';
 
 const cli = new URL('../c4-send.js', import.meta.url).pathname;
+const spawnFault = new URL('./fixtures/send-spawn-fault.js', import.meta.url).href;
 const endpoint = 'private-route-\'"$`\\\nvalue';
 const argMax = Number(execFileSync('getconf', ['ARG_MAX'], { encoding: 'utf8' }).trim());
 assert.ok(Number.isSafeInteger(argMax) && argMax > 0);
 
 for (const absorbed of [false, true]) {
+  // Integration: real CLI/store audit and component-spawn errors in a temporary
+  // instance. Run for send launch/audit changes; skip unrelated components. The
+  // official runner isolates HOME/PM2_HOME, each case owns ZYLOS_DIR and its DB,
+  // and a 12s synchronous child timeout bounds execution. No live channels,
+  // sockets, tmux, background loops or services are used. The preload only
+  // injects the native spawn fault for this case's temporary component script.
   test(`${absorbed ? 'absorbed' : 'ordinary'} real CLI failure set retains exactly the committed audit`, { timeout: 30000 }, async t => {
     for (const fault of ['success', 'E2BIG', 'EACCES', 'ENOENT', 'missing', 'deleted', 'syntax', 'DB_BUSY']) {
       await t.test(fault, t => {
@@ -38,15 +45,8 @@ for (const absorbed of [false, true]) {
         }
         const bin = path.join(root, 'bin');
         fs.mkdirSync(bin);
-        let childPath = process.env.PATH;
-        if (['EACCES', 'ENOENT', 'deleted'].includes(fault)) {
-          childPath = bin;
-          if (fault === 'EACCES') fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\nexit 0\n', { mode: 0o600 });
-          if (fault === 'deleted') {
-            // Node is launched only after the audit; delete before it loads send.js.
-            fs.writeFileSync(path.join(bin, 'node'), `#!/bin/sh\n/bin/rm -- "$1"\nexec '${process.execPath.replaceAll("'", "'\\''")}' "$@"\n`, { mode: 0o700 });
-          }
-        }
+        const injectSpawnFault = ['EACCES', 'ENOENT', 'deleted'].includes(fault);
+        if (fault === 'EACCES') fs.writeFileSync(path.join(bin, 'not-executable'), '#!/bin/sh\nexit 0\n', { mode: 0o600 });
         if (fault === 'missing') fs.unlinkSync(script);
         const writer = fault === 'DB_BUSY' ? new Database(f.filename) : null;
         const counts = () => ['conversations', 'channel_namespaces', 'group_heads'].map(table =>
@@ -55,8 +55,9 @@ for (const absorbed of [false, true]) {
         if (writer) { writer.exec('BEGIN IMMEDIATE'); t.after(() => writer.close()); }
         let result;
         try {
-          result = spawnSync(process.execPath, [cli, ...args], {
-            env: { ...process.env, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: path.resolve(import.meta.dirname, '../../../..'), PATH: childPath },
+          result = spawnSync(process.execPath, [...(injectSpawnFault ? ['--import', spawnFault] : []), cli, ...args], {
+            env: { ...process.env, ZYLOS_DIR: root, ZYLOS_PACKAGE_ROOT: path.resolve(import.meta.dirname, '../../../..'),
+              ...(injectSpawnFault ? { C4_TEST_SPAWN_TARGET: script, C4_TEST_SPAWN_FAULT: fault } : {}) },
             input: fault === 'E2BIG' ? 'x'.repeat(argMax + 1) : 'reply body', encoding: 'utf8', timeout: 12000,
           });
         } finally { if (writer) writer.exec('ROLLBACK'); }
