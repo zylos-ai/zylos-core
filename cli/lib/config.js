@@ -20,6 +20,10 @@ export const HTTP_DIR = path.join(ZYLOS_DIR, 'http');
 export const CADDYFILE = path.join(HTTP_DIR, 'Caddyfile');
 export const CADDY_BIN = path.join(BIN_DIR, 'caddy');
 
+// Claude credential variables that `zylos init` may write to .env. The Claude
+// auth probe reads the same names, so a new credential type cannot be missed.
+export const CLAUDE_CREDENTIAL_KEYS = Object.freeze(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']);
+
 // ── Config file (config.json) ───────────────────────────────────
 
 export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');

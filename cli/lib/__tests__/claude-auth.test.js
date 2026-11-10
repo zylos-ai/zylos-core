@@ -114,6 +114,36 @@ describe('Claude auth checks', () => {
     assert.equal(env.CLAUDE_CODE_ENTRYPOINT, '');
   });
 
+  it('injects ANTHROPIC_AUTH_TOKEN with the base URL for a relay-only .env (#1130)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-claude-relay-'));
+    tmpDirs.push(root);
+    fs.writeFileSync(
+      path.join(root, '.env'),
+      [
+        'ANTHROPIC_BASE_URL=https://relay.example.test',
+        'ANTHROPIC_AUTH_TOKEN=relay-bearer-test',
+        '',
+      ].join('\n'),
+      'utf8'
+    );
+    const calls = [];
+    const execFile = async (file, args, options) => {
+      calls.push({ file, args, env: options.env });
+      return { stdout: 'pong', stderr: '' };
+    };
+
+    // The supervisor env carries no Anthropic credentials; they must come from .env.
+    const result = await new ClaudeAdapter({ root, env: { PATH: process.env.PATH, HOME: os.tmpdir() }, execFile }).checkAuth();
+
+    assert.equal(result.status, 'success');
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].args, ['-p', 'ping', '--max-turns', '1']);
+    assert.equal(calls[0].env.ANTHROPIC_BASE_URL, 'https://relay.example.test');
+    assert.equal(calls[0].env.ANTHROPIC_AUTH_TOKEN, 'relay-bearer-test');
+    assert.equal(calls[0].env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(calls[0].env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  });
+
   it('returns failure for explicit logged-out and authentication-error signals', async () => {
     const adapter = new ClaudeAdapter({});
 

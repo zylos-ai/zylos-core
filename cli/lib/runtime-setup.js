@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { parse, stringify } from 'smol-toml';
 import { parse as parseDotEnv } from 'dotenv';
-import { ZYLOS_DIR } from './config.js';
+import { CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from './config.js';
 import { writeEnvFile } from './env.js';
 import { checkPrivateFile, writePrivateFile } from './private-file.js';
 import { commandExists } from './shell-utils.js';
@@ -209,7 +209,6 @@ export function credentialFilePermissionWarnings(files) {
   return warnings;
 }
 
-const CLAUDE_CREDENTIAL_KEYS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
 const CLAUDE_CREDENTIAL_COMMENTS = {
   ANTHROPIC_API_KEY: 'Anthropic API key (set by zylos init)',
   ANTHROPIC_AUTH_TOKEN: 'Anthropic auth token (set by zylos init)',

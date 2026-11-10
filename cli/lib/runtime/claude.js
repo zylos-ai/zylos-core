@@ -21,11 +21,15 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 import { SessionAdapter } from './session-adapter.js';
 import { buildInstructionFile } from './instruction-builder.js';
-import { ZYLOS_DIR } from '../config.js';
+import { CLAUDE_CREDENTIAL_KEYS, ZYLOS_DIR } from '../config.js';
 import { writePrivateFile } from '../private-file.js';
 
 
 const ENV_VARS_TO_STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT'];
+
+// .env variables the auth probe injects: every credential `zylos init` can
+// write (including ANTHROPIC_AUTH_TOKEN for relays) plus the endpoint.
+const DOTENV_AUTH_VARS = [...CLAUDE_CREDENTIAL_KEYS, 'ANTHROPIC_BASE_URL'];
 
 /**
  * Parse a value from a .env file, tolerating common formatting variations:
@@ -135,17 +139,12 @@ export class ClaudeAdapter extends SessionAdapter {
   async checkAuth() {
     // Build subprocess env: inherit current env, inject .env API keys (same as launch()).
     const injectedEnv = { ...(this.options.env || process.env) };
-    let envApiKey = '';
-    let envOauthToken = '';
-    let envBaseUrl = '';
     try {
       const envContent = fs.readFileSync(path.join(this.options.root || ZYLOS_DIR, '.env'), 'utf8');
-      envApiKey = _parseEnvValue(envContent, 'ANTHROPIC_API_KEY');
-      envOauthToken = _parseEnvValue(envContent, 'CLAUDE_CODE_OAUTH_TOKEN');
-      envBaseUrl = _parseEnvValue(envContent, 'ANTHROPIC_BASE_URL');
-      if (envApiKey) injectedEnv.ANTHROPIC_API_KEY = envApiKey;
-      if (envOauthToken) injectedEnv.CLAUDE_CODE_OAUTH_TOKEN = envOauthToken;
-      if (envBaseUrl) injectedEnv.ANTHROPIC_BASE_URL = envBaseUrl;
+      for (const key of DOTENV_AUTH_VARS) {
+        const value = _parseEnvValue(envContent, key);
+        if (value) injectedEnv[key] = value;
+      }
     } catch { /* .env absent — no keys to inject */ }
 
     // Strip vars that would make Claude refuse to start ("already running" guard).
