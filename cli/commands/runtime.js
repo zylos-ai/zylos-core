@@ -31,6 +31,7 @@ import {
   saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
+  clearClaudeRelayTrafficFlag,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
   writeCodexConfig,
@@ -114,11 +115,14 @@ function warnUnrestrictedCredentialFiles(target, warnings) {
  * @param {Array<{code: string, message: string}>} [warnings] - receives credential file permission warnings
  * @returns {boolean}
  */
-function applyCredentials(target, creds, warnings = []) {
+export function applyCredentials(target, creds, warnings = []) {
   if (target === 'claude') {
     if (creds.setupToken) {
       if (!saveSetupToken(creds.setupToken)) return false;
       saveSetupTokenToEnv(creds.setupToken);
+      // Setup-token login does not use a relay; a --save-base-url relay in the
+      // same command is applied afterwards and turns the setting back on.
+      if (!clearClaudeRelayTrafficFlag()) return false;
       warnUnrestrictedCredentialFiles(target, warnings);
       return true;
     }

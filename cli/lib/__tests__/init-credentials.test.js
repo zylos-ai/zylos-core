@@ -483,6 +483,45 @@ test('unexpected authentication dependency errors propagate instead of becoming 
   }), error => error === expected);
 });
 
+const relayFlag = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+// Seed a relay install with the setting on in .env, settings.json and process.env.
+function seedRelayFlag(t, home) {
+  const envFile = path.join(ZYLOS_DIR, '.env'), settingsFile = path.join(home, '.claude', 'settings.json');
+  const previous = fs.existsSync(envFile) ? fs.readFileSync(envFile) : null, previousFlag = process.env[relayFlag];
+  t.after(() => {
+    if (previous) fs.writeFileSync(envFile, previous); else fs.rmSync(envFile, { force: true });
+    if (previousFlag === undefined) delete process.env[relayFlag]; else process.env[relayFlag] = previousFlag;
+  });
+  fs.writeFileSync(envFile, `KEEP=unchanged\nANTHROPIC_BASE_URL=https://relay.example\n${relayFlag}=1\n`);
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://relay.example', [relayFlag]: '1' } }));
+  process.env[relayFlag] = '1';
+  return () => ({
+    env: fs.readFileSync(envFile, 'utf8').includes(relayFlag),
+    settings: JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env?.[relayFlag],
+    process: process.env[relayFlag],
+  });
+}
+
+test('init subscription login removes the relay traffic setting when no relay is configured', async t => {
+  const state = seedRelayFlag(t, isolatedCredentials(t)); let statusCalls = 0, logins = 0;
+  const result = await runInitAuthentication(parseInitFlags([]), { runtime: 'claude', quiet: true, exists: () => true,
+    claudeStatus: () => statusCalls++ > 0, choose: async () => 1, nativeLogin: () => { logins += 1; }, log: () => {},
+  });
+  assert.equal(logins, 1); assert.equal(result.claudeAuthenticated, true); assert.equal(result.subscriptionLogin, true);
+  assert.equal(persistInitCredentials({ setupToken: result.pendingSetupToken, subscriptionLogin: result.subscriptionLogin,
+    claudeBaseUrl: result.pendingClaudeBaseUrl }), true);
+  assert.deepEqual(state(), { env: false, settings: undefined, process: undefined });
+});
+
+test('init setup-token login removes the relay traffic setting; a relay base URL in the same run keeps it on', t => {
+  const state = seedRelayFlag(t, isolatedCredentials(t));
+  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID() }), true);
+  assert.deepEqual(state(), { env: false, settings: undefined, process: undefined });
+  assert.equal(persistInitCredentials({ setupToken: 'sk-ant-oat01-' + crypto.randomUUID(), claudeBaseUrl: 'https://relay.example' }), true);
+  assert.deepEqual(state(), { env: true, settings: '1', process: '1' });
+});
+
 test('Claude authentication menu uses the baseline API-key label when no address was selected', async t => {
   isolatedCredentials(t); const menus = [];
   await runInitAuthentication(parseInitFlags([]), { runtime: 'claude', quiet: true, exists: () => true, claudeStatus: () => false,

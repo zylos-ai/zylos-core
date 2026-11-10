@@ -59,6 +59,7 @@ import {
   saveClaudeBaseUrlToSettingsAndEnv,
   saveSetupToken,
   saveSetupTokenToEnv,
+  clearClaudeRelayTrafficFlag,
   saveCodexBaseUrl,
   saveCodexApiKey,
   saveCodexBaseUrlToEnv,
@@ -1865,13 +1866,18 @@ export async function authenticateCodexApiCredential(apiKey, {
 }
 
 /** Persist post-template auth values; a partial write must stop init before services start. */
-export function persistInitCredentials({ apiKey, authToken, setupToken, claudeBaseUrl, codexBaseUrl }, {
+export function persistInitCredentials({ apiKey, authToken, setupToken, subscriptionLogin = false, claudeBaseUrl, codexBaseUrl }, {
   saveKeyEnv = saveApiKeyToEnv, saveTokenEnv = saveAuthTokenToEnv, saveSetupEnv = saveSetupTokenToEnv,
+  clearRelayTraffic = clearClaudeRelayTrafficFlag,
   saveClaudeBase = saveClaudeBaseUrlToSettingsAndEnv, saveCodexBase = saveCodexBaseUrlToEnv,
   saveCodexConfig = writeCodexConfig, reportError = console.error,
 } = {}) {
   try {
-    for (const [value, save] of [[authToken, saveTokenEnv], [apiKey, saveKeyEnv], [setupToken, saveSetupEnv], [claudeBaseUrl, saveClaudeBase], [codexBaseUrl, saveCodexBase]]) {
+    // Subscription or setup-token login drops the relay traffic setting; a relay
+    // base URL configured in the same run turns it back on when it is saved next.
+    const leftRelay = !!(setupToken || subscriptionLogin);
+    for (const [value, save] of [[authToken, saveTokenEnv], [apiKey, saveKeyEnv], [setupToken, saveSetupEnv],
+      [leftRelay, () => clearRelayTraffic()], [claudeBaseUrl, saveClaudeBase], [codexBaseUrl, saveCodexBase]]) {
       if (value && save(value) !== true) throw new Error('credential persistence failed');
     }
     if (codexBaseUrl && saveCodexConfig(ZYLOS_DIR, { openaiBaseUrl: codexBaseUrl }) !== true) throw new Error('credential persistence failed');
@@ -1917,11 +1923,12 @@ export async function runInitAuthentication(opts, {
   let pendingAuthToken = null;
   let pendingApiKey = null; // set if user enters API key, written to .env after templates
   let pendingSetupToken = null; // set if user enters setup-token, written to .env after templates
+  let subscriptionLogin = false; // set after a successful subscription (browser) login in this run
   let pendingClaudeBaseUrl = null;
   let pendingCodexBaseUrl = null;
 
   const snapshot = () => ({ claudeAuthenticated, codexAuthenticated, pendingAuthToken, pendingApiKey,
-    pendingSetupToken, pendingClaudeBaseUrl, pendingCodexBaseUrl, exitCode });
+    pendingSetupToken, subscriptionLogin, pendingClaudeBaseUrl, pendingCodexBaseUrl, exitCode });
   const activateBase = runtime => {
     const base = runtime === 'codex' ? opts.codexBaseUrl : opts.baseUrl;
     if (!base) return;
@@ -2086,6 +2093,7 @@ export async function runInitAuthentication(opts, {
             for (const l of sigintListeners) process.on('SIGINT', l);
             claudeAuthenticated = claudeStatus();
             if (claudeAuthenticated) {
+              subscriptionLogin = true;
               log(`\n  ${success('Claude Code authenticated')}`);
             } else {
               log(`\n  ${warn('Authentication not completed.')}`);
@@ -2370,7 +2378,7 @@ export async function initCommand(args) {
   if (authenticationState.shouldStop) return;
   exitCode = authenticationState.exitCode;
   const { claudeAuthenticated, codexAuthenticated, pendingAuthToken, pendingApiKey,
-    pendingSetupToken, pendingClaudeBaseUrl, pendingCodexBaseUrl } = authentication;
+    pendingSetupToken, subscriptionLogin, pendingClaudeBaseUrl, pendingCodexBaseUrl } = authentication;
 
   // Pre-accept Claude Code terms (skips manual prompts on first launch).
   // Called regardless of auth state — user may configure credentials after init.
@@ -2422,7 +2430,7 @@ export async function initCommand(args) {
     // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
     migrateWebConsolePassword();
 
-    return continueInitAfterPersistence({ apiKey: pendingApiKey, authToken: pendingAuthToken, setupToken: pendingSetupToken,
+    return continueInitAfterPersistence({ apiKey: pendingApiKey, authToken: pendingAuthToken, setupToken: pendingSetupToken, subscriptionLogin,
       claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl }, async () => {
       // Timezone: use resolved value or show current
       if (!quiet) console.log(heading('Checking timezone...'));
@@ -2491,7 +2499,7 @@ export async function initCommand(args) {
   // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
   migrateWebConsolePassword();
 
-  return continueInitAfterPersistence({ apiKey: pendingApiKey, authToken: pendingAuthToken, setupToken: pendingSetupToken,
+  return continueInitAfterPersistence({ apiKey: pendingApiKey, authToken: pendingAuthToken, setupToken: pendingSetupToken, subscriptionLogin,
     claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl }, async () => {
     // Step 8: Configure timezone
     if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);
