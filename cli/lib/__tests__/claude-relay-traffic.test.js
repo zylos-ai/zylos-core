@@ -86,16 +86,43 @@ test('configuring a relay base URL rewrites a wrong or duplicated existing value
 const keyLines = key => fs.readFileSync(envFile, 'utf8').split('\n').filter(line => new RegExp(`^\\s*(export\\s+)?${key}\\s*=`).test(line));
 
 test('saving a base URL over `export ANTHROPIC_BASE_URL=` leaves one line with the new value', () => {
-  fs.writeFileSync(envFile, 'KEEP=unchanged\nexport ANTHROPIC_BASE_URL=https://old-relay.example.test\n');
+  fs.writeFileSync(envFile, 'export ANTHROPIC_BASE_URL=https://old-relay.example.test\nKEEP=unchanged\n');
   assert.equal(applyBaseUrl('claude', relayUrl), true);
   assert.deepEqual(keyLines('ANTHROPIC_BASE_URL'), [`ANTHROPIC_BASE_URL=${relayUrl}`]);
+  const env = parseDotEnv(fs.readFileSync(envFile));
+  assert.equal(env.ANTHROPIC_BASE_URL, relayUrl);
+  assert.equal(env.KEEP, 'unchanged', 'the line after the rewritten one is intact');
 });
 
 test('saving an API key over an export-prefixed and a bare line leaves one line with the new key', () => {
   const key = apiKey();
-  fs.writeFileSync(envFile, 'KEEP=unchanged\n  export ANTHROPIC_API_KEY=sk-ant-api03-old-exported\nANTHROPIC_API_KEY=sk-ant-api03-old-bare\n');
+  fs.writeFileSync(envFile, '  export ANTHROPIC_API_KEY=sk-ant-api03-old-exported\nKEEP=unchanged\nANTHROPIC_API_KEY=sk-ant-api03-old-bare\n');
   assert.equal(applyCredentials('claude', { apiKey: key }), true);
   assert.deepEqual(keyLines('ANTHROPIC_API_KEY'), [`ANTHROPIC_API_KEY=${key}`]);
+  const env = parseDotEnv(fs.readFileSync(envFile));
+  assert.equal(env.ANTHROPIC_API_KEY, key);
+  assert.equal(env.KEEP, 'unchanged', 'the line after the rewritten one is intact');
+});
+
+test('saving a setup token removes every API key line, bare and export-prefixed', () => {
+  const token = setupToken();
+  fs.writeFileSync(envFile, 'ANTHROPIC_API_KEY=sk-ant-api03-old-bare\nKEEP=unchanged\nexport ANTHROPIC_API_KEY=sk-ant-api03-old-exported\n');
+  applyCredentials('claude', { setupToken: token });
+  const env = parseDotEnv(fs.readFileSync(envFile));
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, token);
+  assert.equal(env.KEEP, 'unchanged');
+});
+
+test('saving a setup token removes an API key written as `ANTHROPIC_API_KEY: value`', () => {
+  const token = setupToken();
+  fs.writeFileSync(envFile, 'KEEP=unchanged\nANTHROPIC_API_KEY: sk-ant-api03-old-colon\n');
+  assert.equal(parseDotEnv(fs.readFileSync(envFile)).ANTHROPIC_API_KEY, 'sk-ant-api03-old-colon', 'dotenv reads the colon form');
+  applyCredentials('claude', { setupToken: token });
+  const env = parseDotEnv(fs.readFileSync(envFile));
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, token);
+  assert.equal(env.KEEP, 'unchanged');
 });
 
 test('configuring the official base URL without a credential removes the relay traffic setting from .env and process', () => {

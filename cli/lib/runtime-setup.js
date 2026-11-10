@@ -19,14 +19,15 @@ import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js'
 import { installCoreCodexHook } from './codex-hooks.js';
 
 /**
- * Every .env line that sets `key`: `KEY=` or `export KEY=`, leading spaces
- * allowed (the lines dotenv reads as KEY), each with its line break.
+ * Every .env line that sets `key`, as dotenv reads it: `KEY=value` or
+ * `KEY: value`, optionally after `export ` and leading spaces, each with its
+ * line break.
  */
 function envAssignments(key) {
-  return new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?${key}[^\\S\\r\\n]*=.*(?:\\r?\\n|$)`, 'gm');
+  return new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?${key}(?:[^\\S\\r\\n]*=|:(?=\\s|$)).*(?:\\r?\\n|$)`, 'gm');
 }
 
-/** Set `key` on its first existing line (bare or `export`) and drop any later ones; append if absent. */
+/** Set `key` on its first existing line (any form envAssignments matches) and drop any later ones; append if absent. */
 function upsertEnvValue(content, key, value, comment = null) {
   const line = `${key}=${value}`;
   let found = false;

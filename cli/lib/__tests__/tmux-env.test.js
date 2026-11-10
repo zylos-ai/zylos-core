@@ -558,7 +558,7 @@ describe('writeLaunchSpec / readAndDeleteSpec', () => {
 });
 
 // ~/zylos/.env as a new Claude session and the settings.json check read it
-// (dotenv rules, the same as init and the skills).
+// (dotenv rules, the same as the scheduler, zylos-memory and web-console skills).
 describe('parseZylosDotenv', () => {
   it('drops an export prefix from the key', () => {
     assert.equal(parseZylosDotenv('export ANTHROPIC_BASE_URL=https://relay.example.test\n').ANTHROPIC_BASE_URL, 'https://relay.example.test');

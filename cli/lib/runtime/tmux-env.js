@@ -18,10 +18,12 @@ const EMPTY_MANIFEST = Object.freeze({
 });
 
 /**
- * Parse ~/zylos/.env the way a new runtime session reads it, with dotenv (as
- * the rest of zylos does): `export ` prefixes and trailing ` # comments` are
- * handled, quotes removed, later lines win. The relay traffic setting and the
- * settings.json override check use the same parse.
+ * Parse ~/zylos/.env the way a new Claude session reads it, with dotenv (as
+ * the scheduler, zylos-memory and web-console skills do): `export ` prefixes
+ * are dropped, an unquoted value ends at its first `#`, quotes are removed
+ * (`\n` in double quotes becomes a newline, and double quotes may span lines),
+ * later lines win. The relay traffic setting and the settings.json override
+ * check use the same parse.
  * @param {string} content
  * @returns {Record<string, string>}
  */
