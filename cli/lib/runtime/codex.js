@@ -52,7 +52,7 @@ const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 
 function getCodexApiBaseUrl() {
   try {
-    const configPath = path.join(os.homedir(), '.codex', 'config.toml');
+    const configPath = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml');
     const config = fs.readFileSync(configPath, 'utf8');
     const match = config.match(/^\s*openai_base_url\s*=\s*"([^"]+)"\s*$/m);
     if (match?.[1]) {
@@ -110,7 +110,7 @@ export class CodexAdapter extends RuntimeAdapter {
     let apiKey = '';
     try {
       const authJson = JSON.parse(fs.readFileSync(
-        path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'
+        path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json'), 'utf8'
       ));
       authMode = authJson?.auth_mode || null;
       // Only extract the API key when the mode is explicitly "apikey".
