@@ -494,16 +494,22 @@ describe('Codex hook trust backstop', () => {
     ['Authorization header with a plain-looking value', 'sent Authorization: Basic zzsecretzz to proxy', ['zzsecretzz', 'Basic'], ['sent Authorization: [redacted] to proxy']],
     ['bare Bearer value', 'retrying with Bearer abc.DEF-SECRETBEARER2 now', ['SECRETBEARER2'], ['retrying with Bearer [redacted] now']],
     ['bare Basic value that looks like base64', 'got Basic dXNlcjpTRUNSRVQ= back', ['dXNlcjpTRUNSRVQ='], ['got Basic [redacted] back']],
+    ['bare Basic value of letters only, in mixed case', 'got Basic dXNlcjpwYXNz back', ['dXNlcjpwYXNz'], ['got Basic [redacted] back']],
     ['ordinary words after basic', 'Basic validation failed; basic check skipped', [], ['Basic validation failed; basic check skipped']],
     ['bare JWT', 'cached eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJTRUNSRVRKV1QifQ.c2lnbmF0dXJl ok', ['eyJzdWIiOiJTRUNSRVRKV1QifQ'], ['cached [redacted] ok']],
     ['bare OpenAI-style key', 'using sk-proj-SECRETSK123456 for requests', ['SECRETSK123456'], ['using [redacted] for requests']],
     ['bare GitHub token', 'remote ghp_SECRETGH1234567890abcd rejected', ['SECRETGH'], ['remote [redacted] rejected']],
     ['URL userinfo', 'proxy http://user:SECRETURL@proxy:8080 refused', ['SECRETURL', 'user:'], ['proxy http://[redacted]@proxy:8080 refused']],
+    ['URL password holding an unencoded @', 'proxy http://user:pa@SECRETAT@proxy:8080/x refused', ['SECRETAT', 'pa@'], ['proxy http://[redacted]@proxy:8080/x refused']],
     ['command-line flag', 'spawn tool --api-key SECRETFLAG --verbose', ['SECRETFLAG'], ['spawn tool --api-key [redacted] --verbose']],
-    ['upper-case environment name', 'env OPENAI_API_KEY=SECRETENV set', ['SECRETENV'], ['env OPENAI_API_KEY=[redacted] set']],
+    ['secret flag after a plain flag', 'spawn tool --verbose --api-key SECRETNEXT done', ['SECRETNEXT'], ['spawn tool --verbose --api-key [redacted] done']],
+    ['upper-case environment names', 'env OPENAI_API_KEY=SECRETENV GITHUB_TOKEN=SECRETUP set', ['SECRETENV', 'SECRETUP'], ['env OPENAI_API_KEY=[redacted] GITHUB_TOKEN=[redacted] set']],
     ['quoted value with spaces', 'parsed password: "has SECRETSPACE inside" from file', ['SECRETSPACE'], ['parsed password: [redacted] from file']],
     ['quoted value with an escaped quote', '{"password": "ab\\"SECRETESC", "user": "felix"}', ['SECRETESC'], ['{"password": [redacted], "user": "felix"}']],
     ['Rust debug-escaped JSON', 'config: "{\\"api_key\\":\\"SECRETRUST\\",\\"model\\":\\"gpt\\"}"', ['SECRETRUST'], ['config: "{\\"api_key\\":[redacted],\\"model\\":\\"gpt\\"}"']],
+    ['Rust debug-escaped JSON with an escaped quote in the value', 'body: "{\\"password\\": \\"ab\\\\\\"SECRETDEEP\\"}" next', ['SECRETDEEP'],
+      ['body: "{\\"password\\": [redacted]}" next']],
+    ['secret pair in the bare value of a plain name', 'flags opts=token=SECRETCHAIN mode=fast', ['SECRETCHAIN'], ['flags opts=token=[redacted] mode=fast']],
     ['names that end in _key or contain secret', 'aws_secret_access_key=SECRETAWS SECRET_KEY=SECRETSK2 private_key: SECRETPK passphrase=SECRETPP region=us-east-1',
       ['SECRETAWS', 'SECRETSK2', 'SECRETPK', 'SECRETPP'], ['aws_secret_access_key=[redacted] SECRET_KEY=[redacted] private_key: [redacted] passphrase=[redacted] region=us-east-1']],
   ];
@@ -515,6 +521,50 @@ describe('Codex hook trust backstop', () => {
       }
     });
   }
+
+  it('redacts a secret in a non-numeric Codex error code', () => {
+    const report = describeTrustFailure({ error: { code: 'auth sk-proj-SECRETCODE99 rejected', message: 'refused' } });
+    assert.equal(report, 'Codex error auth [redacted] rejected: refused');
+  });
+
+  it('does not call an error of the trust helper or of spawning Codex a Codex error', () => {
+    const { homeDir, zylosDir } = makeEnv();
+    installCoreCodexHook({ zylosDir });
+    const timedOut = Object.assign(new Error('spawnSync /usr/bin/node ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    assert.equal(trustFailure({ zylosDir, projectDir: zylosDir, homeDir, spawnSyncImpl: () => ({ error: timedOut, status: null, stdout: '', stderr: '' }) }),
+      'Codex hook trust failed (trust_helper_error): error: Error: spawnSync /usr/bin/node ETIMEDOUT');
+    assert.equal(describeTrustFailure({ reason: 'codex_app_server_error', error: 'Error: spawn /missing/codex ENOENT', stderr: '' }),
+      'error: Error: spawn /missing/codex ENOENT');
+  });
+
+  // Only the start of a message and the end of stderr are redacted; a cut replaces the token it went through.
+  it('redacts a bounded part of huge input and marks a token the cut went through', () => {
+    assert.equal(describeTrustFailure({ stderr: `${'k'.repeat(9000)} end` }), 'stderr: [cut] end');
+    assert.equal(describeTrustFailure({ error: { code: 1, message: `start ${'k'.repeat(5000)}` } }), 'Codex error 1: start [cut]');
+    // Inputs that make backtracking patterns slow: runs of 8000 characters, longer than the part that is
+    // redacted, repeated with spaces between them to about 1 MiB.
+    const runs = (unit) => `${unit.repeat(Math.ceil(8000 / unit.length)).slice(0, 8000)} `.repeat(132);
+    const units = ['a', '-', 'x.', 'token', 'api_key_token-', 'secret_key=', 'a@', 'sk-', '\\"', `http://${'a@'.repeat(4000)}`,
+      'a=', '"a":', '\\"a\\":', 'token="', "token='", 'token=\\"', `${'k'.repeat(4000)} `];
+    // The best of five times, so a pause of the machine does not count. Each input is compared with plain words of
+    // the same length: linear redaction takes about as long on both, and a pattern that backtracks over a run takes
+    // tens of times longer. The margin keeps a slow or busy machine from failing the test.
+    const bestTime = (text) => {
+      let best = Infinity;
+      for (let i = 0; i < 5; i += 1) {
+        const started = performance.now();
+        describeTrustFailure({ stderr: text });
+        describeTrustFailure({ error: { code: 1, message: text } });
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    const plain = bestTime(runs('plain words '));
+    for (const unit of units) {
+      const time = bestTime(runs(unit));
+      assert.ok(time < 10 * plain + 20, `redacting runs of ${JSON.stringify(unit.slice(0, 12))} took ${time.toFixed(1)} ms, plain words ${plain.toFixed(1)} ms`);
+    }
+  });
 
   it('redacts a JWT that straddles the message limit before cutting the message', () => {
     const header = 'eyJhbGciOiJIUzI1NiJ9', payload = 'eyJzdWIiOiJTRUNSRVRKV1QiLCJuYW1lIjoiZmVsaXgifQ';

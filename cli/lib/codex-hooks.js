@@ -512,12 +512,21 @@ send('initialize', {
 const TRUST_ERROR_MESSAGE_LIMIT = 300;
 const TRUST_STDERR_TAIL_LIMIT = 600;
 const TRUST_ERROR_CODE_LIMIT = 40;
+// Only this much is redacted: the start of a message and the end of stderr. That is far more than is reported,
+// so the reported part keeps its context, and it bounds the time redaction can take on a huge input.
+const TRUST_REDACT_MESSAGE_LIMIT = 4096;
+const TRUST_REDACT_STDERR_LIMIT = 8192;
 
-// Names whose values are secrets: any name containing one of these words, or ending in _key, -key or apikey.
-const SECRET_NAME = String.raw`[A-Za-z0-9_.-]*(?:secret|token|password|passwd|passphrase|credential|cookie|authorization)[A-Za-z0-9_.-]*|[A-Za-z0-9_.-]*(?:[_-]key|apikey)`;
-// A value: \"escaped-quoted\" (Rust debug output of JSON), "quoted" or 'quoted' with escapes, or a bare word.
-// A value an earlier rule already replaced is left alone.
-const SECRET_VALUE = String.raw`(?!\[redacted\])(?:\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;&"'}\]]+)`;
+// A name: a whole run of name characters, starting only where the run begins, and checked by isSecretName instead
+// of being searched for inside the run. Either of the other ways makes redaction slow on long runs.
+const NAME = String.raw`(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])`;
+// A name whose value is a secret: it contains one of these words, or ends in _key, -key or apikey.
+const isSecretName = name => /secret|token|password|passwd|passphrase|credential|cookie|authorization/i.test(name)
+  || /(?:[_-]key|apikey)$/i.test(name);
+// A value: \"escaped-quoted\" (Rust debug output of JSON, where a JSON-escaped quote shows as \\\" and a
+// backslash as \\\\), "quoted" or 'quoted' with escapes, or a bare word. A value an earlier rule already
+// replaced is left alone.
+const SECRET_VALUE = String.raw`(?!\[redacted\])(?:\\"(?:\\\\\\"|\\\\\\\\|\\\\[^\\]|\\[^"\\]|[^\\])*?\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;&"'}\]]+)`;
 const REDACTIONS = [
   // Cookie headers carry several values: everything to the end of the line goes.
   [/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1[redacted]'],
@@ -530,18 +539,54 @@ const REDACTIONS = [
   [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]'],
   [/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}/g, '[redacted]'],
   [/\b(?:gh[opsur]_|github_pat_)[A-Za-z0-9_]{16,}/g, '[redacted]'],
-  // user:password@ in a URL.
-  [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[redacted]@'],
-  // --api-key VALUE or --token=VALUE on a command line.
-  [new RegExp(String.raw`(--(?:${SECRET_NAME})(?:=|\s+))[^\s"']+`, 'gi'), '$1[redacted]'],
-  // name=value, name: value, "name": "value" and \"name\":\"value\".
-  [new RegExp(String.raw`((?:\\?["'])?\b(?:${SECRET_NAME})(?:\\?["'])?\s*[:=]\s*)${SECRET_VALUE}`, 'gi'), '$1[redacted]'],
+  // user:password@ in a URL, up to the last @ before the host, since a password may hold an unencoded @.
+  // The scheme starts only where a run of scheme characters begins: starting anywhere makes it slow on long runs.
+  [/(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, '$1[redacted]@'],
 ];
+// --api-key VALUE on a command line. A value never starts with "-", so a following flag is not taken as one.
+const SECRET_FLAG = new RegExp(String.raw`(?<![A-Za-z0-9_.-])(--[A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])(\s+)([^\s"'-][^\s"']*)`, 'g');
+// The start of name=value, name: value, "name": "value", \"name\":\"value\" and --token=value, up to the value.
+const NAME_SEPARATOR = new RegExp(String.raw`(\\?["']?)${NAME}(\\?["']?\s*[:=]\s*)`, 'g');
+const VALUE_HERE = new RegExp(SECRET_VALUE, 'y');
+
+// Replaces the value after each secret name. The search goes on right after the separator of a name that is not
+// secret, so its value is searched too, since a quoted value may hold a secret pair. Only a secret name's value is
+// matched, so a long run of plain pairs is read once instead of once for each pair.
+function redactNameValues(text) {
+  let result = '';
+  let from = 0;
+  NAME_SEPARATOR.lastIndex = 0;
+  for (let match; (match = NAME_SEPARATOR.exec(text));) {
+    if (!isSecretName(match[2])) continue;
+    VALUE_HERE.lastIndex = NAME_SEPARATOR.lastIndex;
+    const value = VALUE_HERE.exec(text);
+    if (!value) continue;
+    result += `${text.slice(from, NAME_SEPARATOR.lastIndex)}[redacted]`;
+    from = NAME_SEPARATOR.lastIndex = VALUE_HERE.lastIndex;
+  }
+  return result + text.slice(from);
+}
 
 // Credentials that a Codex error or its stderr could carry. The error's data field and stdout are never included.
 function redactTrustText(text) {
-  return REDACTIONS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), String(text));
+  const redacted = REDACTIONS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), String(text));
+  return redactNameValues(redacted.replace(SECRET_FLAG, (match, name, separator) => (isSecretName(name) ? `${name}${separator}[redacted]` : match)));
 }
+
+// Characters that can belong to a credential: a cut replaces the piece of one it went through with [cut], since
+// a piece of a credential is no longer recognised as one.
+const TOKEN_CHAR = String.raw`[^\s,;"'{}\[\]]`;
+const IS_TOKEN_CHAR = new RegExp(`^${TOKEN_CHAR}$`);
+// The head is searched backwards for the start of its last token: a pattern anchored at the end would be tried
+// from every position of a long token.
+const headForRedaction = (text) => {
+  if (text.length <= TRUST_REDACT_MESSAGE_LIMIT) return text;
+  let end = TRUST_REDACT_MESSAGE_LIMIT;
+  while (end > 0 && IS_TOKEN_CHAR.test(text[end - 1])) end -= 1;
+  return `${text.slice(0, end)}[cut]`;
+};
+const tailForRedaction = text => (text.length > TRUST_REDACT_STDERR_LIMIT
+  ? text.slice(-TRUST_REDACT_STDERR_LIMIT).replace(new RegExp(`^${TOKEN_CHAR}*`), '[cut]') : text);
 
 // One log line: terminal escape sequences removed, line breaks shown as " | ", other control characters as spaces.
 function oneLine(text) {
@@ -562,16 +607,19 @@ export function describeTrustFailure(trust = {}) {
   if (exit !== null) parts.push(`exit code ${exit}`);
   const error = trust.error;
   if (error !== undefined && error !== null) {
-    const rawCode = typeof error === 'object' ? error.code : undefined;
+    // An object is Codex's own JSON-RPC error; a string is an error of the trust helper or of spawning Codex.
+    const fromCodex = typeof error === 'object';
+    const rawCode = fromCodex ? error.code : undefined;
     const code = rawCode === undefined || rawCode === null ? null
-      : typeof rawCode === 'number' ? String(rawCode) : oneLine(redactTrustText(rawCode)).slice(0, TRUST_ERROR_CODE_LIMIT);
-    const raw = typeof error === 'object' ? error.message ?? '' : error;
-    const message = oneLine(redactTrustText(raw)).slice(0, TRUST_ERROR_MESSAGE_LIMIT);
-    parts.push(`Codex error${code ? ` ${code}` : ''}: ${message || '(no message)'}`);
+      : typeof rawCode === 'number' ? String(rawCode)
+        : oneLine(redactTrustText(headForRedaction(String(rawCode)))).slice(0, TRUST_ERROR_CODE_LIMIT);
+    const raw = fromCodex ? error.message ?? '' : error;
+    const message = oneLine(redactTrustText(headForRedaction(String(raw)))).slice(0, TRUST_ERROR_MESSAGE_LIMIT);
+    parts.push(`${fromCodex ? 'Codex error' : 'error'}${code ? ` ${code}` : ''}: ${message || '(no message)'}`);
   }
   const stderr = typeof trust.stderr === 'string' ? trust.stderr.trim() : '';
   if (stderr) {
-    const tail = oneLine(redactTrustText(stderr));
+    const tail = oneLine(redactTrustText(tailForRedaction(stderr)));
     parts.push(`stderr${tail.length > TRUST_STDERR_TAIL_LIMIT ? ` (last ${TRUST_STDERR_TAIL_LIMIT} characters)` : ''}: ${tail.slice(-TRUST_STDERR_TAIL_LIMIT)}`);
   }
   return parts.join('; ');
