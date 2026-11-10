@@ -11,13 +11,37 @@ import { claudeProjectSlug } from '../src/lib/claude-project-path.js';
 import { latestCodexRolloutSessionBounds } from '../src/lib/metric-aggregate.js';
 import { CodexHistory } from '../src/lib/history/codex-history.js';
 
+// All cases use actual SQLite/files and collectors. Run for transcript discovery,
+// snapshot scheduling or attribution changes; skip unrelated UI changes. The official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR before imports; no services, network,
+// tmux sessions or child processes are started. Each fixture closes/removes its DB.
+const privateHome = fs.realpathSync(process.env.HOME);
+const ownerHome = fs.realpathSync(os.userInfo().homedir);
+assert.notEqual(privateHome, ownerHome);
+assert.ok(!privateHome.startsWith(ownerHome + path.sep));
+const isolationRoot = path.dirname(privateHome);
+for (const key of ['ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+  const target = process.env[key];
+  assert.ok(target, `${key} must be set`);
+  const resolved = fs.existsSync(target) ? fs.realpathSync(target)
+    : path.join(fs.realpathSync(path.dirname(target)), path.basename(target));
+  assert.ok(resolved.startsWith(isolationRoot + path.sep), `${key} must be private`);
+}
+assert.ok(Buffer.byteLength(path.join(process.env.TMPDIR, 'test.sock')) < 104);
+console.log('Transcript test isolation:', JSON.stringify({ HOME: privateHome,
+  ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME,
+  TMPDIR: process.env.TMPDIR, database: 'per-fixture temporary dashboard.db',
+  tmux: 'no tmux commands or sessions', children: 'none', network: 'none' }));
+
 const DAY = 86400000;
 function fixture(t, snapshot = { listKnown: true, rows: [] }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'transcripts-'));
   const store = new Store(path.join(root, 'dashboard.db'));
   let clock = Date.parse('2026-11-06T12:00:00Z');
   const inventory = new UsageTranscripts(store, { homeDir: root, zylosDir: root },
-    { now: () => clock, getSnapshot: async () => { if (snapshot instanceof Error) throw snapshot; return snapshot; } });
+    { now: () => clock,
+      getSnapshotKey: () => snapshot instanceof Error ? null : JSON.stringify(snapshot?.rows ?? []),
+      getSnapshot: async () => { if (snapshot instanceof Error) throw snapshot; return structuredClone(snapshot); } });
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const file = name => {
     const p = path.join(root, `${name}.jsonl`); fs.writeFileSync(p, '');
@@ -322,7 +346,8 @@ test('failed snapshots retain established Codex runtime facts until current evid
   assert.equal(collector.getRuntimeInfo().model_id, 'gpt-5.3-codex');
   assert.equal(collector.getRuntimeInfo().cli_version, '1.0.0');
   f.inventory.getSnapshot = async () => { throw new Error('status unavailable'); };
-  f.advance(60000);
+  f.inventory.getSnapshotKey = () => 'changed';
+  f.advance(5000);
   await collector.collect();
   assert.equal(f.inventory.snapshot, null);
   const retained = collector.getRuntimeInfo();
@@ -339,23 +364,253 @@ test('failed snapshots retain established Codex runtime facts until current evid
   assert.equal(collector.getRuntimeInfo().session_id, null);
 });
 
-test('valid current-run snapshots are reused for twelve polls and refreshed after a minute', async t => {
+test('unchanged session identities reuse snapshots across discovery rounds until ten minutes', async t => {
   const f = fixture(t), p = f.file('snapshot-cache'); f.start(p, 'origin');
-  let calls = 0;
+  let calls = 0, discoveries = 0;
+  const discover = f.inventory.discover.bind(f.inventory);
+  t.mock.method(f.inventory, 'discover', at => { discoveries++; return discover(at); });
   f.inventory.getSnapshot = async () => { calls++; return { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] }; };
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 120; i++) {
     await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
     await f.inventory.collect('codex', () => assert.fail('no Codex file'));
+    assert.equal(calls, 1, `poll ${i} before fallback`);
     f.advance(5000);
   }
-  assert.equal(calls, 1);
+  assert.equal(discoveries, 10);
   await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
   assert.equal(calls, 2);
+  assert.equal(discoveries, 11);
+});
+
+// Identity transitions must affect the next poll, independently of 60s discovery.
+test('session start and end keys refresh on the next poll and preserve run attribution', async t => {
+  const snapshot = { listKnown: true, rows: [] };
+  const f = fixture(t, snapshot), old = f.file('old-origin'), next = f.file('next-origin');
+  f.start(old, 'origin');
+  f.store.insertEvent({ id: 'next-start', ingest_id: 'next-start', timestamp: new Date(f.now()).toISOString(),
+    runtime: 'claude', session_id: 'next-session', session_group: 'origin', run_id: 'next-run',
+    event_type: 'session_start', category: 'session', metadata: { transcript_path: next }, source: 'core-log', confidence: 'actual' });
+  let calls = 0;
+  f.inventory.getSnapshot = async () => { calls++; return structuredClone(snapshot); };
+  const seen = new Map();
+  const poll = async () => {
+    seen.clear();
+    await f.inventory.collect('claude', (row, current) => { seen.set(row.transcript_path, current); return { byteOffset: 0 }; });
+  };
+  await poll();
+  assert.equal(seen.get(old), false); assert.equal(seen.get(next), false);
+  snapshot.rows = [{ sessionGroup: 'origin', live: { runId: 'run-origin', sessionId: 'session-origin' } }];
+  f.advance(5000); await poll();
+  assert.equal(calls, 2); assert.equal(seen.get(old), true); assert.equal(seen.get(next), false);
+  snapshot.rows[0].live = { runId: 'next-run', sessionId: 'next-session' };
+  f.advance(5000); await poll();
+  assert.equal(calls, 3); assert.equal(seen.get(old), false); assert.equal(seen.get(next), true);
+  snapshot.rows[0].live = null;
+  f.advance(5000); await poll();
+  assert.equal(calls, 4); assert.equal(seen.get(old), false); assert.equal(seen.get(next), false);
+});
+
+for (const signal of ['stuck', 'null', 'throws']) {
+  test(`ten minute fallback refreshes when the session signal is ${signal}`, async t => {
+    const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
+    const f = fixture(t, snapshot), p = f.file('fallback'); f.start(p, 'origin');
+    f.inventory.getSnapshotKey = () => { if (signal === 'throws') throw new Error('signal unavailable'); return signal === 'null' ? null : 'unchanged'; };
+    let calls = 0;
+    f.inventory.getSnapshot = async () => { calls++; return structuredClone(snapshot); };
+    const poll = expected => f.inventory.collect('claude', (row, current) => { assert.equal(current, expected); return { byteOffset: 0 }; });
+    await poll(true);
+    snapshot.rows[0].live = null;
+    f.advance(599999); await poll(true); assert.equal(calls, 1);
+    f.advance(1); await poll(false); assert.equal(calls, 2);
+  });
+}
+
+test('signal loss refreshes immediately and accepts a stable actual snapshot', async t => {
+  const f = fixture(t), p = f.file('signal-loss'); f.start(p, 'origin');
+  let key = 'running', calls = 0;
+  f.inventory.getSnapshotKey = () => key;
+  f.inventory.getSnapshot = async () => { calls++; return { listKnown: true, rows: [] }; };
+  await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
+  key = null; f.advance(5000);
+  await f.inventory.collect('claude', (row, current) => { assert.equal(current, false); return { byteOffset: 0 }; });
+  assert.equal(calls, 2); assert.equal(f.inventory.snapshot.listKnown, true);
+  f.advance(5000); await f.inventory.collect('claude', () => ({ byteOffset: 0 }));
+  assert.equal(calls, 2);
+});
+
+test('clock rollback refreshes the snapshot without waiting for fallback', async t => {
+  const f = fixture(t); let calls = 0;
+  f.inventory.getSnapshot = async () => { calls++; return { listKnown: true, rows: [] }; };
+  await f.inventory.collect('claude', () => assert.fail('no files'));
+  f.advance(-1);
+  await f.inventory.collect('claude', () => assert.fail('no files'));
+  assert.equal(calls, 2); assert.equal(f.inventory._snapshotAt, f.now());
+});
+
+for (const staleRun of ['run-origin', 'ended-run']) {
+  for (const signal of ['live key', 'persisted lifecycle']) {
+    test(`identity changing during snapshot read rejects ${staleRun} evidence from ${signal} and retries next poll`, { timeout: 1000 }, async t => {
+      const f = fixture(t), p = f.file('transition'); f.start(p, 'origin');
+      fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
+      let key = 'before', calls = 0, release, began;
+      const entered = new Promise(resolve => { began = resolve; });
+      const ready = new Promise(resolve => { release = resolve; });
+      t.after(() => release());
+      f.inventory.getSnapshotKey = () => signal === 'live key' ? key : null;
+      f.inventory.getSnapshot = async () => {
+        calls++;
+        const candidate = { listKnown: true, rows: [{ sessionGroup: 'origin', live: {
+          runId: calls === 1 ? staleRun : 'run-origin',
+        } }] };
+        if (calls === 1) { began(); await ready; }
+        return candidate;
+      };
+      const first = f.inventory.collect('claude', (row, current) => { assert.equal(current, false); return { byteOffset: 0 }; });
+      await entered;
+      if (signal === 'live key') key = 'after';
+      else lifecycleEvent(f, 'rotate_done');
+      release(); await first;
+      assert.equal(f.inventory.snapshot, null); assert.equal(f.inventory._snapshotAt, null);
+      assert.equal(f.store.getUsageTranscript(p).status, 'active');
+      f.advance(5000);
+      await f.inventory.collect('claude', (row, current) => { assert.equal(current, true); return { byteOffset: 0 }; });
+      assert.equal(calls, 2); assert.equal(f.inventory.snapshot.listKnown, true);
+    });
+  }
+}
+
+// SQLite event identity integration: existing Core events must invalidate even
+// when Origin is asleep and the sampled live key is null. No new Core API is used.
+function lifecycleEvent(f, type, source = 'core-log') {
+  const id = `${source}-${type}-${Math.random()}`;
+  f.store.insertEvent({ id, ingest_id: id, timestamp: new Date(f.now()).toISOString(),
+    runtime: 'claude', session_id: 'group-session', session_group: 'other-group', run_id: 'group-run',
+    event_type: type, category: 'session', metadata: {}, source, confidence: 'actual' });
+  return id;
+}
+
+test('persisted Core lifecycle events refresh on the next poll while the live key is unavailable', async t => {
+  const f = fixture(t);
+  f.inventory.getSnapshotKey = () => null;
+  let calls = 0;
+  f.inventory.getSnapshot = async () => { calls++; return { listKnown: true, rows: [] }; };
+  const poll = () => f.inventory.collect('claude', () => assert.fail('no files'));
+  await poll(); assert.equal(calls, 1);
+  // Starts, switches, reclamation/end, manual restart and stop all reuse existing
+  // persisted Core event types; each must independently trigger within five seconds.
+  const types = ['session_start', 'activate_new', 'start_always', 'activate_continuation',
+    'adopt_ready', 'activate_failed', 'activate_timeout', 'reclaim_done', 'rotate_done',
+    'crash_detected', 'manual_restart_done', 'unowned_start_stopped'];
+  for (const [index, type] of types.entries()) {
+    lifecycleEvent(f, type); f.advance(5000); await poll();
+    assert.equal(calls, index + 2, type);
+  }
+});
+
+test('replacing a persisted lifecycle event with a reused sequence still refreshes the snapshot', async t => {
+  const f = fixture(t);
+  f.inventory.getSnapshotKey = () => null;
+  let calls = 0;
+  f.inventory.getSnapshot = async () => { calls++; return { listKnown: true, rows: [] }; };
+  const first = lifecycleEvent(f, 'session_start');
+  const sequence = f.store.db.prepare('SELECT event_seq FROM runtime_events WHERE id=?').get(first).event_seq;
+  await f.inventory.collect('claude', () => assert.fail('no files'));
+  f.store.db.prepare('DELETE FROM runtime_events WHERE id=?').run(first);
+  const replacement = lifecycleEvent(f, 'rotate_done');
+  assert.equal(f.store.db.prepare('SELECT event_seq FROM runtime_events WHERE id=?').get(replacement).event_seq, sequence);
+  f.advance(5000);
+  await f.inventory.collect('claude', () => assert.fail('no files'));
+  assert.equal(calls, 2);
+});
+
+test('tool turn pool and non-Core lifecycle events do not refresh run snapshots', async t => {
+  const f = fixture(t);
+  f.inventory.getSnapshotKey = () => null;
+  let calls = 0;
+  f.inventory.getSnapshot = async () => { calls++; return { listKnown: true, rows: [] }; };
+  const poll = () => f.inventory.collect('claude', () => assert.fail('no files'));
+  await poll();
+  for (const [type, source] of [['pre_tool_use', 'core-log'], ['post_tool_use', 'core-log'], ['stop', 'core-log'],
+    ['pool_sample', 'core-log'], ['session_start', 'conversation'], ['rotate_done', 'hook']]) {
+    lifecycleEvent(f, type, source); f.advance(5000); await poll();
+    assert.equal(calls, 1, `${source}/${type}`);
+  }
+});
+
+for (const failureAt of ['before snapshot', 'after snapshot']) {
+  test(`unreadable lifecycle storage ${failureAt} rejects snapshots until the next healthy poll`, async t => {
+    const f = fixture(t), p = f.file('unreadable-lifecycle'); f.start(p, 'origin');
+    fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
+    let calls = 0, readError = false;
+    const statement = f.inventory._lifecycleSequence;
+    const get = statement.get.bind(statement);
+    t.mock.method(statement, 'get', (...args) => {
+      if (readError) throw new Error('lifecycle storage unavailable');
+      return get(...args);
+    });
+    f.inventory.getSnapshotKey = () => null;
+    f.inventory.getSnapshot = async () => {
+      calls++;
+      if (calls === 2 && failureAt === 'after snapshot') readError = true;
+      return { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: calls === 1 ? 'run-origin' : 'ended-run' } }] };
+    };
+    await f.inventory.collect('claude', (row, current) => { assert.equal(current, true); return { byteOffset: 0 }; });
+    if (failureAt === 'before snapshot') readError = true;
+    else lifecycleEvent(f, 'reclaim_done');
+    for (let round = 0; round < 2; round++) {
+      f.advance(5000);
+      await f.inventory.collect('claude', (row, current) => { assert.equal(current, false); return { byteOffset: 0 }; });
+      assert.equal(f.inventory.snapshot, null);
+      assert.equal(f.inventory._snapshotAt, null);
+      assert.equal(f.store.getUsageTranscript(p).status, 'active');
+      assert.equal(calls, round + 2);
+    }
+    readError = false; f.advance(5000);
+    await f.inventory.collect('claude', (row, current) => { assert.equal(current, false); return { byteOffset: 0 }; });
+    assert.equal(calls, 4);
+    assert.equal(f.inventory.snapshot.listKnown, true);
+    assert.equal(f.store.getUsageTranscript(p).status, 'finished');
+  });
+}
+
+// Real collector/SQLite integration: lifecycle keys gate current summaries while
+// usage retains each transcript's own session/run attribution, including late writes.
+test('session rotation keeps old and new usage on their own runs and authorizes only current summaries', async t => {
+  const snapshot = { listKnown: true, rows: [{ sessionGroup: 'origin', live: { runId: 'run-origin' } }] };
+  const f = fixture(t, snapshot), old = f.file('usage-old'), next = f.file('usage-next');
+  f.start(old, 'origin');
+  f.store.insertEvent({ id: 'usage-next-start', ingest_id: 'usage-next-start', timestamp: new Date(f.now()).toISOString(),
+    runtime: 'claude', session_id: 'next-session', session_group: 'origin', run_id: 'next-run',
+    event_type: 'session_start', category: 'session', metadata: { transcript_path: next }, source: 'core-log', confidence: 'actual' });
+  const append = (file, session, id) => {
+    fs.appendFileSync(file, JSON.stringify({ type: 'assistant', uuid: id, requestId: id, sessionId: session,
+      timestamp: new Date(f.now()).toISOString(), message: { model: 'claude-example',
+        content: [{ type: 'text', text: id }], usage: { input_tokens: 10, output_tokens: 2 } } }) + '\n');
+    fs.utimesSync(file, new Date(f.now()), new Date(f.now()));
+  };
+  const collector = new ConversationCollector(f.store, { homeDir: f.root, zylosDir: f.root }, { transcripts: f.inventory });
+  append(old, 'session-origin', 'old-current'); append(next, 'next-session', 'next-before-start');
+  await collector.collect();
+  snapshot.rows[0].live.runId = 'next-run'; f.advance(5000);
+  append(old, 'session-origin', 'old-late'); append(next, 'next-session', 'next-current');
+  await collector.collect();
+  const summaries = f.store.queryEvents({ types: ['assistant_message'] });
+  assert.equal(summaries.length, 2);
+  assert.equal(summaries.find(row => row.summary === 'old-current')?.run_id, 'run-origin');
+  assert.equal(summaries.find(row => row.summary === 'next-current')?.run_id, 'next-run');
+  const usage = f.store.queryMetrics({ name: 'usage_event' });
+  assert.equal(usage.length, 4);
+  for (const row of usage) {
+    const oldRun = row.dimensions.request_id.startsWith('old-');
+    assert.equal(row.session_id, oldRun ? 'session-origin' : 'next-session');
+    assert.equal(row.dimensions.run_id, oldRun ? 'run-origin' : 'next-run');
+  }
 });
 
 test('discovery refreshes a recovered snapshot before reading a new Origin transcript', async t => {
   const f = fixture(t);
   let calls = 0, currentRun = 'old-run';
+  f.inventory.getSnapshotKey = () => currentRun;
   f.inventory.getSnapshot = async () => {
     calls++;
     if (calls === 1) throw new Error('snapshot unavailable');
@@ -389,6 +644,8 @@ test('discovery refreshes a recovered snapshot before reading a new Origin trans
 
 test('incomplete and failed status snapshots suppress finishing and current attribution without caching', async t => {
   for (const snapshot of [
+    new Error('snapshot unavailable'),
+    null,
     { listKnown: false, reason: 'group_list_failed', rows: [{ sessionGroup: 'origin', live: null }] },
     { rows: [] },
     { listKnown: false, sources: { status: { ok: false } }, rows: [{ sessionGroup: 'origin', live: null }] },
@@ -396,7 +653,7 @@ test('incomplete and failed status snapshots suppress finishing and current attr
     const f = fixture(t, snapshot), p = f.file('incomplete'); f.start(p, 'origin');
     fs.utimesSync(p, new Date(f.now() - DAY), new Date(f.now() - DAY));
     let calls = 0;
-    f.inventory.getSnapshot = async () => { calls++; return snapshot; };
+    f.inventory.getSnapshot = async () => { calls++; if (snapshot instanceof Error) throw snapshot; return snapshot; };
     for (let i = 0; i < 2; i++) {
       await f.inventory.collect('claude', (row, current) => {
         assert.equal(current, false); return { byteOffset: 0 };

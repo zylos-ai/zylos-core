@@ -39,9 +39,15 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (!ids.length) return new Map();
     try { return await readTaskNames(ids); } catch { return new Map(); }
   }
-  async function getSnapshot(at = now()) {
-    if (inflight) return inflight;
-    if (cache && at - cache.builtAt < 2000) return cache.value;
+  async function getSnapshot(at = now(), { fresh = false } = {}) {
+    if (inflight) {
+      if (!fresh) return inflight;
+      // A lifecycle-triggered reader needs observations made after the pending
+      // read, rather than reusing an old generation's in-flight snapshot.
+      await inflight;
+      return getSnapshot(at, { fresh });
+    }
+    if (!fresh && cache && at - cache.builtAt < 2000) return cache.value;
     inflight = buildGroupSnapshot(at);
     try {
       const value = await inflight;

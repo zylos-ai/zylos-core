@@ -4,6 +4,14 @@ import { claudeProjectSlug } from '../claude-project-path.js';
 import { sameSourceFile } from '../source-file-identity.js';
 
 const DAY = 86400000;
+// Existing identity and lifecycle signals handle session changes; this bounds a
+// missed signal to ten minutes without repeating the Core CLI reads each minute.
+const SNAPSHOT_FALLBACK_MS = 10 * 60000;
+// Persisted lifecycle signals still work when Origin is asleep and costKey is
+// unavailable. Turn stops and tool events do not change a session's identity.
+const SESSION_LIFECYCLE_EVENTS = ['session_start', 'activate_new', 'start_always',
+  'activate_continuation', 'adopt_ready', 'activate_failed', 'activate_timeout',
+  'reclaim_done', 'rotate_done', 'crash_detected', 'manual_restart_done', 'unowned_start_stopped'];
 
 /** A non-origin group's own main transcript (not a subagent file): its assistant words belong to that group. */
 export function groupMainTranscript(mapping) {
@@ -11,16 +19,21 @@ export function groupMainTranscript(mapping) {
 }
 
 export class UsageTranscripts {
-  constructor(store, config, { getSnapshot, now = Date.now } = {}) {
+  constructor(store, config, { getSnapshot, getSnapshotKey, now = Date.now } = {}) {
     this.store = store;
     this.config = config;
     this.getSnapshot = getSnapshot;
+    this.getSnapshotKey = getSnapshotKey;
+    this._lifecycleSequence = store.db.prepare(`SELECT event_seq,id FROM runtime_events
+      WHERE source='core-log' AND event_type IN (${SESSION_LIFECYCLE_EVENTS.map(() => '?').join(',')})
+      ORDER BY event_seq DESC LIMIT 1`);
     this.now = now;
     this._lastDiscovery = null;
     this._round = null;
     this._pending = new Map();
     this.snapshot = null;
     this._snapshotAt = null;
+    this._snapshotKey = undefined;
     this._legacySessionId = null;
   }
 
@@ -105,17 +118,35 @@ export class UsageTranscripts {
   async _newRound(at) {
     const discoveryDue = this._lastDiscovery == null || at - this._lastDiscovery >= 60000 || at < this._lastDiscovery;
     if (discoveryDue) this.discover(at);
+    const snapshotKey = this._readSnapshotKey();
     let snapshot = this.snapshot;
-    if (discoveryDue || this._snapshotAt == null || at < this._snapshotAt || at - this._snapshotAt >= 60000) {
+    if (this._snapshotAt == null || at < this._snapshotAt ||
+        at - this._snapshotAt >= SNAPSHOT_FALLBACK_MS || snapshotKey !== this._snapshotKey) {
       snapshot = null;
       try {
         const candidate = await this.getSnapshot?.(at) ?? null;
-        if (candidate?.listKnown === true) snapshot = candidate;
+        // A lifecycle change while the read was pending must not authorize
+        // either generation with a snapshot captured for the other one.
+        if (snapshotKey !== null && candidate?.listKnown === true && snapshotKey === this._readSnapshotKey()) snapshot = candidate;
       } catch { /* Failed snapshots cannot authorize current-session events or finishing. */ }
       this.snapshot = snapshot;
       this._snapshotAt = snapshot ? at : null;
+      this._snapshotKey = snapshot ? snapshotKey : undefined;
     }
     return { at, snapshot, rows: this.store.activeUsageTranscripts(50) };
+  }
+
+  _readSnapshotKey() {
+    let liveKey = null;
+    try { liveKey = this.getSnapshotKey?.() ?? null; }
+    catch { /* The persisted lifecycle signal and fallback remain available. */ }
+    try {
+      const event = this._lifecycleSequence.get(...SESSION_LIFECYCLE_EVENTS);
+      // Deletion can reduce/reuse event_seq; the event ID also distinguishes a
+      // newly imported lifecycle observation at a previously used sequence.
+      return JSON.stringify([liveKey, event?.event_seq ?? null, event?.id ?? null]);
+    }
+    catch { return null; } // Unreadable lifecycle storage cannot authorize a snapshot.
   }
 
   collect(runtime, callback, at = this.now()) {
