@@ -1370,7 +1370,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
     if (ctx.preInstallProtection) {
       ctx.journal = serviceMaintenance.read(path.join(ctx.transactionDir, 'journal.json'));
       for (const name of ctx.servicesWereRunning) {
-        if ((ctx.journal.originalServices || []).filter(service => service.name === name).length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
+        if (!(ctx.journal.originalServices || []).some(service => service.name === name)) throw Error('original PM2 service record missing or changed: ' + name);
       }
       const {external} = serviceMaintenance.serviceRequirements(ctx.journal);
       if (ctx.journal.initialIdentity?.ecosystemHash === null) {

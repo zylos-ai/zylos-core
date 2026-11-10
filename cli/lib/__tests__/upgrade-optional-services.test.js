@@ -188,8 +188,8 @@ for(const ecosystemSource of ['module.exports={apps:[]};','module.exports={};'])
   assert.deepEqual(f.j.serviceWarnings,[],'obsolete service warnings are cleared');
 });
 
-// Forward finalization follows the trusted deployed link; restored recovery
-// still verifies the original nonsymlink path before restarting any service.
+// Forward finalization and new-phase recovery follow the trusted deployed link;
+// restored recovery still verifies the original nonsymlink path before restart.
 test('protected upgrade completes with a trusted ecosystem symlink',t=>{
   const f=mixed(t);f.j.phase='new_data_ready';
   const target=path.join(f.root,'deployed-ecosystem.cjs');fs.renameSync(f.file,target);fs.symlinkSync(target,f.file);f.save();
@@ -202,4 +202,51 @@ test('protected upgrade completes with a trusted ecosystem symlink',t=>{
   assert.equal(f.load().phase,'upgrade_complete');
   assert.equal(f.readRecords().find(record=>record.name==='scheduler').pm2_env.status,'online');
   assert.throws(()=>m.start({...f.load(),phase:'restored_verifying'}),/unsafe recovery path/);
+});
+
+// Real service steps must retain ecosystem cluster-instance compatibility.
+// Run when step11 saved-record admission changes; unrelated changes may skip.
+test('protected upgrade completes with two instances of an ecosystem service',t=>{
+  const f=mixed(t);f.j.phase='new_data_ready';
+  const scheduler=f.j.originalServices.find(service=>service.name==='scheduler');
+  f.j.originalServices.push({...scheduler});
+  f.records([...f.readRecords(),{name:'scheduler',pid:0,pm2_env:{status:'stopped',pm_exec_path:scheduler.script}}]);
+  fs.writeFileSync(f.file,`module.exports={apps:[{name:'scheduler',script:${JSON.stringify(scheduler.script)},instances:2,exec_mode:'cluster'}]};`);
+  f.save();
+  const state={schemaVersion:2,preInstallProtection:true,zylosDir:f.root,ecosystemPath:f.file,
+    transactionId:'tx',transactionDir:f.dir,servicesWereRunning:['custom','scheduler','scheduler'],from:'1',to:'2',databaseMode:'unchanged'};
+  const statePath=path.join(f.root,'state.json');fs.writeFileSync(statePath,JSON.stringify(state));
+  const child=spawnSync(process.execPath,['cli/lib/__tests__/helpers/optional-service-finalizer.js',statePath],{env:f.env,encoding:'utf8',timeout:20000});
+  assert.equal(child.status,0,child.stderr);const result=JSON.parse(child.stdout);
+  assert.equal(result.success,true,JSON.stringify(result));assert.equal(result.serviceWarnings,undefined);
+  assert.equal(f.load().phase,'upgrade_complete');
+  const instances=f.readRecords().filter(record=>record.name==='scheduler');
+  assert.equal(instances.length,2);assert.ok(instances.every(record=>record.pid>0&&record.pm2_env.status==='online'));
+  assert.equal(f.commands().filter(args=>args[0]==='start'&&args.includes('scheduler')).length,2);
+  assert.ok(f.commands().some(args=>args[0]==='save'));
+});
+
+// Actual resume exercises validateReady and the terminal-services-stopped path.
+// Run for forward recovery ecosystem/start changes; unrelated changes may skip.
+for(const phase of ['new_data_ready','new_verifying'])test(`forward recovery completes with a trusted ecosystem symlink from ${phase}`,t=>{
+  const f=mixed(t);f.j.phase=phase;
+  const target=path.join(f.root,'deployed-ecosystem.cjs');fs.renameSync(f.file,target);fs.symlinkSync(target,f.file);
+  const core=path.join(f.root,'core');fs.mkdirSync(core);fs.writeFileSync(path.join(core,'current.js'),'// deployed core');
+  const coreHash=f.maintenance.treeHash(core);f.save();
+  const result=f.runner.resume(f.dir);
+  assert.equal(result.stage,'upgrade_complete',JSON.stringify(result));assert.equal(result.recovery_required,false);
+  assert.equal(result.attempted,false);assert.equal(result.completed,false,'forward completion is not rollback completion');
+  const durable=f.load();assert.equal(durable.phase,'upgrade_complete');assert.equal(durable.terminalEvidence.verified,true);
+  assert.equal(durable.cleanup.complete,true);assert.equal(f.maintenance.discover(f.root).marker,null);
+  assert.equal(f.maintenance.treeHash(core),coreHash,'forward completion preserves deployed core');
+  assert.ok(f.readRecords().every(record=>record.pid>0&&record.pm2_env.status==='online'));
+  const starts=f.commands().filter(args=>args[0]==='startOrRestart').length;
+  durable.terminalServicesStopped=true;f.maintenance.update(f.dir,durable);f.maintenance.marker(f.root,f.dir,durable);
+  f.records(f.readRecords().map(record=>({...record,pid:0,pm2_env:{...record.pm2_env,status:'stopped'}})));
+  const terminal=f.runner.resume(f.dir);
+  assert.equal(terminal.stage,'upgrade_complete',JSON.stringify(terminal));assert.equal(terminal.recovery_required,false);
+  assert.equal(terminal.completed,false);assert.equal(f.load().terminalServicesStopped,false);
+  assert.ok(f.commands().filter(args=>args[0]==='startOrRestart').length>starts,'terminal resume restarts through the symlink');
+  assert.ok(f.readRecords().every(record=>record.pid>0&&record.pm2_env.status==='online'));
+  assert.equal(f.maintenance.discover(f.root).marker,null);assert.equal(f.maintenance.treeHash(core),coreHash);
 });
