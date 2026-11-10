@@ -144,6 +144,53 @@ test('snapshot shares in-flight collection, caches from completion, and captures
   f.advance(30000); await f.service.getSnapshot(); assert.equal(f.reads.length, 4);
 });
 
+// Integration: real snapshot/collectStatus cache bypass after lifecycle changes.
+// Run for lifecycle freshness or cache changes; skip UI-only changes. Official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; fixture owns its root.
+// No database, socket, child process, PM2 or network is used.
+test('fresh snapshots bypass a completed cache after a session changes', async t => {
+  const f = fixture(t);
+  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
+  console.log('Fresh snapshot isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, root: f.root,
+    database: 'none', tmux: 'none', network: 'none', Core: 'injected' }));
+  const original = await f.service.getSnapshot();
+  f.live.get('telegram:g0').identity.runId = 'replacement-run';
+  assert.equal(await f.service.getSnapshot(), original, 'ordinary reads still use the two-second cache');
+  const refreshed = await f.service.getSnapshot(f.now(), { fresh: true });
+  assert.equal(refreshed.rows.find(row => row.sessionGroup === 'telegram:g0').live.runId, 'replacement-run');
+  assert.equal(original.rows.find(row => row.sessionGroup === 'telegram:g0').live.runId, 'run-telegram:g0');
+  assert.equal(f.calls.length, 6, 'one additional three-command build');
+});
+
+// Integration: real snapshot/collectStatus sequencing with injected Core/CLI;
+// run for lifecycle freshness or inflight/cache changes, skip UI-only changes.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; fixture owns
+// its temporary root. No database, socket, child process, PM2 or network is used.
+test('fresh snapshots wait for an earlier read then observe the next session', { timeout: 1000 }, async t => {
+  const f = fixture(t), originalCli = f.cli.runC4Db;
+  assert.ok(f.root.startsWith(process.env.TMPDIR + path.sep));
+  console.log('Pending snapshot isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, root: f.root,
+    database: 'none', tmux: 'none', network: 'none', Core: 'injected' }));
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  let pendingCalls = 0;
+  f.cli.runC4Db = async args => { if (++pendingCalls <= 2) await held; return originalCli(args); };
+  const earlier = f.service.getSnapshot();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.observations.length, 2, 'the earlier build captured live identities before waiting');
+  f.live.get('telegram:g0').identity.runId = 'replacement-run';
+  const fresh = f.service.getSnapshot(f.now(), { fresh: true });
+  release();
+  const [before, after] = await Promise.all([earlier, fresh]);
+  assert.equal(before.rows.find(row => row.sessionGroup === 'telegram:g0').live.runId, 'run-telegram:g0');
+  assert.equal(after.rows.find(row => row.sessionGroup === 'telegram:g0').live.runId, 'replacement-run');
+  assert.equal(f.calls.length, 6);
+  assert.equal(await f.service.getSnapshot(), after, 'ordinary readers share the newly completed cache');
+});
+
 // Integration: Cross-module failure/retry boundary; run for snapshot error handling changes.
 // Skip rendering-only edits. Owned temporary root/DB, injected Core/CLI; no live
 // tmux/PM2/network. Fixture cleanup closes owned resources; auth timer is stopped.
@@ -165,7 +212,8 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
     storage: 'injected, no DB/PM2/tmux/network opened' }));
   const value = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams());
   assert.equal(value.listKnown, true); assert.equal(value.baselineRuntime, 'claude');
-  assert.equal(value.instance.pool.used, 3); assert.equal(value.instance.pool.capacity, null);
+  assert.equal(value.instance.pool.used, null); assert.equal(value.instance.pool.capacity, null);
+  assert.equal(value.instance.pool.reason, 'pool_occupancy_unreadable');
   assert.equal(value.instance.accounts.claude.used_percentage, 23); assert.equal(value.instance.accounts.codex, null);
   assert.equal(value.instance.accounts.claude.live, false);
   assert.equal(value.instance.accounts.claude.recordedAt, f.now() - 3600000);
@@ -178,7 +226,7 @@ test('full and summary responses preserve metadata-only C4 and redact messages a
   assert.match(row.preview.text, /REDACTED/); assert.match(row.tools[0].detail, /REDACTED/);
   const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
   assert.deepEqual(Object.keys(summary).sort(), ['counts', 'hasOlder', 'mode', 'pool', 'readAt', 'view']);
-  assert.deepEqual(summary.pool, { used: 3, capacity: null });
+  assert.deepEqual(summary.pool, { used: null, capacity: null });
 });
 
 // Integration: shared PM2 snapshot projection and attention boundary. Run for

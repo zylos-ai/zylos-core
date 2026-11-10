@@ -15,6 +15,7 @@ import { StateEngine } from '../src/lib/state-engine.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
+import { CoreState } from '../src/lib/core-state.js';
 
 const at = Date.parse('2026-11-06T12:00:00.000Z');
 const timestamp = new Date(at).toISOString();
@@ -89,7 +90,7 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
   const previous = { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR };
   const intervals = new Set();
   const realSetInterval = globalThis.setInterval;
-  let engine;
+  let engine, coreState;
   t.after(() => {
     for (const timer of intervals) clearInterval(timer);
     engine?.store.close();
@@ -112,10 +113,16 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
   t.mock.module('../src/lib/state-engine.js', { namedExports: {
     StateEngine: class extends StateEngine { constructor(...args) { super(...args); engine = this; } },
   } });
+  t.mock.module('../src/lib/core-state.js', { namedExports: {
+    CoreState: class extends CoreState { constructor(...args) { super(...args); coreState = this; } },
+  } });
   let snapshots = 0;
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     workbenchResponse,
-    createGroupSnapshot: () => ({ getSnapshot: async () => { snapshots++; return { listKnown: true, rows: [] }; } }),
+    createGroupSnapshot: () => ({ getSnapshot: async (at, options) => {
+      assert.deepEqual(options, { fresh: true }, 'usage lifecycle reads bypass the UI snapshot cache');
+      snapshots++; return { listKnown: true, rows: [] };
+    } }),
   } });
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude' }));
@@ -126,6 +133,9 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
   }));
   process.env.HOME = root;
   process.env.ZYLOS_DIR = root;
+  console.log('Usage constructor isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: process.env.TMUX_TMPDIR,
+    database: path.join(root, 'components/dashboard/dashboard.db'), Core: 'injected', network: 'none' }));
   await import(`../src/index.js?usage-wiring=${crypto.randomUUID()}`);
   assert.equal(engine?._config.runtime, 'claude');
   assert.ok(engine.collectors.conversation instanceof ConversationCollector);
@@ -147,6 +157,11 @@ test('dashboard constructs both usage collectors when configured for Claude', { 
   assert.equal(rows[0].dimensions.run_id, 'other-run');
   near(rows[0].dimensions.cost, (60 * 3 + 40 * 0.3 + 20 * 12) / 1e6);
   assert.equal(snapshots, 1);
+  await engine.collectors.conversation.collect();
+  assert.equal(snapshots, 1, 'unchanged production CoreState signal reuses the snapshot');
+  coreState.costKey = JSON.stringify([['other-group', 'next-run', 'next-session']]);
+  await engine.collectors.conversation.collect();
+  assert.equal(snapshots, 2, 'the production constructor connects CoreState identity changes to the inventory');
   assert.equal(childCalls.every(([, args]) => args.length === 1 && args[0] === '--version'), true);
 });
 

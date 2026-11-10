@@ -1132,7 +1132,75 @@ function verifyFinalizerExit(dir, j) {
     update(dir, j, {installerExitUnconfirmed:false, installerExitConfirmed:true});
   }
 }
+// Both upgrade admission and the stable bootstrap execute this same boundary.
+// The helper belongs to the caller's maintenance generation, never the frozen runner's.
+const DEFAULT_RECOVERY_NEXT = 'Run zylos recovery status, then zylos recovery resume; preserve ambiguous materials for inspection.';
+const CLOSED_RECOVERY_NEXT = 'Run zylos upgrade --resume-finalize to finish the closed transaction; use zylos upgrade --resume-finalize --status first to inspect it.';
+function isClosedRecovery(found, m = module.exports) {
+  if (found?.diagnostics?.length || found?.candidates?.length !== 1) return false;
+  const journal = found.candidates[0].journal;
+  try {
+    if (journal?.phase !== 'upgrade_complete' && m.canRecognizeProcesses?.() === false) return false;
+    return m.classifyCutoff(journal) === 'closed';
+  } catch { return false; }
+}
+function recoveryNext(found, m = module.exports, fallback = DEFAULT_RECOVERY_NEXT) {
+  return isClosedRecovery(found, m) ? CLOSED_RECOVERY_NEXT : fallback;
+}
+function recoveryFailureDetails(error, {next = DEFAULT_RECOVERY_NEXT} = {}) {
+  return {
+    recovery_required:true,
+    code:typeof error?.code === 'string' && error.code ? error.code.slice(0,128) : 'UPGRADE_RECOVERY_REQUIRED',
+    error:String(error?.message || error || 'Upgrade discovery failed.').slice(0,8192),
+    next:String(error?.next || next).slice(0,2048)
+  };
+}
+function recoverBeforeUpgrade(root, deps = {}) {
+  const m = deps.maintenance ?? module.exports;
+  let found;
+  try {
+    found = m.discover(root);
+    if (!found.candidates.length && !found.diagnostics.length && !found.marker) return {active:false};
+    const reject = (message, code = 'UPGRADE_RECOVERY_REQUIRED') => {
+      throw Object.assign(new Error(message), {code, recovery_required:true, persisted:[], next:recoveryNext(found,m)});
+    };
+    if (found.diagnostics.length || found.candidates.length !== 1) {
+      reject(['Upgrade recovery materials are ambiguous; preserve them for inspection.', ...found.diagnostics].join(' '));
+    }
+    if (!m.canRecognizeProcesses()) reject('Process identity cannot be verified; interrupted upgrade requires manual recovery.', 'MANUAL_RECOVERY_REQUIRED');
+    const {dir,journal} = found.candidates[0];
+    const controller = path.join(dir,'controller.json');
+    if (fs.existsSync(controller) && m.alive(m.read(controller))) reject('An upgrade controller is still running.');
+    try {m.validateRecoveryFiles(dir,journal);}
+    catch (error) {reject(error.message);}
+    const child = (deps.spawn ?? cp.spawnSync)(process.execPath,[path.join(dir,'runner.cjs'),'resume','--transaction-dir',dir],
+      {encoding:'utf8',env:{...process.env},maxBuffer:4*1024*1024});
+    if (child.error) reject(child.error.message);
+    const exit = child.signal ? 'signal '+child.signal : 'status '+child.status;
+    let result;
+    try {result=JSON.parse(child.stdout);}
+    catch {
+      reject('Transaction recovery returned an invalid result ('+exit+').'+(child.stderr ? ' '+String(child.stderr).slice(0,8192) : ''));
+    }
+    if (!result || typeof result !== 'object' || Array.isArray(result)) reject('Transaction recovery returned an invalid result ('+exit+').');
+    const reasons = [result.error,result.reason,...(Array.isArray(result.warnings) ? result.warnings : [])]
+      .filter(value=>typeof value==='string' && value.trim()).join('; ');
+    if (child.status !== 0 || result.recovery_required) reject(reasons || 'Transaction recovery did not complete ('+exit+').');
+    const after = m.discover(root);
+    if (after.candidates.length || after.diagnostics.length || after.marker) {
+      reject([reasons,...after.diagnostics,'Transaction recovery still requires attention.'].filter(Boolean).join('; '));
+    }
+    return {active:true,result};
+  } catch (error) {
+    const details=recoveryFailureDetails(error,{next:recoveryNext(found,m)});
+    throw Object.assign(new Error(details.error),details,{persisted:error?.persisted || []});
+  }
+}
 module.exports = {
+  recoverBeforeUpgrade,
+  recoveryFailureDetails,
+  recoveryNext,
+  isClosedRecovery,
   validateRecoveryFiles,
   runInstaller,
   restoreOriginalPackage,

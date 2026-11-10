@@ -17,11 +17,11 @@ function fixture(t) {
   fs.mkdirSync(path.join(home, 'empty-bin'));
   return { home, root };
 }
-function run({ home, root }, source) {
+function run({ home, root }, source, env = {}) {
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
     encoding: 'utf8', timeout: 15000,
     env: { ...process.env, HOME: home, ZYLOS_DIR: root,
-      CODEX_BIN: path.join(home, 'unavailable-codex'), PATH: path.join(home, 'empty-bin') },
+      CODEX_BIN: path.join(home, 'unavailable-codex'), PATH: path.join(home, 'empty-bin'), ...env },
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   return JSON.parse(result.stdout.trim().split('\n').at(-1));
@@ -92,6 +92,47 @@ test('init template generator prepares dual hooks and assets report unavailable 
   }
   assert.equal(fs.existsSync(path.join(context.root, '.codex', 'hooks.trust.json')), false);
   assert.equal(fs.readFileSync(configPath, 'utf8'), config);
+});
+
+// Integration boundary: the real default init Codex hook step, in a child process with HOME and ZYLOS_DIR in a
+// temp dir and an empty PATH; Codex is either missing or a stub app-server written into that temp dir, so no
+// real Codex, PM2, tmux, socket or database is reached. Run when init's Codex hook step, the trust report or
+// the init wording changes; skip for changes elsewhere. Only run it isolated: separate HOME, ZYLOS_DIR,
+// PM2_HOME and short TMPDIR, private tmux socket and test database, never live resources. The temp dir is
+// removed when the case ends.
+test('init reports a Codex hook trust failure as blocking later launches, not as a stopped start', t => {
+  const prepare = (context, env) => run(context, `
+    import { prepareInitRuntimeAssets } from ${JSON.stringify(initUrl)};
+    console.log(JSON.stringify(await prepareInitRuntimeAssets({ instruction: () => ${JSON.stringify(context.root)} })));
+  `, env).failed.filter(failure => failure.item === 'codex.hooks');
+  const suffix = '. Codex will not start until hook trust succeeds; each Codex launch tries it again.';
+
+  const missing = fixture(t);
+  const failed = prepare(missing);
+  assert.equal(failed.length, 1);
+  assert.match(failed[0].message, /^spawnSync \S*unavailable-codex ENOENT\. Codex will not start until hook trust succeeds; each Codex launch tries it again\.$/);
+  assert.doesNotMatch(failed[0].message, /did not start/);
+
+  // A Codex too old to report currentHash: the trust report already ends a sentence, and is joined without "..".
+  const old = fixture(t);
+  const codex = path.join(old.home, 'hashless-codex');
+  fs.writeFileSync(codex, `#!${process.execPath}
+if (process.argv[2] === '--version') { console.log('codex-cli 0.128.0'); process.exit(0); }
+let buf = '';
+process.stdin.on('data', chunk => {
+  buf += chunk; const lines = buf.split('\\n'); buf = lines.pop();
+  for (const line of lines) {
+    const msg = JSON.parse(line);
+    if (msg.method === 'initialize') console.log(JSON.stringify({ id: msg.id, result: {} }));
+    if (msg.method === 'hooks/list') console.log(JSON.stringify({ id: msg.id, result: { data: [{ hooks: [{ key: 'k:session_start:0:0', isManaged: false }] }] } }));
+    if (msg.method === 'config/batchWrite') console.log(JSON.stringify({ id: msg.id, result: { status: 'ok' } }));
+  }
+});
+`, { mode: 0o755 });
+  const hashless = prepare(old, { CODEX_BIN: codex });
+  assert.equal(hashless.length, 1);
+  assert.equal(hashless[0].message, 'Codex hook trust failed (missing_current_hash): Codex CLI "codex-cli 0.128.0" does not report ' +
+    'currentHash in hooks/list (field added in Codex CLI 0.129.0). Upgrade Codex CLI to 0.129.0 or later (0.146+ recommended)' + suffix);
 });
 
 test('init template sync never restarts or invokes the wrapper CLI', async t => {

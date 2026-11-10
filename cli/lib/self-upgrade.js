@@ -1,3 +1,4 @@
+import { writeCorePackageLocation } from './core-package-location.js';
 import { migrateModelThresholds } from './model-rotation-thresholds.js';
 /**
  * Self-upgrade logic for zylos-core itself.
@@ -463,6 +464,15 @@ export function step5_syncCoreSkills(ctx, deps = {}) {
       return { step: 5, name: 'sync_core_skills', status: 'failed', error: syncResult.errors.join('; '), duration: Date.now() - startTime };
     }
 
+    try {
+      (deps.writeCorePackageLocation ?? writeCorePackageLocation)({
+        skillDir: path.join(zylosDir, '.claude/skills/comm-bridge'),
+        packageRoot: ctx.packageRoot || ctx.coreDir,
+      });
+    } catch (error) {
+      (ctx.corePackageWarnings ||= []).push({ code: 'CORE_PACKAGE_LOCATION_WRITE_FAILED',
+        message: `Core package location record was not updated: ${error.message}. Set ZYLOS_PACKAGE_ROOT to the installed zylos package root for minimal-PATH callers, or rerun zylos init to repair the record.` });
+    }
     return { step: 5, name: 'sync_core_skills', status: 'done', message: msg, duration: Date.now() - startTime };
   } catch (err) {
     return { step: 5, name: 'sync_core_skills', status: 'failed', error: err.message, duration: Date.now() - startTime };
@@ -759,6 +769,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
       success: false,
       ...protectionResult(ctx),
       warnings: ctx.runtimeWarnings || [],
+      corePackageWarnings: ctx.corePackageWarnings || [],
       webConsoleMigration: ctx.webConsoleMigration || null,
       dashboard: ctx.dashboard || {state:'degraded',errors:[]},
       upgradeProtected:true,
@@ -782,6 +793,7 @@ function buildSelfUpgradeResult(ctx, failedStep, rollbackResults = null, rollbac
     success: true,
     ...protectionResult(ctx),
     warnings: ctx.runtimeWarnings || [],
+    corePackageWarnings: ctx.corePackageWarnings || [],
     webConsoleMigration: ctx.webConsoleMigration || null,
     from: ctx.from,
     to: ctx.to,
@@ -1062,7 +1074,7 @@ async function finalizeInstalledUpgrade(ctx, deps) {
     }
     const runtimeClis=await (deps.prepareRuntimeClis || prepareUpgradeRuntimeClis)(ctx);
     ctx.runtimeWarnings=runtimeClis?.warnings || [];
-    maintenanceFor(ctx).update(ctx.transactionDir,ctx.journal,{runtimeWarnings:ctx.runtimeWarnings});
+    maintenanceFor(ctx).update(ctx.transactionDir,ctx.journal,{runtimeWarnings:ctx.runtimeWarnings, corePackageWarnings:ctx.corePackageWarnings || []});
     (deps.dataReady || protectedDataReady)(ctx);
     const prepared=await (deps.prepareRuntime || prepareUpgradeRuntime)(ctx);
     ctx.preparationWarnings=prepared.warnings || [];
@@ -1096,6 +1108,7 @@ function publishedSettingsChanged(preparation) {
 export async function resumeUpgradeFinalization(ctx, deps = {}) {
   ctx.steps ||= [];
   ctx.runtimeWarnings ||= ctx.journal.runtimeWarnings || [];
+  ctx.corePackageWarnings ||= ctx.journal.corePackageWarnings || [];
   ctx.from ||= ctx.journal.from;
   ctx.to ||= ctx.journal.to;
   ctx.servicesWereRunning ||= ctx.journal.originalServices.map(service=>service.name);

@@ -1,3 +1,4 @@
+import { writeCorePackageLocation } from '../cli/lib/core-package-location.js';
 /**
  * Postinstall script - runs after `npm install -g zylos`
  *
@@ -25,6 +26,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(process.env.HOME, 'zylos');
 const SKILLS_DIR = path.join(ZYLOS_DIR, '.claude', 'skills');
 const CORE_SKILLS_SRC = path.join(__dirname, '..', 'skills');
+
+function publishCorePackageLocation(skillDir) {
+  try {
+    writeCorePackageLocation({ skillDir, packageRoot: path.join(__dirname, '..') });
+  } catch (err) {
+    console.log(`  Warning: Core package location record was not updated: ${err.message}. Set ZYLOS_PACKAGE_ROOT to the installed Core package or rerun zylos init.`);
+  }
+}
 
 function syncSkills() {
   if (!fs.existsSync(CORE_SKILLS_SRC)) {
@@ -54,6 +63,7 @@ function syncSkills() {
         saveOriginals(destDir, srcDir);
         console.log(`  + ${entry.name}`);
         added++;
+        if (entry.name === 'comm-bridge') publishCorePackageLocation(destDir);
       } catch (err) {
         console.log(`  Warning: Failed to sync ${entry.name}: ${err.message}`);
       }
@@ -77,6 +87,9 @@ function syncSkills() {
         for (const c of mergeResult.conflicts) {
           if (c.backupPath) console.log(`    Conflict backup: ${c.backupPath}`);
         }
+      }
+      if (entry.name === 'comm-bridge' && !mergeResult.errors?.length) {
+        publishCorePackageLocation(destDir);
       }
     } catch (err) {
       console.log(`  Warning: Failed to update ${entry.name}: ${err.message}`);

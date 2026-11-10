@@ -209,7 +209,7 @@ test('metadata snapshots share history visibility and discover only scoped pendi
   f.write({ id: 22, group: 'unowned:one' }); f.write({ id: 23, direction: 'other' });
   f.write({ id: 24, channel: 'telegram', group: 'telegram:one' });
   const own = f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one') }, { afterId: 0 });
-  assert.equal(own.listChanged, true); assert.equal(own.latestId, 1); assert.equal(own.highwater, 24);
+  assert.equal(own.listChanged, true); assert.equal(own.latestId, 11); assert.equal(own.highwater, 24);
   const external = f.history.chatChangeSnapshot({ tab: 'external' }, { afterId: 23 }); assert.equal(external.listChanged, true);
   const hiddenOnly = f.history.chatChangeSnapshot({ tab: 'mine' }, { afterId: 1 }); assert.equal(hiddenOnly.listChanged, false);
   assert.throws(() => f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('telegram:one') }), /chat_conversation_not_found/);
@@ -363,6 +363,49 @@ test('one conversation stream discovers new pending inputs and observes terminal
   assert.equal(stream.events.length, count, 'retiring terminal rows does not create an extra hint');
 });
 
+// Real SQLite/history/observer integration. Run for pending-delivery visibility
+// or internal-message invalidation changes; rendering-only work may skip.
+// fixture() proves private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB before
+// access and owns DB/timer cleanup; no HTTP, model, PM2 or tmux launch.
+test('selected mine internal inputs change history but never enter pending delivery snapshots or hints', gate, t => {
+  const f = fixture(t);
+  f.write({ id: 1, status: 'delivered' });
+  const options = { tab: 'mine', conversationId: idFor('dash:one') };
+  const stream = f.subscribe(options);
+  assert.equal(stream.events.length, 1);
+  assert.equal(stream.events[0].data.ids.length, 0);
+  f.write({ id: 2, channel: 'internal', endpoint: 'telegram:peer' });
+  f.timers.tick();
+  assert.equal(stream.events.length, 2);
+  assert.equal(stream.events[1].event, 'chat_messages_changed', 'internal inbound is visible in selected history');
+  const pending = () => f.history.chatChangeSnapshot(options).delivery.map(row => row.id);
+  assert.deepEqual(pending(), [], 'selected mine pending internal row is excluded');
+  assert.equal(f.history.messages(options.conversationId, { tab: 'mine' }).items.at(-1).id, 2);
+  for (const status of ['running', 'delivered']) {
+    const count = stream.events.length;
+    f.writer.prepare('UPDATE conversations SET status=? WHERE id=2').run(status);
+    f.timers.tick();
+    assert.equal(stream.events.length, count, 'internal status transitions never dirty delivery');
+    assert.deepEqual(pending(), []);
+  }
+  f.write({ id: 3 });
+  f.timers.tick();
+  assert.deepEqual(pending(), [3], 'ordinary selected mine inbound is monitored');
+  assert.equal(stream.events.at(-1).event, 'chat_delivery_changed');
+  assert.deepEqual(stream.events.at(-1).data.ids, [3]);
+  f.write({ id: 4, channel: 'internal', endpoint: 'telegram:peer' });
+  f.timers.tick();
+  assert.equal(stream.events.at(-1).event, 'chat_messages_changed');
+  assert.deepEqual(pending(), [3], 'mixed internal and external pending rows retain only external delivery truth');
+  assert.equal(stream.events.filter(row => row.event === 'chat_delivery_changed').length, 1);
+  const count = stream.events.length;
+  f.writer.prepare("UPDATE conversations SET status='running' WHERE id=3").run();
+  f.timers.tick();
+  assert.equal(stream.events.length, count + 1);
+  assert.equal(stream.events.at(-1).event, 'chat_delivery_changed', 'ordinary status updates still dirty delivery');
+  assert.deepEqual(stream.events.at(-1).data.ids, [3]);
+});
+
 test('server pending discovery retains the newest hundred scoped inbound rows with bounded indexed reads', gate, t => {
   const f = fixture(t);
   f.writer.transaction(() => {
@@ -385,4 +428,40 @@ test('server pending discovery retains the newest hundred scoped inbound rows wi
   assert.equal(stream.events.at(-1).data.ids.includes(300), false);
   assert.equal(stream.events.at(-1).data.ids.includes(200), true);
   assert.equal(f.reader._db.pragma('query_only', { simple: true }), 1);
+});
+
+// Real SQLite reader/writer + production observer, with the gated sandbox's
+// private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB proof before access.
+// Run for internal message invalidation or scope changes; UI-only work skips.
+// The fixture owns/cleans DBs and sampler; no HTTP, PM2, model or tmux launch.
+test('internal relay inserts invalidate each selected history without changing either list', gate, t => {
+  const f = fixture(t);
+  f.write({ id: 1, status: 'delivered' });
+  f.write({ id: 2, channel: 'telegram', group: 'telegram:peer', endpoint: 'peer', status: 'delivered' });
+  f.write({ id: 3, endpoint: 'other', group: 'dash:other', status: 'delivered' });
+  const own = f.subscribe();
+  const external = f.subscribe({ tab: 'external', conversationId: idFor('telegram:peer') });
+  const other = f.subscribe({ tab: 'mine', conversationId: idFor('dash:other') });
+  const ownList = f.subscribe({ tab: 'mine', conversationId: null });
+  const externalList = f.subscribe({ tab: 'external', conversationId: null });
+  f.writer.transaction(() => {
+    f.write({ id: 4, channel: 'internal', direction: 'out', endpoint: 'telegram:peer', content: 'PRIVATE_RELAY', status: 'delivered' });
+    f.write({ id: 5, channel: 'internal', group: 'telegram:peer', endpoint: 'dash:one', content: '[internal] Yourself, from your "dash:one" session group, said: PRIVATE_RELAY' });
+  })();
+  f.timers.tick();
+  for (const stream of [own, external]) {
+    assert.equal(stream.events.length, 2);
+    assert.equal(stream.events.at(-1).event, 'chat_messages_changed');
+    const payload = JSON.stringify(stream.events);
+    for (const forbidden of ['PRIVATE_RELAY', 'content', 'preview', 'attachment']) assert.equal(payload.includes(forbidden), false);
+    assert.equal(stream.events.some(row => row.event === 'chat_delivery_changed'), false);
+  }
+  for (const stream of [other, ownList, externalList]) assert.equal(stream.events.length, 1);
+  const ownTruth = f.history.messages(idFor('dash:one'), { tab: 'mine' });
+  const peerTruth = f.history.messages(idFor('telegram:peer'), { tab: 'external' });
+  assert.equal(ownTruth.items.at(-1).internal.content, 'PRIVATE_RELAY');
+  assert.equal(peerTruth.items.at(-1).internal.content, 'PRIVATE_RELAY');
+  assert.equal(f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one') }, { afterId: 3 }).listChanged, false);
+  assert.equal(f.history.chatChangeSnapshot({ tab: 'external', conversationId: idFor('telegram:peer') }, { afterId: 3 }).listChanged, false);
+  assert.throws(() => f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('unknown:peer') }), /chat_conversation_not_found/);
 });

@@ -46,6 +46,7 @@ for(const mode of ['none','runtime','incomplete-audit','web-console']) test(`dow
     mock.module(${JSON.stringify(url('upgrade-package.js'))},{namedExports:{...packages,saveOriginalPackage(){}}});
     mock.module(${JSON.stringify(pathToFileURL(path.join(installed,'cli/lib/self-upgrade.js')).href)},{namedExports:{runSelfUpgradeFinalize:()=>({success:true,
       ${mode === 'web-console' ? "webConsoleMigration:{status:'manual_required',caddyfile:'/private/http/Caddyfile',reason:'Inspect custom console route.',instructions:['At /private/http/Caddyfile:8 add header_up X-Forwarded-Prefix /console to the Web Console reverse_proxy block.','Validate, reload Caddy, log in and verify cookie Path.']}," : ''}
+      ${mode === 'web-console' ? "corePackageWarnings:[{code:'CORE_PACKAGE_LOCATION_WRITE_FAILED',message:'Record update denied; set ZYLOS_PACKAGE_ROOT.'}],steps:[{step:5,name:'sync_core_skills',status:'done',message:'2 synced'}]," : ''}
       warnings:${mode === 'runtime' ? "[{runtime:'codex',code:'RUNTIME_CLI_UNAVAILABLE',message:'optional CLI unavailable'}]" : '[]'},
       checkpointAudit:${mode === 'incomplete-audit' ? "{state:'incomplete',error:'DB_BUSY'}" : "{state:'complete',items:[]}"}})}});
     process.argv[1]=${JSON.stringify(path.join(target,'cli/lib/upgrade-entry.js'))};
@@ -62,6 +63,12 @@ for(const mode of ['none','runtime','incomplete-audit','web-console']) test(`dow
     assert.equal(migration.status,'manual_required');
     assert.match(child.stderr,/Web Console: Inspect custom console route\./);
     for(const instruction of migration.instructions) assert.ok(child.stderr.includes(instruction));
+    const result=JSON.parse(child.stdout);
+    assert.equal(result.steps[0].message,'2 synced');
+    assert.equal(result.corePackageWarnings[0].code,'CORE_PACKAGE_LOCATION_WRITE_FAILED');
+    assert.ok(child.stderr.indexOf('Core package location warning: Record update denied; set ZYLOS_PACKAGE_ROOT.')
+      < child.stderr.indexOf('Web Console: Inspect custom console route.'));
+    assert.match(child.stderr,/Core package location warning: Record update denied; set ZYLOS_PACKAGE_ROOT\./);
   } else assert.doesNotMatch(child.stderr,/Web Console:/);
   if(mode === 'runtime') assert.match(child.stderr,/^Runtime warning \(codex\): RUNTIME_CLI_UNAVAILABLE: optional CLI unavailable$/m);
   else assert.doesNotMatch(child.stderr,/Runtime warning/);

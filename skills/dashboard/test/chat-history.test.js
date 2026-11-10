@@ -9,6 +9,7 @@ import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { AuthGate } from '../src/lib/auth.js';
+import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { ChatHistory } from '../src/lib/chat/history.js';
 import { handleChatHistory } from '../src/lib/chat/history-routes.js';
 import { sendJson } from '../src/lib/http.js';
@@ -25,9 +26,23 @@ const bad = error => Number(error.statusCode ?? error.status) >= 400;
 
 function fixture(t, withAuth = false) {
   assert.ok(process.env.ZYLOS_DIR && process.env.ZYLOS_DIR !== '/home/agent/zylos');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-history-'));
+  const temporary = fs.realpathSync(os.tmpdir());
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME']) {
+    const directory = process.env[key];
+    assert.ok(directory && path.isAbsolute(directory), `${key} must be explicit`);
+    const canonical = fs.existsSync(directory) ? fs.realpathSync(directory)
+      : path.join(fs.realpathSync(path.dirname(directory)), path.basename(directory));
+    assert.ok(canonical.startsWith(path.dirname(temporary) + path.sep),
+      `${key} must belong to the official runner's private root`);
+  }
+  const root = fs.mkdtempSync(path.join(temporary, 'chat-history-'));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
-  const db = new Database(path.join(root, 'comm-bridge/c4.db'));
+  const filename = path.join(root, 'comm-bridge/c4.db');
+  assert.equal(fs.realpathSync(path.dirname(filename)), path.dirname(filename));
+  assert.ok(filename.startsWith(temporary + path.sep), 'C4 fixture DB must stay inside private TMPDIR');
+  console.log('History case isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: temporary, database: filename, tmux: 'not launched' }));
+  const db = new Database(filename);
   migrateSchema(db, { isNew: true });
   migrateToV2(db);
   db.prepare('INSERT INTO channel_namespaces VALUES (?,?)').run('dash-owned', 'dashboard');
@@ -64,7 +79,7 @@ function collect(history, tab, limit = 2, expectedCount) {
   assert.fail('Pagination did not terminate');
 }
 
-test('external lists use stable bounded pages and one allowed-row scope for metadata and content', t => {
+test('external list summaries exclude internal traffic while selected histories include it', t => {
   const f = fixture(t);
   for (let i = 0; i < 7; i++) f.add({ id: 10 + i * 10, session_group: `tg:${i}` });
   f.add({ id: 85, session_group: 'tg:0', content: 'visible latest', timestamp: '2026-01-02 00:00:00' });
@@ -96,8 +111,9 @@ test('external lists use stable bounded pages and one allowed-row scope for meta
   assert.ok(queries.length > 1);
   for (const query of queries) { assert.match(query.sql, /\bLIMIT\b/i); assert.ok(query.rows <= 3); }
   const body = f.history.messages(items[0].id, { tab: 'external' });
-  assert.deepEqual(body.items.map(row => row.id), [10, 85]);
-  assert.ok(body.items.every(row => row.content !== 'HIDDEN'));
+  assert.deepEqual(body.items.map(row => row.id), [10, 85, 101]);
+  assert.equal(body.items.at(-1).internal.content, 'HIDDEN');
+  assert.equal(body.items.at(-1).internal.peerExists, false);
 });
 
 test('legacy history is separated by channel and endpoint without creating group membership', t => {
@@ -493,4 +509,115 @@ test('conversation lists and message pages carry the instance time zone from .en
   assert.equal((await call('/api/chat/conversations?tab=external', null)).body.tz, null);
   const status = await call(`/api/chat/conversations/${encodeURIComponent(id)}/status?tab=external&ids=1`, reader());
   assert.equal(status.status, 200); assert.equal('tz' in status.body, false, 'delivery status reads carry no zone');
+});
+
+// Integration: real read-only C4 SQLite and Dashboard display-name storage.
+// Run for internal history/scope/attachment projection changes; rendering-only
+// changes may skip. Official runner owns HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR;
+// fixture() owns private DBs and removes them at teardown, with no child/tmux.
+test('internal rows preserve raw facts and project peers on both histories without changing summaries', t => {
+  const f = fixture(t, true);
+  const conversations = new ChatConversations({ store: f.store });
+  f.history.conversations = conversations;
+  f.store.writeGroupDisplayName('tg:a', 'Telegram 对话', 'human');
+  f.store.writeGroupDisplayName('dash-owned:one', '我的工作', 'human');
+  f.add({ id: 1, channel: 'dashboard', endpoint_id: 'one', session_group: 'dash-owned:one', content: 'own external' });
+  f.add({ id: 2, content: 'telegram external' });
+  const body = '转达：你好 🌏';
+  const prefix = '[internal] Yourself, from your "dash-owned:one" session group, said: ';
+  f.add({ id: 3, channel: 'internal', direction: 'out', endpoint_id: 'tg:a', session_group: 'dash-owned:one', content: body });
+  f.add({ id: 4, channel: 'internal', endpoint_id: 'dash-owned:one', content: prefix + body });
+  f.add({ id: 5, channel: 'internal', endpoint_id: 'dash-owned:one', content: '[internal] Yourself, from your "wrong:group" session group, said: literal' });
+  f.add({ id: 6, channel: 'internal', endpoint_id: 'missing:peer', content: 'missing body' });
+  f.add({ id: 7, channel: 'internal', endpoint_id: 'tg:a', session_group: 'internal:only' });
+  f.add({ id: 8, channel: 'internal', endpoint_id: 'tg:a', session_group: 'origin' });
+  f.add({ id: 9, channel: 'internal', endpoint_id: 'internal:only', content: 'unlisted peer' });
+  const own = f.history.messages(groupId('dash-owned:one'), { tab: 'mine' }).items;
+  const external = f.history.messages(groupId('tg:a'), { tab: 'external' }).items;
+  assert.deepEqual(own.map(row => row.id), [1, 3]);
+  assert.deepEqual(external.map(row => row.id), [2, 4, 5, 6, 9]);
+  assert.equal(own[1].direction, 'out');
+  assert.equal(own[1].content, body);
+  assert.deepEqual(own[1].internal, { peerSessionGroup: 'tg:a', peerDisplayName: 'Telegram 对话', peerExists: true, peerChannel: 'telegram', content: body });
+  assert.equal(external[1].direction, 'in');
+  assert.equal(external[1].content, prefix + body);
+  assert.deepEqual(external[1].internal, { peerSessionGroup: 'dash-owned:one', peerDisplayName: '我的工作', peerExists: true, peerChannel: 'dashboard', content: body });
+  assert.equal(external[2].internal.content, external[2].content, 'mismatched sender prefix is literal');
+  assert.equal(external[3].internal.peerExists, false);
+  assert.equal(external[3].internal.peerDisplayName, 'missing:peer');
+  assert.equal(external[3].internal.peerChannel, null);
+  assert.equal(external[4].internal.peerExists, false, 'internal-only group does not create a navigable peer');
+  for (const [tab, id, expected] of [['mine', 1, 'own external'], ['external', 2, 'telegram external']]) {
+    const list = f.history.list({ tab }).items;
+    assert.equal(list.length, 1); assert.equal(list[0].count, 1);
+    assert.equal(list[0].preview, expected);
+    assert.equal(list[0].channel, tab === 'mine' ? 'dashboard' : 'telegram');
+    const recent = f.reader.getGroupMessages(list[0].session_group, { since: '2026-01-01', until: '2026-01-02' });
+    assert.equal(recent.length, 1);
+    assert.equal(recent[0].id, id);
+  }
+  assert.throws(() => f.history.messages(groupId('dash-owned:one'), { tab: 'external' }), bad);
+  assert.throws(() => f.history.messages(groupId('tg:a'), { tab: 'mine' }), bad);
+  assert.throws(() => f.history.messages(groupId('internal:only'), { tab: 'external' }), bad);
+  assert.throws(() => f.history.status(groupId('dash-owned:one'), { tab: 'mine', ids: [3] }), bad);
+  assert.equal(Object.hasOwn(external[1], 'deliveryState'), false);
+});
+
+// Real SQLite/history projection under the official runner's isolated paths.
+// Run for received-prefix changes; skip for layout-only work. fixture() owns
+// the private DB and closes/removes it; no HTTP, model, PM2 or tmux launch.
+test('received internal prefixes match the exact endpoint in both stored formats and retain raw content', t => {
+  const f = fixture(t);
+  f.add({ id: 1 });
+  const endpoint = 'dash:peer.[one]';
+  const cases = [
+    ['in', `[internal] Yourself, from your "${endpoint}" session group, said: modern body`, 'modern body'],
+    ['in', `[internal] ${endpoint} said: legacy body`, 'legacy body'],
+    ['in', '[internal] wrong:peer said: literal'],
+    ['in', '[internal] dash:peerXone said: literal'],
+    ['in', '[internal] Yourself, from your "wrong:peer" session group, said: literal'],
+    ['in', `[internal] ${endpoint} said:missing space`],
+    ['in', `quoted [internal] ${endpoint} said: literal`],
+    ['out', `[internal] ${endpoint} said: outgoing literal`],
+    ['out', `[internal] Yourself, from your "${endpoint}" session group, said: outgoing literal`],
+  ];
+  for (const [index, [direction, content]] of cases.entries()) {
+    f.add({ id: index + 2, channel: 'internal', endpoint_id: endpoint, direction, content });
+  }
+  const rows = f.history.messages(groupId('tg:a'), { tab: 'external' }).items.slice(1);
+  assert.equal(rows.length, cases.length);
+  for (const [index, [direction, raw, display = raw]] of cases.entries()) {
+    assert.equal(rows[index].direction, direction);
+    assert.equal(rows[index].content, raw, 'stored message remains available as raw detail');
+    assert.equal(rows[index].internal.content, display);
+  }
+});
+
+// Same runner/private database lifecycle as above. Run for internal pagination,
+// prefix or recheck changes; skip for layout-only work. No network/process/tmux.
+test('internal history pages and rechecks stay scoped and never resolve relayed attachments', t => {
+  const f = fixture(t);
+  f.add({ id: 1, channel: 'dashboard', endpoint_id: 'one', session_group: 'dash-owned:one' });
+  const seen = [];
+  f.history.attachments = { metadata(rows) { seen.push(...rows.map(row => row.id)); return new Map(); } };
+  const raw = '[internal] Yourself, from your "tg:a" session group, said: file relay';
+  f.add({ id: 3, channel: 'internal', endpoint_id: 'tg:a', session_group: 'dash-owned:one', content: raw });
+  f.add({ id: 5, channel: 'internal', endpoint_id: 'tg:a', session_group: 'dash-owned:one', direction: 'out', content: raw });
+  f.add({ id: 6, channel: 'internal', endpoint_id: 'tg:a', session_group: 'elsewhere:one' });
+  const id = groupId('dash-owned:one');
+  const first = f.history.messages(id, { tab: 'mine', limit: 1 });
+  assert.deepEqual(first.items.map(row => row.id), [5]);
+  assert.equal(first.items[0].internal.content, raw, 'outbound prefix-looking text stays literal');
+  const older = f.history.messages(id, { tab: 'mine', limit: 1, cursor: first.nextCursor, recheckIds: [5] });
+  assert.deepEqual(older.items.map(row => row.id), [3]);
+  assert.equal(older.items[0].internal.content, 'file relay');
+  assert.deepEqual(older.attachmentUpdates, [{ id: 5, attachments: [] }]);
+  assert.deepEqual(seen, [], 'internal rows never reach attachment lookup');
+  f.add({ id: 9, channel: 'internal', endpoint_id: 'missing:peer', session_group: 'dash-owned:one', content: '[internal] malformed' });
+  const after = f.history.messages(id, { tab: 'mine', direction: 'after', cursor: first.afterCursor });
+  assert.deepEqual(after.items.map(row => row.id), [9]);
+  assert.equal(after.items[0].internal.content, '[internal] malformed');
+  assert.throws(() => f.history.messages(id, { tab: 'mine', recheckIds: [6] }), bad);
+  f.history.messages(id, { tab: 'mine', limit: 100 });
+  assert.deepEqual(seen, [1]);
 });

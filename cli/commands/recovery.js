@@ -1,7 +1,7 @@
 import path from 'node:path';
 import {createRequire} from 'node:module';
 import {ZYLOS_DIR} from '../lib/config.js';
-import {discoverUpgradeContext} from '../lib/runtime/upgrade-context.js';
+import {discoverUpgradeContext,upgradeDiscoveryFailure} from '../lib/runtime/upgrade-context.js';
 const require = createRequire(import.meta.url);
 
 export async function recoveryCommand(args, {root = ZYLOS_DIR} = {}) {
@@ -29,7 +29,9 @@ export async function recoveryCommand(args, {root = ZYLOS_DIR} = {}) {
     return;
   }
   const entry = path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs');
-  const result = require(entry).bootstrap(root, {once:true});
+  let result;
+  try { result = require(entry).bootstrap(root, {once:true}); }
+  catch (error) { result = upgradeDiscoveryFailure({error}); }
   console.log(JSON.stringify(result, null, 2));
   if (result.recovery_required) process.exitCode = 1;
 }

@@ -69,7 +69,7 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
     const spawnFailed = error => reject(sendError('COMPONENT_SPAWN_FAILED',
       `Component did not start (${error.code || 'UNKNOWN'}); audit retained; not sent`));
     const args = stdinDelivery ? [script] : [script, ...(endpoint === null ? [] : [endpoint]), message];
-    try { child = spawn('node', args, { env, stdio: stdinDelivery ? ['pipe', 'inherit', 'inherit'] : 'inherit' }); }
+    try { child = spawn(process.execPath, args, { env, stdio: stdinDelivery ? ['pipe', 'inherit', 'inherit'] : 'inherit' }); }
     catch (error) { spawnFailed(error); return; }
     child.once('error', spawnFailed);
     child.once('close', (code, signal) => {

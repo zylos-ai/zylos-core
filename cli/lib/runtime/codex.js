@@ -62,7 +62,15 @@ export class CodexAdapter extends SessionAdapter {
       await ensureLaunchHooksTrusted({ zylosDir: root, projectDir: root,
         codexBin, env: launchEnvironment(root, env) });
     } catch (cause) {
-      throw adapterError('LAUNCH_FAILED', 'Codex hook trust failed before runtime launch', cause);
+      // Trust failing stops the launch, so Codex is not running: say so, with the trust step's own report.
+      let reason = cause;
+      while (reason?.cause instanceof Error) reason = reason.cause;
+      const report = (reason?.message || 'hook trust failed').replace(/\.+$/, '');
+      const message = `Codex did not start: ${report}. ` +
+        'Hook trust must succeed before Codex starts and is tried again at the next launch; ' +
+        'run `zylos init` to retry it now and see the result.';
+      process.stderr.write(`${message}\n`);
+      throw adapterError('LAUNCH_FAILED', message, cause);
     }
     return super.launch(options);
   }

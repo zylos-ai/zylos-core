@@ -198,7 +198,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
     assert.equal(first.status, 200);
     return { draft: draft.body.conversation, receipt: first.body, route: `/api/chat/conversations/${encodeURIComponent(first.body.conversationId)}` };
   }
-  fixture = { sandbox, base, request, rawRequest, attachments, config, configPath, store, db, c4, reader, history, conversations, sender, get answers() { return answers; }, get delivery() { return delivery; },
+  fixture = { sandbox, base, request, rawRequest, attachments, auth, config, configPath, store, db, c4, reader, history, conversations, sender, get answers() { return answers; }, get delivery() { return delivery; },
     addOutbound, createConversation, realReceive, readMode, modePath, cookie, tokens, counts,
     setRoute: value => { route = value; }, setNotification: value => { notification = value; }, setInvoke: value => { invoke = value; },
     setLookupUnavailable: value => { lookupUnavailable = value; },

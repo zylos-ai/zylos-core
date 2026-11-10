@@ -11,6 +11,9 @@ import { COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, VIEW_SCHEMA, FORM_CON
 
 const publicRoot = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const schemaPath = fileURLToPath(new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
+const appReference = source => /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(source)?.[1];
+const currentAppPath = appReference(fs.readFileSync(path.join(publicRoot, 'index.html'), 'utf8'));
+assert.ok(currentAppPath, 'the source entry page versions its application module');
 function privateEnvironment() {
   const canonical = value => {
     let ancestor = path.resolve(value); const suffix = [];
@@ -72,8 +75,9 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    const appPath = /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(pageText)?.[1];
-    assert.equal(appPath, 'js/app.js?v=147', 'the entry page invalidates the application module cache');
+    assert.match(pageText, /css\/conversation\.css\?v=130"/, 'the entry page invalidates the conversation stylesheet cache');
+    const appPath = appReference(pageText);
+    assert.equal(appPath, currentAppPath, 'delivery preserves the current entry page application cache version');
     const cache = new Map();
     async function moduleAt(url) {
       if (cache.has(url)) return cache.get(url);
@@ -99,10 +103,20 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     assert.equal(await moduleAt(pluginUrl), fs.readFileSync(path.join(publicRoot, 'js/markdown-it-cjk-friendly/index.js'), 'utf8'));
     let parentUrl = appUrl;
     const activeModules = new Map();
-    for (const [name, version] of [['conversation-page', 143], ['conversation-content', 116], ['chat-blocks', 111]]) {
+    // Follow the source's current versioned imports instead of duplicating its
+    // release numbers. Each local/fleet route must deliver that same graph.
+    const currentImport = (parent, name) => {
+      const relative = new URL(parent).pathname.split('/_assets/')[1];
+      const source = fs.readFileSync(path.join(publicRoot, relative), 'utf8');
+      const specifier = [...source.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)]
+        .map(match => match[1]).find(value => value.split('?')[0].endsWith('/' + name + '.js'));
+      assert.ok(specifier && /\?v=\d+$/.test(specifier), `${name} has a current versioned source import`);
+      return specifier;
+    };
+    for (const name of ['conversation-page', 'conversation-content', 'chat-blocks']) {
       const parent = await moduleAt(parentUrl);
       const specifiers = [...parent.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map(match => match[1]);
-      const specifier = specifiers.find(value => value.endsWith(`/${name}.js?v=${version}`));
+      const specifier = specifiers.find(value => value === currentImport(parentUrl, name));
       assert.ok(specifier, `${parentUrl} loads ${name}`);
       parentUrl = new URL(specifier, parentUrl).href;
       activeModules.set(name, parentUrl);
@@ -110,18 +124,22 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const pageUrl = activeModules.get('conversation-page');
     assert.match(importLine(await moduleAt(activeModules.get('conversation-content')), 'markdown-it-cjk-friendly/index.js'), /from ['"]\.\.\/markdown-it-cjk-friendly\/index\.js\?v=1['"]/);
     const page = await moduleAt(pageUrl);
-    for (const [name, version] of [['conversation-state', 131], ['chat-questions', 108], ['conversation-activity', 105], ['conversation-delete', 4]]) {
+    for (const name of ['conversation-state', 'chat-questions', 'conversation-activity', 'conversation-delete', 'conversation-internal']) {
       const specifier = [...page.matchAll(/from ['"]([^'"]+)['"]/g)]
-        .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=${version}`));
+        .map(match => match[1]).find(value => value === currentImport(pageUrl, name));
       assert.ok(specifier, `${name} belongs to the active page graph`);
       activeModules.set(name, new URL(specifier, pageUrl).href);
     }
-    for (const [parent, names] of [[appUrl, [['chat-drafts', 102]]],
-      [activeModules.get('conversation-content'), [['chat-view', 106], ['conversation-charts', 110]]]]) {
+    for (const moduleUrl of [pageUrl, activeModules.get('conversation-internal')]) {
+      assert.match(importLine(await moduleAt(moduleUrl), 'plain-text.js'), /from ['"]\.\/plain-text\.js\?v=106['"]/,
+        'internal renderer and page share the post-merge plain-text module');
+    }
+    for (const [parent, names] of [[appUrl, ['chat-drafts']],
+      [activeModules.get('conversation-content'), ['chat-view', 'conversation-charts']]]) {
       const source = await moduleAt(parent);
-      for (const [name, version] of names) {
+      for (const name of names) {
         const specifier = [...source.matchAll(/from ['"]([^'"]+)['"]/g)]
-          .map(match => match[1]).find(value => value.endsWith(`/${name}.js?v=${version}`));
+          .map(match => match[1]).find(value => value === currentImport(parent, name));
         assert.ok(specifier, `${name} belongs to the current cache graph`);
         const url = new URL(specifier, parent).href;
         assert.equal(await moduleAt(url), fs.readFileSync(path.join(publicRoot, 'js/wb', name + '.js'), 'utf8'));

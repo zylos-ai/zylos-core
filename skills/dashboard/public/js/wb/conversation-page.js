@@ -3,15 +3,16 @@ import { createChatAttachment } from './chat-attachments.js?v=6';
 import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
-import { channelIcon } from './board.js?v=117';
-import { createConversationState } from './conversation-state.js?v=131';
+import { channelIcon } from './board.js?v=150';
+import { createConversationState } from './conversation-state.js?v=132';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=108';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=116';
-import { createGroupSide } from './group-side.js?v=6';
+import { createGroupSide } from './group-side.js?v=150';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=105';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=4';
+import { renderInternalMessage } from './conversation-internal.js?v=3';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -589,6 +590,15 @@ export function mountConversationPage({
     }, instanceTimeZone) : null;
   }
   function makeMessage(row, s) {
+    if (row.channel === 'internal') {
+      const date = asDate(row.timestamp ?? row.created_at ?? row.createdAt);
+      const resource = renderInternalMessage({ document, row, t,
+        onOpenPeer: (sessionGroup, channel) => openGroup(sessionGroup, { channel }),
+        timeText: date ? clockText(date) : null, timeIso: date?.toISOString(),
+        showTechnicalDetails: technicalDetails() === true });
+      return { node: resource.node, resource, content: row.content, internal: true,
+        attachmentKey: JSON.stringify(row.attachments || []), time: resource.time, date };
+    }
     const article = node('article', undefined, 'chat-message conversation-message ' + (row.direction === 'in' ? 'chat-in' : 'chat-out'));
     article.dataset.messageId = String(row.id);
     const avatar = node('span', undefined, 'conversation-avatar');
@@ -720,6 +730,10 @@ export function mountConversationPage({
   }
   function patchMessage(record, row, s) {
     if (record.time) text(record.time, clockText(record.date));
+    if (record.internal) {
+      record.resource.update(row, { showTechnicalDetails: technicalDetails() === true });
+      return;
+    }
     const delivery = s.tab === 'mine' && row.direction === 'in' ? messageState(row) : null;
     const status = delivery ? t(delivery === 'pending' && s.groupWait?.kind === 'rate_wait'
       ? s.groupHealth === 'recovering' ? 'chat.page.delivery.recovering' : 'chat.page.delivery.rateLimited'
@@ -881,7 +895,7 @@ export function mountConversationPage({
       } else {
         const attachmentKey = JSON.stringify(row.attachments || []);
         if (record.attachmentKey !== attachmentKey) {
-          record.resource.updateAttachments(row.attachments || []);
+          record.resource.updateAttachments?.(row.attachments || []);
           record.attachmentKey = attachmentKey;
         }
         patchMessage(record, row, s);
@@ -929,7 +943,7 @@ export function mountConversationPage({
   }
   /** Reply work folds above it; follow-up work stays below the last loaded reply or after a later user message. */
   function placeActivity(s, ordered) {
-    const placement = activityPlacement(s.messages, s.tab === 'mine' ? s.activity : null);
+    const placement = activityPlacement(s.messages.filter(row => row.channel !== 'internal'), s.tab === 'mine' ? s.activity : null);
     activityEntries.clear();
     for (const [id, record] of messages) {
       if (!record.activitySlot) continue;
@@ -1235,10 +1249,10 @@ export function mountConversationPage({
     const rateWait = s.groupWait?.kind === 'rate_wait';
     const healthLabel = { rate_limited: 'rateLimited', recovering: 'recovering', auth_failed: 'authFailed',
       unavailable: 'unavailable', down: 'down' }[s.groupHealth];
-    const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused',
+    const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused', pool_wait: 'queueing',
       starting: 'starting', start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
-    const waiting = s.groupHealth === 'ok' && s.groupWait?.kind === 'unknown';
-    const headerLabel = healthLabel ?? (waiting ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
+    const waiting = s.groupHealth === 'ok' && ['unknown', 'pool_wait'].includes(s.groupWait?.kind);
+    const headerLabel = healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
     const restricted = headerLabel !== 'running' && !waiting;
     running.hidden = s.groupPresence !== true && (!(restricted || waiting) || !healthLabel && !s.groupWait);
     running.classList.toggle('conversation-restricted', restricted);
@@ -1352,6 +1366,30 @@ export function mountConversationPage({
   };
   const unsubscribe = state.subscribe(() => { redraw(); notifyStreamSubscription(); void selectFirstDesktop(); });
   redraw();
+  async function openGroup(sessionGroup, {
+    channel
+  } = {}) {
+    if (typeof sessionGroup !== 'string' || !sessionGroup) {
+      return false;
+    }
+    autoSelectPending = false;
+    opened = true;
+    selectionIdentity = typeof identity === 'function' ? identity() : identity;
+    page.hidden = false;
+    await state.open();
+    const tab = (channel ?? sessionGroup.split(':')[0]) === 'dashboard' ? 'mine' : 'external';
+    if (state.snapshot().tab !== tab) {
+      await state.setTab(tab);
+    }
+    const matched = state.snapshot().items.find(item => (item.sessionGroup ?? item.session_group) === sessionGroup);
+    const hex = [...new TextEncoder().encode(sessionGroup)].map(byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+    const id = matched?.id ?? 'g:' + hex;
+    const fallback = { id, session_group: sessionGroup, channel: channel ?? sessionGroup.split(':')[0] };
+    await state.select(id, matched ?? fallback);
+    mobileDetail(true);
+    scheduleFit();
+    return !state.snapshot().error;
+  }
   return {
     streamSubscription: state.streamSubscription,
     streamStatus: state.streamStatus,
@@ -1366,30 +1404,7 @@ export function mountConversationPage({
       await state.open(...args);
       await selectFirstDesktop();
     },
-    async openGroup(sessionGroup, {
-      channel
-    } = {}) {
-      if (typeof sessionGroup !== 'string' || !sessionGroup) {
-        return false;
-      }
-      autoSelectPending = false;
-      opened = true;
-      selectionIdentity = typeof identity === 'function' ? identity() : identity;
-      page.hidden = false;
-      await state.open();
-      const tab = (channel ?? sessionGroup.split(':')[0]) === 'dashboard' ? 'mine' : 'external';
-      if (state.snapshot().tab !== tab) {
-        await state.setTab(tab);
-      }
-      const matched = state.snapshot().items.find(item => (item.sessionGroup ?? item.session_group) === sessionGroup);
-      const hex = [...new TextEncoder().encode(sessionGroup)].map(byte => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
-      const id = matched?.id ?? 'g:' + hex;
-      const fallback = { id, session_group: sessionGroup, channel: channel ?? sessionGroup.split(':')[0] };
-      await state.select(id, matched ?? fallback);
-      mobileDetail(true);
-      scheduleFit();
-      return !state.snapshot().error;
-    },
+    openGroup,
     close() {
       autoSelectPending = false;
       opened = false;

@@ -18,6 +18,9 @@ const CODEX_EVENT_KEYS = {
 };
 
 const DEFAULT_TRUST_TIMEOUT_MS = 15_000;
+// The trust helper keeps only this much of the app-server's stderr: enough context to redact the reported tail,
+// and far below spawnSync's 1 MiB output buffer, so a chatty Codex cannot turn the result into ENOBUFS.
+const TRUST_HELPER_STDERR_KEEP = 16_384;
 const DEFAULT_HOOK_TIMEOUT_SECONDS = 25;
 
 function sha256(text) {
@@ -390,10 +393,10 @@ const timer = setTimeout(() => {
   finish({ ok: false, reason: 'codex_app_server_timeout', stderr });
 }, ${timeoutMs});
 
-app.stderr.on('data', d => { stderr += d.toString(); });
+app.stderr.on('data', d => { stderr = (stderr + d.toString()).slice(-${TRUST_HELPER_STDERR_KEEP}); });
 app.on('error', err => {
   clearTimeout(timer);
-  finish({ ok: false, reason: 'codex_app_server_error', error: String(err) });
+  finish({ ok: false, reason: 'codex_app_server_error', error: String(err), stderr });
 });
 app.on('exit', code => {
   if (!finished) {
@@ -420,7 +423,7 @@ app.stdout.on('data', chunk => {
     if (msg.id === 1) {
       if (msg.error) {
         clearTimeout(timer);
-        finish({ ok: false, reason: 'hooks_list_error', error: msg.error });
+        finish({ ok: false, reason: 'hooks_list_error', error: msg.error, stderr });
         return;
       }
 
@@ -452,7 +455,7 @@ app.stdout.on('data', chunk => {
     if (msg.id === 2) {
       clearTimeout(timer);
       if (msg.error) {
-        finish({ ok: false, reason: 'config_batch_write_error', error: msg.error });
+        finish({ ok: false, reason: 'config_batch_write_error', error: msg.error, stderr });
       } else {
         finish({
           ok: true,
@@ -506,6 +509,127 @@ send('initialize', {
   }
 }
 
+const TRUST_ERROR_MESSAGE_LIMIT = 300;
+const TRUST_STDERR_TAIL_LIMIT = 600;
+const TRUST_ERROR_CODE_LIMIT = 40;
+// Only this much is redacted: the start of a message and the end of stderr. That is far more than is reported,
+// so the reported part keeps its context, and it bounds the time redaction can take on a huge input.
+const TRUST_REDACT_MESSAGE_LIMIT = 4096;
+const TRUST_REDACT_STDERR_LIMIT = 8192;
+
+// A name: a whole run of name characters, starting only where the run begins, and checked by isSecretName instead
+// of being searched for inside the run. Either of the other ways makes redaction slow on long runs.
+const NAME = String.raw`(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])`;
+// A name whose value is a secret: it contains one of these words, or ends in _key, -key or apikey.
+const isSecretName = name => /secret|token|password|passwd|passphrase|credential|cookie|authorization/i.test(name)
+  || /(?:[_-]key|apikey)$/i.test(name);
+// A value: \"escaped-quoted\" (Rust debug output of JSON, where a JSON-escaped quote shows as \\\" and a
+// backslash as \\\\), "quoted" or 'quoted' with escapes, or a bare word. A quoted value whose closing quote is
+// not in the text (it was cut off) runs to the end of the text. A value an earlier rule already replaced is left
+// alone.
+const SECRET_VALUE = String.raw`(?!\[redacted\])(?:\\"(?:\\\\\\"|\\\\\\\\|\\\\[^\\]|\\[^"\\]|[^\\])*?\\"|"(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*(?:'|$)|[^\s,;&"'}\]]+)`;
+const REDACTIONS = [
+  // Cookie headers carry several values: everything to the end of the line goes.
+  [/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, '$1[redacted]'],
+  // An Authorization header, whatever its scheme.
+  [/\b((?:proxy-)?authorization\s*:\s*)(?:(?:Bearer|Basic|Digest|Token|Negotiate)\s+)?[^\s,;]+/gi, '$1[redacted]'],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1[redacted]'],
+  // Basic credentials only when the value looks like base64, so "basic validation failed" stays readable.
+  [/\b(Basic\s+)(?=[A-Za-z0-9+/=]{8,})(?=[A-Za-z0-9+/=]*(?:[0-9+/=]|[a-z][A-Z]))[A-Za-z0-9+/]+=*/g, '$1[redacted]'],
+  // JWTs, OpenAI-style keys and GitHub tokens, wherever they appear.
+  [/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]'],
+  [/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}/g, '[redacted]'],
+  [/\b(?:gh[opsur]_|github_pat_)[A-Za-z0-9_]{16,}/g, '[redacted]'],
+  // user:password@ in a URL, up to the last @ before the host, since a password may hold an unencoded @.
+  // The scheme starts only where a run of scheme characters begins: starting anywhere makes it slow on long runs.
+  [/(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, '$1[redacted]@'],
+];
+// --api-key VALUE on a command line. A value never starts with "--", so a following flag is not taken as one; a
+// value may start with a single "-", as a random token sometimes does.
+const SECRET_FLAG = new RegExp(String.raw`(?<![A-Za-z0-9_.-])(--[A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])(\s+)((?!--)[^\s"']+)`, 'g');
+// The start of name=value, name: value, "name": "value", \"name\":\"value\" and --token=value, up to the value.
+const NAME_SEPARATOR = new RegExp(String.raw`(\\?["']?)${NAME}(\\?["']?\s*[:=]\s*)`, 'g');
+const VALUE_HERE = new RegExp(SECRET_VALUE, 'y');
+
+// Replaces the value after each secret name. The search goes on right after the separator of a name that is not
+// secret, so its value is searched too, since a quoted value may hold a secret pair. Only a secret name's value is
+// matched, so a long run of plain pairs is read once instead of once for each pair.
+function redactNameValues(text) {
+  let result = '';
+  let from = 0;
+  NAME_SEPARATOR.lastIndex = 0;
+  for (let match; (match = NAME_SEPARATOR.exec(text));) {
+    if (!isSecretName(match[2])) continue;
+    VALUE_HERE.lastIndex = NAME_SEPARATOR.lastIndex;
+    const value = VALUE_HERE.exec(text);
+    if (!value) continue;
+    result += `${text.slice(from, NAME_SEPARATOR.lastIndex)}[redacted]`;
+    from = NAME_SEPARATOR.lastIndex = VALUE_HERE.lastIndex;
+  }
+  return result + text.slice(from);
+}
+
+// Credentials that a Codex error or its stderr could carry. The error's data field and stdout are never included.
+function redactTrustText(text) {
+  const redacted = REDACTIONS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), String(text));
+  return redactNameValues(redacted.replace(SECRET_FLAG, (match, name, separator) => (isSecretName(name) ? `${name}${separator}[redacted]` : match)));
+}
+
+// The line a cut goes through is never reported: a cut can leave part of a secret that redaction no longer
+// recognises, such as a value without its name. [cut] stands for that line. The head ends at the last line break
+// before the cut and the tail starts at the first one after it; with none, the whole part is [cut].
+const headForRedaction = (text) => {
+  if (text.length <= TRUST_REDACT_MESSAGE_LIMIT) return text;
+  const head = text.slice(0, TRUST_REDACT_MESSAGE_LIMIT);
+  const end = Math.max(head.lastIndexOf('\n'), head.lastIndexOf('\r')) + 1;
+  return `${head.slice(0, end)}[cut]`;
+};
+// The tail is redacted together with the line the cut goes through, so a secret name on that line still covers
+// its value on the next line; the cut line is dropped after that.
+const redactTail = (text) => {
+  if (text.length <= TRUST_REDACT_STDERR_LIMIT) return redactTrustText(text);
+  const tail = redactTrustText(text.slice(-TRUST_REDACT_STDERR_LIMIT));
+  const start = tail.search(/[\r\n]/);
+  return start === -1 ? '[cut]' : `[cut]${tail.slice(start)}`;
+};
+
+// One log line: terminal escape sequences removed, line breaks shown as " | ", other control characters as spaces.
+function oneLine(text) {
+  return String(text)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g, '')
+    .replace(/\s*(?:\r\n|\r|\n)\s*/g, ' | ')
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .trim();
+}
+
+/**
+ * The parts of a failed trust attempt worth reporting: the exit code of a process that ended early, Codex's own
+ * error code and message, and the end of the app-server's stderr; each redacted before it is capped.
+ */
+export function describeTrustFailure(trust = {}) {
+  const parts = [];
+  const exit = Number.isInteger(trust.code) ? trust.code : Number.isInteger(trust.status) ? trust.status : null;
+  if (exit !== null) parts.push(`exit code ${exit}`);
+  const error = trust.error;
+  if (error !== undefined && error !== null) {
+    // An object is Codex's own JSON-RPC error; a string is an error of the trust helper or of spawning Codex.
+    const fromCodex = typeof error === 'object';
+    const rawCode = fromCodex ? error.code : undefined;
+    const code = rawCode === undefined || rawCode === null ? null
+      : typeof rawCode === 'number' ? String(rawCode)
+        : oneLine(redactTrustText(headForRedaction(String(rawCode)))).slice(0, TRUST_ERROR_CODE_LIMIT);
+    const raw = fromCodex ? error.message ?? '' : error;
+    const message = oneLine(redactTrustText(headForRedaction(String(raw)))).slice(0, TRUST_ERROR_MESSAGE_LIMIT);
+    parts.push(`${fromCodex ? 'Codex error' : 'error'}${code ? ` ${code}` : ''}: ${message || '(no message)'}`);
+  }
+  const stderr = typeof trust.stderr === 'string' ? trust.stderr.trim() : '';
+  if (stderr) {
+    const tail = oneLine(redactTail(stderr));
+    parts.push(`stderr${tail.length > TRUST_STDERR_TAIL_LIMIT ? ` (last ${TRUST_STDERR_TAIL_LIMIT} characters)` : ''}: ${tail.slice(-TRUST_STDERR_TAIL_LIMIT)}`);
+  }
+  return parts.join('; ');
+}
+
 export function ensureCodexHooksTrusted({
   zylosDir,
   projectDir = zylosDir,
@@ -524,13 +648,13 @@ export function ensureCodexHooksTrusted({
   ensureHooksFeature({ projectDir, homeDir, codexHome });
   const trust = trustCodexHooksWithAppServer({ zylosDir, codexBin, spawnSyncImpl });
   if (!trust.ok) {
-    throw new Error(`Codex hook trust failed (${trust.reason || 'unknown'}). Native SessionStart bootstrap may not run.`);
+    const detail = describeTrustFailure(trust);
+    throw new Error(`Codex hook trust failed (${trust.reason || 'unknown'})${detail ? `: ${detail}` : ''}`);
   }
   if (trust.trusted === 0 && trust.missingHash > 0) {
     throw new Error(
       `Codex hook trust failed (missing_current_hash): Codex CLI "${codexVersion}" does not report currentHash in hooks/list ` +
-      '(field added in Codex CLI 0.129.0). Upgrade Codex CLI to 0.129.0 or later (0.146+ recommended). ' +
-      'Native SessionStart bootstrap may not run.'
+      '(field added in Codex CLI 0.129.0). Upgrade Codex CLI to 0.129.0 or later (0.146+ recommended).'
     );
   }
 
@@ -539,7 +663,7 @@ export function ensureCodexHooksTrusted({
   const hooksContent = fs.readFileSync(hooksPath, 'utf8');
   const trustSnapshot = extractTrustSnapshot(readHooksState(globalConfig), hooksPath);
   if (Object.keys(trustSnapshot).length === 0) {
-    throw new Error('Codex hook trust failed (empty_trust_snapshot). Native SessionStart bootstrap may not run.');
+    throw new Error('Codex hook trust failed (empty_trust_snapshot)');
   }
   writeTrustMarker(codexTrustMarkerPath(zylosDir), {
     hooksHash: sha256(hooksContent),

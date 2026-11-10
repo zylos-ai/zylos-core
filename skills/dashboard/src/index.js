@@ -228,7 +228,10 @@ const eventLoopMonitor = new EventLoopMonitor({
 const pm2Collector = new PM2Collector(store, config);
 const systemCollector = new SystemCollector(store, config);
 const statuslineCollector = new StatuslineCollector(store, config);
-const usageTranscripts = new UsageTranscripts(store, config, { getSnapshot: at => workbench.getSnapshot(at) });
+const usageTranscripts = new UsageTranscripts(store, config, {
+  getSnapshot: at => workbench.getSnapshot(at, { fresh: true }),
+  getSnapshotKey: () => coreState.costKey,
+});
 const conversationCollector = new ConversationCollector(store, config, { transcripts: usageTranscripts });
 const codexRolloutCollector = new CodexRolloutCollector(store, config, { transcripts: usageTranscripts });
 

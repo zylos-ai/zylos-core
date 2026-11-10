@@ -41,13 +41,20 @@ function copyCore(root) {
   return root;
 }
 
+function writeRecord(fx, record) {
+  const file = path.resolve(path.dirname(fx.loader), '../.zylos/core-package.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, typeof record === 'string' ? record : JSON.stringify(record));
+  return file;
+}
+
 function run(fx, source, env = {}) {
   return spawnSync(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import fs from 'node:fs';
     const { loadCoreConfig, resolveCoreConfigModule } = await import(${JSON.stringify(pathToFileURL(fx.loader).href)});
     ${source}
-  `], { env: { ...fx.env, ...env }, encoding: 'utf8', timeout: 10000 });
+  `], { cwd: fx.root, env: { ...fx.env, ...env }, encoding: 'utf8', timeout: 10000 });
 }
 
 function assertLoaded(fx, expectedRoot, env) {
@@ -110,7 +117,13 @@ test('invalid explicit root rejects without trying valid alternatives', t => {
   const fx = fixture(t);
   copyCore(fx.deployed);
   copyCore(path.join(fx.npmRoot, 'zylos'));
-  const result = run(fx, `await assert.rejects(loadCoreConfig(), /Cannot locate.*ZYLOS_PACKAGE_ROOT/);`,
+  writeRecord(fx, { v: 1, packageRoot: copyCore(path.join(fx.root, 'recorded')) });
+  const result = run(fx, `await assert.rejects(loadCoreConfig(), error => {
+    assert.match(error.message, /Cannot locate.*ZYLOS_PACKAGE_ROOT/);
+    assert.match(error.message, /Correct or unset ZYLOS_PACKAGE_ROOT/);
+    assert.doesNotMatch(error.message, /refresh|cli\\/zylos.js init/);
+    return true;
+  });`,
     { ZYLOS_PACKAGE_ROOT: path.join(fx.root, 'absent') });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fx.count(), 0);
@@ -133,4 +146,81 @@ test('missing Core and invalid global package identity reject and failed resolut
   const invalid = run(fx, `await assert.rejects(loadCoreConfig(), /Cannot locate/);`);
   assert.equal(invalid.status, 0, invalid.stderr);
   assert.equal(fx.count(), 3);
+});
+
+for (const [title, development, explicit, expected] of [
+  ['explicit root wins over the installation record', false, true, 'explicit'],
+  ['development tree wins over the installation record', true, false, 'deployed'],
+  ['installation record wins over PATH and npm roots', false, false, 'recorded'],
+]) test(title, t => {
+  const fx = fixture(t);
+  const roots = { recorded: copyCore(path.join(fx.root, 'recorded')),
+    installed: copyCore(path.join(fx.root, 'installed')), deployed: fx.deployed };
+  writeRecord(fx, { v: 1, packageRoot: roots.recorded });
+  if (development) copyCore(roots.deployed);
+  if (explicit) roots.explicit = copyCore(path.join(fx.root, 'explicit'));
+  fs.symlinkSync(path.join(roots.installed, 'cli/zylos.js'), path.join(fx.bin, 'zylos'));
+  copyCore(path.join(fx.npmRoot, 'zylos'));
+  assertLoaded(fx, roots[expected], explicit ? { ZYLOS_PACKAGE_ROOT: roots.explicit } : undefined);
+  assert.equal(fx.count(), 0);
+});
+
+test('minimal PATH resolves the record beside the loader independently of ZYLOS_DIR', t => {
+  const fx = fixture(t), core = copyCore(path.join(fx.root, 'recorded'));
+  writeRecord(fx, { v: 1, packageRoot: core });
+  assertLoaded(fx, core, { PATH: '/usr/bin:/bin' });
+  assert.equal(fx.count(), 0);
+});
+
+for (const fault of ['missing', 'malformed', 'version', 'relative', 'unrelated', 'stale']) {
+  test('invalid installation record preserves PATH and npm fallbacks and actionable failure: ' + fault, t => {
+    const fx = fixture(t);
+    const recorded = copyCore(path.join(fx.root, 'recorded'));
+    // The child runs in fx.root, so ./recorded is a real, loadable Core. Only
+    // the absolute-path contract can reject it in favor of the PATH package.
+    if (fault === 'relative') {
+      const probe = run(fx, `assert.ok(fs.statSync('./recorded/cli/lib/config.js').isFile());`);
+      assert.equal(probe.status, 0, probe.stderr);
+    }
+    if (fault !== 'missing') {
+      writeRecord(fx, fault === 'malformed' ? '{' : {
+        v: fault === 'version' ? 2 : 1,
+        packageRoot: fault === 'relative' ? './recorded' : fault === 'stale' ? path.join(fx.root, 'absent') : recorded,
+      });
+    }
+    if (fault === 'unrelated') fs.writeFileSync(path.join(recorded, 'package.json'), '{"type":"module","name":"unrelated"}');
+    const installed = copyCore(path.join(fx.root, 'installed'));
+    const executable = path.join(fx.bin, 'zylos');
+    fs.symlinkSync(path.join(installed, 'cli/zylos.js'), executable);
+    assertLoaded(fx, installed);
+    assert.equal(fx.count(), 0);
+    fs.unlinkSync(executable);
+    const global = copyCore(path.join(fx.npmRoot, 'zylos'));
+    assertLoaded(fx, global);
+    assert.equal(fx.count(), 1);
+    fs.writeFileSync(path.join(global, 'package.json'), '{"type":"module","name":"unrelated"}');
+    const result = run(fx, `
+      await assert.rejects(loadCoreConfig(), error => {
+        assert.match(error.message, /ZYLOS_PACKAGE_ROOT/);
+        assert.ok(error.message.includes(${JSON.stringify(path.resolve(path.dirname(fx.loader), '../.zylos/core-package.json'))}));
+        assert.ok(error.message.includes('/absolute/path/to/node /absolute/path/to/zylos/cli/zylos.js init'));
+        assert.match(error.message, /PATH/);
+        return true;
+      });
+    `);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fx.count(), 2);
+  });
+}
+
+test('record resolution observes an updated installation without another locator cache', t => {
+  const fx = fixture(t), before = copyCore(path.join(fx.root, 'before')), after = copyCore(path.join(fx.root, 'after'));
+  const record = writeRecord(fx, { v: 1, packageRoot: before });
+  const result = run(fx, `
+    assert.equal(resolveCoreConfigModule(), ${JSON.stringify(path.join(before, 'cli/lib/config.js'))});
+    fs.writeFileSync(${JSON.stringify(record)}, ${JSON.stringify(JSON.stringify({ v: 1, packageRoot: after }))});
+    assert.equal(resolveCoreConfigModule(), ${JSON.stringify(path.join(after, 'cli/lib/config.js'))});
+  `);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fx.count(), 0);
 });

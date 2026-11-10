@@ -31,7 +31,7 @@ export function renderAttention(root, snapshot, { error, lastSuccess, now = Date
   for (const [item, severity] of items) {
     const at = item.kind === 'rate_limited' ? recoveryTime(item.until, now) : null;
     const values = { runtime: item.runtime ? item.runtime.charAt(0).toUpperCase() + item.runtime.slice(1) : '', count: item.groups?.length ?? item.count30m ?? '', service: item.service ?? '',
-      time: at === null ? '' : clock(at) };
+      time: at === null ? '' : clock(at), waiting: item.waiting ?? '' };
     const key = 'wb.attention.' + item.kind + (item.kind === 'rate_limited' && at === null ? '_unknown' : '');
     const group = item.group !== undefined ? item.group : item.groups?.length === 1 ? item.groups[0] : undefined;
     const subs = [];

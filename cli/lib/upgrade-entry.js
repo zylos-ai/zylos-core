@@ -156,6 +156,7 @@ if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process
     result = {success:false, code:error instanceof SyntaxError ? 'INVALID_UPGRADE_HANDOFF' : upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]};
   }
   for(const warning of result.warnings || []) process.stderr.write(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}\n`);
+  for(const warning of result.corePackageWarnings || []) process.stderr.write(`Core package location warning: ${warning.message}\n`);
   const webConsoleNotice=result.webConsoleMigration?.reason;
   if(webConsoleNotice) process.stderr.write(`Web Console: ${webConsoleNotice}\n`);
   for(const instruction of result.webConsoleMigration?.instructions || []) process.stderr.write(`${instruction}\n`);

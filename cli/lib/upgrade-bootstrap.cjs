@@ -34,7 +34,7 @@ function recoveryPrompt(root, d) {
       controllerAlive,
       automaticResume: m.canRecognizeProcesses(),
       status: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--status'],
-      ...(!m.canRecognizeProcesses() ? {manualRecovery: 'Preserve transaction and snapshot materials. Confirm all writers stopped and code/schema compatibility before manual restoration; do not delete controller admission to force resume.'} : {resume: [process.execPath, path.join(root, '.zylos', 'upgrade', 'bootstrap.cjs'), '--root', root, '--once']})
+      ...(!m.canRecognizeProcesses() ? {manualRecovery: 'Preserve transaction and snapshot materials. Confirm all writers stopped and code/schema compatibility before manual restoration; do not delete controller admission to force resume.'} : {resume: m.isClosedRecovery(d) ? ['zylos', 'upgrade', '--resume-finalize'] : ['zylos', 'recovery', 'resume']})
     };
   });
   const availability = d.blocked ? 'Normal C4/database access is unavailable during upgrade maintenance.' : 'Core database access is available. The interrupted upgrade still requires final validation or terminal cleanup; preserve legitimate business writes.';
@@ -50,39 +50,39 @@ function bootstrap(root, {
   status = false
 } = {}) {
   root = path.resolve(root);
-  let d;
+  let d, discoveryFailure;
   try {
     d = m.discover(root);
-  } catch {
-    // File discovery failures preserve isolation and still reach an agent.
-    // Do not interpolate exception text from untrusted material into a cue.
+  } catch (error) {
+    // Report diagnostics as bounded JSON data, never as executable instructions.
+    discoveryFailure = m.recoveryFailureDetails(error);
     d = {
       marker: null,
       candidates: [],
-      diagnostics: ['file-only upgrade discovery unavailable'],
+      diagnostics: ['file-only upgrade discovery unavailable', discoveryFailure.error],
       blocked: true
     };
   }
   if (!d.candidates.length && !d.diagnostics.length) return {
     active: false
   };
-  const prompt = recoveryPrompt(root, d);
+  const invalid = d.diagnostics.length > 0 || d.candidates.length !== 1;
+  const failure = discoveryFailure || (invalid ? m.recoveryFailureDetails(
+    new Error(d.diagnostics.join('; ') || 'transaction attribution is not unique'), {next:m.recoveryNext(d)}) : null);
+  const prompt = recoveryPrompt(root, d)+(failure ? '\n'+JSON.stringify(failure) : '');
   if (status) return {
     active: true,
     ...d,
+    ...failure,
     prompt
   };
-  const invalid = d.diagnostics.length > 0 || d.candidates.length !== 1;
   const controller = !invalid ? controllerState(d.candidates[0]) : null;
   const out = {
     active: true,
     automaticResume: m.canRecognizeProcesses(),
     blocked: d.blocked,
     prompt,
-    ...(invalid ? {
-      recovery_required: true,
-      error: d.diagnostics.join('; ').slice(0, 8192) || 'transaction attribution is not unique'
-    } : {})
+    ...failure
   };
   // A verified live controller already owns progress. Discovery remains
   // visible to status/startup callers, but never enters resume concurrently, including at READY and terminal cleanup.
@@ -95,15 +95,15 @@ function bootstrap(root, {
   // neither diagnostics nor ambiguity authorize automatic recovery execution.
   if (once) {
     if (invalid) return out;
-    if (!m.canRecognizeProcesses()) return {...out, recovery_required:true, error:'interrupted upgrade requires manual recovery because process identities cannot be recognized; automatic resume is unavailable'};
-    const candidate = d.candidates[0];
-    const runner = path.join(candidate.dir, 'runner.cjs');
-    m.validateRecoveryFiles(candidate.dir, candidate.journal);
-    const r = require(runner);
-    return {
-      active: true,
-      ...r.resume(d.candidates[0].dir)
-    };
+    try {
+      // This is the maintenance deployed beside this bootstrap. A frozen
+      // transaction may predate the helper and its hashes must not change.
+      const recovered = m.recoverBeforeUpgrade(root);
+      return {active:false, resumed:recovered.active, ...recovered.result};
+    } catch (error) {
+      const details = m.recoveryFailureDetails(error);
+      return {...out, ...details, prompt:prompt+'\n'+JSON.stringify(details)};
+    }
   }
   return out;
 }
@@ -114,16 +114,16 @@ if (require.main === module) {
     if (i < 0 || !args[i + 1]) throw Error('--root is required');
     const allowed = new Set(['--status', '--once']);
     if (args.some((arg, index) => index !== i && index !== i + 1 && !allowed.has(arg))) {
-      throw Error('Usage: bootstrap.cjs --root <directory> [--status | --once]; runtime startup uses the existing boot chain');
+      throw Error('Usage: bootstrap.cjs --root <directory> [--status]; use zylos recovery resume to continue; runtime startup uses the existing boot chain');
     }
-    if (args.includes('--status') && args.includes('--once')) throw Error('select either --status or --once');
+    if (args.includes('--status') && args.includes('--once')) throw Error('Do not combine recovery execution with --status; use zylos recovery resume to continue.');
     const out = bootstrap(path.resolve(args[i + 1]), {
       once: args.includes('--once'), status: args.includes('--status')
     });
     process.stdout.write(JSON.stringify(out) + '\n');
     if (out.recovery_required) process.exitCode = 1;
   } catch (error) {
-    process.stdout.write(JSON.stringify({ recovery_required: true, error: error.message }) + '\n');
+    process.stdout.write(JSON.stringify(m.recoveryFailureDetails(error)) + '\n');
     process.exitCode = 1;
   }
 }

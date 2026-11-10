@@ -58,7 +58,12 @@ test('malformed journals expose a fixed diagnostic cue and never resume', t => {
   assert.match(out.prompt, /SYSTEM RECOVERY TASK/);
   assert.match(out.prompt, /--status/);
   assert.match(out.prompt, /Do not query C4/);
-  assert.equal(f.api.bootstrap(f.root, {once: true}).recovery_required, true);
+  for (const options of [{}, {status:true}, {once:true}]) {
+    const failed=f.api.bootstrap(f.root,options);
+    assert.equal(failed.recovery_required,true);
+    assert.equal(failed.code,'UPGRADE_RECOVERY_REQUIRED');
+    for(const key of ['code','error','next']) assert.ok(failed.prompt.includes(JSON.stringify(failed[key]).slice(1,-1)));
+  }
 });
 
 test('ambiguous transactions remain visible but cannot authorize recovery', t => {
@@ -90,18 +95,102 @@ test('live controller is observed without entering resume', {skip:process.platfo
   assert.equal(out.observing, true);
 });
 
-test('once resumes exactly the attributed transaction and does not launch a runtime', {skip:process.platform==='darwin'}, t => {
+// Boundary: exercise the real stable bootstrap and its shared subprocess helper.
+// Run for bootstrap/shared-executor changes; no Core services or database is used.
+function runnerFixture(t, mode, {legacy = false} = {}) {
   const f = fixture(t), dir = f.journal();
   const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
   t.mock.method(m, 'canRecognizeProcesses', () => true);
-  fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'throw Error("stable recovery must not execute");');
-  fs.writeFileSync(path.join(dir, 'runner.cjs'), 'exports.resume = dir => ({resumed: dir});');
-  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+  fs.copyFileSync(new URL('../../../test/fixtures/recovery-bootstrap-runner.cjs', import.meta.url), path.join(dir, 'runner.cjs'));
+  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) {
+    fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+    fs.chmodSync(path.join(dir, dest), 0o600);
+  }
+  if (legacy) fs.copyFileSync(new URL('../../../test/fixtures/upgrade-maintenance-legacy.cjs', import.meta.url), path.join(dir, 'maintenance.cjs'));
+  fs.chmodSync(path.join(dir, 'runner.cjs'), 0o600);
+  fs.writeFileSync(path.join(dir, 'fixture.json'), JSON.stringify({mode}), {mode:0o600});
   const journal = m.read(path.join(dir, 'journal.json'));
   m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
-  const out = f.api.bootstrap(f.root, {once: true});
-  assert.equal(out.resumed, dir);
+  return {...f, dir, m, hashes:{...journal.recoveryHashes}, receipt:path.join(f.root, 'fixture-child.json')};
+}
+
+test('once runs the attributed child and verifies clean completion including a preinstall abort', {timeout:10000}, t => {
+  const f = runnerFixture(t, 'clean');
+  fs.writeFileSync(path.join(f.stable, 'recovery.cjs'), 'throw Error("stable recovery must not execute");');
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.active, false);
+  assert.equal(out.resumed, true);
+  assert.equal(out.completed, false);
   assert.equal(out.launched, undefined);
+  const receipt = JSON.parse(fs.readFileSync(f.receipt, 'utf8'));
+  assert.notEqual(receipt.pid, process.pid);
+  assert.equal(receipt.ppid, process.pid);
+  assert.equal(fs.existsSync(path.join(f.stable, 'active.json')), false);
+});
+
+for (const mode of ['crash', 'invalid', 'remaining', 'cleanup-warning']) test(`once preserves the parent and rejects ${mode} recovery`, {timeout:10000}, t => {
+  const f = runnerFixture(t, mode);
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.next, /zylos recovery/);
+  assert.match(out.prompt, /UPGRADE_RECOVERY_REQUIRED/);
+  assert.match(out.prompt, /zylos recovery/);
+  assert.equal(fs.existsSync(path.join(f.stable, 'active.json')), true);
+  const receipt = JSON.parse(fs.readFileSync(f.receipt, 'utf8'));
+  assert.notEqual(receipt.pid, process.pid);
+  assert.equal(receipt.ppid, process.pid);
+  if (mode === 'cleanup-warning') {
+    assert.match(out.error, /EACCES: fixture code removal denied/);
+    assert.match(out.prompt, /EACCES: fixture code removal denied/);
+  }
+});
+
+// The frozen-module stub intentionally has no recoverBeforeUpgrade export.
+// The stable sibling module must own execution, regardless of frozen exports.
+test('once uses its stable helper when frozen transaction maintenance predates that helper', {timeout:10000}, t => {
+  const f = runnerFixture(t, 'remaining', {legacy:true});
+  const legacyFile = path.join(f.dir, 'maintenance.cjs');
+  const legacy = createRequire(import.meta.url)(legacyFile);
+  assert.equal(legacy.recoverBeforeUpgrade, undefined);
+  assert.equal(typeof f.m.recoverBeforeUpgrade, 'function');
+  const before = fs.readFileSync(path.join(f.dir, 'journal.json'), 'utf8');
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.notEqual(JSON.parse(fs.readFileSync(f.receipt, 'utf8')).pid, process.pid);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'journal.json'), 'utf8'), before);
+  for (const [name, hash] of Object.entries(f.hashes)) assert.equal(f.m.hash(path.join(f.dir, name)), hash, name);
+});
+
+// A timed-out CLI must not leave its recovery child behind. The private
+// process group belongs only to this fixture and is reaped on every result.
+function runOnceCli(f) {
+  const child = spawnSync(process.execPath, [path.join(f.stable,'bootstrap.cjs'),'--root',f.root,'--once'], {
+    encoding:'utf8', timeout:5000, killSignal:'SIGKILL', detached:true,
+    env:{...process.env,HOME:f.root,ZYLOS_DIR:f.root,PM2_HOME:path.join(f.root,'pm2-home')},
+  });
+  if (child.pid) {
+    try { process.kill(-child.pid,'SIGKILL'); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; }
+  }
+  return child;
+}
+
+// Linux exercises the non-injected CLI capability branch. On Mac the separate
+// manual-recovery case below proves that automatic takeover remains forbidden.
+for (const mode of ['crash', 'remaining', 'cleanup-warning']) test(`once CLI exits nonzero for ${mode} and retains the marker`, {skip:process.platform!=='linux', timeout:10000}, t => {
+  const f = runnerFixture(t, mode);
+  const child = runOnceCli(f);
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1, child.stderr);
+  const out = JSON.parse(child.stdout);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.equal(out.recovery_required, true);
+  assert.match(out.next, /zylos recovery/);
+  assert.match(out.prompt, /UPGRADE_RECOVERY_REQUIRED/);
+  assert.equal(fs.existsSync(path.join(f.stable, 'active.json')), true);
+  if (mode === 'cleanup-warning') assert.match(out.error, /EACCES: fixture code removal denied/);
 });
 
 test('once rejects changed transaction recovery code before executing it', {skip:process.platform==='darwin'}, t => {
@@ -113,7 +202,11 @@ test('once rejects changed transaction recovery code before executing it', {skip
   const journal = m.read(path.join(dir, 'journal.json'));
   m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   fs.appendFileSync(path.join(dir, 'runner.cjs'), '\nthrow Error("changed runner executed");');
-  assert.throws(() => f.api.bootstrap(f.root, {once:true}), /transaction recovery material changed/);
+  const out = f.api.bootstrap(f.root, {once:true});
+  assert.equal(out.recovery_required, true);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.match(out.error, /transaction recovery material changed/);
+  assert.match(out.next, /zylos recovery/);
 });
 
 test('restricted process visibility refuses automatic bootstrap recovery on Linux', {skip:process.platform!=='linux'}, t => {
@@ -160,24 +253,53 @@ test('READY provides a nonblocking recovery cue and terminal evidence ends disco
   }
 });
 
-test('unexpected discovery exceptions preserve isolation without exposing exception text', t => {
+// Discovery itself can fail before a transaction is attributable. Preserve the
+// real filesystem diagnosis and an action in every actual bootstrap cue.
+test('unexpected discovery errors retain code cause and next action in every bootstrap mode', t => {
   const f = fixture(t);
   const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
-  const discover = m.discover;
-  m.discover = () => {throw Error('untrusted exception text');};
-  try {
-    const out = f.api.bootstrap(f.root, {once: true});
-    assert.equal(out.recovery_required, true); assert.equal(out.blocked, true);
-    assert.match(out.prompt, /file-only upgrade discovery unavailable/);
-    assert.doesNotMatch(out.prompt, /untrusted exception text/);
-  } finally {m.discover = discover;}
+  t.mock.method(m, 'discover', () => {throw Object.assign(Error('EACCES: fixture recovery discovery denied'), {code:'EACCES'});});
+  for (const options of [{}, {status:true}, {once:true}]) {
+    const out = f.api.bootstrap(f.root, options);
+    assert.equal(out.recovery_required, true);
+    assert.equal(out.blocked, true);
+    assert.equal(out.code, 'EACCES');
+    assert.match(out.error, /EACCES: fixture recovery discovery denied/);
+    assert.match(out.next, /zylos recovery status/);
+    assert.match(out.prompt, /EACCES: fixture recovery discovery denied/);
+    assert.match(out.prompt, /zylos recovery status/);
+  }
+});
+
+// Closed transactions need forward repair even before an explicit resume is
+// attempted. Status and ordinary startup cues must not suggest compensation.
+test('closed transaction startup and status recommend forward finalization instead of recovery resume', t => {
+  const f = fixture(t);
+  const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
+  t.mock.method(m, 'canRecognizeProcesses', () => true);
+  const digest = 'a'.repeat(64);
+  readyJournal(f, 'compensation_closed', {
+    compensationCutoff:{formatVersion:1, closed:true, transactionId:'tx', snapshotManifestHash:digest,
+      closedAt:'2026-10-27T00:00:00.000Z', writer:'finalizer'},
+  });
+  for (const options of [{}, {status:true}]) {
+    const out = f.api.bootstrap(f.root, options);
+    assert.equal(out.active, true);
+    assert.match(out.prompt, /"zylos",\s*"upgrade",\s*"--resume-finalize"/);
+    assert.doesNotMatch(out.prompt, /"zylos",\s*"recovery",\s*"resume"/);
+    assert.equal(fs.existsSync(path.join(f.stable, 'active.json')), true);
+  }
 });
 
 test('retired runtime-launch option fails clearly and cannot run a supervisor', t => {
   const f = fixture(t);
   const out = spawnSync(process.execPath, [path.join(f.stable, 'bootstrap.cjs'), '--root', f.root, '--launch-runtime'], {encoding: 'utf8'});
   assert.equal(out.status, 1);
-  assert.match(JSON.parse(out.stdout).error, /existing boot chain/);
+  const error = JSON.parse(out.stdout).error;
+  assert.match(error, /existing boot chain/);
+  assert.match(error, /--status/);
+  assert.match(error, /zylos recovery resume/);
+  assert.doesNotMatch(error, /--once/);
 });
 
  test('Mac discovery only offers status/manual recovery and once cannot invoke runner', {skip:process.platform!=='darwin'}, t=>{
@@ -189,3 +311,40 @@ test('retired runtime-launch option fails clearly and cannot run a supervisor', 
  assert.match(out.prompt,/"controllerAlive": null/);
  assert.match(out.prompt,/do not run automatic resume/);
  });
+
+// Boundary: Linux performs actual interrupted takeover, real terminal cleanup,
+// and outer rediscovery. Only fs.rmSync(code/) is fault-injected in the child;
+// no service, database, or installed package is touched. Run when recovery
+// cleanup or its caller changes. Mac refusal is covered separately above.
+test('once CLI reports a real runner cleanup failure with its cause and retained marker', {skip:process.platform!=='linux', timeout:10000}, t => {
+  const f = runnerFixture(t, 'remaining');
+  fs.copyFileSync(new URL('../../../test/fixtures/recovery-cleanup-runner.cjs', import.meta.url), path.join(f.dir, 'runner.cjs'));
+  fs.copyFileSync(new URL('../upgrade-recovery.cjs', import.meta.url), path.join(f.dir, 'product-runner.cjs'));
+  for (const name of ['runner.cjs', 'product-runner.cjs']) fs.chmodSync(path.join(f.dir, name), 0o600);
+  fs.mkdirSync(path.join(f.dir, 'code'), {mode:0o700});
+  fs.writeFileSync(path.join(f.dir, 'code', 'retained.txt'), 'retained test code\n', {mode:0o600});
+  const hashes = Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name, f.m.hash(path.join(f.dir, name))]));
+  readyJournal(f, 'upgrade_complete', {
+    recoveryHashes:hashes,
+    cleanup:{complete:false, codeRemoved:false, servicesRestored:true},
+    terminalEvidence:{verified:true, kind:'code_data_services'},
+  });
+  const child = runOnceCli(f);
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1, child.stderr);
+  const out = JSON.parse(child.stdout);
+  assert.equal(out.code, 'UPGRADE_RECOVERY_REQUIRED');
+  assert.equal(out.recovery_required, true);
+  assert.match(out.error, /EACCES: fixture code removal denied/);
+  assert.match(out.prompt, /EACCES: fixture code removal denied/);
+  assert.match(out.next, /zylos recovery/);
+  assert.equal(fs.existsSync(path.join(f.stable, 'active.json')), true);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'code', 'retained.txt'), 'utf8'), 'retained test code\n');
+  const saved = f.m.read(path.join(f.dir, 'journal.json'));
+  assert.equal(saved.phase, 'upgrade_complete');
+  assert.equal(saved.cleanup.complete, false);
+  for (const [name, hash] of Object.entries(hashes)) {
+    assert.equal(saved.recoveryHashes[name], hash, name);
+    assert.equal(f.m.hash(path.join(f.dir, name)), hash, name);
+  }
+});

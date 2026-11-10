@@ -784,3 +784,26 @@ test('a part that lost its oldest steps counts them as N+ and says older steps a
   assert.match(english.node.querySelector('button').textContent, /1\+ steps/);
   assert.equal(english.node.querySelector('.conversation-activity-more').textContent, 'Earlier steps are not shown');
 });
+
+test('a running activity stays under the external message when a newer internal relay arrives', async t => {
+  const rows = [{ id: 1, channel: 'dashboard', direction: 'in', content: 'work on this', status: 'delivered' }];
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => running([tool(2.5, null, 'running')]) });
+  await f.open();
+  const list = f.root.querySelector('.conversation-message-list');
+  const external = list.querySelector('[data-message-id="1"]');
+  const before = list.querySelector('.conversation-activity-message');
+  assert.ok(before?.querySelector('.conversation-activity-step'), 'the real mounted page has a running tool');
+  assert.equal(list.children.indexOf(before), list.children.indexOf(external) + 1);
+
+  rows.push({ id: 2, channel: 'internal', direction: 'in', content: 'relay body', status: 'delivered',
+    internal: { peerSessionGroup: 'telegram:peer', peerDisplayName: 'Peer room', peerExists: true, peerChannel: 'telegram', content: 'relay body' } });
+  await refresh(f);
+  const relay = list.querySelector('[data-message-id="2"]');
+  assert.ok(relay?.classList.contains('conversation-internal'), 'the newer relay is rendered');
+  const live = list.querySelectorAll('.conversation-activity-message');
+  assert.equal(live.length, 1, 'there is still one running activity');
+  assert.equal(live[0], before, 'the activity retains its mounted instance');
+  assert.equal(list.children.indexOf(live[0]), list.children.indexOf(external) + 1, 'activity remains immediately below the external row');
+  assert.equal(list.children.indexOf(relay), list.children.indexOf(live[0]) + 1, 'the relay follows the activity instead of taking its anchor');
+  assert.equal(relay.querySelector('.conversation-activity'), null);
+});

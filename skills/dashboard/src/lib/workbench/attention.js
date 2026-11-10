@@ -26,6 +26,10 @@ export function buildAttention(snapshot, { channelDownCounter, pm2Data } = {}) {
   }
   for (const row of rows) if (row.wait?.kind === 'start_failed') problems.push({ kind: 'start_failed', group: row.sessionGroup,
     count30m: row.wait.count30m, lastAt: row.wait.lastAt });
+  const pool = snapshot.instance.pool, waiting = rows.filter(row => row.wait?.kind === 'pool_wait').length;
+  if (pool?.used != null && pool.capacity != null && pool.used >= pool.capacity && waiting > 0) {
+    reminders.push({ kind: 'pool_full', waiting });
+  }
   const services = new Set(rows.flatMap(row => row.c4?.componentName ? ['zylos-' + row.c4.componentName] : []));
   for (const service of services) if ((channelDownCounter?.get(service) ?? 0) >= 2) problems.push({ kind: 'channel_down', service,
     pm2Status: pm2Data?.processes.find(process => process.name === service)?.pm2_env?.status ?? null });

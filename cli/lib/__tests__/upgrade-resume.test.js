@@ -40,6 +40,29 @@ test('status reads persisted facts without locking, isolation, finalizer calls, 
   assert.deepEqual(fs.readFileSync(path.join(f.dir,'journal.json')),bytes);
 });
 
+// Integration: real resume/status projection and readable formatter over an owned
+// temporary journal. Run for installation warning propagation; skip unrelated
+// runtime changes. Finalizer/services are injected; no live I/O or processes.
+test('resume and later status preserve Core package location warnings independently from runtime warnings',async t=>{
+  const f=fixture(t);
+  const persisted=[{code:'CORE_PACKAGE_LOCATION_WRITE_FAILED',message:'Record unavailable; rerun zylos init.'}];
+  const returned=[{code:'CORE_PACKAGE_LOCATION_WRITE_FAILED',message:'Record update denied; set ZYLOS_PACKAGE_ROOT.'}];
+  f.journal={...f.journal,corePackageWarnings:persisted};
+  const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
+    f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete'});
+    return {success:true,corePackageWarnings:returned};
+  }});
+  assert.equal(result.ok,true);
+  const json=JSON.parse(JSON.stringify(result));
+  assert.deepEqual(json.data.corePackageWarnings,returned);
+  assert.deepEqual(json.data.warnings,[]);
+  assert.match(formatFinalizeResult(json),/Core package location warning: Record update denied; set ZYLOS_PACKAGE_ROOT/);
+  assert.doesNotMatch(formatFinalizeResult(json),/Runtime warning/);
+  const status=await resumeFinalize(f.root,{status:true},{maintenance:f.m});
+  assert.deepEqual(status.data.corePackageWarnings,persisted);
+  assert.match(formatFinalizeResult(status),/Core package location warning: Record unavailable; rerun zylos init/);
+});
+
 test('persisted Dashboard items never substitute for current runtime verification',()=>{
   const journal={transactionId:'upgrade-status',phase:'upgrade_complete'};
   assert.equal(finalizeStatus(journal).dashboard.state,'degraded');
@@ -119,13 +142,18 @@ for(const success of [false,true]) test(`resume retains structured runtime warni
 test('forward repair returns the current Web Console migration instructions',async t=>{
   const f=fixture(t);
   const webConsoleMigration={status:'manual_required',caddyfile:path.join(f.root,'http/Caddyfile'),
-    message:'Custom route needs inspection.',instructions:['Add header_up X-Forwarded-Prefix /console.']};
+    reason:'Custom route needs inspection.',instructions:['Add header_up X-Forwarded-Prefix /console.']};
+  const corePackageWarnings=[{code:'CORE_PACKAGE_LOCATION_WRITE_FAILED',message:'Record update denied; set ZYLOS_PACKAGE_ROOT.'}];
   const result=await resumeFinalize(f.root,{}, {maintenance:f.m,platform:'linux',quiesce:()=>{},finalize:async ctx=>{
     f.m.update(f.dir,ctx.journal,{phase:'upgrade_complete',resumePhase:'compensation_closed'});
-    return {success:true,webConsoleMigration};
+    return {success:true,webConsoleMigration,corePackageWarnings};
   }});
   assert.equal(result.ok,true);
   assert.deepEqual(JSON.parse(JSON.stringify(result)).data.webConsoleMigration,webConsoleMigration);
+  assert.deepEqual(JSON.parse(JSON.stringify(result)).data.corePackageWarnings,corePackageWarnings);
+  const output=formatFinalizeResult(result);
+  assert.match(output,/Core package location warning: Record update denied/);
+  assert.match(output,/Web Console: Custom route needs inspection/);
 });
 
 test('snapshot hash drift is rejected before any modifications even when closed facts agree',async t=>{

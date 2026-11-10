@@ -1972,3 +1972,42 @@ test('a continuing send retains the accelerated deadline installed when sending 
   await f.timer.advance(1000);
   assert.equal(f.reads().at(-1).time, started + 4000);
 });
+
+test('internal rows stay out of delivery activity and list previews', async t => {
+  const external = { id: 1, channel: 'dashboard', direction: 'in', status: 'pending', content: 'External preview', timestamp: '2026-01-01T00:00:00Z' };
+  const internal = { id: 2, channel: 'internal', direction: 'in', status: 'pending', content: 'Internal secret', timestamp: '2026-01-02T00:00:00Z' };
+  const f = await selected(u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'before'
+    ? { items: [external, internal], afterCursor: 'after2' }
+    : u.pathname.endsWith('/activity') ? { items: [], rounds: [] } : undefined);
+  t.after(() => f.state.destroy());
+  await flush();
+  const listed = f.state.snapshot().items.find(row => row.id === 'g:A');
+  assert.equal(listed.preview, 'External preview');
+  assert.equal(listed.previewDirection, 'in');
+  assert.equal(listed.stamp, new Date(external.timestamp).getTime() / 86400000 + 2440587.5);
+  assert.equal(f.state.snapshot().messages.length, 2, 'the internal row remains visible in selected history');
+  await f.timer.advance(5000);
+  for (const suffix of ['/status', '/activity']) {
+    const reads = f.calls.filter(call => new URL(call.path, 'http://fixture').pathname.endsWith(suffix));
+    assert.ok(reads.length > 0, `${suffix} has the external positive control`);
+    for (const read of reads) assert.equal(new URL(read.path, 'http://fixture').searchParams.get('ids'), '1');
+  }
+});
+
+test('an internal outbound relay preserves accelerated waiting and avoids question refresh', async t => {
+  let afterReads = 0;
+  const f = await selected(u => u.pathname.endsWith('/send') ? { stored: true, conversationId: 'g:A', deliveryState: 'pending' }
+    : u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'after'
+      ? { items: ++afterReads === 2 ? [{ id: 11, channel: 'internal', direction: 'out', status: 'delivered', content: 'Relay' }] : [], afterCursor: 'after' }
+      : undefined);
+  t.after(() => f.state.destroy());
+  f.state.setInput('hello'); await f.state.send();
+  const before = f.reads().length, questions = f.calls.filter(call => call.path.includes('/questions?')).length;
+  await f.timer.advance(2000);
+  assert.equal(f.reads().length, before + 1);
+  assert.equal(f.calls.filter(call => call.path.includes('/questions?')).length, questions);
+  await f.timer.advance(1999);
+  assert.equal(f.reads().length, before + 1);
+  await f.timer.advance(1);
+  assert.equal(f.reads().length, before + 2, 'relay does not masquerade as the awaited external reply');
+});

@@ -34,6 +34,41 @@ function item(document, ...children) {
   const node = element(document, 'span', undefined, 'wb-inst-item');
   node.append(...children); return node;
 }
+const finite = value => typeof value === 'number' && Number.isFinite(value);
+const gib = bytes => Number((bytes / 1073741824).toFixed(2));
+function poolSource(pool, t) {
+  if (pool.capacity == null) return '';
+  const record = pool.capacityRecord;
+  if (record?.valid !== true) return t('wb.inst.poolUnavailable', { capacity: pool.capacity });
+  if (record.fresh !== true) return t('wb.inst.poolExpired', { capacity: pool.capacity });
+  if (record.source === 'fixed') return finite(record.kMemory) && pool.capacity > record.kMemory
+    ? t('wb.inst.poolFixedAdvice', { capacity: pool.capacity, recommended: record.kMemory }) : t('wb.inst.poolFixed');
+  if (record.source === 'auto') return t('wb.inst.poolAuto');
+  if (record.source === 'fallback') return t('wb.inst.poolFallback');
+  return '';
+}
+function poolExplanation(record, t) {
+  const parts = [], memory = record?.memory, model = record?.model;
+  if (memory && typeof memory === 'object') {
+    const fields = [];
+    if (memory.source === 'host') fields.push(t('wb.inst.poolMemoryHost'));
+    if (memory.source === 'darwin') fields.push(t('wb.inst.poolMemoryDarwin'));
+    for (const [field, key] of [['limitBytes', 'poolMemoryLimit'], ['usedBytes', 'poolMemoryUsed'], ['reserveBytes', 'poolMemoryReserve']]) {
+      if (finite(memory[field]) && memory[field] >= 0) fields.push(t('wb.inst.' + key, { amount: gib(memory[field]) }));
+    }
+    if (fields.length) parts.push(fields.join(' · '));
+  }
+  if (model && typeof model === 'object' && ['default', 'fitted'].includes(model.state)) {
+    const fields = [];
+    if (model.state === 'default') fields.push(t('wb.inst.poolModelDefault'));
+    if (finite(model.slopeBytes) && model.slopeBytes > 0) fields.push(t('wb.inst.poolModelSession', { amount: gib(model.slopeBytes) }));
+    if (model.state === 'fitted' && finite(model.interceptBytes)) fields.push(t('wb.inst.poolModelFixed', { amount: gib(model.interceptBytes) }));
+    if (finite(model.windowDays) && model.windowDays > 0) fields.push(t('wb.inst.poolModelWindow', { days: model.windowDays }));
+    if (fields.length) parts.push(fields.join(' · '));
+  }
+  if (record?.reason === 'floor') parts.push(t('wb.inst.poolFloor'));
+  return parts;
+}
 /** One-line instance strip; the host button stays at the right end. */
 export function instanceStrip(root, snapshot, { document = root.ownerDocument, t = key => key, cost = null, costSummary = null, onHost = () => {}, hostOpen = false, level = 'plain', now = Date.now() } = {}) {
   root.replaceChildren(); const instance = snapshot.instance ?? {};
@@ -73,9 +108,12 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
     }
     root.append(box);
   }
-  const pool = instance.pool ?? {}, used = pool.used, capacity = pool.capacity ?? null;
+  const pool = instance.pool ?? {}, multi = snapshot.mode === 'multi';
+  const used = multi ? pool.used : pool.ready == null ? null : pool.ready + pool.starting;
+  const capacity = multi ? pool.capacity ?? null : null;
   const full = used != null && capacity != null && used >= capacity;
   const poolItem = item(document, icon(document, 'layers', 'xs'), element(document, 'span', technical ? t('wb.inst.pool') : t('wb.pool')));
+  poolItem.style.flexWrap = 'wrap'; poolItem.style.whiteSpace = 'normal'; poolItem.style.maxWidth = '100%';
   if (technical && used != null) {
     const pips = element(document, 'span', undefined, 'wb-pips' + (full ? ' wb-full' : ''));
     for (let i = 0; i < Math.max(used, capacity ?? 0); i++) pips.append(element(document, 'i', undefined, i < used ? 'wb-slot wb-on' : 'wb-slot'));
@@ -83,7 +121,10 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   }
   const amount = used == null ? t('wb.unknown') : capacity == null ? String(used) : `${used} / ${capacity}`;
   poolItem.append(element(document, 'b', amount, full ? 'wb-txt-warn' : undefined));
-  if (technical && used != null) poolItem.append(element(document, 'span', t('wb.inst.inUse')));
+  if ((technical || multi) && used != null) poolItem.append(element(document, 'span', t('wb.inst.inUse')));
+  const source = multi ? poolSource(pool, t) : '';
+  if (source) poolItem.append(element(document, 'span', ' · ' + source, 'wb-sub'));
+  if (technical && multi) for (const text of poolExplanation(pool.capacityRecord, t)) poolItem.append(element(document, 'span', ' · ' + text, 'wb-sub'));
   if (pool.waiting) poolItem.append(element(document, 'span', ' · ' + t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: pool.waiting }), 'wb-txt-warn'));
   poolItem.title = t('wb.inst.poolHint');
   root.append(poolItem);

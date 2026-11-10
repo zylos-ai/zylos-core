@@ -1,6 +1,6 @@
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=117';
-import { toolLabel, waitText } from './view-mode.js?v=116';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=150';
+import { toolLabel, waitText } from './view-mode.js?v=150';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=91';
 import { recentRows } from './timeline-rows.js?v=108';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';

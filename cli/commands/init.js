@@ -1,3 +1,4 @@
+import { writeCorePackageLocation } from '../lib/core-package-location.js';
 import { migrateModelThresholds } from '../lib/model-rotation-thresholds.js';
 import { applyDashboardRoute } from '../lib/dashboard-install.js';
 import { generateWebConsoleRoute } from '../lib/web-console-route.js';
@@ -94,7 +95,11 @@ export async function prepareInitRuntimeAssets({ result = { completed: [], faile
   hooks = { claude: async () => {
     if (!(await runtimeHooksReady('claude')).ready) throw new Error('Claude hooks/instructions not ready');
   }, codex: () => {
-    ensureCodexHooksTrusted({ zylosDir: ZYLOS_DIR });
+    try { ensureCodexHooksTrusted({ zylosDir: ZYLOS_DIR }); }
+    catch (error) {
+      // Init does not start Codex; each Codex launch repeats the trust step and does not start Codex until it succeeds.
+      throw new Error(`${error.message.replace(/\.+$/, '')}. Codex will not start until hook trust succeeds; each Codex launch tries it again.`, { cause: error });
+    }
   } }, exists = fs.existsSync } = {}) {
   for (const runtime of ['claude', 'codex']) {
     for (const [item, prepare] of [['instructions', () => {
@@ -789,7 +794,7 @@ function copyTree(src, dest) {
  * by zylos-core, like ecosystem.config.cjs). Preserves node_modules
  * and any extra files not in the package source.
  */
-function syncCoreSkills() {
+export function syncCoreSkills() {
   if (!fs.existsSync(CORE_SKILLS_SRC)) {
     return { installed: [], updated: [], error: 'Core Skills source not found' };
   }
@@ -812,9 +817,10 @@ function syncCoreSkills() {
       // into the ownership record (issue #715).
       const manifest = generateManifest(srcDir);
       saveMergeBaseline(destDir, srcDir, manifest);
+      if (entry.name === 'comm-bridge') writeCorePackageLocation({ skillDir: destDir, packageRoot: PACKAGE_ROOT });
       (isNew ? installed : updated).push(entry.name);
-    } catch {
-      console.log(`  ${warn(`Failed to sync ${bold(entry.name)}`)}`);
+    } catch (err) {
+      console.log(`  ${warn(`Failed to sync ${bold(entry.name)}: ${err.message}`)}`);
     }
   }
 

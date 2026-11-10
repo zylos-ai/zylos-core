@@ -6,6 +6,8 @@ import { createBoardSearch } from '../public/js/wb/board-search.js';
 import { activityStrip } from '../public/js/wb/activity-strip.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
 import { renderAttention } from '../public/js/wb/attention-bar.js';
+import { waitText } from '../public/js/wb/view-mode.js';
+import { renderOverview } from '../public/js/wb/detail-overview.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
@@ -132,7 +134,7 @@ test('search debounces, clears and rejects stale results independently from snap
 test('instance strip renders pool unknown or used slots, runtime union, quota and same-sample services', () => {
   const document = createDocument(), root = document.createElement('div');
   instanceStrip(root, { mode: 'unreadable', baselineRuntime: 'claude', rows: [{ launchConfig: { runtime: 'codex' } }],
-    instance: { pool: { used: 3, waiting: 1 }, runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'auth_failed' } },
+    instance: { pool: { ready: 3, starting: 0, used: 3, waiting: 1 }, runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'auth_failed' } },
       accounts: { claude: { used_percentage: 23 }, codex: null }, services: { online: 4, total: 5 } } }, { document, t, cost: 0.25, level: 'technical' });
   const chip = allNodes(root).find(node => node.classList.contains('wb-mode-chip'));
   assert.equal(chip.textContent, 'wb.unknown'); assert.equal(chip.title, 'wb.mode');
@@ -275,4 +277,134 @@ test('a last-received line without words names the channel, with the date when t
     assert.match(earlier, /^wb\.board\.lastReceivedAt \{"channel":"wb\.platform\.openmax","time":"11\/7, 08:05 AM"\}$/);
     assert.equal(lastReceived({ preview: { text: null, channel: 'openmax', timestamp: null } }, t), 'wb.board.lastReceivedFrom {"channel":"wb.platform.openmax"}');
   } finally { setInstanceZone(undefined); }
+});
+
+const poolTranslations = Object.fromEntries(['zh', 'en'].map(locale => [locale,
+  JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'))]));
+const poolTranslator = locale => (key, values = {}) => (poolTranslations[locale][key] ?? key)
+  .replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(values, name) ? String(values[name]) : match);
+
+test('pool source distinguishes fresh, expired, missing, invalid and fallback records in both views and languages', () => {
+  const cases = [
+    { capacityRecord: { valid: true, fresh: true, source: 'auto' }, capacity: 3,
+      zh: '按内存自动', en: 'Automatic, based on memory' },
+    { capacityRecord: { valid: true, fresh: false, source: 'auto' }, capacity: 2,
+      zh: '上限数据已过期，按 2 运行', en: 'Capacity data expired; running with a limit of 2' },
+    { capacityRecord: null, capacity: 5,
+      zh: '上限数据不可用，按 5 运行', en: 'Capacity data unavailable; running with a limit of 5' },
+    { capacityRecord: { valid: false, fresh: false, source: 'fallback' }, capacity: 4,
+      zh: '上限数据不可用，按 4 运行', en: 'Capacity data unavailable; running with a limit of 4' },
+    { capacityRecord: { valid: true, fresh: true, source: 'fallback' }, capacity: 1,
+      zh: '内存读数不可用，按 1 运行', en: 'Memory reading unavailable; running with a limit of 1' },
+    { capacityRecord: { valid: true, fresh: true, source: 'fixed', kMemory: 3 }, capacity: 6,
+      zh: '手动设定 6（按内存建议 3）', en: 'Manually set to 6 (memory recommendation: 3)' },
+    { capacityRecord: { valid: true, fresh: true, source: 'fixed', kMemory: 3 }, capacity: 3,
+      zh: '手动设定', en: 'Manually set' },
+    { capacityRecord: { valid: true, fresh: false, source: 'fallback' }, capacity: 2,
+      zh: '上限数据已过期，按 2 运行', en: 'Capacity data expired; running with a limit of 2' },
+  ];
+  for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) for (const sample of cases) {
+    const document = createDocument(), root = document.createElement('div');
+    instanceStrip(root, { mode: 'multi', instance: { pool: { used: sample.capacity, capacity: sample.capacity,
+      capacityRecord: sample.capacityRecord } } }, { document, t: poolTranslator(locale), level });
+    assert.ok(root.textContent.includes(sample[locale]), `${locale}/${level}: ${sample[locale]}`);
+    assert.ok(root.textContent.includes(`${sample.capacity} / ${sample.capacity}`));
+    assert.ok(root.textContent.includes(locale === 'zh' ? '在用' : 'in use'));
+    if (sample.capacity !== 1) assert.ok(!root.textContent.includes(poolTranslations[locale]['wb.inst.poolFallback']));
+    if (sample.capacityRecord?.source === 'fixed' && sample.capacity === sample.capacityRecord.kMemory) {
+      assert.doesNotMatch(root.textContent, /按内存建议|memory recommendation/);
+    }
+    assert.doesNotMatch(root.textContent, /wb\.inst\.pool(?:Auto|Fixed|Fallback|Expired|Unavailable)/);
+  }
+});
+
+test('single and unreadable instance strips retain sampled counts without capacity or occupancy data', () => {
+  const document = createDocument(), root = document.createElement('div');
+  for (const mode of ['single', 'unreadable']) for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) {
+    const t = poolTranslator(locale), pool = { used: 0, capacity: 119,
+      capacityRecord: { valid: false, fresh: false, source: 'fallback', reason: 'floor' } };
+    instanceStrip(root, { mode, instance: { pool } }, { document, t, level });
+    const empty = root.children[1];
+    assert.equal(empty.textContent, t(level === 'technical' ? 'wb.inst.pool' : 'wb.pool') + t('wb.unknown'));
+    assert.equal(allNodes(empty).some(node => node.classList.contains('wb-slot')), false);
+    instanceStrip(root, { mode, instance: { pool: { ...pool, ready: 2, starting: 1, waiting: 4 } } }, { document, t, level });
+    const sampled = root.children[1];
+    assert.ok(sampled.textContent.includes('3'));
+    assert.ok(sampled.textContent.includes(t(level === 'technical' ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: 4 })));
+    assert.equal(sampled.textContent.includes(t('wb.inst.inUse')), level === 'technical');
+    assert.doesNotMatch(sampled.textContent, /119|\/|按 .*运行|running with|内存只够|Memory fits/);
+    assert.equal(allNodes(sampled).filter(node => node.classList.contains('wb-slot')).length, level === 'technical' ? 3 : 0);
+  }
+});
+
+test('pool renders actual occupancy above capacity and preserves sampled waiting separately', () => {
+  const document = createDocument(), root = document.createElement('div');
+  instanceStrip(root, { mode: 'multi', instance: { pool: { used: 4, capacity: 3, waiting: 7,
+    capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
+  assert.match(root.textContent, /4 \/ 3/); assert.match(root.textContent, /7 排队/);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-slot')).length, 4);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-on')).length, 4);
+  const pool = root.children.find(node => node.textContent.includes('4 / 3'));
+  assert.equal(pool.style.flexWrap, 'wrap'); assert.equal(pool.style.whiteSpace, 'normal');
+  instanceStrip(root, { mode: 'multi', instance: { pool: { used: null, capacity: 3,
+    capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
+  assert.match(root.textContent, /未知/);
+  assert.match(root.textContent, /按内存自动/);
+  assert.equal(allNodes(root).some(node => node.classList.contains('wb-full')), false);
+});
+
+test('pool technical explanations show only usable published values without recalculating advice', () => {
+  const document = createDocument(), root = document.createElement('div'), GiB = 1073741824;
+  const capacityRecord = { valid: true, fresh: true, source: 'fixed', kMemory: 0, reason: 'floor',
+    memory: { source: 'host', limitBytes: 4 * GiB, usedBytes: 3.7 * GiB, reserveBytes: 0.5 * GiB },
+    model: { state: 'fitted', slopeBytes: 0.5 * GiB, interceptBytes: 1.3 * GiB, windowDays: 7 } };
+  const snapshot = { mode: 'multi', instance: { pool: { used: 2, capacity: 6, capacityRecord } } };
+  instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'plain' });
+  assert.match(root.textContent, /手动设定 6（按内存建议 0）/);
+  assert.doesNotMatch(root.textContent, /内存上限|固定开销|内存只够/);
+  instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'technical' });
+  for (const phrase of ['未设内存上限，按整机内存', '内存上限 4 GiB', '已用 3.7 GiB', '保底 0.5 GiB',
+    '每会话约 0.5 GiB', '固定开销约 1.3 GiB', '近 7 天', '内存只够系统助手']) assert.ok(root.textContent.includes(phrase), phrase);
+  capacityRecord.kMemory = -2; capacityRecord.reason = null;
+  capacityRecord.memory = { source: 'darwin', limitBytes: '4', usedBytes: null, reserveBytes: NaN };
+  capacityRecord.model = { state: 'default', slopeBytes: 0.5 * GiB, interceptBytes: 'bad', windowDays: undefined };
+  instanceStrip(root, snapshot, { document, t: poolTranslator('en'), level: 'technical' });
+  assert.match(root.textContent, /memory recommendation: -2/);
+  assert.match(root.textContent, /Using host memory \(macOS\)/);
+  assert.match(root.textContent, /Still gathering data/);
+  assert.match(root.textContent, /about 0.5 GiB per session/);
+  assert.doesNotMatch(root.textContent, /Memory limit|fixed overhead|NaN|undefined|last .* days|Memory fits/);
+});
+
+// Pool presentation integration: run when pool fields, wait rendering or reminder
+// translations change; skip unrelated features. Real renderers plus injected DOM
+// and repository packs only; no sockets, timers or live state. The official runner
+// supplies temporary HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and a private tmux namespace.
+test('board and detail share snapshot queue positions while the pool reminder uses its own waiting count', () => {
+  const document = createDocument(), root = document.createElement('div');
+  for (const locale of ['zh', 'en']) {
+    const t = poolTranslator(locale);
+    for (const level of ['plain', 'technical']) {
+      const value = { ...row('b', 'waiting'), presence: 'not_running', tools: [], wait: { kind: 'pool_wait', position: 2 } };
+      const expected = locale === 'zh' ? `${level === 'technical' ? '等池位' : '排队中'} · 第 2 个`
+        : `${level === 'technical' ? 'Waiting for a slot' : 'Queueing'} · position 2`;
+      renderBoard(root, { rows: [value] }, { document, t, level });
+      assert.ok(root.textContent.includes(expected));
+      const technical = locale === 'zh' ? '按当前快照估计' : 'estimated from the current snapshot';
+      assert.equal(root.textContent.includes(technical), level === 'technical');
+      renderOverview(root, value, {}, { document, t, level, snapshot: { rows: [value] } });
+      assert.ok(root.textContent.includes(expected));
+      assert.equal(root.textContent.includes(technical), level === 'technical');
+      renderAttention(root, { attention: { problems: [], reminders: [{ kind: 'pool_full', waiting: 2 }] },
+        instance: { pool: { waiting: 99 } } }, { document, t, level });
+      assert.equal(root.children.length, 1);
+      assert.equal(root.children[0].classList.contains('wb-attention-reminder'), true);
+      assert.equal(root.children[0].tagName, 'DIV');
+      assert.match(root.textContent, locale === 'zh' ? /同时运行已满 · 2 组在等名额/ : /Concurrent sessions full · 2 groups waiting/);
+      assert.equal(allNodes(root).some(node => node.classList.contains('wb-ico-clock')), true);
+      assert.doesNotMatch(root.textContent, /99|\{waiting\}/);
+    }
+  }
+  assert.equal(waitText(null, 'plain', poolTranslator('zh')), '');
+  assert.equal(waitText({ kind: 'pool_wait', position: '<img>' }, 'plain', poolTranslator('zh')), '排队中 · 第 — 个');
 });
