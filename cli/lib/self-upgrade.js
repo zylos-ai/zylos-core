@@ -618,8 +618,11 @@ export function step11_startCoreServices(ctx, deps = {}) {
 
   const started = [];
   const failed = [];
-  let ecosystemNames, external, originalEcosystemMissing;
+  let ecosystemNames, externalNames = new Set();
   try {
+    // Forward startup has already admitted/published its configuration above.
+    // Preserve its routing and concise loading errors independently of recovery.
+    ecosystemNames = new Set(fsApi.existsSync(ecosystemPath) ? maintenance.ecosystemServiceNames(ecosystemPath) : []);
     const saved = ctx.journal?.originalServices;
     const selected = ctx.servicesWereRunning.map(name => {
       if (!saved) return {name};
@@ -627,22 +630,19 @@ export function step11_startCoreServices(ctx, deps = {}) {
       if (records.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
       return records[0];
     });
-    const serviceJournal = ctx.journal ? {...ctx.journal, originalServices:selected} : {
-      zylosDir, originalServices:selected,
-      initialIdentity:{ecosystemHash:fsApi.existsSync(ecosystemPath) ? maintenance.hash(ecosystemPath) : null},
-    };
-    // Preserve forward-start configuration admission without trusting a newly
-    // generated file to downgrade originally unclassified saved services.
-    if (serviceJournal.initialIdentity.ecosystemHash === null && fsApi.existsSync(ecosystemPath)) {
-      maintenance.privatePath(ecosystemPath);
-      maintenance.ecosystemServiceNames(ecosystemPath);
+    const outside = selected.filter(service => !ecosystemNames.has(service.name));
+    if (outside.length) {
+      if (!saved) throw Error('original PM2 service record missing or changed: ' + outside[0].name);
+      maintenance.validateSavedServices(ctx.journal, outside);
     }
-    const requirements = maintenance.serviceRequirements(serviceJournal, {ecosystemPath, allowUpdatedEcosystem:true});
-    external = requirements.external;
-    ecosystemNames = new Set(requirements.required.map(service => service.name));
-    if (external.length) maintenance.validateSavedServices(ctx.journal, external);
-    originalEcosystemMissing = serviceJournal.initialIdentity.ecosystemHash === null;
-    if (originalEcosystemMissing) maintenance.validateSavedServices(serviceJournal, selected);
+    // Without original ecosystem identity, every original service remains fatal;
+    // newly generated members still need their new env/args/script applied.
+    if (ctx.journal?.initialIdentity?.ecosystemHash != null) {
+      const requirements = maintenance.serviceRequirements({...ctx.journal, originalServices:selected}, {
+        ecosystemPath, allowUpdatedEcosystem:true,
+      });
+      externalNames = new Set(requirements.external.map(service => service.name));
+    }
     ctx.serviceEcosystemPath = ecosystemPath;
   } catch (error) {
     return {step:11,name:'start_core_services',status:'failed',error:error.message,duration:Date.now()-startTime};
@@ -650,7 +650,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
 
   for (const name of ctx.servicesWereRunning) {
     try {
-      if (originalEcosystemMissing || !ecosystemNames.has(name)) maintenance.restartService(name);
+      if (!ecosystemNames.has(name)) maintenance.restartService(name);
       else restartFn(name, {
         ecosystemPath,
         stdio: 'pipe',
@@ -658,7 +658,10 @@ export function step11_startCoreServices(ctx, deps = {}) {
       });
       started.push(name);
     } catch {
-      if (!ecosystemNames.has(name)) continue;
+      if (!ecosystemNames.has(name)) {
+        if (!externalNames.has(name)) failed.push(name);
+        continue;
+      }
       // A timed-out PM2 command may have committed its start before it died.
       try {
         const processes=JSON.parse(exec('pm2 jlist 2>/dev/null',{encoding:'utf8',stdio:'pipe'}));
@@ -719,7 +722,7 @@ export function step12_verifyServices(ctx, deps = {}) {
   const maintenance = maintenanceFor(ctx);
   let required = ctx.servicesWereRunning, external = [];
   try {
-    if (ctx.journal) {
+    if (ctx.journal?.initialIdentity?.ecosystemHash !== undefined) {
       const selected = ctx.servicesWereRunning.map(name => {
         const matches = ctx.journal.originalServices.filter(service => service.name === name);
         if (matches.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);

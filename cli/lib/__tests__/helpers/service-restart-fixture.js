@@ -43,13 +43,13 @@ if(args[0]==='jlist'){
  console.log(JSON.stringify(records));process.exit(0);}
 if(args[0]==='save')process.exit(0);
 if(args[0]==='stop'){const record=records.find(item=>item.name===args[1]);if(!record)process.exit(3);record.pid=0;record.pm2_env.status='stopped';fs.writeFileSync(state,JSON.stringify(records));process.exit(0);}
-if(fs.existsSync(${JSON.stringify(failure)})){const selected=fs.readFileSync(${JSON.stringify(failure)},'utf8');if(selected==='fail'||selected===args[1]){console.error('restart failed');process.exit(1);}}
-let names=[];
+if(fs.existsSync(${JSON.stringify(failure)})){const selected=fs.readFileSync(${JSON.stringify(failure)},'utf8');if(selected==='fail'||args.includes(selected)){console.error('restart failed');process.exit(1);}}
+let names=[],apps=[];
 if(args[0]==='restart')names=[args[1]];
 else if(['start','startOrRestart'].includes(args[0])){
- const config=require(args[1]),only=args[args.indexOf('--only')+1];names=config.apps.filter(app=>app.name===only).map(app=>app.name);
+ const config=require(args[1]),only=args[args.indexOf('--only')+1];apps=config.apps.filter(app=>app.name===only);names=apps.map(app=>app.name);
 }else {console.error('unexpected PM2 command');process.exit(2);}
-for(const name of names){const record=records.find(item=>item.name===name);if(!record)process.exit(3);record.pid=123;record.pm2_env.status='online';}
+for(const name of names){const record=records.find(item=>item.name===name);if(!record)process.exit(3);record.pid=123;Object.assign(record.pm2_env,apps.find(app=>app.name===name)?.env || {});record.pm2_env.status='online';}
 fs.writeFileSync(state,JSON.stringify(records));
 `,{mode:0o700});
   assert.equal(fs.realpathSync(pm2),pm2);

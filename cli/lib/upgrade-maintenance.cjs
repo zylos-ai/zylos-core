@@ -745,10 +745,13 @@ function restartService(name) {
 }
 function serviceRequirements(j, {ecosystemPath, allowUpdatedEcosystem = false} = {}) {
   const original = j.originalServices || [];
-  const ecosystem = ecosystemPath || path.join(j.zylosDir, 'pm2', 'ecosystem.config.cjs');
+  let ecosystem = ecosystemPath || path.join(j.zylosDir, 'pm2', 'ecosystem.config.cjs');
   const originalHash = j.initialIdentity?.ecosystemHash;
   if (originalHash === null) return {required: original, external: []};
   if (typeof originalHash !== 'string' || !/^[a-f0-9]{64}$/.test(originalHash)) throw Error('original ecosystem evidence missing');
+  // Forward startup follows the deployment's existing symlink, as PM2 does.
+  // Recovery still requires the original nonsymlink path and verified bytes.
+  if (allowUpdatedEcosystem) ecosystem = fs.realpathSync(ecosystem);
   privatePath(ecosystem);
   // Finalization has already verified publication and intentionally deploys the
   // new template. Recovery must instead retain the verified original bytes.
@@ -773,6 +776,7 @@ function start(j) {
   }
 }
 function verifyServices(j) {
+  if (!(j.originalServices || []).length) { j.serviceWarnings = []; return; }
   const {required, external} = serviceRequirements(j);
   if (external.length) validateSavedServices(j, external);
   const deadline = Date.now() + 30000;
