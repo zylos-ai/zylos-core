@@ -1845,6 +1845,70 @@ Note: --setup-token and --api-key values are visible in process listings.
 
 // ── Main init command ───────────────────────────────────────────
 
+/**
+ * Subscription (browser) login: run Claude Code interactively, then report
+ * whether it is now authenticated and whether that came from this login.
+ */
+export function runClaudeSubscriptionLogin({
+  launch = spawnSync, status = isClaudeAuthenticated, platform = process.platform, log = console.log,
+} = {}) {
+  log(`\n  ${cyan('Starting Claude Code for authentication...')}`);
+  log(`  ${dim('After login, type /exit to return to zylos init.')}\n`);
+  const sigintListeners = process.rawListeners('SIGINT');
+  process.removeAllListeners('SIGINT');
+  process.on('SIGINT', () => {});
+  try {
+    // On macOS, spawning Claude from a curl|bash pipeline leaves stdin
+    // in a state where ink's TUI can't receive keyboard input — even with
+    // /dev/tty redirects. Use `script` to allocate a fresh pseudo-terminal
+    // that gives Claude full terminal control.
+    if (platform === 'darwin') {
+      launch('script', ['-q', '/dev/null', 'claude'], { stdio: 'inherit' });
+    } else {
+      launch('claude', [], { stdio: 'inherit' });
+    }
+  } catch { /* user may Ctrl+C */ }
+  process.removeAllListeners('SIGINT');
+  for (const l of sigintListeners) process.on('SIGINT', l);
+  const claudeAuthenticated = status();
+  if (claudeAuthenticated) {
+    log(`\n  ${success('Claude Code authenticated')}`);
+  } else {
+    log(`\n  ${warn('Authentication not completed.')}`);
+    log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
+  }
+  return { claudeAuthenticated, subscriptionLogin: claudeAuthenticated };
+}
+
+/**
+ * Write the credentials and base URLs chosen during init, after templates are
+ * deployed. Subscription or setup-token login drops the relay traffic setting
+ * first; a relay Claude base URL from the same run is saved afterwards and
+ * turns it back on.
+ */
+export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin = false,
+  codexApiKey, claudeBaseUrl, codexBaseUrl } = {}) {
+  if (apiKey) {
+    saveApiKeyToEnv(apiKey);
+  }
+  if (setupToken) {
+    saveSetupTokenToEnv(setupToken);
+  }
+  if (setupToken || subscriptionLogin) {
+    clearClaudeRelayTrafficFlag();
+  }
+  if (codexApiKey) {
+    saveCodexApiKeyToEnv(codexApiKey);
+  }
+  if (claudeBaseUrl) {
+    saveClaudeBaseUrlToSettingsAndEnv(claudeBaseUrl);
+  }
+  if (codexBaseUrl) {
+    saveCodexBaseUrlToEnv(codexBaseUrl);
+    writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: codexBaseUrl });
+  }
+}
+
 export async function initCommand(args) {
   const opts = parseInitFlags(args);
 
@@ -2204,32 +2268,7 @@ export async function initCommand(args) {
 
         if (authChoice === 1) {
           // Option 1: Subscription login (existing flow)
-          console.log(`\n  ${cyan('Starting Claude Code for authentication...')}`);
-          console.log(`  ${dim('After login, type /exit to return to zylos init.')}\n`);
-          const sigintListeners = process.rawListeners('SIGINT');
-          process.removeAllListeners('SIGINT');
-          process.on('SIGINT', () => {});
-          try {
-            // On macOS, spawning Claude from a curl|bash pipeline leaves stdin
-            // in a state where ink's TUI can't receive keyboard input — even with
-            // /dev/tty redirects. Use `script` to allocate a fresh pseudo-terminal
-            // that gives Claude full terminal control.
-            if (process.platform === 'darwin') {
-              spawnSync('script', ['-q', '/dev/null', 'claude'], { stdio: 'inherit' });
-            } else {
-              spawnSync('claude', [], { stdio: 'inherit' });
-            }
-          } catch { /* user may Ctrl+C */ }
-          process.removeAllListeners('SIGINT');
-          for (const l of sigintListeners) process.on('SIGINT', l);
-          claudeAuthenticated = isClaudeAuthenticated();
-          if (claudeAuthenticated) {
-            subscriptionLogin = true;
-            console.log(`\n  ${success('Claude Code authenticated')}`);
-          } else {
-            console.log(`\n  ${warn('Authentication not completed.')}`);
-            console.log(`    ${dim('Run "claude" to authenticate then "zylos init" again.')}`);
-          }
+          ({ claudeAuthenticated, subscriptionLogin } = runClaudeSubscriptionLogin());
         } else if (authChoice === 2) {
           // Option 2: API key
           console.log(`\n  ${dim('Paste your Anthropic API key (starts with sk-ant-):')}`);
@@ -2340,27 +2379,8 @@ export async function initCommand(args) {
     migrateWebConsolePassword();
 
     // Write auth credentials to .env if entered during this run
-    if (pendingApiKey) {
-      saveApiKeyToEnv(pendingApiKey);
-    }
-    if (pendingSetupToken) {
-      saveSetupTokenToEnv(pendingSetupToken);
-    }
-    // Subscription or setup-token login drops the relay traffic setting; a relay
-    // base URL saved next in this run turns it back on.
-    if (pendingSetupToken || subscriptionLogin) {
-      clearClaudeRelayTrafficFlag();
-    }
-    if (pendingCodexApiKey) {
-      saveCodexApiKeyToEnv(pendingCodexApiKey);
-    }
-    if (pendingClaudeBaseUrl) {
-      saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
-    }
-    if (pendingCodexBaseUrl) {
-      saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
-      writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
-    }
+    persistInitCredentials({ apiKey: pendingApiKey, setupToken: pendingSetupToken, subscriptionLogin,
+      codexApiKey: pendingCodexApiKey, claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl });
 
     // Timezone: use resolved value or show current
     if (!quiet) console.log(heading('Checking timezone...'));
@@ -2454,27 +2474,8 @@ export async function initCommand(args) {
   migrateWebConsolePassword();
 
   // Write auth credentials to .env now that templates have been deployed
-  if (pendingApiKey) {
-    saveApiKeyToEnv(pendingApiKey);
-  }
-  if (pendingSetupToken) {
-    saveSetupTokenToEnv(pendingSetupToken);
-  }
-  // Subscription or setup-token login drops the relay traffic setting; a relay
-  // base URL saved next in this run turns it back on.
-  if (pendingSetupToken || subscriptionLogin) {
-    clearClaudeRelayTrafficFlag();
-  }
-  if (pendingCodexApiKey) {
-    saveCodexApiKeyToEnv(pendingCodexApiKey);
-  }
-  if (pendingClaudeBaseUrl) {
-    saveClaudeBaseUrlToSettingsAndEnv(pendingClaudeBaseUrl);
-  }
-  if (pendingCodexBaseUrl) {
-    saveCodexBaseUrlToEnv(pendingCodexBaseUrl);
-    writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: pendingCodexBaseUrl });
-  }
+  persistInitCredentials({ apiKey: pendingApiKey, setupToken: pendingSetupToken, subscriptionLogin,
+    codexApiKey: pendingCodexApiKey, claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl });
   // Step 8: Configure timezone
   if (!quiet) console.log(`\n${heading('Timezone configuration...')}`);
   await configureTimezone(skipConfirm, false, opts.timezone, quiet);
