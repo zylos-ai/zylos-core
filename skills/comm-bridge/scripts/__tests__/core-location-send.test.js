@@ -49,6 +49,11 @@ function fixture(t, searchPath) {
   const component = path.join(data, '.claude/skills/local-fixture');
   fs.mkdirSync(path.join(component, 'scripts'), { recursive: true });
   fs.writeFileSync(path.join(component, 'package.json'), '{"type":"module"}');
+  fs.writeFileSync(path.join(component, 'scripts/session-group.js'), `
+    import fs from 'node:fs';
+    fs.writeFileSync(${JSON.stringify(path.join(root, 'query-runtime.json'))}, JSON.stringify({ runtime: process.execPath, endpoint: process.argv[2] }));
+    process.stdout.write('local-room');
+  `);
   const marker = path.join(root, 'received.json');
   fs.writeFileSync(path.join(component, 'scripts/send.js'), `
     import fs from 'node:fs';
@@ -76,7 +81,7 @@ function fixture(t, searchPath) {
 for (const searchPath of ['/usr/bin:/bin', '']) {
   // Integration boundary: copied production Core/bridge, installation metadata,
   // external-channel child and private C4 SQLite. Run for Core discovery or send
-  // child changes; skip unrelated work. The official runner owns temporary
+  // child or ownership-query changes; skip unrelated work. The official runner owns temporary
   // HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private TMUX_TMPDIR; the nested fixture
   // overrides all of them. No live channel, socket or background loop is started.
   // spawnSync waits for completion and has a timeout; fixture cleanup removes all
@@ -93,12 +98,15 @@ for (const searchPath of ['/usr/bin:/bin', '']) {
     const delivered = JSON.parse(fs.readFileSync(f.marker, 'utf8'));
     assert.deepEqual(delivered.args, [endpoint, message]);
     assert.equal(fs.realpathSync(delivered.runtime), fs.realpathSync(process.execPath));
+    const queried = JSON.parse(fs.readFileSync(path.join(f.root, 'query-runtime.json'), 'utf8'));
+    assert.equal(fs.realpathSync(queried.runtime), fs.realpathSync(process.execPath));
+    assert.equal(queried.endpoint, endpoint);
     const db = new Database(f.file, { readonly: true });
     try {
-      const rows = db.prepare('SELECT direction, channel, endpoint_id, content, status FROM conversations').all();
+      const rows = db.prepare('SELECT direction, channel, endpoint_id, content, status, session_group FROM conversations').all();
       assert.equal(rows.length, 1);
       assert.deepEqual(rows[0], { direction: 'out', channel: 'local-fixture', endpoint_id: endpoint,
-        content: message, status: 'delivered' });
+        content: message, status: 'delivered', session_group: 'local-fixture:local-room' });
     } finally { db.close(); }
   });
 }

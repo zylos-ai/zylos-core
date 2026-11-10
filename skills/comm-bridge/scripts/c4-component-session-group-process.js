@@ -9,7 +9,7 @@ let timer;
 const report = () => process.stdout.write(JSON.stringify({ reason: reason || null,
   output: stdout.toString('utf8'), stderr: [...stderr.toString('utf8')].slice(0, 200).join('') }));
 try {
-  child = spawn('node', [script, endpoint], { cwd: process.cwd(), env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, [script, endpoint], { cwd: process.cwd(), env: process.env, stdio: ['pipe', 'pipe', 'pipe'] });
 } catch (error) {
   reason = `could not start: ${error.code || 'UNKNOWN'}`;
   report();
