@@ -3,7 +3,8 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 
 const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_MODULE && !!process.env.ZYLOS_CHAT_BROWSER_BIN;
 // Boundary: real Content/View renderers and shipped CSS in Chrome cover the
-// section stack/columns following boundary and all six nested compositions.
+// section container boundaries, all six nested compositions, a final body
+// container before actions, and columns nested inside that final stack.
 // Run after View spacing or related cascade changes; unrelated backend work may skip.
 // The opt-in sandbox proves HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private socket
 // and both unused DB paths before fixture HTTP and lifecycle-owned Chrome start.

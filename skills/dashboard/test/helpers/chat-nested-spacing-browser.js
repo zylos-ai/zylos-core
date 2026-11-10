@@ -72,7 +72,7 @@ export async function runNestedSpacingBrowser(sandbox, { width, theme }) {
         const s = getComputedStyle(node);
         return { display: s.display, rowGap: s.rowGap, marginTop: s.marginTop, marginBottom: s.marginBottom, alignItems: s.alignItems };
       };
-      return [...document.querySelectorAll('article')].map(article => {
+      return [...document.querySelectorAll('article[data-spacing-composition]')].map(article => {
         const outer = article.querySelector('.chat-message-content').firstElementChild;
         const slot = outer.classList.contains('conversation-view-section') ? outer.querySelector(':scope > .conversation-view-body') : outer;
         const [before, inner, after] = slot.children;
@@ -112,13 +112,34 @@ export async function runNestedSpacingBrowser(sandbox, { width, theme }) {
       assert.equal(item.second.marginBottom, '0px', item.id + ' last inner block keeps zero margin');
       assert.equal(item.after.marginBottom, '0px', item.id + ' last outer block keeps zero margin');
     }
+    const terminalSpacing = await page.evaluate(() => {
+      const section = document.querySelector('#section-ending-stack .conversation-view-section');
+      const body = section.querySelector(':scope > .conversation-view-body');
+      const actions = section.querySelector(':scope > .conversation-view-actions');
+      const stack = body.lastElementChild;
+      const [columns, summary] = stack.children;
+      return {
+        lastContainerMargin: getComputedStyle(stack).marginBottom,
+        bodyBottomOffset: body.getBoundingClientRect().bottom - stack.getBoundingClientRect().bottom,
+        sectionGap: parseFloat(getComputedStyle(section).rowGap),
+        actionsGap: actions.getBoundingClientRect().top - body.getBoundingClientRect().bottom,
+        stackGap: parseFloat(getComputedStyle(stack).rowGap),
+        nestedColumnsGap: summary.getBoundingClientRect().top - columns.getBoundingClientRect().bottom,
+      };
+    });
+    assert.equal(terminalSpacing.lastContainerMargin, '0px', 'last body container keeps zero bottom margin');
+    near(terminalSpacing.bodyBottomOffset, 0, 'last body container aligns with body bottom');
+    near(terminalSpacing.sectionGap, 8, 'section retains its 8px slot gap');
+    near(terminalSpacing.actionsGap, terminalSpacing.sectionGap, 'body to actions uses only the section gap');
+    near(terminalSpacing.stackGap, 12, 'stack retains its 12px internal gap');
+    near(terminalSpacing.nestedColumnsGap, terminalSpacing.stackGap, 'nested columns to markdown uses only the stack gap');
     const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     if (output) {
       fs.mkdirSync(output, { recursive: true });
-      fs.writeFileSync(path.join(output,`nested-spacing-${width}-${theme}.json`),JSON.stringify({width,theme,sourceHead:process.env.ZYLOS_CHAT_SOURCE_HEAD,actual},null,2));
+      fs.writeFileSync(path.join(output,`nested-spacing-${width}-${theme}.json`),JSON.stringify({width,theme,sourceHead:process.env.ZYLOS_CHAT_SOURCE_HEAD,actual,terminalSpacing},null,2));
       await page.screenshot({path:path.join(output,`nested-spacing-${width}-${theme}.png`),fullPage:true,animations:'disabled',scale:'css'});
     }
-    console.info('nested spacing geometry',JSON.stringify({width,theme,actual}));
+    console.info('nested spacing geometry',JSON.stringify({width,theme,actual,terminalSpacing}));
     assert.equal(errors.length,0,errors.join('; '));assert.equal(outside.length,0,outside.join('; '));assert.equal(missing.length,0,missing.join('; '));
     await context.close();
   } finally {
