@@ -4,8 +4,7 @@ import { claudeProjectSlug } from '../claude-project-path.js';
 import { sameSourceFile } from '../source-file-identity.js';
 
 const DAY = 86400000;
-// Existing identity and lifecycle signals handle session changes; this bounds a
-// missed signal to ten minutes without repeating the Core CLI reads each minute.
+// Healthy snapshots reuse existing identity/lifecycle signals between refreshes.
 const SNAPSHOT_FALLBACK_MS = 10 * 60000;
 // Persisted lifecycle signals still work when Origin is asleep and costKey is
 // unavailable. Turn stops and tool events do not change a session's identity.
@@ -119,8 +118,13 @@ export class UsageTranscripts {
     if (discoveryDue) this.discover(at);
     const snapshotKey = this._readSnapshotKey();
     let snapshot = this.snapshot;
+    // A known group list can still carry an unreadable Origin observation.
+    // Retry those snapshots at the previous cadence so lost current summaries
+    // are not extended by the healthy snapshot's ten-minute cache.
+    const snapshotTtl = snapshot?.rows?.some(row => (row.sessionGroup ?? 'origin') === 'origin' &&
+      (!row.live || row.live.error || row.presence === 'unknown')) ? 60000 : SNAPSHOT_FALLBACK_MS;
     if (this._snapshotAt == null || at < this._snapshotAt ||
-        at - this._snapshotAt >= SNAPSHOT_FALLBACK_MS || snapshotKey !== this._snapshotKey) {
+        at - this._snapshotAt >= snapshotTtl || snapshotKey !== this._snapshotKey) {
       snapshot = null;
       let matchedKey;
       try {

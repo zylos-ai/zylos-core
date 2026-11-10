@@ -711,6 +711,86 @@ test('continuous unrelated lifecycle changes preserve every Origin assistant mes
   assert.equal(calls, expected.length, 'stable final candidate is cached');
 });
 
+// Real Store/UsageTranscripts/ConversationCollector integration: a successful
+// group list does not imply a readable Origin. Run for snapshot acceptance or
+// expiry changes; skip unrelated UI work. The official runner and fixture isolate
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, DB and files; no services/tmux/children.
+for (const trigger of ['unrelated lifecycle', 'ten minute fallback']) {
+  for (const degraded of [
+    { name: 'Origin read error', group: 'origin', presence: 'running', live: { runId: null, presence: 'running', error: { code: 'READ_FAILED' } } },
+    { name: 'missing Origin live observation', group: 'origin', presence: 'running', live: null },
+    { name: 'unknown Origin presence', group: 'origin', presence: 'unknown', live: { runId: null, presence: 'unknown' } },
+    { name: 'single-session read error', group: null, presence: 'unknown', live: { runId: null, presence: 'unknown', error: { code: 'READ_FAILED' } } },
+  ]) {
+    test(`${trigger} with ${degraded.name} retries after one minute and retains recovered Origin messages`, async t => {
+      const f = fixture(t), p = f.file('origin-recovery'); f.start(p, 'origin');
+      const healthy = { listKnown: true, rows: [{ sessionGroup: degraded.group,
+        presence: 'running', live: { runId: 'run-origin', presence: 'running' } }] };
+      let calls = 0;
+      f.inventory.getSnapshotKey = () => 'stable-origin';
+      f.inventory.getSnapshot = async () => {
+        calls++;
+        return calls === 2 ? { listKnown: true, rows: [{ sessionGroup: degraded.group,
+          presence: degraded.presence, live: structuredClone(degraded.live) }] } : structuredClone(healthy);
+      };
+      const collector = new ConversationCollector(f.store, { homeDir: f.root, zylosDir: f.root }, { transcripts: f.inventory });
+      const poll = async (id, retained) => {
+        fs.appendFileSync(p, JSON.stringify({ type: 'assistant', uuid: id, requestId: id,
+          sessionId: 'session-origin', timestamp: new Date(f.now()).toISOString(),
+          message: { model: 'claude-example', content: [{ type: 'text', text: id }],
+            usage: { input_tokens: 10, output_tokens: 2 } } }) + '\n');
+        fs.utimesSync(p, new Date(f.now()), new Date(f.now()));
+        await collector.collect();
+        const event = f.store.queryEvents({ types: ['assistant_message'] }).find(row => row.summary === id);
+        assert.equal(!!event, retained, `message ${id}`);
+        if (retained) {
+          assert.equal(event.session_id, 'session-origin');
+          assert.equal(event.run_id, 'run-origin');
+        }
+        const usage = f.store.queryMetrics({ name: 'usage_event' }).find(row => row.dimensions.request_id === id);
+        assert.ok(usage, `usage ${id} survives even without a current Origin observation`);
+        assert.equal(usage.session_id, 'session-origin');
+        assert.equal(usage.dimensions.run_id, 'run-origin');
+        assert.equal(f.store.getUsageTranscript(p).byte_offset, fs.statSync(p).size);
+      };
+      await poll('healthy-before-error', true);
+      assert.equal(calls, 1);
+      if (trigger === 'unrelated lifecycle') {
+        lifecycleEvent(f, 'reclaim_done'); f.advance(5000);
+      } else f.advance(600000);
+      const failedAt = f.now();
+      const lost = [];
+      for (let step = 0; step < 14; step++) {
+        if (step) f.advance(5000);
+        const id = `origin-after-error-${step * 5}s`;
+        await poll(id, step >= 12);
+        assert.equal(calls, step < 12 ? 2 : 3, `snapshot calls at ${step * 5}s`);
+        if (step < 12) lost.push(id);
+        if (!step) {
+          assert.equal(f.inventory.snapshot.listKnown, true);
+          assert.notEqual(f.inventory._snapshotKey, undefined, 'error snapshot has a matched key');
+        }
+      }
+      // A recovered snapshot must keep the healthy ten-minute cache, rather
+      // than permanently falling back to sixty-second reads after one error.
+      f.advance(failedAt + 60000 + 599999 - f.now());
+      await poll('healthy-before-ten-minute-expiry', true);
+      assert.equal(calls, 3);
+      f.advance(1); await poll('healthy-at-ten-minute-expiry', true);
+      assert.equal(calls, 4);
+      const messages = f.store.queryEvents({ types: ['assistant_message'] });
+      for (const id of lost) assert.equal(messages.some(row => row.summary === id), false, `no replay of ${id}`);
+      for (const id of ['healthy-before-error', 'origin-after-error-60s', 'origin-after-error-65s',
+        'healthy-before-ten-minute-expiry', 'healthy-at-ten-minute-expiry']) {
+        assert.ok(messages.some(row => row.summary === id), `retained named message ${id}`);
+      }
+      assert.equal(lost.length, 12, 'one failed observation loses the same twelve five-second messages as the old cadence');
+      assert.equal(messages.length, 5);
+      assert.equal(f.store.queryMetrics({ name: 'usage_event' }).length, 17);
+    });
+  }
+}
+
 test('discovery refreshes a recovered snapshot before reading a new Origin transcript', async t => {
   const f = fixture(t);
   let calls = 0, currentRun = 'old-run';
