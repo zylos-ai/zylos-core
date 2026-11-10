@@ -402,8 +402,7 @@ fails, explain the failure in plain text instead of sending an attachment block.
 The block contains no source path, URL, bytes, size or MIME claims. Send the
 complete envelope through
 the **original reply-via command unchanged**, with content on stdin; preserve
-its absorbed-reply form. Core queries the component to determine the group;
-generated reply commands do not include `--session-group`.
+its absorbed-reply form. Core queries the component to determine the group.
 There is no attachment send subcommand. Plain `[MEDIA:...]` text does not
 register or copy a file. Registration alone does not send a message; follow the
 original send-result contract before deciding whether to retry. A failed send

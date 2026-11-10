@@ -40,9 +40,8 @@ Core asks the channel component which group handles each endpoint before
 BeforeSend, recording or delivery. The answer is used once for both the sender
 check and recording; message history does not select the group. A missing query
 script or NULL endpoint means the component's overall namespace. The fixed
-`dashboard origin` address belongs to `origin` without a query. A legacy trailing
-`--session-group` argument is accepted and ignored; generated reply commands no
-longer include it. Never override inherited sender identity to bypass the check.
+`dashboard origin` address belongs to `origin` without a query. Never override
+inherited sender identity to bypass the check.
 An explicit `ZYLOS_SESSION_GROUP=origin` is checked like any other session; a
 present but empty or unknown group is refused. Without that key there is no
 sender comparison, but component querying and recording still use the same rule.
