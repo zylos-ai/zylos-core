@@ -82,7 +82,7 @@ test('unknown dispatch retains its reason and records elapsed time on timeout', 
 
 for(const mode of ['success','UNHEALTHY_NOTIFY_FAILED','UNHEALTHY_NOTIFY_UNCERTAIN'])
  test(`committed ${mode} remains running and does not resend`,t=>{
-  const {db,task,read}=fixture(t,{reply_channel:'telegram',reply_endpoint:'target'});let sends=0;
+  const {db,task,read}=fixture(t,{reply_channel:'telegram',reply_endpoint:'target',session_component:'telegram'});let sends=0;
   const real=realReceive(t,mode==='success'?{}:{health:'unavailable',...(mode==='UNHEALTHY_NOTIFY_UNCERTAIN'?{noticeExit:7}:{})});
   const deps={...base,sendViaC4(...args){sends++;const result=real.send(...args);
     if(mode!=='success')assert.deepEqual(result.receipt.error.persisted,['D1']);
