@@ -5,8 +5,12 @@
 // repository. Covers: a commit on the first tick of the hour and none after it;
 // a failed run recorded for the day and not retried on later ticks, retried the
 // next day; files over 50 MB left out of the commit and logged (untracked and
-// tracked), a file over core.bigFileThreshold (512 MB) never written into a
-// pack. Large files are sparse, so they take no disk space.
+// tracked, and one staged before the run) while small files whose names their
+// paths would match as globs are committed, a long error kept to 500 characters
+// in the state, a file over core.bigFileThreshold (512 MB) never written into a
+// pack. Large files are sparse. git reads only the 50 MB file that is committed
+// and the 50 MB + 1 byte file staged by hand (on tmpfs, reading allocates it),
+// never the larger ones.
 // Isolation: HOME, ZYLOS_DIR, PM2_HOME and TMPDIR point into a fresh temporary
 // directory before anything runs, git ignores the user's global and system
 // config, and the directory is removed afterwards. No PM2, tmux, runtime or
@@ -167,10 +171,12 @@ describe('daily memory commit', () => {
     sparse('archive/odd [1] *.bin', 50 * MB + 1);
     sparse('archive/at-limit.bin', 50 * MB);
     fs.writeFileSync(path.join(memory, 'archive', 'notes.md'), 'archived\n');
+    // Read as a glob, the skipped name `odd [1] *.bin` would also match this small file.
+    fs.writeFileSync(path.join(memory, 'archive', 'odd 1 x.bin'), 'small\n');
     const run = scheduler({ date: '2026-11-10' });
 
     assert.equal(run.tick(), 1);
-    assert.deepEqual(committed(), ['archive/at-limit.bin', 'archive/notes.md', 'state.md']);
+    assert.deepEqual(committed(), ['archive/at-limit.bin', 'archive/notes.md', 'archive/odd 1 x.bin', 'state.md']);
     const skipped = run.logs.join('\n').split('\n').find(line => line.startsWith('Skipped '));
     assert.ok(skipped, run.logs.join('\n'));
     assert.match(skipped, /^Skipped 2 file\(s\) over 50 MB, not committed: /);
@@ -236,5 +242,41 @@ describe('daily memory commit', () => {
     assert.equal(state().last_date, '2026-11-12');
     assert.equal(state().last_status, 'ok');
     assert.deepEqual(packFiles(), []);
+  });
+
+  it('keeps the first 500 characters of a long error as last_error', () => {
+    const day = { date: '2026-11-10' };
+    const run = scheduler(day);
+    assert.equal(run.tick(), 1);
+    day.date = '2026-11-11';
+    for (let i = 1; i <= 11; i++) sparse(`archive/a-long-archive-name-to-make-the-error-long-${String(i).padStart(2, '0')}.tar`, 51 * MB);
+    fs.writeFileSync(path.join(memory, '.git', 'index.lock'), '');
+
+    assert.equal(run.tick(), 0);
+    const prefix = 'Daily memory commit failed: ';
+    const failure = run.logs.find(line => line.startsWith(prefix));
+    assert.match(failure, /^Daily memory commit failed: Skipped 11 file\(s\) over 50 MB, not committed: .*, and 1 more\n/);
+    const detail = failure.slice(prefix.length);
+    assert.ok(detail.length > 500, `the error is ${detail.length} characters`);
+    assert.equal(state().last_status, 'failed');
+    assert.equal(state().last_error.length, 501);
+    assert.equal(state().last_error, `${detail.slice(0, 500)}…`);
+  });
+
+  it('does not commit a file over 50 MB that was already staged before the run', () => {
+    const day = { date: '2026-11-10' };
+    const run = scheduler(day);
+    assert.equal(run.tick(), 1);
+    day.date = '2026-11-11';
+    sparse('archive/staged.tar', 50 * MB + 1);
+    git('add', 'archive/staged.tar');
+    fs.writeFileSync(path.join(memory, 'state.md'), '# State\nchanged\n');
+
+    assert.equal(run.tick(), 1);
+    assert.equal(commits(), '2');
+    assert.deepEqual(committed(), ['state.md']);
+    assert.ok(run.logs.some(line => line.startsWith('Daily memory commit: Skipped 1 file(s) over 50 MB, not committed: archive/staged.tar (50 MB)')), run.logs.join('\n'));
+    assert.equal(git('ls-files', '--stage', '--', 'archive').trim(), '', 'unstaged, not only left out of this commit');
+    assert.equal(git('ls-files', '--others', '--', 'archive').trim(), 'archive/staged.tar');
   });
 });

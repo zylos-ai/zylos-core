@@ -113,6 +113,15 @@ function main() {
       stdio: ['ignore', 'pipe', 'pipe']
     });
 
+    // A file staged before this run (by hand, or by an earlier `git add .` whose commit failed) is still in the
+    // index despite the exclude: put it back to its committed state so it is not committed either.
+    if (oversized.length > 0) {
+      execFileSync('git', ['reset', '-q', '--', ...oversized.map(file => `:(literal)${file.path}`)], {
+        cwd: MEMORY_DIR,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+    }
+
     if (!hasStagedChanges()) {
       console.log('No memory changes to commit.');
       return;

@@ -10,7 +10,7 @@ const MAX_ERROR_LENGTH = 500;
  * 'failed' with last_error), so it is not retried on every tick for the rest
  * of the hour; the next attempt is the next day.
  */
-export function createDailyMemoryCommit({ stateFile, script, log, timeoutMs = 30000 }) {
+export function createDailyMemoryCommit({ stateFile, script, log }) {
   let lastError = null;
 
   function loadState() {
@@ -40,7 +40,7 @@ export function createDailyMemoryCommit({ stateFile, script, log, timeoutMs = 30
     try {
       const output = execFileSync('node', [script], {
         encoding: 'utf8',
-        timeout: timeoutMs,
+        timeout: 30000,
         stdio: ['ignore', 'pipe', 'pipe']
       });
       if (output.trim()) {
