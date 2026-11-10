@@ -6,7 +6,7 @@ import { startPage } from './workbench-browser.js';
 
 // Short labels on the overview: each must stay on one line as a whole.
 const LABELS = ['.wb-dist-total', '.wb-dist-item', '.wb-bh-state', '.wb-bh-now > span', '.wb-bh-right', '.wb-bh > .wb-tech-col',
-  '#wb-range button', '.wb-inst-item > :not(.wb-meter):not(.wb-pips):not(.wb-spark):not(.wb-pool-note)', '.wb-inst-more', '.wb-legend-item', '.wb-row .wb-pill'];
+  '#wb-range button', '.wb-inst-item > :not(.wb-meter):not(.wb-spark):not(.wb-pool-note)', '.wb-inst-more', '.wb-legend-item', '.wb-row .wb-pill'];
 const NOWRAP = ['.wb-dist-total', '.wb-dist-item', '.wb-bh-right', '.wb-bh > .wb-tech-col', '.wb-legend-item', '.wb-account > *',
   '.wb-inst-item:not(.wb-account)', '.wb-inst-more'];
 

@@ -79,9 +79,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(bytes), c => c.charCodeAt(0))], { type: 'image/png' }));
       const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
       const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0); bitmap.close();
-      // Element screenshots round fractional CSS bounds to device pixels. The
-      // one-pixel outline can occupy either of the first two raster rows.
-      return [0, 1].map(y => [...context.getImageData(Math.floor(canvas.width / 2), y, 1, 1).data]);
+      return [...context.getImageData(Math.floor(canvas.width / 2), 0, 1, 1).data];
     }, failedImageShot.toString('base64'));
     const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     if (output) {
@@ -113,6 +111,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
           valueTitle: c.scales.x.options.title.text, valueTitleVisible: c.scales.x.options.title.display,
           valueAxisTop: c.scales.x.top, categoryTitleVisible: c.scales.y.options.title.display,
           axesHidden: document.querySelector('#' + id + ' .chat-chart-axes').hidden,
+          axesText: document.querySelector('#' + id + ' .chat-chart-axes').textContent,
           bars: bars.map(bar => ({ height: bar.height, y: bar.y })),
           labels: labels.map(item => ({ text: item.label, y: item.options.translation[1], height: item.font.lineHeight })),
         };
@@ -268,7 +267,8 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.equal(category.valueTitle, '数量', category.id + ' numeric axis uses yLabel');
       assert.equal(category.valueTitleVisible, true);
       assert.equal(category.categoryTitleVisible, false, 'categories have no vertical title');
-      assert.equal(category.axesHidden, true, 'enhanced chart hides repeated axis text');
+      assert.equal(category.axesHidden, false, 'enhanced chart retains the category axis description');
+      assert.equal(category.axesText, '状态', 'only the duplicated numeric axis description is removed');
       for (const label of category.labels) assert.ok(label.y + label.height / 2 <= category.valueAxisTop,
         category.id + ' category label is above the numeric axis title region');
       assert.ok(Math.abs(category.area - category.count * 34) <= .5, category.id + ' plot reserves a 34px row per category');
@@ -296,7 +296,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.equal(actual.errorStyles[state].statusColor, actual.dangerInk, state + ' status text uses danger ink');
       assert.ok(actual.errorStyles[state].status, state + ' tray item retains the status text');
     }
-    assert.ok(failedImagePixel.some(pixel => pixel.slice(0, 3).every((value, i) => Math.abs(value - actual.dangerRgb[i]) <= 12)), 'failed image top-edge midpoint remains visible danger ink above its placeholder: ' + JSON.stringify({ pixel: failedImagePixel, expected: actual.dangerRgb }));
+    assert.ok(failedImagePixel.slice(0, 3).every((value, i) => Math.abs(value - actual.dangerRgb[i]) <= 12), 'failed image top-edge midpoint remains visible danger ink above its placeholder: ' + JSON.stringify({ pixel: failedImagePixel, expected: actual.dangerRgb }));
     assert.ok(actual.widths.every(value => value <= 720), 'rich cards stay within the shared width');
     assert.ok(actual.scroll <= width, 'no horizontal overflow');
     assert.equal(errors.length, 0, errors.join('; ')); assert.equal(outside.length, 0, outside.join('; ')); assert.equal(missing.length, 0, missing.join('; '));
