@@ -511,6 +511,39 @@ describe('Claude launch — built-in passthrough from .env', () => {
   }
 });
 
+describe('Claude launch — .env read the same way by the session and the relay setting', () => {
+  // A hand-edited .env with two ANTHROPIC_BASE_URL lines: the session and the
+  // relay traffic setting must both use the same (last) one.
+  const NAME = 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC';
+  for (const [first, last, on] of [['https://relay.example.test', 'https://api.anthropic.com', false], ['https://api.anthropic.com', 'https://relay.example.test', true]]) {
+    it(`two ANTHROPIC_BASE_URL lines (${first} then ${last}): session uses ${last}, setting ${on ? 'on' : 'off'}`, async () => {
+      tmuxSessionExists = false;
+      calls.execFileSync.length = 0;
+      const dotenvPath = path.join(fakeZylosDir, '.env');
+      const original = fs.readFileSync(dotenvPath, 'utf8');
+      const names = [NAME, 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+      const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+      for (const name of names) delete process.env[name];
+      fs.writeFileSync(dotenvPath, `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-synthetic-setup-token\nANTHROPIC_BASE_URL=${first}\nANTHROPIC_BASE_URL=${last}\n`);
+      try {
+        const { syncClaudeRelayTraffic } = await import('../runtime-setup.js');
+        assert.equal(syncClaudeRelayTraffic(), true);
+        await makeAdapter(ClaudeAdapter).launch({ bypassPermissions: false });
+        const env = readSpecEnv();
+        assert.ok(env, 'spec should be written');
+        assert.equal(env.ANTHROPIC_BASE_URL, last);
+        assert.equal(env[NAME], on ? '1' : undefined);
+      } finally {
+        fs.writeFileSync(dotenvPath, original);
+        for (const [name, value] of Object.entries(saved)) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+      }
+    });
+  }
+});
+
 describe('Claude launch — existing session', () => {
   it('does not create a new tmux session', async () => {
     tmuxSessionExists = true;

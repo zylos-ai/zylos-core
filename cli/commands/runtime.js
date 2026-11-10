@@ -104,12 +104,12 @@ export function applyCredentials(target, creds) {
     if (creds.setupToken) {
       if (!saveSetupToken(creds.setupToken)) return false;
       saveSetupTokenToEnv(creds.setupToken);
-      return syncClaudeRelayTraffic({ credential: 'setupToken' });
+      return syncClaudeRelayTraffic();
     }
     if (creds.apiKey) {
       if (!saveApiKey(creds.apiKey)) return false;
       saveApiKeyToEnv(creds.apiKey);
-      return syncClaudeRelayTraffic({ credential: 'apiKey' });
+      return syncClaudeRelayTraffic();
     }
   } else if (target === 'codex') {
     if (creds.apiKey) {

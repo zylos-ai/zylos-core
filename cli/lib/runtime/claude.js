@@ -34,7 +34,7 @@ import {
   getProcessName,
   hasChildProcess,
 } from './tmux-helpers.js';
-import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, writeLaunchSpec } from './tmux-env.js';
+import { buildCleanEnv, buildCompatEnv, loadRuntimeEnvManifest, parseZylosDotenv, writeLaunchSpec } from './tmux-env.js';
 
 import { upgradeStartupPrompt, shellArgument } from './upgrade-context.js';
 
@@ -59,40 +59,6 @@ const ENV_CLEAN_PREFIX = 'env ' + ENV_VARS_TO_STRIP.map(v => `-u ${v}`).join(' '
 // not seen, so these are pre-approved whenever .env sets them.
 const PRE_APPROVED_KEYS = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
 const C4_CONTROL_PATH = path.join(ZYLOS_DIR, '.claude', 'skills', 'comm-bridge', 'scripts', 'c4-control.js');
-
-/**
- * Parse a value from a .env file, tolerating common formatting variations:
- *   - Spaces/tabs around key and `=`  (e.g. `KEY = value`)
- *   - Single/double quotes around value (e.g. `KEY="value"`)
- *   - Trailing whitespace
- *
- * @param {string} content - Full .env file content
- * @param {string} key     - Variable name to extract
- * @returns {string}       - Trimmed, unquoted value, or empty string if not found
- */
-function _parseEnvValue(content, key) {
-  const re = new RegExp(`^\\s*${key}\\s*=\\s*(.+)$`, 'm');
-  const m = content.match(re);
-  if (!m) return '';
-  return m[1].trim().replace(/^(['"])(.*)\1$/, '$2');
-}
-
-/**
- * Read the non-empty values of the given keys from ~/zylos/.env.
- * @param {string[]} keys
- * @returns {Record<string, string>} Empty object when .env is absent.
- */
-function _readDotenvValues(keys) {
-  const vars = {};
-  try {
-    const envContent = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    for (const key of keys) {
-      const value = _parseEnvValue(envContent, key);
-      if (value) vars[key] = value;
-    }
-  } catch { /* .env absent — no keys to inject */ }
-  return vars;
-}
 
 // ── ClaudeAdapter ─────────────────────────────────────────────────────────────
 
@@ -264,7 +230,8 @@ export class ClaudeAdapter extends RuntimeAdapter {
     _ensureOnboardingComplete(ZYLOS_DIR);
 
     // 3. Pre-approve .env credentials so an interactive start never stops on the approval prompt
-    for (const value of Object.values(_readDotenvValues(PRE_APPROVED_KEYS))) _approveApiKey(value);
+    const dotenvVars = _readDotenvVars();
+    for (const key of PRE_APPROVED_KEYS) if (dotenvVars[key]) _approveApiKey(dotenvVars[key]);
 
     // 4. Build the claude command string (for existing-session path)
     const bypassFlag = bypassPermissions ? ' --dangerously-skip-permissions' : '';
@@ -344,20 +311,10 @@ export class ClaudeAdapter extends RuntimeAdapter {
 // ── Private helpers ────────────────────────────────────────────────────────
 
 function _readDotenvVars() {
-  const vars = {};
   try {
-    const content = fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx < 1) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      const val = trimmed.slice(eqIdx + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
-      vars[key] = val;
-    }
+    return parseZylosDotenv(fs.readFileSync(path.join(ZYLOS_DIR, '.env'), 'utf8'));
   } catch { /* .env absent */ }
-  return vars;
+  return {};
 }
 
 /**
@@ -378,7 +335,9 @@ function _buildSessionEnv() {
 
   // Built-in runtime passthrough from .env, independent of runtime-env.manifest:
   // applied after the manifest (clean and compat mode) so a manifest cannot drop it.
-  Object.assign(env, _readDotenvValues(RUNTIME_BUILTIN_ENV_KEYS.claude));
+  for (const key of RUNTIME_BUILTIN_ENV_KEYS.claude) {
+    if (dotenvVars[key]) env[key] = dotenvVars[key];
+  }
   return env;
 }
 

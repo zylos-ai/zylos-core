@@ -1904,9 +1904,9 @@ export function persistInitCredentials({ apiKey, setupToken, subscriptionLogin =
     saveCodexBaseUrlToEnv(codexBaseUrl);
     writeCodexConfig(ZYLOS_DIR, { openaiBaseUrl: codexBaseUrl });
   }
-  const credential = apiKey ? 'apiKey' : setupToken ? 'setupToken' : subscriptionLogin ? 'subscription' : undefined;
-  if (credential || claudeBaseUrl) {
-    syncClaudeRelayTraffic({ credential });
+  // Recompute the relay traffic setting from the saved Claude state.
+  if (apiKey || setupToken || subscriptionLogin || claudeBaseUrl) {
+    syncClaudeRelayTraffic();
   }
   if ((setupToken || subscriptionLogin) && !claudeBaseUrl) {
     const relay = relayLoginNotice();
