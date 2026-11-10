@@ -543,8 +543,9 @@ const REDACTIONS = [
   // The scheme starts only where a run of scheme characters begins: starting anywhere makes it slow on long runs.
   [/(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, '$1[redacted]@'],
 ];
-// --api-key VALUE on a command line. A value never starts with "-", so a following flag is not taken as one.
-const SECRET_FLAG = new RegExp(String.raw`(?<![A-Za-z0-9_.-])(--[A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])(\s+)([^\s"'-][^\s"']*)`, 'g');
+// --api-key VALUE on a command line. A value never starts with "--", so a following flag is not taken as one; a
+// value may start with a single "-", as a random token sometimes does.
+const SECRET_FLAG = new RegExp(String.raw`(?<![A-Za-z0-9_.-])(--[A-Za-z0-9_.-]+)(?![A-Za-z0-9_.-])(\s+)((?!--)[^\s"']+)`, 'g');
 // The start of name=value, name: value, "name": "value", \"name\":\"value\" and --token=value, up to the value.
 const NAME_SEPARATOR = new RegExp(String.raw`(\\?["']?)${NAME}(\\?["']?\s*[:=]\s*)`, 'g');
 const VALUE_HERE = new RegExp(SECRET_VALUE, 'y');
@@ -573,20 +574,22 @@ function redactTrustText(text) {
   return redactNameValues(redacted.replace(SECRET_FLAG, (match, name, separator) => (isSecretName(name) ? `${name}${separator}[redacted]` : match)));
 }
 
-// Characters that can belong to a credential: a cut replaces the piece of one it went through with [cut], since
-// a piece of a credential is no longer recognised as one.
-const TOKEN_CHAR = String.raw`[^\s,;"'{}\[\]]`;
-const IS_TOKEN_CHAR = new RegExp(`^${TOKEN_CHAR}$`);
-// The head is searched backwards for the start of its last token: a pattern anchored at the end would be tried
-// from every position of a long token.
+// The line a cut goes through is never reported: a cut can take a secret's name and leave its value, or open a
+// quoted value it does not close, and redaction no longer recognises either. [cut] stands for that line. The head
+// ends at the last line break before the cut and the tail starts at the first one after it; with none, the whole
+// part is [cut].
 const headForRedaction = (text) => {
   if (text.length <= TRUST_REDACT_MESSAGE_LIMIT) return text;
-  let end = TRUST_REDACT_MESSAGE_LIMIT;
-  while (end > 0 && IS_TOKEN_CHAR.test(text[end - 1])) end -= 1;
-  return `${text.slice(0, end)}[cut]`;
+  const head = text.slice(0, TRUST_REDACT_MESSAGE_LIMIT);
+  const end = Math.max(head.lastIndexOf('\n'), head.lastIndexOf('\r')) + 1;
+  return `${head.slice(0, end)}[cut]`;
 };
-const tailForRedaction = text => (text.length > TRUST_REDACT_STDERR_LIMIT
-  ? text.slice(-TRUST_REDACT_STDERR_LIMIT).replace(new RegExp(`^${TOKEN_CHAR}*`), '[cut]') : text);
+const tailForRedaction = (text) => {
+  if (text.length <= TRUST_REDACT_STDERR_LIMIT) return text;
+  const tail = text.slice(-TRUST_REDACT_STDERR_LIMIT);
+  const start = tail.search(/[\r\n]/);
+  return start === -1 ? '[cut]' : `[cut]${tail.slice(start)}`;
+};
 
 // One log line: terminal escape sequences removed, line breaks shown as " | ", other control characters as spaces.
 function oneLine(text) {

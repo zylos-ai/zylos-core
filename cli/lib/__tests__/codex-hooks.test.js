@@ -502,6 +502,7 @@ describe('Codex hook trust backstop', () => {
     ['URL userinfo', 'proxy http://user:SECRETURL@proxy:8080 refused', ['SECRETURL', 'user:'], ['proxy http://[redacted]@proxy:8080 refused']],
     ['URL password holding an unencoded @', 'proxy http://user:pa@SECRETAT@proxy:8080/x refused', ['SECRETAT', 'pa@'], ['proxy http://[redacted]@proxy:8080/x refused']],
     ['command-line flag', 'spawn tool --api-key SECRETFLAG --verbose', ['SECRETFLAG'], ['spawn tool --api-key [redacted] --verbose']],
+    ['flag value that starts with a dash', 'run --token -SECRETdash1 now --password -Xy9SECRET', ['SECRETdash1', 'Xy9SECRET'], ['run --token [redacted] now --password [redacted]']],
     ['secret flag after a plain flag', 'spawn tool --verbose --api-key SECRETNEXT done', ['SECRETNEXT'], ['spawn tool --verbose --api-key [redacted] done']],
     ['upper-case environment names', 'env OPENAI_API_KEY=SECRETENV GITHUB_TOKEN=SECRETUP set', ['SECRETENV', 'SECRETUP'], ['env OPENAI_API_KEY=[redacted] GITHUB_TOKEN=[redacted] set']],
     ['quoted value with spaces', 'parsed password: "has SECRETSPACE inside" from file', ['SECRETSPACE'], ['parsed password: [redacted] from file']],
@@ -537,34 +538,56 @@ describe('Codex hook trust backstop', () => {
       'error: Error: spawn /missing/codex ENOENT');
   });
 
-  // Only the start of a message and the end of stderr are redacted; a cut replaces the token it went through.
-  it('redacts a bounded part of huge input and marks a token the cut went through', () => {
-    assert.equal(describeTrustFailure({ stderr: `${'k'.repeat(9000)} end` }), 'stderr: [cut] end');
-    assert.equal(describeTrustFailure({ error: { code: 1, message: `start ${'k'.repeat(5000)}` } }), 'Codex error 1: start [cut]');
-    // Inputs that make backtracking patterns slow: runs of 8000 characters, longer than the part that is
-    // redacted, repeated with spaces between them to about 1 MiB.
-    const runs = (unit) => `${unit.repeat(Math.ceil(8000 / unit.length)).slice(0, 8000)} `.repeat(132);
+  // Only the start of a message and the end of stderr are redacted; [cut] stands for the whole line a cut went through.
+  it('redacts a bounded part of huge input and reports none of the line a cut went through', () => {
+    assert.equal(describeTrustFailure({ stderr: `${'k'.repeat(9000)}\nlast line` }), 'stderr: [cut] | last line');
+    assert.equal(describeTrustFailure({ stderr: `${'k'.repeat(9000)} end` }), 'stderr: [cut]');
+    assert.equal(describeTrustFailure({ error: { code: 1, message: `first line\nstart ${'k'.repeat(5000)}` } }), 'Codex error 1: first line | [cut]');
+    assert.equal(describeTrustFailure({ error: { code: 1, message: `start ${'k'.repeat(5000)}` } }), 'Codex error 1: [cut]');
+    // Inputs that make backtracking patterns slow: lines that each fill almost all of the part that is redacted
+    // (8000 characters of stderr, 4000 of a message), repeated to about 1 MiB.
+    const runs = (unit, length) => `${unit.repeat(Math.ceil(length / unit.length)).slice(0, length)}\n`.repeat(Math.ceil((1 << 20) / length));
     const units = ['a', '-', 'x.', 'token', 'api_key_token-', 'secret_key=', 'a@', 'sk-', '\\"', `http://${'a@'.repeat(4000)}`,
-      'a=', '"a":', '\\"a\\":', 'token="', "token='", 'token=\\"', `${'k'.repeat(4000)} `];
+      'a=', '"a":', '\\"a\\":', 'token="', "token='", 'token=\\"'];
     // The best of five times, so a pause of the machine does not count. Each input is compared with plain words of
     // the same length: linear redaction takes about as long on both, and a pattern that backtracks over a run takes
     // tens of times longer. The margin keeps a slow or busy machine from failing the test.
-    const bestTime = (text) => {
+    const bestTime = (unit) => {
+      const stderr = runs(unit, 8000), message = runs(unit, 4000);
       let best = Infinity;
       for (let i = 0; i < 5; i += 1) {
         const started = performance.now();
-        describeTrustFailure({ stderr: text });
-        describeTrustFailure({ error: { code: 1, message: text } });
+        describeTrustFailure({ stderr });
+        describeTrustFailure({ error: { code: 1, message } });
         best = Math.min(best, performance.now() - started);
       }
       return best;
     };
-    const plain = bestTime(runs('plain words '));
+    const plain = bestTime('plain words ');
     for (const unit of units) {
-      const time = bestTime(runs(unit));
+      const time = bestTime(unit);
       assert.ok(time < 10 * plain + 20, `redacting runs of ${JSON.stringify(unit.slice(0, 12))} took ${time.toFixed(1)} ms, plain words ${plain.toFixed(1)} ms`);
     }
   });
+
+  // Removing colour codes, joining lines and redacting can shrink the redacted part to a few characters, so the
+  // start of the stderr part or the end of the message part can be what is reported. In each stderr case the
+  // last 8 KiB start inside the secret's name.
+  const cutCases = [
+    ['a name cut off before colour codes', { stderr: `my_password = SECRETA1xyz${'\x1b[0m'.repeat(2042)}` }, 'stderr: [cut]', 'SECRETA1xyz'],
+    ['a name cut off before blank lines', { stderr: `my_password = SECRETA2xyz${'\n'.repeat(8170)}end` }, 'stderr: [cut] | end', 'SECRETA2xyz'],
+    ['a quoted name cut off before colour codes', { stderr: `{"password": "SECRETA3xyz"}${'\x1b[0m'.repeat(2042)}` }, 'stderr: [cut]', 'SECRETA3xyz'],
+    ['a name cut off before a long redacted value', { stderr: `my_password = SECRETA5xyz token=${'v'.repeat(8166)}` }, 'stderr: [cut]', 'SECRETA5xyz'],
+    ['a quoted value cut in the middle', { error: { code: 1, message: `token=${'v'.repeat(4070)} password="correct horse SECRETB1 staple"` } },
+      'Codex error 1: [cut]', 'correct'],
+  ];
+  for (const [name, trust, expected, secret] of cutCases) {
+    it(`reports no part of a secret at the cut: ${name}`, () => {
+      const report = describeTrustFailure(trust);
+      assert.equal(report, expected);
+      assert.equal(report.includes(secret) || report.includes(secret.slice(0, 6)), false);
+    });
+  }
 
   it('redacts a JWT that straddles the message limit before cutting the message', () => {
     const header = 'eyJhbGciOiJIUzI1NiJ9', payload = 'eyJzdWIiOiJTRUNSRVRKV1QiLCJuYW1lIjoiZmVsaXgifQ';
