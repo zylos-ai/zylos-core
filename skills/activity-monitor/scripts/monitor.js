@@ -153,6 +153,7 @@ import {
   startContextMonitor as startRuntimeContextMonitor,
 } from './adapters/runtime-components.js';
 import { createActivityMonitorTaskScheduler } from './tasks/activity-monitor-tasks.js';
+import { createDailyMemoryCommit } from './tasks/daily-memory-commit.js';
 import { readTmuxInputState } from '../../comm-bridge/scripts/tmux-input-state.js';
 import { CHECKPOINT_THRESHOLD } from '../../comm-bridge/scripts/c4-config.js';
 // activity-monitor runs as a deployed skill at ~/zylos/.claude/skills/activity-monitor/scripts/.
@@ -833,45 +834,11 @@ function enqueueDailyUpgradeControl() {
 // Daily Memory Commit
 // ---------------------------------------------------------------------------
 
-function loadMemoryCommitState() {
-  try {
-    if (!fs.existsSync(DAILY_MEMORY_COMMIT_STATE_FILE)) return null;
-    return JSON.parse(fs.readFileSync(DAILY_MEMORY_COMMIT_STATE_FILE, 'utf8'));
-  } catch { }
-  return null;
-}
-
-function writeMemoryCommitState(date) {
-  try {
-    if (!fs.existsSync(MONITOR_DIR)) {
-      fs.mkdirSync(MONITOR_DIR, { recursive: true });
-    }
-    fs.writeFileSync(DAILY_MEMORY_COMMIT_STATE_FILE, JSON.stringify({
-      last_date: date,
-      updated_at: new Date().toISOString()
-    }, null, 2));
-  } catch (err) {
-    log(`Daily memory commit: failed to write state (${err.message})`);
-  }
-}
-
-function executeDailyMemoryCommit() {
-  try {
-    const output = execFileSync('node', [DAILY_COMMIT_SCRIPT], {
-      encoding: 'utf8',
-      timeout: 30000,
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-    if (output.trim()) {
-      log(`Daily memory commit: ${output.trim()}`);
-    }
-    return true;
-  } catch (err) {
-    const detail = err?.stderr?.toString?.().trim() || err.message;
-    log(`Daily memory commit failed: ${detail}`);
-    return false;
-  }
-}
+const dailyMemoryCommit = createDailyMemoryCommit({
+  stateFile: DAILY_MEMORY_COMMIT_STATE_FILE,
+  script: DAILY_COMMIT_SCRIPT,
+  log,
+});
 
 // ---------------------------------------------------------------------------
 // Daily Upgrade Check
@@ -955,9 +922,9 @@ function createTaskScheduler(activeUsageMonitor) {
     loadDailyUpgradeState,
     writeDailyUpgradeState,
     enqueueDailyUpgradeControl,
-    loadMemoryCommitState,
-    writeMemoryCommitState,
-    executeDailyMemoryCommit,
+    loadMemoryCommitState: dailyMemoryCommit.loadState,
+    writeMemoryCommitState: dailyMemoryCommit.writeState,
+    executeDailyMemoryCommit: dailyMemoryCommit.execute,
     loadUpgradeCheckState,
     writeUpgradeCheckState,
     executeUpgradeCheck,

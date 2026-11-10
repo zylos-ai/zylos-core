@@ -67,6 +67,42 @@ describe('TaskScheduler', () => {
     assert.deepEqual(writes, []);
   });
 
+  it('records a failed run of a recordFailure daily task for the day and does not run it again that day', () => {
+    const writes = [];
+    let runs = 0;
+    let saved = null;
+    const { scheduler, calls } = createScheduler([{
+      id: 'daily-once',
+      type: 'daily',
+      hour: 5,
+      recordFailure: true,
+      loadState: () => saved,
+      writeState: (date, ok) => { writes.push([date, ok]); saved = { last_date: date }; },
+      execute: () => { runs++; return false; }
+    }]);
+
+    assert.equal(scheduler.tick({}), 0);
+    assert.deepEqual(writes, [['2026-04-30', false]]);
+    assert.deepEqual(calls.log, ['daily-once: failed, next attempt tomorrow (date=2026-04-30)']);
+    assert.equal(scheduler.tick({}), 0);
+    assert.equal(runs, 1);
+  });
+
+  it('passes success to writeState for a recordFailure daily task', () => {
+    const writes = [];
+    const { scheduler } = createScheduler([{
+      id: 'daily-once',
+      type: 'daily',
+      hour: 5,
+      recordFailure: true,
+      writeState: (date, ok) => writes.push([date, ok]),
+      execute: () => true
+    }]);
+
+    assert.equal(scheduler.tick({}), 1);
+    assert.deepEqual(writes, [['2026-04-30', true]]);
+  });
+
   it('runs interval tasks after the configured delay', () => {
     let runs = 0;
     const writes = [];

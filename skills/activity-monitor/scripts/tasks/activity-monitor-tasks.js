@@ -41,6 +41,9 @@ export function createActivityMonitorTaskScheduler({
       id: 'daily-memory-commit',
       type: 'daily',
       hour: dailyMemoryCommitHour,
+      // Retrying cannot fix what makes a commit fail (a large or unreadable
+      // file, a full disk) and each retry repeats the work: one try a day.
+      recordFailure: true,
       loadState: loadMemoryCommitState,
       writeState: writeMemoryCommitState,
       execute: executeDailyMemoryCommit,
