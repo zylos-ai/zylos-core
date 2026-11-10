@@ -17,6 +17,28 @@ function fixture(t) {
 }
 const candidate = 'http://localhost:8080 {\n respond 201\n}\n';
 
+function assertCandidatesRemoved({ tmpDir }) {
+  const remaining = fs.readdirSync(tmpDir).filter(name => name.startsWith('zylos-caddy-'));
+  assert.equal(remaining.length, 0, 'deployment candidate directories must be removed');
+}
+
+test('successful deployment removes its candidate directory', t => {
+  const f = fixture(t);
+  const calls = [];
+  const result = validateAndDeploy(candidate, f.original, { ...f, execFileSync: (command, args) => {
+    calls.push(command);
+    if (command === f.caddyBin) assert.equal(fs.readFileSync(args[2], 'utf8'), candidate);
+    else {
+      assert.equal(command, 'pm2');
+      assert.deepEqual(args, ['reload', 'caddy']);
+    }
+  } });
+  assertCandidatesRemoved(f);
+  assert.equal(result.success, true);
+  assert.equal(fs.readFileSync(f.caddyfile, 'utf8'), candidate);
+  assert.deepEqual(calls, [f.caddyBin, 'pm2']);
+});
+
 test('candidate validation failure preserves original bytes and never reloads', t => {
   const f = fixture(t);
   const calls = [];
@@ -26,6 +48,7 @@ test('candidate validation failure preserves original bytes and never reloads', 
     assert.equal(fs.readFileSync(args[2], 'utf8'), candidate);
     throw new Error('bad candidate');
   } });
+  assertCandidatesRemoved(f);
   assert.equal(result.success, false);
   assert.match(result.error, /validation failed/);
   assert.equal(fs.readFileSync(f.caddyfile).equals(f.original), true);
@@ -45,6 +68,7 @@ test('partial deployment write failure restores and verifies original bytes', t 
       fs.writeFileSync(filename, content);
     },
   });
+  assertCandidatesRemoved(f);
   assert.equal(result.success, false);
   assert.match(result.error, /original Caddyfile restored/);
   assert.equal(fs.readFileSync(f.caddyfile).equals(f.original), true);
@@ -59,6 +83,7 @@ test('reload failure restores original bytes and reloads the restored file', t =
     if (reloads === 1) throw new Error('reload rejected');
     assert.equal(fs.readFileSync(f.caddyfile).equals(f.original), true);
   } });
+  assertCandidatesRemoved(f);
   assert.equal(result.success, false);
   assert.equal(reloads, 2);
   assert.match(result.error, /restored and reloaded/);
@@ -76,6 +101,7 @@ test('failed restore write, mismatched bytes or recovery reload are reported tru
       },
       readFileSync: filename => failure === 'bytes' ? Buffer.from('wrong bytes') : fs.readFileSync(filename),
     });
+    assertCandidatesRemoved(f);
     assert.equal(result.success, false);
     assert.match(result.error, /recovery failed/);
     assert.match(result.error, /Manually restore.*Caddyfile/);
@@ -131,10 +157,12 @@ test('real Caddy validates good candidates and rejects invalid candidates before
     PATH: process.env.PATH, caddyfile: f.caddyfile, binary, executor: 'real-caddy; injected-pm2; no-daemons' }));
   const generated = `http://localhost:8080 {\n${generateWebConsoleRoute()}\n}\n`;
   const good = validateAndDeploy(generated, f.original, { ...f, caddyBin: binary, execFileSync: execute });
+  assertCandidatesRemoved(f);
   assert.equal(good.success, true, good.error);
   assert.equal(fs.readFileSync(f.caddyfile, 'utf8'), generated);
   const bad = validateAndDeploy('http://localhost:8080 {\n unknown_zylos_directive\n}\n', generated,
     { ...f, caddyBin: binary, execFileSync: execute });
+  assertCandidatesRemoved(f);
   assert.equal(bad.success, false);
   assert.match(bad.error, /validation failed/);
   assert.equal(fs.readFileSync(f.caddyfile, 'utf8'), generated);
@@ -146,6 +174,7 @@ test('real Caddy validates good candidates and rejects invalid candidates before
       if (++reloads === 1) throw new Error('isolated reload rejected');
     },
   });
+  assertCandidatesRemoved(f);
   assert.equal(failedReload.success, false);
   assert.match(failedReload.error, /restored and reloaded/);
   assert.equal(fs.readFileSync(f.caddyfile, 'utf8'), generated);
@@ -162,6 +191,7 @@ test('real Caddy validates good candidates and rejects invalid candidates before
       fs.writeFileSync(filename, content);
     },
   });
+  assertCandidatesRemoved(f);
   assert.equal(failedRecovery.success, false);
   assert.match(failedRecovery.error, /recovery failed: isolated restoration denied/);
   assert.match(failedRecovery.error, /Manually restore/);
