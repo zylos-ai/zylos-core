@@ -30,6 +30,7 @@ export function serviceRestartFixture(t, {ecosystem = true, names = ['scheduler'
     fs.writeFileSync(file,`module.exports={apps:${JSON.stringify(names.map(name => ({name,script:scripts[name]})))}};`,{mode:0o600});
   }
   const state = path.join(root,'state.json'), calls = path.join(root,'calls.jsonl'), failure = path.join(root,'failure'), listLimit=path.join(root,'list-limit');
+  const stopped = path.join(root,'stay-stopped');
   const record = (name,status = 'stopped') => ({name,pid:status==='online'?123:0,pm2_env:{status,pm_exec_path:scripts[name]}});
   fs.writeFileSync(state,JSON.stringify([record('scheduler'),record('custom-service')]));
   fs.mkdirSync(path.join(root,'bin'));
@@ -49,7 +50,8 @@ if(args[0]==='restart')names=[args[1]];
 else if(['start','startOrRestart'].includes(args[0])){
  const config=require(args[1]),only=args[args.indexOf('--only')+1];apps=config.apps.filter(app=>app.name===only);names=apps.map(app=>app.name);
 }else {console.error('unexpected PM2 command');process.exit(2);}
-for(const name of names){const record=records.find(item=>item.name===name);if(!record)process.exit(3);record.pid=123;Object.assign(record.pm2_env,apps.find(app=>app.name===name)?.env || {});record.pm2_env.status='online';}
+if(fs.existsSync(${JSON.stringify(stopped)})&&names.includes(fs.readFileSync(${JSON.stringify(stopped)},'utf8')))process.exit(0);
+for(const name of names){const matches=records.filter(item=>item.name===name);if(!matches.length)process.exit(3);for(const record of matches){record.pid=123;Object.assign(record.pm2_env,apps.find(app=>app.name===name)?.env || {});record.pm2_env.status='online';}}
 fs.writeFileSync(state,JSON.stringify(records));
 `,{mode:0o700});
   assert.equal(fs.realpathSync(pm2),pm2);
@@ -60,6 +62,7 @@ fs.writeFileSync(state,JSON.stringify(records));
     records(next) {if(next)fs.writeFileSync(state,JSON.stringify(next));return JSON.parse(fs.readFileSync(state));},
     calls:() => fs.existsSync(calls)?fs.readFileSync(calls,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[],
     fail:(name='fail') => fs.writeFileSync(failure,name),clearFailure:()=>fs.rmSync(failure,{force:true}),listLimit:count=>fs.writeFileSync(listLimit,String(count)),record,
+    stayStopped:name=>fs.writeFileSync(stopped,name),
     custom() {j.originalServices.push({name:'custom-service',script:scripts['custom-service']});return j;},
   };
 }

@@ -95,7 +95,7 @@ for (const fails of [false, true]) test(`upgrade keeps Core available and return
   assert.equal(ctx.servicesWereRunning.length, 2);
 });
 
-for (const failedName of [null, 'custom-service', 'scheduler', 'changed-record']) test(`new ecosystem after an absent original applies configuration with strict failures (${failedName || 'healthy'})`, t => {
+for (const failedName of [null, 'custom-service', 'scheduler', 'changed-record', 'custom-stopped']) test(`new ecosystem after an absent original applies configuration with strict failures (${failedName || 'healthy'})`, t => {
   const f = fixture(t, {ecosystem:false});
   const tempDir=path.join(f.root,'download'),template=path.join(tempDir,'templates/pm2/ecosystem.config.cjs');
   fs.mkdirSync(path.dirname(template),{recursive:true});
@@ -103,11 +103,12 @@ for (const failedName of [null, 'custom-service', 'scheduler', 'changed-record']
   const dir=path.join(f.env.ZYLOS_DIR,'.backup/self-upgrade','new-ecosystem');
   fs.mkdirSync(dir,{recursive:true,mode:0o700});maintenance.durable(path.join(dir,'journal.json'),f.j);
   if (failedName==='changed-record') f.records([f.record('scheduler'), {...f.record('custom-service'), pm2_env:{status:'stopped',pm_exec_path:'/untrusted/custom.js'}}]);
+  else if(failedName==='custom-stopped')f.stayStopped('custom-service');
   else if(failedName)f.fail(failedName);
   assert.equal(f.records().find(record=>record.name==='scheduler').pm2_env.FRESH_CORE_ENV,undefined);
   const ctx = {...context(f),tempDir,transactionDir:dir,upgradeProtected:true};
   const result = step11_startCoreServices(ctx, {zylosDir:f.env.ZYLOS_DIR, ecosystemPath:f.file});
-  assert.equal(result.status, failedName ? 'failed' : 'done', JSON.stringify(result));
+  assert.equal(result.status, failedName && failedName!=='custom-stopped' ? 'failed' : 'done', JSON.stringify(result));
   assert.equal(ctx.serviceWarnings,undefined,'unclassified original services are never optional');
   if (failedName==='changed-record') {
     assert.match(result.error, /original PM2 service record missing or changed/);
@@ -115,7 +116,13 @@ for (const failedName of [null, 'custom-service', 'scheduler', 'changed-record']
   } else {
     assert.ok(f.calls().some(args=>args[0]==='restart'&&args[1]==='custom-service'));
     assert.ok(f.calls().some(args=>['start','startOrRestart'].includes(args[0])&&args[1]===f.file&&args.includes('scheduler')));
-    if(failedName)assert.match(result.error,new RegExp(failedName));
+    if(failedName==='custom-stopped') {
+      assert.equal(f.records().find(record=>record.name==='custom-service').pm2_env.status,'stopped','successful restart leaves the external service stopped');
+      let now=0;t.mock.method(Date,'now',()=>now+=2000);
+      const verified=step12_verifyServices(ctx,{execSync:poll(f)});
+      assert.equal(verified.status,'failed');assert.match(verified.error,/Not online after 30s: custom-service/);
+      assert.equal(ctx.serviceWarnings,undefined);assert.equal(ctx.journal.serviceWarnings,undefined);
+    } else if(failedName)assert.match(result.error,new RegExp(failedName));
     else {
       assert.equal(f.records().find(record=>record.name==='scheduler').pm2_env.FRESH_CORE_ENV,'new-template');
       assert.equal(step12_verifyServices(ctx, {execSync:poll(f)}).status, 'done');
@@ -123,6 +130,24 @@ for (const failedName of [null, 'custom-service', 'scheduler', 'changed-record']
     }
   }
   assert.equal(maintenance.read(path.join(dir,'journal.json')).ecosystemCreationIntent.originalMissing,true);
+});
+
+// Actual forward service steps cover both known and originally absent identity.
+// Run for startup/verification membership changes; unrelated changes may skip.
+for(const originalHash of ['known','absent'])test(`forward service steps accept two ecosystem instances with ${originalHash} original identity`,t=>{
+  const f=serviceRestartFixture(t);
+  fs.writeFileSync(f.file,`module.exports={apps:[{name:'scheduler',script:${JSON.stringify(f.scripts.scheduler)},instances:2,exec_mode:'cluster'}]};`);
+  f.j.initialIdentity.ecosystemHash=originalHash==='known'?maintenance.hash(f.file):null;
+  f.j.originalServices.push({...f.j.originalServices[0]});
+  f.records([f.record('scheduler'),f.record('scheduler')]);
+  const ctx=context(f);assert.deepEqual(ctx.servicesWereRunning,['scheduler','scheduler']);
+  const started=step11_startCoreServices(ctx,{zylosDir:f.env.ZYLOS_DIR,ecosystemPath:f.file});
+  assert.equal(started.status,'done',JSON.stringify(started));
+  const verified=step12_verifyServices(ctx,{execSync:poll(f)});
+  assert.equal(verified.status,'done',JSON.stringify(verified));assert.deepEqual(ctx.serviceWarnings,[]);
+  assert.equal(f.records().length,2);assert.ok(f.records().every(record=>record.pid>0&&record.pm2_env.status==='online'));
+  assert.equal(f.calls().filter(args=>args[0]==='start'&&args.includes('scheduler')).length,2);
+  assert.ok(f.calls().some(args=>args[0]==='save'));
 });
 
 test('a newly present invalid ecosystem remains fatal when the original file was missing', t => {

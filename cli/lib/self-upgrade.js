@@ -625,7 +625,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
     ecosystemNames = new Set(fsApi.existsSync(ecosystemPath) ? maintenance.ecosystemServiceNames(ecosystemPath) : []);
     const saved = ctx.journal?.originalServices;
     const selected = ctx.servicesWereRunning.map(name => {
-      if (!saved) return {name};
+      if (!saved || ecosystemNames.has(name)) return {name};
       const records = saved.filter(service => service.name === name);
       if (records.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
       return records[0];
@@ -724,9 +724,7 @@ export function step12_verifyServices(ctx, deps = {}) {
   try {
     if (ctx.journal?.initialIdentity?.ecosystemHash !== undefined) {
       const selected = ctx.servicesWereRunning.map(name => {
-        const matches = ctx.journal.originalServices.filter(service => service.name === name);
-        if (matches.length !== 1) throw Error('original PM2 service record missing or changed: ' + name);
-        return matches[0];
+        return ctx.journal.originalServices.find(service => service.name === name) || {name};
       });
       const requirements = maintenance.serviceRequirements({...ctx.journal, originalServices:selected}, {
         ecosystemPath:ctx.serviceEcosystemPath, allowUpdatedEcosystem:true,
