@@ -71,15 +71,11 @@ export function inspectWebConsoleRoute(content) {
   const routes = [];
   const ambiguousLines = [];
   const consolePath = word => word === '/console' || word.startsWith('/console/') || word.startsWith('/console*');
-  // A path-confined handler cannot receive console requests; its nested
-  // matchers are irrelevant even when they rewrite paths after selection.
+  // Other path handlers do not override the more specific console handler.
   function excludesConsole(node) {
     if (!['handle', 'handle_path', 'route'].includes(node.words?.[0])) return false;
     const matcher = node.words[1];
-    if (!matcher?.startsWith('/')) return false;
-    if (!matcher.includes('*')) return !consolePath(matcher);
-    const prefix = matcher.split('*')[0];
-    return !'/console/'.startsWith(prefix) && !prefix.startsWith('/console');
+    return matcher?.startsWith('/') && !consolePath(matcher);
   }
   function collect(node) {
     if (excludesConsole(node)) return;
@@ -117,8 +113,6 @@ export function inspectWebConsoleRoute(content) {
       while (site.parent && site.parent !== tree) site = site.parent;
       const hasConsolePath = node.words.slice(1).some(consolePath);
       if (hasConsolePath && !['handle', 'handle_path', 'path', 'redir', 'uri', 'header_up'].includes(node.words[0])) ambiguousLines.push(node.start + 1);
-      if (['handle', 'handle_path', 'route'].includes(node.words[0])
-          && node.words[1]?.startsWith('/') && !hasConsolePath) ambiguousLines.push(node.start + 1);
       if (['handle', 'handle_path', 'route', 'reverse_proxy'].includes(node.words[0])
           && node.words.slice(1).some(word => word.startsWith('@') && !(
             nonConsoleMatchers.get(site)?.has(word) && node.parent === site

@@ -231,7 +231,7 @@ export function formatSelfUpgradeCompletion(data) {
   for (const warning of data.warnings || []) {
     lines.push(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}`);
   }
-  const webConsoleNotice = data.webConsoleMigration?.message || data.webConsoleMigration?.reason;
+  const webConsoleNotice = data.webConsoleMigration?.reason;
   if (webConsoleNotice) lines.push(`Web Console: ${webConsoleNotice}`);
   for (const instruction of data.webConsoleMigration?.instructions || []) lines.push(instruction);
   if (data.checkpointAudit?.state === 'incomplete') {

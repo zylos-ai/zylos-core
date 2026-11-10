@@ -84,7 +84,6 @@ test('alternate named matchers and shorthand proxies prevent migration or silent
       'reverse_proxy /console* localhost:3456',
       'route /console/* {\n reverse_proxy localhost:3456\n}',
       'handle @unresolved {\n reverse_proxy localhost:3456\n}',
-      'handle /c* {\n reverse_proxy localhost:3456\n}',
       '@markdown path *.md\nroute {\n handle @markdown {\n uri strip_prefix /console\n reverse_proxy localhost:3456\n }\n}',
       '@markdown path *.md\nhandle @markdown {\n reverse_proxy localhost:3456\n}',
     ]) {
@@ -108,9 +107,26 @@ test('named matchers confined to unrelated paths or other sites do not shadow co
     }
 }`;
   for (const [block, status] of [[stock, 'ready'], [generateWebConsoleRoute(), 'unchanged']]) {
-    for (const unrelated of [nested, nested.replace('handle_path', 'handle')]) {
+    for (const unrelated of [nested, nested.replace('handle_path', 'handle'),
+      'handle /* {\n respond "x" 200\n}',
+      'handle /c* {\n respond "x" 200\n}',
+      'handle /console-old/* {\n respond "x" 200\n}',
+    ]) {
       assert.equal(inspectWebConsoleRoute(site(`${block}\n${unrelated}`)).status, status);
       assert.equal(inspectWebConsoleRoute(`${site(block)}\n${otherSite}`).status, status);
+    }
+  }
+});
+
+test('more specific console paths prevent silent completion or automatic migration', () => {
+  for (const block of [stock, generateWebConsoleRoute()]) {
+    for (const alternate of [
+      'handle /console/api/* {\n reverse_proxy localhost:9999\n}',
+      'handle /console/api/status {\n respond "x" 200\n}',
+    ]) {
+      const result = inspectWebConsoleRoute(site(`${alternate}\n${block}`));
+      assert.equal(result.status, 'manual_required', alternate);
+      assert.equal(Object.hasOwn(result, 'content'), false);
     }
   }
 });
@@ -176,6 +192,45 @@ test('invalid UTF-8 Caddyfiles remain byte-identical and never reach deployment'
   assert.equal(result.status, 'manual_required');
   assert.match(result.reason, /encoded data|encoding/i);
   assert.equal(fs.readFileSync(filename).equals(bytes), true);
+});
+
+test('UTF-8 BOM survives successful migration and exact restoration after reload failure', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-bom-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'http'));
+  const filename = path.join(root, 'http/Caddyfile');
+  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+  const original = Buffer.concat([bom, Buffer.from(site(stock))]);
+  for (const failReload of [false, true]) {
+    fs.writeFileSync(filename, original);
+    let validations = 0, reloads = 0;
+    const result = migrateWebConsoleRoute({ zylosDir: root, tmpDir: root,
+      execFileSync: (command, args) => {
+        if (command === 'pm2') {
+          assert.deepEqual(args, ['reload', 'caddy']);
+          if (++reloads === 1 && failReload) throw new Error('isolated reload rejected');
+        } else {
+          assert.equal(command, path.join(root, 'bin/caddy'));
+          assert.equal(args[0], 'validate');
+          assert.ok(args[2].startsWith(root + path.sep));
+          validations++;
+        }
+      },
+    });
+    assert.equal(validations, 1);
+    const actual = fs.readFileSync(filename);
+    if (failReload) {
+      assert.equal(result.status, 'manual_required');
+      assert.match(result.reason, /original Caddyfile restored and reloaded/);
+      assert.equal(actual.equals(original), true);
+      assert.equal(reloads, 2);
+    } else {
+      assert.equal(result.status, 'updated');
+      assert.equal(actual.subarray(0, bom.length).equals(bom), true);
+      assert.match(actual.toString('utf8'), /header_up X-Forwarded-Prefix \/console/);
+      assert.equal(reloads, 1);
+    }
+  }
 });
 
 test('deployment errors become nonfatal actionable results', () => {
