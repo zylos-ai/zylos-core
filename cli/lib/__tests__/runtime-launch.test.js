@@ -581,6 +581,44 @@ describe('Claude launch — export-prefixed .env lines', () => {
   });
 });
 
+describe('Claude launch — saving a setup token over an export-prefixed API key', () => {
+  it('`zylos runtime claude --save-setup-token` removes `export ANTHROPIC_API_KEY=`: session and probe have no API key', async () => {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0;
+    calls.execFile.length = 0;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const claudeJson = path.join(fakeHome, '.claude.json');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const originalClaudeJson = fs.existsSync(claudeJson) ? fs.readFileSync(claudeJson) : null;
+    const names = ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
+    const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+    const token = 'sk-ant-oat01-synthetic-new-setup-token';
+    fs.writeFileSync(dotenvPath, 'KEEP=unchanged\n  export ANTHROPIC_API_KEY=sk-ant-api03-synthetic-stale-key\n');
+    try {
+      const { applyCredentials } = await import('../../commands/runtime.js');
+      applyCredentials('claude', { setupToken: token });
+      assert.equal(fs.readFileSync(dotenvPath, 'utf8').includes('ANTHROPIC_API_KEY'), false, 'the API key line is removed from .env');
+      const adapter = makeAdapter(ClaudeAdapter);
+      await adapter.launch({ bypassPermissions: false });
+      const session = readSpecEnv();
+      assert.ok(session, 'spec should be written');
+      assert.equal(session.ANTHROPIC_API_KEY, undefined, 'session has no API key');
+      await adapter.checkAuth();
+      const probe = calls.execFile.find(c => c.args[0] === '-p');
+      assert.ok(probe, 'probe should run');
+      assert.equal(probe.opts.env.ANTHROPIC_API_KEY, undefined, 'probe has no API key');
+    } finally {
+      fs.writeFileSync(dotenvPath, original);
+      if (originalClaudeJson) fs.writeFileSync(claudeJson, originalClaudeJson); else fs.rmSync(claudeJson, { force: true });
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+});
+
 describe('Claude launch — existing session', () => {
   it('does not create a new tmux session', async () => {
     tmuxSessionExists = true;
@@ -653,6 +691,32 @@ describe('Claude launch — compat mode PATH dedupe', () => {
 });
 
 // ── Codex launch tests ───────────────────────────────────────────────────────
+
+describe('Codex launch — export-prefixed .env lines', () => {
+  it('spec.env carries a manifest variable written as `export NAME=value # comment` in .env', async () => {
+    tmuxSessionExists = false;
+    calls.execFileSync.length = 0;
+    const dotenvPath = path.join(fakeZylosDir, '.env');
+    const manifestPath = path.join(fakeZylosDir, '.zylos', 'runtime-env.manifest');
+    const original = fs.readFileSync(dotenvPath, 'utf8');
+    const manifestBefore = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath) : null;
+    const saved = process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_BASE_URL;
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, 'env OPENAI_BASE_URL\n');
+    fs.writeFileSync(dotenvPath, 'export OPENAI_BASE_URL=https://codex-relay.example.test # relay\n');
+    try {
+      await makeAdapter(CodexAdapter).launch({ bypassPermissions: false });
+      const spec = readLaunchSpec();
+      assert.ok(spec, 'spec should be written');
+      assert.equal(spec.env.OPENAI_BASE_URL, 'https://codex-relay.example.test');
+    } finally {
+      fs.writeFileSync(dotenvPath, original);
+      if (manifestBefore) fs.writeFileSync(manifestPath, manifestBefore); else fs.rmSync(manifestPath, { force: true });
+      if (saved === undefined) delete process.env.OPENAI_BASE_URL; else process.env.OPENAI_BASE_URL = saved;
+    }
+  });
+});
 
 describe('Codex launch — new session', () => {
   it('keeps the recovery prompt after automatic resume fails without concatenating undefined', async t => {

@@ -18,11 +18,24 @@ import { commandExists } from './shell-utils.js';
 import { parseClaudeAuthStatus, parseCodexLoginStatus } from './auth-parsers.js';
 import { installCoreCodexHook } from './codex-hooks.js';
 
+/**
+ * Every .env line that sets `key`: `KEY=` or `export KEY=`, leading spaces
+ * allowed (the lines dotenv reads as KEY), each with its line break.
+ */
+function envAssignments(key) {
+  return new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?${key}[^\\S\\r\\n]*=.*(?:\\r?\\n|$)`, 'gm');
+}
+
+/** Set `key` on its first existing line (bare or `export`) and drop any later ones; append if absent. */
 function upsertEnvValue(content, key, value, comment = null) {
   const line = `${key}=${value}`;
-  if (content.match(new RegExp(`^${key}=.*$`, 'm'))) {
-    return content.replace(new RegExp(`^${key}=.*$`, 'm'), line);
-  }
+  let found = false;
+  const next = content.replace(envAssignments(key), match => {
+    if (found) return '';
+    found = true;
+    return line + (match.endsWith('\n') ? '\n' : '');
+  });
+  if (found) return next;
   const prefix = comment ? `\n\n# ${comment}\n` : '\n';
   return content.trimEnd() + `${prefix}${line}\n`;
 }
@@ -234,7 +247,7 @@ export function saveSetupTokenToEnv(token) {
     try { content = fs.readFileSync(envPath, 'utf8'); } catch {}
     content = upsertEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN', token, 'Claude Code setup token (set by zylos init)');
     content = content.replace(/^# Anthropic API key \(set by zylos init\)\n/m, '');
-    content = content.replace(/^\s*ANTHROPIC_API_KEY\s*=.*\n?/m, '');
+    content = content.replace(envAssignments('ANTHROPIC_API_KEY'), '');
     fs.writeFileSync(envPath, content);
   } catch {}
 }
@@ -327,7 +340,7 @@ export function isClaudeRelayBaseUrl(baseUrl) {
 /** Turn the relay setting on or off in ~/zylos/.env and process.env. */
 function setClaudeRelayTrafficFlag(on) {
   const name = CLAUDE_RELAY_TRAFFIC_FLAG;
-  const assignment = new RegExp(`^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?${name}[^\\S\\r\\n]*=.*(?:\\r?\\n|$)`, 'gm');
+  const assignment = envAssignments(name);
   try {
     const envPath = path.join(ZYLOS_DIR, '.env');
     let content = null;

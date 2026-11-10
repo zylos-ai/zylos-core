@@ -81,6 +81,23 @@ test('configuring a relay base URL rewrites a wrong or duplicated existing value
   assert.equal(parseDotEnv(fs.readFileSync(envFile)).KEEP, 'unchanged');
 });
 
+// .env lines are read with dotenv, so `export KEY=` sets KEY: a save must
+// rewrite that line too, leaving exactly one line for the key.
+const keyLines = key => fs.readFileSync(envFile, 'utf8').split('\n').filter(line => new RegExp(`^\\s*(export\\s+)?${key}\\s*=`).test(line));
+
+test('saving a base URL over `export ANTHROPIC_BASE_URL=` leaves one line with the new value', () => {
+  fs.writeFileSync(envFile, 'KEEP=unchanged\nexport ANTHROPIC_BASE_URL=https://old-relay.example.test\n');
+  assert.equal(applyBaseUrl('claude', relayUrl), true);
+  assert.deepEqual(keyLines('ANTHROPIC_BASE_URL'), [`ANTHROPIC_BASE_URL=${relayUrl}`]);
+});
+
+test('saving an API key over an export-prefixed and a bare line leaves one line with the new key', () => {
+  const key = apiKey();
+  fs.writeFileSync(envFile, 'KEEP=unchanged\n  export ANTHROPIC_API_KEY=sk-ant-api03-old-exported\nANTHROPIC_API_KEY=sk-ant-api03-old-bare\n');
+  assert.equal(applyCredentials('claude', { apiKey: key }), true);
+  assert.deepEqual(keyLines('ANTHROPIC_API_KEY'), [`ANTHROPIC_API_KEY=${key}`]);
+});
+
 test('configuring the official base URL without a credential removes the relay traffic setting from .env and process', () => {
   fs.writeFileSync(envFile, `KEEP=unchanged\n${flag}=1\nexport ${flag}=1\n`);
   process.env[flag] = '1';
