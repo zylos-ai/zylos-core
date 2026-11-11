@@ -13,7 +13,7 @@ registerHooks({
 const text = await import('../public/js/wb/chat-compose-text.js');
 const { createComposeDraftStore, createDraftStore, validComposeDraft, MAX_COMPOSE_DRAFT_BYTES } = await import('../public/js/wb/chat-drafts.js');
 const { createConversationState } = await import('../public/js/wb/conversation-state.js');
-const { annotationRange, textIndex, annotatable } = await import('../public/js/wb/chat-annotations.js');
+const { annotationRange, textIndex, annotatable, quoteAuthor } = await import('../public/js/wb/chat-annotations.js');
 
 // Pure browser modules only: in-memory storage, fake request functions and clock; no HTTP, database, PM2 or tmux.
 class Storage {
@@ -465,6 +465,17 @@ test('internal messages and locked composers cannot be annotated', () => {
   for (const locked of [{ tab: 'external' }, { canWrite: false }, { sending: true }, { pending: { content: 'x', quote: null } }]) {
     assert.equal(annotatable(article(false), { ...writable, ...locked }), false, JSON.stringify(locked));
   }
+});
+
+test('a quoted internal message is labelled internal whichever direction it went', () => {
+  // The server marks a quoted internal original with internal:true; the label must not fall back to you / AI.
+  const t = key => key;
+  for (const direction of ['in', 'out']) {
+    assert.equal(quoteAuthor({ id: 7, direction, internal: true }, t), 'chat.quote.internal', direction);
+  }
+  assert.equal(quoteAuthor({ id: 7, direction: 'in', internal: false }, t), 'chat.page.you');
+  assert.equal(quoteAuthor({ id: 7, direction: 'out', internal: false }, t), 'chat.page.ai');
+  assert.equal(quoteAuthor({ id: 7, direction: 'in' }, t), 'chat.page.you');
 });
 
 test('a reload or a switch to another conversation keeps each conversation draft separate', async () => {

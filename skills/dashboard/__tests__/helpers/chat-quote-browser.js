@@ -9,45 +9,12 @@ import { SseHub } from '../../src/lib/sse.js';
 import { handleChatStream } from '../../src/lib/chat/stream.js';
 import { sendJson } from '../../src/lib/http.js';
 
-const MARKER = /^\[quote c4_id=([1-9][0-9]{0,18})\]\n/;
-const ATTACHMENT_LINE = /^\[attachment:(?:image|file) .+\]$/;
-
-/**
- * The Dashboard server side of quoting as the contract states it (send accepts `quote` and stores
- * `[quote c4_id=N]` as the first line; a dashboard row from the user whose marker names an older message carries
- * `quote: { id, direction, internal, timestamp, preview, available }`, available only while the original is in the same
- * conversation), applied in front of the real routes. The page under test is the real frontend; only this server step is emulated.
- */
-async function emulateQuoteServer(context, fixture, sent) {
-  const lookup = id => fixture.db.prepare('SELECT id, direction, timestamp, content, channel, endpoint_id, session_group FROM conversations WHERE id = ?').get(Number(id));
-  const INTERNAL = /^\[internal\] (?:Yourself, from your "[^"]*" session group, said|[^\n]* said): /;
+/** Records each send body the page posts (bounded) and passes the request on to the real route unchanged. */
+async function recordSends(context, sent) {
   await context.route(url => url.pathname.endsWith('/send') && url.pathname.startsWith('/api/chat/conversations/'), async route => {
-    const body = route.request().postDataJSON();
     assert.ok(sent.length < 50, 'bounded send capture');
-    sent.push(structuredClone(body));
-    if (body.quote !== undefined) {
-      assert.ok(Number.isSafeInteger(body.quote) && body.quote > 0, 'quote is a message number');
-      assert.ok(lookup(body.quote), 'quoted message exists');
-      body.content = `[quote c4_id=${body.quote}]\n${body.content}`;
-      delete body.quote;
-    }
-    await route.continue({ postData: JSON.stringify(body) });
-  });
-  await context.route(url => url.pathname.endsWith('/messages') && url.pathname.startsWith('/api/chat/conversations/'), async route => {
-    const response = await route.fetch();
-    const data = await response.json();
-    for (const row of Array.isArray(data.items) ? data.items : []) {
-      const match = typeof row.content === 'string' ? MARKER.exec(row.content) : null;
-      const own = lookup(row.id);
-      // A marker naming a newer message is not a quote; it stays text.
-      if (!match || own?.channel !== 'dashboard' || own.direction !== 'in' || Number(match[1]) >= own.id) continue;
-      const found = lookup(match[1]), target = found && found.session_group === own.session_group ? found : null;
-      const body = target ? target.content.replace(target.channel === 'internal' ? INTERNAL : MARKER, '') : '';
-      const text = body.split('\n').filter(line => !ATTACHMENT_LINE.test(line)).join('\n').trim();
-      row.quote = { id: Number(match[1]), direction: target?.direction ?? null, internal: target?.channel === 'internal',
-        timestamp: target?.timestamp ?? null, preview: Array.from(text).slice(0, 160).join(''), available: !!target };
-    }
-    await route.fulfill({ response, json: data });
+    sent.push(structuredClone(route.request().postDataJSON()));
+    await route.continue();
   });
 }
 
@@ -113,7 +80,7 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     const context = await browser.newContext({ locale: 'zh-CN', timezoneId: 'Asia/Shanghai', viewport: { width, height: width === 390 ? 844 : 900 },
       ...(touch ? { hasTouch: true, isMobile: true, deviceScaleFactor: 2 } : {}) });
     await context.route(url => !url.href.startsWith(fixture.base + '/'), route => route.abort());
-    await emulateQuoteServer(context, fixture, sent);
+    await recordSends(context, sent);
     await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: fixture.cookie, domain: '127.0.0.1', path: '/', secure: true }]);
     await context.addInitScript(value => {
       if (window !== window.top) return;

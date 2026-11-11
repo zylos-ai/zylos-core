@@ -2,8 +2,8 @@ import test from 'node:test';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 
 // Boundary: full Dashboard entry and real frontend against private SQLite histories, authenticated SSE and a
-// private headless browser. The server's quote step (send `quote` → stored `[quote c4_id=N]` first line, history
-// `quote` field) is emulated in front of the real routes until the server side ships.
+// private headless browser. Quotes go through the real send and history routes (stored `[quote c4_id=N]` first line,
+// history `quote` field); the browser only records the send bodies.
 // Covers: hover/trackpad/touch quoting and its no-trigger cases, the quote bar, history quote blocks (jump with
 // older-page loading over several pages, a second jump while a page loads, unavailable original), annotations (selection,
 // internal messages excluded, editor kept on screen through resizes, list, preview equals sent content),
