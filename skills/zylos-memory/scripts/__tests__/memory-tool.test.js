@@ -7,7 +7,13 @@ import { PassThrough } from 'node:stream';
 import { createMemoryEditor, serveMemoryTools } from '../memory-mcp-server.js';
 import { acquire, memoryScope, withMemoryLock } from '../sync-lock.js';
 
+for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+  assert.ok(process.env[key]);
+  assert.equal(path.resolve(process.env[key]).startsWith(path.resolve(os.userInfo().homedir) + path.sep), false);
+}
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-tool-'));
+console.log('Memory tool test isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+  PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, fixtureRoot: root, tmux: 'unused', database: 'unused' }));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 const runId = '11111111-1111-4111-8111-111111111111';
 async function fixture(kind, group, sharedRoot) {
@@ -29,7 +35,7 @@ test('local: group, origin and global use marker-derived target scopes', async (
     assert.equal((await group.editor(create(group.token, target))).code, 'PATH_NOT_ALLOWED');
   }
   const origin = await fixture('origin', 'origin');
-  for (const target of ['identity.md', 'references.md', 'reference/projects.md', 'users/person/profile.md']) {
+  for (const target of ['identity.md', 'references.md', 'reference/projects/example.md', 'users/person/profile.md']) {
     assert.equal((await origin.editor(create(origin.token, target))).ok, true);
   }
   assert.equal((await origin.editor(create(origin.token, `session-groups/origin/state.md.${origin.token}.tmp`))).code, 'PATH_NOT_ALLOWED');
@@ -150,6 +156,10 @@ test('local: concurrent group editors cannot cross scope and origin tokens choos
   assert.equal((await origin.editor(create(origin.token, 'identity.md'))).ok, true);
 });
 
+// Integration boundary: real stdio RPC retains environment-bound authorization.
+// Run for editor authorization/protocol changes; skip for unrelated memory text.
+// The runner paths are checked and printed above. No tmux or database is used;
+// execFileSync has a timeout and the enclosing after hook removes all fixtures.
 test('local: actual stdio process exposes no authority when forwarded run env is absent', async () => {
   const { execFileSync } = await import('node:child_process');
   const env = { ...process.env };
@@ -183,4 +193,33 @@ test('local: contended memory lock returns LOCK_TIMEOUT without changing the tar
   });
   assert.equal((await f.editor({ op: 'edit', path: 'identity.md', expected: 'original',
     replacement: 'after release', token: f.token })).ok, true);
+});
+
+test('local: legacy paths are read-only for create and edit before path permissions', async () => {
+  for (const [kind, group] of [['global', undefined], ['origin', 'origin'], ['group', 'telegram:legacy']]) {
+    const f = await fixture(kind, group);
+    for (const name of ['reference/projects.md', 'reference/decisions.md', 'reference/legacy/stored.md', 'reference/reorg-progress.md']) {
+      const target = path.join(f.dir, 'memory', name);
+      assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
+      assert.equal(fs.existsSync(target), false);
+      fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, 'unchanged');
+      assert.equal((await f.editor({ op: 'edit', path: name, expected: 'unchanged', replacement: 'new', token: f.token })).code, 'LEGACY_READ_ONLY');
+      assert.equal(fs.readFileSync(target, 'utf8'), 'unchanged');
+    }
+    assert.equal((await f.editor(create('0'.repeat(32), 'reference/projects.md'))).code, 'TOKEN_MISMATCH');
+    assert.equal((await f.editor(create(f.token, 'reference/projects/../projects.md'))).code, 'LEGACY_READ_ONLY');
+  }
+});
+
+test('local: resolved aliases cannot write legacy files', async () => {
+  const f = await fixture('global'), memory = path.join(f.dir, 'memory');
+  fs.mkdirSync(path.join(memory, 'reference/legacy'), { recursive: true });
+  fs.writeFileSync(path.join(memory, 'reference/projects.md'), 'old');
+  fs.symlinkSync('projects.md', path.join(memory, 'reference/alias.md'));
+  fs.symlinkSync('legacy', path.join(memory, 'reference/alias'));
+  for (const name of ['reference/alias.md', 'reference/alias/new.md']) {
+    assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
+  }
+  assert.equal(fs.readFileSync(path.join(memory, 'reference/projects.md'), 'utf8'), 'old');
+  assert.equal(fs.readdirSync(path.join(memory, 'reference/legacy')).length, 0);
 });

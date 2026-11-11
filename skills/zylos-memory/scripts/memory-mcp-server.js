@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline';
 import { guard, memoryError } from './sync-lock.js';
 import { resolveAllowedMemoryPath, applyFragmentLocked, isSelfPath } from './self-write.js';
 
-const codes = new Set(['PATH_NOT_ALLOWED', 'TOKEN_MISMATCH', 'FRAGMENT_CONFLICT', 'EXISTS', 'INVALID_INPUT', 'LOCK_TIMEOUT', 'SCOPE_UNBOUND', 'WRITE_FAILED', 'LOCK_UNAVAILABLE']);
+const codes = new Set(['PATH_NOT_ALLOWED', 'TOKEN_MISMATCH', 'FRAGMENT_CONFLICT', 'EXISTS', 'INVALID_INPUT', 'LOCK_TIMEOUT', 'SCOPE_UNBOUND', 'WRITE_FAILED', 'LOCK_UNAVAILABLE', 'LEGACY_READ_ONLY']);
 export const EDIT_MEMORY_TOOL = {
   name: 'edit_memory',
   description: 'Create or edit an authorized memory fragment using the current Sync token.',
@@ -34,7 +34,14 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
           path.join(scope.memoryDir, `state.md.${input.token}.tmp`)).split(path.sep).join('/');
         const allowed = relative => (marker.kind !== 'origin' && relative === temporary) ||
           (marker.kind !== 'group' && isSelfPath(relative));
-        const resolved = resolveAllowedMemoryPath({ root: scope.root, path: input.path, allowed });
+        const legacy = relative => ['reference/projects.md', 'reference/decisions.md', 'reference/reorg-progress.md'].includes(relative) ||
+          relative === 'reference/legacy' || relative.startsWith('reference/legacy/');
+        const relative = path.relative(path.join(scope.root, 'memory'), path.resolve(scope.root, 'memory', input.path)).split(path.sep).join('/');
+        if (legacy(relative)) throw memoryError('LEGACY_READ_ONLY', 'Legacy memory paths are read-only');
+        const resolved = resolveAllowedMemoryPath({ root: scope.root, path: input.path, allowed: candidate => {
+          if (legacy(candidate)) throw memoryError('LEGACY_READ_ONLY', 'Legacy memory paths are read-only');
+          return allowed(candidate);
+        } });
         const result = fragment({ target: resolved.target, expected: input.op === 'create' ? null : input.expected,
           replacement: input.replacement });
         return { ok: true, path: resolved.path, bytes: result.bytes };
