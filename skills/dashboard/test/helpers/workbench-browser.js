@@ -637,6 +637,71 @@ export async function runWorkbenchBrowser(t, sandbox) {
     }
   });
 
+  // Viewing other machines: the header version and the machine panel's meta line show the viewed machine's own
+  // Core version, and nothing when that machine reports none or "unknown"; never this machine's 0.9.4. Only this
+  // page sees the fleet: /api/fleet lists three remotes and /fleet/<name>/api/* answers with that machine's state.
+  await step('header and machine panel show only the viewed machine\'s own Core version, without falling back to this one', async () => {
+    const remotes = { 'old-box': undefined, spark: '1.0.0-beta.7', 'unknown-box': 'unknown' };
+    const { page, context, errors } = await open(1280, 800, '/');
+    // The machine panel lists the Core version at the technical detail level; this runs after open()'s plain default.
+    await context.addInitScript(() => { try { localStorage.setItem('zylos-dashboard-detail-level', 'technical'); } catch {} });
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/api/fleet') {
+        const machine = (name, extra = {}) => ({ name, state: 'IDLE', access: 'admin', health_reason: null, pulse_rate: 1, updated_at: new Date().toISOString(), ...extra });
+        return route.fulfill({ json: { agents: [machine('browser-case', { self: true }), ...Object.keys(remotes).map(name => machine(name))], updated_at: new Date().toISOString() } });
+      }
+      const remote = url.pathname.match(/^\/fleet\/([^/]+)(\/api\/.*)$/);
+      if (!remote) return route.fallback();
+      const [name, apiPath] = [decodeURIComponent(remote[1]), remote[2]];
+      if (apiPath === '/api/stream') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
+      let value = workbenchAnswer(new URL(apiPath + url.search, 'http://fixture'), Date.now());
+      if (apiPath === '/api/state' && value) {
+        const { zylos_version: _local, ...info } = value.runtime_info;
+        value = { ...value, agent: { name }, runtime_info: remotes[name] === undefined ? info : { ...info, zylos_version: remotes[name] } };
+      }
+      return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });
+    });
+    await page.reload();
+    const read = () => page.evaluate(() => {
+      const version = document.querySelector('#tab-bar-core-version'), meta = document.querySelector('.wb-detail-header .wb-detail-meta');
+      return { name: document.querySelector('#tab-bar-agent-name').textContent, version: version.textContent, versionShown: !version.hidden && version.getBoundingClientRect().width > 0,
+        meta: meta?.isConnected ? meta.textContent : '' };
+    });
+    // Opens the machine panel when closed and waits until its meta line names the machine and its mode, which
+    // comes from that machine's own answers, so the header and the panel have rendered the viewed machine's state.
+    const machinePanel = async name => {
+      const toggle = page.locator('#wb-host-open');
+      if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+      await page.waitForFunction(name => document.querySelector('.wb-detail-header .wb-detail-meta')?.textContent.startsWith(name + ' · '), name);
+      await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+      return read();
+    };
+    await page.locator('#agent-fleet-root .agent-open[data-self="true"]').click();
+    const own = await machinePanel('browser-case');
+    assert.equal(own.version, 'v0.9.4', 'this machine shows its own Core version');
+    assert.equal(own.versionShown, true);
+    assert.match(own.meta, /· core 0\.9\.4$/, 'the machine panel names this machine\'s Core version');
+    for (const [name, version] of Object.entries(remotes)) {
+      await page.locator('#back-to-fleet').click();
+      const stateRead = page.waitForResponse(response => new URL(response.url()).pathname === `/fleet/${name}/api/state`);
+      await page.locator(`#agent-fleet-root .agent-open[data-agent="${name}"]`).click();
+      await stateRead;
+      const seen = await machinePanel(name);
+      assert.equal(seen.name, name);
+      if (version === '1.0.0-beta.7') {
+        assert.equal(seen.version, 'v1.0.0-beta.7', `${name}: its own Core version`);
+        assert.equal(seen.versionShown, true);
+        assert.match(seen.meta, /· core 1\.0\.0-beta\.7$/, `${name}: the panel names its own Core version`);
+      } else {
+        assert.equal(seen.version, '', `${name} reports ${version ?? 'no version'}: no version, not this machine's`);
+        assert.equal(seen.versionShown, false, `${name}: the header version is hidden`);
+        assert.doesNotMatch(seen.meta, /core/, `${name}: the panel names no Core version`);
+      }
+    }
+    assert.deepEqual(errors, []);
+  });
+
   // Unanswered reads are listed so a page change that needs a new answer is visible, not silently empty.
   if (unserved.size) console.log('Workbench browser case left unanswered:', [...unserved].sort().join(', '));
 }
