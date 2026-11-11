@@ -16,7 +16,9 @@ const identity = `CASE WHEN c.session_group = '' THEN 'l:' || hex(c.channel) || 
 const previewLabels = locale => locale === 'en'
   ? { image: '[Image]', file: '[File]', chart: '[Chart]', component: '[Component]', media: '[Media] Original-channel attachment', invalid: 'Unable to display message' }
   : { image: '[图片]', file: '[文件]', chart: '[图表]', component: '[组件]', media: '[媒体] 原渠道附件', invalid: '无法显示的消息' };
-const readableAttachment = (attachment, locale = 'zh') => `${previewLabels(locale)[attachment.kind === 'image' ? 'image' : 'file']} ${sanitizeDisplayName(attachment.name)}`;
+const readableAttachment = (attachment, locale = 'zh', quote = false) => quote
+  ? `（附件：${sanitizeDisplayName(attachment.name)}）`
+  : `${previewLabels(locale)[attachment.kind === 'image' ? 'image' : 'file']} ${sanitizeDisplayName(attachment.name)}`;
 
 /**
  * Browser summaries of valid content contain attachment names, never
@@ -28,7 +30,7 @@ export function chatAttachmentPreview(content, { external = false, locale = 'zh'
   return attachmentPreview(content, { external, locale });
 }
 
-function attachmentPreview(content, { external = false, locale = 'zh' } = {}, format = null) {
+function attachmentPreview(content, { external = false, locale = 'zh', quote = false } = {}, format = null) {
   const parsed = parseC4Content(content);
   const labels = previewLabels(locale);
   const body = (text, literal = false) => {
@@ -50,7 +52,7 @@ function attachmentPreview(content, { external = false, locale = 'zh' } = {}, fo
       return body(parsed.envelope.fallbackText);
     }
     return blocks.map(block => ['x-zylos.image', 'x-zylos.file'].includes(block.type)
-      ? readableAttachment({ kind: block.type === 'x-zylos.image' ? 'image' : 'file', name: block.data.nameSnapshot }, locale)
+      ? readableAttachment({ kind: block.type === 'x-zylos.image' ? 'image' : 'file', name: block.data.nameSnapshot }, locale, quote)
       : block.type === 'markdown' ? body(block.fallbackText ?? block.data.text)
         : ['time_series', 'breakdown', 'category_series'].includes(block.type) ? labels.chart : labels.component).filter(Boolean).join('\n');
   }
@@ -58,12 +60,18 @@ function attachmentPreview(content, { external = false, locale = 'zh' } = {}, fo
   if (!split.attachments.length) {
     return body(content);
   }
-  return [body(split.content), ...split.attachments.map(attachment => readableAttachment(attachment, locale))].filter(Boolean).join('\n');
+  return [body(split.content), ...split.attachments.map(attachment => readableAttachment(attachment, locale, quote))].filter(Boolean).join('\n');
 }
 
 /** The same bounded human summary is used by lists and incremental message reads. */
 export function conversationPreview(content, options = {}) {
   return Array.from(attachmentPreview(content, options, text => markdownPreview(text, options))).slice(0, 160).join('');
+}
+
+/** One quote projection for the history API and Core's text history reader. */
+export function quotePreview(row, options = {}) {
+  const content = stripChatQuote(row.channel === 'internal' ? internalContent(row) : row.content);
+  return conversationPreview(content, { ...options, quote: true }).replace(/\s+/g, ' ');
 }
 
 function rowQuote(row) {
@@ -315,9 +323,7 @@ export class ChatHistory {
         const target = quoted.get(marker.id);
         row = { ...row, quote: { id: marker.id, direction: target?.direction ?? null,
           internal: target?.channel === 'internal',
-          timestamp: target?.timestamp ?? null, preview: target ? conversationPreview(
-            stripChatQuote(target.channel === 'internal' ? internalContent(target) : target.content),
-            { external: tab === 'external', locale }) : '', available: !!target } };
+          timestamp: target?.timestamp ?? null, preview: target ? quotePreview(target, { external: tab === 'external', locale }) : '', available: !!target } };
       }
       if (row.channel === 'internal') {
         if (!peers.has(row.endpoint_id)) peers.set(row.endpoint_id, this._internalPeer(row.endpoint_id));

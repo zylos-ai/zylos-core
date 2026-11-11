@@ -752,3 +752,16 @@ test('internal history pages and rechecks stay scoped and never resolve relayed 
   f.history.messages(id, { tab: 'mine', limit: 100 });
   assert.deepEqual(seen, [1]);
 });
+
+// Real history API projection and private SQLite, no service/runtime starts.
+// Run for shared quote previews; skip unrelated browser or transport changes.
+test('history quote previews use the shared single-line text and readable attachment names', t => {
+  const f = fixture(t);
+  f.add({ id: 1, channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a', direction: 'out',
+    content: buildAnnotatedContent('[quote c4_id=9]\n**First line**\nsecond line',
+      [{ kind: 'file', name: 'report.txt', path: '/private/report.txt', size: 3 }]) });
+  f.add({ id: 2, channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a',
+    content: '[quote c4_id=1]\nCurrent words' });
+  const result = f.history.messages(groupId('dash-owned:a')).items.find(row => row.id === 2);
+  assert.equal(result.quote.preview, 'First line second line （附件：report.txt）');
+});

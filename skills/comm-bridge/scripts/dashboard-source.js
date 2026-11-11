@@ -16,13 +16,37 @@ export function readOwnerName(file = path.join(DATA_DIR, '..', 'memory', 'refere
   } catch { return 'the owner'; }
 }
 
-export function resolveDashboardQuote(row, database) {
+function quoteReference(row) {
   const quote = parseChatQuote(row.content || '');
-  if (!quote || !Number.isSafeInteger(row.id)
-      || !row.session_group || ['origin', '*'].includes(row.session_group)) return null;
+  return quote && Number.isSafeInteger(row.id) && quote.id < row.id
+    && row.session_group && !['origin', '*'].includes(row.session_group) ? quote : null;
+}
+
+export function resolveDashboardQuote(row, database) {
+  const quote = quoteReference(row);
+  if (!quote) return null;
   return database.prepare(`SELECT * FROM conversations
     WHERE id=? AND session_group=? AND id<? AND direction IN ('in','out')`)
     .get(quote.id, row.session_group, row.id) ?? null;
+}
+
+/** Resolve only this output's references in one read, then apply the delivery scope rule. */
+export function resolveDashboardQuotes(rows, database) {
+  const references = rows.filter(row => row.channel === 'dashboard' && row.direction === 'in')
+    .map(row => ({ row, quote: quoteReference(row) })).filter(item => item.quote);
+  if (!references.length) return new Map();
+  const ids = [...new Set(references.map(item => item.quote.id))];
+  const targets = new Map(database.prepare(`SELECT * FROM conversations
+    WHERE id IN (SELECT value FROM json_each(?)) AND direction IN ('in','out')`)
+    .all(JSON.stringify(ids)).map(row => [row.id, row]));
+  return new Map(references.flatMap(({ row, quote }) => {
+    const target = targets.get(quote.id);
+    return target?.session_group === row.session_group ? [[row.id, target]] : [];
+  }));
+}
+
+export function dashboardQuoteSender(row, ownerName = readOwnerName()) {
+  return row.direction === 'out' ? 'AI' : row.channel === 'internal' ? row.endpoint_id : ownerName;
 }
 
 function quotedText(row) {
@@ -59,8 +83,7 @@ export function dashboardSource(content, ownerName = readOwnerName(), { row, loo
   }
   const body = lines.slice(0, tail), annotations = lines.slice(tail);
   const escape = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-  const sender = valid && (original.direction === 'out' ? 'AI'
-    : original.channel === 'internal' ? original.endpoint_id : ownerName);
+  const sender = valid && dashboardQuoteSender(original, ownerName);
   const replying = valid ? `\n<replying-to>\n[${escape(sender)}]: ${escape(quotedText(original))}\n</replying-to>\n` : '';
   const message = `[Dashboard]${replying}\n<current-message>\n${escape(ownerName)} said: ${escape(body.join('\n'))}\n</current-message>`;
   return message + (annotations.length ? '\n' + annotations.join('\n') : '');

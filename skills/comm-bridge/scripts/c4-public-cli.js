@@ -1,3 +1,6 @@
+import { parseChatQuote } from './chat-quote.js';
+import { resolveDashboardQuotes, dashboardQuoteSender, readOwnerName } from './dashboard-source.js';
+import { quotePreview } from '../../dashboard/src/lib/chat/history.js';
 import path from 'node:path';
 import { SKILLS_DIR } from './c4-config.js';
 import * as db from './c4-db.js';
@@ -85,9 +88,21 @@ function historyNotes(rows) {
   ).join('');
 }
 function conversations(rows) {
+  const candidates = rows.filter(row => row.channel === 'dashboard' && row.direction === 'in' && parseChatQuote(row.content));
+  const quoted = candidates.length ? resolveDashboardQuotes(candidates, db.getDb()) : new Map();
+  const owner = quoted.size ? readOwnerName() : null;
   return rows.map(row => {
     const route = row.direction === 'in' && row.endpoint_id !== null ? '\n' + replyVia(row, sendPath) : '';
-    return `[${row.timestamp}] ${row.direction === 'in' ? 'IN' : 'OUT'} (${row.channel}${row.endpoint_id ? ':' + row.endpoint_id : ''}):\n${row.content}${route}\n`;
+    const target = quoted.get(row.id);
+    const marker = target && parseChatQuote(row.content);
+    let content = row.content;
+    if (marker) {
+      const preview = `(quoting c4_id=${marker.id} — ${dashboardQuoteSender(target, owner)}: ${quotePreview(target)})`;
+      const end = content.indexOf('\n');
+      content = end < 0 ? content + '\n' + preview
+        : content.slice(0, end + 1) + preview + '\n' + content.slice(end + 1);
+    }
+    return `[${row.timestamp}] ${row.direction === 'in' ? 'IN' : 'OUT'} (${row.channel}${row.endpoint_id ? ':' + row.endpoint_id : ''}):\n${content}${route}\n`;
   }).join('\n');
 }
 function checkpoint(args, positionalSummary = false) {
