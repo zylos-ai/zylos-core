@@ -2,7 +2,7 @@ import { element } from './plain-text.js?v=106';
 
 /** Internal relays are context between sessions, never user/AI replies or interactive content. */
 export function renderInternalMessage({ document, row, t = key => key, onOpenPeer, timeText, timeIso,
-  showTechnicalDetails = false }) {
+  showTechnicalDetails = false, external = false }) {
   const article = element(document, 'article', undefined, 'chat-message conversation-message conversation-internal');
   article.dataset.messageId = String(row.id);
   const spacer = element(document, 'span', undefined, 'conversation-avatar conversation-internal-spacer');
@@ -26,8 +26,8 @@ export function renderInternalMessage({ document, row, t = key => key, onOpenPee
   if (time) { time.dateTime = timeIso; heading.append(time); }
   body.append(heading, bubble, raw);
   article.append(spacer, body);
-  let current, peer, navigable;
-  function update(next, { showTechnicalDetails: technical = false } = {}) {
+  let current, peer, navigable, badge = null;
+  function update(next, { showTechnicalDetails: technical = false, external: externalTab = external } = {}) {
     current = next;
     article.classList.toggle('chat-in', next.direction !== 'out');
     article.classList.toggle('chat-out', next.direction === 'out');
@@ -46,14 +46,20 @@ export function renderInternalMessage({ document, row, t = key => key, onOpenPee
       }
       peerSlot.replaceChildren(peer);
     }
-    label.textContent = t(next.direction === 'out' ? 'chat.internal.sent' : 'chat.internal.received');
+    label.textContent = t(externalTab
+      ? next.direction === 'out' ? 'chat.external.internalSent' : 'chat.external.internalReceived'
+      : next.direction === 'out' ? 'chat.internal.sent' : 'chat.internal.received');
+    if (externalTab) {
+      if (!badge) { badge = element(document, 'span', undefined, 'conversation-internal-badge'); route.append(badge); }
+      badge.textContent = t('chat.external.internal');
+    } else if (badge) { badge.remove(); badge = null; }
     peer.textContent = isOrigin ? t('wb.term.origin') : info.peerDisplayName || info.peerSessionGroup || t('chat.unnamed');
     missing.textContent = t('chat.internal.unavailable');
     missing.hidden = isOrigin || canNavigate;
     content.textContent = typeof info.content === 'string' ? info.content : next.content;
     summary.textContent = t('chat.internal.original');
     original.textContent = next.content;
-    raw.hidden = !technical || next.direction === 'out';
+    raw.hidden = next.direction === 'out' || (!externalTab && !technical);
   }
   update(row, { showTechnicalDetails });
   return { node: article, time, update };

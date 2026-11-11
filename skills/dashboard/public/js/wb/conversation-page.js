@@ -12,7 +12,7 @@ import { createGroupSide } from './group-side.js?v=158';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=4';
-import { renderInternalMessage } from './conversation-internal.js?v=3';
+import { renderInternalMessage } from './conversation-internal.js?v=4';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -195,6 +195,9 @@ export function mountConversationPage({
     };
     return known[channel] ?? channel;
   };
+  const messageAuthor = (row, s) => s.tab === 'external'
+    ? t(row.direction === 'in' ? 'chat.external.received' : 'chat.external.sent', { channel: channelLabel(row.channel ?? '') })
+    : t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai');
   const relativeTime = date => {
     const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
     if (seconds >= 3600 && seconds < 86400) {
@@ -568,7 +571,7 @@ export function mountConversationPage({
       const resource = renderInternalMessage({ document, row, t,
         onOpenPeer: (sessionGroup, channel) => openGroup(sessionGroup, { channel }),
         timeText: date ? clockText(date) : null, timeIso: date?.toISOString(),
-        showTechnicalDetails: technicalDetails() === true });
+        showTechnicalDetails: technicalDetails() === true, external: s.tab === 'external' });
       return { node: resource.node, resource, content: row.content, internal: true,
         attachmentKey: JSON.stringify(row.attachments || []), time: resource.time, date };
     }
@@ -578,7 +581,7 @@ export function mountConversationPage({
     avatar.append(icon(document, row.direction === 'in' ? 'monitor' : 'bot'));
     const body = node('div', undefined, 'conversation-message-body');
     const meta = node('div', undefined, 'conversation-message-meta'),
-      author = node('span', t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai'), 'chat-message-author');
+      author = node('span', messageAuthor(row, s), 'chat-message-author');
     meta.append(author);
     const date = asDate(row.timestamp ?? row.created_at ?? row.createdAt);
     let timeNode = null;
@@ -704,14 +707,14 @@ export function mountConversationPage({
   function patchMessage(record, row, s) {
     if (record.time) text(record.time, clockText(record.date));
     if (record.internal) {
-      record.resource.update(row, { showTechnicalDetails: technicalDetails() === true });
+      record.resource.update(row, { showTechnicalDetails: technicalDetails() === true, external: s.tab === 'external' });
       return;
     }
     const delivery = s.tab === 'mine' && row.direction === 'in' ? messageState(row) : null;
     const status = delivery ? t(delivery === 'pending' && s.groupWait?.kind === 'rate_wait'
       ? s.groupHealth === 'recovering' ? 'chat.page.delivery.recovering' : 'chat.page.delivery.rateLimited'
       : 'chat.page.delivery.' + delivery) : '';
-    text(record.author, t(row.direction === 'in' ? 'chat.page.you' : 'chat.page.ai'));
+    text(record.author, messageAuthor(row, s));
     text(record.statusText, status);
     record.status.hidden = !delivery;
     record.status.dataset.deliveryState = delivery || '';

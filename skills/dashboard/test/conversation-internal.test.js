@@ -135,3 +135,114 @@ for (const locale of ['en', 'zh']) for (const peerExists of [false, true]) {
     assert.equal(opened.length, 0);
   });
 }
+
+function mixedConversation(t, locale) {
+  const document = createDocument(), root = document.createElement('div'), words = translations(locale), calls = [];
+  const mine = { sessionGroup: 'dashboard:mixed', channel: 'dashboard', displayName: 'My room' };
+  const external = { sessionGroup: 'lark:mixed', channel: 'lark', displayName: 'External room' };
+  for (const item of [mine, external]) item.id = 'g:' + Buffer.from(item.sessionGroup).toString('hex').toUpperCase();
+  const rows = [{ id: 1, direction: 'in', channel: 'openmax', content: 'external incoming', status: 'delivered' },
+    { id: 2, direction: 'out', channel: 'telegram', content: 'external outgoing' },
+    { ...relay('out'), id: 3 }, { ...relay('in'), id: 4 }];
+  let technical = false;
+  const translate = (key, params = {}) => Object.entries(params).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), words[key] ?? key);
+  const page = mountConversationPage({ root, document, t: translate, technicalDetails: () => technical, fetch: async path => {
+    calls.push(path); assert.ok(calls.length < 100, 'the fixture request history stays bounded');
+    const url = new URL(path, 'http://fixture');
+    const item = url.pathname.includes(encodeURIComponent(external.id)) ? external : mine;
+    const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
+      : url.pathname === '/api/chat/conversations' ? { items: [url.searchParams.get('tab') === 'external' ? external : mine], nextCursor: null }
+      : url.pathname.endsWith('/messages') ? { items: rows, nextCursor: null, afterCursor: 'after' }
+      : /\/conversations\/[^/]+$/.test(url.pathname) ? { conversation: { ...item, state: 'active' } }
+      : { items: [], nextCursor: null };
+    return { ok: true, status: 200, json: async () => body };
+  } });
+  t.after(() => page.destroy());
+  return { root, page, rows, mine, external, setTechnical(value) { technical = value; page.redraw(); } };
+}
+
+// The same four rows are rendered through both real page tabs. These cases own
+// labels, directional bubble classes and raw-message availability; browser cases
+// own layout/colour. No HTTP, DB, runtime, children or independent timers start.
+for (const locale of ['en', 'zh']) {
+  test(`external mixed messages identify each row's channel or internal peer in ${locale}`, async t => {
+    const f = mixedConversation(t, locale);
+    await f.page.openGroup(f.external.sessionGroup, { channel: f.external.channel });
+    const message = id => f.root.querySelector(`[data-message-id="${id}"]`);
+    const author = id => message(id).querySelector('.chat-message-author');
+    assert.equal(author(1).textContent, locale === 'zh' ? '收到 · OpenMax' : 'Received · OpenMax');
+    assert.equal(author(2).textContent, locale === 'zh' ? '发出 → Telegram' : 'Sent → Telegram');
+    for (const [id, incoming] of [[1, true], [2, false], [3, false], [4, true]]) {
+      assert.equal(message(id).classList.contains('chat-in'), incoming);
+      assert.equal(message(id).classList.contains('chat-out'), !incoming);
+      assert.equal(message(id).classList.contains('conversation-internal'), id >= 3);
+    }
+    for (const id of [3, 4]) {
+      assert.equal(message(id).querySelector('.conversation-internal-label').textContent,
+        locale === 'zh' ? id === 3 ? '发出 →' : '收到 ←' : id === 3 ? 'Sent →' : 'Received ←');
+      assert.equal(message(id).querySelector('.conversation-internal-peer').textContent, 'Peer room');
+      assert.equal(message(id).querySelector('.conversation-internal-badge').textContent, locale === 'zh' ? '内部' : 'Internal');
+    }
+    for (const id of [1, 2]) {
+      assert.equal(message(id).querySelector('.conversation-internal-badge'), null);
+      assert.equal(message(id).querySelector('.conversation-internal-raw'), null, 'ordinary channel rows gain no raw-message entry');
+    }
+    const raw = message(4).querySelector('.conversation-internal-raw');
+    assert.equal(raw.hidden, false, 'incoming internal raw is available with technical details off');
+    assert.equal(raw.open, false, 'incoming raw starts folded');
+    assert.equal(raw.querySelector('summary').textContent, locale === 'zh' ? '原始消息' : 'Original message');
+    raw.open = true;
+    assert.equal(raw.querySelector('pre').textContent, f.rows[3].content);
+    assert.equal(message(3).querySelector('.conversation-internal-raw').hidden, true);
+    const incomingAuthor = author(1), outgoingAuthor = author(2);
+    f.rows[0].channel = 'feishu'; f.rows[1].channel = 'openmax'; f.page.redraw();
+    assert.ok(author(1) === incomingAuthor); assert.ok(author(2) === outgoingAuthor);
+    assert.equal(author(1).textContent, locale === 'zh' ? '收到 · Feishu' : 'Received · Feishu');
+    assert.equal(author(2).textContent, locale === 'zh' ? '发出 → OpenMax' : 'Sent → OpenMax');
+    await f.page.openGroup(f.mine.sessionGroup, { channel: f.mine.channel });
+    assert.equal(author(1).textContent, locale === 'zh' ? '你' : 'You');
+    assert.equal(author(2).textContent, 'AI');
+    for (const [id, incoming] of [[1, true], [2, false], [3, false], [4, true]]) {
+      assert.equal(message(id).classList.contains('chat-in'), incoming);
+      assert.equal(message(id).classList.contains('chat-out'), !incoming);
+      assert.equal(message(id).classList.contains('conversation-internal'), id >= 3);
+    }
+    for (const id of [3, 4]) {
+      assert.equal(message(id).querySelector('.conversation-internal-label').textContent,
+        locale === 'zh' ? id === 3 ? '发给' : '来自' : id === 3 ? 'To' : 'From');
+      assert.equal(message(id).querySelector('.conversation-internal-badge'), null);
+      assert.equal(message(id).querySelector('.conversation-internal-peer').textContent, 'Peer room');
+      assert.equal(message(id).querySelector('.conversation-internal-raw').hidden, true);
+    }
+    f.setTechnical(true);
+    assert.equal(message(4).querySelector('.conversation-internal-raw').hidden, false, 'mine retains the existing technical-only raw entry');
+    assert.equal(message(3).querySelector('.conversation-internal-raw').hidden, true);
+    f.setTechnical(false);
+    assert.equal(message(4).querySelector('.conversation-internal-raw').hidden, true);
+    await f.page.openGroup(f.external.sessionGroup, { channel: f.external.channel });
+    assert.equal(author(1).textContent, locale === 'zh' ? '收到 · Feishu' : 'Received · Feishu');
+    assert.equal(message(4).querySelector('.conversation-internal-badge').textContent, locale === 'zh' ? '内部' : 'Internal');
+    assert.equal(message(4).querySelector('.conversation-internal-raw').hidden, false);
+    assert.equal(message(4).querySelector('.conversation-internal-raw').open, false, 'a newly opened external view starts folded');
+  });
+
+  test(`internal message updates follow the current external or mine view in ${locale}`, () => {
+    const document = createDocument(), words = translations(locale), row = relay();
+    const resource = renderInternalMessage({ document, row, external: true, t: key => words[key] ?? key });
+    const raw = resource.node.querySelector('.conversation-internal-raw');
+    assert.equal(raw.hidden, false); assert.equal(raw.open, false);
+    assert.equal(resource.node.querySelector('.conversation-internal-badge').textContent, locale === 'zh' ? '内部' : 'Internal');
+    resource.update(row, { external: false });
+    assert.equal(raw.hidden, true); assert.equal(resource.node.querySelector('.conversation-internal-badge'), null);
+    assert.equal(resource.node.querySelector('.conversation-internal-label').textContent, locale === 'zh' ? '来自' : 'From');
+    resource.update(row, { external: true });
+    assert.equal(raw.hidden, false);
+    assert.equal(resource.node.querySelector('.conversation-internal-label').textContent, locale === 'zh' ? '收到 ←' : 'Received ←');
+    assert.equal(resource.node.querySelector('.conversation-internal-badge').textContent, locale === 'zh' ? '内部' : 'Internal');
+    resource.update({ ...row, direction: 'out' }, { external: true });
+    assert.equal(raw.hidden, true);
+    assert.equal(resource.node.querySelector('.conversation-internal-label').textContent, locale === 'zh' ? '发出 →' : 'Sent →');
+    resource.update(row, { external: false, showTechnicalDetails: true });
+    assert.equal(raw.hidden, false); assert.equal(resource.node.querySelector('.conversation-internal-badge'), null);
+  });
+}
