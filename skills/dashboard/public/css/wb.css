@@ -574,6 +574,9 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .app-header .header-actions { gap: 0; margin-right: -8px; }
   .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -12px; padding: 0 2px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
   .app-header .tab-bar::-webkit-scrollbar { display: none; }
+  /* The machines page has no sections, so its own row would stay empty: it takes no space here (wider screens keep
+     the hidden navigation in place on the brand row, so the header does not jump). */
+  body:has(#agent-detail[hidden]) .app-header .tab-bar { display: none; }
   .app-header .tab { flex: none; height: 40px; padding: 0 10px; font-size: 14px; border-radius: 0; background: none; box-shadow: inset 0 -2px 0 transparent; }
   .app-header .tab.active, body:has(#tab-settings.active) .app-header .tab.wb-tab-here { background: none; color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
   .wb-tech-btn { height: 40px; margin: 0; padding: 0 6px; border: 0; background: none; font-size: 13px; }

@@ -170,3 +170,10 @@ test('header: the title uses the brand colour and the Core version follows the i
   assert.match(app, /renderBrandVersion\(\$\('#tab-bar-core-version'\), state\.dashboardState\?\.runtime_info\)/,
     'the header reads the viewed instance\'s own state');
 });
+
+test('header: the machines page hides the section row in place on wide screens and drops it on phones', () => {
+  // Wide screens: the navigation shares the brand row, so hiding it in place keeps the header height between pages.
+  assert.match(css, /^body:has\(#agent-detail\[hidden\]\) \.app-header \.tab-bar \{ visibility: hidden; \}$/m);
+  // Phones: the navigation has its own row; on the machines page that row would stay empty, so it takes no space.
+  assert.match(phone, /body:has\(#agent-detail\[hidden\]\) \.app-header \.tab-bar \{ display: none; \}/);
+});

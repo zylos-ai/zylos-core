@@ -637,14 +637,10 @@ export async function runWorkbenchBrowser(t, sandbox) {
     }
   });
 
-  // Viewing other machines: the header version and the machine panel's meta line show the viewed machine's own
-  // Core version, and nothing when that machine reports none or "unknown"; never this machine's 0.9.4. Only this
-  // page sees the fleet: /api/fleet lists three remotes and /fleet/<name>/api/* answers with that machine's state.
-  await step('header and machine panel show only the viewed machine\'s own Core version, without falling back to this one', async () => {
-    const remotes = { 'old-box': undefined, spark: '1.0.0-beta.7', 'unknown-box': 'unknown' };
-    const { page, context, errors } = await open(1280, 800, '/');
-    // The machine panel lists the Core version at the technical detail level; this runs after open()'s plain default.
-    await context.addInitScript(() => { try { localStorage.setItem('zylos-dashboard-detail-level', 'technical'); } catch {} });
+  // Only the given page sees a fleet: /api/fleet lists this machine and the remotes, and /fleet/<name>/api/* answers
+  // with the fixture's answers as that machine's own, its Core version taken from `remotes` (undefined: none reported).
+  // Other pages keep the single-machine fixture. The page is reloaded by the caller.
+  async function answerFleet(page, remotes) {
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
       if (url.pathname === '/api/fleet') {
@@ -662,6 +658,17 @@ export async function runWorkbenchBrowser(t, sandbox) {
       }
       return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });
     });
+  }
+
+  // Viewing other machines: the header version and the machine panel's meta line show the viewed machine's own
+  // Core version, and nothing when that machine reports none or "unknown"; never this machine's 0.9.4. This step's
+  // page sees three remotes through answerFleet.
+  await step('header and machine panel show only the viewed machine\'s own Core version, without falling back to this one', async () => {
+    const remotes = { 'old-box': undefined, spark: '1.0.0-beta.7', 'unknown-box': 'unknown' };
+    const { page, context, errors } = await open(1280, 800, '/');
+    // The machine panel lists the Core version at the technical detail level; this runs after open()'s plain default.
+    await context.addInitScript(() => { try { localStorage.setItem('zylos-dashboard-detail-level', 'technical'); } catch {} });
+    await answerFleet(page, remotes);
     await page.reload();
     const read = () => page.evaluate(() => {
       const version = document.querySelector('#tab-bar-core-version'), meta = document.querySelector('.wb-detail-header .wb-detail-meta');
@@ -700,6 +707,54 @@ export async function runWorkbenchBrowser(t, sandbox) {
       }
     }
     assert.deepEqual(errors, []);
+  });
+
+  // The machines page has no sections. On phones the navigation has a row of its own, so there it takes no space and
+  // the header is only its first row; opening a machine brings the row back. Wider screens keep the hidden navigation
+  // in place on the brand row, so the header is as tall on the machines page as on a machine's page.
+  await step('machines page: on phones the empty section row takes no space, and returns with a machine; wider headers keep their height', async () => {
+    for (const [width, height, theme] of [[390, 844, 'light'], [390, 844, 'dark'], [800, 800, 'light'], [1280, 800, 'light']]) {
+      const label = `${width} ${theme}`;
+      const { page, context, errors, shot } = await open(width, height, '/');
+      await context.addInitScript(theme => { try { localStorage.setItem('zylos-dashboard-theme', theme); } catch {} }, theme);
+      await answerFleet(page, { spark: '1.0.0-beta.7' });
+      await page.reload();
+      const self = page.locator('#agent-fleet-root .agent-open[data-self="true"]');
+      await self.waitFor();
+      // Measured once the view switch has finished: the page it leaves fades out over the one it opens. Endless
+      // animations (a busy group's pulse) never finish and are not part of the switch.
+      const settled = machinesPage => page.waitForFunction(machinesPage => document.querySelector('#agent-detail').hidden === machinesPage
+        && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity), machinesPage);
+      await settled(true);
+      const header = () => page.evaluate(() => {
+        const box = node => node.getBoundingClientRect(), nav = document.querySelector('.app-header .tab-bar');
+        const head = box(document.querySelector('.app-header'));
+        const rowBottom = Math.max(...['.header-left', '.header-actions'].map(selector => box(document.querySelector(`.app-header ${selector}`)).bottom));
+        return { height: head.height, belowFirstRow: head.bottom - rowBottom, navBoxes: nav.getClientRects().length, navVisibility: getComputedStyle(nav).visibility, scroll: document.documentElement.scrollWidth > innerWidth };
+      });
+      const machines = await header();
+      await shot(`machines-${theme}`);
+      await self.click();
+      await settled(false);
+      const machine = await header();
+      if (width <= 760) {
+        assert.equal(machines.navBoxes, 0, `${label}: the machines page has no section row`);
+        assert.ok(machines.belowFirstRow <= 1.5, `${label}: the header ends with its first row (only its border below), got ${machines.belowFirstRow}`);
+        assert.ok(machine.navBoxes > 0 && machine.navVisibility === 'visible', `${label}: a machine's page shows the sections`);
+        assert.ok(machine.belowFirstRow >= 39, `${label}: the sections take their own row again, got ${machine.belowFirstRow}`);
+      } else {
+        assert.equal(machines.navVisibility, 'hidden', `${label}: the machines page hides the sections in place`);
+        assert.equal(machines.height, machine.height, `${label}: the header keeps its height between the machines page and a machine's page`);
+      }
+      assert.equal(machines.scroll || machine.scroll, false, `${label}: no sideways scrolling`);
+      await shot(`machine-${theme}`);
+      // The sections work once a machine is open.
+      const memory = page.locator('.app-header .tab[data-tab="memory"]');
+      await memory.click();
+      await page.waitForFunction(() => document.querySelector('.app-header .tab[data-tab="memory"]').getAttribute('aria-current') === 'page');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
   });
 
   // Unanswered reads are listed so a page change that needs a new answer is visible, not silently empty.
