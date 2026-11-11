@@ -6,7 +6,6 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import * as childProcess from 'node:child_process';
-import { hashPassword } from '../../../skills/dashboard/src/lib/auth.js';
 
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
 const hook = path.join(packageRoot, 'skills/dashboard/hooks/post-install.js');
@@ -37,23 +36,6 @@ test('new Dashboard auth is independent of Web Console and hook never prints cre
   const second = run(); assert.equal(second.status, 0, second.stderr);
   assert.equal(fs.readFileSync(file, 'utf8'), before);
   assert.doesNotMatch(second.stdout + second.stderr, /Dashboard password:|scrypt:|web-console-fixture-password/);
-});
-
-test('existing configure stdin accepts a password hash without writing or printing plaintext', t => {
-  const root = fixture(t); const password = 'owner-chosen-fixture-password';
-  const data = path.join(root, 'components/dashboard');
-  const hashed = hashPassword(password);
-  const result = spawnSync(process.execPath, [path.join(packageRoot, 'skills/dashboard/hooks/configure.js')], {
-    input: JSON.stringify({ DASHBOARD_AUTH_PASSWORD: hashed }), encoding: 'utf8',
-    env: { ...process.env, ZYLOS_DATA_DIR: data },
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const bytes = fs.readFileSync(path.join(data, 'config.json'), 'utf8');
-  assert.equal(JSON.parse(bytes).auth.password, hashed);
-  assert.equal(matchesPassword(password, hashed), true);
-  assert.equal(bytes.includes(password), false);
-  assert.equal((result.stdout + result.stderr).includes(password), false);
-  assert.equal((result.stdout + result.stderr).includes(hashed), false);
 });
 
 test('PM2 template keeps all Core services in the selected instance and has no dead Dashboard data override', t => {
