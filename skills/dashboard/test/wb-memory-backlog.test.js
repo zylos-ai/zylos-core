@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { createMemoryBacklog } from '../src/lib/workbench/memory-backlog.js';
 import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
+import { createOriginBacklog } from '../src/lib/workbench/origin-backlog.js';
 import { AuthGate } from '../src/lib/auth.js';
 import { MemoryBrowser } from '../src/lib/memory-browser.js';
 import { setupMemoryHttp } from './fixtures/memory-http.js';
@@ -36,7 +37,7 @@ test('memory backlog uses Core thresholds and UTC ages for active groups only', 
   assert.deepEqual(snapshotTimes, [at]);
   assert.deepEqual(calls, [...values.keys()]);
   assert.equal(result.hasOlder, true);
-  assert.deepEqual(result.groups.map(group => group.threshold), [50, 15, 15]);
+  assert.deepEqual(result.groups.map(group => group.threshold), [15, 15, 15], 'Origin\'s own conversation uses the group threshold');
   assert.deepEqual(result.groups.map(group => group.count), [3, 20, 2]);
   assert.equal(result.groups[1].count > result.groups[1].threshold, true);
   assert.deepEqual(result.groups.map(group => group.aged), [true, false, false]);
@@ -45,20 +46,96 @@ test('memory backlog uses Core thresholds and UTC ages for active groups only', 
   assert.deepEqual(result.budgets, { limits: { 'identity.md': 16384, 'references.md': 16384 }, warnings: { 'references.md': 8192 } });
 });
 
-test('memory backlog parses configured Origin threshold through Core', async t => {
+test('the configured Origin Sync threshold goes to the cross-group row, never to Origin\'s own row', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mback-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, '.zylos'));
   await fs.writeFile(path.join(root, '.zylos/config.json'), JSON.stringify({ origin_sync_threshold: 73 }));
-  const get = createMemoryBacklog({ ...defaults, zylosDir: root, readConfig: undefined,
-    env: { ZYLOS_ORIGIN_SYNC_THRESHOLD: '61' },
-    getSnapshot: async () => ({ rows: [{ sessionGroup: 'origin' }], hasOlder: false }),
-  });
-  assert.equal((await get()).groups[0].threshold, 61);
-  const configured = createMemoryBacklog({ ...defaults, zylosDir: root, readConfig: undefined,
-    getSnapshot: async () => ({ rows: [{ sessionGroup: 'origin' }], hasOlder: false }),
-  });
-  assert.equal((await configured()).groups[0].threshold, 73);
+  const options = { ...defaults, zylosDir: root, readConfig: undefined,
+    getSnapshot: async () => ({ view: 'multi', rows: [{ sessionGroup: 'origin' }], hasOlder: false }),
+    originBacklog: async () => ({ count: 0, pendingSummaries: 0, firstAt: null, syncing: false }) };
+  const fromEnv = await createMemoryBacklog({ ...options, env: { ZYLOS_ORIGIN_SYNC_THRESHOLD: '61' } })();
+  assert.equal(fromEnv.originSync.threshold, 61);
+  assert.equal(fromEnv.groups[0].threshold, 15);
+  const configured = await createMemoryBacklog(options)();
+  assert.equal(configured.originSync.threshold, 73);
+  assert.equal(configured.groups[0].threshold, 15);
+});
+
+// The Origin rows below read through the real group and cross-group readers; only the C4 and
+// sync-lock children are replaced by in-memory answers (no process, database or file).
+const lockStatus = (sync, origin) => async () => ({ stdout: JSON.stringify({ sync: { held: sync }, origin: { held: origin } }) });
+function originReaders({ execute, crossFails = false } = {}) {
+  const runC4Db = async args => {
+    if (args[0] === 'unsummarized') return { ok: true, data: { count: 3, firstAt: utcText(at - 3600000) } };
+    assert.deepEqual(args, ['origin-sync', 'backlog', '--json']);
+    if (crossFails) return { ok: false, reason: 'origin_backlog_failed' };
+    return { ok: true, data: { total: 60, groups: [
+      { sessionGroup: 'telegram:a', count: 45, firstAt: utcText(at - 2 * 3600000), pendingCheckpoints: 2, firstCheckpointAt: utcText(at - 8 * 3600000) },
+      { sessionGroup: 'telegram:b', count: 15, firstAt: utcText(at - 4 * 3600000), pendingCheckpoints: 0, firstCheckpointAt: null },
+    ] } };
+  };
+  return {
+    groupBacklog: createGroupBacklog({ zylosDir: '/isolated-zylos', runC4Db, execute, now: () => at }),
+    originBacklog: createOriginBacklog({ zylosDir: '/isolated-zylos', runC4Db, execute, now: () => at }),
+  };
+}
+const multiOrigin = { ...defaults, getSnapshot: async () => ({ view: 'multi', rows: [{ sessionGroup: 'origin' }, { sessionGroup: 'telegram:a' }], hasOlder: false }) };
+
+test('Origin\'s own row compares its own backlog with the group threshold; the cross-group row carries the machine-wide backlog', async () => {
+  const result = await createMemoryBacklog({ ...multiOrigin, ...originReaders({ execute: lockStatus(false, false) }) })(at);
+  const own = result.groups[0];
+  assert.equal(own.sessionGroup, 'origin');
+  assert.equal(own.count, 3);
+  assert.equal(own.threshold, 15);
+  assert.equal(own.count > own.threshold, false);
+  assert.deepEqual(result.originSync, { count: 60, pendingSummaries: 2, firstAt: utcText(at - 8 * 3600000),
+    aged: true, syncing: false, threshold: 50 }, 'the oldest time includes unread summaries, as the Supervisor computes it');
+  assert.equal(result.originSync.count > result.originSync.threshold, true);
+});
+
+test('the group sync lock marks only Origin\'s own row and the Origin Sync lock marks only the cross-group row', async () => {
+  const own = await createMemoryBacklog({ ...multiOrigin, ...originReaders({ execute: lockStatus(true, false) }) })(at);
+  assert.equal(own.groups[0].syncing, true);
+  assert.equal(own.originSync.syncing, false);
+  const cross = await createMemoryBacklog({ ...multiOrigin, ...originReaders({ execute: lockStatus(false, true) }) })(at);
+  assert.equal(cross.groups[0].syncing, false);
+  assert.equal(cross.originSync.syncing, true);
+});
+
+test('a failed cross-group read shows that row as unknown and leaves the group rows intact', async () => {
+  const result = await createMemoryBacklog({ ...multiOrigin, ...originReaders({ execute: lockStatus(false, true), crossFails: true }) })(at);
+  assert.deepEqual(result.originSync, { count: null, pendingSummaries: null, firstAt: null, aged: false,
+    syncing: true, threshold: 50, reason: 'origin_backlog_failed' });
+  assert.deepEqual(result.groups.map(group => [group.count, group.syncing, group.reason]), [[3, false, undefined], [3, false, undefined]]);
+  const thrown = await createMemoryBacklog({ ...multiOrigin, groupBacklog: async () => ({ count: 4, syncing: false }),
+    originBacklog: async () => { throw new Error('reader failed'); } })(at);
+  assert.equal(thrown.originSync.count, null);
+  assert.equal(thrown.originSync.syncing, null);
+  assert.deepEqual(thrown.groups.map(group => group.count), [4, 4]);
+  const malformed = createOriginBacklog({ zylosDir: '/isolated-zylos', execute: lockStatus(false, false),
+    runC4Db: async () => ({ ok: true, data: { total: 5, groups: [{ pendingCheckpoints: -1 }] } }) });
+  assert.equal((await malformed()).count, null, 'a malformed backlog is unknown, not a number');
+});
+
+test('the cross-group row exists only in multi mode', async () => {
+  for (const view of ['single', null, undefined]) {
+    const result = await createMemoryBacklog({ ...defaults,
+      getSnapshot: async () => ({ view, rows: [{ sessionGroup: 'telegram:a' }], hasOlder: false }),
+      originBacklog: async () => assert.fail('the cross-group backlog is read only in multi mode') })(at);
+    assert.equal('originSync' in result, false, String(view));
+  }
+});
+
+test('the cross-group reader keeps its answer for thirty seconds', async () => {
+  let time = at, reads = 0;
+  const get = createOriginBacklog({ zylosDir: '/isolated-zylos', now: () => time, execute: lockStatus(false, false),
+    runC4Db: async () => ({ ok: true, data: { total: ++reads, groups: [] } }) });
+  assert.equal((await get()).count, 1);
+  time += 29999;
+  assert.equal((await get()).count, 1);
+  time++;
+  assert.equal((await get()).count, 2);
 });
 
 test('unavailable Core configuration and budgets omit their lines', async () => {
@@ -231,10 +308,13 @@ test('memory backlog HTTP route shares the detail cache and enforces administrat
   assert.equal(value.groups.length, 1);
   assert.equal(value.groups[0].sessionGroup, 'origin');
   assert.equal(value.groups[0].count, 7);
-  assert.equal(value.groups[0].syncing, false);
-  assert.equal(value.groups[0].threshold, 50);
+  assert.equal(value.groups[0].syncing, true, 'Origin\'s own row reads its own sync lock');
+  assert.equal(value.groups[0].threshold, 15);
+  assert.deepEqual(value.originSync, { count: 60, pendingSummaries: 2, firstAt: '2026-10-01 11:00:00',
+    aged: true, syncing: false, threshold: 50 });
   assert.equal(value.budgets.limits['identity.md'], 16384);
-  assert.equal(calls.length, before, 'memory and group detail must share one backlog reader cache');
+  assert.deepEqual(calls.slice(before).map(call => call.args[1]), ['origin-sync', 'status'],
+    'memory and group detail share one group backlog cache; only the cross-group row reads again');
   assert.equal(snapshotReads(), snapshotBefore + 1, 'memory asks the snapshot service to refresh active groups');
   assert.equal(engine.store.writeGroupDisplayName('telegram:dm-1001', 'Product notes', 'human'), true);
   const original = await new MemoryBrowser({ zylosDir: root }).tree();

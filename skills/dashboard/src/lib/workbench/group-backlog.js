@@ -34,7 +34,8 @@ export function createGroupBacklog({ zylosDir, runC4Db,
       const script = path.join(zylosDir, '.claude', 'skills', 'zylos-memory', 'scripts', 'sync-lock.js');
       const { stdout } = await execute(process.execPath, [script, 'status', ...groupArgs, '--json'],
         { env: childEnv, timeout: 15000, maxBuffer: 1024 * 1024 });
-      const state = JSON.parse(stdout), held = scope === 'origin' ? state.origin?.held : state.sync?.held;
+      // Each group, Origin included, reports its own sync lock; the Origin Sync lock belongs to the cross-group row.
+      const held = JSON.parse(stdout).sync?.held;
       if (typeof held === 'boolean') value.syncing = held;
       else value.reason ??= 'backlog_failed';
     } catch { value.reason ??= 'backlog_failed'; }

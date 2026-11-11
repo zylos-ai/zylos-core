@@ -224,7 +224,8 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
 
   await t.test('backlog HTTP reads reuse cached views without rebuilding even when count cache is warm', async () => {
     const before = snapshotReads;
-    for (const [mode, count, syncing] of [['single', 3, true], ['multi', 7, false]]) {
+    // The fixture's group lock is held and its Origin Sync lock is not: Origin's details read the group lock.
+    for (const [mode, count, syncing] of [['single', 3, true], ['multi', 7, true]]) {
       view = mode; cachedSnapshot = snapshot();
       for (let round = 0; round < 2; round++) {
         const response = await request('/api/workbench/groups/origin/backlog');
@@ -270,7 +271,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     const before = snapshotReads;
     const response = await request('/api/workbench/groups/origin/backlog');
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { count: 7, firstAt: 100, syncing: false });
+    assert.deepEqual(await response.json(), { count: 7, firstAt: 100, syncing: true }, 'Origin reads its group sync lock, not the Origin Sync lock');
     assert.deepEqual(calls.at(-2).args.slice(1), ['unsummarized', '--group', 'origin', '--json']);
     assert.deepEqual(calls.at(-1).args.slice(1), ['status', '--group', 'origin', '--json']);
     assert.equal(snapshotReads, before, 'a cached unreadable view must not trigger a new build');

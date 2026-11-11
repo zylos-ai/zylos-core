@@ -170,6 +170,147 @@ test('the backlog count column gets one shared width when a count is shown in wo
   f.controller.destroy();
 });
 
+test('the cross-group Origin row leads the backlog with its own count, threshold, unread summaries and lock', async () => {
+  const hoursAgo = h => new Date(Date.now() - h * 3600e3).toISOString();
+  const groups = [
+    { sessionGroup: 'origin', count: 3, threshold: 15, syncing: true },
+    { sessionGroup: 'telegram:dm-1', count: 0, threshold: 15, syncing: false },
+  ];
+  const originSync = { count: 60, pendingSummaries: 2, firstAt: hoursAgo(8.5), aged: true, syncing: false, threshold: 50 };
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups, originSync, hasOlder: false }) });
+  await f.controller.load();
+  const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
+  assert.match(card.textContent, /wb.memory.thresholdHintOrigin \{"count":15,"origin":50\}/,
+    'each row has its own scale, so the subtitle names the group threshold and the gathering threshold');
+  const rows = nodesOfClass(card, 'wb-memory-bl');
+  const [cross, own] = rows;
+  assert.match(cross.className, /\bwb-memory-bl-cross\b/);
+  assert.equal(nodesOfClass(cross, 'wb-memory-chart-label')[0].textContent, 'wb.memory.originSync');
+  assert.equal(allNodes(cross).some(node => node.tagName === 'BUTTON'), false, 'the cross-group row is not a group to open');
+  assert.match(nodesOfClass(cross, 'wb-memory-chart-label')[0].className, /\bwb-memory-chart-label-static\b/, 'its name does not look like a link');
+  assert.equal(nodesOfClass(cross, 'wb-memory-chart-label')[0].title, 'wb.memory.originSyncHint {"count":50}', 'the hover text carries the row\'s actual threshold');
+  assert.equal(nodesOfClass(cross, 'wb-memory-chart-value')[0].textContent, '60');
+  const tags = nodesOfClass(cross, 'wb-memory-bl-tag').map(node => node.textContent);
+  assert.deepEqual(tags, ['wb.memory.agedHours {"count":8}', 'wb.memory.overThreshold', 'wb.memory.pendingSummaries {"count":2}',
+    'wb.memory.originThreshold {"count":50}']);
+  const line = nodesOfClass(cross, 'wb-memory-threshold')[0];
+  assert.equal(line.title, 'wb.memory.originThreshold {"count":50}', 'the dashed line is named like the tag beside it');
+  assert.equal(line.style.left, `${100 * 50 / 62.5}%`, 'the threshold line sits at 50 on the cross-group scale');
+  assert.equal(nodesOfClass(own, 'wb-memory-chart-label')[0].textContent, 'wb.term.origin');
+  assert.equal(nodesOfClass(own, 'wb-memory-chart-value')[0].textContent, '3');
+  assert.equal(nodesOfClass(own, 'wb-memory-threshold')[0].title, 'wb.memory.threshold {"count":15}');
+  assert.equal(nodesOfClass(own, 'wb-memory-chart-label-static').length, 0, 'a group name stays a link');
+  assert.deepEqual(nodesOfClass(own, 'wb-memory-bl-tag').map(node => node.textContent), ['wb.memory.syncing'],
+    'Origin\'s own lock marks only its own row, under the group threshold');
+  f.controller.destroy();
+  const swapped = fixture({ detail: () => 'technical', request: async () => ({
+    groups: [{ sessionGroup: 'origin', count: 3, threshold: 15, syncing: false }],
+    originSync: { ...originSync, aged: false, syncing: true }, hasOlder: false }) });
+  await swapped.controller.load();
+  const [crossRow, ownRow] = nodesOfClass(swapped.chartsRoot, 'wb-memory-bl');
+  assert.equal(nodesOfClass(crossRow, 'wb-memory-bl-tag').some(node => node.textContent === 'wb.memory.originSyncing'), true);
+  assert.equal(nodesOfClass(ownRow, 'wb-memory-bl-tag').some(node => /syncing/i.test(node.textContent)), false);
+  swapped.controller.destroy();
+});
+
+test('an unreadable cross-group backlog shows unknown on its row only, and single mode has no such row', async () => {
+  const f = fixture({ detail: () => 'technical', request: async () => ({
+    groups: [{ sessionGroup: 'telegram:dm-1', count: 20, threshold: 15, syncing: false }],
+    originSync: { count: null, pendingSummaries: null, firstAt: null, aged: false, syncing: null, threshold: 50, reason: 'origin_backlog_failed' },
+    hasOlder: false }) });
+  await f.controller.load();
+  const [cross, group] = nodesOfClass(f.chartsRoot, 'wb-memory-bl');
+  assert.equal(nodesOfClass(cross, 'wb-memory-chart-value')[0].textContent, 'wb.unknown');
+  assert.equal(nodesOfClass(cross, 'wb-memory-bl-tag').some(node => node.textContent === 'wb.memory.originSyncUnknown'), true);
+  assert.equal(nodesOfClass(group, 'wb-memory-chart-value')[0].textContent, '20');
+  assert.deepEqual(nodesOfClass(group, 'wb-memory-bl-tag').map(node => node.textContent), ['wb.memory.overThreshold']);
+  f.controller.destroy();
+  const single = fixture({ detail: () => 'technical', request: async () => ({
+    groups: [{ sessionGroup: 'telegram:dm-1', count: 2, threshold: 15, syncing: false }], hasOlder: false }) });
+  await single.controller.load();
+  assert.equal(nodesOfClass(single.chartsRoot, 'wb-memory-bl-cross').length, 0);
+  const singleCard = nodesOfClass(single.chartsRoot, 'wb-memory-progress')[0].textContent;
+  assert.match(singleCard, /wb.memory.thresholdHint \{"count":15\}/, 'without the cross-group row the subtitle is unchanged');
+  assert.doesNotMatch(singleCard, /thresholdHintOrigin|backlogHintOrigin/);
+  single.controller.destroy();
+});
+
+test('the cross-group row name explains itself in plain words with its actual threshold', async () => {
+  const label = async threshold => {
+    const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [],
+      originSync: { count: 4, pendingSummaries: 0, firstAt: null, aged: false, syncing: false, threshold }, hasOlder: false }) });
+    await f.controller.load();
+    const title = nodesOfClass(f.chartsRoot, 'wb-memory-chart-label')[0].title;
+    f.controller.destroy();
+    return title;
+  };
+  assert.equal(await label(73), 'wb.memory.originSyncHint {"count":73}', 'the hover text carries the row\'s actual threshold');
+  assert.equal(await label(null), 'wb.memory.originSyncHintNoThreshold', 'without a readable threshold the count clause is left out');
+  for (const lang of ['zh', 'en']) {
+    const pack = JSON.parse(await readFile(new URL(`../public/i18n/wb.${lang}.json`, import.meta.url), 'utf8'));
+    assert.match(pack['wb.memory.originSyncHint'], /\{count\}/, lang);
+    assert.doesNotMatch(pack['wb.memory.originSyncHintNoThreshold'], /\{count\}/, lang);
+    for (const key of ['wb.memory.originSyncHint', 'wb.memory.originSyncHintNoThreshold']) {
+      assert.doesNotMatch(pack[key], /Supervisor|lock|锁/i, `${lang} ${key} uses no internal names`);
+    }
+  }
+});
+
+test('the ordinary summary reports a late or running cross-group sync', async () => {
+  const document = createDocument(), summaryRoot = document.createElement('div');
+  const f = fixture({ document, summaryRoot, detail: () => 'plain', request: async () => ({
+    groups: [{ sessionGroup: 'telegram:dm-1', count: 0, threshold: 15, syncing: false }],
+    originSync: { count: 60, pendingSummaries: 0, firstAt: null, aged: true, syncing: true, threshold: 50 }, hasOlder: false }) });
+  await f.controller.load();
+  assert.match(summaryRoot.className, /\bwb-warn\b/);
+  assert.match(summaryRoot.textContent, /wb.memory.summaryOriginLate/);
+  assert.match(summaryRoot.textContent, /wb.memory.summaryOriginSyncing/);
+  f.controller.destroy();
+});
+
+test('the ordinary summary is unknown when only the cross-group backlog cannot be read', async () => {
+  const summaryWith = async originSync => {
+    const document = createDocument(), summaryRoot = document.createElement('div');
+    const f = fixture({ document, summaryRoot, detail: () => 'plain', request: async () => ({
+      groups: [{ sessionGroup: 'telegram:dm-1', count: 2, threshold: 15, syncing: false, aged: false }], originSync, hasOlder: false }) });
+    await f.controller.load();
+    const text = summaryRoot.textContent;
+    f.controller.destroy();
+    return text;
+  };
+  const known = { count: 4, pendingSummaries: 0, firstAt: null, aged: false, syncing: false, threshold: 50 };
+  assert.match(await summaryWith(known), /wb.memory.summaryOk/, 'every row known and in order reads as fine');
+  for (const unreadable of [
+    { count: null, pendingSummaries: null, firstAt: null, aged: false, syncing: null, threshold: 50, reason: 'origin_backlog_failed' },
+    { ...known, count: null },
+    { ...known, syncing: null }
+  ]) {
+    const text = await summaryWith(unreadable);
+    assert.match(text, /wb.memory.summaryUnknown/, JSON.stringify(unreadable));
+    assert.doesNotMatch(text, /wb.memory.summaryOk/, JSON.stringify(unreadable));
+  }
+});
+
+test('a backlog search keeps the cross-group row only when its name matches', async () => {
+  const groups = Array.from({ length: 12 }, (_, i) => ({ sessionGroup: `telegram:dm-q${i}`, displayName: `Quiet ${i}`, count: 0, threshold: 15, syncing: false }));
+  const originSync = { count: 60, pendingSummaries: 2, firstAt: null, aged: false, syncing: false, threshold: 50 };
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups, originSync, hasOlder: false }) });
+  await f.controller.load();
+  const search = value => {
+    const filter = allNodes(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0]).find(node => node.tagName === 'INPUT');
+    filter.value = value; filter.dispatch('input');
+    const card = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
+    return { cross: nodesOfClass(card, 'wb-memory-bl-cross').length, rows: nodesOfClass(card, 'wb-memory-bl').length,
+      noMatch: /wb\.memory\.noMatch/.test(card.textContent) };
+  };
+  // The test translator returns keys, so the row's name reads `wb.memory.originSync`.
+  assert.deepEqual(search('ORIGINSYNC'), { cross: 1, rows: 1, noMatch: false }, 'a matching search keeps the row and is not "no match"');
+  assert.deepEqual(search('quiet 1'), { cross: 0, rows: 3, noMatch: false }, 'a group search hides the cross-group row');
+  assert.deepEqual(search('nothing'), { cross: 0, rows: 0, noMatch: true }, 'with neither matching, "no match" still shows');
+  assert.deepEqual(search(''), { cross: 1, rows: 13, noMatch: false }, 'clearing the search brings the row back');
+  f.controller.destroy();
+});
+
 test('the backlog filter appears from twelve groups', async () => {
   const filterWith = async count => {
     const groups = Array.from({ length: count }, (_, i) => ({ sessionGroup: `telegram:dm-${i}`, count: i, threshold: 15, syncing: false }));
@@ -563,4 +704,20 @@ test('the shared list leads with the core files even though the server lists dir
     file('identity.md'), file('references.md'), file('state.md')]) };
   assert.deepEqual(memoryFlatFiles(memoryScope(value).shared).map(node => node.path),
     ['identity.md', 'references.md', 'state.md', 'reference/decisions.md', 'users/owner/profile.md']);
+});
+
+test('the cross-group row name keeps the label layout without the link cursor or hover underline', async () => {
+  const css = await readFile(new URL('../public/css/wb.css', import.meta.url), 'utf8');
+  const rule = selector => css.match(new RegExp(`^${selector.replace(/[.:]/g, '\\$&')} \\{([^}]*)\\}`, 'm'))?.[1] ?? '';
+  assert.match(rule('.wb-memory-chart-label'), /cursor: pointer/);
+  assert.match(rule('.wb-memory-chart-label.wb-memory-chart-label-static'), /cursor: default/);
+  assert.match(rule('.wb-memory-chart-label.wb-memory-chart-label-static:hover'), /text-decoration: none/);
+});
+
+test('the backlog subtitle names the gathering threshold even when no group threshold is known', async () => {
+  const f = fixture({ detail: () => 'technical', request: async () => ({ groups: [],
+    originSync: { count: 4, pendingSummaries: 0, firstAt: null, aged: false, syncing: false, threshold: 50 }, hasOlder: false }) });
+  await f.controller.load();
+  assert.match(nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0].textContent, /wb.memory.backlogHintOrigin \{"origin":50\}/);
+  f.controller.destroy();
 });

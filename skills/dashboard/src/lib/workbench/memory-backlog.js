@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+const positive = value => Number.isSafeInteger(value) && value > 0 ? value : null;
 const configurationModule = () => import('../../../../activity-monitor/scripts/supervisor-configuration.js');
 const budgetModule = () => import('../../../../zylos-memory/scripts/shared.js');
 
@@ -12,8 +13,12 @@ function timestampMillis(value) {
     ? `${value.replace(' ', 'T')}Z` : value);
 }
 
-/** The supplied group reader owns the only backlog cache, shared with details. */
-export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog,
+/**
+ * The supplied group reader owns the only per-group backlog cache, shared with details. Every group row,
+ * Origin's own included, compares its own unsummarized count with the group threshold. The cross-group
+ * Origin Sync backlog is a separate field, read only in multi mode.
+ */
+export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog, originBacklog = null,
   readConfig = async () => JSON.parse(await fs.readFile(path.join(zylosDir, '.zylos', 'config.json'), 'utf8')),
   loadConfiguration = configurationModule, loadBudgets = budgetModule,
   env = process.env, now = Date.now } = {}) {
@@ -44,19 +49,32 @@ export function createMemoryBacklog({ zylosDir, getSnapshot, groupBacklog,
         try { backlog = await groupBacklog(sessionGroup); }
         catch { backlog = { count: null, firstAt: null, syncing: null, reason: 'backlog_failed' }; }
         const firstAt = backlog.firstAt ?? null, firstMillis = timestampMillis(firstAt);
-        const threshold = sessionGroup === 'origin' ? config?.originSyncThreshold : config?.syncThreshold;
+        const threshold = config?.syncThreshold;
         groups[index] = {
           sessionGroup, displayName: row.name?.displayName ?? null,
           c4: { componentName: row.c4?.componentName ?? null },
           count: backlog.count ?? null, firstAt,
           aged: Number.isFinite(firstMillis) && at - firstMillis > SIX_HOURS_MS,
           syncing: backlog.syncing ?? null,
-          threshold: Number.isSafeInteger(threshold) && threshold > 0 ? threshold : null,
+          threshold: positive(threshold),
           ...(backlog.reason ? { reason: backlog.reason } : {}),
         };
       }
     }
-    await Promise.all(Array.from({ length: Math.min(4, keys.length) }, readNext));
-    return { groups, hasOlder: snapshot.hasOlder, budgets: limits };
+    async function readOrigin() {
+      if (snapshot.view !== 'multi' || !originBacklog) return undefined;
+      let backlog;
+      try { backlog = await originBacklog(); }
+      catch { backlog = { count: null, pendingSummaries: null, firstAt: null, syncing: null, reason: 'origin_backlog_failed' }; }
+      const firstAt = backlog.firstAt ?? null, firstMillis = timestampMillis(firstAt);
+      return {
+        count: backlog.count ?? null, pendingSummaries: backlog.pendingSummaries ?? null, firstAt,
+        aged: Number.isFinite(firstMillis) && at - firstMillis > SIX_HOURS_MS,
+        syncing: backlog.syncing ?? null, threshold: positive(config?.originSyncThreshold),
+        ...(backlog.reason ? { reason: backlog.reason } : {}),
+      };
+    }
+    const [originSync] = await Promise.all([readOrigin(), ...Array.from({ length: Math.min(4, keys.length) }, readNext)]);
+    return { groups, ...(originSync ? { originSync } : {}), hasOlder: snapshot.hasOlder, budgets: limits };
   };
 }

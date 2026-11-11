@@ -863,6 +863,8 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-chart-row { display: grid; grid-template-columns: minmax(84px, 140px) minmax(60px, 1fr) auto minmax(0, max-content); align-items: center; gap: 10px; margin: 7px 0; font-size: 12.5px; }
 .wb-memory-chart-label { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .wb-memory-chart-label:hover { text-decoration: underline; text-underline-offset: 2px; }
+.wb-memory-chart-label.wb-memory-chart-label-static { cursor: default; }
+.wb-memory-chart-label.wb-memory-chart-label-static:hover { text-decoration: none; }
 .wb-memory-chart-value { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .wb-memory-track { position: relative; display: flex; height: 8px; border-radius: 3px; background: var(--wb-off); }
 .wb-memory-fill { height: 100%; border-radius: 3px 0 0 3px; background: var(--text-dim); }

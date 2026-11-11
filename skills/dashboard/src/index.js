@@ -76,6 +76,7 @@ import { createRuns } from './lib/workbench/runs.js';
 import { createGroupConfig } from './lib/workbench/group-config.js';
 import { createGroupBacklog } from './lib/workbench/group-backlog.js';
 import { createMemoryBacklog } from './lib/workbench/memory-backlog.js';
+import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
@@ -427,7 +428,8 @@ const getDetailSnapshot = () => workbench.getCachedSnapshot() ?? workbench.getSn
 const groupRuns = createRuns({ store, getSnapshot: getDetailSnapshot });
 const groupConfig = createGroupConfig({ zylosDir: config.zylosDir });
 const groupBacklog = createGroupBacklog({ zylosDir: config.zylosDir, getSnapshot: getDetailSnapshot });
-const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog });
+const memoryBacklog = createMemoryBacklog({ zylosDir: config.zylosDir, getSnapshot: at => workbench.getSnapshot(at), groupBacklog,
+  originBacklog: createOriginBacklog({ zylosDir: config.zylosDir }) });
 function recordDashboardInterrupt(record) {
   recordGroupInterrupt(store, record);
 }

@@ -176,7 +176,7 @@ test('backlog has one shared thirty-second per-group cache for count and lock st
   assert.deepEqual([countCalls, lockCalls], [2, 2]);
 });
 
-test('backlog count and lock failures remain independent and Origin uses its own lock', async () => {
+test('backlog count and lock failures remain independent and Origin reads its group sync lock, not the Origin Sync lock', async () => {
   let countFailed = false, lockFailed = true;
   const backlog = () => createGroupBacklog({ zylosDir: '/isolated/instance',
     runC4Db: async () => countFailed ? { ok: false } : { ok: true, data: { count: 3, firstAt: 100 } },
@@ -186,7 +186,7 @@ test('backlog count and lock failures remain independent and Origin uses its own
     } });
   assert.deepEqual(await backlog()('origin'), { count: 3, firstAt: 100, syncing: null, reason: 'backlog_failed' });
   countFailed = true; lockFailed = false;
-  assert.deepEqual(await backlog()('origin'), { count: null, firstAt: null, reason: 'backlog_failed', syncing: true });
+  assert.deepEqual(await backlog()('origin'), { count: null, firstAt: null, reason: 'backlog_failed', syncing: false });
 });
 
 test('single backlog uses global commands and keeps its cache separate from multi Origin', async () => {
@@ -210,7 +210,7 @@ test('single backlog uses global commands and keeps its cache separate from mult
   assert.equal(calls.length, 2);
   view = 'multi';
   const origin = await backlog('origin');
-  assert.deepEqual(origin, { count: 2, firstAt: 100, syncing: false });
+  assert.deepEqual(origin, { count: 2, firstAt: 100, syncing: true });
   assert.equal(calls.length, 4);
   assert.deepEqual(calls[2].argv.slice(1), ['unsummarized', '--group', 'origin', '--json']);
   assert.deepEqual(calls[3].argv.slice(1), ['status', '--group', 'origin', '--json']);
@@ -237,7 +237,7 @@ test('an unavailable backlog view retains the requested Origin scope', async () 
       lockCalls.push(argv);
       return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
     } });
-  assert.deepEqual(await backlog('origin'), { count: 2, firstAt: null, syncing: false });
+  assert.deepEqual(await backlog('origin'), { count: 2, firstAt: null, syncing: true });
   assert.deepEqual(countCalls, [['unsummarized', '--group', 'origin', '--json']]);
   assert.deepEqual(lockCalls[0].slice(1), ['status', '--group', 'origin', '--json']);
 });

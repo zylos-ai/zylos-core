@@ -390,14 +390,16 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     summaryRoot.replaceChildren();
     summaryRoot.hidden = detail() === 'technical' || !getTree();
     if (summaryRoot.hidden) return;
-    const rows = backlog?.groups ?? [];
-    const unknown = !backlog || rows.some(row => row.count == null || row.syncing === null);
-    const late = rows.some(row => row.aged);
+    const rows = backlog?.groups ?? [], cross = backlog?.originSync ?? null;
+    const unknown = !backlog || [...rows, ...(cross ? [cross] : [])].some(row => row.count == null || row.syncing === null);
+    const late = rows.some(row => row.aged), crossLate = cross?.aged === true;
     const waiting = rows.filter(row => isNumber(row.count) && row.count > 0).length;
     const syncing = rows.filter(row => row.syncing === true).length;
-    summaryRoot.className = 'wb-memory-summary' + (late ? ' wb-warn' : '');
-    summaryRoot.append(icon(document, late ? 'alert' : unknown ? 'help' : 'check', 'xs'),
-      element(document, 'b', t(!loaded ? 'memory.loading' : late ? 'wb.memory.summaryLate' : unknown ? 'wb.memory.summaryUnknown' : 'wb.memory.summaryOk')));
+    summaryRoot.className = 'wb-memory-summary' + (late || crossLate ? ' wb-warn' : '');
+    summaryRoot.append(icon(document, late || crossLate ? 'alert' : unknown ? 'help' : 'check', 'xs'),
+      element(document, 'b', t(!loaded ? 'memory.loading' : late ? 'wb.memory.summaryLate' : crossLate ? 'wb.memory.summaryOriginLate'
+        : unknown ? 'wb.memory.summaryUnknown' : 'wb.memory.summaryOk')));
+    if (cross?.syncing === true) summaryRoot.append(element(document, 'span', t('wb.memory.summaryOriginSyncing')));
     if (syncing) summaryRoot.append(element(document, 'span', t('wb.memory.summarySyncing', { count: syncing })));
     if (waiting) summaryRoot.append(element(document, 'span', t('wb.memory.summaryWaiting', { count: waiting })));
     summaryRoot.append(element(document, 'span', t('wb.memory.summaryTech'), 'wb-sub'));
@@ -409,14 +411,23 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     card.append(head);
     return card;
   }
-  function backlogItem(row) {
-    const meta = { ...(getTree()?.sessionGroups ?? []).find(group => group.sessionGroup === row.sessionGroup), ...row };
-    const item = element(document, 'div', undefined, 'wb-memory-chart-row wb-memory-bl');
+  // `cross` is the machine-wide Origin Sync backlog: not a group of its own, so its name selects nothing.
+  function backlogItem(row, cross = false) {
+    const item = element(document, 'div', undefined, 'wb-memory-chart-row wb-memory-bl' + (cross ? ' wb-memory-bl-cross' : ''));
     // Name and its badges share one cell: one line beside the bar on wide screens, a line of its own on phones.
     const head = element(document, 'span', undefined, 'wb-memory-bl-head');
-    const label = memoryGroupLabel(meta, t);
-    const name = button(head, label, () => selectGroup(row.sessionGroup), 'wb-memory-chart-label');
-    name.title = label === row.sessionGroup ? label : `${label}\n${row.sessionGroup}`;
+    if (cross) {
+      // Static name: the label class lays it out like a group name, the modifier drops the link look.
+      const name = element(document, 'span', t('wb.memory.originSync'), 'wb-memory-chart-label wb-memory-chart-label-static');
+      // A plain-words explanation with the row's actual threshold; without one, the count clause is left out.
+      name.title = isNumber(row.threshold) ? t('wb.memory.originSyncHint', { count: row.threshold }) : t('wb.memory.originSyncHintNoThreshold');
+      head.append(name);
+    } else {
+      const meta = { ...(getTree()?.sessionGroups ?? []).find(group => group.sessionGroup === row.sessionGroup), ...row };
+      const label = memoryGroupLabel(meta, t);
+      const name = button(head, label, () => selectGroup(row.sessionGroup), 'wb-memory-chart-label');
+      name.title = label === row.sessionGroup ? label : `${label}\n${row.sessionGroup}`;
+    }
     const over = isNumber(row.count) && isNumber(row.threshold) && row.count > row.threshold;
     const value = isNumber(row.count) ? String(row.count) : t('wb.unknown');
     const track = element(document, 'div', undefined, 'wb-memory-track');
@@ -426,7 +437,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       fill.style.width = `${100 * row.count / max}%`; track.append(fill);
       if (isNumber(row.threshold)) {
         const line = element(document, 'span', undefined, 'wb-memory-threshold'); line.style.left = `${100 * row.threshold / max}%`;
-        line.title = t('wb.memory.threshold', { count: row.threshold }); track.append(line);
+        line.title = t(cross ? 'wb.memory.originThreshold' : 'wb.memory.threshold', { count: row.threshold }); track.append(line);
         track.setAttribute('aria-label', t('wb.memory.countThreshold', { count: row.count, threshold: row.threshold }));
       } else track.setAttribute('aria-label', value);
     }
@@ -437,9 +448,13 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     }
     // Over the threshold is said in words too, not only by the bar's colour.
     if (over) flags.append(element(document, 'span', t('wb.memory.overThreshold'), 'wb-memory-bl-tag warn'));
-    if (row.syncing === true) flags.append(element(document, 'span', t('wb.memory.syncing'), 'wb-memory-bl-tag'));
-    else if (row.syncing === null) flags.append(element(document, 'span', t('wb.memory.syncUnknown'), 'wb-memory-bl-tag'));
-    if (row.ownThreshold != null) flags.append(element(document, 'span', t('wb.memory.threshold', { count: row.ownThreshold }), 'wb-memory-bl-tag'));
+    if (cross && isNumber(row.pendingSummaries) && row.pendingSummaries > 0) {
+      flags.append(element(document, 'span', t('wb.memory.pendingSummaries', { count: row.pendingSummaries }), 'wb-memory-bl-tag'));
+    }
+    if (row.syncing === true) flags.append(element(document, 'span', t(cross ? 'wb.memory.originSyncing' : 'wb.memory.syncing'), 'wb-memory-bl-tag'));
+    else if (row.syncing === null) flags.append(element(document, 'span', t(cross ? 'wb.memory.originSyncUnknown' : 'wb.memory.syncUnknown'), 'wb-memory-bl-tag'));
+    if (cross && isNumber(row.threshold)) flags.append(element(document, 'span', t('wb.memory.originThreshold', { count: row.threshold }), 'wb-memory-bl-tag'));
+    if (!cross && row.ownThreshold != null) flags.append(element(document, 'span', t('wb.memory.threshold', { count: row.ownThreshold }), 'wb-memory-bl-tag'));
     if (row.reason) flags.append(element(document, 'small', row.reason, 'wb-memory-bl-tag'));
     head.append(flags);
     item.append(head, track, element(document, 'span', value, 'wb-memory-chart-value' + (over ? ' wb-txt-warn' : '')));
@@ -453,7 +468,10 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     const match = row => !needle || row.sessionGroup.toLowerCase().includes(needle)
       || memoryGroupLabel({ ...(getTree()?.sessionGroups ?? []).find(group => group.sessionGroup === row.sessionGroup), ...row }, t).toLowerCase().includes(needle);
     const active = view.active.filter(match), quiet = view.quiet.filter(match);
-    backlogRows.style.setProperty('--wb-bl-value', memoryBacklogValueWidth(active, t('wb.unknown')));
+    // The cross-group row leads and never folds; a search keeps it only when its name matches.
+    const cross = backlog?.originSync && (!needle || t('wb.memory.originSync').toLowerCase().includes(needle)) ? backlog.originSync : null;
+    backlogRows.style.setProperty('--wb-bl-value', memoryBacklogValueWidth(cross ? [cross, ...active] : active, t('wb.unknown')));
+    if (cross) backlogRows.append(backlogItem(cross, true));
     for (const row of active) backlogRows.append(backlogItem(row));
     // A search shows every match; otherwise groups with nothing pending fold into one line.
     if (needle) for (const row of quiet) backlogRows.append(backlogItem(row));
@@ -467,7 +485,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       for (const row of quiet) rest.append(backlogItem(row));
       backlogRows.append(rest);
     }
-    if (needle && !active.length && !quiet.length) backlogRows.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
+    if (needle && !cross && !active.length && !quiet.length) backlogRows.append(element(document, 'p', t('wb.memory.noMatch'), 'wb-memory-source'));
   }
   function renderCharts() {
     if (!chartsRoot || stopped) return;
@@ -475,8 +493,12 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     chartsRoot.hidden = detail() !== 'technical';
     if (chartsRoot.hidden) return;
     const view = memoryBacklogView(backlog?.groups);
-    const progress = chartCard('wb-memory-progress', 'layers', t('wb.memory.backlog'),
-      view.threshold == null ? t('wb.memory.backlogHint') : t('wb.memory.thresholdHint', { count: view.threshold }));
+    // Each row draws its own scale, so with the cross-group row the subtitle names both thresholds.
+    const origin = isNumber(backlog?.originSync?.threshold) ? backlog.originSync.threshold : null;
+    const hint = origin == null
+      ? (view.threshold == null ? t('wb.memory.backlogHint') : t('wb.memory.thresholdHint', { count: view.threshold }))
+      : (view.threshold == null ? t('wb.memory.backlogHintOrigin', { origin }) : t('wb.memory.thresholdHintOrigin', { count: view.threshold, origin }));
+    const progress = chartCard('wb-memory-progress', 'layers', t('wb.memory.backlog'), hint);
     if (!backlog) progress.append(element(document, 'p', t('wb.unknown')));
     else {
       const many = view.active.length + view.quiet.length >= BACKLOG_FILTER_AT;

@@ -12,6 +12,7 @@ import { C4Reader } from '../../src/lib/c4-reader.js';
 import { EventLoopMonitor } from '../../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../../src/lib/version-checker.js';
 import { createGroupBacklog } from '../../src/lib/workbench/group-backlog.js';
+import { createOriginBacklog } from '../../src/lib/workbench/origin-backlog.js';
 import { MemoryBrowser } from '../../src/lib/memory-browser.js';
 
 // HTTP integration: actual createServer, AuthGate, route dispatch, display-name
@@ -78,6 +79,11 @@ export async function setupMemoryHttp(t) {
       const global = !args.includes('--group');
       return { stdout: JSON.stringify({ ok: true, data: { count: global ? 3 : 7, firstAt: 100 } }) };
     }
+    if (args[0] === path.join(root, '.claude/skills/comm-bridge/scripts/c4-db.js') && args[1] === 'origin-sync') {
+      return { stdout: JSON.stringify({ ok: true, data: { total: 60, groups: [
+        { sessionGroup: 'telegram:a', count: 60, firstAt: '2026-10-01 12:00:00', pendingCheckpoints: 2, firstCheckpointAt: '2026-10-01 11:00:00' },
+      ] } }) };
+    }
     if (args[0] === path.join(root, '.claude/skills/zylos-memory/scripts/sync-lock.js')) {
       return { stdout: JSON.stringify({ sync: { held: true }, origin: { held: false } }) };
     }
@@ -87,6 +93,9 @@ export async function setupMemoryHttp(t) {
   execFile[promisify.custom] = async (...args) => execute(...args);
   t.mock.module('../../src/lib/workbench/group-backlog.js', { namedExports: {
     createGroupBacklog: options => createGroupBacklog({ ...options, execute: async (...args) => execute(...args) }),
+  } });
+  t.mock.module('../../src/lib/workbench/origin-backlog.js', { namedExports: {
+    createOriginBacklog: options => createOriginBacklog({ ...options, execute: async (...args) => execute(...args) }),
   } });
   t.mock.module('node:child_process', { namedExports: {
     ...childProcess, execFile,
