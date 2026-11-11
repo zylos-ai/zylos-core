@@ -1,5 +1,8 @@
 // Keep mounted detail nodes and their native interaction state. Explicit keys
 // identify data rows; structural elements use their stable role/class.
+// Only callbacks registered through listen() are replaced on retained nodes.
+// A subtree using direct addEventListener() must have a key that changes when
+// those callbacks' dependencies change, so its closures stay current.
 const handlers = new WeakMap();
 
 export function listen(node, type, handler) {

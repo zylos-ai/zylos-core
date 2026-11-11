@@ -18,14 +18,25 @@ export class Node {
     this.style = { setProperty: (key, value) => { this.style[key] = value; } };
   }
   get nodeName() { return this.tagName; }
-  get children() { return this.childNodes.filter(node => node.nodeType === 1); }
+  // Legacy DOM helpers assign/splice an element-only children array. Keep that
+  // array backed by childNodes; standard text-bearing nodes expose elements only.
+  get children() { return this.childNodes.every(node => node.nodeType === 1) ? this.childNodes : this.childNodes.filter(node => node.nodeType === 1); }
+  set children(nodes) {
+    for (const child of this.childNodes) if (child.parentNode === this) child.parentNode = null;
+    this.childNodes = [...nodes];
+    for (const child of this.childNodes) child.parentNode = this;
+  }
   get firstChild() { return this.childNodes[0] ?? null; }
   get nextSibling() { const siblings = this.parentNode?.childNodes ?? []; return siblings[siblings.indexOf(this) + 1] ?? null; }
+  // Legacy helpers read/write direct text separately from element children.
+  get text() { return this.legacyText ?? this.childNodes.filter(node => node.nodeType === 3).map(node => node.nodeValue).join(''); }
+  set text(value) { this.legacyText = String(value); }
   set textContent(value) {
+    delete this.legacyText;
     this.replaceChildren();
     if (String(value)) this.append(new TextNode(value, this.ownerDocument));
   }
-  get textContent() { return this.childNodes.map(child => child.textContent).join(''); }
+  get textContent() { return (this.legacyText ?? '') + this.childNodes.map(child => child.textContent).join(''); }
   set className(value) { this.attributes.class = String(value); }
   get className() { return this.attributes.class ?? ''; }
   get classList() {

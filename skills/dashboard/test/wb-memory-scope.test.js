@@ -138,11 +138,14 @@ test('backlog card: threshold in the header, age as a mark on its row, quiet gro
   assert.equal(rest.tagName, 'DETAILS'); assert.equal(rest.open, false);
   assert.match(rest.textContent, /wb.memory.restQuiet \{"count":12\}/);
   assert.equal(nodesOfClass(rest, 'wb-memory-bl').length, 12, 'quiet groups stay reachable inside the fold');
+  const originalFilter = allNodes(card).find(node => node.tagName === 'INPUT');
   rest.open = true; rest.dispatch('toggle');
   f.controller.render();
   assert.equal(nodesOfClass(f.chartsRoot, 'wb-memory-rest')[0].open, true, 'an opened fold stays open across refreshes');
-  const filter = allNodes(card).find(node => node.tagName === 'INPUT');
+  const mountedCard = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
+  const filter = allNodes(mountedCard).find(node => node.tagName === 'INPUT');
   assert.ok(filter, 'thirteen groups get a filter');
+  assert.equal(filter, originalFilter, 'refresh keeps the live filter input mounted');
   filter.value = 'quiet 1'; filter.dispatch('input');
   const card2 = nodesOfClass(f.chartsRoot, 'wb-memory-progress')[0];
   assert.deepEqual(nodesOfClass(card2, 'wb-memory-chart-label').map(node => node.textContent), ['Quiet 1', 'Quiet 10', 'Quiet 11'], 'a search lists matching quiet groups unfolded');
