@@ -15,6 +15,9 @@ const invalid = () => Object.assign(new Error('Deletion target must be a real ch
  * Preflight is not atomic. Callers must exclude concurrent writers: replacing
  * a checked directory with a symlink can redirect later path-based unlinks
  * outside the root. These checks do not provide a concurrent-writer sandbox.
+ * Access checks also cannot predict sticky-directory ownership restrictions,
+ * immutable flags or busy mountpoints. Deletion-time errors can therefore
+ * occur after earlier entries have already been removed.
  */
 export function removeOwnedTree(root, target) {
   if (typeof root !== 'string' || !path.isAbsolute(root) || root === path.parse(root).root
