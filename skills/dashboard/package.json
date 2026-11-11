@@ -1,7 +1,7 @@
 {
   "name": "zylos-dashboard",
   "version": "0.6.9",
-  "description": "Read-only observability dashboard for a local Zylos agent.",
+  "description": "Observability dashboard and conversation channel for a local Zylos agent, bundled with Zylos Core.",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
@@ -20,13 +20,14 @@
   ],
   "author": "Zylos AI",
   "license": "MIT",
-  "homepage": "https://github.com/zylos-ai/zylos-dashboard",
+  "homepage": "https://github.com/zylos-ai/zylos-core/tree/main/skills/dashboard",
   "repository": {
     "type": "git",
-    "url": "https://github.com/zylos-ai/zylos-dashboard.git"
+    "url": "https://github.com/zylos-ai/zylos-core.git",
+    "directory": "skills/dashboard"
   },
   "bugs": {
-    "url": "https://github.com/zylos-ai/zylos-dashboard/issues"
+    "url": "https://github.com/zylos-ai/zylos-core/issues"
   },
   "engines": {
     "node": ">=20"
