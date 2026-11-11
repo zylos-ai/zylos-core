@@ -205,7 +205,6 @@
   "agent_fleet.no_activity": "Standing by",
   "agent_fleet.context_chip_title": "Context usage / rotation threshold",
   "agent_fleet.model": "Model",
-  "agent_fleet.back_to_fleet": "← Machines",
   "agent_fleet.sound_on": "Sound cues on — click to mute",
   "agent_fleet.sound_off": "Sound cues muted — click to enable",
   "trends.tool_calls": "Tool Calls",

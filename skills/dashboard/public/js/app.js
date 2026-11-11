@@ -21,8 +21,8 @@ import { createUsagePage } from './wb/usage.js?v=157';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=157';
-import { createFleetSounds } from './fleet-sounds.js?v=157';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=158';
+import { createFleetSounds } from './fleet-sounds.js?v=158';
 import { refreshDashboardState } from './state-refresh.js?v=99';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
@@ -35,8 +35,8 @@ setAssetRoot(ASSET_ROOT);
 
 // When served via the fleet proxy (/fleet/<name>/) this page shows a REMOTE
 // agent's detail. The remote's own /api/fleet must not drive the view (its
-// fleet config is unrelated to the wall the viewer came from), and the back
-// control returns to the parent dashboard root instead of an in-app view.
+// fleet config is unrelated to the wall the viewer came from), and the header's
+// machines icon returns to the parent dashboard root instead of an in-app view.
 const REMOTE_AGENT_MATCH = BASE_PATH.match(/\/fleet\/([^/]+)$/);
 const REMOTE_AGENT = REMOTE_AGENT_MATCH ? decodeURIComponent(REMOTE_AGENT_MATCH[1]) : null;
 const PARENT_DASHBOARD_PATH = REMOTE_AGENT ? `${BASE_PATH.slice(0, REMOTE_AGENT_MATCH.index)}/` : null;
@@ -1831,12 +1831,9 @@ function syncLiveFleetMode(fleet) {
   const nextMultiAgent = hasFleetWall(fleet);
   if (nextMultiAgent === state.multiAgent) return false;
   state.multiAgent = nextMultiAgent;
-  const backBtn = $('#back-to-fleet');
   if (nextMultiAgent) {
-    if (backBtn) backBtn.hidden = false;
     showFleetView({ animate: !prefersReducedMotion() });
   } else {
-    if (backBtn) backBtn.hidden = !REMOTE_AGENT;
     if (state.remoteAgent) exitRemoteAgent({ push: true });
     else showAgentDetail({ animate: !prefersReducedMotion() });
   }
@@ -1846,17 +1843,14 @@ function syncLiveFleetMode(fleet) {
 
 function applyFleetMode(fleet) {
   // Remote context: always the agent-detail view (the remote's own fleet
-  // size is irrelevant here), with the back control returning to the wall
+  // size is irrelevant here); the header's machines icon returns to the wall
   // the viewer drilled down from.
   state.multiAgent = hasFleetWall(fleet);
-  const backBtn = $('#back-to-fleet');
   const fleetView = $('#fleet-view');
   const agentDetail = $('#agent-detail');
   if (!state.multiAgent) {
-    // Single mode: only the agent dashboard exists, no fleet view. The back
-    // control survives only in remote context, where it leaves the page.
+    // Single mode: only the agent dashboard exists, no fleet view.
     state.fleetViewActive = false;
-    if (backBtn) backBtn.hidden = !REMOTE_AGENT;
     if (fleetView) fleetView.hidden = true;
     if (agentDetail) agentDetail.hidden = false;
     syncFleetSubscription();
@@ -1867,7 +1861,6 @@ function applyFleetMode(fleet) {
   // the single-agent dashboard (it is the safe default if JS/fleet fails), so
   // rather than swap instantly we briefly let it settle, then zoom out to the
   // wall — turning the unavoidable first frame into a deliberate transition.
-  if (backBtn) backBtn.hidden = false;
   state.fleetViewActive = false;
   if (fleetView) fleetView.hidden = true;
   if (agentDetail) agentDetail.hidden = false;
@@ -1961,20 +1954,16 @@ function initFleetMode() {
     onSelf: showAgentDetail, onRemote: enterRemoteAgent,
   }));
   $('#fleet-manage-open')?.addEventListener('click', () => openSettingsModal('fleet'));
-  const backBtn = $('#back-to-fleet');
-  if (backBtn) {
-    backBtn.addEventListener('click', () => {
-      if (state.remoteAgent) {
-        exitRemoteAgent();
-        return;
-      }
-      if (REMOTE_AGENT) {
-        window.location.href = PARENT_DASHBOARD_PATH;
-        return;
-      }
-      showFleetView();
-    });
-  }
+}
+
+// The header's machines icon (fleetIconAction decides): back to the machines page from any machine's page, or
+// machine settings when no other machine is configured.
+function openFleetFromIcon() {
+  const action = fleetIconAction({ remoteAgent: state.remoteAgent, standaloneRemote: Boolean(REMOTE_AGENT), multiAgent: state.multiAgent });
+  if (action === 'exit-remote') exitRemoteAgent();
+  else if (action === 'parent') window.location.href = PARENT_DASHBOARD_PATH;
+  else if (action === 'fleet') showFleetView();
+  else openSettingsModal('fleet');
 }
 
 async function changeLocale(locale) {
@@ -2910,15 +2899,13 @@ function initInfoBarButtons() {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') toggleZylosUpdateHint(null); });
   document.addEventListener('click', e => {
     if (!e.target.closest('#settings-zylos-update')) toggleZylosUpdateHint(null);
-    // With other machines configured the icon opens the fleet wall; otherwise it opens fleet settings.
-    if (e.target.closest('#fleet-manage-btn')) { e.preventDefault(); if (state.multiAgent && !state.remoteAgent) showFleetView(); else openSettingsModal('fleet'); }
+    if (e.target.closest('#fleet-manage-btn')) { e.preventDefault(); openFleetFromIcon(); }
   });
 }
 
 function initFleetManageButton() {
   const btn = $('#fleet-manage-btn');
   if (!btn) return;
-  btn.hidden = !!REMOTE_AGENT;
   btn.setAttribute('aria-label', t('fleet_manage.open'));
 }
 

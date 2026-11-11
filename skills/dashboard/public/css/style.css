@@ -599,30 +599,6 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
 .fleet-view {
   padding: var(--space-md) var(--space-lg) var(--space-xl);
 }
-.back-to-fleet {
-  display: inline-flex;
-  /* #241: keep intrinsic width when a flex parent would otherwise stretch it
-     (the memory-tab-active pinned layout makes #agent-detail a flex column). */
-  align-self: flex-start;
-  align-items: center;
-  height: 30px;
-  margin: var(--space-sm) 0 0 var(--space-lg);
-  padding: 0 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  color: var(--text-dim);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-/* The class sets display:inline-flex, which overrides the UA [hidden] rule.
-   Without this guard the back control stays visible in single-agent mode even
-   when JS sets backBtn.hidden = true (same specificity trap as .latency-section). */
-.back-to-fleet[hidden] { display: none; }
-.back-to-fleet:hover { background: var(--bg-elevated); border-color: var(--border-focus); color: var(--text); }
-.back-to-fleet:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 .agent-fleet-head {
   display: flex;
   align-items: baseline;
@@ -785,14 +761,10 @@ main { padding: var(--space-md) var(--space-lg) var(--space-xl); }
   .agent-fleet-head {
     flex-direction: column;
   }
-  /* Reclaim horizontal space and give the back control a touch-sized target. */
+  /* Reclaim horizontal space. */
   .fleet-view {
     padding-left: var(--space-md);
     padding-right: var(--space-md);
-  }
-  .back-to-fleet {
-    height: 40px;
-    margin-left: var(--space-md);
   }
 }
 

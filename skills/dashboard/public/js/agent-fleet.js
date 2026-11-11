@@ -487,6 +487,15 @@ export function renderFleetPage(container, fleet, { t, fmtAge, basePath, labels,
  * Clicks on the Machines page: a problem card's buttons open settings or re-read the fleet; "Open" opens this
  * machine's own workbench in place, or another machine through the in-page fleet proxy.
  */
+// What the header's machines icon does on the page being viewed: leave a machine opened in-page for the machines
+// page; leave a remote machine's own page (opened from another dashboard's machines page) for that dashboard; show
+// the machines page when other machines are configured; otherwise open machine settings, where they are added.
+export function fleetIconAction({ remoteAgent = null, standaloneRemote = false, multiAgent = false } = {}) {
+  if (remoteAgent) return 'exit-remote';
+  if (standaloneRemote) return 'parent';
+  return multiAgent ? 'fleet' : 'settings';
+}
+
 export function handleFleetClick(event, { onSettings = () => {}, onRefresh = () => {}, onSelf = () => {}, onRemote = () => {} } = {}) {
   const action = event.target?.closest?.('[data-fleet-action]');
   if (action?.dataset.fleetAction) {

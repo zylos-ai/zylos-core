@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
-import { afterSentence, buildAgentFleetView, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
+import { afterSentence, buildAgentFleetView, fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
@@ -109,6 +109,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     observerPageUsable,
     observerRecoveryReason,
     handleFleetClick,
+    fleetIconAction,
     ArrayBuffer,
     window: {
       location: { href: 'http://fixture.local/dashboard/', pathname: '/' },
@@ -585,17 +586,29 @@ test('this machine opens its own workbench and others open through the fleet pat
   assert.deepEqual(calls, ['self', 'remote:remote', 'settings', 'refresh']);
 });
 
-test('back-to-fleet control is hidden via [hidden] in single-agent mode (no CSS specificity leak)', () => {
+test('the header machines icon is the one way back to the machines page, or opens machine settings without one', () => {
+  // A machine opened in-page is left for the machines page, also when the page reports one machine for a moment.
+  assert.equal(fleetIconAction({ remoteAgent: 'alpha', multiAgent: true }), 'exit-remote');
+  assert.equal(fleetIconAction({ remoteAgent: 'alpha', multiAgent: false }), 'exit-remote');
+  // A remote machine's own page (served under the opening dashboard's /fleet/<name>/) goes back to that dashboard.
+  assert.equal(fleetIconAction({ standaloneRemote: true, multiAgent: false }), 'parent');
+  // This machine's page: the machines page when there is one, otherwise machine settings.
+  assert.equal(fleetIconAction({ multiAgent: true }), 'fleet');
+  assert.equal(fleetIconAction({ multiAgent: false }), 'settings');
+  assert.equal(fleetIconAction(), 'settings');
+});
+
+test('the separate back-to-machines button is gone with its styles and text', () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url).pathname, 'utf8');
   const css = fs.readFileSync(new URL('../public/css/style.css', import.meta.url).pathname, 'utf8');
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  // The class sets display:inline-flex, so a [hidden] guard is required or the
-  // UA hidden rule is overridden and the button leaks into single-agent mode.
-  assert.match(css, /\.back-to-fleet\[hidden\]\s*\{\s*display:\s*none/);
-  // And single mode must actually set the hidden attribute — except in remote
-  // context, where the back control survives to return to the parent wall.
-  assert.match(app, /if \(!state\.multiAgent\)[\s\S]*?backBtn\.hidden = !REMOTE_AGENT/);
-  // The remote-context back control leaves the page for the parent dashboard.
-  assert.match(app, /if \(REMOTE_AGENT\)[\s\S]*?window\.location\.href = PARENT_DASHBOARD_PATH/);
+  assert.doesNotMatch(html, /back-to-fleet|back_to_fleet/);
+  assert.doesNotMatch(css, /back-to-fleet/);
+  assert.doesNotMatch(app, /back-to-fleet|backBtn/);
+  for (const language of ['en', 'zh']) {
+    const pack = JSON.parse(fs.readFileSync(new URL(`../public/i18n/${language}.json`, import.meta.url).pathname, 'utf8'));
+    assert.equal(Object.hasOwn(pack, 'agent_fleet.back_to_fleet'), false, language);
+  }
 });
 
 test('Agent Fleet is the top-level fleet view and pulse is gone from UI', () => {
@@ -607,7 +620,6 @@ test('Agent Fleet is the top-level fleet view and pulse is gone from UI', () => 
   assert.match(html, /data-tab="memory"/);
   assert.match(html, /data-tab="trends"/);
   assert.match(html, /id="fleet-view"/);
-  assert.match(html, /id="back-to-fleet"/);
   assert.match(html, /id="agent-fleet-root"/);
 });
 
@@ -803,18 +815,14 @@ test('single-agent dashboards never activate in-page remote viewing', () => {
   assert.ok(enter.indexOf('if (!state.multiAgent) return;') < enter.indexOf('state.remoteAgent = name;'));
 });
 
-test('back button resolves in-page remote first, standalone remote second, fleet wall last', () => {
+test('the header machines icon does what fleetIconAction decides', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  // Anchor inside initFleetMode — applyFleetMode also references #back-to-fleet.
-  const fleetMode = app.indexOf('function initFleetMode(');
-  const start = app.indexOf("const backBtn = $('#back-to-fleet');", fleetMode);
-  const handler = app.slice(start, app.indexOf('initLocaleToggle', start));
-  const inPage = handler.indexOf('if (state.remoteAgent) {');
-  const standalone = handler.indexOf('if (REMOTE_AGENT) {');
-  const wall = handler.indexOf('showFleetView();');
-  assert.ok(inPage > -1 && standalone > inPage && wall > standalone);
-  assert.match(handler, /exitRemoteAgent\(\);/);
-  assert.match(handler, /window\.location\.href = PARENT_DASHBOARD_PATH;/);
+  const handler = app.slice(app.indexOf('function openFleetFromIcon('), app.indexOf('async function changeLocale('));
+  assert.match(handler, /fleetIconAction\(\{ remoteAgent: state\.remoteAgent, standaloneRemote: Boolean\(REMOTE_AGENT\), multiAgent: state\.multiAgent \}\)/);
+  assert.match(handler, /if \(action === 'exit-remote'\) exitRemoteAgent\(\);/);
+  assert.match(handler, /else if \(action === 'parent'\) window\.location\.href = PARENT_DASHBOARD_PATH;/);
+  assert.match(handler, /else if \(action === 'fleet'\) showFleetView\(\);/);
+  assert.match(handler, /else openSettingsModal\('fleet'\);/);
 });
 
 test('popstate routes /fleet/<name> paths into remote view only on the parent document', () => {
@@ -829,7 +837,7 @@ test('popstate routes /fleet/<name> paths into remote view only on the parent do
 test('machine cards enter remote agents in-page instead of full navigation', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
   const fleetMode = app.indexOf('function initFleetMode(');
-  const block = app.slice(fleetMode, app.indexOf("const backBtn = $('#back-to-fleet');", fleetMode));
+  const block = app.slice(fleetMode, app.indexOf('function openFleetFromIcon(', fleetMode));
   // What a click does is tested on handleFleetClick itself; here only that the app hands it the in-page entry.
   assert.match(block, /addEventListener\('click', e => handleFleetClick\(e, \{[\s\S]*onSelf: showAgentDetail, onRemote: enterRemoteAgent,/);
 });
@@ -1329,7 +1337,6 @@ test('Observer view transitions invalidate pending popstate across fleet entry p
       h.context.refreshAll = () => refresh.promise;
       h.setFetch((url) => Promise.resolve(observerResponse(String(url).endsWith('/leases')
         ? { id: 'hidden' } : { state: 'installed', desired: { enabled: true } })));
-      h.elements['#back-to-fleet'] = { addEventListener(_event, handler) { this.click = handler; } };
       h.elements['#agent-fleet-root'] = { addEventListener(_event, handler) { this.click = handler; } };
       h.context.initTabs();
       h.context.initFleetMode();
@@ -1343,7 +1350,7 @@ test('Observer view transitions invalidate pending popstate across fleet entry p
       if (route === 'self-tile') h.elements['#agent-fleet-root'].click({
         target: { closest: () => ({ dataset: { self: 'true' } }) }, preventDefault() {}
       });
-      if (route === 'back-local') h.elements['#back-to-fleet'].click();
+      if (route === 'back-local') h.context.openFleetFromIcon();
       const fleet = { agents: [{ name: 'self' }, { name: 'alpha' }] };
       if (route === 'live-mode') {
         h.context.state.multiAgent = false;
@@ -1493,7 +1500,7 @@ test('memory browser is admin-scoped, agent-routed, and cache-busted', () => {
   assert.match(index, /id="memory-tree"/);
   assert.match(index, /id="memory-content"/);
   assert.match(index, /app\.js\?v=\d+/);
-  assert.match(index, /style\.css\?v=63/);
+  assert.match(index, /style\.css\?v=64/);
 
   assert.match(app, /fetchAgentJson\('\/api\/memory\/tree'\)/);
   assert.match(app, /fetchAgentJson\(`\/api\/memory\/file\?path=\$\{encoded\}`\)/);
@@ -1570,9 +1577,9 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.match(index, /data-i18n-title="fleet_manage\.open"/);
   assert.match(index, /app\.js\?v=\d+/);
   assert.match(index, /id="fleet-manage-btn"[^>]*><i class="wb-ico wb-ico-fleet" aria-hidden="true"><\/i>/);
-  assert.match(app, /function initFleetManageButton\(\)[\s\S]*btn\.hidden = !!REMOTE_AGENT/);
-  // With other machines configured the icon opens the fleet wall; otherwise fleet settings.
-  assert.match(app, /if \(e\.target\.closest\('#fleet-manage-btn'\)\) \{ e\.preventDefault\(\); if \(state\.multiAgent && !state\.remoteAgent\) showFleetView\(\); else openSettingsModal\('fleet'\); \}/);
+  // The icon is shown on every page, a remote machine's own page included: it is the way back to the machines page.
+  assert.doesNotMatch(app.slice(app.indexOf('function initFleetManageButton('), app.indexOf('function initTechButton(')), /hidden/);
+  assert.match(app, /if \(e\.target\.closest\('#fleet-manage-btn'\)\) \{ e\.preventDefault\(\); openFleetFromIcon\(\); \}/);
 
   // Fleet management configures the local consumer even while viewing a remote
   // agent in-page, so these calls intentionally avoid agentPath().
@@ -1646,11 +1653,6 @@ test('fleet management entry stays local and its controls are retained in settin
     assert.equal(typeof pack['fleet_manage.base_url_hint'], 'string');
     assert.equal(typeof pack['fleet_manage.base_url_copied'], 'string');
   }
-
-  // #241: the back-to-fleet button must not stretch when a flex parent
-  // (memory-tab-active pinned layout) applies align-items: stretch.
-  const backToFleetRule = css.match(/\.back-to-fleet \{[^}]*\}/)[0];
-  assert.match(backToFleetRule, /align-self:\s*flex-start/);
 
   // Success statuses auto-dismiss; leaving fleet management clears its status
   // without hiding or removing the shared settings page.

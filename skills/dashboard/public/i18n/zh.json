@@ -205,7 +205,6 @@
   "agent_fleet.no_activity": "待命中",
   "agent_fleet.context_chip_title": "Context 用量 / 换会话阈值",
   "agent_fleet.model": "模型",
-  "agent_fleet.back_to_fleet": "← 多台机器",
   "agent_fleet.sound_on": "提示音已开启 — 点击静音",
   "agent_fleet.sound_off": "提示音已静音 — 点击开启",
   "trends.tool_calls": "工具调用",

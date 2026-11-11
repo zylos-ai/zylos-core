@@ -660,6 +660,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
     });
   }
 
+  // Waits until the view switch has finished: the page it leaves fades out over the one it opens. Endless
+  // animations (a busy group's pulse) never finish and are not part of the switch.
+  const settled = (page, machinesPage) => page.waitForFunction(machinesPage => document.querySelector('#agent-detail').hidden === machinesPage
+    && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity), machinesPage);
+
   // Viewing other machines: the header version and the machine panel's meta line show the viewed machine's own
   // Core version, and nothing when that machine reports none or "unknown"; never this machine's 0.9.4. This step's
   // page sees three remotes through answerFleet.
@@ -690,7 +695,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.equal(own.versionShown, true);
     assert.match(own.meta, /· core 0\.9\.4$/, 'the machine panel names this machine\'s Core version');
     for (const [name, version] of Object.entries(remotes)) {
-      await page.locator('#back-to-fleet').click();
+      await page.locator('#fleet-manage-btn').click();
       const stateRead = page.waitForResponse(response => new URL(response.url()).pathname === `/fleet/${name}/api/state`);
       await page.locator(`#agent-fleet-root .agent-open[data-agent="${name}"]`).click();
       await stateRead;
@@ -721,11 +726,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await page.reload();
       const self = page.locator('#agent-fleet-root .agent-open[data-self="true"]');
       await self.waitFor();
-      // Measured once the view switch has finished: the page it leaves fades out over the one it opens. Endless
-      // animations (a busy group's pulse) never finish and are not part of the switch.
-      const settled = machinesPage => page.waitForFunction(machinesPage => document.querySelector('#agent-detail').hidden === machinesPage
-        && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity), machinesPage);
-      await settled(true);
+      await settled(page, true);
       const header = () => page.evaluate(() => {
         const box = node => node.getBoundingClientRect(), nav = document.querySelector('.app-header .tab-bar');
         const head = box(document.querySelector('.app-header'));
@@ -735,7 +736,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const machines = await header();
       await shot(`machines-${theme}`);
       await self.click();
-      await settled(false);
+      await settled(page, false);
       const machine = await header();
       if (width <= 760) {
         assert.equal(machines.navBoxes, 0, `${label}: the machines page has no section row`);
@@ -752,6 +753,83 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const memory = page.locator('.app-header .tab[data-tab="memory"]');
       await memory.click();
       await page.waitForFunction(() => document.querySelector('.app-header .tab[data-tab="memory"]').getAttribute('aria-current') === 'page');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
+  // One way back to the machines page: the header's machines icon, from this machine's page and from a remote one
+  // (leaving the remote view the way the history expects), and from a remote machine's own page (opened from another
+  // dashboard), which goes back to that dashboard. There is no separate back button. Without other machines the icon
+  // opens machine settings.
+  await step('machines icon: back to the machines page from any machine, no back button; machine settings without other machines', async () => {
+    for (const width of [1280, 390]) {
+      const { page, context, errors, shot } = await open(width, width === 390 ? 844 : 800, '/');
+      await answerFleet(page, { spark: '1.0.0-beta.7' });
+      await page.reload();
+      const icon = page.locator('#fleet-manage-btn'), path = () => new URL(page.url()).pathname;
+      await settled(page, true);
+      assert.equal(await page.locator('#back-to-fleet').count(), 0, `${width}: no back button`);
+      await shot('icon-machines');
+      await page.locator('#agent-fleet-root .agent-open[data-self="true"]').click();
+      await settled(page, false);
+      assert.equal(await icon.isVisible(), true, `${width}: this machine's page has the icon`);
+      await shot('icon-this-machine');
+      await icon.click();
+      await settled(page, true);
+      await page.locator('#agent-fleet-root .agent-open[data-agent="spark"]').click();
+      await settled(page, false);
+      await page.waitForFunction(() => document.querySelector('#tab-bar-agent-name').textContent === 'spark');
+      assert.equal(path(), '/fleet/spark/');
+      await shot('icon-remote');
+      await icon.click();
+      await settled(page, true);
+      assert.equal(path(), '/', `${width}: the remote view is left for the machines page`);
+      assert.equal(await page.locator('#tab-bar-agent-name').textContent(), 'browser-case', `${width}: this machine again`);
+      // Like the removed back button, leaving adds a history entry: Back returns to the remote machine.
+      await page.goBack();
+      await settled(page, false);
+      await page.waitForFunction(() => document.querySelector('#tab-bar-agent-name').textContent === 'spark');
+      assert.equal(path(), '/fleet/spark/', `${width}: Back returns to the remote machine`);
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+
+    // A remote machine's own page, served under /fleet/<name>/ of the dashboard it was opened from: it has no
+    // machines page of its own, so the icon goes back to that dashboard, which lands on its machines page.
+    {
+      const { page, context, errors } = await open(1280, 800, '/');
+      await answerFleet(page, { spark: '1.0.0-beta.7' });
+      await page.route(/\/fleet\/spark\/(_assets\/.*)?(\?.*)?$/, async route => {
+        const url = new URL(route.request().url());
+        if (url.pathname.startsWith('/fleet/spark/_assets/')) return route.fallback({ url: new URL(url.pathname.slice('/fleet/spark'.length) + url.search, url).href });
+        return route.fulfill({ contentType: 'text/html; charset=utf-8', body: fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8')
+          .replaceAll('__BASE_PATH__', '/fleet/spark').replaceAll('__ASSET_ROOT__', '/fleet/spark/_assets').replaceAll('__REMOTE_ACCESS__', 'admin') });
+      });
+      await page.goto(new URL('/fleet/spark/', page.url()).href);
+      await page.waitForFunction(() => document.querySelector('#tab-bar-agent-name').textContent === 'spark');
+      const icon = page.locator('#fleet-manage-btn');
+      assert.equal(await icon.isVisible(), true, 'a remote machine\'s own page keeps the icon as its way back');
+      assert.equal(await page.locator('#back-to-fleet').count(), 0);
+      await icon.click();
+      await page.waitForURL(url => new URL(url).pathname === '/');
+      // A fresh document: only the view it lands on is waited for. Headless Chromium does not hand frames to the
+      // test for a document reached from a remote machine's own page (screenshots time out there too, also before
+      // this page had the icon as its way back), so the check polls on a timer, not on frames.
+      await page.waitForFunction(() => document.querySelector('#agent-detail').hidden && !document.querySelector('#fleet-view').hidden, null, { polling: 100 });
+      await page.locator('#agent-fleet-root .agent-open[data-agent="spark"]').waitFor({ state: 'attached' });
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+
+    // Without other machines there is no machines page: the icon opens machine settings.
+    {
+      const { page, context, errors } = await open(1280, 800, '/');
+      await page.locator('#fleet-manage-btn').click();
+      await page.locator('#settings-section-fleet').waitFor();
+      assert.equal(await page.locator('#tab-settings').isVisible(), true);
+      assert.equal(await page.locator('[data-settings-section="fleet"]').first().getAttribute('aria-current'), 'true');
+      assert.equal(await page.locator('#back-to-fleet').count(), 0);
       assert.deepEqual(errors, []);
       await context.close();
     }
