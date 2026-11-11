@@ -94,7 +94,7 @@ export function currentRecordedWeekly(value, recordedAt, now) {
 }
 
 /** Recorded account evidence uses its recorded run/session, never a live identity. */
-export function readRecordedCodexSample({ sessionGroup, env = process.env, now = Date.now() }) {
+export function readRecordedCodexSample({ sessionGroup, env = process.env, now = Date.now(), includeWithoutQuota = false }) {
   const events = readSnapshot(path.join(groupRunDir(sessionGroup, env), 'events.jsonl'));
   if (events.error) return null;
   const starts = completeRows(events.text).filter(row => row.v === 1 && row.event === 'session_start' &&
@@ -112,7 +112,7 @@ export function readRecordedCodexSample({ sessionGroup, env = process.env, now =
     const row = source.rows.findLast(item => item.type === 'event_msg' && item.payload?.type === 'token_count');
     if (!row) continue;
     const sample = codexSampleFromRow(source, row, { runId: event.run_id, sessionId: event.session_id });
-    return sample && currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now) ? sample : null;
+    return sample && (includeWithoutQuota || currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now)) ? sample : null;
   }
   return null;
 }

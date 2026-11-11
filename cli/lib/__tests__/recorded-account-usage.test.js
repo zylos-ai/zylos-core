@@ -30,18 +30,19 @@ function fixture(t) {
     setIdentity: value => { observed = value; }, counts: () => [connections, closes] };
 }
 
-test('live account values and mtime selection stay unchanged, with opt-in provenance', async t => {
+test('default live account values keep mtime selection while recorded reads compare sample times', async t => {
   const f = fixture(t); const a = f.status('origin', 7, now - 5000), b = f.status('other', 12, now - 10000);
   fs.utimesSync(a, 100, 100); fs.utimesSync(b, 200, 200); f.setLive(['origin', 'other']);
   const expected = { seven_day: { used_percentage: 12, resets_at: reset } };
   assert.deepEqual(await f.reader.readAccountUsage('claude'), expected);
   assert.deepEqual(await f.reader.readAccountUsage('claude', null), expected);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1).toISOString(), weeklyAll: { percent: 99, resets: reset } });
-  assert.deepEqual(await f.reader.readAccountUsage('claude', { allowRecorded: true }), { value: expected, recordedAt: now - 10000, live: true });
+  assert.deepEqual(await f.reader.readAccountUsage('claude', { allowRecorded: true }), {
+    value: { seven_day: { used_percentage: 99, resets_at: reset } }, recordedAt: now - 1, live: false });
   assert.deepEqual(f.counts(), [6, 6]);
 });
 
-test('reclaimed groups prefer the newest valid group quota over a later sampler copy', async t => {
+test('reclaimed groups and sampler copies compete by their actual sample times', async t => {
   const f = fixture(t); const file = f.status('origin', 4, now - 7200000);
   fs.utimesSync(file, now / 1000, now / 1000);
   f.status('other', 7, now - 3600000);
@@ -49,23 +50,23 @@ test('reclaimed groups prefer the newest valid group quota over a later sampler 
   const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
   assert.equal(record.value.seven_day.used_percentage, 7); assert.equal(record.recordedAt, now - 3600000); assert.equal(record.live, false);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 9, resets: new Date(reset * 1000).toISOString() } });
-  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 7);
-  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).recordedAt, now - 3600000);
+  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 9);
+  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).recordedAt, now - 1000);
   f.status('newest', 11, now - 500);
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 11);
   assert.deepEqual(f.counts(), [0, 0], 'history does not open a tmux connection');
 });
 
-test('the account sampler is used only when all group samples are absent or invalid', async t => {
+test('the account sampler stays newer than older group samples', async t => {
   const f = fixture(t);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 8, resets: reset } });
-  f.status('expired', 20, now - 500, now / 1000 - 1);
+  f.status('expired', 20, now - 2000, now / 1000 - 1);
   f.write('activity-monitor/session-groups/broken/statusline.json', '{broken');
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 8);
   f.status('valid', 20, now - 3600000);
   const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
-  assert.equal(record.value.seven_day.used_percentage, 20);
-  assert.equal(record.recordedAt, now - 3600000);
+  assert.equal(record.value.seven_day.used_percentage, 8);
+  assert.equal(record.recordedAt, now - 1000);
   assert.equal(await f.reader.readAccountUsage('claude', null), null);
 });
 
@@ -260,4 +261,149 @@ test('usage monitor keeps the default live-only interface even when recorded quo
   assert.equal(await monitor.runMonitor({ currentTime: now / 1000 }), true);
   assert.deepEqual(calls, [['claude']]); assert.equal(fs.existsSync(path.join(f.root, 'monitor.json')), false);
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 99);
+});
+
+function completedClaude(f, group, at, extra = {}) {
+  return f.write(`activity-monitor/session-groups/${group}/statusline.json`, {
+    session_id: 'session', zylos: { v: 1, runId: 'run', capturedAt: at },
+    context_window: { total_input_tokens: 100, total_output_tokens: 25,
+      current_usage: { input_tokens: 100, output_tokens: 25 } }, ...extra,
+  });
+}
+function codexTokens(f, group, rows) {
+  const file = f.write(`${group}/rollout.jsonl`, rows.map(({ at, percent }) => JSON.stringify({
+    timestamp: new Date(at).toISOString(), type: 'event_msg', payload: { type: 'token_count',
+      ...(percent === undefined ? {} : { rate_limits: { secondary: { window_minutes: 10080, used_percent: percent, resets_at: reset } } }) },
+  })).join('\n') + '\n');
+  f.write(`activity-monitor/session-groups/${group}/events.jsonl`, JSON.stringify({ v: 1, ts: now - 60000,
+    event: 'session_start', runtime: 'codex', session_group: group, run_id: 'run', session_id: 'session', transcript_path: file }) + '\n');
+  return file;
+}
+
+test('a live proxy response without quota blocks older subscription groups and sampler copies', async t => {
+  const f = fixture(t);
+  f.status('sleeping', 7, now - 2 * 86400000);
+  f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 60000).toISOString(), weeklyAll: { percent: 7, resets: reset } });
+  completedClaude(f, 'origin', now - 1000); f.setLive(['origin']);
+  assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
+  assert.equal(await f.reader.readAccountUsage('claude'), null);
+  assert.deepEqual(f.counts(), [2, 2]);
+});
+
+test('a recorded proxy response without quota also blocks older subscription records', async t => {
+  const f = fixture(t); f.status('subscription', 7, now - 10000);
+  completedClaude(f, 'proxy', now - 1000);
+  assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
+});
+
+test('a live subscription quota wins by captured time despite a newer file mtime elsewhere', async t => {
+  const f = fixture(t); f.setLive(['origin', 'other']);
+  const live = f.status('origin', 11, now - 1000), other = f.status('other', 17, now - 10000);
+  fs.utimesSync(live, 100, 100); fs.utimesSync(other, 200, 200);
+  const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
+  assert.equal(record.value.seven_day.used_percentage, 11); assert.equal(record.recordedAt, now - 1000); assert.equal(record.live, true);
+  assert.equal((await f.reader.readAccountUsage('claude')).seven_day.used_percentage, 17, 'default remains mtime-based');
+});
+
+test('a newer subscription record beats an older no-quota proxy response', async t => {
+  const f = fixture(t); completedClaude(f, 'origin', now - 10000); f.setLive(['origin']);
+  f.status('subscription', 21, now - 1000);
+  const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
+  assert.equal(record.value.seven_day.used_percentage, 21); assert.equal(record.live, false);
+});
+
+test('a newer sampler quota can supersede a no-quota group response', async t => {
+  const f = fixture(t); completedClaude(f, 'origin', now - 10000); f.setLive(['origin']);
+  f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 13, resets: reset } });
+  const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
+  assert.equal(record.value.seven_day.used_percentage, 13); assert.equal(record.recordedAt, now - 1000); assert.equal(record.live, false);
+});
+
+test('a subscription startup sample without an API response cannot erase recorded quota', async t => {
+  const f = fixture(t); f.status('subscription', 7, now - 10000); f.setLive(['origin']);
+  f.write('activity-monitor/session-groups/origin/statusline.json', {
+    session_id: 'session', zylos: { v: 1, runId: 'run', capturedAt: now - 1000 },
+    context_window: { total_input_tokens: 0, total_output_tokens: 0, current_usage: null },
+  });
+  const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
+  assert.equal(record.value.seven_day.used_percentage, 7); assert.equal(record.live, false);
+});
+
+test('a completed response remains no-quota evidence after context compaction clears current usage', async t => {
+  const f = fixture(t); f.status('subscription', 7, now - 10000);
+  completedClaude(f, 'origin', now - 1000, { context_window: { total_input_tokens: 0, total_output_tokens: 0, current_usage: null },
+    cost: { total_api_duration_ms: 1000 } });
+  assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
+});
+
+test('legacy no-quota response timestamps use mtime but explicit invalid captured times do not', async t => {
+  const f = fixture(t); f.status('subscription', 7, now - 10000);
+  const file = completedClaude(f, 'proxy', now - 1000, { zylos: { v: 1, runId: 'run' } });
+  fs.utimesSync(file, (now - 1000) / 1000, (now - 1000) / 1000);
+  assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
+  for (const at of [null, 'invalid', now + 1000]) {
+    completedClaude(f, 'proxy', at);
+    assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 7);
+  }
+});
+
+test('Codex latest live token sample without quota blocks an older quota in the same rollout', async t => {
+  const f = fixture(t); f.setIdentity({ ...f.identity, runtime: 'codex' }); f.setLive(['codex:live']);
+  codexTokens(f, 'codex:live', [{ at: now - 10000, percent: 7 }, { at: now - 1000 }]);
+  assert.equal(await f.reader.readAccountUsage('codex', { allowRecorded: true }), null);
+  assert.equal((await f.reader.readAccountUsage('codex')).sevenDay.usedPercentage, 7, 'default account lookup still finds quota');
+});
+
+test('Codex latest recorded no-quota sample blocks older quota from another group', async t => {
+  const f = fixture(t); codexTokens(f, 'codex:old', [{ at: now - 10000, percent: 7 }]);
+  codexTokens(f, 'codex:new', [{ at: now - 1000 }]);
+  assert.equal(await f.reader.readAccountUsage('codex', { allowRecorded: true }), null);
+  assert.equal(readRecordedCodexSample({ sessionGroup: 'codex:new', env: { ZYLOS_DIR: f.root }, now }), null, 'default historical API remains quota-only');
+});
+
+test('Codex newer recorded quota beats older live no-quota evidence', async t => {
+  const f = fixture(t); f.setIdentity({ ...f.identity, runtime: 'codex' }); f.setLive(['codex:live']);
+  codexTokens(f, 'codex:live', [{ at: now - 10000 }]); codexTokens(f, 'codex:recorded', [{ at: now - 1000, percent: 13 }]);
+  const record = await f.reader.readAccountUsage('codex', { allowRecorded: true });
+  assert.equal(record.value.sevenDay.usedPercentage, 13); assert.equal(record.live, false); assert.equal(record.recordedAt, now - 1000);
+});
+
+test('Codex live quota wins a same-time historical copy and uses captured time rather than mtime', async t => {
+  const f = fixture(t); f.setIdentity({ ...f.identity, runtime: 'codex' }); f.setLive(['codex:live']);
+  const live = codexTokens(f, 'codex:live', [{ at: now - 1000, percent: 13 }]);
+  const old = codexTokens(f, 'codex:old', [{ at: now - 10000, percent: 7 }]);
+  fs.utimesSync(live, 100, 100); fs.utimesSync(old, 200, 200);
+  const record = await f.reader.readAccountUsage('codex', { allowRecorded: true });
+  assert.equal(record.value.sevenDay.usedPercentage, 13); assert.equal(record.live, true); assert.equal(record.recordedAt, now - 1000);
+});
+
+test('a newer expired quota cannot revive an older still-valid subscription window', async t => {
+  const f = fixture(t); f.status('older', 7, now - 10000);
+  f.status('newer', 20, now - 1000, now / 1000 - 1);
+  f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 5000).toISOString(), weeklyAll: { percent: 13, resets: reset } });
+  assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
+});
+
+for (const [kind, context_window] of [
+  ['current usage', { current_usage: { input_tokens: 2 }, total_input_tokens: 0, total_output_tokens: 0 }],
+  ['input tokens', { current_usage: null, total_input_tokens: 2, total_output_tokens: 0 }],
+  ['output tokens', { current_usage: null, total_input_tokens: 0, total_output_tokens: 2 }],
+]) test(`Claude ${kind} makes a quota-less response authoritative`, async t => {
+  const f = fixture(t); f.status('subscription', 7, now - 10000);
+  completedClaude(f, 'response', now - 1000, { context_window });
+  assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
+});
+
+test('the supplied proxy sample shape supersedes its sleeping subscription record', async t => {
+  const f = fixture(t);
+  const captured = 1794386006677, older = 1794240169059, weeklyReset = 1794751200;
+  const frozenNow = captured + 1000;
+  f.status('sleeping', 7, older, weeklyReset);
+  f.write('activity-monitor/session-groups/origin/statusline.json', { session_id: 'session',
+    zylos: { v: 1, runId: 'run', capturedAt: captured }, cost: { total_api_duration_ms: 13410 },
+    context_window: { total_input_tokens: 30527, current_usage: { input_tokens: 2, output_tokens: 231,
+      cache_creation_input_tokens: 300, cache_read_input_tokens: 30225 } } });
+  const reader = createSessionReader({ env: { ZYLOS_DIR: f.root }, now: () => frozenNow,
+    listSessions: async () => [{ sessionGroup: 'origin' }], open: async () => ({ close: async () => {} }), observe: async () => f.identity });
+  assert.equal(await reader.readAccountUsage('claude', { allowRecorded: true }), null);
 });
