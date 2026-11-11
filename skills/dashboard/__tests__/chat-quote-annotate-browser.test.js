@@ -5,7 +5,8 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 // private headless browser. The server's quote step (send `quote` → stored `[quote c4_id=N]` first line, history
 // `quote` field) is emulated in front of the real routes until the server side ships.
 // Covers: hover/trackpad/touch quoting and its no-trigger cases, the quote bar, history quote blocks (jump with
-// older-page loading, unavailable original), annotations (selection, editor, list, preview equals sent content),
+// older-page loading over several pages, a second jump while a page loads, unavailable original), annotations (selection,
+// internal messages excluded, editor kept on screen through resizes, list, preview equals sent content),
 // draft survival across reload and conversation switch, and layout at 1280/390 in light and dark.
 // Run for changes to the conversation page, composer, quote/annotation modules or their styles; skip otherwise.
 // Opt-in runner and sandbox prove HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB isolation,

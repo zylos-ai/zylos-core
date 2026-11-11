@@ -356,7 +356,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
   await page.goto('about:blank'); await context.clearCookies(); await page.goto(fixture.base+'/login');
   await page.locator('input[name="password"]').waitFor();
   const staleScope={authRoot:fixture.base,instance:fixture.base,conversationId:scenes.controls.receipt.conversationId,messageId:scenes.controls.envelope.messageId,blockId:'customer_form',schemaVersion:2};
-  assert.equal(await page.evaluate(async ({scope})=>{const {browserDraftStore}=await import('/_assets/js/wb/chat-drafts.js?v=102');return browserDraftStore.save(scope,{customer_type:'company',full_name:'stale login',email:'stale@example.com',company_name:'stale hidden'}).saved;},{scope:staleScope}),true);
+  assert.equal(await page.evaluate(async ({scope})=>{const {browserDraftStore}=await import('/_assets/js/wb/chat-drafts.js?v=103');return browserDraftStore.save(scope,{customer_type:'company',full_name:'stale login',email:'stale@example.com',company_name:'stale hidden'}).saved;},{scope:staleScope}),true);
   await page.locator('input[name="password"]').fill('isolated-login-password');
   await Promise.all([page.waitForURL(url=>url.pathname==='/'),page.locator('button[type="submit"]').click()]);
   await page.goto(fixture.base+'/chat'); await page.locator('#wb-chat [data-conversation-id]').first().waitFor(); root=await choose('controls');

@@ -184,7 +184,9 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
     el.style.top = '0px';
     const height = el.offsetHeight;
     let top = (last?.bottom ?? 12) + 10;
-    if (top + height > view.innerHeight - 12) top = Math.max(12, (rects[0]?.top ?? 12) - height - 10);
+    if (top + height > view.innerHeight - 12) top = (rects[0]?.top ?? 12) - height - 10;
+    // The selected text may be off screen (a shorter window); the editor and its buttons stay on it.
+    top = Math.max(12, Math.min(top, view.innerHeight - height - 12));
     el.style.top = `${top}px`;
   }
   // Where the editor sits follows the viewport: a bottom sheet when narrow, otherwise beside the selected text, which is

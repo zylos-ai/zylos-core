@@ -772,13 +772,11 @@ export function mountConversationPage({
     const find = () => messageList.querySelector(`article[data-message-id="${target}"]`);
     let article = find();
     while (!article && !destroyed && selectedKey === selected) {
-      // A page already loading (the reader scrolled to the top, or an earlier jump) may hold the original.
-      await state.olderSettled();
-      article = find();
-      if (article || destroyed || selectedKey !== selected) break;
       const before = state.snapshot();
       if (!before.messageCursor || before.olderError) break;
       await state.loadOlder();
+      // A page already loading (an earlier jump, the top-of-list loader) makes this call start nothing; wait for it.
+      await state.olderSettled();
       article = find();
       const after = state.snapshot();
       if (after.olderError || after.messages[0]?.id === before.messages[0]?.id) break;

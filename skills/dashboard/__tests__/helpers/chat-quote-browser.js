@@ -72,20 +72,23 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     sendJson(res, 200, values[url.pathname] || {}); return true;
   } });
 
-  // Conversation A: an early AI message (more than one page back), filler, a two-paragraph AI reply to annotate,
+  // Conversation A: an early AI message (several pages back), filler, a two-paragraph AI reply to annotate,
   // a scrollable code block, a stored quote of the early message and one whose original is gone.
   const mine = await fixture.createConversation('我们讨论一下灰度发布。');
   const localId = mine.draft.localId, conversationId = mine.receipt.conversationId;
   const early = fixture.addOutbound(localId, '很早的方案：先在测试环境演练一次回滚。');
-  for (let index = 1; index <= 55; index++) fixture.addOutbound(localId, `进度记录 ${index}`);
+  for (let index = 1; index <= 130; index++) fixture.addOutbound(localId, `进度记录 ${index}`);
   const plan = fixture.addOutbound(localId, '灰度只影响一小部分实例，出问题时撤回这一批即可。\n\n资源占用：蓝绿要同时保留两套完整环境，机器翻倍。\n\n验证方式：灰度可以先放 5% 的流量观察错误率和延迟，再逐步放大。');
   const code = fixture.addOutbound(localId, '回滚命令：\n\n```\n' + 'deploy rollback --batch=1 --keep-traffic --confirm '.repeat(6) + '\n```');
   const table = fixture.addOutbound(localId, '| 批次 | 实例 | 观察时长 | 错误率阈值 | 延迟阈值 | 负责人 | 回滚命令 |\n|---|---|---|---|---|---|---|\n' + '| 第一批 | node-01, node-02 | 30 分钟 | 0.5% | P95 800ms | 值班工程师 | deploy rollback --batch=1 --keep-traffic |\n'.repeat(2));
   const quoted = fixture.c4.insertConversation('in', 'dashboard', localId, `[quote c4_id=${early.id}]\n这个早的方案还算数吗？`, { groupName: localId });
   const gone = fixture.c4.insertConversation('in', 'dashboard', localId, '[quote c4_id=999999]\n原消息已经删掉了。', { groupName: localId });
-  const reply = fixture.addOutbound(localId, '建议第一批放 2 台，观察 30 分钟再放到全部 4 台。');
   const other = await fixture.createConversation('另一个对话的草稿不应串过来。');
   const otherId = other.receipt.conversationId;
+  // An internal message from the other conversation's session group, shown in conversation A.
+  const groupWith = content => fixture.db.prepare('SELECT session_group FROM conversations WHERE content = ?').get(content).session_group;
+  const internal = fixture.c4.insertInternalMessage(groupWith('另一个对话的草稿不应串过来。'), groupWith('我们讨论一下灰度发布。'), '内部协调：发布窗口定在周四晚上。').inRow;
+  const reply = fixture.addOutbound(localId, '建议第一批放 2 台，观察 30 分钟再放到全部 4 台。');
 
   const { chromium } = await import(pathToFileURL(modulePath));
   console.info('Quote browser private targets:', JSON.stringify(sandbox.assertIsolation()), 'model/PM2/tmux unused');
@@ -194,13 +197,13 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     const goneBlock = row(page, gone.id).locator('.conversation-quote-block');
     assert.equal(await goneBlock.innerText(), '原消息不可用');
     assert.equal(await goneBlock.isDisabled(), true);
-    assert.equal(await row(page, early.id).count(), 0, 'the early message is more than one page back');
+    assert.equal(await row(page, early.id).count(), 0, 'the early message is several pages back');
     const before = olderReads.length;
     await block.click();
     await row(page, early.id).waitFor();
     await waitUntil(() => row(page, early.id).evaluate(el => el.classList.contains('conversation-flash')), 'the original flashes');
     await waitUntil(() => row(page, early.id).evaluate(el => { const box = el.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; }), 'the original scrolls into view');
-    assert.ok(olderReads.length > before, 'earlier pages were loaded to reach it');
+    assert.ok(olderReads.length >= before + 2, 'earlier pages were loaded one after another to reach it');
 
     // Mouse: the hover button quotes; a quote alone cannot be sent.
     await row(page, reply.id).scrollIntoViewIfNeeded();
@@ -280,6 +283,11 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     await selectText(page, plan.id, '验证方式', reply.id, '观察 30 分钟');
     await delay(200);
     assert.equal(await markButton(page).isVisible(), false, 'no 标注 across messages');
+    await row(page, internal.id).waitFor();
+    assert.equal(await row(page, internal.id).evaluate(el => el.classList.contains('conversation-internal')), true);
+    await selectText(page, internal.id, '发布窗口定在周四晚上');
+    await delay(200);
+    assert.equal(await markButton(page).isVisible(), false, 'internal messages cannot be annotated');
     await selectText(page, plan.id, '灰度只影响一小部分实例，出问题时撤回这一批即可。');
     await markButton(page).waitFor();
     assert.ok(await assertLayout(page, '1280 mark') >= 1);
@@ -393,6 +401,14 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     assert.equal(await editor.isVisible(), true, 'a resize keeps the editor open');
     assert.equal(await editor.locator('textarea').inputValue(), '半小时够吗？');
     assert.ok(await assertLayout(page, '1280 dark editor after resize') >= 2);
+    // The selected text scrolled out of a shorter window: the editor and its buttons stay on screen.
+    await page.locator('#wb-chat .conversation-stream').evaluate(el => { el.scrollTop = Math.max(0, el.scrollTop - 900); });
+    await waitUntil(() => row(page, reply.id).evaluate(el => el.getBoundingClientRect().top > innerHeight), 'the selected text is below the window');
+    await page.setViewportSize({ width: 1000, height: 560 });
+    await delay(120);
+    assert.equal(await editor.isVisible(), true);
+    assert.ok(await assertLayout(page, '1280 dark editor, selection off screen') >= 2);
+    assert.ok(await editor.locator('[data-action="saveAnnotation"]').evaluate(el => el.getBoundingClientRect().bottom <= innerHeight), 'save stays reachable');
     await editor.locator('.wb-btn:not(.wb-btn-primary)').click();
     await page.locator('#wb-chat .conversation-quote-bar-close').click();
     await context.close();
