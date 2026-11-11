@@ -14,11 +14,13 @@ const ATTACHMENT_LINE = /^\[attachment:(?:image|file) .+\]$/;
 
 /**
  * The Dashboard server side of quoting as the contract states it (send accepts `quote` and stores
- * `[quote c4_id=N]` as the first line; history rows carry `quote: { id, direction, timestamp, preview, available }`),
- * applied in front of the real routes. The page under test is the real frontend; only this server step is emulated.
+ * `[quote c4_id=N]` as the first line; a dashboard row from the user whose marker names an older message carries
+ * `quote: { id, direction, internal, timestamp, preview, available }`, available only while the original is in the same
+ * conversation), applied in front of the real routes. The page under test is the real frontend; only this server step is emulated.
  */
 async function emulateQuoteServer(context, fixture, sent) {
-  const lookup = id => fixture.db.prepare('SELECT id, direction, timestamp, content, session_group FROM conversations WHERE id = ?').get(Number(id));
+  const lookup = id => fixture.db.prepare('SELECT id, direction, timestamp, content, channel, endpoint_id, session_group FROM conversations WHERE id = ?').get(Number(id));
+  const INTERNAL = /^\[internal\] (?:Yourself, from your "[^"]*" session group, said|[^\n]* said): /;
   await context.route(url => url.pathname.endsWith('/send') && url.pathname.startsWith('/api/chat/conversations/'), async route => {
     const body = route.request().postDataJSON();
     assert.ok(sent.length < 50, 'bounded send capture');
@@ -36,12 +38,14 @@ async function emulateQuoteServer(context, fixture, sent) {
     const data = await response.json();
     for (const row of Array.isArray(data.items) ? data.items : []) {
       const match = typeof row.content === 'string' ? MARKER.exec(row.content) : null;
-      if (!match) continue;
-      const own = lookup(row.id), target = lookup(match[1]);
-      const available = !!target && target.session_group === own?.session_group && target.id < own.id;
-      const text = available ? target.content.replace(MARKER, '').split('\n').filter(line => !ATTACHMENT_LINE.test(line)).join('\n').trim() : '';
-      row.quote = { id: Number(match[1]), direction: target?.direction ?? null, timestamp: target?.timestamp ?? null,
-        preview: Array.from(text).slice(0, 160).join(''), available };
+      const own = lookup(row.id);
+      // A marker naming a newer message is not a quote; it stays text.
+      if (!match || own?.channel !== 'dashboard' || own.direction !== 'in' || Number(match[1]) >= own.id) continue;
+      const found = lookup(match[1]), target = found && found.session_group === own.session_group ? found : null;
+      const body = target ? target.content.replace(target.channel === 'internal' ? INTERNAL : MARKER, '') : '';
+      const text = body.split('\n').filter(line => !ATTACHMENT_LINE.test(line)).join('\n').trim();
+      row.quote = { id: Number(match[1]), direction: target?.direction ?? null, internal: target?.channel === 'internal',
+        timestamp: target?.timestamp ?? null, preview: Array.from(text).slice(0, 160).join(''), available: !!target };
     }
     await route.fulfill({ response, json: data });
   });
@@ -82,11 +86,14 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
   const code = fixture.addOutbound(localId, '回滚命令：\n\n```\n' + 'deploy rollback --batch=1 --keep-traffic --confirm '.repeat(6) + '\n```');
   const table = fixture.addOutbound(localId, '| 批次 | 实例 | 观察时长 | 错误率阈值 | 延迟阈值 | 负责人 | 回滚命令 |\n|---|---|---|---|---|---|---|\n' + '| 第一批 | node-01, node-02 | 30 分钟 | 0.5% | P95 800ms | 值班工程师 | deploy rollback --batch=1 --keep-traffic |\n'.repeat(2));
   const quoted = fixture.c4.insertConversation('in', 'dashboard', localId, `[quote c4_id=${early.id}]\n这个早的方案还算数吗？`, { groupName: localId });
-  const gone = fixture.c4.insertConversation('in', 'dashboard', localId, '[quote c4_id=999999]\n原消息已经删掉了。', { groupName: localId });
+  // Quotes an earlier message that later left this conversation (moved to the other one below).
+  const movedAway = fixture.addOutbound(localId, '这条后来被移到另一个对话了。');
+  const gone = fixture.c4.insertConversation('in', 'dashboard', localId, `[quote c4_id=${movedAway.id}]\n原消息已经不在这个对话里了。`, { groupName: localId });
   const other = await fixture.createConversation('另一个对话的草稿不应串过来。');
   const otherId = other.receipt.conversationId;
   // An internal message from the other conversation's session group, shown in conversation A.
   const groupWith = content => fixture.db.prepare('SELECT session_group FROM conversations WHERE content = ?').get(content).session_group;
+  fixture.db.prepare('UPDATE conversations SET session_group = ? WHERE id = ?').run(groupWith('另一个对话的草稿不应串过来。'), movedAway.id);
   const internal = fixture.c4.insertInternalMessage(groupWith('另一个对话的草稿不应串过来。'), groupWith('我们讨论一下灰度发布。'), '内部协调：发布窗口定在周四晚上。').inRow;
   const reply = fixture.addOutbound(localId, '建议第一批放 2 台，观察 30 分钟再放到全部 4 台。');
 
