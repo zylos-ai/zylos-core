@@ -10,6 +10,7 @@
  *   3. If lifecycle.hooks.configure exists, pipe config JSON to it
  *      Otherwise, write to .env for legacy components
  *   4. Run post-install hook → start PM2 service
+ *   5. Print the SKILL.md next-steps, if declared
  *
  * JSON mode (--json): Mechanical installation only
  *   1. Resolve target → download → npm install → manifest → register
@@ -45,6 +46,16 @@ function printManualCaddyRoutes(result) {
   for (const line of (result.manualConfig || '').split('\n')) {
     console.log(line);
   }
+}
+
+/**
+ * Post-install instructions declared in SKILL.md frontmatter as `next-steps`
+ * (or `nextSteps`). Components place it at the top level or under
+ * `lifecycle`; the top-level value wins when both are present.
+ */
+function readNextSteps(fm) {
+  const lifecycle = fm.lifecycle || {};
+  return fm['next-steps'] || fm.nextSteps || lifecycle['next-steps'] || lifecycle.nextSteps || null;
 }
 
 /**
@@ -448,6 +459,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   const config = fm.config || {};
   const hooks = lifecycle.hooks || {};
   const configureHook = hasConfigureHook(hooks) ? hooks.configure : null;
+  const nextSteps = readNextSteps(fm);
   let configureResult = null;
 
   // Resolve version: prefer resolved tag, then SKILL.md frontmatter, then package.json
@@ -564,8 +576,8 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
       const names = requiredConfig.map(c => typeof c === 'string' ? c : c.name);
       reply += `\nRequired config: ${names.join(', ')}`;
     }
-    if (fm['next-steps'] || fm.nextSteps) {
-      reply += `\nNext: ${fm['next-steps'] || fm.nextSteps}`;
+    if (nextSteps) {
+      reply += `\nNext: ${nextSteps}`;
     }
     if (caddyResult?.notice) reply += `\nCaddy routes: ${caddyResult.notice}`;
     const output = {
@@ -590,7 +602,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
         service: lifecycle.service || null,
         bin: binResult || null,
         caddy: caddyResult,
-        nextSteps: fm['next-steps'] || fm.nextSteps || null,
+        nextSteps,
       },
       reply,
     };
@@ -687,6 +699,10 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
   }
 
   console.log(`\n${success(`${bold(resolved.name)} installed successfully!`)}`);
+
+  if (nextSteps) {
+    console.log(`\n${bold('Next:')} ${nextSteps}`);
+  }
 
   // Show PATH hint if bin commands were linked
   if (binResult && Object.keys(binResult).length > 0) {
