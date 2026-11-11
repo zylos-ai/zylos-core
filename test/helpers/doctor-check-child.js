@@ -21,7 +21,7 @@ assert.equal(process.env.DOCTOR_TEST_TMUX_SOCKET, path.join(resolved.TMPDIR, 'tm
 assert.ok(Buffer.byteLength(process.env.DOCTOR_TEST_TMUX_SOCKET) < 100);
 const allowed = new Set(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'PATH', 'CLAUDE_BIN',
   'DOCTOR_TEST_ROOT', 'DOCTOR_TEST_STATE', 'DOCTOR_TEST_NETWORK', 'DOCTOR_TEST_TMUX_SOCKET',
-  'NO_COLOR', 'ZYLOS_GH_RETRY_DELAY_MS', 'DOCTOR_TEST_MODE', 'DOCTOR_TEST_ORIGIN', 'DOCTOR_TEST_RUNTIME', 'ZYLOS_SESSION_GROUP']);
+  'NO_COLOR', 'ZYLOS_GH_RETRY_DELAY_MS', 'DOCTOR_TEST_MODE', 'DOCTOR_TEST_ORIGIN', 'DOCTOR_TEST_RUNTIME', 'ZYLOS_SESSION_GROUP', 'DOCTOR_TEST_WEB']);
 // The repository test runner adds only its child-process guard preload.
 const guardPreload = `--import=${JSON.stringify(new URL('../../scripts/test-child-preload.js', import.meta.url).href)}`;
 if (process.env.NODE_OPTIONS !== undefined) assert.equal(process.env.NODE_OPTIONS, guardPreload);

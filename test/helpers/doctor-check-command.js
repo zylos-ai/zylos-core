@@ -34,6 +34,11 @@ if (command === 'which') {
   if (args[0] === '--version') console.log('6.0.0');
   else if (args[0] === 'jlist') console.log(JSON.stringify([
     { name: 'activity-monitor', pm2_env: { status: 'online' } },
+    // Optional built-in web services: DOCTOR_TEST_WEB lists name=status pairs, e.g. "zylos-dashboard=online caddy=online".
+    ...(process.env.DOCTOR_TEST_WEB || '').split(' ').filter(Boolean).map(pair => {
+      const [name, status] = pair.split('=');
+      return { name, pm2_env: { status } };
+    }),
     ...['worker-a', 'worker-b'].map(name => ({ name,
       pm2_env: { status: process.env.DOCTOR_TEST_STATE === 'pass' || (process.env.DOCTOR_TEST_STATE === 'repair_once' && fs.existsSync(path.join(root, 'repaired'))) ? 'online' : 'stopped' } })),
   ]));

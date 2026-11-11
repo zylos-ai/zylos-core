@@ -31,6 +31,7 @@ import { describeOrigin, formatOriginDescription } from '../lib/origin-presence.
 import { TMUX_COMMAND as C } from '../lib/runtime/tmux-protocol.js';
 import { alertTargetNotice, formatAlertTargetNotice } from '../lib/alert-target-notice.js';
 import { readPoolCapacity } from '../lib/session-pool-config.js';
+import { dashboardAccessAddress } from '../lib/dashboard-access.js';
 import { readSessionModeStatus } from '../lib/session-mode-status.js';
 
 const LOG_DIR = path.join(ZYLOS_DIR, 'logs');
@@ -592,7 +593,7 @@ function getNetworkIP() {
   return '';
 }
 
-function discoverChannels(pm2Procs, env, tmuxSession, components) {
+function discoverChannels(pm2Procs, env, tmuxSession, components, { zylosDir = ZYLOS_DIR } = {}) {
   const channels = [];
 
   // tmux channel — only show when session is active
@@ -639,6 +640,26 @@ function discoverChannels(pm2Procs, env, tmuxSession, components) {
       online: wcOnline,
       warning,
       hint,
+    });
+  }
+
+  // Dashboard — built-in, check PM2. The address is the one init prints: the public route when Caddy runs,
+  // otherwise the local port.
+  const dashboard = pm2Procs.find(p => p.name === 'zylos-dashboard');
+  if (dashboard) {
+    let action, warning = null;
+    try {
+      action = dashboardAccessAddress({ zylosDir, routed: caddy?.pm2_env?.status === 'online' }).url;
+    } catch (error) {
+      action = 'address unknown';
+      warning = error.message;
+    }
+    channels.push({
+      name: 'Dashboard',
+      action,
+      type: 'web',
+      online: dashboard.pm2_env?.status === 'online',
+      warning,
     });
   }
 

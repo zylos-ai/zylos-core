@@ -12,7 +12,7 @@ const hints = ['Check: pm2 logs worker-a', 'Check: pm2 logs worker-b'];
 const cleanup = [];
 afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 
-function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity } = {}) {
+function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity, web = '', coreConfig = {}, dashboardConfig } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-')));
   cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
@@ -33,7 +33,11 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
   fs.mkdirSync(path.join(dirs.ZYLOS_DIR, '.zylos'));
   fs.mkdirSync(path.join(dirs.ZYLOS_DIR, '.claude', 'skills'), { recursive: true });
   fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'components.json'), '{}');
-  fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime, ...(alertTarget === undefined ? {} : { alert_target: alertTarget }), session_mode: sessionMode ?? mode }));
+  fs.writeFileSync(path.join(dirs.ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({ runtime, ...(alertTarget === undefined ? {} : { alert_target: alertTarget }), session_mode: sessionMode ?? mode, ...coreConfig }));
+  if (dashboardConfig) {
+    fs.mkdirSync(path.join(dirs.ZYLOS_DIR, 'components', 'dashboard'), { recursive: true });
+    fs.writeFileSync(path.join(dirs.ZYLOS_DIR, 'components', 'dashboard', 'config.json'), JSON.stringify(dashboardConfig));
+  }
   if (capacity !== undefined) {
     fs.mkdirSync(path.join(dirs.ZYLOS_DIR, 'activity-monitor'), { recursive: true });
     fs.writeFileSync(path.join(dirs.ZYLOS_DIR, 'activity-monitor', 'pool-capacity.json'), JSON.stringify(capacity));
@@ -46,7 +50,7 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
   const env = { ...dirs, PATH: bin, CLAUDE_BIN: path.join(bin, 'claude'),
     DOCTOR_TEST_ROOT: root, DOCTOR_TEST_STATE: state, DOCTOR_TEST_NETWORK: network,
     DOCTOR_TEST_MODE: sessionMode ?? mode, DOCTOR_TEST_ORIGIN: origin, ZYLOS_SESSION_GROUP: group, DOCTOR_TEST_RUNTIME: runtime,
-    DOCTOR_TEST_TMUX_SOCKET: path.join(dirs.TMPDIR, 'tmux.sock'), NO_COLOR: '1',
+    DOCTOR_TEST_TMUX_SOCKET: path.join(dirs.TMPDIR, 'tmux.sock'), DOCTOR_TEST_WEB: web, NO_COLOR: '1',
     ZYLOS_GH_RETRY_DELAY_MS: '' };
   for (const [key, dir] of Object.entries(dirs)) assert.equal(fs.realpathSync(env[key]), dir);
   assert.ok(Buffer.byteLength(env.DOCTOR_TEST_TMUX_SOCKET) < 100, 'Use a short temporary parent');
@@ -105,10 +109,10 @@ for (const scenario of ['fresh floor', 'stale floor', 'future floor', 'missing',
 // private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR and fake tmux on a private socket;
 // no C4 database or live services; runDoctor verifies paths and removes fixtures.
 for (const [alertTarget, sender, message] of [
-  [undefined, false, 'Alert target: not set; system alerts go only to Web Console. The agent will ask the owner in the next private chat, or run: zylos config set alert_target <channel>:<endpoint>'],
-  ['web-console:console', false, 'Alert target: web-console:console (the owner chose Web Console only). To change: zylos config set alert_target <channel>:<endpoint>'],
-  ['invalid', false, 'Alert target: invalid value (expected channel:endpoint, both non-empty, without newline or NUL); system alerts fall back to Web Console.'],
-  ['telegram:room', false, 'Alert target: skills/telegram/scripts/send.js not found; system alerts fall back to Web Console.'],
+  [undefined, false, 'Alert target: not set; system alerts go to the pinned Origin conversation in Dashboard. The agent will ask the owner in the next private chat, or run: zylos config set alert_target <channel>:<endpoint> (or "default" to keep alerts in Dashboard and stop asking)'],
+  ['default', false, 'Alert target: default (the owner chose the default destination, the pinned Origin conversation in Dashboard). To change: zylos config set alert_target <channel>:<endpoint>'],
+  ['invalid', false, 'Alert target: invalid value (expected channel:endpoint with both parts non-empty, or default; no newline or NUL); system alerts fall back to the pinned Origin conversation in Dashboard.'],
+  ['telegram:room', false, 'Alert target: skills/telegram/scripts/send.js not found; system alerts fall back to the pinned Origin conversation in Dashboard.'],
   ['telegram:room', true, 'Alert target: telegram:room'],
 ]) {
   test(`alert destination ${alertTarget ?? 'missing'} sender=${sender} is a notice without diagnostic failure`, () => {
@@ -314,4 +318,26 @@ test('successful service repair does not render an unknown Origin as null', () =
   assert.equal(result.repairs.length, 1);
   assert.match(result.stdout, /All issues fixed/);
   assert.doesNotMatch(result.stdout, /^\s*null\s*$/m);
+});
+
+// Boundary: the Dashboard access row in real doctor text, from the PM2 list and the same address helper init uses.
+// Run for doctor channel or Dashboard address changes; skip otherwise. runDoctor verifies private
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, fake pm2/tmux on a private socket; no live services are used.
+for (const [label, options, line] of [
+  ['local port', { web: 'zylos-dashboard=online', dashboardConfig: { port: 3999 } }, '● Dashboard        http://127.0.0.1:3999/'],
+  ['default port', { web: 'zylos-dashboard=online' }, '● Dashboard        http://127.0.0.1:3470/'],
+  ['public route', { web: 'zylos-dashboard=online caddy=online', coreConfig: { domain: 'agent.example.test', protocol: 'https' } }, '● Dashboard        https://agent.example.test/dashboard/'],
+  ['Caddy stopped', { web: 'zylos-dashboard=online caddy=stopped', coreConfig: { domain: 'agent.example.test' } }, '● Dashboard        http://127.0.0.1:3470/'],
+  ['offline', { web: 'zylos-dashboard=stopped' }, '○ Dashboard        offline'],
+]) {
+  test(`doctor lists the Dashboard address (${label})`, () => {
+    const text = runDoctor(['--check'], { state: 'pass', ...options });
+    const lines = text.stdout.split(/\r?\n/).map(line => line.trim()).filter(line => /^[●○] Dashboard /.test(line));
+    assert.deepEqual(lines, [line], text.stdout);
+  });
+}
+
+test('doctor lists no Dashboard row when PM2 has no Dashboard process', () => {
+  const text = runDoctor(['--check'], { state: 'pass' });
+  assert.equal(text.stdout.split(/\r?\n/).some(line => /^\s*[●○] Dashboard\b/.test(line)), false);
 });
