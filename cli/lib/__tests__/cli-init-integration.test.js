@@ -61,7 +61,11 @@ test('default init imports real migration ensure and preserves unreadable record
   }
 });
 
-test('init template generator prepares dual hooks and assets report unavailable native trust', t => {
+// Real init asset/hook generation with private HOME/ZYLOS_DIR and an empty PATH;
+// Codex is unavailable, with no real runtime, PM2, tmux or database reached.
+// Run for init assets or model-threshold migration changes; unrelated work may
+// skip. The official runner isolates PM2_HOME/short TMPDIR; fixtures are removed.
+test('init template generator migrates legacy thresholds, prepares dual hooks and reports unavailable native trust', t => {
   const context = fixture(t);
   const instruction = path.join(context.root, 'instructions.md');
   fs.writeFileSync(instruction, '# Fixture instructions\n');
@@ -91,7 +95,14 @@ test('init template generator prepares dual hooks and assets report unavailable 
       .some(hook => hook.command.endsWith('/hook-activity.js')), `missing nondefault Codex ${event} activity hook`);
   }
   assert.equal(fs.existsSync(path.join(context.root, '.codex', 'hooks.trust.json')), false);
-  assert.equal(fs.readFileSync(configPath, 'utf8'), config);
+  // Hook sync pins the legacy value to the saved native model. Atomic config
+  // writes preserve fields, not the input JSON's whitespace.
+  assert.equal(typeof claude.model, 'string');
+  assert.ok(claude.model.length > 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), {
+    ...JSON.parse(config),
+    model_rotation_thresholds: { claude: { [claude.model]: 30 } },
+  });
 });
 
 // Integration boundary: the real default init Codex hook step, in a child process with HOME and ZYLOS_DIR in a
