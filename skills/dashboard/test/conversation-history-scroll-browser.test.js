@@ -138,6 +138,13 @@ test('conversation history loads older messages while preserving the reading pos
         await wait(async () => (await f.page.locator('.conversation-history-start').innerText()).includes('没有更早的消息了'), 'beginning notice shown');
         const finalRequests = f.metrics.older; await nearTop(f.page); await new Promise(resolve => setTimeout(resolve, 100));
         assert.equal(f.metrics.older, finalRequests, 'no older read after the cursor ends');
+        await stream(f.page).evaluate(node => { node.scrollTop = 0; node.dispatchEvent(new Event('scroll')); });
+        const beginning = f.page.locator('.conversation-history-start');
+        assert.equal(await beginning.innerText(), '没有更早的消息了');
+        assert.equal(await beginning.evaluate(node => {
+          const box = node.getBoundingClientRect(), viewport = node.closest('.conversation-stream').getBoundingClientRect();
+          return box.top >= Math.max(0, viewport.top) && box.bottom <= Math.min(innerHeight, viewport.bottom);
+        }), true, 'the beginning notice is fully inside the visible history before capture');
         await shot(f.page, `${tab}-${width}-${theme}-beginning`);
         measurements.push({ tab, width, theme, anchorId: anchor.id, shift: after - anchor.top, olderRequests: f.metrics.older, maxActive: f.metrics.maxActive });
       } finally { f.release(); await close(f.context); }

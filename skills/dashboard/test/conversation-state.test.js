@@ -2079,3 +2079,39 @@ test('older history admits one request and retains its cursor and local error un
   assert.equal(f.state.snapshot().messageCursor, null);
   assert.equal(f.state.snapshot().messages[0].content, 'oldest');
 });
+
+for (const malformed of ['same cursor', 'empty continuation']) {
+  test(`older history rejects a ${malformed} response without merging or advancing until retry`, async t => {
+    let olderReads = 0;
+    const f = await selected(url => {
+      if (!url.pathname.endsWith('/messages') || url.searchParams.get('direction') !== 'before') return;
+      if (!url.searchParams.has('cursor')) return { items: [{ id: 10, direction: 'out', content: 'current history' }], nextCursor: 'older', afterCursor: 'after10' };
+      olderReads++;
+      if (olderReads > 1) return { items: [{ id: 1, direction: 'out', content: 'retried oldest' }], nextCursor: null };
+      return malformed === 'same cursor'
+        ? { items: [{ id: 1, direction: 'out', content: 'malformed page must stay hidden' }], nextCursor: 'older' }
+        : { items: [], nextCursor: 'another-cursor' };
+    });
+    t.after(() => f.state.destroy());
+    const assertRejectedPage = () => {
+      const snapshot = f.state.snapshot();
+      assert.equal(snapshot.olderError, 'chat_invalid_response');
+      assert.equal(snapshot.olderLoading, false);
+      assert.equal(snapshot.messageCursor, 'older', 'invalid continuation does not change the retry cursor');
+      assert.equal(snapshot.messages.length, 1, 'no invalid page rows enter history');
+      assert.equal(snapshot.messages[0].id, 10);
+      assert.equal(snapshot.messages[0].content, 'current history');
+    };
+    await f.state.loadOlder();
+    assert.equal(olderReads, 1);
+    assertRejectedPage();
+    await f.timer.advance(30000);
+    assert.equal(olderReads, 1, 'automatic polling never repeats the failed older-page request');
+    assertRejectedPage();
+    await f.state.loadOlder();
+    assert.equal(olderReads, 2, 'only an explicit retry starts another older-page read');
+    assert.equal(f.state.snapshot().olderError, null);
+    assert.equal(f.state.snapshot().messageCursor, null);
+    assert.equal(f.state.snapshot().messages[0].content, 'retried oldest');
+  });
+}

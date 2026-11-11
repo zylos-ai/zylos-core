@@ -210,7 +210,7 @@ export function createConversationState({
     } else if (!['chat_messages_changed', 'chat_delivery_changed'].includes(name)) return;
     void poll({ dirty: true, admitted });
   }
-  async function poll({ dirty = false, manual = false, admitted = false } = {}) {
+  async function poll({ dirty = false, admitted = false } = {}) {
     const e = epoch, navigation = selectedVersion, scope = streamScope;
     readDirty ||= dirty;
     while (polling) {
@@ -220,7 +220,7 @@ export function createConversationState({
     if (!valid(e)) return;
     if (admitted) retryAt = 0;
     if (!visible()) return;
-    if (!manual && updateError && retryAt > now()) {
+    if (updateError && retryAt > now()) {
       schedule(retryAt - now());
       return;
     }

@@ -15,7 +15,7 @@ const { mountConversationPage } = await import('../public/js/wb/conversation-pag
 const { conversationErrorKey: errorKey } = await import('../public/js/wb/conversation-content.js');
 const labels = { 'chat.remoteDisabled': 'Remote disabled', 'chat.single': 'Switch to multi to chat' };
 const t = key => labels[key] ?? key;
-function fixture(testContext, { mode = 'multi', tab = 'mine', denied = false, rows = [], draft = false, malformedStatus = null, secondGroup = false, receipt = {}, translate = t } = {}) {
+function fixture(testContext, { mode = 'multi', tab = 'mine', denied = false, rows = [], draft = false, malformedStatus = null, secondGroup = false, olderCursor = null, receipt = {}, translate = t } = {}) {
   const document = createDocument(), root = document.createElement('div'), calls = [];
   let isDenied = denied, pendingMessage = null, listFailed = false, failedMessageId = null;
   const fetch = async (path, options) => {
@@ -25,7 +25,7 @@ function fixture(testContext, { mode = 'multi', tab = 'mine', denied = false, ro
     if (pendingMessage && path.includes('/messages')) { const pending = pendingMessage; pendingMessage = null; return pending.promise; }
     if (path.endsWith('/send') && malformedStatus) return { ok: malformedStatus < 400, status: malformedStatus, json: async () => { throw new SyntaxError('invalid JSON'); } };
     let body = path.includes('session-mode') ? { data: { sessionMode: mode } }
-      : path.includes('/messages') ? { items: rows, nextCursor: null, afterCursor: 'after' }
+      : path.includes('/messages') ? { items: rows, nextCursor: olderCursor, afterCursor: 'after' }
       : path.includes('/status') ? { items: rows }
       : /conversations\/[^/]+$/.test(path) ? { draft, stored: false, deliveryState: null, retryAllowed: true, preserveInput: false, pendingContent: null, error: null, ...receipt, conversation: { id: draft ? 'd:local' : 'g:AA', state: draft ? 'draft' : 'active', displayName: 'Example', pendingContent: receipt.pendingContent ?? null } }
       : { items: [{ id: draft ? 'd:local' : 'g:AA', display_name: 'Example', draft }, ...(secondGroup ? [{ id: 'g:BB', display_name: 'Second group', draft: false }] : [])], nextCursor: null };
@@ -120,13 +120,22 @@ for (const status of [200, 502]) test(`unparseable send response ${status} prese
 });
 
 
-for (const operation of ['refresh', 'stream catchup', 'select']) test(`remote closure during ${operation} removes previously loaded names and content`, async testContext => {
-  const f = fixture(testContext, { rows: [{ id: 8, direction: 'out', status: 'delivered', content: 'Private body' }], secondGroup: true });
+for (const operation of ['refresh', 'stream catchup', 'select', 'older history']) test(`remote closure during ${operation} removes previously loaded names and content`, async testContext => {
+  const f = fixture(testContext, { rows: [{ id: 8, direction: 'out', status: 'delivered', content: 'Private body' }], secondGroup: true, olderCursor: operation === 'older history' ? 'older' : null });
   await f.page.open(); await f.select();
   assert.ok(visibleText(f.root).includes('Example'));
   assert.ok(visibleText(f.root).includes('Private body'));
   f.deny();
   if (operation === 'select') { allNodes(f.root).find(node => node.dataset.conversationId === 'g:BB').dispatch('click'); await tick(); await tick(); }
+  else if (operation === 'older history') {
+    const stream = f.root.querySelector('.conversation-stream');
+    stream.clientHeight = 200; stream.scrollHeight = 1000; stream.scrollTop = 0;
+    stream.dispatch('scroll'); await tick(); await tick();
+    assert.equal(f.calls.filter(call => {
+      const url = new URL(call.path, 'http://fixture');
+      return url.pathname.endsWith('/messages') && url.searchParams.get('direction') === 'before' && url.searchParams.get('cursor') === 'older';
+    }).length, 1, 'near-top scrolling really attempts the denied older-page read');
+  }
   else if (operation === 'stream catchup') await catchUpConversation(f.page);
   else { f.button(operation).dispatch('click'); await tick(); await tick(); }
   assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
