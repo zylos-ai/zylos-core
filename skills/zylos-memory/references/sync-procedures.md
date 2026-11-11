@@ -38,6 +38,12 @@ leave remaining inputs for recovery in a later triggered Sync. A crash or failed
 commit does not justify deleting inputs. Do not start another Sync merely to
 repair leftovers when there are no new conversations.
 
+An owner's refusal or silence in response to a memory reorganization proposal
+is neither a decision nor a pending task; do not record it in memory.
+This applies to group Sync as well as Origin and global Sync: do not put it in
+state's Headline, ended items, checkpoint summaries, decision pages or inbox.
+Do not turn it into an instruction to wait for the owner or avoid asking again.
+
 ## Sync limits
 
 Resolve limits once for this run using the same source order as the supervisor:
@@ -137,16 +143,29 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
    `request-rotation.js --reason identity`. Report TRANSITION_OPEN or enqueue
    failure as rotation incomplete; it does not undo the identity write or
    block successful groups' cursor advancement. Do not promise an automatic retry.
-7. Audit shared file content/size and references navigation. First run
-   `reference-index.js rebuild`, including on the first Sync with no pages.
-   Only after rebuild succeeds and both category INDEX files exist, replace
-   references.md navigation that still names the old files as read/write
-   locations with `reference/projects/INDEX.md` and
-   `reference/decisions/INDEX.md`. Apply the archive/restore rule below. Once old
-   files have been archived, replace pointers to old headings with the matching
-   page or, if no page exists, the legacy archive file. Audit errors are
-   report-only and do not block advancement, except `TOKEN_MISMATCH`.
-   For each successful group call `origin-cursor.js advance --group G --synced <proposed-raw>
+7. Before any cursor advance or checkpoint, execute every item in this numbered
+   audit checklist, including on the first Sync with no pages. Check shared file
+   content/size as part of the audit. In the Sync report, write one result sentence
+   for each item: what was done, why no action was needed, or what failed.
+   1. Run `reference-index.js rebuild`.
+   2. Only after rebuild succeeds and both category INDEX files exist, replace
+      references.md navigation that still names the old files as read/write
+      locations with `reference/projects/INDEX.md` and
+      `reference/decisions/INDEX.md`. Otherwise report why navigation was not changed.
+      Include navigation lines that still refer to the old paths, even if they
+      describe those files as read-only history.
+   3. Apply the archive/restore rule below: archive eligible completed or abandoned
+      pages, and restore archived pages mentioned again. Check every INDEX row
+      whose Status is completed/abandoned and Updated is about 30 days old or
+      older; archive every eligible row. Report if none qualify.
+   4. Once old files have moved into `reference/legacy/`, replace pointers to old
+      headings with the matching page or, if no page exists, the legacy archive
+      file, including navigation lines that still refer to the old paths.
+      Report if there are no such pointers or the old files remain in place.
+
+   Audit errors are report-only and do not block advancement, except
+   `TOKEN_MISMATCH`, which stops everything. For each successful group call
+   `origin-cursor.js advance --group G --synced <proposed-raw>
    --checkpoint <saved-K> --token T`. A cursor rejection leaves that group
    unadvanced; report it and continue eligible groups. TOKEN_MISMATCH stops
    everything, including release and internal prompts.
@@ -197,15 +216,15 @@ state, commit, and failure sequence, with these differences:
   means redirect the change to the corresponding page and continue, not a
   failed self-write. Any other necessary self-write failure stops checkpoint,
   temporary state, and commit; release once and report. Already written
-  fragments remain. Run `reference-index.js rebuild` before checkpoint;
-  report rebuild failure without blocking the checkpoint.
+  fragments remain. Before checkpoint, execute each item of the Origin step 7
+  checklist individually and include one result sentence per item in the Sync
+  report. Audit errors, including rebuild failure, are report-only and do not
+  block checkpoint, except `TOKEN_MISMATCH`.
 - After a substantive identity write, request rotation. Failure is reported
   but checkpoint/state/release still proceed; do not claim it will retry itself.
 - The temporary file is `state.md.T.tmp` relative to memory. Preserve absorbed
   items by supplying only proven followedUpIds to commit, as in Group Sync.
-- Audit content, navigation and size as in Origin step 7, including rebuild,
-  INDEX navigation and archive/restore. Audit errors except `TOKEN_MISMATCH`
-  are report-only. Then release once and report.
+- Release once and report.
 
 ## Moving from old files
 
@@ -213,10 +232,13 @@ When no matching project or decision topic appears in the category INDEX or
 Grep of its pages (including `archive/`):
 
 1. Search the old file if it still exists, otherwise `reference/legacy/`.
-   Use the Grep tool with line numbers for names and aliases, then Read from
-   a matched heading to the next heading at the same level. Do not use shell
-   `grep` or `sed`. Read from the newest sections backward and stop when the
-   current situation is clear.
+   Search names and aliases with line numbers, then read from a matched heading
+   to the next heading at the same level. Search with `grep -n` or `rg -n`
+   (Grep is also allowed when available); read with Read offset/limit or
+   `sed -n '<a>,<b>p'`. Do not read an entire old file into a script.
+   Do not use `cat` or print an entire old file, and never write old files.
+   Read from the newest sections backward and stop when the current situation
+   is clear.
 2. Create a page with the current status (`completed` if the old text says it
    has ended). Under a "Moved from old projects.md" section, retain only what
    is still needed: current situation, unfinished work, key decisions and
@@ -228,6 +250,15 @@ Grep of its pages (including `archive/`):
 4. Do not edit old files or mark their sections as moved. After a page has been
    created and indexed, use it directly on later matches rather than rereading
    the old file.
+
+This same lookup and page creation applies when the only source is in
+`reference/legacy/`: move the needed facts into a category page, record its old
+heading in `Moved from`, and rebuild. Never recreate the old projects.md or
+decisions.md path or write into legacy files.
+For ongoing work found only in legacy, create the corresponding project or
+decision category page with `Moved from`; do not write it into infrastructure.md
+or leave it in group state. Group Sync carries it in its checkpoint for Origin
+to perform this shared-page lookup and creation; it does not write shared pages.
 
 ## Archive and restore
 
