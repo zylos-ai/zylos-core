@@ -48,9 +48,9 @@ const runId = '12345678-1234-4234-8234-123456789abc';
 
 test('plain attachment annotations survive projection and general agent history formatters byte for byte', () => {
   assert.equal(projectC4Content(content, { c4Id: row.id }), content);
-  for (const output of [formatters.formatConversations([row]),
-    formatters.formatConversationsForAgent([row], { spill: false, ownerName: () => 'the owner' })]) {
-    assert.ok(output.includes(content));
+  for (const [output, expected] of [[formatters.formatConversations([row]), content],
+    [formatters.formatConversationsForAgent([row], { spill: false, ownerName: () => 'the owner' }), dashboardSource(content, 'the owner')]]) {
+    assert.ok(output.includes(expected));
     assert.ok(output.includes(buildAttachmentAnnotation(file)));
     assert.ok(output.includes(buildAttachmentAnnotation(image)));
   }
@@ -66,7 +66,7 @@ test('Dashboard inbound attachment hint retains the exact original reply route w
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const spill = path.join(directory, 'message.txt');
   const complete = fs.existsSync(spill) ? fs.readFileSync(spill, 'utf8') : output;
-  assert.ok(complete.includes(content));
+  assert.ok(complete.includes(dashboardSource(content, 'the owner')));
   assert.ok(complete.includes(path.join(SKILLS_DIR, 'dashboard/SKILL.md')));
   assert.ok(complete.includes('Attachments:'));
   const marker = 'Charts/choices/forms when useful:';
@@ -87,7 +87,7 @@ test('attachment-only Dashboard delivery preserves complete annotation lines and
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const spill = path.join(directory, 'message.txt');
   const complete = fs.existsSync(spill) ? fs.readFileSync(spill, 'utf8') : output;
-  assert.ok(complete.startsWith('[Dashboard] the owner said:\n' + value.content));
+  assert.ok(complete.startsWith('[Dashboard]\n<current-message>\nthe owner said: \n</current-message>\n' + value.content));
   assert.ok(complete.includes('\n' + buildAttachmentAnnotation(file) + '\n'));
   assert.equal(complete.split('Attachments:').length - 1, 1);
   assert.ok(complete.endsWith(replyVia(value, sendPath)));

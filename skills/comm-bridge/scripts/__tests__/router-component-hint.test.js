@@ -61,7 +61,7 @@ test('projected long Dashboard delivery retains one hint in both preview and com
   assert.ok(preview.includes(file));
   assert.equal(count(preview), 1);
   const full = fs.readFileSync(file, 'utf8');
-  assert.ok(full.startsWith('[Dashboard] the owner said: ' + envelope.fallbackText));
+  assert.ok(full.startsWith('[Dashboard]\n<current-message>\nthe owner said: ' + envelope.fallbackText));
   assert.equal(count(full), 1);
   for (const text of [preview, full]) assert.equal(text.includes('HOST_ONLY_METADATA'), false);
   assert.equal(formatConversation(input), preview);

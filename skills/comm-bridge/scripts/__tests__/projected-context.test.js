@@ -221,7 +221,7 @@ test('Dashboard replay decorates only agent-facing inbound content in either spi
     const projected = projectC4Content(row.content, { c4Id: row.id });
     const options = { spill, ownerName: () => 'Replay Owner' };
     assert.equal(actualDb.formatConversationsForAgent([row], options),
-      heading(row) + '[Dashboard] Replay Owner said: ' + projected + route(row) + '\n');
+      heading(row) + '[Dashboard]\n<current-message>\nReplay Owner said: ' + projected + '\n</current-message>' + route(row) + '\n');
     assert.equal(actualDb.formatConversations([row]), heading(row) + projected + '\n');
     for (const other of [{ ...row, direction: 'out' }, { ...row, channel: 'telegram' }]) {
       assert.equal(actualDb.formatConversationsForAgent([other], options),
@@ -234,9 +234,9 @@ test('Dashboard replay decorates only agent-facing inbound content in either spi
   const output = actualDb.formatConversationsForAgent([row], { ownerName: () => 'Replay Owner' });
   const file = path.join(directory, 'message.txt');
   assert.ok(output.includes(file));
-  assert.equal(fs.readFileSync(file, 'utf8'), '[Dashboard] Replay Owner said: ' + row.content + route(row));
+  assert.equal(fs.readFileSync(file, 'utf8'), '[Dashboard]\n<current-message>\nReplay Owner said: ' + row.content + '\n</current-message>' + route(row));
   assert.equal(actualDb.formatConversationsForAgent([row], { spill: false, ownerName: () => 'Replay Owner' }),
-    heading(row) + '[Dashboard] Replay Owner said: ' + row.content + route(row) + '\n');
+    heading(row) + '[Dashboard]\n<current-message>\nReplay Owner said: ' + row.content + '\n</current-message>' + route(row) + '\n');
 });
 
 // Real startup whole-message packing with a fixed owner provider. Run when
@@ -255,7 +255,7 @@ test('startup replay counts the Dashboard source label inside its whole-message 
   const packed = await emitC4Conversations({}, budget);
   assert.equal(packed, newestOnly);
   assert.equal(packed.includes(older.content), false);
-  assert.ok(packed.includes('[Dashboard] Replay Owner said: ' + newest.content));
+  assert.ok(packed.includes('[Dashboard]\n<current-message>\nReplay Owner said: ' + newest.content + '\n</current-message>'));
   assert.equal(packed.includes('TRUNCATED'), false);
   assert.equal(packed.split('[Dashboard]').length - 1, 1);
   assert.equal(databaseOpens, 0); assert.equal(dashboardCalls, 0);
