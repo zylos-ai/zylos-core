@@ -65,7 +65,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       reader = await loadCoreModule('session-state-reader.js');
       const { collectStatus } = await loadCoreModule('status-view.js');
       status = await collectStatus({ session: async (group, options) => {
-        const observation = await reader.readSessionState(group, options);
+        // Context use stays the session's last sample however long it has been idle; the run and session
+        // identity checks still apply. The status sample keeps the status view's own freshness.
+        const observation = await reader.readSessionState(group, { ...options, usageFreshnessMs: Infinity });
         captured.set(group, observation);
         return observation;
       } });

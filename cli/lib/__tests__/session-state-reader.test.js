@@ -88,3 +88,21 @@ test('unexpected observe failure closes held connection',async()=>{
  const failing=createSessionReader({open:async()=>({close:async()=>{closed++;}}),observe:async()=>{throw error;}});
  await assert.rejects(failing.readLiveIdentity('lark:x'),e=>e===error);assert.equal(closed,1);
 });
+test('usage freshness can be bounded apart from status freshness; identity checks still apply',async()=>{
+ const f=fixture();
+ try{
+  put(path.join(f.dir,'agent-status.json'),status());put(path.join(f.dir,'statusline.json'),usage());
+  const at=now=>createSessionReader({env:f.env,now:()=>now,open:async()=>({close:async()=>{}}),observe:async()=>identity});
+  // Idle for 42 s since the last statusLine write: by default both samples are stale.
+  const idle=await at(43000).readSessionState('lark:x',{freshnessMs:5000});
+  assert.equal(idle.usage.reason,'stale');assert.equal(idle.status.reason,'stale');
+  const kept=await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity});
+  assert.deepEqual(kept.usage,{value:usage(),valid:true,reason:null,sampledAt:1000});
+  assert.equal(kept.status.reason,'stale','the status sample keeps its own freshness');
+  const bounded=await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:41999});
+  assert.equal(bounded.usage.reason,'stale');
+  put(path.join(f.dir,'statusline.json'),{...usage(),session_id:'previous'});
+  assert.equal((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage.reason,'identity_mismatch');
+  for(const bad of [-1,Number.NaN,'5000',null]) await assert.rejects(at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:bad}),TypeError);
+ }finally{f.clean();}
+});

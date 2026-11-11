@@ -23,8 +23,13 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
     finally { await connection.close(); }
   }
   async function readLiveIdentity(group) { return withConnection(group, async read => publicIdentity(await read())); }
-  async function readSessionState(group, { freshnessMs } = {}) {
+  /** usageFreshnessMs bounds the usage sample's age separately (default: freshnessMs). The runtime writes that sample
+   * only after the session's own requests, so an idle session's last one is still its current usage. */
+  async function readSessionState(group, { freshnessMs, usageFreshnessMs = freshnessMs } = {}) {
     if (!Number.isFinite(freshnessMs) || freshnessMs < 0) throw new TypeError('freshnessMs must be a nonnegative number');
+    if (typeof usageFreshnessMs !== 'number' || Number.isNaN(usageFreshnessMs) || usageFreshnessMs < 0) {
+      throw new TypeError('usageFreshnessMs must be a nonnegative number');
+    }
     return withConnection(group, async read => {
       const first = await read();
       const dir = groupRunDir(group ?? 'origin', env);
@@ -42,7 +47,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         last = absent(group);
       }
       return { identity: publicIdentity(first), status: sampleResult(status, first, last, freshnessMs, now()),
-        usage: sampleResult(usage, first, last, freshnessMs, now()) };
+        usage: sampleResult(usage, first, last, usageFreshnessMs, now()) };
     });
   }
   async function readCodexUsageSample({ sessionGroup }) {
