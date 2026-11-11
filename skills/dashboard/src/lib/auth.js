@@ -250,6 +250,7 @@ function loginPageHtml(base, error = '', next = '', configured = true) {
 <html lang="en">
   <head>
     <meta charset="utf-8">
+    <meta name="robots" content="noindex, nofollow">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Login - Zylos Dashboard</title>
     <script>${LOGIN_THEME_SCRIPT}</script>

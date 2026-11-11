@@ -1717,12 +1717,31 @@ export function createServer() {
   }
 
   const server = http.createServer(async (req, res) => {
+    // Enforce at header emission so upstream Fleet headers cannot override it.
+    const writeHead = res.writeHead;
+    res.writeHead = function (statusCode, ...args) {
+      const index = typeof args[0] === 'string' ? 1 : 0;
+      const headers = args[index];
+      if (Array.isArray(headers)) {
+        // Raw header arrays alternate names and values; retain complete pairs.
+        args[index] = headers.filter((_, i) => String(headers[i - i % 2]).toLowerCase() !== 'x-robots-tag');
+      } else if (headers) {
+        args[index] = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== 'x-robots-tag'));
+      }
+      this.setHeader('X-Robots-Tag', 'noindex, nofollow');
+      return writeHead.call(this, statusCode, ...args);
+    };
     let url;
     try { url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`); } catch {
       sendJson(res, 400, { error: 'invalid_request' });
       return;
     }
     let pathname = url.pathname;
+
+    if (pathname === '/robots.txt' || pathname === `${browserBaseFromRequest(req)}/robots.txt`) {
+      sendText(res, 200, 'User-agent: *\nDisallow: /\n');
+      return;
+    }
 
     if (await auth.handle(req, res, url)) {
       return;
