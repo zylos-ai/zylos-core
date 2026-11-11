@@ -445,6 +445,27 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     await context.close();
   }
 
+  // ── 1280 light, slow earlier pages: a refresh during a jump drops the page in flight without calling the original gone ──
+  {
+    const { context, page } = await openContext({ width: 1280, theme: 'light' });
+    await context.route(url => url.pathname.endsWith('/messages') && url.searchParams.get('direction') === 'before' && url.searchParams.has('cursor'),
+      async route => { await delay(700); await route.fallback(); });
+    await openA(page);
+    await page.evaluate(() => {
+      const chat = document.querySelector('#wb-chat');
+      window.goneNoticeSeen = false;
+      new MutationObserver(() => { if (chat.textContent.includes('原消息已不在这个对话里')) window.goneNoticeSeen = true; })
+        .observe(chat, { subtree: true, childList: true, characterData: true });
+    });
+    const before = olderReads.length;
+    await row(page, quoted.id).locator('.conversation-quote-block').click();
+    await waitUntil(() => olderReads.length > before, 'the jump requested an earlier page');
+    await page.locator('#wb-chat .conversation-reload').click();
+    await delay(2000);
+    assert.equal(await page.evaluate(() => window.goneNoticeSeen), false, 'a refresh mid-jump does not report the original gone');
+    await context.close();
+  }
+
   // ── 390, touch: swipe, sheets, light and dark ──
   for (const theme of ['light', 'dark']) {
     const { context, page } = await openContext({ width: 390, theme, touch: true });

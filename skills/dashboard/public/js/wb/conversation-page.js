@@ -783,8 +783,10 @@ export function mountConversationPage({
     }
     if (destroyed || selectedKey !== selected) return;
     if (!article) {
-      // A failed page shows the existing retry notice at the top instead.
-      if (!state.snapshot().olderError) { locateNotice = 'chat.quote.missing'; redraw(); }
+      // Only a history read to its start proves the original is gone. A failed page shows the existing retry notice at
+      // the top instead; a page dropped by a refresh or reselection leaves the jump for another click.
+      const after = state.snapshot();
+      if (!after.olderError && !after.messageCursor) { locateNotice = 'chat.quote.missing'; redraw(); }
       return;
     }
     if (locateNotice === 'chat.quote.missing') { locateNotice = null; redraw(); }
