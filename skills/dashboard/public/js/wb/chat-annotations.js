@@ -89,6 +89,11 @@ export function annotationRange({ document, root, item }) {
   return range;
 }
 
+/** Annotations change only on the user's own conversation while the composer is writable and no send is open. */
+export const annotationsEditable = s => s.tab === 'mine' && s.canWrite && !s.sending && !s.pending;
+/** Whether text in a message can be annotated: internal messages cannot, nor anything while editing is locked. */
+export const annotatable = (article, s) => !article.classList.contains('conversation-internal') && annotationsEditable(s);
+
 /**
  * Annotations while composing: the 标注 button beside a selection, the editor (a bottom sheet on phones), the
  * highlights, the count button in the composer and the list. The conversation state owns the items; this draws them.
@@ -103,8 +108,8 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
     if (label !== undefined) result.append(node('span', label));
     return result;
   };
-  const editable = s => s.tab === 'mine' && s.canWrite && !s.sending && !s.pending;
-  const eligible = article => !article.classList.contains('conversation-internal') && editable(snapshot());
+  const editable = annotationsEditable;
+  const eligible = article => annotatable(article, snapshot());
   const layer = [];
   // Fixed-position popups live on <body>: the page view is scale-transformed while it animates in, which would anchor
   // them to the view instead of the viewport. Without a body (a detached document) they stay inside the page.
@@ -144,12 +149,14 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
   const comment = node('textarea', undefined, 'conversation-annotation-input');
   comment.maxLength = MAX_CHARS;
   comment.id = 'conversation-annotation-comment';
+  comment.disabled = true;
   field.htmlFor = comment.id;
   field.append(fieldLabel, fieldCount);
   const editorHint = node('p', undefined, 'conversation-annotation-hint');
   editor.body.append(excerpt, field, comment, editorHint);
   const editorCancel = button('wb-btn', t('chat.page.cancel')), editorSave = button('wb-btn wb-btn-primary', t('chat.annotation.save'));
   editorSave.dataset.action = 'saveAnnotation';
+  editorSave.disabled = true;
   editor.foot.append(node('span', undefined, 'conversation-annotation-spacer'), editorCancel, editorSave);
   const charCount = value => `${chars(value)} / ${MAX_CHARS}`;
   comment.addEventListener('input', () => { fieldCount.textContent = charCount(comment.value); });
@@ -162,7 +169,7 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
   editor.close.addEventListener('click', closeEditor);
   editorCancel.addEventListener('click', closeEditor);
   editorSave.addEventListener('click', () => {
-    if (!editing) return;
+    if (!editing || !editable(snapshot())) return;
     const target = editing;
     if (onAdd({ ...target.item, comment: firstChars(comment.value.trim(), MAX_CHARS) })) view?.getSelection?.()?.removeAllRanges();
     closeEditor();
@@ -180,11 +187,22 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
     if (top + height > view.innerHeight - 12) top = Math.max(12, (rects[0]?.top ?? 12) - height - 10);
     el.style.top = `${top}px`;
   }
+  // Where the editor sits follows the viewport: a bottom sheet when narrow, otherwise beside the selected text, which is
+  // measured again because a resize (a phone keyboard opening, a window drag) moves it.
+  function placeEditor() {
+    if (editor.el.hidden || !editing) return;
+    const range = annotationRange({ document, root, item: editing.item });
+    const rects = range ? [...range.getClientRects()].filter(rect => rect.width || rect.height) : [];
+    if (rects.length) editing.rects = rects;
+    editor.el.classList.toggle('conversation-annotation-sheet', narrow());
+    scrim.hidden = !narrow();
+    placeNear(editor.el, editing.rects);
+  }
   function openEditor(target) {
     const row = author(target.messageId);
     if (!row) return;
     editing = { item: { messageId: String(target.messageId), direction: row.direction, timestamp: row.timestamp, part: target.part,
-      start: target.start, end: target.end, excerpt: target.excerpt, length: target.length } };
+      start: target.start, end: target.end, excerpt: target.excerpt, length: target.length }, rects: target.rects };
     editor.heading.textContent = t('chat.annotation.title');
     excerpt.textContent = target.excerpt;
     fieldLabel.textContent = t('chat.annotation.commentLabel');
@@ -194,9 +212,7 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
     editorHint.textContent = target.length > MAX_CHARS ? t('chat.annotation.hintLong', { count: String(target.length), limit: String(MAX_CHARS) })
       : t('chat.annotation.hint');
     editor.el.hidden = false;
-    editor.el.classList.toggle('conversation-annotation-sheet', narrow());
-    scrim.hidden = !narrow();
-    placeNear(editor.el, target.rects);
+    placeEditor();
     mark.hidden = true;
     view?.setTimeout(() => comment.focus({ preventScroll: true }), 0);
   }
@@ -383,13 +399,15 @@ export function createAnnotationUi({ document, t, root, composer, composeBox, na
     countText.textContent = String(total);
     count.setAttribute('aria-label', t('chat.annotation.count', { count: String(total) }));
     count.title = t('chat.annotation.countTitle', { count: String(total) });
-    if (!editable(s)) { mark.hidden = true; if (!editor.el.hidden) closeEditor(); }
+    const writable = editable(s);
+    comment.disabled = editorSave.disabled = !writable;
+    if (!writable) { mark.hidden = true; if (!editor.el.hidden) closeEditor(); }
     if (!total && list.open) closeList();
     if (list.open && list.editing === null) render(s);
     else placeList();
     paint(s);
   }
-  const resize = () => { placeList(); if (!editor.el.hidden) closeEditor(); };
+  const resize = () => { placeList(); placeEditor(); };
   view?.addEventListener('resize', resize);
   return {
     count,

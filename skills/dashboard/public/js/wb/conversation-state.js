@@ -993,12 +993,26 @@ export function createConversationState({
       failure(err, e, current);
     }
   }
-  async function loadOlder() {
-    const current = cell(),
-      id = selectedId,
+  // The older page in flight per conversation, so a caller that needs its messages (jumping to a quoted original) can
+  // wait for it instead of reading the list before it lands. A concurrent loadOlder() still starts nothing.
+  const olderRuns = new WeakMap();
+  function loadOlder() {
+    const current = cell();
+    if (current?.olderLoading) return Promise.resolve();
+    const run = readOlder(current);
+    if (current?.olderLoading) olderRuns.set(current, run);
+    return run;
+  }
+  /** Resolves once the selected conversation has no older page loading. */
+  function olderSettled() {
+    const current = cell();
+    return current?.olderLoading ? olderRuns.get(current) ?? Promise.resolve() : Promise.resolve();
+  }
+  async function readOlder(current) {
+    const id = selectedId,
       currentTab = tab,
       e = epoch;
-    if (!current?.messageCursor || current.olderLoading || blocked || !active) return;
+    if (!current?.messageCursor || blocked || !active) return;
     current.olderLoading = true;
     current.olderError = null;
     emit();
@@ -1386,6 +1400,7 @@ export function createConversationState({
     },
     loadMore: () => list(true),
     loadOlder,
+    olderSettled,
     async refreshStatus() {
       const current = cell(),
         id = selectedId,

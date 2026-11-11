@@ -249,9 +249,14 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     await delay(260);
     assert.equal(await quoteBar(page).isVisible(), false, 'a short swipe springs back');
     assert.equal(await row(page, plan.id).evaluate(el => el.classList.contains('conversation-swiping')), false);
+    // Recorded as it happens: reading the class once after the last event would depend on the machine's timing.
+    await row(page, plan.id).evaluate(el => {
+      window.swipeSeen = false;
+      new MutationObserver(() => { if (el.classList.contains('conversation-swipe-ready')) window.swipeSeen = true; }).observe(el, { attributes: true, attributeFilter: ['class'] });
+    });
     for (let step = 0; step < 4; step++) { await page.mouse.wheel(22, 0); await delay(16); }
-    assert.equal(await row(page, plan.id).evaluate(el => el.classList.contains('conversation-swipe-ready')), true, 'the row follows the swipe');
     await delay(260);
+    assert.equal(await page.evaluate(() => window.swipeSeen), true, 'the row follows the swipe');
     await quoteBar(page).waitFor();
     assert.match(await quoteBar(page).innerText(), /灰度只影响一小部分实例/);
 
@@ -377,11 +382,43 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     await row(page, reply.id).locator('.conversation-quote-button').click();
     await selectText(page, reply.id, '观察 30 分钟');
     await markButton(page).click();
-    await page.locator('body > .conversation-annotation-editor').waitFor();
+    const editor = page.locator('body > .conversation-annotation-editor');
+    await editor.waitFor();
     assert.ok(await assertLayout(page, '1280 dark editor') >= 2);
     await shot(page, '1280-dark-editor');
-    await page.locator('body > .conversation-annotation-editor .wb-btn:not(.wb-btn-primary)').click();
+    // A window resize moves the editor with its text; what was typed stays.
+    await editor.locator('textarea').fill('半小时够吗？');
+    await page.setViewportSize({ width: 1000, height: 620 });
+    await delay(120);
+    assert.equal(await editor.isVisible(), true, 'a resize keeps the editor open');
+    assert.equal(await editor.locator('textarea').inputValue(), '半小时够吗？');
+    assert.ok(await assertLayout(page, '1280 dark editor after resize') >= 2);
+    await editor.locator('.wb-btn:not(.wb-btn-primary)').click();
     await page.locator('#wb-chat .conversation-quote-bar-close').click();
+    await context.close();
+  }
+
+  // ── 1280 light, slow earlier pages: a second jump while one is loading waits for it ──
+  {
+    const { context, page } = await openContext({ width: 1280, theme: 'light' });
+    await context.route(url => url.pathname.endsWith('/messages') && url.searchParams.get('direction') === 'before' && url.searchParams.has('cursor'),
+      async route => { await delay(700); await route.fallback(); });
+    await openA(page);
+    // Recorded as it happens: the first jump's success would clear a false notice before a later read could see it.
+    await page.evaluate(() => {
+      const chat = document.querySelector('#wb-chat');
+      window.goneNoticeSeen = false;
+      new MutationObserver(() => { if (chat.textContent.includes('原消息已不在这个对话里')) window.goneNoticeSeen = true; })
+        .observe(chat, { subtree: true, childList: true, characterData: true });
+    });
+    const block = row(page, quoted.id).locator('.conversation-quote-block');
+    await block.click();
+    await delay(150);
+    await block.click();
+    await row(page, early.id).waitFor({ timeout: 15_000 });
+    await waitUntil(() => row(page, early.id).evaluate(el => el.classList.contains('conversation-flash')), 'the original flashes', 15_000);
+    await delay(200);
+    assert.equal(await page.evaluate(() => window.goneNoticeSeen), false, 'no false "original gone" notice, not even briefly');
     await context.close();
   }
 
@@ -430,7 +467,16 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     assert.equal(await editor.evaluate(el => el.classList.contains('conversation-annotation-sheet')), true, 'a bottom sheet on phones');
     assert.ok(await assertLayout(page, `390 ${theme} editor`) >= 2);
     await shot(page, `390-${theme}-editor`);
+    // The on-screen keyboard shrinks the viewport: the sheet stays, with what was typed, and saves.
+    await editor.locator('textarea').fill('两套环境要保留多久？');
+    await page.setViewportSize({ width: 390, height: 480 });
+    await delay(120);
+    assert.equal(await editor.isVisible(), true, 'the keyboard does not close the editor');
+    assert.equal(await editor.locator('textarea').inputValue(), '两套环境要保留多久？');
+    assert.ok(await assertLayout(page, `390 ${theme} editor with keyboard`) >= 2);
     await editor.locator('[data-action="saveAnnotation"]').click();
+    await waitUntil(async () => (await count(page).innerText()).trim() === '1', 'the annotation typed with the keyboard open is saved');
+    await page.setViewportSize({ width: 390, height: 844 });
     await count(page).click();
     const list = page.locator('body > .conversation-annotation-list');
     await list.waitFor();

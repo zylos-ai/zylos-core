@@ -772,6 +772,10 @@ export function mountConversationPage({
     const find = () => messageList.querySelector(`article[data-message-id="${target}"]`);
     let article = find();
     while (!article && !destroyed && selectedKey === selected) {
+      // A page already loading (the reader scrolled to the top, or an earlier jump) may hold the original.
+      await state.olderSettled();
+      article = find();
+      if (article || destroyed || selectedKey !== selected) break;
       const before = state.snapshot();
       if (!before.messageCursor || before.olderError) break;
       await state.loadOlder();
@@ -785,6 +789,7 @@ export function mountConversationPage({
       if (!state.snapshot().olderError) { locateNotice = 'chat.quote.missing'; redraw(); }
       return;
     }
+    if (locateNotice === 'chat.quote.missing') { locateNotice = null; redraw(); }
     // Instant: the page's next fit keeps the visible message in place by writing scrollTop, which would cut a smooth
     // scroll short; once the original is the visible message, the fit keeps it there. The flash marks it.
     article.scrollIntoView({ block: 'center' });
