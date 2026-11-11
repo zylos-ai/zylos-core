@@ -14,7 +14,7 @@ import { mountWorkbench } from './wb/shell.js?v=163';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=109';
 import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=150';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from './wb/observer-page.js?v=119';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js?v=120';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=145';
 import { createUsagePage } from './wb/usage.js?v=157';
@@ -1084,7 +1084,9 @@ function renderObserverPage() {
 function leaveObserverFocus() {
   const key = state.observer.focus;
   state.observer.focus = null;
-  if (key) openWorkbenchGroup(key).catch(() => {});
+  if (!key) return;
+  const opened = state.observer.returnPage === 'chat' ? openConversationGroup(key, { groupDetail: true }) : openWorkbenchGroup(key);
+  Promise.resolve(opened).catch(() => {});
 }
 /** From a group's detail: observe only that group, with a way back to its detail. */
 async function openObserverFor(key, view = 'live', { focus = true } = {}) {
@@ -1092,6 +1094,8 @@ async function openObserverFor(key, view = 'live', { focus = true } = {}) {
     identity: () => observerEndpoint('/api/observer'),
     disconnect: () => closeObserver({ release: true }),
     apply: () => {
+      // Changing group on the observer page keeps the page the detail was opened on.
+      if (activeTabName() !== 'observer') state.observer.returnPage = observerReturnPage(activeTabName());
       state.observer.group = key === null ? 'origin' : key;
       state.observer.focus = focus && key !== undefined ? key ?? 'origin' : null;
       state.observer.status = state.observer.status ? { ...state.observer.status, target: null, agentSize: null } : null;
@@ -2975,10 +2979,7 @@ workbench = mountWorkbench({
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   writable: () => wbWritable(remoteIsReadOnly),
   onMemory: openGroupMemory,
-  onConversation: row => {
-    document.querySelector('.tab[data-tab="chat"]')?.click();
-    return chatPage?.openGroup(row.sessionGroup, { channel: row.c4?.componentName });
-  },
+  onConversation: row => openConversationGroup(row.sessionGroup, { channel: row.c4?.componentName }),
   observerStatus: () => state.observer.status,
   observerAvailable: observerOpenable,
   onObserve: openObserverFor,
@@ -2999,6 +3000,10 @@ function openGroupMemory(key) {
   state.memory.filePaneOpen = false;
   memoryScopeView.selectGroup(key);
   document.querySelector('.tab[data-tab="memory"]')?.click();
+}
+function openConversationGroup(key, options) {
+  document.querySelector('.tab[data-tab="chat"]')?.click();
+  return chatPage?.openGroup(key, options);
 }
 export function openWorkbenchGroup(key) {
   document.querySelector('.tab[data-tab="overview"]')?.click();

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from '../public/js/wb/observer-page.js';
+import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from '../public/js/wb/observer-page.js';
 
 const healthy = { state: 'installed', desired: { enabled: true } };
 
@@ -184,4 +184,9 @@ test('a terminal wider than its box is marked for the sideways-scroll hint', () 
   assert.equal(observerFrameWide(340.4, 340), true, 'partial pixels round up, matching the frame width set on the iframe');
   assert.equal(observerFrameWide(339, 340), false);
   assert.equal(observerFrameWide(340, 340), false);
+});
+
+test('the back button returns to the page the group detail was opened on', () => {
+  assert.equal(observerReturnPage('chat'), 'chat');
+  for (const tab of ['overview', 'schedule', 'memory', undefined]) assert.equal(observerReturnPage(tab), 'overview', String(tab));
 });

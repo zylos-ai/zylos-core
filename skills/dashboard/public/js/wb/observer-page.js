@@ -63,6 +63,11 @@ export function observerFrameVisible({ historyMode, choosing, idle, lease, notic
   return !historyMode && !choosing && !idle && (Boolean(lease) || noticeState !== 'error');
 }
 
+/** The page the observer's back button returns to: the one the group's detail was opened on. */
+export function observerReturnPage(tab) {
+  return tab === 'chat' ? 'chat' : 'overview';
+}
+
 /** Page title key: while the group picker is on screen it names the group, so the title is just the page name. */
 export function observerTitleKey({ focus, hasTarget, multi } = {}) {
   if (focus && hasTarget) return 'wb.observer.focusTitle';

@@ -453,9 +453,11 @@ export function mountConversationPage({
     if (!groupSide) return;
     if (groupSide.open) { groupSide.close(); return; }
     const current = currentSnapshot.conversation ?? currentSnapshot.items.find(item => item.id === currentSnapshot.selectedId);
-    const key = current?.sessionGroup ?? current?.session_group;
+    showGroupSide(current?.sessionGroup ?? current?.session_group, currentSnapshot.selectedId);
+  }
+  function showGroupSide(key, conversationId) {
     if (!key) return;
-    groupSideFor = currentSnapshot.selectedId;
+    groupSideFor = conversationId;
     // The panel appears inside the preserved change, so the position measured before is the one before it opened.
     preserveAttachmentLayout(() => { void groupSide.show(key); page.classList.toggle('conversation-has-side', true); });
     group.setAttribute('aria-expanded', 'true');
@@ -1382,7 +1384,7 @@ export function mountConversationPage({
   const unsubscribe = state.subscribe(() => { redraw(); notifyStreamSubscription(); void selectFirstDesktop(); });
   redraw();
   async function openGroup(sessionGroup, {
-    channel
+    channel, groupDetail = false
   } = {}) {
     if (typeof sessionGroup !== 'string' || !sessionGroup) {
       return false;
@@ -1403,6 +1405,8 @@ export function mountConversationPage({
     await state.select(id, matched ?? fallback);
     mobileDetail(true);
     scheduleFit();
+    // Back from observing the group: its detail opens beside the conversation again.
+    if (groupDetail && groupSide && !groupSide.open) showGroupSide(sessionGroup, state.snapshot().selectedId);
     return !state.snapshot().error;
   }
   return {

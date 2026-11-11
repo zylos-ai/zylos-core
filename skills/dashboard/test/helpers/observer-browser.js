@@ -26,6 +26,11 @@ export async function runObserverBrowser(t, sandbox, signal) {
   let mode = 'multi', scenario = 'normal', groupCount = 2, counter = 0, heldLease = null;
   let rapidInterval = 150, rapidCalls = 0, base;
   const now = Date.now();
+  const chats = [['lark:oc_product', 'lark', 'Product weekly'], [GROUP, 'telegram', 'Telegram direct chat']].map(([group, channel, name]) => {
+    const id = 'g:' + Buffer.from(group).toString('hex').toUpperCase();
+    return { row: { id, session_group: group, channel, display_name: name, draft: false, state: 'active', stamp: now, preview: 'Fixture message' },
+      detail: { id, namespace: channel, sessionGroup: group, displayName: name, state: 'active', draft: false } };
+  });
   const record = (rows, value) => { assert.ok(rows.length < 1000, 'fixture trace is bounded'); rows.push(value); };
   const pause = ms => new Promise((resolve, reject) => {
     const wait = { timer: null, abort: () => { clearTimeout(wait.timer); waits.delete(wait); reject(new Error('observer browser case stopped')); } };
@@ -53,6 +58,13 @@ export async function runObserverBrowser(t, sandbox, signal) {
         runtime: { state: 'idle' }, agentSize: running ? { cols: 120, rows: 40 } : null };
     }
     if (p.startsWith('/api/observer/history/')) return { sessions: [], entries: [], hasMore: false };
+    // Two external conversations; the first is not the observed group's, so a return that only reopens the
+    // conversation page (which selects the first one on wide screens) does not pass for a return to GROUP's.
+    if (p === '/api/chat/conversations') return { items: url.searchParams.get('tab') === 'external' ? chats.map(chat => chat.row) : [], nextCursor: null, tz: 'UTC' };
+    const chat = chats.find(item => p.startsWith(`/api/chat/conversations/${encodeURIComponent(item.row.id)}`));
+    if (chat && p.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: chat.row.channel, status: 'delivered', content: 'Fixture message', timestamp: new Date(now).toISOString() }], nextCursor: null, afterCursor: null, tz: 'UTC' };
+    if (chat && /\/(?:questions|activity|status)$/.test(p)) return { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'UTC' };
+    if (chat) return { conversation: chat.detail, stored: true, conversationId: chat.row.id };
     const value = workbenchAnswer(url, now) ?? {};
     if (p === '/api/state') { value.state = mode === 'multi' ? 'SLEEPING' : 'IDLE'; value.runId = mode === 'multi' ? null : 'origin-run'; value.sessionId = null; }
     if (p === '/api/instance-status') value.data.origin = { presence: mode === 'multi' ? 'not_running' : 'running' };
@@ -95,7 +107,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
       if (url.pathname === '/observer/frame') { sendHtml(res, 200, frame); return; }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) { sendJson(res, 200, answer(url)); return; }
-      if (['/', '/observer', '/settings'].includes(url.pathname)) { sendHtml(res, 200, fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8').replaceAll('__BASE_PATH__', '').replaceAll('__ASSET_ROOT__', '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin')); return; }
+      if (['/', '/observer', '/settings', '/chat'].includes(url.pathname)) { sendHtml(res, 200, fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8').replaceAll('__BASE_PATH__', '').replaceAll('__ASSET_ROOT__', '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin')); return; }
       if (!serveStatic(req, res, publicDir)) sendJson(res, 404, { error: 'not_found' });
     } catch (error) { record(errors, error.message); if (!res.destroyed) sendJson(res, 500, { error: 'fixture_error' }); }
   });
@@ -136,12 +148,12 @@ export async function runObserverBrowser(t, sandbox, signal) {
   const select = (page, group) => page.locator('#observer-group-select').selectOption(group);
   async function observing(page, group = GROUP) { await page.locator('#observer-tab').click(); await select(page, group); await page.waitForFunction(() => window.__observerSockets.length > 0); }
   const leaseWrites = start => writes.slice(start).filter(row => row.path === '/api/observer/leases');
-  const step = async (name, fn) => {
+  const step = async (name, fn, width = 1280) => {
     let failure;
     await t.test(name, async () => {
     signal.throwIfAborted();
     let context;
-    try { const opened = await open(); context = opened.context; await fn(opened.page); assert.equal(errors.length, 0, errors[0]); }
+    try { const opened = await open('en', width); context = opened.context; await fn(opened.page); assert.equal(errors.length, 0, errors[0]); }
     catch (error) { console.log('Observer case diagnostics:', JSON.stringify({ name, errors: errors.slice(0, 5), writes: writes.slice(-10), reads: reads.slice(-10) })); failure = error; throw error; }
     finally { await context?.close(); for (const res of held) res.destroy(); held.clear(); heldLease = null; }
     });
@@ -292,7 +304,57 @@ export async function runObserverBrowser(t, sandbox, signal) {
     await until(() => writes.slice(before).some(row => row.path.endsWith('/release')), 'single mismatch release');
     assert.equal(await page.evaluate(() => window.__observerSockets.length), 0);
   });
+  // The observer's back button returns to the page the group's detail was opened on: the overview with that
+  // detail open, or the conversation page with that group's conversation selected and its detail beside it.
+  // Opening the observer page from its own entry (no detail) offers no back button.
   mode = 'multi'; scenario = 'normal';
+  const observeFromDetail = async (page, scope) => {
+    await page.locator(`${scope} button[data-observer-group="${GROUP}"]`).click();
+    await page.waitForFunction(() => window.__observerSockets.length > 0);
+    await page.locator('#observer-back').waitFor({ state: 'visible' });
+    assert.equal(new URL(page.url()).pathname, '/observer');
+  };
+  const noSideScroll = async (page, width) => assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width, 'no sideways scrolling');
+  const shot = (page, name) => evidence ? page.screenshot({ path: path.join(evidence, `observer-back-${name}.png`) }) : null;
+  for (const width of [1280, 390]) {
+    await step(`observer back returns to the overview with the group's detail open at ${width}px`, async page => {
+      await page.locator(`#wb-board [data-group="${GROUP}"]`).click();
+      await page.locator('#wb-side').waitFor({ state: 'visible' });
+      await observeFromDetail(page, '#wb-side');
+      await shot(page, `overview-observing-${width}`);
+      await page.locator('#observer-back').click();
+      await page.locator('#tab-overview').waitFor({ state: 'visible' });
+      await page.locator(`#wb-side button[data-observer-group="${GROUP}"]`).waitFor({ state: 'visible' });
+      assert.equal(await page.locator(`#wb-board [data-group="${GROUP}"]`).getAttribute('aria-current'), 'true');
+      assert.equal(new URL(page.url()).pathname, '/');
+      await noSideScroll(page, width);
+      await shot(page, `overview-back-${width}`);
+    }, width);
+    await step(`observer back returns to the conversation and its group's detail at ${width}px`, async page => {
+      await page.locator('.tab[data-tab="chat"]').click();
+      await page.locator('#wb-chat [data-action="external"]').click();
+      const groupId = chats[1].row.id;
+      await page.locator(`#wb-chat [data-conversation-id="${groupId}"]`).click();
+      await page.locator('#wb-chat [data-action="page.groupInfo"]').click();
+      await page.locator('#wb-chat .wb-group-side').waitFor({ state: 'visible' });
+      await observeFromDetail(page, '#wb-chat .wb-group-side');
+      await shot(page, `chat-observing-${width}`);
+      await page.locator('#observer-back').click();
+      await page.locator('#tab-chat').waitFor({ state: 'visible' });
+      await page.locator(`#wb-chat .wb-group-side button[data-observer-group="${GROUP}"]`).waitFor({ state: 'visible' });
+      assert.equal(await page.locator(`#wb-chat [data-conversation-id="${groupId}"]`).getAttribute('aria-current'), 'true', 'the observed group\'s conversation is selected');
+      assert.equal(await page.locator('#wb-chat [data-action="page.groupInfo"]').getAttribute('aria-expanded'), 'true');
+      assert.equal(new URL(page.url()).pathname, '/chat');
+      await noSideScroll(page, width);
+      await shot(page, `chat-back-${width}`);
+    }, width);
+  }
+  await step('the observer page opened from its own entry offers no back button', async page => {
+    await page.locator('#observer-tab').click();
+    await page.locator('#tab-observer').waitFor({ state: 'visible' });
+    await page.locator('#observer-group-picker').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#observer-back').isVisible(), false);
+  });
   for (const locale of ['en', 'zh']) for (const width of [1280, 390]) {
     const { page, context } = await open(locale, width);
     try {
