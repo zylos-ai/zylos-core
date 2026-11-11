@@ -1,17 +1,33 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { databaseCli, fetchCli } from '../skills/comm-bridge/scripts/c4-public-cli.js';
-import { getDb, close } from '../skills/comm-bridge/scripts/c4-db.js';
-import { DB_PATH, SKILLS_DIR } from '../skills/comm-bridge/scripts/c4-config.js';
 import { shellQuote } from '../skills/comm-bridge/scripts/c4-query-format.js';
 
 const home = fs.realpathSync(process.env.HOME);
 assert.notEqual(home, fs.realpathSync(os.userInfo().homedir));
+// Give this worker its own database before any C4 module captures ZYLOS_DIR.
+const runnerZylosDir = process.env.ZYLOS_DIR;
+const privateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'history-readers-'));
+process.env.ZYLOS_DIR = privateRoot;
+let closeDatabase;
+after(() => {
+  try { closeDatabase?.(); }
+  finally {
+    if (runnerZylosDir === undefined) delete process.env.ZYLOS_DIR;
+    else process.env.ZYLOS_DIR = runnerZylosDir;
+    fs.rmSync(privateRoot, { recursive: true, force: true });
+    assert.equal(fs.existsSync(privateRoot), false);
+  }
+});
+const { databaseCli, fetchCli } = await import('../skills/comm-bridge/scripts/c4-public-cli.js');
+const { getDb, close } = await import('../skills/comm-bridge/scripts/c4-db.js');
+closeDatabase = close;
+const { DB_PATH, SKILLS_DIR } = await import('../skills/comm-bridge/scripts/c4-config.js');
+assert.notEqual(path.resolve(process.env.ZYLOS_DIR), path.resolve(runnerZylosDir));
 assert.ok(DB_PATH.startsWith(process.env.ZYLOS_DIR + path.sep));
 for (const key of ['ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
   assert.ok(path.resolve(process.env[key]).startsWith(path.dirname(home) + path.sep));
@@ -111,7 +127,7 @@ test('History single origin Sync and JSON reads preserve the baseline bytes', t 
   console.log('History compatibility:', JSON.stringify({ outputs, originRawRows: 2 }));
 });
 
-// Actual CLI entrypoint child reads only the runner's private DB. Timeout and
+// Actual CLI entrypoint child reads only this worker's private DB. Timeout and
 // maxBuffer bound the child; spawnSync reaps it. No background loops or runtime.
 // Run for public CLI entry/output changes; skip template-only changes.
 test('History CLI prints the foreign-group reminder after the original text', t => {
@@ -127,7 +143,7 @@ test('History CLI prints the foreign-group reminder after the original text', t 
   console.log('History exact output:', JSON.stringify(result.stdout));
 });
 
-// Actual JSON CLI entrypoint against the runner's private DB; no services/socket.
+// Actual JSON CLI entrypoint against this worker's private DB; no services/socket.
 // Run for recent/output changes; skip template-only changes. The synchronous
 // child is reaped and bounded by the same timeout/output limits as the fetch child.
 test('History recent CLI remains parseable JSON with foreign rows and a non-origin caller', t => {
