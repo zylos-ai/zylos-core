@@ -45,9 +45,17 @@ test('external conversation labels identify channels and internal peers', { skip
     const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, env: sandbox.env,
       args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
     sandbox.addCleanup(() => browser.close());
+    const contextClosures = new WeakMap();
+    const closeContext = context => {
+      if (!contextClosures.has(context)) contextClosures.set(context, (async () => {
+        await context.unrouteAll({ behavior: 'ignoreErrors' });
+        await context.close();
+      })());
+      return contextClosures.get(context);
+    };
     const open = async (width, theme) => {
       const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN', timezoneId: 'UTC' });
-      sandbox.addCleanup(() => context.close());
+      sandbox.addCleanup(() => closeContext(context));
       await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
       await context.addCookies([{ name: '__Secure-zylos_dashboard_session', value: fixture.cookie, domain: '127.0.0.1', path: '/', secure: true }]);
       await context.addInitScript(theme => { localStorage.setItem('zylos-dashboard-theme', theme); localStorage.setItem('zylos-dashboard-locale', 'zh'); localStorage.setItem('zylos-dashboard-detail-level', 'plain'); }, theme);
@@ -74,7 +82,7 @@ test('external conversation labels identify channels and internal peers', { skip
         assert.equal(await page.locator('#wb-chat .chat-in:not(.conversation-internal) .conversation-avatar .wb-ico-monitor').count(), 1);
         assert.equal(await page.locator('#wb-chat .chat-out:not(.conversation-internal) .conversation-avatar .wb-ico-bot').count(), 1);
         await shot(page, 'mine-light-1280', '.conversation-detail');
-      } finally { await context.close(); }
+      } finally { await closeContext(context); }
     });
     for (const width of [1280, 390]) for (const theme of ['light', 'dark']) await t.test(`${width} ${theme}: external directions, peers and raw entry`, async () => {
       const { context, page } = await open(width, theme);
@@ -96,7 +104,16 @@ test('external conversation labels identify channels and internal peers', { skip
         assert.equal(await row(page, outgoing.id).locator('.chat-message-author').innerText(), '发出 → OpenMax', 'use the row channel, not the Telegram history channel');
         assert.match(await row(page, relayOut.outRow.id).locator('.conversation-internal-heading').innerText(), /发出 →\s*Peer Session/);
         assert.match(await row(page, relayIn.inRow.id).locator('.conversation-internal-heading').innerText(), /收到 ←\s*Peer Session/);
-        for (const id of [relayOut.outRow.id, relayIn.inRow.id]) assert.match(await row(page, id).locator('.conversation-internal-heading').innerText(), /内部/);
+        for (const id of [relayOut.outRow.id, relayIn.inRow.id]) {
+          assert.match(await row(page, id).locator('.conversation-internal-heading').innerText(), /内部/);
+          const badge = row(page, id).locator('.conversation-internal-badge');
+          assert.equal(await badge.evaluate(node => node.parentElement.matches('.conversation-internal-route')
+            && node.parentElement.lastElementChild === node), true, 'internal badge follows the peer inside its route');
+          assert.deepEqual(await badge.evaluate(node => {
+            const style = getComputedStyle(node);
+            return [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth];
+          }), ['1px', '1px', '1px', '1px'], 'internal badge retains its outlined style');
+        }
         assert.deepEqual(layout.map(value => value.in), [true, false, false, true]);
         assert.ok(layout.every(value => value.top >= 0 && value.bottom <= 900), 'all four messages are on screen');
         assert.ok(layout[0].right > layout[1].right && layout[3].right > layout[2].right, 'incoming bubbles align right');
@@ -111,7 +128,7 @@ test('external conversation labels identify channels and internal peers', { skip
         assert.ok((await raw.locator('pre').innerText()).includes('Internal input'));
         assert.equal(await row(page, relayOut.outRow.id).locator('.conversation-internal-raw').isVisible(), false);
         assert.equal(await row(page, incoming.id).locator('.conversation-internal-raw').count(), 0);
-      } finally { await context.close(); }
+      } finally { await closeContext(context); }
     });
     // A controlled history response replays an existing row with updated channel metadata;
     // real state merging and keyed DOM reconciliation must refresh its icon without replacing its wrapper.
@@ -137,7 +154,7 @@ test('external conversation labels identify channels and internal peers', { skip
           assert.equal(await avatar.evaluate((node, original) => node === original, handle), true, 'avatar wrapper retains identity');
           assert.equal(await row(page, outgoing.id).locator('.conversation-avatar .wb-ico-bot').count(), 1);
         }
-      } finally { await context.close(); }
+      } finally { await closeContext(context); }
     });
   }, { timeoutMs: 110000 });
 });

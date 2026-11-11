@@ -139,12 +139,21 @@ export async function runInternalConversationBrowser(t, sandbox) {
       const out = side === 'mine' ? outgoing.outRow : incoming.outRow;
       const received = side === 'mine' ? incoming.inRow : outgoing.inRow;
       await row(out.id).waitFor(); await row(received.id).waitFor();
-      assert.equal(await row(out.id).locator('.conversation-internal-label').innerText(), '发给');
-      assert.equal(await row(received.id).locator('.conversation-internal-label').innerText(), '来自');
-      assert.doesNotMatch(await row(out.id).locator('.conversation-internal-heading').innerText(), /内部|→|←/);
-      assert.doesNotMatch(await row(received.id).locator('.conversation-internal-heading').innerText(), /内部|→|←/);
+      if (side === 'mine') {
+        assert.equal(await row(out.id).locator('.conversation-internal-label').innerText(), '发给');
+        assert.equal(await row(received.id).locator('.conversation-internal-label').innerText(), '来自');
+        assert.doesNotMatch(await row(out.id).locator('.conversation-internal-heading').innerText(), /内部|→|←/);
+        assert.doesNotMatch(await row(received.id).locator('.conversation-internal-heading').innerText(), /内部|→|←/);
+      } else {
+        assert.equal(await row(out.id).locator('.conversation-internal-label').innerText(), '发出 →');
+        assert.equal(await row(received.id).locator('.conversation-internal-label').innerText(), '收到 ←');
+        for (const message of [out, received]) {
+          assert.equal(await row(message.id).locator('.conversation-internal-badge').innerText(), '内部');
+        }
+      }
       assert.equal(await row(received.id).locator('.conversation-internal-content').innerText(), side === 'mine' ? '安排已确认，稍后发出通知。' : '请确认发布安排。');
-      assert.equal(await row(received.id).locator('.conversation-internal-raw').isVisible(), false);
+      assert.equal(await row(received.id).locator('.conversation-internal-raw').isVisible(), side === 'external');
+      if (side === 'external') assert.equal(await row(received.id).locator('.conversation-internal-raw').evaluate(raw => raw.open), false);
       assert.equal(await row(out.id).locator('.conversation-message-status, .chat-message-author').count(), 0);
       assert.equal(await row(out.id).locator('.conversation-internal-raw').evaluate(raw => raw.hidden), true, 'outbound detail does not repeat the body');
       const html = row(side === 'mine' ? htmlPair.outRow.id : htmlPair.inRow.id).locator('.conversation-internal-content');
