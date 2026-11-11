@@ -42,7 +42,10 @@ Use an authenticated administrator session. Observer is unavailable when
 Dashboard authentication is disabled; read-only accounts and Fleet credentials
 without administrator scope cannot acquire a viewing lease or change its state.
 For a Fleet target, actions apply to the selected remote Dashboard and require
-that target's administrator credentials and Observer support.
+that target's administrator credentials and Observer support. The target must
+also allow remote access to conversations and terminal (`chat.allowRemote`);
+otherwise every Observer route and the stream refuse its API key with
+`remote_chat_disabled`, and turning the switch off closes remote viewers at once.
 
 Once enabled, open the Observer tab. The first viewer starts a private Observer
 generation attached read-only to the active runtime's tmux session. Keyboard,

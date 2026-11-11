@@ -89,6 +89,40 @@ never created. This is a deliberate trade-off: the mapping stays a pure function
 of the endpoint, and Core creates the group when it stores the first message for
 it.
 
+### The Origin conversation
+
+The first row of "My conversations" is always the Origin conversation, in both
+session modes and even before it has any message. It is the fixed address
+`dashboard origin`: Core records it in session group `origin` without asking
+Dashboard, which is why `session-group.js` refuses `origin`. Reply to it like
+any Dashboard conversation:
+
+```bash
+cat <<'EOF_MESSAGE' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js dashboard origin
+Your plain-text reply.
+EOF_MESSAGE
+```
+
+- It is writable in single mode too: single's only session is Origin. Other
+  conversations stay read-only in single, and "new conversation" stays hidden.
+- System alerts land here when `alert_target` is not set, is `default`, cannot
+  be parsed, or its channel fails to send.
+- It shows the owner's messages, Origin's replies, alerts, and internal messages
+  between Origin and other sessions (in both directions). Scheduled tasks
+  without a reply address and system messages are not shown; the header still
+  shows Origin working, and says "Running a scheduled task" when the latest
+  message handed to it came from a scheduled task (handed over is not proof it
+  is the one in hand: the scheduler does not wait for Origin to be idle). In
+  multi mode an Origin that is not running is
+  shown asleep: the next message wakes it.
+- Another session cannot send to `dashboard origin` directly; it asks Origin to
+  relay with `c4-send internal origin`, and that internal message also appears
+  here.
+- For reminders to the owner, use an IM address or no reply address. Do not set
+  a scheduled task's reply address to `dashboard origin`: its trigger is shown
+  as a message from the owner.
+- It cannot be renamed, deleted or automatically named.
+
 ### Automatic conversation naming
 
 The new-conversation button creates an unnamed draft immediately. On the first
@@ -285,6 +319,19 @@ collected at install time; edit the file by hand and restart Dashboard
 
 Do not edit the password in `config.json` by hand: `config.json` keeps only its
 hash. Use `zylos dashboard reset-password` (see above).
+
+### Remote access to conversations and terminal
+
+Settings has the switch "Allow remote access to conversations and terminal"
+(config key `chat.allowRemote`, default off; the key name predates the observer
+part). It governs what other Dashboards in the fleet may do here with this
+instance's admin API key: read and send in conversations (including the Origin
+conversation) and use the terminal observer. While it is off, those requests are
+refused with `403 remote_chat_disabled`, and turning it off closes remote
+observer connections and their leases at once. Local browser sessions are never
+affected. `/api/state` reports the switch as `chat_allow_remote` so remote views
+hide the Conversations and Observer tabs; a fleet Dashboard too old to read it
+still shows the tabs, and their requests are refused.
 
 ## HTTP API
 

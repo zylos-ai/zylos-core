@@ -51,8 +51,11 @@ See [Conversation Text and Original Records](../../comm-bridge/SKILL.md#conversa
 ## Drafts and text sending
 
 All routes require the Dashboard conversation access policy. Writes require
-multi mode, admin access, same-origin cookie requests, and a registered
-Dashboard-owned conversation. API access also requires `chat.allowRemote`.
+admin access, same-origin cookie requests, and a registered Dashboard-owned
+conversation; every conversation except the Origin conversation also requires
+multi mode. API access also requires `chat.allowRemote`, the switch that covers
+both conversations and the terminal observer
+([Remote access](../SKILL.md#remote-access-to-conversations-and-terminal)).
 
 | Request | Body | Result |
 | --- | --- | --- |
