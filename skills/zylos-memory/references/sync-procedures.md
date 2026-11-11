@@ -124,13 +124,29 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
    --checkpoint <saved-K> --token T`. A cursor rejection leaves that group
    unadvanced; report it and continue eligible groups. TOKEN_MISMATCH stops
    everything, including release and internal prompts.
-8. At most three strong cross-group correlations may be prompted. Check existing
-   project notes to avoid repeating an association. Record the association and
-   intended prompt as part of necessary shared edits **before** cursor advance;
-   send only after those writes/advances, via `c4-send.js internal G` with stdin.
-   Include one explanation and source pointers, not raw logs; do not send to
-   origin itself. A rejected send is reported without deleting the record or
-   automatic retry. A crash between recording and sending can lose the prompt.
+8. Cross-group correlation prompts. Prompt only **strong** correlations: both
+   groups' records point to the same task, the same object, or the same person's
+   same matter (including commitments that contradict each other). A similar
+   topic is not enough. At most three prompts per run.
+   - **Once per correlation.** Before prompting, check the matching entry in
+     `reference/projects.md`. Each correlation is recorded there as
+     `Correlation between groups A and B notified at <time>`; a correlation
+     already recorded is not prompted again unless something new has happened
+     (for example a new conflict). Do not keep a separate table or file of sent
+     prompts.
+   - **Order.** Write that record as part of the necessary shared edits
+     **before** cursor advance; send only after those writes/advances, via
+     `c4-send.js internal G` with stdin.
+   - **Fixed format.** Each recipient group gets exactly this text, with the
+     placeholders filled in (one sentence each) and nothing else:
+     ```
+     [Correlation notice] Your "<this group's matter, one sentence>" relates to "<the other group's matter, one sentence>" in <other session group>: <why, one sentence>. Pointer: <C4 #id, checkpoint #id, or sessions/<date>.md>. For details, ask that group directly (c4-send internal "<other group>"); no need to reply to this message.
+     ```
+     Pointers only, never raw logs. The prompt is a hint, not an instruction,
+     and must be self-contained: the recipient may not have read the latest memory.
+   - Do not send to origin itself; correlations involving origin go into the
+     report (step 9). A rejected send is reported without deleting the record or
+     automatic retry. A crash between recording and sending can lose the prompt.
 9. Release once and report advanced/unadvanced groups, reasons, prompt recipients,
    and correlations involving origin for its running thread to decide on.
 
