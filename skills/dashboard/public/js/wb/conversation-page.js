@@ -774,6 +774,8 @@ export function mountConversationPage({
     while (!article && !destroyed && selectedKey === selected) {
       const before = state.snapshot();
       if (!before.messageCursor || before.olderError) break;
+      // At the top, the loading notice and a failed page's retry notice are in view while earlier pages load.
+      stream.scrollTop = 0;
       await state.loadOlder();
       // A page already loading (an earlier jump, the top-of-list loader) makes this call start nothing; wait for it.
       await state.olderSettled();
