@@ -10,6 +10,7 @@ const { readPoolCapacity } = await loadCoreModule('session-pool-config.js');
 import { createRouter } from './scheduler.js';
 import { createDelivery } from './delivery.js';
 import { formatConversation } from './format.js';
+import { resolveDashboardQuote } from '../dashboard-source.js';
 import { notifyDelivered } from './notify.js';
 import { createStatusNoticeSender } from '../c4-status-notice.js';
 import { createPendingExpiryHandler } from './expiry.js';
@@ -81,7 +82,9 @@ export function createDispatcher(overrides = {}, options = {}) {
   });
   let router;
   const delivery = createDelivery({ ...providers, getSessionMode: () => router.state.mode,
-    formatConversation: overrides.formatConversation ?? formatConversation,
+    formatConversation: overrides.formatConversation ?? (row => formatConversation(row, {
+      lookupQuote: current => resolveDashboardQuote(current, db.getDb()),
+    })),
     notifyDelivered: overrides.notifyDelivered ?? notifyDelivered,
   }, { ...options.delivery, tmux });
   router = createRouter({ ...providers, handleExpired, sendStatusNotice,

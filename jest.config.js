@@ -8,6 +8,7 @@ export default {
     '<rootDir>/test/test-location.test.js',
     '<rootDir>/test/reference-memory-templates.test.js',
     '<rootDir>/test/history-reminders.integration.test.js',
+    '<rootDir>/test/chat-quote.integration.test.js',
   ],
   globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',

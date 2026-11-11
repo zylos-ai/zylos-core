@@ -3,6 +3,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../comm-bridge/scripts/attachment-annotations.js';
 import { answerDisplay } from '../../../public/js/wb/chat-answer.js';
+import { parseChatQuote, stripChatQuote } from '../../../../comm-bridge/scripts/chat-quote.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const visible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin','*')
@@ -63,6 +64,23 @@ function attachmentPreview(content, { external = false, locale = 'zh' } = {}, fo
 /** The same bounded human summary is used by lists and incremental message reads. */
 export function conversationPreview(content, options = {}) {
   return Array.from(attachmentPreview(content, options, text => markdownPreview(text, options))).slice(0, 160).join('');
+}
+
+function rowQuote(row) {
+  if (row?.channel !== 'dashboard' || row.direction !== 'in') return null;
+  const quote = parseChatQuote(row.content);
+  return quote && quote.id < row.id ? quote : null;
+}
+
+const previewContent = row => rowQuote(row)?.content ?? row?.content ?? '';
+
+function internalContent(row) {
+  const prefixes = [
+    `[internal] Yourself, from your "${row.endpoint_id}" session group, said: `,
+    `[internal] ${row.endpoint_id} said: `,
+  ];
+  const prefix = row.direction === 'in' && prefixes.find(value => row.content.startsWith(value));
+  return prefix ? row.content.slice(prefix.length) : row.content;
 }
 
 export function deliveryState(row) {
@@ -158,12 +176,12 @@ export class ChatHistory {
         : 'c.session_group=@group', row.session_group === ''
         ? { channel: row.channel, endpoint: row.endpoint_id } : { group: row.session_group });
       const index = row.session_group === '' ? 'idx_conv_channel_endpoint' : 'idx_conv_group_id';
-      const latest = this._query(`SELECT c.id, c.content, c.direction FROM conversations c INDEXED BY ${index}
+      const latest = this._query(`SELECT c.id, c.content, c.direction, c.channel FROM conversations c INDEXED BY ${index}
         WHERE ${visible} AND ${where}
         ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
       const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
       const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
-      return { ...row, previewDirection: latest?.direction ?? null, preview: conversationPreview(latest?.content ?? '', { external: tab === 'external', locale }),
+      return { ...row, previewDirection: latest?.direction ?? null, preview: conversationPreview(previewContent(latest), { external: tab === 'external', locale }),
         display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
         ...(registered ? { localId: registered.localId } : {}), draft: false };
@@ -272,6 +290,10 @@ export class ChatHistory {
     const rechecked = recheck.length ? this._rowsByIds(range, recheck,
       'c.id,c.direction,c.channel,c.endpoint_id,c.session_group,c.content', messageVisible) : [];
     const batch = [...new Map([...page, ...rechecked].map(row => [row.id, row])).values()];
+    const quoteIds = [...new Set(page.map(row => rowQuote(row)?.id).filter(Boolean))];
+    const quoted = new Map((quoteIds.length ? this._rowsByIds(range, quoteIds,
+      'c.id,c.direction,c.timestamp,c.channel,c.endpoint_id,c.content', messageVisible, false) : [])
+      .map(row => [row.id, row]));
     const metadata = new Map();
     if (tab === 'mine' && this.attachments) {
       const externalRows = batch.filter(row => row.channel !== 'internal');
@@ -288,18 +310,21 @@ export class ChatHistory {
       })) : metadata.get(row.id) ?? [];
     const peers = new Map();
     const items = (direction === 'before' ? page.reverse() : page).map(row => {
+      const marker = rowQuote(row);
+      if (marker) {
+        const target = quoted.get(marker.id);
+        row = { ...row, quote: { id: marker.id, direction: target?.direction ?? null,
+          internal: target?.channel === 'internal',
+          timestamp: target?.timestamp ?? null, preview: target ? conversationPreview(
+            stripChatQuote(target.channel === 'internal' ? internalContent(target) : target.content),
+            { external: tab === 'external', locale }) : '', available: !!target } };
+      }
       if (row.channel === 'internal') {
         if (!peers.has(row.endpoint_id)) peers.set(row.endpoint_id, this._internalPeer(row.endpoint_id));
-        const prefixes = [
-          `[internal] Yourself, from your "${row.endpoint_id}" session group, said: `,
-          `[internal] ${row.endpoint_id} said: `,
-        ];
-        const prefix = row.direction === 'in' && prefixes.find(value => row.content.startsWith(value));
-        const content = prefix ? row.content.slice(prefix.length) : row.content;
-        return { ...row, internal: { ...peers.get(row.endpoint_id), content }, attachments: [] };
+        return { ...row, internal: { ...peers.get(row.endpoint_id), content: internalContent(row) }, attachments: [] };
       }
       return { ...row, deliveryState: deliveryState(row),
-        preview: conversationPreview(row.content, { external: tab === 'external', locale }), attachments: rowAttachments(row) };
+        preview: conversationPreview(previewContent(row), { external: tab === 'external', locale }), attachments: rowAttachments(row) };
     });
     const newest = items.at(-1)?.id ?? position?.id ?? 0;
     return { items, nextCursor: more ? this._token({ scope: `messages:${tab}:${id}:${direction}`, id: next }) : null,
@@ -317,12 +342,12 @@ export class ChatHistory {
     return unique;
   }
 
-  _rowsByIds(range, unique, columns, visibility = visible) {
+  _rowsByIds(range, unique, columns, visibility = visible, strict = true) {
     const parameters = { ...range.parameters, limit: unique.length };
     unique.forEach((value, index) => { parameters[`id${index}`] = value; });
     const rows = this._query(`SELECT ${columns} FROM conversations c
       WHERE ${visibility} AND ${range.where} AND c.id IN (${unique.map((_, index) => `@id${index}`).join(',')}) LIMIT @limit`, parameters);
-    if (rows.length !== unique.length) throw fail('chat_message_not_found', 404);
+    if (strict && rows.length !== unique.length) throw fail('chat_message_not_found', 404);
     return rows;
   }
 

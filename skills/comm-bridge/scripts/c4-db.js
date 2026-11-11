@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
 import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
 import { projectC4Content } from './c4-content-projection.js';
-import { dashboardSource, readOwnerName } from './dashboard-source.js';
+import { dashboardSource, readOwnerName, resolveDashboardQuote } from './dashboard-source.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export { migrateSchema, stripTrailingAckSuffix } from './c4-migrations.js';
@@ -387,7 +387,8 @@ export function formatConversations(conversations) {
  * @param {function} [options.ownerName] - owner display-name reader
  * @returns {string} - formatted text for agent delivery/session init
  */
-export function formatConversationsForAgent(conversations, { spill = true, ownerName = readOwnerName } = {}) {
+export function formatConversationsForAgent(conversations, { spill = true, ownerName = readOwnerName,
+  lookupQuote = row => resolveDashboardQuote(row, getDb()) } = {}) {
   if (!conversations || conversations.length === 0) {
     return '';
   }
@@ -398,7 +399,7 @@ export function formatConversationsForAgent(conversations, { spill = true, owner
     const endpoint = conv.endpoint_id ? `:${conv.endpoint_id}` : '';
     const projected = projectC4Content(conv.content || '', { c4Id: conv.id });
     const content = conv.channel === 'dashboard' && conv.direction === 'in'
-      ? dashboardSource(projected, ownerName()) : projected;
+      ? dashboardSource(projected, ownerName(), { row: conv, lookupQuote }) : projected;
     const replyViaSuffix = (
       conv.direction === 'in' &&
       conv.endpoint_id &&

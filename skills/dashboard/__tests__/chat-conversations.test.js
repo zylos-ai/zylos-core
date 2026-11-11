@@ -83,6 +83,106 @@ async function activate(f, name = 'first') {
   return { draft, receipt, id: groupId(`${receipt.namespace}:${draft.localId}`) };
 }
 
+// Boundary: real sender/receive and private C4 storage, without a runtime.
+// Run for quote validation/annotation/retry changes; unrelated UI may skip.
+test('quote sends persist a first-line marker for Dashboard and visible internal targets', async t => {
+  const f = fixture(t), active = await activate(f);
+  const target = active.receipt.messageId;
+  const sent = await f.sender.send(active.id, { content: 'reply to owner', quote: target });
+  assert.equal(sent.stored, true);
+  assert.equal(f.rows(active.draft.localId).at(-1).content, `[quote c4_id=${target}]\nreply to owner`);
+  const internal = f.db.prepare(`INSERT INTO conversations(direction,channel,endpoint_id,session_group,content,status)
+    VALUES('in','internal','peer',?,'internal text','delivered')`).run(`${active.receipt.namespace}:${active.draft.localId}`);
+  const internalId = Number(internal.lastInsertRowid);
+  await f.sender.send(active.id, { content: 'reply to peer', quote: internalId });
+  assert.equal(f.rows(active.draft.localId).at(-1).content, `[quote c4_id=${internalId}]\nreply to peer`);
+});
+
+test('quote sends reject invalid IDs and rows outside the visible conversation before receive', async t => {
+  const f = fixture(t), active = await activate(f), other = await activate(f, 'other');
+  const group = `${active.receipt.namespace}:${active.draft.localId}`;
+  const hidden = [
+    ['dashboard', 'wrong-endpoint', group, 'in'],
+    ['telegram', active.draft.localId, group, 'in'],
+    ['system', active.draft.localId, group, 'in'],
+    ['dashboard', active.draft.localId, group, 'other'],
+    ['internal', active.draft.localId, `${other.receipt.namespace}:${other.draft.localId}`, 'in'],
+  ].map(([channel, endpoint, sessionGroup, direction]) => Number(f.db.prepare(`INSERT INTO conversations
+    (direction,channel,endpoint_id,session_group,content,status) VALUES(?,?,?,?,'hidden','delivered')`)
+    .run(direction, channel, endpoint, sessionGroup).lastInsertRowid));
+  const before = f.counts.receive;
+  for (const quote of [null, 0, -1, 1.2, true, '1', Number.MAX_SAFE_INTEGER + 1, 999999,
+    other.receipt.messageId, ...hidden]) {
+    await assert.rejects(f.sender.send(active.id, { content: 'must reject', quote }), { code: 'invalid_chat_quote' });
+  }
+  const draft = f.conversations.create();
+  await assert.rejects(f.sender.send(draft.id, { content: 'no conversation yet', quote: active.receipt.messageId }),
+    { code: 'invalid_chat_quote' });
+  assert.equal(f.counts.receive, before);
+});
+
+// Real sender authorization and SQLite prepare boundary, within fixture-owned
+// databases. Run for quote access-order changes; unrelated UI may skip.
+test('quote authorization rejects before any reference query', async t => {
+  const f = fixture(t), active = await activate(f);
+  const prepare = f.reader._open().prepare.bind(f.reader._open());
+  let quoteReads = 0;
+  const sender = new ChatSender({ conversations: f.conversations,
+    c4Reader: { _open: () => ({ prepare(sql) {
+      if (/\bFROM\s+conversations\b/i.test(sql)) quoteReads++;
+      return prepare(sql);
+    } }) }, loadCore: async () => f.core, zylosDir: f.root });
+  const before = f.counts.receive;
+  await assert.rejects(sender.send(active.id, { content: 'denied', quote: active.receipt.messageId }, {
+    authorize: () => ({ status: 403, error: 'chat_conversation_forbidden' }),
+  }), { code: 'chat_conversation_forbidden', statusCode: 403 });
+  assert.equal(quoteReads, 0);
+  assert.equal(f.counts.receive, before);
+});
+
+test('quote markers count toward the byte limit and cannot make empty content sendable', async t => {
+  const f = fixture(t), active = await activate(f), quote = active.receipt.messageId;
+  for (const content of ['', ' \n ']) {
+    await assert.rejects(f.sender.send(active.id, { content, quote }), { code: 'invalid_chat_content' });
+  }
+  const prefix = `[quote c4_id=${quote}]\n`;
+  const exact = 'a'.repeat(65536 - Buffer.byteLength(prefix));
+  await f.sender.send(active.id, { content: exact, quote });
+  assert.equal(Buffer.byteLength(f.rows(active.draft.localId).at(-1).content), 65536);
+  const before = f.counts.receive;
+  await assert.rejects(f.sender.send(active.id, { content: exact + 'a', quote }), { code: 'invalid_chat_content' });
+  assert.equal(f.counts.receive, before);
+});
+
+for (const notification of ['failed', 'suppressed']) {
+test(`quote retries preserve exact pending content and reuse a ${notification} notification receipt`, async t => {
+  const f = fixture(t), active = await activate(f), quote = active.receipt.messageId;
+  f.setInvoke(() => { throw Error('private uncertain receive'); });
+  const uncertain = await f.sender.send(active.id, { content: 'retry body', quote });
+  assert.equal(uncertain.stored, null);
+  assert.equal(f.conversations.get(active.draft.localId).pendingContent, `[quote c4_id=${quote}]\nretry body`);
+  await f.makeSender().send(active.id, { content: 'retry body', quote });
+  assert.equal(f.counts.receive, 2, 'unconfirmed repeat cannot receive again');
+  f.setInvoke(null);
+  f.setRoute({ decision: 'unavailable', runtime: 'claude', health: 'unavailable', reason: 'fixture' });
+  f.setNotification(notification);
+  const expectedContent = `[quote c4_id=${quote}]\nretry body` + (notification === 'suppressed'
+    ? '\n\n[C4] Status notification suppressed by cooldown while health=unavailable reason=fixture.' : '');
+  const sent = await f.makeSender().send(active.id, { content: 'retry body', quote, retry: true });
+  assert.equal(f.rows(active.draft.localId).at(-1).content, expectedContent);
+  if (notification === 'suppressed') assert.equal(sent.action, 'suppressed');
+  else assert.equal(sent.error, 'UNHEALTHY_NOTIFY_FAILED');
+  const again = await f.makeSender().send(active.id, { content: 'retry body', quote, retry: true });
+  assert.equal(f.rows(active.draft.localId).at(-1).content, expectedContent);
+  assert.equal(again.messageId, sent.messageId);
+  assert.equal(f.counts.receive, 3);
+  assert.equal(f.rows(active.draft.localId).length, 2);
+  const changed = await f.makeSender().send(active.id, { content: 'retry body', quote: sent.messageId });
+  assert.notEqual(changed.messageId, sent.messageId, 'a different quote is a different complete string');
+  assert.ok(f.rows(active.draft.localId).at(-1).content.startsWith(`[quote c4_id=${sent.messageId}]\nretry body`));
+});
+}
+
 test('creating, reopening and renaming a draft leaves Core empty and never starts a receive', async t => {
   const f = fixture(t), draft = f.conversations.create({ displayName: '方案' });
   assert.equal(draft.state, 'draft');
