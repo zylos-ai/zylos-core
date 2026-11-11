@@ -393,7 +393,7 @@ test('controlled installed migration requires installing identity, preserves sna
  const m=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
  fs.mkdirSync(transactionDir,{recursive:true,mode:0o700});
  fs.mkdirSync(path.join(dir,'.zylos/upgrade'),{recursive:true,mode:0o700});
- fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(dir,'.zylos/upgrade/maintenance.cjs'));
+ fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(dir,'.zylos/upgrade/maintenance.cjs'));fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(path.join(dir,'.zylos/upgrade/maintenance.cjs')),'remove-owned-tree.mjs'));
  fs.chmodSync(path.join(dir,'.zylos/upgrade/maintenance.cjs'),0o600);
  const j={formatVersion:1,from:'0.9.4',firstTakeover:true,dashboardOwnerManaged:false,transactionId,zylosDir:dir,skillsDir:schemaRoot,phase:'installing',installationIntent:true,initialIdentity:{},dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json'))};
  const digest='a'.repeat(64);
@@ -433,4 +433,25 @@ test('controlled installed migration requires installing identity, preserves sna
   try {assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,1);}finally{db.close();}
  }
  assert.throws(()=>runCoreDbWorker(payload),/active installing|ENOENT/);
+});
+
+test('rehearsal cleanup accepts an instance alias while retaining unrelated directories', t => {
+ const dir=fixture(t),base=path.join(dir,'.backup/db'),alias=path.join(dir,'instance-alias');
+ fs.mkdirSync(path.join(base,'.rehearsal'),{recursive:true});fs.writeFileSync(path.join(base,'.rehearsal/copy.db'),'owned');
+ fs.mkdirSync(path.join(base,'keep'));fs.writeFileSync(path.join(base,'keep/content'),'unchanged');fs.symlinkSync(dir,alias);
+ assert.deepEqual(cleanupCoreDbRehearsals(alias).removed,[path.join(base,'.rehearsal')]);
+ assert.equal(fs.readFileSync(path.join(base,'keep/content'),'utf8'),'unchanged');
+ assert.equal(fs.lstatSync(alias).isSymbolicLink(),true);
+});
+
+// Root bypasses chmod permissions; the shared deletion suite separately proves
+// preflight retention in a real unprivileged child when the runner is root.
+test('rehearsal cleanup preflight failure preserves every file and reports the pending tree',
+ {skip:process.getuid?.()===0?'Root bypasses chmod; real unprivileged permission coverage is in remove-owned-tree.test.js':false}, t => {
+ const dir=fixture(t),target=path.join(dir,'.backup/db/.rehearsal'),locked=path.join(target,'locked');
+ fs.mkdirSync(locked,{recursive:true});fs.writeFileSync(path.join(target,'first.db'),'first');fs.writeFileSync(path.join(locked,'last.db'),'last');
+ fs.chmodSync(locked,0o000);t.after(()=>{if(fs.existsSync(locked))fs.chmodSync(locked,0o700);});
+ try {assert.throws(()=>cleanupCoreDbRehearsals(dir),error=>error.code==='EACCES'&&error.removedRehearsals.length===0);}
+ finally {fs.chmodSync(locked,0o700);}
+ assert.equal(fs.readFileSync(path.join(target,'first.db'),'utf8'),'first');assert.equal(fs.readFileSync(path.join(locked,'last.db'),'utf8'),'last');
 });

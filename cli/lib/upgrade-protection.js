@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -10,7 +11,7 @@ export const maintenance = require('./upgrade-maintenance.cjs');
 export function maintenanceFor(ctx) { return ctx.maintenance || maintenance; }
 const library = import.meta.dirname;
 function recoveryFiles(runnerName = 'runner.cjs') {
-  const files = [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', runnerName], ['upgrade-installer.cjs', 'installer.cjs']];
+  const files = [['upgrade-maintenance.cjs', 'maintenance.cjs'], ['upgrade-recovery.cjs', runnerName], ['upgrade-installer.cjs', 'installer.cjs'], ['../../skills/comm-bridge/scripts/remove-owned-tree.js', 'remove-owned-tree.mjs']];
 
   return files;
 }
@@ -51,7 +52,7 @@ export function deployUpgradeBootstrap(root, {transactionDir} = {}) {
   }
   // Stable paths are reused by later attempts in a long-lived process. Drop
   // the previous generation only after every replacement is durable.
-  for (const name of ['maintenance.cjs', 'recovery.cjs', 'installer.cjs', 'bootstrap.cjs']) {
+  for (const name of ['maintenance.cjs', 'recovery.cjs', 'installer.cjs', 'bootstrap.cjs', 'remove-owned-tree.mjs']) {
     delete require.cache[path.join(dest, name)];
   }
   return path.join(dest, 'bootstrap.cjs');
@@ -179,7 +180,7 @@ export function beginUpgrade(ctx, {
     // the active journal for file-only recovery even when directory fsync fails.
     try {
       if (fs.existsSync(staging)) {
-        fs.rmSync(staging, {recursive: true});
+        removeOwnedTree(stagingRoot, staging);
         maintenance.fsyncDir(stagingRoot);
       }
     } catch (cleanupError) { error.stagingCleanupError = cleanupError.message; }
@@ -273,7 +274,8 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     hashes: {
       'installer.cjs': maintenance.hash(path.join(dir, 'installer.cjs')),
       'maintenance.cjs': maintenance.hash(path.join(dir, 'maintenance.cjs')),
-      'runner.cjs': maintenance.hash(path.join(dir, 'runner.cjs'))
+      'runner.cjs': maintenance.hash(path.join(dir, 'runner.cjs')),
+      'remove-owned-tree.mjs': maintenance.hash(path.join(dir, 'remove-owned-tree.mjs'))
     }
   };
   maintenance.durable(path.join(dir, 'descriptor.json'), descriptor);

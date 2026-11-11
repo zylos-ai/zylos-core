@@ -3,6 +3,7 @@
  */
 
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
@@ -893,7 +894,8 @@ function cleanOldBackups(skillDir) {
     const entries = fs.readdirSync(backupRoot).sort();
     // Keep the last one, remove the rest
     for (let i = 0; i < entries.length - 1; i++) {
-      fs.rmSync(path.join(backupRoot, entries[i]), { recursive: true, force: true });
+      const root = fs.realpathSync(SKILLS_DIR);
+      removeOwnedTree(root, path.join(root, path.relative(SKILLS_DIR, backupRoot), entries[i]));
     }
   } catch {
     // Non-critical, ignore
@@ -1550,8 +1552,9 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force, jsonOutput 
   }
 
   // 3. Remove skill directory
-  if (fs.existsSync(skillDir)) {
-    fs.rmSync(skillDir, { recursive: true, force: true });
+  if (fs.lstatSync(skillDir, { throwIfNoEntry: false })) {
+    const root = fs.realpathSync(SKILLS_DIR);
+    removeOwnedTree(root, path.join(root, path.relative(SKILLS_DIR, skillDir)));
     steps.push({ action: 'Skill directory removed', success: true });
     if (!jsonOutput) console.log(`  ${success('Skill directory removed')}`);
   } else {
@@ -1561,8 +1564,9 @@ async function handleRemoveFlow(target, { purge, skipConfirm, force, jsonOutput 
 
   // 4. Remove data directory if --purge
   if (purge) {
-    if (fs.existsSync(dataDir)) {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+    if (fs.lstatSync(dataDir, { throwIfNoEntry: false })) {
+      const root = fs.realpathSync(COMPONENTS_DIR);
+      removeOwnedTree(root, path.join(root, path.relative(COMPONENTS_DIR, dataDir)));
       steps.push({ action: 'Data directory removed', success: true });
       if (!jsonOutput) console.log(`  ${success('Data directory removed')}`);
     } else {

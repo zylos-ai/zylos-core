@@ -194,27 +194,28 @@ describe('saveMergeBaseline', () => {
     // and the cleanup itself is interrupted by an I/O error on its SECOND
     // deletion — the window between the two cleanup steps
     const realRename = fs.renameSync;
-    const realRm = fs.rmSync;
-    let rmCalls = 0;
+    const realUnlink = fs.unlinkSync;
+    let markerRemovalAttempts = 0;
     fs.renameSync = () => {
       const err = new Error('EIO: injected commit failure');
       err.code = 'EIO';
       throw err;
     };
-    fs.rmSync = (...args) => {
-      rmCalls++;
-      if (rmCalls === 2) {
+    fs.unlinkSync = (...args) => {
+      if (path.basename(args[0]) === 'manifest.json.tmp') {
+        markerRemovalAttempts++;
         const err = new Error('EIO: injected cleanup interruption');
         err.code = 'EIO';
         throw err;
       }
-      return realRm(...args);
+      return realUnlink(...args);
     };
     try {
       expect(() => saveMergeBaseline(component, sourceV2, manifestV2)).toThrow(/EIO/);
+      expect(markerRemovalAttempts).toBe(1);
     } finally {
       fs.renameSync = realRename;
-      fs.rmSync = realRm;
+      fs.unlinkSync = realUnlink;
     }
 
     // Whatever the interruption left behind, recovery must restore the OLD
@@ -269,21 +270,22 @@ describe('recoverMergeBaseline', () => {
 
     // Fault injection: the SECOND deletion inside this recovery run fails
     // (EIO) — an interruption in the window between the two cleanup steps
-    const realRm = fs.rmSync;
-    let rmCalls = 0;
-    fs.rmSync = (...args) => {
-      rmCalls++;
-      if (rmCalls === 2) {
+    const realUnlink = fs.unlinkSync;
+    let markerRemovalAttempts = 0;
+    fs.unlinkSync = (...args) => {
+      if (path.basename(args[0]) === 'manifest.json.tmp') {
+        markerRemovalAttempts++;
         const err = new Error('EIO: injected recovery interruption');
         err.code = 'EIO';
         throw err;
       }
-      return realRm(...args);
+      return realUnlink(...args);
     };
     try {
       expect(() => recoverMergeBaseline(component)).toThrow(/EIO/);
+      expect(markerRemovalAttempts).toBe(1);
     } finally {
-      fs.rmSync = realRm;
+      fs.unlinkSync = realUnlink;
     }
 
     // Re-run recovery (injection gone). The interrupted rollback must still
@@ -432,4 +434,32 @@ describe('detectChanges', () => {
     const changes = detectChanges(dir);
     expect(changes).toBeNull();
   });
+});
+
+// Recovery must preserve its transaction marker when a staged deletion is unsafe.
+test('baseline recovery rejects a linked staged originals directory before removing its marker', () => {
+  const component = mkTmp(), outside = mkTmp();
+  fs.mkdirSync(path.join(component, '.zylos'));
+  writeFile(outside, 'keep.txt', 'outside contents');
+  writeFile(component, '.zylos/manifest.json.tmp', '{"files":{}}');
+  fs.symlinkSync(outside, path.join(component, '.zylos/originals.new'));
+  expect(() => recoverMergeBaseline(component)).toThrow();
+  expect(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8')).toBe('outside contents');
+  expect(fs.existsSync(path.join(component, '.zylos/manifest.json.tmp'))).toBe(true);
+  expect(fs.lstatSync(path.join(component, '.zylos/originals.new')).isSymbolicLink()).toBe(true);
+});
+
+test('baseline helpers preserve absent component creation and recovery no-op behavior', () => {
+  const parent = mkTmp(), source = mkTmp();
+  const absent = path.join(parent, 'absent');
+  expect(() => recoverMergeBaseline(absent)).not.toThrow();
+  expect(fs.existsSync(absent)).toBe(false);
+  writeFile(source, 'entry.txt', 'source contents');
+  const originalsOnly = path.join(parent, 'originals-only');
+  saveOriginals(originalsOnly, source);
+  expect(getOriginalContent(originalsOnly, 'entry.txt')).toBe('source contents');
+  const merged = path.join(parent, 'merged');
+  saveMergeBaseline(merged, source, generateManifest(source));
+  expect(getOriginalContent(merged, 'entry.txt')).toBe('source contents');
+  expect(loadManifest(merged).files).toEqual(generateManifest(source).files);
 });

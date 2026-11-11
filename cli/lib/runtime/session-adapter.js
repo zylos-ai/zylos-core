@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -95,7 +96,8 @@ export class SessionAdapter extends RuntimeAdapter {
   }
   async sendText({target,connection,text,bracketedPaste = false}) {
     if (typeof text !== 'string' || text.includes('\0')) throw new TypeError('Invalid text');
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(),'zylos-paste-'));
+    const temporaryRoot = await fs.realpath(os.tmpdir());
+    const dir = await fs.mkdtemp(path.join(temporaryRoot,'zylos-paste-'));
     const file = path.join(dir,'text');
     const buffer = `zylos-${randomUUID()}`;
     try {
@@ -113,7 +115,7 @@ export class SessionAdapter extends RuntimeAdapter {
     } finally {
       // Unique buffer cleanup is independent of target identity and executor state.
       try { await connection.cleanupBuffer(buffer); } catch {}
-      await fs.rm(dir,{recursive:true,force:true});
+      removeOwnedTree(temporaryRoot, dir);
     }
   }
   async launch({sessionGroup,runId,launchConfig,sessionMode}) {

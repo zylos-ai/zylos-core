@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -106,7 +107,7 @@ export function prepareUpgradeRuntime(ctx, {
   const clearPendingPrompt = () => {
     if (readRegular(path.join(zylosDir, promptRelative), { optional: true }) !== null) add(promptRelative, '');
   };
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-upgrade-render-'));
+  const scratch = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'zylos-upgrade-render-'));
   fs.chmodSync(scratch, 0o700);
   try {
     const version = readInstructionFormatVersion({ zylosDir });
@@ -271,5 +272,5 @@ export function prepareUpgradeRuntime(ctx, {
       add(manifest, readRegular(path.join(templatesDir, 'runtime-env.manifest.example')));
     }
     return { replacements, runtime, homeDir: path.resolve(homeDir), warnings };
-  } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+  } finally { removeOwnedTree(path.dirname(scratch), scratch); }
 }

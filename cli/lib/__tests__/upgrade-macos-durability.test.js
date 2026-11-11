@@ -27,7 +27,7 @@ test('Node directory publication sync failure propagates after rename',t=>{
  assert.equal(JSON.parse(fs.readFileSync(file)).phase,'prepared');
 });
 test('frozen maintenance publishes file then directory using only Node sync',t=>{
- const dir=fixture(t),saved=path.join(dir,'maintenance.cjs'),file=path.join(dir,'journal.json');fs.copyFileSync(modulePath,saved);
+ const dir=fixture(t),saved=path.join(dir,'maintenance.cjs'),file=path.join(dir,'journal.json');fs.copyFileSync(modulePath,saved);fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(saved),'remove-owned-tree.mjs'));
  const result=spawnSync(process.execPath,['-e',`
  const fs=require('node:fs'),cp=require('node:child_process'),sync=fs.fsyncSync,events=[];
  cp.spawnSync=()=>{throw Error('unexpected external helper');};

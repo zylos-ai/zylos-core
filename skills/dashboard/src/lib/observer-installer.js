@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../../comm-bridge/scripts/remove-owned-tree.js';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -415,8 +416,10 @@ export class ObserverInstaller {
     await this.prepareRoots();
     const current = await this.verify();
     if (current.state === 'installed') return current;
+    const stagingRoot = await fs.promises.realpath(this.paths.staging);
+    const artifactsRoot = await fs.promises.realpath(this.paths.artifacts);
     const nonce = `${process.pid}-${crypto.randomBytes(12).toString('hex')}`;
-    const stageRoot = path.join(this.paths.staging, nonce);
+    const stageRoot = path.join(stagingRoot, nonce);
     const archivePath = path.join(stageRoot, 'zellij.tar.gz');
     const extractionPath = path.join(stageRoot, 'extract');
     let publishDirectory = null;
@@ -444,7 +447,7 @@ export class ObserverInstaller {
       if (!isCurrent()) throw new ObserverInstallError('operation_obsolete', 'Observer install was superseded');
 
       const artifactDirectory = path.join(this.paths.artifacts, `${this.artifact.version}-${this.artifact.platform}`);
-      publishDirectory = path.join(this.paths.artifacts, `.publish-${nonce}`);
+      publishDirectory = path.join(artifactsRoot, `.publish-${nonce}`);
       await fs.promises.rename(extractionPath, publishDirectory);
       const licenseDestination = path.join(publishDirectory, 'LICENSE.zellij.md');
       await fs.promises.copyFile(this.licensePath, licenseDestination, fs.constants.COPYFILE_EXCL);
@@ -460,7 +463,7 @@ export class ObserverInstaller {
         if (verified.state !== 'installed' && !await this.verifyIncompletePublication(artifactDirectory)) {
           throw new ObserverInstallError('artifact_conflict', 'Existing managed artifact failed verification', error);
         }
-        await fs.promises.rm(publishDirectory, { recursive: true, force: true });
+        removeOwnedTree(artifactsRoot, publishDirectory);
         publishDirectory = null;
         if (verified.state === 'installed') return verified;
       }
@@ -474,8 +477,8 @@ export class ObserverInstaller {
       onProgress?.({ phase: 'complete', bytes: download.bytes, total: download.bytes });
       return installed;
     } finally {
-      await fs.promises.rm(stageRoot, { recursive: true, force: true });
-      if (publishDirectory) await fs.promises.rm(publishDirectory, { recursive: true, force: true });
+      removeOwnedTree(stagingRoot, stageRoot);
+      if (publishDirectory) removeOwnedTree(artifactsRoot, publishDirectory);
     }
   }
 
@@ -514,7 +517,8 @@ export class ObserverInstaller {
     } catch (error) {
       throw new ObserverInstallError('unsafe_removal', 'Observer artifact parent chain is not safe to remove', error);
     }
-    await fs.promises.rm(expectedDirectory, { recursive: true, force: true });
+    const artifactsRoot = await fs.promises.realpath(this.paths.artifacts);
+    removeOwnedTree(artifactsRoot, path.join(artifactsRoot, path.basename(expectedDirectory)));
     await fs.promises.unlink(this.paths.installedManifest);
     return { state: 'not_installed', platform: this.platformKey };
   }

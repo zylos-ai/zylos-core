@@ -4,6 +4,19 @@
 // Linux uses util-linux flock; macOS retains exclusive admission until release.
 const fs = require('node:fs');
 const path = require('node:path');
+// Load deletion only at the mutation boundary, after checking frozen material identity.
+function removeOwnedTree(root, target) {
+  const source = path.basename(__filename) === 'upgrade-maintenance.cjs';
+  const helper = source ? path.resolve(__dirname, '../../skills/comm-bridge/scripts/remove-owned-tree.js')
+    : path.join(__dirname, 'remove-owned-tree.mjs');
+  const journal = path.join(__dirname, 'journal.json');
+  if (!source) {
+    const expected = read(journal).recoveryHashes?.['remove-owned-tree.mjs'];
+    privatePath(helper);
+    if (!/^[a-f0-9]{64}$/.test(expected || '') || hash(helper) !== expected) throw Error('transaction recovery material changed: remove-owned-tree.mjs');
+  }
+  return require('node:module').createRequire(__filename)(helper).removeOwnedTree(root, target);
+}
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
 const {isDeepStrictEqual} = require('node:util');
@@ -871,7 +884,7 @@ function target(j, name) {
   return p;
 }
 function sync(src, dest) {
-  fs.rmSync(dest, {recursive:true, force:true});
+  removeOwnedTree(fs.realpathSync(path.dirname(dest)), dest);
   copyTreePreservingModes(src, dest);
   fsyncTree(dest);
   fsyncDir(path.dirname(dest));
@@ -916,6 +929,7 @@ function validateDescriptor(dir, j, d) {
   };
   for (const [key, value] of Object.entries(fixed)) if (d[key] !== value) throw Error('recovery material outside fixed layout: ' + key);
   const names = ['installer.cjs', 'maintenance.cjs', 'runner.cjs'];
+  if (j.recoveryHashes?.['remove-owned-tree.mjs'] || d.hashes?.['remove-owned-tree.mjs']) names.push('remove-owned-tree.mjs');
   if (!d.hashes || Array.isArray(d.hashes) || Object.keys(d.hashes).length !== names.length || names.some(name => !Object.hasOwn(d.hashes, name))) throw Error('missing required recovery material hashes');
   for (const name of names) {
     privatePath(path.join(dir, name));
@@ -1002,8 +1016,8 @@ function finishTerminal(dir, j) {
       catch (error) { if (error.code !== 'ENOENT') throw error; }
       if (stat) {
         privatePath(code, {directory:true});
-        // Recursive rm unlinks nested symlinks; it never follows their targets.
-        fs.rmSync(code, {recursive:true});
+        // Preflight all entries before unlinking nested links or owned files.
+        removeOwnedTree(dir, code);
       }
       // Also sync on ENOENT: a prior attempt may have removed code but failed
       // before syncing the directory or recording completion.
@@ -1019,6 +1033,7 @@ function finishTerminal(dir, j) {
 }
 
 function validateRecoveryFiles(dir, j, names = ['runner.cjs', 'maintenance.cjs', 'installer.cjs']) {
+  if (j.recoveryHashes?.['remove-owned-tree.mjs']) names = [...new Set([...names, 'remove-owned-tree.mjs'])];
   for (const name of names) {
     const file = path.join(dir, name);
     privatePath(file);
@@ -1143,7 +1158,7 @@ function restoreOriginalPackage(dir, j) {
   }
   if (currentHash !== original.treeHash) {
     validateSupportedGlobalLayout(sourceRoot, metadata, {recovery:true});
-    fs.rmSync(sourceRoot, {recursive:true, force:true});
+    removeOwnedTree(fs.realpathSync(path.dirname(sourceRoot)), sourceRoot);
     copyTreePreservingModes(snapshot, sourceRoot);
     fsyncTree(sourceRoot);
     fsyncDir(path.dirname(sourceRoot));
@@ -1231,6 +1246,7 @@ function recoverBeforeUpgrade(root, deps = {}) {
   }
 }
 module.exports = {
+  removeOwnedTree,
   recoverBeforeUpgrade,
   recoveryFailureDetails,
   recoveryNext,

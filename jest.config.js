@@ -7,6 +7,9 @@ export default {
     // Node test-runner file; run by scripts/run-node-tests.js.
     '<rootDir>/test/test-location.test.js',
     '<rootDir>/test/reference-memory-templates.test.js',
+    '<rootDir>/test/owned-tree-deletion-policy.test.js',
+    '<rootDir>/test/owned-removal-callers.integration.test.js',
+    '<rootDir>/test/test-environment-cleanup.test.js',
     '<rootDir>/test/history-reminders.integration.test.js',
     '<rootDir>/test/chat-quote.integration.test.js',
     '<rootDir>/test/origin-conversation.integration.test.js',

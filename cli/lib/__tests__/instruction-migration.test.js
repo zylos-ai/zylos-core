@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { migrateInstructionsCommand } from '../../commands/migrate-instructions.js';
 import {
   classifyInstructionBaseline,
+  createMigrationBackup,
   convergeAssemblerTopology,
   executeMigrationApply,
   inspectAssemblerTopology,
@@ -1037,4 +1038,15 @@ describe('migrate-instructions command', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+it('creates a migration backup when the instance directory does not exist yet', () => {
+  const parent = fixture();
+  const instance = path.join(parent, 'new-instance');
+  try {
+    const result = createMigrationBackup({ zylosDir: instance, report: 'Private migration report.' });
+    assert.equal(fs.readFileSync(path.join(result.backupPath, 'migration-report.md'), 'utf8'), 'Private migration report.');
+    assert.ok(result.backupPath.startsWith(fs.realpathSync(instance) + path.sep));
+    assert.deepEqual(result.originals, []);
+  } finally { fs.rmSync(parent, { recursive: true, force: true }); }
 });

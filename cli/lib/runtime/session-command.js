@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -87,7 +88,8 @@ export function claudeProbeEnvironment(root, processEnv) {
 }
 /** Shell exec works on the minimum Node release too: no resident Node parent. */
 export function writeSessionLaunchScript({command,args,env,root,multi}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-session-'));
+  const temporaryRoot = fs.realpathSync(os.tmpdir());
+  const dir = fs.mkdtempSync(path.join(temporaryRoot, 'zylos-session-'));
   fs.chmodSync(dir,0o700);
   const file = path.join(dir,'launch.sh');
   const bindings = Object.entries(env).map(([k,v]) => shellQuote(`${k}=${v}`));
@@ -95,7 +97,7 @@ export function writeSessionLaunchScript({command,args,env,root,multi}) {
   if (multi) bindings.push('"ZYLOS_SESSION_GROUP=$ZYLOS_SESSION_GROUP"');
   const script = `#!/bin/sh\nset -eu\ncd ${shellQuote(root)}\nrm -- ${shellQuote(file)}\nrmdir -- ${shellQuote(dir)}\nexec env -i ${bindings.join(' ')} ${[command,...args].map(shellQuote).join(' ')}\n`;
   fs.writeFileSync(file,script,{mode:0o600});
-  return {file, cleanup() { fs.rmSync(dir,{recursive:true,force:true}); }};
+  return {file, cleanup() { removeOwnedTree(temporaryRoot, dir); }};
 }
 export function runtimeHelp(command, env = process.env) {
   try { return execFileSync(command,['--help'],{env,encoding:'utf8',timeout:10000,killSignal:'SIGKILL',stdio:'pipe'}); }

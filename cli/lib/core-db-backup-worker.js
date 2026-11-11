@@ -225,8 +225,10 @@ export async function execute(input) {
   }
   const engine=['offline-preflight','upgrade-migrate','rehearse'].includes(input.action) ? await migrationEngine(input) : null;
   if(input.action==='rehearse') {
+    // Rehearsal executes the downloaded package's own worker and deletion contract.
+    const {removeOwnedTree}=await import('../../skills/comm-bridge/scripts/remove-owned-tree.js');
     if (!input.schemaRoot || !input.driverRoot || !input.rehearsalDir) throw Error('Rehearsal requires target schema, installed driver, and private copy roots');
-    const directory=input.rehearsalDir;
+    const directory=path.join(fs.realpathSync(path.dirname(input.rehearsalDir)),path.basename(input.rehearsalDir));
     const stat=fs.lstatSync(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw Error('Unsafe private rehearsal directory');
     const reports=[];
@@ -265,7 +267,7 @@ export async function execute(input) {
         } catch(error) {throw schemaError(`${item.source}: rehearsal failed: ${error.message}`,'SCHEMA_MIGRATION_FAILED',error);} finally {copy.close();}
       }
       return {databases:reports};
-    } finally {fs.rmSync(directory,{recursive:true,force:true});}
+    } finally {removeOwnedTree(fs.realpathSync(path.dirname(directory)),directory);}
   }
   const plan=(db,mod,options={}) => {
     // A restored pre-chain owner still supplies its original readonly contract.

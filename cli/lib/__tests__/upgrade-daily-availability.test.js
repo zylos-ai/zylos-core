@@ -16,7 +16,7 @@ function fixture(t) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_DAILY_TEST_TMPDIR || os.tmpdir(),'upgrade-daily-')));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
- for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-bootstrap.cjs','bootstrap.cjs']]) {
+ for(const [src,dest] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-bootstrap.cjs','bootstrap.cjs']]) {
   fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dest));fs.chmodSync(path.join(stable,dest),0o600);
  }
  const dir=path.join(root,'.backup/self-upgrade/active');fs.mkdirSync(dir,{recursive:true,mode:0o700});
@@ -302,10 +302,10 @@ for(const damage of ['malformed','missing','oversized','unknown-entry','dangling
 
 test('active READY ignores unrelated corrupt history, allows real writes, and still suppresses PM2 save',t=>{
  const f=fixture(t);
- for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','runner.cjs'],['upgrade-installer.cjs','installer.cjs']]) {
+ for(const [src,dest] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','runner.cjs'],['upgrade-installer.cjs','installer.cjs']]) {
   fs.copyFileSync(path.resolve('cli/lib',src),path.join(f.dir,dest));fs.chmodSync(path.join(f.dir,dest),0o600);
  }
- f.j.recoveryHashes=Object.fromEntries(['maintenance.cjs','runner.cjs','installer.cjs'].map(name=>[name,m.hash(path.join(f.dir,name))]));
+ f.j.recoveryHashes=Object.fromEntries(['maintenance.cjs','runner.cjs','installer.cjs','remove-owned-tree.mjs'].map(name=>[name,m.hash(path.join(f.dir,name))]));
  f.save();m.marker(f.root,f.dir,f.j);
  const old=path.join(f.root,'.backup/self-upgrade/old');fs.mkdirSync(old,{mode:0o700});fs.writeFileSync(path.join(old,'journal.json'),'{');
  assert.equal(m.discover(f.root).blocked,true);

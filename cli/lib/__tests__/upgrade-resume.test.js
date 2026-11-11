@@ -308,6 +308,7 @@ for(const corrupt of [false,true]) test(`resume preserves default reader access 
   const f=fixture(t),stable=path.join(f.root,'.zylos/upgrade/maintenance.cjs');
   fs.mkdirSync(path.dirname(stable),{recursive:true});
   fs.writeFileSync(stable,fs.readFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),'utf8'));
+  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(stable),'remove-owned-tree.mjs'));
   const preparation=preparePostCutoff({transactionDir:f.dir,zylosDir:f.root,homeDir:f.root,runtime:'claude',
     replacements:[{path:'CLAUDE.md',content:'published'}]});
   f.journal={...f.journal,postCutoff:{...preparation,items:{hooks:{...preparation.items.hooks,state:'done'}}}};

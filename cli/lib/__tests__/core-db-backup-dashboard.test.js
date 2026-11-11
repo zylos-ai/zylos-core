@@ -189,7 +189,7 @@ function controlledMigration(t, dashboardOwnerManaged, options) {
   const m=createRequire(import.meta.url)('../upgrade-maintenance.cjs');
   const transactionDir=path.join(root,'.backup/self-upgrade/deferred-dashboard'),digest='a'.repeat(64);
   fs.mkdirSync(transactionDir,{recursive:true,mode:0o700});fs.mkdirSync(path.join(root,'.zylos/upgrade'),{recursive:true,mode:0o700});
-  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(root,'.zylos/upgrade/maintenance.cjs'));fs.chmodSync(path.join(root,'.zylos/upgrade/maintenance.cjs'),0o600);
+  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(root,'.zylos/upgrade/maintenance.cjs'));fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(path.join(root,'.zylos/upgrade/maintenance.cjs')),'remove-owned-tree.mjs'));fs.chmodSync(path.join(root,'.zylos/upgrade/maintenance.cjs'),0o600);
   const j={formatVersion:1,from:'0.9.4',firstTakeover:false,dashboardOwnerManaged,transactionId:'deferred-dashboard',zylosDir:root,skillsDir:driverRoot,phase:'installing',installationIntent:true,nodePath:process.execPath,
     dbBackupDir:snapshot.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshot.dbBackupDir,'manifest.json')),originalServices:[],coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],
     initialIdentity:{nodePath:process.execPath,cliRoot:path.join(root,'package/cli'),cliHash:digest,packageJson:path.join(root,'package/package.json'),packageHash:digest,workerPath:path.join(root,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:false}))}};

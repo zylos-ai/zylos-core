@@ -207,6 +207,23 @@ describe('shard-sequencer TTL sweep', () => {
     assert.equal(fs.existsSync(sessionFlagDir('fresh-session', { tmpdir })), true);
   });
 
+  it('retains a stale linked session directory without touching its destination', () => {
+    const tmpdir = makeTmpdir();
+    const outside = path.join(tmpdir, 'outside');
+    fs.mkdirSync(outside);
+    const sentinel = path.join(outside, 'sentinel.txt');
+    fs.writeFileSync(sentinel, 'retained');
+    fs.mkdirSync(flagRoot({ tmpdir }));
+    const linked = sessionFlagDir('linked-session', { tmpdir });
+    fs.symlinkSync(outside, linked);
+    const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    fs.utimesSync(outside, past, past);
+
+    assert.equal(sweepStaleFlags({ ttlMs: 60 * 60 * 1000, tmpdir }), 0);
+    assert.equal(fs.lstatSync(linked).isSymbolicLink(), true);
+    assert.equal(fs.readFileSync(sentinel, 'utf8'), 'retained');
+  });
+
   it('is a no-op when the flag root does not exist', () => {
     const tmpdir = makeTmpdir();
     assert.equal(sweepStaleFlags({ tmpdir }), 0);

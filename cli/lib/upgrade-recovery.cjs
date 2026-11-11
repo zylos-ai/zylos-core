@@ -198,9 +198,7 @@ function restoreCore(dir, j) {
     } else if (fs.existsSync(p)) {
       const ownership = path.join(p, '.zylos', 'upgrade-owner.json');
       if (!fs.existsSync(ownership) || m.read(ownership).transactionId !== j.transactionId) throw Error('new core directory provenance unknown: ' + e.name);
-      fs.rmSync(p, {
-        recursive: true
-      });
+      m.removeOwnedTree(fs.realpathSync(j.skillsDir), p);
       m.fsyncDir(path.dirname(p));
     }
     j.codeRestore[e.name] = {

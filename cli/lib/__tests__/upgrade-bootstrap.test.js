@@ -10,7 +10,7 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const stable = path.join(root, '.zylos/upgrade');
   fs.mkdirSync(stable, {recursive: true, mode: 0o700});
-  for (const [source, target] of [['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['upgrade-maintenance.cjs', 'maintenance.cjs']]) {
+  for (const [source, target] of [['upgrade-bootstrap.cjs', 'bootstrap.cjs'], ['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs']]) {
     fs.copyFileSync(new URL('../' + source, import.meta.url), path.join(stable, target));
     fs.chmodSync(path.join(stable, target), 0o600);
   }
@@ -102,7 +102,7 @@ function runnerFixture(t, mode, {legacy = false} = {}) {
   const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
   t.mock.method(m, 'canRecognizeProcesses', () => true);
   fs.copyFileSync(new URL('../../../test/fixtures/recovery-bootstrap-runner.cjs', import.meta.url), path.join(dir, 'runner.cjs'));
-  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) {
+  for (const [src, dest] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) {
     fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
     fs.chmodSync(path.join(dir, dest), 0o600);
   }
@@ -110,7 +110,7 @@ function runnerFixture(t, mode, {legacy = false} = {}) {
   fs.chmodSync(path.join(dir, 'runner.cjs'), 0o600);
   fs.writeFileSync(path.join(dir, 'fixture.json'), JSON.stringify({mode}), {mode:0o600});
   const journal = m.read(path.join(dir, 'journal.json'));
-  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   return {...f, dir, m, hashes:{...journal.recoveryHashes}, receipt:path.join(f.root, 'fixture-child.json')};
 }
 
@@ -197,10 +197,10 @@ test('once rejects changed transaction recovery code before executing it', {skip
   const f = fixture(t), dir = f.journal();
   const m = createRequire(import.meta.url)(path.join(f.stable, 'maintenance.cjs'));
   t.mock.method(m, 'canRecognizeProcesses', () => true);
-  for (const [src, dest] of [['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
+  for (const [src, dest] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'], ['upgrade-installer.cjs','installer.cjs']]) fs.copyFileSync(new URL('../' + src, import.meta.url), path.join(dir, dest));
   fs.writeFileSync(path.join(dir, 'runner.cjs'), 'exports.resume = () => ({resumed:true});');
   const journal = m.read(path.join(dir, 'journal.json'));
-  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   fs.appendFileSync(path.join(dir, 'runner.cjs'), '\nthrow Error("changed runner executed");');
   const out = f.api.bootstrap(f.root, {once:true});
   assert.equal(out.recovery_required, true);
@@ -216,8 +216,9 @@ test('restricted process visibility refuses automatic bootstrap recovery on Linu
   const executed = path.join(dir, 'runner-executed');
   fs.writeFileSync(path.join(dir, 'runner.cjs'), `exports.resume = () => { require('node:fs').writeFileSync(${JSON.stringify(executed)}, 'executed'); return {resumed:true}; };`);
   for (const name of ['maintenance.cjs', 'installer.cjs']) fs.writeFileSync(path.join(dir, name), 'module.exports = {};');
+  fs.copyFileSync(new URL('../../../skills/comm-bridge/scripts/remove-owned-tree.js',import.meta.url),path.join(dir,'remove-owned-tree.mjs'));
   const journal = m.read(path.join(dir, 'journal.json'));
-  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name,m.hash(path.join(dir,name))]))});
+  m.update(dir, journal, {recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs'].map(name => [name,m.hash(path.join(dir,name))]))});
   const out = f.api.bootstrap(f.root, {once:true});
   assert.equal(fs.existsSync(executed), false);
   assert.equal(out.automaticResume, false);
@@ -313,7 +314,7 @@ test('retired runtime-launch option fails clearly and cannot run a supervisor', 
  });
 
 // Boundary: Linux performs actual interrupted takeover, real terminal cleanup,
-// and outer rediscovery. Only fs.rmSync(code/) is fault-injected in the child;
+// and outer rediscovery. Only unlinkSync within code/ is fault-injected in the child;
 // no service, database, or installed package is touched. Run when recovery
 // cleanup or its caller changes. Mac refusal is covered separately above.
 test('once CLI reports a real runner cleanup failure with its cause and retained marker', {skip:process.platform!=='linux', timeout:10000}, t => {
@@ -323,7 +324,7 @@ test('once CLI reports a real runner cleanup failure with its cause and retained
   for (const name of ['runner.cjs', 'product-runner.cjs']) fs.chmodSync(path.join(f.dir, name), 0o600);
   fs.mkdirSync(path.join(f.dir, 'code'), {mode:0o700});
   fs.writeFileSync(path.join(f.dir, 'code', 'retained.txt'), 'retained test code\n', {mode:0o600});
-  const hashes = Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name => [name, f.m.hash(path.join(f.dir, name))]));
+  const hashes = Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs'].map(name => [name, f.m.hash(path.join(f.dir, name))]));
   readyJournal(f, 'upgrade_complete', {
     recoveryHashes:hashes,
     cleanup:{complete:false, codeRemoved:false, servicesRestored:true},

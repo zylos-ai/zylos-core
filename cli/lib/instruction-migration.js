@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -354,7 +355,9 @@ export function renderMigrationReport({
 
 export function createMigrationBackup({ zylosDir, report, now = new Date(), faultInjector = () => {} }) {
   const timestamp = now.toISOString().replace(/[:.]/g, '-');
-  const timestampRoot = path.join(zylosDir, '.backup', timestamp);
+  fs.mkdirSync(zylosDir, { recursive: true });
+  const root = fs.realpathSync(zylosDir);
+  const timestampRoot = path.join(root, '.backup', timestamp);
   let backupPath = path.join(timestampRoot, 'instruction-migration');
   let collision = 1;
   while (fs.existsSync(backupPath)) {
@@ -376,7 +379,7 @@ export function createMigrationBackup({ zylosDir, report, now = new Date(), faul
     atomicWrite(path.join(backupPath, 'migration-report.md'), report.replaceAll('__BACKUP_PATH__', backupPath));
     return { backupPath, originals };
   } catch (error) {
-    try { fs.rmSync(backupPath, { recursive: true, force: true }); } catch (cleanupError) {
+    try { removeOwnedTree(root, backupPath); } catch (cleanupError) {
       error.backupCleanupWarning = cleanupError;
       error.partialBackupPath = backupPath;
     }

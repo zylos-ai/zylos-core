@@ -11,6 +11,7 @@
 
 import { savePm2ProcessList } from '../lib/pm2-save.js';
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -153,7 +154,7 @@ export async function selfUninstall(args) {
     console.log(success('zylos data directory removed'));
   } else {
     console.log(dim(`  Data directory preserved at ${cyan('~/zylos/')}`));
-    console.log(dim('  You can remove it later with: rm -rf ~/zylos'));
+    console.log(dim('  You can remove the preserved data directory later.'));
   }
 
   // ── Done ─────────────────────────────────────────────
@@ -311,7 +312,9 @@ function cleanShellProfiles() {
  */
 function removeDirectory(dirPath) {
   try {
-    fs.rmSync(dirPath, { recursive: true, force: true });
+    if (!fs.lstatSync(dirPath, { throwIfNoEntry: false })) return;
+    const root = fs.realpathSync(path.dirname(dirPath));
+    removeOwnedTree(root, path.join(root, path.basename(dirPath)));
   } catch (err) {
     console.log(warn(`Could not fully remove ${dirPath}: ${err.message}`));
   }

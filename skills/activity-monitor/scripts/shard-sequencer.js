@@ -26,6 +26,7 @@
  * - All waits fail open: a missing predecessor delays a shard, never drops it.
  */
 
+import { removeOwnedTree } from '../../comm-bridge/scripts/remove-owned-tree.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -164,10 +165,12 @@ export async function waitForFlag(sessionId, shardName, {
  * mechanism.
  */
 export function sweepStaleFlags({ ttlMs = DEFAULT_FLAG_TTL_MS, tmpdir } = {}) {
-  const root = flagRoot(tmpdir ? { tmpdir } : {});
+  let root = flagRoot(tmpdir ? { tmpdir } : {});
   let removed = 0;
   let entries;
   try {
+    if (!fs.lstatSync(root).isDirectory()) return removed;
+    root = fs.realpathSync(root);
     entries = fs.readdirSync(root);
   } catch {
     return removed;
@@ -177,7 +180,7 @@ export function sweepStaleFlags({ ttlMs = DEFAULT_FLAG_TTL_MS, tmpdir } = {}) {
     const dir = path.join(root, entry);
     try {
       if (fs.statSync(dir).mtimeMs < cutoff) {
-        fs.rmSync(dir, { recursive: true, force: true });
+        removeOwnedTree(root, dir);
         removed += 1;
       }
     } catch {

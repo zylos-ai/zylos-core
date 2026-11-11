@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../../comm-bridge/scripts/remove-owned-tree.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -53,7 +54,8 @@ async function recoverLegacyStaleLock(lockPath, staleLockMs, now = Date.now()) {
   const quarantinePath = `${lockPath}.stale-${crypto.randomBytes(12).toString('hex')}`;
   try {
     await fs.promises.rename(lockPath, quarantinePath);
-    await fs.promises.rm(quarantinePath, { recursive: true });
+    const root = await fs.promises.realpath(path.dirname(lockPath));
+    removeOwnedTree(root, path.join(root, path.basename(quarantinePath)));
     return true;
   } catch (error) {
     if (error?.code === 'ENOENT') return true;

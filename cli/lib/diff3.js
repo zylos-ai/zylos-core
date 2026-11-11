@@ -6,6 +6,7 @@
  */
 
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -15,14 +16,14 @@ let _diff3Available = null;
 function getWritableTmpBase(prefix = 'zylos-merge-probe-') {
   let base = os.tmpdir();
   try {
-    const probe = fs.mkdtempSync(path.join(base, prefix));
-    fs.rmSync(probe, { recursive: true, force: true });
+    const probe = fs.mkdtempSync(path.join(fs.realpathSync(base), prefix));
+    removeOwnedTree(path.dirname(probe), probe);
   } catch {
     // System tmp unavailable — fallback to ~/tmp
     base = path.join(os.homedir(), 'tmp');
     fs.mkdirSync(base, { recursive: true });
   }
-  return base;
+  return fs.realpathSync(base);
 }
 
 /**
@@ -80,7 +81,7 @@ export function merge3(baseContent, localContent, newContent) {
     // Exit code 2 or other error: diff3 failed entirely
     throw new Error(`diff3 failed: ${err.stderr || err.message}`);
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removeOwnedTree(path.dirname(tmpDir), tmpDir);
   }
 }
 

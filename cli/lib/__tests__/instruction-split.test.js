@@ -17,6 +17,7 @@ import {
   instructionPaths,
   needsRebuild,
   readInstructionFormatVersion,
+  recoverSplitTransaction,
   refreshSplitInstructions,
   writeInstructionFormatVersion,
 } from '../runtime/instruction-builder.js';
@@ -557,6 +558,41 @@ describe('fresh split activation transaction', () => {
     assert.deepEqual(leftovers(root), []);
     fs.rmSync(root, { recursive: true, force: true });
   });
+});
+
+describe('split instruction temporary cleanup ownership', () => {
+  for (const linkedPart of ['instructions', 'metadata']) {
+    it(`keeps outside transaction residue behind a linked ${linkedPart} directory`, t => {
+      const container = fixture();
+      t.after(() => fs.rmSync(container, { recursive: true, force: true }));
+      const instance = path.join(container, 'instance');
+      const outside = path.join(container, 'outside');
+      fs.mkdirSync(instance);
+      fs.mkdirSync(outside);
+      let externalInstructions;
+      if (linkedPart === 'instructions') {
+        fs.mkdirSync(path.join(instance, '.zylos'));
+        fs.symlinkSync(outside, path.join(instance, '.zylos', 'instructions'), 'dir');
+        externalInstructions = outside;
+      } else {
+        externalInstructions = path.join(outside, 'instructions');
+        fs.mkdirSync(externalInstructions);
+        fs.symlinkSync(outside, path.join(instance, '.zylos'), 'dir');
+      }
+      const protectedResidue = path.join(externalInstructions, 'system.split-txn.123.456.abc');
+      fs.mkdirSync(protectedResidue);
+      const sentinel = path.join(protectedResidue, 'sentinel');
+      fs.writeFileSync(sentinel, 'external transaction residue remains');
+      const localResidue = path.join(instance, 'local.split-txn.123.456.abc');
+      fs.writeFileSync(localResidue, 'local temporary data');
+
+      recoverSplitTransaction(instance);
+
+      assert.equal(fs.existsSync(localResidue), false);
+      assert.equal(fs.readFileSync(sentinel, 'utf8'), 'external transaction residue remains');
+      assert.equal(fs.lstatSync(linkedPart === 'instructions' ? path.join(instance, '.zylos', 'instructions') : path.join(instance, '.zylos')).isSymbolicLink(), true);
+    });
+  }
 });
 
 describe('pre-v0.4 migration', () => {

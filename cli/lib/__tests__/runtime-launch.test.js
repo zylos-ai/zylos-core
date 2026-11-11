@@ -73,7 +73,7 @@ function publishStartupRecovery(root, { succeed = false, controller = false } = 
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const executed = path.join(canonicalRoot, 'recovery-executed');
   for (const [source, name] of [
-    ['upgrade-maintenance.cjs', 'maintenance.cjs'],
+    ['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],
     ['upgrade-installer.cjs', 'installer.cjs'],
     ['upgrade-bootstrap.cjs', 'bootstrap.cjs'],
     ['upgrade-recovery.cjs', 'recovery.cjs'],
@@ -97,7 +97,7 @@ ${succeed
     phase: 'preparing',
     installationIntent: false,
     initialIdentity: {},
-    recoveryHashes: Object.fromEntries(['runner.cjs', 'maintenance.cjs', 'installer.cjs']
+    recoveryHashes: Object.fromEntries(['runner.cjs', 'maintenance.cjs', 'installer.cjs','remove-owned-tree.mjs']
       .map(name => [name, maintenance.hash(path.join(dir, name))])),
   };
   if (controller) {

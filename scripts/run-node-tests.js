@@ -16,6 +16,9 @@ const ROOT_NODE_TESTS = [
   'test/group-deletion.integration.test.js',
   'test/group-deletion-storage.integration.test.js',
   'test/reference-memory-templates.test.js',
+  'test/owned-tree-deletion-policy.test.js',
+  'test/owned-removal-callers.integration.test.js',
+  'test/test-environment-cleanup.test.js',
 ];
 const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'dashboard', '__tests__'),

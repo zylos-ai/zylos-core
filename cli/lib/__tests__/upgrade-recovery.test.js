@@ -51,8 +51,8 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
  });
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
- for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dst));
- const m=require(path.join(stable,'maintenance.cjs')),r=require(path.join(stable,'recovery.cjs'));
+ for(const [src,dst] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dst));
+ let m=require(path.join(stable,'maintenance.cjs')),r=require(path.join(stable,'recovery.cjs'));
  const skillsDir=path.join(root,'.claude/skills');
  for(const item of CORE_DATABASES){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');dependencyDirectory(path.resolve('skills/comm-bridge/node_modules'),path.join(owner,'node_modules'));
   if(item.owner==='web-console'){installLegacyWebConsoleSchema(skillsDir);continue;}
@@ -79,7 +79,9 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
  if(dashboard){const file=path.join(root,'components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});const db=new Database(file);db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);CREATE TABLE events(value TEXT);INSERT INTO events VALUES (\'original\')');db.prepare('INSERT INTO schema_migrations VALUES (?)').run(dashboardVersion);db.close();}
  const snapshotResult=await createReleasedSnapshotFixture({Database,zylosDir:root,transactionId:'tx',formatVersion,snapshot}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
- for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
+ for(const [src,dst] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
+ // Match production: recovery mutations belong to the transaction's frozen controllers.
+ m=require(path.join(dir,'maintenance.cjs'));r=require(path.join(dir,'runner.cjs'));
  const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner),{excludeNodeModules:false})}));
  for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,verbatimSymlinks:true});
  // Match saveProtectedCode: the disposable code root is private.
@@ -94,7 +96,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
  fs.chmodSync(originalSnapshot,fs.statSync(installedRoot).mode);
  fs.chmodSync(path.join(originalSnapshot,'cli'),fs.statSync(originalCli).mode);
  j.originalPackage={path:originalSnapshot,treeHash:m.treeHash(originalSnapshot,{excludeNodeModules:false,includeModes:true}),sourceVersion:j.from,sourceRoot:installedRoot};j.originalPackageRestored=true;
- const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,m.hash(path.join(dir,name))]))};j.recoveryHashes=descriptor.hashes;m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
+ const descriptor={formatVersion:1,transactionId:'tx',...closure,runnerPath:path.join(dir,'runner.cjs'),hashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs'].map(name=>[name,m.hash(path.join(dir,name))]))};j.recoveryHashes=descriptor.hashes;m.durable(path.join(dir,'descriptor.json'),descriptor);m.update(dir,j);m.marker(root,dir,j);
  const calls=[];m.stop=()=>calls.push('stop');m.start=()=>calls.push('start');m.verifyServices=()=>calls.push('verify');
  // These state-machine tests exercise same-owner retries on Mac, not crash
  // takeover. Dedicated admission tests prove standalone resume is refused.
@@ -965,9 +967,9 @@ test('verified terminal with stopped services retries startup without database c
 });
 
 test('Mac production recovery aborts preinstall failure through held frozen ownership', {skip:process.platform!=='darwin'}, async t=>{
- const f=await fixture(t),stableRunner=path.join(f.root,'.zylos/upgrade/recovery.cjs'),frozenRunner=path.join(f.dir,'runner.cjs');
+ const f=await fixture(t),frozenRunner=path.join(f.dir,'runner.cjs');
  f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});
- delete require.cache[stableRunner]; // fixture wrapper is not the production entry.
+ delete require.cache[frozenRunner]; // fixture wrapper is not the production entry.
  const {recovery}=await import('../upgrade-protection.js');
  const ctx={maintenance:f.m,journal:f.load(),transactionId:'tx',transactionDir:f.dir,releaseControl:f.m.acquire(f.dir),frozenRecoveryPath:frozenRunner,frozenRecoveryHash:f.m.hash(frozenRunner)};
  const before=fs.readFileSync(f.db('comm-bridge/c4.db'));
@@ -984,7 +986,7 @@ test('successful cleanup deletes only code copies and unlinks nested symlinks wi
  const outside=path.join(f.root,'external.txt');fs.writeFileSync(outside,'external data');
  fs.symlinkSync(outside,path.join(code,'external-link'));
  for(const name of ['install.log','recovery.log','rescue/evidence']){const file=path.join(f.dir,name);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,name);}
- const retained=['descriptor.json','runner.cjs','maintenance.cjs','installer.cjs','install.log','recovery.log','rescue/evidence'];
+ const retained=['descriptor.json','runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs','install.log','recovery.log','rescue/evidence'];
  const hashes=Object.fromEntries(retained.map(name=>[name,f.m.hash(path.join(f.dir,name))]));
  const snapshotHash=f.m.treeHash(f.snapshot.dbBackupDir);
  f.m.update(f.dir,f.j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}});
@@ -1015,9 +1017,9 @@ for(const gate of ['installerExitUnconfirmed','finalizerExitUnconfirmed','termin
 });
 
 test('partial code removal failure retries without compensation or service restart and preserves new writes',async t=>{
- const f=await fixture(t),code=path.join(f.dir,'code'),rm=fs.rmSync;let fail=true;
- t.after(()=>{fs.rmSync=rm;});
- fs.rmSync=(file,options)=>{if(file===code&&fail){fail=false;rm(path.join(code,'skills/comm-bridge'),{recursive:true});throw Error('partial code removal failed');}return rm(file,options);};
+ const f=await fixture(t),code=path.join(f.dir,'code'),unlink=fs.unlinkSync;let fail=true,unlinked=0;
+ t.after(()=>{fs.unlinkSync=unlink;});
+ fs.unlinkSync=(file,...args)=>{if(file.startsWith(code+path.sep)&&fail&&unlinked>0){fail=false;throw Error('partial code removal failed');}const result=unlink(file,...args);if(file.startsWith(code+path.sep))unlinked++;return result;};
  f.m.update(f.dir,f.j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:false,codeRemoved:false,servicesRestored:true}});
  const first=f.r.resume(f.dir);assert.equal(first.complete,false);assert.match(first.warnings.join('\n'),/partial code removal failed/);
  assert.equal(f.load().phase,'upgrade_complete');assert.equal(f.load().cleanup.complete,false);assert.equal(f.load().cleanup.codeRemoved,false);

@@ -518,3 +518,39 @@ test('a zero-cutoff group remains deletable without messages', async t => {
   assert.equal(result.counts.messages, 0); assert.equal(result.counts.files, 1);
   assert.equal(result.groupDataRetained, false); assert.equal(fs.existsSync(memory), false);
 });
+
+test('conversation cleanup counts nested links without deleting their external destinations', async t => {
+  const f = fixture(t), group = 'telegram:one';
+  f.insert(1, group, 'in', 'delivered');
+  const memory = path.join(f.instance, 'memory/session-groups', group);
+  const outside = path.join(f.root, 'outside-file');
+  fs.mkdirSync(memory, { recursive: true }); fs.writeFileSync(outside, 'must remain');
+  fs.writeFileSync(path.join(memory, 'state.md'), 'owned');
+  fs.symlinkSync(outside, path.join(memory, 'linked'));
+  const preview = await f.service.preview(group);
+  assert.equal(preview.files, 2);
+  const result = await f.service.delete(group, { confirmed: true, actor: 'owner', operationId: 'nested-link-cleanup' });
+  assert.equal(result.pending, false); assert.equal(result.counts.files, 2);
+  assert.equal(fs.existsSync(memory), false);
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'must remain');
+});
+
+// Root bypasses chmod access checks; the shared helper's permission test
+// runs a real unprivileged child for that environment. This caller case uses
+// the current unprivileged account and its actual permission boundary.
+test('unreadable conversation memory prevents deletion of every source file',
+  { skip: process.getuid?.() === 0 ? 'Caller permission check requires an unprivileged account; shared helper covers root via a child' : false }, async t => {
+  const f = fixture(t), group = 'telegram:one'; f.insert(1, group, 'in', 'delivered');
+  const memory = path.join(f.instance, 'memory/session-groups', group);
+  const locked = path.join(memory, 'locked');
+  fs.mkdirSync(locked, { recursive: true });
+  fs.writeFileSync(path.join(memory, 'visible'), 'keep visible');
+  fs.writeFileSync(path.join(locked, 'hidden'), 'keep hidden');
+  fs.chmodSync(locked, 0);
+  try {
+    await assert.rejects(f.service.delete(group, { confirmed: true, actor: 'owner', operationId: 'unreadable-cleanup' }), error => ['EACCES', 'EPERM'].includes(error.code));
+  } finally { fs.chmodSync(locked, 0o700); }
+  assert.equal(fs.readFileSync(path.join(memory, 'visible'), 'utf8'), 'keep visible');
+  assert.equal(fs.readFileSync(path.join(locked, 'hidden'), 'utf8'), 'keep hidden');
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM conversations').get().n, 1);
+});

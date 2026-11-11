@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import { writeCorePackageLocation } from './core-package-location.js';
 import { migrateModelThresholds } from './model-rotation-thresholds.js';
 /**
@@ -193,12 +194,14 @@ export function checkForCoreUpdates({ branch, beta = false, version } = {}) {
 function getWritableTmpBase(prefix = 'zylos-self-upgrade-probe-') {
   let base = os.tmpdir();
   try {
+    base = fs.realpathSync(base);
     const probe = fs.mkdtempSync(path.join(base, prefix));
-    fs.rmSync(probe, { recursive: true, force: true });
+    removeOwnedTree(base, probe);
   } catch {
     // System tmp unavailable — fallback to ~/tmp
     base = path.join(os.homedir(), 'tmp');
     fs.mkdirSync(base, { recursive: true });
+    base = fs.realpathSync(base);
   }
   return base;
 }
@@ -210,7 +213,7 @@ export function downloadCoreToTemp(version, branch) {
   if (branch) {
     const branchResult = downloadBranch(REPO, branch, tempDir);
     if (!branchResult.success) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      removeOwnedTree(base, tempDir);
       return { success: false, error: branchResult.error };
     }
     return { success: true, tempDir };
@@ -219,7 +222,7 @@ export function downloadCoreToTemp(version, branch) {
   const result = downloadArchive(REPO, version, tempDir);
   if (!result.success) {
     // A selected release must not silently turn into a different main-branch version.
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    removeOwnedTree(base, tempDir);
     return { success: false, error: result.error };
   }
 
@@ -1207,5 +1210,6 @@ export function cleanupTemp(tempDir) {
     return;
   }
 
-  fs.rmSync(tempDir, { recursive: true, force: true });
+  const parent = fs.realpathSync(path.dirname(path.resolve(tempDir)));
+  removeOwnedTree(parent, path.join(parent, path.basename(tempDir)));
 }

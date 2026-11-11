@@ -12,6 +12,7 @@ import { parseSessionGroup } from '../../skills/comm-bridge/scripts/c4-session-g
 import { submit } from './am-sock-client.js';
 import { groupMemoryDir, groupRunDir } from './session-group-paths.js';
 import { ownedPath } from '../../skills/comm-bridge/scripts/owned-path.js';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 
 export const groupDeletionCliPath = fileURLToPath(new URL('./group-delete-cli.js', import.meta.url));
 const error = (code, message) => Object.assign(new Error(message), { code });
@@ -34,17 +35,14 @@ function targetOf(value) {
 
 
 function countFiles(base, target) {
-  const file = ownedPath(base, target);
-  let stat;
-  try { stat = fs.lstatSync(file); } catch (cause) { if (cause.code === 'ENOENT') return 0; throw cause; }
-  if (!stat.isDirectory()) return 1;
-  return fs.readdirSync(file).reduce((total, name) => total + countFiles(base, path.join(file, name)), 0);
-}
-
-function removeTree(base, target) {
-  const candidate = ownedPath(base, target), files = countFiles(base, candidate);
-  fs.rmSync(candidate, { recursive: true, force: true });
-  return files;
+  const candidate = ownedPath(base, target);
+  const count = file => {
+    let stat;
+    try { stat = fs.lstatSync(file); } catch (cause) { if (cause.code === 'ENOENT') return 0; throw cause; }
+    if (!stat.isDirectory()) return 1;
+    return fs.readdirSync(file).reduce((total, name) => total + count(path.join(file, name)), 0);
+  };
+  return count(candidate);
 }
 
 /** All mutation entry points delegate here; the Dashboard invokes it in a Core child process. */
@@ -242,7 +240,7 @@ export function createGroupDeletion({
         let removed = 0;
         const outcome = participant.cleanup({ ...resolved, cutoffId: active.cutoffId, hasRetainedMessages, onFilePhase,
           removeGroupSources: () => {
-            for (const [base, file] of groupSources) removed += removeTree(base, file);
+            for (const [base, file] of groupSources) removed += removeOwnedTree(zylosDir, ownedPath(base, file));
             onStage('files_removed', active);
           } });
         if (outcome?.then) throw error('GROUP_DELETE_ASYNC_CLEANUP', 'Cleanup must finish inside its writer transaction');

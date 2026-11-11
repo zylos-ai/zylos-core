@@ -4,20 +4,21 @@
  */
 
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import path from 'node:path';
 import os from 'node:os';
 
 function getWritableTmpBase(prefix = 'zylos-copy-probe-') {
   let base = os.tmpdir();
   try {
-    const probe = fs.mkdtempSync(path.join(base, prefix));
-    fs.rmSync(probe, { recursive: true, force: true });
+    const probe = fs.mkdtempSync(path.join(fs.realpathSync(base), prefix));
+    removeOwnedTree(path.dirname(probe), probe);
   } catch {
     // System tmp unavailable — fallback to ~/tmp
     base = path.join(os.homedir(), 'tmp');
     fs.mkdirSync(base, { recursive: true });
   }
-  return base;
+  return fs.realpathSync(base);
 }
 
 /**
@@ -77,7 +78,7 @@ export function copyTree(src, dest, { excludes = [] } = {}) {
       // Move from temp to real dest
       fs.cpSync(tmpDest, resolvedDest, { recursive: true, force: true });
     } finally {
-      fs.rmSync(tmpDest, { recursive: true, force: true });
+      removeOwnedTree(path.dirname(tmpDest), tmpDest);
     }
     return;
   }
@@ -110,7 +111,7 @@ export function syncTree(src, dest, { excludes = [] } = {}) {
   const normalized = excludes.map(e => e.replace(/\/+$/, ''));
   for (const entry of fs.readdirSync(dest)) {
     if (normalized.includes(entry)) continue;
-    fs.rmSync(path.join(dest, entry), { recursive: true, force: true });
+    removeOwnedTree(resolvedDest, path.join(resolvedDest, entry));
   }
 
   // Copy from src, skipping excluded entries

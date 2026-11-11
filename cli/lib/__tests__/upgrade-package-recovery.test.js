@@ -10,7 +10,7 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'upgrade-package-recovery-'));
   const dir = path.join(root, '.backup/self-upgrade/tx'); fs.mkdirSync(dir, {recursive:true});
   t.after(() => fs.rmSync(root, {recursive:true, force:true}));
-  for (const [source, name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','runner.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
+  for (const [source, name] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','runner.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
   const m = require(path.join(dir,'maintenance.cjs')), recovery = require(path.join(dir,'runner.cjs'));
   const j = {formatVersion:1, phase:'restored_data_ready', databaseMode:'unchanged', transactionId:'tx', zylosDir:root, installationIntent:true,
     nodePath:process.execPath, skillsDir:path.join(root,'.claude/skills'), dbBackupDir:path.join(root,'.backup/db/tx'), snapshotManifestHash:'a'.repeat(64),

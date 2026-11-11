@@ -12,7 +12,7 @@ function fixture(t,{terminal=false}={}) {
   const active=path.join(root,'.backup/self-upgrade/tx'),dir=active;
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
   const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
-  for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dest));
+  for(const [src,dest] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dest));
   const parent={formatVersion:1,transactionId:'tx',zylosDir:root,initialIdentity:{nodePath:process.execPath},nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),phase:'installing',installationIntent:true,originalServices:[],cleanup:{complete:false}};
   parent.dbBackupDir=path.join(root,'.backup/db/tx');parent.snapshotManifestHash='a'.repeat(64);parent.coreManifest=[{name:'core',existedBefore:true,backedUp:true,originalHash:'b'.repeat(64)}];Object.assign(parent.initialIdentity,{packageJson:path.join(root,'package.json'),packageHash:'c'.repeat(64),cliRoot:path.join(root,'original-cli'),cliHash:'d'.repeat(64),workerPath:path.join(root,'original-cli/lib/worker.js'),workerHash:'e'.repeat(64),ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:true}))});
   const saved={...structuredClone(parent),phase:terminal?'upgrade_complete':'installing',...(terminal?{cleanup:{complete:true,servicesRestored:true},terminalEvidence:{verified:true,kind:'code_data_services'},finalizerExitConfirmed:true}:{})};

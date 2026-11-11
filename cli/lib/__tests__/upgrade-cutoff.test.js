@@ -14,7 +14,7 @@ const hash = 'a'.repeat(64);
 test('snapshot validates original database identities before executing its worker', t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'cutoff-snapshot-'));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  fs.copyFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),path.join(root,'maintenance.cjs'));
+  fs.copyFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),path.join(root,'maintenance.cjs'));fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(path.join(root,'maintenance.cjs')),'remove-owned-tree.mjs'));
   fs.copyFileSync(new URL('../upgrade-recovery.cjs',import.meta.url),path.join(root,'recovery.cjs'));
   const controller=require(path.join(root,'maintenance.cjs')),runner=require(path.join(root,'recovery.cjs'));
   const manifest={formatVersion:2,id:'tx',status:'complete',databases:controller.databasePaths(2).map(source=>({source}))};
@@ -173,7 +173,7 @@ for (const corrupt of [false,true]) test(`recovery ${corrupt?'rejects untrusted 
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'.backup/self-upgrade/tx'),stable=path.join(root,'.zylos/upgrade');
   fs.mkdirSync(dir,{recursive:true});fs.mkdirSync(stable,{recursive:true});
-  for(const [source,target] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']]) {
+  for(const [source,target] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']]) {
     fs.copyFileSync(new URL('../'+source,import.meta.url),path.join(stable,target));
   }
   const controller=require(path.join(stable,'maintenance.cjs')),recovery=require(path.join(stable,'recovery.cjs'));

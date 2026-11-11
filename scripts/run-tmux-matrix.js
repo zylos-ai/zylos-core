@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { removeOwnedTree } from '../skills/comm-bridge/scripts/remove-owned-tree.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,7 +51,8 @@ sourceHashes['skills/comm-bridge/scripts/tmux-protocol.js'] = sha256(path.join(r
 for (const filename of tests) sourceHashes[filename] = sha256(path.join(repo, filename));
 const summary = { head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
   node: process.version, platform: process.platform, tests, sourceHashes, versions: [] };
-const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'tmux-matrix-'));
+const temporaryRoot = fs.realpathSync(os.tmpdir());
+const temporary = fs.mkdtempSync(path.join(temporaryRoot, 'tmux-matrix-'));
 let active;
 const stop = signal => active?.kill(signal);
 process.on('SIGINT', stop); process.on('SIGTERM', stop);
@@ -106,6 +108,6 @@ try {
   }
 } finally {
   process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
-  fs.rmSync(temporary, { recursive: true, force: true });
+  removeOwnedTree(temporaryRoot, temporary);
 }
 if (summary.versions.length !== versions.length || summary.versions.some(record => !record.passed)) process.exitCode = 1;

@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -177,6 +178,9 @@ export function hasSplitTransactionResidue(zylosDir) {
 }
 
 function cleanupSplitTemps(zylosDir) {
+  const instancePath = path.resolve(zylosDir);
+  let ownedRoot;
+  try { ownedRoot = fs.realpathSync(instancePath); } catch { return; }
   for (const root of splitTransactionRoots(zylosDir)) {
     let names = [];
     try { names = fs.readdirSync(root); } catch { continue; }
@@ -184,7 +188,10 @@ function cleanupSplitTemps(zylosDir) {
       if (!name.includes('.split-txn.')) continue;
       // Backups are recovery records, not disposable temporary files.
       if (name.endsWith('.bak')) continue;
-      try { fs.rmSync(path.join(root, name), { recursive: true, force: true }); } catch { }
+      try {
+        const relative = path.relative(instancePath, path.join(root, name));
+        removeOwnedTree(ownedRoot, path.join(ownedRoot, relative));
+      } catch { }
     }
   }
 }

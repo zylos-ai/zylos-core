@@ -4,6 +4,7 @@
  */
 
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
@@ -121,9 +122,9 @@ export function loadManifest(dir) {
  * Copy source files into a target directory, mirroring the source structure.
  * Replaces any previous content at targetDir.
  */
-function copyOriginalsTo(targetDir, sourceDir) {
-  if (fs.existsSync(targetDir)) {
-    fs.rmSync(targetDir, { recursive: true, force: true });
+function copyOriginalsTo(root, targetDir, sourceDir) {
+  if (fs.lstatSync(targetDir, { throwIfNoEntry: false })) {
+    removeOwnedTree(root, targetDir);
   }
   fs.mkdirSync(targetDir, { recursive: true });
 
@@ -144,7 +145,9 @@ function copyOriginalsTo(targetDir, sourceDir) {
  * @param {string} sourceDir    - Source directory (e.g., temp dir with new version)
  */
 export function saveOriginals(componentDir, sourceDir) {
-  copyOriginalsTo(path.join(componentDir, MANIFEST_DIR, ORIGINALS_DIR), sourceDir);
+  fs.mkdirSync(componentDir, { recursive: true });
+  const root = fs.realpathSync(componentDir);
+  copyOriginalsTo(root, path.join(root, MANIFEST_DIR, ORIGINALS_DIR), sourceDir);
 }
 
 const MANIFEST_TMP = MANIFEST_FILE + '.tmp';
@@ -198,6 +201,8 @@ function dirMatchesManifest(dir, manifest) {
  * @throws {Error} legacy-backup state where neither candidate matches the manifest
  */
 export function recoverMergeBaseline(componentDir) {
+  if (!fs.lstatSync(componentDir, { throwIfNoEntry: false })) return;
+  componentDir = fs.realpathSync(componentDir);
   const zylosDir = path.join(componentDir, MANIFEST_DIR);
   if (!fs.existsSync(zylosDir)) return;
 
@@ -206,7 +211,7 @@ export function recoverMergeBaseline(componentDir) {
   const stagedOriginals = path.join(zylosDir, ORIGINALS_NEW);
   const legacyBackup = path.join(zylosDir, ORIGINALS_LEGACY_BAK);
 
-  if (fs.existsSync(stagedManifest)) {
+  if (fs.lstatSync(stagedManifest, { throwIfNoEntry: false })) {
     // Commit never happened — discard staging, live pair is the baseline.
     // Deletion order matters: staged originals first, marker last. The staged
     // manifest is the uncommitted-transaction discriminator — were it deleted
@@ -215,22 +220,22 @@ export function recoverMergeBaseline(componentDir) {
     // roll the uncommitted originals forward (R3 review P2). With this order
     // an interruption leaves the marker behind and the re-run rolls back
     // again.
-    fs.rmSync(stagedOriginals, { recursive: true, force: true });
-    fs.rmSync(stagedManifest, { recursive: true, force: true });
-  } else if (fs.existsSync(stagedOriginals)) {
+    removeOwnedTree(componentDir, stagedOriginals);
+    removeOwnedTree(componentDir, stagedManifest);
+  } else if (fs.lstatSync(stagedOriginals, { throwIfNoEntry: false })) {
     // Manifest committed but originals swap interrupted — roll forward
-    fs.rmSync(originalsDir, { recursive: true, force: true });
+    removeOwnedTree(componentDir, originalsDir);
     fs.renameSync(stagedOriginals, originalsDir);
   }
 
-  if (fs.existsSync(legacyBackup)) {
+  if (fs.lstatSync(legacyBackup, { throwIfNoEntry: false })) {
     const manifest = loadManifest(componentDir);
     if (dirMatchesManifest(originalsDir, manifest)) {
       // Live originals are the committed generation — backup is stale
-      fs.rmSync(legacyBackup, { recursive: true, force: true });
+      removeOwnedTree(componentDir, legacyBackup);
     } else if (dirMatchesManifest(legacyBackup, manifest)) {
       // Backup provably matches the live manifest — restore it
-      fs.rmSync(originalsDir, { recursive: true, force: true });
+      removeOwnedTree(componentDir, originalsDir);
       fs.renameSync(legacyBackup, originalsDir);
     } else {
       // Neither candidate matches the manifest (disk damage, unknown
@@ -267,6 +272,8 @@ export function recoverMergeBaseline(componentDir) {
  * @param {Object} manifest     - Manifest generated from sourceDir
  */
 export function saveMergeBaseline(componentDir, sourceDir, manifest) {
+  fs.mkdirSync(componentDir, { recursive: true });
+  componentDir = fs.realpathSync(componentDir);
   recoverMergeBaseline(componentDir);
 
   const zylosDir = path.join(componentDir, MANIFEST_DIR);
@@ -282,7 +289,7 @@ export function saveMergeBaseline(componentDir, sourceDir, manifest) {
     // transaction as uncommitted, so a crash while staging originals is
     // rolled back, never mistaken for a committed generation.
     fs.writeFileSync(stagedManifest, JSON.stringify(manifest, null, 2));
-    copyOriginalsTo(stagedOriginals, sourceDir);
+    copyOriginalsTo(componentDir, stagedOriginals, sourceDir);
     // Commit point (atomic)
     fs.renameSync(stagedManifest, manifestPath);
   } catch (err) {
@@ -294,8 +301,8 @@ export function saveMergeBaseline(componentDir, sourceDir, manifest) {
     // try-block, not one per deletion: should the originals deletion fail,
     // the marker must NOT be deleted.
     try {
-      fs.rmSync(stagedOriginals, { recursive: true, force: true });
-      fs.rmSync(stagedManifest, { recursive: true, force: true });
+      removeOwnedTree(componentDir, stagedOriginals);
+      removeOwnedTree(componentDir, stagedManifest);
     } catch { /* keep original error; recovery finishes the rollback */ }
     throw err;
   }
@@ -312,7 +319,7 @@ export function saveMergeBaseline(componentDir, sourceDir, manifest) {
   // change as a local modification and "keep" it — reporting success while
   // never applying the new version (R3 review P2).
   try {
-    fs.rmSync(originalsDir, { recursive: true, force: true });
+    removeOwnedTree(componentDir, originalsDir);
     fs.renameSync(stagedOriginals, originalsDir);
   } catch { /* committed; roll-forward deferred to the next recovery */ }
 }

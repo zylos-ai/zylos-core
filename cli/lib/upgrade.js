@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 /**
  * Core upgrade logic for components.
  * Uses GitHub archive tarballs and filesystem-based backup/rollback.
@@ -208,19 +209,21 @@ export function getAllowedTmpRoots() {
 export function downloadToTemp(repo, version, branch) {
   let base = os.tmpdir();
   try {
+    base = fs.realpathSync(base);
     const probe = fs.mkdtempSync(path.join(base, 'zylos-upgrade-probe-'));
-    fs.rmSync(probe, { recursive: true, force: true });
+    removeOwnedTree(base, probe);
   } catch {
     // System tmp unavailable — fallback to ~/tmp
     base = path.join(os.homedir(), 'tmp');
     fs.mkdirSync(base, { recursive: true });
+    base = fs.realpathSync(base);
   }
   const tempDir = fs.mkdtempSync(path.join(base, 'zylos-upgrade-'));
 
   if (branch) {
     const branchResult = downloadBranch(repo, branch, tempDir);
     if (!branchResult.success) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      removeOwnedTree(base, tempDir);
       return { success: false, error: branchResult.error };
     }
     return { success: true, tempDir };
@@ -231,7 +234,7 @@ export function downloadToTemp(repo, version, branch) {
     // Fallback: try downloading main branch
     const branchResult = downloadBranch(repo, 'main', tempDir);
     if (!branchResult.success) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      removeOwnedTree(base, tempDir);
       return { success: false, error: result.error };
     }
   }
@@ -326,7 +329,8 @@ export function cleanupTemp(tempDir) {
     return;
   }
 
-  fs.rmSync(tempDir, { recursive: true, force: true });
+  const parent = fs.realpathSync(path.dirname(path.resolve(tempDir)));
+  removeOwnedTree(parent, path.join(parent, path.basename(tempDir)));
 }
 
 // ---------------------------------------------------------------------------

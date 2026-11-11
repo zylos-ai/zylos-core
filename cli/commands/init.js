@@ -19,6 +19,7 @@ export { verifyApiKey, verifyCodexApiKey } from '../lib/init-api-auth.js';
  */
 
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import os from 'node:os';
 import path from 'node:path';
 import { parse as parseDotEnv } from 'dotenv';
@@ -626,8 +627,9 @@ export function resetManagedState() {
 
   // Remove managed directories
   for (const dir of [SKILLS_DIR, CONFIG_DIR, COMPONENTS_DIR, LOCKS_DIR, path.join(ZYLOS_DIR, 'pm2')]) {
-    if (fs.existsSync(dir)) {
-      fs.rmSync(dir, { recursive: true, force: true });
+    if (fs.lstatSync(dir, { throwIfNoEntry: false })) {
+      const root = fs.realpathSync(ZYLOS_DIR);
+      removeOwnedTree(root, path.join(root, path.relative(ZYLOS_DIR, dir)));
     }
   }
 }
@@ -1198,7 +1200,7 @@ export function downloadCaddy() {
 
   const filename = `caddy_${version}_${platform}_${arch}.tar.gz`;
   const url = githubUrl('releaseAsset', 'caddyserver/caddy', { ref: `v${version}`, asset: filename });
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-caddy-'));
+  const tmpDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'zylos-caddy-'));
   const tarballPath = path.join(tmpDir, filename);
 
   try {
@@ -1222,7 +1224,7 @@ export function downloadCaddy() {
     console.log(`  ${warn(`Failed to download Caddy: ${err.message}`)}`);
     return false;
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removeOwnedTree(path.dirname(tmpDir), tmpDir);
   }
 }
 

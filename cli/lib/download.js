@@ -4,6 +4,7 @@
  */
 
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
@@ -16,13 +17,13 @@ import { parseSkillMd } from './skill.js';
 function getWritableTmpBase() {
   let base = os.tmpdir();
   try {
-    const probe = fs.mkdtempSync(path.join(base, 'zylos-download-probe-'));
-    fs.rmSync(probe, { recursive: true, force: true });
+    const probe = fs.mkdtempSync(path.join(fs.realpathSync(base), 'zylos-download-probe-'));
+    removeOwnedTree(path.dirname(probe), probe);
   } catch {
     base = path.join(os.homedir(), 'tmp');
     fs.mkdirSync(base, { recursive: true });
   }
-  return base;
+  return fs.realpathSync(base);
 }
 
 function createDownloadTmpDir() {
@@ -100,10 +101,10 @@ export function downloadArchive(repo, version, destDir) {
     fs.mkdirSync(destDir, { recursive: true });
     curlDownload(repo, tag, 'tag', tarballPath);
     const result = extractTarball(tarballPath, destDir);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removeOwnedTree(path.dirname(tmpDir), tmpDir);
     return result;
   } catch (err) {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removeOwnedTree(path.dirname(tmpDir), tmpDir);
     return {
       success: false,
       extractedDir: null,
@@ -170,7 +171,7 @@ export function inspectLocalSource(localPath) {
     const metadata = readLocalMetadata(tmpDir, fallback);
     return { ...metadata, source: { type: 'local-tarball', path: srcPath } };
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removeOwnedTree(path.dirname(tmpDir), tmpDir);
   }
 }
 
@@ -255,10 +256,10 @@ export function downloadBranch(repo, branch, destDir) {
     fs.mkdirSync(destDir, { recursive: true });
     curlDownload(repo, branch, 'branch', tarballPath);
     const result = extractTarball(tarballPath, destDir);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removeOwnedTree(path.dirname(tmpDir), tmpDir);
     return result;
   } catch (err) {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    removeOwnedTree(path.dirname(tmpDir), tmpDir);
     return {
       success: false,
       extractedDir: null,

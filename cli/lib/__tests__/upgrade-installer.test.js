@@ -11,8 +11,8 @@ const require=createRequire(import.meta.url),m=require('../upgrade-maintenance.c
 const runInstaller=(ctx,options)=>m.runInstaller(ctx.transactionDir,ctx.journal,options);
 function fixture(t,body){
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-installer-'))),dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
- for(const [src,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dest));fs.chmodSync(path.join(dir,dest),0o600);}fs.writeFileSync(path.join(dir,'runner.cjs'),'// fixture',{mode:0o600});
- const materialNames=['maintenance.cjs','installer.cjs','runner.cjs'];
+ for(const [src,dest] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dest));fs.chmodSync(path.join(dir,dest),0o600);}fs.writeFileSync(path.join(dir,'runner.cjs'),'// fixture',{mode:0o600});
+ const materialNames=['maintenance.cjs','installer.cjs','runner.cjs','remove-owned-tree.mjs'];
  const closure=path.join(dir,'sqlite-runtime'),files=['package.json','core-db-backup-worker.js','node_modules/better-sqlite3/lib/index.js'];
  const driverClosureHashes=files.map(file=>{const p=path.join(closure,file);fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});fs.writeFileSync(p,'fixture',{mode:0o600});return {file,bytes:fs.statSync(p).size,sha256:m.hash(p)};});
  const d={formatVersion:1,transactionId:'tx',nodePath:process.execPath,runnerPath:path.join(dir,'runner.cjs'),workerPath:path.join(closure,'core-db-backup-worker.js'),driverPath:path.join(closure,'node_modules/better-sqlite3/lib/index.js'),driverClosureRoot:closure,driverClosureHashes,hashes:Object.fromEntries(materialNames.map(file=>[file,m.hash(path.join(dir,file))]))};m.durable(path.join(dir,'descriptor.json'),d);
@@ -164,7 +164,7 @@ test('transaction installer launches through an aliased work directory', t => {
   assert.equal(f.read().installerExitConfirmed,true);
 });
 
-for(const name of ['runner.cjs','maintenance.cjs','installer.cjs']) for(const damage of ['missing','changed']) {
+for(const name of ['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs']) for(const damage of ['missing','changed']) {
  test(`transaction installer rejects ${damage} ${name} before recording launch`,t=>{
   const f=fixture(t,"process.stdout.write('unexpected');");
   const file=path.join(f.dir,name);

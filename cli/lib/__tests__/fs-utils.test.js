@@ -112,3 +112,16 @@ describe('syncTree', () => {
     assert.equal(fs.readFileSync(path.join(destDir, '.zylos', 'manifest.json'), 'utf8'), '{}');
   });
 });
+
+// Safe removal now rejects a destination entry that is itself a symlink.
+// Exercise syncTree rather than only its shared deletion dependency.
+it('syncTree refuses a linked destination entry without changing the linked directory', () => {
+  const root = makeTmpDir();
+  const src = path.join(root, 'source'), dest = path.join(root, 'destination'), outside = path.join(root, 'outside');
+  for (const directory of [src, dest, outside]) fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(outside, 'keep.txt'), 'outside contents');
+  fs.symlinkSync(outside, path.join(dest, 'linked'));
+  assert.throws(() => syncTree(src, dest));
+  assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'outside contents');
+  assert.equal(fs.lstatSync(path.join(dest, 'linked')).isSymbolicLink(), true);
+});

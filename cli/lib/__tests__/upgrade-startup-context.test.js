@@ -21,7 +21,7 @@ test('partial skill deployment does not import diagnostics, formatting, registry
  const stable=path.join(root,'.zylos/upgrade'),hook=path.join(root,'hook/c4-session-init.js');fs.mkdirSync(stable,{recursive:true,mode:0o700});fs.mkdirSync(path.dirname(hook));
  fs.writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
  fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/c4-session-init.js'),hook);
- for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
+ for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
  const dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'journal.json'),'{broken',{mode:0o600});fs.writeFileSync(path.join(stable,'active.json'),'{}',{mode:0o600});
  // An explicit directory alias exercises this entry-point boundary on Linux too.
  const alias=path.join(root,'hook-alias');fs.symlinkSync(path.dirname(hook),alias,'dir');
@@ -47,9 +47,9 @@ function publishedTransaction(t, {fail = false, controller = false, failure} = {
  const dir = path.join(root,'.backup/self-upgrade/tx');
  fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const executed = path.join(root,'recovery-executed');
- for (const [source,name] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs'],['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-recovery.cjs','recovery.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
+ for (const [source,name] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs'],['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-recovery.cjs','recovery.cjs']]) fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,name));
  fs.writeFileSync(path.join(dir,'runner.cjs'),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(executed)},JSON.stringify(process.argv.slice(2)));${failure ? `console.log(${JSON.stringify(JSON.stringify(failure))});process.exit(1);` : fail?'process.exit(9);':`fs.rmSync(${JSON.stringify(dir)},{recursive:true});console.log(JSON.stringify({recovery_required:false,stage:'aborted_before_install'}));`}`);
- const journal={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:false,initialIdentity:{},recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(dir,name))]))};
+ const journal={formatVersion:1,transactionId:'tx',zylosDir:root,nodePath:process.execPath,from:'0.9.3',phase:'preparing',installationIntent:false,initialIdentity:{},recoveryHashes:Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs'].map(name=>[name,maintenance.hash(path.join(dir,name))]))};
  if(controller){
   const digest='a'.repeat(64);
   Object.assign(journal,{phase:'restored_data_ready',installationIntent:true,skillsDir:path.join(root,'.claude/skills'),dbBackupDir:path.join(root,'.backup/db/tx'),snapshotManifestHash:digest,
@@ -139,7 +139,7 @@ test('recovery resume output directs a closed transaction to forward finalizatio
  Object.assign(f.journal,{phase:'compensation_closed',snapshotManifestHash:hash,originalServices:[],lastError:'EACCES: retained diagnostic',
   compensationCutoff:{formatVersion:1,closed:true,transactionId:'tx',snapshotManifestHash:hash,closedAt:'2026-10-27T00:00:00.000Z',writer:'finalizer'},
   postCutoff:{formatVersion:1,items:{hooks:{state:'done',attempts:1,lastError:null}}},dashboardInstall:null});
- f.journal.recoveryHashes=Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs'].map(name=>[name,maintenance.hash(path.join(f.dir,name))]));
+ f.journal.recoveryHashes=Object.fromEntries(['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs'].map(name=>[name,maintenance.hash(path.join(f.dir,name))]));
  maintenance.durable(path.join(f.dir,'journal.json'),f.journal);
  const output=[],log=console.log,exitCode=process.exitCode;
  console.log=value=>output.push(String(value));
@@ -438,7 +438,7 @@ test('Mac runtime startup recovery prompt permits status and manual recovery onl
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-context-mac-')));
  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const stable=path.join(root,'.zylos/upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
- for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
+ for(const [source,target] of [['upgrade-bootstrap.cjs','bootstrap.cjs'],['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs']]){fs.copyFileSync(path.resolve('cli/lib',source),path.join(stable,target));fs.chmodSync(path.join(stable,target),0o600);}
  fs.writeFileSync(path.join(stable,'active.json'),'{broken',{mode:0o600});
  const prompt=upgradeStartupPrompt(root);
  assert.match(prompt,/manual recovery/);assert.match(prompt,/--status/);assert.match(prompt,/do not run automatic resume/);assert.doesNotMatch(prompt,/--once/);

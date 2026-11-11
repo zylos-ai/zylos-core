@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../skills/comm-bridge/scripts/remove-owned-tree.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,10 +25,18 @@ export function testRootPrefix(tmpdir = os.tmpdir(), platform = process.platform
 // inherited live-instance paths; individual tests may set their own paths later.
 export function createTestEnvironment() {
   const realHome = fs.realpathSync(os.userInfo().homedir);
-  const root = fs.mkdtempSync(testRootPrefix());
+  const root = fs.realpathSync(fs.mkdtempSync(testRootPrefix()));
+  const temporaryRoot = path.dirname(root);
   const previous = { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME };
   let cleaned = false;
   let restoreChildGuard;
+
+  function restoreEnvironment() {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 
   function cleanup({ preserveTmp = false } = {}) {
     if (cleaned) return;
@@ -41,19 +50,18 @@ export function createTestEnvironment() {
     } finally {
       try {
         cleanupTestPm2(root);
+        // The preserved runner home is a deletion target, not the current user home.
+        restoreEnvironment();
         if (preserveTmp) {
           for (const name of fs.readdirSync(root)) {
-            if (name !== 'tmp') fs.rmSync(path.join(root, name), { recursive: true, force: true });
+            if (name !== 'tmp') removeOwnedTree(root, path.join(root, name));
           }
         } else {
-          fs.rmSync(root, { recursive: true, force: true });
+          removeOwnedTree(temporaryRoot, root);
         }
       } finally {
         restoreChildGuard?.();
-        for (const [key, value] of Object.entries(previous)) {
-          if (value === undefined) delete process.env[key];
-          else process.env[key] = value;
-        }
+        restoreEnvironment();
       }
     }
   }
@@ -85,11 +93,8 @@ export function createTestEnvironment() {
   } catch (error) {
     restoreChildGuard?.();
     // Initialization may fail before the live inherited paths are replaced.
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    fs.rmSync(root, { recursive: true, force: true });
+    restoreEnvironment();
+    removeOwnedTree(temporaryRoot, root);
     throw error;
   }
 }

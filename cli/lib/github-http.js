@@ -1,5 +1,6 @@
 /** GitHub transport. Custom routes check local credential consent at every hop. */
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import { getUpstreamSnapshot } from './upstreams.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,7 +29,7 @@ function validateRedirect(url, allowHttp = false) {
 
 function* request(url, { token, headers = [], output, timeout = 10000, snapshot = getUpstreamSnapshot() } = {}) {
   const direct = OFFICIAL_ORIGINS.has(new URL(url).origin);
-  const temp = direct ? null : fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-github-http-'));
+  const temp = direct ? null : fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'zylos-github-http-'));
   try {
     for (let hop = 0; hop <= 10; hop++) {
       if (!direct) url = validateRedirect(url, snapshot?.allowHttp);
@@ -62,7 +63,7 @@ function* request(url, { token, headers = [], output, timeout = 10000, snapshot 
       url = validateRedirect(new URL(location, url).href, snapshot?.allowHttp);
     }
   } finally {
-    if (temp) fs.rmSync(temp, { recursive: true, force: true });
+    if (temp) removeOwnedTree(path.dirname(temp), temp);
   }
 }
 

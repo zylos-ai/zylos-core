@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -50,6 +51,7 @@ function validComplete(manifest) {
 // Probe only snapshot durability, independently of recovery locks and process
 // identity. All platforms use Node synchronization and propagate its errors.
 export function probeCoreDbSnapshotSync(zylosDir) {
+  zylosDir=fs.realpathSync(zylosDir);
   let probe;
   try {
     probe=fs.mkdtempSync(path.join(zylosDir,'.snapshot-sync-'));
@@ -60,7 +62,7 @@ export function probeCoreDbSnapshotSync(zylosDir) {
   } catch(error) {
     throw new Error(`Reliable database snapshot synchronization unavailable; installation was not started: ${error.message}`);
   } finally {
-    if(probe) fs.rmSync(probe,{recursive:true,force:true});
+    if(probe) removeOwnedTree(fs.realpathSync(zylosDir),probe);
   }
 }
 // Run before any service is stopped or maintenance marker is published. This
@@ -89,6 +91,7 @@ export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zyl
 // Clear a fixed-name rehearsal left by an interrupted upgrade, plus older
 // random-name copies. Refuse ambiguous paths before stopping services.
 export function cleanupCoreDbRehearsals(zylosDir) {
+  zylosDir=fs.realpathSync(zylosDir);
   const removed=[];
   const root=path.join(zylosDir,'.backup','db');
   for(const dir of [path.join(zylosDir,'.backup'),root]) {
@@ -105,7 +108,7 @@ export function cleanupCoreDbRehearsals(zylosDir) {
     candidates.push(dir);
   }
   for(const dir of candidates) {
-    try {fs.rmSync(dir,{recursive:true});}
+    try {removeOwnedTree(fs.realpathSync(root),dir);}
     catch(error) {error.removedRehearsals=removed;throw error;}
     removed.push(dir);
   }
@@ -115,6 +118,7 @@ export function cleanupCoreDbRehearsals(zylosDir) {
 // backup copies while services are still running. This is an early warning;
 // the stopped, snapshotted databases are migrated and checked again later.
 export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),onCleanup,dashboardOwnerManaged=true}={}) {
+  zylosDir=fs.realpathSync(zylosDir);
   const schemaRoot=path.join(tempDir,'skills');
   const workerPath=path.join(tempDir,'cli','lib','core-db-backup-worker.js');
   if (!fs.existsSync(workerPath) || !fs.existsSync(path.join(schemaRoot,'comm-bridge','scripts','sqlite-schema.js'))) {
@@ -142,7 +146,7 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
     fs.mkdirSync(rehearsalDir,{mode:0o700});
     fs.chmodSync(rehearsalDir,0o700);
     try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir,formatVersion:3,dashboardOwnerManaged},{workerPath});}
-    finally {fs.rmSync(rehearsalDir,{recursive:true,force:true});}
+    finally {removeOwnedTree(fs.realpathSync(path.dirname(rehearsalDir)),rehearsalDir);}
   } finally {
     for (const directory of created.reverse()) {
       try {fs.rmdirSync(directory);}
@@ -151,6 +155,7 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
   }
 }
 export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress,verifySnapshot=runCoreDbWorker,formatVersion=3}) {
+  zylosDir=fs.realpathSync(zylosDir);
   if(formatVersion!==3) throw Error('New database snapshots require formatVersion 3');
   if(!/^[a-zA-Z0-9_-]+$/.test(transactionId)) throw new Error('Invalid snapshot transaction ID');
   const root=path.join(zylosDir,'.backup','db');fs.mkdirSync(root,{recursive:true,mode:0o700});
@@ -175,7 +180,7 @@ export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersi
         const old=JSON.parse(fs.readFileSync(path.join(oldDir,'manifest.json'),'utf8'));
         if(!validComplete(old)||old.id!==entry.name||!Number.isFinite(Date.parse(old.createdAt))||Date.parse(old.createdAt)>Date.parse(manifest.createdAt)) continue;
         runCoreDbWorker({action:'verify',zylosDir,dbBackupDir:oldDir,manifest:old});
-        fs.rmSync(oldDir,{recursive:true});syncDir(root);
+        removeOwnedTree(fs.realpathSync(root),oldDir);syncDir(root);
       }catch(error){warnings.push(`Retained ${oldDir}: ${error.message}`);}
     }
     try {onProgress?.({dbBackupDir:destination,manifest,warnings});}catch(error){warnings.push(`Progress reporting failed: ${error.message}`);}

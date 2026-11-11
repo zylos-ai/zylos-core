@@ -85,7 +85,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
   database.close();
   const stable = path.join(root, '.zylos/upgrade');
   fs.mkdirSync(stable, { recursive: true });
-  fs.copyFileSync(path.join(packageRoot, 'cli/lib/upgrade-maintenance.cjs'), path.join(stable, 'maintenance.cjs'));
+  fs.copyFileSync(path.join(packageRoot, 'cli/lib/upgrade-maintenance.cjs'), path.join(stable, 'maintenance.cjs'));fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(path.join(stable, 'maintenance.cjs')),'remove-owned-tree.mjs'));
   const m = require(path.join(stable, 'maintenance.cjs'));
   const calls = [];
   m.stop = () => calls.push('stop');
@@ -99,14 +99,14 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const snapshot = createCoreDbSnapshot({ zylosDir: root, transactionId: 'tx', formatVersion: 3 });
     const closure = prepareRecoveryDependencies(dir, root, { dashboardRoot: path.join(home, 'uninstalled-dashboard') });
-    for (const [source, target] of [['upgrade-maintenance.cjs', 'maintenance.cjs'],
+    for (const [source, target] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],
       ['upgrade-recovery.cjs', 'runner.cjs'], ['upgrade-installer.cjs', 'installer.cjs']]) {
       fs.copyFileSync(path.join(packageRoot, 'cli/lib', source), path.join(dir, target));
       fs.chmodSync(path.join(dir, target), 0o600);
     }
     m.durable(path.join(dir, 'descriptor.json'), { formatVersion: 1, transactionId: 'tx', ...closure,
       runnerPath: path.join(dir, 'runner.cjs'), hashes: Object.fromEntries(
-        ['maintenance.cjs', 'runner.cjs', 'installer.cjs'].map(name => [name, m.hash(path.join(dir, name))])) });
+        ['maintenance.cjs', 'runner.cjs', 'installer.cjs','remove-owned-tree.mjs'].map(name => [name, m.hash(path.join(dir, name))])) });
     const packageJson = path.join(home, 'old-package.json'), cliRoot = path.join(home, 'old-cli');
     fs.writeFileSync(packageJson, '{}'); fs.mkdirSync(cliRoot);
     journal = { formatVersion: 1, transactionId: 'tx', zylosDir: root, skillsDir,

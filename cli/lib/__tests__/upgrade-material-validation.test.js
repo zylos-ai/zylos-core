@@ -9,7 +9,7 @@ function fixture(t) {
   const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-material-')));
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const dir=path.join(root,'tx'),closure=path.join(dir,'sqlite-runtime');fs.mkdirSync(closure,{recursive:true,mode:0o700});
-  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','installer.cjs']){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
+  const hashes={};for(const name of ['runner.cjs','maintenance.cjs','installer.cjs','remove-owned-tree.mjs']){const file=path.join(dir,name);fs.writeFileSync(file,'// trusted fixture '+name,{mode:0o600});hashes[name]=m.hash(file);}
   const closureFiles=['package.json','core-db-backup-worker.js','node_modules/better-sqlite3/lib/index.js'];
   for(const file of closureFiles){const p=path.join(closure,file);fs.mkdirSync(path.dirname(p),{recursive:true,mode:0o700});fs.writeFileSync(p,'fixture '+file,{mode:0o600});}
   const j={transactionId:'tx',nodePath:process.execPath,initialIdentity:{nodePath:process.execPath}};
@@ -222,7 +222,41 @@ for (const blocker of ['installer', 'finalizer', 'services']) test(`terminal mar
 
 test('macOS descriptor needs only frozen JavaScript controllers and existing SQLite closure',{skip:process.platform!=='darwin'},t=>{
  const f=fixture(t);
- assert.deepEqual(Object.keys(f.d.hashes).sort(),['installer.cjs','maintenance.cjs','runner.cjs']);
+ assert.deepEqual(Object.keys(f.d.hashes).sort(),['installer.cjs','maintenance.cjs','remove-owned-tree.mjs','runner.cjs']);
  assert.equal(fs.existsSync(path.join(f.dir,'macos-recovery-helper')),false);
  assert.doesNotThrow(()=>m.validateDescriptor(f.dir,f.j,f.d));
+});
+
+// Frozen deletion dependency boundary: real copied CJS/ESM, private files only;
+// run for recovery-material or deletion changes. No service/socket is launched.
+for (const defect of ['missing journal', 'missing hash', 'mismatched hash']) test(`frozen deletion refuses a ${defect} before loading its helper`, t => {
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'frozen-removal-')));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const maintenance=path.join(root,'maintenance.cjs'),helper=path.join(root,'remove-owned-tree.mjs');
+  fs.copyFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),maintenance);
+  fs.copyFileSync(new URL('../../../skills/comm-bridge/scripts/remove-owned-tree.js',import.meta.url),helper);
+  const frozen=require(maintenance),target=path.join(root,'owned');fs.mkdirSync(target);fs.writeFileSync(path.join(target,'keep'),'unchanged');
+  if(defect!=='missing journal')fs.writeFileSync(path.join(root,'journal.json'),JSON.stringify({recoveryHashes:defect==='missing hash'?{}:{'remove-owned-tree.mjs':'0'.repeat(64)}}));
+  const modules=require('node:module'),native=modules.createRequire;
+  let helperLoads=0;
+  t.mock.method(modules,'createRequire',(...args)=>{
+    const load=native(...args);
+    return file=>{if(file===helper)helperLoads++;return load(file);};
+  });
+  assert.throws(()=>frozen.removeOwnedTree(root,target),/ENOENT|transaction recovery material changed: remove-owned-tree.mjs/);
+  assert.equal(helperLoads,0);
+  assert.equal(fs.readFileSync(path.join(target,'keep'),'utf8'),'unchanged');
+});
+
+test('standalone frozen controller deletes through its pinned shared ESM helper', async t => {
+  const {spawnSync}=await import('node:child_process');
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'frozen-removal-')));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const maintenance=path.join(root,'maintenance.cjs'),helper=path.join(root,'remove-owned-tree.mjs');
+  fs.copyFileSync(new URL('../upgrade-maintenance.cjs',import.meta.url),maintenance);
+  fs.copyFileSync(new URL('../../../skills/comm-bridge/scripts/remove-owned-tree.js',import.meta.url),helper);
+  fs.writeFileSync(path.join(root,'journal.json'),JSON.stringify({recoveryHashes:{'remove-owned-tree.mjs':m.hash(helper)}}));
+  const target=path.join(root,'owned');fs.mkdirSync(target);fs.writeFileSync(path.join(target,'file'),'owned');
+  const result=spawnSync(process.execPath,['-e','const m=require(process.argv[1]);process.stdout.write(String(m.removeOwnedTree(process.argv[2],process.argv[3])));',maintenance,root,target],{encoding:'utf8',env:process.env,timeout:10000});
+  assert.equal(result.status,0,result.stderr);assert.equal(result.stdout,'1');assert.equal(fs.existsSync(target),false);
 });

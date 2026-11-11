@@ -7,7 +7,7 @@ let root, m;
 beforeEach(() => {
   root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'upgrade-contracts-')));
   const stable=path.join(root,'.zylos','upgrade');fs.mkdirSync(stable,{recursive:true,mode:0o700});
-  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(stable,'maintenance.cjs'));
+  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(stable,'maintenance.cjs'));fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(path.join(stable,'maintenance.cjs')),'remove-owned-tree.mjs'));
   fs.chmodSync(path.join(stable,'maintenance.cjs'),0o600);
   m=createRequire(import.meta.url)(path.join(stable,'maintenance.cjs'));
 });

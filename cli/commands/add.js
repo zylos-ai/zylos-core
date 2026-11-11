@@ -17,6 +17,7 @@
  */
 
 import fs from 'node:fs';
+import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-tree.js';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
@@ -766,12 +767,12 @@ function installAI(resolved, skillDir, branch) {
  * Clean up a failed installation.
  */
 function cleanup(dir) {
-  if (fs.existsSync(dir)) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // Best effort
-    }
+  try {
+    if (!fs.lstatSync(dir, { throwIfNoEntry: false })) return;
+    const root = fs.realpathSync(SKILLS_DIR);
+    removeOwnedTree(root, path.join(root, path.relative(SKILLS_DIR, dir)));
+  } catch {
+    // Best effort
   }
 }
 

@@ -214,7 +214,7 @@ for (const requiredFails of [false, true]) test(`restored verification finishes 
   // Load unchanged product modules privately so package-restoration admission can
   // be supplied as an already-complete boundary; actual service policy, durable
   // journal, recovery state machine and maintenance marker cleanup stay real.
-  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(dir,'maintenance.cjs'));
+  fs.copyFileSync(path.resolve('cli/lib/upgrade-maintenance.cjs'),path.join(dir,'maintenance.cjs'));fs.copyFileSync(path.resolve('skills/comm-bridge/scripts/remove-owned-tree.js'),path.join(path.dirname(path.join(dir,'maintenance.cjs')),'remove-owned-tree.mjs'));
   fs.copyFileSync(path.resolve('cli/lib/upgrade-recovery.cjs'),path.join(dir,'recovery.cjs'));
   const m=require(path.join(dir,'maintenance.cjs')),recovery=require(path.join(dir,'recovery.cjs'));
   const digest='a'.repeat(64),pkg=path.join(f.env.ZYLOS_DIR,'package.json');
@@ -303,7 +303,7 @@ test('resume retains durable service warnings when publication fails before serv
 for(const unavailable of [false,true])test(`preinstall abort preserves service warnings and cleanup shape (${unavailable?'unavailable':'online'})`,t=>{
   const f=fixture(t),id='optional-abort',root=f.env.ZYLOS_DIR,dir=path.join(root,'.backup/self-upgrade',id);
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
-  for(const [source,dest] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,dest));
+  for(const [source,dest] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',source),path.join(dir,dest));
   const m=require(path.join(dir,'maintenance.cjs')),recovery=require(path.join(dir,'recovery.cjs'));
   const pkg=path.join(root,'package.json'),cli=path.join(root,'cli'),worker=path.join(root,'worker.js');
   fs.writeFileSync(pkg,JSON.stringify({name:'original',version:'old'}));fs.mkdirSync(cli);fs.writeFileSync(path.join(cli,'original.js'),'// original CLI');

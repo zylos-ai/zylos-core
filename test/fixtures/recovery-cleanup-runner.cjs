@@ -8,9 +8,9 @@ const index = process.argv.indexOf('--transaction-dir');
 if (index < 0 || !process.argv[index + 1]) throw Error('fixture transaction directory required');
 const dir = path.resolve(process.argv[index + 1]);
 const code = path.join(dir, 'code');
-const remove = fs.rmSync;
-fs.rmSync = function (file, options) {
-  if (path.resolve(file) === code) throw Object.assign(Error('EACCES: fixture code removal denied'), {code:'EACCES'});
+const remove = fs.unlinkSync;
+fs.unlinkSync = function (file, options) {
+  if (path.resolve(file).startsWith(code + path.sep)) throw Object.assign(Error('EACCES: fixture code removal denied'), {code:'EACCES'});
   return remove.call(this, file, options);
 };
 try {
@@ -21,5 +21,5 @@ try {
   process.stdout.write(JSON.stringify({recovery_required:true, code:error.code, error:error.message}) + '\n');
   process.exitCode = 1;
 } finally {
-  fs.rmSync = remove;
+  fs.unlinkSync = remove;
 }
