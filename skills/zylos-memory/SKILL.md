@@ -59,7 +59,10 @@ before taking a token; run only the selected procedure.
 All Sync content edits and new memory files use `mcp__zylos-memory__edit_memory`.
 Origin and global Sync also run the documented `reference-index.js rebuild`,
 `archive`, and `unarchive` commands to maintain generated indexes and page locations.
-Use Read/Glob/Grep for inputs and Bash only for the documented scripts.
+Read inputs with Read (offset/limit), Glob, or read-only Bash commands
+`grep -n`, `rg -n`, and `sed -n '<a>,<b>p'`; use Grep when available.
+Do not read an entire old file into a script. Memory writes still use only the
+documented tools and scripts.
 Do not use native Edit/Write/patch, shell redirects into memory, or a fallback
 writer after a tool denial. The token is from `sync-lock.js acquire`, never
 from another worker. The tool infers permission from its own environment and
