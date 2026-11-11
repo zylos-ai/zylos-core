@@ -1722,7 +1722,7 @@ export function createServer() {
     res.writeHead = function (statusCode, ...args) {
       const index = typeof args[0] === 'string' ? 1 : 0;
       const headers = args[index];
-      if (headers) {
+      if (headers && !Array.isArray(headers)) {
         args[index] = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== 'x-robots-tag'));
       }
       this.setHeader('X-Robots-Tag', 'noindex, nofollow');

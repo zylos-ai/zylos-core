@@ -52,7 +52,11 @@ test('Dashboard responses and documents exclude search crawlers', { timeout: 200
   // Supply conflicting upstream headers without starting a remote Fleet server.
   t.mock.method(FleetProxy.prototype, 'handle', async (_req, res, url) => {
     res.setHeader('X-Robots-Tag', 'index, follow');
-    res.writeHead(200, 'OK', { 'x-robots-tag': 'all', 'content-type': 'text/plain' });
+    if (url.pathname.endsWith('/raw')) {
+      res.writeHead(200, ['Content-Type', 'text/plain']);
+    } else {
+      res.writeHead(200, 'OK', { 'x-robots-tag': 'all', 'content-type': 'text/plain' });
+    }
     res.end('upstream body');
   });
   process.env.ZYLOS_DIR = fixtureRoot;
@@ -108,10 +112,12 @@ test('Dashboard responses and documents exclude search crawlers', { timeout: 200
     const page = await request('/', 200, { headers });
     assert.match(page.body, /<meta name="robots" content="noindex, nofollow">/);
     await request('/missing-page', 404, { headers });
-    for (const route of ['/fleet/example/object']) {
+    for (const route of ['/fleet/example/object', '/fleet/example/raw']) {
       const proxy = await request(route, 200, { headers });
       assert.equal(proxy.body, 'upstream body');
       assert.match(proxy.res.headers.get('content-type'), /text\/plain/);
+      assert.equal(proxy.res.headers.has('0'), false);
+      assert.equal(proxy.res.headers.has('1'), false);
     }
   });
 
