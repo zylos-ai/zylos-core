@@ -2,7 +2,7 @@
   "app.title": "Zylos Dashboard",
   "tab.overview": "总览",
   "tab.memory": "记忆",
-  "tab.observer": "终端",
+  "tab.observer": "终端观察",
   "tab.trends": "趋势",
   "observer.title": "终端观察",
   "observer.waiting_for_agent": "连接中断，正在等待 Agent 恢复…",

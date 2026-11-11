@@ -1,7 +1,7 @@
 import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=153';
-import { toolLabel, waitText } from './view-mode.js?v=151';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=152';
+import { toolLabel, waitText } from './view-mode.js?v=150';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=91';
 import { recentRows } from './timeline-rows.js?v=108';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
@@ -169,6 +169,17 @@ export function configText(row, level = 'plain', t = key => key) {
   return [runtimeName(value.runtime), model, effort ? t('wb.term.effort') + ' ' + effort : null].filter(Boolean).join(' · ');
 }
 
+function idleDuration(seconds, t) {
+  const elapsed = Math.max(0, Math.floor(seconds));
+  if (elapsed < 60) return t(elapsed === 1 ? 'wb.detail.durationSecond' : 'wb.detail.durationSeconds', { count: elapsed });
+  const minutes = Math.floor(elapsed / 60);
+  const minuteText = count => t(count === 1 ? 'wb.detail.durationMinute' : 'wb.detail.durationMinutes', { count });
+  if (minutes < 60) return minuteText(minutes);
+  const hours = Math.floor(minutes / 60), remaining = minutes % 60;
+  return [t(hours === 1 ? 'wb.detail.durationHour' : 'wb.detail.durationHours', { count: hours }),
+    remaining ? minuteText(remaining) : null].filter(Boolean).join(' ');
+}
+
 function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastReceived, agents }) {
   const kind = row.state?.kind ?? 'unknown';
   const card = element(document, 'div', undefined, 'wb-now-card');
@@ -178,11 +189,11 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
   if (!technical(level)) {
     const waiting = row.wait && ['waiting', 'unknown', 'error'].includes(kind);
     const status = waiting ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, 'plain', t)
-      : kind === 'busy' ? [tools.length ? tools.map(tool => toolLabel(tool.name, 'plain', t)).join('、') : t('wb.state.busy'),
+      : kind === 'busy' ? [tools.length ? tools.map(tool => toolLabel(tool.name, 'plain', t)).join(t('wb.detail.toolSeparator')) : t('wb.state.busy'),
         agents.length ? t('wb.detail.backgroundAgents', { count: agents.length }) : null].filter(Boolean).join(' · ')
         : kind === 'not_running' ? t('wb.detail.standby') : t('wb.state.' + kind);
     title.append(icon(document, kind === 'busy' ? 'tool' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', status));
-    if (kind === 'idle' && row.duration != null) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
+    if (kind === 'idle' && row.duration != null) title.append(element(document, 'span', ' · ' + t('wb.detail.idleElapsed', { duration: idleDuration(row.duration, t) }), 'wb-dur'));
     if (kind === 'busy') card.classList.add('wb-now-work');
     else if (['waiting', 'error', 'unknown'].includes(kind)) card.classList.add(kind === 'error' ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
   } else if (tools.length) {
@@ -214,7 +225,7 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
   if (technical(level)) {
     // A preview labelled with its source offers the stored message, folded: headers, ids and line breaks included.
     // It is read when opened (`onRaw`); `data.raw` holds that read for this group's current preview.
-    if (row.preview?.source) {
+    if (showLastReceived && row.preview?.source) {
       const stored = data.raw?.key === rawKey(row) ? data.raw : null;
       const raw = element(document, 'details', undefined, 'wb-now-raw');
       raw.dataset.updateKey = 'raw:' + rawKey(row);

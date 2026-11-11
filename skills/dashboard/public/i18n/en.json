@@ -2,7 +2,7 @@
   "app.title": "Zylos Dashboard",
   "tab.overview": "Overview",
   "tab.memory": "Memory",
-  "tab.observer": "Terminal",
+  "tab.observer": "Observer",
   "tab.trends": "Trends",
   "observer.title": "Terminal Observer",
   "observer.waiting_for_agent": "Connection interrupted. Waiting for Agent recovery…",

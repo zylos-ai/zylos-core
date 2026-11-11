@@ -80,9 +80,9 @@ export function observerNavEntry(status, level, t) {
   const enabled = status?.enabled ?? status?.desired?.enabled;
   const key = installed ? (enabled ? 'tab.observer' : 'wb.observerDisabled') : 'wb.observerInstall';
   const fallback = {
-    'tab.observer': '终端',
-    'wb.observerDisabled': '终端（已停用）',
-    'wb.observerInstall': '终端 · 去设置安装',
+    'tab.observer': '终端观察',
+    'wb.observerDisabled': '终端观察（已停用）',
+    'wb.observerInstall': '终端观察 · 去设置安装',
   };
   return { label: t ? t(key) : fallback[key], target: installed && enabled ? 'observer' : 'settings' };
 }

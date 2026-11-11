@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { observerNavEntry } from '../public/js/wb/view-mode.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from '../public/js/origin-lock.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
@@ -1199,7 +1198,7 @@ test('the idle now card leads with the current state and duration while received
   const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
   const title = allNodes(card).find(node => node.classList.contains('wb-now-title'));
   assert.match(title.textContent, /wb\.state\.idle/);
-  assert.match(title.textContent, /1m15s/);
+  assert.match(title.textContent, /wb\.detail\.idleElapsed/);
   assert.doesNotMatch(title.textContent, /lastReceived|please check/);
   assert.equal(allNodes(card).filter(node => node.classList.contains('wb-now-title')).length, 1);
   const received = allNodes(card).find(node => node.classList.contains('wb-now-sub'));
@@ -1213,7 +1212,7 @@ test('the idle now card leads with the current state and duration while received
   assert.match(fallback, /^wb\.board\.lastReceivedAt \{"channel":"wb\.platform\.openmax","time":"[^"]+"\}$/);
   root = document.createElement('div');
   renderOverview(root, row('telegram:b', { state: { kind: 'idle' }, duration: 30 }), {}, { document, t });
-  assert.match(allNodes(root).find(node => node.classList.contains('wb-now-title')).textContent, /wb\.state\.idle.*30s/);
+  assert.match(allNodes(root).find(node => node.classList.contains('wb-now-title')).textContent, /wb\.state\.idle.*wb\.detail\.idleElapsed/);
 });
 
 test('an error or unknown state keeps its word in the now card, with the last message under it', () => {
@@ -1549,7 +1548,7 @@ test('an open name editor follows permission changes with fresh controls', async
 
 test('account source evidence reads each runtime before deciding whether sources are healthy', () => {
   const accountSources = { claude: { ok: true, readAt: 1000 }, codex: { ok: true, readAt: 2000 } };
-  const current = row('telegram:accounts', { state: { kind: 'waiting' }, wait: { kind: 'queued' } });
+  const current = row('telegram:accounts', { presence: 'not_running', live: null, target: { runtime: 'claude' }, state: { kind: 'waiting' }, wait: { kind: 'pool_wait', position: 2 } });
   const healthy = detailEvidence(current, { sources: { status: { ok: true, readAt: 3000 }, accounts: accountSources } });
   const sources = healthy.samples.filter(item => item.source === 'sources' || item.source.startsWith('accounts'));
   assert.equal(sources.length, 1);
@@ -1588,15 +1587,15 @@ test('plain busy and waiting summaries stay on one current-state line', () => {
     assert.equal(allNodes(now).some(node => node.classList.contains('wb-subs')), false, 'plain count replaces individual technical subagent tags');
   }
   const root = document.createElement('div');
-  renderOverview(root, row('telegram:wait', { state: { kind: 'waiting' }, wait: { kind: 'queued', reasonCode: 'queue_pending' } }), {}, { document, t });
+  renderOverview(root, row('telegram:wait', { presence: 'not_running', live: null, target: { runtime: 'claude' }, state: { kind: 'waiting' }, wait: { kind: 'pool_wait', position: 2, reasonCode: 'pool_capacity' } }), {}, { document, t });
   const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
   const titles = allNodes(card).filter(node => node.classList.contains('wb-now-title'));
   assert.equal(titles.length, 1);
-  assert.equal(titles[0].textContent, 'wb.wait.queued {"time":"","count":1}');
-  assert.doesNotMatch(card.textContent, /wb\.state\.waiting|queue_pending/);
+  assert.equal(titles[0].textContent, 'wb.wait.pool_wait {"position":2}');
+  assert.doesNotMatch(card.textContent, /wb\.state\.waiting|pool_capacity/);
 });
 
-test('received previews can be omitted while technical raw history remains available', async tctx => {
+test('received previews and their raw fold are omitted together from conversation details', async tctx => {
   const current = row('telegram:side', { state: { kind: 'idle' }, duration: 75,
     preview: { text: 'already visible in the conversation', timestamp: 1000, channel: 'telegram', source: { kind: 'channel' } } });
   for (const level of ['plain', 'technical']) {
@@ -1608,18 +1607,16 @@ test('received previews can be omitted while technical raw history remains avail
     tctx.after(() => f.controller.destroy());
     await f.controller.open(current, { rows: [current], listKnown: true });
     const card = allNodes(f.root).find(node => node.classList.contains('wb-now-card'));
-    assert.match(card.textContent, /wb\.state\.idle.*1m15s/);
+    assert.match(card.textContent, /wb\.state\.idle/);
+    if (level === 'plain') assert.match(card.textContent, /wb\.detail\.idleElapsed/);
     assert.doesNotMatch(card.textContent, /lastReceived|already visible/);
     assert.equal(allNodes(card).some(node => node.classList.contains('wb-now-sub')), false);
     assert.equal(rawReads, 0, 'hiding the subtitle does not eagerly read stored history');
     const raw = allNodes(card).find(node => node.classList.contains('wb-now-raw'));
-    if (level === 'plain') assert.equal(raw, undefined);
-    else {
-      assert.ok(raw, 'the existing technical raw-history viewer remains');
-      raw.open = true; raw.dispatch('toggle'); await tick(); await tick();
-      assert.equal(rawReads, 1);
-      assert.match(f.root.textContent, /explicitly requested stored history/);
-    }
+    assert.equal(raw, undefined, 'no unlabelled original-message fold is offered in the conversation sidebar');
+    assert.doesNotMatch(card.textContent, /wb\.detail\.rawMessage/);
+    f.controller.setViewDetail(); await tick(); await tick();
+    assert.equal(rawReads, 0, 'redraw does not introduce a hidden stored-history request');
   }
 });
 
@@ -1635,11 +1632,12 @@ test('diagnostic evidence appears only in technical waiting unknown and error st
 
 test('source evidence condenses healthy reads and labels failed reads separately from session state', () => {
   const document = createDocument(), current = row('telegram:sources', { state: { kind: 'waiting' },
-    live: { status: { state: 'idle', sampledAt: 99000 } }, wait: { kind: 'queued' } });
+    live: { runId: 'run-a', sessionId: 'session-a', status: { valid: true, state: 'idle', sampledAt: 99000 } }, wait: { kind: 'rate_wait', runtime: 'claude' } });
   const sources = { status: { ok: true, readAt: 97000 }, c4: { ok: true, readAt: 96000 }, q: { ok: true, readAt: 95000 },
     ov: { ok: true, readAt: 94000 }, accounts: { claude: { ok: true, readAt: 93000 }, codex: { ok: true, readAt: 92000 } } };
+  const instance = { runtimeHealth: { claude: { health: 'rate_limited', updatedAt: 90000 } } };
   let root = document.createElement('div');
-  renderOverview(root, current, {}, { document, t, level: 'technical', snapshot: { sources } });
+  renderOverview(root, current, {}, { document, t, level: 'technical', snapshot: { sources, instance } });
   let evidence = allNodes(root).find(node => node.classList.contains('wb-detail-evidence'));
   let lines = allNodes(evidence).filter(node => node.tagName === 'TR');
   assert.equal(lines.filter(node => node.dataset.updateKey === 'sources').length, 1);
@@ -1647,7 +1645,7 @@ test('source evidence condenses healthy reads and labels failed reads separately
   assert.match(evidence.textContent, /wb\.detail\.sessionStatus/);
   assert.equal(lines.some(node => ['status', 'c4', 'q', 'ov', 'accounts.claude', 'accounts.codex'].includes(node.dataset.updateKey)), false);
   root = document.createElement('div');
-  renderOverview(root, current, {}, { document, t, level: 'technical', snapshot: { sources: { ...sources,
+  renderOverview(root, current, {}, { document, t, level: 'technical', snapshot: { instance, sources: { ...sources,
     status: { ok: false, reason: 'status_unreadable', readAt: 97000 }, accounts: { ...sources.accounts, codex: { ok: false, reason: 'account_usage_unreadable', readAt: 92000 } } } } });
   evidence = allNodes(root).find(node => node.classList.contains('wb-detail-evidence'));
   lines = allNodes(evidence).filter(node => node.tagName === 'TR');
@@ -1679,19 +1677,74 @@ test('terminal entry stays technical and keeps its accessible name and navigatio
 });
 
 
-test('terminal buttons and navigation use the same Chinese and English accessible label', () => {
+test('detail terminal buttons use Chinese and English accessible labels', () => {
   const document = createDocument();
   for (const [locale, expected] of [['zh', '终端'], ['en', 'Terminal']]) {
-    const main = JSON.parse(readFileSync(new URL('../public/i18n/' + locale + '.json', import.meta.url), 'utf8'));
     const workbench = JSON.parse(readFileSync(new URL('../public/i18n/wb.' + locale + '.json', import.meta.url), 'utf8'));
-    const labels = { ...main, ...workbench }, translate = key => labels[key] ?? key;
+    const translate = key => workbench[key] ?? key;
     const root = document.createElement('div');
     renderOverview(root, row('telegram:terminal'), {}, { document, t: translate, level: 'technical', onObserve() {} });
     const button = allNodes(root).find(node => node.dataset.observerGroup === 'telegram:terminal');
     assert.equal(button.textContent, expected);
     assert.equal(button.title, expected);
     assert.equal(button.getAttribute('aria-label'), expected);
-    assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical', translate).label, expected);
-    assert.equal(observerNavEntry({ installed: true, enabled: true }, 'plain', translate), null);
+  }
+});
+
+
+function overviewTranslation(locale) {
+  const labels = JSON.parse(readFileSync(new URL('../public/i18n/wb.' + locale + '.json', import.meta.url), 'utf8'));
+  return (key, params = {}) => (labels[key] ?? key).replace(/\{([^}]+)\}/g, (match, name) => params[name] ?? match);
+}
+
+test('plain active tools use the locale separator between their readable names', () => {
+  const document = createDocument();
+  for (const [locale, expected] of [['en', 'Run command, Search web'], ['zh', '运行命令、搜索网页']]) {
+    const root = document.createElement('div');
+    renderOverview(root, row('telegram:tools', { tools: [{ name: 'Bash' }, { name: 'WebSearch' }] }), {},
+      { document, t: overviewTranslation(locale), level: 'plain' });
+    const title = allNodes(root).find(node => node.classList.contains('wb-now-title'));
+    assert.equal(title.textContent, expected);
+  }
+});
+
+test('failed starts and unknown waits keep their full readable reason in the plain title', () => {
+  const document = createDocument();
+  for (const [locale, cases] of [
+    ['zh', [['error', 'start_failed', '会话启动失败，请查看技术细节中的原因。'],
+      ['unknown', 'unknown', '正在等待，恢复条件未知，请查看技术细节。']]],
+    ['en', [['error', 'start_failed', 'Session start failed. Check technical details for the reason.'],
+      ['unknown', 'unknown', 'Waiting; the recovery condition is unknown. Check technical details.']]],
+  ]) for (const [kind, wait, expected] of cases) {
+    const root = document.createElement('div');
+    renderOverview(root, row('telegram:wait', { presence: kind === 'error' ? 'not_running' : 'unknown', live: null, target: { runtime: 'claude' }, state: { kind }, wait: { kind: wait } }), {},
+      { document, t: overviewTranslation(locale), level: 'plain' });
+    const titles = allNodes(root).filter(node => node.classList.contains('wb-now-title'));
+    assert.equal(titles.length, 1);
+    assert.equal(titles[0].textContent, expected, locale + ' ' + kind);
+  }
+});
+
+test('plain idle time uses readable elapsed units from the existing state duration', () => {
+  const document = createDocument();
+  const cases = [
+    [null, '空闲', 'Idle'],
+    [0, '空闲 · 已 0 秒', 'Idle · for 0 seconds'],
+    [1, '空闲 · 已 1 秒', 'Idle · for 1 second'],
+    [59, '空闲 · 已 59 秒', 'Idle · for 59 seconds'],
+    [60, '空闲 · 已 1 分钟', 'Idle · for 1 minute'],
+    [1560, '空闲 · 已 26 分钟', 'Idle · for 26 minutes'],
+    [3599, '空闲 · 已 59 分钟', 'Idle · for 59 minutes'],
+    [3600, '空闲 · 已 1 小时', 'Idle · for 1 hour'],
+    [4500, '空闲 · 已 1 小时 15 分钟', 'Idle · for 1 hour 15 minutes'],
+    [7200, '空闲 · 已 2 小时', 'Idle · for 2 hours'],
+  ];
+  for (const [locale, expectedIndex] of [['zh', 1], ['en', 2]]) for (const example of cases) {
+    const root = document.createElement('div');
+    renderOverview(root, row('telegram:idle', { state: { kind: 'idle' }, duration: example[0] }), {},
+      { document, t: overviewTranslation(locale), level: 'plain' });
+    const titles = allNodes(root).filter(node => node.classList.contains('wb-now-title'));
+    assert.equal(titles.length, 1);
+    assert.equal(titles[0].textContent, example[expectedIndex], locale + ' duration ' + example[0]);
   }
 });

@@ -51,7 +51,7 @@ function memoryStorage(entries = {}) {
   return { values, getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, String(value)); } };
 }
 
-async function fixture(testContext, { storage = memoryStorage(), open = true, groupRow = listedRow } = {}) {
+async function fixture(testContext, { storage = memoryStorage(), open = true, groupRow = listedRow, translate = key => key } = {}) {
   const document = eventDocument(), root = document.createElement('div');
   const reads = [], links = { memory: [], observe: [] };
   // Timers the panel started and has not cleared, by id: the panel's 5s re-read of the group list.
@@ -80,7 +80,7 @@ async function fixture(testContext, { storage = memoryStorage(), open = true, gr
     }
     return json({ items: [], nextCursor: null, afterCursor: 'after' });
   };
-  const page = mountConversationPage({ root, document, t: key => key, fetch, endpoint: path => path, storage,
+  const page = mountConversationPage({ root, document, t: translate, fetch, endpoint: path => path, storage,
     groupLinks: { onMemory: key => links.memory.push(key), onObserve: key => links.observe.push(key),
       setTimer: fn => { timers.set(++nextTimer, fn); return nextTimer; }, clearTimer: id => { timers.delete(id); } } });
   testContext.after(() => page.destroy());
@@ -359,11 +359,13 @@ test('the group detail sits beside the conversation only where about 600px of it
 
 
 test('the conversation group sidebar keeps current state without repeating the last received preview', async t => {
-  const f = await fixture(t, { groupRow: { ...listedRow, state: { kind: 'idle' }, duration: 75,
+  const labels = JSON.parse(readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url), 'utf8'));
+  const translate = (key, params) => Object.entries(params ?? {}).reduce((text, [name, value]) => text.replaceAll('{'+name+'}', value), labels[key] ?? key);
+  const f = await fixture(t, { translate, groupRow: { ...listedRow, state: { kind: 'idle' }, duration: 75,
     preview: { text: 'private preview already shown in conversation', channel: 'dashboard', timestamp: 1000 } } });
   await f.openSide();
   const title = allNodes(f.side()).find(node => node.classList.contains('wb-now-title'));
-  assert.equal(title.textContent, 'wb.state.idle1m15s');
+  assert.equal(title.textContent, 'Idle · for 1 minute');
   assert.equal(f.side().textContent.includes('private preview already shown in conversation'), false);
   assert.equal(f.side().textContent.includes('wb.board.lastReceived'), false);
   assert.equal(allNodes(f.side()).some(node => node.classList.contains('wb-now-raw')), false);

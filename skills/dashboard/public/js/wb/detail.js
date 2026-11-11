@@ -1,7 +1,7 @@
 import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=153';
+import { channelIcon, platformLabel, statePill } from './board.js?v=152';
 import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=162';
 import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=162';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
