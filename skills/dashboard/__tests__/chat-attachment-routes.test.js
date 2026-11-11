@@ -11,6 +11,7 @@ import { Store } from '../src/lib/store.js';
 import { ChatAttachments } from '../src/lib/chat/attachments.js';
 import { ChatConversations } from '../src/lib/chat/conversations.js';
 import { ChatSender } from '../src/lib/chat/send.js';
+import { ensureOriginConversation, ORIGIN_CONVERSATION_ID } from '../src/lib/chat/origin.js';
 import { handleChatAttachments } from '../src/lib/chat/attachment-routes.js';
 import { handleChatConversations } from '../src/lib/chat/write-routes.js';
 import { sendJson } from '../src/lib/http.js';
@@ -210,6 +211,26 @@ test('upload and config gate authentication, remote access, mode and registered 
   assert.equal((await f.request('/uploads', { method: 'POST', body: f.form() })).status, 403);
   assert.equal(f.store.db.prepare('SELECT COUNT(*) n FROM chat_attachments').get().n, 0);
   assert.equal(f.db.prepare('SELECT COUNT(*) n FROM group_heads').get().n, 0);
+});
+
+test('Origin uploads work in both modes and remotely only with the switch on and an admin key', async t => {
+  const f = await fixture(t);
+  ensureOriginConversation(f.store.db);
+  const origin = `/api/chat/conversations/${encodeURIComponent(ORIGIN_CONVERSATION_ID)}/uploads`;
+  const upload = (identity, headers) => fetch(f.base + origin, { method: 'POST', body: f.form(), signal: AbortSignal.timeout(10000),
+    headers: { origin: f.base, 'x-fixture-identity': identity, ...headers } });
+  for (const mode of ['single', 'multi']) {
+    f.setMode(mode);
+    for (const allowRemote of [false, true]) {
+      f.config.chat.allowRemote = allowRemote;
+      assert.equal((await upload('cookie')).status, 201, `${mode} local cookie`);
+      assert.equal((await upload('admin')).status, allowRemote ? 201 : 403, `${mode} remote admin, switch ${allowRemote}`);
+      assert.equal((await upload('read')).status, 403, `${mode} remote read key`);
+    }
+  }
+  f.config.chat.allowRemote = false;
+  const body = await (await upload('admin')).json();
+  assert.equal(body.error?.code ?? body.error ?? body.code, 'remote_chat_disabled');
 });
 
 test('single-file bounded uploads create no head, reject malformed requests and hide prepared downloads', async t => {
