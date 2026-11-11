@@ -867,7 +867,7 @@ export async function doctorCommand(args, upstreamSource) {
     if (readSessionMode().mode === 'multi') {
       const capacity = readPoolCapacity();
       if (capacity.valid && capacity.fresh && capacity.record.reason === 'floor') {
-        console.log('  Memory fits only the system assistant; running at most 1 conversation at a time');
+        console.log('  Memory fits only Origin; running at most 1 conversation at a time');
       }
     }
   } catch { /* Capacity is informational and does not change diagnostic results. */ }

@@ -88,7 +88,7 @@ for (const scenario of ['fresh floor', 'stale floor', 'future floor', 'missing',
       capacity: scenario === 'missing' ? undefined : record };
     const text = runDoctor(['--check'], options);
     assert.equal(text.status, 0, text.stderr);
-    const notice = 'Memory fits only the system assistant; running at most 1 conversation at a time';
+    const notice = 'Memory fits only Origin; running at most 1 conversation at a time';
     const lines = text.stdout.split(/\r?\n/).map(line => line.trim());
     assert.deepEqual(lines.filter(line => line.startsWith('Memory fits')), scenario === 'fresh floor' ? [notice] : []);
     if (scenario === 'fresh floor') {
