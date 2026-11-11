@@ -60,7 +60,7 @@ test('key search puts the group whose key equals the search first, ahead of many
   assert.deepEqual(store.queries.listGroups({ keyMatch: 'LARK:OC_1', limit: 1 }).map(row => row.sessionGroup), ['lark:oc_1_thread_59']);
 });
 
-test('default and legacy matching output keep the previous reader\'s fields byte for byte and add only the preview message', t => {
+test('default and legacy matching output keep the previous reader\'s fields byte for byte and add only the preview message and Origin\'s processing source', t => {
   const { db: c, store } = fixture(t);
   const all = (db, sql, ...args) => db.prepare(sql).all(...args);
   const get = (db, sql, ...args) => db.prepare(sql).get(...args);
@@ -86,7 +86,8 @@ test('default and legacy matching output keep the previous reader\'s fields byte
   for (const options of [{}, { limit: 2 }, { match: 'preview' }, { match: 'LARK:OC_', limit: 1 }, { match: 'missing' }]) {
     const rows = store.queries.listGroups(options);
     for (const row of rows) if (row.preview) assert.ok(Object.hasOwn(row.preview, 'message'), 'every preview carries the reader message');
-    const withoutMessage = rows.map(row => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => !['message', 'messageSource', 'messageRaw'].includes(key))) } : row);
+    for (const row of rows) assert.equal(Object.hasOwn(row, 'processingSource'), row.sessionGroup === 'origin', row.sessionGroup);
+    const withoutMessage = rows.map(({ processingSource, ...row }) => row.preview ? { ...row, preview: Object.fromEntries(Object.entries(row.preview).filter(([key]) => !['message', 'messageSource', 'messageRaw'].includes(key))) } : row);
     assert.equal(JSON.stringify(withoutMessage), JSON.stringify(legacyListGroups(options)));
   }
 });
@@ -112,6 +113,58 @@ test('a group preview names where a message came from when it is not a person\'s
   assert.equal(raw['scheduler:main'].message, rows['scheduler:main'].message);
   for (const key of ['origin', 'lark:recent2']) assert.equal(Object.hasOwn(raw[key], 'messageRaw'), false);
   for (const value of [1, 'yes', null]) assert.throws(() => store.queries.listGroups({ raw: value }), { code: 'INVALID_ARGS' });
+});
+
+test('Origin\'s processing source names a scheduled task only while no control item has run since the task was stored', t => {
+  const { db } = fixture(t);
+  // One clock for the store and the stored message, as in production: conversation timestamps are UTC text,
+  // control_queue times are the store's Unix seconds.
+  let clock = Date.parse('2026-02-01T00:00:00.400Z');
+  const store = createStore(db, { now: () => clock });
+  const at = ms => new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+  const later = seconds => { clock += seconds * 1000; };
+  const task = '[Scheduled Task: task-ab12cd34 #2]\nnightly digest\n\n---- After completing this task, run: node cli.js done task-ab12cd34';
+  const message = (content, status, channel = 'system') => db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group,timestamp) VALUES('in',?,?,?,'origin',?)")
+    .run(channel, content, status, at(clock)).lastInsertRowid;
+  const control = () => store.insertControl('Memory sync', { sessionGroup: 'origin', ackDeadlineAt: Math.floor(clock / 1000) + 600 }).id;
+  // Marked done the way the acknowledgement does it: status and the store's current second.
+  const done = id => db.prepare("UPDATE control_queue SET status='done',updated_at=? WHERE id=?").run(Math.floor(clock / 1000), id);
+  const source = () => store.queries.listGroups({ limit: 2 }).find(row => row.sessionGroup === 'origin').processingSource;
+
+  const handed = message(task, 'delivered');
+  assert.equal(source(), 'scheduled_task');
+  later(5);
+  const sync = control();
+  assert.equal(source(), 'scheduled_task', 'a control item still waiting is not being handled');
+  assert.ok(store.claimControl(sync));
+  assert.equal(source(), null, 'a control item handed to Origin');
+  later(15); done(sync);
+  assert.equal(source(), null, 'a control item handled after the task: Origin may be done with the task');
+  // A pending owner message queued behind the task does not change it.
+  db.prepare('DELETE FROM control_queue').run();
+  message('are the alerts handled?', 'pending', 'dashboard');
+  assert.equal(source(), 'scheduled_task');
+  // Handled in the same second as the task's stored time counts as after it.
+  clock = Date.parse('2026-02-01T00:00:00.900Z');
+  const sameSecond = control(); assert.ok(store.claimControl(sameSecond)); done(sameSecond);
+  assert.equal(source(), null, 'same second');
+  db.prepare('DELETE FROM control_queue').run();
+  // An older control item handled before the task does not count.
+  clock = Date.parse('2026-01-31T23:59:58.000Z');
+  const earlier = control(); assert.ok(store.claimControl(earlier)); done(earlier);
+  assert.equal(source(), 'scheduled_task', 'handled before the task');
+  // A control item for no group (single mode) running counts too.
+  db.prepare("INSERT INTO control_queue(raw_content,content,status,created_at,updated_at,session_group) VALUES('health','health','running',?,?,NULL)")
+    .run(Math.floor(clock / 1000), Math.floor(clock / 1000));
+  assert.equal(source(), null, 'a control item for no group');
+  db.prepare('DELETE FROM control_queue').run();
+  const handing = message('next', 'running', 'dashboard');
+  assert.equal(source(), null, 'a message being handed over');
+  db.prepare("UPDATE conversations SET status='delivered' WHERE id=?").run(handing);
+  assert.equal(source(), null, 'the owner message is the one in hand');
+  db.prepare('DELETE FROM conversations WHERE id>?').run(handed);
+  db.prepare("UPDATE conversations SET status='pending' WHERE id=?").run(handed);
+  assert.equal(source(), null, 'nothing handed yet');
 });
 
 test('a long labelled message keeps at most 2000 characters of its start, without a cut token', t => {

@@ -1,5 +1,6 @@
 {
   "chat.working.processing": "Processing",
+  "chat.working.scheduled": "Running a scheduled task",
   "chat.working.child": "{count} background task",
   "chat.working.children": "{count} background tasks",
   "chat.working.lessMinute": "Less than 1 minute",
@@ -781,6 +782,9 @@
   "chat.page.waiting": "Waiting",
   "chat.page.paused": "Delivery paused",
   "chat.page.starting": "Session starting",
+  "chat.page.originPinned": "Pinned conversation",
+  "chat.page.originEmpty": "Talk to Origin directly here. Alerts also appear here when no other destination is set.",
+  "chat.page.origin.asleep": "Asleep · a message wakes it; the first reply takes a little longer",
   "chat.page.startFailed": "Session start failed",
   "chat.page.delivery.rateLimited": "Stored · service limited; delivery resumes after recovery",
   "chat.page.delivery.recovering": "Stored · service recovering; delivery resumes after recovery",

@@ -169,3 +169,17 @@ test('working English text uses singular task hour and minute labels', async () 
   assert.equal(workingText({ ...working, turn: { since: now - 60000 }, subagents: null }, { now, t: translate }), 'Processing · 1 minute');
   assert.equal(workingText({ ...working, turn: { since: now - 121 * 60000 }, subagents: null }, { now, t: translate }), 'Processing · 2 hours 1 minute');
 });
+
+test('the working line names a scheduled task only for a turn known to be one', async () => {
+  const fs = await import('node:fs');
+  const { workingText } = await import('../public/js/wb/working-display.js');
+  const labels = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
+  const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
+  const now = 10 * 3600000, turn = { since: now - 60000 };
+  const children = { count: 2, since: now - 120000, lastActivityAt: now };
+  assert.equal(workingText({ on: true, turn, subagents: null }, { now, t: translate, scheduled: true }), 'Running a scheduled task · 1 minute');
+  assert.equal(workingText({ on: true, turn, subagents: children }, { now, t: translate, scheduled: true }), 'Running a scheduled task · 1 minute · 2 background tasks');
+  // Only background tasks left: the turn is over, so the scheduled wording does not apply.
+  assert.equal(workingText({ on: true, turn: null, subagents: children }, { now, t: translate, scheduled: true }), '2 background tasks · 2 minutes');
+  assert.equal(workingText({ on: false }, { now, t: translate, scheduled: true }), labels['wb.state.idle']);
+});

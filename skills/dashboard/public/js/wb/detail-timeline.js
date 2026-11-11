@@ -1,9 +1,9 @@
 import { formatZoned } from './instance-zone.js?v=100';
-import { workingNowText } from './working-display.js?v=1';
+import { workingNowText } from './working-display.js?v=2';
 import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { endReasonLabel, timeValue } from './event-labels.js?v=91';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=162';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=163';
 import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=108';
 
 export { timeValue };

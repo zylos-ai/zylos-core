@@ -24,7 +24,7 @@ const flush = async () => { for (let i = 0; i < 100; i++) await Promise.resolve(
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; };
 const row = id => ({ id, sessionGroup: id === 'g:AA' ? 'dashboard:first' : 'dashboard:chosen', stamp: id === 'g:AA' ? 2 : 1 });
 
-function fixture(t, { width = 1440 } = {}) {
+function fixture(t, { width = 1440, mode = 'multi' } = {}) {
   let time = 1_700_000_000_000, serial = 0, identity = 'local';
   const timers = new Map(), lists = [], detailReads = [], events = new Map();
   const original = { now: Date.now, setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout };
@@ -63,7 +63,7 @@ function fixture(t, { width = 1440 } = {}) {
         assert.ok(lists.length < 8, 'list request log is bounded');
         const held = deferred(); lists.push(held); return held.promise.then(response);
       }
-      if (url === '/api/session-mode') return response({ data: { sessionMode: 'multi' } });
+      if (url === '/api/session-mode') return response({ data: { sessionMode: mode } });
       if (url.endsWith('/deletion')) return response({ operationId: 'delete-first', cutoffId: 1, messages: 1 });
       if (options?.method === 'DELETE') return response({ ok: true });
       if (url.includes('/messages?')) return response({ items: [{ id: 1, direction: 'out', content: 'hello' }], afterCursor: 'after', nextCursor: null });
@@ -164,3 +164,31 @@ test('reopening the same instance selects its first newly available conversation
   assert.ok(f.detailReads.length > 0);
   assert.ok(f.detailReads.every(id => id === 'g:BB'));
 });
+
+// In single, Origin is the only conversation that can be written to, so desktop opens it even when others are newer.
+for (const originStamp of [null, 1]) {
+  test(`single desktop opens Origin ahead of newer read-only conversations (Origin ${originStamp === null ? 'empty' : 'older'})`, { timeout: 2000 }, async t => {
+    const f = fixture(t, { mode: 'single' }), opening = f.page.open(); await flush();
+    f.lists[0].resolve({ items: [{ ...row('g:6F726967696E'), session_group: 'origin', origin: true, stamp: originStamp },
+      { ...row('g:AA'), stamp: 3 }, { ...row('g:BB'), stamp: 5 }], nextCursor: null, deletionAllowed: false });
+    await flush(); await opening; await flush();
+    assert.deepEqual(f.selected(), ['g:6F726967696E']);
+  });
+}
+test('single desktop without an Origin row still opens the latest conversation', { timeout: 2000 }, async t => {
+  const f = fixture(t, { mode: 'single' }), opening = f.page.open(); await flush();
+  f.lists[0].resolve({ items: [{ ...row('g:AA'), stamp: 3 }, { ...row('g:BB'), stamp: 5 }], nextCursor: null, deletionAllowed: false });
+  await flush(); await opening; await flush();
+  assert.deepEqual(f.selected(), ['g:BB']);
+});
+
+// Origin is pinned first in "mine", so "first" is no longer "latest": desktop opens the most recently active one.
+for (const [name, originStamp, expected] of [['an empty Origin', null, 'g:BB'], ['Origin when it is the latest', 9, 'g:6F726967696E']]) {
+  test(`desktop opens the most recently active conversation, not ${name === 'an empty Origin' ? name : 'another'} pinned first`, { timeout: 2000 }, async t => {
+    const f = fixture(t), opening = f.page.open(); await flush();
+    f.lists[0].resolve({ items: [{ ...row('g:6F726967696E'), session_group: 'origin', origin: true, stamp: originStamp },
+      { ...row('g:AA'), stamp: 3 }, { ...row('g:BB'), stamp: 5 }], nextCursor: null, deletionAllowed: true });
+    await flush(); await opening; await flush();
+    assert.deepEqual(f.selected(), [expected]);
+  });
+}

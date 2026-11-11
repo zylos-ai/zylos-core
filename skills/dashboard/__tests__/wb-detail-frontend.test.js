@@ -1163,7 +1163,7 @@ test('the configuration editor offers engine, model and effort as dropdowns with
 });
 
 // Navigation is a callback only: no chat write or runtime action is launched.
-test('group details expose conversation navigation for real groups and omit origin', async () => {
+test('group details expose conversation navigation for real groups and Origin in both modes', async () => {
   const selected = [];
   const f = detailFixture(async path => response(defaultRead(path)), { onConversation: value => selected.push(value) });
   const current = row('dash-owned:example');
@@ -1173,8 +1173,13 @@ test('group details expose conversation navigation for real groups and omit orig
   button.dispatch('click');
   assert.equal(selected.length, 1);
   assert.equal(selected[0].sessionGroup, current.sessionGroup);
-  await f.controller.open(row('origin'), { rows: [], listKnown: true });
-  assert.equal(allNodes(f.root).some(node => node.dataset.action === 'viewConversation'), false);
+  // Origin has its own conversation now: keyed `origin` in multi, no group key in single.
+  for (const origin of [{ ...row('origin'), origin: true }, { ...row(null), sessionGroup: null, origin: true }]) {
+    await f.controller.open(origin, { rows: [origin], listKnown: true });
+    allNodes(f.root).find(node => node.dataset.action === 'viewConversation').dispatch('click');
+    assert.equal(selected.at(-1).origin, true);
+  }
+  assert.equal(selected.length, 3);
   f.controller.destroy();
 });
 

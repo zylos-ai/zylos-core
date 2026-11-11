@@ -5,15 +5,15 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=157';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=163';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=164';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=171';
+import { mountConversationPage } from './wb/conversation-page.js?v=172';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
-import { mountWorkbench } from './wb/shell.js?v=164';
+import { mountWorkbench } from './wb/shell.js?v=165';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=109';
-import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=150';
+import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=151';
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js?v=120';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=145';
@@ -2979,7 +2979,8 @@ workbench = mountWorkbench({
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
   writable: () => wbWritable(remoteIsReadOnly),
   onMemory: openGroupMemory,
-  onConversation: row => openConversationGroup(row.sessionGroup, { channel: row.c4?.componentName }),
+  onConversation: row => row.origin === true ? openConversationGroup('origin', { channel: 'dashboard' })
+    : openConversationGroup(row.sessionGroup, { channel: row.c4?.componentName }),
   observerStatus: () => state.observer.status,
   observerAvailable: observerOpenable,
   onObserve: openObserverFor,

@@ -33,6 +33,16 @@ test('single view has only the unique null-key session regardless of other sourc
   const result = mergeGroups({ status: { ...status, view: 'single', origin: live(null) }, c4, q });
   assert.equal(result.rows.length, 1);assert.equal(result.rows[0].sessionGroup, null);assert.equal(result.rows[0].title, '唯一会话');assert.equal(result.hasOlder, null);
 });
+test('only the Origin row says what was last handed to it, and only a scheduled task', () => {
+  const rows = source => mergeGroups({ status, c4: { ok: true, data: { groups: [{ ...group('origin'), processingSource: source }, { ...group('a'), processingSource: 'scheduled_task' }], hasOlder: false } }, q }).rows;
+  assert.equal(rows('scheduled_task')[0].processing, 'scheduled_task');
+  for (const source of [null, undefined, 'owner', 'SCHEDULED_TASK']) assert.equal(rows(source)[0].processing, null, String(source));
+  for (const row of rows('scheduled_task').slice(1)) assert.equal(Object.hasOwn(row, 'processing'), false, row.sessionGroup);
+  // Without a C4 row (C4 failed) Origin is not known to be on a scheduled task.
+  assert.equal(mergeGroups({ status, c4: { ok: false }, q }).rows[0].processing, null);
+  // Single has no per-message preview to read the source from.
+  assert.equal(mergeGroups({ status: { ...status, view: 'single', origin: live(null) }, c4, q }).rows[0].processing, null);
+});
 test('C4 Origin is deduplicated and browser fields never include raw preview through metadata', () => {
   const secret = 'sk-' + 'x'.repeat(32);
   const input = { ...group('origin'), preview: { text: secret, timestamp: 10 } };

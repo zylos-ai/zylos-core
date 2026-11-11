@@ -10,12 +10,13 @@ export function workingDuration(since, { now = Date.now(), t = key => key } = {}
   return [t(hours === 1 ? 'chat.working.hour' : 'chat.working.hours', { count: hours }), minuteText(minutes % 60)].join(' ');
 }
 
-export function workingText(working, { now = Date.now(), t = key => key } = {}) {
+/** `scheduled`: the latest message handed to Origin came from a scheduled task (only Origin reports this); otherwise the generic wording. */
+export function workingText(working, { now = Date.now(), t = key => key, scheduled = false } = {}) {
   if (!working) return '';
   if (!working.on) return t('wb.state.idle');
   const children = working.subagents?.count > 0 ? t(working.subagents.count === 1 ? 'chat.working.child' : 'chat.working.children', { count: working.subagents.count }) : null;
   const duration = workingDuration(working.turn?.since ?? working.subagents?.since, { now, t });
-  const main = working.turn || !children ? t('chat.working.processing') : children;
+  const main = working.turn && scheduled ? t('chat.working.scheduled') : working.turn || !children ? t('chat.working.processing') : children;
   return [main, duration, working.turn ? children : null].filter(Boolean).join(' · ');
 }
 

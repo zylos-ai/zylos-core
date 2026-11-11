@@ -7,6 +7,12 @@ import { composeContent, storedContent, contentBytes, MAX_ANNOTATIONS, MAX_CONTE
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
 const base = '/api/chat/conversations';
 const pathFor = id => `${base}/${encodeURIComponent(id)}`;
+/** The fixed Origin conversation: group `origin` encoded like every other group ID. */
+export const ORIGIN_CONVERSATION_ID = 'g:6F726967696E';
+export const isOriginConversation = id => id === ORIGIN_CONVERSATION_ID;
+// Origin stays pinned first; the rest follow recent activity.
+const listOrder = (a, b) => Number(isOriginConversation(b.id)) - Number(isOriginConversation(a.id))
+  || Number(b.stamp || 0) - Number(a.stamp || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const query = values => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== null && v !== undefined)).toString();
 export function createConversationState({
   request,
@@ -107,6 +113,7 @@ export function createConversationState({
     groupWorking: null,
     groupHealth: null,
     groupWait: null,
+    groupProcessing: null,
     groupPresenceReadAt: null,
     groupPresenceVersion: 0,
     conversation: null,
@@ -153,6 +160,9 @@ export function createConversationState({
   // reads as unknown.
   let instanceTz = null;
   const readZone = data => { instanceTz = typeof data?.tz === 'string' && data.tz ? data.tz : null; };
+  // Origin is the single session itself, so it stays writable in single; other conversations need multi.
+  const writable = () => active && !blocked && tab === 'mine' && (mode === 'multi' || isOriginConversation(selectedId))
+    && !!selectedId && cell()?.ownershipResolved === true;
   const snapshot = () => ({
     tab,
     mode,
@@ -169,7 +179,9 @@ export function createConversationState({
     creatingDraft,
     canDelete: active && !blocked && mode === 'multi' && deletionAllowed,
     canRetry: active && !!cell()?.retryRequired && cell()?.receipt?.retryAllowed === true && !cell()?.sending,
-    canWrite: active && !blocked && tab === 'mine' && mode === 'multi' && !!selectedId && cell()?.ownershipResolved === true,
+    canWrite: writable(),
+    // Origin keeps its name in both views.
+    canRename: writable() && !isOriginConversation(selectedId),
     canCreate: active && !blocked && tab === 'mine' && mode === 'multi'
   });
   const emit = () => {
@@ -222,7 +234,7 @@ export function createConversationState({
       ...(stamp === null ? {} : {
         stamp
       })
-    } : row).sort((a, b) => Number(b.stamp || 0) - Number(a.stamp || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    } : row).sort(listOrder);
   }
   function streamSubscription() {
     if (!valid(epoch)) return null;
@@ -435,7 +447,7 @@ export function createConversationState({
       readZone(data);
       deletionAllowed = data.deletionAllowed === true;
       items = more || quiet ? merge(items, data.items) : data.items;
-      items.sort((a, b) => Number(b.stamp || 0) - Number(a.stamp || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      items.sort(listOrder);
       if (more) listDepth++;
       if (!quiet || listDepth === 1) nextCursor = data.nextCursor ?? null;
       if (!more) lastListAt = now();
@@ -482,6 +494,7 @@ export function createConversationState({
     current.groupWorking = null;
     current.groupHealth = null;
     current.groupWait = null;
+    current.groupProcessing = null;
     current.groupPresenceReadAt = null;
     emit();
     if (currentTab === 'mine') {
@@ -832,6 +845,7 @@ export function createConversationState({
       current.groupWorking = null;
       current.groupHealth = null;
       current.groupWait = null;
+      current.groupProcessing = null;
       current.groupPresenceReadAt = null;
       return;
     }
@@ -848,13 +862,17 @@ export function createConversationState({
       try {
         const data = await request('/api/workbench/groups', { signal: record.controller.signal });
         if (!stillCurrent()) return;
-        const group = Array.isArray(data?.rows) ? data.rows.find(row => row.sessionGroup === sessionGroup) : null;
+        // Origin's row is keyed `origin` in multi and has no group in single; both are marked `origin`.
+        const origin = sessionGroup === 'origin';
+        const group = Array.isArray(data?.rows) ? data.rows.find(row => origin ? row.origin === true : row.sessionGroup === sessionGroup) : null;
         const trusted = data?.listKnown === true && data?.sources?.status?.ok === true;
         current.groupPresence = trusted && group?.presence === 'running' ? true : trusted && group?.presence === 'not_running' ? false : null;
         const health = trusted ? data.instance?.runtimeHealth?.[group?.target?.runtime] : null;
         current.groupHealth = health?.health ?? null;
         current.groupWait = trusted ? group?.wait ?? null : null;
         current.groupWorking = trusted && group?.presence === 'running' && typeof group?.working?.on === 'boolean' ? group.working : null;
+        // Only Origin's row carries what was last handed to it, and only when that is a scheduled task.
+        current.groupProcessing = trusted && origin && group?.processing === 'scheduled_task' ? 'scheduled_task' : null;
         current.groupPresenceReadAt = trusted && Number.isFinite(data.sources.status.readAt) ? data.sources.status.readAt : null;
       } catch {
         if (!stillCurrent()) return;
@@ -863,6 +881,7 @@ export function createConversationState({
         current.groupWorking = null;
         current.groupHealth = null;
         current.groupWait = null;
+        current.groupProcessing = null;
         current.groupPresenceReadAt = null;
       } finally {
         if (groupPresenceRead === record) groupPresenceRead = null;
@@ -1123,7 +1142,7 @@ export function createConversationState({
     }
   }
   async function rename(displayName) {
-    if (!snapshot().canWrite) return;
+    if (!snapshot().canRename) return;
     const current = cell(),
       id = selectedId;
     await run(() => request(pathFor(id), {

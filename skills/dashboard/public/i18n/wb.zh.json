@@ -1,5 +1,6 @@
 {
   "chat.working.processing": "正在处理",
+  "chat.working.scheduled": "正在执行定时任务",
   "chat.working.child": "后台子任务 {count} 个",
   "chat.working.children": "后台子任务 {count} 个",
   "chat.working.lessMinute": "不到 1 分钟",
@@ -781,6 +782,9 @@
   "chat.page.waiting": "等待处理",
   "chat.page.paused": "投递已暂停",
   "chat.page.starting": "会话启动中",
+  "chat.page.originPinned": "置顶对话",
+  "chat.page.originEmpty": "在这里直接和 Origin 说话；告警没有另设去处时，也会出现在这里。",
+  "chat.page.origin.asleep": "休眠 · 发消息会唤醒它，第一条回复会慢一些",
   "chat.page.startFailed": "会话启动失败",
   "chat.page.delivery.rateLimited": "已入库 · 服务受限，恢复后自动投递",
   "chat.page.delivery.recovering": "已入库 · 服务恢复中，恢复后自动投递",

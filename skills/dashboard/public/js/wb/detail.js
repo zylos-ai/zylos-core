@@ -1,9 +1,9 @@
 import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=152';
-import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=162';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=163';
+import { channelIcon, platformLabel, statePill } from './board.js?v=153';
+import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=163';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=164';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=115';
 import { renderNameEditor } from './name-edit.js?v=115';
@@ -148,7 +148,8 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     top.append(box, heading, sub);
     const actions = element(document, 'div', undefined, 'wb-d-acts');
     // Opening the conversation is the main action, so it leads the action row.
-    if (typeof onConversation === 'function' && row.sessionGroup && row.sessionGroup !== 'origin') {
+    // Origin has its own conversation in both modes (its single-mode row has no group).
+    if (typeof onConversation === 'function' && (row.origin === true || row.sessionGroup)) {
       const conversation = element(document, 'button', undefined, 'wb-btn wb-btn-primary wb-d-conv');
       conversation.append(element(document, 'span', t('chat.page.viewConversation'), 'wb-conv-label'));
       conversation.type = 'button';

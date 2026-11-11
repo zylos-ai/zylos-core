@@ -1,15 +1,15 @@
-import { workingText } from './working-display.js?v=1';
+import { workingText } from './working-display.js?v=2';
 import { createUploadTray } from './chat-upload-tray.js?v=2';
 import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
-import { channelIcon, channelIcons } from './board.js?v=152';
-import { createConversationState } from './conversation-state.js?v=162';
+import { channelIcon, channelIcons } from './board.js?v=153';
+import { createConversationState, isOriginConversation } from './conversation-state.js?v=163';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=158';
-import { createGroupSide } from './group-side.js?v=163';
+import { createGroupSide } from './group-side.js?v=164';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=5';
@@ -224,7 +224,11 @@ export function mountConversationPage({
     if (!current.items.length) return;
     // A stream catch-up may provide the first list after open() has already returned.
     autoSelectPending = false;
-    await state.select(current.items[0].id);
+    // The most recently active conversation: Origin is pinned first but opens only when it is the latest,
+    // except in single, where Origin is the only conversation that can be written to.
+    const latest = current.items.reduce((best, item) => Number(item.stamp || 0) > Number(best.stamp || 0) ? item : best, current.items[0]);
+    const origin = current.mode === 'single' && current.tab === 'mine' ? current.items.find(item => isOriginConversation(item.id)) : null;
+    await state.select((origin ?? latest).id);
   }
   const page = node('div', undefined, 'conversation-page');
   const sidebar = node('aside', undefined, 'conversation-sidebar');
@@ -325,7 +329,7 @@ export function mountConversationPage({
   renameForm.append(renameInput, renameSave, renameCancel);
   renameForm.addEventListener('submit', event => {
     event.preventDefault();
-    if (currentSnapshot.canWrite) {
+    if (currentSnapshot.canRename) {
       void state.rename(renameInput.value || null);
       renaming = false;
       renameForm.hidden = true;
@@ -498,16 +502,19 @@ export function mountConversationPage({
     const headerLabel = healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
     const restricted = headerLabel !== 'running' && !waiting;
     const exceptional = headerLabel !== 'running';
+    const origin = s.tab === 'mine' && isOriginConversation(s.selectedId);
+    // Only in multi is an Origin that is not running asleep, woken by the next message; in single it would be down.
+    const asleep = origin && s.mode === 'multi' && s.groupPresence === false && !healthLabel && !s.groupWait;
     const working = !exceptional && s.groupPresence === true ? s.groupWorking : null;
-    running.hidden = exceptional ? s.groupPresence !== true && !healthLabel && !s.groupWait : !working;
-    running.classList.toggle('conversation-restricted', exceptional && restricted);
-    running.classList.toggle('conversation-waiting', exceptional && waiting);
+    running.hidden = asleep ? false : exceptional ? s.groupPresence !== true && !healthLabel && !s.groupWait : !working;
+    running.classList.toggle('conversation-restricted', !asleep && exceptional && restricted);
+    running.classList.toggle('conversation-waiting', asleep || exceptional && waiting);
     const wasBusy = running.dataset.state === 'busy';
-    running.dataset.state = exceptional ? restricted ? 'restricted' : 'waiting' : working?.on ? 'busy' : 'idle';
-    const description = exceptional ? t('chat.page.' + headerLabel
+    running.dataset.state = asleep ? 'asleep' : exceptional ? restricted ? 'restricted' : 'waiting' : working?.on ? 'busy' : 'idle';
+    const description = asleep ? t('chat.page.origin.asleep') : exceptional ? t('chat.page.' + headerLabel
       + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : ''))
-      : workingText(working, { t });
-    const mark = exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
+      : workingText(working, { t, scheduled: origin && s.groupProcessing === 'scheduled_task' });
+    const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
     if (!exceptional && working?.on) mark.classList.add('wi-spin');
     const childSuffix = !exceptional && working?.turn && working.subagents
       ? t(working.subagents.count === 1 ? 'chat.working.child' : 'chat.working.children', { count: working.subagents.count }) : null;
@@ -545,7 +552,7 @@ export function mountConversationPage({
   }
   root.replaceChildren(page);
   function updateInputPlaceholder(mode = currentSnapshot?.mode) {
-    const key = mode === 'single' ? 'chat.page.singlePlaceholder'
+    const key = mode === 'single' && !isOriginConversation(currentSnapshot?.selectedId) ? 'chat.page.singlePlaceholder'
       : currentSnapshot?.annotations?.length ? 'chat.page.annotationPlaceholder'
       : currentSnapshot?.quote ? 'chat.page.replyPlaceholder'
       : view?.innerWidth <= 760 || touchFirst(view) || currentSnapshot?.retryRequired ? 'chat.page.mobilePlaceholder' : 'chat.page.placeholder';
@@ -1433,7 +1440,8 @@ export function mountConversationPage({
     if (deletionResult?.countsEstimated === true) completionText.push(t('chat.delete.estimated'));
     deletionNotice.hidden = !local() || !completionText.length || deletionResult.identity !== (typeof identity === 'function' ? identity() : identity);
     text(deletionNotice, deletionNotice.hidden ? '' : completionText.join(document.documentElement?.lang?.startsWith('zh') ? '' : ' '));
-    accessNotice.hidden = s.mode !== 'single' || s.tab !== 'mine';
+    const origin = s.tab === 'mine' && isOriginConversation(s.selectedId);
+    accessNotice.hidden = s.mode !== 'single' || s.tab !== 'mine' || origin;
     text(accessText, t('chat.single'));
     const outcome = receiptState(s.receipt);
     const showReceipt = !!s.receipt && ['not_stored', 'pending_reconciliation'].includes(outcome);
@@ -1457,10 +1465,11 @@ export function mountConversationPage({
       headerIcon.replaceChildren(icon(document, symbol));
       headerIcon.dataset.icon = symbol;
     }
-    text(subtitle, channelLabel(channel) + ' · ' + t(s.tab === 'mine' ? 'chat.page.selfCreated' : 'chat.page.readOnly'));
-    renameToggle.hidden = !s.canWrite;
+    text(subtitle, channelLabel(channel) + ' · ' + t(origin ? 'chat.page.originPinned' : s.tab === 'mine' ? 'chat.page.selfCreated' : 'chat.page.readOnly'));
+    renameToggle.hidden = !s.canRename;
     renameSave.disabled = s.loading || s.sending;
-    group.hidden = !groupSide || !(current?.sessionGroup ?? current?.session_group) || isDraft(s);
+    // In single, Origin's workbench row has no group key, so there is no group detail to open beside it.
+    group.hidden = !groupSide || !(current?.sessionGroup ?? current?.session_group) || isDraft(s) || origin && s.mode === 'single';
     // The side panel belongs to the conversation it was opened from.
     if (groupSide?.open && (group.hidden || s.selectedId !== groupSideFor)) groupSide.close({ focus: false });
     historyStart.hidden = !s.selectedId || isDraft(s) || !s.historyLoaded
@@ -1477,9 +1486,10 @@ export function mountConversationPage({
     questionMore.hidden = !s.questionCursor;
     questionMore.disabled = !!s.questionsLoading;
     historyNotice.hidden = !!s.messages.length || !!s.blocked;
-    text(historyNotice, t(!s.selectedId ? 'chat.select' : s.loading ? 'chat.loading' : isDraft(s) ? 'chat.page.draftExplanation' : 'chat.page.noMessages'));
+    text(historyNotice, t(!s.selectedId ? 'chat.select' : s.loading ? 'chat.loading' : isDraft(s) ? 'chat.page.draftExplanation'
+      : origin ? 'chat.page.originEmpty' : 'chat.page.noMessages'));
     const showComposer = !!s.selectedId && s.tab === 'mine' && (s.canWrite || s.mode === 'single');
-    if (!s.canWrite) {
+    if (!s.canRename) {
       renameForm.remove();
     } else if (renameForm.parentNode !== detail) {
       detail.insertBefore(renameForm, notices);
@@ -1492,7 +1502,7 @@ export function mountConversationPage({
     composer.hidden = !showComposer;
     readOnlyFooter.hidden = s.tab !== 'external' || !s.selectedId;
     text(readOnlyFooter.lastElementChild, t('chat.page.externalReadOnly'));
-    composer.classList.toggle('conversation-composer-disabled', s.mode === 'single');
+    composer.classList.toggle('conversation-composer-disabled', s.mode === 'single' && !origin);
     updateInputPlaceholder(s.mode);
     input.disabled = !s.canWrite || !!s.sending;
     // While a send's outcome is open the draft is read-only: a retry sends exactly what was sent.
@@ -1561,7 +1571,7 @@ export function mountConversationPage({
       || !uploadTray.isSendable(s.pending || s.annotations.length ? outgoing : s.input);
     receipt.hidden = !showReceipt;
     receipt.dataset.deliveryState = outcome || '';
-    const receiptKey = outcome === 'not_stored' && s.mode === 'single'
+    const receiptKey = outcome === 'not_stored' && s.mode === 'single' && !origin
       ? 'chat.page.receipt.notStoredReadOnly' : 'chat.page.receipt.' + outcome;
     text(receiptText, outcome ? t(receiptKey) : '');
     for (const reference of root.querySelectorAll('.chat-block-reference')) {
@@ -1591,7 +1601,8 @@ export function mountConversationPage({
     selectionIdentity = typeof identity === 'function' ? identity() : identity;
     page.hidden = false;
     await state.open();
-    const tab = (channel ?? sessionGroup.split(':')[0]) === 'dashboard' ? 'mine' : 'external';
+    // Origin's conversation is the fixed address `dashboard origin`, listed in "mine".
+    const tab = sessionGroup === 'origin' || (channel ?? sessionGroup.split(':')[0]) === 'dashboard' ? 'mine' : 'external';
     if (state.snapshot().tab !== tab) {
       await state.setTab(tab);
     }

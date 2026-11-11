@@ -172,7 +172,23 @@ export function createStore(database, dependencies = {}) {
         if (match !== undefined && !head.session_group.toLowerCase().includes(match.toLowerCase()) && !(text ?? '').toLowerCase().includes(match.toLowerCase())) return null;
         const parsed = parseSessionGroup(head.session_group);
         const componentName = parsed && parsed.namespace !== 'origin' ? get(c, 'SELECT component_name FROM channel_namespaces WHERE namespace=?', parsed.namespace)?.component_name ?? null : null;
-        return { sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? previewOf(preview, text, projection) : null };
+        return { sessionGroup: head.session_group, componentName, sessionGroupName: parsed?.groupName ?? null, lastActivityAt: millis(head.timestamp), preview: preview ? previewOf(preview, text, projection) : null,
+          ...(head.session_group === 'origin' ? { processingSource: processingSource(head.session_group) } : {}) };
+      }
+      // For Origin's header: 'scheduled_task' when the message last handed to Origin came from a scheduled task.
+      // A message still being handed over, or a control item running or handled at or after the task's stored time
+      // (its `timestamp`, set when it was stored and not changed on delivery; the same second counts), makes that
+      // uncertain; then null, and the page says only that Origin is working. Delivery is not proof of
+      // processing: a task handed over while Origin is still on an earlier message is reported as soon as it is
+      // delivered.
+      function processingSource(sessionGroup) {
+        const last = get(c, "SELECT id,timestamp,channel,content FROM conversations WHERE session_group=? AND direction='in' AND status='delivered' ORDER BY id DESC LIMIT 1", sessionGroup);
+        if (!last) return null;
+        if (get(c, "SELECT 1 FROM conversations WHERE session_group=? AND direction='in' AND status='running' AND id>? LIMIT 1", sessionGroup, last.id)) return null;
+        // control_queue times are Unix seconds; conversation timestamps are UTC text with second precision.
+        if (get(c, "SELECT 1 FROM control_queue WHERE (session_group=? OR session_group IS NULL) AND (status='running' OR (status NOT IN ('pending','superseded') AND updated_at>=unixepoch(?))) LIMIT 1",
+          sessionGroup, last.timestamp)) return null;
+        return previewMessage(last.content, { channel: last.channel }).source?.kind === 'scheduled_task' ? 'scheduled_task' : null;
       }
       function previewOf(preview, text, projection) {
         const { text: message, source } = previewMessage(preview.content, { channel: preview.channel });

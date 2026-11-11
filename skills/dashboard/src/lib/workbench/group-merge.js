@@ -51,7 +51,7 @@ export function redactQuerySecrets(text) {
 export function mergeGroups({ status, c4, q, names = new Map(), taskNames = new Map(), statusError }, sanitizer = new Sanitizer('')) {
   const safeLive = value => value?.error ? { ...value, error: { ...value.error, message: sanitizer.safeSummary(value.error.message) } } : value;
   if (status?.view === 'single') return { rows: [{ sessionGroup: null, title: '唯一会话',
-    presence: status.origin.presence, live: safeLive(status.origin), c4: null, preview: null, name: null, origin: true }], hasOlder: null };
+    presence: status.origin.presence, live: safeLive(status.origin), c4: null, preview: null, name: null, origin: true, processing: null }], hasOlder: null };
   const live = new Map();
   if (status) {
     live.set('origin', safeLive(status.origin));
@@ -64,7 +64,9 @@ export function mergeGroups({ status, c4, q, names = new Map(), taskNames = new 
     const current = live.get(key), item = items.get(key);
     return { sessionGroup: key, presence: current ? current.presence : listKnown ? 'not_running' : 'unknown',
       reason: current || listKnown ? null : statusError ?? 'group_list_failed', live: current ?? null,
-      c4: c4Meta(item), preview: safePreview(item, sanitizer, taskNames), name: names.get(key) ?? null, origin: key === 'origin' };
+      c4: c4Meta(item), preview: safePreview(item, sanitizer, taskNames), name: names.get(key) ?? null, origin: key === 'origin',
+      // Origin's header says "scheduled task" only when the latest message handed to Origin came from one (C4's processingSource).
+      ...(key === 'origin' ? { processing: item?.processingSource === 'scheduled_task' ? 'scheduled_task' : null } : {}) };
   });
   return { rows, hasOlder: c4.ok ? c4.data.hasOlder : null };
 }
