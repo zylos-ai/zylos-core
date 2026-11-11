@@ -38,7 +38,7 @@ export async function handleChatConversations(req, res, url, { auth, config, con
       return true;
     }
     const body = await readJsonBody(req, 512 * 1024);
-    const permitted = draft ? ['displayName'] : match[2] ? ['content', 'retry', 'attachments'] : ['displayName'];
+    const permitted = draft ? ['displayName'] : match[2] ? ['content', 'retry', 'attachments', 'quote'] : ['displayName'];
     if (!object(body) || Object.keys(body).some(key => !permitted.includes(key))
         || (Object.hasOwn(body, 'retry') && typeof body.retry !== 'boolean')
         || (!draft && !match[2] && !Object.hasOwn(body, 'displayName'))) {

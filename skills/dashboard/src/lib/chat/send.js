@@ -187,12 +187,22 @@ export class ChatSender {
     return this._receipt(row, { initial: true });
   }
 
-  async send(id, { content = '', retry = false, attachments = [] } = {}, { authorize, principal } = {}) {
+  async send(id, { content = '', retry = false, attachments = [], quote } = {}, { authorize, principal } = {}) {
     if (typeof content !== 'string' || typeof retry !== 'boolean' || !Array.isArray(attachments)
         || (attachments.length && !this.attachments)) {
       throw fail('invalid_chat_content');
     }
     let row = await this.resolve(id);
+    if (quote !== undefined) {
+      const denied = await authorize?.(row);
+      if (denied) throw fail(denied.error || 'chat_conversation_forbidden', denied.status || 403);
+      if (!messageId(quote) || !row.namespace) throw fail('invalid_chat_quote');
+      const target = this._db().prepare(`SELECT id FROM conversations
+        WHERE id=? AND session_group=? AND direction IN ('in','out')
+        AND (channel='internal' OR (channel='dashboard' AND endpoint_id=?))`)
+        .get(quote, `${row.namespace}:${row.localId}`, row.localId);
+      if (!target) throw fail('invalid_chat_quote');
+    }
     try { this.conversations.get(row.localId); }
     catch (error) {
       if (error.code !== 'chat_conversation_not_found' || row.state !== 'active') throw error;
@@ -202,8 +212,10 @@ export class ChatSender {
       row = this._registerForWrite(row);
     }
     const records = this.attachments?.prepareSend(row, attachments, principal) ?? [];
+    if (!content.trim() && !records.length) throw fail('invalid_chat_content');
+    if (quote !== undefined) content = `[quote c4_id=${quote}]\n${content}`;
     if (records.length) content = buildAnnotatedContent(content, records);
-    if (!content.trim() || Buffer.byteLength(content) > MAX_CONTENT_BYTES) throw fail('invalid_chat_content');
+    if (Buffer.byteLength(content) > MAX_CONTENT_BYTES) throw fail('invalid_chat_content');
     const initial = id.startsWith('d:');
     if (initial && row.state === 'active') return this._initialReceipt(row, content);
     if (this.inflight.has(row.localId)) return { ...this._receipt(row, { initial }), retryAllowed: false, preserveInput: true };

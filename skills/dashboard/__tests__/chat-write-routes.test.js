@@ -49,7 +49,8 @@ async function fixture(t) {
         code: 'chat_conversation_started', statusCode: 409, conversationId: 'g:6F776E65643A6C6F63616C', preserveInput: true,
       });
       calls++;
-      return { localId: row.localId, content: body.content };
+      return { localId: row.localId, content: body.content,
+        ...(Object.hasOwn(body, 'quote') ? { quote: body.quote } : {}) };
     },
   };
   const server = http.createServer(async (req, res) => {
@@ -119,6 +120,16 @@ test('remote admin writes require the data instance switch and stored ownership'
   assert.equal((await f.request(route, { method: 'PATCH', identity: 'admin', body: { displayName: 'remote name' } })).status, 200);
   assert.equal((await f.request('/api/chat/conversations/g:74673A6F74686572/send', { body: { content: 'wrong group' } })).status, 403);
   assert.equal(f.calls(), 0);
+});
+
+test('write routes forward the optional quote field to the sender', async t => {
+  const f = await fixture(t);
+  const created = await f.request('/api/chat/drafts');
+  const route = `/api/chat/conversations/${encodeURIComponent(created.body.conversation.id)}/send`;
+  const response = await f.request(route, { body: { content: 'quoted body', quote: 42 } });
+  assert.equal(response.status, 200);
+  assert.equal(response.body.quote, 42);
+  assert.equal(f.calls(), 1);
 });
 
 test('fleet proxy allowlists draft rename and still checks both admin and remote switch', async t => {

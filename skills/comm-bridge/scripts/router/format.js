@@ -23,9 +23,9 @@ function withoutLegacyRoute(content, row) {
   return content.slice(0, offset).trimEnd();
 }
 
-export function formatConversation(row, { scriptPath = sendPath, ownerName = readOwnerName } = {}) {
+export function formatConversation(row, { scriptPath = sendPath, ownerName = readOwnerName, lookupQuote } = {}) {
   const projected = withoutLegacyRoute(projectC4Content(row.content || '', { c4Id: row.id }), row);
-  const content = row.channel === 'dashboard' && row.direction === 'in' ? dashboardSource(projected, ownerName()) : projected;
+  const content = row.channel === 'dashboard' && row.direction === 'in' ? dashboardSource(projected, ownerName(), { row, lookupQuote }) : projected;
   const attachmentHint = row.channel === 'dashboard' && row.direction === 'in'
     && splitContentAndAttachments(projected).attachments.length
     ? `\nAttachments: ${path.join(SKILLS_DIR, 'dashboard', 'SKILL.md')}\n`

@@ -19,6 +19,8 @@ import { chatStatusCases } from './fixtures/chat-status.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 import { createScheduleTz } from '../src/lib/workbench/schedule-tz.js';
 import { CONTENT_PREFIX } from '../../comm-bridge/scripts/c4-content-schema.js';
+import { conversationPreview } from '../src/lib/chat/history.js';
+import { buildAnnotatedContent } from '../../comm-bridge/scripts/attachment-annotations.js';
 
 const groupId = value => `g:${Buffer.from(value).toString('hex').toUpperCase()}`;
 const legacyId = (channel, endpoint) => `l:${Buffer.from(channel).toString('hex').toUpperCase()}:${Buffer.from(endpoint).toString('hex').toUpperCase()}`;
@@ -78,6 +80,135 @@ function collect(history, tab, limit = 2, expectedCount) {
   }
   assert.fail('Pagination did not terminate');
 }
+
+// Boundary: actual history queries against a private C4 database. Run for quote
+// metadata/range/preview changes; no runtime, tmux, PM2 or network is launched.
+test('history quote metadata batches visible references and preserves raw message content', t => {
+  const f = fixture(t), group = 'dash-owned:a';
+  const add = row => f.add({ channel: 'dashboard', endpoint_id: 'a', session_group: group, ...row });
+  add({ id: 1, direction: 'out', content: '**Readable** ' + '😀'.repeat(180) });
+  add({ id: 2, channel: 'internal', endpoint_id: 'peer', content: '[internal] peer said: peer body' });
+  add({ id: 3, content: '[quote c4_id=1]\nfirst reply' });
+  add({ id: 4, content: '[quote c4_id=2]\nsecond reply' });
+  add({ id: 5, content: '[quote c4_id=1]\nrepeated target' });
+  const lookups = [];
+  const original = f.history._rowsByIds.bind(f.history);
+  f.history._rowsByIds = (...args) => { lookups.push(args[1]); return original(...args); };
+  const rows = f.history.messages(groupId(group)).items;
+  assert.equal(lookups.length, 1, 'one bounded reference query per page');
+  assert.deepEqual(lookups[0], [1, 2]);
+  const first = rows.find(row => row.id === 3);
+  assert.equal(first.content, '[quote c4_id=1]\nfirst reply');
+  assert.deepEqual(first.quote, { id: 1, direction: 'out', timestamp: '2026-01-01 12:00:00',
+    internal: false, preview: 'Readable ' + '😀'.repeat(151), available: true });
+  assert.equal(Array.from(first.quote.preview).length, 160);
+  assert.equal(rows.find(row => row.id === 4).quote.preview, 'peer body');
+  assert.equal(rows.find(row => row.id === 4).quote.internal, true);
+  assert.equal(Object.hasOwn(rows[0], 'quote'), false);
+});
+
+test('history quote references outside the visible range remain unavailable without breaking the page', t => {
+  const f = fixture(t), group = 'dash-owned:a';
+  const add = row => f.add({ channel: 'dashboard', endpoint_id: 'a', session_group: group, ...row });
+  add({ id: 1, session_group: 'dash-owned:b', endpoint_id: 'b', content: 'foreign secret' });
+  add({ id: 2, endpoint_id: 'wrong', content: 'wrong endpoint secret' });
+  add({ id: 3, channel: 'system', content: 'hidden secret' });
+  add({ id: 4, content: '[quote c4_id=1]\nforeign' });
+  add({ id: 5, content: '[quote c4_id=2]\nwrong endpoint' });
+  add({ id: 6, content: '[quote c4_id=3]\nhidden' });
+  add({ id: 1000, content: '[quote c4_id=999]\ndeleted' });
+  const rows = f.history.messages(groupId(group)).items;
+  assert.equal(rows.length, 4);
+  for (const row of rows) assert.deepEqual(row.quote, { id: row.id === 1000 ? 999 : row.id - 3,
+    direction: null, internal: false, timestamp: null, preview: '', available: false });
+  assert.throws(() => f.history.status(groupId(group), { ids: [999] }), { code: 'chat_message_not_found' });
+});
+
+// Real history projections in a private database. Run when nested quote
+// previews or internal metadata change; unrelated frontend work may skip.
+test('history nested quote previews show the target body and internal metadata follows the target channel', t => {
+  const f = fixture(t), group = 'dash-owned:a';
+  const add = row => f.add({ channel: 'dashboard', endpoint_id: 'a', session_group: group, ...row });
+  add({ id: 1, direction: 'out', content: 'Original answer' });
+  add({ id: 2, content: '[quote c4_id=1]\n**Intermediate reply**' });
+  add({ id: 3, content: '[quote c4_id=2]\nLatest reply' });
+  add({ id: 4, channel: 'internal', direction: 'in', endpoint_id: 'peer',
+    content: '[internal] peer said: Incoming' });
+  add({ id: 5, channel: 'internal', direction: 'out', endpoint_id: 'peer', content: 'Outgoing' });
+  add({ id: 6, content: '[quote c4_id=4]\nQuote inbound' });
+  add({ id: 7, content: '[quote c4_id=5]\nQuote outbound' });
+  add({ id: 8, direction: 'out', content: '[quote c4_id=1]\nAI quoting earlier answer' });
+  add({ id: 9, content: '[quote c4_id=8]\nQuote AI marker' });
+  add({ id: 10, channel: 'internal', endpoint_id: 'peer',
+    content: '[internal] peer said: [quote c4_id=1]\nInternal quoting earlier answer' });
+  add({ id: 11, content: '[quote c4_id=10]\nQuote internal marker' });
+  const rows = f.history.messages(groupId(group)).items;
+  const nested = rows.find(row => row.id === 3);
+  assert.equal(nested.quote.preview, 'Intermediate reply');
+  assert.equal(nested.content, '[quote c4_id=2]\nLatest reply');
+  assert.equal(rows.find(row => row.id === 2).content, '[quote c4_id=1]\n**Intermediate reply**');
+  assert.equal(rows.find(row => row.id === 9).quote.preview, 'AI quoting earlier answer');
+  assert.equal(rows.find(row => row.id === 11).quote.preview, 'Internal quoting earlier answer');
+  assert.equal(nested.quote.internal, false);
+  assert.equal(rows.find(row => row.id === 8).preview, '[quote c4_id=1]\nAI quoting earlier answer');
+  assert.equal(Object.hasOwn(rows.find(row => row.id === 8), 'quote'), false);
+  assert.equal(rows.find(row => row.id === 10).internal.content,
+    '[quote c4_id=1]\nInternal quoting earlier answer');
+  for (const [id, target, direction, preview] of [[6, 4, 'in', 'Incoming'], [7, 5, 'out', 'Outgoing']]) {
+    assert.deepEqual(rows.find(row => row.id === id).quote, { id: target, direction, internal: true,
+      timestamp: '2026-01-01 12:00:00', preview, available: true });
+  }
+});
+
+test('list and quote previews skip only a valid first-line marker and retain readable attachments', t => {
+  const f = fixture(t);
+  f.add({ id: 100, channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a',
+    content: '[quote c4_id=99]\n**User words**' });
+  assert.equal(f.history.list().items[0].preview, 'User words');
+  assert.equal(conversationPreview('[quote c4_id=1]\n[quote c4_id=2]\nbody'), '[quote c4_id=1]\n[quote c4_id=2]\nbody');
+  assert.equal(conversationPreview('intro\n[quote c4_id=1]\nbody'), 'intro\n[quote c4_id=1]\nbody');
+  assert.equal(conversationPreview('[quote c4_id=0]\nbody'), '[quote c4_id=0]\nbody');
+  const withFile = buildAnnotatedContent('body',
+    [{ kind: 'file', name: 'report.txt', path: '/private/report.txt', size: 100 }]);
+  const preview = conversationPreview(withFile);
+  assert.match(preview, /report\.txt/);
+  assert.doesNotMatch(preview, /quote c4_id|\/private\//);
+});
+
+// Real history/list projections and private SQLite. Run for quote eligibility
+// changes; UI styling may skip. No runtime, socket or child is started.
+test('history treats markers as literal except on earlier Dashboard inbound references', t => {
+  const f = fixture(t), group = 'dash-owned:a';
+  const marker = '[quote c4_id=1]\nliteral body';
+  f.add({ id: 1, channel: 'dashboard', endpoint_id: 'a', session_group: group, content: 'original' });
+  for (const row of [
+    { id: 2, direction: 'out', channel: 'dashboard', endpoint_id: 'a', session_group: group },
+    { id: 3, channel: 'internal', endpoint_id: 'peer', session_group: group },
+    { id: 4, channel: 'telegram', endpoint_id: 'external', session_group: 'tg:a' },
+    { id: 5, channel: 'internal', endpoint_id: 'peer', session_group: 'tg:a' },
+    { id: 6, channel: 'dashboard', endpoint_id: 'b', session_group: 'dash-owned:b', content: '[quote c4_id=6]\nself' },
+    { id: 7, channel: 'dashboard', endpoint_id: 'c', session_group: 'dash-owned:c', content: '[quote c4_id=8]\nfuture' },
+  ]) f.add({ content: marker, ...row });
+  let referenceReads = 0;
+  const lookup = f.history._rowsByIds.bind(f.history);
+  f.history._rowsByIds = (...args) => { referenceReads++; return lookup(...args); };
+  for (const [tab, sessionGroup] of [['mine', group], ['mine', 'dash-owned:b'],
+    ['mine', 'dash-owned:c'], ['external', 'tg:a']]) {
+    const items = f.history.messages(groupId(sessionGroup), { tab }).items;
+    for (const row of items) {
+      assert.equal(Object.hasOwn(row, 'quote'), false);
+      if (row.id !== 1) assert.ok((row.internal?.content ?? row.preview).startsWith('[quote c4_id='));
+    }
+    assert.ok(f.history.list({ tab }).items.find(row => row.session_group === sessionGroup).preview.startsWith('[quote c4_id='));
+  }
+  assert.equal(referenceReads, 0);
+  f.add({ id: 8, channel: 'dashboard', endpoint_id: 'a', session_group: group, content: marker });
+  const reply = f.history.messages(groupId(group)).items.find(row => row.id === 8);
+  assert.equal(reply.preview, 'literal body');
+  assert.equal(reply.quote.id, 1);
+  assert.equal(reply.quote.available, true);
+  assert.equal(referenceReads, 1);
+});
 
 test('external list summaries exclude internal traffic while selected histories include it', t => {
   const f = fixture(t);
