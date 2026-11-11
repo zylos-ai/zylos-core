@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Internal
+- Allow the real-model memory test harness to run reference index rebuild, archive, and unarchive commands with fixture-bound arguments and environment.
 - Move Dashboard tests and fixtures to `skills/dashboard/__tests__/`, update test paths, and check repository test locations and exclusions.
 
 ### Upgrade notes

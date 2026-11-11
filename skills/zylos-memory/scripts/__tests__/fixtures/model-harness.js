@@ -20,14 +20,14 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 export const provenIds = [3, 17, 89, 144, 233, 377, 512, 688, 901, 997];
 const originalCount = 1000;
 const oldDate = '2026-10-20T08:00:00Z';
-const scripts = Object.fromEntries(['sync-lock', 'sync-files', 'origin-cursor', 'request-rotation']
+const scripts = Object.fromEntries(['sync-lock', 'sync-files', 'origin-cursor', 'request-rotation', 'reference-index']
   .map(name => [name, path.join(memoryScripts, `${name}.js`)]));
 Object.assign(scripts, Object.fromEntries(['c4-db', 'c4-fetch'].map(name => [name, path.join(bridgeScripts, `${name}.js`)])));
 
 export const tools = [
   { name: 'read_file', description: 'Read a complete UTF-8 fixture file, relative to ZYLOS_DIR. No writes.', inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } } },
   { name: 'list_files', description: 'List a fixture directory, relative to ZYLOS_DIR.', inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } } },
-  { name: 'run_script', description: 'Execute a real repository CLI with fixture-bound environment, argv and optional stdin. No shell.', inputSchema: { type: 'object', required: ['script', 'args'], properties: { script: { type: 'string', enum: Object.keys(scripts) }, args: { type: 'array', items: { type: 'string' } }, stdin: { type: 'string' } } } },
+  { name: 'run_script', description: 'Execute a real repository CLI with fixture-bound environment, argv and optional stdin. No shell. reference-index permits only rebuild, archive --path <page>, or unarchive --path <archived page>, without stdin or environment overrides.', inputSchema: { type: 'object', required: ['script', 'args'], properties: { script: { type: 'string', enum: Object.keys(scripts) }, args: { type: 'array', items: { type: 'string' } }, stdin: { type: 'string' } } } },
   EDIT_MEMORY_TOOL,
 ];
 
@@ -182,6 +182,16 @@ export async function createToolExecutor(f) {
           const rpc = await mcp.request('tools/call', { name: 'edit_memory', arguments: a });
           result = rpc.error ? { ok: false, code: 'TOOL_PROTOCOL_ERROR', rpc } : { ...JSON.parse(rpc.result.content[0].text), rpc };
         } else if (request.name === 'run_script') {
+          if (a.script === 'reference-index') {
+            const stringArgs = Array.isArray(a.args) && a.args.every(value => typeof value === 'string');
+            const rebuild = stringArgs && a.args.length === 1 && a.args[0] === 'rebuild';
+            const move = stringArgs && a.args.length === 3 && ['archive', 'unarchive'].includes(a.args[0]) &&
+              a.args[1] === '--path' && a.args[2].length > 0 && !a.args[2].startsWith('--');
+            if ((!rebuild && !move) || (a.stdin !== undefined && a.stdin !== '') ||
+                Object.keys(a).some(key => !['script', 'args', 'stdin'].includes(key))) {
+              throw new Error('reference-index expects rebuild, archive --path <page>, or unarchive --path <archived page>; no extra arguments, stdin, or environment overrides');
+            }
+          }
           if (!Object.hasOwn(scripts, a.script) || !Array.isArray(a.args) || a.args.some(value => typeof value !== 'string') || (a.stdin !== undefined && typeof a.stdin !== 'string')) throw new Error('Invalid script request');
           // Read tools must not expose other command surfaces or --out writes.
           if (a.script === 'c4-db' && !['unsummarized', 'origin-sync'].includes(a.args[0])) throw new Error('c4-db command is outside Sync read surface');
