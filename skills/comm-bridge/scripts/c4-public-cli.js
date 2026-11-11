@@ -1,4 +1,3 @@
-import { parseChatQuote } from './chat-quote.js';
 import { resolveDashboardQuotes, dashboardQuoteSender, readOwnerName } from './dashboard-source.js';
 import { quotePreview } from '../../dashboard/src/lib/chat/history.js';
 import path from 'node:path';
@@ -88,15 +87,14 @@ function historyNotes(rows) {
   ).join('');
 }
 function conversations(rows) {
-  const quoted = resolveDashboardQuotes(rows, db.getDb());
+  const quoted = resolveDashboardQuotes(rows, () => db.getDb());
   const owner = quoted.size ? readOwnerName() : null;
   return rows.map(row => {
     const route = row.direction === 'in' && row.endpoint_id !== null ? '\n' + replyVia(row, sendPath) : '';
     const target = quoted.get(row.id);
-    const marker = target && parseChatQuote(row.content);
     let content = row.content;
-    if (marker) {
-      const preview = `(quoting c4_id=${marker.id} — ${dashboardQuoteSender(target, owner)}: ${quotePreview(target, { singleLine: true })})`;
+    if (target) {
+      const preview = `(quoting c4_id=${target.id} — ${dashboardQuoteSender(target, owner)}: ${quotePreview(target, { singleLine: true })})`;
       const end = content.indexOf('\n');
       content = end < 0 ? content + '\n' + preview
         : content.slice(0, end + 1) + preview + '\n' + content.slice(end + 1);

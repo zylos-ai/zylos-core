@@ -105,6 +105,7 @@ for (const [name, args] of modes) test(`${name} text leaves unavailable and inel
   f.add({ id: 1, session_group: 'dashboard:foreign' });
   f.add({ id: 2 }); f.db.prepare('DELETE FROM conversations WHERE id=2').run();
   f.add({ id: 3, content: 'available same-group target' });
+  f.add({ id: 4, direction: 'system', content: 'Not a message direction' });
   f.add({ id: 190 });
   for (const [id, content, extra] of [
     [101, '[quote c4_id=1]\nforeign'], [102, '[quote c4_id=2]\ndeleted'],
@@ -113,11 +114,12 @@ for (const [name, args] of modes) test(`${name} text leaves unavailable and inel
     [106, '[quote c4_id=3]\noutbound', { direction: 'out' }],
     [107, 'intro\n[quote c4_id=1]\nlater marker'], [108, '[quote c4_id=0]\nzero'],
     [109, '[quote c4_id=9007199254740992]\nunsafe'],
+    [110, '[quote c4_id=4]\nsystem target'],
   ]) f.add({ id, direction: 'in', content, ...extra });
   f.ready();
   const output = fetchCli(args);
   assert.equal(output.includes('(quoting '), false);
-  for (const text of ['foreign', 'deleted', 'newer', 'self', 'other channel', 'outbound', 'later marker', 'zero', 'unsafe']) assert.ok(output.includes(text), text);
+  for (const text of ['foreign', 'deleted', 'newer', 'self', 'other channel', 'outbound', 'later marker', 'zero', 'unsafe', 'system target']) assert.ok(output.includes(text), text);
   assert.ok(output.includes('[quote c4_id=190]\nnewer'));
 });
 

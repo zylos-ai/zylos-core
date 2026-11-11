@@ -31,12 +31,12 @@ export function resolveDashboardQuote(row, database) {
 }
 
 /** Resolve only this output's references in one read, then apply the delivery scope rule. */
-export function resolveDashboardQuotes(rows, database) {
+export function resolveDashboardQuotes(rows, getDatabase) {
   const references = rows.filter(row => row.channel === 'dashboard' && row.direction === 'in')
     .map(row => ({ row, quote: quoteReference(row) })).filter(item => item.quote);
   if (!references.length) return new Map();
   const ids = [...new Set(references.map(item => item.quote.id))];
-  const targets = new Map(database.prepare(`SELECT * FROM conversations
+  const targets = new Map(getDatabase().prepare(`SELECT * FROM conversations
     WHERE id IN (SELECT value FROM json_each(?)) AND direction IN ('in','out')`)
     .all(JSON.stringify(ids)).map(row => [row.id, row]));
   return new Map(references.flatMap(({ row, quote }) => {
