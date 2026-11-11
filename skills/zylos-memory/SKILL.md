@@ -40,6 +40,14 @@ configuration. Origin Sync uses Origin's actual runtime.
   If background tools or the restricted memory tool are unavailable, report
   `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
 
+For both runtimes, the parent must include a few lines in the worker's task
+message covering relevant facts from this period that are absent from the
+conversation: findings from code or logs, actions it took without mentioning
+them, and pitfalls it encountered. The worker reads C4 and inbox, but cannot see
+the parent conversation. Record these facts as they arise with
+`memory-append.js inbox --kind fact`, `--kind decision`, or `--kind commitment`,
+rather than waiting until Sync to capture them.
+
 Select by the requested job and inherited environment: a nonempty
 `ZYLOS_SESSION_GROUP` means group Sync; only the `origin` group can run Origin
 Sync. No group with a `ZYLOS_RUN_ID` means single global Sync. Never invent or
