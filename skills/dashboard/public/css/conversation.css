@@ -436,6 +436,13 @@
   font-size:11px;
   color:var(--text-muted)
 }
+/* Message anchoring compensates this notice's height; keep loading/retry in view without moving messages. */
+.conversation-history-start-active {
+  position:sticky;
+  top:0;
+  z-index:1;
+  background:var(--bg)
+}
 .conversation-gap {
   display:flex;
   gap:8px;

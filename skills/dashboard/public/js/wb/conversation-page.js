@@ -1465,6 +1465,7 @@ export function mountConversationPage({
     if (groupSide?.open && (group.hidden || s.selectedId !== groupSideFor)) groupSide.close({ focus: false });
     historyStart.hidden = !s.selectedId || isDraft(s) || !s.historyLoaded
       || !!s.messageCursor && !s.olderLoading && !s.olderError;
+    historyStart.classList.toggle('conversation-history-start-active', !!s.olderLoading || !!s.olderError);
     text(historyStartLabel, s.olderLoading ? t('chat.page.olderLoading') : !s.messageCursor ? t('chat.page.olderEnd') : '');
     historyStartLabel.hidden = !!s.olderError;
     olderRetry.hidden = !s.olderError;
