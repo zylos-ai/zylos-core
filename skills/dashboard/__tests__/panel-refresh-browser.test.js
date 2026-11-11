@@ -95,6 +95,16 @@ test('background panel refresh preserves reading position and folds', { skip: !c
             const value = workbenchAnswer(new URL(route.request().url()), fixtureAt);
             value.rows[1].contextPct = 60 + ++boardReads;
             value.rows[1].preview.source = 'c4'; value.rows[1].preview.timestamp = fixtureAt;
+            // Evidence is diagnostic-only; keep this group waiting across refreshes to exercise its fold.
+            value.rows[1].state = { kind: 'waiting' };
+            value.rows[1].tools = [];
+            value.rows[1].queue.running.count = 0;
+            value.rows[1].queue.pending.oldestAt = fixtureAt - 60000;
+            value.rows[1].live.status = { valid: true, state: 'idle', sampledAt: fixtureAt };
+            const cooldownUntil = Math.floor(fixtureAt / 1000) + 3600;
+            value.rows[1].wait = { kind: 'rate_wait', runtime: 'claude', cooldownUntil };
+            value.instance.runtimeHealth.claude = { health: 'rate_limited', updatedAt: fixtureAt, cooldownUntil };
+            value.counts.busy--; value.counts.waiting++;
             return route.fulfill({ json: value });
           });
           await page.route('**/api/workbench/groups/*/config', route => route.fulfill({ json: { runtime: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } }, model: { ok: true, data: { resolved: { runtime: 'claude', model: 'default', effort: 'high' } } } } }));
