@@ -178,7 +178,7 @@ Persistent memory lives in `~/zylos/memory/`.
 | **Working Memory** | Current scope's state/inbox/segments | Active work, pending tasks | On demand through read-work-memory.js |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
 | **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
-| **Reference** | `memory/reference/*.md` | Decisions, projects, shared prefs, ideas | On demand |
+| **Reference** | `memory/reference/` | `projects/` and `decisions/` (each with an INDEX; one project or decision topic per page), `preferences.md`, `ideas.md` | On demand |
 | **Sessions** | Current scope's `sessions/YYYY-MM-DD.md` | Daily event log in configured TZ | On demand |
 | **Archive** | `memory/archive/` | Cold storage | Rarely |
 
@@ -241,8 +241,10 @@ The bot serves a team. Route user-specific preferences to
    long experiences, examples and repeated explanations move to indexed topics.
 5. **state.md is maintained by the current scope's Memory Sync.** Allowed:
    current focus, genuinely pending items, blockers. Disallowed (route
-   instead): completed-task narrative → `reference/projects.md`; decision
-   rationale → `reference/decisions.md`; superseded detail → `archive/`.
+   instead): completed work → 1–3 dated lines of results on the relevant project
+   page in `reference/projects/`; decision rationale → the relevant topic page in
+   `reference/decisions/`; superseded detail → `archive/`. Do not copy state.md
+   status blocks verbatim into reference/.
    It has no fixed length limit; keep current work focused and archive old content
    through Sync. Agents do not directly rewrite state, inbox, identity or shared
    references through the memory tool. The tool permits current-scope append,
@@ -275,11 +277,16 @@ followed-up Pending entries through its normal commit, without changing C4.
 
 ### Classification Rules for reference/ Files
 
-- **decisions.md:** deliberate choices that close off alternatives
-- **projects.md:** work efforts with defined scope and lifecycle
+- **decisions/:** deliberate choices that close off alternatives; check
+  `reference/decisions/INDEX.md` first, then the relevant topic page
+- **projects/:** work efforts with defined scope and lifecycle; check
+  `reference/projects/INDEX.md` first, then the relevant project page
 - **preferences.md:** standing instructions for how things should be done
   (exception: must-be-active-every-session rules → `custom-hooks/session-start/`)
 - **ideas.md:** uncommitted plans, explorations, hypotheses
+
+Old `reference/projects.md` and `reference/decisions.md`, if present, are
+read-only history.
 
 For session notes, use `memory-append.js session` with content on stdin. It writes
 the current scope's `sessions/YYYY-MM-DD.md` in the configured timezone; do not
@@ -290,10 +297,13 @@ create `sessions/current.md`.
 Always-loaded files are lean summaries; on-demand files hold full context.
 When you lack context to act confidently, read the relevant file first — a
 file read is far cheaper than a wrong assumption. Triggers: interacting with
-a user → their profile; making a decision → `decisions.md`; starting/resuming
-work → `projects.md`; following a convention → `preferences.md`; exploring
-ideas → `ideas.md`; recalling recent events → the current scope's daily session log;
-historical info → `archive/`.
+a user → their profile; making a decision → `reference/decisions/INDEX.md`;
+starting/resuming work → `reference/projects/INDEX.md`; following a convention →
+`preferences.md`; exploring ideas → `ideas.md`; recalling recent events → the
+current scope's daily session log;
+historical info → `archive/`. For decisions and projects, read the corresponding
+INDEX first and open only relevant pages. If the INDEX has no matching entry,
+follow the zylos-memory skill to search the old files.
 
 ## Data Directories
 

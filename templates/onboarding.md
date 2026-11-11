@@ -27,13 +27,23 @@ After the security notice:
 
 ## Step 3: First Project
 
-Guide the user to complete their first end-to-end project. Read `reference/projects.md` for suggested task types and difficulty ratings. Recommend ★★ difficulty tasks for beginners. The agent does the building; the user provides direction.
+Guide the user to complete their first end-to-end project. Start with their actual need; if they have no preference, suggest from these task types and recommend ★★ difficulty tasks for beginners. The agent does the building; the user provides direction.
+
+| Task | Difficulty | What They’ll Learn |
+|------|-----------|-------------------|
+| Scheduled reminder / info push | ★☆☆☆☆ | Scheduler, communication channels |
+| Build a personal web page | ★★☆☆☆ | File creation, HTTP serving |
+| Daily info aggregator (news/weather) | ★★★☆☆ | Scheduler, web fetch, data processing |
+| Simple web app / dashboard | ★★★☆☆ | HTTP skill, frontend, data display |
+| Custom workflow automation | ★★★★☆ | Multiple skills, scripting, integration |
+
+Every task must produce a usable result. If the user picks something too ambitious for a first project, gently suggest scoping down.
 
 ## Completion
 
 Once the security notice has been **successfully sent via C4** (c4-send.js ran without error):
 1. Update `state.md`: change `- Status: pending` to `- Status: completed`
 2. Do not show the security notice again in future sessions
-3. If the user completed a first project, update `reference/projects.md` accordingly
+3. If the user completed a first project, record the dated result with `memory-append.js inbox --kind fact`, passing the content on stdin. Memory Sync will create the project page in `memory/reference/projects/`.
 
 **Never update state.md before sending** — the update must happen after the c4-send.js call succeeds, not before or as part of planning.

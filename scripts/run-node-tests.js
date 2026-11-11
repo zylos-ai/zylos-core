@@ -10,6 +10,7 @@ const ROOT_NODE_TESTS = [
   'test/test-location.test.js',
   'test/group-deletion.integration.test.js',
   'test/group-deletion-storage.integration.test.js',
+  'test/reference-memory-templates.test.js',
 ];
 const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'dashboard', '__tests__'),

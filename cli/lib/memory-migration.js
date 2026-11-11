@@ -10,6 +10,7 @@ import { observeSessionTarget } from './runtime/session-target.js';
 import { withMemoryLock } from '../../skills/zylos-memory/scripts/sync-lock.js';
 
 export const MIGRATION_ID = 'references-layout-v1';
+const OPTIONAL_REFERENCE_INDEXES = new Set(['memory/reference/projects/INDEX.md', 'memory/reference/decisions/INDEX.md']);
 const VERSION = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url))).version;
 const error = (code, message, persisted = [], extra = {}) => Object.assign(new Error(message), { code, persisted, ...extra });
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -166,7 +167,9 @@ export function createMigration({ env = process.env, now = Date.now, version = V
             try { readRegular(path.join(directory, name)); return true; } catch { return false; }
           })) throw Error('No readable regular file matches index');
         } else fs.accessSync(target, fs.constants.R_OK);
-      } catch { missingPaths.push(reported); }
+      } catch (cause) {
+        if (!(cause.code === 'ENOENT' && OPTIONAL_REFERENCE_INDEXES.has(normalized))) missingPaths.push(reported);
+      }
     }
     const backupPresent = backupState(backupDir) === 'valid';
     if (requireBackup && !backupPresent) missingPaths.push(path.relative(root, backupDir));

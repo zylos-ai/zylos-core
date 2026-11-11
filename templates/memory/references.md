@@ -13,8 +13,8 @@
 (Record necessary identity relationships and authorization boundaries here.)
 
 ## On-Demand Index
-- Decisions: `memory/reference/decisions.md` — read before revisiting a deliberate choice.
-- Projects: `memory/reference/projects.md` — read when starting or resuming project work.
+- Decisions: `memory/reference/decisions/INDEX.md` — read before revisiting a deliberate choice.
+- Projects: `memory/reference/projects/INDEX.md` — read when starting or resuming project work.
 - Preferences: `memory/reference/preferences.md` — read when applying shared conventions.
 - Ideas: `memory/reference/ideas.md` — read when exploring uncommitted proposals.
 - User profiles: `memory/users/<id>/profile.md` — read for the current user's preferences.
