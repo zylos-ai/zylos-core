@@ -62,6 +62,7 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
   const groupWith = content => fixture.db.prepare('SELECT session_group FROM conversations WHERE content = ?').get(content).session_group;
   fixture.db.prepare('UPDATE conversations SET session_group = ? WHERE id = ?').run(groupWith('另一个对话的草稿不应串过来。'), movedAway.id);
   const internal = fixture.c4.insertInternalMessage(groupWith('另一个对话的草稿不应串过来。'), groupWith('我们讨论一下灰度发布。'), '内部协调：发布窗口定在周四晚上。').inRow;
+  const quotesInternal = fixture.c4.insertConversation('in', 'dashboard', localId, `[quote c4_id=${internal.id}]\n周四晚上谁值班？`, { groupName: localId });
   const reply = fixture.addOutbound(localId, '建议第一批放 2 台，观察 30 分钟再放到全部 4 台。');
 
   const { chromium } = await import(pathToFileURL(modulePath));
@@ -171,6 +172,8 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     const goneBlock = row(page, gone.id).locator('.conversation-quote-block');
     assert.equal(await goneBlock.innerText(), '原消息不可用');
     assert.equal(await goneBlock.isDisabled(), true);
+    // A quote of an internal message names it as one, whichever way it went.
+    assert.match(await row(page, quotesInternal.id).locator('.conversation-quote-block').innerText(), /^内部消息 · \d{2}:\d{2}\n/);
     assert.equal(await row(page, early.id).count(), 0, 'the early message is several pages back');
     const before = olderReads.length;
     await block.click();
@@ -193,6 +196,14 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     await row(page, reply.id).evaluate(el => el.classList.remove('conversation-flash'));
     await page.locator('#wb-chat .conversation-quote-bar-body').click();
     await waitUntil(() => row(page, reply.id).evaluate(el => el.classList.contains('conversation-flash')), 'the quote bar jumps to the quoted message');
+    await page.locator('#wb-chat .conversation-quote-bar-close').click();
+    await quoteBar(page).waitFor({ state: 'hidden' });
+    // Quoting an internal message names it as one in the quote bar.
+    await row(page, internal.id).scrollIntoViewIfNeeded();
+    await row(page, internal.id).hover();
+    await row(page, internal.id).locator('.conversation-quote-button').click();
+    await quoteBar(page).waitFor();
+    assert.match(await quoteBar(page).innerText(), /^引用 内部消息 · \d{2}:\d{2}\n/);
     await page.locator('#wb-chat .conversation-quote-bar-close').click();
     await quoteBar(page).waitFor({ state: 'hidden' });
 
