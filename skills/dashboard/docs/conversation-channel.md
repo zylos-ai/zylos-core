@@ -34,7 +34,10 @@ controls are separate capabilities.
 A successful send confirms the stored row and channel handoff; it does not prove
 that a person viewed the text. Dashboard delivery reads the authoritative C4 row
 by its ID using a read-only connection and does not call back into Dashboard HTTP.
-Plain-text and noninteractive delivery do not open the Dashboard database.
+Plain-text and noninteractive replies may open an existing Dashboard database
+for first-reply conversation naming. This never creates a missing Dashboard
+database. Naming errors are logged without failing the stored reply; see
+[automatic conversation naming](../SKILL.md#automatic-conversation-naming).
 Question registration writes only to Dashboard's database after the C4 readback;
 it never writes C4 or creates a second message/head.
 

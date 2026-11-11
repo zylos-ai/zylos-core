@@ -72,6 +72,24 @@ test('first committed Agent reply queues one control for its own group and later
   assert.equal(f.core.prepare('SELECT COUNT(*) AS n FROM conversations').get().n, 3, 'control is absent from history');
 });
 
+// Real naming transaction and private SQLite, with the enqueue boundary failing.
+// Run on naming submission/fallback changes; skip unrelated UI work. The sandbox
+// proves HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private socket/DBs and owns cleanup.
+test('an enqueue failure names the conversation unknown without queuing or retrying later replies', gate, async t => {
+  const f = fixture(t);
+  const { requestConversationName } = await import('../src/lib/chat/auto-name.js');
+  let attempts = 0;
+  const enqueue = () => { attempts++; throw new Error('fixture enqueue failure'); };
+  assert.equal(requestConversationName(f.out(), { env: f.sandbox.env, enqueue }), null);
+  assert.equal(f.conversations.get('one').displayName, 'unknown');
+  assert.equal(f.count(), 0);
+  assert.equal(attempts, 1);
+  assert.equal(requestConversationName(f.out(), { env: f.sandbox.env, enqueue }), null);
+  assert.equal(f.conversations.get('one').displayName, 'unknown');
+  assert.equal(f.count(), 0);
+  assert.equal(attempts, 1, 'later replies never retry the failed naming submission');
+});
+
 // Same real channel/SQLite boundary and isolation as above. Run on first-reply
 // eligibility/name changes; unrelated UI rendering can skip.
 test('a name set before the first reply prevents naming even when later cleared', gate, t => {
