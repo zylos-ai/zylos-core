@@ -10,6 +10,7 @@ import { Store } from '../skills/dashboard/src/lib/store.js';
 import { ChatConversations } from '../skills/dashboard/src/lib/chat/conversations.js';
 import { ChatAttachments } from '../skills/dashboard/src/lib/chat/attachments.js';
 import { ChatSender } from '../skills/dashboard/src/lib/chat/send.js';
+import { AUTO_NAME_PREFIX } from '../skills/dashboard/src/lib/chat/auto-name.js';
 import { createGroupDeletionBridge } from '../skills/dashboard/src/lib/workbench/group-deletion.js';
 import { groupDeletionCliPath } from '../cli/lib/group-delete.js';
 import { isDataError } from '../skills/comm-bridge/scripts/c4-session-group.js';
@@ -89,6 +90,34 @@ async function setup(t, channel) {
     } });
   return { ...f, localId, group, channel, skills, dashboard, conversations, attachments, sender, receiveReal, sendReply, delivered, bridge };
 }
+async function completeNaming(f, name) {
+  // The terminal fixture has no model. Act as its Agent only after the real
+  // dispatcher delivers the naming control, then use the instructed CLIs.
+  let control;
+  await f.waitFor(() => {
+    control = f.database.prepare(`SELECT id,status FROM control_queue
+      WHERE session_group=? AND substr(raw_content,1,?)=? ORDER BY id DESC LIMIT 1`)
+      .get(f.group, AUTO_NAME_PREFIX.length, AUTO_NAME_PREFIX);
+    if (!control) return false;
+    assert.ok(['pending', 'running'].includes(control.status), JSON.stringify(control));
+    const receipt = path.join(f.root, 'runtime-input.txt');
+    return control.status === 'running' && fs.existsSync(receipt)
+      && new RegExp(`ack --id ${control.id}(?:\\s|$)`).test(fs.readFileSync(receipt, 'utf8'));
+  }, 'Real dispatcher must deliver the naming control before Agent completion');
+  const identity = await f.scenes.observeGroup(f.group);
+  const env = { ...f.env, ZYLOS_SESSION_GROUP: f.group, ZYLOS_RUN_ID: identity.runId };
+  const run = async args => {
+    const child = f.sandbox.startChild(process.execPath, args, { env, timeoutMs: 15_000 });
+    child.stdin.end(); const result = await child.completion;
+    assert.equal(result.code, 0, result.stdout + result.stderr);
+    return result.stdout;
+  };
+  const named = JSON.parse(await run([path.join(repo, 'skills/dashboard/scripts/conversation-name.js'), f.group, name, '--json']));
+  assert.equal(named.code, 'NAME_WRITTEN');
+  assert.equal(f.conversations.findByGroup(f.group).displayName, name);
+  await run([path.join(f.skills, 'comm-bridge/scripts/c4-control.js'), 'ack', '--id', String(control.id)]);
+  assert.equal(f.database.prepare('SELECT status FROM control_queue WHERE id=?').get(control.id).status, 'done');
+}
 function seedOwnedData(f, identity) {
   const { group, root, homeDir, dashboard, database } = f;
   const sid = identity.sessionId;
@@ -149,8 +178,9 @@ function assertDeleted(f, files, operationId) {
 // Covers real draft/attachment storage + native receive and dispatcher delivery,
 // Core CLI/AM stop + final usage import and physical cleanup + new-run replies.
 // Run when Core deletion, Dashboard participant, sender or attachment ownership
-// changes; unrelated UI can skip. HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/private
-// tmux/SQLite are asserted by the fixture before resources start. No model API.
+// changes or first-reply naming changes; unrelated UI can skip. Isolated HOME,
+// ZYLOS_DIR, PM2_HOME, short TMPDIR, private tmux and SQLite paths are asserted
+// by the fixture before resources start. No model API.
 test('Dashboard conversation deletes owned storage and recreates with an attachment-first reply', { skip: !enabled, timeout: 90_000 }, async t => {
   const f = await setup(t, 'dashboard');
   await f.sandbox.runCase(async () => {
@@ -162,6 +192,7 @@ test('Dashboard conversation deletes owned storage and recreates with an attachm
     const uploadedFile = f.attachments.resolve(f.localId, upload.id);
     assert.equal(count(f.dashboard.db, 'chat_attachment_messages', 'attachment_id', upload.id), 1);
     await f.sendReply('first reply');
+    await completeNaming(f, 'Storage first');
     const second = await f.sender.send(first.conversationId, { content: 'second input ' + 'x'.repeat(1800) });
     await f.delivered(second.messageId); await f.sendReply('second reply');
     const old = await f.scenes.observeGroup(f.group); assert.equal(old.processRunning, true);
@@ -188,6 +219,7 @@ test('Dashboard conversation deletes owned storage and recreates with an attachm
     const attachment = await f.attachments.register(f.localId, { kind: 'file', path: replySource });
     assert.equal(attachment.ok, true); assert.equal(f.conversations.findByGroup(f.group).state, 'active');
     const reply = await f.sendReply(attachmentMessage(attachment.attachmentId, attachment.name));
+    await completeNaming(f, 'Storage recreated');
     assert.equal(count(f.dashboard.db, 'chat_attachment_messages', 'attachment_id', attachment.attachmentId), 1);
     assert.equal(f.attachments.download(f.localId, attachment.attachmentId).path, f.attachments.resolve(f.localId, attachment.attachmentId));
     const followup = await f.sender.send(canonical(f.group), { content: 'normal reply from owner' }); await f.delivered(followup.messageId);
