@@ -14,7 +14,8 @@ const origin = { id: groupId('origin'), sessionGroup: 'origin', channel: 'origin
 const external = { id: groupId('telegram:sample'), sessionGroup: 'telegram:sample', channel: 'telegram', displayName: 'Telegram product chat', stamp: 2461352 };
 
 async function startPage(sandbox) {
-  const writes = [], state = { pending: false, stale: false, removed: new Set(), deletionAllowed: true, retainedMessages: 2, countsEstimated: true };
+  const writes = [], state = { pending: false, stale: false, previewFailure: false, deleteFailure: false,
+    removed: new Set(), deletionAllowed: true, retainedMessages: 2, countsEstimated: true };
   const server = http.createServer(async (req, res) => {
     try {
       const full = new URL(req.url, 'http://fixture');
@@ -27,13 +28,17 @@ async function startPage(sandbox) {
         sendJson(res, 200, { items, nextCursor: null, tz: 'Asia/Singapore', deletionAllowed: state.deletionAllowed }); return;
       }
       if ((route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/')) && route.endsWith('/deletion')) {
+        if (state.previewFailure) {
+          sendJson(res, 409, { ok: false, error: { code: 'group_delete_path_unavailable', message: '/private/do-not-render' } }); return;
+        }
         const draftTarget = route.includes('/drafts/');
         sendJson(res, 200, { ok: true, operationId: 'browser-operation', cutoffId: draftTarget ? 0 : 8,
           messages: 8, attachments: 2, draft: draftTarget }); return;
       }
       if (req.method === 'DELETE' && (route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/'))) {
         const body = await readJsonBody(req, 4096); writes.push({ route, body });
-        if (state.stale) sendJson(res, 409, { ok: false, error: { code: 'DELETION_PREVIEW_STALE' } });
+        if (state.deleteFailure) sendJson(res, 500, { ok: false, error: { code: 'cleanup_unavailable' } });
+        else if (state.stale) sendJson(res, 409, { ok: false, error: { code: 'DELETION_PREVIEW_STALE' } });
         else if (state.pending) sendJson(res, 202, { ok: true, pending: true, operationId: body.operationId });
         else {
           state.removed.add(route.includes('/drafts/') ? draft.id : active.id);
@@ -82,7 +87,8 @@ export async function runConversationDeleteBrowser(t, sandbox) {
   sandbox.addCleanup(() => browser.close());
   const metrics = [];
   for (const locale of ['zh', 'en']) for (const width of [1280, 390]) {
-    api.state.removed.clear(); api.state.pending = false; api.state.stale = false; api.state.deletionAllowed = true;
+    api.state.removed.clear(); api.state.pending = false; api.state.stale = false; api.state.previewFailure = false;
+    api.state.deleteFailure = false; api.state.deletionAllowed = true;
     api.state.retainedMessages = 2; api.state.countsEstimated = true;
     const context = await browser.newContext({ viewport: { width, height: 844 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US',
       ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
@@ -106,12 +112,26 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     metrics.push({ locale, width, ...layout });
     const shot = async name => { if (evidence) await page.screenshot({ path: path.join(evidence, `${locale}-${width}-${name}.png`) }); };
     await shot('list');
+    const dialog = page.getByRole('alertdialog');
+    api.state.previewFailure = true;
+    const beforePreviewFailure = api.writes.length;
     await page.locator('.conversation-delete:visible').first().click();
-    const dialog = page.getByRole('alertdialog'); await dialog.waitFor();
+    const preflight = page.locator('.conversation-delete-status:visible').filter({ hasText: locale === 'zh' ? '无法安全访问' : 'cannot be accessed safely' });
+    await preflight.waitFor();
+    assert.equal(await dialog.count(), 0, 'a failed preflight does not ask for confirmation');
+    assert.equal(api.writes.length, beforePreviewFailure, 'a failed preflight sends no DELETE');
+    assert.equal(await page.locator('.conversation-delete:visible').first().getAttribute('title'), locale === 'zh' ? '删除对话' : 'Delete conversation');
+    assert.doesNotMatch(await preflight.innerText(), /private|do-not-render|尚未完成|继续同一次|same operation|finish deletion/i);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+    await shot('preview-error');
+    api.state.previewFailure = false;
+    await page.locator('.conversation-delete:visible').first().click();
+    await dialog.waitFor();
     assert.match(await dialog.innerText(), /8/); assert.match(await dialog.innerText(), /2/);
     await shot('confirm');
     const before = api.writes.length;
     await dialog.locator('button').first().click(); assert.equal(api.writes.length, before);
+    assert.equal(await preflight.count(), 0, 'a successful preflight followed by cancel clears its previous failure');
     await page.locator('.conversation-delete:visible').nth(1).click(); await dialog.waitFor();
     assert.ok(!(await dialog.innerText()).includes(locale === 'zh' ? '主记忆' : 'main memory'));
     await shot('draft-confirm'); await dialog.locator('button').first().click();
@@ -122,17 +142,25 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     await shot('stale');
     api.state.stale = false;
-    api.state.pending = true;
+    api.state.deleteFailure = true;
     await page.locator('.conversation-delete:visible').first().click(); await dialog.waitFor(); await dialog.locator('button').last().click();
+    const interrupted = page.locator('.conversation-delete-status:visible').filter({ hasText: locale === 'zh' ? '删除尚未完成' : 'Could not finish deletion' });
+    await interrupted.waitFor();
+    assert.equal(await page.locator('.conversation-delete:visible').first().getAttribute('title'), locale === 'zh' ? '重试删除' : 'Retry deletion');
+    await shot('delete-error');
+    api.state.deleteFailure = false;
+    api.state.pending = true;
+    await page.locator('.conversation-delete:visible').first().click();
     const pending = page.locator('.conversation-delete-status:visible').filter({ hasText: locale === 'zh' ? '再点一次删除继续' : 'Click delete again to continue' });
     await pending.waitFor();
+    assert.equal(await dialog.count(), 0, 'retry after a started deletion failure reuses its confirmation');
     assert.match(await pending.innerText(), locale === 'zh' ? /再点一次删除继续/ : /Click delete again to continue/);
     await shot('pending');
     api.state.pending = false;
     await page.locator('.conversation-delete:visible').first().click();
     await page.waitForFunction(id => !document.querySelector(`[data-conversation-id="${id}"]`), active.id);
     assert.equal(await dialog.count(), 0, 'continuing an already confirmed deletion does not open another dialog');
-    assert.deepEqual(api.writes.slice(-2).map(row => row.body.operationId), ['browser-operation', 'browser-operation']);
+    assert.deepEqual(api.writes.slice(-3).map(row => row.body.operationId), ['browser-operation', 'browser-operation', 'browser-operation']);
     const estimate = page.locator('.conversation-deletion-notice:visible');
     await estimate.waitFor();
     assert.match(await estimate.innerText(), locale === 'zh' ? /估计值/ : /estimates/);
@@ -176,5 +204,5 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.deepEqual(errors, []); await context.close();
   }
   if (evidence) fs.writeFileSync(path.join(evidence, 'layout.json'), JSON.stringify(metrics, null, 2));
-  console.info('Deletion browser verified', JSON.stringify({ screenshots: evidence ? 44 : 0, pairs: 4, writes: api.writes.length }));
+  console.info('Deletion browser verified', JSON.stringify({ screenshots: evidence ? 52 : 0, pairs: 4, writes: api.writes.length }));
 }

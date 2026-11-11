@@ -33,7 +33,7 @@ export function createConversationDeletion({ request, confirm, t = key => key,
         const message = draft ? t('chat.delete.draftConfirm') :
           t('chat.delete.confirm', { messages: preview.messages ?? 0, attachments: preview.attachments ?? 0 });
         if (!(await confirm(message, { ok: t('chat.delete.button'), danger: true })) || !valid()) {
-          update({ ...previous, busy: false }); return;
+          update({ busy: false }); return;
         }
         operationId = preview.operationId;
         ({ cutoffId } = preview);
@@ -53,7 +53,14 @@ export function createConversationDeletion({ request, confirm, t = key => key,
     } catch (error) {
       if (!valid()) return;
       const payload = error.payload;
-      if (['DELETION_PREVIEW_STALE', 'DRAFT_BECAME_ACTIVE', 'DELETION_OWNERSHIP_MISMATCH'].includes(payload?.error?.code ?? error.code)) {
+      const operationId = operations.get(id)?.operationId ?? previous?.operationId;
+      const code = payload?.error?.code ?? payload?.error ?? error.code;
+      if (!operationId) {
+        update({ busy: false, state: 'preview_error', errorKey: code === 'group_delete_path_unavailable'
+          ? 'chat.delete.previewPathUnavailable' : 'chat.delete.previewError' });
+        return;
+      }
+      if (['DELETION_PREVIEW_STALE', 'DRAFT_BECAME_ACTIVE', 'DELETION_OWNERSHIP_MISMATCH'].includes(code)) {
         update({ busy: false, state: 'stale' });
         return;
       }
@@ -62,7 +69,9 @@ export function createConversationDeletion({ request, confirm, t = key => key,
         operationId: payload?.operationId ?? operations.get(id)?.operationId ?? previous?.operationId });
     } finally {
       const record = operations.get(id);
-      if (record?.busy) operations.set(id, { ...record, busy: false, state: 'error' });
+      if (record?.busy) operations.set(id, { ...record, busy: false,
+        state: record.operationId ? 'error' : 'preview_error',
+        ...(!record.operationId ? { errorKey: 'chat.delete.previewError' } : {}) });
     }
   }
   return { remove, status, invalidate() { generation++; } };

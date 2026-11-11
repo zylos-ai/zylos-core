@@ -260,3 +260,14 @@ test('external conversation deletes group storage and receives replies after rec
     console.log('External storage cycle:', JSON.stringify({ operationId, oldRun: old.runId, newRun: next.runId, retainedCost: cost }));
   }, { timeoutMs: 80_000 });
 });
+
+// Manual acceptance of a private prepared copy of genuine Claude parent/child
+// transcripts and its real tasks/*.output layout. No live files or model calls.
+// Run only for owned runtime storage deletion; the fixture proves private HOME,
+// ZYLOS_DIR, PM2_HOME, short TMPDIR, tmux socket and test DBs before startup.
+// Prepared input is read-only; CLI, AM, HTTP and browser are lifecycle-bound.
+test('a real historical Claude subagent session copy deletes from the conversation page',
+  { skip: process.env.ZYLOS_GROUP_DELETION_REAL_HISTORY !== '1', timeout: 100000 }, async t => {
+    const { runRealSessionDeletionBrowser } = await import('./helpers/real-session-deletion-browser.js');
+    await runRealSessionDeletionBrowser(t);
+  });

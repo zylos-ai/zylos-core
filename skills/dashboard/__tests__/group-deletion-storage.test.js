@@ -843,6 +843,82 @@ test('a symbolic-link component inside a mapped runtime path is refused', t => {
   assert.equal(fs.readFileSync(target, 'utf8'), 'retained');
 });
 
+test('Claude task output links count as files and confirmed deletion removes their mapped transcripts', async t => {
+  const f = fixture(t), group = 'dashboard:child-output', sid = 'parent-with-child';
+  f.register('child-output'); f.message(group);
+  const main = f.transcript(group, sid);
+  const child = f.write(path.join(path.dirname(main), sid, 'subagents/agent-child.jsonl'), '');
+  f.store.insertUsageTranscript({ transcript_path: child, runtime: 'claude', session_group: group,
+    session_id: sid, run_id: `run-${sid}`, parent_path: main }, new Date().toISOString());
+  const temporary = path.join(f.tmpdir, 'claude-123/project', sid);
+  const link = path.join(temporary, 'tasks/child.output');
+  fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync(child, link);
+  const { service } = stoppedService(t, f);
+  let preview;
+  await assert.doesNotReject(async () => { preview = await service.preview(group); });
+  assert.equal(preview.files, 3, 'Main, mapped child and output link are counted once each');
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true, 'Preview leaves the link intact');
+  assert.equal(fs.existsSync(child), true);
+  const result = await service.delete(group, await confirmation(service, group, 'delete-child-output'));
+  assert.equal(result.pending, false);
+  assert.equal(result.counts.files, 3);
+  assert.equal(fs.existsSync(main), false); assert.equal(fs.existsSync(child), false);
+  assert.equal(fs.existsSync(temporary), false);
+  assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' });
+});
+
+test('deleting a Claude task output link never removes its unmapped external target', async t => {
+  const f = fixture(t), group = 'dashboard:external-output', sid = 'parent-with-external-output';
+  f.register('external-output'); f.message(group); f.transcript(group, sid);
+  const outside = f.write(path.join(f.home, '.claude/projects/other-project/foreign-session.jsonl'), 'external transcript bytes\n');
+  const temporary = path.join(f.tmpdir, 'claude-123/project', sid);
+  const link = path.join(temporary, 'tasks/external.output');
+  fs.mkdirSync(path.dirname(link), { recursive: true }); fs.symlinkSync(outside, link);
+  const { service } = stoppedService(t, f);
+  let preview;
+  await assert.doesNotReject(async () => { preview = await service.preview(group); });
+  assert.equal(preview.files, 2, 'The target is not included through the link');
+  const result = await service.delete(group, await confirmation(service, group, 'delete-external-output'));
+  assert.equal(result.pending, false); assert.equal(result.counts.files, 2);
+  assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' });
+  assert.equal(fs.existsSync(temporary), false);
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'external transcript bytes\n');
+});
+
+test('dangling and cyclic Claude task output links remain unlinkable leaf entries', t => {
+  const f = fixture(t), group = 'dashboard:unresolved-output', sid = 'parent-with-unresolved-output';
+  f.transcript(group, sid);
+  const temporary = path.join(f.tmpdir, 'claude-123/project', sid);
+  const tasks = path.join(temporary, 'tasks'); fs.mkdirSync(tasks, { recursive: true });
+  fs.symlinkSync(path.join(f.root, 'missing-transcript.jsonl'), path.join(tasks, 'missing.output'));
+  fs.symlinkSync('cycle.output', path.join(tasks, 'cycle.output'));
+  let preview;
+  assert.doesNotThrow(() => { preview = f.participant.preview({ sessionGroup: group }); });
+  assert.equal(preview.files, 3);
+  f.participant.finalizeTranscripts({ sessionGroup: group, processExited: true });
+  assert.equal(f.participant.cleanup({ sessionGroup: group }).files, 3);
+  assert.equal(fs.existsSync(temporary), false);
+});
+
+for (const location of ['root', 'ancestor']) test(`a symbolic link at the Claude temporary ${location} is refused`, t => {
+  const f = fixture(t), group = `dashboard:linked-${location}`, sid = `linked-${location}-session`;
+  f.transcript(group, sid);
+  const outside = path.join(f.root, 'outside');
+  const marker = f.write(path.join(outside, sid, 'keep.txt'), 'outside directory bytes');
+  const temporaryProject = path.join(f.tmpdir, 'claude-123/project');
+  if (location === 'root') {
+    fs.mkdirSync(temporaryProject, { recursive: true });
+    fs.symlinkSync(path.join(outside, sid), path.join(temporaryProject, sid));
+  } else {
+    fs.mkdirSync(path.dirname(temporaryProject), { recursive: true });
+    fs.symlinkSync(outside, temporaryProject);
+  }
+  assert.throws(() => f.participant.preview({ sessionGroup: group }), { code: 'group_delete_path_unavailable' });
+  f.participant.finalizeTranscripts({ sessionGroup: group, processExited: true });
+  assert.throws(() => f.participant.cleanup({ sessionGroup: group }), { code: 'group_delete_path_unavailable' });
+  assert.equal(fs.readFileSync(marker, 'utf8'), 'outside directory bytes');
+});
+
 test('recreated groups are registered only by authorized send or attachment writes', async t => {
   const f = fixture(t), group = 'dashboard:authorization-first'; f.message(group, 'pending');
   const reader = { _open: () => f.c4Db };

@@ -16,13 +16,17 @@ const validSession = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0
 const below = (file, root) => file.startsWith(root + path.sep);
 
 const ownedPath = (file, root) => resolveOwnedPath(root, file, () => fail('group_delete_path_unavailable'));
-function removeOwned(file, root) {
-  const candidate = ownedPath(file, root);
+// Recursion may unlink a symlink entry, but its parent must still be an owned
+// directory. Top-level targets keep the stricter check including the leaf.
+const ownedEntry = (file, root, nested) => nested
+  ? path.join(ownedPath(path.dirname(file), root), path.basename(file)) : ownedPath(file, root);
+function removeOwned(file, root, nested = false) {
+  const candidate = ownedEntry(file, root, nested);
   let stat;
   try { stat = fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
   if (stat.isDirectory()) {
     let removed = 0;
-    for (const entry of fs.readdirSync(candidate)) removed += removeOwned(path.join(candidate, entry), root);
+    for (const entry of fs.readdirSync(candidate)) removed += removeOwned(path.join(candidate, entry), root, true);
     fs.rmdirSync(candidate);
     return removed;
   }
@@ -120,11 +124,11 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
   }
   function countOwnedTargets(targets) {
     const found = new Set();
-    const visit = (file, root) => {
-      const candidate = ownedPath(file, root);
+    const visit = (file, root, nested = false) => {
+      const candidate = ownedEntry(file, root, nested);
       let stat;
       try { stat = fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
-      if (stat.isDirectory()) for (const name of fs.readdirSync(candidate)) visit(path.join(candidate, name), root);
+      if (stat.isDirectory()) for (const name of fs.readdirSync(candidate)) visit(path.join(candidate, name), root, true);
       else found.add(candidate);
     };
     for (const [file, root] of targets) visit(file, root);

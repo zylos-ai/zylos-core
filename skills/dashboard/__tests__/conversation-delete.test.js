@@ -99,7 +99,39 @@ test('changing instance or closing the page during confirmation prevents delete'
 
 test('malformed previews cannot cause an unbound delete', async () => {
   const f = fixture({ request: async () => ({ ok: true }) }); await f.controller.remove(item);
-  assert.equal(f.controller.status(item).state, 'error'); assert.equal(f.removed.length, 0);
+  assert.equal(f.controller.status(item).state, 'preview_error'); assert.equal(f.removed.length, 0);
+});
+
+test('a failed preview explains the safety check without starting or resuming deletion', async () => {
+  const calls = []; let blocked = true;
+  const f = fixture({ request: async (path, options) => {
+    calls.push({ path, options });
+    if (blocked) throw { payload: { ok: false, error: { code: 'group_delete_path_unavailable', message: '/private/path' } }, status: 409 };
+    return options?.method ? { ok: true } : { ...boundary, ok: true, operationId: 'fresh' };
+  } });
+  await f.controller.remove(item);
+  assert.deepEqual(f.controller.status(item), { busy: false, state: 'preview_error', errorKey: 'chat.delete.previewPathUnavailable' });
+  assert.equal(f.confirmations.length, 0); assert.equal(calls.length, 1); assert.equal(calls[0].options, undefined);
+  blocked = false;
+  await f.controller.remove(item);
+  assert.equal(calls.filter(call => !call.options?.method).length, 2, 'the next click starts with a fresh preview');
+  assert.equal(f.confirmations.length, 1); assert.deepEqual(f.removed, [item.id]);
+});
+
+test('unknown preview failures use a generic localized reason without server details', async () => {
+  const f = fixture({ request: async () => { throw { payload: { error: { code: 'unrecognized', message: 'secret /path' } } }; } });
+  await f.controller.remove(item);
+  assert.equal(f.controller.status(item).errorKey, 'chat.delete.previewError');
+  assert.equal(f.controller.status(item).operationId, undefined);
+  assert.equal(f.confirmations.length, 0);
+});
+
+test('an error after preview but before confirmation still has not started deletion', async () => {
+  const f = fixture({ confirm: async () => { throw Error('dialog unavailable'); } });
+  await f.controller.remove(item);
+  assert.equal(f.controller.status(item).state, 'preview_error');
+  assert.equal(f.controller.status(item).operationId, undefined);
+  assert.equal(f.calls.length, 1);
 });
 
 test('completed estimated counts reach the page result callback', async () => {
