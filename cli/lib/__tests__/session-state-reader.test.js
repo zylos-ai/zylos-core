@@ -103,6 +103,9 @@ test('usage freshness can be bounded apart from status freshness; identity check
   assert.equal(bounded.usage.reason,'stale');
   put(path.join(f.dir,'statusline.json'),{...usage(),session_id:'previous'});
   assert.equal((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage.reason,'identity_mismatch');
+  // Without an age limit, a sample with no capture time is still refused rather than taken as current.
+  put(path.join(f.dir,'statusline.json'),{...usage(),zylos:{v:1,runId:'run'}});
+  assert.deepEqual((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage,{value:null,valid:false,reason:'stale',sampledAt:null});
   for(const bad of [-1,Number.NaN,'5000',null]) await assert.rejects(at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:bad}),TypeError);
  }finally{f.clean();}
 });

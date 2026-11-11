@@ -10,7 +10,8 @@ import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
 
 // The real chain behind a group's context use: the statusLine hook publishes the session's sample into the
 // group's run directory, Core's session reader reads it back against the live run and session, and the
-// workbench snapshot puts it on the group's row. Only tmux identity, C4 and the event store are fixed answers.
+// workbench snapshot puts it on the group's row. Fixed answers: the tmux identity, the tmux session list (empty,
+// so the account usage step lists no live sessions), C4, overrides and the event store. No tmux command runs.
 // Covers: an idle group (no new sample since its last request) and a group whose session has changed.
 // Run for changes to the session reader, the statusLine hook or the group snapshot. Temporary root only.
 const GROUP = 'dashboard:854b9f9c-0c1e-4c43-9a51-2f0d2f7c5e01';
@@ -28,7 +29,7 @@ function fixture(t, { live = identity } = {}) {
   publishContextSample(JSON.stringify(statusLine), { env, now: writtenAt });
   let clock = writtenAt;
   const reader = createSessionReader({ env: { ZYLOS_DIR: root }, now: () => clock,
-    open: async () => ({ close: async () => {} }), observe: async () => live });
+    open: async () => ({ close: async () => {} }), observe: async () => live, listSessions: async () => [] });
   const cli = {
     runC4Db: async args => args[0] === 'groups'
       ? { ok: true, readAt: clock, data: { groups: [{ sessionGroup: GROUP, componentName: 'dashboard', lastActivityAt: writtenAt }], hasOlder: false } }
