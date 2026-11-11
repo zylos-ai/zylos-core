@@ -648,6 +648,37 @@ export function getConversationsSince(since) {
 }
 
 /**
+ * Get id-ordered range information for a consumer-owned cursor
+ * @param {number} afterId - cursor: the last conversation id already consumed
+ * @param {number|null} limit - if set, begin_id covers only the newest N rows after the cursor
+ * @returns {object} - { latest_id, after_id, count, begin_id }; latest_id is the
+ *   highest id overall, count the number of rows with id > afterId, begin_id the
+ *   smallest id of the covered rows (null when there are none)
+ */
+export function getRangeInfo(afterId, limit = null) {
+  const db = getDb();
+  // One read transaction, so the three values come from the same snapshot
+  return db.transaction(() => {
+    const latest = db.prepare('SELECT MAX(id) AS latest_id FROM conversations').get();
+    const range = db.prepare(
+      'SELECT COUNT(*) AS count, MIN(id) AS begin_id FROM conversations WHERE id > ?'
+    ).get(afterId);
+    let beginId = range.begin_id;
+    if (limit && range.count > limit) {
+      beginId = db.prepare(
+        'SELECT MIN(id) AS begin_id FROM (SELECT id FROM conversations WHERE id > ? ORDER BY id DESC LIMIT ?)'
+      ).get(afterId, limit).begin_id;
+    }
+    return {
+      latest_id: latest.latest_id,
+      after_id: afterId,
+      count: range.count,
+      begin_id: beginId
+    };
+  })();
+}
+
+/**
  * Get recent conversations (for debugging/testing)
  * @param {number} limit - max records to return
  * @returns {array} - latest N conversation records in chronological order
@@ -793,6 +824,38 @@ if (isMainModule) {
       console.log(JSON.stringify(cps, null, 2));
       break;
 
+    case 'range-info': {
+      // range-info --after <id> [--limit <N>]
+      const usage = 'Usage: c4-db.js range-info --after <id> [--limit <N>]';
+      const options = {};
+      for (let i = 1; i < args.length; i += 2) {
+        const flag = args[i];
+        if ((flag !== '--after' && flag !== '--limit') || flag.slice(2) in options || args[i + 1] === undefined) {
+          console.error(usage);
+          process.exit(1);
+        }
+        options[flag.slice(2)] = args[i + 1];
+      }
+      const parseInteger = (value) => (/^\d+$/.test(value) ? Number(value) : NaN);
+      const afterId = parseInteger(options.after);
+      if (!Number.isSafeInteger(afterId)) {
+        console.error('--after must be a non-negative integer conversation id');
+        console.error(usage);
+        process.exit(1);
+      }
+      let rangeLimit = null;
+      if (options.limit !== undefined) {
+        rangeLimit = parseInteger(options.limit);
+        if (!Number.isSafeInteger(rangeLimit) || rangeLimit < 1) {
+          console.error('--limit must be a positive integer');
+          console.error(usage);
+          process.exit(1);
+        }
+      }
+      console.log(JSON.stringify(getRangeInfo(afterId, rangeLimit), null, 2));
+      break;
+    }
+
     default:
       console.log(`C4 Database CLI
 
@@ -804,6 +867,7 @@ Commands:
   checkpoint <end_id> [summary]          Create checkpoint up to conversation id
   unsummarized                          Show unsummarized conversation range and count
   recent [limit]                        Get recent conversations
+  range-info --after <id> [--limit <N>]  Show id-ordered range info after a cursor id
   checkpoints                           List all checkpoints
 `);
   }

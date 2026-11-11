@@ -45,6 +45,32 @@ c4-db.js recent [limit]
 ]
 ```
 
+### range-info
+
+Show id-ordered range information after a cursor that the caller keeps (for example, the last conversation id a component has processed). Read-only.
+
+```bash
+c4-db.js range-info --after <id> [--limit <N>]
+```
+
+**Output:**
+
+```json
+{
+  "latest_id": 49605,
+  "after_id": 49588,
+  "count": 17,
+  "begin_id": 49589
+}
+```
+
+- `latest_id` — the highest conversation id, or `null` when there are no conversations.
+- `after_id` — the cursor passed in `--after`.
+- `count` — the number of conversations with an id greater than `after_id`.
+- `begin_id` — the smallest id of the covered conversations: all of them, or only the newest `N` by id with `--limit <N>` (so a first run does not pull the whole backlog). `null` when `count` is 0.
+
+Everything is ordered by id, not by timestamp. Pass `begin_id` and `latest_id` to `c4-fetch.js --begin/--end` to read the range, then store `latest_id` as the new cursor. `--after` must be a non-negative integer and `--limit` a positive integer; anything else prints the usage and exits 1.
+
 ### unsummarized
 
 Show the range and count of conversations not yet covered by a checkpoint.
@@ -100,6 +126,7 @@ When imported by other C4 scripts, `c4-db.js` exports:
 | `markDelivered(id)` | Mark a message as delivered |
 | `getRecentConversations(limit)` | Get recent conversations |
 | `getUnsummarizedRange()` | Get range/count of unsummarized conversations |
+| `getRangeInfo(afterId, limit)` | Get latest id, count and begin id after a caller-owned cursor |
 | `getConversationsByRange(begin, end)` | Fetch conversations by id range |
 | `getConversationsSince(since)` | Fetch conversations at or after a UTC timestamp |
 | `createCheckpoint(endId, summary)` | Create a sync checkpoint |
