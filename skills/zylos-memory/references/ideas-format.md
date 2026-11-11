@@ -40,7 +40,7 @@ See `examples/ideas.md` for a full example.
 
 1. Must be uncommitted. Once work begins, it becomes a project. Once
    committed, it becomes a decision.
-2. NOT ideas: things already decided (-> decisions.md), things actively
-   being built (-> projects.md), config data (-> references.md).
+2. NOT ideas: things already decided (-> reference/decisions/), things actively
+   being built (-> reference/projects/), config data (-> references.md).
 3. Dropped ideas are candidates for archival during consolidation review.
 4. The Related field helps trace idea lineage.

@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { isMainModule } from './is-main-module.js';
-import { MEMORY_DIR, BUDGETS, WARN_THRESHOLDS, walkFiles } from './shared.js';
+import { MEMORY_DIR, BUDGETS, WARN_THRESHOLDS, OPTIONAL_BUDGET_FILES, walkFiles } from './shared.js';
 
 export function formatBytes(bytes) {
   if (bytes < 1024) {
@@ -39,8 +39,11 @@ function main() {
   for (const [name, budget] of Object.entries(BUDGETS)) {
     const info = fileInfo(path.join(MEMORY_DIR, name));
     if (!info) {
-      lines.push(`${name}: MISSING`);
-      missingCount += 1;
+      if (OPTIONAL_BUDGET_FILES.has(name)) lines.push(`${name}: not created yet`);
+      else {
+        lines.push(`${name}: MISSING`);
+        missingCount += 1;
+      }
       continue;
     }
 

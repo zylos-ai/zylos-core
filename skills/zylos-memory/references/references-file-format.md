@@ -46,8 +46,8 @@ See `examples/references.md` for a full example.
 
 | Content class | Route to |
 |---------------|----------|
-| Version/upgrade history, breaking-change notes | `reference/decisions.md` |
-| Incident caveats, lessons learned | `reference/decisions.md` |
+| Version/upgrade history, breaking-change notes | `reference/decisions/` |
+| Incident caveats, lessons learned | `reference/decisions/` |
 | Entries for uninstalled/dead components | `archive/` |
 | Values already present in a config file | replace with a pointer |
 

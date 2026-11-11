@@ -1,23 +1,14 @@
-# Projects
-
-Active and planned projects. Updated by Memory Sync.
-
-## Active
-
-### Memory Architecture v5
+# Memory reference pages
+<!-- zylos:entry kind=projects -->
 - **Status:** active
-- **Started:** 2026-02-01
-- **Updated:** 2026-02-08
-- **Description:** Implement Inside Out-inspired tiered memory system with forked subagent sync and scheduled maintenance.
-- **Importance:** 1
-- **Type:** factual
+- **Updated:** 2026-11-10
+- **Started:** 2026-11-01
+- **Keys:** memory, reference-pages, index
+- **Moved from:** projects.md “Memory reference pages”
+- **Description:** Replace growing project and decision ledgers with indexed pages. Page tooling is implemented; documentation and owner acceptance are pending.
 
-## Completed
-
-### Telegram Bot Setup
-- **Status:** completed
-- **Started:** 2026-01-10
-- **Updated:** 2026-01-25
-- **Description:** Set up Telegram bot with webhook, message receive/send, and C4 bridge integration.
+## 2026-11-10
+- Page creation and archive operations preserve existing destinations.
+- Next: document the reading and writing procedure, then request acceptance.
 - **Importance:** 2
 - **Type:** factual

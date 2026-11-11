@@ -82,8 +82,8 @@ describe('BUDGETS', () => {
     assert.equal(BUDGETS['references.md'], 16 * 1024);
   });
 
-  it('has exactly 2 entries', () => {
-    assert.equal(Object.keys(BUDGETS).length, 2);
+  it('budgets only the startup files and reference indexes', () => {
+    assert.deepEqual(Object.keys(BUDGETS).sort(), ['identity.md', 'reference/decisions/INDEX.md', 'reference/projects/INDEX.md', 'references.md']);
   });
 
   it('all budget values are positive numbers', () => {

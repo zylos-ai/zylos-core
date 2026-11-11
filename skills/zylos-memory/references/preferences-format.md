@@ -31,7 +31,7 @@ See `examples/preferences.md` for a full example.
 1. Must be a standing instruction, not a one-time request. One-time
    requests are session events, not preferences.
 2. Per-user preferences go in `users/<id>/profile.md`, not here.
-3. NOT preferences: decisions with alternatives considered (-> decisions.md),
+3. NOT preferences: decisions with alternatives considered (-> reference/decisions/),
    workflow ideas (-> ideas.md).
 4. "Applies to: all" means every interaction. Specify context if limited
    (e.g., "Telegram messages only").

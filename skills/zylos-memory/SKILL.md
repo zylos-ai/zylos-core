@@ -56,12 +56,26 @@ before taking a token; run only the selected procedure.
 
 ## Writing rules
 
-All Sync edits and new memory files use `mcp__zylos-memory__edit_memory`.
+All Sync content edits and new memory files use `mcp__zylos-memory__edit_memory`.
+Origin and global Sync also run the documented `reference-index.js rebuild`,
+`archive`, and `unarchive` commands to maintain generated indexes and page locations.
 Use Read/Glob/Grep for inputs and Bash only for the documented scripts.
 Do not use native Edit/Write/patch, shell redirects into memory, or a fallback
 writer after a tool denial. The token is from `sync-lock.js acquire`, never
 from another worker. The tool infers permission from its own environment and
 the matching marker; a model-supplied group or role is not authorization.
+
+The owner-approved one-time reorganization is a separate, explicit exception:
+the session that hears the owner's agreement launches a background subagent as
+specified in [reference reorganization](references/reference-reorg.md). That
+worker is not Sync and uses no Sync token or `edit_memory`. It creates pages
+and its progress page only with `reference-index.js create`, and updates
+existing pages and progress checkboxes only with `memory-write.js --path <page>
+--sha256 <hash-read-with-the-file>`. It does not use native Edit/Write or shell
+redirection into memory. It may write only `reference/projects/**`,
+`reference/decisions/**`, and `reference/reorg-progress.md`; it runs `rebuild`
+after each batch and `move-old` only for the documented final archival step.
+It does not edit old file contents, `reference/legacy/`, references, state, or inbox.
 
 Group Sync writes only its temporary state and its guarded checkpoint/commit.
 Origin Sync writes shared self files; it does not read or write group state or
@@ -90,6 +104,12 @@ thread editing does not share Sync's lock, so do not claim all writers are
 mutually protected. Cross-group requests are sent through the normal internal
 channel; do not write another group's files.
 
+The owner's agreement to one-time reference reorganization authorizes the
+background worker described above and in [reference reorganization](references/reference-reorg.md).
+That exception uses `create` for new pages and `memory-write.js` for existing
+pages; `MEMORY_CONFLICT` means reread and merge again, `SYNC_BUSY` means retry
+later, and `MEMORY_FILE_NOT_FOUND` means find the page at its new location.
+
 External file editors can use the [locked memory writer](references/memory-write.md)
 to save an existing file with a content hash and refuse an active Sync. This
 does not replace the restricted Sync tool or authorize additional Sync writes.
@@ -108,8 +128,9 @@ Shared knowledge classification:
 - `identity.md`: stable identity, principles, and durable behavior; avoid incident histories.
 - `references.md`: essential identity, boundaries, and navigation. Reuse topic files,
   maintain content/path/read-when pointers, and keep a single source of truth.
-- `reference/decisions.md`: committed choices and rationale.
-- `reference/projects.md`: scoped work and status.
+- `reference/decisions/`: an INDEX plus one page per decision topic, for committed choices and rationale.
+- `reference/projects/`: an INDEX plus one page per scoped project, for work and status.
+- Old `reference/projects.md`, `reference/decisions.md`, and `reference/legacy/` are read-only history. Start with the category INDEX, then Grep pages (including `archive/`), then consult old files or `legacy/` only when needed; see [Sync procedures](references/sync-procedures.md).
 - `reference/preferences.md`: standing shared preferences.
 - `reference/ideas.md`: uncommitted proposals.
 - `users/<id>/profile.md`: individual preferences and stable facts.
@@ -117,9 +138,13 @@ Shared knowledge classification:
 Read an existing target before generating its replacement fragment. Check
 references for duplicated configuration values or narrative history; move the
 information into an allowed topic file and replace it with a pointer. The shared
-identity/references budget is 16 KiB, with references audited at 8 KiB. Other
-reference files have no size cap. Do not copy whole startup instructions into
-memory. References layout migration belongs to its dedicated migration command,
+identity/references budget is 16 KiB, with references audited at 8 KiB.
+`reference/projects/INDEX.md` and `reference/decisions/INDEX.md` each have a
+16 KiB warning threshold and 32 KiB budget. These indexes are optional until
+created: `memory-status.js` prints `not created yet` without a missing-file
+health issue. Other reference files, including the read-only old files, have
+no size budget. Budget reporting does not block writes. Do not copy whole
+startup instructions into memory. References layout migration belongs to its dedicated migration command,
 not an improvised Sync write.
 
 `memory-status.js` and `consolidate.js` are read-only diagnostics; they do not

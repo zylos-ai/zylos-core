@@ -1,21 +1,17 @@
-# Decisions Log
+# JavaScript module policy
+<!-- zylos:entry kind=decisions -->
+- **Status:** active
+- **Updated:** 2026-11-10
+- **Keys:** JavaScript, ESM, modules
+- **Scope:** Module-system choices for the core codebase
+- **Moved from:** decisions.md “ESM-only for core code”
 
-Key decisions made during operation. Entries are added by Memory Sync.
-
-### ESM-only for all zylos-core code
-- **Date:** 2026-01-15
-- **Decided by:** Howard
-- **Decision:** All JavaScript in zylos-core must use ESM (import/export). No CommonJS.
-- **Context:** Consistency across the codebase. Node.js 20+ supports ESM natively.
+## 2026-11-10
+### ESM-only for core code
+- **Date:** 2026-11-10
+- **Decided by:** Owner
+- **Decision:** Use ESM import/export throughout the core codebase.
+- **Context:** A single module system keeps maintained code consistent. CommonJS was considered and not adopted.
 - **Status:** active
 - **Importance:** 2
 - **Type:** procedural
-
-### Daily local git commit for memory persistence
-- **Date:** 2026-02-01
-- **Decided by:** Howard
-- **Decision:** Use daily local git commits as the safety net for memory files. No remote push.
-- **Context:** Considered SQLite WAL, rsync, and cloud sync. Git is simplest with zero dependencies.
-- **Status:** active
-- **Importance:** 2
-- **Type:** strategic
