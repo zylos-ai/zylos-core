@@ -10,6 +10,7 @@ import { createOriginBacklog } from '../src/lib/workbench/origin-backlog.js';
 import { AuthGate } from '../src/lib/auth.js';
 import { MemoryBrowser } from '../src/lib/memory-browser.js';
 import { setupMemoryHttp } from './fixtures/memory-http.js';
+import { BUDGETS, WARN_THRESHOLDS } from '../../zylos-memory/scripts/shared.js';
 
 const at = Date.UTC(2026, 0, 10, 12);
 const utcText = value => new Date(value).toISOString().slice(0, 19).replace('T', ' ');
@@ -43,7 +44,7 @@ test('memory backlog uses Core thresholds and UTC ages for active groups only', 
   assert.deepEqual(result.groups.map(group => group.aged), [true, false, false]);
   assert.deepEqual(result.groups.map(group => group.syncing), [true, false, null]);
   assert.equal(result.groups[2].reason, 'backlog_failed');
-  assert.deepEqual(result.budgets, { limits: { 'identity.md': 16384, 'references.md': 16384 }, warnings: { 'references.md': 8192 } });
+  assert.deepEqual(result.budgets, { limits: BUDGETS, warnings: WARN_THRESHOLDS });
 });
 
 test('the configured Origin Sync threshold goes to the cross-group row, never to Origin\'s own row', async t => {
@@ -312,7 +313,7 @@ test('memory backlog HTTP route shares the detail cache and enforces administrat
   assert.equal(value.groups[0].threshold, 15);
   assert.deepEqual(value.originSync, { count: 60, pendingSummaries: 2, firstAt: '2026-10-01 11:00:00',
     aged: true, syncing: false, threshold: 50 });
-  assert.equal(value.budgets.limits['identity.md'], 16384);
+  assert.equal(value.budgets.limits['identity.md'], BUDGETS['identity.md']);
   assert.deepEqual(calls.slice(before).map(call => call.args[1]), ['origin-sync', 'status'],
     'memory and group detail share one group backlog cache; only the cross-group row reads again');
   assert.equal(snapshotReads(), snapshotBefore + 1, 'memory asks the snapshot service to refresh active groups');
