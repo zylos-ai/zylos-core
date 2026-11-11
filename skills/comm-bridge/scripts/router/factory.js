@@ -48,7 +48,7 @@ export function createDispatcher(overrides = {}, options = {}) {
   const alertController = new AbortController();
   const sendAlert = overrides.sendAlert ?? ((target, message) => new Promise((resolve, reject) => {
     const child = execFile(process.execPath, [fileURLToPath(new URL('../c4-send.js', import.meta.url)), target.channel, target.endpoint],
-      { env: systemSendEnvironment(env), signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
+      { env: systemSendEnvironment(env, { notice: true }), signal: alertController.signal, timeout: 30000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve(true));
     child.stdin.on('error', reject); child.stdin.end(message + '\n');
   }));
   const alert = (event, fields) => {

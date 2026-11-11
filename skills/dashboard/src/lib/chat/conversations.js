@@ -140,6 +140,22 @@ export class ChatConversations {
     return this.get(localId);
   }
 
+  /** Internal Agent writeback: any existing name wins, regardless of its source. */
+  renameIfEmpty(sessionGroup, displayName) {
+    const name = validName(displayName);
+    if (name === null) throw fail('invalid_chat_display_name');
+    return this.db.transaction(() => {
+      const conversation = this.findByGroup(sessionGroup);
+      if (!conversation) throw fail('chat_conversation_not_found', 404);
+      if (conversation.displayName || this.store.getGroupDisplayName(sessionGroup)?.display_name) {
+        return { code: 'NAME_ALREADY_SET', conversation };
+      }
+      this.store.writeGroupDisplayName(sessionGroup, name, 'agent');
+      this.db.prepare('UPDATE chat_conversations SET updated_at=? WHERE local_id=?').run(this.now(), conversation.localId);
+      return { code: 'NAME_WRITTEN', conversation: this.get(conversation.localId) };
+    }).immediate();
+  }
+
   bind(localId, namespace) {
     if (!validNamespace(namespace)) throw fail('chat_conversation_forbidden', 403);
     const row = this._row(localId);

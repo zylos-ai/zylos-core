@@ -52,7 +52,7 @@ export function createStatusNoticeSender({ db = defaultDb, spawn = spawnChild,
       const finish = result => { if (done) return; done = true; clearTimeout(timer); resolve(result); };
       const stop = () => { try { child.kill('SIGKILL'); } catch {} };
       try {
-        child = spawn(process.execPath, argv, { stdio: ['pipe', 'ignore', 'ignore'], env: systemSendEnvironment() });
+        child = spawn(process.execPath, argv, { stdio: ['pipe', 'ignore', 'ignore'], env: systemSendEnvironment(process.env, { notice: true }) });
         started = Boolean(child.pid);
         child.once('spawn', () => { started = true; });
         child.once('error', error => {

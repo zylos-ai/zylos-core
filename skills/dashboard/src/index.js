@@ -18,6 +18,7 @@ import { handleChatStream } from './lib/chat/stream.js';
 import { handleChatHistory } from './lib/chat/history-routes.js';
 import { ChatActivity, recordGroupInterrupt } from './lib/chat/activity.js';
 import { ChatConversations, isChatLocalIdUsed } from './lib/chat/conversations.js';
+import { reconcileConversationNames } from './lib/chat/auto-name.js';
 import { ChatSender } from './lib/chat/send.js';
 import { ChatAnswers } from './lib/chat/answers.js';
 import { ChatAnswerDelivery } from './lib/chat/delivery.js';
@@ -1944,12 +1945,20 @@ export function createServer() {
   collect();
   const attachmentTimer = setInterval(collect, 5 * 60 * 1000);
   attachmentTimer.unref();
+  const reconcileNames = () => {
+    try { reconcileConversationNames({ store, c4Reader }); }
+    catch { console.error('[chat] Conversation naming reconciliation remains pending.'); }
+  };
+  reconcileNames();
+  const namingTimer = setInterval(reconcileNames, 1000);
+  namingTimer.unref();
   let attachmentClose = null;
   server.closeAttachments = () => {
     clearInterval(attachmentTimer);
     return attachmentClose ??= attachments.close();
   };
   server.on('close', () => {
+    clearInterval(namingTimer);
     chatObserver.close();
     server.closeAttachments().catch(() => {
       console.error('[chat] Attachment cleanup did not close cleanly.');

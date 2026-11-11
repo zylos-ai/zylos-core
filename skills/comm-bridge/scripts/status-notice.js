@@ -72,7 +72,7 @@ export async function sendStatusNotice(claim, message, route = {}, { spawn = spa
     try {
       child = spawn(process.execPath, [script, claim.channel, ...(claim.endpoint ? [claim.endpoint] : ['--stdin'])], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: systemSendEnvironment(),
+        env: systemSendEnvironment(process.env, { notice: true }),
       });
       // Keep draining both pipes after the diagnostic prefix is full.
       child.stdout.setEncoding('utf8');

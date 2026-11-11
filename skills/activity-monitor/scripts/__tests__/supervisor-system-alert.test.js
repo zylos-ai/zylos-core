@@ -17,7 +17,7 @@ import { startSupervisor } from '../supervisor-main.js';
 // No scheduled loop is started. The real sender has a 30-second child timeout;
 // entry shutdown drains pending sends before closing DB and removing the root.
 test('default supervisor alert delivery clears inherited session identity', { timeout: 40000 }, async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sys-alert-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sys-alert-')));
   const bin = path.join(root, 'bin'), tmp = path.join(root, 'tmp');
   const channel = path.join(root, '.claude', 'skills', 'fixture', 'scripts');
   const marker = path.join(root, 'delivered.json');
@@ -102,4 +102,5 @@ test('default supervisor alert delivery clears inherited session identity', { ti
   assert.equal(rows[0].session_group, 'fixture:responsible');
   assert.equal(rows[0].endpoint_id, 'room');
   assert.equal(rows[0].status, 'delivered');
+  assert.equal(rows[0].delivery_action, 'system_notice');
 });

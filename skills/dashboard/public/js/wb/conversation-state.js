@@ -229,17 +229,22 @@ export function createConversationState({
         const force = readDirty;
         passDirty = force;
         readDirty = false;
-        if (force || now() - lastListAt >= 30000) await list(false, true);
+        const refreshMetadata = force || now() - lastListAt >= 30000;
+        if (refreshMetadata) await list(false, true);
         if (!valid(e) || !visible() || selectedVersion !== navigation) return;
         const current = cell(), currentTab = tab;
         let id = selectedId;
-        if (current && currentTab === 'mine' && !current.sending && force && current.retryRequired) {
+        if (current && currentTab === 'mine' && !current.sending && refreshMetadata) {
           const data = await request(pathFor(id));
           if (!valid(e) || !visible() || selectedVersion !== navigation) return;
-          current.receipt = data;
+          if (current.retryRequired) {
+            current.receipt = data;
+            current.retryRequired = data.stored === null;
+          }
           current.conversation = data.conversation;
           current.ownershipResolved = !!data.conversation;
-          current.retryRequired = data.stored === null;
+          if (data.conversation) items = items.map(row => row.id === id
+            ? { ...row, display_name: data.conversation.displayName, displayName: data.conversation.displayName } : row);
           if (data.conversationId && data.conversationId !== id) {
             id = data.conversationId;
             cells.set(`${currentTab}:${id}`, current);
@@ -1042,6 +1047,8 @@ export function createConversationState({
       if (!result.preserveInput && result.stored === true && current.input === text) current.input = '';
       if (result.error) current.error = result.error;
       const canonical = result.conversationId || id;
+      // A committed draft becomes this canonical conversation; keep quiet list merges from retaining its old row.
+      if (result.stored === true && id.startsWith('d:') && canonical !== id) items = items.filter(row => row.id !== id);
       cells.set(`${currentTab}:${canonical}`, current);
       if (selectedId === id && tab === currentTab) selectedId = canonical;
       if (valid(e)) {

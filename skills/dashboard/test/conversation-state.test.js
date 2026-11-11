@@ -2035,3 +2035,20 @@ test('an internal outbound relay preserves accelerated waiting and avoids questi
   await f.timer.advance(1);
   assert.equal(f.reads().length, before + 2, 'relay does not masquerade as the awaited external reply');
 });
+
+test('polling refreshes the selected name when its row is outside the first page', async t => {
+  let name = null;
+  const f = fixture(u => {
+    if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:B', display_name: 'Other' }], nextCursor: null };
+    if (decodeURIComponent(u.pathname) === '/api/chat/conversations/g:A') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
+  });
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A');
+  f.state.setInput('retain my draft');
+  const receipt = f.state.snapshot().receipt;
+  name = 'New name from another page';
+  await f.timer.advance(30000);
+  assert.equal(f.state.snapshot().conversation.displayName, name);
+  assert.equal(f.state.snapshot().input, 'retain my draft');
+  assert.equal(f.state.snapshot().receipt, receipt);
+});

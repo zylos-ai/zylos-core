@@ -669,19 +669,6 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   font-size:11px;
   flex:none
 }
-.conversation-create-form {
-  display:flex;
-  flex-wrap:wrap;
-  gap:6px;
-  margin:0 4px
-}
-.conversation-create-form input {
-  flex:1 1 100%;
-  min-width:0
-}
-.conversation-create-form button {
-  min-height:36px
-}
 .conversation-read-only {
   display:flex;
   align-items:center;
@@ -784,10 +771,7 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
     height:40px;
     min-height:40px
   }
-  .conversation-page .conversation-create-form button,.conversation-page .conversation-reload {
-    min-height:40px
-  }
-  .conversation-page .conversation-create-form input {
+  .conversation-page .conversation-reload {
     min-height:40px
   }
   .conversation-page .conversation-reload {

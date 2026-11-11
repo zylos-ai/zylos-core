@@ -340,3 +340,56 @@ test('late conversation failure cannot become the selected conversation error', 
   assert.equal(state.snapshot().selectedId, 'g:B'); assert.equal(state.snapshot().error, null);
   hold = false; await state.select('g:A'); assert.equal(state.snapshot().error, null); state.destroy();
 });
+
+test('a list invalidation refreshes the selected name without resetting the composer', async () => {
+  let name = null;
+  const { state } = fixture((url, options) => {
+    if (url.startsWith('/api/chat/conversations?')) return { items: [{ id: 'g:A', display_name: name }], nextCursor: null };
+    if (url === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
+  });
+  await state.open(); await state.select('g:A');
+  assert.equal(state.snapshot().conversation.displayName, null);
+  state.setInput('keep the unsent draft');
+  name = 'Research notes';
+  await state.refreshMessages();
+  assert.equal(state.snapshot().conversation.displayName, name);
+  assert.equal(state.snapshot().items.find(row => row.id === 'g:A').display_name, name);
+  assert.equal(state.snapshot().input, 'keep the unsent draft');
+  assert.equal(state.snapshot().canWrite, true);
+  name = '';
+  await state.refreshMessages();
+  assert.equal(state.snapshot().conversation.displayName, '');
+});
+
+test('an opened conversation outside the first list page receives a name change', async () => {
+  let name = null, firstPage = true;
+  const { state } = fixture(url => {
+    if (url.startsWith('/api/chat/conversations?')) return { items: firstPage ? [{ id: 'g:A', display_name: name }] : [], nextCursor: null };
+    if (url === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
+  });
+  await state.open(); await state.select('g:A'); state.setInput('preserve my draft');
+  const receipt = state.snapshot().receipt;
+  firstPage = false; name = 'Travel planning';
+  await state.refreshMessages();
+  assert.equal(state.snapshot().conversation.displayName, name);
+  assert.equal(state.snapshot().items.find(row => row.id === 'g:A').display_name, name);
+  assert.equal(state.snapshot().input, 'preserve my draft');
+  assert.equal(state.snapshot().receipt, receipt);
+});
+
+test('a committed draft drops its old list row before canonical detail reconciliation', async () => {
+  const detail = pending(); let promoted = false;
+  const { state } = fixture((url, options) => {
+    if (url === '/api/chat/drafts') return { conversation: { id: 'd:new', state: 'draft' } };
+    if (url.startsWith('/api/chat/conversations?')) return { items: [{ id: promoted ? 'g:A' : 'd:new' }], nextCursor: null };
+    if (url.endsWith('/send')) { promoted = true; return { stored: true, conversationId: 'g:A' }; }
+    if (url === '/api/chat/conversations/g%3AA') return detail.promise;
+  });
+  await state.open(); await state.createDraft(); state.setInput('hello');
+  const sending = state.send();
+  try {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    assert.equal(state.snapshot().selectedId, 'g:A');
+    assert.equal(state.snapshot().items.some(row => row.id === 'd:new'), false);
+  } finally { detail.resolve({ conversation: { id: 'g:A', state: 'active' } }); await sending; }
+});

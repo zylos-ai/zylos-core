@@ -98,7 +98,7 @@ test('stdin exception after child started drains close before returning', async 
 test('real child gets original argv and shared template stdin without inherited session identity', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "c4 receipt's ")); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const output = path.join(dir, 'capture.json'), script = path.join(dir, 'recorder.cjs');
-  fs.writeFileSync(script, `let body='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>body+=x);process.stdin.on('end',()=>require('fs').writeFileSync(${JSON.stringify(output)},JSON.stringify({argv:process.argv.slice(2),body,runId:process.env.ZYLOS_RUN_ID,sessionGroup:process.env.ZYLOS_SESSION_GROUP})));`);
+  fs.writeFileSync(script, `let body='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>body+=x);process.stdin.on('end',()=>require('fs').writeFileSync(${JSON.stringify(output)},JSON.stringify({argv:process.argv.slice(2),body,runId:process.env.ZYLOS_RUN_ID,sessionGroup:process.env.ZYLOS_SESSION_GROUP,systemSend:process.env.ZYLOS_SYSTEM_SEND})));`);
   const previous = { ZYLOS_RUN_ID: process.env.ZYLOS_RUN_ID, ZYLOS_SESSION_GROUP: process.env.ZYLOS_SESSION_GROUP };
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
   process.env.ZYLOS_RUN_ID = 'stale-system-run';
@@ -113,6 +113,7 @@ test('real child gets original argv and shared template stdin without inherited 
     assert.equal(captured.body, messageForStatus(route, config));
     assert.equal(captured.runId, undefined);
     assert.equal(captured.sessionGroup, undefined);
+    assert.equal(captured.systemSend, '1');
   }
 });
 

@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { fixture } from './c4-v2-test-helpers.js';
 import { parseSendArgs } from '../c4-send-args.js';
 import { sendExternal, recordVoid, senderSessionId, readAbsorbedReply } from '../c4-send-external.js';
+import { systemSendEnvironment } from '../c4-system-send-env.js';
 
 function setup(t) {
   const { db, store, filename } = fixture(t, {}, true);
@@ -22,6 +23,22 @@ function setup(t) {
   return { db, store, filename, dir, script, marker, api };
 }
 const request = { channel: 'demo', endpoint: 'endpoint' };
+
+test('system sends retain explicit notice provenance without changing ordinary reply records', async t => {
+  const { api, dir } = setup(t);
+  const inherited = { ...process.env, ZYLOS_RUN_ID: 'runtime-run', ZYLOS_SESSION_GROUP: 'demo:owned' };
+  assert.equal(systemSendEnvironment(inherited).ZYLOS_SYSTEM_SEND, undefined, 'service environments are not notices');
+  assert.equal(systemSendEnvironment({ ...inherited, ZYLOS_SYSTEM_SEND: '1' }).ZYLOS_SYSTEM_SEND, undefined,
+    'a service environment cannot inherit a notice marker');
+  const env = systemSendEnvironment(inherited, { notice: true });
+  assert.equal(env.ZYLOS_SYSTEM_SEND, '1');
+  assert.equal(env.ZYLOS_RUN_ID, undefined); assert.equal(env.ZYLOS_SESSION_GROUP, undefined);
+  assert.equal(inherited.ZYLOS_RUN_ID, 'runtime-run');
+  const notice = await sendExternal(request, 'notice', { api, skillsDir: dir, env });
+  assert.equal(notice.delivery_action, 'system_notice');
+  const ordinary = await sendExternal(request, 'reply', { api, skillsDir: dir, env: { ...process.env } });
+  assert.equal(ordinary.delivery_action, null);
+});
 
 test('legacy trailing group option is discarded while preserving content', () => {
   for (const isTTY of [true, false]) {

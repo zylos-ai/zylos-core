@@ -86,7 +86,8 @@ export async function sendExternal(request, message, { api, skillsDir, env = pro
   const stdinDelivery = readChannelHookMetadata(channel, { skillsDir })?.delivery === 'stdin';
   await runBeforeSendHook({ ...request, ...route }, message, { skillsDir, env });
   const record = api.insertConversation('out', channel, endpoint, message,
-    { status: 'delivered', ...route, sessionId: senderSessionId(env) });
+    { status: 'delivered', ...route, sessionId: senderSessionId(env),
+      ...(env.ZYLOS_SYSTEM_SEND === '1' ? { deliveryAction: 'system_notice' } : {}) });
   return new Promise((resolve, reject) => {
     let child;
     let inputError;

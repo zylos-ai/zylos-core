@@ -26,7 +26,7 @@ test('status notice queries its destination group without inheriting session ide
     db.insertConversation('in','fake','room','new',{groupName:'other'});
     const route={sessionGroup:'fake:wanted',runtime:'claude'};
     const result=await sendStatusNotice(reserveStatusNotice('fake','room',route),'notice',route,{diagnostic:false});
-    const row=db.getDb().prepare("SELECT session_group FROM conversations WHERE direction='out'").get();
+    const row=db.getDb().prepare("SELECT session_group,delivery_action FROM conversations WHERE direction='out'").get();
     console.log(JSON.stringify({result,row}));db.close();`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
     env: { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'stale-system-run', ZYLOS_SESSION_GROUP: 'fake:unrelated' }, encoding: 'utf8', timeout: 5000,
@@ -35,6 +35,7 @@ test('status notice queries its destination group without inheriting session ide
   const data = JSON.parse(result.stdout.trim());
   assert.equal(data.result.outcome, 'sent');
   assert.equal(data.row.session_group, 'fake:wanted');
+  assert.equal(data.row.delivery_action, 'system_notice');
   const captured = JSON.parse(fs.readFileSync(marker));
   assert.deepEqual(captured.argv, ['room', 'notice']);
   assert.equal(captured.runId, undefined);

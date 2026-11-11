@@ -63,7 +63,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   const pendingAlerts=new Set(),pendingNotices=new Set();
   const sendAlert=overrides.sendAlert ?? ((target,message)=>new Promise((resolve,reject)=>{
     const child=execFile(process.execPath,[fileURLToPath(new URL('../../comm-bridge/scripts/c4-send.js',import.meta.url)),target.channel,target.endpoint],
-      {env:systemSendEnvironment(env),timeout:30000,maxBuffer:1024*1024},error=>error?reject(error):resolve(true));
+      {env:systemSendEnvironment(env,{notice:true}),timeout:30000,maxBuffer:1024*1024},error=>error?reject(error):resolve(true));
     child.stdin.on('error',reject);child.stdin.end(message+'\n');
   }));
   const guard=new SupervisorServerHealth({readAlertTarget:()=>parseServerAlertTarget(configuration?.alert_target),sendAlert,log});

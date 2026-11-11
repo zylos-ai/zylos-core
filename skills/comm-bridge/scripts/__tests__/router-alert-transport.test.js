@@ -70,6 +70,7 @@ async function run(t, mode) {
     assert.equal(record.message, expected, 'Factory stdin reached real c4-send and the recording channel unchanged');
     assert.equal(record.runId, undefined);
     assert.equal(record.sessionGroup, undefined);
+    assert.equal(record.systemSend, '1');
   }
   assert.deepEqual(records.map(record => [record.channel, record.endpoint]),
     ['configured','destination_hangs'].includes(mode) ? [['telegram','fixture-owner']] : [['telegram','fixture-owner'],['web-console','console']]);

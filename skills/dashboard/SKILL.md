@@ -90,6 +90,26 @@ never created. This is a deliberate trade-off: the mapping stays a pure function
 of the endpoint, and Core creates the group when it stores the first message for
 it.
 
+### Automatic conversation naming
+
+The new-conversation button creates an unnamed draft immediately. On the first
+Agent reply, an unnamed Dashboard conversation receives one control instruction
+in its own group, with a five-minute acknowledgement deadline. This instruction
+stays outside conversation history. Follow it by choosing a contextual name of
+at most 20 characters in the conversation's language, then run:
+
+```bash
+node ~/zylos/.claude/skills/dashboard/scripts/conversation-name.js '<session-group>' '<name>' --json
+```
+
+The command uses the existing 1–40 character rename validation and writes only
+while the name is empty. `NAME_WRITTEN` exits 0; `NAME_ALREADY_SET` exits 2 and
+preserves the existing name; invalid input or an unavailable conversation exits
+1. If naming is impossible, write `unknown` with the same command. Finish without
+replying in the conversation. Dashboard also writes `unknown` for failed or
+expired naming controls while the name remains empty. Later replies never repeat
+the first-reply naming decision. Name changes update open lists and details.
+
 ### Available structured components
 
 Choose a supported component when it makes the reply clearer or lets the user

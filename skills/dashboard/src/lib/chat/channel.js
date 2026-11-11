@@ -5,6 +5,7 @@ import { registerQuestion } from './questions.js';
 import { recordQuestionControl } from './question-controls.js';
 import { parseC4Content, validateDeliveryPacket } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { withChatAttachments } from './attachments.js';
+import { requestConversationName } from './auto-name.js';
 
 const mismatch = () => Object.assign(new Error('Dashboard delivery does not match an authoritative outbound row.'), { code: 'DELIVERY_MISMATCH' });
 
@@ -16,7 +17,7 @@ export function acceptDelivery(packet, { env = process.env } = {}) {
   let db, row;
   try {
     db = new Database(path.join(zylosDir, 'comm-bridge', 'c4.db'), { readonly: true, fileMustExist: true });
-    row = db.prepare(`SELECT CAST(id AS TEXT) AS id, direction, channel, endpoint_id, session_group, content
+    row = db.prepare(`SELECT CAST(id AS TEXT) AS id, direction, channel, endpoint_id, session_group, content, delivery_action
       FROM conversations WHERE id = ?`).get(packet.c4_id);
     if (!row || row.direction !== 'out' || !validateDeliveryPacket(packet, row)) throw mismatch();
   } catch (error) {
@@ -38,6 +39,11 @@ export function acceptDelivery(packet, { env = process.env } = {}) {
       throw Object.assign(new Error('Dashboard attachment association failed; history or collection will retry the existing C4 row.'),
         { code: 'ATTACHMENT_ASSOCIATION_FAILED', storedAttachmentFailure: true });
     }
+  }
+  try { requestConversationName(row, { env }); }
+  catch (cause) {
+    throw Object.assign(new Error('Dashboard conversation naming is unavailable.', { cause }),
+      { code: 'CONVERSATION_NAMING_FAILED', storedNamingFailure: true });
   }
   return row;
 }

@@ -4,7 +4,7 @@ import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon } from './board.js?v=151';
-import { createConversationState } from './conversation-state.js?v=157';
+import { createConversationState } from './conversation-state.js?v=158';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=157';
@@ -68,7 +68,6 @@ export function mountConversationPage({
     unread = 0,
     maxSeenId = null,
     renaming = false,
-    creating = false,
     creationPending = false;
   let fitFrame = null,
     fitObserver = null,
@@ -237,46 +236,20 @@ export function mountConversationPage({
   }
   const reload = action('refresh', () => state.refresh(), 'restart', 'wb-icon-btn conversation-reload');
   listToolbar.append(tabs, reload);
-  const create = action('create', () => {
-    creating = true;
-    createForm.hidden = false;
-    create.hidden = true;
-    createName.focus();
-  }, 'plus', 'wb-btn wb-btn-primary conversation-create');
-  const createForm = node('form', undefined, 'conversation-create-form');
-  createForm.hidden = true;
-  const createName = node('input', undefined, 'wb-input');
-  createName.maxLength = 40;
-  const createSubmit = action('chat.page.createSubmit', () => {}, undefined, 'wb-btn wb-btn-primary');
-  createSubmit.type = 'submit';
-  createSubmit.dataset.action = 'createDraft';
-  const createCancel = action('chat.page.cancel', () => {
-    creating = false;
-    createForm.hidden = true;
-    createName.value = '';
-    redraw();
-    create.focus();
-  });
-  createForm.append(createName, createSubmit, createCancel);
-  createForm.addEventListener('submit', async event => {
-    event.preventDefault();
+  const create = action('create', async () => {
     if (creationPending || state.snapshot().creatingDraft || !state.snapshot().canCreate) {
       return;
     }
     creationPending = true;
     redraw();
     try {
-      await state.createDraft(createName.value.trim() || undefined);
-      if (!state.snapshot().error) {
-        creating = false;
-        createName.value = '';
-        mobileDetail(true);
-      }
+      await state.createDraft();
+      if (!state.snapshot().error) mobileDetail(true);
     } finally {
       creationPending = false;
       redraw();
     }
-  });
+  }, 'plus', 'wb-btn wb-btn-primary conversation-create');
   const externalSection = node('div', undefined, 'conversation-external-section');
   externalSection.append(icon(document, 'lock'), node('span', t('chat.page.externalSection')));
   const list = node('div', undefined, 'conversation-items');
@@ -286,7 +259,7 @@ export function mountConversationPage({
   deletionNotice.hidden = true;
   const more = action('loadMore', () => state.loadMore());
   more.classList.add('conversation-load-more');
-  sidebar.append(listToolbar, create, createForm, externalSection, list, deletionNotice, listNotice, more);
+  sidebar.append(listToolbar, create, externalSection, list, deletionNotice, listNotice, more);
   const detail = node('section', undefined, 'conversation-detail');
   detail.setAttribute('aria-label', t('chat.history'));
   const header = node('header', undefined, 'conversation-header');
@@ -1141,18 +1114,8 @@ export function mountConversationPage({
     header.hidden = !s.selectedId || s.blocked;
     applyList();
     history.hidden = !!s.blocked;
-    if (!s.canCreate) {
-      creating = false;
-      createName.value = '';
-    }
-    create.hidden = s.tab !== 'mine' || creating || !s.canCreate && s.mode !== 'single';
+    create.hidden = s.tab !== 'mine' || !s.canCreate && s.mode !== 'single';
     create.disabled = !s.canCreate || !!s.loading || !!s.creatingDraft || creationPending;
-    createForm.hidden = !creating || !s.canCreate;
-    createSubmit.disabled = !s.canCreate || !!s.creatingDraft || creationPending;
-    createCancel.disabled = !!s.creatingDraft || creationPending;
-    createName.disabled = !!s.creatingDraft || creationPending;
-    createName.placeholder = t('chat.page.createName');
-    createName.setAttribute('aria-label', t('chat.page.createName'));
     externalSection.hidden = s.tab !== 'external';
     text(externalSection.lastElementChild, t('chat.page.externalSection'));
     reload.disabled = !!s.loading;

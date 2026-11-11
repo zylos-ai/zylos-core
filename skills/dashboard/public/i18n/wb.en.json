@@ -691,8 +691,6 @@
   "chat.page.you": "You",
   "chat.page.ai": "AI",
   "chat.page.previewYou": "You: ",
-  "chat.page.createSubmit": "Create",
-  "chat.page.createName": "Conversation name (optional)",
   "chat.page.externalSection": "Other channels · read only",
   "chat.page.externalReadOnly": "External channel history is read only: you cannot send messages, answer questions or perform actions for the original channel here.",
   "chat.page.readOnly": "Read only",
