@@ -1,7 +1,7 @@
 import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=152';
-import { toolLabel, waitText } from './view-mode.js?v=150';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=153';
+import { toolLabel, waitText } from './view-mode.js?v=151';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=91';
 import { recentRows } from './timeline-rows.js?v=108';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
@@ -18,6 +18,8 @@ export function activeSubagents(events, runId) {
   return [...agents.values()];
 }
 
+const technical = level => level === 'technical';
+
 export function detailEvidence(row, snapshot = {}) {
   const wait = row.wait;
   const runtime = wait?.runtime ?? row.target?.runtime;
@@ -27,12 +29,21 @@ export function detailEvidence(row, snapshot = {}) {
     : wait?.reasonCode ?? wait?.reason ?? wait?.fenceReason ?? row.state?.reasonCode ?? row.state?.reason ?? row.reason ?? 'no_rule';
   const samples = [];
   const fromHealth = headline === `${runtime} · ${health?.health}`;
-  if (runtime && health) samples.push({ source: `${runtime} health`, value: health.health, at: health.updatedAt, hit: fromHealth });
+  if (runtime && health) samples.push({ source: `${runtime} health`, value: health.health, hit: fromHealth });
   if (row.queue) samples.push({ source: 'queue', value: row.queue.known === false ? row.queue.reason : row.queue.pending?.count, at: snapshot.readAt });
-  if (row.live?.status) samples.push({ source: 'status', value: row.live.status.reason ?? row.live.status.state, at: row.live.status.sampledAt });
+  if (row.live?.status) samples.push({ source: 'session status', labelKey: 'wb.detail.sessionStatus', value: row.live.status.reason ?? row.live.status.state, at: row.live.status.sampledAt });
+  const sources = [];
   for (const [source, value] of Object.entries(snapshot.sources ?? {})) {
-    samples.push({ source, value: value.reason ?? (value.ok ? 'ok' : 'unknown'), at: value.readAt });
+    if (source === 'accounts') {
+      for (const [runtime, read] of Object.entries(value ?? {})) sources.push({
+        source: `accounts.${runtime}`, labelKey: 'wb.detail.sourceAccounts', runtime,
+        ok: read?.ok === true, value: read?.reason ?? (read?.ok ? 'ok' : 'unknown'), at: read?.readAt,
+      });
+    } else sources.push({ source, ...(source === 'status' ? { labelKey: 'wb.detail.sourceStatus' } : {}),
+      ok: value?.ok === true, value: value?.reason ?? (value?.ok ? 'ok' : 'unknown'), at: value?.readAt });
   }
+  if (sources.length && sources.every(source => source.ok)) samples.push({ source: 'sources', labelKey: 'wb.detail.sourcesHealthy', value: 'ok' });
+  else samples.push(...sources.filter(source => !source.ok));
   // The sample the headline came from is highlighted in the table.
   if (!fromHealth) for (const sample of samples) sample.hit = sample.value != null && String(sample.value) === headline;
   return { headline, samples };
@@ -158,13 +169,23 @@ export function configText(row, level = 'plain', t = key => key) {
   return [runtimeName(value.runtime), model, effort ? t('wb.term.effort') + ' ' + effort : null].filter(Boolean).join(' · ');
 }
 
-function nowCard(document, row, data, { level, t, snapshot, onRaw }) {
+function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastReceived, agents }) {
   const kind = row.state?.kind ?? 'unknown';
   const card = element(document, 'div', undefined, 'wb-now-card');
   const title = element(document, 'div', undefined, 'wb-now-title');
   card.append(title);
   const tools = row.tools ?? [];
-  if (tools.length) {
+  if (!technical(level)) {
+    const waiting = row.wait && ['waiting', 'unknown', 'error'].includes(kind);
+    const status = waiting ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, 'plain', t)
+      : kind === 'busy' ? [tools.length ? tools.map(tool => toolLabel(tool.name, 'plain', t)).join('、') : t('wb.state.busy'),
+        agents.length ? t('wb.detail.backgroundAgents', { count: agents.length }) : null].filter(Boolean).join(' · ')
+        : kind === 'not_running' ? t('wb.detail.standby') : t('wb.state.' + kind);
+    title.append(icon(document, kind === 'busy' ? 'tool' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', status));
+    if (kind === 'idle' && row.duration != null) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
+    if (kind === 'busy') card.classList.add('wb-now-work');
+    else if (['waiting', 'error', 'unknown'].includes(kind)) card.classList.add(kind === 'error' ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
+  } else if (tools.length) {
     card.classList.add('wb-now-work');
     for (const [index, tool] of tools.entries()) {
       const line = index === 0 ? title : element(document, 'div', undefined, 'wb-now-title');
@@ -178,7 +199,6 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw }) {
       if (index > 0) card.append(line);
       if (level === 'technical' && tool.detail) card.append(element(document, 'div', tool.detail, 'wb-args'));
     }
-    if (row.preview) card.append(element(document, 'p', lastReceived(row, t), 'wb-now-sub'));
   } else if (row.wait) {
     const failed = row.wait.kind === 'start_failed' || kind === 'error';
     card.classList.add(failed ? 'wb-now-err' : kind === 'unknown' ? 'wb-now-unk' : 'wb-now-wait');
@@ -187,17 +207,11 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw }) {
   } else {
     if (kind === 'error') card.classList.add('wb-now-err');
     const glyph = icon(document, kind === 'not_running' ? 'power' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock');
-    // The header already shows the state and for how long, so the card says what it means: the last message, or standby.
-    // An error or an unknown state is the news itself: the card keeps that word and puts the last message under it.
-    const sub = kind === 'not_running' ? t('wb.detail.standby') : lastReceived(row, t);
-    if (sub && kind !== 'error' && kind !== 'unknown') { title.classList.add('wb-now-said'); title.append(glyph, element(document, 'span', sub)); }
-    else {
-      title.append(glyph, element(document, 'span', t('wb.state.' + kind)));
-      if (row.duration != null && !['not_running', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
-      if (sub) card.append(element(document, 'p', sub, 'wb-now-sub'));
-    }
+    title.append(glyph, element(document, 'span', kind === 'not_running' ? t('wb.detail.standby') : t('wb.state.' + kind)));
+    if (row.duration != null && !['not_running', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
   }
-  if (level === 'technical') {
+  if (showLastReceived && row.preview) card.append(element(document, 'p', lastReceived(row, t, { now: data.now }), 'wb-now-sub'));
+  if (technical(level)) {
     // A preview labelled with its source offers the stored message, folded: headers, ids and line breaks included.
     // It is read when opened (`onRaw`); `data.raw` holds that read for this group's current preview.
     if (row.preview?.source) {
@@ -214,25 +228,28 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw }) {
       listen(raw, 'toggle', event => onRaw(event.currentTarget.open));
       card.append(raw);
     }
-    const evidence = detailEvidence(row, snapshot);
-    const details = element(document, 'details', undefined, 'wb-detail-evidence');
-    details.open = false;
-    const summary = element(document, 'summary');
-    // The reason code stays visible (this is the technical view) after a readable phrase when there is one.
-    const readable = evidence.headline === 'no_rule' ? t('wb.detail.evidenceNoRule') : null;
-    summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.evidence') + ' · ' + (readable ?? '')),
-      element(document, 'span', evidence.headline, 'wb-ev-code'));
-    details.append(summary);
-    const table = element(document, 'table'), body = element(document, 'tbody');
-    for (const item of evidence.samples) {
-      const line = element(document, 'tr', undefined, item.hit ? 'wb-hit' : undefined);
-      line.dataset.updateKey = item.source;
-      const age = element(document, 'td', sampleAge(item.at, data.now ?? Date.now(), t));
-      if (item.at != null) age.title = String(item.at);
-      line.append(element(document, 'td', item.source), element(document, 'td', item.value == null ? '—' : String(item.value)), age);
-      body.append(line);
+    if (['waiting', 'unknown', 'error'].includes(kind)) {
+      const evidence = detailEvidence(row, snapshot);
+      const details = element(document, 'details', undefined, 'wb-detail-evidence');
+      details.open = false;
+      const summary = element(document, 'summary');
+      // The reason code stays visible (this is the technical view) after a readable phrase when there is one.
+      const readable = evidence.headline === 'no_rule' ? t('wb.detail.evidenceNoRule') : null;
+      summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.evidence') + ' · ' + (readable ?? '')),
+        element(document, 'span', evidence.headline, 'wb-ev-code'));
+      details.append(summary);
+      const table = element(document, 'table'), body = element(document, 'tbody');
+      for (const item of evidence.samples) {
+        const line = element(document, 'tr', undefined, item.hit ? 'wb-hit' : undefined);
+        line.dataset.updateKey = item.source;
+        const age = element(document, 'td', sampleAge(item.at, data.now ?? Date.now(), t));
+        if (item.at != null) age.title = String(item.at);
+        const label = item.labelKey ? t(item.labelKey) + (item.runtime ? ' · ' + runtimeName(item.runtime) : '') : item.source;
+        line.append(element(document, 'td', label), element(document, 'td', item.source === 'sources' ? '' : item.value == null ? '—' : String(item.value)), age);
+        body.append(line);
+      }
+      table.append(body); details.append(table); card.append(details);
     }
-    table.append(body); details.append(table); card.append(details);
   }
   return card;
 }
@@ -243,7 +260,7 @@ export function rawKey(row) {
 }
 
 export function renderOverview(root, row, data = {}, { document = root.ownerDocument, t = key => key,
-  level = 'plain', snapshot = {}, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {}, onObserve = null, onRaw = () => {},
+  level = 'plain', snapshot = {}, showLastReceived = true, onTimeline = () => {}, onMemory = () => {}, onConfig = () => {}, onObserve = null, onRaw = () => {},
   currentTime = Date.now() } = {}) {
   root.replaceChildren();
   const section = (key, className, glyph) => {
@@ -253,10 +270,10 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     node.append(head); root.append(node); return node;
   };
   const now = section('wb.detail.now', 'wb-detail-now', 'activity');
-  const card = nowCard(document, row, data, { level, t, snapshot, onRaw });
-  now.append(card);
   const agents = activeSubagents(data.currentEvents ?? [], row.live?.runId);
-  if (agents.length) {
+  const card = nowCard(document, row, { ...data, now: currentTime }, { level, t, snapshot, onRaw, showLastReceived, agents });
+  now.append(card);
+  if (technical(level) && agents.length) {
     const subs = element(document, 'div', undefined, 'wb-subs');
     for (const agent of agents) {
       const tag = element(document, 'span', undefined, 'wb-tag');
@@ -267,10 +284,11 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     now.append(subs);
   }
   // Sleeping groups enter the observer page's no-session/history branch. The button closes the card it belongs to.
-  if (onObserve) {
+  if (technical(level) && onObserve) {
     const foot = element(document, 'div', undefined, 'wb-now-foot');
     const live = element(document, 'button', undefined, 'wb-btn wb-btn-sm'); live.type = 'button';
     live.dataset.observerGroup = row.sessionGroup ?? 'origin';
+    live.title = t('wb.detail.observe'); live.setAttribute('aria-label', t('wb.detail.observe'));
     live.append(icon(document, 'term', 'xs'), element(document, 'span', t('wb.detail.observe')));
     listen(live, 'click', () => onObserve('live')); foot.append(live); card.append(foot);
   }

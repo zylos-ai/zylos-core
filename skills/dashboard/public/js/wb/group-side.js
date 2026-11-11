@@ -1,5 +1,5 @@
-import { createGroupDetail } from './detail.js?v=161';
-import { boardController } from './board.js?v=152';
+import { createGroupDetail } from './detail.js?v=162';
+import { boardController } from './board.js?v=153';
 import { element, icon } from './plain-text.js?v=106';
 
 /**
@@ -32,7 +32,7 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
   };
   const groupDetail = createGroupDetail({ root: body, document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable, detail, isVisible: visible,
-    onMemory, onObserve, observable, onConversation, onClose: closed });
+    onMemory, onObserve, observable, onConversation, showLastReceived: false, onClose: closed });
   const controller = boardController({ visible,
     fetchSnapshot: async () => ({ snapshot: await read('/api/workbench/groups') }),
     onSnapshot: value => {

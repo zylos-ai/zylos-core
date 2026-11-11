@@ -51,7 +51,7 @@ function memoryStorage(entries = {}) {
   return { values, getItem: key => values.get(key) ?? null, setItem: (key, value) => { values.set(key, String(value)); } };
 }
 
-async function fixture(testContext, { storage = memoryStorage(), open = true } = {}) {
+async function fixture(testContext, { storage = memoryStorage(), open = true, groupRow = listedRow } = {}) {
   const document = eventDocument(), root = document.createElement('div');
   const reads = [], links = { memory: [], observe: [] };
   // Timers the panel started and has not cleared, by id: the panel's 5s re-read of the group list.
@@ -63,7 +63,7 @@ async function fixture(testContext, { storage = memoryStorage(), open = true } =
     if (path === '/api/workbench/groups') {
       if (groupFailures > 0) { groupFailures--; return { ok: false, status: 500, json: async () => ({}) }; }
       if (groupHold) await groupHold.promise;
-      return json({ rows: [listedRow], listKnown: true });
+      return json({ rows: [groupRow], listKnown: true });
     }
     if (path.startsWith('/api/timeline')) return json({ events: [] });
     if (path.includes('/backlog')) return json({ pending: 0 });
@@ -355,4 +355,16 @@ test('the group detail sits beside the conversation only where about 600px of it
     const left = width - margins - list - sideWidth;
     assert.ok(left >= 590 && left < 610, `${query}: about 600px of conversation remain beside the panel (${left})`);
   }
+});
+
+
+test('the conversation group sidebar keeps current state without repeating the last received preview', async t => {
+  const f = await fixture(t, { groupRow: { ...listedRow, state: { kind: 'idle' }, duration: 75,
+    preview: { text: 'private preview already shown in conversation', channel: 'dashboard', timestamp: 1000 } } });
+  await f.openSide();
+  const title = allNodes(f.side()).find(node => node.classList.contains('wb-now-title'));
+  assert.equal(title.textContent, 'wb.state.idle1m15s');
+  assert.equal(f.side().textContent.includes('private preview already shown in conversation'), false);
+  assert.equal(f.side().textContent.includes('wb.board.lastReceived'), false);
+  assert.equal(allNodes(f.side()).some(node => node.classList.contains('wb-now-raw')), false);
 });

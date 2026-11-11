@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createViewMode, term, toolLabel, resolveTheme, observeTheme, observerNavEntry, groupObservable, wbWritable, tabForPath, instanceStatusText } from '../public/js/wb/view-mode.js';
 import { createDocument, storage } from './fixtures/workbench-dom.js';
 
@@ -30,8 +31,8 @@ test('observer navigation follows detail, installation and enabled status', () =
   assert.equal(observerNavEntry({ installed: true, enabled: true }, 'plain'), null);
   assert.equal(observerNavEntry(null, 'technical'), null);
   assert.equal(observerNavEntry(undefined, 'technical'), null);
-  const primary = { 'tab.observer': 'Observer' };
-  assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical', key => primary[key] ?? key).label, 'Observer');
+  const primary = { 'tab.observer': 'Terminal' };
+  assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical', key => primary[key] ?? key).label, 'Terminal');
   assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical').target, 'observer');
   assert.equal(observerNavEntry({ state: 'installed', desired: { enabled: true } }, 'technical').target, 'observer');
   assert.match(observerNavEntry({ installed: false }, 'technical').label, /去设置安装/);
@@ -67,4 +68,13 @@ test('instance status names Origin in plain words and keeps raw values for techn
   assert.equal(instanceStatusText({ origin: { presence: 'mystery_state' } }, 'plain', t), 'wb.term.origin · wb.state.unknown');
   assert.equal(instanceStatusText(data, 'technical', t),
     'actions.instance_status {"view":"multi","mode":"multi","origin":"not_running"}');
+});
+
+
+test('terminal navigation uses the translated label and technical-only visibility in both languages', () => {
+  for (const [language, label] of [['en', 'Terminal'], ['zh', '终端']]) {
+    const pack = JSON.parse(readFileSync(new URL(`../public/i18n/${language}.json`, import.meta.url)));
+    assert.equal(observerNavEntry({ installed: true, enabled: true }, 'plain', key => pack[key]), null);
+    assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical', key => pack[key]).label, label);
+  }
 });

@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { observerNavEntry } from '../public/js/wb/view-mode.js';
 import { createDocument, allNodes, deferred, tick } from './fixtures/workbench-dom.js';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from '../public/js/origin-lock.js';
 import { createGroupDetail, resolveDetailRow, groupActionButtons, groupActionText, formatStartedAt } from '../public/js/wb/detail.js';
@@ -75,7 +77,7 @@ test('overview keeps safe text, section order, technical-only numbers and curren
     { run_id: 'r', event_type: 'subagent_stop', agent_id: 'finished', event_seq: 3 },
   ];
   assert.deepEqual(activeSubagents(events, 'r').map(agent => agent.id), ['<img>']);
-  const current = row('a', { live: { runId: 'r' }, queue: null, contextPct: null, tools: [{ name: 'Bash', detail: '<script>' }],
+  const current = row('a', { state: { kind: 'waiting' }, live: { runId: 'r' }, queue: null, contextPct: null, tools: [{ name: 'Bash', detail: '<script>' }],
     wait: { kind: 'unknown', reasonCode: '<script>unknown' }, desired: { runtime: 'codex', mode: 'default' } });
   renderOverview(root, current, { recent: [{ timestamp: 'now', event_type: 'stop' }], currentEvents: events,
     totalEvents: 99, totalRuns: 5, backlog: { count: 3 } }, { document, t, level: 'technical', snapshot: { readAt: 42 } });
@@ -245,7 +247,7 @@ test('overview recent activity and evidence are plain in plain view and raw only
   assert.match(root.children[1].textContent, /wb\.event\.wait_healthwait_health/);
   assert.match(root.children[1].textContent, /wb\.event\.reclaim_donereclaim_done/);
   assert.equal(allNodes(root.children[1]).find(node => node.tagName === 'TIME').title, iso);
-  assert.match(root.textContent, /wb\.detail\.evidence · wb\.detail\.evidenceNoRuleno_rule/, 'the evidence names the reason in words, then its code');
+  assert.equal(allNodes(root).some(node => node.classList?.contains('wb-detail-evidence')), false, 'idle has no diagnostic evidence even in technical view');
 });
 
 test('recent activity lists newest first, dates events from another day, and counts the same events as the timeline', () => {
@@ -504,7 +506,8 @@ test('overview restores a current subagent whose start predates the five recent 
     return response(defaultRead(path));
   });
   await f.controller.open(current, { rows: [current], listKnown: true });
-  assert.match(f.root.textContent, /wb.detail.subagent · worker/);
+  assert.match(f.root.textContent, /wb\.detail\.backgroundAgents \{"count":1\}/);
+  assert.deepEqual(activeSubagents(f.controller.state.currentEvents, 'run-a').map(agent => agent.id), ['worker']);
   const subagentRead = new URL(calls.find(path => path.includes('types=subagent_start')), 'http://fixture');
   assert.equal(subagentRead.searchParams.get('run_id'), 'run-a');
   assert.equal(subagentRead.searchParams.get('order'), 'asc');
@@ -529,13 +532,15 @@ test('overview consumes a subagent stop followed by more than five unrelated eve
   });
   const snapshot = { rows: [current], listKnown: true };
   await f.controller.open(current, snapshot);
-  assert.match(f.root.textContent, /wb.detail.subagent · worker/);
+  assert.match(f.root.textContent, /wb\.detail\.backgroundAgents \{"count":1\}/);
+  assert.deepEqual(activeSubagents(f.controller.state.currentEvents, 'run-a').map(agent => agent.id), ['worker']);
   await f.controller.selectTab('timeline');
   await f.controller.timeline.setFilter('tools');
   await f.controller.selectTab('overview');
   stopped = true; calls.length = 0;
   await f.controller.updateSnapshot(snapshot);
-  assert.doesNotMatch(f.root.textContent, /wb.detail.subagent · worker/);
+  assert.doesNotMatch(f.root.textContent, /wb\.detail\.backgroundAgents/);
+  assert.deepEqual(activeSubagents(f.controller.state.currentEvents, 'run-a').map(agent => agent.id), []);
   const subagentRead = new URL(calls.find(path => path.includes('types=subagent_start')), 'http://fixture');
   assert.equal(subagentRead.searchParams.get('after_seq'), '1');
   assert.equal(f.controller.timeline.state.filter, 'tools');
@@ -1061,8 +1066,9 @@ test('evidence marks the sample its headline came from and says how long ago eac
   const { headline, samples } = detailEvidence(waiting, snapshot);
   assert.equal(headline, 'claude · rate_limited');
   assert.deepEqual(samples.filter(item => item.hit).map(item => item.source), ['claude health']);
-  const fenced = detailEvidence(row('telegram:a', { wait: { kind: 'fenced', reasonCode: 'ok' } }), snapshot);
-  assert.deepEqual(fenced.samples.filter(item => item.hit).map(item => item.source), ['status'], 'otherwise the sample with the headline value');
+  const fenced = detailEvidence(row('telegram:a', { wait: { kind: 'fenced', reasonCode: 'status_unreadable' } }), { ...snapshot, sources: { status: { ok: false, reason: 'status_unreadable', readAt: 99000 } } });
+  assert.deepEqual(fenced.samples.filter(item => item.hit).map(item => item.source), ['status'], 'otherwise the failed source with the headline value');
+  assert.equal(samples.find(item => item.source === 'claude health').at, undefined, 'health write time is not labelled as source freshness');
   const now = 1_700_000_100_000;
   assert.equal(sampleAge(now - 1000, now, t), 'wb.detail.agoSeconds {"n":1}');
   assert.equal(sampleAge(new Date(now - 60000).toISOString(), now, t), 'wb.detail.ago {"span":"1m00s"}');
@@ -1185,26 +1191,29 @@ test('the conversation button leads the action row, as the primary action beside
   f.controller.destroy();
 });
 
-test('the now card says what the state means instead of repeating the header state, and holds its observe button', () => {
-  const document = createDocument(), seen = [];
+test('the idle now card leads with the current state and duration while received text stays secondary', () => {
+  const document = createDocument();
   const said = row('telegram:a', { state: { kind: 'idle' }, duration: 75, preview: { text: 'please check the layout', channel: 'telegram', timestamp: 1000 } });
   let root = document.createElement('div');
-  renderOverview(root, said, {}, { document, t, onObserve: view => seen.push(view) });
+  renderOverview(root, said, {}, { document, t });
   const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
-  assert.equal(card.textContent.includes('wb.state.idle'), false, 'the header pill already shows the state and its duration');
-  assert.match(card.textContent, /wb\.board\.lastReceived \{"text":"please check the layout"\}/);
-  const observe = allNodes(card).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.observe');
-  assert.ok(observe, 'the observe button sits inside the card it belongs to');
-  // A message whose text cannot be shown names its channel and time instead of the raw protocol text.
+  const title = allNodes(card).find(node => node.classList.contains('wb-now-title'));
+  assert.match(title.textContent, /wb\.state\.idle/);
+  assert.match(title.textContent, /1m15s/);
+  assert.doesNotMatch(title.textContent, /lastReceived|please check/);
+  assert.equal(allNodes(card).filter(node => node.classList.contains('wb-now-title')).length, 1);
+  const received = allNodes(card).find(node => node.classList.contains('wb-now-sub'));
+  assert.equal(received.tagName, 'P');
+  assert.match(received.textContent, /wb\.board\.lastReceived \{"text":"please check the layout"\}/);
+  // A wrapped message retains its channel/time fallback beneath the current state.
   const hidden = row('openmax:x', { state: { kind: 'idle' }, preview: { text: null, channel: 'openmax', timestamp: Date.parse('2026-11-09T08:05:00Z') } });
   root = document.createElement('div');
   renderOverview(root, hidden, {}, { document, t, currentTime: Date.parse('2026-11-09T09:00:00Z') });
-  const fallback = allNodes(root).find(node => node.classList.contains('wb-now-card')).textContent;
+  const fallback = allNodes(root).find(node => node.classList.contains('wb-now-sub')).textContent;
   assert.match(fallback, /^wb\.board\.lastReceivedAt \{"channel":"wb\.platform\.openmax","time":"[^"]+"\}$/);
-  // Without anything received the card falls back to the state itself.
   root = document.createElement('div');
   renderOverview(root, row('telegram:b', { state: { kind: 'idle' }, duration: 30 }), {}, { document, t });
-  assert.match(allNodes(root).find(node => node.classList.contains('wb-now-card')).textContent, /^wb\.state\.idle/);
+  assert.match(allNodes(root).find(node => node.classList.contains('wb-now-title')).textContent, /wb\.state\.idle.*30s/);
 });
 
 test('an error or unknown state keeps its word in the now card, with the last message under it', () => {
@@ -1227,19 +1236,19 @@ test('a stopped session reads as a plain event, with its code only in technical 
   assert.equal(eventLabel({ event_type: 'runtime_health:stop', category: 'runtime_health' }, 'technical', t), 'runtime_health:stop');
 });
 
-test('every group detail offers observation, including sleeping groups that enter history', () => {
+test('technical group details offer a terminal, including sleeping groups that enter history', () => {
   const document = createDocument(), seen = [];
   const live = row('telegram:active', { live: { runId: 'r' } }), idle = row('telegram:sleeping', { presence: 'not_running', live: null });
   const findButton = root => allNodes(root).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.observe');
   let root = document.createElement('div');
-  renderOverview(root, live, {}, { document, t, onObserve: view => seen.push(view) });
+  renderOverview(root, live, {}, { document, t, level: 'technical', onObserve: view => seen.push(view) });
   findButton(root).dispatch('click'); assert.deepEqual(seen, ['live']);
   root = document.createElement('div'); renderOverview(root, live, {}, { document, t }); assert.equal(findButton(root), undefined);
-  root = document.createElement('div'); renderOverview(root, idle, {}, { document, t, onObserve: view => seen.push(view) });
+  root = document.createElement('div'); renderOverview(root, idle, {}, { document, t, level: 'technical', onObserve: view => seen.push(view) });
   assert.equal(findButton(root).dataset.observerGroup, 'telegram:sleeping');
   findButton(root).dispatch('click'); assert.deepEqual(seen, ['live', 'live'], 'sleeping detail enters the page, which offers history');
   const loader = { state: { runs: [], expanded: new Set(), events: new Map(), messages: new Map(), between: [], filter: 'all', totalRuns: 0 }, setFilter() {}, collapse() {} };
-  root = document.createElement('div'); renderTimeline(root, loader, { document, t, onObserve: view => seen.push(view) });
+  root = document.createElement('div'); renderTimeline(root, loader, { document, t, level: 'technical', onObserve: view => seen.push(view) });
   allNodes(root).find(node => node.textContent === 'wb.detail.observeHistory').dispatch('click'); assert.deepEqual(seen, ['live', 'live', 'history']);
   root = document.createElement('div'); renderTimeline(root, loader, { document, t });
   assert.equal(allNodes(root).some(node => node.textContent === 'wb.detail.observeHistory'), false);
@@ -1275,7 +1284,7 @@ function detailScrollFixture(fetch, options = {}) {
 test('overview refresh updates mounted nodes without replacing the body or evidence fold', async context => {
   for (const open of [true, false]) await context.test(open ? 'open evidence' : 'closed evidence', async () => {
     const pending = deferred(); let delayed = false;
-    let current = row('a');
+    let current = row('a', { state: { kind: 'waiting' } });
     const stableEvent = { event_seq: 1, event_type: 'stop', timestamp: '2026-11-11T00:00:00Z' };
     const f = detailScrollFixture(async path => {
       if (delayed && path.startsWith('/api/timeline')) return pending.promise;
@@ -1310,7 +1319,7 @@ test('overview refresh updates mounted nodes without replacing the body or evide
 test('explicit detail tabs and another group start at the top without leaking evidence expansion', async () => {
   let level = 'technical';
   const f = detailScrollFixture(async path => response(defaultRead(path)), { detail: () => level });
-  const first = row('a'), second = row('b');
+  const first = row('a', { state: { kind: 'waiting' } }), second = row('b', { state: { kind: 'waiting' } });
   try {
     await f.controller.open(first, { rows: [first, second], listKnown: true });
     f.root.querySelector('.wb-detail-body').scrollTop = 175;
@@ -1343,7 +1352,7 @@ test('explicit detail tabs and another group start at the top without leaking ev
 
 test('evidence expansion survives a new preview while its stored-message fold keeps preview ownership', async () => {
   const preview = timestamp => ({ text: 'message', channel: 'telegram', timestamp, source: { kind: 'channel' } });
-  let current = row('a', { state: { kind: 'idle' }, preview: preview(1) });
+  let current = row('a', { state: { kind: 'waiting' }, preview: preview(1) });
   const f = detailScrollFixture(async path => response(path.endsWith('/raw') ? { raw: 'stored message' } : defaultRead(path)),
     { detail: () => 'technical' });
   try {
@@ -1535,4 +1544,154 @@ test('an open name editor follows permission changes with fresh controls', async
     assert.equal(reopenedEditor.children[0].value, 'Unsent name');
     assert.equal(reopenedEditor.children[0].disabled, false); assert.equal(reopenedEditor.children[1].disabled, false);
   } finally { f.controller.destroy(); }
+});
+
+
+test('account source evidence reads each runtime before deciding whether sources are healthy', () => {
+  const accountSources = { claude: { ok: true, readAt: 1000 }, codex: { ok: true, readAt: 2000 } };
+  const current = row('telegram:accounts', { state: { kind: 'waiting' }, wait: { kind: 'queued' } });
+  const healthy = detailEvidence(current, { sources: { status: { ok: true, readAt: 3000 }, accounts: accountSources } });
+  const sources = healthy.samples.filter(item => item.source === 'sources' || item.source.startsWith('accounts'));
+  assert.equal(sources.length, 1);
+  assert.equal(sources[0].value, 'ok', 'successful nested account reads must not become unknown');
+  assert.equal(sources[0].source, 'sources');
+  for (const runtime of ['claude', 'codex']) {
+    const readAt = runtime === 'claude' ? 4000 : 5000;
+    const evidence = detailEvidence(current, { sources: { status: { ok: true, readAt: 3000 },
+      accounts: { ...accountSources, [runtime]: { ok: false, reason: 'account_usage_unreadable', readAt } } } });
+    const failures = evidence.samples.filter(item => item.source === 'sources' || item.source.startsWith('accounts'));
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].source, 'accounts.' + runtime);
+    assert.equal(failures[0].value, 'account_usage_unreadable');
+    assert.equal(failures[0].at, readAt, 'the failed runtime keeps its own read timestamp');
+    assert.equal(failures[0].runtime, runtime);
+  }
+});
+
+
+test('plain busy and waiting summaries stay on one current-state line', () => {
+  const document = createDocument();
+  const currentEvents = [
+    { run_id: 'r', event_type: 'subagent_start', agent_id: 'first', event_seq: 1 },
+    { run_id: 'r', event_type: 'subagent_start', agent_id: 'second', event_seq: 2 },
+    { run_id: 'old', event_type: 'subagent_start', agent_id: 'stale', event_seq: 1 },
+  ];
+  for (const tools of [[], [{ name: 'Bash', detail: 'private command' }, { name: 'Read', detail: '/private/path' }]]) {
+    const root = document.createElement('div');
+    renderOverview(root, row('telegram:busy', { live: { runId: 'r' }, tools }), { currentEvents }, { document, t });
+    const now = allNodes(root).find(node => node.classList.contains('wb-detail-now'));
+    const titles = allNodes(now).filter(node => node.classList.contains('wb-now-title'));
+    assert.equal(titles.length, 1);
+    assert.match(titles[0].textContent, /wb\.detail\.backgroundAgents \{"count":2\}/);
+    for (const tool of tools) assert.ok(titles[0].textContent.includes('wb.tool.' + tool.name));
+    assert.doesNotMatch(now.textContent, /private command|private.path|stale/);
+    assert.equal(allNodes(now).some(node => node.classList.contains('wb-subs')), false, 'plain count replaces individual technical subagent tags');
+  }
+  const root = document.createElement('div');
+  renderOverview(root, row('telegram:wait', { state: { kind: 'waiting' }, wait: { kind: 'queued', reasonCode: 'queue_pending' } }), {}, { document, t });
+  const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
+  const titles = allNodes(card).filter(node => node.classList.contains('wb-now-title'));
+  assert.equal(titles.length, 1);
+  assert.equal(titles[0].textContent, 'wb.wait.queued {"time":"","count":1}');
+  assert.doesNotMatch(card.textContent, /wb\.state\.waiting|queue_pending/);
+});
+
+test('received previews can be omitted while technical raw history remains available', async tctx => {
+  const current = row('telegram:side', { state: { kind: 'idle' }, duration: 75,
+    preview: { text: 'already visible in the conversation', timestamp: 1000, channel: 'telegram', source: { kind: 'channel' } } });
+  for (const level of ['plain', 'technical']) {
+    let rawReads = 0;
+    const f = detailFixture(async path => {
+      if (path.endsWith('/raw')) { rawReads++; return response({ raw: 'explicitly requested stored history' }); }
+      return response(defaultRead(path));
+    }, { detail: () => level, showLastReceived: false });
+    tctx.after(() => f.controller.destroy());
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    const card = allNodes(f.root).find(node => node.classList.contains('wb-now-card'));
+    assert.match(card.textContent, /wb\.state\.idle.*1m15s/);
+    assert.doesNotMatch(card.textContent, /lastReceived|already visible/);
+    assert.equal(allNodes(card).some(node => node.classList.contains('wb-now-sub')), false);
+    assert.equal(rawReads, 0, 'hiding the subtitle does not eagerly read stored history');
+    const raw = allNodes(card).find(node => node.classList.contains('wb-now-raw'));
+    if (level === 'plain') assert.equal(raw, undefined);
+    else {
+      assert.ok(raw, 'the existing technical raw-history viewer remains');
+      raw.open = true; raw.dispatch('toggle'); await tick(); await tick();
+      assert.equal(rawReads, 1);
+      assert.match(f.root.textContent, /explicitly requested stored history/);
+    }
+  }
+});
+
+test('diagnostic evidence appears only in technical waiting unknown and error states', () => {
+  const document = createDocument();
+  for (const level of ['plain', 'technical']) for (const kind of ['idle', 'busy', 'waiting', 'unknown', 'error', 'not_running']) {
+    const root = document.createElement('div');
+    renderOverview(root, row('telegram:evidence', { state: { kind } }), {}, { document, t, level });
+    const evidence = allNodes(root).filter(node => node.classList.contains('wb-detail-evidence'));
+    assert.equal(evidence.length, level === 'technical' && ['waiting', 'unknown', 'error'].includes(kind) ? 1 : 0, level + ' ' + kind);
+  }
+});
+
+test('source evidence condenses healthy reads and labels failed reads separately from session state', () => {
+  const document = createDocument(), current = row('telegram:sources', { state: { kind: 'waiting' },
+    live: { status: { state: 'idle', sampledAt: 99000 } }, wait: { kind: 'queued' } });
+  const sources = { status: { ok: true, readAt: 97000 }, c4: { ok: true, readAt: 96000 }, q: { ok: true, readAt: 95000 },
+    ov: { ok: true, readAt: 94000 }, accounts: { claude: { ok: true, readAt: 93000 }, codex: { ok: true, readAt: 92000 } } };
+  let root = document.createElement('div');
+  renderOverview(root, current, {}, { document, t, level: 'technical', snapshot: { sources } });
+  let evidence = allNodes(root).find(node => node.classList.contains('wb-detail-evidence'));
+  let lines = allNodes(evidence).filter(node => node.tagName === 'TR');
+  assert.equal(lines.filter(node => node.dataset.updateKey === 'sources').length, 1);
+  assert.match(evidence.textContent, /wb\.detail\.sourcesHealthy/);
+  assert.match(evidence.textContent, /wb\.detail\.sessionStatus/);
+  assert.equal(lines.some(node => ['status', 'c4', 'q', 'ov', 'accounts.claude', 'accounts.codex'].includes(node.dataset.updateKey)), false);
+  root = document.createElement('div');
+  renderOverview(root, current, {}, { document, t, level: 'technical', snapshot: { sources: { ...sources,
+    status: { ok: false, reason: 'status_unreadable', readAt: 97000 }, accounts: { ...sources.accounts, codex: { ok: false, reason: 'account_usage_unreadable', readAt: 92000 } } } } });
+  evidence = allNodes(root).find(node => node.classList.contains('wb-detail-evidence'));
+  lines = allNodes(evidence).filter(node => node.tagName === 'TR');
+  assert.equal(lines.some(node => node.dataset.updateKey === 'sources'), false);
+  assert.equal(lines.filter(node => node.dataset.updateKey === 'status').length, 1);
+  assert.equal(lines.filter(node => node.dataset.updateKey === 'accounts.codex').length, 1);
+  assert.equal(lines.some(node => ['c4', 'q', 'ov', 'accounts.claude'].includes(node.dataset.updateKey)), false);
+  assert.match(evidence.textContent, /wb\.detail\.sessionStatus/);
+  assert.match(evidence.textContent, /wb\.detail\.sourceStatus/);
+  assert.match(evidence.textContent, /wb\.detail\.sourceAccounts.*Codex/);
+  assert.doesNotMatch(evidence.textContent, /sourcesHealthy|unknown/);
+});
+
+test('terminal entry stays technical and keeps its accessible name and navigation action', () => {
+  const document = createDocument(), seen = [], current = row('telegram:terminal');
+  for (const level of ['plain', 'technical']) {
+    const root = document.createElement('div');
+    renderOverview(root, current, {}, { document, t, level, onObserve: view => seen.push(view) });
+    const button = allNodes(root).find(node => node.dataset.observerGroup === 'telegram:terminal');
+    if (level === 'plain') assert.equal(button, undefined);
+    else {
+      assert.equal(button.textContent, 'wb.detail.observe');
+      assert.equal(button.title, 'wb.detail.observe');
+      assert.equal(button.getAttribute('aria-label'), 'wb.detail.observe');
+      button.dispatch('click');
+    }
+  }
+  assert.deepEqual(seen, ['live']);
+});
+
+
+test('terminal buttons and navigation use the same Chinese and English accessible label', () => {
+  const document = createDocument();
+  for (const [locale, expected] of [['zh', '终端'], ['en', 'Terminal']]) {
+    const main = JSON.parse(readFileSync(new URL('../public/i18n/' + locale + '.json', import.meta.url), 'utf8'));
+    const workbench = JSON.parse(readFileSync(new URL('../public/i18n/wb.' + locale + '.json', import.meta.url), 'utf8'));
+    const labels = { ...main, ...workbench }, translate = key => labels[key] ?? key;
+    const root = document.createElement('div');
+    renderOverview(root, row('telegram:terminal'), {}, { document, t: translate, level: 'technical', onObserve() {} });
+    const button = allNodes(root).find(node => node.dataset.observerGroup === 'telegram:terminal');
+    assert.equal(button.textContent, expected);
+    assert.equal(button.title, expected);
+    assert.equal(button.getAttribute('aria-label'), expected);
+    assert.equal(observerNavEntry({ installed: true, enabled: true }, 'technical', translate).label, expected);
+    assert.equal(observerNavEntry({ installed: true, enabled: true }, 'plain', translate), null);
+  }
 });

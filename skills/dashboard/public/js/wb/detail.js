@@ -1,9 +1,9 @@
 import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=152';
-import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=161';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=161';
+import { channelIcon, platformLabel, statePill } from './board.js?v=153';
+import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=162';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=162';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=115';
 import { renderNameEditor } from './name-edit.js?v=115';
@@ -90,7 +90,7 @@ export function plainMeta(row, t = key => key, { now = Date.now(), locale } = {}
 }
 
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
-  t = key => key, writable = () => true, detail = () => 'plain', identity = () => '',
+  t = key => key, writable = () => true, detail = () => 'plain', identity = () => '', showLastReceived = true,
   onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm, observable = () => false, onObserve = () => {},
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
@@ -188,7 +188,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const body = element(document, 'div', undefined, 'wb-detail-body');
     const observe = observable(row) ? view => onObserve(key, view) : null;
     if (state.tab === 'overview') {
-      const sections = renderOverview(body, row, state, { document, t, level: getLevel(), snapshot: state.snapshot, currentTime: now(),
+      const sections = renderOverview(body, row, state, { document, t, level: getLevel(), snapshot: state.snapshot, currentTime: now(), showLastReceived,
         onTimeline: () => { void selectTab('timeline'); }, onMemory: () => onMemory(row.sessionGroup), onObserve: observe,
         onRaw: open => { void openRaw(row, open); },
         onConfig: async () => {
