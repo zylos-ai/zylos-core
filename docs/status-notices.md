@@ -218,7 +218,9 @@ The `capacity` context has one ID: `memory_low` (valid memory readings reach or
 exceed the danger line for two consecutive calculations, in automatic or fixed
 mode). This is a complete notice without inbound or first-failure suffixes or
 template variables. It is sent at most once every 30 minutes through the
-Supervisor's existing alert destination, with Web Console fallback. If
+Supervisor's existing alert destination (`alert_target`), falling back to the
+Origin conversation in Dashboard (address `dashboard origin`) when the target is
+not set, is `default`, cannot be parsed, or fails to send. If
 configuration cannot be read, that round does not read memory, judge pressure,
 or send a capacity notice. Group names, memory readings, and error text remain
 diagnostics and are not inserted into the message.
@@ -255,7 +257,9 @@ nonempty/2000-character/control-character validation as other notices.
 The Router alerts after five failed continuation starts, at most once per machine
 every thirty minutes. Any activation becoming ready resets that group's failures,
 including inbound activation. Alert destination and templates are read at sending;
-unreadable configuration uses defaults and Web Console. Delivery failures retain
+unreadable configuration uses defaults and the Origin conversation in Dashboard,
+as does an `alert_target` that is not set, is `default`, cannot be parsed, or
+fails to send. Delivery failures retain
 the window. Sending does not block scheduling or Router shutdown. Ready runs that
 end unexpectedly use the Supervisor's existing per-group counter and cooldown;
 only the text changes. Neither counter nor cooldown is persisted.

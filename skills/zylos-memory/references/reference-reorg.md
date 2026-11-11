@@ -24,8 +24,7 @@ incoming-message preview. Read from the top and choose the first private chat
 whose incoming sender matches the owner's platform ID or name in references.md
 under Active IDs. The Agent judges the match; do not turn this into a fixed
 query. If no private chat is found in that period, ask in the Dashboard's Origin
-conversation in multi mode, or the web console in single mode. Both are owner
-channels.
+conversation, in either session mode. It is an owner channel.
 
 | Situation | Single mode | Multi mode |
 |---|---|---|
@@ -62,7 +61,7 @@ decline record.
 
 A direct “reorganize now” from the owner also authorizes this procedure without
 waiting for a proposal. Verify the owner's platform identity in private chat, or
-use the owner trust boundary of web console or Dashboard. Someone else's group
+use the owner trust boundary of Dashboard. Someone else's group
 message or a secondhand statement of the owner's wishes does not count.
 
 ## Start one background worker
