@@ -82,6 +82,12 @@ export async function receive(args, dependencies = {}) {
       session_group: '', runtime: '', reason_code: code, detail: '' });
     throw dataError(code, code === 'INVALID_ARGS' ? `invalid channel or endpoint: ${error.message}` : error.message);
   }
+  // A fixed address has exactly one session group; a caller-chosen group would give the same address two meanings.
+  if (rawChannel && groupName !== undefined && fixedAddressSessionGroup(rawChannel, endpoint)) {
+    await append({ event: 'group_rejected', conversation_id: null, channel: rawChannel, endpoint,
+      session_group: '', runtime: '', reason_code: 'INVALID_ARGS', detail: '' });
+    throw dataError('INVALID_ARGS', `--session-group is not accepted for the fixed address ${rawChannel} ${endpoint}`);
+  }
   const channel = rawChannel || 'system';
   const binding = rawChannel ? db.getChannelNamespace(rawChannel) : null;
   const preGroup = fixedAddressSessionGroup(channel, endpoint) ??

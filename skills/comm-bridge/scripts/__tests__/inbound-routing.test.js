@@ -15,8 +15,8 @@ const input = ['--channel', 'chat', '--endpoint', 'room|msg:1', '--content', 'he
 const pending = { decision: 'pending', recovered: true, runtime: 'codex', health: 'rate_limited', reason: 'quota', transitionHold: false };
 const rejected = { recovered: false, runtime: 'codex', health: 'unavailable', reason: 'down', transitionHold: false, userMessage: 'unavailable' };
 const auth = result => ({ ...rejected, decision: 'auth_rejected', health: 'auth_failed', reason: 'auth_failed', auth: { result, detail: 'probe\u0000failed' } });
-function setup(t) {
-  const f = fixture(t, {}, true);
+function setup(t, storeDependencies = {}) {
+  const f = fixture(t, storeDependencies, true);
   fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'chat'), { recursive: true });
   const events = [], order = [];
   const dependencies = { db: f.store,
@@ -41,6 +41,30 @@ test('dashboard origin uses the fixed group before routing and while storing', a
   assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(reply.id).session_group, 'origin');
   assert.equal(f.store.getChannelNamespace('dashboard'), null);
   assert.equal(f.store.listGroupHeads().some(head => head.sessionGroup === 'dashboard:origin'), false);
+});
+
+test('dashboard origin is stored in origin in both session modes and refuses a caller-chosen group', async t => {
+  for (const mode of ['single', 'multi']) {
+    const f = setup(t, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: mode } }) });
+    fs.mkdirSync(path.join(process.env.ZYLOS_DIR, '.claude', 'skills', 'dashboard'), { recursive: true });
+    const rejections = [];
+    let routed = 0;
+    f.dependencies.queryRoute = async () => { routed++; return pending; };
+    f.dependencies.appendEntryEvent = async event => { if (event.event === 'group_rejected') rejections.push(event); return true; };
+    const stored = await receive(['--channel', 'dashboard', '--endpoint', 'origin', '--content', `from ${mode}`], f.dependencies);
+    assert.equal(f.db.prepare('SELECT session_group FROM conversations WHERE id=?').get(stored.id).session_group, 'origin', mode);
+    await assert.rejects(receive(['--channel', 'dashboard', '--endpoint', 'origin', '--content', 'grouped', '--session-group', 'origin'], f.dependencies),
+      { code: 'INVALID_ARGS', message: /fixed address dashboard origin/ });
+    await assert.rejects(receive(['--channel', 'dashboard', '--endpoint', 'origin', '--content', 'grouped', '--session-group', 'Team'], f.dependencies),
+      { code: 'INVALID_ARGS' });
+    assert.equal(routed, 1, `${mode}: a refused message is not routed`);
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM conversations WHERE content='grouped'").get().n, 0, `${mode}: nothing stored`);
+    assert.deepEqual(rejections.map(event => [event.channel, event.endpoint, event.reason_code, event.conversation_id]),
+      [['dashboard', 'origin', 'INVALID_ARGS', null], ['dashboard', 'origin', 'INVALID_ARGS', null]]);
+    // The address `origin` means nothing special on another channel.
+    const other = await receive(['--channel', 'chat', '--endpoint', 'origin', '--content', 'elsewhere', '--session-group', 'Team'], f.dependencies);
+    assert.equal(other.sessionGroup, 'chat:Team', mode);
+  }
 });
 
 test('validates before route/; name/group errors emit one and ordinary argument errors none', async t => {
