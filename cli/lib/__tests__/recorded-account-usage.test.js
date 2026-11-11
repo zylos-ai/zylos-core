@@ -321,6 +321,7 @@ test('a subscription startup sample without an API response cannot erase recorde
   const f = fixture(t); f.status('subscription', 7, now - 10000); f.setLive(['origin']);
   f.write('activity-monitor/session-groups/origin/statusline.json', {
     session_id: 'session', zylos: { v: 1, runId: 'run', capturedAt: now - 1000 },
+    cost: { total_api_duration_ms: 0 },
     context_window: { total_input_tokens: 0, total_output_tokens: 0, current_usage: null },
   });
   const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
