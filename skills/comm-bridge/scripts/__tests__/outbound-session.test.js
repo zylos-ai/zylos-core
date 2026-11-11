@@ -10,6 +10,8 @@ import { createStore } from '../c4-v2-store.js';
 import { guardDatabase } from '../sqlite-schema.js';
 import * as schema from '../c4-schema.js';
 import { sendExternal } from '../c4-send-external.js';
+import { formatConversation } from '../router/format.js';
+import { formatConversationsForAgent } from '../c4-db.js';
 
 const scripts = fileURLToPath(new URL('../', import.meta.url));
 const packageRoot = path.resolve(scripts, '../../..');
@@ -216,6 +218,30 @@ test('Dashboard origin shares the fixed origin rule and bypasses its query', asy
   assert.equal(f.queries().length, 0);
   assert.equal(f.hooks().length, 1);
   assert.equal(f.deliveries().length, 1);
+});
+
+// Same installed isolation boundary. Run for fixed-address or reply-via changes:
+// the route an Origin session is given (live delivery and the session-start
+// context) names no group, and replying with it records origin.
+test('an owner message to dashboard origin offers a reply route without a group that records origin', { timeout: 10000 }, t => {
+  const f = fixture(t, { installed: true }); f.installComponent('dashboard');
+  const incoming = f.store.insertConversation('in', 'dashboard', 'origin', 'Are the alerts handled?');
+  const row = f.db.prepare('SELECT * FROM conversations WHERE id=?').get(incoming.id);
+  assert.equal(row.session_group, 'origin');
+  const options = { ownerName: () => 'the owner', lookupQuote: () => null };
+  for (const text of [formatConversation(row, { ...options, scriptPath: f.cli }), formatConversationsForAgent([row], { ...options, spill: false })]) {
+    // Live delivery quotes for the shell with single quotes, the session-start context with double quotes.
+    const route = text.match(/---- reply via: node .+ (['"])([^'"]*)\1 (['"])([^'"]*)\3$/m);
+    assert.ok(route, text);
+    assert.doesNotMatch(text, /--session-group/);
+    const [channel, endpoint] = [route[2], route[4]];
+    assert.deepEqual([channel, endpoint], ['dashboard', 'origin']);
+    const reply = f.invoke([channel, endpoint, '--stdin'], 'origin');
+    assert.ifError(reply.error); assert.equal(reply.status, 0, reply.stderr);
+    sent(f, f.db.prepare('SELECT * FROM conversations ORDER BY id DESC LIMIT 1').get(), 'origin', 'origin');
+  }
+  assert.equal(f.queries().length, 0);
+  assert.equal(f.count('channel_namespaces'), 0);
 });
 
 function ordinaryMessage(script) {
