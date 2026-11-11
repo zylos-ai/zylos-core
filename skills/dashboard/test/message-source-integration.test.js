@@ -55,7 +55,8 @@ test('Dashboard sends and question or form answers gain source identity only at 
     }
     assert.equal(received.length, 6);
     for (const [index, row] of rows.entries()) {
-      const expected = '[Dashboard] Howard said: ' + projectC4Content(row.content, { c4Id: row.id }) + `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n` + ' ' + replyVia(row, '/private/c4-send.js');
+      const body = projectC4Content(row.content, { c4Id: row.id }).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      const expected = '[Dashboard]\n<current-message>\nHoward said: ' + body + '\n</current-message>' + `\nCharts/choices/forms when useful: node ${shellQuote(path.join(SKILLS_DIR, 'dashboard', 'scripts', 'components.js'))} list --json\n` + ' ' + replyVia(row, '/private/c4-send.js');
       assert.equal(received[index].text, expected); assert.equal(received[index + 3].text, expected);
       assert.equal(row.content.includes('[Dashboard]'), false);
     }
@@ -65,6 +66,6 @@ test('Dashboard sends and question or form answers gain source identity only at 
     assert.equal(JSON.stringify(history.body).includes('[Dashboard]'), false);
     assert.equal(api.db.prepare("SELECT COUNT(*) n FROM conversations WHERE content LIKE '%[Dashboard]%' ").get().n, 0);
     fs.writeFileSync(references, '## Active IDs\n- Owner: (not yet established)\n');
-    assert.ok(format(rows[0]).startsWith('[Dashboard] the owner said: Original Dashboard message'));
+    assert.ok(format(rows[0]).startsWith('[Dashboard]\n<current-message>\nthe owner said: Original Dashboard message\n</current-message>'));
   });
 });

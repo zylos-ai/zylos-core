@@ -1722,10 +1722,7 @@ export function createServer() {
     res.writeHead = function (statusCode, ...args) {
       const index = typeof args[0] === 'string' ? 1 : 0;
       const headers = args[index];
-      if (Array.isArray(headers)) {
-        // Raw header arrays alternate names and values; retain complete pairs.
-        args[index] = headers.filter((_, i) => String(headers[i - i % 2]).toLowerCase() !== 'x-robots-tag');
-      } else if (headers) {
+      if (headers) {
         args[index] = Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== 'x-robots-tag'));
       }
       this.setHeader('X-Robots-Tag', 'noindex, nofollow');
@@ -1738,7 +1735,7 @@ export function createServer() {
     }
     let pathname = url.pathname;
 
-    if (pathname === '/robots.txt' || pathname === `${browserBaseFromRequest(req)}/robots.txt`) {
+    if (pathname === '/robots.txt') {
       sendText(res, 200, 'User-agent: *\nDisallow: /\n');
       return;
     }

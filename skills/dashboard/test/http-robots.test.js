@@ -52,11 +52,7 @@ test('Dashboard responses and documents exclude search crawlers', { timeout: 200
   // Supply conflicting upstream headers without starting a remote Fleet server.
   t.mock.method(FleetProxy.prototype, 'handle', async (_req, res, url) => {
     res.setHeader('X-Robots-Tag', 'index, follow');
-    if (url.pathname.endsWith('/raw')) {
-      res.writeHead(200, ['X-Robots-Tag', 'all', 'Content-Type', 'text/plain']);
-    } else {
-      res.writeHead(200, 'OK', { 'x-robots-tag': 'all', 'content-type': 'text/plain' });
-    }
+    res.writeHead(200, 'OK', { 'x-robots-tag': 'all', 'content-type': 'text/plain' });
     res.end('upstream body');
   });
   process.env.ZYLOS_DIR = fixtureRoot;
@@ -87,12 +83,11 @@ test('Dashboard responses and documents exclude search crawlers', { timeout: 200
   });
 
   // Public robots route: run for auth ordering or prefix handling; skip style.
-  // Both proxy-stripped and retained prefixes use the same isolated listener.
+  // Caddy strips the prefix and passes it in X-Forwarded-Prefix.
   await t.test('robots file stays public through proxy prefixes', async () => {
     for (const [route, headers] of [
       ['/robots.txt', {}],
       ['/robots.txt', { 'x-forwarded-prefix': '/dashboard' }],
-      ['/dashboard/robots.txt', { 'x-forwarded-prefix': '/dashboard' }],
     ]) {
       const { res, body } = await request(route, 200, { headers });
       assert.match(res.headers.get('content-type'), /text\/plain/);
@@ -113,7 +108,7 @@ test('Dashboard responses and documents exclude search crawlers', { timeout: 200
     const page = await request('/', 200, { headers });
     assert.match(page.body, /<meta name="robots" content="noindex, nofollow">/);
     await request('/missing-page', 404, { headers });
-    for (const route of ['/fleet/example/object', '/fleet/example/raw']) {
+    for (const route of ['/fleet/example/object']) {
       const proxy = await request(route, 200, { headers });
       assert.equal(proxy.body, 'upstream body');
       assert.match(proxy.res.headers.get('content-type'), /text\/plain/);

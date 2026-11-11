@@ -15,11 +15,13 @@ export function readOwnerName(file = path.join(DATA_DIR, '..', 'memory', 'refere
 }
 
 export function dashboardSource(content, ownerName = readOwnerName()) {
-  const body = [], annotations = [];
-  for (const line of content.split('\n')) {
-    // Preserve parser-recognized annotation bytes, including their file paths.
-    (parseAttachmentAnnotation(line) ? annotations : body).push(line);
+  const lines = content.split('\n');
+  let tail = lines.length;
+  // Generated annotations form a suffix; angle-bearing lookalikes stay escaped.
+  while (tail > 0 && !/[<>]/.test(lines[tail - 1]) && parseAttachmentAnnotation(lines[tail - 1])) {
+    tail--;
   }
+  const body = lines.slice(0, tail), annotations = lines.slice(tail);
   const escape = value => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   const message = `[Dashboard]\n<current-message>\n${escape(ownerName)} said: ${escape(body.join('\n'))}\n</current-message>`;
   return message + (annotations.length ? '\n' + annotations.join('\n') : '');

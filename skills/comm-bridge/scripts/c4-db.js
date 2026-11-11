@@ -402,7 +402,7 @@ export function formatConversationsForAgent(conversations, { spill = true, owner
     const replyViaSuffix = (
       conv.direction === 'in' &&
       conv.endpoint_id &&
-      !hasLegacyReplyViaSuffix(content)
+      (conv.channel === 'dashboard' || !hasLegacyReplyViaSuffix(content))
     ) ? buildReplyViaSuffix(conv.channel, conv.endpoint_id) : '';
     lines.push(`[${conv.timestamp}] ${dir} (${conv.channel}${endpoint}):`);
     lines.push(spill
