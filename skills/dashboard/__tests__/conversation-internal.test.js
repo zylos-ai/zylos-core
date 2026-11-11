@@ -123,7 +123,7 @@ test('mounted conversation peer links navigate both tabs and retain raw technica
 });
 
 for (const locale of ['en', 'zh']) for (const peerExists of [false, true]) {
-  test(`origin internal peer uses the system assistant name without an unavailable warning in ${locale} (${peerExists})`, () => {
+  test(`origin internal peer uses the Origin name without an unavailable warning in ${locale} (${peerExists})`, () => {
     const document = createDocument(), words = translations(locale), row = relay(), opened = [];
     row.internal = { ...row.internal, peerSessionGroup: 'origin', peerDisplayName: 'origin', peerExists };
     const resource = renderInternalMessage({ document, row, t: key => words[key], onOpenPeer: (...args) => opened.push(args) });

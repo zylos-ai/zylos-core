@@ -116,7 +116,7 @@ test('scheduler writes report done or the scheduler rejection text', async conte
   const row = db.prepare('SELECT * FROM tasks WHERE id=?').get(id);
   assert.deepEqual([row.priority, row.miss_threshold, row.require_idle, row.interval_seconds], [2, 120, 1, 7200]);
   assert.deepEqual([row.session_component, row.session_group_name, row.reply_channel, row.reply_endpoint], [null, null, null, null]);
-  assert.equal(deliveryLine(await d.task(id), { t }), '在系统助手执行 · 结果不另外发送');
+  assert.equal(deliveryLine(await d.task(id), { t }), '在 Origin 执行 · 结果不另外发送');
 
   const priority = await d.write('POST', '/api/workbench/schedule', { prompt: 'x', schedule: { kind: 'every', value: '1h' }, priority: '9' });
   assert.equal(priority.status, 400);
@@ -214,7 +214,7 @@ test('delivery stays read-only and follows agent changes in two parts', async co
   const id = (await d.write('POST', '/api/workbench/schedule', { name: 'Report', prompt: 'Report',
     schedule: { kind: 'cron', value: '0 8 * * *' } })).body.data.task.id;
   const line = async (level = 'plain') => deliveryLine(await d.task(id), { t, level });
-  assert.equal(await line(), '在系统助手执行 · 结果不另外发送');
+  assert.equal(await line(), '在 Origin 执行 · 结果不另外发送');
   assert.equal(d.agent(['update', id, '--reply-channel', 'telegram', '--reply-endpoint', '1001', '--reply-session-group', 'dm-1001']).ok, true);
   assert.equal(await line(), '在 Telegram · dm-1001 执行 · 结果发到 Telegram');
   assert.equal(await line('technical'), '在 telegram:dm-1001 执行 · 结果发到 Telegram · 1001');
@@ -233,7 +233,7 @@ test('delivery stays read-only and follows agent changes in two parts', async co
   assert.deepEqual({ ...after, name: undefined, cron_expression: undefined }, { ...before, name: undefined, cron_expression: undefined });
   assert.deepEqual([after.name, after.cron_expression], ['Renamed', '0 9 * * *']);
   assert.equal(d.agent(['update', id, '--clear-session-group', '--clear-reply']).ok, true);
-  assert.equal(await line(), '在系统助手执行 · 结果不另外发送');
+  assert.equal(await line(), '在 Origin 执行 · 结果不另外发送');
 });
 
 // Permission integration: real AuthGate with in-memory API sessions only. Run for

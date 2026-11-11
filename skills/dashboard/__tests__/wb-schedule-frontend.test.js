@@ -29,11 +29,11 @@ test('target and delivery lines use the dispatch target and always keep two part
   assert.equal(targetLabel({ ...group, displayName: '客户群' }, { t }), '客户群');
   assert.equal(targetLabel({ kind: 'raw', text: 'telegram:dm-1001' }, { t }), 'telegram:dm-1001');
   assert.equal(targetLabel({ kind: 'group', sessionGroup: 'telegram', componentName: 'telegram' }, { t }), 'Telegram');
-  assert.equal(targetLabel({ kind: 'origin' }, { t }), '系统助手');
+  assert.equal(targetLabel({ kind: 'origin' }, { t }), 'Origin');
   assert.equal(targetLabel({ kind: 'origin' }, { t, level: 'technical' }), 'Origin');
   assert.equal(deliveryLine({ target: group, reply }, { t }), '在 Telegram · dm-1001 执行 · 结果发到 Telegram');
   assert.equal(deliveryLine({ target: group, reply }, { t, level: 'technical' }), '在 telegram:dm-1001 执行 · 结果发到 Telegram · 1001');
-  assert.equal(deliveryLine({ target: { kind: 'origin' }, reply: null }, { t }), '在系统助手执行 · 结果不另外发送');
+  assert.equal(deliveryLine({ target: { kind: 'origin' }, reply: null }, { t }), '在 Origin 执行 · 结果不另外发送');
   const en = packTranslator('en');
   assert.equal(deliveryLine({ target: group, reply }, { t: en, locale: 'en' }), 'Runs in Telegram · dm-1001 · results go to Telegram');
 });
@@ -269,7 +269,7 @@ test('an unknown write result re-reads the list once and a re-enable moves the t
   allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();
   assert.match(textOf(h.root), /上次出错：Missed execution window/);
-  assert.match(textOf(h.root), /在系统助手执行 · 结果不另外发送/);
+  assert.match(textOf(h.root), /在 Origin 执行 · 结果不另外发送/);
   buttons(h.root, '改时间并重新启用')[0].dispatch('click');
   const form = allNodes(h.root).find(node => node.tagName === 'FORM');
   const time = allNodes(form).find(node => node.type === 'datetime-local');

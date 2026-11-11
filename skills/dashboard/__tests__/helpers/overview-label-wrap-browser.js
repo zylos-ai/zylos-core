@@ -38,7 +38,7 @@ function measureLabels({ labels, nowrap }) {
   }
   // The auto-name button and the pool's notes may wrap between words: no word of them may have parts on two lines.
   // A word ends at a space or after Chinese punctuation (，。；：、）) and starts before （: line breaks there are
-  // between words, so 「内存只够系统助手，」 and 「同时运行上限按」 are two words.
+  // between words, so 「内存只够 Origin，」 and 「同时运行上限按」 are two words.
   const autoName = document.querySelector('#wb-auto-name');
   const splitWords = [];
   const wrapsBetweenWords = [autoName, ...[...document.querySelectorAll('.wb-pool-note')].filter(note => note.getBoundingClientRect().width > 1)];
@@ -98,12 +98,12 @@ const RICH_POOL = { used: 2, capacity: 4, waiting: 2, capacityRecord: { valid: t
 const SOURCE = { zh: '手动设定 4（按内存建议 3）', en: 'Manually set to 4 (memory recommendation: 3)' };
 const EXPLANATIONS = {
   zh: ['未设内存上限，按整机内存 · 内存上限 16 GiB · 已用 9.5 GiB · 保底 2 GiB', '每会话约 1.2 GiB · 固定开销约 0.8 GiB · 近 7 天',
-    '内存只够系统助手，同时运行上限按 1 运行'],
+    '内存只够 Origin，同时运行上限按 1 运行'],
   en: ['No memory limit set; using host memory · Memory limit 16 GiB · used 9.5 GiB · reserve 2 GiB',
-    'about 1.2 GiB per session · fixed overhead about 0.8 GiB · over the last 7 days', 'Memory fits only the system assistant; running with a limit of 1'],
+    'about 1.2 GiB per session · fixed overhead about 0.8 GiB · over the last 7 days', 'Memory fits only Origin; running with a limit of 1'],
 };
 const HOST_POOL = { zh: { title: '会话池', slots: '名额', source: '来源' }, en: { title: 'Session pool', slots: 'Slots', source: 'Source' } };
-const POOL_HINT = { zh: '系统助手常驻，不占这里的名额', en: 'The system assistant is resident and does not take a slot here' };
+const POOL_HINT = { zh: 'Origin 常驻，不占这里的名额', en: 'Origin is resident and does not take a slot here' };
 const WORDS = { zh: ['1 忙碌', '1 空闲', '1 未运行'], en: ['1 Busy', '1 Idle', '1 Not running'] };
 
 export async function runOverviewLabelWrapBrowser(t, sandbox) {

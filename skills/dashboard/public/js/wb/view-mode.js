@@ -29,7 +29,7 @@ export function createViewMode({ storage = globalThis.localStorage, document = g
 }
 
 const terms = {
-  origin: '系统助手', pool: '同时运行', '7d': '本周额度', runtime: 'AI 引擎',
+  pool: '同时运行', '7d': '本周额度', runtime: 'AI 引擎',
   effort: '思考强度', inherit: '用默认设置', pool_wait: '排队中', unsummarized: '待存入',
 };
 export const term = (key, level = 'plain', t) => level === 'plain'

@@ -16,7 +16,7 @@ export function validName(name) {
 }
 export function fallbackName(key, componentName) {
   const parsed = parseSessionGroup(key);
-  if (key === 'origin') return '系统助手';
+  if (key === 'origin') return 'Origin';
   if (!parsed) return key;
   const component = componentName ?? parsed.namespace, platform = platforms[component] ?? component;
   return parsed.groupName === null ? platform : `${platform} · ${parsed.groupName}`;

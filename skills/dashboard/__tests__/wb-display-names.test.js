@@ -49,7 +49,7 @@ test('display names count Unicode code points and reject control characters and 
   }
 });
 test('fallback labels use only platform and parsed group segment', () => {
-  assert.equal(fallbackName('origin'), '系统助手');
+  assert.equal(fallbackName('origin'), 'Origin');
   assert.equal(fallbackName('telegram'), 'Telegram');
   assert.equal(fallbackName('telegram:dm-1001'), 'Telegram · dm-1001');
   for (const [key, label] of [['lark:a', 'Lark'], ['feishu:a', '飞书'], ['web-console:a', '网页控制台'], ['openmax:a', 'OpenMax'], ['wechat:a', '微信'], ['custom:a', 'custom']]) assert.equal(fallbackName(key), label + ' · a');

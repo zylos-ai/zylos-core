@@ -152,10 +152,10 @@ test('a newer group choice or machine switch cancels an older pending choice', a
 
 
 test('observer group labels use the same readable fallback as the board', () => {
-  const t = key => ({ 'wb.platform.lark': 'Lark', 'wb.term.origin': 'System assistant' }[key] ?? key);
-  assert.equal(observerGroupName({ sessionGroup: 'lark:team.topic', c4: { componentName: 'lark' } }, 'lark:team.topic', 'System assistant', t), 'Lark · team.topic');
-  assert.equal(observerGroupName({ sessionGroup: 'lark:team.topic', name: { displayName: 'Operations' } }, 'lark:team.topic', 'System assistant', t), 'Operations');
-  assert.equal(observerGroupName(null, 'origin', 'System assistant', t), 'System assistant');
+  const t = key => ({ 'wb.platform.lark': 'Lark', 'wb.term.origin': 'Origin' }[key] ?? key);
+  assert.equal(observerGroupName({ sessionGroup: 'lark:team.topic', c4: { componentName: 'lark' } }, 'lark:team.topic', 'Origin', t), 'Lark · team.topic');
+  assert.equal(observerGroupName({ sessionGroup: 'lark:team.topic', name: { displayName: 'Operations' } }, 'lark:team.topic', 'Origin', t), 'Operations');
+  assert.equal(observerGroupName(null, 'origin', 'Origin', t), 'Origin');
 });
 
 test('with the group picker on screen the title is just the page name', () => {

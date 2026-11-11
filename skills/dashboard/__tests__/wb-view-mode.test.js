@@ -17,7 +17,9 @@ test('view level persists only recognized values', () => {
   assert.equal(mode.detailLevel(), 'technical'); mode.setDetailLevel('plain'); assert.equal(saved.getItem('zylos-dashboard-detail-level'), 'plain');
 });
 test('plain language helpers follow the view level', () => {
-  assert.equal(term('origin'), '系统助手'); assert.equal(term('origin', 'technical'), 'origin');
+  // Origin has the same name in both views; the plain view reads it from wb.term.origin.
+  assert.equal(term('origin', 'plain', key => ({ 'wb.term.origin': 'Origin' })[key]), 'Origin');
+  assert.equal(term('origin'), 'origin'); assert.equal(term('origin', 'technical'), 'origin');
   assert.equal(toolLabel('Bash'), '运行命令'); assert.equal(toolLabel('Bash', 'technical'), 'Bash'); assert.equal(toolLabel('unknown'), '使用工具');
 });
 test('system theme reacts to media changes and removes its listener', () => {

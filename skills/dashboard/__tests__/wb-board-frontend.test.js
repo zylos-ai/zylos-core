@@ -397,7 +397,7 @@ test('pool explanations show only usable published values in the host panel, not
   const snapshot = { mode: 'multi', instance: { pool: { used: 2, capacity: 6, capacityRecord } } };
   const view = { mode: snapshot.mode, pool: snapshot.instance.pool };
   const phrases = ['未设内存上限，按整机内存', '内存上限 4 GiB', '已用 3.7 GiB', '保底 0.5 GiB',
-    '每会话约 0.5 GiB', '固定开销约 1.3 GiB', '近 7 天', '内存只够系统助手'];
+    '每会话约 0.5 GiB', '固定开销约 1.3 GiB', '近 7 天', '内存只够 Origin'];
   instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'plain' });
   assert.match(root.textContent, /手动设定 6（按内存建议 0）/);
   assert.doesNotMatch(root.textContent, /内存上限|固定开销|内存只够/);
@@ -418,7 +418,7 @@ test('pool explanations show only usable published values in the host panel, not
   assert.ok(section.textContent.includes('来源手动设定 6（按内存建议 0）'));
   const items = allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent);
   assert.deepEqual(items, ['未设内存上限，按整机内存 · 内存上限 4 GiB · 已用 3.7 GiB · 保底 0.5 GiB',
-    '每会话约 0.5 GiB · 固定开销约 1.3 GiB · 近 7 天', '内存只够系统助手，同时运行上限按 1 运行']);
+    '每会话约 0.5 GiB · 固定开销约 1.3 GiB · 近 7 天', '内存只够 Origin，同时运行上限按 1 运行']);
   capacityRecord.kMemory = -2; capacityRecord.reason = null;
   capacityRecord.memory = { source: 'darwin', limitBytes: '4', usedBytes: null, reserveBytes: NaN };
   capacityRecord.model = { state: 'default', slopeBytes: 0.5 * GiB, interceptBytes: 'bad', windowDays: undefined };
