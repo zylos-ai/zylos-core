@@ -36,7 +36,7 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
           (marker.kind !== 'group' && isSelfPath(relative));
         const legacy = relative => {
           const lower = relative.toLowerCase();
-          return ['reference/projects.md', 'reference/decisions.md', 'reference/reorg-progress.md'].includes(lower) ||
+          return ['reference/projects.md', 'reference/decisions.md'].includes(lower) ||
             lower === 'reference/legacy' || lower.startsWith('reference/legacy/');
         };
         const resolved = resolveAllowedMemoryPath({ root: scope.root, path: input.path, allowed: candidate => {

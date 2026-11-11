@@ -25,7 +25,7 @@ result; do not replace the original outcome or retry release. Never use an
 unrestricted writer to repair a tool failure.
 
 `LEGACY_READ_ONLY` is not a required-step failure: old `reference/projects.md`,
-`reference/decisions.md`, `reference/legacy/**`, and `reference/reorg-progress.md`
+`reference/decisions.md`, and `reference/legacy/**`
 are read-only through `edit_memory`, even when an old path no longer exists.
 Redirect that change to its project/topic page and continue this Sync normally.
 A failed `reference-index.js rebuild` is reported without blocking progress.
@@ -37,12 +37,6 @@ and release once if T was obtained. A checkpoint may already have committed;
 leave remaining inputs for recovery in a later triggered Sync. A crash or failed
 commit does not justify deleting inputs. Do not start another Sync merely to
 repair leftovers when there are no new conversations.
-
-An owner's refusal or silence in response to a memory reorganization proposal
-is neither a decision nor a pending task; do not record it in memory.
-This applies to group Sync as well as Origin and global Sync: do not put it in
-state's Headline, ended items, checkpoint summaries, decision pages or inbox.
-Do not turn it into an instruction to wait for the owner or avoid asking again.
 
 ## Sync limits
 
@@ -264,6 +258,9 @@ to perform this shared-page lookup and creation; it does not write shared pages.
 
 The Sync Agent judges whether a project is done or abandoned and untouched for
 about a month, or all decisions in a topic have been superseded; use
-`reference-index.js archive --path <page>`, leave paused projects in place, and
-use `reference-index.js unarchive --path <archive-page>` when mentioned again.
+`reference-index.js archive --path reference/projects/<name>.md`, leave paused projects in place, and
+use `reference-index.js unarchive --path reference/projects/archive/<name>.md` when mentioned again.
+Every `--path` is relative to the memory directory and includes the category
+folder; decision-topic pages use `reference/decisions/<name>.md` or
+`reference/decisions/archive/<name>.md` instead.
 On `EXISTS`, both pages remain unchanged; rename or merge them before moving.

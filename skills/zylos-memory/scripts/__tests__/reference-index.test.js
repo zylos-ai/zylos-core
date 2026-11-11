@@ -71,7 +71,7 @@ test('rebuild sorts headers and separates malformed pages while ignoring other l
 
 test('create publishes exact bytes and refuses existing files and invalid page paths', t => {
   const f = fixture(t), bytes = Buffer.from([0, 0xff, 0x0a, 0xc3, 0xa9]);
-  for (const name of ['reference/projects/item.md', 'reference/decisions/topic.md', 'reference/reorg-progress.md', `reference/projects/${'a'.repeat(45)}.md`]) {
+  for (const name of ['reference/projects/item.md', 'reference/decisions/topic.md', `reference/projects/${'a'.repeat(45)}.md`]) {
     createPage(f.root, name, bytes);
     assert.equal(fs.readFileSync(f.target(name)).equals(bytes), true);
     assert.throws(() => createPage(f.root, name, 'replacement'), code('EXISTS'));
@@ -79,7 +79,7 @@ test('create publishes exact bytes and refuses existing files and invalid page p
   }
   for (const name of ['reference/projects/INDEX.md', 'reference/projects/archive/item.md', 'reference/projects/中文.md',
     'reference/projects/Upper.md', 'reference/projects/nested/item.md', 'reference/projects/../item.md',
-    `reference/projects/${'a'.repeat(46)}.md`, 'reference/legacy/item.md', 'identity.md']) {
+    `reference/projects/${'a'.repeat(46)}.md`, 'reference/reorg-progress.md', 'reference/legacy/item.md', 'identity.md']) {
     assert.throws(() => createPage(f.root, name, 'no'), code('PATH_NOT_ALLOWED'));
   }
 });
@@ -114,17 +114,18 @@ test('archive and unarchive conflicts change neither pages nor indexes', t => {
 
 test('move-old moves available old files unchanged and skips missing files', t => {
   const f = fixture(t), now = new Date(2026, 10, 11, 10, 15, 30), bytes = Buffer.from([0, 255, 10]);
-  for (const name of ['projects', 'decisions', 'reorg-progress']) f.write(`reference/${name}.md`, bytes);
+  for (const name of ['projects', 'decisions']) f.write(`reference/${name}.md`, bytes);
+  f.write('reference/reorg-progress.md', 'unrelated file');
   const result = moveOld(f.root, now);
   assert.deepEqual(result.paths, [
     'reference/legacy/projects-before-split-20261111-101530.md',
     'reference/legacy/decisions-before-split-20261111-101530.md',
-    'reference/legacy/reorg-progress-20261111-101530.md',
   ]);
-  for (const name of ['projects', 'decisions', 'reorg-progress']) {
+  for (const name of ['projects', 'decisions']) {
     assert.equal(fs.existsSync(f.target(`reference/${name}.md`)), false);
-    assert.equal(fs.readFileSync(f.target(result.paths[['projects', 'decisions', 'reorg-progress'].indexOf(name)])).equals(bytes), true);
+    assert.equal(fs.readFileSync(f.target(result.paths[['projects', 'decisions'].indexOf(name)])).equals(bytes), true);
   }
+  assert.equal(f.read('reference/reorg-progress.md'), 'unrelated file');
   assert.equal(moveOld(f.root, now).paths.length, 0);
 });
 

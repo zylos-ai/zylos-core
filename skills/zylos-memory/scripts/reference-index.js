@@ -95,7 +95,7 @@ export function rebuild(root) {
 }
 
 export function createPage(root, requested, content) {
-  const permitted = p => pagePath(p) || p === 'reference/reorg-progress.md';
+  const permitted = p => pagePath(p);
   if (!permitted(requested)) throw memoryError('PATH_NOT_ALLOWED', 'Expected a direct reference page path');
   const { target } = resolveAllowedMemoryPath({ root, path: requested, allowed: permitted });
   publish(target, content, true);
@@ -117,8 +117,8 @@ export function moveOld(root, now = new Date()) {
   const pad = value => String(value).padStart(2, '0');
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const moves = [];
-  for (const name of ['projects', 'decisions', 'reorg-progress']) {
-    const old = `reference/${name}.md`, archived = `reference/legacy/${name}${name === 'reorg-progress' ? '' : '-before-split'}-${stamp}.md`;
+  for (const name of ['projects', 'decisions']) {
+    const old = `reference/${name}.md`, archived = `reference/legacy/${name}-before-split-${stamp}.md`;
     const source = resolveAllowedMemoryPath({ root, path: old, allowed: p => p === old }).target;
     if (!exists(source)) continue;
     const target = resolveAllowedMemoryPath({ root, path: archived, allowed: p => p === archived }).target;

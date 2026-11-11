@@ -191,7 +191,7 @@ Persistent memory lives in `~/zylos/memory/`.
 | **Working Memory** | Current scope's state/inbox/segments | Active work, pending tasks | On demand through read-work-memory.js |
 | **References** | `memory/references.md` | Pointers to config files, key paths | Always (session start) |
 | **User Profiles** | `memory/users/<id>/profile.md` | Per-user preferences | On demand |
-| **Reference** | `memory/reference/` | `projects/` and `decisions/` (each with an INDEX; one project or decision topic per page), `preferences.md`, `ideas.md` | On demand |
+| **Reference** | `memory/reference/` | `projects/` and `decisions/` (each with an INDEX; one project or decision topic per page), `preferences.md`, `ideas.md`; `legacy/` holds the intact, read-only old projects.md/decisions.md after one-time reorganization; search it for old projects and decisions missing from the new directories | On demand |
 | **Sessions** | Current scope's `sessions/YYYY-MM-DD.md` | Daily event log in configured TZ | On demand |
 | **Archive** | `memory/archive/` | Cold storage | Rarely |
 
@@ -299,7 +299,8 @@ followed-up Pending entries through its normal commit, without changing C4.
 - **ideas.md:** uncommitted plans, explorations, hypotheses
 
 Old `reference/projects.md` and `reference/decisions.md`, if present, are
-read-only history.
+read-only history. After one-time reorganization they are in `reference/legacy/`;
+search there for old projects and decisions missing from the new directories.
 
 For session notes, use `memory-append.js session` with content on stdin. It writes
 the current scope's `sessions/YYYY-MM-DD.md` in the configured timezone; do not

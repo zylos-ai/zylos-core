@@ -198,7 +198,7 @@ test('local: contended memory lock returns LOCK_TIMEOUT without changing the tar
 test('local: legacy paths are read-only for create and edit before path permissions', async () => {
   for (const [kind, group] of [['global', undefined], ['origin', 'origin'], ['group', 'telegram:legacy']]) {
     const f = await fixture(kind, group);
-    for (const name of ['reference/projects.md', 'reference/decisions.md', 'reference/legacy/stored.md', 'reference/reorg-progress.md']) {
+    for (const name of ['reference/projects.md', 'reference/decisions.md', 'reference/legacy/stored.md']) {
       const target = path.join(f.dir, 'memory', name);
       assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
       assert.equal(fs.existsSync(target), false);
@@ -227,7 +227,7 @@ test('local: resolved aliases cannot write legacy files', async () => {
 
 test('local: legacy names are case insensitive and the legacy prefix has a directory boundary', async () => {
   const f = await fixture('global');
-  for (const name of ['reference/Projects.md', 'Reference/Decisions.md', 'reference/Legacy/stored.md', 'reference/Reorg-Progress.md']) {
+  for (const name of ['reference/Projects.md', 'Reference/Decisions.md', 'reference/Legacy/stored.md']) {
     assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
     assert.equal(fs.existsSync(path.join(f.dir, 'memory', name)), false);
   }

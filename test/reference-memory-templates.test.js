@@ -51,6 +51,8 @@ for (const { runtime, text } of systems) {
     assert.match(blocks.tier, /`projects\/` and `decisions\/`/);
     assert.match(blocks.tier, /each with an INDEX; one project or decision topic per page/);
     assert.match(blocks.tier, /`preferences\.md`, `ideas\.md`/);
+    assert.match(blocks.tier, /`legacy\/` holds the intact, read-only old projects.md\/decisions.md/);
+    assert.match(blocks.tier, /search it for old projects and decisions missing from the new directories/);
   });
 
   // Baseline fails: completed narratives/rationale route to the old files and
@@ -68,6 +70,7 @@ for (const { runtime, text } of systems) {
     assert.match(blocks.classification, /\*\*decisions\/:\*\* deliberate choices[\s\S]*`reference\/decisions\/INDEX\.md` first, then the relevant topic page/);
     assert.match(blocks.classification, /\*\*projects\/:\*\* work efforts[\s\S]*`reference\/projects\/INDEX\.md` first, then the relevant project page/);
     assert.match(blocks.classification, /Old `reference\/projects\.md` and `reference\/decisions\.md`, if present, are\s+read-only history\./);
+    assert.match(blocks.classification, /After one-time reorganization they are in `reference\/legacy\/`;\s+search there for old projects and decisions missing from the new directories/);
     assert.match(blocks.classification, /\*\*preferences\.md:\*\*/);
     assert.match(blocks.classification, /\*\*ideas\.md:\*\*/);
   });
