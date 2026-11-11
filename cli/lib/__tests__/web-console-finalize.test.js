@@ -132,6 +132,34 @@ test('cleanup and final save are skipped when Core verification fails', async t 
   assert.deepEqual(calls, ['start']);
 });
 
+for (const scenario of ['registration failure', 'restore failure', 'completed registration']) {
+  test(`final startup save follows cleanup after Dashboard ${scenario}`, async t => {
+    const root = fixture(t), calls = [];
+    const ctx = {zylosDir:root, servicesWereRunning:['web-console','scheduler','zylos-dashboard'],
+      steps:[], mergeConflicts:[], mergedFiles:[], firstDashboardTakeover:scenario !== 'restore failure'};
+    if (scenario === 'completed registration') {
+      ctx.journal = {dashboardInstall:{items:{registration:{state:'done'}}}};
+    }
+    const owner = {
+      applyDashboardRegistration:() => {
+        calls.push('registration');
+        assert.equal(scenario, 'registration failure');
+        throw Error('registration failed before saving');
+      },
+      applyDashboardRoute:() => {calls.push('route'); return {state:'skipped'};},
+      restoreDashboardService:() => {calls.push('restore'); throw Error('restore failed before saving');},
+      verifyDashboard:() => {calls.push('dashboard'); return {state:'ready'};},
+    };
+    const result = await completeUpgradeFinalization(ctx, finalizationDeps(calls, {dashboardOwner:owner}));
+    assert.equal(result.success, true);
+    assert.equal(result.dashboard.state, scenario === 'completed registration' ? 'ready' : 'degraded');
+    const expected = scenario === 'restore failure' ? ['restore'] : scenario === 'registration failure'
+      ? ['registration','route','dashboard'] : ['route','dashboard'];
+    assert.deepEqual(calls, ['start','verify','remove',...expected,'terminal','save']);
+    assert.equal(calls.filter(call => call === 'save').length, 1);
+  });
+}
+
 test('init reuses cleanup after startup then saves the final process list', async () => {
   const calls = [];
   await startServicesWithDashboard({caddy:false}, async () => {calls.push('start'); return 4;}, {

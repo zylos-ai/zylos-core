@@ -56,7 +56,7 @@ test('PM2 template keeps all Core services in the selected instance and has no d
 test('Dashboard provisioning failure warns but continues real init Core service orchestration', async t => {
   const root = fixture(t); fs.mkdirSync(path.join(root, '.claude/skills/dashboard/hooks'), { recursive: true });
   fs.mkdirSync(path.join(root, 'pm2')); fs.writeFileSync(path.join(root, 'pm2/ecosystem.config.cjs'), 'module.exports={apps:[{name:"scheduler"}]}');
-  fs.writeFileSync(path.join(root, '.env'), 'TZ=UTC\n');
+  fs.writeFileSync(path.join(root, '.env'), 'ZYLOS_WEB_PASSWORD=fixture\n');
   const commands = []; const logs = [];
   t.mock.module('node:child_process', { namedExports: { ...childProcess,
     execFileSync(command, args) {
