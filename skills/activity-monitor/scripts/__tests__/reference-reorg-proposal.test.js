@@ -61,6 +61,17 @@ test('read permission errors propagate without writing question state', t => {
   assert.equal(fs.readFileSync(f.target, 'utf8'), '{"lastAskedAt":"old"}');
 });
 
+test('old-file permission errors propagate without reading or writing question state', t => {
+  const f = fixture(t);
+  const io = { ...fs,
+    statSync: () => { throw Object.assign(new Error('old file denied'), { code: 'EACCES' }); },
+    readFileSync: () => { throw new Error('unexpected state read'); },
+    writeFileSync: () => { throw new Error('unexpected state write'); },
+  };
+  assert.throws(() => f.run(now, io), error => error.code === 'EACCES');
+  assert.equal(fs.existsSync(f.target), false);
+});
+
 for (const method of ['writeFileSync', 'renameSync']) {
   test(`${method} failure preserves prior question state and cleans the temporary file`, t => {
     const f = fixture(t); f.old('projects.md'); f.state('{}');
