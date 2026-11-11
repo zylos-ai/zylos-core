@@ -233,7 +233,7 @@ function hasRecoveryHistory(root) {
     if (!j || j.formatVersion !== 1 || j.transactionId !== id || j.zylosDir !== fs.realpathSync(root) ||
         !['upgrade_complete', 'restored_complete', 'aborted_before_install'].includes(j.phase) ||
         !legacyUpgradeHistory(j) && j.cleanup?.complete !== true || j.cleanup?.servicesRestored !== true || j.terminalEvidence?.verified !== true ||
-        j.terminalServicesStopped || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed ||
+        j.webConsolePm2SavePending === true || j.terminalServicesStopped || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed ||
         j.installerStarted && !j.installerExitConfirmed || j.finalizerStarted && !j.finalizerExitConfirmed) return false;
     const aborted = j.phase === 'aborted_before_install', i = j.initialIdentity;
     if (j.installationIntent !== !aborted || j.terminalEvidence.kind !== (aborted ? 'original_deployment_and_readonly_data' : 'code_data_services') ||
@@ -343,7 +343,7 @@ function discover(root, {
         const dir = path.join(active, ent.name);
         try {
           const j = transaction(root, dir);
-          if (!terminalValid(j) || !legacyUpgradeHistory(j) && j.cleanup.complete !== true || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed || j.terminalServicesStopped || marker?.transactionId === j.transactionId) addCandidate({
+          if (!terminalValid(j) || j.webConsolePm2SavePending === true || !legacyUpgradeHistory(j) && j.cleanup.complete !== true || j.installerExitUnconfirmed || j.finalizerExitUnconfirmed || j.finalizerStarted && !j.finalizerExitConfirmed || j.installerStarted && !j.installerExitConfirmed || j.terminalServicesStopped || marker?.transactionId === j.transactionId) addCandidate({
             dir,
             journal: j
           });

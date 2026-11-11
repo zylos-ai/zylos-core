@@ -39,6 +39,7 @@ function fixture(t, { added = false } = {}) {
     discover: () => ({ candidates: [{ dir, journal: load() }], diagnostics: [] }) };
   let starts = 0;
   const deps = { maintenance: m, verifySnapshot: () => {}, assertDashboardUninstalled: () => {},
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
     syncSkills: ctx => {
       const merged = smartSync(source, target);
       assert.deepEqual(merged.errors, []);

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   applyCaddyRoutes, checkCaddyRouteMarkers, generateManualRouteSnippet, inspectCaddyRouteMarkers,
-  removeCaddyRoutes, resolveCaddyRoutePorts,
+  removeCaddyRoutes, resolveCaddyRoutePorts, validateAndDeploy,
 } from '../caddy.js';
 import { step6_updateCaddyRoutes } from '../upgrade.js';
 import { formatC4Reply } from '../../commands/component.js';
@@ -18,6 +18,45 @@ const route = (path, port, extra = {}) => ({
 const site = (...blocks) => `example.com {\n    respond /health 200\n${blocks.join('\n')}\n}\n`;
 const block = (name, routes) => generateManualRouteSnippet(name, routes);
 const parsed = (name, content) => inspectCaddyRouteMarkers(content, name).blocks;
+
+for (const action of ['apply', 'remove']) {
+  test(`component route ${action} retains validation diagnostics and supports symlink Caddyfiles`, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'component-caddy-'));
+    t.after(() => fs.rmSync(root, {recursive:true, force:true}));
+    const target = path.join(root, 'configured-Caddyfile'), caddyfile = path.join(root, 'Caddyfile');
+    const original = site(block('example', [route('/example/*', 3471)]));
+    fs.writeFileSync(target, original, {mode:0o640});
+    fs.symlinkSync('configured-Caddyfile', caddyfile);
+    let reject = true, reloads = 0;
+    const deps = {
+      isCaddyAvailable:() => true,
+      readFileSync:() => fs.readFileSync(caddyfile, 'utf8'),
+      validateAndDeploy:(next, previous) => validateAndDeploy(next, previous, {
+        caddyfile,
+        validate:() => {
+          if (reject) throw Object.assign(Error('validation rejected'), {stderr:'Caddyfile:4: invalid route'});
+        },
+        reload:() => { reloads++; },
+      }),
+    };
+    const run = () => action === 'apply'
+      ? applyCaddyRoutes('example', [route('/renamed/*', 3471)], deps)
+      : removeCaddyRoutes('example', deps);
+    const failed = run();
+    assert.equal(failed.success, false);
+    assert.match(failed.error, /Caddyfile:4: invalid route/);
+    assert.equal(fs.readFileSync(target, 'utf8'), original);
+    assert.equal(reloads, 0);
+    reject = false;
+    assert.equal(run().success, true);
+    assert.equal(fs.readlinkSync(caddyfile), 'configured-Caddyfile');
+    assert.equal(reloads, 1);
+    const updated = fs.readFileSync(target, 'utf8');
+    assert.match(updated, /respond \/health 200/);
+    if (action === 'apply') assert.match(updated, /handle \/renamed\/\*/);
+    else assert.doesNotMatch(updated, /zylos-component:example/);
+  });
+}
 
 test('upgrade keeps a deployed port while regenerating all other route settings', () => {
   const old = site(block('dashboard', [route('/dashboard/*', 3471, { strip_prefix: '/dashboard' })]));

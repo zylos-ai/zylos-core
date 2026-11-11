@@ -110,8 +110,10 @@ test('validation failure keeps original file and never reloads', t => {
   const {caddyfile} = fixture(t, original);
   const inode = fs.statSync(caddyfile).ino;
   const result = validateAndDeploy('candidate', original, {caddyfile,
-    validate:() => { throw Error('invalid'); }, reload:() => assert.fail('reload after rejected validation')});
+    validate:() => { throw Object.assign(Error('invalid'), {stderr:Buffer.from('Caddyfile:7: unrecognized directive: broken\n')}); },
+    reload:() => assert.fail('reload after rejected validation')});
   assert.equal(result.success, false);
+  assert.match(result.error, /Caddyfile:7: unrecognized directive: broken/);
   assert.equal(fs.readFileSync(caddyfile, 'utf8'), original);
   assert.equal(fs.statSync(caddyfile).ino, inode);
   assert.deepEqual(fs.readdirSync(path.dirname(caddyfile)), ['Caddyfile']);
@@ -134,15 +136,42 @@ test('reload failure atomically restores original bytes and permissions', t => {
   assert.deepEqual(fs.readdirSync(path.dirname(caddyfile)), ['Caddyfile']);
 });
 
-test('symlink Caddyfiles and edits during validation are preserved', t => {
+test('symlink Caddyfiles retain the link while atomically updating their target', t => {
   const {caddyfile} = fixture(t, 'original');
-  const target = caddyfile + '.target';
+  const target = path.join(path.dirname(path.dirname(caddyfile)), 'owner-Caddyfile');
   fs.renameSync(caddyfile, target);
+  fs.symlinkSync('../owner-Caddyfile', caddyfile);
+  const link = fs.readlinkSync(caddyfile), inode = fs.statSync(target).ino;
+  const result = validateAndDeploy('candidate', 'original', {caddyfile,
+    validate:candidate => {
+      assert.equal(path.dirname(candidate), path.dirname(target));
+      assert.equal(fs.readFileSync(target, 'utf8'), 'original');
+    }, reload:() => {}});
+  assert.equal(result.success, true);
+  assert.equal(fs.readlinkSync(caddyfile), link);
+  assert.notEqual(fs.statSync(target).ino, inode);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'candidate');
+  assert.equal(fs.statSync(target).mode & 0o777, 0o640);
+});
+
+test('symlink target changes during validation leave both files untouched', t => {
+  const {caddyfile} = fixture(t, 'original');
+  const target = caddyfile + '.target', other = caddyfile + '.other';
+  fs.renameSync(caddyfile, target);
+  fs.writeFileSync(other, 'other');
   fs.symlinkSync(target, caddyfile);
-  assert.equal(validateAndDeploy('candidate', 'original', {caddyfile, validate:() => assert.fail()}).success, false);
+  const result = validateAndDeploy('candidate', 'original', {caddyfile, validate:() => {
+    fs.unlinkSync(caddyfile);
+    fs.symlinkSync(other, caddyfile);
+  }, reload:() => assert.fail('reload after symlink target changed')});
+  assert.equal(result.success, false);
   assert.equal(fs.readFileSync(target, 'utf8'), 'original');
-  fs.unlinkSync(caddyfile);
-  fs.renameSync(target, caddyfile);
+  assert.equal(fs.readFileSync(other, 'utf8'), 'other');
+  assert.equal(fs.readlinkSync(caddyfile), other);
+});
+
+test('edits during validation are preserved', t => {
+  const {caddyfile} = fixture(t, 'original');
   const result = validateAndDeploy('candidate', 'original', {caddyfile, validate:() => fs.writeFileSync(caddyfile, 'user edit'), reload:() => assert.fail()});
   assert.equal(result.success, false);
   assert.equal(fs.readFileSync(caddyfile, 'utf8'), 'user edit');

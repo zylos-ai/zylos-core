@@ -28,6 +28,7 @@ test('old configuration upgrade exposes the same model threshold in settings, mo
   const ctx={zylosDir:root,from:'old',to:'new',tempDir:null,servicesWereRunning:[],steps:[],mergeConflicts:[],mergedFiles:[],journal:{phase:'compensation_closed'},transactionDir:path.join(root,'transaction')};
   ctx.maintenance={transaction:()=>ctx.journal,classifyCutoff:()=> 'closed',update(_dir,j,changes){Object.assign(j,changes);},stop(){},canRecognizeProcesses:()=>true};
   const result=await completeUpgradeFinalization(ctx,{
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
     ensureMemoryMigration(){},rotateSession(){},verifyPublicationForServices(){},protectedSuccess(){},
     startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),
     dashboardOwner:{verifyDashboard:()=>({state:'degraded',errors:[]})},

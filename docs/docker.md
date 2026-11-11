@@ -39,7 +39,7 @@ export CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE
 docker compose up -d
 ```
 
-The compose file supports timezone, channel tokens (Telegram, Lark), the Dashboard host port, and more — edit it or pass via environment variables.
+The compose file supports timezone, channel tokens (Telegram, Lark), and more — edit it or pass via environment variables.
 
 ### Dashboard Password
 
@@ -95,7 +95,6 @@ docker container: zylos
 ├── tmux session: claude-main (or codex-main)  ← AI agent loop (runtime-dependent)
 └── PM2 services
     ├── scheduler                   ← cron / heartbeat
-    ├── zylos-dashboard             ← browser UI and Origin (port 3470)
     ├── c4-dispatcher               ← message routing bridge
     ├── activity-monitor            ← liveness / state tracking
     ├── caddy (optional)            ← reverse proxy (port 8080)
@@ -132,7 +131,6 @@ Set variables in `docker-compose.yml`, a `.env` file alongside `docker-compose.y
 | `CLAUDE_BYPASS_PERMISSIONS` | `true` | Run Claude with `--dangerously-skip-permissions` |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram channel token |
 | `LARK_APP_ID` / `LARK_APP_SECRET` | — | Lark/Feishu app credentials |
-| `DASHBOARD_PORT` | `3470` | Host port mapped to Dashboard's container port 3470 |
 | `HTTP_PORT` | `8080` | Host port for Caddy proxy |
 
 ## Mounting Your Own `.env`
@@ -167,7 +165,7 @@ docker pull ghcr.io/zylos-ai/zylos-core:latest
 docker stop zylos && docker rm zylos
 docker run -d --name zylos \
   -e CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE \
-  -p 3456:3456 \
+  -p 3470:3470 \
   -v zylos-data:/home/zylos/zylos \
   -v claude-config:/home/zylos/.claude \
   ghcr.io/zylos-ai/zylos-core:latest

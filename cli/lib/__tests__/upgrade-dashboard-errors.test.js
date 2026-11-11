@@ -23,6 +23,7 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
     else if(item==='dashboard') owner.verifyDashboard=response==='throw'?fail:()=>({state:'degraded',errors:[{item:'dashboard',...error,location:'dashboard.db'}]});
     else owner[item==='registration'?'applyDashboardRegistration':'applyDashboardRoute']=fail;
     const result=await completeUpgradeFinalization(ctx,{
+      finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
       dashboardOwner:owner,updateConfig:()=>{},ensureMemoryMigration:()=>{},commitBaselines:()=>{},
       verifyPublicationForServices:()=>{},protectedSuccess:()=>{},
       startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),

@@ -11,6 +11,10 @@ assert.equal(fs.realpathSync(root), root);
 const commands = [];
 mock.module('node:child_process', { namedExports: { ...childProcess,
   execFileSync(command, args, options) {
+    if (command === 'pm2') {
+      assert.deepEqual(args,['jlist']);
+      return '[]';
+    }
     if (args.some(arg => String(arg).endsWith('/dashboard/hooks/post-install.js')) && process.argv.includes('hook-failed')) throw new Error('fixture hook failure');
     return childProcess.execFileSync(command, args, options);
   },

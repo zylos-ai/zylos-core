@@ -123,6 +123,56 @@ test('offline-preflight loads only pure owner inspectors through maintenance mar
  assert.deepEqual(fs.readFileSync(source),before);
 });
 
+// Real worker/SQLite boundary: all files and databases belong to fixture(t),
+// with HOME/ZYLOS_DIR/PM2_HOME/TMPDIR isolated by the official runner. Run for
+// restored snapshot evidence changes; no services or tmux are involved.
+test('restored snapshot evidence takes precedence over original deployment evidence', {skip:!Database},async t=>{
+ const dir=fixture(t);skills(dir);
+ const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
+ const owner=await import('../../../skills/comm-bridge/scripts/c4-schema.js');
+ const source=path.join(dir,'comm-bridge/c4.db');fs.mkdirSync(path.dirname(source),{recursive:true});
+ const db=new Database(source);
+ try {migrateDatabase(db,owner,{allowNew:true,strict:false});} finally {db.close();}
+ const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'restored-evidence'});
+ fs.copyFileSync(path.join(snapshot.dbBackupDir,'comm-bridge.db'),source);
+ const expectedDatabases=snapshot.manifest.databases.map(row=>({source:row.source,status:row.status==='missing'?'missing':'complete'}));
+ const request={action:'offline-preflight',zylosDir:dir,schemaRoot:path.resolve('skills'),formatVersion:3,expectedDatabases,manifest:snapshot.manifest};
+ assert.equal(runCoreDbWorker(request).databases[0].status,'present');
+ for(const status of ['complete','failed',undefined]) {
+  const manifest={...snapshot.manifest,databases:snapshot.manifest.databases.map((row,index)=>index===0?{...row,status}:row)};
+  assert.throws(()=>runCoreDbWorker({...request,manifest}),/Missing standalone restored snapshot evidence/);
+ }
+ const before=fs.readFileSync(source);
+ const changed=new Database(source);changed.exec('CREATE TABLE retained_archive(value TEXT)');changed.close();
+ assert.throws(()=>runCoreDbWorker(request),/Standalone database hash mismatch/);
+ assert.notDeepEqual(fs.readFileSync(source),before);
+});
+
+// Real worker/SQLite boundary: only fixture databases and a private schema
+// module are opened; fixture(t) closes/removes them. Run when changing mixed
+// snapshot/original-deployment recovery, skip for unrelated changes.
+test('original deployment evidence supplies only owners absent from a restored snapshot', {skip:!Database},async t=>{
+ const dir=fixture(t);skills(dir);
+ const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
+ const owner=await import('../../../skills/comm-bridge/scripts/c4-schema.js');
+ const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'omitted-owner'});
+ const schemaRoot=path.join(dir,'schemas');fs.mkdirSync(path.join(schemaRoot,'web-console/scripts'),{recursive:true});
+ fs.writeFileSync(path.join(schemaRoot,'web-console/package.json'),'{"type":"module"}');
+ fs.writeFileSync(path.join(schemaRoot,'web-console/scripts/schema.js'),`export * from ${JSON.stringify(new URL('../../../skills/comm-bridge/scripts/c4-schema.js',import.meta.url).href)};`);
+ for(const name of ['comm-bridge','scheduler']) fs.symlinkSync(path.resolve('skills',name),path.join(schemaRoot,name));
+ const source=path.join(dir,'web-console/web-console.db');fs.mkdirSync(path.dirname(source),{recursive:true});
+ const writer=new Database(source);t.after(()=>writer.close());
+ writer.pragma('journal_mode=WAL');migrateDatabase(writer,owner,{allowNew:true,strict:false});
+ writer.exec('CREATE TABLE retained_archive(value TEXT)');
+ const expectedDatabases=[...snapshot.manifest.databases.slice(0,2).map(row=>({source:row.source,status:'missing'})),
+  {source:'web-console/web-console.db',status:'complete'},
+  {source:'components/dashboard/dashboard.db',status:'missing'}];
+ const request={action:'offline-preflight',zylosDir:dir,schemaRoot,formatVersion:2,expectedDatabases,manifest:snapshot.manifest};
+ const row=runCoreDbWorker(request).databases.find(row=>row.source==='web-console/web-console.db');
+ assert.equal(row.status,'present');assert.deepEqual(row.extensions.tables,['retained_archive']);
+ assert.throws(()=>runCoreDbWorker({...request,expectedDatabases:expectedDatabases.map(row=>row.source==='web-console/web-console.db'?{...row,status:'missing'}:row)}),/Expected missing database exists/);
+});
+
 // Integration boundary: real SQLite/worker with temporary databases and copied
 // dependencies only; run for backup/driver-path changes, skip if unrelated.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.

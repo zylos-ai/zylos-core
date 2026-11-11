@@ -7,6 +7,8 @@ import { createRequire } from 'node:module';
 import { finalizeWebConsoleRemoval, webConsoleProcesses, inspectWebConsoleTasks } from '../web-console-finalize.js';
 import { completeUpgradeFinalization, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
 import { startServicesWithDashboard } from '../../commands/init.js';
+import { protectedSuccess, maintenance } from '../upgrade-protection.js';
+import { savePm2ProcessList } from '../pm2-save.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-finalize-'));
@@ -77,24 +79,19 @@ test('individual failures remain warnings and later cleanup continues without va
     inspectTasks:() => { calls.push('tasks'); throw Error('private-value'); },
   });
   assert.deepEqual(calls, ['route', 'env', 'tasks']);
-  assert.equal(result.warnings.length, 5);
+  assert.equal(result.warnings.length, 4);
   assert.doesNotMatch(JSON.stringify(result), /private-value/);
 });
 
-test('scheduler inspection combines reply CLI results and a readonly session-component query', t => {
+test('scheduler inspection reads both legacy destinations without changing database bytes', t => {
   const root = fixture(t), file = path.join(root, 'scheduler/scheduler.db');
   fs.mkdirSync(path.dirname(file));
   const Database = createRequire(new URL('../../../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
   const db = new Database(file);
-  db.exec('CREATE TABLE tasks (id TEXT, session_component TEXT); INSERT INTO tasks VALUES (\'session-only\',\'web-console\'),(\'unrelated\',\'dashboard\');');
+  db.exec("CREATE TABLE tasks (id TEXT, session_component TEXT, reply_channel TEXT); INSERT INTO tasks VALUES ('reply-only','origin','web-console'),('session-only','web-console','lark'),('unrelated','dashboard','lark');");
   db.close();
   const before = fs.readFileSync(file);
-  const ids = inspectWebConsoleTasks(root, {Database, run(command, args, options) {
-    assert.equal(command, process.execPath);
-    assert.deepEqual(args.slice(1), ['list', '--reply-channel', 'web-console', '--json', '--readonly']);
-    assert.equal(options.env.ZYLOS_DIR, root);
-    return JSON.stringify([{id:'reply-only'}]);
-  }});
+  const ids = inspectWebConsoleTasks(root, {Database});
   assert.deepEqual(ids, ['reply-only', 'session-only']);
   assert.equal(fs.readFileSync(file).equals(before), true);
 });
@@ -104,7 +101,7 @@ function finalizationDeps(calls, extras = {}) {
     updateConfig:()=>{}, ensureMemoryMigration:()=>{}, verifyPublicationForServices:()=>{},
     startServices:ctx => { calls.push('start'); assert.deepEqual(ctx.servicesWereRunning, ['scheduler']); },
     verifyServices:ctx => { calls.push('verify'); assert.deepEqual(ctx.servicesWereRunning, ['scheduler']); },
-    finalizeWebConsoleRemoval:() => { calls.push('remove'); return {warnings:['removal explanation']}; },
+    finalizeWebConsoleRemoval:() => { calls.push('remove'); return {warnings:['removal explanation'],pm2Changed:true}; },
     dashboardOwner:{verifyDashboard:() => {calls.push('dashboard'); return {state:'ready'};}},
     readModeStatus:()=>({sessionMode:'single', transition:null}), readMode:()=>({mode:'single'}), readTransition:()=>null,
     restart:()=>({ok:true,data:{result:'exit_enqueued'}}), audit:()=>[],
@@ -163,22 +160,22 @@ for (const scenario of ['registration failure', 'restore failure', 'completed re
 test('init reuses cleanup after startup then saves the final process list', async () => {
   const calls = [];
   await startServicesWithDashboard({caddy:false}, async () => {calls.push('start'); return 4;}, {
-    finalizeWebConsoleRemoval:options => {assert.equal(options.noCaddy, true); calls.push('remove'); return {warnings:[]};},
+    finalizeWebConsoleRemoval:options => {assert.equal(options.noCaddy, true); assert.match(options.dashboardUrl, /^http:\/\/127\.0\.0\.1:3470\/$/); calls.push('remove'); return {warnings:[],pm2Changed:true};},
     savePm2ProcessList:()=>{calls.push('save');}, log:()=>{},
   });
   assert.deepEqual(calls, ['start','remove','save']);
 });
 
-test('direct startup and verification never restart or wait for the removed external service', t => {
-  const root = fixture(t), ecosystem = path.join(root, 'ecosystem.cjs');
-  const ctx = {servicesWereRunning:['web-console']};
-  const result = step11_startCoreServices(ctx, {zylosDir:root, ecosystemPath:ecosystem,
-    execSync:() => {throw Error('PM2 must not run for the removed service');}});
-  assert.equal(result.status, 'skipped');
-  const verified = step12_verifyServices({servicesWereRunning:['web-console']}, {
-    execSync:() => {throw Error('PM2 must not be polled for the removed service');},
-  });
-  assert.equal(verified.status, 'skipped');
+test('finalization filters removed services without mutating the caller running set', async t => {
+  const root = fixture(t), calls = [], running = ['web-console','scheduler'];
+  await completeUpgradeFinalization({zylosDir:root,servicesWereRunning:running,steps:[],mergeConflicts:[],mergedFiles:[]},finalizationDeps(calls));
+  assert.deepEqual(running,['web-console','scheduler']);
+});
+
+test('fresh cleanup and residue-free reentry do not announce removal or require saving', async t => {
+  const root = fixture(t);
+  const deps = {run:()=> '[]',removeRoute:()=>({warnings:[]}),inspectTasks:()=>[]};
+  for (let i=0;i<2;i++) assert.deepEqual(await finalizeWebConsoleRemoval({zylosDir:root},deps),{warnings:[],pm2Changed:false});
 });
 
 test('pending recovery preserves the save guard and reports the required manual save', async t => {
@@ -187,4 +184,78 @@ test('pending recovery preserves the save guard and reports the required manual 
     finalizationDeps(calls, {protectedSuccess:()=>({complete:false}), savePm2ProcessList:()=>false}));
   assert.equal(result.success, true);
   assert.match(result.warnings.join(' '), /PM2 startup list still needs saving after recovery cleanup/);
+});
+
+test('real terminal cleanup releases the real save guard and clears durable removal intent', async t => {
+  const root = fs.realpathSync(fixture(t)), calls = [];
+  const dir = path.join(root,'.backup/self-upgrade/removed-console');
+  fs.mkdirSync(dir,{recursive:true,mode:0o700});
+  fs.mkdirSync(path.join(root,'.zylos/upgrade'),{recursive:true,mode:0o700});
+  const journal = {formatVersion:1,transactionId:'removed-console',zylosDir:root,
+    nodePath:process.execPath,skillsDir:path.join(root,'.claude/skills'),phase:'installing',installationIntent:true,
+    dbBackupDir:path.join(root,'.backup/db/removed-console'),snapshotManifestHash:'a'.repeat(64),originalServices:[],
+    coreManifest:[{name:'core',existedBefore:false,backedUp:false,originalHash:null}],
+    initialIdentity:{nodePath:process.execPath,packageJson:path.join(root,'package.json'),packageHash:'b'.repeat(64),
+      cliRoot:path.join(root,'cli'),cliHash:'c'.repeat(64),workerPath:path.join(root,'worker.js'),workerHash:'d'.repeat(64),
+      ecosystemHash:null,databases:maintenance.databasePaths(2).map(source=>({source,exists:false}))},
+    webConsolePm2SavePending:true};
+  maintenance.update(dir,journal);
+  maintenance.marker(root,dir,journal);
+  assert.equal(savePm2ProcessList({root,save:()=>{throw Error('Active recovery must prevent saving');},log:()=>{}}),false);
+  let saves = 0;
+  const ctx = {zylosDir:root,transactionDir:dir,journal,servicesWereRunning:['scheduler'],steps:[],mergeConflicts:[],mergedFiles:[]};
+  const result = await completeUpgradeFinalization(ctx,finalizationDeps(calls,{
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
+    protectedSuccess,
+    savePm2ProcessList:options=>savePm2ProcessList({...options,save:()=>{
+      assert.equal(fs.existsSync(path.join(root,'.zylos/upgrade/active.json')),false);
+      saves++;
+    }}),
+  }));
+  assert.equal(result.success,true);
+  assert.equal(saves,1);
+  const saved = maintenance.read(path.join(dir,'journal.json'));
+  assert.equal(saved.phase,'upgrade_complete');
+  assert.equal(saved.cleanup.complete,true);
+  assert.equal(saved.webConsolePm2SavePending,false);
+});
+
+test('Dashboard registration saves after deletion and prevents a duplicate final save', async t => {
+  const root = fixture(t), calls = [];
+  await completeUpgradeFinalization({zylosDir:root,firstDashboardTakeover:true,servicesWereRunning:['scheduler'],steps:[],mergeConflicts:[],mergedFiles:[]},
+    finalizationDeps(calls,{dashboardOwner:{
+      applyDashboardRegistration:()=>{calls.push('registration-save');return {state:'done'};},
+      applyDashboardRoute:()=>({state:'skipped'}),verifyDashboard:()=>({state:'ready'}),
+    }}));
+  assert.deepEqual(calls,['start','verify','remove','registration-save','terminal']);
+});
+
+test('upgrade persists save intent before deleting and resolves a direct Dashboard address', async t => {
+  const root = fixture(t), calls = [], dir = path.join(root,'transaction');
+  fs.mkdirSync(dir);
+  maintenance.update(dir,{});
+  const code = path.join(root,'.claude/skills/web-console');
+  const ctx = {zylosDir:root,transactionDir:dir,journal:{},servicesWereRunning:['scheduler'],steps:[],mergeConflicts:[],mergedFiles:[]};
+  await assert.rejects(()=>completeUpgradeFinalization(ctx,finalizationDeps(calls,{
+    finalizeWebConsoleRemoval:options=>{
+      assert.equal(options.dashboardUrl,'http://127.0.0.1:3470/');
+      return finalizeWebConsoleRemoval(options,{
+        run:(_command,args)=>{
+          if(args[0]==='jlist')return JSON.stringify([{pm_id:7,name:'web-console',pm2_env:{pm_exec_path:path.join(code,'server.js')}}]);
+          assert.deepEqual(args,['delete','7']);
+          assert.equal(maintenance.read(path.join(dir,'journal.json')).webConsolePm2SavePending,true);
+        },removeRoute:()=>({warnings:[]}),inspectTasks:()=>[],
+      });
+    },protectedSuccess:()=>{throw Error('interrupted terminal');},
+  })),/interrupted terminal/);
+  assert.equal(maintenance.read(path.join(dir,'journal.json')).webConsolePm2SavePending,true);
+});
+
+test('fresh upgrade has no removal announcement, final save or recovery-save warning', async t => {
+  const root = fixture(t), calls = [];
+  const result=await completeUpgradeFinalization({zylosDir:root,servicesWereRunning:['scheduler'],steps:[],mergeConflicts:[],mergedFiles:[]},
+    finalizationDeps(calls,{finalizeWebConsoleRemoval:options=>finalizeWebConsoleRemoval(options,{
+      run:()=> '[]',removeRoute:()=>({warnings:[]}),inspectTasks:()=>[],
+    }),savePm2ProcessList:()=>{throw Error('Fresh upgrade must not save again');}}));
+  assert.deepEqual(result.warnings,[]);
 });

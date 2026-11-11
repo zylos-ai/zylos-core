@@ -22,27 +22,22 @@ export function webConsoleProcesses(output, skillsDir) {
   });
 }
 
-export function inspectWebConsoleTasks(zylosDir, {run = execFileSync, Database} = {}) {
+export function inspectWebConsoleTasks(zylosDir, {Database} = {}) {
   const file = path.join(zylosDir, 'scheduler/scheduler.db');
   if (!fs.existsSync(file)) return [];
-  const cli = path.join(zylosDir, '.claude/skills/scheduler/scripts/cli.js');
-  const replyTasks = JSON.parse(run(process.execPath, [cli, 'list', '--reply-channel', 'web-console', '--json', '--readonly'], {
-    encoding:'utf8', stdio:'pipe', timeout:10000, env:{...process.env, ZYLOS_DIR:zylosDir},
-  }));
-  if (!Array.isArray(replyTasks)) throw Error('Invalid scheduler task list');
   const Driver = Database || createRequire(path.join(zylosDir, '.claude/skills/comm-bridge/package.json'))('better-sqlite3');
   const db = new Driver(file, {readonly:true, fileMustExist:true});
   try {
-    const sessionTasks = db.prepare("SELECT id FROM tasks WHERE session_component = 'web-console'").all();
-    return [...new Set([...replyTasks, ...sessionTasks].map(row => String(row.id)))];
+    return db.prepare("SELECT id FROM tasks WHERE reply_channel = 'web-console' OR session_component = 'web-console'").all().map(row => String(row.id));
   } finally { db.close(); }
 }
 
 /** Post-cutoff cleanup is deliberately warning-only and safe to run again. */
-export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dashboardUrl = '/dashboard/'} = {}, deps = {}) {
+export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dashboardUrl = 'http://localhost:3470/', beforePm2Delete = () => {}} = {}, deps = {}) {
   const run = deps.run || execFileSync;
   const warnings = [];
   let pm2Changed = false;
+  let residue = false;
   const step = async (name, fn) => {
     try { await fn(); }
     catch { warnings.push(`${name} could not be completed. Review this step manually and rerun zylos init.`); }
@@ -51,7 +46,9 @@ export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dash
     const processes = webConsoleProcesses(run('pm2', ['jlist'], {encoding:'utf8', stdio:'pipe', timeout:10000}),
       path.join(zylosDir, '.claude/skills'));
     for (const row of processes) {
+      residue = true;
       try {
+        beforePm2Delete();
         run('pm2', ['delete', String(row.pm_id)], {stdio:'pipe', timeout:10000});
         pm2Changed = true;
         warnings.push(`Removed this instance's Web Console PM2 record (${row.pm_id}).`);
@@ -61,6 +58,7 @@ export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dash
   await step('Web Console skill backup', () => {
     const source = path.join(zylosDir, '.claude/skills/web-console');
     try { fs.lstatSync(source); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    residue = true;
     const parent = path.join(zylosDir, '.backup');
     fs.mkdirSync(parent, {recursive:true});
     const target = path.join(parent, `web-console-skill-${new Date().toISOString().replace(/[:.]/g, '-')}`);
@@ -70,14 +68,20 @@ export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dash
   await step('Web Console Caddy cleanup', async () => {
     const result = await (deps.removeRoute || removeWebConsoleRoute)({zylosDir, noCaddy});
     warnings.push(...(result.warnings || []));
+    residue ||= result.state === 'changed' || result.state === 'manual' || !!result.warnings?.length;
   });
   await step('Web Console environment cleanup', () => {
-    warnings.push(...(deps.cleanupEnv || cleanupWebConsoleEnv)(zylosDir).messages);
+    const result = (deps.cleanupEnv || cleanupWebConsoleEnv)(zylosDir);
+    warnings.push(...result.messages);
+    residue ||= result.state === 'changed' || result.state === 'manual';
   });
   await step('Web Console scheduler inspection', () => {
     const ids = (deps.inspectTasks || inspectWebConsoleTasks)(zylosDir);
-    if (ids.length) warnings.push(`Scheduled tasks still target Web Console: ${ids.join(', ')}. Change their reply channel or session to Dashboard or IM.`);
+    if (ids.length) {
+      residue = true;
+      warnings.push(`Scheduled tasks still target Web Console: ${ids.join(', ')}. Change their reply channel or session to Dashboard or IM.`);
+    }
   });
-  warnings.push(`Web Console has been removed. Open Dashboard at ${dashboardUrl} and use its Origin conversation. Reset access with zylos dashboard reset-password. Old Web Console history remains in Conversations > External. /console/ is no longer provided.`);
+  if (residue) warnings.push(`Web Console has been removed. Open Dashboard at ${dashboardUrl} and use its Origin conversation. Reset access with zylos dashboard reset-password. Old Web Console history remains in Conversations > External. /console/ is no longer provided.`);
   return {warnings, pm2Changed};
 }

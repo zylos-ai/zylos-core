@@ -476,12 +476,13 @@ export function validateAndDeploy(newContent, originalContent, {
   let temporary;
   let replaced = false;
   let originalStat;
+  let target;
   const syncDirectory = () => {
-    const fd = fs.openSync(path.dirname(caddyfile), 'r');
+    const fd = fs.openSync(path.dirname(target), 'r');
     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   };
   const stage = (content, stat) => {
-    temporary = path.join(path.dirname(caddyfile), `.Caddyfile.zylos-${crypto.randomUUID()}`);
+    temporary = path.join(path.dirname(target), `.Caddyfile.zylos-${crypto.randomUUID()}`);
     const fd = fs.openSync(temporary, 'wx', stat.mode & 0o7777);
     try {
       fs.fchownSync(fd, stat.uid, stat.gid);
@@ -491,21 +492,26 @@ export function validateAndDeploy(newContent, originalContent, {
     } finally { fs.closeSync(fd); }
   };
   const deploy = () => {
-    fs.renameSync(temporary, caddyfile);
+    fs.renameSync(temporary, target);
     temporary = null;
     replaced = true;
     syncDirectory();
   };
   try {
-    const stat = fs.lstatSync(caddyfile);
+    // Replace the resolved file, retaining symlinks used by existing installs.
+    target = fs.realpathSync(caddyfile);
+    const stat = fs.lstatSync(target);
     originalStat = stat;
     if (!stat.isFile() || stat.isSymbolicLink()) return {success:false, error:'Caddyfile must be a regular file; unchanged.'};
     stage(newContent, stat);
     try { validate(temporary); }
-    catch { return {success:false, error:'Caddy validation failed; Caddyfile unchanged.'}; }
+    catch (error) {
+      const detail = error.stderr?.toString().trim();
+      return {success:false, error:`Caddy validation failed; Caddyfile unchanged.${detail ? ` ${detail}` : ''}`};
+    }
     // Do not overwrite an edit made while validation was running.
-    const current = fs.lstatSync(caddyfile);
-    if (current.ino !== stat.ino || current.dev !== stat.dev || !fs.readFileSync(caddyfile).equals(Buffer.from(originalContent))) {
+    const current = fs.lstatSync(target);
+    if (fs.realpathSync(caddyfile) !== target || current.ino !== stat.ino || current.dev !== stat.dev || !fs.readFileSync(target).equals(Buffer.from(originalContent))) {
       return {success:false, error:'Caddyfile changed during validation; unchanged.'};
     }
     deploy();

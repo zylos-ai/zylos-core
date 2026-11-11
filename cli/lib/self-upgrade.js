@@ -32,6 +32,8 @@ import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runt
 import { upgradeFailureCode } from './upgrade-admission.js';
 import { finalizeWebConsoleRemoval } from './web-console-finalize.js';
 import { savePm2ProcessList } from './pm2-save.js';
+import { dashboardAccessAddress } from './dashboard-access.js';
+import { isCaddyAvailable } from './caddy.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -531,7 +533,6 @@ export function step6_installSkillDeps(ctx, deps = {}) {
  * Step 11: start core services
  */
 export function step11_startCoreServices(ctx, deps = {}) {
-  ctx.servicesWereRunning = ctx.servicesWereRunning.filter(name => name !== 'web-console');
   const startTime = Date.now();
   const maintenance = maintenanceFor(ctx);
   const fsApi = deps.fs ?? fs;
@@ -717,7 +718,6 @@ export function step11_startCoreServices(ctx, deps = {}) {
  */
 export function step12_verifyServices(ctx, deps = {}) {
   const startTime = Date.now();
-  ctx.servicesWereRunning = ctx.servicesWereRunning.filter(name => name !== 'web-console');
 
   if (ctx.servicesWereRunning.length === 0) {
     return { step: 12, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
@@ -941,8 +941,21 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     }
   } catch(error) {return fail(error);}
 
+  let pm2SavePending = ctx.journal?.webConsolePm2SavePending === true;
+  const setPm2SavePending = pending => {
+    if (ctx.transactionDir && ctx.journal) {
+      const owner = maintenanceFor(ctx);
+      ctx.journal = owner.read(path.join(ctx.transactionDir,'journal.json'));
+      owner.update(ctx.transactionDir,ctx.journal,{webConsolePm2SavePending:pending});
+    }
+    pm2SavePending = pending;
+  };
+  let dashboardUrl = 'http://localhost:3470/';
+  try { dashboardUrl = dashboardAccessAddress({zylosDir:root,routed:isCaddyAvailable(root)}).url; } catch { /* Cleanup is independent of Dashboard configuration. */ }
   try {
-    const removal = await (deps.finalizeWebConsoleRemoval || finalizeWebConsoleRemoval)({zylosDir:root});
+    const removal = await (deps.finalizeWebConsoleRemoval || finalizeWebConsoleRemoval)({zylosDir:root,
+      dashboardUrl, beforePm2Delete:()=>setPm2SavePending(true)});
+    if (removal.pm2Changed && !pm2SavePending) setPm2SavePending(true);
     ctx.runtimeWarnings = [...(ctx.runtimeWarnings || []), ...removal.warnings];
   } catch {
     (ctx.runtimeWarnings ||= []).push('Web Console removal needs attention. Rerun zylos init to finish cleanup.');
@@ -974,6 +987,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
           const accepted = result.state==='done' || item==='route' && result.state==='skipped';
           if(!accepted)throw Object.assign(Error(result.error?.message || result.message || `${name}: ${result.state}`),
             {code:result.error?.code || result.code,location:result.error?.location || result.location});
+          if (item==='registration' && pm2SavePending) setPm2SavePending(false);
           persistItem({state:result.state,lastError:null});
         } catch(error) {
           persistItem({state:'failed',lastError:{code:error.code || 'DASHBOARD_INSTALL_FAILED',message:error.message}});
@@ -986,6 +1000,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       try {
         const restored=await owner.restoreDashboardService({zylosDir:root});
         if(restored?.state!=='done') throw Object.assign(Error(restored?.error?.message || 'Dashboard restore failed'),{code:'registration_failed'});
+        if (pm2SavePending) setPm2SavePending(false);
       } catch(error) {restoreFailed=true;dashboardFailure('registration',{code:'registration_failed',message:error.message});}
     }
     if(!restoreFailed)dashboard=await owner.verifyDashboard({zylosDir:root});
@@ -1020,12 +1035,12 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   } catch(error) {ctx.checkpointAudit={state:'incomplete',error:error.message};}
   completion.install='done';
   ctx.completion=completion;
-  const cleanup = (deps.protectedSuccess || protectedSuccess)(ctx);
-  if (cleanup?.warnings?.length) (ctx.runtimeWarnings ||= []).push(...cleanup.warnings);
-  try {
+  (deps.protectedSuccess || protectedSuccess)(ctx);
+  if (pm2SavePending) try {
     const saved = (deps.savePm2ProcessList || savePm2ProcessList)({root,
       log:message => (ctx.runtimeWarnings ||= []).push(message)});
     if (!saved) (ctx.runtimeWarnings ||= []).push('The PM2 startup list still needs saving after recovery cleanup: run pm2 save when recovery is complete.');
+    else setPm2SavePending(false);
   } catch {
     (ctx.runtimeWarnings ||= []).push('Could not save the PM2 startup list. Run pm2 save after recovery cleanup so Web Console is not resurrected.');
   }

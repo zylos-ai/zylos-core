@@ -1,7 +1,7 @@
 import { writeCorePackageLocation } from '../lib/core-package-location.js';
 import { migrateModelThresholds } from '../lib/model-rotation-thresholds.js';
 import { applyDashboardRoute } from '../lib/dashboard-install.js';
-import { printDashboardInfo } from '../lib/dashboard-access.js';
+import { printDashboardInfo, dashboardAccessAddress } from '../lib/dashboard-access.js';
 import { provisionDashboardAuth } from '../../skills/dashboard/src/lib/auth-provision.js';
 import { savePm2ProcessList } from '../lib/pm2-save.js';
 import { finalizeWebConsoleRemoval } from '../lib/web-console-finalize.js';
@@ -888,12 +888,17 @@ function initializeDatabases() {
 export async function startServicesWithDashboard(opts, startServices = startCoreServices, deps = {}) {
   const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false, quiet: opts.quiet };
   const servicesStarted = await startServices(dashboardAccess);
+  let dashboardUrl = 'http://localhost:3470/';
+  try { dashboardUrl = dashboardAccessAddress(dashboardAccess).url; } catch { /* Cleanup still runs if Dashboard configuration needs repair. */ }
   const removal = await (deps.finalizeWebConsoleRemoval || finalizeWebConsoleRemoval)({
     zylosDir:ZYLOS_DIR, noCaddy:opts.caddy === false,
+    dashboardUrl,
   });
   for (const message of removal.warnings) (deps.log || console.log)(`  ${warn(message)}`);
   try {
-    (deps.savePm2ProcessList || savePm2ProcessList)();
+    if (removal.pm2Changed && (deps.savePm2ProcessList || savePm2ProcessList)() === false) {
+      (deps.log || console.log)(`  ${warn('The PM2 startup list still needs saving after recovery cleanup: run pm2 save when recovery is complete.')}`);
+    }
   } catch {
     (deps.log || console.log)(`  ${warn('Could not save the PM2 startup list; run pm2 save after cleanup.')}`);
   }

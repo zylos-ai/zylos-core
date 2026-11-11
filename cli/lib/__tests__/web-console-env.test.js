@@ -74,6 +74,33 @@ test('symlink dotenv is refused without changing its target', t => {
   assert.doesNotMatch(JSON.stringify(result), /secret/);
 });
 
+test('symlink dotenv without effective legacy keys skips silently', t => {
+  const input = '# WEB_CONSOLE_PASSWORD=comment\nOTHER=value\nDASHBOARD_MAX_UPLOAD_MB=20\n';
+  const f = fixture(t, input);
+  const target = path.join(f.root, 'original');
+  fs.renameSync(f.file, target);
+  fs.symlinkSync(target, f.file);
+  const inode = fs.statSync(target).ino;
+  assert.deepEqual(cleanupWebConsoleEnv(f.root), {state:'skipped', messages:[]});
+  assert.equal(fs.lstatSync(f.file).isSymbolicLink(), true);
+  assert.equal(fs.statSync(target).ino, inode);
+  assert.equal(fs.readFileSync(target, 'utf8'), input);
+});
+
+test('cleanup preserves non-UTF8 bytes in unrelated lines and renamed upload values', t => {
+  const untouched = Buffer.from([0x23, 0x20, 0xff, 0xfe, 0x0d, 0x0a]);
+  const value = Buffer.from([0x27, 0x80, 0xff, 0x27, 0x20, 0x23, 0x20, 0xfe, 0x0d, 0x0a]);
+  const ending = Buffer.from([0x4f, 0x54, 0x48, 0x45, 0x52, 0x3d, 0xc3, 0x28]);
+  const input = Buffer.concat([untouched, Buffer.from('ZYLOS_WEB_PASSWORD=remove\r\nWEB_CONSOLE_MAX_UPLOAD_MB='), value, ending]);
+  const expected = Buffer.concat([untouched, Buffer.from('DASHBOARD_MAX_UPLOAD_MB='), value, ending]);
+  const f = fixture(t, input);
+  assert.equal(cleanupWebConsoleEnv(f.root).state, 'changed');
+  assert.equal(fs.readFileSync(f.file).equals(expected), true);
+  const inode = fs.statSync(f.file).ino;
+  assert.deepEqual(cleanupWebConsoleEnv(f.root), {state:'skipped', messages:[]});
+  assert.equal(fs.statSync(f.file).ino, inode);
+});
+
 test('failed atomic publication preserves the original and removes its temporary file', t => {
   const f = fixture(t, 'original');
   assert.throws(() => atomicReplace(f.file, 'replacement', {beforeRename:() => {throw Error('injected publication failure');}}), /publication failure/);

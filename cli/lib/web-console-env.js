@@ -83,10 +83,13 @@ export function cleanupWebConsoleEnv(zylosDir) {
   ]};
   try {
     const stat = fs.lstatSync(file);
-    if (stat.isSymbolicLink() || !stat.isFile()) return manual;
-    const plan = planWebConsoleEnvCleanup(fs.readFileSync(file, 'utf8'));
+    if (!stat.isSymbolicLink() && !stat.isFile()) return manual;
+    // Latin-1 maps every byte one-to-one while the ASCII keys are edited.
+    const plan = planWebConsoleEnvCleanup(fs.readFileSync(file).toString('latin1'));
+    if (plan.state === 'skipped') return {state:'skipped', messages:[]};
+    if (stat.isSymbolicLink()) return manual;
     if (plan.state === 'manual') return manual;
-    if (plan.state === 'changed') atomicReplace(file, plan.content);
+    if (plan.state === 'changed') atomicReplace(file, Buffer.from(plan.content, 'latin1'));
     return {state:plan.state, messages:plan.messages};
   } catch (error) {
     if (error.code === 'ENOENT') return {state:'skipped', messages:[]};

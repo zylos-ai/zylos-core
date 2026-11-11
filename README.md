@@ -240,7 +240,7 @@ displayed no notice.
 ```bash
 docker run -d --name zylos \
   -e CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE \
-  -p 3456:3456 \
+  -p 3470:3470 \
   -v zylos-data:/home/zylos/zylos \
   -v claude-config:/home/zylos/.claude \
   ghcr.io/zylos-ai/zylos-core:latest

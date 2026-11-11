@@ -280,10 +280,15 @@ export async function execute(input) {
   const rows=[];
   const standaloneSnapshot=input.action==='offline-preflight' && input.manifest?.status==='complete' && input.requireCurrent!==true;
   for(const item of databases) {
+    const manifestRow=input.manifest?.databases?.find(row=>row.source===item.source);
+    const originalRow=input.expectedDatabases?.find(row=>row.source===item.source);
+    // Manifest evidence takes precedence; only owners omitted from that
+    // snapshot may fall back to original deployment presence evidence.
+    const originalOnly=!manifestRow && !!originalRow;
+    const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : manifestRow ?? originalRow;
     if(skipDashboard(item) && ['offline-preflight','upgrade-migrate'].includes(input.action)) {
       // Legacy Dashboard bytes remain protected without invoking its new owner.
       const source=path.join(input.zylosDir,item.source),absent=missing(source);
-      const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : input.manifest?.databases?.find(row=>row.source===item.source) ?? input.expectedDatabases?.find(row=>row.source===item.source);
       if(input.action==='offline-preflight') {
         if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
         const preserveMissingDashboard=standaloneSnapshot && item.owner==='dashboard' && expected?.status==='missing' && !absent;
@@ -291,7 +296,7 @@ export async function execute(input) {
         if(preserveMissingDashboard) {rows.push({source:item.source,status:'present',ownerSkipped:true});continue;}
         if(!absent) {
           const Database=driver(input);
-          if(standaloneSnapshot && expected?.status==='backed_up') {
+          if(standaloneSnapshot && !originalOnly) {
             if(expected?.status!=='backed_up') throw Error('Missing standalone restored snapshot evidence');
             withStandaloneReadonly(Database,source,expected.sha256,inspectConnection);
           } else {
@@ -303,7 +308,6 @@ export async function execute(input) {
       rows.push({source:item.source,status:absent?'missing':'present',ownerSkipped:true});
       continue;
     }
-    const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : input.manifest?.databases?.find(row=>row.source===item.source) ?? input.expectedDatabases?.find(row=>row.source===item.source);
     const source=path.join(input.zylosDir,item.source);
     if(input.action==='verify') {
       if(!expected) throw new Error(`Missing manifest entry: ${item.source}`);
@@ -352,7 +356,7 @@ export async function execute(input) {
       if(absent) {rows.push({source:item.source,status:'missing'});continue;}
       if(preserveMissingDashboard) {rows.push({source:item.source,status:'present'});continue;}
       const mod=await ownerSchema(input,item);
-      if(standaloneSnapshot) {
+      if(standaloneSnapshot && !originalOnly) {
         if(expected?.status!=='backed_up') throw Error('Missing standalone restored snapshot evidence');
         withStandaloneReadonly(driver(input,item),source,expected.sha256,inspectConnection);
       }
@@ -380,7 +384,7 @@ export async function execute(input) {
     if(input.action==='offline-preflight') {
       const mod=await ownerSchema(input,item);
       let state;
-      if (standaloneSnapshot && expected?.status==='backed_up') {
+      if (standaloneSnapshot && !originalOnly) {
         if (input.manifest?.status !== 'complete' || expected?.status !== 'backed_up' || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Missing standalone restored snapshot evidence');
         state = withStandaloneReadonly(Database, source, expected.sha256, db => {const layout=plan(db,mod); return {...inspectConnection(db),extensions:layout.extensions};});
       } else {

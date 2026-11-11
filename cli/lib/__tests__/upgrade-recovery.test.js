@@ -417,6 +417,7 @@ for(const failure of [null,'thresholds','ensure','state'])test(`closed writer ac
    };
  let started=0;
  const result=await completeUpgradeFinalization(ctx,{
+   finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
    updateConfig:()=>{available();if(failure==='thresholds')throw Error('threshold failure');},
    ensureMemoryMigration:()=>{available();if(failure==='ensure')throw Error('ensure failure');},
    commitBaselines:()=>{available();return {status:'done'};},

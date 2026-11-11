@@ -222,6 +222,10 @@ the source. Both services and this command read `DASHBOARD_MAX_UPLOAD_MB` from
 the actual instance's `.env`; invalid or missing values use 20 MiB. Each file is
 limited independently, with at most 20 attachments per message.
 
+Upgrade cleanup automatically renames `WEB_CONSOLE_MAX_UPLOAD_MB` to
+`DASHBOARD_MAX_UPLOAD_MB` in `.env`, preserving an existing new-name setting.
+Dashboard no longer reads the old variable name.
+
 Registration succeeds with
 `{ok:true,attachmentId,name,kind,expiresAt}`. The expiry is the strict 25-minute
 deadline for sending an unlinked attachment, not its deletion time. `resolve`

@@ -88,7 +88,7 @@ for (const failHook of [false, true]) test(`finalizer child preserves JSON stdou
   assert.equal(result.completion.dashboard, failHook ? 'degraded' : 'ready');
   assert.equal(child.stdout.includes(secret), false);
   assert.equal(child.stderr.includes(secret), false);
-  if (!failHook) assert.deepEqual(fs.readFileSync(path.join(root, 'pm2-calls'), 'utf8').trim().split('\n').map(JSON.parse).map(args => args[0]), ['start', 'jlist', 'save']);
+  if (!failHook) assert.deepEqual(fs.readFileSync(path.join(root, 'pm2-calls'), 'utf8').trim().split('\n').map(JSON.parse).map(args => args[0]), ['jlist', 'start', 'jlist', 'save']);
 });
 
 // Finalization integration: run for Dashboard schema/takeover changes; skip

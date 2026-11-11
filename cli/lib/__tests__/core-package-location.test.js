@@ -101,6 +101,7 @@ test('record publication failure remains a distinct JSON and readable warning wi
   assert.equal(step.status, 'done');
   assert.equal(ctx.corePackageWarnings.length, 1);
   const finalizer = {
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
     updateConfig() {}, ensureMemoryMigration() {}, verifyPublicationForServices() {},
     startServices: () => ({ status: 'done' }), verifyServices: () => ({ status: 'done' }),
     dashboardOwner: { verifyDashboard: () => ({ state: 'ready', errors: [] }) },

@@ -10,8 +10,8 @@ import { savePm2ProcessList } from '../cli/lib/pm2-save.js';
 // Covers native PM2 delete-by-id and startup persistence after a post-cutoff
 // interruption. Run for cleanup/save ordering changes; skip when native PM2 is
 // unavailable or isolation cannot be proved. No real upgrade or data is used.
-// Every case isolates HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR, private tmux socket
-// and synthetic database paths; all children are stopped on failure/timeout.
+// Every case isolates HOME, ZYLOS_DIR, PM2_HOME and short TMPDIR. No tmux or
+// database is opened; task inspection is injected. Children stop during cleanup.
 test('native PM2 forward cleanup preserves another instance and survives resurrect', {
   skip:process.env.RUN_WEB_CONSOLE_NATIVE !== '1', timeout:60000,
 }, async t => {
@@ -25,7 +25,7 @@ test('native PM2 forward cleanup preserves another instance and survives resurre
     assert.ok(fs.realpathSync(directory).startsWith(base + path.sep));
   }
   console.log(JSON.stringify({isolation:{HOME:env.HOME, ZYLOS_DIR:root, PM2_HOME:env.PM2_HOME,
-    TMPDIR:env.TMPDIR, tmuxSocket:path.join(base,'private-tmux'), database:path.join(root,'scheduler/scheduler.db')}}));
+    TMPDIR:env.TMPDIR, tmux:'unused', database:'unused; task inspection injected'}}));
   const run = (command, args, options = {}) => execFileSync(command, args, {...options, env, encoding:'utf8', stdio:'pipe', timeout:10000});
   const pm2 = (...args) => run('pm2', args);
   t.after(() => {
