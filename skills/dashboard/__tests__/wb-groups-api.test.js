@@ -1224,8 +1224,8 @@ test('latest child tool queries preserve per-child source order ties scope and b
   const put = (id, timestamp, agent, runId = 'tools') => store.insertEvent({ id, ingest_id: id, timestamp,
     session_group: 'telegram:g0', run_id: runId, event_type: 'pre_tool_use', category: 'activity', metadata: { agent_id: agent } });
   put('quiet-new', '2027-01-01T00:00:10Z', 'quiet');
+  put('quiet-tie', '2027-01-01T00:00:10Z', 'quiet');
   put('quiet-late-old', '2027-01-01T01:00:09+01:00', 'quiet');
-  put('quiet-tie', '2027-01-01T01:00:10+01:00', 'quiet');
   put('other-run', '2027-01-01T00:00:11Z', 'quiet', 'other');
   put('main', '2027-01-01T00:00:11Z', '');
   store.db.transaction(() => {
