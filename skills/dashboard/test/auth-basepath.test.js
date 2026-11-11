@@ -234,6 +234,83 @@ test('login sets secure cookie and authenticated requests can reach API and SSE'
   }
 });
 
+// Post-login `next` targets outside the forwarded prefix fall back to the
+// Dashboard root, and the login page never echoes them as a hidden field.
+// Actual HTTP entry + loaded config + AuthGate. Run for login/redirect or
+// browser-base changes; unrelated UI may skip. Runner must isolate
+// HOME/ZYLOS_DIR/PM2_HOME, short temp/tmux socket and DBs; each server/root is
+// closed in teardown.
+const outsideNextTargets = [
+  'https://evil.test/x',
+  'https://evil.test/dashboard/',
+  '//evil.test',
+  '//evil.test/dashboard/',
+  '/\\evil.test',
+  '/\\evil.test/dashboard/',
+  '/dashboard/../admin',
+  '/dashboard/%2e%2e/admin',
+  '/admin',
+  '/dashboardx',
+  '/dashboardx/y'
+];
+
+test('login rejects next targets outside the forwarded prefix', { timeout: 15_000 }, async t => {
+  const { origin, server, zylosDir } = await makeServer();
+  t.after(async () => {
+    server.closeAllConnections();
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+  for (const next of outsideNextTargets) {
+    const page = await fetch(`${origin}/login?next=${encodeURIComponent(next)}`, {
+      headers: { 'X-Forwarded-Prefix': '/dashboard' },
+      redirect: 'manual'
+    });
+    assert.equal(page.status, 200, next);
+    assert.doesNotMatch(await page.text(), /name="next"/, next);
+
+    const login = await fetch(`${origin}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Forwarded-Prefix': '/dashboard'
+      },
+      body: form({ password: 'secret', next }),
+      redirect: 'manual'
+    });
+    assert.equal(login.status, 302, next);
+    assert.equal(login.headers.get('location'), '/dashboard/', next);
+  }
+});
+
+test('login keeps a next target inside the forwarded prefix', { timeout: 15_000 }, async t => {
+  const { origin, server, zylosDir } = await makeServer();
+  t.after(async () => {
+    server.closeAllConnections();
+    await closeServer(server);
+    fs.rmSync(zylosDir, { recursive: true, force: true });
+  });
+  const next = '/dashboard/memory?tab=files';
+  const page = await fetch(`${origin}/login?next=${encodeURIComponent(next)}`, {
+    headers: { 'X-Forwarded-Prefix': '/dashboard' },
+    redirect: 'manual'
+  });
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /name="next" value="\/dashboard\/memory\?tab=files"/);
+
+  const login = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'X-Forwarded-Prefix': '/dashboard'
+    },
+    body: form({ password: 'secret', next }),
+    redirect: 'manual'
+  });
+  assert.equal(login.status, 302);
+  assert.equal(login.headers.get('location'), next);
+});
+
 test('logout succeeds without origin checks and respects forwarded prefix', async () => {
   const { origin, server } = await makeServer();
   const clearCookie = '__Secure-zylos_dashboard_session=; HttpOnly; Secure; SameSite=Strict; Path=/dashboard; Max-Age=0';
