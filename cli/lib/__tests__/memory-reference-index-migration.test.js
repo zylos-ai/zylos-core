@@ -63,6 +63,46 @@ test('fresh references navigation with absent generated indexes is immediately d
   assert.equal(f.record().evidence.kind, 'fresh_install');
 });
 
+test('a fresh copy of the real memory templates accepts prefixed optional index navigation', t => {
+  const f = fixture(t, []);
+  fs.cpSync(new URL('../../../templates/memory/', import.meta.url), path.join(f.root, 'memory'), { recursive: true });
+  const navigation = fs.readFileSync(path.join(f.root, 'memory/references.md'), 'utf8');
+  for (const name of indexes) {
+    assert.ok(navigation.includes(`memory/${name}`));
+    assert.equal(fs.existsSync(path.join(f.root, 'memory', name)), false);
+  }
+  assert.equal(f.service.ensure({ createdBy: 'init', freshInstall: true }).state, 'done');
+  const evidence = f.record().evidence.mechanical;
+  assert.deepEqual(evidence.missingPaths, []);
+  for (const name of indexes) assert.ok(evidence.indexedPaths.includes(`memory/${name}`));
+});
+
+test('missing project and decision pages remain required alongside optional indexes', async t => {
+  const pages = ['reference/projects/some-page.md', 'reference/decisions/some-page.md'];
+  const f = fixture(t, [...indexes, ...pages]);
+  await f.prepareCompletion();
+  await assert.rejects(f.service.complete('Missing category pages'), error => {
+    assert.equal(error.code, 'CHECK_FAILED');
+    assert.deepEqual(error.missingPaths, pages.map(name => `memory/${name}`));
+    return true;
+  });
+  assert.equal(f.service.status().state, 'pending');
+});
+
+test('an index path beneath a regular file is not treated as an optional absence', async t => {
+  const f = fixture(t, indexes);
+  for (const category of ['projects', 'decisions']) {
+    fs.writeFileSync(path.join(f.root, 'memory/reference', category), 'not a directory');
+  }
+  await f.prepareCompletion();
+  await assert.rejects(f.service.complete('Invalid category directories'), error => {
+    assert.equal(error.code, 'CHECK_FAILED');
+    assert.deepEqual(error.missingPaths, indexes.map(name => `memory/${name}`));
+    return true;
+  });
+  assert.equal(f.service.status().state, 'pending');
+});
+
 test('an existing unreadable index is not treated as an optional absence', async t => {
   const f = fixture(t, indexes), target = path.join(f.root, 'memory', indexes[0]);
   fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, 'index');

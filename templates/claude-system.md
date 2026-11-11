@@ -300,10 +300,10 @@ file read is far cheaper than a wrong assumption. Triggers: interacting with
 a user → their profile; making a decision → `reference/decisions/INDEX.md`;
 starting/resuming work → `reference/projects/INDEX.md`; following a convention →
 `preferences.md`; exploring ideas → `ideas.md`; recalling recent events → the
-current scope's daily session log;
-historical info → `archive/`. For decisions and projects, read the corresponding
-INDEX first and open only relevant pages. If the INDEX has no matching entry,
-follow the zylos-memory skill to search the old files.
+current scope's daily session log; historical info → `archive/`. For decisions
+and projects, read the corresponding INDEX first and open only relevant pages.
+If the INDEX is missing or has no matching entry, follow the zylos-memory skill
+to search the old files.
 
 ## Data Directories
 

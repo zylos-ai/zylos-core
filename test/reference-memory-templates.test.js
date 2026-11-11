@@ -78,7 +78,7 @@ for (const { runtime, text } of systems) {
     assert.match(blocks.loading, /making a decision → `reference\/decisions\/INDEX\.md`/);
     assert.match(blocks.loading, /starting\/resuming work → `reference\/projects\/INDEX\.md`/);
     assert.match(blocks.loading, /read the corresponding\s+INDEX first and open only relevant pages/);
-    assert.match(blocks.loading, /If the INDEX has no matching entry,\s+follow the zylos-memory skill to search the old files/);
+    assert.match(blocks.loading, /If the INDEX is missing or has no matching entry, follow the zylos-memory skill\s+to search the old files/);
     assert.doesNotMatch(blocks.loading, /`(?:reference\/)?(?:projects|decisions)\.md`/);
   });
 }

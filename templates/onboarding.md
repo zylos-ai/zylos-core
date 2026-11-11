@@ -29,7 +29,7 @@ After the security notice:
 
 Guide the user to complete their first end-to-end project. Start with their actual need; if they have no preference, suggest from these task types and recommend ★★ difficulty tasks for beginners. The agent does the building; the user provides direction.
 
-| Task | Difficulty | What They’ll Learn |
+| Task | Difficulty | What They'll Learn |
 |------|-----------|-------------------|
 | Scheduled reminder / info push | ★☆☆☆☆ | Scheduler, communication channels |
 | Build a personal web page | ★★☆☆☆ | File creation, HTTP serving |

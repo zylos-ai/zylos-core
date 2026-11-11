@@ -6,6 +6,7 @@ export default {
     '<rootDir>/test/group-deletion-storage.integration.test.js',
     // Node test-runner file; run by scripts/run-node-tests.js.
     '<rootDir>/test/test-location.test.js',
+    '<rootDir>/test/reference-memory-templates.test.js',
   ],
   globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',
