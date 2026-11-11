@@ -7,6 +7,7 @@
     "--require-idle": { "takesValue": false },
     "--block-queue-until-idle": { "takesValue": false },
     "--json": { "takesValue": false },
-    "--content": { "takesValue": true }
+    "--content": { "takesValue": true },
+    "--content-stdin": { "takesValue": false }
   }
 }

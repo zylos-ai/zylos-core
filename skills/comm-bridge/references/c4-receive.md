@@ -9,6 +9,10 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 ```bash
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
     --channel <channel> [options] --content "<message>"
+
+# Content piped on stdin (any size)
+printf '%s' "$message" | ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
+    --channel <channel> [options] --content-stdin
 ```
 
 ## Options
@@ -17,7 +21,8 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 |--------|-------------|
 | `--channel <name>` | Channel name (required unless `--no-reply`) |
 | `--endpoint <id>` | Endpoint identifier. Can contain multiple space-separated parts (e.g., `"chat_id topic_id"` for Lark topics) |
-| `--content <text>` | Message content (required) |
+| `--content <text>` | Message content (this or `--content-stdin` is required) |
+| `--content-stdin` | Read the message content from stdin instead of `--content` |
 | `--priority <1-3>` | Priority level (default: 3) |
 | `--no-reply` | Mark the message as having no reply target; defaults channel to `system` |
 | `--block-queue-until-idle` | Wait for sustained idle, then block later dispatch until execution settles |
@@ -27,6 +32,25 @@ Messages are written to DB with `status='pending'`. The c4-dispatcher daemon han
 `scripts/c4-receive-options.json`, next to the actual `c4-receive.js`, is the argument list used by the receiver itself. Its format is `{ "options": { "--channel": { "takesValue": true }, "--no-reply": { "takesValue": false } } }`; all accepted names, including aliases, are listed. `takesValue` specifies whether the next word is consumed as a value, even when it begins with `--`. A missing, unreadable or malformed manifest is an installation error: the receiver exits with `INTERNAL_ERROR` before queuing a message.
 
 Unknown options are ignored with an `Ignored unknown option: --name` notice on stderr; the next word is also skipped when it does not start with `--`, and option values are never included in the notice.
+
+## Content from stdin
+
+`--content` passes the whole message as one command-line argument, and the operating system limits its size (on Linux, 128 KiB for a single argument). A longer message cannot reach `c4-receive.js` this way: starting the process fails before any message is queued. Channels that forward large payloads (group context, history, reply context) should pipe the body on stdin with `--content-stdin` instead.
+
+- The whole of stdin, up to end of input, is the message content. It is stored exactly as received, so a heredoc's final newline is kept; use `printf '%s'` or write the body without a trailing newline when that matters.
+- `--content-stdin` cannot be combined with `--content`, needs piped input (a terminal on stdin is rejected), and empty input is rejected. These errors exit with `INVALID_ARGS` before anything is queued.
+- The caller must close stdin after writing the body; `c4-receive.js` waits for end of input.
+- A component that must also work with an older comm-bridge can check for `--content-stdin` in `scripts/c4-receive-options.json` and fall back to `--content` when it is not listed.
+
+From Node.js:
+
+```js
+import { execFile } from 'node:child_process';
+
+const child = execFile('node', [C4_RECEIVE, '--channel', 'telegram', '--endpoint', chatId, '--json', '--content-stdin'],
+  (err, stdout) => { /* parse stdout as JSON */ });
+child.stdin.end(content);
+```
 
 ## Priority Levels
 
@@ -58,6 +82,10 @@ Unknown options are ignored with an `Ignored unknown option: --name` notice on s
 ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
     --channel lark --endpoint "chat_xxx topic_yyy" \
     --content '[Lark] user said: hello'
+
+# Large payload piped on stdin
+printf '%s' "$formatted_payload" | ~/zylos/.claude/skills/comm-bridge/scripts/c4-receive.js \
+    --channel telegram --endpoint 8101553026 --json --content-stdin
 ```
 
 ## Message Storage

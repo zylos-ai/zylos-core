@@ -26,9 +26,10 @@ const AM_SOCKET_PATH = path.join(ACTIVITY_MONITOR_DIR, 'am.sock');
 const ROUTER_IPC_TIMEOUT_MS = 30000;
 
 function printUsage() {
-  console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] --content "<message>"');
+  console.log('Usage: node c4-receive.js --channel <channel> [--endpoint <endpoint_id>] [--priority <1-3>] [--no-reply] [--block-queue-until-idle] [--json] (--content "<message>" | --content-stdin)');
   console.log('');
   console.log('Options:');
+  console.log('  --content-stdin  Read the message content from stdin instead of --content (for large payloads)');
   console.log('  --no-reply       Mark as not needing a reply target (use for system messages)');
   console.log('  --block-queue-until-idle');
   console.log('                   Wait for sustained idle, then block subsequent dispatch until execution settles');
@@ -57,6 +58,7 @@ function parseArgs(args, options) {
     channel: null,
     endpoint: null,
     content: null,
+    contentStdin: false,
     priority: 3,
     noReply: false,
     requireIdle: false,
@@ -97,10 +99,28 @@ function parseArgs(args, options) {
       case '--content':
         result.content = value;
         break;
+      case '--content-stdin':
+        result.contentStdin = true;
+        break;
     }
   }
 
   return result;
+}
+
+/**
+ * Read the whole message body from stdin. Content is kept exactly as
+ * received, like --content; the UTF-8 decoder keeps multi-byte characters
+ * that span chunk boundaries intact.
+ */
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => { data += chunk; });
+    process.stdin.on('end', () => resolve(data));
+    process.stdin.on('error', reject);
+  });
 }
 
 function readHealthStatusFile() {
@@ -273,8 +293,29 @@ async function main() {
     emitError(asJson, 'INVALID_ARGS', parsed.error);
   }
 
-  const { channel: rawChannel, endpoint, content, priority, noReply, requireIdle, json } = parsed;
+  const { channel: rawChannel, endpoint, contentStdin, priority, noReply, requireIdle, json } = parsed;
+  let { content } = parsed;
   let channel = rawChannel;
+
+  if (contentStdin) {
+    if (content !== null) {
+      if (!json) printUsage();
+      emitError(json, 'INVALID_ARGS', '--content and --content-stdin cannot be combined');
+    }
+    if (process.stdin.isTTY) {
+      if (!json) printUsage();
+      emitError(json, 'INVALID_ARGS', '--content-stdin requires the content to be piped on stdin');
+    }
+    try {
+      content = await readStdin();
+    } catch (err) {
+      emitError(json, 'INTERNAL_ERROR', `failed to read content from stdin: ${err.message}`);
+    }
+    if (!content) {
+      if (!json) printUsage();
+      emitError(json, 'INVALID_ARGS', '--content-stdin received no content');
+    }
+  }
 
   if (!channel && noReply) {
     channel = 'system';
