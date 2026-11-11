@@ -7,7 +7,7 @@ import { createChatApiFixture } from './helpers/chat-integration-api.js';
 import { sendJson } from '../src/lib/http.js';
 
 // Boundary: real Dashboard entry, authenticated chat HTTP routes, private C4/dashboard SQLite histories,
-// and browser layout/raw-message interaction. No model, PM2, tmux, real channel or live database starts.
+// and browser layout/raw-message/avatar interaction. No model, PM2, tmux, real channel or live database starts.
 // Run for external message author/internal labels and raw visibility changes; skip unrelated backend changes.
 // Opt-in before allocating; sandbox proves private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket/DB paths and
 // owns browser, HTTP and database cleanup on pass, failure or timeout. All remote browser requests denied.
@@ -31,6 +31,7 @@ test('external conversation labels identify channels and internal peers', { skip
     const mineGroup = `${mine.receipt.namespace}:${mine.draft.localId}`;
     const incoming = fixture.c4.insertConversation('in', 'telegram', 'channel-labels', 'External input', { groupName: 'channel-labels' });
     const externalGroup = incoming.session_group;
+    fixture.db.prepare('UPDATE conversations SET channel=? WHERE id=?').run('openmax', incoming.id);
     const outgoing = fixture.c4.insertConversation('out', 'telegram', 'channel-labels', 'External output', { groupName: 'channel-labels' });
     // A row's recorded channel can differ from its history's channel. Only this private fixture row is changed.
     fixture.db.prepare('UPDATE conversations SET channel=? WHERE id=?').run('openmax', outgoing.id);
@@ -70,6 +71,8 @@ test('external conversation labels identify channels and internal peers', { skip
         assert.equal(await row(page, relayIn.outRow.id).locator('.conversation-internal-label').innerText(), '发给');
         assert.equal(await row(page, relayOut.inRow.id).locator('.conversation-internal-raw').isVisible(), false);
         assert.doesNotMatch(await row(page, relayOut.inRow.id).locator('.conversation-internal-heading').innerText(), /内部|←|→/);
+        assert.equal(await page.locator('#wb-chat .chat-in:not(.conversation-internal) .conversation-avatar .wb-ico-monitor').count(), 1);
+        assert.equal(await page.locator('#wb-chat .chat-out:not(.conversation-internal) .conversation-avatar .wb-ico-bot').count(), 1);
         await shot(page, 'mine-light-1280', '.conversation-detail');
       } finally { await context.close(); }
     });
@@ -83,7 +86,13 @@ test('external conversation labels identify channels and internal peers', { skip
           return { id, in: node.classList.contains('chat-in'), background: getComputedStyle(body).backgroundColor, top: b.top, bottom: b.bottom, left: b.left, right: b.right };
         }), ids);
         await shot(page, `external-${width}-${theme}`);
-        assert.equal(await row(page, incoming.id).locator('.chat-message-author').innerText(), '收到 · Telegram');
+        assert.equal(await row(page, incoming.id).locator('.chat-message-author').innerText(), '收到 · OpenMax');
+        assert.equal(await row(page, incoming.id).locator('.conversation-avatar .wb-ico-hex').count(), 1, 'avatar uses the incoming row channel instead of Telegram history');
+        assert.equal(await row(page, outgoing.id).locator('.conversation-avatar .wb-ico-bot').count(), 1);
+        for (const id of [relayOut.outRow.id, relayIn.inRow.id]) {
+          assert.equal(await row(page, id).locator('.conversation-internal-spacer[aria-hidden="true"]').count(), 1);
+          assert.equal(await row(page, id).locator('.conversation-avatar .wb-ico').count(), 0);
+        }
         assert.equal(await row(page, outgoing.id).locator('.chat-message-author').innerText(), '发出 → OpenMax', 'use the row channel, not the Telegram history channel');
         assert.match(await row(page, relayOut.outRow.id).locator('.conversation-internal-heading').innerText(), /发出 →\s*Peer Session/);
         assert.match(await row(page, relayIn.inRow.id).locator('.conversation-internal-heading').innerText(), /收到 ←\s*Peer Session/);
@@ -102,6 +111,32 @@ test('external conversation labels identify channels and internal peers', { skip
         assert.ok((await raw.locator('pre').innerText()).includes('Internal input'));
         assert.equal(await row(page, relayOut.outRow.id).locator('.conversation-internal-raw').isVisible(), false);
         assert.equal(await row(page, incoming.id).locator('.conversation-internal-raw').count(), 0);
+      } finally { await context.close(); }
+    });
+    // A controlled history response replays an existing row with updated channel metadata;
+    // real state merging and keyed DOM reconciliation must refresh its icon without replacing its wrapper.
+    await t.test('existing external row avatar refreshes when its recorded channel changes', async () => {
+      const { context, page } = await open(1280, 'light');
+      let original, patchedChannel = null;
+      try {
+        await context.route('**/api/chat/conversations/**/messages?*', async route => {
+          const response = await route.fetch();
+          const data = await response.json();
+          original ??= data.items?.find(item => item.id === incoming.id);
+          if (patchedChannel && original) data.items = [{ ...original, channel: patchedChannel }];
+          await route.fulfill({ response, json: data });
+        });
+        await select(page, 'external', externalId);
+        const avatar = row(page, incoming.id).locator('.conversation-avatar');
+        await avatar.locator('.wb-ico-hex').waitFor();
+        const handle = await avatar.elementHandle();
+        for (const [channel, symbol] of [['telegram', 'send'], ['lark', 'msg'], ['web-console', 'monitor'], ['unrecognized-channel', 'msg'], ['toString', 'msg'], ['openmax', 'hex']]) {
+          patchedChannel = channel;
+          await page.locator('#wb-chat .conversation-header [data-action="refreshMessages"]').click();
+          await avatar.locator(`.wb-ico-${symbol}`).waitFor();
+          assert.equal(await avatar.evaluate((node, original) => node === original, handle), true, 'avatar wrapper retains identity');
+          assert.equal(await row(page, outgoing.id).locator('.conversation-avatar .wb-ico-bot').count(), 1);
+        }
       } finally { await context.close(); }
     });
   }, { timeoutMs: 110000 });

@@ -1,6 +1,6 @@
 import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=151';
+import { modelCell, pendingModel, shortDuration } from './board.js?v=152';
 import { toolLabel, waitText } from './view-mode.js?v=150';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=91';
 import { recentRows } from './timeline-rows.js?v=108';

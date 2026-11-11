@@ -3,12 +3,12 @@ import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
-import { channelIcon } from './board.js?v=151';
+import { channelIcon, channelIcons } from './board.js?v=152';
 import { createConversationState } from './conversation-state.js?v=158';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=157';
-import { createGroupSide } from './group-side.js?v=158';
+import { createGroupSide } from './group-side.js?v=161';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=4';
@@ -565,6 +565,12 @@ export function mountConversationPage({
       day: 'numeric'
     }, instanceTimeZone) : null;
   }
+  function messageAvatar(row, s) {
+    if (row.direction !== 'in') return 'bot';
+    return s.tab === 'external'
+      ? Object.hasOwn(channelIcons, row.channel) ? channelIcons[row.channel] : 'msg'
+      : 'monitor';
+  }
   function makeMessage(row, s) {
     if (row.channel === 'internal') {
       const date = asDate(row.timestamp ?? row.created_at ?? row.createdAt);
@@ -578,7 +584,8 @@ export function mountConversationPage({
     const article = node('article', undefined, 'chat-message conversation-message ' + (row.direction === 'in' ? 'chat-in' : 'chat-out'));
     article.dataset.messageId = String(row.id);
     const avatar = node('span', undefined, 'conversation-avatar');
-    avatar.append(icon(document, row.direction === 'in' ? 'monitor' : 'bot'));
+    const avatarSymbol = messageAvatar(row, s);
+    avatar.append(icon(document, avatarSymbol));
     const body = node('div', undefined, 'conversation-message-body');
     const meta = node('div', undefined, 'conversation-message-meta'),
       author = node('span', messageAuthor(row, s), 'chat-message-author');
@@ -634,6 +641,8 @@ export function mountConversationPage({
     article.append(avatar, body);
     const record = {
       node: article,
+      avatar,
+      avatarSymbol,
       activitySlot,
       activityAreas: new Map(),
       afterActivitySlot,
@@ -709,6 +718,11 @@ export function mountConversationPage({
     if (record.internal) {
       record.resource.update(row, { showTechnicalDetails: technicalDetails() === true, external: s.tab === 'external' });
       return;
+    }
+    const avatarSymbol = messageAvatar(row, s);
+    if (record.avatarSymbol !== avatarSymbol) {
+      record.avatar.replaceChildren(icon(document, avatarSymbol));
+      record.avatarSymbol = avatarSymbol;
     }
     const delivery = s.tab === 'mine' && row.direction === 'in' ? messageState(row) : null;
     const status = delivery ? t(delivery === 'pending' && s.groupWait?.kind === 'rate_wait'

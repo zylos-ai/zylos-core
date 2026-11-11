@@ -1,9 +1,9 @@
 import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=151';
-import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=158';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=158';
+import { channelIcon, platformLabel, statePill } from './board.js?v=152';
+import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=161';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=161';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=115';
 import { renderNameEditor } from './name-edit.js?v=115';

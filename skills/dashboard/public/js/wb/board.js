@@ -32,7 +32,7 @@ export function statePill(document, row, { t = key => key, level = 'plain' } = {
   if (level === 'technical') pill.title = [row.state?.reason ?? row.state?.reasonCode, row.state?.sampledAt].filter(v => v != null).join(' · ');
   return pill;
 }
-const channelIcons = { origin: 'origin', telegram: 'send', lark: 'msg', feishu: 'msg', wechat: 'msg', 'web-console': 'monitor', openmax: 'hex' };
+export const channelIcons = { origin: 'origin', telegram: 'send', lark: 'msg', feishu: 'msg', wechat: 'msg', 'web-console': 'monitor', openmax: 'hex' };
 export const channelIcon = row => row.sessionGroup == null || row.sessionGroup === 'origin' ? 'origin'
   : channelIcons[platformOf(row)] ?? 'hex';
 export function contextRing(document, pct, reason = '') {

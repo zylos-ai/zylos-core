@@ -1,7 +1,7 @@
 import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { endReasonLabel, timeValue } from './event-labels.js?v=91';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=158';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=161';
 import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=108';
 
 export { timeValue };

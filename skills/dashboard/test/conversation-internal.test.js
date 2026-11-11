@@ -246,3 +246,41 @@ for (const locale of ['en', 'zh']) {
     assert.equal(raw.hidden, false); assert.equal(resource.node.querySelector('.conversation-internal-badge'), null);
   });
 }
+
+test('message avatars follow each external row channel while mine and internal avatars stay unchanged', async t => {
+  const f = mixedConversation(t, 'en');
+  await f.page.openGroup(f.external.sessionGroup, { channel: f.external.channel });
+  const message = id => f.root.querySelector(`[data-message-id="${id}"]`);
+  const avatar = id => message(id).querySelector('.conversation-avatar');
+  const expectIcon = (id, name) => {
+    const icons = avatar(id).querySelectorAll('.wb-ico');
+    assert.equal(icons.length, 1);
+    assert.equal(icons[0].classList.contains('wb-ico-' + name), true, `${id} has the ${name} icon`);
+  };
+  const expectInternalSpacers = () => {
+    for (const id of [3, 4]) {
+      assert.equal(avatar(id).textContent, '');
+      assert.equal(avatar(id).getAttribute('aria-hidden'), 'true');
+      assert.equal(avatar(id).querySelector('.wb-ico'), null);
+    }
+  };
+  const externalIncoming = avatar(1), externalOutgoing = avatar(2);
+  expectIcon(1, 'hex'); expectIcon(2, 'bot'); expectInternalSpacers();
+  const channels = [['telegram', 'send'], ['openmax', 'hex'], ['lark', 'msg'], ['web-console', 'monitor'], ['toString', 'msg'], ['unknown-transport', 'msg']];
+  for (const [channel, glyph] of channels) {
+    f.rows[0].channel = channel; f.rows[1].channel = channel; f.page.redraw();
+    assert.ok(avatar(1) === externalIncoming, 'channel patches retain the incoming avatar wrapper');
+    assert.ok(avatar(2) === externalOutgoing, 'channel patches retain the outgoing avatar wrapper');
+    expectIcon(1, glyph); expectIcon(2, 'bot');
+  }
+  await f.page.openGroup(f.mine.sessionGroup, { channel: f.mine.channel });
+  const mineIncoming = avatar(1), mineOutgoing = avatar(2);
+  for (const [channel] of channels) {
+    f.rows[0].channel = channel; f.rows[1].channel = channel; f.page.redraw();
+    assert.ok(avatar(1) === mineIncoming); assert.ok(avatar(2) === mineOutgoing);
+    expectIcon(1, 'monitor'); expectIcon(2, 'bot');
+  }
+  expectInternalSpacers();
+  await f.page.openGroup(f.external.sessionGroup, { channel: f.external.channel });
+  expectIcon(1, 'msg'); expectIcon(2, 'bot'); expectInternalSpacers();
+});
