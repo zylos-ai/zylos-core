@@ -1449,3 +1449,90 @@ test('timeline keeps event and message identity separate when numeric ids match 
     assert.equal(rows()[0], event); assert.equal(rows()[1], message);
   } finally { f.controller.destroy(); }
 });
+
+test('inserting a newer timeline run keeps the existing expanded run section', async () => {
+  let includeNewer = false;
+  const current = row('a'), existingRun = run('run-a'), newerRun = run('run-new', 3000, 4000);
+  const event = { event_seq: 1, event_type: 'stop', timestamp: new Date(1800).toISOString() };
+  const f = detailScrollFixture(async path => {
+    const url = new URL(path, 'http://fixture');
+    if (path.includes('types=subagent_start')) return response({ events: [] });
+    if (url.pathname.endsWith('/runs')) return response({ runs: includeNewer ? [newerRun, existingRun] : [existingRun], totalEvents: 1, totalRuns: includeNewer ? 2 : 1 });
+    if (url.pathname === '/api/timeline') return response({ events: url.searchParams.has('after_seq') ? [] : [event] });
+    return response(defaultRead(path));
+  }, { detail: () => 'technical' });
+  const sections = () => allNodes(f.root).filter(node => node.classList.contains('wb-timeline-run'));
+  const findRun = id => sections().find(node => node.dataset.runId === id && allNodes(node).some(child => child.classList.contains('wb-mono') && child.textContent === id));
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    await f.controller.selectTab('timeline');
+    const existingSection = findRun('run-a');
+    assert.ok(existingSection);
+    const heading = allNodes(existingSection).find(node => node.classList.contains('wb-run-h'));
+    assert.equal(heading.getAttribute('aria-expanded'), 'true');
+    includeNewer = true;
+    await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+    assert.ok(findRun('run-a') === existingSection, 'the existing run keeps its section rather than inheriting a positional match');
+    assert.ok(sections()[0] === findRun('run-new'), 'the refreshed run is inserted above the existing run');
+    assert.ok(allNodes(existingSection).includes(heading), 'the expanded run keeps its heading');
+    assert.equal(heading.getAttribute('aria-expanded'), 'true');
+    assert.equal(f.controller.timeline.state.expanded.has('run-a'), true);
+  } finally { f.controller.destroy(); }
+});
+
+test('an open configuration form becomes writable without retaining read-only callbacks', async () => {
+  let writable = false;
+  const current = row('a');
+  const configValue = { runtime: { data: { resolved: { runtime: 'claude' } } },
+    model: { data: { desired: { mode: 'override', runtime: 'claude', model: 'opus', effort: 'low' } } } };
+  const f = detailScrollFixture(async path => {
+    if (path.endsWith('/config')) return response(configValue);
+    if (path.startsWith('/api/actions/meta')) return response({ models: [{ id: 'opus' }, { id: 'sonnet' }],
+      efforts_by_model: { '*': ['low', 'high'] }, model_thresholds: { opus: 70, sonnet: 60 } });
+    return response(defaultRead(path));
+  }, { detail: () => 'technical', writable: () => writable });
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    const config = f.root.querySelector('.wb-detail-config');
+    allNodes(config).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.modify').dispatch('click');
+    await tick(); await tick();
+    const readonlyForm = f.root.querySelector('.wb-cfg-edit');
+    const revision = readonlyForm.dataset.updateKey.split(':')[1];
+    const readonlyPair = f.root.querySelector('.wb-cfg-controls');
+    assert.equal(readonlyPair.children[1].disabled, true);
+    assert.equal(readonlyPair.children[3].disabled, true);
+    writable = true;
+    f.controller.setViewDetail();
+    const writableForm = f.root.querySelector('.wb-cfg-edit');
+    assert.equal(writableForm.dataset.updateKey.split(':')[1], revision, 'permission changes do not publish new configuration data');
+    assert.ok(writableForm !== readonlyForm, 'the new permission gets a form with fresh callbacks');
+    const [, model, effort, save] = f.root.querySelector('.wb-cfg-controls').children;
+    assert.equal(model.disabled, false);
+    model.value = 'sonnet'; model.dispatch('change');
+    effort.value = 'high'; effort.dispatch('change');
+    assert.equal(save.disabled, false, 'new model and effort can be saved with the current permission');
+  } finally { f.controller.destroy(); }
+});
+
+test('an open name editor follows permission changes with fresh controls', async () => {
+  let writable = true;
+  const current = row('a');
+  const f = detailScrollFixture(async path => response(defaultRead(path)), { writable: () => writable });
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    allNodes(f.root).find(node => node.tagName === 'BUTTON' && node.getAttribute('aria-label') === 'wb.name.edit').dispatch('click');
+    const writableEditor = f.root.querySelector('.wb-name-editor');
+    writableEditor.children[0].value = 'Unsent name'; writableEditor.children[0].dispatch('input');
+    assert.equal(writableEditor.children[1].disabled, false);
+    writable = false; f.controller.setViewDetail();
+    const readonlyEditor = f.root.querySelector('.wb-name-editor');
+    assert.ok(readonlyEditor !== writableEditor, 'read-only permission replaces the editor and its callbacks');
+    assert.equal(readonlyEditor.children[0].value, 'Unsent name');
+    assert.equal(readonlyEditor.children[0].disabled, true); assert.equal(readonlyEditor.children[1].disabled, true);
+    writable = true; f.controller.setViewDetail();
+    const reopenedEditor = f.root.querySelector('.wb-name-editor');
+    assert.ok(reopenedEditor !== readonlyEditor, 'writable permission creates current writable callbacks');
+    assert.equal(reopenedEditor.children[0].value, 'Unsent name');
+    assert.equal(reopenedEditor.children[0].disabled, false); assert.equal(reopenedEditor.children[1].disabled, false);
+  } finally { f.controller.destroy(); }
+});
