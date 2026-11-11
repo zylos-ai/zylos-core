@@ -34,10 +34,11 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
           path.join(scope.memoryDir, `state.md.${input.token}.tmp`)).split(path.sep).join('/');
         const allowed = relative => (marker.kind !== 'origin' && relative === temporary) ||
           (marker.kind !== 'group' && isSelfPath(relative));
-        const legacy = relative => ['reference/projects.md', 'reference/decisions.md', 'reference/reorg-progress.md'].includes(relative) ||
-          relative === 'reference/legacy' || relative.startsWith('reference/legacy/');
-        const relative = path.relative(path.join(scope.root, 'memory'), path.resolve(scope.root, 'memory', input.path)).split(path.sep).join('/');
-        if (legacy(relative)) throw memoryError('LEGACY_READ_ONLY', 'Legacy memory paths are read-only');
+        const legacy = relative => {
+          const lower = relative.toLowerCase();
+          return ['reference/projects.md', 'reference/decisions.md', 'reference/reorg-progress.md'].includes(lower) ||
+            lower === 'reference/legacy' || lower.startsWith('reference/legacy/');
+        };
         const resolved = resolveAllowedMemoryPath({ root: scope.root, path: input.path, allowed: candidate => {
           if (legacy(candidate)) throw memoryError('LEGACY_READ_ONLY', 'Legacy memory paths are read-only');
           return allowed(candidate);

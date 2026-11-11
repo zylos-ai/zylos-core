@@ -223,3 +223,14 @@ test('local: resolved aliases cannot write legacy files', async () => {
   assert.equal(fs.readFileSync(path.join(memory, 'reference/projects.md'), 'utf8'), 'old');
   assert.equal(fs.readdirSync(path.join(memory, 'reference/legacy')).length, 0);
 });
+
+
+test('local: legacy names are case insensitive and the legacy prefix has a directory boundary', async () => {
+  const f = await fixture('global');
+  for (const name of ['reference/Projects.md', 'Reference/Decisions.md', 'reference/Legacy/stored.md', 'reference/Reorg-Progress.md']) {
+    assert.equal((await f.editor(create(f.token, name))).code, 'LEGACY_READ_ONLY');
+    assert.equal(fs.existsSync(path.join(f.dir, 'memory', name)), false);
+  }
+  assert.equal((await f.editor(create(f.token, 'reference/legacy-notes.md', 'ordinary reference page'))).ok, true);
+  assert.equal(fs.readFileSync(path.join(f.dir, 'memory/reference/legacy-notes.md'), 'utf8'), 'ordinary reference page');
+});

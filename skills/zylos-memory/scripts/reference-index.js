@@ -51,7 +51,6 @@ function header(text, kind) {
   for (const line of block.slice(1)) {
     const match = /^- \*\*(Status|Updated|Keys|Scope):\*\* (.*)$/.exec(line);
     if (match) {
-      if (Object.hasOwn(fields, match[1])) return null;
       fields[match[1]] = match[2];
     }
   }
@@ -99,7 +98,6 @@ export function createPage(root, requested, content) {
   const permitted = p => pagePath(p) || p === 'reference/reorg-progress.md';
   if (!permitted(requested)) throw memoryError('PATH_NOT_ALLOWED', 'Expected a direct reference page path');
   const { target } = resolveAllowedMemoryPath({ root, path: requested, allowed: permitted });
-  unused(target);
   publish(target, content, true);
   return { ok: true, path: requested, bytes: Buffer.byteLength(content) };
 }
@@ -109,7 +107,6 @@ export function movePage(root, requested, unarchive = false) {
   const source = resolveAllowedMemoryPath({ root, path: requested, allowed: p => pagePath(p, unarchive) }).target;
   const destination = unarchive ? requested.replace('/archive/', '/') : requested.replace(/\/([^/]+)$/, '/archive/$1');
   const target = resolveAllowedMemoryPath({ root, path: destination, allowed: p => pagePath(p, !unarchive) }).target;
-  unused(target);
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   moveWithoutOverwrite(source, target);
   rebuild(root);
@@ -121,7 +118,7 @@ export function moveOld(root, now = new Date()) {
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const moves = [];
   for (const name of ['projects', 'decisions', 'reorg-progress']) {
-    const old = `reference/${name}.md`, archived = `reference/legacy/${name}-before-split-${stamp}.md`;
+    const old = `reference/${name}.md`, archived = `reference/legacy/${name}${name === 'reorg-progress' ? '' : '-before-split'}-${stamp}.md`;
     const source = resolveAllowedMemoryPath({ root, path: old, allowed: p => p === old }).target;
     if (!exists(source)) continue;
     const target = resolveAllowedMemoryPath({ root, path: archived, allowed: p => p === archived }).target;
