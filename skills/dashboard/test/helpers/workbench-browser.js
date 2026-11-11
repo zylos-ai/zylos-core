@@ -610,6 +610,33 @@ export async function runWorkbenchBrowser(t, sandbox) {
     }
   });
 
+  // The header: the title in the theme's brand colour, then the instance name and the instance's own Core version
+  // (fixtures/workbench-browser-api.js reports zylos 0.9.4) as grey small text. Phones hide both.
+  await step('header: brand-coloured title and the Core version after the instance name, hidden on phones', async () => {
+    for (const width of [1280, 390]) for (const [theme, accent] of [['light', 'rgb(13, 148, 136)'], ['dark', 'rgb(67, 199, 181)']]) {
+      const { page, context, errors, shot } = await open(width, width === 390 ? 844 : 800, '/');
+      if (theme === 'dark') { await page.evaluate(() => localStorage.setItem('zylos-dashboard-theme', 'dark')); await page.reload(); }
+      await page.locator('#tab-bar-core-version').waitFor({ state: 'attached' });
+      await page.waitForFunction(() => document.querySelector('#tab-bar-core-version').textContent !== '');
+      const header = await page.evaluate(() => {
+        const look = node => { const style = getComputedStyle(node), box = node.getBoundingClientRect();
+          return { color: style.color, size: style.fontSize, shown: style.display !== 'none' && box.width > 0 }; };
+        const version = document.querySelector('#tab-bar-core-version');
+        return { brand: look(document.querySelector('.app-header .brand')), name: look(document.querySelector('#tab-bar-agent-name')),
+          version: look(version), text: version.textContent, scroll: document.documentElement.scrollWidth > innerWidth };
+      });
+      assert.equal(header.brand.color, accent, `${width} ${theme}: the title takes the brand colour`);
+      assert.equal(header.text, 'v0.9.4', `${width} ${theme}: the instance's Core version`);
+      assert.equal(header.version.shown, width > 760, `${width} ${theme}: shown on wide screens, hidden on phones`);
+      assert.equal(header.name.shown, width > 760, `${width} ${theme}: the instance name follows the same rule`);
+      if (width > 760) assert.deepEqual([header.version.color, header.version.size], [header.name.color, header.name.size], 'styled like the instance name');
+      assert.equal(header.scroll, false, `${width} ${theme}: no sideways scrolling`);
+      await shot(`header-${theme}`);
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
   // Unanswered reads are listed so a page change that needs a new answer is visible, not silently empty.
   if (unserved.size) console.log('Workbench browser case left unanswered:', [...unserved].sort().join(', '));
 }

@@ -7,6 +7,15 @@ export function coreVersion(info) {
   return value && value !== 'unknown' ? value : null;
 }
 
+// The header's version beside the instance name: the viewed instance's own Core version, hidden when it cannot
+// be read. Each call uses only the info it is given, so another instance never shows this machine's version.
+export function renderBrandVersion(el, info) {
+  if (!el) return;
+  const core = coreVersion(info);
+  el.textContent = core ? 'v' + core : '';
+  el.hidden = !core;
+}
+
 // The viewed instance's Core version with its update hint, the AI engine CLI and its upgrade button
 // (the original generated action node), in both views.
 export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, onHint = () => {} } = {}) {

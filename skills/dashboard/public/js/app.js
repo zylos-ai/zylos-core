@@ -6,7 +6,7 @@ import { createPricingPanel } from './wb/settings-pricing.js?v=157';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=161';
-import { coreVersion, renderVersion } from './wb/settings-version.js?v=107';
+import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
 import { mountConversationPage } from './wb/conversation-page.js?v=162';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
@@ -236,7 +236,7 @@ function agentFleetLabels() {
 
 
 // ─── Render: Info Bar ───
-// The header's instance name: the viewed instance's.
+// The header's instance name and Core version, both the viewed instance's.
 function renderIdentityChrome() {
   const nameEl = $('#tab-bar-agent-name');
   if (nameEl) {
@@ -244,6 +244,8 @@ function renderIdentityChrome() {
     nameEl.textContent = name;
     nameEl.hidden = !name;
   }
+  // dashboardState is the viewed instance's own state (cleared while switching), like the name above.
+  renderBrandVersion($('#tab-bar-core-version'), state.dashboardState?.runtime_info);
 }
 
 function renderInfoBar() {

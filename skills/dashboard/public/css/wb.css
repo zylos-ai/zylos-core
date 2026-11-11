@@ -184,10 +184,12 @@
 /* ─── Header: brand, page navigation and tools on one row ─── */
 .app-header { flex-direction: row; align-items: center; justify-content: flex-start; flex-wrap: nowrap; gap: 12px; height: 48px; padding: 0 16px; background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; border-bottom: 1px solid var(--wb-line); z-index: 30; }
 .app-header .header-left { display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: none; }
-.brand { font-size: 15px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+.brand { color: var(--accent); font-size: 15px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
 .brand-inst { color: var(--text-dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-.brand-inst::before { content: "· "; }
-.brand-inst[hidden] { display: none; }
+/* The viewed instance's Core version, styled like the instance name; it never shrinks, the name truncates first. */
+.brand-ver { flex: none; color: var(--text-dim); font-size: 13px; white-space: nowrap; }
+.brand-inst::before, .brand-ver::before { content: "· "; }
+.brand-inst[hidden], .brand-ver[hidden] { display: none; }
 .app-header .tab-bar { display: flex; gap: 2px; padding: 0; margin-left: 10px; overflow: visible; }
 .app-header .tab { height: 30px; min-width: 0; padding: 0 10px; border-radius: var(--wb-r); color: var(--text-dim); font-size: 13px; font-weight: 500; }
 .app-header .tab::after { display: none; }
@@ -568,7 +570,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .app-header { flex-wrap: wrap; height: auto; min-height: 0; padding: 2px 12px 0; column-gap: 0; row-gap: 0; position: sticky; }
   .app-header .header-left { flex: 1 1 auto; min-width: 0; overflow: hidden; }
   .app-header .brand { overflow: hidden; text-overflow: ellipsis; }
-  .brand-inst { display: none; }
+  .brand-inst, .brand-ver { display: none; }
   .app-header .header-actions { gap: 0; margin-right: -8px; }
   .app-header .tab-bar { order: 10; flex: 0 0 100%; margin: 0 -12px; padding: 0 2px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
   .app-header .tab-bar::-webkit-scrollbar { display: none; }

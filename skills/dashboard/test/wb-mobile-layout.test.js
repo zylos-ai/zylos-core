@@ -148,3 +148,25 @@ test('stylesheet: on phones a group\'s name has the first row, and the actions a
   // Wider touch screens (tablets) keep the labelled actions.
   assert.match(css, /@media \(max-width: 900px\) \{[^@]*\.wb-act-label \{ display: inline; \}/);
 });
+
+test('header: the title uses the brand colour and the Core version follows the instance name, hidden on phones', () => {
+  assert.match(html, /<span class="brand-inst" id="tab-bar-agent-name" hidden><\/span>\s*<span class="brand-ver" id="tab-bar-core-version" hidden><\/span>/,
+    'the version sits right after the instance name and starts hidden');
+  const rule = selector => css.match(new RegExp(`^${selector.replace(/[.\[\]:]/g, '\\$&')} \\{([^}]*)\\}`, 'm'))?.[1] ?? '';
+  assert.match(rule('.brand'), /color: var\(--accent\);/);
+  for (const [theme, accent] of [['light', '#0d9488'], ['dark', '#43c7b5']]) {
+    assert.match(read(`themes/${theme}.css`), new RegExp(`--accent: ${accent};`), theme);
+  }
+  // Same grey small text as the instance name; the name keeps its own truncation and the version does not shrink.
+  const name = rule('.brand-inst'), version = rule('.brand-ver');
+  for (const declaration of ['color: var(--text-dim);', 'font-size: 13px;', 'white-space: nowrap;']) {
+    assert.ok(name.includes(declaration) && version.includes(declaration), declaration);
+  }
+  assert.match(name, /overflow: hidden; text-overflow: ellipsis; max-width: 220px;/);
+  assert.match(version, /flex: none;/);
+  assert.match(css, /^\.brand-inst::before, \.brand-ver::before \{ content: "· "; \}$/m);
+  assert.match(css, /^\.brand-inst\[hidden\], \.brand-ver\[hidden\] \{ display: none; \}$/m);
+  assert.match(phone, /\.brand-inst, \.brand-ver \{ display: none; \}/, 'phones hide the version with the instance name');
+  assert.match(app, /renderBrandVersion\(\$\('#tab-bar-core-version'\), state\.dashboardState\?\.runtime_info\)/,
+    'the header reads the viewed instance\'s own state');
+});

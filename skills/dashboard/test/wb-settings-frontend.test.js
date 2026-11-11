@@ -6,7 +6,7 @@ import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, crea
 import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
 import { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
-import { coreVersion, renderVersion } from '../public/js/wb/settings-version.js';
+import { coreVersion, renderBrandVersion, renderVersion } from '../public/js/wb/settings-version.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { deferred, tick } from './fixtures/workbench-dom.js';
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
@@ -579,6 +579,20 @@ test('the version row shows the Core version with its update hint and the engine
     assert.match(root.textContent, /zylos · wb\.unknown/, JSON.stringify(zylos_version));
     assert.doesNotMatch(root.textContent, /zylos · v/, JSON.stringify(zylos_version));
   }
+});
+
+test('the header version follows the viewed instance and never falls back to an earlier one', () => {
+  const document = documentFixture(), el = node(document, 'span'); el.hidden = true;
+  renderBrandVersion(el, { zylos_version: '1.0.0-beta.7' });
+  assert.equal(el.textContent, 'v1.0.0-beta.7'); assert.equal(el.hidden, false);
+  // Switching to another instance: its state is cleared first, then arrives without a readable version.
+  for (const info of [undefined, { zylos_version: 'unknown' }, { runtime: 'claude' }]) {
+    renderBrandVersion(el, info);
+    assert.equal(el.textContent, '', JSON.stringify(info)); assert.equal(el.hidden, true, JSON.stringify(info));
+  }
+  renderBrandVersion(el, { zylos_version: '0.9.6' });
+  assert.equal(el.textContent, 'v0.9.6', 'another instance shows its own version'); assert.equal(el.hidden, false);
+  assert.doesNotThrow(() => renderBrandVersion(null, { zylos_version: '1' }), 'a page without the header element is left alone');
 });
 
 test('the Core version is read only from the instance\'s own runtime info', () => {
