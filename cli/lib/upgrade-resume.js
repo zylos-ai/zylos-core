@@ -3,7 +3,6 @@ import { createRequire } from 'node:module';
 import { classifyCutoff } from './upgrade-cutoff.js';
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 import { upgradeFailureCode } from './upgrade-admission.js';
-import { savePm2ProcessList } from './pm2-save.js';
 
 const require = createRequire(import.meta.url);
 const maintenance = require('./upgrade-maintenance.cjs');
@@ -25,9 +24,7 @@ export function finalizeStatus(journal) {
     warnings:journal.runtimeWarnings || [],
     ...(journal.serviceWarnings?.length ? {serviceWarnings:journal.serviceWarnings} : {}),
     corePackageWarnings:journal.corePackageWarnings || [],
-    next:journal.webConsolePm2SavePending===true
-      ? 'Run zylos upgrade --resume-finalize to save the PM2 startup list after recovery cleanup.'
-      : journal.phase==='upgrade_complete'?null:'Repair the reported failure, then run zylos upgrade --resume-finalize.'
+    next:journal.phase==='upgrade_complete'?null:'Repair the reported failure, then run zylos upgrade --resume-finalize.'
   };
 }
 
@@ -92,25 +89,7 @@ export async function resumeFinalize(root,{status=false}={},deps={}) {
     if(candidate.dir!==expected.dir || candidate.journal.transactionId!==expected.transactionId) throw failure('CUTOFF_UNTRUSTED','The upgrade transaction changed while acquiring its lock.');
     const j=m.transaction(root,candidate.dir);
     before=structuredClone(j);
-    if(j.phase==='upgrade_complete') {
-      const cleanup=m.finishTerminal(candidate.dir,j);
-      const warnings=[];
-      if(j.webConsolePm2SavePending===true && cleanup.complete) {
-        try {
-          const saved=(deps.savePm2ProcessList ?? savePm2ProcessList)({root,
-            log:message=>warnings.push(message)});
-          if(saved) {
-            const current=m.transaction(root,candidate.dir);
-            m.update(candidate.dir,current,{webConsolePm2SavePending:false});
-          } else warnings.push('The PM2 startup list still needs saving after recovery cleanup: run pm2 save when recovery is complete.');
-        } catch {
-          warnings.push('Could not save the PM2 startup list. Run pm2 save after recovery cleanup so Web Console is not resurrected.');
-        }
-      }
-      const data=finalizeStatus(m.transaction(root,candidate.dir));
-      data.warnings=[...data.warnings,...warnings];
-      return {ok:true,data,cleanup};
-    }
+    if(j.phase==='upgrade_complete') return {ok:true,data:finalizeStatus(j),cleanup:m.finishTerminal(candidate.dir,j)};
     (deps.quiesce ?? m.verifyFinalizerExit)(candidate.dir,j,m);
     m.marker(root,candidate.dir,j);
     m.stop(j);

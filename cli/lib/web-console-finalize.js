@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { cleanupWebConsoleEnv } from './web-console-env.js';
 import { removeWebConsoleRoute } from './web-console-route.js';
+import { dashboardAccessAddress } from './dashboard-access.js';
 
 const realOrRaw = file => { try { return fs.realpathSync(file); } catch { return file; } };
 const under = (file, root) => file.startsWith(root + path.sep);
@@ -32,8 +33,14 @@ export function inspectWebConsoleTasks(zylosDir, {Database} = {}) {
   } finally { db.close(); }
 }
 
+export function webConsoleRemovalNotice({zylosDir, routed = false, dashboardUrl} = {}) {
+  if (!dashboardUrl) try { dashboardUrl = dashboardAccessAddress({zylosDir,routed}).url; }
+  catch { dashboardUrl = 'the configured Dashboard address (run zylos init to check access)'; }
+  return `Web Console has been removed. Open Dashboard at ${dashboardUrl} and use its Origin conversation. Reset access with zylos dashboard reset-password. Old Web Console history remains in Conversations > External. /console/ is no longer provided.`;
+}
+
 /** Post-cutoff cleanup is deliberately warning-only and safe to run again. */
-export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dashboardUrl = 'http://localhost:3470/', beforePm2Delete = () => {}} = {}, deps = {}) {
+export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dashboardUrl, deferNotice = false, beforePm2Delete = () => {}} = {}, deps = {}) {
   const run = deps.run || execFileSync;
   const warnings = [];
   let pm2Changed = false;
@@ -68,7 +75,7 @@ export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dash
   await step('Web Console Caddy cleanup', async () => {
     const result = await (deps.removeRoute || removeWebConsoleRoute)({zylosDir, noCaddy});
     warnings.push(...(result.warnings || []));
-    residue ||= result.state === 'changed' || result.state === 'manual' || !!result.warnings?.length;
+    residue ||= result.changed || !!result.warnings?.length;
   });
   await step('Web Console environment cleanup', () => {
     const result = (deps.cleanupEnv || cleanupWebConsoleEnv)(zylosDir);
@@ -82,6 +89,6 @@ export async function finalizeWebConsoleRemoval({zylosDir, noCaddy = false, dash
       warnings.push(`Scheduled tasks still target Web Console: ${ids.join(', ')}. Change their reply channel or session to Dashboard or IM.`);
     }
   });
-  if (residue) warnings.push(`Web Console has been removed. Open Dashboard at ${dashboardUrl} and use its Origin conversation. Reset access with zylos dashboard reset-password. Old Web Console history remains in Conversations > External. /console/ is no longer provided.`);
-  return {warnings, pm2Changed};
+  if (residue && !deferNotice) warnings.push(webConsoleRemovalNotice({zylosDir,dashboardUrl}));
+  return {warnings, pm2Changed, ...(deferNotice ? {residue} : {})};
 }

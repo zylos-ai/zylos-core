@@ -7,8 +7,7 @@ import { createRequire } from 'node:module';
 import { finalizeWebConsoleRemoval, webConsoleProcesses, inspectWebConsoleTasks } from '../web-console-finalize.js';
 import { completeUpgradeFinalization, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
 import { startServicesWithDashboard } from '../../commands/init.js';
-import { protectedSuccess, maintenance } from '../upgrade-protection.js';
-import { savePm2ProcessList } from '../pm2-save.js';
+import { protectedSuccess, maintenance, deployUpgradeBootstrap } from '../upgrade-protection.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-finalize-'));
@@ -111,11 +110,11 @@ function finalizationDeps(calls, extras = {}) {
   };
 }
 
-test('cleanup follows verified Core and startup save follows Dashboard and terminal cleanup without restore branch', async t => {
+test('cleanup follows verified Core and startup save follows Dashboard before terminal cleanup', async t => {
   const root = fixture(t), calls = [];
   const result = await completeUpgradeFinalization({zylosDir:root, servicesWereRunning:['web-console','scheduler'], steps:[], mergeConflicts:[], mergedFiles:[]}, finalizationDeps(calls));
   assert.equal(result.success, true);
-  assert.deepEqual(calls, ['start','verify','remove','dashboard','terminal','save']);
+  assert.deepEqual(calls, ['start','verify','remove','dashboard','save','terminal']);
   assert.ok(result.warnings.includes('removal explanation'));
 });
 
@@ -152,7 +151,7 @@ for (const scenario of ['registration failure', 'restore failure', 'completed re
     assert.equal(result.dashboard.state, scenario === 'completed registration' ? 'ready' : 'degraded');
     const expected = scenario === 'restore failure' ? ['restore'] : scenario === 'registration failure'
       ? ['registration','route','dashboard'] : ['route','dashboard'];
-    assert.deepEqual(calls, ['start','verify','remove',...expected,'terminal','save']);
+    assert.deepEqual(calls, ['start','verify','remove',...expected,'save','terminal']);
     assert.equal(calls.filter(call => call === 'save').length, 1);
   });
 }
@@ -178,15 +177,16 @@ test('fresh cleanup and residue-free reentry do not announce removal or require 
   for (let i=0;i<2;i++) assert.deepEqual(await finalizeWebConsoleRemoval({zylosDir:root},deps),{warnings:[],pm2Changed:false});
 });
 
-test('pending recovery preserves the save guard and reports the required manual save', async t => {
+test('failed final save warns while finalization still succeeds', async t => {
   const root = fixture(t), calls = [];
   const result = await completeUpgradeFinalization({zylosDir:root, servicesWereRunning:['scheduler'], steps:[], mergeConflicts:[], mergedFiles:[]},
-    finalizationDeps(calls, {protectedSuccess:()=>({complete:false}), savePm2ProcessList:()=>false}));
+    finalizationDeps(calls, {savePm2ProcessList:()=>{throw Error('PM2 unavailable');}}));
   assert.equal(result.success, true);
-  assert.match(result.warnings.join(' '), /PM2 startup list still needs saving after recovery cleanup/);
+  assert.match(result.warnings.join(' '), /Could not save the PM2 startup list/);
+  assert.equal(calls.at(-1), 'terminal');
 });
 
-test('real terminal cleanup releases the real save guard and clears durable removal intent', async t => {
+for (const saveFails of [false, true]) test(`final save ${saveFails ? 'failure warns without blocking later upgrades' : 'clears durable intent before terminal cleanup'}`, async t => {
   const root = fs.realpathSync(fixture(t)), calls = [];
   const dir = path.join(root,'.backup/self-upgrade/removed-console');
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
@@ -201,23 +201,27 @@ test('real terminal cleanup releases the real save guard and clears durable remo
     webConsolePm2SavePending:true};
   maintenance.update(dir,journal);
   maintenance.marker(root,dir,journal);
-  assert.equal(savePm2ProcessList({root,save:()=>{throw Error('Active recovery must prevent saving');},log:()=>{}}),false);
   let saves = 0;
   const ctx = {zylosDir:root,transactionDir:dir,journal,servicesWereRunning:['scheduler'],steps:[],mergeConflicts:[],mergedFiles:[]};
   const result = await completeUpgradeFinalization(ctx,finalizationDeps(calls,{
     finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
     protectedSuccess,
-    savePm2ProcessList:options=>savePm2ProcessList({...options,save:()=>{
-      assert.equal(fs.existsSync(path.join(root,'.zylos/upgrade/active.json')),false);
+    savePm2ProcessList:()=>{
+      assert.equal(fs.existsSync(path.join(root,'.zylos/upgrade/active.json')),true);
       saves++;
-    }}),
+      if (saveFails) throw Error('PM2 unavailable');
+    },
   }));
   assert.equal(result.success,true);
   assert.equal(saves,1);
   const saved = maintenance.read(path.join(dir,'journal.json'));
   assert.equal(saved.phase,'upgrade_complete');
   assert.equal(saved.cleanup.complete,true);
-  assert.equal(saved.webConsolePm2SavePending,false);
+  assert.equal(saved.webConsolePm2SavePending,saveFails);
+  assert.equal(maintenance.discover(root).candidates.length,0);
+  assert.deepEqual(maintenance.recoverBeforeUpgrade(root),{active:false});
+  assert.doesNotThrow(()=>deployUpgradeBootstrap(root));
+  if (saveFails) assert.match(result.warnings.join(' '),/Could not save the PM2 startup list/);
 });
 
 test('Dashboard registration saves after deletion and prevents a duplicate final save', async t => {
@@ -230,7 +234,22 @@ test('Dashboard registration saves after deletion and prevents a duplicate final
   assert.deepEqual(calls,['start','verify','remove','registration-save','terminal']);
 });
 
-test('upgrade persists save intent before deleting and resolves a direct Dashboard address', async t => {
+test('Dashboard restoration clears persisted intent and avoids a duplicate final save', async t => {
+  const root=fixture(t), dir=path.join(root,'transaction'), calls=[];
+  fs.mkdirSync(dir);
+  const journal={webConsolePm2SavePending:true};
+  maintenance.update(dir,journal);
+  const ctx={zylosDir:root,transactionDir:dir,journal,servicesWereRunning:['scheduler','zylos-dashboard'],steps:[],mergeConflicts:[],mergedFiles:[]};
+  await completeUpgradeFinalization(ctx,finalizationDeps(calls,{
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
+    dashboardOwner:{restoreDashboardService:()=>{calls.push('restore-save');return {state:'done'};},verifyDashboard:()=>({state:'ready'})},
+  }));
+  assert.equal(maintenance.read(path.join(dir,'journal.json')).webConsolePm2SavePending,false);
+  assert.equal(calls.filter(x=>x==='restore-save').length,1);
+  assert.equal(calls.includes('save'),false);
+});
+
+test('interrupted cleanup persists intent before deletion and forward reentry saves once', async t => {
   const root = fixture(t), calls = [], dir = path.join(root,'transaction');
   fs.mkdirSync(dir);
   maintenance.update(dir,{});
@@ -238,7 +257,7 @@ test('upgrade persists save intent before deleting and resolves a direct Dashboa
   const ctx = {zylosDir:root,transactionDir:dir,journal:{},servicesWereRunning:['scheduler'],steps:[],mergeConflicts:[],mergedFiles:[]};
   await assert.rejects(()=>completeUpgradeFinalization(ctx,finalizationDeps(calls,{
     finalizeWebConsoleRemoval:options=>{
-      assert.equal(options.dashboardUrl,'http://127.0.0.1:3470/');
+      assert.equal(options.deferNotice,true);
       return finalizeWebConsoleRemoval(options,{
         run:(_command,args)=>{
           if(args[0]==='jlist')return JSON.stringify([{pm_id:7,name:'web-console',pm2_env:{pm_exec_path:path.join(code,'server.js')}}]);
@@ -246,9 +265,48 @@ test('upgrade persists save intent before deleting and resolves a direct Dashboa
           assert.equal(maintenance.read(path.join(dir,'journal.json')).webConsolePm2SavePending,true);
         },removeRoute:()=>({warnings:[]}),inspectTasks:()=>[],
       });
-    },protectedSuccess:()=>{throw Error('interrupted terminal');},
+    },savePm2ProcessList:()=>{throw Error('PM2 unavailable');},protectedSuccess:()=>{throw Error('interrupted terminal');},
   })),/interrupted terminal/);
   assert.equal(maintenance.read(path.join(dir,'journal.json')).webConsolePm2SavePending,true);
+  ctx.journal=maintenance.read(path.join(dir,'journal.json'));
+  let saves=0;
+  const result=await completeUpgradeFinalization(ctx,finalizationDeps([],{
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
+    savePm2ProcessList:()=>{saves++;},
+  }));
+  assert.equal(result.success,true);
+  assert.equal(saves,1);
+  assert.equal(maintenance.read(path.join(dir,'journal.json')).webConsolePm2SavePending,false);
+});
+
+for (const residue of ['route','env']) test(`${residue}-only cleanup announces removal at the configured Dashboard port`, async t=>{
+  const root=fixture(t), config=path.join(root,'components/dashboard');
+  fs.mkdirSync(config,{recursive:true});
+  fs.writeFileSync(path.join(config,'config.json'),JSON.stringify({port:4123}));
+  const result=await finalizeWebConsoleRemoval({zylosDir:root},{
+    run:()=>'[]',inspectTasks:()=>[],
+    removeRoute:()=>({changed:residue==='route',warnings:[]}),
+    cleanupEnv:()=>({state:residue==='env'?'changed':'skipped',messages:[]}),
+  });
+  assert.equal(result.pm2Changed,false);
+  assert.equal(result.warnings.length,1);
+  assert.match(result.warnings[0],/http:\/\/127\.0\.0\.1:4123\//);
+});
+
+for (const routeState of ['done','failed','skipped']) test(`upgrade removal address follows actual Dashboard route ${routeState}`, async t=>{
+  const root=fixture(t), calls=[];
+  fs.mkdirSync(path.join(root,'components/dashboard'),{recursive:true});
+  fs.mkdirSync(path.join(root,'.zylos'));
+  fs.writeFileSync(path.join(root,'components/dashboard/config.json'),JSON.stringify({port:4123}));
+  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({domain:'dashboard.example'}));
+  const result=await completeUpgradeFinalization({zylosDir:root,firstDashboardTakeover:true,servicesWereRunning:['scheduler'],steps:[],mergeConflicts:[],mergedFiles:[]},finalizationDeps(calls,{
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false,residue:true}),
+    dashboardOwner:{applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:routeState}),verifyDashboard:()=>({state:'ready',checks:{route:true}})},
+  }));
+  const notice=result.warnings.find(x=>x.startsWith('Web Console has been removed.'));
+  assert.ok(notice);
+  assert.ok(notice.includes(routeState==='done'?'https://dashboard.example/dashboard/':'http://127.0.0.1:4123/'));
+  if(routeState!=='done')assert.equal(notice.includes('https://dashboard.example/dashboard/'),false);
 });
 
 test('fresh upgrade has no removal announcement, final save or recovery-save warning', async t => {

@@ -888,7 +888,7 @@ function initializeDatabases() {
 export async function startServicesWithDashboard(opts, startServices = startCoreServices, deps = {}) {
   const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false, quiet: opts.quiet };
   const servicesStarted = await startServices(dashboardAccess);
-  let dashboardUrl = 'http://localhost:3470/';
+  let dashboardUrl;
   try { dashboardUrl = dashboardAccessAddress(dashboardAccess).url; } catch { /* Cleanup still runs if Dashboard configuration needs repair. */ }
   const removal = await (deps.finalizeWebConsoleRemoval || finalizeWebConsoleRemoval)({
     zylosDir:ZYLOS_DIR, noCaddy:opts.caddy === false,

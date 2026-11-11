@@ -119,6 +119,21 @@ test('validation failure keeps original file and never reloads', t => {
   assert.deepEqual(fs.readdirSync(path.dirname(caddyfile)), ['Caddyfile']);
 });
 
+for (const message of ['spawnSync caddy ENOENT', 'spawnSync caddy ETIMEDOUT']) {
+  test(`validation failure reports ${message} when stderr is empty`, t => {
+    const {caddyfile} = fixture(t, 'original');
+    let reloads = 0;
+    const result = validateAndDeploy('candidate', 'original', {caddyfile,
+      validate:() => { throw Object.assign(Error(message), {stderr:Buffer.alloc(0)}); },
+      reload:() => { reloads++; }});
+    assert.equal(result.success, false);
+    assert.equal(result.error, `Caddy validation failed; Caddyfile unchanged. ${message}`);
+    assert.equal(reloads, 0);
+    assert.equal(fs.readFileSync(caddyfile, 'utf8'), 'original');
+    assert.deepEqual(fs.readdirSync(path.dirname(caddyfile)), ['Caddyfile']);
+  });
+}
+
 test('reload failure atomically restores original bytes and permissions', t => {
   const original = before + route(true) + after;
   const {caddyfile} = fixture(t, original);
@@ -160,11 +175,14 @@ test('symlink target changes during validation leave both files untouched', t =>
   fs.renameSync(caddyfile, target);
   fs.writeFileSync(other, 'other');
   fs.symlinkSync(target, caddyfile);
+  let reloads = 0;
   const result = validateAndDeploy('candidate', 'original', {caddyfile, validate:() => {
     fs.unlinkSync(caddyfile);
     fs.symlinkSync(other, caddyfile);
-  }, reload:() => assert.fail('reload after symlink target changed')});
+  }, reload:() => { reloads++; }});
   assert.equal(result.success, false);
+  assert.equal(result.error, 'Caddyfile changed during validation; unchanged.');
+  assert.equal(reloads, 0);
   assert.equal(fs.readFileSync(target, 'utf8'), 'original');
   assert.equal(fs.readFileSync(other, 'utf8'), 'other');
   assert.equal(fs.readlinkSync(caddyfile), other);

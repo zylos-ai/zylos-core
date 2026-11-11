@@ -502,11 +502,11 @@ export function validateAndDeploy(newContent, originalContent, {
     target = fs.realpathSync(caddyfile);
     const stat = fs.lstatSync(target);
     originalStat = stat;
-    if (!stat.isFile() || stat.isSymbolicLink()) return {success:false, error:'Caddyfile must be a regular file; unchanged.'};
+    if (!stat.isFile()) return {success:false, error:'Caddyfile must be a regular file; unchanged.'};
     stage(newContent, stat);
     try { validate(temporary); }
     catch (error) {
-      const detail = error.stderr?.toString().trim();
+      const detail = error.stderr?.toString().trim() || error.message;
       return {success:false, error:`Caddy validation failed; Caddyfile unchanged.${detail ? ` ${detail}` : ''}`};
     }
     // Do not overwrite an edit made while validation was running.

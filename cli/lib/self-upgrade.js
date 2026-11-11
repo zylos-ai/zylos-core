@@ -30,10 +30,7 @@ import { classifyCutoff, commitCutoff } from './upgrade-cutoff.js';
 import { preparePostCutoff, publishPostCutoff } from './upgrade-post-cutoff.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runtime-preparation.js';
 import { upgradeFailureCode } from './upgrade-admission.js';
-import { finalizeWebConsoleRemoval } from './web-console-finalize.js';
-import { savePm2ProcessList } from './pm2-save.js';
-import { dashboardAccessAddress } from './dashboard-access.js';
-import { isCaddyAvailable } from './caddy.js';
+import { finalizeWebConsoleRemoval, webConsoleRemovalNotice } from './web-console-finalize.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -950,11 +947,10 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     }
     pm2SavePending = pending;
   };
-  let dashboardUrl = 'http://localhost:3470/';
-  try { dashboardUrl = dashboardAccessAddress({zylosDir:root,routed:isCaddyAvailable(root)}).url; } catch { /* Cleanup is independent of Dashboard configuration. */ }
+  let removal;
   try {
-    const removal = await (deps.finalizeWebConsoleRemoval || finalizeWebConsoleRemoval)({zylosDir:root,
-      dashboardUrl, beforePm2Delete:()=>setPm2SavePending(true)});
+    removal = await (deps.finalizeWebConsoleRemoval || finalizeWebConsoleRemoval)({zylosDir:root,
+      deferNotice:true, beforePm2Delete:()=>setPm2SavePending(true)});
     if (removal.pm2Changed && !pm2SavePending) setPm2SavePending(true);
     ctx.runtimeWarnings = [...(ctx.runtimeWarnings || []), ...removal.warnings];
   } catch {
@@ -962,6 +958,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   }
 
   let dashboard;
+  let dashboardRouted = false;
   const dashboardErrors=[];
   const dashboardFailure=(item,error)=>dashboardErrors.push({item,code:error.code || 'DASHBOARD_UNAVAILABLE',
     message:error.message,location:error.location || error.message});
@@ -987,6 +984,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
           const accepted = result.state==='done' || item==='route' && result.state==='skipped';
           if(!accepted)throw Object.assign(Error(result.error?.message || result.message || `${name}: ${result.state}`),
             {code:result.error?.code || result.code,location:result.error?.location || result.location});
+          if (item==='route') dashboardRouted = result.state==='done';
           if (item==='registration' && pm2SavePending) setPm2SavePending(false);
           persistItem({state:result.state,lastError:null});
         } catch(error) {
@@ -1005,6 +1003,8 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     }
     if(!restoreFailed)dashboard=await owner.verifyDashboard({zylosDir:root});
   } catch(error) {dashboardFailure('dashboard',error);}
+  if (removal?.residue) (ctx.runtimeWarnings ||= []).push(webConsoleRemovalNotice({zylosDir:root,
+    routed:ctx.firstDashboardTakeover ? dashboardRouted : dashboard?.checks?.route === true}));
   dashboard={...dashboard,state:dashboardErrors.length?'degraded':dashboard?.state || 'degraded',errors:[...(dashboard?.errors || []),...dashboardErrors]};
   completion.dashboard=dashboard.state;
   ctx.dashboard=dashboard;
@@ -1035,15 +1035,13 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   } catch(error) {ctx.checkpointAudit={state:'incomplete',error:error.message};}
   completion.install='done';
   ctx.completion=completion;
-  (deps.protectedSuccess || protectedSuccess)(ctx);
   if (pm2SavePending) try {
-    const saved = (deps.savePm2ProcessList || savePm2ProcessList)({root,
-      log:message => (ctx.runtimeWarnings ||= []).push(message)});
-    if (!saved) (ctx.runtimeWarnings ||= []).push('The PM2 startup list still needs saving after recovery cleanup: run pm2 save when recovery is complete.');
-    else setPm2SavePending(false);
+    (deps.savePm2ProcessList || (()=>execFileSync('pm2',['save'],{stdio:'pipe',timeout:10000})))();
+    setPm2SavePending(false);
   } catch {
-    (ctx.runtimeWarnings ||= []).push('Could not save the PM2 startup list. Run pm2 save after recovery cleanup so Web Console is not resurrected.');
+    (ctx.runtimeWarnings ||= []).push('Could not save the PM2 startup list. Run pm2 save so Web Console is not resurrected.');
   }
+  (deps.protectedSuccess || protectedSuccess)(ctx);
   return {...buildSelfUpgradeResult(ctx,null),completion,dashboard,sessionRestart:ctx.restart,checkpointAudit:ctx.checkpointAudit,
     modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || [],next:dashboardNext(dashboard)};
 }
