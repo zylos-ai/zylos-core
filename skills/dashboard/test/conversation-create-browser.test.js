@@ -4,15 +4,17 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 // Real full entry, page/controller, styles and SSE with a bounded fixture API.
 // Covers one-click draft creation and name propagation across two open pages;
 // not the server's first-reply decision, control queue or model execution.
-// Run for creation UI or conversation-name refresh changes; skip backend-only changes.
+// Run for creation UI, stream-teardown timing or conversation-name refresh
+// changes; skip backend-only changes. The case abort signal also cancels the
+// bounded server-side stream-close wait if its lifecycle ends.
 // Opt-in before allocation. The sandbox proves private HOME/ZYLOS_DIR/PM2_HOME,
 // short TMPDIR, socket and DB paths; no PM2/tmux/DB/model is started.
 // Browser contexts, HTTP connections and sandbox resources are reclaimed on failure too.
 test('conversation creation needs no name and open pages receive the resulting name',
   { skip: !chatEnabled(), timeout: 120000 }, async t => {
     const sandbox = createChatSandbox(t);
-    await sandbox.runCase(async () => {
+    await sandbox.runCase(async ({ signal }) => {
       const { runConversationCreateBrowser } = await import('./helpers/conversation-create-browser.js');
-      await runConversationCreateBrowser(t, sandbox);
+      await runConversationCreateBrowser(t, sandbox, { signal });
     }, { timeoutMs: 110000 });
   });

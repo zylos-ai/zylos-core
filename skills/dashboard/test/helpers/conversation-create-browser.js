@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic, readJsonBody } from '../../src/lib/http.js';
@@ -12,7 +13,7 @@ const activeId = 'g:' + Buffer.from(group).toString('hex').toUpperCase();
 const draftId = 'd:browser-create';
 const title = '研究对话自动命名';
 
-async function startPage(sandbox) {
+async function startPage(sandbox, signal) {
   let row = null, messages = [];
   const streams = new Set(), writes = [];
   const detail = () => row && ({ id: row.id, localId: 'browser-create', namespace: row.draft ? null : 'dashboard',
@@ -67,7 +68,16 @@ async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   return { base: await sandbox.startHttp(server), writes,
-    reset() { assert.equal(streams.size, 0, 'previous page streams are closed'); row = null; messages = []; writes.length = 0; },
+    async reset() {
+      // Closing a browser context does not await the server's request-close event.
+      // Observe that boundary before sharing fixture state with the next variant.
+      signal.throwIfAborted();
+      const deadline = performance.now() + 8000;
+      while (streams.size > 0 && performance.now() < deadline) await delay(10, undefined, { signal });
+      signal.throwIfAborted();
+      assert.equal(streams.size, 0, `previous page streams are closed (${streams.size} remaining)`);
+      row = null; messages = []; writes.length = 0;
+    },
     completeReplyAndName() {
       row = { ...row, display_name: title, preview: '可以在首次回复后根据上下文命名。', previewDirection: 'out' };
       messages.push({ id: 2, direction: 'out', channel: 'dashboard', status: 'sent', content: row.preview,
@@ -78,19 +88,19 @@ async function startPage(sandbox) {
   };
 }
 
-export async function runConversationCreateBrowser(t, sandbox) {
+export async function runConversationCreateBrowser(t, sandbox, { signal }) {
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE, executablePath = process.env.ZYLOS_CHAT_BROWSER_BIN;
   assert.ok(modulePath && fs.existsSync(modulePath)); assert.ok(executablePath && fs.existsSync(executablePath));
   console.info('Creation browser isolation', JSON.stringify(sandbox.assertIsolation()));
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
-  const api = await startPage(sandbox), { chromium } = await import(pathToFileURL(modulePath));
+  const api = await startPage(sandbox, signal), { chromium } = await import(pathToFileURL(modulePath));
   const browser = await chromium.launch({ executablePath, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
   sandbox.addCleanup(() => browser.close());
   const metrics = [];
   for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
-    api.reset();
+    await api.reset();
     const context = await browser.newContext({ viewport: { width, height: 844 }, locale: 'zh-CN', colorScheme: theme,
       ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
     sandbox.addCleanup(() => context.close());
@@ -117,6 +127,7 @@ export async function runConversationCreateBrowser(t, sandbox) {
     assert.equal(api.writes[0].route, '/api/chat/drafts');
     assert.equal(Object.keys(api.writes[0].body).length, 0, 'creation does not supply a name');
     assert.equal(await page.locator('.conversation-create-form input').count(), 0);
+    await page.locator('.conversation-input:visible').waitFor({ state: 'visible' });
     assert.equal(await page.locator('.conversation-input:visible').count(), 1, 'the new conversation is already open');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
     await shot('created');
