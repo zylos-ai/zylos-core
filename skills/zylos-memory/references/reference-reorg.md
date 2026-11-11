@@ -60,8 +60,9 @@ Do not relay that result to the owner or anyone else.
      Search old `decisions.md` in the same way for decisions directly related to
      this project, using its latest archive if it has already moved. Include
      those facts in this project page's key decisions and reasons.
-   - If no page exists, create one with `reference-index.js create`. Its header
-     describes the current status; its body contains the current situation,
+   - If no page exists, create one with `reference-index.js create` using the page
+     format in [projects-format.md](projects-format.md) (Status is one of `active`,
+     `planning`, `paused`, `completed`, `abandoned`). Its header describes the current status; its body contains the current situation,
      unfinished items, key decisions and reasons, and recent records. Record the
      old headings read in `Moved from`. Facts follow the source; retain the
      original wording when unsure.

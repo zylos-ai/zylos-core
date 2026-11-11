@@ -104,6 +104,7 @@ test('reorganization looks up existing and archived pages before searching point
   assert.match(pages, /newest sections first, stopping when the current situation is clear/);
   assert.match(pages, /decisions directly related to this project/);
   assert.match(pages, /Record the old headings read in `Moved from`/);
+  assert.match(pages, /using the page format in \[projects-format\.md\]\(projects-format\.md\) \(Status is one of `active`, `planning`, `paused`, `completed`, `abandoned`\)/);
   assert.match(pages, /do not change its `Status`, `Updated`, or `Description`/);
   assert.match(pages, /Supplement only `Keys` and `Moved from`/);
   assert.match(pages, /Append useful missing old facts in a final section named `整理补充（<date>）`/);
