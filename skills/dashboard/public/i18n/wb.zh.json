@@ -1,4 +1,13 @@
 {
+  "chat.working.processing": "正在处理",
+  "chat.working.children": "后台子任务 {count} 个",
+  "chat.working.lessMinute": "不到 1 分钟",
+  "chat.working.minutes": "{count} 分钟",
+  "chat.working.hours": "{hours} 小时 {minutes} 分钟",
+  "chat.working.timeline": "{state}，点按查看时间线",
+  "chat.working.now": "现在：{state}",
+  "chat.working.since": "{time} 起",
+  "chat.working.latest": "最近一步 {time}",
   "wb.nav.overview": "总览",
   "wb.nav.usage": "用量与费用",
   "wb.single": "唯一会话",

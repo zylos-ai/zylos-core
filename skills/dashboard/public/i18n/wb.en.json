@@ -1,4 +1,13 @@
 {
+  "chat.working.processing": "Processing",
+  "chat.working.children": "{count} background tasks",
+  "chat.working.lessMinute": "Less than 1 minute",
+  "chat.working.minutes": "{count} minutes",
+  "chat.working.hours": "{hours} hours {minutes} minutes",
+  "chat.working.timeline": "{state}, open timeline",
+  "chat.working.now": "Now: {state}",
+  "chat.working.since": "Since {time}",
+  "chat.working.latest": "Latest step {time}",
   "wb.nav.overview": "Overview",
   "wb.nav.usage": "Usage & cost",
   "wb.single": "Only session",

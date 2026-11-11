@@ -6,7 +6,7 @@ const minute = 60000, hour = 60 * minute, now = 6 * hour + 30000;
 const event = (type, at, extra = {}) => ({ event_type: type, timestamp: new Date(at).toISOString(),
   session_group: 'chat:a', run_id: 'run-a', metadata: {}, ...extra });
 const row = (key = 'chat:a', runId = 'run-a') => ({ sessionGroup: key, live: { runId } });
-const result = (events, extra = {}) => activityBuckets({ range: '60m', now, rows: [row()], events, ...extra });
+const result = (events, extra = {}) => activityBuckets({ range: '60m', now, rows: [row()], events, ttlMs: 24 * hour, ...extra });
 const cell = (output, at, key = 'chat:a') => output.groups[key].cells[Math.floor((at - output.start) / (output.cellSeconds * 1000))];
 
 test('activity ranges have the exact aligned windows and reject unsupported ranges', () => {
@@ -216,4 +216,45 @@ test('the sampled current cell is covered even when now is exactly on its bounda
   assert.ok(busy.groups['chat:a'].cells.every(value => value === 'busy'));
   const stopped = result([event('user_prompt_submit', at - 2 * hour), event('stop', at)], { now: at });
   assert.equal(cell(stopped, at), 'idle');
+});
+
+// Freshness checks use the production default; earlier interval-shape cases use
+// a long configured TTL to keep their matching/window boundary independent.
+test('lost main and child ends expire at their own freshness boundaries', () => {
+  const stale = now - 31 * minute;
+  for (const [type, metadata] of [['user_prompt_submit', {}], ['subagent_start', { agent_id: 'child' }]]) {
+    const output = result([event(type, stale, { metadata })], { ttlMs: 30 * minute });
+    assert.equal(cell(output, stale + 29 * minute), 'busy');
+    assert.equal(cell(output, now), 'idle');
+  }
+});
+
+test('any current-run event refreshes a main turn but only child tools refresh a child', () => {
+  const stale = now - 31 * minute;
+  const main = result([event('user_prompt_submit', stale), event('assistant_message', now - minute)], { ttlMs: 30 * minute });
+  assert.equal(cell(main, now), 'busy');
+  const child = result([event('subagent_start', stale, { metadata: { agent_id: 'child' } }),
+    event('pre_tool_use', now - minute, { metadata: { agent_id: 'child', tool_use_id: 'child-tool' } })], { ttlMs: 30 * minute });
+  assert.equal(cell(child, now), 'busy');
+  const expired = result([event('subagent_start', stale, { metadata: { agent_id: 'child' } }),
+    event('pre_tool_use', stale + 1000, { metadata: { agent_id: 'child', tool_use_id: 'lost' } })], { ttlMs: 30 * minute });
+  assert.equal(cell(expired, now), 'idle', 'A lost child tool end cannot become an unmatched main tool');
+});
+
+for (const type of ['turn_complete', 'dashboard_interrupt']) test(`${type} closes the main interval while child stops do not`, () => {
+  const output = result([event('user_prompt_submit', now - 5 * minute), event(type, now - minute)]);
+  assert.equal(cell(output, now), 'idle');
+  const childStop = result([event('user_prompt_submit', now - 5 * minute),
+    event('stop', now - 4 * minute, { metadata: { agent_id: 'child' } })]);
+  assert.equal(cell(childStop, now), 'busy');
+});
+
+test('current sampled tools remain busy while absent tools bound stale unmatched event history', () => {
+  const events = [event('pre_tool_use', now - 2 * hour, { metadata: { tool_use_id: 'old' } })];
+  const absent = result(events, { ttlMs: 30 * minute, rows: [{ ...row(), tools: [] }] });
+  assert.equal(cell(absent, now), 'idle');
+  const live = result(events, { ttlMs: 30 * minute, rows: [{ ...row(), tools: [{ id: 'old' }] }] });
+  assert.equal(cell(live, now), 'busy');
+  const unseen = result([], { ttlMs: 30 * minute, rows: [{ ...row(), tools: [{ id: 'missing-start' }] }] });
+  assert.equal(cell(unseen, now), 'busy');
 });

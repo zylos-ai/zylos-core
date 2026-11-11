@@ -1,3 +1,5 @@
+import { formatZoned } from './instance-zone.js?v=100';
+import { workingNowText } from './working-display.js?v=1';
 import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { endReasonLabel, timeValue } from './event-labels.js?v=91';
@@ -224,10 +226,22 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
   };
 }
 
-export function renderTimeline(root, loader, { document = root.ownerDocument, t = key => key, level = 'plain', onObserve = null } = {}) {
+export function renderTimeline(root, loader, { document = root.ownerDocument, t = key => key, level = 'plain', onObserve = null, working = null } = {}) {
   const { state } = loader;
   const chips = state.chips ?? new Set(chipNames);
   root.replaceChildren();
+  if (working?.on) {
+    const line = element(document, 'div', undefined, 'wi-now');
+    if (working.on) line.append(icon(document, 'loader'));
+    const locale = document.documentElement?.lang;
+    const caption = element(document, 'span', workingNowText(working, { t, locale, includeLatest: false }));
+    if (working.subagents && Number.isFinite(working.subagents.lastActivityAt)) {
+      const time = formatZoned(new Date(working.subagents.lastActivityAt), locale, { hour: '2-digit', minute: '2-digit' });
+      caption.append(element(document, 'span', ' · ' + t('chat.working.latest', { time }), 'wi-now-sub'));
+    }
+    line.append(caption);
+    root.append(line);
+  }
   const filters = element(document, 'div', undefined, 'wb-timeline-filters');
   const chipRow = element(document, 'div', undefined, 'wb-chips');
   for (const chip of chipNames) {

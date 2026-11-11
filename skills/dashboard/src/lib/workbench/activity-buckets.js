@@ -1,48 +1,12 @@
-const EVENT_TYPES = new Set([
-  'pre_tool_use', 'post_tool_use', 'post_tool_failure', 'user_prompt_submit', 'stop',
-  'permission_request', 'wait_health', 'wait_capacity', 'activate_failed', 'activate_timeout',
-  'session_start', 'activate_new', 'start_always', 'adopt_ready', 'reclaim_done', 'rotate_done',
-  'crash_detected', 'subagent_start', 'subagent_stop',
-]);
+import { workingHistory, eventTime } from './working.js';
+
 const WAIT_TYPES = new Set(['permission_request', 'wait_health', 'wait_capacity']);
 const ERROR_TYPES = new Set(['activate_failed', 'activate_timeout']);
 const PRIORITY = { none: 0, idle: 1, busy: 2, waiting: 3, error: 4 };
 const milliseconds = value => typeof value === 'number' ? value : Date.parse(value);
 
-function runIntervals(events, end) {
-  const tools = [], agents = [], turns = [], openTools = new Map(), openAgents = new Map();
-  const pendingTools = new Set();
-  let turnStart = null;
-  for (const event of events) {
-    const at = event.at, meta = event.metadata ?? {};
-    if (event.event_type === 'pre_tool_use') {
-      const tool = { start: at, end: null, stop: null };
-      tools.push(tool); pendingTools.add(tool);
-      if (meta.tool_use_id != null) openTools.set(meta.tool_use_id, tool);
-    } else if (['post_tool_use', 'post_tool_failure'].includes(event.event_type)) {
-      const tool = meta.tool_use_id == null ? null : openTools.get(meta.tool_use_id);
-      if (tool) { tool.end = at; pendingTools.delete(tool); openTools.delete(meta.tool_use_id); }
-    } else if (event.event_type === 'user_prompt_submit') {
-      turnStart ??= at;
-    } else if (event.event_type === 'stop') {
-      if (turnStart !== null) { turns.push([turnStart, at]); turnStart = null; }
-      for (const tool of pendingTools) tool.stop ??= at;
-    } else if (event.event_type === 'subagent_start') {
-      const agent = { start: at, end: null };
-      agents.push(agent);
-      if (meta.agent_id != null) openAgents.set(meta.agent_id, agent);
-    } else if (event.event_type === 'subagent_stop') {
-      const agent = meta.agent_id == null ? null : openAgents.get(meta.agent_id);
-      if (agent) { agent.end = at; openAgents.delete(meta.agent_id); }
-    }
-  }
-  if (turnStart !== null) turns.push([turnStart, end]);
-  return [...turns, ...tools.map(tool => [tool.start, tool.end ?? tool.stop ?? end]),
-    ...agents.map(agent => [agent.start, agent.end ?? end])];
-}
-
 /** Display-only intervals; no scheduler state or persistence is changed. */
-export function activityBuckets({ range, now, rows, events = [], inbound = [] }) {
+export function activityBuckets({ range, now, rows, events = [], inbound = [], ttlMs = 1800000 }) {
   const spec = range === '60m' ? { count: 60, seconds: 60 }
     : range === '6h' ? { count: 72, seconds: 300 } : null;
   if (!spec) throw Object.assign(new Error('Unsupported activity range'), { statusCode: 400, code: 'invalid_range' });
@@ -52,7 +16,7 @@ export function activityBuckets({ range, now, rows, events = [], inbound = [] })
   const groups = Object.fromEntries([...currentRuns.keys()].map(key => [key, { cells: Array(spec.count).fill('none'), inbound: [] }]));
   const runs = new Map();
   for (const event of events) {
-    if (!currentRuns.has(event.session_group) || !EVENT_TYPES.has(event.event_type)) continue;
+    if (!currentRuns.has(event.session_group)) continue;
     const at = milliseconds(event.timestamp);
     if (!Number.isFinite(at) || at > now) continue;
     let groupRuns = runs.get(event.session_group);
@@ -89,7 +53,12 @@ export function activityBuckets({ range, now, rows, events = [], inbound = [] })
         const createdAt = typeof row?.createdAt === 'number' ? row.createdAt * 1000 : milliseconds(row?.createdAt);
         const from = current && Number.isFinite(createdAt) ? createdAt : run[0]?.at ?? start;
         paint(from, end, 'idle');
-        for (const [from, to] of runIntervals(run, end)) paint(from, to, 'busy');
+        const toolLimitAt = current && Array.isArray(row?.tools) && row.tools.length === 0
+          ? (run.length ? eventTime(run.at(-1)) + ttlMs : end) : end;
+        for (const [from, to] of workingHistory(run, end, { ttlMs, toolLimitAt }).intervals) paint(from, to, 'busy');
+        // An authoritative live tool can exist without its start event in this
+        // bounded history. Keep the sampled instant busy without inventing a start.
+        if (current && row?.tools?.length > 0) paint(now, now, 'busy');
       }
       for (const event of run) {
         if (WAIT_TYPES.has(event.event_type)) paint(event.at, event.at, 'waiting');

@@ -46,7 +46,7 @@ export function createConversationState({
     error = null,
     loading = false,
     creatingDraft = false;
-  let groupPresenceRead = null;
+  let groupPresenceRead = null, workingTimer = null, storedWorkingTimer = null;
   let deletionAllowed = false;
   let streamState = 'polling', streamTimer = null, streamScope = null, readDirty = false, retryAt = 0;
   const cells = new Map(),
@@ -104,6 +104,7 @@ export function createConversationState({
   const composeEditable = current => !!current && snapshot().canWrite && !current.sending && !current.pending;
   const blank = () => ({
     groupPresence: null,
+    groupWorking: null,
     groupHealth: null,
     groupWait: null,
     groupPresenceReadAt: null,
@@ -369,7 +370,11 @@ export function createConversationState({
   }
   const visibilityChanged = () => {
     stopTimer();
-    if (visible()) void poll();
+    cancelGroupPresenceRead();
+    if (visible()) {
+      if (cell()) readGroupPresence(cell(), tab, epoch);
+      void poll();
+    }
   };
   document?.addEventListener?.('visibilitychange', visibilityChanged);
   function failure(err, e, target = null) {
@@ -438,7 +443,7 @@ export function createConversationState({
         listLoadingVersion = 0;
         loading = false;
       }
-      if (quiet && !more && cell() && visible()) readGroupPresence(cell(), currentTab, e);
+
       emit();
       return data.items;
     } catch (err) {
@@ -474,6 +479,7 @@ export function createConversationState({
         id, session_group: fallbackMetadata.session_group, channel: fallbackMetadata.channel,
       } : null);
     current.groupPresence = null;
+    current.groupWorking = null;
     current.groupHealth = null;
     current.groupWait = null;
     current.groupPresenceReadAt = null;
@@ -809,6 +815,9 @@ export function createConversationState({
     emit();
   }
   function cancelGroupPresenceRead() {
+    if (workingTimer !== null) cancel(workingTimer);
+    if (storedWorkingTimer !== null) cancel(storedWorkingTimer);
+    workingTimer = storedWorkingTimer = null;
     if (!groupPresenceRead) return;
     const record = groupPresenceRead;
     groupPresenceRead = null;
@@ -816,9 +825,11 @@ export function createConversationState({
     record.controller.abort();
   }
   function readGroupPresence(current, currentTab, e) {
+    if (!valid(e) || !visible()) return;
     const sessionGroup = current.conversation?.sessionGroup ?? current.conversation?.session_group;
     if (currentTab !== 'mine' || typeof sessionGroup !== 'string' || !sessionGroup) {
       current.groupPresence = null;
+      current.groupWorking = null;
       current.groupHealth = null;
       current.groupWait = null;
       current.groupPresenceReadAt = null;
@@ -826,7 +837,7 @@ export function createConversationState({
     }
     // Deduplicate only the selected conversation's optional status request.
     // Navigation must not wait for the old transport to acknowledge its abort.
-    // This read never joins message reading or creates a timer.
+    // This optional read has its own cadence and never joins message polling.
     if (groupPresenceRead?.current === current) return;
     cancelGroupPresenceRead();
     const version = ++current.groupPresenceVersion, navigation = selectedVersion;
@@ -843,17 +854,25 @@ export function createConversationState({
         const health = trusted ? data.instance?.runtimeHealth?.[group?.target?.runtime] : null;
         current.groupHealth = health?.health ?? null;
         current.groupWait = trusted ? group?.wait ?? null : null;
+        current.groupWorking = trusted && group?.presence === 'running' && typeof group?.working?.on === 'boolean' ? group.working : null;
         current.groupPresenceReadAt = trusted && Number.isFinite(data.sources.status.readAt) ? data.sources.status.readAt : null;
       } catch {
         if (!stillCurrent()) return;
         // An unreadable optional source must not leave a stale running marker.
         current.groupPresence = null;
+        current.groupWorking = null;
         current.groupHealth = null;
         current.groupWait = null;
         current.groupPresenceReadAt = null;
       } finally {
         if (groupPresenceRead === record) groupPresenceRead = null;
-        if (stillCurrent()) emit();
+        if (stillCurrent()) {
+          emit();
+          if (visible()) {
+            workingTimer = delay(() => { workingTimer = null; readGroupPresence(current, currentTab, e); }, current.groupWorking?.on ? 5000 : 30000);
+            workingTimer?.unref?.();
+          }
+        }
       }
     })();
   }
@@ -1184,10 +1203,16 @@ export function createConversationState({
           emit();
         }, e, current);
         if (!valid(e) || tab !== currentTab) return outcome;
-        if (result.stored === true && current.groupHealth !== 'ok' && navigation === selectedVersion) {
+        if (result.stored === true && navigation === selectedVersion) {
           // A read started before storage cannot describe the newly queued message.
           cancelGroupPresenceRead();
-          readGroupPresence(current, currentTab, e);
+          if (visible()) {
+            storedWorkingTimer = delay(() => {
+              storedWorkingTimer = null;
+              if (valid(e) && navigation === selectedVersion) readGroupPresence(current, currentTab, e);
+            }, 2000);
+            storedWorkingTimer?.unref?.();
+          }
         }
         await list();
         if (!valid(e) || tab !== currentTab) return outcome;

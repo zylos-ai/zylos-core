@@ -402,8 +402,10 @@ export class Store {
   }
 
   queryEvents({ since, until, types, sessionId, sessionGroup, runId, runtime, afterSeq,
-    limit = 100, offset = 0, order = 'asc' } = {}) {
-    const clauses = ['timestamp >= @since', 'timestamp <= @until'];
+    limit = 100, offset = 0, order = 'asc', sourceTime = false, agentScope } = {}) {
+    const clauses = sourceTime
+      ? ['julianday(timestamp) >= julianday(@since)', 'julianday(timestamp) <= julianday(@until)']
+      : ['timestamp >= @since', 'timestamp <= @until'];
     const params = { since: since || '1970-01-01T00:00:00.000Z', until: until || '2099-12-31T23:59:59Z',
       limit: Number.isFinite(limit) ? Math.min(10000, Math.max(1, Math.floor(limit))) : 100,
       offset: Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0 };
@@ -413,6 +415,8 @@ export class Store {
       if (value === null) clauses.push(`${column} IS NULL`);
       else { clauses.push(`${column} = @${column}`); params[column] = value; }
     }
+    if (agentScope === 'main') clauses.push("COALESCE(json_extract(metadata, '$.agent_id'), '') = ''");
+    if (agentScope === 'child') clauses.push("COALESCE(json_extract(metadata, '$.agent_id'), '') != ''");
     if (Number.isSafeInteger(afterSeq) && afterSeq >= 0) {
       clauses.push('event_seq > @afterSeq'); params.afterSeq = afterSeq;
     }
@@ -421,7 +425,7 @@ export class Store {
       clauses.push(`event_type IN (${names.join(',')})`);
     }
     return this.db.prepare(`SELECT * FROM runtime_events WHERE ${clauses.join(' AND ')}
-      ORDER BY event_seq ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT @limit OFFSET @offset`)
+      ORDER BY ${sourceTime ? `julianday(timestamp) ${order === 'desc' ? 'DESC' : 'ASC'}, ` : ''}event_seq ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT @limit OFFSET @offset`)
       .all(params).map(this._parseEventRow);
   }
 

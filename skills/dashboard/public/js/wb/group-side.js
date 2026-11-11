@@ -1,4 +1,4 @@
-import { createGroupDetail } from './detail.js?v=162';
+import { createGroupDetail } from './detail.js?v=163';
 import { boardController } from './board.js?v=152';
 import { element, icon } from './plain-text.js?v=106';
 
@@ -23,7 +23,7 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
   bar.append(back);
   const body = element(document, 'div', undefined, 'wb-group-side-detail');
   aside.append(bar, body);
-  let key = null, snapshot = null, timer = null, opening = false, restoreFocus = true, generation = 0, stopped = false;
+  let key = null, snapshot = null, timer = null, opening = false, restoreFocus = true, generation = 0, stopped = false, initialTab = 'overview';
   const visible = () => !stopped && !aside.hidden && isVisible();
   const read = async path => {
     const response = await fetch(endpoint(path));
@@ -55,7 +55,7 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
   function openDetail() {
     // Opening first closes the previous selection; that close is not the panel closing.
     opening = true;
-    try { return groupDetail.open(key, snapshot ?? { rows: [], listKnown: false }); } finally { opening = false; }
+    try { return groupDetail.open(key, snapshot ?? { rows: [], listKnown: false }, { tab: initialTab }); } finally { opening = false; }
   }
   function closed() {
     if (opening || aside.hidden) return;
@@ -89,8 +89,14 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
     get open() { return !aside.hidden; },
     get group() { return key; },
     /** Shows the panel synchronously (so a caller can measure the layout around it), then reads the group list. */
-    async show(sessionGroup) {
+    async show(sessionGroup, { tab = 'overview' } = {}) {
       if (stopped) return;
+      if (!aside.hidden && key === sessionGroup) {
+        initialTab = tab === 'timeline' ? 'timeline' : 'overview';
+        await groupDetail.selectTab(initialTab);
+        return;
+      }
+      initialTab = tab === 'timeline' ? 'timeline' : 'overview';
       if (!aside.hidden) close({ focus: false });
       key = sessionGroup;
       const gen = ++generation;

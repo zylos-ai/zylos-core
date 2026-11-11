@@ -3,7 +3,7 @@ import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106'
 import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=152';
 import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=162';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=162';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=163';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=115';
 import { renderNameEditor } from './name-edit.js?v=115';
@@ -141,7 +141,9 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     }
     // State and actions share one wrapper: on phones it becomes the second row under the title.
     const sub = element(document, 'div', undefined, 'wb-d-sub');
-    sub.append(statePill(document, row, { t, level: getLevel() }));
+    const displayRow = ['busy', 'idle'].includes(row.state?.kind)
+      ? { ...row, state: { ...row.state, kind: row.working ? row.working.on ? 'busy' : 'idle' : 'unknown' }, duration: null } : row;
+    sub.append(statePill(document, displayRow, { t, level: getLevel() }));
     top.append(box, heading, sub);
     const actions = element(document, 'div', undefined, 'wb-d-acts');
     // Opening the conversation is the main action, so it leads the action row.
@@ -210,7 +212,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       }
     } else {
       body.classList.add('wb-detail-timeline');
-      renderTimeline(body, timeline, { document, t, level: getLevel(), onObserve: observe });
+      renderTimeline(body, timeline, { document, t, level: getLevel(), onObserve: observe, working: row.working });
     }
     if (state.nameOpen) {
       const editor = element(document, 'div', undefined, 'wb-name-editor');
@@ -396,8 +398,9 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   }
   return {
     state, timeline, refresh, close, act, selectTab, escape,
-    async open(selection, snapshot = {}) {
-      close(); stopped = false; controller = new AbortController(); owner = identity();
+    async open(selection, snapshot = {}, { tab = 'overview' } = {}) {
+      close();
+      state.tab = tab === 'timeline' ? 'timeline' : 'overview'; stopped = false; controller = new AbortController(); owner = identity();
       const selected = resolveDetailRow(selection, snapshot);
       state.row = selected.row; state.historical = selected.historical; state.snapshot = snapshot;
       const gen = generation, key = state.row.sessionGroup ?? 'origin';

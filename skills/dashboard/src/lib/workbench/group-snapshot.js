@@ -8,6 +8,8 @@ import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
 import { buildAttention, createChannelDownCounter } from './attention.js';
 import { activityBuckets } from './activity-buckets.js';
+import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES } from './working.js';
+const { resolveSessionHotTtl } = await defaultLoadCoreModule('session-hot-ttl.js');
 import { searchGroups } from './group-search.js';
 import { validKey } from './display-names.js';
 import { readPool, poolPositions } from './pool-capacity.js';
@@ -15,9 +17,7 @@ import { readPool, poolPositions } from './pool-capacity.js';
 const emptyNames = { listAll: () => new Map(), search: () => [] };
 const activationTypes = ['activate_new', 'start_always', 'activate_failed', 'activate_timeout'];
 const activityLookbackLimit = 200;
-const activityTypes = ['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'user_prompt_submit', 'stop',
-  'permission_request', 'wait_health', 'wait_capacity', 'activate_failed', 'activate_timeout', 'session_start',
-  'activate_new', 'start_always', 'adopt_ready', 'reclaim_done', 'rotate_done', 'crash_detected', 'subagent_start', 'subagent_stop'];
+
 
 function queryAllEvents(store, filter) {
   const events = [];
@@ -35,6 +35,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
   readPm2 = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids) } = {}) {
   let cache = null, inflight = null, accountsCache = null;
   const activities = new Map();
+  let hotTtlMs = 1800000;
   async function namesOfTasks(items) {
     const ids = previewTaskIds(items);
     if (!ids.length) return new Map();
@@ -110,6 +111,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     sources.accounts = accountsCache.sources;
     const runtimeHealth = status?.runtimeHealth ?? {};
     const thresholdPolicy = readThresholdPolicy(zylosDir);
+    hotTtlMs = resolveSessionHotTtl(thresholdPolicy.config).seconds * 1000;
     for (const row of rows) {
       const observation = captured.get(row.sessionGroup);
       row.createdAt = observation?.identity.createdAt ?? null;
@@ -147,6 +149,19 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       row.wait = waitingReason(row, { runtimeHealth, activations, now: at, pool,
         position: positions.get(row.sessionGroup), ownsSlot: owners.has(row.sessionGroup) });
       row.state = classify(row, { statusError });
+      row.working = null;
+      if (row.presence === 'running' && row.live?.runId && sources.status.ok === true) {
+        const filter = { sessionGroup: row.sessionGroup, runId: row.live.runId,
+          until: new Date(at).toISOString(), sourceTime: true, order: 'desc' };
+        const prompt = store.queryEvents({ ...filter, types: ['user_prompt_submit'], agentScope: 'main', limit: 1 });
+        const end = store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 });
+        const children = store.queryEvents({ ...filter, types: CHILD_TYPES, agentScope: 'child', limit: activityLookbackLimit });
+        // The main-turn TTL also needs ANY event, including assistant/permission events.
+        // This fourth bounded read implements the later main-turn freshness requirement.
+        const latest = store.queryEvents({ ...filter, limit: 1 });
+        const events = [...prompt, ...end, ...children, ...latest];
+        row.working = workingHistory(events, at, { ttlMs: hotTtlMs, tools: row.tools.length }).working;
+      }
       const events = row.state.kind === 'busy' && row.live?.runId ? queryAllEvents(store, {
         sessionGroup: row.sessionGroup, runId: row.live.runId, types: ['user_prompt_submit', 'stop'], until: new Date(at).toISOString(),
       }) : [];
@@ -177,37 +192,25 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const width = range === '60m' ? 60000 : 300000, size = range === '60m' ? 60 : 72;
     const start = Math.floor(at / width) * width - (size - 1) * width;
     const events = keys.flatMap(sessionGroup => queryAllEvents(store, { sessionGroup,
-      since: new Date(start).toISOString(), until: new Date(at).toISOString(), types: activityTypes }));
+      since: new Date(start).toISOString(), until: new Date(at).toISOString(), sourceTime: true }));
     const runs = new Map(keys.map(key => [key, new Set()]));
     for (const row of snapshot.rows) if (row.live?.runId && runs.has(row.sessionGroup)) runs.get(row.sessionGroup).add(row.live.runId);
     for (const event of events) if (event.run_id != null) runs.get(event.session_group)?.add(event.run_id);
     for (const [sessionGroup, runIds] of runs) for (const runId of runIds) {
-      const filter = { sessionGroup, runId, until: new Date(start - 1).toISOString(), order: 'desc' };
-      const prompt = store.queryEvents({ ...filter, types: ['user_prompt_submit'], limit: 1 })[0];
-      const stop = store.queryEvents({ ...filter, types: ['stop'], limit: 1 })[0];
-      // Match the reducer's source-time ordering, with insertion order for ties.
-      const turn = !prompt ? stop : !stop ? prompt
-        : (Date.parse(prompt.timestamp) - Date.parse(stop.timestamp) || prompt.event_seq - stop.event_seq) > 0
-          ? prompt : stop;
-      if (turn) events.push(turn);
-      // An open turn already covers tools. Stop supplies a fallback tool end;
-      // the reducer still prefers a matching end after stop. Capped lookback
-      // omits pre-stop tools, so that overlap may be absent at the window edge.
-      // No timestamp floor from an earlier ingested event: source times may
-      // arrive out of order. afterSeq uses the Store's insertion ordering.
-      if (turn?.event_type !== 'user_prompt_submit') events.push(...store.queryEvents({ ...filter,
-        types: ['pre_tool_use', 'post_tool_use', 'post_tool_failure'],
-        ...(turn ? { afterSeq: turn.event_seq } : {}), limit: activityLookbackLimit }));
-      // Stop does not close subagents. Pair their own starts/ends separately.
-      // The run index bounds scans to this run; caps bound returned rows, not
-      // scans within a long run. Starts older than 200 matching events can be
-      // omitted, so this display can under-report very old outstanding work.
-      events.push(...store.queryEvents({ ...filter, types: ['subagent_start', 'subagent_stop'], limit: activityLookbackLimit }));
+      const filter = { sessionGroup, runId, until: new Date(start - 1).toISOString(), sourceTime: true, order: 'desc' };
+      // Seed by source time, not insertion order: late ingestion must not hide a newer transition.
+      events.push(...store.queryEvents({ ...filter, types: ['user_prompt_submit'], agentScope: 'main', limit: 1 }));
+      events.push(...store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 }));
+      events.push(...store.queryEvents({ ...filter, limit: 1 }));
+      // Both streams are bounded per run. Child tool events refresh only their own
+      // child; main tool intervals remain independent of the turn's TTL.
+      events.push(...store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'main', limit: activityLookbackLimit }));
+      events.push(...store.queryEvents({ ...filter, types: CHILD_TYPES, agentScope: 'child', limit: activityLookbackLimit }));
     }
     let inbound = [], inboundError = false;
     try { if (keys.length) inbound = c4Reader.getInboundTimes({ since: start, groups: keys }); }
     catch { inboundError = true; }
-    const value = activityBuckets({ range, now: at, rows: snapshot.rows, events, inbound });
+    const value = activityBuckets({ range, now: at, rows: snapshot.rows, events, inbound, ttlMs: hotTtlMs });
     if (inboundError) return { ...value, inboundError: 'inbound_unreadable' };
     activities.set(range, { at: now(), value });
     return value;

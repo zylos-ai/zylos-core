@@ -1,3 +1,4 @@
+import { workingText } from './working-display.js?v=1';
 import { createUploadTray } from './chat-upload-tray.js?v=2';
 import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
@@ -8,7 +9,7 @@ import { createConversationState } from './conversation-state.js?v=161';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=158';
-import { createGroupSide } from './group-side.js?v=162';
+import { createGroupSide } from './group-side.js?v=163';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=4';
@@ -81,6 +82,7 @@ export function mountConversationPage({
   const activityOpen = new Map(),
     trailingActivity = new Map(),
     activityEntries = new Map();
+  let workingClock = null, settleTimer = null;
   let activityTimer = null,
     followAfterGesture = false,
     growthDuringGesture = 0,
@@ -278,8 +280,12 @@ export function mountConversationPage({
     titleLine = node('div', undefined, 'conversation-title-line');
   const title = node('h2'),
     subtitle = node('span', undefined, 'conversation-subtitle');
-  const running = node('span', undefined, 'conversation-running');
-  running.append(icon(document, 'activity'), node('span', t('chat.page.running')));
+  const running = node('button', undefined, 'conversation-running wi-ind');
+  running.type = 'button';
+  running.addEventListener('click', () => {
+    const current = currentSnapshot.conversation ?? currentSnapshot.items.find(item => item.id === currentSnapshot.selectedId);
+    showGroupSide(current?.sessionGroup ?? current?.session_group, currentSnapshot.selectedId, { tab: 'timeline' });
+  });
   const renameToggle = action('rename', () => {
     renaming = !renaming;
     renameForm.hidden = !renaming;
@@ -482,17 +488,59 @@ export function mountConversationPage({
     // The conversation widens or narrows: keep the reading position, as for the side panel.
     preserveAttachmentLayout(applyList);
   }
+  function updateWorkingIndicator(s) {
+    const rateWait = s.groupWait?.kind === 'rate_wait';
+    const healthLabel = { rate_limited: 'rateLimited', recovering: 'recovering', auth_failed: 'authFailed',
+      unavailable: 'unavailable', down: 'down' }[s.groupHealth];
+    const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused', pool_wait: 'queueing',
+      starting: 'starting', start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
+    const waiting = s.groupHealth === 'ok' && ['unknown', 'pool_wait'].includes(s.groupWait?.kind);
+    const headerLabel = healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
+    const restricted = headerLabel !== 'running' && !waiting;
+    const exceptional = Boolean(healthLabel || s.groupWait && (restricted || waiting));
+    const working = !exceptional && s.groupPresence === true ? s.groupWorking : null;
+    running.hidden = !exceptional && !working;
+    running.classList.toggle('conversation-restricted', exceptional && restricted);
+    running.classList.toggle('conversation-waiting', exceptional && waiting);
+    const wasBusy = running.dataset.state === 'busy';
+    running.dataset.state = exceptional ? restricted ? 'restricted' : 'waiting' : working?.on ? 'busy' : 'idle';
+    const description = exceptional ? t('chat.page.' + headerLabel
+      + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : ''))
+      : workingText(working, { t });
+    const mark = exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
+    if (!exceptional && working?.on) mark.classList.add('wi-spin');
+    const childSuffix = !exceptional && working?.turn && working.subagents
+      ? t('chat.working.children', { count: working.subagents.count }) : null;
+    const caption = node('span', childSuffix ? description.slice(0, -(childSuffix.length + 3)) : description, 'wi-ind-text');
+    if (childSuffix) caption.append(node('span', ' · ' + childSuffix, 'wi-ind-sub'));
+    const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev');
+    running.replaceChildren(mark, caption, chevron);
+    const accessible = t('chat.working.timeline', { state: description });
+    running.setAttribute('aria-label', accessible); running.title = accessible;
+    if (wasBusy && working && !working.on) {
+      running.classList.add('wi-settle');
+      if (settleTimer !== null) view?.clearTimeout(settleTimer);
+      settleTimer = view?.setTimeout?.(() => { settleTimer = null; running.classList.remove('wi-settle'); }, 1200) ?? null;
+    } else if (!working || working.on) {
+      running.classList.remove('wi-settle');
+    }
+    const ticking = opened && !page.hidden && working?.on;
+    if (ticking && workingClock === null && view?.setInterval) workingClock = view.setInterval(() => {
+      if (!destroyed && !document.hidden) updateWorkingIndicator(currentSnapshot);
+    }, 1000);
+    if (!ticking && workingClock !== null) { view?.clearInterval(workingClock); workingClock = null; }
+  }
   function toggleGroupSide() {
     if (!groupSide) return;
     if (groupSide.open) { groupSide.close(); return; }
     const current = currentSnapshot.conversation ?? currentSnapshot.items.find(item => item.id === currentSnapshot.selectedId);
     showGroupSide(current?.sessionGroup ?? current?.session_group, currentSnapshot.selectedId);
   }
-  function showGroupSide(key, conversationId) {
+  function showGroupSide(key, conversationId, options) {
     if (!key) return;
     groupSideFor = conversationId;
     // The panel appears inside the preserved change, so the position measured before is the one before it opened.
-    preserveAttachmentLayout(() => { void groupSide.show(key); page.classList.toggle('conversation-has-side', true); });
+    preserveAttachmentLayout(() => { void groupSide.show(key, options); page.classList.toggle('conversation-has-side', true); });
     group.setAttribute('aria-expanded', 'true');
   }
   root.replaceChildren(page);
@@ -1397,19 +1445,7 @@ export function mountConversationPage({
     text(streamHint, t('chat.page.push.' + s.streamState));
     const current = s.conversation ?? s.items.find(item => item.id === s.selectedId);
     text(title, nameOf(current, s.tab === 'external'));
-    const rateWait = s.groupWait?.kind === 'rate_wait';
-    const healthLabel = { rate_limited: 'rateLimited', recovering: 'recovering', auth_failed: 'authFailed',
-      unavailable: 'unavailable', down: 'down' }[s.groupHealth];
-    const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused', pool_wait: 'queueing',
-      starting: 'starting', start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
-    const waiting = s.groupHealth === 'ok' && ['unknown', 'pool_wait'].includes(s.groupWait?.kind);
-    const headerLabel = healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
-    const restricted = headerLabel !== 'running' && !waiting;
-    running.hidden = s.groupPresence !== true && (!(restricted || waiting) || !healthLabel && !s.groupWait);
-    running.classList.toggle('conversation-restricted', restricted);
-    running.classList.toggle('conversation-waiting', waiting);
-    text(running.lastElementChild, t('chat.page.' + headerLabel
-      + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : '')));
+    updateWorkingIndicator(s);
     const channel = channelOf(current);
     const symbol = s.tab === 'mine' ? 'monitor' : channelIcon({
       sessionGroup: current?.sessionGroup ?? current?.session_group,
@@ -1587,6 +1623,8 @@ export function mountConversationPage({
     close() {
       autoSelectPending = false;
       opened = false;
+      if (workingClock !== null) view?.clearInterval(workingClock);
+      workingClock = null;
       deletion.invalidate();
       deletionResult = null;
       groupSide?.close({ focus: false });
@@ -1607,6 +1645,9 @@ export function mountConversationPage({
       gesture.destroy();
       quoteGesture.destroy();
       annotations.destroy();
+      if (workingClock !== null) view?.clearInterval(workingClock);
+      if (settleTimer !== null) view?.clearTimeout(settleTimer);
+      workingClock = settleTimer = null;
       if (activityTimer !== null) view?.clearInterval(activityTimer);
       activityTimer = null;
       if (fitFrame !== null) {
