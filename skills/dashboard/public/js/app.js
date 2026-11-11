@@ -1094,8 +1094,7 @@ async function openObserverFor(key, view = 'live', { focus = true } = {}) {
     identity: () => observerEndpoint('/api/observer'),
     disconnect: () => closeObserver({ release: true }),
     apply: () => {
-      // Changing group on the observer page keeps the page the detail was opened on.
-      if (activeTabName() !== 'observer') state.observer.returnPage = observerReturnPage(activeTabName());
+      state.observer.returnPage = observerReturnPage(activeTabName());
       state.observer.group = key === null ? 'origin' : key;
       state.observer.focus = focus && key !== undefined ? key ?? 'origin' : null;
       state.observer.status = state.observer.status ? { ...state.observer.status, target: null, agentSize: null } : null;

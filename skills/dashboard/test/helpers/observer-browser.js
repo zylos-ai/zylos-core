@@ -349,6 +349,26 @@ export async function runObserverBrowser(t, sandbox, signal) {
       await shot(page, `chat-back-${width}`);
     }, width);
   }
+  // Each entry records its own source: a round trip from the conversation page, then one from the overview in the
+  // same page, returns the second time to the overview.
+  await step('a second observation from the overview returns to the overview after one from the conversation page', async page => {
+    await page.locator('.tab[data-tab="chat"]').click();
+    await page.locator('#wb-chat [data-action="external"]').click();
+    await page.locator(`#wb-chat [data-conversation-id="${chats[1].row.id}"]`).click();
+    await page.locator('#wb-chat [data-action="page.groupInfo"]').click();
+    await observeFromDetail(page, '#wb-chat .wb-group-side');
+    await page.locator('#observer-back').click();
+    await page.locator('#tab-chat').waitFor({ state: 'visible' });
+    await page.locator('.tab[data-tab="overview"]').click();
+    await page.locator(`#wb-board [data-group="${GROUP}"]`).click();
+    await page.locator('#wb-side').waitFor({ state: 'visible' });
+    await observeFromDetail(page, '#wb-side');
+    await page.locator('#observer-back').click();
+    await page.locator('#tab-overview').waitFor({ state: 'visible' });
+    await page.locator(`#wb-side button[data-observer-group="${GROUP}"]`).waitFor({ state: 'visible' });
+    assert.equal(new URL(page.url()).pathname, '/');
+    assert.equal(await page.locator('#tab-chat').isVisible(), false);
+  });
   await step('the observer page opened from its own entry offers no back button', async page => {
     await page.locator('#observer-tab').click();
     await page.locator('#tab-observer').waitFor({ state: 'visible' });
