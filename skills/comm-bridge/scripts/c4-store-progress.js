@@ -42,6 +42,20 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     const f = scope(group), l = limitClause(limit, true);
     return all(c, `SELECT * FROM conversations WHERE id>?${f.sql} AND ${loadable} ORDER BY id DESC${l.sql}`, after, ...f.args, ...l.args).reverse();
   }
+  function pendingStartupReply(c, group, { since } = {}) {
+    if (typeof since !== 'string' || !Number.isFinite(Date.parse(since))) {
+      throw dataError('INVALID_ARGS', 'since must be a timestamp');
+    }
+    const f = scope(group);
+    // Checkpoints and delivery status do not decide whether a human was answered.
+    // Ignore Core notices before selecting the latest id at each channel/endpoint.
+    return !!get(c, `SELECT 1 FROM conversations WHERE direction='in' AND id IN (
+      SELECT MAX(id) FROM conversations
+      WHERE julianday(timestamp)>=julianday(?)${f.sql}
+        AND NOT (direction='out' AND COALESCE(delivery_action,'')='system_notice')
+      GROUP BY channel,endpoint_id
+    ) LIMIT 1`, since, ...f.args);
+  }
   function unsummarized(c, group, { upToConversationId, limit, afterConversationId } = {}) {
     upper(c, group, upToConversationId);
     if (afterConversationId !== undefined && (!Number.isSafeInteger(afterConversationId) || afterConversationId < 0)) throw dataError('INVALID_ARGS', 'afterConversationId must be a nonnegative integer');
@@ -57,6 +71,10 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     getGlobalDeliveredFrontier: () => snapshot(c => frontier(c, '*')),
     createCheckpoint: (group, end, summary, options) => write(c => checkpoint(c, group, end, summary, { noContent: options?.noContent })),
     getLatestContentCheckpoint: group => { requireGroup(group, { global: true }); return snapshot(c => get(c, `SELECT * FROM checkpoints WHERE session_group=? AND no_content=0${group === '*' ? '' : ' AND end_conversation_id>?'} ORDER BY id DESC LIMIT 1`, group, ...(group === '*' ? [] : [baseline(c)])) ?? null); },
+    hasPendingStartupReply: (group, options) => {
+      requireGroup(group, { global: true });
+      return read(c => pendingStartupReply(c, group, options));
+    },
     getDeliveredSince: (group, after, options) => groupRead(group, c => tail(c, group, after, options)),
     getGlobalDeliveredSince: (after, options) => read(c => tail(c, '*', after, options)),
     getUnsummarizedRange: group => groupRead(group, range),

@@ -330,7 +330,7 @@ describe('session-start-orchestrator', () => {
       onboardingPending: () => false,
       scopeReader: async () => ({ sessionGroup: null }),
       migrationPending: () => false,
-      recentReader: async () => ({ coverage: 0, conversations: [{ direction: 'in', timestamp: new Date().toISOString() }] }),
+      recentReader: async () => true,
       execFile: async (...args) => { calls.push(args); return { stdout: '{"id":1}' }; },
     });
 
@@ -370,7 +370,7 @@ describe('session-start-orchestrator', () => {
       onboardingPending: () => false,
       scopeReader: async () => ({ sessionGroup: null }),
       migrationPending: () => false,
-      recentReader: async () => ({ coverage: 0, conversations: [{ direction: 'in', timestamp: new Date().toISOString() }] }),
+      recentReader: async () => true,
       execFile: () => new Promise((resolve) => { resolveChild = resolve; }),
     }).then(() => { settled = true; });
 

@@ -14,7 +14,6 @@ import path from 'path';
 import os from 'os';
 import { isMainModule } from './is-main-module.js';
 import { bootstrapScope } from './bootstrap-scope.js';
-import { readStartupConversationTail } from '../../comm-bridge/scripts/c4-session-init.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -88,25 +87,21 @@ const startupPrompt = handoff => [
   'Do not query c4.db for recent conversations.'
 ].join(' ');
 
-function timestampMs(value) {
-  // SQLite CURRENT_TIMESTAMP is UTC but has no zone suffix.
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
-    ? value.replace(' ', 'T') + 'Z' : value;
-  const timestamp = Date.parse(normalized);
-  if (!Number.isFinite(timestamp)) throw new Error('Startup conversation timestamp is unreadable');
-  return timestamp;
+/** Read independently of the context tail and its checkpoint coverage. */
+export async function readStartupPendingReply(scope, now, { database } = {}) {
+  const db = database ?? await import('../../comm-bridge/scripts/c4-db.js');
+  try {
+    return db.hasPendingStartupReply(scope.mode === 'multi' ? scope.sessionGroup : '*', {
+      since: new Date(now - 30 * 60 * 1000).toISOString(),
+    });
+  } finally {
+    if (!database) db.close();
+  }
 }
 
-async function hasRecentInbound(scope, recentReader, now) {
+async function hasPendingReply(scope, recentReader, now) {
   try {
-    const tail = await recentReader(scope);
-    if (!Array.isArray(tail?.conversations)) throw new Error('Startup conversation tail is unreadable');
-    let latest = null, latestAt = -Infinity;
-    for (const row of tail.conversations) {
-      const time = timestampMs(row.timestamp);
-      if (time >= latestAt) { latest = row; latestAt = time; }
-    }
-    return latest?.direction === 'in' && now() - latestAt <= 30 * 60 * 1000;
+    return await recentReader(scope, now());
   } catch {
     // A failed read must not suppress a reminder to a potentially waiting human.
     return true;
@@ -153,7 +148,7 @@ export async function enqueueStartupPrompt(source, {
   onboardingPending = isOnboardingPending,
   migrationPending = isMigrationPending,
   scopeReader = bootstrapScope,
-  recentReader = readStartupConversationTail,
+  recentReader = readStartupPendingReply,
   now = Date.now,
 } = {}) {
   if (!['startup', 'clear'].includes(source)) return { skipped: true, reason: 'source', startupControlIds: [] };
@@ -164,7 +159,7 @@ export async function enqueueStartupPrompt(source, {
   if (migrationPending()) activePrompt = migrationPrompt;
   else {
     const handoff = !!scope.memoryDir && fs.existsSync(path.join(scope.memoryDir, 'handoff.md'));
-    if (!handoff && !await hasRecentInbound(scope, recentReader, now)) {
+    if (!handoff && !await hasPendingReply(scope, recentReader, now)) {
       return { skipped: true, reason: 'nothing_pending', startupControlIds: [] };
     }
     activePrompt = startupPrompt(handoff);

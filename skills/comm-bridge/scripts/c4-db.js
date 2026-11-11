@@ -464,6 +464,7 @@ export const getDeliveredFrontier = (...args) => store.getDeliveredFrontier(...a
 export const getGlobalDeliveredFrontier = (...args) => store.getGlobalDeliveredFrontier(...args);
 export const createCheckpoint = (...args) => store.createCheckpoint(...args);
 export const getLatestContentCheckpoint = (...args) => store.getLatestContentCheckpoint(...args);
+export const hasPendingStartupReply = (...args) => store.hasPendingStartupReply(...args);
 export const getDeliveredSince = (...args) => store.getDeliveredSince(...args);
 export const getGlobalDeliveredSince = (...args) => store.getGlobalDeliveredSince(...args);
 export const getUnsummarizedRange = (...args) => store.getUnsummarizedRange(...args);
