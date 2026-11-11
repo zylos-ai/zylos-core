@@ -156,9 +156,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         const prompt = store.queryEvents({ ...filter, types: ['user_prompt_submit'], agentScope: 'main', limit: 1 });
         const end = store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 });
         const children = store.queryEvents({ ...filter, types: CHILD_TYPES, agentScope: 'child', limit: activityLookbackLimit });
-        const childTools = store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'child', limit: activityLookbackLimit });
+        const childTools = store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'child', latestPerAgent: true, limit: activityLookbackLimit });
         // The main-turn TTL also needs ANY event, including assistant/permission events.
-        // Keep child transitions separate so frequent tools cannot evict an active start.
+        // Keep transitions separate and retain each child's own latest tool time.
         const latest = store.queryEvents({ ...filter, limit: 1 });
         const events = [...prompt, ...end, ...children, ...childTools, ...latest];
         row.working = workingHistory(events, at, { ttlMs: hotTtlMs, tools: row.tools.length }).working;
@@ -203,11 +203,11 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       events.push(...store.queryEvents({ ...filter, types: ['user_prompt_submit'], agentScope: 'main', limit: 1 }));
       events.push(...store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 }));
       events.push(...store.queryEvents({ ...filter, limit: 1 }));
-      // Bound transitions and tools separately: many child tools must not evict
-      // the start which establishes the child's lifetime across the window edge.
+      // Keep starts independent of tool volume, and seed each child's own latest
+      // tool so noisy siblings cannot evict its freshness at the window edge.
       events.push(...store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'main', limit: activityLookbackLimit }));
       events.push(...store.queryEvents({ ...filter, types: CHILD_TYPES, agentScope: 'child', limit: activityLookbackLimit }));
-      events.push(...store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'child', limit: activityLookbackLimit }));
+      events.push(...store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'child', latestPerAgent: true, limit: activityLookbackLimit }));
     }
     let inbound = [], inboundError = false;
     try { if (keys.length) inbound = c4Reader.getInboundTimes({ since: start, groups: keys }); }

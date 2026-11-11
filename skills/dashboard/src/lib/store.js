@@ -402,7 +402,7 @@ export class Store {
   }
 
   queryEvents({ since, until, types, sessionId, sessionGroup, runId, runtime, afterSeq,
-    limit = 100, offset = 0, order = 'asc', sourceTime = false, agentScope } = {}) {
+    limit = 100, offset = 0, order = 'asc', sourceTime = false, agentScope, latestPerAgent = false } = {}) {
     const clauses = sourceTime
       ? ['julianday(timestamp) >= julianday(@since)', 'julianday(timestamp) <= julianday(@until)']
       : ['timestamp >= @since', 'timestamp <= @until'];
@@ -424,7 +424,16 @@ export class Store {
       const names = types.slice(0, 100).map((type, i) => { params[`type${i}`] = type; return `@type${i}`; });
       clauses.push(`event_type IN (${names.join(',')})`);
     }
-    return this.db.prepare(`SELECT * FROM runtime_events WHERE ${clauses.join(' AND ')}
+    // Child freshness needs one event per child before applying the result cap:
+    // a noisy sibling must not evict another child's most recent own tool.
+    const selection = latestPerAgent && agentScope === 'child'
+      ? `event_seq IN (SELECT event_seq FROM (
+          SELECT event_seq, ROW_NUMBER() OVER (PARTITION BY json_extract(metadata, '$.agent_id')
+            ORDER BY julianday(timestamp) DESC, event_seq DESC) AS agent_rank
+          FROM runtime_events WHERE ${clauses.join(' AND ')}
+        ) WHERE agent_rank = 1)`
+      : clauses.join(' AND ');
+    return this.db.prepare(`SELECT * FROM runtime_events WHERE ${selection}
       ORDER BY ${sourceTime ? `julianday(timestamp) ${order === 'desc' ? 'DESC' : 'ASC'}, ` : ''}event_seq ${order === 'desc' ? 'DESC' : 'ASC'} LIMIT @limit OFFSET @offset`)
       .all(params).map(this._parseEventRow);
   }

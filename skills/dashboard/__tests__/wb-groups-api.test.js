@@ -1082,6 +1082,7 @@ test('working uses environment TTL precedence and reads source-time facts with b
   const reads = queries.filter(query => query.runId === 'run-telegram:g0' && query.sourceTime);
   assert.equal(reads.length, 5);
   assert.equal(reads.filter(query => query.limit === 200 && query.agentScope === 'child').length, 2);
+  assert.equal(reads.find(query => query.types?.includes('pre_tool_use')).latestPerAgent, true);
   assert.ok(reads.every(query => query.order === 'desc' && [1, 200].includes(query.limit)));
 });
 
@@ -1169,8 +1170,74 @@ for (const position of ['current', 'before window']) test(`working preserves an 
     const tools = seedReads.find(query => query.agentScope === 'child' && query.types.includes('pre_tool_use'));
     assert.equal(transitions.limit, 200); assert.equal(tools.limit, 200);
     assert.equal(store.queryEvents(transitions).length, 1);
-    assert.equal(store.queryEvents(tools).length, 200);
+    assert.equal(tools.latestPerAgent, true);
+    assert.equal(store.queryEvents(tools).length, 1);
   }
+});
+
+// Real Store/API and activity fixtures: a busy sibling cannot evict another
+// child's own freshness, either now or when seeding the visible window.
+for (const stopped of [false, true]) test(`working keeps a quiet child when its noisy sibling is ${stopped ? 'stopped' : 'running'}`, async t => {
+  const { f, store, add, read } = workingFixture(t), minute = 60000, at = f.now();
+  store.db.transaction(() => {
+    add('subagent_start', 40 * minute, { agent_id: 'quiet' });
+    add('pre_tool_use', 10 * minute, { agent_id: 'quiet', tool_use_id: 'long-command' });
+    add('subagent_start', 12 * minute, { agent_id: 'noisy' });
+    for (let i = 0; i < 110; i++) {
+      const ago = 9 * minute - i * 4000;
+      add('pre_tool_use', ago, { agent_id: 'noisy', tool_use_id: `tool-${i}` });
+      add('post_tool_use', ago - 500, { agent_id: 'noisy', tool_use_id: `tool-${i}` });
+    }
+    if (stopped) add('subagent_stop', 30000, { agent_id: 'noisy' });
+  })();
+  const work = (await read()).working;
+  assert.equal(work.on, true);
+  assert.equal(work.since, at - 40 * minute);
+  assert.equal(work.subagents.count, stopped ? 1 : 2);
+  assert.equal(work.subagents.lastActivityAt, stopped ? at - 10 * minute : at - 9 * minute + 109 * 4000 + 500);
+});
+
+test('working activity seeds each child freshness independently of a noisy sibling', async t => {
+  const { f, store, add } = workingFixture(t), minute = 60000, at = f.now();
+  const start = Math.floor(at / minute) * minute - 59 * minute;
+  const before = ago => at - start + ago;
+  f.live.get('telegram:g0').identity.createdAt = (start - 41 * minute) / 1000;
+  store.db.transaction(() => {
+    add('subagent_start', before(40 * minute), { agent_id: 'quiet' });
+    add('pre_tool_use', before(10 * minute), { agent_id: 'quiet', tool_use_id: 'long-command' });
+    add('subagent_start', before(12 * minute), { agent_id: 'noisy' });
+    for (let i = 0; i < 110; i++) {
+      const ago = before(9 * minute - i * 4000);
+      add('pre_tool_use', ago, { agent_id: 'noisy', tool_use_id: `tool-${i}` });
+      add('post_tool_use', ago - 500, { agent_id: 'noisy', tool_use_id: `tool-${i}` });
+    }
+    add('subagent_stop', before(30000), { agent_id: 'noisy' });
+  })();
+  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  assert.equal(cells[0], 'busy', 'The quiet child refreshed ten minutes before the window');
+  assert.equal(cells[19], 'busy');
+  assert.equal(cells[20], 'idle', 'The stopped sibling cannot extend the quiet child beyond its own TTL');
+});
+
+test('latest child tool queries preserve per-child source order ties scope and bounded output', t => {
+  const { store } = workingFixture(t);
+  const put = (id, timestamp, agent, runId = 'tools') => store.insertEvent({ id, ingest_id: id, timestamp,
+    session_group: 'telegram:g0', run_id: runId, event_type: 'pre_tool_use', category: 'activity', metadata: { agent_id: agent } });
+  put('quiet-new', '2027-01-01T00:00:10Z', 'quiet');
+  put('quiet-late-old', '2027-01-01T01:00:09+01:00', 'quiet');
+  put('quiet-tie', '2027-01-01T01:00:10+01:00', 'quiet');
+  put('other-run', '2027-01-01T00:00:11Z', 'quiet', 'other');
+  put('main', '2027-01-01T00:00:11Z', '');
+  store.db.transaction(() => {
+    for (let i = 0; i < 210; i++) put(`child-${i}`, '2027-01-01T00:00:08Z', `child-${i}`);
+  })();
+  const rows = store.queryEvents({ sessionGroup: 'telegram:g0', runId: 'tools', types: ['pre_tool_use'],
+    until: '2027-01-01T00:00:12Z', agentScope: 'child', sourceTime: true, order: 'desc', latestPerAgent: true, limit: 200 });
+  assert.equal(rows.length, 200);
+  assert.equal(rows[0].id, 'quiet-tie', 'Source-time order wins over later ingestion; event_seq resolves ties');
+  assert.equal(new Set(rows.map(row => row.metadata.agent_id)).size, 200);
+  assert.equal(rows.some(row => ['other-run', 'main', 'quiet-late-old'].includes(row.id)), false);
+  assert.equal(Object.hasOwn(rows[0], 'agent_rank'), false, 'Query bookkeeping does not leak into event fields');
 });
 
 test('working removes a child when its own stop is stored', async t => {
