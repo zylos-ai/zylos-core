@@ -47,6 +47,11 @@ export function createDraftStore({ storage = () => globalThis.sessionStorage, no
         const scope = keyScope(key);
         if (scope && match(scope)) target.removeItem(key);
       }
+      // A conversation's composer draft belongs to the same login and instance as its form drafts.
+      for (const key of composeKeys(target)) {
+        const scope = composeKeyScope(key);
+        if (!scope || match(scope)) target.removeItem(key);
+      }
       return true;
     } catch { return false; }
   }
@@ -98,6 +103,101 @@ export function createDraftStore({ storage = () => globalThis.sessionStorage, no
 }
 
 export const browserDraftStore = createDraftStore();
+
+const COMPOSE_PREFIX = 'zylos-dashboard-compose-draft:';
+export const MAX_COMPOSE_DRAFT_BYTES = 128 * 1024;
+const COMPOSE_PARTS = ['authRoot', 'instance', 'conversationId'];
+function composeKey(scope) {
+  if (!scope || COMPOSE_PARTS.some(key => typeof scope[key] !== 'string' || !scope[key])) return null;
+  return COMPOSE_PREFIX + JSON.stringify(COMPOSE_PARTS.map(key => scope[key]));
+}
+function composeKeyScope(key) {
+  try {
+    const parts = JSON.parse(key.slice(COMPOSE_PREFIX.length));
+    if (!Array.isArray(parts) || parts.length !== COMPOSE_PARTS.length || parts.some(part => typeof part !== 'string' || !part)) return null;
+    return Object.fromEntries(COMPOSE_PARTS.map((name, i) => [name, parts[i]]));
+  } catch { return null; }
+}
+function composeKeys(target) {
+  const result = [];
+  for (let i = 0; i < target.length; i += 1) {
+    const key = target.key(i);
+    if (key?.startsWith(COMPOSE_PREFIX)) result.push(key);
+  }
+  return result;
+}
+const isText = value => typeof value === 'string';
+const validQuote = quote => quote === null || !!quote && /^[1-9][0-9]{0,18}$/.test(String(quote.id)) && ['in', 'out'].includes(quote.direction)
+  && isText(quote.timestamp) && isText(quote.text) && (quote.internal === undefined || typeof quote.internal === 'boolean');
+const validAnnotation = item => !!item && Number.isSafeInteger(item.key) && /^[1-9][0-9]{0,18}$/.test(String(item.messageId))
+  && ['in', 'out'].includes(item.direction) && isText(item.timestamp) && isText(item.excerpt) && isText(item.comment)
+  && Number.isSafeInteger(item.part) && item.part >= 0 && Number.isSafeInteger(item.start) && Number.isSafeInteger(item.end)
+  && item.start >= 0 && item.end > item.start && Number.isSafeInteger(item.length) && item.length > 0;
+const validPending = pending => pending === null || !!pending && isText(pending.content)
+  && (pending.quote === null || /^[1-9][0-9]{0,18}$/.test(String(pending.quote))) && typeof pending.answered === 'boolean';
+/** A stored draft is used only when every part has its expected shape. */
+export function validComposeDraft(draft) {
+  return !!draft && typeof draft === 'object' && isText(draft.text) && validQuote(draft.quote) && Array.isArray(draft.annotations)
+    && draft.annotations.length <= 20 && draft.annotations.every(validAnnotation) && Number.isSafeInteger(draft.seq)
+    && validPending(draft.pending);
+}
+export const emptyComposeDraft = draft => !draft || !draft.text && !draft.quote && !draft.annotations?.length && !draft.pending;
+
+/**
+ * One composer draft per conversation (text, quote, annotations and the content awaiting a retry), kept in the
+ * tab's sessionStorage under the login root and instance, at most MAX_COMPOSE_DRAFT_BYTES each.
+ */
+export function createComposeDraftStore({ storage = () => globalThis.sessionStorage } = {}) {
+  const getStorage = () => typeof storage === 'function' ? storage() : storage;
+  return {
+    load(scope) {
+      try {
+        const key = composeKey(scope);
+        if (!key) return null;
+        const raw = getStorage().getItem(key);
+        if (raw === null || new TextEncoder().encode(raw).byteLength > MAX_COMPOSE_DRAFT_BYTES) return null;
+        const record = JSON.parse(raw);
+        return validComposeDraft(record?.draft) ? record.draft : null;
+      } catch { return null; }
+    },
+    /** `oversize` and `storage` mean the draft lives in memory only; any older stored copy is removed. */
+    save(scope, draft) {
+      const key = composeKey(scope);
+      if (!key || !validComposeDraft(draft)) return { saved: false, reason: 'invalid' };
+      let target;
+      try { target = getStorage(); } catch { return { saved: false, reason: 'storage' }; }
+      try {
+        if (emptyComposeDraft(draft)) { target.removeItem(key); return { saved: true }; }
+        const serialized = JSON.stringify({ scope, draft });
+        if (new TextEncoder().encode(serialized).byteLength > MAX_COMPOSE_DRAFT_BYTES) {
+          target.removeItem(key);
+          return { saved: false, reason: 'oversize' };
+        }
+        target.setItem(key, serialized);
+        return { saved: true };
+      } catch {
+        try { target.removeItem(key); } catch {}
+        return { saved: false, reason: 'storage' };
+      }
+    },
+    remove(scope) {
+      try { const key = composeKey(scope); if (key) getStorage().removeItem(key); return true; }
+      catch { return false; }
+    },
+  };
+}
+export const browserComposeDraftStore = createComposeDraftStore();
+
+/** Like createDraftRestoreStore: a pending login reset clears every draft of the login root before any restore. */
+export function createComposeRestoreStore({ document, location, base = '', store = browserComposeDraftStore, formStore = browserDraftStore }) {
+  const authRoot = draftAuthRoot(location, base), rootBase = new URL(authRoot).pathname.replace(/\/$/, '');
+  const name = draftResetCookieName(rootBase);
+  const ready = () => {
+    consumeDraftReset({ document, location, base, store: formStore });
+    return !document.cookie.split(';').some(item => item.trim() === `${name}=1`);
+  };
+  return { ...store, load: scope => ready() ? store.load(scope) : null };
+}
 const normalizeBase = base => String(base || '').replace(/\/+$/, '');
 export function draftAuthRoot(location, base = '') {
   const parent = normalizeBase(base).replace(/\/fleet\/[^/]+$/, '');

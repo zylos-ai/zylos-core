@@ -4,15 +4,18 @@ import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon, channelIcons } from './board.js?v=152';
-import { createConversationState } from './conversation-state.js?v=160';
+import { createConversationState } from './conversation-state.js?v=161';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
-import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=157';
+import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=158';
 import { createGroupSide } from './group-side.js?v=162';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=4';
 import { renderInternalMessage } from './conversation-internal.js?v=4';
+import { composeContent, contentBytes, displayRow, previewLine, readableText, shortStamp, storedContent, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=1';
+import { createQuoteGesture } from './chat-quote-gesture.js?v=1';
+import { createAnnotationUi, quoteAuthor } from './chat-annotations.js?v=1';
 const laterThan = (left, right) => {
   const a = String(left),
     b = String(right);
@@ -54,6 +57,7 @@ export function mountConversationPage({
   identity,
   draftStore = null,
   draftScope = () => null,
+  composeDrafts = null,
   groupLinks = null,
   technicalDetails = () => false,
   local = () => false,
@@ -154,6 +158,7 @@ export function mountConversationPage({
     identity,
     draftStore,
     draftScope,
+    composeDrafts,
     document,
     t
   });
@@ -397,8 +402,36 @@ export function mountConversationPage({
       addFiles(event.dataTransfer.files || []);
     }
   });
-  composeBox.append(attach, input, send, fileInput);
-  composer.append(receipt, trayLabel, tray, uploadNotice, composeBox, hint);
+  // The quote bar: one quoted message above the input; its text goes to the message, × removes it.
+  const quoteBar = node('div', undefined, 'conversation-quote-bar');
+  quoteBar.hidden = true;
+  const quoteBarIcon = icon(document, 'reply');
+  quoteBarIcon.classList.add('conversation-quote-bar-icon');
+  const quoteBarBody = node('button', undefined, 'conversation-quote-bar-body');
+  quoteBarBody.type = 'button';
+  quoteBarBody.dataset.action = 'quoteJump';
+  const quoteBarWho = node('span', undefined, 'conversation-quote-bar-who'), quoteBarText = node('span', undefined, 'conversation-quote-bar-text');
+  quoteBarBody.append(quoteBarWho, quoteBarText);
+  const quoteBarClose = node('button', undefined, 'wb-icon-btn conversation-quote-bar-close');
+  quoteBarClose.type = 'button';
+  quoteBarClose.dataset.action = 'quoteCancel';
+  quoteBarClose.append(icon(document, 'x'));
+  quoteBar.append(quoteBarIcon, quoteBarBody, quoteBarClose);
+  quoteBarBody.addEventListener('click', () => { const quote = currentSnapshot?.quote; if (quote) void locate(quote.id); });
+  quoteBarClose.addEventListener('click', () => { if (state.setQuote(null)) input.focus({ preventScroll: true }); });
+  const composeNotice = node('p', '', 'chat-notice conversation-compose-notice');
+  composeNotice.setAttribute('role', 'status');
+  composeNotice.hidden = true;
+  let locateNotice = null;
+  const annotations = createAnnotationUi({ document, t, root: page, composer, composeBox,
+    narrow: () => (view?.innerWidth ?? 1280) <= 760, snapshot: () => state.snapshot(),
+    author: id => { const row = state.snapshot().messages.find(item => String(item.id) === String(id)); return row ? { direction: row.direction, timestamp: String(row.timestamp ?? row.created_at ?? row.createdAt ?? '') } : null; },
+    onAdd: item => { locateNotice = null; return state.addAnnotation(item); },
+    onUpdate: (key, comment) => state.updateAnnotation(key, comment),
+    onRemove: key => state.removeAnnotation(key),
+    onLocate: id => locate(id) });
+  composeBox.append(attach, annotations.count, input, send, fileInput);
+  composer.append(receipt, trayLabel, tray, uploadNotice, composeNotice, quoteBar, composeBox, hint);
   input.addEventListener('input', () => state.setInput(input.value));
   input.addEventListener('keydown', event => {
     if (composerKeySends(event, { touch: touchFirst(view) })) {
@@ -465,6 +498,8 @@ export function mountConversationPage({
   root.replaceChildren(page);
   function updateInputPlaceholder(mode = currentSnapshot?.mode) {
     const key = mode === 'single' ? 'chat.page.singlePlaceholder'
+      : currentSnapshot?.annotations?.length ? 'chat.page.annotationPlaceholder'
+      : currentSnapshot?.quote ? 'chat.page.replyPlaceholder'
       : view?.innerWidth <= 760 || touchFirst(view) || currentSnapshot?.retryRequired ? 'chat.page.mobilePlaceholder' : 'chat.page.placeholder';
     input.placeholder = t(key);
   }
@@ -532,6 +567,10 @@ export function mountConversationPage({
   // is still, it follows new content only if the user stayed at the bottom; a user who left it is not pulled back,
   // but the content that moved under them meanwhile (an older page, an opened attachment) is moved back by the same
   // amount, so what they were reading stays in view.
+  const quoteGesture = createQuoteGesture({ list: messageList, document, enabled: () => quotable(currentSnapshot),
+    onQuote: id => quoteMessage(id),
+    setTimeout: (fn, ms) => view?.setTimeout ? view.setTimeout(fn, ms) : globalThis.setTimeout(fn, ms),
+    clearTimeout: id => view?.clearTimeout ? view.clearTimeout(id) : globalThis.clearTimeout(id) });
   const gesture = createScrollGesture(stream, {
     setTimeout: (fn, ms) => view?.setTimeout ? view.setTimeout(fn, ms) : globalThis.setTimeout(fn, ms),
     clearTimeout: id => view?.clearTimeout ? view.clearTimeout(id) : globalThis.clearTimeout(id),
@@ -592,8 +631,10 @@ export function mountConversationPage({
         onOpenPeer: (sessionGroup, channel) => openGroup(sessionGroup, { channel }),
         timeText: date ? clockText(date) : null, timeIso: date?.toISOString(),
         showTechnicalDetails: technicalDetails() === true, external: s.tab === 'external' });
-      return { node: resource.node, resource, content: row.content, internal: true,
-        attachmentKey: JSON.stringify(row.attachments || []), time: resource.time, date };
+      const quoteButton = quoteAction(row);
+      resource.node.querySelector('.conversation-message-meta')?.append(quoteButton);
+      return { node: resource.node, resource, content: row.content, quoteKey: JSON.stringify(row.quote ?? null), internal: true,
+        attachmentKey: JSON.stringify(row.attachments || []), time: resource.time, date, quoteButton };
     }
     const article = node('article', undefined, 'chat-message conversation-message ' + (row.direction === 'in' ? 'chat-in' : 'chat-out'));
     article.dataset.messageId = String(row.id);
@@ -611,10 +652,12 @@ export function mountConversationPage({
       timeNode.dateTime = date.toISOString();
       meta.append(timeNode);
     }
+    const quoteButton = quoteAction(row);
+    meta.append(quoteButton);
     const questions = [];
     const content = renderConversationContent({
       document,
-      row,
+      row: displayRow(row),
       t,
       showTechnicalDetails: technicalDetails() === true,
       chartTimeZone: () => instanceTimeZone,
@@ -635,6 +678,7 @@ export function mountConversationPage({
         return record.node;
       }
     });
+    if (row.quote) content.prepend(quoteBlock(row.quote, s));
     if (content.classList.contains('conversation-composed-content') || content.classList.contains('conversation-chart-content')) body.classList.add('conversation-message-body-wide');
     const status = node('span', undefined, 'chat-message-status conversation-message-status');
     status.setAttribute('role', 'status');
@@ -671,11 +715,82 @@ export function mountConversationPage({
       resource: content,
       attachmentKey: JSON.stringify(row.attachments || []),
       content: row.content,
+      quoteKey: JSON.stringify(row.quote ?? null),
+      quoteButton,
       time: timeNode,
       date
     };
     patchMessage(record, row, s);
     return record;
+  }
+  // Quoting: the hover button beside the time, a left swipe (touch, pen, trackpad) or a click on the history's quote.
+  const quotable = s => !!s && s.tab === 'mine' && s.canWrite && !s.sending && !s.pending && !isDraft(s);
+  function quoteAction(row) {
+    const button = node('button', undefined, 'conversation-quote-button');
+    button.type = 'button';
+    button.dataset.action = 'quote';
+    button.append(icon(document, 'reply'), node('span', t('chat.quote.button')));
+    button.title = t('chat.quote.buttonTitle');
+    button.setAttribute('aria-label', t('chat.quote.buttonTitle'));
+    button.addEventListener('click', () => quoteMessage(row.id));
+    return button;
+  }
+  function quoteMessage(id) {
+    const s = state.snapshot();
+    const row = s.messages.find(item => String(item.id) === String(id));
+    if (!row || !quotable(s)) return;
+    locateNotice = null;
+    if (!state.setQuote({ id: String(row.id), direction: row.direction === 'out' ? 'out' : 'in',
+      timestamp: String(row.timestamp ?? row.created_at ?? row.createdAt ?? ''), text: previewLine(readableText(row)),
+      internal: row.channel === 'internal' })) return;
+    quoteBar.classList.remove('conversation-bump');
+    void quoteBar.offsetWidth;
+    quoteBar.classList.add('conversation-bump');
+    if ((view?.innerWidth ?? 1280) > 760) input.focus({ preventScroll: true });
+  }
+  /** The history's quote block: who and when, the first two lines; a click shows the original message. */
+  function quoteBlock(quote, s) {
+    const block = node('button', undefined, 'conversation-quote-block');
+    block.type = 'button';
+    block.dataset.action = 'quoteOpen';
+    block.dataset.quoteId = String(quote.id);
+    if (quote.available !== true) {
+      block.disabled = true;
+      block.append(node('span', t('chat.quote.unavailable'), 'conversation-quote-block-who'));
+      return block;
+    }
+    block.title = t('chat.quote.jump');
+    block.append(node('span', `${quoteAuthor(quote, t)} · ${shortStamp(quote.timestamp, s.tz)}`, 'conversation-quote-block-who'),
+      node('span', String(quote.preview ?? ''), 'conversation-quote-block-text'));
+    block.addEventListener('click', event => { event.stopPropagation(); void locate(quote.id); });
+    return block;
+  }
+  /** Shows a message; one that is not loaded yet is older, so earlier pages load until it appears. */
+  async function locate(id) {
+    const target = String(id), selected = selectedKey;
+    if (!/^[1-9][0-9]{0,18}$/.test(target)) return;
+    const find = () => messageList.querySelector(`article[data-message-id="${target}"]`);
+    let article = find();
+    while (!article && !destroyed && selectedKey === selected) {
+      const before = state.snapshot();
+      if (!before.messageCursor || before.olderError) break;
+      await state.loadOlder();
+      article = find();
+      const after = state.snapshot();
+      if (after.olderError || after.messages[0]?.id === before.messages[0]?.id) break;
+    }
+    if (destroyed || selectedKey !== selected) return;
+    if (!article) {
+      // A failed page shows the existing retry notice at the top instead.
+      if (!state.snapshot().olderError) { locateNotice = 'chat.quote.missing'; redraw(); }
+      return;
+    }
+    // Instant: the page's next fit keeps the visible message in place by writing scrollTop, which would cut a smooth
+    // scroll short; once the original is the visible message, the fit keeps it there. The flash marks it.
+    article.scrollIntoView({ block: 'center' });
+    article.classList.remove('conversation-flash');
+    void article.offsetWidth;
+    article.classList.add('conversation-flash');
   }
   function questionNode(record, s) {
     const question = s.questions.find(item => String(item.c4Id) === String(record.row.id) && item.interruptId === record.envelope.interruptId);
@@ -729,6 +844,15 @@ export function mountConversationPage({
   }
   function patchMessage(record, row, s) {
     if (record.time) text(record.time, clockText(record.date));
+    if (record.quoteButton) {
+      const quoted = s.tab === 'mine' && String(s.quote?.id ?? '') === String(row.id);
+      record.quoteButton.hidden = !quotable(s) && !quoted;
+      record.quoteButton.disabled = !quotable(s);
+      record.quoteButton.dataset.quoted = String(quoted);
+      text(record.quoteButton.lastElementChild, t('chat.quote.button'));
+      record.quoteButton.title = t('chat.quote.buttonTitle');
+      record.quoteButton.setAttribute('aria-label', t('chat.quote.buttonTitle'));
+    }
     if (record.internal) {
       record.resource.update(row, { showTechnicalDetails: technicalDetails() === true, external: s.tab === 'external' });
       return;
@@ -900,7 +1024,7 @@ export function mountConversationPage({
         previousDay = day;
       }
       let record = messages.get(id);
-      if (record && record.content !== row.content) {
+      if (record && (record.content !== row.content || record.quoteKey !== JSON.stringify(row.quote ?? null))) {
         record.resource?.destroy?.();
         record.node.remove();
         messages.delete(id);
@@ -1104,6 +1228,7 @@ export function mountConversationPage({
     input.setAttribute('aria-label', t('chat.input'));
     renameInput.setAttribute('aria-label', t('chat.name'));
     if (s.blocked) {
+      annotations.hide();
       uploadTray.clear();
       input.value = '';
       renameInput.value = '';
@@ -1128,6 +1253,8 @@ export function mountConversationPage({
     const switched = selectedKey !== key;
     if (switched || s.blocked) {
       selectedKey = key;
+      annotations.hide();
+      locateNotice = null;
       unread = 0;
       maxSeenId = null;
       renaming = false;
@@ -1324,9 +1451,32 @@ export function mountConversationPage({
     composer.classList.toggle('conversation-composer-disabled', s.mode === 'single');
     updateInputPlaceholder(s.mode);
     input.disabled = !s.canWrite || !!s.sending;
+    // While a send's outcome is open the draft is read-only: a retry sends exactly what was sent.
+    input.readOnly = !!s.pending;
     if (input.value !== s.input) {
       input.value = s.input;
     }
+    page.classList.toggle('conversation-quotable', quotable(s));
+    const quote = s.tab === 'mine' ? s.quote : null;
+    quoteBar.hidden = !quote;
+    if (quote) {
+      text(quoteBarWho, t('chat.quote.bar', { who: quoteAuthor(quote, t), time: shortStamp(quote.timestamp, s.tz) }));
+      text(quoteBarText, quote.text);
+      quoteBarBody.title = t('chat.quote.jump');
+      quoteBarClose.title = t('chat.quote.cancel');
+      quoteBarClose.setAttribute('aria-label', t('chat.quote.cancel'));
+      quoteBarClose.disabled = !quotable(s);
+    }
+    const outgoing = s.pending?.content ?? composeContent({ text: s.input, annotations: s.annotations, timeZone: s.tz });
+    const outgoingBytes = contentBytes(storedContent(outgoing, s.pending ? s.pending.quote : quote?.id ?? null));
+    const tooLarge = outgoingBytes > MAX_CONTENT_BYTES;
+    const composeMessages = [
+      tooLarge ? t('chat.compose.tooLarge', { bytes: outgoingBytes.toLocaleString('en-US') }) : null,
+      s.draftUnsaved ? t('chat.compose.unsaved') : null,
+      locateNotice ? t(locateNotice) : null,
+    ].filter(Boolean);
+    composeNotice.hidden = !composeMessages.length;
+    text(composeNotice, composeMessages.join(' '));
     fitInput();
     send.dataset.action = s.retryRequired ? 'retry' : 'send';
     text(send.label, t(s.retryRequired ? 'chat.retry' : 'chat.send'));
@@ -1362,7 +1512,9 @@ export function mountConversationPage({
     const uploadError = upload.error || (s.error === 'chat_attachment_unavailable' ? s.error : null);
     uploadNotice.hidden = !uploadError;
     text(uploadNotice, uploadError ? t('chat.upload.' + uploadError).replace('{count}', String(upload.config?.maxAttachments || 20)) : '');
-    send.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry || !uploadTray.isSendable(s.input);
+    // A quote alone is not a message: the text, an annotation or an attachment makes it sendable.
+    send.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry || tooLarge
+      || !uploadTray.isSendable(s.pending || s.annotations.length ? outgoing : s.input);
     receipt.hidden = !showReceipt;
     receipt.dataset.deliveryState = outcome || '';
     const receiptKey = outcome === 'not_stored' && s.mode === 'single'
@@ -1372,6 +1524,7 @@ export function mountConversationPage({
       reference.hidden = technicalDetails() !== true;
     }
     reconcileMessages(s, switched, before);
+    annotations.update(s);
     scheduleFit();
   }
   let streamSubscriptionKey = 'null';
@@ -1430,6 +1583,7 @@ export function mountConversationPage({
       deletion.invalidate();
       deletionResult = null;
       groupSide?.close({ focus: false });
+      annotations.hide();
       page.hidden = true;
       state.close();
     },
@@ -1444,6 +1598,8 @@ export function mountConversationPage({
       trayResources.clear();
       view?.removeEventListener('resize', scheduleFit);
       gesture.destroy();
+      quoteGesture.destroy();
+      annotations.destroy();
       if (activityTimer !== null) view?.clearInterval(activityTimer);
       activityTimer = null;
       if (fitFrame !== null) {

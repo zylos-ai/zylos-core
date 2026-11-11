@@ -1453,3 +1453,109 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-page .chat-question .chat-form-segment:active:not(:disabled) { background: var(--c-fill-press); }
 .conversation-page .chat-question .chat-form-segment:disabled { opacity: .55; cursor: not-allowed; }
 .conversation-page :is(.conversation-question-other, .conversation-chart-data) > summary:active { background: var(--c-fill-press); }
+
+/* Quote: the hover button beside the time (desktop), swipe left (touch, pen, trackpad), one quote bar above the input. */
+.conversation-page .conversation-message-meta .conversation-quote-button{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 7px;margin:0 2px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--text-muted);font:inherit;font-size:11.5px;cursor:pointer;opacity:0;transition:opacity .14s,background .14s,color .14s}
+.conversation-page .conversation-message-meta .conversation-quote-button[hidden]{display:none}
+.conversation-page .conversation-message-meta .conversation-quote-button .wb-ico{width:13px;height:13px}
+.conversation-page .conversation-message:hover .conversation-quote-button,.conversation-page .conversation-message:focus-within .conversation-quote-button,.conversation-page .conversation-quote-button:focus-visible{opacity:1}
+.conversation-page .conversation-message-meta .conversation-quote-button:hover:not(:disabled){background:var(--wb-hover);color:var(--text)}
+.conversation-page .conversation-message-meta .conversation-quote-button:disabled{cursor:default}
+.conversation-page .conversation-message-meta .conversation-quote-button:focus-visible{outline:2px solid var(--wb-accent-line);outline-offset:1px}
+.conversation-page .conversation-message-meta .conversation-quote-button[data-quoted="true"]{opacity:1;color:var(--accent-hover)}
+@media (max-width:760px){
+  .conversation-page .conversation-message-meta .conversation-quote-button{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);border:0;opacity:1}
+  .conversation-page .conversation-message-meta .conversation-quote-button[data-quoted="true"]{position:static;width:auto;height:22px;margin:0 2px;padding:0 5px;clip:auto;overflow:visible}
+  .conversation-page .conversation-message-meta .conversation-quote-button[data-quoted="true"] span{display:none}
+}
+.conversation-page .conversation-message{position:relative}
+.conversation-page.conversation-quotable .conversation-message{touch-action:pan-y}
+.conversation-page .conversation-message>:is(.conversation-avatar,.conversation-message-body){transition:transform .18s var(--c-ease)}
+.conversation-page .conversation-message.conversation-swiping>:is(.conversation-avatar,.conversation-message-body){transition:none}
+.conversation-swipe-cue{position:absolute;top:50%;width:30px;height:30px;margin-top:-15px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:var(--c-fill-press);color:var(--text-dim);opacity:var(--conversation-swipe,0);transform:scale(calc(.6 + .4 * var(--conversation-swipe,0)));pointer-events:none}
+.conversation-swipe-ready .conversation-swipe-cue{background:var(--accent);color:var(--wb-on-fill)}
+.conversation-page .conversation-quote-bar{display:flex;align-items:center;gap:10px;min-width:0;padding:6px 6px 6px 12px;border:1px solid var(--wb-line-strong);border-left:3px solid var(--accent);border-radius:10px;background:var(--wb-panel)}
+.conversation-page .conversation-quote-bar[hidden]{display:none}
+.conversation-page .conversation-quote-bar.conversation-bump{animation:conversation-bump .32s var(--c-ease)}
+.conversation-page .conversation-quote-bar-icon{color:var(--accent-hover);width:16px;height:16px}
+.conversation-page .conversation-quote-bar-body{flex:1 1 0;width:0;min-width:0;display:flex;flex-direction:column;gap:1px;padding:2px 0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.conversation-page .conversation-quote-bar-who{font-size:12px;font-weight:600;color:var(--accent-hover);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conversation-page .conversation-quote-bar-text{font-size:12.5px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The quote block at the top of a sent message. */
+.conversation-page .conversation-quote-block{display:flex;flex-direction:column;gap:2px;width:100%;box-sizing:border-box;margin:0 0 8px;padding:6px 10px;border:0;border-left:3px solid var(--accent);border-radius:6px;background:color-mix(in srgb,var(--text) 5%,transparent);color:inherit;font:inherit;text-align:left;cursor:pointer;transition:background .14s}
+.conversation-page .conversation-quote-block:hover:not(:disabled){background:color-mix(in srgb,var(--text) 8%,transparent)}
+.conversation-page .conversation-quote-block:disabled{cursor:default;border-left-color:var(--wb-line-strong)}
+.conversation-page .conversation-quote-block:focus-visible{outline:2px solid var(--wb-accent-line);outline-offset:1px}
+.conversation-page .conversation-quote-block-who{font-size:12px;font-weight:600;color:var(--accent-hover)}
+.conversation-page .conversation-quote-block:disabled .conversation-quote-block-who{color:var(--text-muted);font-weight:500}
+.conversation-page .conversation-quote-block-text{font-size:12.5px;line-height:1.5;color:var(--text-dim);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.conversation-page .conversation-flash>.conversation-message-body>.chat-message-content{animation:conversation-flash 1.4s var(--c-ease)}
+@keyframes conversation-flash{0%,35%{box-shadow:0 0 0 2px var(--accent)}100%{box-shadow:0 0 0 2px transparent}}
+@keyframes conversation-bump{50%{transform:scale(1.08)}}
+
+/* Annotations: the highlights while composing, the 标注 button beside a selection, the editor and the list. */
+::highlight(conversation-annotations){background-color:color-mix(in srgb,var(--wb-wait) 34%,transparent);color:inherit}
+.conversation-mark-button{position:fixed;z-index:60;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid var(--wb-line-strong);border-radius:var(--wb-r);background:var(--wb-panel);color:var(--text);font:inherit;font-size:13px;font-weight:500;box-shadow:var(--c-shadow-card);cursor:pointer}
+.conversation-mark-button:hover:not(:disabled){background:color-mix(in srgb,var(--text) 4%,var(--wb-panel))}
+.conversation-mark-button:disabled{opacity:.55;cursor:not-allowed}
+.conversation-mark-button .wb-ico{color:var(--accent-hover)}
+.conversation-annotation-pop{position:fixed;z-index:70;display:flex;flex-direction:column;min-height:0;max-height:calc(100vh - 24px);box-sizing:border-box;border:1px solid var(--wb-line-strong);border-radius:12px;background:var(--wb-panel);color:var(--text);box-shadow:var(--c-shadow-card),0 12px 32px color-mix(in srgb,var(--text) 12%,transparent);font-size:13px}
+:is(.conversation-annotation-pop,.conversation-annotation-scrim,.conversation-mark-button)[hidden]{display:none}
+.conversation-annotation-head{display:flex;align-items:center;gap:8px;padding:10px 10px 8px 14px;border-bottom:1px solid var(--wb-line)}
+.conversation-annotation-head h3{margin:0;font-size:13.5px;font-weight:600;flex:1;min-width:0}
+.conversation-annotation-body{padding:12px 14px;overflow:auto;min-height:0;overscroll-behavior:contain}
+.conversation-annotation-foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--wb-line);flex-wrap:wrap}
+.conversation-annotation-spacer{flex:1}
+.conversation-annotation-scrim{position:fixed;inset:0;z-index:65;background:var(--wb-scrim)}
+.conversation-annotation-excerpt{margin:0;padding:8px 10px;border-left:3px solid color-mix(in srgb,var(--wb-wait) 70%,transparent);border-radius:0 6px 6px 0;background:var(--c-sunken);color:var(--text-dim);font-size:12.5px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.conversation-annotation-excerpt.conversation-annotation-clamp{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.conversation-annotation-editor .conversation-annotation-excerpt{max-height:132px;overflow:auto}
+.conversation-annotation-field{display:flex;justify-content:space-between;margin:12px 0 6px;color:var(--text-dim);font-size:12px}
+.conversation-annotation-chars{color:var(--text-muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+.conversation-annotation-input{display:block;width:100%;box-sizing:border-box;min-height:76px;max-height:200px;padding:8px 10px;border:1px solid var(--c-line-input);border-radius:var(--c-r);background:var(--c-input-bg);color:var(--text);font:inherit;font-size:13px;line-height:1.5;resize:vertical}
+.conversation-annotation-input:focus{outline:2px solid var(--wb-accent-line);border-color:var(--accent)}
+.conversation-annotation-hint{margin:6px 0 0;color:var(--text-muted);font-size:11.5px;line-height:1.5}
+.conversation-page .conversation-compose-box>.conversation-annotations-button{display:inline-flex;align-items:center;gap:5px;height:var(--conversation-control-height);min-width:var(--conversation-control-height);padding:0 10px;flex:none;border:1px solid var(--wb-accent-line);border-radius:var(--wb-r);background:var(--wb-accent-soft);color:var(--accent-hover);font:inherit;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer;transition:background .14s}
+.conversation-page .conversation-compose-box>.conversation-annotations-button:hover{background:color-mix(in srgb,var(--accent) 15%,transparent)}
+.conversation-page .conversation-compose-box>.conversation-annotations-button[hidden]{display:none}
+.conversation-page .conversation-compose-box>.conversation-annotations-button .wb-ico{width:18px;height:18px}
+.conversation-page .conversation-annotations-button.conversation-bump{animation:conversation-bump .32s var(--c-ease)}
+@media (max-width:760px){
+  /* Phone: a square icon button with the count as a corner bubble, so the text box keeps its width. */
+  .conversation-page .conversation-compose-box>.conversation-annotations-button{position:relative;width:36px;min-width:36px;padding:0;gap:0;justify-content:center}
+  .conversation-page .conversation-compose-box:has(>.conversation-annotations-button:not([hidden])){gap:4px}
+  .conversation-page .conversation-compose-box:has(>.conversation-annotations-button:not([hidden]))>.conversation-attach{width:36px;min-width:36px}
+  .conversation-page .conversation-compose-box>.conversation-annotations-button .conversation-annotations-count{position:absolute;top:-6px;right:-6px;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accent);color:var(--wb-on-fill);font-size:11px;line-height:18px;text-align:center;box-shadow:0 0 0 2px var(--wb-panel)}
+  .conversation-annotation-pop.conversation-annotation-sheet{left:0!important;right:0!important;bottom:0!important;top:auto!important;width:auto!important;max-height:70vh;border-radius:14px 14px 0 0;border-bottom:0}
+  .conversation-annotation-pop.conversation-annotation-sheet .conversation-annotation-foot{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+  .conversation-annotation-action{height:32px;padding:0 8px}
+}
+.conversation-annotation-items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.conversation-annotation-item{display:grid;grid-template-columns:22px minmax(0,1fr);gap:4px 10px;padding:10px;border:1px solid var(--wb-line);border-radius:10px;background:var(--wb-panel)}
+.conversation-annotation-number{grid-row:1/span 2;width:22px;height:22px;border-radius:50%;background:var(--c-fill-press);color:var(--text-dim);font-size:11.5px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+.conversation-annotation-meta{display:flex;align-items:center;gap:6px;min-width:0;color:var(--text-muted);font-size:11.5px}
+.conversation-annotation-content{grid-column:2;display:grid;gap:6px;min-width:0}
+.conversation-annotation-more{border:0;background:none;padding:0;margin-top:2px;color:var(--accent-hover);font:inherit;font-size:11.5px;cursor:pointer;justify-self:start}
+.conversation-annotation-comment{margin:0;font-size:13px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.conversation-annotation-comment.conversation-annotation-empty{color:var(--text-muted)}
+.conversation-annotation-edit-row{display:flex;align-items:center;gap:6px}
+.conversation-annotation-edit-row .conversation-annotation-chars{margin-right:auto}
+.conversation-annotation-actions{display:flex;flex-wrap:wrap;gap:2px;margin-left:-6px}
+.conversation-annotation-action{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:var(--text-dim);font:inherit;font-size:12px;cursor:pointer}
+.conversation-annotation-action:hover:not(:disabled){background:var(--wb-hover);color:var(--text)}
+.conversation-annotation-action:disabled{opacity:.45;cursor:not-allowed}
+.conversation-annotation-action .wb-ico{width:14px;height:14px}
+.conversation-annotation-action.conversation-annotation-danger:hover:not(:disabled){color:var(--c-danger-ink);background:var(--c-danger-soft)}
+.conversation-annotation-preview{margin-top:12px}
+.conversation-annotation-preview summary{cursor:pointer;color:var(--text-dim);font-size:12.5px;list-style:none;display:flex;align-items:center;gap:6px}
+.conversation-annotation-preview summary::-webkit-details-marker{display:none}
+.conversation-annotation-preview summary .wb-ico{width:13px;height:13px;transition:transform .14s}
+.conversation-annotation-preview[open] summary .wb-ico{transform:rotate(90deg)}
+.conversation-annotation-preview-text{margin:8px 0 0;padding:10px 12px;border:1px solid var(--wb-line);border-radius:8px;background:var(--c-sunken);font:12px/1.6 "JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"PingFang SC","Noto Sans CJK SC",monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;color:var(--text)}
+.conversation-annotation-preview-quote{margin:8px 0 0;padding:6px 10px;border-left:3px solid var(--accent);border-radius:6px;background:var(--c-sunken);color:var(--text-dim);font-size:12px}
+.conversation-annotation-bytes{margin:6px 0 0;color:var(--text-muted);font-size:11.5px;font-variant-numeric:tabular-nums}
+.conversation-annotation-bytes.conversation-annotation-over{color:var(--c-danger-ink)}
+.conversation-annotation-limit{margin:0 0 10px;padding:7px 10px;border-radius:7px;background:var(--c-fill);color:var(--text-dim);font-size:12px}
+.conversation-annotation-clear{border:0;background:none;padding:0 2px;color:var(--c-danger-ink);font:inherit;font-size:12.5px;cursor:pointer}
+.conversation-annotation-clear:hover:not(:disabled){text-decoration:underline}
+.conversation-annotation-clear:disabled{opacity:.45;cursor:not-allowed}

@@ -23,6 +23,9 @@ export function conversationErrorKey(code) {
   if (code === 'chat_send_unknown') {
     return 'chat.error.sendUnknown';
   }
+  if (code === 'invalid_chat_quote') {
+    return 'chat.error.invalidQuote';
+  }
   return 'chat.error.requestFailed';
 }
 

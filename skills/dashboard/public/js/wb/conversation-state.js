@@ -3,6 +3,7 @@ import { messageState } from './chat-delivery-state.js?v=100';
 import { asDate } from './conversation-time.js?v=99';
 import { normalizeChatSubscription, chatSubscriptionKey, matchesChatEvent } from './conversation-push.js?v=1';
 import { answerDisplay } from './chat-answer.js?v=1';
+import { composeContent, storedContent, contentBytes, MAX_ANNOTATIONS, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=1';
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
 const base = '/api/chat/conversations';
 const pathFor = id => `${base}/${encodeURIComponent(id)}`;
@@ -12,6 +13,7 @@ export function createConversationState({
   identity = null,
   draftStore = null,
   draftScope = () => null,
+  composeDrafts = null,
   onChange,
   t = key => key,
   document = globalThis.document,
@@ -51,6 +53,55 @@ export function createConversationState({
     listeners = new Set(onChange ? [onChange] : []);
   const key = id => `${tab}:${id}`;
   const cell = () => cells.get(key(selectedId));
+  const composeScope = id => {
+    const scope = draftScope();
+    return scope && typeof id === 'string' && id ? { authRoot: scope.authRoot, instance: scope.instance, conversationId: id } : null;
+  };
+  /** Stores the conversation's composer draft; when it cannot be stored, it stays in memory and the page says so. */
+  function persistCompose(current) {
+    const scope = composeScope(current.draftId);
+    if (!scope || !composeDrafts) return;
+    const result = composeDrafts.save(scope, { text: current.input, quote: current.quote, annotations: current.annotations,
+      seq: current.annotationSeq, pending: current.pending });
+    current.draftUnsaved = result.saved !== true;
+  }
+  function restoreCompose(current, id) {
+    current.draftId = id;
+    const saved = composeDrafts?.load(composeScope(id));
+    if (!saved) return;
+    current.input = saved.text;
+    current.quote = saved.quote;
+    current.annotations = saved.annotations;
+    current.annotationSeq = saved.seq;
+    current.pending = saved.pending;
+  }
+  /** A draft conversation's first send gives it its canonical id; the draft moves with it. */
+  function moveCompose(current, id) {
+    if (!current.draftId || current.draftId === id) return;
+    const previous = composeScope(current.draftId);
+    current.draftId = id;
+    if (previous) composeDrafts?.remove(previous);
+    persistCompose(current);
+  }
+  function clearCompose(current) {
+    current.input = '';
+    current.quote = null;
+    current.annotations = [];
+    current.pending = null;
+    current.draftUnsaved = false;
+    const scope = composeScope(current.draftId);
+    if (scope) composeDrafts?.remove(scope);
+  }
+  /**
+   * A status read settles a send whose outcome was open: stored clears the draft (unless the request may never have
+   * reached the server, when the read describes an earlier message), not stored makes it editable again.
+   */
+  function settleCompose(current, receipt) {
+    if (!current.pending || current.sending || receipt?.stored === null || receipt?.stored === undefined) return;
+    if (receipt.stored === true && current.pending.answered) clearCompose(current);
+    else { current.pending = null; persistCompose(current); }
+  }
+  const composeEditable = current => !!current && snapshot().canWrite && !current.sending && !current.pending;
   const blank = () => ({
     groupPresence: null,
     groupHealth: null,
@@ -66,6 +117,14 @@ export function createConversationState({
     olderError: null,
     afterCursor: null,
     input: '',
+    // The composer draft besides the text: one quote, the annotations, and the content and quote sent while the
+    // outcome is open (the composer is read-only then and a retry sends exactly these).
+    quote: null,
+    annotations: [],
+    annotationSeq: 0,
+    pending: null,
+    draftId: null,
+    draftUnsaved: false,
     receipt: null,
     sending: false,
     retryRequired: false,
@@ -245,6 +304,7 @@ export function createConversationState({
           if (current.retryRequired) {
             current.receipt = data;
             current.retryRequired = data.stored === null;
+            settleCompose(current, data);
           }
           const hasName = row => row && (Object.hasOwn(row, 'displayName') || Object.hasOwn(row, 'display_name'));
           const nameOf = row => row.displayName ?? row.display_name ?? null;
@@ -398,7 +458,10 @@ export function createConversationState({
     cancelGroupPresenceRead();
     selectedId = id;
     selectedVersion++;
-    if (!cells.has(key(id))) cells.set(key(id), blank());
+    if (!cells.has(key(id))) {
+      cells.set(key(id), blank());
+      if (tab === 'mine') restoreCompose(cells.get(key(id)), id);
+    }
     const current = cell(),
       currentTab = tab,
       e = epoch;
@@ -423,10 +486,12 @@ export function createConversationState({
         current.ownershipResolved = !!data.conversation;
         current.receipt = data;
         current.retryRequired = data.stored === null;
+        settleCompose(current, data);
         if (data.preserveInput && data.stored !== true && !current.input && data.conversation?.pendingContent) current.input = data.conversation.pendingContent;
         current.error = data.error || null;
         if (data.conversationId && data.conversationId !== id) {
           cells.set(`${currentTab}:${data.conversationId}`, current);
+          moveCompose(current, data.conversationId);
           if (version === selectedVersion && selectedId === id) selectedId = data.conversationId;
           id = data.conversationId;
         }
@@ -1047,13 +1112,21 @@ export function createConversationState({
     retry = false, attachments = []
   } = {}) {
     const current = cell();
-    if (!snapshot().canWrite || !current || current.sending || (!current.input.trim() && !attachments.length) || current.retryRequired && (!retry || current.receipt?.retryAllowed !== true)) return;
+    if (!snapshot().canWrite || !current || current.sending || current.retryRequired && (!retry || current.receipt?.retryAllowed !== true)) return;
+    // A quote alone is not a message; text, an annotation or an attachment is.
+    if (!current.pending && !current.input.trim() && !current.annotations.length && !attachments.length) return;
+    // An open outcome is retried with the same content and quote; otherwise the annotations follow the user's words.
+    const payload = current.pending ?? { content: composeContent({ text: current.input, annotations: current.annotations, timeZone: instanceTz, now: new Date(now()) }),
+      quote: current.quote?.id ?? null };
+    if (contentBytes(storedContent(payload.content, payload.quote)) > MAX_CONTENT_BYTES) return;
     const e = epoch,
       id = selectedId,
       currentTab = tab,
       navigation = selectedVersion,
       text = current.input,
       attachmentIds = [...attachments];
+    current.pending = { content: payload.content, quote: payload.quote, answered: false };
+    persistCompose(current);
     let outcome = null;
     accelerate();
     current.sending = true;
@@ -1065,7 +1138,8 @@ export function createConversationState({
       const result = await request(`${pathFor(id)}/send`, {
         method: 'POST',
         body: {
-          content: text,
+          content: payload.content,
+          ...(payload.quote ? { quote: Number(payload.quote) } : {}),
           ...(attachmentIds.length ? { attachments: attachmentIds } : {}),
           ...(retry ? {
             retry: true
@@ -1079,12 +1153,16 @@ export function createConversationState({
       outcome = result;
       current.receipt = result;
       current.retryRequired = result.stored === null;
-      if (!result.preserveInput && result.stored === true && current.input === text) current.input = '';
+      if (!result.preserveInput && result.stored === true && current.input === text) clearCompose(current);
+      else if (result.stored === null) current.pending = { ...current.pending, answered: true };
+      else current.pending = null;
       if (result.error) current.error = result.error;
       const canonical = result.conversationId || id;
       // A committed draft becomes this canonical conversation; keep quiet list merges from retaining its old row.
       if (result.stored === true && id.startsWith('d:') && canonical !== id) items = items.filter(row => row.id !== id);
       cells.set(`${currentTab}:${canonical}`, current);
+      moveCompose(current, canonical);
+      persistCompose(current);
       if (selectedId === id && tab === currentTab) selectedId = canonical;
       if (valid(e)) {
         await run(() => request(pathFor(canonical)), data => {
@@ -1108,7 +1186,10 @@ export function createConversationState({
         const canonical = err.payload.conversationId;
         current.receipt = null;
         current.retryRequired = false;
+        current.pending = null;
         cells.set(`${currentTab}:${canonical}`, current);
+        moveCompose(current, canonical);
+        persistCompose(current);
         if (selectedId === id && tab === currentTab) selectedId = canonical;
         const navigation = selectedVersion;
         await run(() => request(pathFor(canonical)), data => {
@@ -1129,7 +1210,8 @@ export function createConversationState({
             retryAllowed: false,
             preserveInput: true
           };
-        }
+        } else current.pending = null;
+        persistCompose(current);
       }
       if ((err?.code || err?.payload?.error) === 'remote_chat_disabled') {
         failure(err, e);
@@ -1263,8 +1345,44 @@ export function createConversationState({
     setInput(value) {
       if (cell()) {
         cell().input = value;
+        persistCompose(cell());
         emit();
       }
+    },
+    /** One quote at a time: a new one replaces the old; null removes it. */
+    setQuote(quote) {
+      const current = cell();
+      if (!composeEditable(current)) return false;
+      current.quote = quote ? { id: String(quote.id), direction: quote.direction, timestamp: String(quote.timestamp), text: quote.text,
+        ...(quote.internal ? { internal: true } : {}) } : null;
+      persistCompose(current);
+      emit();
+      return true;
+    },
+    addAnnotation(item) {
+      const current = cell();
+      if (!composeEditable(current) || current.annotations.length >= MAX_ANNOTATIONS) return false;
+      current.annotationSeq += 1;
+      current.annotations = [...current.annotations, { ...item, key: current.annotationSeq }];
+      persistCompose(current);
+      emit();
+      return true;
+    },
+    updateAnnotation(itemKey, comment) {
+      const current = cell();
+      if (!composeEditable(current)) return false;
+      current.annotations = current.annotations.map(item => item.key === itemKey ? { ...item, comment } : item);
+      persistCompose(current);
+      emit();
+      return true;
+    },
+    removeAnnotation(itemKey) {
+      const current = cell();
+      if (!composeEditable(current)) return false;
+      current.annotations = itemKey === undefined ? [] : current.annotations.filter(item => item.key !== itemKey);
+      persistCompose(current);
+      emit();
+      return true;
     },
     loadMore: () => list(true),
     loadOlder,
@@ -1279,6 +1397,7 @@ export function createConversationState({
         current.conversation = data.conversation;
         current.ownershipResolved = !!data.conversation;
         current.retryRequired = data.stored === null;
+        settleCompose(current, data);
         emit();
       }, e, current);
       if (!valid(e)) return;

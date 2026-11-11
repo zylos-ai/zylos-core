@@ -1,5 +1,5 @@
 import { createConversationPush } from './wb/conversation-push.js?v=1';
-import { consumeDraftReset, createDraftRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=102';
+import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=103';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=116';
 import { createPricingPanel } from './wb/settings-pricing.js?v=157';
@@ -7,7 +7,7 @@ import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/set
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=162';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=166';
+import { mountConversationPage } from './wb/conversation-page.js?v=167';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
 import { mountWorkbench } from './wb/shell.js?v=163';
@@ -46,6 +46,7 @@ const draftAuth = createDraftAuth({ authRoot: FORM_AUTH_ROOT,
   onClear: scope => chatPage?.clearDrafts?.(scope) });
 const draftFetch = draftAuth.fetch;
 const draftRestoreStore = createDraftRestoreStore({ document, location: window.location, base: BASE_PATH });
+const composeDraftStore = createComposeRestoreStore({ document, location: window.location, base: BASE_PATH });
 const REMOTE_ACCESS = document.documentElement.dataset.remoteAccess === 'admin' ? 'admin' : 'read';
 
 const THEMES = ['light', 'dark', 'system'];
@@ -3022,7 +3023,7 @@ window.addEventListener('pagehide', stopSchedule);
 chatPage = mountConversationPage({ root: document.querySelector('#wb-chat'), t,
   local: () => !REMOTE_AGENT && !state.remoteAgent, confirm: confirmSetting,
   onStreamSubscription: subscription => chatPush.setSubscription(subscription),
-  fetch: draftFetch, draftStore: draftRestoreStore,
+  fetch: draftFetch, draftStore: draftRestoreStore, composeDrafts: composeDraftStore,
   draftScope: () => ({ authRoot: FORM_AUTH_ROOT, instance: draftInstance(FORM_AUTH_ROOT, state.remoteAgent ?? REMOTE_AGENT ?? null) }),
   endpoint: path => api(agentPath(path)),
   identity: () => state.remoteAgent ?? REMOTE_AGENT ?? 'local',
