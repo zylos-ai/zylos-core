@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
@@ -39,7 +40,7 @@ async function fixture(t, { initialContent = content('First'), initialTz } = {})
   const select = async id => { visibleNodes(root).find(n => n.dataset.conversationId === id).dispatch('click'); await tick(); await tick(); };
   await select('g:AA');
   return { page, root, instances, select, setContent(v) { value = v; }, setTz(v) { tz = v; }, block() { blocked = true; },
-    async refresh() { visibleNodes(root).find(n => n.dataset.action === 'refreshMessages').dispatch('click'); await tick(); await tick(); } };
+    async refresh() { await catchUpConversation(page); } };
 }
 test('page mounts attached chart once, keeps it on polling and disposes changed content including replacement with plain text', async t => {
   const f = await fixture(t); assert.equal(f.instances.length, 1);

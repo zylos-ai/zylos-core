@@ -149,7 +149,10 @@ test('external conversation labels identify channels and internal peers', { skip
         const handle = await avatar.elementHandle();
         for (const [channel, symbol] of [['telegram', 'send'], ['lark', 'msg'], ['web-console', 'monitor'], ['unrecognized-channel', 'msg'], ['toString', 'msg'], ['openmax', 'hex']]) {
           patchedChannel = channel;
-          await page.locator('#wb-chat .conversation-header [data-action="refreshMessages"]').click();
+          await page.waitForResponse(response => {
+            const url = new URL(response.url());
+            return url.pathname.endsWith('/messages') && url.searchParams.get('direction') === 'after';
+          }, { timeout: 10000 });
           await avatar.locator(`.wb-ico-${symbol}`).waitFor();
           assert.equal(await avatar.evaluate((node, original) => node === original, handle), true, 'avatar wrapper retains identity');
           assert.equal(await row(page, outgoing.id).locator('.conversation-avatar .wb-ico-bot').count(), 1);

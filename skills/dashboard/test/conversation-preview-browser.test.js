@@ -89,7 +89,7 @@ test('conversation list previews distinguish received and sent external messages
         }
       } finally { await close(context); }
     });
-    await t.test('new external messages refresh the selected list preview in both directions', async () => {
+    await t.test('automatic polling refreshes the selected external list preview in both directions', async () => {
       const { context, page } = await open(1280, 'light');
       try {
         await page.locator('#wb-chat [data-action="external"]').click();
@@ -97,7 +97,6 @@ test('conversation list previews distinguish received and sent external messages
         await page.locator(`#wb-chat [data-message-id="${externalIn.id}"]`).waitFor();
         for (const [direction, body, expected] of [['out', '刷新后的发出预览', '发出：刷新后的发出预览'], ['in', '刷新后的来信预览', '收到：刷新后的来信预览']]) {
           const added = fixture.c4.insertConversation(direction, 'telegram', 'preview-in', body, { groupName: 'preview-in' });
-          await page.locator('#wb-chat .conversation-header [data-action="refreshMessages"]').click();
           await page.locator(`#wb-chat [data-message-id="${added.id}"]`).waitFor();
           assert.equal(await preview(page, externalId(externalIn)).innerText(), expected);
         }

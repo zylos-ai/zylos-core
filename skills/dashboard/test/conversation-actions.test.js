@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
@@ -154,7 +155,7 @@ test('missing mode envelope remains unknown with readable failure', async () => 
 test('hidden state cannot write or initiate history queries', async () => {
   const {state,calls}=fixture(); await state.open(); await state.select('g:A'); state.setInput('text'); state.close();
   const count=calls.length; assert.equal(state.snapshot().canWrite,false); assert.equal(state.snapshot().canCreate,false);
-  await state.send(); await state.refreshMessages(); await state.refreshStatus(); assert.equal(calls.length,count); state.destroy();
+  await state.send(); await catchUpConversation(state); await state.refreshStatus(); assert.equal(calls.length,count); state.destroy();
 });
 for (const boundary of ['reopened page', 'changed identity']) {
   test(`invalid cursor recovery cannot issue another history read after ${boundary}`, { timeout: 2000 }, async () => {
@@ -169,7 +170,7 @@ for (const boundary of ['reopened page', 'changed identity']) {
     }, { identity: () => identity });
     await state.open();
     await state.select('g:A');
-    const refreshing = state.refreshMessages();
+    const refreshing = catchUpConversation(state);
     await started.promise;
     if (boundary === 'reopened page') {
       // Active and identity become valid again; only the old epoch is stale.
@@ -236,7 +237,7 @@ test('history pages have independent older and incremental cursors and stable me
   await state.open(); await state.select('g:A'); await state.loadOlder();
   assert.equal(state.snapshot().messageCursor, null); assert.equal(state.snapshot().afterCursor, 'latest');
   const count = paths.length; await state.loadOlder(); assert.equal(paths.length, count);
-  await state.refreshMessages(); assert.match(paths.at(-1), /direction=after&cursor=latest/);
+  await catchUpConversation(state); assert.match(paths.at(-1), /direction=after&cursor=latest/);
   assert.equal(state.snapshot().messages.length, 3); assert.equal(state.snapshot().messages[0].id, 1);
   assert.equal(state.snapshot().afterCursor, 'newest'); state.destroy();
 });
@@ -351,13 +352,13 @@ test('a list invalidation refreshes the selected name without resetting the comp
   assert.equal(state.snapshot().conversation.displayName, null);
   state.setInput('keep the unsent draft');
   name = 'Research notes';
-  await state.refreshMessages();
+  await catchUpConversation(state);
   assert.equal(state.snapshot().conversation.displayName, name);
   assert.equal(state.snapshot().items.find(row => row.id === 'g:A').display_name, name);
   assert.equal(state.snapshot().input, 'keep the unsent draft');
   assert.equal(state.snapshot().canWrite, true);
   name = '';
-  await state.refreshMessages();
+  await catchUpConversation(state);
   assert.equal(state.snapshot().conversation.displayName, '');
 });
 
@@ -370,7 +371,7 @@ test('an opened conversation outside the first list page receives a name change'
   await state.open(); await state.select('g:A'); state.setInput('preserve my draft');
   const receipt = state.snapshot().receipt;
   firstPage = false; name = 'Travel planning';
-  await state.refreshMessages();
+  await catchUpConversation(state);
   assert.equal(state.snapshot().conversation.displayName, name);
   assert.equal(state.snapshot().items.find(row => row.id === 'g:A').display_name, name);
   assert.equal(state.snapshot().input, 'preserve my draft');

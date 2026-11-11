@@ -163,8 +163,8 @@ for (const locale of ['zh', 'en']) for (const width of [1280, 390]) {
 // Same official-runner/per-case HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, private
 // socket/DB/profile readbacks and lifecycle cleanup as the locale cases above.
 // Only private SQLite rows are appended; no model, collector or live resource.
-// The fixture has no collector notification, so its saved stop is read through
-// the app's real refresh control instead of assuming a particular poll deadline.
+// The fixture has no collector notification, so the saved stop must arrive through
+// the app's ordinary automatic activity polling without a manual refresh.
 test('running follow-up work updates below the reply and settles there without an empty AI message', { skip: !enabled, timeout: 35000 }, async t => {
   const f = await fixture(t, 'zh', 1280, { running: true });
   await until(() => f.page.evaluate(`!!document.querySelector('${tail}.conversation-activity-live')`), 'running tail is attached under the reply', 5000);
@@ -175,15 +175,14 @@ test('running follow-up work updates below the reply and settles there without a
   await until(() => f.page.evaluate(`document.querySelector('${tail} .conversation-activity-head').textContent!==${JSON.stringify(initial)}`), 'running follow-up elapsed time updates on the real page', 2500);
   await screenshot(f.page, 'running-zh-1280');
   f.finish();
-  await clickHead(f, '[data-action="refreshMessages"]');
-  await until(() => f.page.evaluate(`!!document.querySelector('${tail}:not(.conversation-activity-live) button')`), 'the real refresh folds the completed follow-up under the same reply', 8000);
+  await until(() => f.page.evaluate(`!!document.querySelector('${tail}:not(.conversation-activity-live) button')`), 'automatic polling folds the completed follow-up under the same reply', 8000);
   assert.match(await f.page.evaluate(`document.querySelector('${tail} button').textContent`), /回复后又处理.*1 步/);
   assert.equal(await f.page.evaluate('document.querySelectorAll("article.chat-out").length'), 1);
   await clickHead(f, tail + ' button');
   await until(() => f.page.evaluate(`!!document.querySelector('${tail} [data-status=failed]')`), 'the settled failed step stays inspectable');
   await screenshot(f.page, 'running-zh-1280-finished');
   await checkBrowser(f);
-  console.info('running after-reply result', JSON.stringify({ initial, completed: true, realManualRefresh: true }));
+  console.info('running after-reply result', JSON.stringify({ initial, completed: true, realAutomaticPolling: true }));
   await f.browser.close(); await f.sandbox.close();
 });
 

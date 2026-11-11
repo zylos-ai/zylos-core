@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
@@ -51,7 +52,7 @@ async function fixture(t, { tz, browser }) {
     days: () => texts('conversation-day'),
     listTime,
     setZone(value) { zone = value; },
-    async refresh() { visibleNodes(root).find(n => n.dataset.action === 'refreshMessages').dispatch('click'); await tick(); await tick(); }
+    async refresh() { await catchUpConversation(page); }
   };
 }
 

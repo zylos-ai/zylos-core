@@ -4,7 +4,7 @@ import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon, channelIcons } from './board.js?v=152';
-import { createConversationState } from './conversation-state.js?v=158';
+import { createConversationState } from './conversation-state.js?v=159';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=157';
@@ -290,10 +290,8 @@ export function mountConversationPage({
   streamHint.setAttribute('role', 'status');
   heading.append(streamHint);
   const headerActions = node('div', undefined, 'conversation-header-actions');
-  const readNew = action('refreshMessages', () => state.refreshMessages(), 'restart');
-  const statusCheck = action('refreshStatus', () => state.refreshStatus(), 'check');
   const group = action('chat.page.groupInfo', () => toggleGroupSide(), 'chev');
-  headerActions.append(readNew, statusCheck, group);
+  headerActions.append(group);
   // Collapses the conversation list on wider screens; remembered like the dashboard's other view preferences.
   const listToggle = action('chat.page.hideList', () => toggleList(), 'menu', 'wb-icon-btn conversation-list-toggle');
   listToggle.dataset.action = 'listToggle';
@@ -337,14 +335,19 @@ export function mountConversationPage({
   const stream = node('div', undefined, 'conversation-stream chat-messages');
   stream.setAttribute('role', 'log');
   stream.setAttribute('aria-label', t('chat.history'));
-  const older = action('loadOlder', () => state.loadOlder(), undefined, 'wb-link-btn conversation-older');
+  const historyStart = node('div', undefined, 'conversation-history-start');
+  historyStart.setAttribute('role', 'status');
+  const historyStartLabel = node('span', undefined, 'conversation-history-start-label');
+  const olderRetry = action('chat.page.olderRetry', () => state.loadOlder(), undefined, 'wb-link-btn');
+  olderRetry.dataset.action = 'retryOlder';
+  historyStart.append(historyStartLabel, olderRetry);
   const gap = node('div', undefined, 'conversation-gap');
   const gapLabel = node('span', t('chat.page.historyGap'));
   const gapLoad = action('chat.page.loadGap', () => state.loadGap());
   gap.append(gapLabel, gapLoad);
   const messageList = node('div', undefined, 'conversation-message-list');
   const historyNotice = node('p', undefined, 'chat-notice conversation-history-notice');
-  stream.append(older, gap, historyNotice, messageList);
+  stream.append(historyStart, gap, historyNotice, messageList);
   const latest = action('chat.page.newMessages', () => {
     stream.scrollTop = stream.scrollHeight;
     unread = 0;
@@ -506,11 +509,20 @@ export function mountConversationPage({
     text(latest.label, title);
     latest.setAttribute('aria-label', title);
   }
+  function maybeLoadOlder(underfilled = false) {
+    const s = state.snapshot();
+    if (destroyed || !opened || page.hidden || document.hidden || document.visibilityState === 'hidden'
+      || !s.selectedId || s.blocked || !s.historyLoaded || isDraft(s)
+      || !s.messageCursor || s.olderLoading || s.olderError || stream.clientHeight <= 0) return;
+    if (underfilled ? messageList.scrollHeight >= stream.clientHeight : stream.scrollTop >= stream.clientHeight / 2) return;
+    void state.loadOlder();
+  }
   stream.addEventListener('scroll', () => {
     if (stream.scrollHeight - stream.scrollTop - stream.clientHeight <= 2) {
       unread = 0;
       updateUnread();
     }
+    maybeLoadOlder();
   }, {
     passive: true
   });
@@ -1042,6 +1054,7 @@ export function mountConversationPage({
     } else {
       stream.scrollTop = oldTop;
     }
+    maybeLoadOlder(true);
   }
   function scheduleFit() {
     if (destroyed || !view || fitFrame !== null) {
@@ -1275,15 +1288,15 @@ export function mountConversationPage({
     text(subtitle, channelLabel(channel) + ' · ' + t(s.tab === 'mine' ? 'chat.page.selfCreated' : 'chat.page.readOnly'));
     renameToggle.hidden = !s.canWrite;
     renameSave.disabled = s.loading || s.sending;
-    readNew.hidden = !s.selectedId || isDraft(s);
-    statusCheck.hidden = !s.selectedId || isDraft(s) || s.tab === 'external';
-    readNew.disabled = !!s.loading;
-    statusCheck.disabled = !!s.loading;
     group.hidden = !groupSide || !(current?.sessionGroup ?? current?.session_group) || isDraft(s);
     // The side panel belongs to the conversation it was opened from.
     if (groupSide?.open && (group.hidden || s.selectedId !== groupSideFor)) groupSide.close({ focus: false });
-    older.hidden = !s.messageCursor;
-    older.disabled = !!s.loading;
+    historyStart.hidden = !s.selectedId || isDraft(s) || !s.historyLoaded
+      || !!s.messageCursor && !s.olderLoading && !s.olderError;
+    text(historyStartLabel, s.olderLoading ? t('chat.page.olderLoading') : !s.messageCursor ? t('chat.page.olderEnd') : '');
+    historyStartLabel.hidden = !!s.olderError;
+    olderRetry.hidden = !s.olderError;
+    olderRetry.disabled = !!s.olderLoading;
     gap.hidden = !s.gap;
     gapLoad.disabled = !!s.loading;
     questionNotice.hidden = s.tab !== 'mine' || !s.selectedId || isDraft(s) || !s.questionsLoading && !s.questionError && s.questionsReady;

@@ -15,7 +15,8 @@ test('slow first send keeps delivery status and replies updating without manual 
   assert.equal(result.sendCount, 1, 'only the user send is posted');
   assert.ok(result.sendDurationMs >= 3000, 'the first send really waits three seconds');
   assert.ok(result.firstAutomaticAfterSendMs !== null && result.firstAutomaticAfterSendMs <= 2500, 'first automatic read is scheduled two seconds after return, with browser timing tolerance');
-  assert.ok(result.buttonCount >= 4, 'recovery and creation buttons exist');
+  assert.equal(result.buttonCount, 2, 'list reload and creation controls remain');
+  assert.equal(result.headerManualCount, 0, 'header history and status refresh controls are removed');
   assert.equal(result.buttonsEnabled, true);
   assert.ok(result.afterReads >= 2, 'automatic history reads continue after send');
   assert.ok(result.statusReads >= 1, 'pending delivery is automatically reconciled');

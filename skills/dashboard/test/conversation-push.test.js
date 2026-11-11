@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -512,7 +513,7 @@ test('a previous conversation read cannot update visible messages or list previe
 });
 
 
-test('the explicit read button can override automatic backoff without sending a message', async t => {
+test('a new stream admission can catch up through automatic backoff without sending a message', async t => {
   let attempts = 0;
   const f = fixture(t, u => {
     if (!u.pathname.endsWith('/messages') || u.searchParams.get('direction') !== 'after') return;
@@ -521,7 +522,7 @@ test('the explicit read button can override automatic backoff without sending a 
   });
   await f.open(); await f.event('chat_ready');
   assert.equal(f.state.snapshot().updateError, 'temporary');
-  await f.state.refreshMessages();
+  await catchUpConversation(f.state);
   assert.equal(attempts, 2); assert.equal(f.timer.now(), 1000);
   assert.equal(f.state.snapshot().updateError, null);
   assert.equal(f.calls.filter(call => call.u.pathname.endsWith('/send')).length, 0);

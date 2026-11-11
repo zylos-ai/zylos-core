@@ -61,6 +61,9 @@ export function createConversationState({
     ownershipResolved: false,
     messages: [],
     messageCursor: null,
+    historyLoaded: false,
+    olderLoading: false,
+    olderError: null,
     afterCursor: null,
     input: '',
     receipt: null,
@@ -401,6 +404,8 @@ export function createConversationState({
       e = epoch;
     const version = selectedVersion;
     current.error = null;
+    current.olderError = null;
+    current.historyLoaded = false;
     current.conversation ||= items.find(item => item.id === id)
       || (fallbackMetadata?.id === id ? {
         id, session_group: fallbackMetadata.session_group, channel: fallbackMetadata.channel,
@@ -683,6 +688,7 @@ export function createConversationState({
     current.afterCursor = data.afterCursor ?? null;
     current.messageCursor = data.nextCursor ?? null;
     current.recoveryOlder = true;
+    current.historyLoaded = true;
     const first = data.items[0]?.id;
     current.gap = oldLatest && first > oldLatest && data.nextCursor && !data.items.some(row => oldIds.has(row.id)) ? {
       afterId: oldLatest,
@@ -706,7 +712,10 @@ export function createConversationState({
       }
       if (!data || version !== current.historyVersion || current !== cell() || id !== selectedId || currentTab !== tab) return 0;
       let added = applyMessages(current, id, data, direction === 'after' && currentTab === 'mine');
-      if (direction !== 'after') current.messageCursor = data.nextCursor ?? null;
+      if (direction !== 'after') {
+        current.messageCursor = data.nextCursor ?? null;
+        current.historyLoaded = true;
+      }
       if (direction !== 'before') current.afterCursor = data.afterCursor ?? null;
       emit();
       // Newer pages are followed by the poll's own activity read.
@@ -924,7 +933,10 @@ export function createConversationState({
       id = selectedId,
       currentTab = tab,
       e = epoch;
-    if (!current?.messageCursor) return;
+    if (!current?.messageCursor || current.olderLoading || blocked || !active) return;
+    current.olderLoading = true;
+    current.olderError = null;
+    emit();
     const oldest = current.messages[0]?.id,
       navigation = selectedVersion;
     let priorMin = Infinity,
@@ -943,9 +955,9 @@ export function createConversationState({
           }
           throw err;
         }
-        if (!data) return;
+        if (!data || !valid(e) || navigation !== selectedVersion || selectedId !== id || tab !== currentTab) return;
         const min = data.items[0]?.id ?? -Infinity;
-        if (min >= priorMin && data.nextCursor) throw {
+        if (data.nextCursor && (!data.items.length || data.nextCursor === cursor || min >= priorMin)) throw {
           code: 'chat_invalid_response'
         };
         priorMin = min;
@@ -960,7 +972,11 @@ export function createConversationState({
         }
       }
     } catch (err) {
-      failure(err, e, current);
+      if (err?.code === 'remote_chat_disabled') failure(err, e, current);
+      else if (valid(e)) current.olderError = err?.code || 'chat_request_failed';
+    } finally {
+      current.olderLoading = false;
+      if (valid(e)) emit();
     }
   }
   async function refresh() {
@@ -1252,7 +1268,6 @@ export function createConversationState({
     },
     loadMore: () => list(true),
     loadOlder,
-    refreshMessages() { return poll({ dirty: true, manual: true }); },
     async refreshStatus() {
       const current = cell(),
         id = selectedId,

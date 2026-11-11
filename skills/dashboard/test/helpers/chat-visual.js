@@ -129,16 +129,17 @@ export async function runVisualCase(t, sandbox) {
       assert.equal(await page.locator('[data-conversation-id]').count(), 53);
       await page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`).click();
       await page.locator('#wb-chat .chat-message').first().waitFor();
-      await page.locator('[data-action="loadOlder"]').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('[data-action="loadOlder"]').count(), 0);
       assert.equal(await page.locator('[data-action="loadMore"]').isVisible(), false);
       await page.locator('[data-action="loadMoreQuestions"]').waitFor({ state: 'visible' });
       await page.locator('[data-action="loadMoreQuestions"]').click();
       await page.locator('[data-action="loadMoreQuestions"]').waitFor({ state: 'hidden' });
       let older = 0;
-      while (await page.locator('[data-action="loadOlder"]').isVisible()) {
+      const end = page.locator('.conversation-history-start-label').filter({ hasText: /No earlier messages|没有更早的消息了/ });
+      while (!await end.isVisible()) {
         assert.ok(++older <= 4, 'Message pagination must terminate');
         const before = await page.locator('.chat-message').count();
-        await page.locator('[data-action="loadOlder"]').click();
+        await page.locator('.conversation-stream').evaluate(stream => { stream.scrollTop = 0; stream.dispatchEvent(new Event('scroll')); });
         await page.waitForFunction(before => document.querySelectorAll('.chat-message').length > before, before);
       }
       assert.ok(older > 0, 'Message pagination must load another page');
@@ -223,7 +224,7 @@ export async function runVisualCase(t, sandbox) {
       const result = await fixture.request('/api/chat/settings', { method: 'PUT', body: { allowRemote } });
       assert.equal(result.status, 200);
     };
-    for (const operation of ['refresh', 'refreshMessages', 'switchGroup']) {
+    for (const operation of ['refresh', 'automaticPoll', 'switchGroup']) {
       await toggle(true);
       await page.goto(fixture.base + '/fleet/Remote/chat');
       await page.locator('#wb-chat [data-conversation-id]').first().waitFor();
@@ -237,7 +238,7 @@ export async function runVisualCase(t, sandbox) {
       expectedChatDenial = true;
       await toggle(false);
       if (operation === 'switchGroup') await page.locator('[data-conversation-id^="d:"]').first().click();
-      else await page.locator(`[data-action="${operation}"]`).click();
+      else if (operation === 'refresh') await page.locator('[data-action="refresh"]').click();
       await page.waitForFunction(() => document.querySelector('#wb-chat')?.children.length === 1
         && document.querySelector('#wb-chat > .chat-notice'));
       assert.equal(await page.locator('#wb-chat [data-conversation-id], #wb-chat button, #wb-chat .chat-message').count(), 0);

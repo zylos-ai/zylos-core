@@ -430,10 +430,11 @@
   color:var(--text-muted);
   margin:0
 }
-.conversation-older {
-  display:flex;
+.conversation-history-start {
   margin:10px auto 0;
-  font-size:11px
+  text-align:center;
+  font-size:11px;
+  color:var(--text-muted)
 }
 .conversation-gap {
   display:flex;

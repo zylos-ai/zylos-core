@@ -98,16 +98,18 @@ async function mounted(t, { terminal = false, gate = null, answerFailure = null,
   visibleNodes(root).find(n => n.dataset.conversationId === 'g:AA').dispatch('click');
   const opening = tick();
   await tick();
-  return { root, document, page, drafts, opening, end() { ended = true; }, input(key) { return root.querySelector(`[data-field-key="${key}"]`)?.querySelector('input,select,textarea'); } };
+  return { root, document, page, drafts, opening, async reload() {
+    root.querySelector('[data-conversation-id="g:AA"]').dispatch('click'); await tick(); await tick();
+  }, end() { ended = true; }, input(key) { return root.querySelector(`[data-field-key="${key}"]`)?.querySelector('input,select,textarea'); } };
 }
 test('mounted reload waits for authority before hydrating and terminal state defeats persisted values', async t => {
   const gate = deferred(), f = await mounted(t, { gate });
   assert.equal(f.drafts.loads.length, 0); gate.resolve(); await f.opening; await tick(); await tick();
   assert.ok(f.drafts.loads.length > 0); assert.equal(f.input('company_name')?.value, 'Private');
   const control = f.input('company_name'); control.focus(); control.selectionStart = 3;
-  visibleNodes(f.root).find(n => n.dataset.action === 'refreshStatus').dispatch('click'); await tick(); await tick();
+  await f.reload();
   assert.equal(f.input('company_name'), control); assert.equal(f.document.activeElement, control); assert.equal(control.selectionStart, 3);
-  f.end(); visibleNodes(f.root).find(n => n.dataset.action === 'refreshStatus').dispatch('click'); await tick(); await tick();
+  f.end(); await f.reload();
   assert.equal(control.value, 'Private'); assert.equal(control.disabled, true); assert.ok(f.drafts.removes.length > 0);
 });
 test('mounted terminal authority clears retained hidden controls and keeps visible input locked', async t => {
@@ -117,7 +119,7 @@ test('mounted terminal authority clears retained hidden controls and keeps visib
   const other = f.root.querySelector('.chat-question-other textarea');
   other.value = 'Visible alternative'; other.dispatch('input');
   assert.equal(company.closest('label').hidden, true); assert.equal(company.value, 'Private');
-  f.end(); visibleNodes(f.root).find(n => n.dataset.action === 'refreshStatus').dispatch('click'); await tick(); await tick();
+  f.end(); await f.reload();
   assert.equal(company.value, ''); assert.equal(count.value, '');
   assert.equal(selector.value, 'person'); assert.equal(selector.disabled, true);
   assert.equal(other.value, 'Visible alternative'); assert.equal(other.disabled, true);

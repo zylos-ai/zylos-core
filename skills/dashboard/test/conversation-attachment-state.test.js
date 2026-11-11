@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
@@ -48,7 +49,7 @@ test('send captures attachment ids before a later editor change', async t => {
 });
 test('incremental history rechecks unavailable attachments and applies metadata without a new message', async t => {
   const f = await fixture(t, undefined, [{ id: 1, direction: 'out', content: 'file', attachments: [{ name: 'note.txt', kind: 'file', available: false }] }]);
-  await f.state.refreshMessages();
+  await catchUpConversation(f.state);
   const requests = f.calls.filter(call => call.path.includes('/messages?'));
   assert.equal(new URL(requests.at(-1).path, 'http://fixture').searchParams.get('recheckIds'), '1');
   assert.equal(f.state.snapshot().messages.length, 1);
@@ -79,7 +80,7 @@ test('bounded attachment rechecks rotate across all loaded missing rows and retr
   t.after(() => state.destroy()); await state.open(); await state.select('g:A');
   for (let i = 0; i < 4; i++) await state.loadOlder();
   assert.equal(state.snapshot().messages.length, 205);
-  for (let i = 0; i < 4; i++) await state.refreshMessages();
+  for (let i = 0; i < 4; i++) await catchUpConversation(state);
   assert.equal(batches[0].join(','), batches[1].join(','), 'failed reads do not advance the recheck cursor');
   assert.equal(new Set(batches.flat()).size, 205, 'older missing rows participate despite permanently missing newer rows');
   assert.equal(state.snapshot().messages[0].attachments[0].available, true);

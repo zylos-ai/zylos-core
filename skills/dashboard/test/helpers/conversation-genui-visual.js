@@ -209,10 +209,8 @@ export async function runConversationGenuiVisual(t, sandbox) {
     await field(root, 'full_name').evaluate(el => el.setSelectionRange(1, 1));
     const previousReads = reads;
     fixture.addOutbound(scenes.drafts.draft.localId, '增量消息不重建填写中的表单。');
-    await page.locator('#wb-chat [data-action="refreshMessages"]').click();
     await page.waitForFunction(() => document.querySelector('#wb-chat')?.textContent.includes('增量消息不重建填写中的表单。'));
-    // The explicit refresh button takes focus; restore it, then let the normal background read run.
-    await field(root, 'full_name').focus(); await field(root, 'full_name').evaluate(el => el.setSelectionRange(1, 1));
+    // Keep focus/caret through another normal background read without restoring them.
     await page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/messages'), { timeout: 15_000 });
     assert.ok(reads > previousReads);
     assert.deepEqual(await field(root, 'full_name').evaluate(el => ({ active: document.activeElement === el, value: el.value, caret: el.selectionStart })), { active: true, value: '林晓', caret: 1 });
@@ -303,7 +301,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
     action: { id: 'other-device-form-answer', protocolVersion: '0.1', type: block.data.action.type, target: block.data.action.target,
       context: { messageId: draftScene.envelope.messageId, blockId: block.id }, payload: { values: { customer_type: 'person', full_name: '另一设备', email: 'other@example.com' } } } } });
   assert.equal(response.status, 200);
-  root = await choose('drafts'); await page.locator('#wb-chat .conversation-header-actions [data-action="refreshStatus"]').click();
+  root = await choose('drafts');
   await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="drafts_interrupt"] [data-field-key] input,[data-interrupt-id="drafts_interrupt"] [data-field-key] select')].every(control=>control.disabled));
   assert.equal(await field(root, 'full_name').inputValue(), '林晓', 'other-client lifecycle transition keeps the visible local input');
   assert.equal(await field(root, 'company_name').inputValue(), '示例科技', 'visible company input remains in the locked form');
@@ -327,7 +325,7 @@ export async function runConversationGenuiVisual(t, sandbox) {
     return route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'chat_auth_required' }) });
   });
   const unauthorizedResponse = page.waitForResponse(response => new URL(response.url()).pathname.startsWith('/fleet/Remote/api/chat/') && response.status() === 401);
-  await page.locator('#wb-chat [data-action="refreshMessages"]').click(); await unauthorizedResponse;
+  await unauthorizedResponse;
   await page.waitForFunction(() => [...document.querySelectorAll('[data-interrupt-id="controls_interrupt"] [data-field-key] input,[data-interrupt-id="controls_interrupt"] [data-field-key] select,[data-interrupt-id="controls_interrupt"] [data-field-key] textarea')].every(control => control.disabled && control.value === ''));
   assert.equal((await remoteDrafts()).length, 0, 'remote 401 clears that instance persistent drafts through the actual application fetch adapter');
   assert.equal(await root.count(), 1, 'authentication loss retains the mounted form');

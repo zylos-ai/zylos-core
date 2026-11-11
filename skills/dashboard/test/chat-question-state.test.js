@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
@@ -203,7 +204,7 @@ test('ordinary message updates leave a paused question pending', async () => {
     ? [{ id: 12, direction: 'out', content: 'Additional explanation' }]
     : [{ id: 11, direction: 'out', content: 'Question' }], afterCursor: 'after', nextCursor: null } : undefined });
   await f.open(); newer = true;
-  await f.state.refreshMessages();
+  await catchUpConversation(f.state);
   assert.equal(f.state.snapshot().messages.length, 2);
   assert.equal(f.state.snapshot().questions[0].status, 'paused');
   assert.equal(posts(f.calls).length, 0);

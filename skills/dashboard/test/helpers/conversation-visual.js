@@ -104,7 +104,8 @@ export async function runConversationVisual(t, sandbox) {
     assert.equal(await page.locator('#wb-chat .chat-composer textarea').count(), 1);
     assert.equal(await page.locator('#attachmentButton').count(), 0);
     if (width === 390) {
-      for (const selector of ['.conversation-back', '[data-action="rename"]', '[data-action="refreshMessages"]', '[data-action="refreshStatus"]', '[data-action="send"]']) {
+      assert.equal(await page.locator('#wb-chat .conversation-header [data-action="refreshMessages"],#wb-chat .conversation-header [data-action="refreshStatus"]').count(), 0);
+      for (const selector of ['.conversation-back', '[data-action="rename"]', '[data-action="send"]']) {
         const control = page.locator('#wb-chat ' + selector).first();
         const box = await control.boundingBox();
         assert.ok(box && box.width >= 40 && box.height >= 40, selector + ' has a usable phone target');
@@ -118,9 +119,10 @@ export async function runConversationVisual(t, sandbox) {
         assert.ok(box && box.height >= 40, selector + ' has a 40px phone height');
       }
       await page.locator('#wb-chat [data-action="create"]').click();
-      const nameBox = await page.locator('#wb-chat .conversation-create-form input').boundingBox();
-      assert.ok(nameBox && nameBox.height >= 40, 'new conversation name has a 40px phone height');
-      await page.locator('#wb-chat .conversation-create-form [data-action="page.cancel"]').click();
+      await page.locator('#wb-chat [aria-current="true"][data-conversation-id^="d:"]').waitFor({ state: 'attached' });
+      const composerBox = await page.locator('#wb-chat .conversation-input').boundingBox();
+      assert.ok(composerBox && composerBox.height >= 40, 'new conversation input has a 40px phone height');
+      await page.locator('#wb-chat .conversation-back').click();
       await select();
     }
     await screenshot(`conversation-${width}-${theme}`);
@@ -437,7 +439,12 @@ export async function runConversationVisual(t, sandbox) {
   await input.focus();
   await input.evaluate(el => { el.setSelectionRange(8, 8); el.dataset.identityProbe = 'same-input'; });
   const stream = page.locator('#wb-chat .chat-messages');
-  await stream.evaluate(el => { el.scrollTop = 0; el.dataset.identityProbe = 'same-history'; });
+  const reading = await stream.evaluate(el => {
+    el.scrollTop = Math.ceil(el.clientHeight * .75); el.dataset.identityProbe = 'same-history';
+    const top = el.getBoundingClientRect().top;
+    const anchor = [...el.querySelectorAll('[data-message-id]')].find(node => node.getBoundingClientRect().bottom > top);
+    return { id: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top };
+  });
   const firstNode = await page.locator('#wb-chat .chat-message').first().elementHandle();
   const beforeReads = reads;
   const incoming = fixture.addOutbound(localId, 'The new response arrives without replacing your draft.');
@@ -450,7 +457,7 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await input.evaluate(el => document.activeElement === el && el.selectionStart === 8), true);
   assert.equal(await stream.getAttribute('data-identity-probe'), 'same-history');
   assert.equal(await firstNode.evaluate(el => el.isConnected), true);
-  assert.ok((await stream.evaluate(el => el.scrollTop)) < 5, 'historical reading anchor retained');
+  assert.ok(Math.abs(await page.locator(`[data-message-id="${reading.id}"]`).evaluate(el => el.getBoundingClientRect().top) - reading.top) < 2, 'historical reading anchor retained');
   const unread = page.locator('#wb-chat [data-action="latest"]');
   assert.equal(await unread.isVisible(), true);
   await stream.evaluate(el => el.scrollTop = el.scrollHeight);
@@ -467,11 +474,13 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await field.inputValue(), 'Draft answer');
   assert.equal(await field.getAttribute('data-identity-probe'), 'same-question-input');
   // Earlier-page prepend keeps the first visible message offset stable.
-  await stream.evaluate(el => el.scrollTop = 0);
-  const anchor = await page.locator('#wb-chat .chat-message').first().getAttribute('data-message-id');
-  const topBefore = await page.locator(`[data-message-id="${anchor}"]`).evaluate(el => el.getBoundingClientRect().top);
   const beforeRows = await page.locator('#wb-chat .chat-message').count();
-  await page.locator('#wb-chat [data-action="loadOlder"]').click();
+  const olderReading = await stream.evaluate(el => {
+    el.scrollTop = 0;
+    const anchor = el.querySelector('[data-message-id]');
+    return { id: anchor.dataset.messageId, top: anchor.getBoundingClientRect().top };
+  });
+  const anchor = olderReading.id, topBefore = olderReading.top;
   await page.waitForFunction(count => document.querySelectorAll('#wb-chat .chat-message').length > count, beforeRows);
   await page.waitForTimeout(50);
   const topAfter = await page.locator(`[data-message-id="${anchor}"]`).evaluate(el => el.getBoundingClientRect().top);
@@ -484,13 +493,14 @@ export async function runConversationVisual(t, sandbox) {
   await page.waitForFunction(() => { const el = document.querySelector('#wb-chat .chat-messages'); return el && el.scrollHeight - el.scrollTop - el.clientHeight < 2; });
   assert.ok(await stream.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 2), 'own send follows the stored message to the bottom');
   assert.equal(await page.locator('#wb-chat .conversation-receipt').isVisible(), false, 'stored receipt does not leave a persistent banner');
-  // Creating first opens the named form; no draft write happens until submit.
+  // Creation writes one automatically named draft; its existing rename form supplies a chosen name.
   const writesBefore = draftWrites;
   await page.locator('#wb-chat [data-action="create"]').click();
-  assert.equal(await page.locator('#wb-chat .conversation-create-form').count(), 1);
-  assert.equal(draftWrites, writesBefore);
-  await page.locator('#wb-chat .conversation-create-form input').fill('Named browser draft');
-  await page.locator('#wb-chat [data-action="createDraft"]').click();
+  await page.locator('#wb-chat [aria-current="true"][data-conversation-id^="d:"]').waitFor({ state: 'attached' });
+  assert.equal(draftWrites, writesBefore + 1);
+  await page.locator('#wb-chat .conversation-title-line [data-action="rename"]').click();
+  await page.locator('#wb-chat .conversation-rename input').fill('Named browser draft');
+  await page.locator('#wb-chat .conversation-rename button[type="submit"]').click();
   await page.locator('#wb-chat .conversation-title-line h2').filter({ hasText: 'Named browser draft' }).waitFor();
   assert.equal(draftWrites, writesBefore + 1);
   const browserDraftId = await page.locator('#wb-chat [aria-current="true"]').getAttribute('data-conversation-id');

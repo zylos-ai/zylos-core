@@ -2052,3 +2052,30 @@ test('polling refreshes the selected name when its row is outside the first page
   assert.equal(f.state.snapshot().input, 'retain my draft');
   assert.equal(f.state.snapshot().receipt, receipt);
 });
+
+test('older history admits one request and retains its cursor and local error until explicit retry', async t => {
+  const held = deferred(); let oldReads = 0;
+  const f = await selected(url => {
+    if (!url.pathname.endsWith('/messages') || url.searchParams.get('direction') !== 'before') return;
+    if (!url.searchParams.has('cursor')) return { items: [{ id: 10, direction: 'out', content: 'current' }], nextCursor: 'older', afterCursor: 'after10' };
+    oldReads++;
+    return oldReads === 1 ? held.promise : { items: [{ id: 1, direction: 'out', content: 'oldest' }], nextCursor: null };
+  });
+  t.after(() => f.state.destroy());
+  const loading = f.state.loadOlder(); await flush();
+  assert.equal(f.state.snapshot().olderLoading, true);
+  await f.state.loadOlder();
+  assert.equal(oldReads, 1, 'a concurrent call never starts another older-page read');
+  held.reject({ code: 'older_unavailable' }); await loading;
+  assert.equal(f.state.snapshot().olderLoading, false);
+  assert.equal(f.state.snapshot().olderError, 'older_unavailable');
+  assert.equal(f.state.snapshot().error, null, 'an older-page error does not replace the conversation');
+  assert.equal(f.state.snapshot().messageCursor, 'older', 'failure retains the retry cursor');
+  assert.equal(f.state.snapshot().messages[0].content, 'current');
+  await f.state.loadOlder();
+  assert.equal(oldReads, 2);
+  assert.equal(f.state.snapshot().olderLoading, false);
+  assert.equal(f.state.snapshot().olderError, null);
+  assert.equal(f.state.snapshot().messageCursor, null);
+  assert.equal(f.state.snapshot().messages[0].content, 'oldest');
+});

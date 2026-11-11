@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -179,7 +180,7 @@ test('a detail name cannot replace the name just returned by the list', options,
     };
   });
   await f.open(); changed = true;
-  await f.state.refreshMessages();
+  await catchUpConversation(f.state);
   assert.equal(f.state.snapshot().items[0].displayName, 'Latest list name');
   assert.equal(f.state.snapshot().conversation.displayName, 'Latest list name');
 });
@@ -195,7 +196,7 @@ test('a list completed during an off-page detail read keeps its newer name', opt
       ? { conversation: { id: 'g:AA', state: 'active', displayName: 'Initial name' } } : detail.promise;
   });
   await f.open(); phase = 'detail';
-  const polling = f.state.refreshMessages(); await flush();
+  const polling = catchUpConversation(f.state); await flush();
   try {
     phase = 'latest'; await f.state.loadMore();
     assert.equal(f.state.snapshot().items[0].displayName, 'Latest list name');
@@ -219,7 +220,7 @@ test('a manual rename during an off-page detail read keeps the user name', optio
     }
   });
   await f.open(); waiting = true;
-  const polling = f.state.refreshMessages(); await flush();
+  const polling = catchUpConversation(f.state); await flush();
   try { await f.state.rename('Human name'); }
   finally {
     detail.resolve({ conversation: { id: 'g:AA', state: 'active', displayName: 'Older detail name' } });

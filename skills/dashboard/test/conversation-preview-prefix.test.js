@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -56,8 +57,7 @@ function fixture(t, locale) {
     async select(id) { root.querySelector(`[data-conversation-id="${id}"]`).dispatch('click'); await flush(); },
     async receive(rows) {
       pending = rows;
-      root.querySelector('.conversation-header [data-action="refreshMessages"]').dispatch('click');
-      await flush();
+      await catchUpConversation(page);
     }
   };
 }
@@ -87,7 +87,7 @@ for (const locale of ['en', 'zh']) for (const tab of ['mine', 'external']) {
       await f.receive([{ id: 10 + index * 2, direction, channel: tab === 'mine' ? 'dashboard' : 'telegram', content },
         { id: 11 + index * 2, direction: direction === 'in' ? 'out' : 'in', channel: 'internal', content: 'internal tail must not become the preview' }]);
       assert.equal(f.messageReads, index + 2, 'each update reads real message state');
-      assert.equal(f.listReads, listReads + index + 1, 'manual refresh rereads deliberately stale list metadata before message merging');
+      assert.equal(f.listReads, listReads + index + 1, 'automatic stream catchup rereads deliberately stale list metadata before message merging');
       assert.ok(f.preview('g:IN') === preview, 'message refresh retains the keyed list preview node');
       assert.equal(preview.textContent, prefix[direction] + content);
       assert.equal(f.preview('g:OUT').textContent, prefix.out + 'initial outgoing', 'another conversation is unchanged');

@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
@@ -518,7 +519,7 @@ for (const retryAllowed of [false, null, undefined]) test(`mounted saved answer 
 test('mounted quiet question refresh failure retains known controls and reports an independent update warning', async testContext => {
   const f = await mountedQuestions(testContext);
   const beforeReads = f.questionReads();
-  f.failQueries(); visibleNodes(f.root).find(node => node.dataset.action === 'refreshMessages').dispatch('click'); await tick(); await tick();
+  f.failQueries(); await catchUpConversation(f.page);
   assert.ok(f.questionReads() > beforeReads, 'new history triggers a real quiet question read');
   const card = f.root.querySelector('.chat-question');
   assert.match(visibleText(card), /chat.question.paused/);
@@ -534,7 +535,7 @@ test('mounted quiet question refresh failure retains known controls and reports 
 test('mounted failed question query retains paused status and disables retained controls until authority returns', async testContext => {
   const f = await mountedQuestions(testContext);
   assert.equal(visibleText(f.root).includes('chat.questions.unavailable'), false);
-  f.failQueries(); visibleNodes(f.root).find(node => node.dataset.action === 'refreshStatus').dispatch('click'); await tick(); await tick();
+  f.failQueries(); f.root.querySelector('[data-conversation-id="g:AA"]').dispatch('click'); await tick(); await tick();
   const card = f.root.querySelector('.chat-question');
   assert.match(visibleText(card), /chat.question.paused/); assert.match(visibleText(card), /chat.question.stateUnavailable/);
   assert.equal(visibleText(card).includes('chat.question.unavailable'), false);
@@ -645,7 +646,7 @@ test('mounted lifecycle refresh keeps editing nodes while updating the accepted 
   draft.value = 'Unsent draft'; draft.focus();
   assert.equal(card.dataset.lifecycle, 'paused');
   f.accept();
-  visibleNodes(f.root).find(node => node.dataset.action === 'refreshStatus').dispatch('click');
+  f.root.querySelector('[data-conversation-id="g:AA"]').dispatch('click');
   await tick(); await tick();
   assert.equal(f.root.querySelector('.chat-question'), card);
   assert.equal(card.querySelector('textarea'), draft);

@@ -90,9 +90,9 @@ export async function runAttachmentVisual(t, sandbox) {
     const deadline = Date.now() + 4000;
     while (!check()) { if (Date.now() >= deadline) throw Error(message); await new Promise(resolve => setTimeout(resolve, 10)); }
   };
-  const bounded = async (promise, message) => {
+  const bounded = async (promise, message, timeoutMs = 4000) => {
     let timer;
-    try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(message)), 4000); })]); }
+    try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(message)), timeoutMs); })]); }
     finally { clearTimeout(timer); }
   };
   let expectedHttpError = null, uploads = 0, sends = 0, reads = 0;
@@ -251,9 +251,8 @@ export async function runAttachmentVisual(t, sandbox) {
       if (image) saved.observer.observe(image, { attributes: true, attributeFilter: ['src'] });
     });
     await page.waitForFunction(value => [...document.querySelectorAll('#wb-chat .conversation-upload-tray progress')].some(node => node.value > value), progress);
-    // Poll completion uses the actual refresh action without moving keyboard focus.
+    // The next real automatic history poll must retain the focused tray action.
     const focusRead = page.waitForResponse(response => new URL(response.url()).pathname === scenes.uploads.route + '/messages');
-    await page.locator('#wb-chat [data-action="refreshMessages"]').evaluate(node => node.click());
     await focusRead;
     await bounded(page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))), 'tray refresh layout did not settle');
     const trayFocus = await itemNamed('焦点预览.png').evaluate(node => {
@@ -382,7 +381,7 @@ export async function runAttachmentVisual(t, sandbox) {
   const heldHistory = []; let resolveHistory; const historyStarted = new Promise(resolve => { resolveHistory = resolve; });
   await context.route(historyPattern, route => { heldHistory.push(route); resolveHistory(); });
   fs.writeFileSync(reportPath, reportBytes);
-  await page.locator('#wb-chat [data-action="refreshMessages"]').click(); await bounded(historyStarted, 'mixed media recheck request did not start');
+  await bounded(historyStarted, 'automatic mixed media recheck request did not start', 10000);
   await editing.focus(); await editing.evaluate(node => node.setSelectionRange(3, 3));
   await mixedRoot.evaluate(node => {
     const stream = document.querySelector('#wb-chat .chat-messages'), bounds = stream.getBoundingClientRect();
@@ -405,7 +404,6 @@ export async function runAttachmentVisual(t, sandbox) {
   // Missing physical files recover through the existing bounded history recheck.
   await choose('states'); const priorMax = fixture.db.prepare('SELECT MAX(id) id FROM conversations').get().id;
   fs.writeFileSync(missingPath, missingBytes);
-  await page.locator('#wb-chat [data-action="refreshMessages"]').click();
   await page.locator(`[data-message-id="${scenes.states.row.id}"] .chat-attachment`).filter({ hasText: '方案说明.pdf' }).locator('[data-action="downloadAttachment"]').waitFor();
   assert.equal(fixture.db.prepare('SELECT MAX(id) id FROM conversations').get().id, priorMax, 'recovery needs no new message');
   const downloadEvent = page.waitForEvent('download');
@@ -428,7 +426,6 @@ export async function runAttachmentVisual(t, sandbox) {
     await choose('other'); await choose(mode === 'older-load' ? 'older' : 'scroll');
     let beforeOlder = null;
     if (mode === 'older-load') {
-      await page.locator('#wb-chat .chat-messages').evaluate(stream => { stream.scrollTop = 100; });
       const olderPattern = '**' + scene.route + '/messages?*';
       let olderRoute, resolveOlder; const olderStarted = new Promise(resolve => { resolveOlder = resolve; });
       await context.route(olderPattern, route => {
@@ -436,10 +433,9 @@ export async function runAttachmentVisual(t, sandbox) {
         if (url.searchParams.get('direction') === 'before' && url.searchParams.has('cursor')) { olderRoute = route; resolveOlder(); }
         else return route.continue();
       });
-      await page.locator('#wb-chat [data-action="loadOlder"]').click();
+      await page.locator('#wb-chat .chat-messages').evaluate(stream => { stream.scrollTop = 100; stream.dispatchEvent(new Event('scroll')); });
       await bounded(olderStarted, 'loading older history did not start its actual request');
-      // Clicking an offscreen button legitimately scrolls it into view first.
-      // Measure the product's restore baseline after that user interaction.
+      // Capture the near-top reading anchor while the real earlier-page request is held.
       beforeOlder = await position();
       await olderRoute.continue(); await context.unroute(olderPattern);
       await page.locator(`[data-message-id="${scene.imageRow.id}"]`).waitFor();

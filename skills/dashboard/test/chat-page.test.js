@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -119,13 +120,14 @@ for (const status of [200, 502]) test(`unparseable send response ${status} prese
 });
 
 
-for (const operation of ['refresh', 'refreshMessages', 'select']) test(`remote closure during ${operation} removes previously loaded names and content`, async testContext => {
+for (const operation of ['refresh', 'stream catchup', 'select']) test(`remote closure during ${operation} removes previously loaded names and content`, async testContext => {
   const f = fixture(testContext, { rows: [{ id: 8, direction: 'out', status: 'delivered', content: 'Private body' }], secondGroup: true });
   await f.page.open(); await f.select();
   assert.ok(visibleText(f.root).includes('Example'));
   assert.ok(visibleText(f.root).includes('Private body'));
   f.deny();
   if (operation === 'select') { allNodes(f.root).find(node => node.dataset.conversationId === 'g:BB').dispatch('click'); await tick(); await tick(); }
+  else if (operation === 'stream catchup') await catchUpConversation(f.page);
   else { f.button(operation).dispatch('click'); await tick(); await tick(); }
   assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
   assert.equal(allNodes(f.root).filter(node => node.tagName === 'BUTTON').length, 0);
@@ -139,7 +141,7 @@ test('late old successful message response cannot restore the remote-disabled DO
   const f = fixture(testContext, { rows: [{ id: 1, direction: 'out', status: 'delivered', content: 'Private body' }] });
   await f.page.open(); await f.select();
   const pending = deferred(); f.holdMessage(pending);
-  f.button('refreshMessages').dispatch('click'); await tick();
+  await catchUpConversation(f.page); await tick();
   f.deny(); f.button('refresh').dispatch('click'); await tick(); await tick();
   assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
   pending.resolve({ ok: true, status: 200, json: async () => ({ items: [{ id: 9, direction: 'out', status: 'delivered', content: 'Late secret' }], afterCursor: 'after' }) });

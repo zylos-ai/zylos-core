@@ -443,12 +443,12 @@ for (const locale of ['en', 'zh']) test(`push updates preserve the editor and ol
   assert.equal(message.querySelector('[data-delivery-state="delivered"]').hidden, false);
   page.streamStatus('disconnected', subscription);
   assert.equal(root.querySelector('.conversation-push-status').textContent, translations['chat.page.push.polling']);
-  assert.ok(root.querySelector('[data-action="refreshMessages"]')); assert.ok(root.querySelector('[data-action="refreshStatus"]'));
+  assert.equal(root.querySelector('.conversation-header [data-action="refreshMessages"]'), null); assert.equal(root.querySelector('.conversation-header [data-action="refreshStatus"]'), null);
   page.close(); assert.equal(subscription, null);
 });
 
 
-test('initial ready catchup releases the loading notice and both manual read buttons', async t => {
+test('initial ready catchup releases the loading notice without manual header read controls', async t => {
   const document = conversationDocument(), root = document.createElement('div');
   const resolvers = []; let subscription;
   const page = mountConversationPage({ root, document, onStreamSubscription: value => { subscription = value; }, fetch: async path => {
@@ -468,10 +468,10 @@ test('initial ready catchup releases the loading notice and both manual read but
   resolvers[1]({ items: [{ id: 'g:AA', displayName: 'Current data' }], nextCursor: null }); await tick(); await tick();
   allNodes(root).find(node => node.dataset.conversationId === 'g:AA').dispatch('click'); await tick(); await tick();
   assert.equal(root.querySelector('.conversation-list-notice').hidden, true);
-  for (const action of ['refreshMessages', 'refreshStatus']) assert.equal(root.querySelector(`[data-action="${action}"]`).disabled, false);
+  for (const action of ['refreshMessages', 'refreshStatus']) assert.equal(root.querySelector(`.conversation-header [data-action="${action}"]`), null);
   resolvers[0]({ items: [{ id: 'g:BB', displayName: 'Stale data' }], nextCursor: null }); await opening;
   assert.equal(root.querySelector('.conversation-list-notice').hidden, true);
-  for (const action of ['refreshMessages', 'refreshStatus']) assert.equal(root.querySelector(`[data-action="${action}"]`).disabled, false);
+  for (const action of ['refreshMessages', 'refreshStatus']) assert.equal(root.querySelector(`.conversation-header [data-action="${action}"]`), null);
   assert.equal(allNodes(root).some(node => node.dataset.conversationId === 'g:BB'), false);
 });
 

@@ -14,10 +14,11 @@ import { startChatBrowser, until, pause } from './helpers/chat-push-browser-driv
 // invalidations, never direct event injection. t.after/abort own every resource.
 const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_BIN;
 async function settledControls(page) {
-  const read = () => page.evaluate(`({readEnabled:document.querySelector('[data-action="refreshMessages"]')?.disabled===false,statusEnabled:document.querySelector('[data-action="refreshStatus"]')?.disabled===false,listSettled:document.querySelector('.conversation-list-notice')?.hidden===true})`);
-  await until(async () => Object.values(await read()).every(Boolean), 'both retained manual controls are enabled and the nonempty list has finished loading', 2000);
+  const read = () => page.evaluate(`({headerControlsRemoved:document.querySelectorAll('.conversation-header [data-action="refreshMessages"],.conversation-header [data-action="refreshStatus"]').length===0,listReloadEnabled:document.querySelector('.conversation-sidebar [data-action="refresh"]')?.disabled===false,createEnabled:document.querySelector('[data-action="create"]')?.disabled===false,listSettled:document.querySelector('.conversation-list-notice')?.hidden===true})`);
+  await until(async () => Object.values(await read()).every(Boolean), 'header manual controls are absent, retained list controls are enabled and the nonempty list has finished loading', 2000);
   const controls = await read();
-  assert.equal(controls.readEnabled, true); assert.equal(controls.statusEnabled, true); assert.equal(controls.listSettled, true);
+  assert.equal(controls.headerControlsRemoved, true); assert.equal(controls.listReloadEnabled, true);
+  assert.equal(controls.createEnabled, true); assert.equal(controls.listSettled, true);
   return controls;
 }
 
@@ -41,14 +42,15 @@ for (const locale of ['en', 'zh']) for (const width of [1280, 390]) {
     const latencyMs = Date.now() - update.committedAt;
     assert.ok(latencyMs <= 2000);
     await screenshot('delivered-reply');
-    await page.evaluate(`(()=>{const stream=document.querySelector('.conversation-stream');stream.scrollTop=0;const input=document.querySelector('textarea.conversation-input');input.value='Unsent draft / 未发送草稿';input.dispatchEvent(new Event('input',{bubbles:true}));window.keptInput=input;const form=document.querySelector('.chat-question-fields input[type="text"]');if(form){form.value='Unsubmitted form';form.dispatchEvent(new Event('input',{bubbles:true}));window.keptForm=form;}input.focus();window.readingTop=stream.scrollTop;})()`);
+    await page.evaluate(`(()=>{const stream=document.querySelector('.conversation-stream');stream.scrollTop=0;const input=document.querySelector('textarea.conversation-input');input.value='Unsent draft / 未发送草稿';input.dispatchEvent(new Event('input',{bubbles:true}));window.keptInput=input;const form=document.querySelector('.chat-question-fields input[type="text"]');if(form){form.value='Unsubmitted form';form.dispatchEvent(new Event('input',{bubbles:true}));window.keptForm=form;}input.focus();const bounds=stream.getBoundingClientRect();const anchor=[...stream.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>bounds.top&&node.getBoundingClientRect().top<bounds.bottom);window.readingAnchor={node:anchor,top:anchor.getBoundingClientRect().top};})()`);
     assert.equal(await page.evaluate('!!window.keptForm'), true, 'an actual unsubmitted form is available');
     const unread = fixture.addReply('A reply while reading older history. / 阅读旧消息时收到回复。');
     await until(() => page.evaluate(`!!document.querySelector('[data-message-id="${unread.id}"]') && !document.querySelector('[data-action="latest"]').hidden`), 'new reply is shown with unread notice', 2000);
-    const retained = await page.evaluate(`({input:document.querySelector('textarea.conversation-input')===window.keptInput,value:window.keptInput.value,focus:document.activeElement===window.keptInput,form:document.querySelector('.chat-question-fields input[type="text"]')===window.keptForm,formValue:window.keptForm.value,scroll:Math.abs(document.querySelector('.conversation-stream').scrollTop-window.readingTop)})`);
+    const retained = await page.evaluate(`({input:document.querySelector('textarea.conversation-input')===window.keptInput,value:window.keptInput.value,focus:document.activeElement===window.keptInput,form:document.querySelector('.chat-question-fields input[type="text"]')===window.keptForm,formValue:window.keptForm.value,anchorConnected:window.readingAnchor.node.isConnected,scroll:Math.abs(window.readingAnchor.node.getBoundingClientRect().top-window.readingAnchor.top)})`);
     assert.equal(retained.input, true); assert.equal(retained.value, 'Unsent draft / 未发送草稿');
     assert.equal(retained.focus, true); assert.equal(retained.form, true); assert.equal(retained.formValue, 'Unsubmitted form');
-    assert.ok(retained.scroll <= 5, 'reading anchor remains at older history');
+    assert.equal(retained.anchorConnected, true, 'the same visible reading row remains mounted');
+    assert.ok(retained.scroll <= 5, 'reading row retains its viewport position while earlier history can be prepended');
     await screenshot('unread');
     fixture.interrupt();
     await until(() => page.evaluate(`document.querySelector('.conversation-push-status')?.dataset.streamState==='polling'`), 'stream disconnect immediately restores polling', 2000);

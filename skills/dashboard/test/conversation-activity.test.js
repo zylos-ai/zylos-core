@@ -1,3 +1,4 @@
+import { catchUpConversation } from './helpers/conversation-stream-catchup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -313,7 +314,7 @@ test('history activity is folded above its reply, outside the reply content, and
   f.page.redraw();
   const again = f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity');
   assert.equal(again.querySelector('.conversation-activity-steps').hidden, false, 'manual open is kept across redraws');
-  f.root.querySelector('[data-action="refreshMessages"]').dispatch('click');
+  await catchUpConversation(f.page);
   for (let i = 0; i < 6; i++) await tick();
   assert.equal(f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity-steps').hidden, false,
     'a later update does not fold it back');
@@ -392,7 +393,7 @@ test('loading a missing reply moves its existing follow-up activity out of the f
   const fallback = f.root.querySelector('.conversation-activity-message');
   assert.ok(fallback); fallback.querySelector('button').dispatch('click');
   rows = [...rows, { id: 2, direction: 'out', content: 'loaded reply', status: 'delivered' }];
-  f.root.querySelector('[data-action="refreshMessages"]').dispatch('click');
+  await catchUpConversation(f.page);
   for (let i = 0; i < 6; i++) await tick();
   assert.equal(f.root.querySelectorAll('.conversation-activity-message').length, 0);
   const area = f.root.querySelector('[data-message-id="2"] .conversation-activity-after-reply-slot .conversation-activity');
@@ -442,7 +443,7 @@ test('the live activity follows the latest message and folds onto the final repl
   assert.equal(live[0].dataset.messageId, undefined, 'the live area is not a message');
   rows = [...rows, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
   body = doneBody(s(61));
-  f.root.querySelector('[data-action="refreshMessages"]').dispatch('click');
+  await catchUpConversation(f.page);
   for (let i = 0; i < 8; i++) await tick();
   assert.equal(list.querySelectorAll('.conversation-activity-message').length, 0, 'no live area once the round is done');
   const folded = f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity');
@@ -615,31 +616,28 @@ function layoutFixture(context, { rows, older, rowHeight = () => 100 }) {
 }
 const reply = id => ({ id, direction: 'out', content: `reply ${id}`, status: 'delivered' });
 
-test('clicking load older keeps the message being read where it was, even with the mouse still on the button', async t => {
+test('scrolling near the top keeps the message being read where it was while loading older history', async t => {
   const f = layoutFixture(t, { rows: Array.from({ length: 10 }, (_, i) => reply(11 + i)), older: Array.from({ length: 10 }, (_, i) => reply(1 + i)) });
   const { stream, list } = await f.open();
-  stream.scrollTop = 300;
-  const reading = list.querySelector('[data-message-id="14"]');
+  stream.scrollTop = 200;
+  const reading = list.querySelector('[data-message-id="13"]');
   assert.equal(reading.getBoundingClientRect().top, 0, 'the row being read is at the top of the view');
-  const older = f.root.querySelector('[data-action="loadOlder"]');
-  assert.equal(older.hidden, false);
-  stream.dispatch('pointerdown', { pointerType: 'mouse', button: 0, target: older });
-  older.dispatch('click');
+  assert.equal(f.root.querySelector('[data-action="loadOlder"]'), null);
+  stream.dispatch('scroll');
   for (let i = 0; i < 8; i++) await tick();
   assert.ok(list.querySelector('[data-message-id="1"]'), 'the older page is shown');
-  assert.equal(reading.getBoundingClientRect().top, 0, 'the row being read did not move while the button was held');
-  f.docListeners.get('pointerup')();
+  assert.equal(reading.getBoundingClientRect().top, 0, 'the row being read did not move while older history was inserted');
   for (const timer of f.timers.filter(timer => timer.fn && timer.ms === 180)) timer.fn();
-  assert.equal(reading.getBoundingClientRect().top, 0, 'nor after the button was released');
+  assert.equal(reading.getBoundingClientRect().top, 0, 'nor after scrolling settles');
 });
 
 test('content that moves during a drag is moved back once the drag settles, unless the user follows the bottom', async t => {
   const f = layoutFixture(t, { rows: Array.from({ length: 10 }, (_, i) => reply(11 + i)), older: Array.from({ length: 10 }, (_, i) => reply(1 + i)) });
   const { stream, list } = await f.open();
-  stream.scrollTop = 300;
-  const reading = list.querySelector('[data-message-id="14"]');
+  stream.scrollTop = 200;
+  const reading = list.querySelector('[data-message-id="13"]');
   stream.dispatch('touchstart', {});
-  f.root.querySelector('[data-action="loadOlder"]').dispatch('click');
+  stream.dispatch('scroll');
   for (let i = 0; i < 8; i++) await tick();
   assert.equal(reading.getBoundingClientRect().top, 1000, 'the position is not written while the finger is down');
   stream.dispatch('touchend', {});
@@ -722,7 +720,7 @@ test('opening a folded part with the mouse or the keyboard keeps its head where 
 });
 
 const refresh = async f => {
-  f.root.querySelector('[data-action="refreshMessages"]').dispatch('click');
+  await catchUpConversation(f.page);
   for (let i = 0; i < 8; i++) await tick();
 };
 const running = (steps, { start = 2, now = 3 } = {}) => ({ now: s(now), items: [{ id: 1, state: 'round', round: '1' }],
