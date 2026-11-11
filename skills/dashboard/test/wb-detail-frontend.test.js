@@ -543,7 +543,7 @@ test('overview consumes a subagent stop followed by more than five unrelated eve
   f.controller.destroy();
 });
 
-test('timeline back-to-latest tracks repeated scrolls and preserves scroll across detail redraws', async () => {
+test('timeline back-to-latest tracks repeated scrolls and keeps its mounted body across updates', async () => {
   const document = createDocument(), root = document.createElement('div');
   const loader = { state: { runs: [], expanded: new Set(), events: new Map(), messages: new Map(),
     between: [], filter: 'all', totalRuns: 0 }, setFilter() {} };
@@ -555,18 +555,13 @@ test('timeline back-to-latest tracks repeated scrolls and preserves scroll acros
 
   const f = detailFixture(async path => response(defaultRead(path)));
   f.root.querySelector = selector => allNodes(f.root).find(node => node.classList.contains(selector.slice(1)));
-  const replace = f.root.replaceChildren.bind(f.root);
-  f.root.replaceChildren = (...children) => {
-    replace(...children);
-    // Model layout clamping a detached scrolling element while it is mounted.
-    const body = f.root.querySelector('.wb-detail-timeline');
-    if (body) body.scrollTop = 0;
-  };
   await f.controller.open('a', { rows: [], listKnown: true });
   f.controller.state.tab = 'timeline'; f.controller.setViewDetail();
-  f.root.querySelector('.wb-detail-timeline').scrollTop = 175;
+  const mountedBody = f.root.querySelector('.wb-detail-timeline');
+  mountedBody.scrollTop = 175;
   f.controller.setViewDetail();
-  assert.equal(f.root.querySelector('.wb-detail-timeline').scrollTop, 175);
+  assert.equal(f.root.querySelector('.wb-detail-timeline'), mountedBody);
+  assert.equal(mountedBody.scrollTop, 175);
   f.controller.destroy();
 });
 
@@ -1264,4 +1259,193 @@ test('group model threshold is read only and follows the selected model and engi
   controller.state.draft = { model: '', target: 'claude' }; root.replaceChildren();
   renderGroupConfig(root, controller, { document, t, rotationThreshold: 35 });
   assert.match(allNodes(root).find(node => node.classList.contains('wb-cfg-threshold')).textContent, /"value":70/, 'default metadata wins over the old running model threshold');
+});
+
+// An injected DOM starts newly created bodies at zero. Browser cases own real
+// layout/clamping; this boundary requires stable mounted nodes during incremental
+// snapshot/data updates and rebuilding at explicit navigation boundaries.
+function detailScrollFixture(fetch, options = {}) {
+  const f = detailFixture(fetch, options);
+  f.root.querySelector = selector => allNodes(f.root).find(node => node.classList.contains(selector.slice(1)));
+  const create = f.document.createElement;
+  f.document.createElement = tag => { const node = create(tag); node.scrollTop = 0; return node; };
+  return f;
+}
+
+test('overview refresh updates mounted nodes without replacing the body or evidence fold', async context => {
+  for (const open of [true, false]) await context.test(open ? 'open evidence' : 'closed evidence', async () => {
+    const pending = deferred(); let delayed = false;
+    let current = row('a');
+    const stableEvent = { event_seq: 1, event_type: 'stop', timestamp: '2026-11-11T00:00:00Z' };
+    const f = detailScrollFixture(async path => {
+      if (delayed && path.startsWith('/api/timeline')) return pending.promise;
+      return response(path.startsWith('/api/timeline') && !path.includes('types=subagent_start') ? { events: [stableEvent] } : defaultRead(path));
+    }, { detail: () => 'technical' });
+    try {
+      await f.controller.open(current, { rows: [current], listKnown: true });
+      const body = () => f.root.querySelector('.wb-detail-body');
+      const evidence = () => f.root.querySelector('.wb-detail-evidence');
+      const oldBody = body(), oldEvidence = evidence(), oldHeader = f.root.children[0];
+      const oldEvent = allNodes(f.root).find(node => node.classList.contains('wb-ev'));
+      assert.ok(oldEvent);
+      body().scrollTop = 110; evidence().open = !open;
+      delayed = true; const refreshing = f.controller.refresh();
+      body().scrollTop = 260; evidence().open = open;
+      pending.resolve(response({ events: [stableEvent] })); await refreshing;
+      assert.equal(body(), oldBody); assert.equal(evidence(), oldEvidence); assert.equal(f.root.children[0], oldHeader);
+      assert.equal(allNodes(f.root).find(node => node.classList.contains('wb-ev')), oldEvent, 'activity rows retain their keyed DOM nodes');
+      assert.equal(body().scrollTop, 260, 'the mounted body keeps the in-flight user scroll');
+      assert.equal(evidence().open, open);
+      body().scrollTop = 310; evidence().open = !open;
+      current = { ...current, contextPct: 73 };
+      await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+      assert.equal(body(), oldBody); assert.equal(evidence(), oldEvidence); assert.equal(f.root.children[0], oldHeader);
+      assert.ok(f.root.textContent.includes('73'), 'updated snapshot numbers reach existing elements');
+      assert.equal(body().scrollTop, 310, 'snapshot and data updates keep the mounted body');
+      assert.equal(evidence().open, !open, 'closed folds remain closed too');
+    } finally { f.controller.destroy(); }
+  });
+});
+
+test('explicit detail tabs and another group start at the top without leaking evidence expansion', async () => {
+  let level = 'technical';
+  const f = detailScrollFixture(async path => response(defaultRead(path)), { detail: () => level });
+  const first = row('a'), second = row('b');
+  try {
+    await f.controller.open(first, { rows: [first, second], listKnown: true });
+    f.root.querySelector('.wb-detail-body').scrollTop = 175;
+    f.root.querySelector('.wb-detail-evidence').open = true;
+    const overviewBody = f.root.querySelector('.wb-detail-body');
+    await f.controller.selectTab('timeline');
+    assert.notEqual(f.root.querySelector('.wb-detail-body'), overviewBody, 'a true tab switch rebuilds');
+    assert.equal(f.root.querySelector('.wb-detail-body').scrollTop, 0, 'overview to timeline resets');
+    f.root.querySelector('.wb-detail-body').scrollTop = 240;
+    const timelineBody = f.root.querySelector('.wb-detail-body');
+    await f.controller.selectTab('timeline');
+    assert.equal(f.root.querySelector('.wb-detail-body'), timelineBody, 'the active tab keeps its body');
+    assert.equal(f.root.querySelector('.wb-detail-body').scrollTop, 240, 'reselecting the active timeline retains its position');
+    await f.controller.selectTab('overview');
+    assert.notEqual(f.root.querySelector('.wb-detail-body'), timelineBody);
+    assert.equal(f.root.querySelector('.wb-detail-body').scrollTop, 0, 'timeline to overview resets');
+    f.root.querySelector('.wb-detail-body').scrollTop = 210;
+    f.root.querySelector('.wb-detail-evidence').open = true;
+    const previousBody = f.root.querySelector('.wb-detail-body');
+    await f.controller.open(second, { rows: [first, second], listKnown: true });
+    assert.notEqual(f.root.querySelector('.wb-detail-body'), previousBody, 'another group rebuilds');
+    assert.equal(f.root.querySelector('.wb-detail-body').scrollTop, 0, 'another group resets');
+    assert.equal(f.root.querySelector('.wb-detail-evidence').open, false, 'another group has its own evidence fold');
+    const technicalBody = f.root.querySelector('.wb-detail-body'); technicalBody.scrollTop = 120;
+    level = 'plain'; f.controller.setViewDetail();
+    assert.notEqual(f.root.querySelector('.wb-detail-body'), technicalBody, 'a detail-level change rebuilds');
+    assert.equal(f.root.querySelector('.wb-detail-body').scrollTop, 0);
+  } finally { f.controller.destroy(); }
+});
+
+test('evidence expansion survives a new preview while its stored-message fold keeps preview ownership', async () => {
+  const preview = timestamp => ({ text: 'message', channel: 'telegram', timestamp, source: { kind: 'channel' } });
+  let current = row('a', { state: { kind: 'idle' }, preview: preview(1) });
+  const f = detailScrollFixture(async path => response(path.endsWith('/raw') ? { raw: 'stored message' } : defaultRead(path)),
+    { detail: () => 'technical' });
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    const raw = () => f.root.querySelector('.wb-now-raw');
+    const evidence = () => f.root.querySelector('.wb-detail-evidence');
+    evidence().open = true; raw().open = true; raw().dispatch('toggle');
+    await tick(); await tick();
+    assert.equal(raw().open, true); assert.equal(evidence().open, true);
+    current = { ...current, preview: preview(2) };
+    await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+    assert.equal(evidence().open, true, 'the technical evidence fold belongs to this view');
+    assert.equal(raw().open, false, 'a new preview must not inherit the old raw-message expansion');
+  } finally { f.controller.destroy(); }
+});
+
+
+test('timeline refresh updates keyed run and activity nodes in the mounted body', async () => {
+  let version = 1;
+  const current = row('a');
+  const first = { event_seq: 1, event_type: 'session_start', timestamp: new Date(1200).toISOString() };
+  const second = { event_seq: 2, event_type: 'stop', timestamp: new Date(1800).toISOString() };
+  const f = detailScrollFixture(async path => {
+    const url = new URL(path, 'http://fixture');
+    if (path.includes('types=subagent_start')) return response({ events: [] });
+    if (url.pathname.endsWith('/runs')) return response({ runs: [{ ...run('run-a'), n: version }], totalEvents: version, totalRuns: 1 });
+    if (url.pathname === '/api/timeline') return response({ events: url.searchParams.has('after_seq') ? version === 2 ? [second] : [] : [first] });
+    return response(defaultRead(path));
+  }, { detail: () => 'technical' });
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    await f.controller.selectTab('timeline');
+    const body = f.root.querySelector('.wb-detail-body'), section = f.root.querySelector('.wb-timeline-run');
+    const event = f.root.querySelector('.wb-timeline-event'), heading = f.root.querySelector('.wb-run-h');
+    assert.ok(section); assert.ok(event); body.scrollTop = 190;
+    version = 2; await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+    assert.equal(f.root.querySelector('.wb-detail-body'), body); assert.equal(body.scrollTop, 190);
+    assert.equal(f.root.querySelector('.wb-timeline-run'), section); assert.equal(f.root.querySelector('.wb-run-h'), heading);
+    assert.ok(allNodes(f.root).includes(event), 'the existing event row survives insertion of a newer event');
+    assert.equal(allNodes(f.root).filter(node => node.classList.contains('wb-timeline-event')).length, 2);
+    assert.match(heading.textContent, /"count":2/, 'the reused run header receives its new count');
+  } finally { f.controller.destroy(); }
+});
+
+// Metadata may replace a free-text model with a select while the other editor
+// controls stay mounted. Subsequent edits and save must use those live controls.
+test('incremental configuration metadata and refresh keep save bound to the mounted controls', async () => {
+  const meta = deferred(), posts = [], current = row('a');
+  const configValue = { runtime: { data: { resolved: { runtime: 'claude' } } },
+    model: { data: { desired: { mode: 'override', runtime: 'claude', model: 'opus', effort: 'low' } } } };
+  const f = detailScrollFixture(async (path, options) => {
+    if (path.endsWith('/config') && options?.method === 'POST') {
+      posts.push(JSON.parse(options.body)); return response({ ok: true, data: { running: { status: 'applied' } } });
+    }
+    if (path.endsWith('/config')) return response(configValue);
+    if (path.startsWith('/api/actions/meta')) return meta.promise;
+    return response(defaultRead(path));
+  }, { detail: () => 'technical' });
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    const config = f.root.querySelector('.wb-detail-config');
+    allNodes(config).find(node => node.tagName === 'BUTTON' && node.textContent === 'wb.detail.modify').dispatch('click');
+    await tick(); await tick();
+    const pair = () => f.root.querySelector('.wb-cfg-controls');
+    assert.equal(pair().children[1].tagName, 'INPUT', 'unavailable metadata starts with free text');
+    meta.resolve(response({ models: [{ id: 'opus' }, { id: 'sonnet' }], efforts_by_model: { '*': ['low', 'high'] },
+      model_thresholds: { opus: 70, sonnet: 60 } }));
+    await tick(); await tick();
+    assert.equal(pair().children[1].tagName, 'SELECT');
+    const mounted = pair();
+    await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+    assert.equal(pair(), mounted, 'background updates keep the editor mounted');
+    const [, model, effort, save] = pair().children;
+    model.value = 'sonnet'; model.dispatch('change');
+    effort.value = 'high'; effort.dispatch('change');
+    assert.equal(save.disabled, false);
+    save.dispatch('click'); await tick(); await tick();
+    assert.equal(posts.length, 1);
+    assert.deepEqual(posts[0], { kind: 'model', runtime: 'claude', model: 'sonnet', effort: 'high' });
+  } finally { f.controller.destroy(); }
+});
+
+test('timeline keeps event and message identity separate when numeric ids match and order changes', async () => {
+  let version = 1;
+  const current = row('a'), eventValue = { id: 7, event_seq: 7, event_type: 'stop', timestamp: new Date(1200).toISOString() };
+  const f = detailScrollFixture(async path => {
+    const url = new URL(path, 'http://fixture');
+    if (path.includes('types=subagent_start')) return response({ events: [] });
+    if (url.pathname.endsWith('/runs')) return response({ runs: [run('run-a')], totalEvents: 1, totalRuns: 1 });
+    if (url.pathname.endsWith('/messages')) return response({ messages: [{ id: 7, direction: 'in', timestamp: new Date(version === 1 ? 1800 : 1100).toISOString() }] });
+    if (url.pathname === '/api/timeline') return response({ events: url.searchParams.has('after_seq') ? [] : [eventValue] });
+    return response(defaultRead(path));
+  }, { detail: () => 'technical' });
+  try {
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    await f.controller.selectTab('timeline');
+    const event = f.root.querySelector('.wb-timeline-event'), message = f.root.querySelector('.wb-timeline-message');
+    const rows = () => allNodes(f.root).filter(node => node.classList.contains('wb-timeline-event') || node.classList.contains('wb-timeline-message'));
+    assert.equal(rows()[0], message); assert.equal(rows()[1], event);
+    version = 2; await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+    assert.equal(f.root.querySelector('.wb-timeline-event'), event);
+    assert.equal(f.root.querySelector('.wb-timeline-message'), message);
+    assert.equal(rows()[0], event); assert.equal(rows()[1], message);
+  } finally { f.controller.destroy(); }
 });

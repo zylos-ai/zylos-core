@@ -1,8 +1,9 @@
+import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=151';
-import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=151';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=151';
+import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=158';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=158';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=115';
 import { renderNameEditor } from './name-edit.js?v=115';
@@ -96,6 +97,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null, level: null,
     configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
+  let renderedLevel = null, configRevision = 0;
   let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
   const getWritable = () => typeof writable === 'function' ? writable() : writable;
   const getLevel = () => typeof detail === 'function' ? detail() : detail;
@@ -120,7 +122,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     },
     onError: () => {},
   });
-  function draw() {
+  function draw({ reset = false } = {}) {
     if (!controller || !active(generation) || !state.row) return;
     const row = state.row;
     const key = row.sessionGroup ?? 'origin';
@@ -134,7 +136,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const rename = element(document, 'button', undefined, 'wb-icon-btn wb-icon-btn-sm'); rename.type = 'button'; rename.disabled = !getWritable();
       rename.setAttribute('aria-label', t('wb.name.edit')); rename.title = getWritable() ? t('wb.name.edit') : t('wb.readOnly');
       rename.append(icon(document, 'edit', 'xs'));
-      rename.addEventListener('click', () => { state.nameOpen = true; state.nameDraft = row.name?.displayName ?? ''; draw(); });
+      listen(rename, 'click', () => { state.nameOpen = true; state.nameDraft = row.name?.displayName ?? ''; draw(); });
       heading.append(rename);
     }
     // State and actions share one wrapper: on phones it becomes the second row under the title.
@@ -148,7 +150,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       conversation.append(element(document, 'span', t('chat.page.viewConversation'), 'wb-conv-label'));
       conversation.type = 'button';
       conversation.dataset.action = 'viewConversation';
-      conversation.addEventListener('click', () => onConversation(row));
+      listen(conversation, 'click', () => onConversation(row));
       actions.append(conversation);
     }
     for (const item of groupActionButtons(row, getWritable())) {
@@ -159,14 +161,13 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       // Unavailable actions stay visible and say why in their tooltip; narrow screens also show the label.
       button.title = t('wb.actions.' + item.action) + (item.reason ? ' · ' + t(item.reason) : '');
       button.append(icon(document, actionIcons[item.action]), element(document, 'span', t('wb.actions.' + item.action), 'wb-act-label'));
-      button.addEventListener('click', () => act(item.action)); actions.append(button);
+      listen(button, 'click', () => act(item.action)); actions.append(button);
     }
     const closeButton = element(document, 'button', undefined, 'wb-icon-btn'); closeButton.type = 'button';
     closeButton.setAttribute('aria-label', t('wb.close')); closeButton.title = t('wb.closeEsc');
-    closeButton.append(icon(document, 'x')); closeButton.addEventListener('click', close);
+    closeButton.append(icon(document, 'x')); listen(closeButton, 'click', close);
     sub.append(actions); top.append(closeButton);
     header.append(top);
-    const previousScroll = root.querySelector?.('.wb-detail-timeline')?.scrollTop ?? 0;
     const platform = row.sessionGroup == null ? t('wb.single') : row.sessionGroup === 'origin' ? t('wb.term.origin') : platformLabel(row, t, { describe: false });
     // Technical: the group key in monospace, then run, start and launch configuration.
     const meta = element(document, 'p', undefined, 'wb-detail-meta');
@@ -182,7 +183,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const button = element(document, 'button', t('wb.detail.' + tab));
       if (tab === 'timeline') button.append(element(document, 'span', ` ${groupEventCount(state)}`, 'wb-n'));
       button.type = 'button'; button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(state.tab === tab));
-      button.addEventListener('click', () => { void selectTab(tab); }); tabs.append(button);
+      listen(button, 'click', () => { void selectTab(tab); }); tabs.append(button);
     }
     const body = element(document, 'div', undefined, 'wb-detail-body');
     const observe = observable(row) ? view => onObserve(key, view) : null;
@@ -199,14 +200,21 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
           } catch (error) { if (error.name !== 'AbortError') { config.state.error = error.message; draw(); } }
         },
       });
-      if (state.configOpen) renderGroupConfig(sections.config, config, { document, t, writable: getWritable(), rotationThreshold: row.rotationThreshold,
-        onCancel: () => { state.configOpen = false; draw(); } });
+      if (state.configOpen) {
+        renderGroupConfig(sections.config, config, { document, t, writable: getWritable(), rotationThreshold: row.rotationThreshold,
+          onCancel: () => { state.configOpen = false; draw(); } });
+        // Form handlers own their field references. A controller publication
+        // changes the form; ordinary board snapshots keep the mounted editor.
+        const form = [...sections.config.children].find(node => node.classList.contains('wb-cfg-edit'));
+        if (form) form.dataset.updateKey = `config:${configRevision}:${getWritable()}:${row.rotationThreshold}`;
+      }
     } else {
       body.classList.add('wb-detail-timeline');
       renderTimeline(body, timeline, { document, t, level: getLevel(), onObserve: observe });
     }
     if (state.nameOpen) {
       const editor = element(document, 'div', undefined, 'wb-name-editor');
+      editor.dataset.updateKey = 'name:' + getWritable();
       header.append(editor);
       const gen = generation;
       renderNameEditor(editor, { key, name: state.nameDraft, request, document, t, writable: getWritable(), active: () => active(gen),
@@ -215,10 +223,15 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       });
     }
     header.append(meta, tabs);
-    root.replaceChildren(header, body);
-    if (state.tab === 'timeline') body.scrollTop = previousScroll;
     if (state.error) header.append(element(document, 'p', t('wb.readFailed') + ' · ' + state.error, 'wb-detail-error'));
     if (state.actionResult) header.append(element(document, 'p', state.actionResult, 'wb-action-result'));
+    const level = getLevel();
+    if (reset || renderedLevel !== level || !root.firstChild) root.replaceChildren(header, body);
+    else {
+      const desired = element(document, 'div'); desired.append(header, body);
+      reconcileChildren(root, desired);
+    }
+    renderedLevel = level;
     root.hidden = false;
   }
   // The stored message of a labelled preview is read when its fold opens, once per preview; a failed read is retried
@@ -311,8 +324,10 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   async function selectTab(tab) {
     invalidateOwner();
     if (!controller || !active(generation)) return;
-    state.tab = tab === 'timeline' ? 'timeline' : 'overview';
-    draw();
+    const nextTab = tab === 'timeline' ? 'timeline' : 'overview';
+    const reset = state.tab !== nextTab;
+    state.tab = nextTab;
+    draw({ reset });
     if (state.tab === 'timeline' && isVisible()) {
       if (!timeline.state.open) await timeline.open(state.row.sessionGroup, state.row.live?.runId);
       else await timeline.refresh();
@@ -365,6 +380,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     timeline.close();
     resetSubagents();
     refreshTask = null;
+    renderedLevel = null;
     state.row = null; state.tab = 'overview'; state.recent = []; state.currentEvents = [];
     state.totalEvents = state.totalRuns = state.unattributed = 0; state.backlog = null; state.error = null; state.level = null;
     state.configOpen = state.nameOpen = false;
@@ -385,7 +401,8 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const selected = resolveDetailRow(selection, snapshot);
       state.row = selected.row; state.historical = selected.historical; state.snapshot = snapshot;
       const gen = generation, key = state.row.sessionGroup ?? 'origin';
-      config = createGroupConfig({ key, request, t, active: () => active(gen), onChange: draw });
+      configRevision = 0;
+      config = createGroupConfig({ key, request, t, active: () => active(gen), onChange: () => { configRevision++; draw(); } });
       draw();
       await refresh();
     },

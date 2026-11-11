@@ -1,3 +1,4 @@
+import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
 import { modelCell, pendingModel, shortDuration } from './board.js?v=151';
 import { toolLabel, waitText } from './view-mode.js?v=150';
@@ -104,6 +105,8 @@ export function toolEventLabel(document, event, { level = 'plain', t = key => ke
 export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev', now = null, after = null } = {}) {
   const kind = eventKind(event);
   const node = element(document, 'div', undefined, `${className} wb-ev-${kind}${badEvents.has(event.event_type) ? ' wb-ev-bad' : ''}`);
+  const domain = event.event_type ? 'event' : 'message';
+  node.dataset.updateKey = `${domain}:${event.id ?? event.event_seq ?? `${event.timestamp}:${event.event_type ?? event.direction}:${event.agent_id ?? ''}`}`;
   const time = eventTime(event.timestamp, level, document.documentElement?.lang, now);
   const stamp = element(document, 'time', time.text); stamp.title = time.title;
   const mark = element(document, 'span', undefined, 'wb-ev-k');
@@ -200,13 +203,15 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw }) {
     if (row.preview?.source) {
       const stored = data.raw?.key === rawKey(row) ? data.raw : null;
       const raw = element(document, 'details', undefined, 'wb-now-raw');
+      raw.dataset.updateKey = 'raw:' + rawKey(row);
+      raw.dataset.updateOpen = 'true';
       raw.open = Boolean(stored?.open);
       const summary = element(document, 'summary');
       summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.rawMessage')));
       raw.append(summary);
       if (stored?.open) raw.append(stored.status === 'ok' && stored.text != null ? element(document, 'pre', stored.text, 'wb-mono')
         : element(document, 'p', t(stored.status === 'loading' ? 'wb.detail.rawLoading' : 'wb.detail.rawUnavailable'), 'wb-now-raw-note'));
-      raw.addEventListener('toggle', () => onRaw(raw.open));
+      listen(raw, 'toggle', event => onRaw(event.currentTarget.open));
       card.append(raw);
     }
     const evidence = detailEvidence(row, snapshot);
@@ -221,6 +226,7 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw }) {
     const table = element(document, 'table'), body = element(document, 'tbody');
     for (const item of evidence.samples) {
       const line = element(document, 'tr', undefined, item.hit ? 'wb-hit' : undefined);
+      line.dataset.updateKey = item.source;
       const age = element(document, 'td', sampleAge(item.at, data.now ?? Date.now(), t));
       if (item.at != null) age.title = String(item.at);
       line.append(element(document, 'td', item.source), element(document, 'td', item.value == null ? '—' : String(item.value)), age);
@@ -242,6 +248,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   root.replaceChildren();
   const section = (key, className, glyph) => {
     const node = element(document, 'section', undefined, 'wb-detail-section ' + className);
+    node.dataset.updateKey = key;
     const head = element(document, 'h3'); head.append(icon(document, glyph, 'xs'), element(document, 'span', t(key)));
     node.append(head); root.append(node); return node;
   };
@@ -253,6 +260,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     const subs = element(document, 'div', undefined, 'wb-subs');
     for (const agent of agents) {
       const tag = element(document, 'span', undefined, 'wb-tag');
+      tag.dataset.updateKey = agent.id;
       tag.append(icon(document, 'bot', 'xs'), element(document, 'span', t('wb.detail.subagent') + ' · ' + agent.name));
       subs.append(tag);
     }
@@ -264,20 +272,20 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
     const live = element(document, 'button', undefined, 'wb-btn wb-btn-sm'); live.type = 'button';
     live.dataset.observerGroup = row.sessionGroup ?? 'origin';
     live.append(icon(document, 'term', 'xs'), element(document, 'span', t('wb.detail.observe')));
-    live.addEventListener('click', () => onObserve('live')); foot.append(live); card.append(foot);
+    listen(live, 'click', () => onObserve('live')); foot.append(live); card.append(foot);
   }
   // Newest first, dated when not from today. The count covers the same events: those in runs and those in none.
   const recent = section('wb.detail.recent', 'wb-detail-recent', 'clock');
   for (const group of recentRows(data.recent ?? [])) recent.append(repeatRow(document, group, { level, t, now: currentTime }));
   const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: groupEventCount(data), runs: data.totalRuns ?? 0 }), 'wb-link-btn wb-chev');
-  timeline.type = 'button'; timeline.addEventListener('click', onTimeline); recent.append(timeline);
+  timeline.type = 'button'; listen(timeline, 'click', onTimeline); recent.append(timeline);
   const memory = section('wb.detail.memory', 'wb-detail-memory', 'book');
   const line = element(document, 'div', undefined, 'wb-mem-line');
   const count = data.backlog?.count;
   line.append(element(document, 'span', count == null ? t('wb.detail.memoryUnknown') : count ? t('wb.detail.memoryPending', { count }) : t('wb.detail.memorySaved')));
   if (data.backlog?.syncing === true) line.append(element(document, 'span', ' · ' + t('wb.detail.syncing'), 'wb-sub'));
   const link = element(document, 'button', t('wb.detail.memoryLink', { count: count == null ? t('wb.unknown') : count }), 'wb-link-btn wb-chev');
-  link.type = 'button'; link.addEventListener('click', onMemory); line.append(link);
+  link.type = 'button'; listen(link, 'click', onMemory); line.append(link);
   memory.append(line);
   const config = section('wb.detail.config', 'wb-detail-config', 'sliders');
   const cfg = element(document, 'div', undefined, 'wb-cfg-line');
@@ -289,12 +297,13 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
       element(document, 'span', t('wb.config.running') + ' · ' + modelCell(row, t), 'wb-sub'));
   } else cfg.append(element(document, 'span', t('wb.config.state.' + status), status === 'unknown' ? 'wb-txt-warn' : 'wb-cfg-state'));
   if (level !== 'technical' && row.desired?.mode) cfg.append(element(document, 'span', '· ' + t(row.desired.mode === 'override' ? 'wb.config.source.override' : 'wb.config.source.default'), 'wb-sub'));
-  const edit = element(document, 'button', t('wb.detail.modify'), 'wb-btn wb-btn-secondary wb-btn-sm'); edit.type = 'button'; edit.addEventListener('click', onConfig); cfg.append(edit);
+  const edit = element(document, 'button', t('wb.detail.modify'), 'wb-btn wb-btn-secondary wb-btn-sm'); edit.type = 'button'; listen(edit, 'click', onConfig); cfg.append(edit);
   config.append(cfg);
   if (level === 'technical') {
     const numbers = element(document, 'div', undefined, 'wb-detail-numbers');
     for (const number of detailNumbers(row, data, t)) {
       const cell = element(document, 'div', t(number.key), number.pct >= 75 ? 'wb-hi' : undefined);
+      cell.dataset.updateKey = number.key;
       cell.append(element(document, 'b', number.value));
       if (number.pct != null) {
         const bar = element(document, 'span', undefined, 'wb-meter' + (number.pct >= 75 ? ' wb-warn' : ''));
@@ -302,7 +311,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
       }
       if (number.note) cell.append(element(document, 'small', t(number.note)));
       if (number.memory) {
-        const go = element(document, 'button', t('wb.detail.groupMemory'), 'wb-link-btn wb-chev'); go.type = 'button'; go.addEventListener('click', onMemory); cell.append(go);
+        const go = element(document, 'button', t('wb.detail.groupMemory'), 'wb-link-btn wb-chev'); go.type = 'button'; listen(go, 'click', onMemory); cell.append(go);
       }
       numbers.append(cell);
     }

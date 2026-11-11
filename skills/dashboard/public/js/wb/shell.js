@@ -3,9 +3,9 @@ import { boardController, renderBoard, renderDistribution } from './board.js?v=1
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip } from './instance-strip.js?v=157';
 import { renderAttention } from './attention-bar.js?v=150';
-import { createGroupDetail } from './detail.js?v=151';
+import { createGroupDetail } from './detail.js?v=158';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
-import { createHostPanel } from './host-panel.js?v=157';
+import { createHostPanel } from './host-panel.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=1';
 
@@ -174,10 +174,11 @@ export function mountWorkbench({ document = globalThis.document, window = global
     document.querySelector('#wb-side').hidden = true;
     return true;
   }
+  const pageActive = () => document.querySelector('#tab-overview')?.classList.contains('active') &&
+    !document.querySelector('#agent-detail')?.hidden;
   const visible = () => {
     resetOwner();
-    return document.visibilityState !== 'hidden' && document.querySelector('#tab-overview')?.classList.contains('active') &&
-      !document.querySelector('#agent-detail')?.hidden;
+    return document.visibilityState !== 'hidden' && pageActive();
   };
   groupDetail = createGroupDetail({ root: document.querySelector('#wb-side'), document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable,
@@ -293,7 +294,6 @@ export function mountWorkbench({ document = globalThis.document, window = global
   };
   const visibility = () => {
     if (document.visibilityState === 'visible') controller.refresh();
-    else hostPanel.close();
   };
   // An installed-but-unavailable observer still opens its page, which explains why and links to settings.
   const observerClick = event => {
@@ -316,7 +316,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     const active = visible();
     syncNav();
     if (active && (changed || !previousVisible)) controller.refresh();
-    if (!active) hostPanel.close();
+    if (!pageActive()) hostPanel.close();
     previousVisible = active;
   }) : null;
   if (nav) observer?.observe(nav, { attributes: true, attributeFilter: ['hidden'] });

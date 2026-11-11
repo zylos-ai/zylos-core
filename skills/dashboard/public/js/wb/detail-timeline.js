@@ -1,6 +1,7 @@
+import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { endReasonLabel, timeValue } from './event-labels.js?v=91';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=151';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=158';
 import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=108';
 
 export { timeValue };
@@ -223,10 +224,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
   };
 }
 
-const scrollListeners = new WeakMap();
-
 export function renderTimeline(root, loader, { document = root.ownerDocument, t = key => key, level = 'plain', onObserve = null } = {}) {
-  const scrollTop = root.scrollTop ?? 0;
   const { state } = loader;
   const chips = state.chips ?? new Set(chipNames);
   root.replaceChildren();
@@ -235,7 +233,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
   for (const chip of chipNames) {
     const button = element(document, 'button', t('wb.timeline.' + chip), 'wb-chip');
     button.type = 'button'; button.setAttribute('aria-pressed', String(chips.has(chip)));
-    button.addEventListener('click', () => {
+    listen(button, 'click', () => {
       const next = chips.has(chip) ? [...chips].filter(value => value !== chip) : [...chips, chip];
       if (loader.setChips) void loader.setChips(next);
       else loader.setFilter(next.length === 1 ? next[0] : 'all');
@@ -245,7 +243,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
   const note = element(document, 'p', t('wb.timeline.messagesNote'), 'wb-note');
   if (onObserve) {
     const raw = element(document, 'button', t('wb.detail.observeHistory'), 'wb-link-btn wb-chev'); raw.type = 'button';
-    raw.addEventListener('click', () => onObserve('history')); note.append(raw);
+    listen(raw, 'click', () => onObserve('history')); note.append(raw);
   }
   filters.append(chipRow, note);
   root.append(filters);
@@ -258,6 +256,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
   for (const run of current) {
     const section = element(document, 'section', undefined, 'wb-timeline-run');
     section.dataset.runId = run.runId;
+    section.dataset.updateKey = run.runId;
     const open = state.expanded.has(run.runId), live = run.runId === state.currentRunId;
     const toggle = element(document, 'button', undefined, 'wb-run-h'); toggle.type = 'button';
     toggle.setAttribute('aria-expanded', String(open));
@@ -268,7 +267,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
     span.title = [start.title, end?.title].filter(Boolean).join(' – ');
     toggle.append(span, element(document, 'span', live ? t('wb.timeline.currentRun') : endReasonLabel(run.endReason, level, t) ?? '', 'wb-end'));
     if (run.n != null) toggle.append(element(document, 'span', t('wb.timeline.count', { count: run.n }), 'wb-sub'));
-    toggle.addEventListener('click', () => open ? loader.collapse(run.runId) : loader.expand(run.runId));
+    listen(toggle, 'click', () => open ? loader.collapse(run.runId) : loader.expand(run.runId));
     section.append(toggle);
     if (open) {
       const rows = [];
@@ -296,18 +295,21 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
   if (state.unattributed) root.append(element(document, 'p', t('wb.timeline.unattributed', { count: state.unattributed }), 'wb-note'));
   if (state.runs.length < state.totalRuns) {
     const more = element(document, 'button', t('wb.timeline.earlier'), 'wb-link-btn wb-more'); more.type = 'button'; more.disabled = state.loading;
-    more.addEventListener('click', () => loader.loadEarlier()); root.append(more);
+    listen(more, 'click', () => loader.loadEarlier()); root.append(more);
   } else if (state.runs.length) root.append(element(document, 'p', t('wb.timeline.noEarlier'), 'wb-note wb-end-note'));
   if (state.error) root.append(element(document, 'p', t('wb.readFailed') + ' · ' + state.error, 'wb-detail-error'));
   const latest = element(document, 'button', undefined, 'wb-timeline-latest'); latest.type = 'button';
   latest.append(icon(document, 'up', 'xs'), element(document, 'span', t('wb.timeline.latest')));
-  latest.hidden = scrollTop < 20;
-  latest.addEventListener('click', () => { root.scrollTop = 0; latest.hidden = true; });
-  const previousListener = scrollListeners.get(root);
-  if (previousListener) root.removeEventListener('scroll', previousListener);
-  const onScroll = () => { latest.hidden = (root.scrollTop ?? 0) < 20; };
-  scrollListeners.set(root, onScroll);
-  root.addEventListener('scroll', onScroll);
+  latest.hidden = true;
+  listen(latest, 'click', event => {
+    const button = event.currentTarget ?? latest;
+    const body = button.closest?.('.wb-detail-body') ?? root;
+    body.scrollTop = 0; button.hidden = true;
+  });
+  listen(root, 'scroll', event => {
+    const body = event.currentTarget ?? root;
+    const button = body.querySelector?.('.wb-timeline-latest') ?? latest;
+    button.hidden = (body.scrollTop ?? 0) < 20;
+  });
   root.append(latest);
-  root.scrollTop = scrollTop;
 }

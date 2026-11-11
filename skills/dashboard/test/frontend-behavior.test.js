@@ -2463,3 +2463,43 @@ test('workbench shell moves between board rows with j/k and leaves typing alone'
   rows[0].focused = false; key({ key: 'k', target: { tagName: 'INPUT' } }); assert.equal(rows[0].focused, false, 'typing in a field is not navigation');
   key({ key: 'k', target: rows[1] }); assert.equal(rows[0].focused, true);
 });
+
+// Host lifecycle boundary: real shell/controller with injected visibility,
+// navigation, fetch and bounded fake timers. Run for shell host refresh/closure
+// changes; no browser, network, DB, runtime or child process is started.
+test('workbench shell keeps host open through document hiding and background redraws', async context => {
+  let version = 17;
+  const h = workbenchHarness(context, (path, fallback) => path.includes('/api/workbench/host')
+    ? { current: { cpu_pct: version } } : fallback(path));
+  await wbTick(); await wbTick();
+  const descendants = node => [node, ...node.children.flatMap(descendants)];
+  descendants(h.nodes.get('#wb-instance')).find(node => node.id === 'wb-host-open').dispatch('click');
+  await wbTick();
+  const side = h.nodes.get('#wb-side'), hostReads = () => h.calls.filter(path => path.includes('/api/workbench/host')).length;
+  assert.ok(side.textContent.includes('17.0%'));
+  const body = descendants(side).find(node => node.classList.contains('wb-detail-body'));
+  const header = side.children[0];
+  const beforeHidden = hostReads();
+  h.document.visibilityState = 'hidden'; h.listeners.get('visibilitychange')(); h.mutate();
+  assert.equal(side.hidden, false, 'document hiding preserves the selected host');
+  assert.equal(descendants(side).find(node => node.classList.contains('wb-detail-body')), body);
+  assert.ok(side.textContent.includes('17.0%'));
+  await h.poll(5000); await wbTick();
+  assert.equal(hostReads(), beforeHidden, 'hidden pages do not poll host metrics');
+  version = 29;
+  h.document.visibilityState = 'visible'; h.listeners.get('visibilitychange')();
+  await wbTick(); await wbTick();
+  assert.equal(side.hidden, false);
+  assert.ok(side.textContent.includes('17.0%'), 'visibility return retains host observations');
+  assert.equal(descendants(side).find(node => node.classList.contains('wb-detail-body')), body);
+  assert.equal(side.children[0], header);
+  assert.equal(hostReads(), beforeHidden, 'visibility redraw keeps the existing host read cadence');
+  version = 31; await h.poll(5000); await wbTick(); await wbTick();
+  assert.equal(hostReads(), beforeHidden, 'board polling redraw does not introduce metric reads');
+  assert.equal(descendants(side).find(node => node.classList.contains('wb-detail-body')), body);
+  assert.equal(side.children[0], header);
+  assert.ok(side.textContent.includes('17.0%'));
+  h.document.visibilityState = 'hidden'; h.navigate(false);
+  assert.equal(side.hidden, true, 'actual navigation closes host even while the document is hidden');
+  h.stop();
+});

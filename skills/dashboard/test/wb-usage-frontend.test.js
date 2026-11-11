@@ -14,8 +14,12 @@ const fixture = () => {
   document.addEventListener = events.addEventListener.bind(events);
   document.removeEventListener = events.removeEventListener.bind(events);
   document.dispatch = events.dispatch.bind(events);
-  const root = document.createElement('main'), configs = []; let destroyed = 0;
-  return { document, root, configs, chartFactory: (_, config) => { configs.push(config); return { destroy() { destroyed++; } }; }, destroyed: () => destroyed };
+  const root = document.createElement('main'), configs = [], charts = []; let destroyed = 0;
+  return { document, root, configs, charts, chartFactory: (_, config) => {
+    configs.push(config);
+    const chart = { data: config.data, updates: [], update(mode) { this.updates.push(mode); }, destroy() { destroyed++; } };
+    charts.push(chart); return chart;
+  }, destroyed: () => destroyed };
 };
 const value = {
   tz:'Asia/Singapore', buckets:['2026-11-01T16:00:00.000Z','2026-11-02T16:00:00.000Z'], bucket:'day',
@@ -360,4 +364,102 @@ test('the usage page starts with its range controls; the nav button says which p
   assert.deepEqual(tabs.map(tab => tab.attributes['aria-current'] ?? null), [null, 'page', null]);
   markCurrentTab(tabs, 'settings');
   assert.deepEqual(tabs.map(tab => tab.attributes['aria-current'] ?? null), [null, null, 'page']);
+});
+
+// This injected DOM starts newly created bodies at zero. Browser cases prove
+// layout/clamping; these cases require stable mounted nodes, chart instances and
+// keyed rows while actual product update paths change observations in place.
+function hostScrollFixture() {
+  const f = fixture();
+  f.root.querySelector = selector => allNodes(f.root).find(node => node.classList.contains(selector.slice(1)));
+  const create = f.document.createElement;
+  f.document.createElement = tag => { const node = create(tag); node.scrollTop = 0; return node; };
+  return f;
+}
+
+test('host refresh updates existing nodes and charts while preserving pending data and table toggles', async context => {
+  for (const open of [true, false]) await context.test(open ? 'open table' : 'closed table', async () => {
+    const f = hostScrollFixture(), pending = deferred(); let reads = 0;
+    const sample = (at, cpu) => ({ at, cpu: { avg: cpu, max: cpu }, mem: { avg: 20, max: 30 }, disk: { avg: 40, max: 50 } });
+    const firstAt = '2026-11-11T00:00:00Z', keptAt = '2026-11-11T00:05:00Z', newAt = '2026-11-11T00:10:00Z';
+    const panel = createHostPanel({ ...f, detail: () => 'technical', read: () => ++reads === 1
+      ? Promise.resolve({ current: { cpu_pct: 17 }, series: [sample(firstAt, 10), sample(keptAt, 17)] }) : pending.promise });
+    try {
+      await panel.open();
+      const body = () => f.root.querySelector('.wb-detail-body');
+      const table = () => f.root.querySelector('.wb-host-table');
+      const rows = () => allNodes(table()).find(node => node.tagName === 'TBODY').children;
+      const oldBody = body(), oldTable = table(), oldHeader = f.root.children[0], oldCanvases = allNodes(f.root).filter(node => node.tagName === 'CANVAS');
+      const keptRow = rows()[1], initialCharts = [...f.charts];
+      body().scrollTop = 120; table().open = !open;
+      const refreshing = panel.refresh();
+      assert.equal(body(), oldBody, 'pending reads do not replace the old body');
+      assert.ok(f.root.textContent.includes('17.0%'), 'old observations remain visible');
+      body().scrollTop = 275; table().open = open;
+      pending.resolve({ current: { cpu_pct: 29 }, series: [sample(keptAt, 29), sample(newAt, 30)] }); await refreshing;
+      assert.ok(f.root.textContent.includes('29.0%'));
+      assert.equal(body(), oldBody); assert.equal(table(), oldTable); assert.equal(f.root.children[0], oldHeader);
+      assert.equal(body().scrollTop, 275, 'the mounted body retains its own position');
+      assert.equal(Boolean(table().open), open, 'the mounted fold keeps the user toggle');
+      assert.equal(rows().length, 2); assert.equal(rows()[0], keptRow, 'timestamp-keyed rows survive removals and additions');
+      assert.ok(keptRow.textContent.includes('29.0%'), 'the reused row receives new observations');
+      assert.equal(f.charts.length, 3, 'no replacement chart is allocated');
+      assert.equal(f.destroyed(), 0, 'refresh does not destroy charts');
+      for (const [index, chart] of initialCharts.entries()) {
+        assert.equal(f.charts[index], chart);
+        assert.ok(chart.updates.includes('none'), 'existing chart updates without animation');
+        assert.equal(allNodes(f.root).filter(node => node.tagName === 'CANVAS')[index], oldCanvases[index]);
+      }
+      body().scrollTop = 310; table().open = !open;
+      panel.setViewDetail();
+      assert.equal(body(), oldBody); assert.equal(table(), oldTable);
+      assert.equal(body().scrollTop, 310); assert.equal(Boolean(table().open), !open);
+    } finally { panel.destroy(); }
+  });
+});
+
+test('host failed refresh retains observations, scroll and table state', async () => {
+  const f = hostScrollFixture(); let failing = false;
+  const panel = createHostPanel({ ...f, detail: () => 'technical', read: async () => {
+    if (failing) throw Error('offline');
+    return { current: { cpu_pct: 17 } };
+  } });
+  try {
+    await panel.open();
+    f.root.querySelector('.wb-detail-body').scrollTop = 210;
+    f.root.querySelector('.wb-host-table').open = true;
+    const oldBody = f.root.querySelector('.wb-detail-body'), oldTable = f.root.querySelector('.wb-host-table');
+    failing = true; await panel.refresh();
+    assert.ok(f.root.textContent.includes('17.0%'));
+    assert.ok(f.root.textContent.includes('wb.readFailed'));
+    assert.equal(f.root.querySelector('.wb-detail-body'), oldBody);
+    assert.equal(f.root.querySelector('.wb-host-table'), oldTable);
+    assert.equal(oldBody.scrollTop, 210);
+    assert.equal(f.root.querySelector('.wb-host-table').open, true);
+  } finally { panel.destroy(); }
+});
+
+test('host changing range, owner, detail level or reopening rebuilds the panel', async () => {
+  const f = hostScrollFixture(); let owner = 'first', level = 'technical';
+  const panel = createHostPanel({ ...f, identity: () => owner, detail: () => level,
+    read: async () => ({ current: { cpu_pct: 17 } }) });
+  const set = () => { f.root.querySelector('.wb-detail-body').scrollTop = 240; f.root.querySelector('.wb-host-table').open = true; };
+  let previousBody;
+  const reset = reason => {
+    assert.notEqual(f.root.querySelector('.wb-detail-body'), previousBody, reason + ': rebuilds');
+    assert.equal(f.root.querySelector('.wb-detail-body').scrollTop, 0, reason);
+    assert.equal(Boolean(f.root.querySelector('.wb-host-table').open), false, reason);
+  };
+  try {
+    await panel.open(); set(); previousBody = f.root.querySelector('.wb-detail-body');
+    const range = allNodes(f.root).find(node => node.id === 'wb-host-range');
+    range.children.find(button => button.dataset.range === '24h').dispatch('click');
+    await tick(); reset('an explicit range change starts at the top');
+    previousBody = f.root.querySelector('.wb-detail-body'); level = 'plain'; panel.setViewDetail();
+    assert.notEqual(f.root.querySelector('.wb-detail-body'), previousBody, 'detail level rebuilds');
+    assert.equal(f.root.querySelector('.wb-detail-body').scrollTop, 0);
+    level = 'technical'; panel.setViewDetail();
+    set(); previousBody = f.root.querySelector('.wb-detail-body'); owner = 'second'; await panel.refresh(); reset('a new owner starts at the top');
+    set(); previousBody = f.root.querySelector('.wb-detail-body'); panel.close(); await panel.open(); reset('reopening starts at the top');
+  } finally { panel.destroy(); }
 });
