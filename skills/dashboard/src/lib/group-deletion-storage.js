@@ -60,6 +60,8 @@ export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), s
     return row;
   };
   function resolveTarget(target) {
+    // The Origin conversation is fixed: neither its group nor its Dashboard record is deletable.
+    if (target?.draftLocalId === 'origin') throw fail('group_delete_forbidden', 403);
     if (target?.draftLocalId !== undefined) {
       let row;
       try { row = draftRow(target.draftLocalId); }

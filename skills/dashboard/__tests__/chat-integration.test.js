@@ -20,6 +20,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 import { createChatApiFixture, createRemoteChatApiFixture, questionContent, assertChatProcessIsolation } from './helpers/chat-integration-api.js';
 import { acceptDelivery } from '../src/lib/chat/channel.js';
+import { ORIGIN_CONVERSATION_ID } from '../src/lib/chat/origin.js';
 import { makeQuestionSummary, parseC4Content } from '../../comm-bridge/scripts/c4-content-schema.js';
 import { ATTACHMENT_SEND_WINDOW_MS, ATTACHMENT_TTL_MS, ATTACHMENT_GC_INTERVAL_MS } from '../src/lib/chat/attachments.js';
 import { buildAnnotatedContent, parseAttachmentAnnotation } from '../../comm-bridge/scripts/attachment-annotations.js';
@@ -472,8 +473,12 @@ registerIntegrationCase('single mode conversion retains both history tabs and re
   assert.equal(transition.target_mode, 'single');
   for (const tab of ['mine', 'external']) {
     const page = await a.request(`/api/chat/conversations?tab=${tab}`);
-    assert.equal(page.status, 200); assert.equal(page.body.items.length, 1);
-    const messages = await a.request(`/api/chat/conversations/${encodeURIComponent(page.body.items[0].id)}/messages?tab=${tab}`);
+    assert.equal(page.status, 200);
+    // "My conversations" always starts with the pinned Origin conversation.
+    const ids = page.body.items.map(item => item.id);
+    if (tab === 'mine') assert.deepEqual(ids, [ORIGIN_CONVERSATION_ID, active.receipt.conversationId]);
+    else assert.equal(ids.length, 1);
+    const messages = await a.request(`/api/chat/conversations/${encodeURIComponent(ids.at(-1))}/messages?tab=${tab}`);
     assert.equal(messages.status, 200); assert.ok(messages.body.items.length >= 1);
   }
   const before = a.counts.receive;

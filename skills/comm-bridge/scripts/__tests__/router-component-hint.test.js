@@ -110,7 +110,7 @@ test('agent hint stays absent from stored messages, Dashboard history, search, e
   const query = createQueryHandlers(store), history = new ChatHistory({ c4Reader: reader });
   const id = 'g:' + Buffer.from(saved.session_group).toString('hex').toUpperCase();
   assert.equal(history.messages(id).items[0].content, before);
-  assert.equal(history.list().items[0].preview, before);
+  assert.equal(history.list().items.find(item => item.id === id).preview, before);
   assert.equal(query.groups({ match: marker }).length, 0);
   const names = createDisplayNames({ zylosDir: root,
     store: { getGroupDisplayName: () => null },

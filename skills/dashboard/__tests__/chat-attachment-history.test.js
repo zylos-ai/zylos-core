@@ -45,7 +45,7 @@ function fixture(t, attachments) {
 test('attachment list previews show names without managed paths and preserve text', t => {
   const f = fixture(t);
   f.add({ id: 1, content: `Readable text\n${annotation}` });
-  const preview = f.history.list().items[0].preview;
+  const preview = f.history.list().items.find(item => !item.origin).preview;
   assert.equal(preview, 'Readable text\n[文件] report.pdf');
   assert.equal(preview.includes('/private/managed'), false);
   f.add({ id: 2, channel: 'web-console', endpoint_id: 'console', session_group: 'wc:console',

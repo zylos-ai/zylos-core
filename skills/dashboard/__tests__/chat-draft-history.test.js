@@ -39,13 +39,18 @@ function fixture(t) {
   return { root, db, store, reader, conversations, history, add, setNow: value => { now = value; } };
 }
 
+// "Mine" pins the Origin conversation first on its first page; the helpers
+// return the ordinary conversations and drafts after it.
+const ORIGIN_ID = 'g:6F726967696E';
+const mine = history => history.list({ tab: 'mine' }).items.filter(item => item.id !== ORIGIN_ID);
 function pages(history, tab, limit) {
   const items = [];
   let cursor;
   for (let count = 0; count < 30; count++) {
     const result = history.list({ tab, limit, cursor });
     assert.ok(result.items.length <= limit);
-    items.push(...result.items);
+    if (tab === 'mine' && count === 0) assert.equal(result.items[0]?.id, ORIGIN_ID);
+    items.push(...(tab === 'mine' && count === 0 ? result.items.slice(1) : result.items));
     if (result.nextCursor === null) return items;
     assert.ok(result.items.length > 0, 'no empty page may advertise a continuation');
     cursor = result.nextCursor;
@@ -78,7 +83,9 @@ test('drafts and stored conversations share stable bounded pages without crossin
   assert.ok(items.every(item => item.channel === 'dashboard'));
   assert.ok(reads.length && sourceReads.length);
   for (const read of reads) { assert.match(read.sql, /\bLIMIT\b/i); assert.ok(read.count <= 3); }
-  for (const read of sourceReads) { assert.equal(read.options.limit, 3); assert.ok(read.count <= 3); }
+  // The first "mine" page reserves one of its two slots for the pinned Origin conversation.
+  assert.equal(sourceReads[0].options.limit, 2);
+  for (const read of sourceReads.slice(1)) { assert.equal(read.options.limit, 3); assert.ok(read.count <= 3); }
   const external = pages(f.history, 'external', 1);
   assert.deepEqual(external.map(item => item.session_group), ['tg:external']);
   assert.equal(external[0].draft, false);
@@ -90,10 +97,10 @@ test('draft refresh uses its updated time and activation removes the blank dupli
   const first = f.conversations.create({ displayName: 'First' });
   f.setNow(Date.parse('2026-01-02T00:00:00Z'));
   const second = f.conversations.create({ displayName: 'Second' });
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].localId, second.localId);
+  assert.equal(mine(f.history)[0].localId, second.localId);
   f.setNow(Date.parse('2026-01-03T00:00:00Z'));
   f.conversations.rename(first.localId, 'Renamed first');
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].display_name, 'Renamed first');
+  assert.equal(mine(f.history)[0].display_name, 'Renamed first');
   f.conversations.bind(first.localId, 'dash-owned');
   const id = f.add(first.localId);
   f.conversations.markCommitted(first.localId, { id });
@@ -132,7 +139,7 @@ test('group names remain authoritative after activation and workbench renames do
   assert.equal(f.conversations.get(draft.localId).displayName, 'Existing workbench title');
   assert.equal(f.store.db.prepare('SELECT display_name FROM chat_conversations WHERE local_id=?').get(draft.localId).display_name, null);
   f.store.writeGroupDisplayName(`dash-owned:${draft.localId}`, 'Workbench rename', 'human');
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].display_name, 'Workbench rename');
+  assert.equal(mine(f.history)[0].display_name, 'Workbench rename');
   f.conversations.rename(draft.localId, 'Conversation rename');
   assert.equal(f.store.getGroupDisplayName(`dash-owned:${draft.localId}`).display_name, 'Conversation rename');
   assert.equal(f.db.prepare('SELECT endpoint_id,session_group FROM conversations WHERE id=?').get(id).endpoint_id, draft.localId);
@@ -150,16 +157,16 @@ test('an unnamed draft stays unnamed and remains eligible for agent naming after
   const f = fixture(t);
   const draft = f.conversations.create();
   assert.equal(draft.displayName, null);
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].display_name, null);
+  assert.equal(mine(f.history)[0].display_name, null);
   f.conversations.bind(draft.localId, 'dash-owned');
   const id = f.add(draft.localId);
   f.conversations.markCommitted(draft.localId, { id });
   const key = `dash-owned:${draft.localId}`;
   assert.equal(f.store.getGroupDisplayName(key), null);
   assert.equal(f.conversations.get(draft.localId).displayName, null);
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].display_name, null);
+  assert.equal(mine(f.history)[0].display_name, null);
   assert.equal(f.store.writeGroupDisplayName(key, 'Agent title', 'agent'), true);
-  assert.equal(f.history.list({ tab: 'mine' }).items[0].display_name, 'Agent title');
+  assert.equal(mine(f.history)[0].display_name, 'Agent title');
 });
 
 test('draft naming reuses the store policy and an existing group name stays authoritative', t => {

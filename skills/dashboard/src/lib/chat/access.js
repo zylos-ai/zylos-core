@@ -1,4 +1,5 @@
 import { isSameOriginRequest } from '../request-origin.js';
+import { isOriginRecord } from './origin.js';
 
 export const CHAT_SETTINGS_PATH = '/api/chat/settings';
 
@@ -27,15 +28,29 @@ export function requireChatAccess(req, auth, config, options) {
 }
 
 /**
- * Call before writing. Supply authoritative server mode and the stored
- * conversation plus server-resolved namespace/localId, never caller routing
- * fields. Only draft creation may omit the stored conversation (draft: true).
+ * Request-level write check before the conversation is resolved. The full
+ * requireChatWrite check, including the session mode, runs on the stored record.
  */
-export function requireChatWrite(req, auth, config, { mode, draft = false, conversation, namespace, localId } = {}) {
+export function requireChatWritePreflight(req, auth, config) {
   const denied = requireChatAccess(req, auth, config);
   if (denied) return denied;
   if (req._authContext.kind === 'cookie' && !isSameOriginRequest(req)) return { status: 403, error: 'same_origin_required' };
-  if (mode !== 'multi') return { status: 403, error: 'chat_requires_multi' };
+  return null;
+}
+
+/**
+ * Call before writing. Supply authoritative server mode and the stored
+ * conversation plus server-resolved namespace/localId, never caller routing
+ * fields. Only draft creation may omit the stored conversation (draft: true).
+ * The Origin conversation is writable in both session modes; every other
+ * conversation requires multi.
+ */
+export function requireChatWrite(req, auth, config, { mode, draft = false, conversation, namespace, localId } = {}) {
+  const denied = requireChatWritePreflight(req, auth, config);
+  if (denied) return denied;
+  const origin = !draft && isOriginRecord(namespace, localId)
+    && isOriginRecord(conversation?.namespace, conversation?.localId);
+  if (mode !== 'multi' && !origin) return { status: 403, error: 'chat_requires_multi' };
   // Draft creation has no existing record. Sends/answers must pass a stored
   // record and server-owned namespace/local ID, never caller routing fields.
   if (!draft && (!conversation || conversation.channel !== 'dashboard' || !namespace ||

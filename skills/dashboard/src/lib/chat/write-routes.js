@@ -1,4 +1,4 @@
-import { requireChatAccess, requireChatWrite } from './access.js';
+import { requireChatAccess, requireChatWrite, requireChatWritePreflight } from './access.js';
 import { readJsonBody, sendJson } from '../http.js';
 import { attachmentPrincipal } from './attachment-routes.js';
 
@@ -15,7 +15,8 @@ export async function handleChatConversations(req, res, url, { auth, config, con
   if (!draft && !match) return false;
   const read = !draft && !match[2] && req.method === 'GET';
   const preflight = read ? requireChatAccess(req, auth, config)
-    : requireChatWrite(req, auth, config, { mode: readMode(), draft: true });
+    : draft ? requireChatWrite(req, auth, config, { mode: readMode(), draft: true })
+      : requireChatWritePreflight(req, auth, config);
   if (preflight) { deniedResponse(res, preflight); return true; }
   const allowed = draft ? req.method === 'POST' : match[2] ? req.method === 'POST' : ['GET', 'PATCH'].includes(req.method);
   if (!allowed) { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }

@@ -193,7 +193,10 @@ for (const withFallback of [true, false]) test(`invalid attachment lifecycle row
     }
   }
   for (const tab of ['mine', 'external']) {
-    const history = f.history(), list = history.list({ tab });
+    const history = f.history(), all = history.list({ tab });
+    // "Mine" also pins the empty Origin conversation first.
+    if (tab === 'mine') assert.equal(all.items[0].origin, true);
+    const list = { ...all, items: all.items.filter(item => item.origin !== true) };
     assert.equal(list.items.length, 1);
     assert.equal(list.items[0].preview, withFallback ? 'Unavailable attachment' : '无法显示的消息');
     const messages = history.messages(list.items[0].id, { tab });

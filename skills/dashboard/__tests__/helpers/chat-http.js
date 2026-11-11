@@ -32,6 +32,8 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
   const counts = { reads: 0, receives: 0, upstream: 0 };
   let mode = 'multi';
   let record = { channel: 'dashboard', namespace: 'dashboard-owned', localId: 'local-chat' };
+  // The server-resolved owner of the requested conversation.
+  let owner = { namespace: 'dashboard-owned', localId: 'local-chat' };
   let proxy;
   const servers = [];
   async function start(isHub) {
@@ -47,7 +49,7 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
         if (isChatDataRoute(req.method, url.pathname)) {
           const denied = req.method === 'GET' ? requireChatAccess(req, auth, settings) :
             requireChatWrite(req, auth, settings, { mode, draft: url.pathname.endsWith('/drafts'),
-              conversation: record, namespace: 'dashboard-owned', localId: 'local-chat' });
+              conversation: record, namespace: owner.namespace, localId: owner.localId });
           if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return; }
           counts[req.method === 'GET' ? 'reads' : 'receives']++;
           sendJson(res, 200, { content: 'PRIVATE_BODY', summary: 'PRIVATE_SUMMARY', count: 12, questions: ['PRIVATE_QUESTION'] });
@@ -79,5 +81,6 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
       method: route.method, headers, ...(['GET', 'HEAD'].includes(route.method) ? {} : { body }) });
     return { status: response.status, text: await response.text() };
   }
-  return { request, config: settings, localConfig: hubSettings, counts, auth, setMode: value => { mode = value; }, setRecord: value => { record = value; } };
+  return { request, config: settings, localConfig: hubSettings, counts, auth, setMode: value => { mode = value; }, setRecord: value => { record = value; },
+    setOwner: value => { owner = value; } };
 }

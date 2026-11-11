@@ -464,7 +464,7 @@ test('an owned canonical list entry opens and reconciles an uncertain first send
   assert.equal((await f.sender.send(draft.id, { content: 'uncertain first message' })).needsReconciliation, true);
   f.setQueryError(false);
   const history = new ChatHistory({ c4Reader: f.reader, conversations: f.conversations });
-  const listed = history.list({ tab: 'mine' }).items;
+  const listed = history.list({ tab: 'mine' }).items.filter(item => !item.origin);
   assert.equal(listed.length, 1);
   assert.ok(listed[0].id.startsWith('g:'));
   assert.equal(listed[0].display_name, 'Preserved title');

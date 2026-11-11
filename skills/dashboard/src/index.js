@@ -18,6 +18,7 @@ import { handleChatStream } from './lib/chat/stream.js';
 import { handleChatHistory } from './lib/chat/history-routes.js';
 import { ChatActivity, recordGroupInterrupt } from './lib/chat/activity.js';
 import { ChatConversations, isChatLocalIdUsed } from './lib/chat/conversations.js';
+import { ensureOriginConversation } from './lib/chat/origin.js';
 import { reconcileConversationNames } from './lib/chat/auto-name.js';
 import { ChatSender } from './lib/chat/send.js';
 import { ChatAnswers } from './lib/chat/answers.js';
@@ -1687,6 +1688,7 @@ async function handleMemoryApi(req, res, pathname, url) {
 
 export function createServer() {
   const conversations = new ChatConversations({ store, isUsed: localId => isChatLocalIdUsed(c4Reader, localId) });
+  ensureOriginConversation(store.db);
   const groupDeletionRoutes = createGroupDeletionRoutes({ auth, config, conversations });
   const attachments = new ChatAttachments({ store, c4Reader, zylosDir: config.zylosDir });
   const sender = new ChatSender({ conversations, c4Reader, zylosDir: config.zylosDir, attachments });

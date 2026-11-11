@@ -4,9 +4,11 @@ import { isDataError as localDataError, parseSessionGroup, validateGroupName, va
 import { MAX_CONTENT_BYTES } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { deliveryState } from './history.js';
 import { buildAnnotatedContent } from '../../../../comm-bridge/scripts/attachment-annotations.js';
+import { ORIGIN, ORIGIN_CONVERSATION_ID, conversationGroup, isOriginRecord } from './origin.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-const canonicalId = row => `g:${Buffer.from(`${row.namespace}:${row.localId}`).toString('hex').toUpperCase()}`;
+const canonicalId = row => `g:${Buffer.from(conversationGroup(row.namespace, row.localId)).toString('hex').toUpperCase()}`;
+const isOrigin = row => isOriginRecord(row?.namespace, row?.localId);
 const messageId = value => Number.isSafeInteger(value) && value > 0 ? value : null;
 const unknown = outcome => ['sending', 'unknown'].includes(outcome?.kind);
 
@@ -54,12 +56,19 @@ export class ChatSender {
   }
 
   _binding(row) {
+    // The fixed address belongs to Dashboard without a channel namespace binding.
+    if (isOrigin(row)) return;
     const binding = this._db().prepare(`SELECT component_name FROM channel_namespaces WHERE namespace=?`).get(row.namespace);
     if (binding?.component_name !== 'dashboard') throw fail('chat_conversation_forbidden', 403);
   }
 
   _record(id, { reconcile = false } = {}) {
     if (typeof id !== 'string') throw fail('invalid_chat_conversation');
+    if (id === ORIGIN_CONVERSATION_ID) {
+      const row = this.conversations.get(ORIGIN);
+      if (!isOrigin(row) || row.channel !== 'dashboard' || row.state !== 'active') throw fail('chat_conversation_forbidden', 403);
+      return row;
+    }
     let localId, namespace = null;
     if (id.startsWith('d:')) localId = id.slice(2);
     else if (/^g:(?:[0-9A-F]{2})+$/.test(id)) {
@@ -70,6 +79,8 @@ export class ChatSender {
       ({ namespace, groupName: localId } = parsed);
     } else throw fail('invalid_chat_conversation');
     try { validateGroupName(localId); } catch { throw fail('invalid_chat_conversation'); }
+    // Only the fixed ID above addresses the Origin conversation.
+    if (localId === ORIGIN) throw fail('invalid_chat_conversation');
     let row;
     try { row = this.conversations.get(localId); }
     catch (error) {
@@ -104,6 +115,7 @@ export class ChatSender {
     const core = await this.loadCore();
     const denied = await authorize?.(row);
     if (denied) throw fail(denied.error || 'chat_conversation_forbidden', denied.status || 403);
+    if (isOrigin(row)) return this.conversations.get(ORIGIN);
     const binding = await core.ensureChannelNamespace('dashboard');
     if (binding?.componentName !== 'dashboard' || !validNamespace(binding.namespace)
         || (row.namespace && row.namespace !== binding.namespace)) throw fail('chat_conversation_forbidden', 403);
@@ -113,7 +125,7 @@ export class ChatSender {
 
   _head(row) {
     this._binding(row);
-    return this._db().prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(`${row.namespace}:${row.localId}`) ?? null;
+    return this._db().prepare('SELECT head_id FROM group_heads WHERE session_group=?').get(conversationGroup(row.namespace, row.localId)) ?? null;
   }
 
   _status(row, id) {
@@ -121,7 +133,7 @@ export class ChatSender {
       this._binding(row);
       const result = this._db().prepare(`SELECT direction,status,delivery_action FROM conversations
         WHERE id=? AND direction='in' AND channel='dashboard' AND endpoint_id=? AND session_group=?`)
-        .get(id, row.localId, `${row.namespace}:${row.localId}`);
+        .get(id, row.localId, conversationGroup(row.namespace, row.localId));
       return result ? deliveryState(result) : 'pending_reconciliation';
     } catch { return 'pending_reconciliation'; }
   }
@@ -200,7 +212,7 @@ export class ChatSender {
       const target = this._db().prepare(`SELECT id FROM conversations
         WHERE id=? AND session_group=? AND direction IN ('in','out')
         AND (channel='internal' OR (channel='dashboard' AND endpoint_id=?))`)
-        .get(quote, `${row.namespace}:${row.localId}`, row.localId);
+        .get(quote, conversationGroup(row.namespace, row.localId), row.localId);
       if (!target) throw fail('invalid_chat_quote');
     }
     try { this.conversations.get(row.localId); }
@@ -239,19 +251,23 @@ export class ChatSender {
         if (denied) throw fail(denied.error || 'chat_conversation_forbidden', denied.status || 403);
       };
       await check(row);
-      const binding = await core.ensureChannelNamespace('dashboard');
-      if (binding?.componentName !== 'dashboard' || !validNamespace(binding.namespace)) throw fail('chat_conversation_forbidden', 403);
-      if (row.namespace && row.namespace !== binding.namespace) throw fail('chat_conversation_forbidden', 403);
-      await check({ ...row, namespace: binding.namespace, sessionGroup: `${binding.namespace}:${row.localId}` });
-      row = this.conversations.bind(row.localId, binding.namespace);
-      this._binding(row);
+      const origin = isOrigin(row);
+      if (!origin) {
+        const binding = await core.ensureChannelNamespace('dashboard');
+        if (binding?.componentName !== 'dashboard' || !validNamespace(binding.namespace)) throw fail('chat_conversation_forbidden', 403);
+        if (row.namespace && row.namespace !== binding.namespace) throw fail('chat_conversation_forbidden', 403);
+        await check({ ...row, namespace: binding.namespace, sessionGroup: `${binding.namespace}:${row.localId}` });
+        row = this.conversations.bind(row.localId, binding.namespace);
+        this._binding(row);
+      }
       // Persist before entering Core. A restart must recover uncertainty instead
       // of treating an interrupted call as a fresh first send.
       this.conversations.beginSend(row.localId, { content, initial });
       let result, failure;
       try {
+        // The fixed address is never sent with a session group; Core refuses one.
         result = await core.receive(['--channel', 'dashboard', '--endpoint', row.localId,
-          '--session-group', row.localId, '--content', content]);
+          ...(origin ? [] : ['--session-group', row.localId]), '--content', content]);
       } catch (error) { failure = error; }
       const { id: savedId, ...outcome } = classifyReceiveResult(result, failure, core.isDataError ?? localDataError);
       if (savedId && records.length) {

@@ -60,13 +60,17 @@ function fixture(t, withAuth = false) {
   return { root, db, store, reader, history, add };
 }
 
+// "Mine" pins the Origin conversation first on its first page; the collected
+// items are the ordinary conversations after it.
+const ORIGIN_ID = 'g:6F726967696E';
 function collect(history, tab, limit = 2, expectedCount) {
   const items = [];
   let cursor;
   for (let batch = 0; batch < 100; batch++) {
     const page = history.list({ tab, limit, cursor });
     assert.ok(page.items.length <= limit);
-    items.push(...page.items);
+    if (tab === 'mine' && batch === 0) assert.equal(page.items[0]?.id, ORIGIN_ID);
+    items.push(...(tab === 'mine' && batch === 0 ? page.items.slice(1) : page.items));
     if (expectedCount !== undefined && items.length === expectedCount) {
       assert.ok(page.items.length > 0);
       assert.equal(page.nextCursor, null, 'Last nonempty page must not advertise another page');
@@ -164,7 +168,7 @@ test('list and quote previews skip only a valid first-line marker and retain rea
   const f = fixture(t);
   f.add({ id: 100, channel: 'dashboard', endpoint_id: 'a', session_group: 'dash-owned:a',
     content: '[quote c4_id=99]\n**User words**' });
-  assert.equal(f.history.list().items[0].preview, 'User words');
+  assert.equal(f.history.list().items.find(item => !item.origin).preview, 'User words');
   assert.equal(conversationPreview('[quote c4_id=1]\n[quote c4_id=2]\nbody'), '[quote c4_id=1]\n[quote c4_id=2]\nbody');
   assert.equal(conversationPreview('intro\n[quote c4_id=1]\nbody'), 'intro\n[quote c4_id=1]\nbody');
   assert.equal(conversationPreview('[quote c4_id=0]\nbody'), '[quote c4_id=0]\nbody');
@@ -338,7 +342,7 @@ test('mine requires the Dashboard namespace binding and exact local endpoint rou
   assert.equal(items[0].display_name, 'a');
   assert.throws(() => f.history.messages(groupId('other-owned:foreign'), { tab: 'mine' }), bad);
   f.db.prepare("DELETE FROM channel_namespaces WHERE component_name='dashboard'").run();
-  assert.deepEqual(f.history.list({ tab: 'mine' }).items, []);
+  assert.deepEqual(f.history.list({ tab: 'mine' }).items.map(item => item.id), [ORIGIN_ID]);
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM channel_namespaces WHERE component_name='dashboard'").get().n, 0);
 });
 
@@ -679,7 +683,7 @@ test('internal rows preserve raw facts and project peers on both histories witho
   assert.equal(external[3].internal.peerChannel, null);
   assert.equal(external[4].internal.peerExists, false, 'internal-only group does not create a navigable peer');
   for (const [tab, id, expected] of [['mine', 1, 'own external'], ['external', 2, 'telegram external']]) {
-    const list = f.history.list({ tab }).items;
+    const list = f.history.list({ tab }).items.filter(item => !item.origin);
     assert.equal(list.length, 1); assert.equal(list[0].count, 1);
     assert.equal(list[0].preview, expected);
     assert.equal(list[0].channel, tab === 'mine' ? 'dashboard' : 'telegram');

@@ -44,6 +44,35 @@ test('cookie reads are local while writes require origin multi and stored owners
   }
 });
 
+// Integration: same private HTTP fixture; run for session-mode or remote write
+// changes, skip presentation-only edits. No Core receive, PM2, tmux or live DB.
+test('the Origin conversation is writable in both modes and remotely only with the switch and an admin key', async t => {
+  const f = await chatHttpFixture(t);
+  const origin = { channel: 'dashboard', namespace: 'origin', localId: 'origin' };
+  const writes = chatRoutes.filter(route => route.method === 'POST' && !route.path.endsWith('/drafts'));
+  const drafts = chatRoutes.find(route => route.path.endsWith('/drafts'));
+  f.setMode('single');
+  for (const route of writes) assert.equal((await f.request(route)).status, 403, 'other conversations stay read-only in single');
+  f.setRecord(origin); f.setOwner(origin);
+  for (const mode of ['single', 'multi']) {
+    f.setMode(mode);
+    for (const route of writes) assert.equal((await f.request(route)).status, 200, `${mode} ${route.path}`);
+  }
+  f.setMode('single');
+  assert.equal((await f.request(drafts)).status, 403, 'creating conversations still requires multi');
+  // The record and the resolved owner must both be the fixed Origin record.
+  f.setOwner({ namespace: 'dashboard-owned', localId: 'origin' });
+  for (const route of writes) assert.equal((await f.request(route)).status, 403);
+  f.setOwner(origin);
+  for (const allowRemote of [false, true]) {
+    f.config.chat.allowRemote = allowRemote;
+    for (const fleet of [false, true]) for (const identity of ['read', 'admin']) for (const route of writes) {
+      const result = await f.request(route, { identity, fleet });
+      assert.equal(result.status, allowRemote && identity === 'admin' ? 200 : 403, JSON.stringify({ allowRemote, fleet, identity, route }));
+    }
+  }
+});
+
 // Integration: private HTTP fixture, run for auth-disabled handling changes;
 // skip visual changes. Resource lifecycle is owned by fixture teardown.
 test('missing authentication and disabled authentication never authorize chat', async t => {

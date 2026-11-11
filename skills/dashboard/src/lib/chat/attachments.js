@@ -13,6 +13,7 @@ import {
 import { sanitizeDisplayName, parseAttachmentAnnotation } from '../../../../comm-bridge/scripts/attachment-annotations.js';
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { validateGroupName, validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
+import { ORIGIN, conversationGroup, isOriginRecord } from './origin.js';
 
 export const ATTACHMENT_SEND_WINDOW_MS = 25 * 60 * 1000;
 export const ATTACHMENT_TTL_MS = 30 * 60 * 1000;
@@ -50,6 +51,15 @@ export class ChatAttachments {
     const localId = typeof conversation === 'string' ? conversation : conversation?.localId;
     try { validateGroupName(localId); } catch { throw fail('invalid_chat_conversation'); }
     let row = this.db.prepare('SELECT local_id,namespace FROM chat_conversations WHERE local_id=?').get(localId);
+    if (localId === ORIGIN) {
+      // The fixed address needs no channel namespace binding; Core records it as group `origin`.
+      if (!row) throw fail('chat_conversation_not_found', 404);
+      if (!isOriginRecord(row.namespace, row.local_id) || (typeof conversation === 'object'
+          && (conversation.channel !== 'dashboard' || !isOriginRecord(conversation.namespace, conversation.localId)))) {
+        throw fail('chat_conversation_forbidden', 403);
+      }
+      return { localId, channel: 'dashboard', namespace: ORIGIN, sessionGroup: ORIGIN };
+    }
     const binding = this._core().prepare("SELECT namespace FROM channel_namespaces WHERE component_name='dashboard'").get();
     if (!row && recover && binding && (typeof conversation === 'string' ||
         conversation.channel === 'dashboard' && (!conversation.namespace || conversation.namespace === binding.namespace))) {
@@ -280,7 +290,7 @@ export class ChatAttachments {
 
   _matches(record, row, reference) {
     return row.channel === 'dashboard' && row.endpoint_id === record.local_id
-      && row.session_group === `${record.namespace}:${record.local_id}`
+      && row.session_group === conversationGroup(record.namespace, record.local_id)
       && row.id > record.c4_watermark && reference.kind === record.kind
       && (row.direction === 'in' ? reference.storageName === record.storage_name && (record.source === 'user' || record.linked)
         : row.direction === 'out' && reference.id === record.id && (record.source === 'agent' || record.linked));
@@ -377,7 +387,7 @@ export class ChatAttachments {
       const rows = core.prepare(`SELECT id,direction,channel,endpoint_id,session_group,content FROM conversations
         WHERE id>? AND id<=? AND channel='dashboard' AND endpoint_id=? AND session_group=? AND direction=?
         ORDER BY id LIMIT ?`).all(record.scanned_c4_id, record.scan_upper_id, record.local_id,
-        `${record.namespace}:${record.local_id}`, record.source === 'user' ? 'in' : 'out', BATCH);
+        conversationGroup(record.namespace, record.local_id), record.source === 'user' ? 'in' : 'out', BATCH);
       for (const row of rows) {
         if (this._references(row).some(reference => this._matches(record, row, reference))) {
           this.db.prepare('INSERT OR IGNORE INTO chat_attachment_messages(attachment_id,c4_id) VALUES(?,?)').run(record.id, row.id);

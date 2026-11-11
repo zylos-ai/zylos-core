@@ -1,5 +1,5 @@
 import { projectQuestion } from './answers.js';
-import { requireChatAccess, requireChatWrite } from './access.js';
+import { requireChatAccess, requireChatWrite, requireChatWritePreflight } from './access.js';
 import { readJsonBody, sendJson } from '../http.js';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -14,8 +14,7 @@ export async function handleChatAnswers(req, res, url, { auth, config, answers, 
   const match = /^\/api\/chat\/conversations\/([^/]+)\/(questions|answers)$/.exec(url.pathname);
   if (!match) return false;
   const read = match[2] === 'questions';
-  const preflight = read ? requireChatAccess(req, auth, config)
-    : requireChatWrite(req, auth, config, { mode: readMode(), draft: true });
+  const preflight = read ? requireChatAccess(req, auth, config) : requireChatWritePreflight(req, auth, config);
   if (preflight) { respondDenied(res, preflight); return true; }
   if (req.method !== (read ? 'GET' : 'POST')) {
     sendJson(res, 405, { error: 'method_not_allowed' }); return true;

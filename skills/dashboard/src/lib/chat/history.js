@@ -4,12 +4,22 @@ import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schem
 import { splitContentAndAttachments, sanitizeDisplayName } from '../../../../comm-bridge/scripts/attachment-annotations.js';
 import { answerDisplay } from '../../../public/js/wb/chat-answer.js';
 import { parseChatQuote, stripChatQuote } from '../../../../comm-bridge/scripts/chat-quote.js';
+import { ORIGIN, ORIGIN_CONVERSATION_ID, ORIGIN_DISPLAY_NAME } from './origin.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-const visible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin','*')
-  AND c.channel <> '' AND c.channel NOT IN ('void','internal','system','scheduler','control')`;
-const messageVisible = `c.direction IN ('in','out') AND c.session_group NOT IN ('origin','*')
-  AND c.channel <> '' AND c.channel NOT IN ('void','system','scheduler','control')`;
+const shown = (groups, channels) => `c.direction IN ('in','out') AND c.session_group NOT IN (${groups})
+  AND c.channel <> '' AND c.channel NOT IN (${channels})`;
+// Lists and summaries never include internal messages; message pages do.
+// The `origin` group is shown only through the Origin conversation's range.
+const visible = shown("'origin','*'", "'void','internal','system','scheduler','control'");
+const messageVisible = shown("'origin','*'", "'void','system','scheduler','control'");
+const originVisible = shown("'*'", "'void','internal','system','scheduler','control'");
+const originMessageVisible = shown("'*'", "'void','system','scheduler','control'");
+const visibleIn = (range, messages = false) => range?.origin
+  ? messages ? originMessageVisible : originVisible
+  : messages ? messageVisible : visible;
+// The Origin conversation: the fixed address `dashboard origin`, recorded in group `origin`.
+const originWhere = "c.session_group=@group AND c.channel='dashboard' AND c.endpoint_id='origin'";
 const identity = `CASE WHEN c.session_group = '' THEN 'l:' || hex(c.channel) || ':' || hex(c.endpoint_id)
   ELSE 'g:' || hex(c.session_group) END`;
 
@@ -164,6 +174,11 @@ export class ChatHistory {
     limit = this._limit(limit);
     const scope = `list:${tab}`;
     const position = this._cursor(cursor, scope);
+    // The Origin conversation is pinned first on the first page of "mine",
+    // with or without messages, outside the activity order. It takes one of
+    // the page's slots; later pages continue the ordinary conversations.
+    const pinned = tab === 'mine' && !position;
+    limit = pinned ? limit - 1 : limit;
     let rows = this._query(`${this._source(tab)}, summaries AS (
       SELECT identity AS id, session_group, channel, endpoint_id,
         COALESCE(MAX(julianday(timestamp)), 0) AS stamp, COUNT(*) AS count
@@ -196,7 +211,23 @@ export class ChatHistory {
         ...(registered ? { localId: registered.localId } : {}), draft: false };
     });
     const last = items.at(-1);
-    return { items, nextCursor: more ? this._token({ scope, stamp: last.stamp, id: last.id }) : null };
+    if (pinned) items.unshift(this._originItem(locale));
+    // A one-item first page holds only Origin; the next page starts at the beginning.
+    const next = last ? { stamp: last.stamp, id: last.id } : { stamp: null, id: '' };
+    return { items, nextCursor: more ? this._token({ scope, ...next }) : null };
+  }
+
+  _originItem(locale) {
+    const parameters = { group: ORIGIN };
+    const summary = this._query(`SELECT COALESCE(MAX(julianday(c.timestamp)), 0) AS stamp, COUNT(*) AS count
+      FROM conversations c INDEXED BY idx_conv_group_id WHERE ${originVisible} AND ${originWhere} LIMIT 1`, parameters)[0];
+    const latest = this._query(`SELECT c.id, c.content, c.direction, c.channel FROM conversations c INDEXED BY idx_conv_group_id
+      WHERE ${originVisible} AND ${originWhere}
+      ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
+    return { id: ORIGIN_CONVERSATION_ID, session_group: ORIGIN, channel: 'dashboard', endpoint_id: ORIGIN,
+      stamp: summary?.stamp ?? 0, count: summary?.count ?? 0, previewDirection: latest?.direction ?? null,
+      preview: latest ? conversationPreview(previewContent(latest), { locale }) : '',
+      display_name: ORIGIN_DISPLAY_NAME, localId: ORIGIN, origin: true, draft: false };
   }
 
   _drafts(limit, position) {
@@ -235,6 +266,9 @@ export class ChatHistory {
       return text;
     };
     let where, parameters;
+    if (tab === 'mine' && id === ORIGIN_CONVERSATION_ID) {
+      return { where: originWhere, parameters: { group: ORIGIN }, origin: true };
+    }
     if (id.startsWith('g:')) {
       parameters = { group: decode(id.slice(2)) };
       where = 'c.session_group=@group';
@@ -255,6 +289,8 @@ export class ChatHistory {
 
   _conversation(tab, id) {
     const range = this._range(tab, id);
+    // The Origin conversation exists without messages; it is empty, not missing.
+    if (range.origin) return range;
     const row = this._query(`SELECT c.id FROM conversations c WHERE ${visible} AND ${range.where} LIMIT 1`, range.parameters)[0];
     if (!row) throw fail('chat_conversation_not_found', 404);
     return range;
@@ -289,7 +325,7 @@ export class ChatHistory {
     const position = this._cursor(cursor, `messages:${tab}:${id}:${direction}`);
     const rows = this._query(`SELECT c.id, c.timestamp, c.direction, c.channel,
       c.endpoint_id, c.session_group, c.content, c.status, c.delivery_action FROM conversations c
-      WHERE ${messageVisible} AND ${range.where} AND (@position IS NULL OR c.id ${direction === 'before' ? '<' : '>'} @position)
+      WHERE ${visibleIn(range, true)} AND ${range.where} AND (@position IS NULL OR c.id ${direction === 'before' ? '<' : '>'} @position)
       ORDER BY c.id ${direction === 'before' ? 'DESC' : 'ASC'} LIMIT @limit`, {
       ...range.parameters, position: position?.id ?? null, limit: limit + 1,
     });
@@ -297,11 +333,11 @@ export class ChatHistory {
     const page = rows.slice(0, limit);
     const next = page.at(-1)?.id;
     const rechecked = recheck.length ? this._rowsByIds(range, recheck,
-      'c.id,c.direction,c.channel,c.endpoint_id,c.session_group,c.content', messageVisible) : [];
+      'c.id,c.direction,c.channel,c.endpoint_id,c.session_group,c.content', visibleIn(range, true)) : [];
     const batch = [...new Map([...page, ...rechecked].map(row => [row.id, row])).values()];
     const quoteIds = [...new Set(page.map(row => rowQuote(row)?.id).filter(Boolean))];
     const quoted = new Map((quoteIds.length ? this._rowsByIds(range, quoteIds,
-      'c.id,c.direction,c.timestamp,c.channel,c.endpoint_id,c.content', messageVisible, false) : [])
+      'c.id,c.direction,c.timestamp,c.channel,c.endpoint_id,c.content', visibleIn(range, true), false) : [])
       .map(row => [row.id, row]));
     const metadata = new Map();
     if (tab === 'mine' && this.attachments) {
@@ -349,7 +385,7 @@ export class ChatHistory {
     return unique;
   }
 
-  _rowsByIds(range, unique, columns, visibility = visible, strict = true) {
+  _rowsByIds(range, unique, columns, visibility = visibleIn(range), strict = true) {
     const parameters = { ...range.parameters, limit: unique.length };
     unique.forEach((value, index) => { parameters[`id${index}`] = value; });
     const rows = this._query(`SELECT ${columns} FROM conversations c
@@ -369,14 +405,17 @@ export class ChatHistory {
       const highwater = this._query('SELECT COALESCE(MAX(id),0) AS id FROM conversations', {})[0].id;
       if (afterId !== null && afterId > highwater) throw fail('chat_history_unavailable', 502);
       const listScope = this._scope(tab, '1=1', {});
+      // "Mine" also changes with the pinned Origin conversation.
+      const listed = tab === 'mine' ? `((${visible} AND ${listScope.where}) OR (${originVisible} AND ${originWhere}))`
+        : `${visible} AND ${listScope.where}`;
       const inserted = this._query(`SELECT c.id FROM conversations c NOT INDEXED
-        WHERE c.id>@afterId AND c.id<=@highwater AND ${visible} AND ${listScope.where}
-        ORDER BY c.id LIMIT 1`, { afterId: afterId ?? highwater, highwater });
+        WHERE c.id>@afterId AND c.id<=@highwater AND ${listed}
+        ORDER BY c.id LIMIT 1`, { afterId: afterId ?? highwater, highwater, group: ORIGIN });
       let latestId = null, delivery = [];
       if (range) {
         const messages = this._messageRange(tab, conversationId, range);
         latestId = this._query(`SELECT c.id FROM conversations c
-          WHERE ${messageVisible} AND ${messages.where} ORDER BY c.id DESC LIMIT 1`, messages.parameters)[0]?.id ?? null;
+          WHERE ${visibleIn(range, true)} AND ${messages.where} ORDER BY c.id DESC LIMIT 1`, messages.parameters)[0]?.id ?? null;
         if (tab === 'mine') {
           // Each fixed-status seek returns at most 100 rows from the existing
           // group/direction/status index, then keep the newest 100 overall.
@@ -384,7 +423,7 @@ export class ChatHistory {
           // reaches a terminal state, without retaining terminal history.
           const pending = ['pending', 'running'].flatMap(status => this._query(`SELECT c.id,c.direction,c.status,c.delivery_action
             FROM conversations c INDEXED BY idx_conv_group_status
-            WHERE ${visible} AND ${range.where} AND c.direction='in' AND c.status=@status
+            WHERE ${visibleIn(range)} AND ${range.where} AND c.direction='in' AND c.status=@status
             ORDER BY c.id DESC LIMIT 100`, { ...range.parameters, status }));
           delivery = pending.sort((a, b) => b.id - a.id).slice(0, 100).reverse();
         }

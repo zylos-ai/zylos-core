@@ -1,6 +1,7 @@
 import { parseC4Content } from '../../../../comm-bridge/scripts/c4-content-schema.js';
 import { parseSessionGroup, isDataError } from '../../../../comm-bridge/scripts/c4-session-group.js';
 import { classifyReceiveResult } from './send.js';
+import { ORIGIN, isOriginRecord } from './origin.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const validId = value => Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -35,6 +36,7 @@ export class ChatAnswerDelivery {
   }
 
   _group(answer) {
+    if (answer.sessionGroup === ORIGIN && answer.endpointId === ORIGIN) return { namespace: ORIGIN, localId: ORIGIN };
     const parsed = parseSessionGroup(answer.sessionGroup);
     if (!parsed?.groupName || parsed.groupName !== answer.endpointId) throw fail('chat_answer_forbidden', 403);
     return { namespace: parsed.namespace, localId: parsed.groupName };
@@ -127,8 +129,10 @@ export class ChatAnswerDelivery {
       this._save(answerId, { state: 'sending' });
       let result, failure;
       try {
+        // The fixed address is never sent with a session group; Core refuses one.
         result = await core.receive(['--channel', 'dashboard', '--endpoint', answer.endpointId,
-          '--session-group', group.localId, '--content', answer.content]);
+          ...(isOriginRecord(group.namespace, group.localId) ? [] : ['--session-group', group.localId]),
+          '--content', answer.content]);
       } catch (error) { failure = error; }
       finally { this.inflight.delete(answerId); }
       const outcome = classifyReceiveResult(result, failure, core.isDataError ?? isDataError);

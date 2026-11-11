@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { validName } from '../workbench/display-names.js';
 import { validateGroupName, validNamespace } from '../../../../comm-bridge/scripts/c4-session-group.js';
+import { ORIGIN, ORIGIN_DISPLAY_NAME, conversationGroup, isOriginRecord } from './origin.js';
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const groupId = key => `g:${Buffer.from(key).toString('hex').toUpperCase()}`;
@@ -72,18 +73,19 @@ export class ChatConversations {
   }
 
   _project(row) {
-    const sessionGroup = row.namespace ? `${row.namespace}:${row.local_id}` : null;
+    const sessionGroup = row.namespace ? conversationGroup(row.namespace, row.local_id) : null;
     let lastOutcome = null;
     try { lastOutcome = row.last_outcome === null ? null : JSON.parse(row.last_outcome); }
     catch { throw fail('chat_conversation_unavailable', 502); }
     return {
       id: row.state === 'active' ? groupId(sessionGroup) : `d:${row.local_id}`,
       localId: row.local_id, channel: 'dashboard', namespace: row.namespace, sessionGroup,
-      displayName: row.state === 'active'
+      displayName: isOriginRecord(row.namespace, row.local_id) ? ORIGIN_DISPLAY_NAME : row.state === 'active'
         ? this.store.getGroupDisplayName(sessionGroup)?.display_name ?? null : row.display_name,
       state: row.state, createdAt: row.created_at, updatedAt: row.updated_at,
       firstMessageId: row.first_message_id, firstContent: row.first_content, pendingContent: row.pending_content,
       lastMessageId: row.last_message_id, lastOutcome,
+      ...(isOriginRecord(row.namespace, row.local_id) ? { origin: true } : {}),
     };
   }
 
@@ -120,7 +122,8 @@ export class ChatConversations {
     for (let attempt = 0; attempt < 32; attempt++) {
       const localId = this.idGenerator();
       try { validateGroupName(localId); } catch { throw fail('invalid_chat_local_id'); }
-      if (this.isUsed(localId)) continue;
+      // `origin` is the fixed Origin conversation's ID, never a new conversation's.
+      if (localId === ORIGIN || this.isUsed(localId)) continue;
       const now = this.now();
       if (insert.run(localId, name, now, now).changes) return this.get(localId);
     }
@@ -132,6 +135,7 @@ export class ChatConversations {
     if (name === null) throw fail('invalid_chat_display_name');
     this.db.transaction(() => {
       const row = this._row(localId);
+      if (isOriginRecord(row.namespace, row.local_id)) throw fail('chat_conversation_forbidden', 403);
       if (row.state === 'active') {
         this.store.writeGroupDisplayName(`${row.namespace}:${localId}`, name, 'human');
       } else this.db.prepare('UPDATE chat_conversations SET display_name=? WHERE local_id=?').run(name, localId);
@@ -168,7 +172,7 @@ export class ChatConversations {
     this.db.transaction(() => {
       const row = this._row(localId);
       if (!row.namespace) throw fail('chat_conversation_forbidden', 403);
-      const group = `${row.namespace}:${localId}`;
+      const group = conversationGroup(row.namespace, localId);
       if (row.state !== 'active' && row.display_name !== null && !this.store.getGroupDisplayName(group)) {
         this.store.writeGroupDisplayName(group, row.display_name, 'human');
       }
