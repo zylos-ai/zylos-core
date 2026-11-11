@@ -249,12 +249,12 @@ for (const type of ['turn_complete', 'dashboard_interrupt']) test(`${type} close
   assert.equal(cell(childStop, now), 'busy');
 });
 
-test('current sampled tools remain busy while absent tools bound stale unmatched event history', () => {
+test('activity tools require an event start while absent tools bound stale unmatched history', () => {
   const events = [event('pre_tool_use', now - 2 * hour, { metadata: { tool_use_id: 'old' } })];
   const absent = result(events, { ttlMs: 30 * minute, rows: [{ ...row(), tools: [] }] });
   assert.equal(cell(absent, now), 'idle');
   const live = result(events, { ttlMs: 30 * minute, rows: [{ ...row(), tools: [{ id: 'old' }] }] });
   assert.equal(cell(live, now), 'busy');
   const unseen = result([], { ttlMs: 30 * minute, rows: [{ ...row(), tools: [{ id: 'missing-start' }] }] });
-  assert.equal(cell(unseen, now), 'busy');
+  assert.equal(cell(unseen, now), 'idle', 'A Core sample cannot invent an event interval');
 });

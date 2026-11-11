@@ -721,8 +721,8 @@ for (const [type, metadata, closes] of [
     return rows;
   };
   const output = await f.service.activity('60m'), cells = output.groups['telegram:g0'].cells;
-  assert.equal(filters.length, 5);
-  assert.ok(lookedBack <= 403);
+  assert.equal(filters.length, 6);
+  assert.ok(lookedBack <= 603);
   if (!closes) assert.ok(cells.every(value => value === 'busy'));
   else if (type === 'pre_tool_use') {
     assert.ok(cells.slice(0, 10).every(value => value === 'busy'));
@@ -773,8 +773,8 @@ for (const type of ['user_prompt_submit', 'subagent_start']) {
     })();
     const output = await f.service.activity('60m');
     assert.ok(output.groups['telegram:g0'].cells.every(value => value === 'busy'));
-    assert.equal(filters.length, 5);
-    assert.ok(filters.reduce((total, filter) => total + filter.returned, 0) <= 403);
+    assert.equal(filters.length, 6);
+    assert.ok(filters.reduce((total, filter) => total + filter.returned, 0) <= 603);
     if (type === 'subagent_start') assert.equal(filters.find(filter => filter.types?.includes('pre_tool_use') && filter.agentScope === 'main').returned, 200);
     const queries = filters.length;
     assert.equal(await f.service.activity('60m'), output);
@@ -792,7 +792,7 @@ test('a replaced run opened before the window stays busy until its in-window sto
   assert.ok(cells.slice(0, 30).every(value => value === 'busy'));
   assert.ok(cells.slice(30, 40).every(value => value === 'none'));
   assert.ok(cells.slice(40).every(value => value === 'idle'));
-  assert.equal(filters.filter(filter => filter.runId === 'replaced').length, 5);
+  assert.equal(filters.filter(filter => filter.runId === 'replaced').length, 6);
 });
 
 // Integration: ingestion order differs from source time; same isolated fixture.
@@ -824,7 +824,7 @@ for (const [lateType, equalTime, busy] of [
     assert.equal(query.limit, 1);
     assert.equal(query.returned, 1);
   }
-  assert.equal(filters.length, 5);
+  assert.equal(filters.length, 6);
 });
 
 // Integration: stop fallback closes unmatched tools but not agents; same fixture.
@@ -857,7 +857,7 @@ for (const [open, close, idKey] of [['pre_tool_use', 'post_tool_failure', 'tool_
     })();
     const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
     assert.ok(cells.every(value => value === 'idle'));
-    assert.equal(filters.length, 5);
+    assert.equal(filters.length, 6);
     assert.equal(filters.find(filter => filter.types?.includes(open) && filter.agentScope === (open === 'subagent_start' ? 'child' : 'main')).returned, 200);
   });
 }
@@ -1080,8 +1080,8 @@ test('working uses environment TTL precedence and reads source-time facts with b
   const row = await read();
   assert.equal(row.working.on, false);
   const reads = queries.filter(query => query.runId === 'run-telegram:g0' && query.sourceTime);
-  assert.equal(reads.length, 4);
-  assert.equal(reads.filter(query => query.limit === 200 && query.agentScope === 'child').length, 1);
+  assert.equal(reads.length, 5);
+  assert.equal(reads.filter(query => query.limit === 200 && query.agentScope === 'child').length, 2);
   assert.ok(reads.every(query => query.order === 'desc' && [1, 200].includes(query.limit)));
 });
 
@@ -1137,4 +1137,61 @@ test('working activity includes offset timestamps inside its visible window', as
   const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
   assert.equal(cells.at(-1), 'busy', 'The in-window prompt cannot fall between lexical window and source-time seed filters');
   assert.equal((await read()).working.on, true);
+});
+
+// Real Store, snapshot and activity fixture above; no live resources. Keep
+// lifetime transitions visible even when a child emits many tool pairs.
+for (const position of ['current', 'before window']) test(`working preserves an active child's start through many tools ${position}`, async t => {
+  const { f, store, add, read, queries } = workingFixture(t), minute = 60000;
+  const at = f.now(), start = Math.floor(at / minute) * minute - 59 * minute;
+  const anchor = position === 'current' ? at : start;
+  f.live.get('telegram:g0').identity.createdAt = (anchor - 21 * minute) / 1000;
+  store.db.transaction(() => {
+    add('subagent_start', at - (anchor - 20 * minute), { agent_id: 'long-child' });
+    for (let i = 0; i < 150; i++) {
+      const toolAt = anchor - 19 * minute + Math.floor(i * 17.5 * minute / 149);
+      add('pre_tool_use', at - toolAt, { agent_id: 'long-child', tool_use_id: `child-tool-${i}` });
+      add('post_tool_use', at - toolAt - 500, { agent_id: 'long-child', tool_use_id: `child-tool-${i}` });
+    }
+  })();
+  if (position === 'current') {
+    const work = (await read()).working;
+    assert.deepEqual(work, { on: true, since: at - 20 * minute, turn: null, tools: 0,
+      subagents: { count: 1, since: at - 20 * minute, lastActivityAt: at - 1.5 * minute + 500 } });
+  }
+  const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
+  if (position === 'current') assert.equal(cells.at(-1), 'busy');
+  else {
+    assert.equal(cells[0], 'busy', 'A pre-window start survives more than 200 child-tool events');
+    assert.equal(cells[29], 'idle', 'The child still expires using its most recent own event');
+    const seedReads = queries.filter(query => query.runId === 'run-telegram:g0' && query.until && Date.parse(query.until) < start);
+    const transitions = seedReads.find(query => query.agentScope === 'child' && query.types.includes('subagent_start'));
+    const tools = seedReads.find(query => query.agentScope === 'child' && query.types.includes('pre_tool_use'));
+    assert.equal(transitions.limit, 200); assert.equal(tools.limit, 200);
+    assert.equal(store.queryEvents(transitions).length, 1);
+    assert.equal(store.queryEvents(tools).length, 200);
+  }
+});
+
+test('working removes a child when its own stop is stored', async t => {
+  const { add, read } = workingFixture(t);
+  add('subagent_start', 3 * 60000, { agent_id: 'child' });
+  add('subagent_stop', 60000, { agent_id: 'child' });
+  assert.deepEqual((await read()).working, { on: false, since: null, turn: null, tools: 0, subagents: null });
+});
+
+test('working retains the remaining child and its own start after another child stops', async t => {
+  const { f, add, read } = workingFixture(t), at = f.now();
+  add('subagent_start', 20 * 60000, { agent_id: 'first' });
+  add('subagent_start', 10 * 60000, { agent_id: 'remaining' });
+  add('subagent_stop', 60000, { agent_id: 'first' });
+  assert.deepEqual((await read()).working, { on: true, since: at - 10 * 60000, turn: null, tools: 0,
+    subagents: { count: 1, since: at - 10 * 60000, lastActivityAt: at - 10 * 60000 } });
+});
+
+test('working keeps an old open turn and its elapsed anchor while a main tool runs', async t => {
+  const { f, add, read } = workingFixture(t), since = f.now() - 45 * 60000;
+  add('user_prompt_submit', 45 * 60000);
+  f.live.get('telegram:g0').status.value.active_tool_details = [{ id: 'still-running', name: 'Bash', input: {} }];
+  assert.deepEqual((await read()).working, { on: true, since, turn: { since }, tools: 1, subagents: null });
 });

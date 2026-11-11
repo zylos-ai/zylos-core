@@ -138,3 +138,34 @@ test('working timeline summary retains each start time and disappears when work 
   await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, turn: null, tools: 0, subagents: null } }], listKnown: true });
   assert.equal(allNodes(root).some(node => node.classList.contains('wi-now')), false, 'idle timeline has no green work summary');
 });
+
+test('working detail duration starts at the earliest current work without changing the board row', async t => {
+  const { createDocument: detailDocument } = await import('./fixtures/workbench-dom.js');
+  const document = detailDocument(), root = document.createElement('div');
+  const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' }, duration: 777,
+    working: { on: true, since: 120000, turn: { since: 600000 }, tools: 0,
+      subagents: { count: 1, since: 120000, lastActivityAt: 800000 } } };
+  const detail = createGroupDetail({ root, document, now: () => 900000, fetch: async path => ({ ok: true,
+    json: async () => path.includes('/runs') ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
+  t.after(() => detail.destroy());
+  await detail.open('dashboard:a', { rows: [row], listKnown: true });
+  assert.equal(allNodes(root).find(node => node.classList.contains('wb-dur'))?.textContent, '13m');
+  assert.equal(row.duration, 777);
+  assert.equal(row.state.kind, 'idle');
+  await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, turn: null, tools: 0, subagents: null } }], listKnown: true });
+  const head = allNodes(root).find(node => node.classList.contains('wb-group-head'));
+  assert.equal(allNodes(head).some(node => node.classList.contains('wb-dur')), false);
+});
+
+test('working English text uses singular task hour and minute labels', async () => {
+  const fs = await import('node:fs');
+  const { workingText } = await import('../public/js/wb/working-display.js');
+  const labels = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
+  const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
+  const now = 10 * 3600000;
+  const working = { on: true, since: now - 65 * 60000, turn: null, tools: 0,
+    subagents: { count: 1, since: now - 65 * 60000, lastActivityAt: now } };
+  assert.equal(workingText(working, { now, t: translate }), '1 background task · 1 hour 5 minutes');
+  assert.equal(workingText({ ...working, turn: { since: now - 60000 }, subagents: null }, { now, t: translate }), 'Processing · 1 minute');
+  assert.equal(workingText({ ...working, turn: { since: now - 121 * 60000 }, subagents: null }, { now, t: translate }), 'Processing · 2 hours 1 minute');
+});

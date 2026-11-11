@@ -16,14 +16,15 @@ registerHooks({
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
 
 function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', presence = 'running', pending = true,
-  wait = null, source, healthRecord, workbench, onSend } = {}) {
+  wait = null, source, healthRecord, workbench, onSend,
+  working = { on: false, since: null, turn: null, tools: 0, subagents: null } } = {}) {
   const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
   const document = conversationDocument(), root = document.createElement('div');
   const sessionGroup = 'dashboard:health', id = 'g:AA';
   const page = mountConversationPage({ root, document, t: key => translations[key] ?? key, fetch: async path => {
     const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
       : path === '/api/workbench/groups' ? workbench?.() ?? { listKnown: true,
-        rows: [{ sessionGroup, presence, target: { runtime }, wait }],
+        rows: [{ sessionGroup, presence, target: { runtime }, wait, working }],
         instance: { runtimeHealth: { claude: { health: 'rate_limited' }, codex: { health: 'auth_failed' },
           [runtime]: healthRecord ?? { health, ...(source ? { source } : {}) } } },
         sources: { status: { ok: true, readAt: 1000 } } }
@@ -40,7 +41,7 @@ function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', prese
 }
 
 for (const locale of ['en', 'zh']) {
-  test(`sending to a healthy idle conversation keeps its running header in ${locale}`, { timeout: 2000 }, async t => {
+  test(`sending to a healthy idle conversation keeps its idle header until the scheduled read in ${locale}`, { timeout: 2000 }, async t => {
     let stored = false, groupReads = 0, sends = 0;
     const f = healthPage(t, { locale, health: 'ok', pending: () => stored,
       onSend: () => { stored = true; sends++; return { stored: true, conversationId: 'g:AA' }; },
@@ -48,12 +49,13 @@ for (const locale of ['en', 'zh']) {
         groupReads++;
         return { listKnown: true,
           rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
+            working: { on: false, since: null, turn: null, tools: 0, subagents: null },
             live: { status: { valid: true, state: 'idle' } }, wait: stored ? { kind: 'unknown', reason: 'no_rule' } : null }],
           instance: { runtimeHealth: { claude: { health: 'ok' } } }, sources: { status: { ok: true, readAt: 1000 } } };
       } });
     await f.page.openGroup(f.sessionGroup); await tick();
     const header = f.root.querySelector('.conversation-running');
-    assert.equal(header.textContent, f.translations['chat.page.running']);
+    assert.equal(header.textContent, f.translations['wb.state.idle']);
     assert.equal(groupReads, 1);
     const input = f.root.querySelector('.conversation-input');
     input.value = 'new message'; input.dispatch('input');
@@ -62,7 +64,7 @@ for (const locale of ['en', 'zh']) {
     assert.equal(sends, 1);
     assert.equal(groupReads, 1, 'healthy sends do not sample a transient idle queue');
     assert.equal(header.hidden, false);
-    assert.equal(header.textContent, f.translations['chat.page.running']);
+    assert.equal(header.textContent, f.translations['wb.state.idle']);
     assert.equal(header.classList.contains('conversation-restricted'), false);
     assert.equal(header.classList.contains('conversation-waiting'), false);
     assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
@@ -80,7 +82,7 @@ for (const locale of ['en', 'zh']) {
       assert.equal(header.hidden, false);
       assert.equal(header.classList.contains('conversation-restricted'), health !== 'ok');
       assert.ok(f.translations['chat.page.' + label], 'the locale defines the status label');
-      assert.equal(header.textContent, f.translations['chat.page.' + label + (wait ? 'Pending' : '')]);
+      assert.equal(header.textContent, f.translations[health === 'ok' ? 'wb.state.idle' : 'chat.page.' + label + (wait ? 'Pending' : '')]);
       assert.equal(header.textContent.includes(locale === 'zh' ? '恢复后自动投递' : 'delivery resumes after recovery'), wait?.kind === 'rate_wait');
       if (pending) {
         const status = f.root.querySelector('[data-message-id="1"] .conversation-message-status');
@@ -98,7 +100,7 @@ for (const locale of ['en', 'zh']) {
       const header = f.root.querySelector('.conversation-running');
       assert.equal(header.hidden, false);
       assert.equal(header.classList.contains('conversation-restricted'), false);
-      assert.equal(header.textContent, f.translations['chat.page.running']);
+      assert.equal(header.textContent, f.translations['wb.state.idle']);
       assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
     });
   }
@@ -120,7 +122,7 @@ for (const locale of ['en', 'zh']) {
       const header = f.root.querySelector('.conversation-running');
       assert.equal(header.hidden, presence !== 'running');
       assert.equal(header.classList.contains('conversation-restricted'), false);
-      if (presence === 'running') assert.equal(header.textContent, f.translations['chat.page.running']);
+      if (presence === 'running') assert.equal(header.textContent, f.translations['wb.state.idle']);
     });
   }
   for (const [kind, label] of [['auth_wait', 'authFailed'], ['fenced', 'paused'], ['starting', 'starting'],
@@ -513,3 +515,14 @@ for (const locale of ['en', 'zh']) for (const retainedMessages of [0, 2]) for (c
     }
   });
 }
+
+for (const on of [true, false]) test(`unknown account health remains the header warning while working is ${on ? 'busy' : 'idle'}`, async t => {
+  const working = { on, since: on ? Date.now() - 180000 : null,
+    turn: on ? { since: Date.now() - 180000 } : null, tools: 0, subagents: null };
+  const f = healthPage(t, { health: null, wait: null, working, pending: false });
+  await f.page.openGroup(f.sessionGroup); await tick();
+  const header = f.root.querySelector('.conversation-running');
+  assert.equal(header.hidden, false);
+  assert.equal(header.classList.contains('conversation-restricted'), true);
+  assert.equal(header.textContent, f.translations['chat.page.healthUnknown']);
+});

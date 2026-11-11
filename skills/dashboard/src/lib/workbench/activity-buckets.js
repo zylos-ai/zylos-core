@@ -56,9 +56,6 @@ export function activityBuckets({ range, now, rows, events = [], inbound = [], t
         const toolLimitAt = current && Array.isArray(row?.tools) && row.tools.length === 0
           ? (run.length ? eventTime(run.at(-1)) + ttlMs : end) : end;
         for (const [from, to] of workingHistory(run, end, { ttlMs, toolLimitAt }).intervals) paint(from, to, 'busy');
-        // An authoritative live tool can exist without its start event in this
-        // bounded history. Keep the sampled instant busy without inventing a start.
-        if (current && row?.tools?.length > 0) paint(now, now, 'busy');
       }
       for (const event of run) {
         if (WAIT_TYPES.has(event.event_type)) paint(event.at, event.at, 'waiting');

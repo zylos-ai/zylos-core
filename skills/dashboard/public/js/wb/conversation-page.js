@@ -497,9 +497,9 @@ export function mountConversationPage({
     const waiting = s.groupHealth === 'ok' && ['unknown', 'pool_wait'].includes(s.groupWait?.kind);
     const headerLabel = healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
     const restricted = headerLabel !== 'running' && !waiting;
-    const exceptional = Boolean(healthLabel || s.groupWait && (restricted || waiting));
+    const exceptional = headerLabel !== 'running';
     const working = !exceptional && s.groupPresence === true ? s.groupWorking : null;
-    running.hidden = !exceptional && !working;
+    running.hidden = exceptional ? s.groupPresence !== true && !healthLabel && !s.groupWait : !working;
     running.classList.toggle('conversation-restricted', exceptional && restricted);
     running.classList.toggle('conversation-waiting', exceptional && waiting);
     const wasBusy = running.dataset.state === 'busy';
@@ -510,7 +510,7 @@ export function mountConversationPage({
     const mark = exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
     if (!exceptional && working?.on) mark.classList.add('wi-spin');
     const childSuffix = !exceptional && working?.turn && working.subagents
-      ? t('chat.working.children', { count: working.subagents.count }) : null;
+      ? t(working.subagents.count === 1 ? 'chat.working.child' : 'chat.working.children', { count: working.subagents.count }) : null;
     const caption = node('span', childSuffix ? description.slice(0, -(childSuffix.length + 3)) : description, 'wi-ind-text');
     if (childSuffix) caption.append(node('span', ' · ' + childSuffix, 'wi-ind-sub'));
     const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev');

@@ -18,10 +18,10 @@ async function startPage(sandbox) {
   let scene = 'main', failGroups = false;
   const counts = { groups: 0, sends: 0 }, missing = new Set();
   const working = () => {
-    const turn = ['main', 'both', 'rate', 'auth', 'queue', 'starting'].includes(scene) ? { since: NOW - 3 * 60000 } : null;
+    const turn = ['main', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - 3 * 60000 } : null;
     const subagents = ['both', 'sub'].includes(scene) ? { count: 2, since: NOW - 13 * 60000, lastActivityAt: NOW - 30000 } : null;
     if (scene === 'unavailable') return null;
-    return { on: !!(turn || subagents), since: turn?.since ?? subagents?.since ?? null, turn, tools: 0, subagents };
+    return { on: !!(turn || subagents), since: turn || subagents ? Math.min(...[turn?.since, subagents?.since].filter(Number.isFinite)) : null, turn, tools: 0, subagents };
   };
   const snapshot = url => {
     const value = workbenchAnswer(url, NOW);
@@ -31,7 +31,7 @@ async function startPage(sandbox) {
     row.working = working(); row.preview = { text: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000), channel: 'dashboard' };
     row.wait = ({ queue: { kind: 'pool_wait' }, starting: { kind: 'starting' }, rate: { kind: 'rate_wait', cooldownUntil: NOW / 1000 + 3600 }, auth: { kind: 'auth_wait' } })[scene] ?? null;
     value.rows = [row]; value.counts = { busy: 0, idle: 1, waiting: 0, unknown: 0, error: 0, not_running: 0 };
-    value.instance.runtimeHealth = { claude: { health: ({ rate: 'rate_limited', auth: 'auth_failed' })[scene] ?? 'ok' } };
+    value.instance.runtimeHealth = { claude: { health: scene.startsWith('unknown-') ? null : ({ rate: 'rate_limited', auth: 'auth_failed' })[scene] ?? 'ok' } };
     return value;
   };
   const conversation = id => ({ id, localId: 'working-browser', sessionGroup: id === ID ? GROUP : OTHER, channel: id === ID ? 'dashboard' : 'telegram', state: 'active', displayName: id === ID ? '工作状态示例' : '外部会话' });
@@ -100,6 +100,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     const page = await context.newPage(); page.setDefaultTimeout(7000);
     const errors = []; page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
     await page.clock.install({ time: new Date(NOW) });
+    if (clock) await page.clock.pauseAt(new Date(NOW + 2000));
     await page.goto(fixture.base + '/chat');
     try {
       await page.locator(`#wb-chat [data-conversation-id="${ID}"]`).click();
@@ -109,7 +110,6 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       if (evidence) { fs.writeFileSync(path.join(evidence, 'mount-failure.html'), await page.content()); await page.screenshot({ path: path.join(evidence, 'mount-failure.png') }); }
       throw error;
     }
-    if (clock) await page.clock.pauseAt(new Date(NOW + 2000));
     return { page, context, errors };
   };
   const indicator = page => page.locator('#wb-chat .conversation-running');
@@ -128,7 +128,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     if (evidence) await page.screenshot({ path: path.join(evidence, name + '.png'), animations: 'disabled' });
     captures.push(name);
   };
-  const scenes = { main: '正在处理 · 3 分钟', both: '正在处理 · 3 分钟 · 后台子任务 2 个', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲', rate: '服务受限', auth: '认证', queue: '排队', starting: '启动', unavailable: null };
+  const scenes = { main: '正在处理 · 3 分钟', both: '正在处理 · 3 分钟 · 后台子任务 2 个', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲', rate: '服务受限', auth: '认证', queue: '排队', starting: '启动', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
   let failed = false;
   for (const width of [1280, 390]) for (const theme of ['light', 'dark']) for (const [scene, expected] of Object.entries(scenes)) {
     await t.test(`${width} ${theme} ${scene}: mounted conversation shows the group working state`, async () => {
@@ -139,6 +139,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           await checkText(f.page, expected);
           const spinning = await indicator(f.page).locator('.wi-spin').count();
           assert.equal(spinning, ['main', 'both', 'sub'].includes(scene) ? 1 : 0);
+          if (scene.startsWith('unknown-')) assert.equal(await indicator(f.page).evaluate(node => node.classList.contains('conversation-restricted')), true, 'unknown health keeps the warning presentation');
         } else await wait(async () => !await indicator(f.page).isVisible(), 'unavailable working is hidden');
         assert.equal(await f.page.locator('.wi-proto-bar').count(), 0, 'prototype switcher is not in the product');
         await shot(f.page, `${width}-${theme}-${scene}`);
@@ -147,7 +148,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           const side = f.page.locator('#wb-chat .wb-group-side');
           await side.locator('.wi-now').waitFor();
           assert.match(await side.locator('.wi-now').innerText(), /现在.*后台子任务 2 个/);
-          assert.match(await side.locator('.wb-d-sub .wb-state').innerText(), /忙碌/);
+          assert.match(await side.locator('.wb-d-sub .wb-state').innerText(), /忙碌\s*13m/);
           await shot(f.page, `${width}-${theme}-${scene}-timeline`);
         }
         assert.equal(f.errors.length, 0, f.errors[0]);

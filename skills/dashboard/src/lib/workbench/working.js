@@ -1,6 +1,6 @@
 export const END_TYPES = ['stop', 'turn_complete', 'dashboard_interrupt'];
 export const TOOL_TYPES = ['pre_tool_use', 'post_tool_use', 'post_tool_failure'];
-export const CHILD_TYPES = ['subagent_start', 'subagent_stop', ...TOOL_TYPES];
+export const CHILD_TYPES = ['subagent_start', 'subagent_stop'];
 export const eventTime = event => typeof event.timestamp === 'number' ? event.timestamp : Date.parse(event.timestamp);
 export const compareEvents = (a, b) => eventTime(a) - eventTime(b) || (a.event_seq ?? 0) - (b.event_seq ?? 0);
 

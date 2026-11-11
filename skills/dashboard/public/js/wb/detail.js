@@ -142,7 +142,8 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     // State and actions share one wrapper: on phones it becomes the second row under the title.
     const sub = element(document, 'div', undefined, 'wb-d-sub');
     const displayRow = ['busy', 'idle'].includes(row.state?.kind)
-      ? { ...row, state: { ...row.state, kind: row.working ? row.working.on ? 'busy' : 'idle' : 'unknown' }, duration: null } : row;
+      ? { ...row, state: { ...row.state, kind: row.working ? row.working.on ? 'busy' : 'idle' : 'unknown' }, duration: row.working?.on && Number.isFinite(row.working.since)
+        ? Math.max(0, (now() - row.working.since) / 1000) : null } : row;
     sub.append(statePill(document, displayRow, { t, level: getLevel() }));
     top.append(box, heading, sub);
     const actions = element(document, 'div', undefined, 'wb-d-acts');
