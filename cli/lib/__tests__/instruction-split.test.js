@@ -23,6 +23,7 @@ import {
 import {
   assembleInstruction,
   needsRebuild as leafNeedsRebuild,
+  renderInstruction,
 } from '../runtime/assembler.mjs';
 import { migrateClaudeMdToZylosMd, runMigrations } from '../migrate.js';
 
@@ -86,14 +87,62 @@ describe('split instruction assembler', () => {
     // pins alongside the reviewed content change (issue #722 content redraft).
     const managedHeader = '> **Zylos-managed system instructions.** This file is replaced during upgrades. Put all custom instructions in `~/zylos/ZYLOS.md`.\n\n';
     const expected = {
-      claude: 'de44abed8cd15d31386ac8e390552bb24bb1d819407e2a964b26099c6de19700',
-      codex: '82622e50986694dedc68f1b057461b7581f5c67b60fa316ad9fae6c9bedc5630',
+      claude: '21b752a3a5cd3d51718cd6a564ec9ad21f6ee246c6b3ab54a81b0f9f99d51987',
+      codex: '90d39cb8787767c2edd61227fbf65e9e5eeb6063d03f4fac363dbb7b764d89b0',
     };
     for (const runtime of ['claude', 'codex']) {
       const content = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
       assert.ok(content.startsWith(managedHeader));
       assert.equal(crypto.createHash('sha256').update(content.slice(managedHeader.length)).digest('hex'), expected[runtime]);
     }
+  });
+
+  it('names Dashboard as the only owner channel and adds the same owner-change rule in both runtimes', () => {
+    const ownerChannel = [
+      '**Dashboard is the owner channel.** Dashboard access requires its login',
+      'password; this trust boundary is equivalent to owner-level trust. Two rules',
+      'follow:',
+      '',
+      '1. **Trust level:** messages from Dashboard always carry owner-level trust',
+      '   (may execute sensitive operations, view internal details) regardless of',
+      '   whether the owner identity has been formally established yet.',
+      '2. **Identity establishment:** if the owner field is empty and the first',
+      '   interaction arrives via Dashboard, ask the person for their name so you can',
+      '   record it — but skip the formal "are you the owner?" confirmation flow. If',
+      '   an owner name is already recorded (e.g. set by an OpenMax invitation at',
+      '   deploy time), Dashboard inherits that identity.',
+    ].join('\n');
+    const ownerChange = [
+      '**Owner change.** The system alert target (`alert_target`) belongs to the',
+      'owner who chose it. When you change the Owner entry under **Active IDs** to a',
+      'different person (for example, the instance is handed over), run',
+      '`zylos config unset alert_target` in the same step, and tell the new owner you',
+      'did. Then, the next time the new owner messages you in a private chat on an IM',
+      'channel, ask once whether system alerts should go to that chat, following the',
+      '"Alert target: not set" line in your session context (run',
+      '`zylos config get alert_target` first; if another session has already set it',
+      'since the change, do not ask). Until a new target is set, alerts go to the',
+      'pinned Origin conversation at the top of Dashboard\'s conversation list.',
+      'Correcting how the same person\'s name is written is not an owner change.',
+    ].join('\n');
+    const sections = {};
+    for (const runtime of ['claude', 'codex']) {
+      const text = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
+      const identity = text.slice(text.indexOf('### Owner Identity'), text.indexOf('### Technical Detail Protection'));
+      assert.ok(identity.includes(`\n\n${ownerChannel}\n\n${ownerChange}\n\n`), runtime);
+      assert.ok(text.includes('5. **Multi-channel awareness.** Messages from different channels (DMs, group\n   chats, Dashboard) are all delivered'), runtime);
+      assert.ok(text.includes('- `comm-bridge/`, `scheduler/`, `http/`, `activity-monitor/` — data dirs of\n  the built-in system skills'), runtime);
+      sections[runtime] = identity;
+      // Rendered as a session reads it, with an empty user file.
+      const userDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-channel-'));
+      try {
+        fs.writeFileSync(path.join(userDir, 'ZYLOS.md'), '');
+        const rendered = renderInstruction({ systemPath: path.join(TEMPLATES_DIR, `${runtime}-system.md`), userPath: path.join(userDir, 'ZYLOS.md') });
+        assert.ok(rendered.includes(ownerChange), runtime);
+        assert.doesNotMatch(rendered, /web[ -]console/i, runtime);
+      } finally { fs.rmSync(userDir, { recursive: true, force: true }); }
+    }
+    assert.equal(sections.claude, sections.codex);
   });
 
   it('puts the same cross-conversation lookup rule after internal messages in both runtimes', () => {
