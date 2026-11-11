@@ -66,6 +66,7 @@ List Options:
                           (untruncated id, type, status, last_error, reply_channel,
                           reply_endpoint, next_run_at, ...)
   --reply-channel "<ch>"  Only tasks with this reply channel (works with or without --json)
+  --readonly              Inspect an existing database without initialization or migration
 
 Add Options:
   --in "<duration>"       One-time: run in X time (e.g., "30 minutes")
@@ -124,7 +125,7 @@ function parseArgs(args) {
     'no-require-idle',
     'clear-reply',
     'clear-session-group',
-    'json'
+    'json', 'readonly'
   ]);
 
   let i = 1;
@@ -717,7 +718,7 @@ function main() {
   }
 
   const { command, args, options } = parseArgs(process.argv.slice(2));
-  db = getDb();
+  db = getDb({readonly:command === 'list' && options.readonly === true});
 
   switch (command) {
     case 'list':

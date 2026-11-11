@@ -30,6 +30,8 @@ import { classifyCutoff, commitCutoff } from './upgrade-cutoff.js';
 import { preparePostCutoff, publishPostCutoff } from './upgrade-post-cutoff.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from './upgrade-runtime-preparation.js';
 import { upgradeFailureCode } from './upgrade-admission.js';
+import { finalizeWebConsoleRemoval } from './web-console-finalize.js';
+import { savePm2ProcessList } from './pm2-save.js';
 
 const REPO = 'zylos-ai/zylos-core';
 
@@ -529,6 +531,7 @@ export function step6_installSkillDeps(ctx, deps = {}) {
  * Step 11: start core services
  */
 export function step11_startCoreServices(ctx, deps = {}) {
+  ctx.servicesWereRunning = ctx.servicesWereRunning.filter(name => name !== 'web-console');
   const startTime = Date.now();
   const maintenance = maintenanceFor(ctx);
   const fsApi = deps.fs ?? fs;
@@ -714,6 +717,7 @@ export function step11_startCoreServices(ctx, deps = {}) {
  */
 export function step12_verifyServices(ctx, deps = {}) {
   const startTime = Date.now();
+  ctx.servicesWereRunning = ctx.servicesWereRunning.filter(name => name !== 'web-console');
 
   if (ctx.servicesWereRunning.length === 0) {
     return { step: 12, name: 'verify_services', status: 'skipped', message: 'no services to verify', duration: Date.now() - startTime };
@@ -927,7 +931,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     });
     await run(7,'verify_publication_for_services',()=> (deps.verifyPublicationForServices || verifyPublicationForServices)(ctx));
     // Dashboard availability is independent of Core publication.
-    const coreCtx={...ctx,servicesWereRunning:(ctx.servicesWereRunning || []).filter(name=>name!=='zylos-dashboard')};
+    const coreCtx={...ctx,servicesWereRunning:(ctx.servicesWereRunning || []).filter(name=>!['zylos-dashboard','web-console'].includes(name))};
     try {
       await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(coreCtx));
       await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(coreCtx));
@@ -936,6 +940,13 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       ctx.serviceWarnings=coreCtx.serviceWarnings || [];
     }
   } catch(error) {return fail(error);}
+
+  try {
+    const removal = await (deps.finalizeWebConsoleRemoval || finalizeWebConsoleRemoval)({zylosDir:root});
+    ctx.runtimeWarnings = [...(ctx.runtimeWarnings || []), ...removal.warnings];
+  } catch {
+    (ctx.runtimeWarnings ||= []).push('Web Console removal needs attention. Rerun zylos init to finish cleanup.');
+  }
 
   let dashboard;
   const dashboardErrors=[];
@@ -1009,7 +1020,15 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   } catch(error) {ctx.checkpointAudit={state:'incomplete',error:error.message};}
   completion.install='done';
   ctx.completion=completion;
-  (deps.protectedSuccess || protectedSuccess)(ctx);
+  const cleanup = (deps.protectedSuccess || protectedSuccess)(ctx);
+  if (cleanup?.warnings?.length) (ctx.runtimeWarnings ||= []).push(...cleanup.warnings);
+  try {
+    const saved = (deps.savePm2ProcessList || savePm2ProcessList)({root,
+      log:message => (ctx.runtimeWarnings ||= []).push(message)});
+    if (!saved) (ctx.runtimeWarnings ||= []).push('The PM2 startup list still needs saving after recovery cleanup: run pm2 save when recovery is complete.');
+  } catch {
+    (ctx.runtimeWarnings ||= []).push('Could not save the PM2 startup list. Run pm2 save after recovery cleanup so Web Console is not resurrected.');
+  }
   return {...buildSelfUpgradeResult(ctx,null),completion,dashboard,sessionRestart:ctx.restart,checkpointAudit:ctx.checkpointAudit,
     modeStatus:ctx.modeStatus,publication:ctx.publication,preparationWarnings:ctx.preparationWarnings || [],next:dashboardNext(dashboard)};
 }

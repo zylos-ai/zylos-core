@@ -10,6 +10,8 @@ export default {
     '<rootDir>/test/history-reminders.integration.test.js',
     '<rootDir>/test/chat-quote.integration.test.js',
     '<rootDir>/test/origin-conversation.integration.test.js',
+    '<rootDir>/test/web-console-process.integration.test.js',
+    '<rootDir>/test/web-console-caddy.integration.test.js',
   ],
   globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',

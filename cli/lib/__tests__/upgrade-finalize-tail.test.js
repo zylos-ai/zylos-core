@@ -65,6 +65,8 @@ function deps(calls, extras={}) {
     restart:async options=>{calls.push('restart');assert.equal((await options.readMode()).mode,'single');return {ok:true,data:{result:'exit_enqueued'}};},
     audit:()=>{calls.push('audit');return [];},
     verifyPublicationForServices(){},protectedSuccess(){},
+    finalizeWebConsoleRemoval:async()=>({warnings:[]}),
+    savePm2ProcessList:()=>true,
     ...extras,
   };
 }

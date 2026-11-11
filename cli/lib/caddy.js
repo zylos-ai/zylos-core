@@ -18,7 +18,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { CADDYFILE, CADDY_BIN, getZylosConfig } from './config.js';
 
 /**
@@ -458,7 +459,7 @@ export function removeCaddyRoutes(componentName, deps = {}) {
 }
 
 /**
- * Validate new Caddyfile content, then write directly to the Caddyfile
+ * Validate new Caddyfile content, then atomically replace the Caddyfile
  * and reload Caddy via PM2. No sudo needed (user-space Caddy).
  * On validation failure, does not modify the Caddyfile.
  *
@@ -466,54 +467,70 @@ export function removeCaddyRoutes(componentName, deps = {}) {
  * @param {string} originalContent - Original content for rollback
  * @returns {{ success: boolean, error?: string }}
  */
-function validateAndDeploy(newContent, originalContent) {
-  const tmpFile = `/tmp/Caddyfile.zylos-${Date.now()}`;
-
+export function validateAndDeploy(newContent, originalContent, {
+  caddyfile = CADDYFILE,
+  caddyBin = CADDY_BIN,
+  validate = file => execFileSync(caddyBin, ['validate', '--config', file, '--adapter', 'caddyfile'], {stdio:'pipe', timeout:10000}),
+  reload = () => execFileSync('pm2', ['reload', 'caddy'], {stdio:'pipe', timeout:10000}),
+} = {}) {
+  let temporary;
+  let replaced = false;
+  let originalStat;
+  const syncDirectory = () => {
+    const fd = fs.openSync(path.dirname(caddyfile), 'r');
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  };
+  const stage = (content, stat) => {
+    temporary = path.join(path.dirname(caddyfile), `.Caddyfile.zylos-${crypto.randomUUID()}`);
+    const fd = fs.openSync(temporary, 'wx', stat.mode & 0o7777);
+    try {
+      fs.fchownSync(fd, stat.uid, stat.gid);
+      fs.fchmodSync(fd, stat.mode & 0o7777);
+      fs.writeFileSync(fd, content);
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+  };
+  const deploy = () => {
+    fs.renameSync(temporary, caddyfile);
+    temporary = null;
+    replaced = true;
+    syncDirectory();
+  };
   try {
-    fs.writeFileSync(tmpFile, newContent);
-
-    // Validate using our own caddy binary
-    try {
-      execSync(`"${CADDY_BIN}" validate --config "${tmpFile}" --adapter caddyfile`, {
-        stdio: 'pipe',
-        timeout: 10000,
-      });
-    } catch (err) {
-      // Validation failed — clean up temp file
-      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-      const stderr = err.stderr?.toString().trim() || err.message;
-      return { success: false, error: `Caddy validation failed: ${stderr}` };
+    const stat = fs.lstatSync(caddyfile);
+    originalStat = stat;
+    if (!stat.isFile() || stat.isSymbolicLink()) return {success:false, error:'Caddyfile must be a regular file; unchanged.'};
+    stage(newContent, stat);
+    try { validate(temporary); }
+    catch { return {success:false, error:'Caddy validation failed; Caddyfile unchanged.'}; }
+    // Do not overwrite an edit made while validation was running.
+    const current = fs.lstatSync(caddyfile);
+    if (current.ino !== stat.ino || current.dev !== stat.dev || !fs.readFileSync(caddyfile).equals(Buffer.from(originalContent))) {
+      return {success:false, error:'Caddyfile changed during validation; unchanged.'};
     }
-
-    // Deploy: write directly (user-space, no sudo)
-    try {
-      fs.writeFileSync(CADDYFILE, newContent);
-    } catch (err) {
-      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-      return { success: false, error: `Failed to write Caddyfile: ${err.message}` };
-    }
-
-    // Reload Caddy via PM2
-    try {
-      execSync('pm2 reload caddy', {
-        stdio: 'pipe',
-        timeout: 10000,
-      });
-    } catch (err) {
-      // Reload failed — rollback
+    deploy();
+    try { reload(); }
+    catch {
       try {
-        fs.writeFileSync(CADDYFILE, originalContent);
-        execSync('pm2 reload caddy', { stdio: 'pipe', timeout: 10000 });
-      } catch { /* rollback best-effort */ }
-      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-      return { success: false, error: `Caddy reload failed (rolled back): ${err.message}` };
+        stage(originalContent, stat);
+        deploy();
+        replaced = false;
+      } catch { return {success:false, error:'Caddy reload failed and restoring the Caddyfile failed; manual recovery required.'}; }
+      try { reload(); } catch { /* The original bytes are restored even if Caddy remains unavailable. */ }
+      return {success:false, error:'Caddy reload failed; original Caddyfile restored.'};
     }
-
-    // Clean up temp file
-    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-    return { success: true };
-  } catch (err) {
-    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-    return { success: false, error: err.message };
+    return {success:true};
+  } catch {
+    if (replaced && originalStat) {
+      try {
+        if (temporary) fs.unlinkSync(temporary);
+        stage(originalContent, originalStat);
+        deploy();
+        return {success:false, error:'Caddyfile atomic deployment failed; original Caddyfile restored.'};
+      } catch { return {success:false, error:'Caddyfile atomic deployment failed and restoration failed; manual recovery required.'}; }
+    }
+    return {success:false, error:'Caddyfile atomic deployment failed; inspect the Caddyfile before retrying.'};
+  } finally {
+    if (temporary) { try { fs.unlinkSync(temporary); } catch { /* best effort */ } }
   }
 }

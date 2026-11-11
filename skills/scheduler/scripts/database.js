@@ -18,8 +18,9 @@ const HISTORY_RETENTION_DAYS = 30;
 
 let db = null;
 
-export function getDb() {
+export function getDb({readonly = false} = {}) {
   assertCoreDatabaseAvailable(ZYLOS_DIR);
+  if (readonly) return new Database(DB_PATH, {readonly:true, fileMustExist:true});
   if (!db) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const connection = new Database(DB_PATH);
