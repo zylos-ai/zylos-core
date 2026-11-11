@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { legacyDashboardHooks } from '../../../skills/dashboard/test/fixtures/legacy-hooks.js';
+import { legacyDashboardHooks } from '../../../skills/dashboard/__tests__/fixtures/legacy-hooks.js';
 import { prepareUpgradeRuntime } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff, publishPostCutoff, removeLegacyDashboardHooks } from '../upgrade-post-cutoff.js';
 const packageRoot=path.resolve(import.meta.dirname,'../../..');

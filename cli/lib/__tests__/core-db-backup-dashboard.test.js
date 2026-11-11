@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import {createRequire} from 'node:module';
 import {Store} from '../../../skills/dashboard/src/lib/store.js';
 import {TARGET_SCHEMA_VERSION} from '../../../skills/dashboard/src/lib/schema.js';
-import {migrateSchema13} from '../../../skills/dashboard/test/fixtures/schema13.js';
+import {migrateSchema13} from '../../../skills/dashboard/__tests__/fixtures/schema13.js';
 import {inspectUpgradeSource} from '../upgrade-entry.js';
 import {createCoreDbSnapshot,runCoreDbWorker,validateSnapshotManifest,probeCoreDbVersions,rehearseCoreDbUpgrade,prepareRecoveryDependencies,inspectDashboardOwnerManaged} from '../core-db-backup.js';
 

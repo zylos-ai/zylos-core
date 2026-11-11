@@ -3,7 +3,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createChatSandbox } from '../../skills/dashboard/test/helpers/chat-integration-harness.js';
+import { createChatSandbox } from '../../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
 import Database from '../../skills/comm-bridge/scripts/sqlite-driver.js';
 import { guardDatabase } from '../../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as schema from '../../skills/comm-bridge/scripts/c4-schema.js';

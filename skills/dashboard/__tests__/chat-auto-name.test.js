@@ -140,7 +140,7 @@ test('controls and other groups do not consume this conversation first reply', g
 test('a Core system notice neither triggers naming nor consumes the first Agent reply', gate, async t => {
   const f = fixture(t);
   const child = f.sandbox.startChild(process.execPath,
-    [path.join(repo, 'skills/dashboard/test/helpers/chat-naming-status-notice.js')]);
+    [path.join(repo, 'skills/dashboard/__tests__/helpers/chat-naming-status-notice.js')]);
   const result = await child.completion;
   assert.equal(result.code, 0, result.stderr);
   assert.equal(f.core.prepare("SELECT delivery_action FROM conversations WHERE direction='out'").get().delivery_action, 'system_notice');

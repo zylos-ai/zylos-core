@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "check": "find src hooks public/js -name '*.js' -print0 | xargs -0 -n1 node --check && find src/lib -name '*.cjs' -print0 | xargs -0 -n1 node --check",
-    "test": "node --experimental-test-module-mocks --test test/*.test.js",
-    "test:acceptance": "ACCEPTANCE=1 node --test test/acceptance-phase2a.test.js",
+    "test": "node --experimental-test-module-mocks --test __tests__/*.test.js",
+    "test:acceptance": "ACCEPTANCE=1 node --test __tests__/acceptance-phase2a.test.js",
     "smoke": "node src/index.js --smoke",
     "smoke:api": "node scripts/smoke-api.js",
     "build:redaction": "node scripts/build-redaction-rules.js"

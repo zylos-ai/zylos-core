@@ -27,7 +27,7 @@ import { prepareNativeRuntimeResources, retainNativeFailure, runtimeProxyNames, 
 // ZYLOS_CHAT_INTEGRATION=1 ZYLOS_CHAT_RUNTIME=1 \
 // ZYLOS_CHAT_RUNTIME_AUTH_DIR=/private/test-auth \
 // ZYLOS_CHAT_TMUX_BINARY=/usr/bin/tmux node scripts/run-node-tests.js \
-// skills/dashboard/test/chat-runtime.test.js
+// skills/dashboard/__tests__/chat-runtime.test.js
 const enabled = chatEnabled(process.env, { runtime: true });
 const authDirectory = process.env.ZYLOS_CHAT_RUNTIME_AUTH_DIR;
 const driver = fileURLToPath(new URL('./helpers/chat-runtime-driver.js', import.meta.url));
