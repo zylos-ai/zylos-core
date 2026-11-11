@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { finalizeWebConsoleRemoval, webConsoleProcesses, inspectWebConsoleTasks } from '../web-console-finalize.js';
+import { finalizeWebConsoleRemoval, webConsoleProcesses, inspectWebConsoleTasks, webConsoleRemovalNotice } from '../web-console-finalize.js';
 import { completeUpgradeFinalization, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
 import { startServicesWithDashboard } from '../../commands/init.js';
 import { protectedSuccess, maintenance, deployUpgradeBootstrap } from '../upgrade-protection.js';
@@ -300,13 +300,51 @@ for (const routeState of ['done','failed','skipped']) test(`upgrade removal addr
   fs.writeFileSync(path.join(root,'components/dashboard/config.json'),JSON.stringify({port:4123}));
   fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({domain:'dashboard.example'}));
   const result=await completeUpgradeFinalization({zylosDir:root,firstDashboardTakeover:true,servicesWereRunning:['scheduler'],steps:[],mergeConflicts:[],mergedFiles:[]},finalizationDeps(calls,{
-    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false,residue:true}),
+    finalizeWebConsoleRemoval:options=>finalizeWebConsoleRemoval(options,{
+      run:()=>'[]',inspectTasks:()=>[],removeRoute:()=>({changed:true,warnings:[]}),
+    }),
     dashboardOwner:{applyDashboardRegistration:()=>({state:'done'}),applyDashboardRoute:()=>({state:routeState}),verifyDashboard:()=>({state:'ready',checks:{route:true}})},
   }));
-  const notice=result.warnings.find(x=>x.startsWith('Web Console has been removed.'));
-  assert.ok(notice);
+  const notices=result.warnings.filter(x=>x.startsWith('Web Console has been removed.'));
+  assert.equal(notices.length,1);
+  const [notice]=notices;
   assert.ok(notice.includes(routeState==='done'?'https://dashboard.example/dashboard/':'http://127.0.0.1:4123/'));
   if(routeState!=='done')assert.equal(notice.includes('https://dashboard.example/dashboard/'),false);
+});
+
+for (const scenario of ['verified route','unavailable route','restore failure']) test(`later upgrade removal address follows Dashboard ${scenario}`, async t=>{
+  const root=fixture(t), calls=[];
+  fs.mkdirSync(path.join(root,'components/dashboard'),{recursive:true});
+  fs.mkdirSync(path.join(root,'.zylos'));
+  fs.writeFileSync(path.join(root,'components/dashboard/config.json'),JSON.stringify({port:4123}));
+  fs.writeFileSync(path.join(root,'.zylos/config.json'),JSON.stringify({domain:'dashboard.example'}));
+  let verified=false;
+  const result=await completeUpgradeFinalization({zylosDir:root,firstDashboardTakeover:false,
+    servicesWereRunning:['scheduler','zylos-dashboard'],steps:[],mergeConflicts:[],mergedFiles:[]},finalizationDeps(calls,{
+    finalizeWebConsoleRemoval:options=>finalizeWebConsoleRemoval(options,{
+      run:()=>'[]',inspectTasks:()=>[],removeRoute:()=>({changed:true,warnings:[]}),
+    }),
+    dashboardOwner:{
+      restoreDashboardService:()=>({state:scenario==='restore failure'?'failed':'done'}),
+      verifyDashboard:()=>{verified=true;return {state:'ready',checks:{route:scenario==='verified route'}};},
+    },
+  }));
+  assert.equal(result.success,true);
+  assert.equal(verified,scenario!=='restore failure');
+  const notices=result.warnings.filter(x=>x.startsWith('Web Console has been removed.'));
+  assert.equal(notices.length,1);
+  const [notice]=notices;
+  assert.ok(notice.includes(scenario==='verified route'?'https://dashboard.example/dashboard/':'http://127.0.0.1:4123/'));
+  if(scenario!=='verified route')assert.equal(notice.includes('https://dashboard.example/dashboard/'),false);
+});
+
+for (const config of ['{',JSON.stringify({port:0})]) test(`removal notice requests access setup for ${config==='{'?'unreadable':'invalid'} Dashboard config`, t=>{
+  const root=fixture(t), directory=path.join(root,'components/dashboard');
+  fs.mkdirSync(directory,{recursive:true});
+  fs.writeFileSync(path.join(directory,'config.json'),config);
+  const notice=webConsoleRemovalNotice({zylosDir:root});
+  assert.match(notice,/run zylos init to check access/);
+  assert.doesNotMatch(notice,/https?:\/\//);
 });
 
 test('fresh upgrade has no removal announcement, final save or recovery-save warning', async t => {
