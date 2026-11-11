@@ -691,6 +691,8 @@
   "chat.page.you": "你",
   "chat.page.ai": "AI",
   "chat.page.previewYou": "你：",
+  "chat.external.previewReceived": "收到：",
+  "chat.external.previewSent": "发出：",
   "chat.page.externalSection": "其他渠道 · 只读",
   "chat.page.externalReadOnly": "外部渠道的历史只能查看：不能在这里发言、回答问题或代替原渠道执行动作。",
   "chat.page.readOnly": "只读",

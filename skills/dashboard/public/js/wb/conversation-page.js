@@ -1200,7 +1200,13 @@ export function mountConversationPage({
       text(row.channel, channelLabel(itemChannel));
       text(row.name, nameOf(item));
       const preview = item.preview || t(item.draft ? 'chat.page.blankPreview' : 'chat.page.noMessages');
-      text(row.preview, (item.preview && item.previewDirection === 'in' ? t('chat.page.previewYou') : '') + preview);
+      let previewPrefix = '';
+      if (item.preview && item.previewDirection === 'in') {
+        previewPrefix = t(s.tab === 'external' ? 'chat.external.previewReceived' : 'chat.page.previewYou');
+      } else if (item.preview && item.previewDirection === 'out' && s.tab === 'external') {
+        previewPrefix = t('chat.external.previewSent');
+      }
+      text(row.preview, previewPrefix + preview);
       text(row.draft, t('chat.draft'));
       row.draft.hidden = !(item.draft || item.state === 'draft');
       row.button.classList.toggle('selected', item.id === s.selectedId);
