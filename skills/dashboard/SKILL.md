@@ -109,6 +109,9 @@ preserves the existing name; invalid input or an unavailable conversation exits
 replying in the conversation. Dashboard also writes `unknown` for failed or
 expired naming controls while the name remains empty. Later replies never repeat
 the first-reply naming decision. Name changes update open lists and details.
+Naming-path exceptions are logged without failing the already stored reply; the
+name stays empty and can be set manually. Failed/expired controls are checked
+about every 30 seconds, with a read-only name check before any write transaction.
 
 ### Available structured components
 

@@ -134,18 +134,21 @@ test('a Core system notice neither triggers naming nor consumes the first Agent 
 // Real authoritative row and incompatible fixture-owned Dashboard DB, with the
 // actual receiver. Run on naming/delivery error changes; skip UI-only work.
 // No product source rewriting or live resources; the sandbox owns both databases.
-test('a naming store failure reports the committed reply and explicitly forbids resending', gate, t => {
+test('a naming store failure logs once while the committed reply delivery succeeds without enqueue', gate, t => {
   const f = fixture(t), row = f.out();
   f.store.db.prepare('INSERT INTO schema_migrations(version) VALUES(999)').run();
+  const log = t.mock.method(console, 'error', () => {});
   let output = '';
   const result = runSend({ env: f.sandbox.env,
     input: () => JSON.stringify({ version: 1, c4_id: row.id, channel: row.channel,
       endpoint_id: row.endpoint_id, session_group: row.session_group, content: row.content }),
     stderr: { write: text => { output += text; } } });
-  assert.equal(result, 1);
-  assert.match(output, /CONVERSATION_NAMING_FAILED/);
-  assert.match(output, /already stored in C4/); assert.match(output, /Do not resend/);
-  assert.doesNotMatch(output, /delivery unconfirmed/);
+  assert.equal(result, 0);
+  assert.equal(output, '');
+  assert.equal(log.mock.callCount(), 1);
+  assert.match(log.mock.calls[0].arguments[0], /naming is unavailable; reply delivery succeeded/);
+  assert.equal(f.count(), 0);
+  assert.equal(f.conversations.get('one').displayName, null);
   assert.equal(f.core.prepare("SELECT COUNT(*) AS n FROM conversations WHERE direction='out'").get().n, 1);
 });
 
@@ -207,6 +210,22 @@ test('failed controls fall back immediately while unexpired pending controls wai
   assert.equal(reconcileConversationNames({ store: f.store, c4Reader: reader }), 1);
   assert.equal(f.conversations.get('one').displayName, 'unknown');
 });
+
+// Real production reconciliation and private SQLite: already-named groups must
+// stop in the read path. Run on cleanup/name changes; skip unrelated rendering.
+for (const committed of [true, false]) {
+  test(`failed naming controls with existing names never enter the write path for ${committed ? 'committed' : 'bound'} conversations`, gate, async t => {
+    const f = fixture(t, { committed }); f.send(f.out());
+    f.core.prepare("UPDATE control_queue SET status='failed'").run();
+    f.store.writeGroupDisplayName(group, '用户名称', 'human');
+    const { reconcileConversationNames } = await import('../src/lib/chat/auto-name.js');
+    const reader = new C4Reader(f.sandbox.paths.zylos); t.after(() => reader.close());
+    const write = t.mock.method(ChatConversations.prototype, 'renameIfEmpty', () => assert.fail('already-named cleanup entered write path'));
+    assert.equal(reconcileConversationNames({ store: f.store, c4Reader: reader }), 0);
+    assert.equal(write.mock.callCount(), 0);
+    assert.equal(f.store.getGroupDisplayName(group).display_name, '用户名称');
+  });
+}
 
 // Real independent SQLite connections and production SSE observer; no network.
 // Run on naming/observer changes; skip unrelated rendering. Sandbox owns DBs/loop.

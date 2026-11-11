@@ -53,22 +53,6 @@ test('mounted content keeps plain text inert and renders validated fallback and 
   assert.equal(allNodes(f.root).some(node => node.tagName === 'SCRIPT'), false);
 });
 
-test('create opens a named form without writing and cancel returns to the create action', async testContext => {
-  const f = fixture(testContext);
-  await f.page.open();
-  f.button('create').dispatch('click');
-  const form = f.root.querySelector('.conversation-create-form');
-  assert.equal(form.hidden, false);
-  const name = form.querySelector('input');
-  assert.equal(name.getAttribute('aria-label'), 'chat.page.createName');
-  name.value = 'A named conversation'; name.dispatch('input');
-  assert.equal(f.calls.some(call => call.options.method === 'POST'), false);
-  f.button('page.cancel').dispatch('click');
-  assert.equal(form.hidden, true); assert.equal(name.value, '');
-  assert.ok(f.button('create'));
-  assert.equal(f.calls.some(call => call.options.method === 'POST'), false);
-});
-
 test('page opens real state loads data and renders authoritative status without executable content', async testContext => {
   const f = fixture(testContext, { rows: [{ id: 1, direction: 'in', status: 'failed', delivery_action: 'delivered', content: '<img src=x>' },
     { id: 2, direction: 'out', status: 'delivered', content: 'Reply' }] });

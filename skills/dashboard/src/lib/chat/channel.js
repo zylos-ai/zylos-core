@@ -41,9 +41,8 @@ export function acceptDelivery(packet, { env = process.env } = {}) {
     }
   }
   try { requestConversationName(row, { env }); }
-  catch (cause) {
-    throw Object.assign(new Error('Dashboard conversation naming is unavailable.', { cause }),
-      { code: 'CONVERSATION_NAMING_FAILED', storedNamingFailure: true });
+  catch {
+    console.error('[chat] Conversation naming is unavailable; reply delivery succeeded.');
   }
   return row;
 }

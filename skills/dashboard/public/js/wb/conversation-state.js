@@ -230,21 +230,38 @@ export function createConversationState({
         passDirty = force;
         readDirty = false;
         const refreshMetadata = force || now() - lastListAt >= 30000;
-        if (refreshMetadata) await list(false, true);
+        const listedRows = refreshMetadata ? await list(false, true) : null;
         if (!valid(e) || !visible() || selectedVersion !== navigation) return;
         const current = cell(), currentTab = tab;
         let id = selectedId;
         if (current && currentTab === 'mine' && !current.sending && refreshMetadata) {
+          const metadataListVersion = listVersion;
+          const metadataRow = items.find(row => row.id === id);
           const data = await request(pathFor(id));
           if (!valid(e) || !visible() || selectedVersion !== navigation) return;
           if (current.retryRequired) {
             current.receipt = data;
             current.retryRequired = data.stored === null;
           }
-          current.conversation = data.conversation;
+          const hasName = row => row && (Object.hasOwn(row, 'displayName') || Object.hasOwn(row, 'display_name'));
+          const nameOf = row => row.displayName ?? row.display_name ?? null;
+          const listed = listedRows?.find(row => row.id === id);
+          const latest = items.find(row => row.id === id);
+          // This pass's list owns names it returned. A newer list also wins over
+          // a detail request that was already in flight. Off-page details are
+          // read after the list and may fill that page's cached row only when
+          // they explicitly supply a name and no later list has started.
+          const listOwnsName = hasName(listed) || listVersion !== metadataListVersion || latest !== metadataRow;
+          const detailName = hasName(data.conversation);
+          let name;
+          if (hasName(latest) && (listOwnsName || !detailName)) name = nameOf(latest);
+          else if (detailName) name = nameOf(data.conversation);
+          else if (hasName(current.conversation)) name = nameOf(current.conversation);
+          current.conversation = data.conversation && { ...data.conversation,
+            ...(name !== undefined ? { displayName: name, display_name: name } : {}) };
           current.ownershipResolved = !!data.conversation;
-          if (data.conversation) items = items.map(row => row.id === id
-            ? { ...row, display_name: data.conversation.displayName, displayName: data.conversation.displayName } : row);
+          if (!listOwnsName && detailName) items = items.map(row => row.id === id
+            ? { ...row, display_name: name, displayName: name } : row);
           if (data.conversationId && data.conversationId !== id) {
             id = data.conversationId;
             cells.set(`${currentTab}:${id}`, current);
@@ -360,6 +377,7 @@ export function createConversationState({
       }
       if (quiet && !more && cell() && visible()) readGroupPresence(cell(), currentTab, e);
       emit();
+      return data.items;
     } catch (err) {
       if (!valid(e) || version !== listVersion || currentTab !== tab) return;
       if (quiet) throw err;
@@ -1003,7 +1021,8 @@ export function createConversationState({
       current.conversation = data.conversation;
       items = items.map(row => row.id === id ? {
         ...row,
-        display_name: data.conversation.displayName
+        display_name: data.conversation.displayName,
+        displayName: data.conversation.displayName
       } : row);
       emit();
     }, epoch, current);

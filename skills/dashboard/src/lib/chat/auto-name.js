@@ -92,7 +92,8 @@ export function reconcileConversationNames({ store, c4Reader, now = Date.now }) 
     .all({ length: AUTO_NAME_PREFIX.length, prefix: AUTO_NAME_PREFIX, now: Math.floor(now() / 1000) });
   let updated = 0;
   for (const row of failed) {
-    if (!conversations.findByGroup(row.session_group)) continue;
+    const conversation = conversations.findByGroup(row.session_group);
+    if (!conversation || conversation.displayName || store.getGroupDisplayName(row.session_group)?.display_name) continue;
     if (conversations.renameIfEmpty(row.session_group, 'unknown').code === 'NAME_WRITTEN') updated++;
   }
   return updated;

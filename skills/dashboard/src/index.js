@@ -1950,7 +1950,7 @@ export function createServer() {
     catch { console.error('[chat] Conversation naming reconciliation remains pending.'); }
   };
   reconcileNames();
-  const namingTimer = setInterval(reconcileNames, 1000);
+  const namingTimer = setInterval(reconcileNames, 30000);
   namingTimer.unref();
   let attachmentClose = null;
   server.closeAttachments = () => {

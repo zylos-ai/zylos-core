@@ -167,3 +167,64 @@ test('a stale foreground question error cannot overwrite a newer successful resu
   assert.equal(f.state.snapshot().questions.some(row => row.interruptId === 'fresh'), true);
   assert.equal(f.state.snapshot().blocked, false);
 });
+
+test('a detail name cannot replace the name just returned by the list', options, async t => {
+  let changed = false;
+  const f = loadingFixture(t, createConversationState, url => {
+    if (url.pathname === '/api/chat/conversations') return {
+      items: [{ id: 'g:AA', displayName: changed ? 'Latest list name' : 'Initial name' }], nextCursor: null
+    };
+    if (decodeURIComponent(url.pathname) === '/api/chat/conversations/g:AA') return {
+      conversation: { id: 'g:AA', state: 'active', displayName: changed ? 'Older detail name' : 'Initial name' }
+    };
+  });
+  await f.open(); changed = true;
+  await f.state.refreshMessages();
+  assert.equal(f.state.snapshot().items[0].displayName, 'Latest list name');
+  assert.equal(f.state.snapshot().conversation.displayName, 'Latest list name');
+});
+
+test('a list completed during an off-page detail read keeps its newer name', options, async t => {
+  const detail = deferred(); let phase = 'initial';
+  const f = loadingFixture(t, createConversationState, url => {
+    if (url.pathname === '/api/chat/conversations') return {
+      items: phase === 'detail' ? [] : [{ id: 'g:AA', displayName: phase === 'latest' ? 'Latest list name' : 'Initial name' }],
+      nextCursor: phase === 'detail' ? 'next-page' : null
+    };
+    if (decodeURIComponent(url.pathname) === '/api/chat/conversations/g:AA') return phase === 'initial'
+      ? { conversation: { id: 'g:AA', state: 'active', displayName: 'Initial name' } } : detail.promise;
+  });
+  await f.open(); phase = 'detail';
+  const polling = f.state.refreshMessages(); await flush();
+  try {
+    phase = 'latest'; await f.state.loadMore();
+    assert.equal(f.state.snapshot().items[0].displayName, 'Latest list name');
+  } finally {
+    detail.resolve({ conversation: { id: 'g:AA', state: 'active', displayName: 'Older detail name' } });
+    await polling;
+  }
+  assert.equal(f.state.snapshot().items[0].displayName, 'Latest list name');
+  assert.equal(f.state.snapshot().conversation.displayName, 'Latest list name');
+});
+
+test('a manual rename during an off-page detail read keeps the user name', options, async t => {
+  const detail = deferred(); let waiting = false;
+  const f = loadingFixture(t, createConversationState, (url, request) => {
+    if (url.pathname === '/api/chat/conversations') return {
+      items: waiting ? [] : [{ id: 'g:AA', displayName: 'Initial name' }], nextCursor: null
+    };
+    if (decodeURIComponent(url.pathname) === '/api/chat/conversations/g:AA') {
+      if (request?.method === 'PATCH') return { conversation: { id: 'g:AA', state: 'active', displayName: request.body.displayName } };
+      return waiting ? detail.promise : { conversation: { id: 'g:AA', state: 'active', displayName: 'Initial name' } };
+    }
+  });
+  await f.open(); waiting = true;
+  const polling = f.state.refreshMessages(); await flush();
+  try { await f.state.rename('Human name'); }
+  finally {
+    detail.resolve({ conversation: { id: 'g:AA', state: 'active', displayName: 'Older detail name' } });
+    await polling;
+  }
+  assert.equal(f.state.snapshot().items[0].displayName, 'Human name');
+  assert.equal(f.state.snapshot().conversation.displayName, 'Human name');
+});
