@@ -273,6 +273,201 @@ describe('cli list', () => {
       assert.equal(rows[0].last_error, 'Missed execution window');
     });
   });
+
+  it('--name matches the exact name only', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'digest', '--cron', '0 8 * * *', '--name', 'lark-group-digest'], env);
+      cli(['add', 'morning digest', '--cron', '0 8 * * *', '--name', 'lark-group-digest-morning'], env);
+      cli(['add', 'other', '--cron', '0 8 * * *', '--name', 'Lark-Group-Digest'], env);
+
+      const rows = JSON.parse(cli(['list', '--json', '--name', 'lark-group-digest'], env));
+      assert.deepEqual(rows.map(r => r.name), ['lark-group-digest']);
+
+      const human = cli(['list', '--name', 'lark-group-digest'], env);
+      assert.ok(human.includes('lark-group-digest'));
+      assert.ok(!human.includes('lark-group-digest-morning'));
+      assert.ok(!human.includes('Lark-Group-Digest'));
+    });
+  });
+
+  it('--name treats "*" as a wildcard', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'morning', '--cron', '0 8 * * *', '--name', 'lark-group-digest-morning-1'], env);
+      cli(['add', 'morning', '--cron', '0 9 * * *', '--name', 'lark-group-digest-morning-2'], env);
+      cli(['add', 'evening', '--cron', '0 20 * * *', '--name', 'lark-group-digest-evening-1'], env);
+
+      const rows = JSON.parse(cli(['list', '--json', '--name', 'lark-group-digest-morning-*'], env));
+      assert.deepEqual(rows.map(r => r.name).sort(), [
+        'lark-group-digest-morning-1',
+        'lark-group-digest-morning-2'
+      ]);
+
+      const all = JSON.parse(cli(['list', '--json', '--name', '*-1'], env));
+      assert.deepEqual(all.map(r => r.name).sort(), [
+        'lark-group-digest-evening-1',
+        'lark-group-digest-morning-1'
+      ]);
+    });
+  });
+
+  it('--name matches "?", "[", "%" and "_" literally', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'a', '--in', '30 minutes', '--name', 'job?'], env);
+      cli(['add', 'b', '--in', '30 minutes', '--name', 'jobX'], env);
+      cli(['add', 'c', '--in', '30 minutes', '--name', '[a]job'], env);
+      cli(['add', 'd', '--in', '30 minutes', '--name', 'ajob'], env);
+      cli(['add', 'e', '--in', '30 minutes', '--name', '100%_done'], env);
+      cli(['add', 'f', '--in', '30 minutes', '--name', '100xxdone'], env);
+
+      const names = (pattern) =>
+        JSON.parse(cli(['list', '--json', '--name', pattern], env)).map(r => r.name);
+      assert.deepEqual(names('job?'), ['job?']);
+      assert.deepEqual(names('[a]job'), ['[a]job']);
+      assert.deepEqual(names('100%_done'), ['100%_done']);
+    });
+  });
+
+  it('--name combines with --reply-channel', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'a', '--in', '30 minutes', '--name', 'digest-1',
+        '--reply-channel', 'lark', '--reply-endpoint', 'chat-1'], env);
+      cli(['add', 'b', '--in', '30 minutes', '--name', 'digest-2',
+        '--reply-channel', 'telegram', '--reply-endpoint', '42'], env);
+
+      const rows = JSON.parse(cli(['list', '--json', '--name', 'digest-*', '--reply-channel', 'lark'], env));
+      assert.deepEqual(rows.map(r => r.name), ['digest-1']);
+    });
+  });
+
+  it('--name with no matches outputs [] under --json', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'a', '--in', '30 minutes', '--name', 'digest-1'], env);
+      assert.deepEqual(JSON.parse(cli(['list', '--json', '--name', 'missing'], env)), []);
+    });
+  });
+
+  it('--name with an empty pattern fails instead of listing every task', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'a', '--in', '30 minutes', '--name', 'digest-1'], env);
+      for (const args of [['list', '--json', '--name', ''], ['list', '--json', '--name']]) {
+        const { stdout, stderr, status } = cliRaw(args, env);
+        assert.equal(status, 1);
+        assert.equal(stdout, '');
+        assert.ok(stderr.includes('--name requires a non-empty pattern'));
+      }
+    });
+  });
+});
+
+describe('cli info', () => {
+  function onlyTaskId(dbPath) {
+    const db = new Database(dbPath);
+    try {
+      return db.prepare('SELECT id FROM tasks LIMIT 1').get().id;
+    } finally {
+      db.close();
+    }
+  }
+
+  it('--json outputs the full task row as an object', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'json info task', '--cron', '0 8 * * *', '--name', 'digest',
+        '--reply-channel', 'lark', '--reply-endpoint', 'chat-1'], env);
+      const id = onlyTaskId(dbPath);
+
+      const task = JSON.parse(cli(['info', id, '--json'], env));
+      assert.equal(task.id, id);
+      assert.equal(task.name, 'digest');
+      assert.equal(task.prompt, 'json info task');
+      assert.equal(task.type, 'recurring');
+      assert.equal(task.cron_expression, '0 8 * * *');
+      assert.equal(task.status, 'pending');
+      assert.equal(task.reply_channel, 'lark');
+      assert.equal(task.reply_endpoint, 'chat-1');
+      assert.equal(typeof task.next_run_at, 'number');
+      assert.ok('last_error' in task);
+    });
+  });
+
+  it('accepts an ID prefix and the get alias', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'prefix task', '--in', '30 minutes'], env);
+      const id = onlyTaskId(dbPath);
+      assert.equal(JSON.parse(cli(['info', id.substring(0, 10), '--json'], env)).id, id);
+      assert.equal(JSON.parse(cli(['get', id, '--json'], env)).id, id);
+    });
+  });
+
+  it('shows completed one-time tasks that list hides', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'finished task', '--in', '30 minutes'], env);
+      const id = onlyTaskId(dbPath);
+      cli(['done', id], env);
+
+      assert.deepEqual(JSON.parse(cli(['list', '--json'], env)), []);
+      assert.equal(JSON.parse(cli(['info', id, '--json'], env)).status, 'completed');
+      assert.ok(cli(['info', id], env).includes('Next run:       done'));
+    });
+  });
+
+  it('prints a readable summary with the full id and prompt', () => {
+    withTmpDir(({ dbPath, env }) => {
+      const prompt = 'line one of a prompt that is longer than the eighty characters list shows\nline two';
+      cli(['add', prompt, '--every', '2 hours', '--name', 'two-line',
+        '--reply-channel', 'telegram', '--reply-endpoint', '42', '--block-queue-until-idle'], env);
+      const id = onlyTaskId(dbPath);
+
+      const output = cli(['info', id], env);
+      assert.ok(output.includes(`Task ${id} (TZ: UTC)`));
+      assert.ok(output.includes('Name:           two-line'));
+      assert.ok(output.includes('Type:           interval'));
+      assert.ok(output.includes('Schedule:       every 7200s'));
+      assert.ok(output.includes('Block queue:    until idle'));
+      assert.ok(output.includes('Reply:          telegram 42'));
+      assert.ok(output.includes('Last run:       never'));
+      assert.ok(output.includes('    line one of a prompt that is longer than the eighty characters list shows\n    line two'));
+      assert.ok(!output.includes('Last error'));
+    });
+  });
+
+  it('shows the cron schedule and the last error of a failed task', () => {
+    withTmpDir(({ dbPath, env }) => {
+      cli(['add', 'morning report', '--cron', '0 8 * * *'], env);
+      const id = onlyTaskId(dbPath);
+      const db = new Database(dbPath);
+      try {
+        db.prepare(`UPDATE tasks SET status = 'failed', last_error = 'Missed execution window', failed_at = 1767258000`).run();
+      } finally {
+        db.close();
+      }
+
+      const output = cli(['info', id], env);
+      assert.ok(output.includes('Schedule:       Every day at 8:00 AM (cron 0 8 * * *)'));
+      assert.ok(output.includes('Status:         failed'));
+      assert.ok(output.includes('Last error:     Missed execution window (Jan 1, 2026, 09:00)'));
+    });
+  });
+
+  it('exits 1 for a missing task, an ambiguous prefix and a missing id', () => {
+    withTmpDir(({ env }) => {
+      cli(['add', 'first', '--in', '30 minutes'], env);
+      cli(['add', 'second', '--in', '30 minutes'], env);
+
+      const missing = cliRaw(['info', 'task-does-not-exist', '--json'], env);
+      assert.equal(missing.status, 1);
+      assert.equal(missing.stdout, '');
+      assert.ok(missing.stderr.includes('Task not found: task-does-not-exist'));
+
+      const ambiguous = cliRaw(['info', 'task-', '--json'], env);
+      assert.equal(ambiguous.status, 1);
+      assert.equal(ambiguous.stdout, '');
+      assert.ok(ambiguous.stderr.includes('Ambiguous task ID prefix'));
+
+      const noId = cliRaw(['info'], env);
+      assert.equal(noId.status, 1);
+      assert.ok(noId.stderr.includes('Task ID is required'));
+    });
+  });
 });
 
 describe('cli done', () => {

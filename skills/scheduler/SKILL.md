@@ -23,7 +23,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 |---------|-------------|-----------|
 | `add <prompt> [options]` | Add a new task | `references/add.md` |
 | `update <task-id> [options]` | Update an existing task | `references/update.md` |
-| `list` / `next` / `running` / `history` | Query tasks | `references/query.md` |
+| `list` / `info` / `next` / `running` / `history` | Query tasks | `references/query.md` |
 | `done` / `remove` / `pause` / `resume` | Task lifecycle | `references/lifecycle.md` |
 
 ## Command Results
