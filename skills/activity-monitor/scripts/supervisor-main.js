@@ -7,6 +7,7 @@ import * as defaultDb from '../../comm-bridge/scripts/c4-db.js';
 import { freezeFirstFailureNotice, drainFirstFailureNotices } from '../../comm-bridge/scripts/first-failure-notice.js';
 import { loadCoreModule } from './core-modules.js';
 import { createSupervisor } from './supervisor.js';
+import { prepareReferenceReorg } from './reference-reorg-proposal.js';
 import { SupervisorServerHealth } from './supervisor-server-health.js';
 import { SupervisorServerObservation, parseServerAlertTarget } from './supervisor-server-observation.js';
 import { SupervisorLegacyStatus } from './supervisor-legacy-status.js';
@@ -152,6 +153,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     checkAuth:runtime=>getSessionAdapter(runtime).checkAuth(),
     matchScreen:(runtime,screen)=>(runtime==='claude'?matchClaudeScreen:matchCodexScreen)(screen),
     resolveToolRule:(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name,toolInput:tool.input,config:configuration}),
+    prepareReferenceReorg:()=>prepareReferenceReorg({root,now:clock()}),
     readSyncMarker:options=>{if(!syncReader)throw unavailable('Sync marker reader');return syncReader(options);},prompts,
     freezeNotice:options=>{
       const mode=configuration?.mode ?? readMode().mode;

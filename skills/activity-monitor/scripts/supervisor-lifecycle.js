@@ -600,6 +600,17 @@ export class SupervisorLifecycle {
     if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
     if (marker.held && !marker.stale) return;
     if (!await this.beforeWrite(modeOf(context) === 'single' ? null : scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
+    if (kind === 'origin' || kind === 'global') {
+      try {
+        const proposal = this.prompt('REFERENCE_REORG_PROMPT');
+        if (typeof this.d.prepareReferenceReorg !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Reference reorganization check is unavailable');
+        if (await this.d.prepareReferenceReorg()) await this.d.db.insertControl(proposal, {
+          sessionGroup: modeOf(context) === 'single' ? null : 'origin', priority: 3, appendAckSuffix: false,
+        });
+      } catch (cause) {
+        this.d.reportError?.(cause, { phase: 'reference-reorganization' });
+      }
+    }
     await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
       sessionGroup: modeOf(context) === 'single' ? null : scene.sessionGroup, priority: 2, appendAckSuffix: false,
       ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000) }),
