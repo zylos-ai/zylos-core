@@ -109,7 +109,11 @@ export function readRecordedCodexSample({ sessionGroup, env = process.env, now =
     seen.add(key);
     const source = readCodexEventSource(event);
     if (!source) continue;
-    const row = source.rows.findLast(item => item.type === 'event_msg' && item.payload?.type === 'token_count');
+    // Empty token updates can occur transiently within subscription runs. Once
+    // this run reports quota, retain its latest quota-bearing update.
+    const token = item => item.type === 'event_msg' && item.payload?.type === 'token_count';
+    const last = source.rows.findLast(token);
+    const row = includeWithoutQuota ? source.rows.findLast(item => token(item) && item.payload.rate_limits) ?? last : last;
     if (!row) continue;
     const sample = codexSampleFromRow(source, row, { runId: event.run_id, sessionId: event.session_id });
     return sample && (includeWithoutQuota || currentRecordedWeekly(sample.sample.rateLimits, sample.sample.capturedAt, now)) ? sample : null;

@@ -5,12 +5,12 @@ import { readJsonSample, readRecordedCodexSample, currentRecordedWeekly } from '
 
 /** Before Claude's first API response, missing rate_limits is not account evidence.
  * API duration also survives compaction, when current_usage can become null. */
-export function claudeAccountSample(sample) {
+function claudeAccountSample(sample) {
   if (sample.error) return null;
   const { value } = sample, usage = value.context_window;
   const positive = number => Number.isFinite(number) && number > 0;
   const responded = (usage?.current_usage !== null && typeof usage?.current_usage === 'object' && !Array.isArray(usage.current_usage)) ||
-    positive(usage?.total_input_tokens) || positive(usage?.total_output_tokens) || positive(value.cost?.total_api_duration_ms);
+    positive(value.cost?.total_api_duration_ms);
   if (!value.rate_limits && !responded) return null;
   return { value: value.rate_limits ?? null,
     recordedAt: Object.hasOwn(value.zylos ?? {}, 'capturedAt') ? value.zylos.capturedAt : sample.mtime };
@@ -22,7 +22,7 @@ export function readRecordedAccountUsage(runtime, env, now, liveSamples = []) {
   let latest = null;
   const consider = ({ value, recordedAt, live = false }) => {
     if (!Number.isFinite(recordedAt) || recordedAt < 0 || recordedAt > now) return;
-    if (!latest || recordedAt > latest.recordedAt || (recordedAt === latest.recordedAt && live && !latest.live)) {
+    if (!latest || recordedAt > latest.recordedAt) {
       latest = { value, recordedAt, live };
     }
   };
@@ -42,7 +42,7 @@ export function readRecordedAccountUsage(runtime, env, now, liveSamples = []) {
       }
     } catch { /* An unreadable group cannot hide other recorded account samples. */ }
   }
-  if (runtime === 'claude') {
+  if (runtime === 'claude' && !latest) {
     const sample = readJsonSample(path.join(zylosRoot(env), 'activity-monitor', 'usage.json'), 'status');
     if (!sample.error) consider({ value: { seven_day: { used_percentage: sample.value.weeklyAll?.percent,
       resets_at: sample.value.weeklyAll?.resets } }, recordedAt: Date.parse(sample.value.lastCheck) });

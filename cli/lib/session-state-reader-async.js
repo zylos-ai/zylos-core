@@ -6,7 +6,7 @@ import { openTmuxConnection } from './runtime/tmux-connection.js';
 import { isIdentityError } from './runtime/tmux-protocol.js';
 import { observeSessionTarget } from './runtime/session-target.js';
 import { readJsonSample, readCodexSampleForIdentity, sampleResult, sameIdentity } from './session-usage-reader.js';
-import { readRecordedAccountUsage, claudeAccountSample } from './recorded-account-usage.js';
+import { readRecordedAccountUsage } from './recorded-account-usage.js';
 
 const publicIdentity = value => Object.fromEntries(['present','tmuxName','runId','createdAt','runtime','launchConfig','ready','sessionId'].map(key => [key, value[key]]));
 const absent = group => ({ present: false, tmuxName: tmuxNameForGroup(group ?? 'origin'), runId: null, createdAt: null,
@@ -79,13 +79,11 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         const first = await read();
         if (!first.ready || first.runtime !== runtime) return null;
         const sample = runtime === 'claude' ? readJsonSample(path.join(groupRunDir(sessionGroup, env), 'statusline.json'), 'usage') :
-          readCodexSampleForIdentity({ sessionGroup, identity: first, env, account: !allowRecorded });
+          readCodexSampleForIdentity({ sessionGroup, identity: first, env, account: true });
         const last = await read();
         if (!sameIdentity(first, last)) return null;
-        if (runtime === 'codex') return sample && (allowRecorded || sample.sample.rateLimits)
-          ? { value: sample.sample.rateLimits, mtime: sample.mtime, recordedAt: sample.sample.capturedAt } : null;
+        if (runtime === 'codex') return sample?.sample.rateLimits ? { value: sample.sample.rateLimits, mtime: sample.mtime, recordedAt: sample.sample.capturedAt } : null;
         if (sample.error || sample.identity.runId !== first.runId || sample.identity.sessionId !== first.sessionId) return null;
-        if (allowRecorded) return claudeAccountSample(sample);
         return sample.value.rate_limits ? { value: sample.value.rate_limits, mtime: sample.mtime, recordedAt: sample.sampledAt ?? sample.mtime } : null;
       });
       if (candidate) samples.push(candidate);

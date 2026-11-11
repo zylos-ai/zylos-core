@@ -38,11 +38,11 @@ test('default live account values keep mtime selection while recorded reads comp
   assert.deepEqual(await f.reader.readAccountUsage('claude', null), expected);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1).toISOString(), weeklyAll: { percent: 99, resets: reset } });
   assert.deepEqual(await f.reader.readAccountUsage('claude', { allowRecorded: true }), {
-    value: { seven_day: { used_percentage: 99, resets_at: reset } }, recordedAt: now - 1, live: false });
+    value: { seven_day: { used_percentage: 7, resets_at: reset } }, recordedAt: now - 5000, live: true });
   assert.deepEqual(f.counts(), [6, 6]);
 });
 
-test('reclaimed groups and sampler copies compete by their actual sample times', async t => {
+test('reclaimed groups prefer their latest quota over a later sampler copy', async t => {
   const f = fixture(t); const file = f.status('origin', 4, now - 7200000);
   fs.utimesSync(file, now / 1000, now / 1000);
   f.status('other', 7, now - 3600000);
@@ -50,23 +50,22 @@ test('reclaimed groups and sampler copies compete by their actual sample times',
   const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
   assert.equal(record.value.seven_day.used_percentage, 7); assert.equal(record.recordedAt, now - 3600000); assert.equal(record.live, false);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 9, resets: new Date(reset * 1000).toISOString() } });
-  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 9);
-  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).recordedAt, now - 1000);
+  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 7);
+  assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).recordedAt, now - 3600000);
   f.status('newest', 11, now - 500);
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 11);
   assert.deepEqual(f.counts(), [0, 0], 'history does not open a tmux connection');
 });
 
-test('the account sampler stays newer than older group samples', async t => {
+test('the account sampler is used only without conclusive group samples', async t => {
   const f = fixture(t);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 8, resets: reset } });
-  f.status('expired', 20, now - 2000, now / 1000 - 1);
   f.write('activity-monitor/session-groups/broken/statusline.json', '{broken');
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 8);
   f.status('valid', 20, now - 3600000);
   const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
-  assert.equal(record.value.seven_day.used_percentage, 8);
-  assert.equal(record.recordedAt, now - 1000);
+  assert.equal(record.value.seven_day.used_percentage, 20);
+  assert.equal(record.recordedAt, now - 3600000);
   assert.equal(await f.reader.readAccountUsage('claude', null), null);
 });
 
@@ -273,7 +272,7 @@ function completedClaude(f, group, at, extra = {}) {
 function codexTokens(f, group, rows) {
   const file = f.write(`${group}/rollout.jsonl`, rows.map(({ at, percent }) => JSON.stringify({
     timestamp: new Date(at).toISOString(), type: 'event_msg', payload: { type: 'token_count',
-      ...(percent === undefined ? {} : { rate_limits: { secondary: { window_minutes: 10080, used_percent: percent, resets_at: reset } } }) },
+      rate_limits: percent === undefined ? null : { secondary: { window_minutes: 10080, used_percent: percent, resets_at: reset } } },
   })).join('\n') + '\n');
   f.write(`activity-monitor/session-groups/${group}/events.jsonl`, JSON.stringify({ v: 1, ts: now - 60000,
     event: 'session_start', runtime: 'codex', session_group: group, run_id: 'run', session_id: 'session', transcript_path: file }) + '\n');
@@ -312,11 +311,10 @@ test('a newer subscription record beats an older no-quota proxy response', async
   assert.equal(record.value.seven_day.used_percentage, 21); assert.equal(record.live, false);
 });
 
-test('a newer sampler quota can supersede a no-quota group response', async t => {
+test('a newer sampler copy cannot supersede a no-quota group response', async t => {
   const f = fixture(t); completedClaude(f, 'origin', now - 10000); f.setLive(['origin']);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 13, resets: reset } });
-  const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
-  assert.equal(record.value.seven_day.used_percentage, 13); assert.equal(record.recordedAt, now - 1000); assert.equal(record.live, false);
+  assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
 });
 
 test('a subscription startup sample without an API response cannot erase recorded quota', async t => {
@@ -347,11 +345,24 @@ test('legacy no-quota response timestamps use mtime but explicit invalid capture
   }
 });
 
-test('Codex latest live token sample without quota blocks an older quota in the same rollout', async t => {
+test('Codex transient empty token updates retain the last quota from the same run', async t => {
   const f = fixture(t); f.setIdentity({ ...f.identity, runtime: 'codex' }); f.setLive(['codex:live']);
   codexTokens(f, 'codex:live', [{ at: now - 10000, percent: 7 }, { at: now - 1000 }]);
-  assert.equal(await f.reader.readAccountUsage('codex', { allowRecorded: true }), null);
+  const live = await f.reader.readAccountUsage('codex', { allowRecorded: true });
+  assert.notEqual(live, null, 'A transient empty update cannot clear this run\'s known quota');
+  assert.equal(live.value.sevenDay.usedPercentage, 7); assert.equal(live.recordedAt, now - 10000); assert.equal(live.live, true);
   assert.equal((await f.reader.readAccountUsage('codex')).sevenDay.usedPercentage, 7, 'default account lookup still finds quota');
+  f.setLive([]);
+  const recorded = await f.reader.readAccountUsage('codex', { allowRecorded: true });
+  assert.equal(recorded.value.sevenDay.usedPercentage, 7); assert.equal(recorded.recordedAt, now - 10000); assert.equal(recorded.live, false);
+});
+
+test('Codex all-empty live runs suppress an older subscription quota from another group', async t => {
+  const f = fixture(t); f.setIdentity({ ...f.identity, runtime: 'codex' }); f.setLive(['codex:live']);
+  codexTokens(f, 'codex:old', [{ at: now - 10000, percent: 7 }]);
+  codexTokens(f, 'codex:live', [{ at: now - 1000 }]);
+  assert.equal(await f.reader.readAccountUsage('codex', { allowRecorded: true }), null);
+  assert.equal(await f.reader.readAccountUsage('codex'), null);
 });
 
 test('Codex latest recorded no-quota sample blocks older quota from another group', async t => {
@@ -384,13 +395,9 @@ test('a newer expired quota cannot revive an older still-valid subscription wind
   assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
 });
 
-for (const [kind, context_window] of [
-  ['current usage', { current_usage: { input_tokens: 2 }, total_input_tokens: 0, total_output_tokens: 0 }],
-  ['input tokens', { current_usage: null, total_input_tokens: 2, total_output_tokens: 0 }],
-  ['output tokens', { current_usage: null, total_input_tokens: 0, total_output_tokens: 2 }],
-]) test(`Claude ${kind} makes a quota-less response authoritative`, async t => {
+test('Claude current usage makes a quota-less response authoritative', async t => {
   const f = fixture(t); f.status('subscription', 7, now - 10000);
-  completedClaude(f, 'response', now - 1000, { context_window });
+  completedClaude(f, 'response', now - 1000, { context_window: { current_usage: { input_tokens: 2 } } });
   assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
 });
 
