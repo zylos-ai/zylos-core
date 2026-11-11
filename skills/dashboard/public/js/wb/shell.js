@@ -5,7 +5,7 @@ import { instanceStrip } from './instance-strip.js?v=157';
 import { renderAttention } from './attention-bar.js?v=150';
 import { createGroupDetail } from './detail.js?v=161';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
-import { createHostPanel } from './host-panel.js?v=158';
+import { createHostPanel } from './host-panel.js?v=159';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=1';
 

@@ -1,6 +1,5 @@
 {
   "name": "zylos-dashboard",
-  "version": "0.6.9",
   "description": "Observability dashboard and conversation channel for a local Zylos agent, bundled with Zylos Core.",
   "type": "module",
   "main": "src/index.js",

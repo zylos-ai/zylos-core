@@ -6,7 +6,7 @@ import { defaultGroups, modelFollowers, runtimeHealth, runtimeConfirmation, crea
 import { createPricingPanel, appendPriceRow, collectPriceRows, countPriceChanges, draftPriceRows, visiblePricePrefixes } from '../public/js/wb/settings-pricing.js';
 import { keyActionConfirmation, keyCounts, remoteStatus, renderKeyTable, renderRemoteAgents } from '../public/js/wb/settings-access.js';
 import { mountLanguageControl, mountThemeControl } from '../public/js/wb/settings-ui.js';
-import { renderVersion } from '../public/js/wb/settings-version.js';
+import { coreVersion, renderVersion } from '../public/js/wb/settings-version.js';
 import { documentFixture, node } from './fixtures/settings-dom.js';
 import { deferred, tick } from './fixtures/workbench-dom.js';
 const t = (key, params = {}) => key + (Object.keys(params).length ? ':' + JSON.stringify(params) : '');
@@ -568,13 +568,25 @@ test('default controls retain the restart lock after an accepted runtime change'
   panel.destroy();
 });
 
-test('the version row shows Dashboard, zylos with its update hint and the engine CLI in both views', () => {
+test('the version row shows the Core version with its update hint and the engine CLI in both views, and no Dashboard version', () => {
   const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button');
-  renderVersion(root, { zylos_version: '3', zylos_update: '4', cc_version: '2' }, { document, upgrade, t, dashboardVersion: '0.7.0' });
-  assert.match(root.textContent, /Dashboard · v0\.7\.0/); assert.match(root.textContent, /zylos · v3/); assert.match(root.textContent, /CC · v2/);
+  renderVersion(root, { zylos_version: '1.0.0-beta.7', zylos_update: '1.0.0', cc_version: '2' }, { document, upgrade, t });
+  assert.match(root.textContent, /zylos · v1\.0\.0-beta\.7/); assert.match(root.textContent, /CC · v2/);
+  assert.doesNotMatch(root.textContent, /Dashboard/, 'Dashboard ships inside Core and has no version of its own');
   assert.ok(root.querySelector('#settings-zylos-update')); assert.equal(root.querySelector('button'), root.querySelector('#settings-zylos-update'));
-  renderVersion(root, { zylos_version: '3', cc_version: '2' }, { document, upgrade, t, dashboardVersion: null });
-  assert.match(root.textContent, /Dashboard · wb\.unknown/);
+  for (const zylos_version of [undefined, null, '', ' ', 'unknown']) {
+    renderVersion(root, { zylos_version, cc_version: '2' }, { document, upgrade, t });
+    assert.match(root.textContent, /zylos · wb\.unknown/, JSON.stringify(zylos_version));
+    assert.doesNotMatch(root.textContent, /zylos · v/, JSON.stringify(zylos_version));
+  }
+});
+
+test('the Core version is read only from the instance\'s own runtime info', () => {
+  assert.equal(coreVersion({ zylos_version: '1.0.0-beta.7' }), '1.0.0-beta.7');
+  assert.equal(coreVersion({ zylos_version: ' 0.9.6\n' }), '0.9.6');
+  for (const info of [undefined, null, {}, { zylos_version: null }, { zylos_version: '' }, { zylos_version: 'unknown' }, { zylos_version: 7 }, { version: '1.0.0' }]) {
+    assert.equal(coreVersion(info), null, JSON.stringify(info));
+  }
 });
 
 test('remote machine rows show the poller connection state and remove through the callback', async () => {

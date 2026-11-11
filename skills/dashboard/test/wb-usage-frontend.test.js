@@ -256,10 +256,11 @@ test('message counts distinguish unreadable and zero in both locales and detail 
 
 test('host curves keep a legend, a labelled 0–100% axis and a readable height, and the header names core', () => {
   const f=fixture(),data={current:{cpu_pct:10},pm2:{online:1,total:1},series:[{at:'2026-11-01T00:00:00Z',cpu:{avg:10,max:40},mem:null,disk:null}]};
-  const view=renderHost(f.root,data,{...f,level:'technical',meta:{name:'spark',mode:'multi',core:'core 0.9.4',version:'dashboard 0.7.0'}});
+  // A stale `version` from an older caller is not shown: Dashboard has no version apart from Core.
+  const view=renderHost(f.root,data,{...f,level:'technical',meta:{name:'spark',mode:'multi',core:'core 1.0.0-beta.7',version:'dashboard 0.7.0'}});
   const nodes=[];const walk=n=>{nodes.push(n);(n.children??[]).forEach(walk);};walk(f.root);
   assert.ok(nodes.some(n=>n.classList?.contains('wb-host-legend')),'avg and max lines are named once for the stack');
-  assert.match(f.root.textContent,/spark · multi · core 0\.9\.4 · dashboard 0\.7\.0/);
+  assert.match(f.root.textContent,/spark · multi · core 1\.0\.0-beta\.7/);assert.doesNotMatch(f.root.textContent,/dashboard 0\.7\.0/);
   const y=f.configs[0].options.scales.y;assert.notEqual(y.ticks.display,false);assert.equal(y.ticks.callback(50),'50%');
   assert.ok(nodes.filter(n=>n.classList?.contains('wb-host-frame')).every(n=>parseInt(n.style.height)>=100));
   assert.doesNotMatch(String(f.configs[0].data.datasets[0].backgroundColor),/22$/,'no hex+alpha concatenation');

@@ -6,11 +6,11 @@ import { createPricingPanel } from './wb/settings-pricing.js?v=157';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=161';
-import { renderVersion } from './wb/settings-version.js?v=106';
+import { coreVersion, renderVersion } from './wb/settings-version.js?v=107';
 import { mountConversationPage } from './wb/conversation-page.js?v=162';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
-import { mountWorkbench } from './wb/shell.js?v=161';
+import { mountWorkbench } from './wb/shell.js?v=162';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=109';
 import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=150';
@@ -236,15 +236,8 @@ function agentFleetLabels() {
 
 
 // ─── Render: Info Bar ───
-// Settings version + header agent name. The version is this page's own
-// dashboard component version: set once from the first payload that carries
-// it (the local server's /api/state, or the remote's own document in
-// standalone remote mode) and never overwritten — in-page remote viewing
-// swaps dashboardState to the remote agent's payload, whose version belongs
-// to a different install.
-let ownDashboardVersion = null;
+// The header's instance name: the viewed instance's.
 function renderIdentityChrome() {
-  ownDashboardVersion ??= state.dashboardState?.dashboard_version ?? null;
   const nameEl = $('#tab-bar-agent-name');
   if (nameEl) {
     const name = viewedAgentName();
@@ -2639,8 +2632,7 @@ function initSettingsPage() {
 
 function refreshSettingsVersion() {
   if (!settingsVersionRoot) return;
-  renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint,
-    dashboardVersion: ownDashboardVersion });
+  renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
 }
 function refreshSettingsLocks() {
   if (!settingsPage) return;
@@ -3001,8 +2993,11 @@ workbench = mountWorkbench({
   observerStatus: () => state.observer.status,
   observerAvailable: observerOpenable,
   onObserve: openObserverFor,
-  instanceInfo: () => ({ name: viewedAgentName(), version: state.dashboardState?.dashboard_version ? 'dashboard ' + state.dashboardState.dashboard_version : null,
-    core: state.dashboardState?.runtime_info?.zylos_version ? 'core ' + state.dashboardState.runtime_info.zylos_version : null }),
+  // The viewed instance's own Core version (a remote's comes from its state); none when it cannot be read.
+  instanceInfo: () => {
+    const core = coreVersion(state.dashboardState?.runtime_info);
+    return { name: viewedAgentName(), core: core ? 'core ' + core : null };
+  },
 });
 initTechButton();
 watchHeader({ header: document.querySelector('.app-header') });

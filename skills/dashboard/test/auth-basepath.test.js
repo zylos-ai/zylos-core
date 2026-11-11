@@ -530,6 +530,7 @@ test('/api/state exposes stable agent identity without fleet secrets', async () 
       assert.equal(JSON.stringify(body).includes(`"${rawField}"`), false);
     }
     assert.equal(Object.hasOwn(body.runtime_info, 'zylos_upgrade_result'), false);
+    assert.equal(Object.hasOwn(body, 'dashboard_version'), false, 'Dashboard has no version of its own; pages show runtime_info.zylos_version');
     assert.equal(fs.existsSync(legacyMarker), true, 'Dashboard must not consume the legacy upgrade marker');
     assert.equal(JSON.stringify(body).includes('zylos_ak_secret'), false);
     assert.equal(JSON.stringify(body).includes('read_api_key'), false);

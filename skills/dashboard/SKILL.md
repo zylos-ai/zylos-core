@@ -1,6 +1,5 @@
 ---
 name: dashboard
-version: 0.6.9
 description: Zylos observability dashboard and Dashboard conversation channel. Use when replying to a Dashboard conversation (the reply-via route names the dashboard channel), when sending charts, choice cards, forms or other structured content to a Dashboard conversation, or when sending an image or file attachment there. Also covers the dashboard service itself - agent state, costs, tools, communication, scheduler and PM2 health (full features on Claude runtime; PM2, system health, communication and scheduler monitoring on all runtimes).
 type: communication
 

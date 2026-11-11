@@ -1,12 +1,17 @@
 import { element } from './plain-text.js?v=106';
 
-// This page's Dashboard version, zylos with its update hint, the AI engine CLI and its upgrade
-// button (the original generated action node), in both views.
-export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, onHint = () => {},
-  dashboardVersion = null } = {}) {
-  root.replaceChildren(element(document, 'p', 'Dashboard · ' + (dashboardVersion ? 'v' + dashboardVersion : t('wb.unknown'))));
-  const ri = info ?? {};
-  root.append(element(document, 'p', 'zylos · ' + (ri.zylos_version ? 'v' + ri.zylos_version : t('wb.unknown'))));
+// The Core version an instance reports in runtime_info (`zylos --version`). Dashboard ships inside Core and
+// has no version of its own. A missing answer, or the CLI's "unknown", is not a version.
+export function coreVersion(info) {
+  const value = typeof info?.zylos_version === 'string' ? info.zylos_version.trim() : '';
+  return value && value !== 'unknown' ? value : null;
+}
+
+// The viewed instance's Core version with its update hint, the AI engine CLI and its upgrade button
+// (the original generated action node), in both views.
+export function renderVersion(root, info, { upgrade, document = root.ownerDocument, t = key => key, readOnly = false, onHint = () => {} } = {}) {
+  const ri = info ?? {}, core = coreVersion(ri);
+  root.replaceChildren(element(document, 'p', 'zylos · ' + (core ? 'v' + core : t('wb.unknown'))));
   if (ri.zylos_update) {
     const hint = element(document, 'button', t('wb.settings.updateTo', { version: ri.zylos_update }), 'wb-link-btn'); hint.type = 'button'; hint.id = 'settings-zylos-update';
     hint.title = t('info.zylos_update_hint', { version: ri.zylos_update }); hint.addEventListener('click', () => onHint(hint)); root.append(hint);

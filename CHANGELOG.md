@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Dashboard conversations**: Dashboard is now also a conversation channel. Start your own conversations from the Dashboard (each one is its own session group), and the agent replies in place. Replies can carry structured content - charts, choice cards and forms you answer directly on the page - plus image and file attachments in both directions. A remote-access switch (`chat.allowRemote` in the Dashboard config) decides whether conversations can also be used through API-key access, for example from another instance's Dashboard. It is off by default, so only browser sessions signed in to this Dashboard can read or write conversations.
 
+### Changed
+- **Dashboard shows the Core version**: Dashboard ships inside Core and no longer has a version of its own. Settings and the instance details show the viewed instance's Core version; for another instance, its own Core version, or nothing when it cannot be read (never this machine's).
+
 ### Fixed
 - **Interrupt notices are not pause orders**: the Claude system instructions now say that Claude Code's "STOP ... wait for the user" interrupt text only cancels that one call, must not be recorded in memory as a pause, and does not stop later messages or scheduled tasks. (#987)
 - **Message left in the input box**: the periodic Enter keeps the deadline of an earlier stuck message instead of restarting it for each new one, and the default interval is now 5 s (`C4_PERIODIC_ENTER_INTERVAL_MS`, previously 60 s). When Claude's two empty-input checks disagree, delivery sends one more Enter and re-checks instead of re-pasting, which could duplicate the message. The budget is kept per session group, and an Enter is now also supplemented after a delivery settles. (#795, #1072)

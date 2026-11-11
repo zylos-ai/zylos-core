@@ -126,7 +126,7 @@ export function workbenchAnswer(url, now) {
       model: { ok: true, data: { runtime: 'claude', desired: pair, resolved: pair, running: { status: 'applied', launchConfig: pair } } } };
   }
   if (p === '/api/timeline') return timeline(url, now);
-  if (p === '/api/state') return { dashboard_version: '0.7.0', state: 'IDLE', agent: { name: 'browser-case' }, sessionGroup: 'origin', runId: 'run-origin', sessionId: 's0',
+  if (p === '/api/state') return { state: 'IDLE', agent: { name: 'browser-case' }, sessionGroup: 'origin', runId: 'run-origin', sessionId: 's0',
     runtime_info: { runtime: 'claude', zylos_version: '0.9.4', cc_version: '2.1.80' } };
   if (p === '/api/session-mode') return { ok: true, data: { sessionMode: 'multi', transition: null } };
   if (p === '/api/instance-status') return { ok: true, data: { origin: { presence: 'running' }, view: 'multi', sessionMode: 'multi' } };

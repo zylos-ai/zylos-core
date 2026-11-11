@@ -202,7 +202,7 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   }
   let errorNode = null;
   const update = (next, { meta: nextMeta = meta, pool: nextPool = pool, failure = null } = {}) => {
-    const metaItems = [nextMeta?.name, ...(level === 'technical' ? [nextMeta?.mode, nextMeta?.core, nextMeta?.version] : [])].filter(Boolean);
+    const metaItems = [nextMeta?.name, ...(level === 'technical' ? [nextMeta?.mode, nextMeta?.core] : [])].filter(Boolean);
     if (metaItems.length) {
       setText(metaNode, metaItems.join(' · '));
       if (metaNode.parentNode !== header) header.append(metaNode);
