@@ -7,6 +7,7 @@ export default {
     // Node test-runner file; run by scripts/run-node-tests.js.
     '<rootDir>/test/test-location.test.js',
     '<rootDir>/test/reference-memory-templates.test.js',
+    '<rootDir>/test/history-reminders.integration.test.js',
   ],
   globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',

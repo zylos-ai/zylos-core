@@ -4,7 +4,7 @@ import * as db from './c4-db.js';
 import { createStore } from './c4-v2-store.js';
 import { createQueryHandlers } from './c4-v2-cli.js';
 import { dataError, requireGroup } from './c4-session-group.js';
-import { formatQueryError, replyVia, projectConversation } from './c4-query-format.js';
+import { formatQueryError, replyVia, projectConversation, shellQuote } from './c4-query-format.js';
 import { queryRejection } from './c4-entry-events.js';
 
 const query = createQueryHandlers(createStore(db.getDb));
@@ -72,6 +72,18 @@ const noPositionals = o => { if (o.positional.length) invalid('Unexpected positi
 const group = (o, global = false) => o.group === undefined ? '*' : requireGroup(o.group, { global });
 const json = data => JSON.stringify({ ok: true, data }) + '\n';
 const display = (data, o) => o.json ? json(data) : JSON.stringify(data, null, 2) + '\n';
+function historyNotes(rows) {
+  const caller = process.env.ZYLOS_SESSION_GROUP;
+  if (!caller || caller === 'origin') return '';
+  const counts = new Map();
+  for (const row of rows) {
+    const group = row.session_group;
+    if (group && group !== caller) counts.set(group, (counts.get(group) ?? 0) + 1);
+  }
+  return [...counts].map(([group, count]) =>
+    `Note: ${count} ${count === 1 ? 'row above belongs' : 'rows above belong'} to session group ${group}; ${count === 1 ? 'it is' : 'they are'} history. For its current state, ask that thread:\ncat <<'EOF_INTERNAL' | node ${shellQuote(sendPath)} internal ${shellQuote(group)}\n<Fill in your question about the current state.>\nEOF_INTERNAL\n`
+  ).join('');
+}
 function conversations(rows) {
   return rows.map(row => {
     const route = row.direction === 'in' && row.endpoint_id !== null ? '\n' + replyVia(row, sendPath) : '';
@@ -217,13 +229,13 @@ export function fetchCli(args) {
     let minId = Infinity, maxId = -Infinity;
     for (const { id } of rows) { minId = Math.min(minId, id); maxId = Math.max(maxId, id); }
     const label = rows.length ? `since ${since} UTC, id ${minId} ~ ${maxId}` : `since ${since} UTC`;
-    return `${checkpoint?.summary ? '[Last Checkpoint Summary] ' + checkpoint.summary + '\n\n' : ''}[Conversations] (${label})\n${conversations(rows) || 'No conversations in this range.\n'}`;
+    return `${checkpoint?.summary ? '[Last Checkpoint Summary] ' + checkpoint.summary + '\n\n' : ''}[Conversations] (${label})\n${conversations(rows) || 'No conversations in this range.\n'}${historyNotes(rows)}`;
   }
   const begin = number(o.begin, 'begin'), end = number(o.end, 'end');
   if (begin > end) invalid('begin must not exceed end');
   const checkpoint = db.getLatestContentCheckpoint('*');
   const rows = db.getConversationsByRange(begin, end).map(projectConversation);
-  return o.json ? json({ checkpoint, rows }) : `${checkpoint?.summary ? '[Last Checkpoint Summary] ' + checkpoint.summary + '\n\n' : ''}[Conversations] (id ${begin} ~ ${end})\n${conversations(rows) || 'No conversations in this range.\n'}`;
+  return o.json ? json({ checkpoint, rows }) : `${checkpoint?.summary ? '[Last Checkpoint Summary] ' + checkpoint.summary + '\n\n' : ''}[Conversations] (id ${begin} ~ ${end})\n${conversations(rows) || 'No conversations in this range.\n'}${historyNotes(rows)}`;
 }
 export function runCli(kind, args) {
   try { process.stdout.write(({ database: databaseCli, checkpoint: checkpointCli, fetch: fetchCli })[kind](args)); }

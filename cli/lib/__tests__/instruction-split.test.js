@@ -86,13 +86,24 @@ describe('split instruction assembler', () => {
     // pins alongside the reviewed content change (issue #722 content redraft).
     const managedHeader = '> **Zylos-managed system instructions.** This file is replaced during upgrades. Put all custom instructions in `~/zylos/ZYLOS.md`.\n\n';
     const expected = {
-      claude: '0479a7a8edf05ad91965229f6172b46e4bf7284228d4663671a162a94e7d6990',
-      codex: '409ca768bc84a4ca3ece80c0b726cb9c1d599d20656894a70ddc76d90d6f5dd7',
+      claude: 'de44abed8cd15d31386ac8e390552bb24bb1d819407e2a964b26099c6de19700',
+      codex: '82622e50986694dedc68f1b057461b7581f5c67b60fa316ad9fae6c9bedc5630',
     };
     for (const runtime of ['claude', 'codex']) {
       const content = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
       assert.ok(content.startsWith(managedHeader));
       assert.equal(crypto.createHash('sha256').update(content.slice(managedHeader.length)).digest('hex'), expected[runtime]);
+    }
+  });
+
+  it('puts the same cross-conversation lookup rule after internal messages in both runtimes', () => {
+    const rule = 'In multi-session mode, when your user refers to something said or done in another conversation, find that thread with the comm-bridge group query and send it an internal message asking for the current state; to read past records use c4-fetch, never query c4.db directly.';
+    for (const runtime of ['claude', 'codex']) {
+      const text = fs.readFileSync(path.join(TEMPLATES_DIR, `${runtime}-system.md`), 'utf8');
+      assert.equal(text.split(rule).length, 2);
+      const internal = text.indexOf('**Internal messages.**');
+      assert.ok(internal >= 0);
+      assert.equal(text.indexOf(rule), text.indexOf('\n\n', internal) + 2);
     }
   });
 

@@ -33,6 +33,8 @@ Outputs to stdout:
 1. Last checkpoint summary (if exists)
 2. Formatted conversations in the specified range (chronological order). With `--since`, the header shows the resolved UTC start time and the id range found, for use with `--begin`/`--end`.
 
+Range and `--since` text may end with a counted reminder and a complete internal-message template for each foreign session group. Reminders are absent when `ZYLOS_SESSION_GROUP` is missing or empty, the caller is `origin`, or all returned rows belong to the caller (or there are no rows). JSON and Sync reads (`--unsummarized`, all `--origin-sync` forms) never append reminders; `c4-db.js recent` always retains its JSON output, including without `--json`.
+
 ## Example
 
 ```bash

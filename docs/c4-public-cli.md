@@ -82,6 +82,8 @@ Other independent commands:
 - `c4-fetch.js --origin-sync --group GROUP [--limit N] [--json]` reads both parts in one snapshot.
 - `c4-fetch.js --absorbed --run-id UUID [--summary [--scope-after GROUP] | --id ID [--field text|endpoint] [--out FILE] | --after ID] [--limit N] [--json]`
 
+Range (`--begin`/`--end`) and `--since` text output may end with counted reminders and complete internal-message templates for foreign session groups. No reminder is appended for a missing/empty `ZYLOS_SESSION_GROUP`, an `origin` caller, same-group-only or empty results, JSON, Sync (`--unsummarized` and all `--origin-sync` forms), or other query modes. `c4-db.js recent` remains JSON even without `--json` and never appends reminders.
+
 `groups` filters are mutually exclusive. `--match` also searches message previews.
 `--key-match` matches group keys only (any part, any letter case) and is meant for occasional
 searches. A group whose key equals the search text exactly (same letter case) comes first,
