@@ -4,18 +4,31 @@
 // Linux uses util-linux flock; macOS retains exclusive admission until release.
 const fs = require('node:fs');
 const path = require('node:path');
-// Load deletion only at the mutation boundary, after checking frozen material identity.
+let retainedRemoval;
+// Bind while the transaction still has its staging path; keep the authenticated
+// function after publication renames the directory or npm replaces the package.
+function retainRemoval(expectedHash) {
+  const helper = path.join(__dirname, 'remove-owned-tree.mjs');
+  privatePath(helper);
+  if (!/^[a-f0-9]{64}$/.test(expectedHash || '') || hash(helper) !== expectedHash) throw Error('transaction recovery material changed: remove-owned-tree.mjs');
+  retainedRemoval = require('node:module').createRequire(__filename)(helper).removeOwnedTree;
+}
 function removeOwnedTree(root, target) {
-  const source = path.basename(__filename) === 'upgrade-maintenance.cjs';
-  const helper = source ? path.resolve(__dirname, '../../skills/comm-bridge/scripts/remove-owned-tree.js')
-    : path.join(__dirname, 'remove-owned-tree.mjs');
-  const journal = path.join(__dirname, 'journal.json');
-  if (!source) {
-    const expected = read(journal).recoveryHashes?.['remove-owned-tree.mjs'];
-    privatePath(helper);
-    if (!/^[a-f0-9]{64}$/.test(expected || '') || hash(helper) !== expected) throw Error('transaction recovery material changed: remove-owned-tree.mjs');
+  if (!retainedRemoval) {
+    const source = path.basename(__filename) === 'upgrade-maintenance.cjs';
+    // Stable bootstrap files are ordinary adjacent deployment dependencies,
+    // just like maintenance.cjs itself; this directory has no transaction journal.
+    const stable = path.basename(__dirname) === 'upgrade' && path.basename(path.dirname(__dirname)) === '.zylos';
+    if (source || stable) {
+      const helper = source ? path.resolve(__dirname, '../../skills/comm-bridge/scripts/remove-owned-tree.js')
+        : path.join(__dirname, 'remove-owned-tree.mjs');
+      privatePath(helper);
+      retainedRemoval = require('node:module').createRequire(__filename)(helper).removeOwnedTree;
+    } else {
+      retainRemoval(read(path.join(__dirname, 'journal.json')).recoveryHashes?.['remove-owned-tree.mjs']);
+    }
   }
-  return require('node:module').createRequire(__filename)(helper).removeOwnedTree(root, target);
+  return retainedRemoval(root, target);
 }
 const crypto = require('node:crypto');
 const cp = require('node:child_process');
@@ -1247,6 +1260,7 @@ function recoverBeforeUpgrade(root, deps = {}) {
 }
 module.exports = {
   removeOwnedTree,
+  retainRemoval,
   recoverBeforeUpgrade,
   recoveryFailureDetails,
   recoveryNext,

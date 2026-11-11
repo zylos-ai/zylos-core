@@ -85,7 +85,9 @@ test('self uninstall removes the private instance and preserves targets of inter
   const f = fixture(t);
   const outside = path.join(f.root, 'outside'); fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, 'keep.txt'), 'outside');
   f.write('memory/entry'); fs.symlinkSync(outside, path.join(f.zylos, 'linked'));
-  assert.equal(f.run('self').ok, true);
+  const result = f.run('self');
+  assert.equal(result.ok, true);
+  assert.match(result.output, /zylos data directory removed/);
   assert.equal(fs.existsSync(f.zylos), false);
   assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'outside');
 });
@@ -97,6 +99,8 @@ test('self uninstall reports a rejected linked instance without touching its des
   const result = f.run('self');
   assert.equal(result.ok, true, 'existing non-fatal warning flow is retained');
   assert.match(result.output, /Could not fully remove/);
+  assert.ok(!result.output.includes('zylos data directory removed'));
+  assert.ok(result.output.includes(`Data directory retained at ${f.zylos}`));
   assert.equal(fs.lstatSync(f.zylos).isSymbolicLink(), true);
   assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'outside');
 });
@@ -113,4 +117,14 @@ test('component purge rejects a dangling skill link instead of treating it as mi
   assert.equal(fs.lstatSync(skill).isSymbolicLink(), true);
   assert.ok(JSON.parse(fs.readFileSync(path.join(f.zylos, '.zylos/components.json'), 'utf8')).fixture);
   assert.equal(fs.existsSync(path.join(f.zylos, 'components/fixture/data')), true);
+});
+
+test('self uninstall identifies the preserved directory after the user declines data removal', { timeout: 15000 }, t => {
+  const f = fixture(t); f.write('memory/keep', 'private retained data');
+  const result = f.run('self-preserve');
+  assert.equal(result.ok, true);
+  assert.ok(result.output.includes(`Data directory preserved at ${f.zylos}`));
+  assert.ok(result.output.includes(`You can remove ${f.zylos} later.`));
+  assert.ok(!result.output.includes('zylos data directory removed'));
+  assert.equal(fs.readFileSync(path.join(f.zylos, 'memory/keep'), 'utf8'), 'private retained data');
 });

@@ -10,28 +10,21 @@ import { CodexRolloutCollector } from './collectors/codex-rollout-collector.js';
 import { ChatAttachments } from './chat/attachments.js';
 import { parseSessionGroup, validateGroupName } from '../../../comm-bridge/scripts/c4-session-group.js';
 import { ownedPath as resolveOwnedPath } from '../../../comm-bridge/scripts/owned-path.js';
+import { removeOwnedTree } from '../../../comm-bridge/scripts/remove-owned-tree.js';
 
 const fail = (code, status = 409) => Object.assign(new Error(code), { code, status });
 const validSession = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 const below = (file, root) => file.startsWith(root + path.sep);
 
 const ownedPath = (file, root) => resolveOwnedPath(root, file, () => fail('group_delete_path_unavailable'));
-// Recursion may unlink a symlink entry, but its parent must still be an owned
-// directory. Top-level targets keep the stricter check including the leaf.
+// Count nested links as entries without following them; their parents stay
+// owned directories. Top-level targets keep the stricter leaf check.
 const ownedEntry = (file, root, nested) => nested
   ? path.join(ownedPath(path.dirname(file), root), path.basename(file)) : ownedPath(file, root);
-function removeOwned(file, root, nested = false) {
-  const candidate = ownedEntry(file, root, nested);
-  let stat;
-  try { stat = fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
-  if (stat.isDirectory()) {
-    let removed = 0;
-    for (const entry of fs.readdirSync(candidate)) removed += removeOwned(path.join(candidate, entry), root, true);
-    fs.rmdirSync(candidate);
-    return removed;
-  }
-  fs.unlinkSync(candidate);
-  return 1;
+function removeOwned(file, root) {
+  const candidate = ownedPath(file, root);
+  try { fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
+  return removeOwnedTree(root, candidate);
 }
 
 export function createGroupDeletionStorage({ zylosDir, homeDir = os.homedir(), store = null, c4Db = null,

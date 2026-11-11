@@ -72,16 +72,20 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
   }
   db.pragma(`user_version=${mod.SUPPORTED_SCHEMA_VERSION}`);if(wal)db.pragma('journal_mode=WAL');db.close();
  }
- const dir=path.join(root,'.backup/self-upgrade','tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});
+ const dir=path.join(root,'.backup/self-upgrade','tx'),staging=path.join(root,'.backup/self-upgrade-staging','tx');
+ fs.mkdirSync(path.dirname(dir),{recursive:true,mode:0o700});fs.mkdirSync(staging,{recursive:true,mode:0o700});
  const dashboardRoot=path.join(skillsDir,'dashboard');fs.mkdirSync(path.join(dashboardRoot,'src/lib'),{recursive:true});
  fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
  fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`export const dashboardSchemaOwner={inspectSchema(db){const currentVersion=db.prepare("SELECT name FROM sqlite_master WHERE name='schema_migrations'").get()?db.prepare('SELECT MAX(version) AS n FROM schema_migrations').get().n:null;return {currentVersion,targetVersion:20,needsMigration:currentVersion!==20};},migrate(){throw Error('recovery must not migrate Dashboard');}};`);
  if(dashboard){const file=path.join(root,'components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});const db=new Database(file);db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);CREATE TABLE events(value TEXT);INSERT INTO events VALUES (\'original\')');db.prepare('INSERT INTO schema_migrations VALUES (?)').run(dashboardVersion);db.close();}
+ fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(staging,'runner.cjs'));fs.chmodSync(path.join(staging,'runner.cjs'),0o600);
+ for(const [src,dst] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(staging,dst));fs.chmodSync(path.join(staging,dst),0o600);}
+ // Match beginUpgrade's controller timing: authenticate/load while staged,
+ // retain that module across rename. The state-machine runner shares it so
+ // service fault injection stays private; publication itself is tested through beginUpgrade.
+ m=require(path.join(staging,'maintenance.cjs'));m.retainRemoval(m.hash(path.join(staging,'remove-owned-tree.mjs')));r=require(path.join(staging,'runner.cjs'));
+ fs.renameSync(staging,dir);
  const snapshotResult=await createReleasedSnapshotFixture({Database,zylosDir:root,transactionId:'tx',formatVersion,snapshot}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
- fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
- for(const [src,dst] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
- // Match production: recovery mutations belong to the transaction's frozen controllers.
- m=require(path.join(dir,'maintenance.cjs'));r=require(path.join(dir,'runner.cjs'));
  const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner),{excludeNodeModules:false})}));
  for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,verbatimSymlinks:true});
  // Match saveProtectedCode: the disposable code root is private.

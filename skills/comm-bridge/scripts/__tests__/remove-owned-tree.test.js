@@ -60,7 +60,8 @@ test('owned tree is idempotent for missing targets and handles a single file', t
   assert.equal(removeOwnedTree(root, file), 0);
 });
 
-test('unreadable subtree aborts the entire preflight without deleting any entry', { timeout: 15000 }, t => {
+for (const permission of ['unreadable', 'readonly-child', 'readonly-parent']) {
+  test(`owned tree ${permission} permissions abort preflight before any deletion`, { timeout: 15000 }, t => {
   const privileged = typeof process.getuid === 'function' && process.getuid() === 0;
   // A root-runner TMPDIR can have private root-only ancestors. Allocate this
   // root-only child fixture directly in canonical system tmp, then chown it.
@@ -92,28 +93,30 @@ test('unreadable subtree aborts the entire preflight without deleting any entry'
     fs.chmodSync(root, 0o700);
     fs.chmodSync(tree, 0o700);
   }
-  fs.chmodSync(locked, 0);
+  fs.chmodSync(locked, permission === 'unreadable' ? 0 : permission === 'readonly-child' ? 0o555 : 0o700);
+  if (permission === 'readonly-parent') fs.chmodSync(root, 0o555);
   try {
     if (privileged) {
       const child = fileURLToPath(new URL('./helpers/owned-tree-permission-child.js', import.meta.url));
-      const result = JSON.parse(execFileSync(process.execPath, [child, root, tree, locked, String(uid), String(gid)], {
+      const result = JSON.parse(execFileSync(process.execPath, [child, root, tree, locked, String(uid), String(gid), permission], {
         cwd: root, env: childEnv, encoding: 'utf8', timeout: 7000, killSignal: 'SIGKILL', maxBuffer: 4096,
       }));
       assert.equal(result.uid, uid);
       assert.equal(result.gid, gid);
-      assert.equal(result.deniedRead, true);
+      assert.equal(result.permissionDenied, true);
       assert.equal(result.writableTree, true);
-      t.diagnostic(`Permission proof: root child dropped to uid=${result.uid}, gid=${result.gid}; owned tree writable, locked readdir denied`);
+      t.diagnostic(`Permission proof: root child dropped to uid=${result.uid}, gid=${result.gid}; ${permission} boundary denied before deletion`);
     } else {
       // Permission enforcement is an actual OS boundary, not a mocked error.
       assert.throws(() => removeOwnedTree(root, tree), error => ['EACCES', 'EPERM'].includes(error.code));
       t.diagnostic(`Permission proof: unprivileged runner uid=${process.getuid?.() ?? 'unavailable'}`);
     }
-  } finally { fs.chmodSync(locked, 0o700); }
+  } finally { fs.chmodSync(root, 0o700); fs.chmodSync(locked, 0o700); }
   assert.equal(fs.readFileSync(visible, 'utf8'), 'visible remains');
   assert.equal(fs.readFileSync(visibleLast, 'utf8'), 'last visible remains');
   assert.equal(fs.readFileSync(hidden, 'utf8'), 'hidden remains');
-});
+  });
+}
 
 // HOME may use a symlink spelling even though the deletion root is canonical.
 test('owned tree protects the current home through an aliased HOME setting', t => {
@@ -129,4 +132,26 @@ test('owned tree protects the current home through an aliased HOME setting', t =
     else process.env.HOME = previous;
   }
   assert.equal(fs.readFileSync(path.join(home, 'keep'), 'utf8'), 'home remains');
+});
+
+test('owned tree refuses an ancestor of the current home and leaves every entry intact', t => {
+  const root = fixture(t), parent = path.join(root, 'parent'), home = path.join(parent, 'home');
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, 'keep'), 'home contents');
+  fs.writeFileSync(path.join(parent, 'sibling'), 'sibling contents');
+  const previous = process.env.HOME;
+  try {
+    process.env.HOME = home;
+    rejected(() => removeOwnedTree(root, parent));
+  } finally {
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+  }
+  assert.equal(fs.readFileSync(path.join(home, 'keep'), 'utf8'), 'home contents');
+  assert.equal(fs.readFileSync(path.join(parent, 'sibling'), 'utf8'), 'sibling contents');
+});
+
+test('owned tree requires an existing canonical root even when its target is missing', t => {
+  const root = fixture(t), missing = path.join(root, 'missing');
+  assert.throws(() => removeOwnedTree(missing, path.join(missing, 'target')), { code: 'ENOENT' });
 });

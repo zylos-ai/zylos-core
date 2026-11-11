@@ -150,11 +150,11 @@ export async function selfUninstall(args) {
   }
 
   if (removeData) {
-    removeDirectory(ZYLOS_DIR);
-    console.log(success('zylos data directory removed'));
+    if (removeDirectory(ZYLOS_DIR)) console.log(success('zylos data directory removed'));
+    else console.log(warn(`Data directory retained at ${ZYLOS_DIR}`));
   } else {
-    console.log(dim(`  Data directory preserved at ${cyan('~/zylos/')}`));
-    console.log(dim('  You can remove the preserved data directory later.'));
+    console.log(dim(`  Data directory preserved at ${cyan(ZYLOS_DIR)}`));
+    console.log(dim(`  You can remove ${cyan(ZYLOS_DIR)} later.`));
   }
 
   // ── Done ─────────────────────────────────────────────
@@ -312,11 +312,13 @@ function cleanShellProfiles() {
  */
 function removeDirectory(dirPath) {
   try {
-    if (!fs.lstatSync(dirPath, { throwIfNoEntry: false })) return;
+    if (!fs.lstatSync(dirPath, { throwIfNoEntry: false })) return true;
     const root = fs.realpathSync(path.dirname(dirPath));
     removeOwnedTree(root, path.join(root, path.basename(dirPath)));
+    return true;
   } catch (err) {
     console.log(warn(`Could not fully remove ${dirPath}: ${err.message}`));
+    return false;
   }
 }
 

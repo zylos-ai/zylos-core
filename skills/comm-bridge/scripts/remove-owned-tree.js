@@ -7,10 +7,14 @@ const invalid = () => Object.assign(new Error('Deletion target must be a real ch
 });
 
 /**
- * Delete one owned tree after a complete, non-mutating readability preflight.
+ * Delete one owned tree after a complete, non-mutating access preflight.
  * The root and the path to target cannot follow links. Links inside the tree
  * are leaf entries: unlink the link itself and never inspect its destination.
- * Returns the number of non-directory entries removed; a missing target is 0.
+ * Root must exist; a missing root propagates ENOENT. With a valid root,
+ * returns non-directory entries removed, or 0 when the target is missing.
+ * Preflight is not atomic. Callers must exclude concurrent writers: replacing
+ * a checked directory with a symlink can redirect later path-based unlinks
+ * outside the root. These checks do not provide a concurrent-writer sandbox.
  */
 export function removeOwnedTree(root, target) {
   if (typeof root !== 'string' || !path.isAbsolute(root) || root === path.parse(root).root
@@ -22,8 +26,7 @@ export function removeOwnedTree(root, target) {
     catch (error) { if (error.code === 'ENOENT') return path.resolve(home); throw error; }
   });
   if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)
-      || candidate === path.parse(candidate).root
-      || homes.includes(candidate)) throw invalid();
+      || homes.some(home => home === candidate || home.startsWith(candidate + path.sep))) throw invalid();
 
   let current = root;
   for (const part of relative.split(path.sep)) {
@@ -36,7 +39,10 @@ export function removeOwnedTree(root, target) {
     }
   }
 
-  // Finish every lstat/readdir before performing the first unlink/rmdir.
+  // Unlink/rmdir require write and search access on their parent directory.
+  // Check every directory up front, including the target's own parent.
+  fs.accessSync(path.dirname(candidate), fs.constants.W_OK | fs.constants.X_OK);
+  // Finish every lstat/readdir/access before the first unlink/rmdir.
   const pending = [candidate], entries = [];
   let files = 0;
   while (pending.length) {
@@ -45,6 +51,7 @@ export function removeOwnedTree(root, target) {
     const directory = stat.isDirectory();
     entries.push({ file, directory });
     if (directory) {
+      fs.accessSync(file, fs.constants.W_OK | fs.constants.X_OK);
       for (const name of fs.readdirSync(file)) pending.push(path.join(file, name));
     } else files++;
   }

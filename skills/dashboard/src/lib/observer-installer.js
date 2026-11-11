@@ -422,7 +422,7 @@ export class ObserverInstaller {
     const stageRoot = path.join(stagingRoot, nonce);
     const archivePath = path.join(stageRoot, 'zellij.tar.gz');
     const extractionPath = path.join(stageRoot, 'extract');
-    let publishDirectory = null;
+    let publishDirectory = null, operationFailed = false, operationError;
     await ensurePrivateDirectory(stageRoot);
     try {
       const download = await downloadArchive(this.artifact, archivePath, {
@@ -476,9 +476,22 @@ export class ObserverInstaller {
       await fs.promises.unlink(path.join(artifactDirectory, '.publication.json'));
       onProgress?.({ phase: 'complete', bytes: download.bytes, total: download.bytes });
       return installed;
+    } catch (error) {
+      operationFailed = true;
+      operationError = error;
+      throw error;
     } finally {
-      removeOwnedTree(stagingRoot, stageRoot);
-      if (publishDirectory) removeOwnedTree(artifactsRoot, publishDirectory);
+      const cleanupErrors = [];
+      for (const [root, target] of [[stagingRoot, stageRoot], [artifactsRoot, publishDirectory]]) {
+        if (!target) continue;
+        try { removeOwnedTree(root, target); } catch (error) { cleanupErrors.push(error); }
+      }
+      if (cleanupErrors.length) {
+        if (!operationFailed) throw new AggregateError(cleanupErrors, 'Observer installation cleanup failed');
+        if (operationError && typeof operationError === 'object') {
+          try { operationError.cleanupErrors = cleanupErrors; } catch { /* Preserve an immutable primary error. */ }
+        }
+      }
     }
   }
 

@@ -168,6 +168,7 @@ export function beginUpgrade(ctx, {
     maintenance.fsyncDir(staging);
     j.recoveryHashes = Object.fromEntries(recoveryFiles().map(([, name]) => [name, maintenance.hash(path.join(staging, name))]));
     controllerMaintenance = require(path.join(staging, 'maintenance.cjs'));
+    controllerMaintenance.retainRemoval(j.recoveryHashes['remove-owned-tree.mjs']);
     ctx.maintenance = controllerMaintenance;
     maintenance.update(staging, j);
     release = controllerMaintenance.acquire(staging, {publishedDir: dir});

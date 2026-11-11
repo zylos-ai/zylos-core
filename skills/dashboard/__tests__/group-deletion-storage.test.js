@@ -955,3 +955,31 @@ test('recreated groups are registered only by authorized send or attachment writ
   const authorized = await sender.prepareAttachmentConversation(await sender.resolve(id), { authorize: () => null });
   assert.equal(authorized.state, 'active'); assert.equal(f.conversations.findByGroup(group).state, 'active');
 });
+
+// Files/private SQLite only, under the existing isolated fixture. The access
+// fault exercises the real participant and shared preflight before its first
+// unlink; no product source or module is replaced or re-evaluated.
+test('attachment tree preflight failure preserves every file and its database registration', t => {
+  const f = fixture(t), group = 'dashboard:preflight-media'; f.register('preflight-media');
+  const message = f.message(group);
+  const media = path.join(f.zylos, 'components/dashboard/media');
+  const target = path.join(media, 'owned-tree'), blocked = path.join(target, 'blocked');
+  f.write(path.join(target, 'first'), 'owned first'); f.write(path.join(blocked, 'entry'), 'blocked contents');
+  f.store.db.prepare(`INSERT INTO chat_attachments(id,local_id,namespace,storage_name,name,size,mime,kind,source,created_at,c4_watermark,scanned_c4_id,next_check_at)
+    VALUES ('preflight','preflight-media','dashboard','owned-tree','owned-tree',5,'text/plain','file','user',1,0,0,1)`).run();
+  f.store.db.prepare('INSERT INTO chat_attachment_messages(attachment_id,c4_id) VALUES (?,?)').run('preflight', message);
+  const access = fs.accessSync;
+  const denied = Object.assign(new Error('fixture directory is not writable'), { code: 'EACCES' });
+  let inspected = false;
+  const syscall = t.mock.method(fs, 'accessSync', (file, mode) => {
+    if (file === blocked && (mode & fs.constants.W_OK)) { inspected = true; throw denied; }
+    return access(file, mode);
+  });
+  try {
+    assert.throws(() => f.participant.cleanup({ sessionGroup: group }), error => error === denied || error.cause === denied);
+  } finally { syscall.mock.restore(); }
+  assert.equal(inspected, true, 'the shared deletion preflight checks directory writability');
+  assert.equal(fs.readFileSync(path.join(target, 'first'), 'utf8'), 'owned first');
+  assert.equal(fs.readFileSync(path.join(blocked, 'entry'), 'utf8'), 'blocked contents');
+  assert.equal(f.store.db.prepare("SELECT COUNT(*) n FROM chat_attachments WHERE id='preflight'").get().n, 1);
+});

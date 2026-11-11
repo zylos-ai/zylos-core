@@ -34,13 +34,21 @@ test('test root falls back only for an overlong macOS socket path', () => {
 });
 
 const root = path.resolve(import.meta.dirname, '../../..');
+function copyRunnerSources(fixture) {
+  fs.cpSync(path.join(root, 'scripts'), path.join(fixture, 'scripts'), { recursive: true });
+  const shared = 'skills/comm-bridge/scripts/remove-owned-tree.js';
+  const destination = path.join(fixture, shared);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(path.join(root, shared), destination);
+}
+
 // Integration boundary: real runner children, isolated HOME/ZYLOS_DIR/PM2_HOME
 // and temporary files only. Run for runner path/discovery/cleanup changes; skip
 // for unrelated runtime changes. The child runner and t.after remove resources.
 for (const fail of [false, true]) test(`Node runner ${fail ? 'retains failed temporary evidence and removes isolated home' : 'cleans successful temporary evidence'}`, t => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'node-runner-'));
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
-  fs.cpSync(path.join(root, 'scripts'), path.join(fixture, 'scripts'), { recursive: true });
+  copyRunnerSources(fixture);
   fs.writeFileSync(path.join(fixture, 'package.json'), '{"type":"module"}');
   const tests = path.join(fixture, 'cli/lib/__tests__');
   fs.mkdirSync(tests, { recursive: true });
@@ -93,7 +101,7 @@ for (const entry of [
 ]) test(`Node runner ${entry.name}`, t => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'node-filter-'));
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
-  fs.cpSync(path.join(root, 'scripts'), path.join(fixture, 'scripts'), { recursive: true });
+  copyRunnerSources(fixture);
   fs.writeFileSync(path.join(fixture, 'package.json'), '{"type":"module"}');
   const tests = path.join(fixture, 'cli/lib/__tests__');
   fs.mkdirSync(tests, { recursive: true });

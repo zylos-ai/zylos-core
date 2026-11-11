@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { beginUpgrade, maintenance as m, maintenanceFor, protectedDataReady } from '../upgrade-protection.js';
+import { beginUpgrade, maintenance as m, maintenanceFor, protectedDataReady, protectedSuccess, saveProtectedCode } from '../upgrade-protection.js';
 import { createCoreDbSnapshot } from '../core-db-backup.js';
 
 function attachSnapshot(f) {
@@ -215,4 +215,32 @@ test('changed active identity after migration prevents READY publication', t => 
     }}),/changed before data-ready/);
   } finally {active.preflight=preflight;}
   assert.equal(m.transaction(f.root,f.ctx.transactionDir).phase,'installing');
+});
+
+// Publication/deletion boundary: real beginUpgrade loads the frozen controller
+// before renaming its directory; fixtures own HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and
+// only private files/SQLite snapshots. Run for controller publication/cleanup
+// changes, skip unrelated runtime/UI work. No installer or service is started.
+test('published controller retains its authenticated deletion helper after staging is renamed', t => {
+  const f=fixture(t);
+  beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
+  assert.deepEqual(fs.readdirSync(path.join(f.root,'.backup/self-upgrade-staging')),[]);
+  const target=path.join(f.ctx.transactionDir,'disposable');fs.mkdirSync(target);fs.writeFileSync(path.join(target,'owned'),'owned');
+  assert.equal(f.ctx.maintenance.removeOwnedTree(f.ctx.transactionDir,target),1);
+  assert.equal(fs.existsSync(target),false);
+});
+
+test('protected success finishes through the staging-loaded controller and clears its active marker', t => {
+  const f=fixture(t);
+  beginUpgrade(f.ctx,{zylosDir:f.root,skillsDir:f.skillsDir});
+  saveProtectedCode(f.ctx);attachSnapshot(f);
+  f.ctx.maintenance.update(f.ctx.transactionDir,f.ctx.journal,{phase:'installing',installationIntent:true});
+  f.ctx.maintenance.marker(f.root,f.ctx.transactionDir,f.ctx.journal);
+  const code=path.join(f.ctx.transactionDir,'code');assert.equal(fs.existsSync(code),true);
+  const result=protectedSuccess(f.ctx);
+  assert.deepEqual(result,{complete:true,warnings:[]});
+  assert.equal(fs.existsSync(code),false);
+  assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')),false);
+  assert.equal(f.ctx.maintenance.read(path.join(f.ctx.transactionDir,'journal.json')).cleanup.complete,true);
+  assert.equal(f.ctx.maintenance.discover(f.root).candidates.length,0);
 });

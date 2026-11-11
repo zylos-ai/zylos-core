@@ -656,3 +656,55 @@ for (const outcome of ['success', 'failure', 'cancelled']) test(`download ${outc
   }
   assert.equal(timers.size, 0);
 });
+
+// Local archive fixture and injected fetch only. Run when install cleanup/error
+// ordering changes; unrelated network/releases need not run. Official runner
+// isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture cleanup owns all files.
+for (const [failPublicationCleanup, frozenPrimary] of [[false, false], [true, false], [false, true]]) test(`install preserves its ${frozenPrimary ? 'frozen ' : ''}primary failure and attempts both cleanups when ${failPublicationCleanup ? 'both cleanup targets fail' : 'staging cleanup fails'}`, async t => {
+  const fixture = makeArtifactFixture(t), installer = installerFor(t, fixture);
+  const primary = new Error('fixture operation failed before publication');
+  if (frozenPrimary) Object.freeze(primary);
+  const stagingError = Object.assign(new Error('fixture staging cleanup denied'), { code: 'EACCES' });
+  const publicationError = Object.assign(new Error('fixture publication cleanup denied'), { code: 'EACCES' });
+  const lstat = fs.lstatSync, attempted = new Set();
+  const syscall = t.mock.method(fs, 'lstatSync', (file, ...args) => {
+    if (path.dirname(file) === installer.paths.staging) { attempted.add('staging'); throw stagingError; }
+    if (path.dirname(file) === installer.paths.artifacts && path.basename(file).startsWith('.publish-')) {
+      attempted.add('publication'); if (failPublicationCleanup) throw publicationError;
+    }
+    return lstat(file, ...args);
+  });
+  let checks = 0;
+  try {
+    await assert.rejects(installer.install({ isCurrent: () => { if (++checks === 2) throw primary; return true; } }), error => {
+      assert.equal(error, primary);
+      if (frozenPrimary) assert.equal(error.cleanupErrors, undefined);
+      else {
+        assert.equal(error.cleanupErrors.length, failPublicationCleanup ? 2 : 1);
+        assert.equal(error.cleanupErrors[0], stagingError);
+        if (failPublicationCleanup) assert.equal(error.cleanupErrors[1], publicationError);
+      }
+      return true;
+    });
+  } finally { syscall.mock.restore(); }
+  assert.equal(checks, 2, 'failure occurs after both cleanup targets exist');
+  assert.ok(attempted.has('staging')); assert.ok(attempted.has('publication'));
+  assert.equal(fs.readdirSync(installer.paths.staging).length, 1);
+  assert.equal(fs.readdirSync(installer.paths.artifacts).filter(name => name.startsWith('.publish-')).length, failPublicationCleanup ? 1 : 0);
+});
+
+test('a successful installation reports cleanup errors without removing its published artifact', async t => {
+  const fixture = makeArtifactFixture(t), installer = installerFor(t, fixture);
+  const cleanupError = Object.assign(new Error('fixture staging cleanup denied'), { code: 'EACCES' });
+  const lstat = fs.lstatSync;
+  const syscall = t.mock.method(fs, 'lstatSync', (file, ...args) => {
+    if (path.dirname(file) === installer.paths.staging) throw cleanupError;
+    return lstat(file, ...args);
+  });
+  try {
+    await assert.rejects(installer.install(), error => error instanceof AggregateError && error.errors.length === 1 && error.errors[0] === cleanupError);
+  } finally { syscall.mock.restore(); }
+  const installed = await installer.verify();
+  assert.equal(installed.state, 'installed');
+  assert.equal(fs.readFileSync(installed.binaryPath, 'utf8'), fs.readFileSync(path.join(fixture.root, 'source/zellij'), 'utf8'));
+});

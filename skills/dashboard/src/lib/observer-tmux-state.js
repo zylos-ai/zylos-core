@@ -1,3 +1,4 @@
+import { removeOwnedTree } from '../../../comm-bridge/scripts/remove-owned-tree.js';
 import { validObserverBinding } from './observer-target.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -226,14 +227,20 @@ export async function readReceipt(state) {
 }
 // Used only for inert staging/retired data, or after exact runtime absence proof.
 export async function removePrivateTree(root, budget = { count: 0 }) {
-  const stat = await fs.lstat(root);
-  if (++budget.count > 4096 || stat.isSymbolicLink() || stat.uid !== process.getuid() ||
-      (budget.count === 1 && (!stat.isDirectory() || (stat.mode & 0o077)))) {
-    throw failure('unsafe_runtime_state', 'Unsafe Observer cleanup tree');
+  await privateParents(root);
+  const pending = [root];
+  while (pending.length) {
+    const file = pending.pop(), stat = await fs.lstat(file);
+    if (++budget.count > 4096 || stat.isSymbolicLink() || stat.uid !== process.getuid() ||
+        (file === root && (!stat.isDirectory() || (stat.mode & 0o077)))) {
+      throw failure('unsafe_runtime_state', 'Unsafe Observer cleanup tree');
+    }
+    if (stat.isDirectory()) {
+      for (const name of await fs.readdir(file)) pending.push(path.join(file, name));
+    } else if (!stat.isFile() && !stat.isSocket()) {
+      throw failure('unsafe_runtime_state', 'Unexpected Observer cleanup entry');
+    }
   }
-  if (stat.isDirectory()) {
-    for (const name of await fs.readdir(root)) await removePrivateTree(path.join(root, name), budget);
-    await fs.rmdir(root);
-  } else if (stat.isFile() || stat.isSocket()) await fs.unlink(root);
-  else throw failure('unsafe_runtime_state', 'Unexpected Observer cleanup entry');
+  const parent = await fs.realpath(path.dirname(root));
+  removeOwnedTree(parent, path.join(parent, path.basename(root)));
 }
