@@ -61,11 +61,14 @@ COPY --chown=zylos:zylos templates/pm2/ecosystem.config.cjs /home/zylos/zylos/pm
 
 # ── Copy entrypoint ───────────────────────────────────────────────────────────
 COPY --chown=zylos:zylos docker/entrypoint.sh /entrypoint.sh
+COPY --chown=zylos:zylos docker/dashboard-host.mjs /dashboard-host.mjs
 RUN chmod +x /entrypoint.sh
 
 # ── Ports ─────────────────────────────────────────────────────────────────────
 # Web console (web-console service, default 3456)
 EXPOSE 3456
+# Dashboard (zylos-dashboard service, default 3470)
+EXPOSE 3470
 # Caddy / reverse proxy (optional, enabled via .env)
 EXPOSE 8080
 

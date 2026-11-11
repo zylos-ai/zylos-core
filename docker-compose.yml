@@ -32,6 +32,10 @@ services:
       WEB_CONSOLE_BIND: "0.0.0.0"
       ZYLOS_WEB_PASSWORD: ${ZYLOS_WEB_PASSWORD:-}
 
+      # ── Dashboard ───────────────────────────────────────────────────────────
+      # Host port shown in the startup message; keep it equal to the mapping below.
+      DASHBOARD_PORT: ${DASHBOARD_PORT:-3470}
+
       # ── Channel tokens (optional) ─────────────────────────────────────────
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       LARK_APP_ID: ${LARK_APP_ID:-}
@@ -41,6 +45,8 @@ services:
     ports:
       # Web console (default: 3456)
       - "${WEB_CONSOLE_PORT:-3456}:3456"
+      # Dashboard (default: 3470)
+      - "${DASHBOARD_PORT:-3470}:3470"
       # Caddy / reverse proxy (optional, set CADDY_ENABLED=true in .env)
       - "${HTTP_PORT:-8080}:8080"
 

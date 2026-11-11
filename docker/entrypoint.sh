@@ -87,6 +87,12 @@ fi
 
 ok "Workspace ready"
 
+# ── Dashboard listens on all interfaces so the published port reaches it ─────
+# Only when components/dashboard/config.json has no explicit host; the owner's own value is kept.
+if ! node /dashboard-host.mjs "${ZYLOS_DIR}/components/dashboard/config.json"; then
+  warn "Dashboard host not set; it may be reachable only inside the container."
+fi
+
 # ── Pass through channel env vars to .env ─────────────────────────────────────
 # zylos init doesn't write channel tokens — those come from component installs.
 # In Docker, we pass them via environment and append to .env here (upsert).
@@ -193,6 +199,8 @@ ok "Zylos is ready!"
 info "=========================================="
 echo ""
 info "Web console: http://localhost:3456"
+info "Dashboard: http://localhost:${DASHBOARD_PORT:-3470}/"
+info "Set or reset the password: docker exec -it <container> zylos dashboard reset-password"
 info "Use 'docker exec <container> pm2 list' to check services."
 info "Monitoring PM2..."
 while kill -0 "${PM2_PID}" 2>/dev/null; do
