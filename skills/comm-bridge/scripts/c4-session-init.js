@@ -137,14 +137,12 @@ async function alertTargetInstruction() {
   catch { return 'Alert target: UNAVAILABLE (instance config unreadable); do not write it.'; }
   if (result.state === 'error') return 'Alert target: UNAVAILABLE (instance config unreadable); do not write it.';
   if (result.state === 'missing' || !Object.hasOwn(result.config, 'alert_target')) {
-    return 'Alert target: not set; system alerts (session unobservable, authentication failure) go only to Web Console. When the owner next messages you in a private chat, ask once whether alerts should go to that chat. Before asking, run "zylos config get alert_target"; if another session has set it, do not ask. If the owner agrees, run "zylos config set alert_target <channel>:<endpoint>", where <endpoint> is the address that channel uses to send a new message to this private chat, not a reply to this particular message (see that channel\'s skill for its address format). If the owner declines, run "zylos config set alert_target web-console:console".';
+    return 'Alert target: not set; system alerts (session unobservable, authentication failure) go to the default destination, the pinned Origin conversation at the top of Dashboard\'s conversation list. When the owner next messages you in a private chat on an IM channel (not Dashboard), ask once whether alerts should go to that chat. Before asking, run "zylos config get alert_target"; if another session has set it, do not ask. If the owner agrees, run "zylos config set alert_target <channel>:<endpoint>", where <endpoint> is the address that channel uses to send a new message to this private chat, not a reply to this particular message (see that channel\'s skill for its address format). If the owner declines, run "zylos config set alert_target default".';
   }
   const value = result.config.alert_target;
   const target = parseServerAlertTarget(value);
-  if (!target) return 'Alert target: invalid value; system alerts fall back to Web Console. Tell the owner and agree on a new value before changing it.';
-  if (target.channel === 'web-console' && target.endpoint === 'console') {
-    return 'Alert target: web-console:console (the owner chose Web Console only). Do not ask again.';
-  }
+  if (!target) return 'Alert target: invalid value; system alerts fall back to the pinned Origin conversation in Dashboard. Tell the owner and agree on a new value before changing it.';
+  if (target.default) return 'Alert target: default (the owner chose the default destination, the pinned Origin conversation at the top of Dashboard\'s conversation list). Do not ask again.';
   return `Alert target: ${value}. System alerts go there; change it only if the owner asks.`;
 }
 

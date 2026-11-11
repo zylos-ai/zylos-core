@@ -52,7 +52,7 @@ export function validateUpdateIntent(update) {
   if (!isPlainObject(update)) throw new TypeError('config update must be an object');
   const allowed = new Set(['set', 'setIfAbsent', 'merge', 'mergeIfAbsent']);
   for (const key of Object.keys(update)) {
-    if (!allowed.has(key)) throw new TypeError(`unknown config update operation: ${key}`);
+    if (!allowed.has(key) && key !== 'unset') throw new TypeError(`unknown config update operation: ${key}`);
   }
   const operations = Object.fromEntries([...allowed].map(key => [key, update[key] ?? {}]));
   const used = new Set();
@@ -64,6 +64,16 @@ export function validateUpdateIntent(update) {
       used.add(key);
     }
   }
+  // `unset` lists top-level keys to remove; a key that is already absent is left as it is.
+  const unset = update.unset ?? [];
+  if (!Array.isArray(unset) || unset.some(key => typeof key !== 'string' || !key)) {
+    throw new TypeError('unset must be an array of non-empty key names');
+  }
+  for (const key of unset) {
+    if (used.has(key)) throw new TypeError(`config key appears in multiple operations: ${key}`);
+    used.add(key);
+  }
+  operations.unset = unset;
   if (!used.size) throw new TypeError('config update must contain at least one key');
   return operations;
 }
@@ -90,7 +100,14 @@ export function evaluateConfigUpdate(current, update) {
   const previous = {};
   const written = [];
   const skipped = [];
+  for (const key of operations.unset) {
+    if (!Object.hasOwn(current, key)) continue;
+    define(previous, key, current[key]);
+    delete config[key];
+    written.push(key);
+  }
   for (const [operation, values] of Object.entries(operations)) {
+    if (operation === 'unset') continue;
     for (const [key, value] of Object.entries(values)) {
       const present = Object.hasOwn(current, key);
       if (present) define(previous, key, current[key]);

@@ -7,18 +7,27 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const worker = fileURLToPath(new URL('./fixtures/session-alert-target-worker.js', import.meta.url));
+// The exact session-context lines; `web-console:console` is an ordinary value with no special case.
 const expected = {
   configured: 'Alert target: telegram:8101553026. System alerts go there; change it only if the owner asks.',
-  console: 'Alert target: web-console:console (the owner chose Web Console only). Do not ask again.',
-  missing: 'Alert target: not set; system alerts (session unobservable, authentication failure) go only to Web Console. When the owner next messages you in a private chat, ask once whether alerts should go to that chat. Before asking, run "zylos config get alert_target"; if another session has set it, do not ask. If the owner agrees, run "zylos config set alert_target <channel>:<endpoint>", where <endpoint> is the address that channel uses to send a new message to this private chat, not a reply to this particular message (see that channel\'s skill for its address format). If the owner declines, run "zylos config set alert_target web-console:console".',
-  invalid: 'Alert target: invalid value; system alerts fall back to Web Console. Tell the owner and agree on a new value before changing it.',
+  console: 'Alert target: web-console:console. System alerts go there; change it only if the owner asks.',
+  origin: 'Alert target: dashboard:origin. System alerts go there; change it only if the owner asks.',
+  default: 'Alert target: default (the owner chose the default destination, the pinned Origin conversation at the top of Dashboard\'s conversation list). Do not ask again.',
+  paddedDefault: 'Alert target: default (the owner chose the default destination, the pinned Origin conversation at the top of Dashboard\'s conversation list). Do not ask again.',
+  missing: 'Alert target: not set; system alerts (session unobservable, authentication failure) go to the default destination, the pinned Origin conversation at the top of Dashboard\'s conversation list. When the owner next messages you in a private chat on an IM channel (not Dashboard), ask once whether alerts should go to that chat. Before asking, run "zylos config get alert_target"; if another session has set it, do not ask. If the owner agrees, run "zylos config set alert_target <channel>:<endpoint>", where <endpoint> is the address that channel uses to send a new message to this private chat, not a reply to this particular message (see that channel\'s skill for its address format). If the owner declines, run "zylos config set alert_target default".',
+  invalid: 'Alert target: invalid value; system alerts fall back to the pinned Origin conversation in Dashboard. Tell the owner and agree on a new value before changing it.',
+  capitalDefault: 'Alert target: invalid value; system alerts fall back to the pinned Origin conversation in Dashboard. Tell the owner and agree on a new value before changing it.',
   unreadable: 'Alert target: UNAVAILABLE (instance config unreadable); do not write it.',
 };
 const states = {
   configured: { alert_target: 'telegram:8101553026' },
   console: { alert_target: 'web-console:console' },
+  origin: { alert_target: 'dashboard:origin' },
+  default: { alert_target: 'default' },
+  paddedDefault: { alert_target: ' default ' },
   missing: {},
   invalid: { alert_target: 'no-destination' },
+  capitalDefault: { alert_target: 'Default' },
   unreadable: '{bad json',
 };
 function fixture(t, config) {

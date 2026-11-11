@@ -1,5 +1,7 @@
+/** `default` (the owner chose the default destination) or `channel:endpoint`; anything else is null. */
 export function parseServerAlertTarget(value) {
   if (typeof value !== 'string') return null;
+  if (value.trim() === 'default') return { default: true };
   const colon = value.indexOf(':');
   if (colon <= 0 || colon === value.length - 1 || /[\0\r\n]/.test(value)) return null;
   const channel = value.slice(0, colon).trim(), endpoint = value.slice(colon + 1).trim();

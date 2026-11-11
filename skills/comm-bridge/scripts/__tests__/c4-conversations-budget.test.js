@@ -67,7 +67,7 @@ function withTmpDir(fn) {
   // Keep the mandatory status instructions short so these cases isolate
   // conversation-tail packing, including their deliberately small budgets.
   fs.mkdirSync(path.join(tmpDir, '.zylos'));
-  fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ alert_target: 'web-console:console' }));
+  fs.writeFileSync(path.join(tmpDir, '.zylos/config.json'), JSON.stringify({ alert_target: 'telegram:1' }));
   try {
     return fn({ tmpDir, env });
   } finally {

@@ -16,10 +16,10 @@ import { startSupervisor } from '../supervisor-main.js';
 // adds a private SQLite DB, am.sock and node-only PATH; no tmux/PM2/network.
 // No scheduled loop is started. The real sender has a 30-second child timeout;
 // entry shutdown drains pending sends before closing DB and removing the root.
-test('default supervisor alert delivery clears inherited session identity', { timeout: 40000 }, async t => {
+async function deliverAlert(t, { alertTarget, channelName, endpoint, group }) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sys-alert-')));
   const bin = path.join(root, 'bin'), tmp = path.join(root, 'tmp');
-  const channel = path.join(root, '.claude', 'skills', 'fixture', 'scripts');
+  const channel = path.join(root, '.claude', 'skills', channelName, 'scripts');
   const marker = path.join(root, 'delivered.json');
   const databasePath = path.join(root, 'comm-bridge', 'c4.db');
   for (const dir of [bin, tmp, channel, path.dirname(databasePath), path.join(root, '.zylos')]) {
@@ -42,7 +42,7 @@ test('default supervisor alert delivery clears inherited session identity', { ti
     HOME: path.join(root, 'home'), ZYLOS_DIR: root,
     PM2_HOME: path.join(root, 'pm2'), TMPDIR: tmp, TMUX_TMPDIR: tmp,
     PATH: bin, ZYLOS_PACKAGE_ROOT: fileURLToPath(new URL('../../../../', import.meta.url)),
-    ZYLOS_RUN_ID: 'stale-supervisor-run', ZYLOS_SESSION_GROUP: 'fixture:sender',
+    ZYLOS_RUN_ID: 'stale-supervisor-run', ZYLOS_SESSION_GROUP: 'telegram:x',
   };
   fs.mkdirSync(env.HOME);
   for (const key of ['HOME', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'PATH']) {
@@ -57,8 +57,8 @@ test('default supervisor alert delivery clears inherited session identity', { ti
 
   const database = new Database(databasePath);
   guardDatabase(database, schema); database.pragma('journal_mode=WAL');
-  const store = createStore(database, { validateComponent: name => name === 'fixture' });
-  store.insertConversation('in', 'fixture', 'room', 'incoming', { groupName: 'responsible' });
+  const store = createStore(database, { validateComponent: name => name === channelName });
+  if (channelName === 'fixture') store.insertConversation('in', 'fixture', 'room', 'incoming', { groupName: 'responsible' });
   let service;
   t.after(async () => {
     try { await service?.stop(); }
@@ -79,7 +79,7 @@ test('default supervisor alert delivery clears inherited session identity', { ti
   };
   service = await startSupervisor({
     env, db, scenes, readMode: () => ({ mode: 'single', keyPresent: true }),
-    readConfig: () => ({ session_mode: 'single', runtime: 'claude', alert_target: 'fixture:room' }),
+    readConfig: () => ({ session_mode: 'single', runtime: 'claude', ...(alertTarget ? { alert_target: alertTarget } : {}) }),
     legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
     loopOptions: { schedule: () => 1, cancel() {} }, log: () => {},
   });
@@ -88,7 +88,7 @@ test('default supervisor alert delivery clears inherited session identity', { ti
   const delivered = JSON.parse(fs.readFileSync(marker, 'utf8'));
   assert.equal(delivered.runId, null);
   assert.equal(delivered.sessionGroup, null);
-  assert.equal(delivered.argv[0], 'room');
+  assert.equal(delivered.argv[0], endpoint);
   assert.match(delivered.argv[1], /Supervisor: system_notice/);
   assert.equal(delivered.home, env.HOME);
   assert.equal(delivered.zylosDir, env.ZYLOS_DIR);
@@ -96,11 +96,20 @@ test('default supervisor alert delivery clears inherited session identity', { ti
   assert.equal(delivered.tmpdir, env.TMPDIR);
   assert.equal(delivered.path, env.PATH);
   assert.equal(env.ZYLOS_RUN_ID, 'stale-supervisor-run');
-  assert.equal(env.ZYLOS_SESSION_GROUP, 'fixture:sender');
+  assert.equal(env.ZYLOS_SESSION_GROUP, 'telegram:x');
   const rows = database.prepare("SELECT * FROM conversations WHERE direction='out'").all();
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].session_group, 'fixture:responsible');
-  assert.equal(rows[0].endpoint_id, 'room');
+  assert.equal(rows[0].session_group, group);
+  assert.equal(rows[0].channel, channelName);
+  assert.equal(rows[0].endpoint_id, endpoint);
   assert.equal(rows[0].status, 'delivered');
   assert.equal(rows[0].delivery_action, 'system_notice');
-});
+}
+
+test('default supervisor alert delivery clears inherited session identity', { timeout: 40000 }, t =>
+  deliverAlert(t, { alertTarget: 'fixture:room', channelName: 'fixture', endpoint: 'room', group: 'fixture:responsible' }));
+
+// With no alert target the alert falls back to the Origin conversation and is
+// still recorded under origin although the Supervisor inherited another group.
+test('an unset alert target reaches dashboard origin under origin despite an inherited group', { timeout: 40000 }, t =>
+  deliverAlert(t, { alertTarget: null, channelName: 'dashboard', endpoint: 'origin', group: 'origin' }));

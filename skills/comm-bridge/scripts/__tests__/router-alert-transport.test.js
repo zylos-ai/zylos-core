@@ -24,7 +24,7 @@ async function run(t, mode) {
   const socket = path.join(tmp, 'tmux-1000', 'fixture');
   assert.ok(Buffer.byteLength(socket) < 104);
   assert.ok(env.PM2_HOME.startsWith(home + '/'));
-  for (const channel of ['telegram', 'web-console']) {
+  for (const channel of ['telegram', 'dashboard']) {
     const directory = path.join(zylos, '.claude', 'skills', channel);
     fs.mkdirSync(path.join(directory, 'scripts'), { recursive: true });
     fs.writeFileSync(path.join(directory, 'package.json'), '{"type":"module"}\n');
@@ -34,7 +34,7 @@ async function run(t, mode) {
   fs.writeFileSync(path.join(zylos, '.zylos', 'config.json'), JSON.stringify({ runtime: 'claude', session_mode: 'multi' }));
   t.diagnostic(JSON.stringify({ paths: Object.fromEntries(['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR','TMUX_TMPDIR'].map(key => [key, env[key]])), socket }));
   const child = spawn(process.execPath, [worker], { env, detached: true, stdio: ['ignore','pipe','pipe'] });
-  let output = '', errors = '', stoppedAt, closed = false;
+  let output = '', errors = '', stoppedAt, storedGroups, closed = false;
   const exit = new Promise(resolve => {
     child.once('exit', (code, signal) => resolve({ code, signal, at: Date.now() }));
     child.once('error', error => { errors += String(error); resolve({ code: null, signal: null, at: Date.now() }); });
@@ -49,7 +49,7 @@ async function run(t, mode) {
     output += chunk;
     if (output.length > 65536) killGroup();
     for (const line of output.split('\n')) {
-      try { const value = JSON.parse(line); if (value.stoppedAt) stoppedAt = value.stoppedAt; } catch {}
+      try { const value = JSON.parse(line); if (value.stoppedAt) stoppedAt = value.stoppedAt; if (value.storedGroups) storedGroups = value.storedGroups; } catch {}
     }
   });
   child.stderr.on('data', chunk => { errors += chunk; if (errors.length > 65536) killGroup(); });
@@ -63,6 +63,7 @@ async function run(t, mode) {
   killGroup(); await close;
   assert.equal(result.code, 0, errors.slice(0, 4000) + output.slice(0, 4000));
   assert.ok(stoppedAt, 'Worker stopped the dispatcher and closed both private databases');
+  assert.ok(storedGroups, 'Worker read back the stored alert rows');
   assert.ok(result.at - stoppedAt < 1500, `Natural process exit took ${result.at - stoppedAt}ms after stop`);
   const records = fs.readFileSync(env.ALERT_TRANSPORT_RECORDS, 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.ok(records.length >= 1 && records.length <= 2);
@@ -73,7 +74,10 @@ async function run(t, mode) {
     assert.equal(record.systemSend, '1');
   }
   assert.deepEqual(records.map(record => [record.channel, record.endpoint]),
-    ['configured','destination_hangs'].includes(mode) ? [['telegram','fixture-owner']] : [['telegram','fixture-owner'],['web-console','console']]);
+    ['configured','destination_hangs'].includes(mode) ? [['telegram','fixture-owner']] : [['telegram','fixture-owner'],['dashboard','origin']]);
+  // The inherited ZYLOS_SESSION_GROUP=telegram:unrelated does not leak into routing: Origin is recorded under origin.
+  assert.deepEqual(storedGroups, records.map(record => [record.channel, record.endpoint,
+    record.channel === 'dashboard' ? 'origin' : 'telegram']));
   t.diagnostic(JSON.stringify({ mode, processExitAfterStopMs: result.at - stoppedAt, deliveries: records.length }));
 }
 
@@ -90,6 +94,6 @@ for (const mode of ['configured','fallback']) {
 // Run for abort/stop/default transport changes; skip template-only/UI changes.
 // Same isolated paths/readback/private DB/socket; all child processes belong to a
 // bounded worker group, forcibly reclaimed and reaped even on timeout/failure.
-for (const mode of ['destination_hangs','console_hangs']) {
+for (const mode of ['destination_hangs','origin_hangs']) {
   test(`default alert transport permits natural process exit when ${mode}`, { timeout: 10000, skip: process.platform === 'win32' }, async t => run(t, mode));
 }

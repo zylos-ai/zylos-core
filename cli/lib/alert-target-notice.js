@@ -12,15 +12,13 @@ export function alertTargetNotice({ read = readZylosConfigStrict, exists = fs.ex
   try { config = read(); } catch { config = { state: 'error' }; }
   if (config.state === 'error') return { kind: 'warning', text: 'instance config unreadable; cannot confirm the alert target. Fix the config first; do not overwrite it.' };
   if (config.state === 'missing' || !Object.hasOwn(config.config, 'alert_target')) {
-    return { kind: 'warning', text: `not set; system alerts go only to Web Console. The agent will ask the owner in the next private chat, or run: ${changeHint}` };
+    return { kind: 'warning', text: `not set; system alerts go to the pinned Origin conversation in Dashboard. The agent will ask the owner in the next private chat, or run: ${changeHint} (or "default" to keep alerts in Dashboard and stop asking)` };
   }
   const target = parseServerAlertTarget(config.config.alert_target);
-  if (!target) return { kind: 'warning', text: 'invalid value (expected channel:endpoint, both non-empty, without newline or NUL); system alerts fall back to Web Console.' };
-  if (target.channel === 'web-console' && target.endpoint === 'console') {
-    return { kind: 'plain', text: `web-console:console (the owner chose Web Console only). To change: ${changeHint}` };
-  }
+  if (!target) return { kind: 'warning', text: 'invalid value (expected channel:endpoint with both parts non-empty, or default; no newline or NUL); system alerts fall back to the pinned Origin conversation in Dashboard.' };
+  if (target.default) return { kind: 'plain', text: `default (the owner chose the default destination, the pinned Origin conversation in Dashboard). To change: ${changeHint}` };
   if (!exists(path.join(skillsDir, target.channel, 'scripts', 'send.js'))) {
-    return { kind: 'warning', text: `skills/${target.channel}/scripts/send.js not found; system alerts fall back to Web Console.` };
+    return { kind: 'warning', text: `skills/${target.channel}/scripts/send.js not found; system alerts fall back to the pinned Origin conversation in Dashboard.` };
   }
   return { kind: 'ready', text: config.config.alert_target };
 }

@@ -48,10 +48,15 @@ test('observed no-server follows absence and clears cached occupancy and alerts'
   f.base.observe = async () => { throw unavailable(); };
   await assert.rejects(f.provider.observe(),{code:'TMUX_UNAVAILABLE'});
 });
-test('alert target splits at first colon and rejects invalid/control-character destinations', () => {
+test('alert target splits at first colon, reads the default keyword and rejects invalid/control-character destinations', () => {
   assert.deepEqual(parseServerAlertTarget('web-console:console'), { channel: 'web-console', endpoint: 'console' });
   assert.deepEqual(parseServerAlertTarget('feishu:abc|type:p2p'), { channel: 'feishu', endpoint: 'abc|type:p2p' });
   for (const value of [null, '', ':foo', 'foo:', 'foo:bar\n']) assert.equal(parseServerAlertTarget(value), null);
+  // `default` is a keyword (trimmed, case-sensitive); `default:x` stays an ordinary channel:endpoint.
+  for (const value of ['default', ' default ', '\tdefault\n']) assert.deepEqual(parseServerAlertTarget(value), { default: true });
+  for (const value of ['Default', 'DEFAULT', 'default:', 'defaults']) assert.equal(parseServerAlertTarget(value), null);
+  assert.deepEqual(parseServerAlertTarget('default:x'), { channel: 'default', endpoint: 'x' });
+  assert.deepEqual(parseServerAlertTarget('dashboard:origin'), { channel: 'dashboard', endpoint: 'origin' });
 });
 test('scene observations add no server probes and forwarded failures reach alert timing', async () => {
   const f = fixture();

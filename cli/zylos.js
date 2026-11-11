@@ -142,6 +142,7 @@ Setup:
   config              Show all configuration
   config get <key>    Get a config value
   config set <key> <value>  Set a config value
+  config unset alert_target  Remove the alert target (alerts go to Dashboard's Origin conversation)
   attach              Attach to the Claude tmux session
   doctor              Diagnose and repair Zylos installation
                       --check   Diagnose only, no repair run

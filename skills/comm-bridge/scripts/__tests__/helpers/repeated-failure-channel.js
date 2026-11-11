@@ -7,7 +7,7 @@ const [endpoint, message] = process.argv.slice(2);
 fs.appendFileSync(process.env.ALERT_TRANSPORT_RECORDS, JSON.stringify({ channel, endpoint, message, pid: process.pid,
   runId: process.env.ZYLOS_RUN_ID, sessionGroup: process.env.ZYLOS_SESSION_GROUP, systemSend: process.env.ZYLOS_SYSTEM_SEND }) + '\n');
 const hangs = mode === 'destination_hangs' && channel === 'telegram'
-  || mode === 'console_hangs' && channel === 'web-console';
+  || mode === 'origin_hangs' && channel === 'dashboard';
 if (hangs) {
   const parent = process.ppid;
   setInterval(() => {

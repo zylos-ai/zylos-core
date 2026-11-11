@@ -57,6 +57,10 @@ try {
     await delay(20);
   }
   assert.ok(delivered, `Default transport did not reach its channel: ${logs.join('; ')}`);
+  // c4-send stores before it delivers, so the rows exist even while a channel hangs.
+  const storedGroups = database.getDb().prepare("SELECT channel, endpoint_id, session_group FROM conversations WHERE direction='out' ORDER BY id LIMIT 3")
+    .all().map(row => [row.channel, row.endpoint_id, row.session_group]);
+  console.log(JSON.stringify({ storedGroups }));
 } finally {
   await dispatcher.stop();
   for (const cleanup of cleanups.reverse()) await cleanup();

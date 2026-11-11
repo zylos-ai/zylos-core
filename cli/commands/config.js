@@ -6,6 +6,7 @@ import { readDefaultModels, setModelThreshold } from '../lib/model-rotation-thre
  *   zylos config                  Show all config
  *   zylos config get <key>        Get a config value
  *   zylos config set <key> <val>  Set a config value
+ *   zylos config unset alert_target  Remove the alert target (alerts go to the Origin conversation)
  */
 
 import { readZylosConfigOrThrow, updateZylosConfigLocked } from '../lib/config.js';
@@ -52,8 +53,17 @@ export async function configCommand(args) {
     return setConfig(key, value);
   }
 
+  if (sub === 'unset') {
+    const key = args[1];
+    if (!key || args.length > 2) {
+      console.error('Usage: zylos config unset alert_target');
+      process.exit(1);
+    }
+    return unsetConfig(key);
+  }
+
   console.error(`Unknown config subcommand: ${sub}`);
-  console.error('Usage: zylos config [get <key> | set <key> <value>]');
+  console.error('Usage: zylos config [get <key> | set <key> <value> | unset alert_target]');
   process.exit(1);
 }
 
@@ -96,7 +106,7 @@ async function setConfig(key, value) {
     throw reserved;
   }
   if (key === 'alert_target' && !parseServerAlertTarget(value)) {
-    const invalid = new Error('alert_target must be channel:endpoint with non-empty parts and no newline or NUL');
+    const invalid = new Error('alert_target must be channel:endpoint (non-empty parts, no newline or NUL) or the word default');
     invalid.code = 'CONFIG_VALUE_INVALID';
     throw invalid;
   }
@@ -115,6 +125,20 @@ async function setConfig(key, value) {
   if (SIDE_EFFECTS[key]) {
     await SIDE_EFFECTS[key](value, oldValue);
   }
+}
+
+/** Keys `zylos config unset` may remove; removing others would change how the instance runs. */
+const UNSETTABLE = new Set(['alert_target']);
+
+function unsetConfig(key) {
+  if (!UNSETTABLE.has(key)) {
+    const refused = new Error(`zylos config unset only accepts alert_target, not ${key}`);
+    refused.code = 'CONFIG_KEY_RESERVED';
+    throw refused;
+  }
+  const result = updateZylosConfigLocked({ unset: [key] });
+  if (Object.hasOwn(result.previous, key)) console.log(`${bold(key)} removed ${dim(`(was: ${result.previous[key]})`)}`);
+  else console.log(`${bold(key)} is not set`);
 }
 
 /**

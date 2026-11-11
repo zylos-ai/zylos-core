@@ -260,7 +260,7 @@ test('actual supervisor entry sends the retained-occupancy explanation after sus
  assert.equal(service.server.listening,true);assert.equal(messages.length,0);
  now+=59000;await service.supervisor.loop.tick();assert.equal(messages.length,0);
  now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);
- assert.deepEqual(messages[0].target,{channel:'web-console',endpoint:'console'});
+ assert.deepEqual(messages[0].target,{channel:'dashboard',endpoint:'origin'});
  assert.match(messages[0].message,/run_ending_reconciliation_failed \(\*\)/);
  assert.match(messages[0].message,/Occupancy rows remain; groups cannot start until reconciliation recovers\./);
  now+=1000;await service.supervisor.loop.tick();assert.equal(messages.length,1);

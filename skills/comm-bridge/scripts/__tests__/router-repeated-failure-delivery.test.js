@@ -11,7 +11,7 @@ import { routerFixture, deferred, flush } from './helpers/router-fixture.js';
 
 after(() => database.close());
 
-const consoleTarget = { channel: 'web-console', endpoint: 'console' };
+const originTarget = { channel: 'dashboard', endpoint: 'origin' };
 const defaultMessage = count => `[Zylos] 对话「a」连续 ${count} 次没能重启。最后一次的原因：启动报错（START_FAILED）。系统会继续重试；已在排队的消息可能在恢复前失败。\n[Zylos] Conversation "a" could not restart: ${count} attempts failed in a row. Last failure: launch error (START_FAILED). It keeps retrying. Messages already queued for this conversation can fail before it recovers.`;
 
 async function setup(t, { readConfig = () => ({ state: 'ok', config: {} }), send = async () => true } = {}) {
@@ -114,7 +114,7 @@ test('dispatcher sends current defaults to the configured destination and reload
 for (const configuration of ['missing', 'invalid', 'unreadable', 'throws']) {
   // Config failure boundary: run for config-reader or alert-target changes; skip unrelated delivery formatting.
   // Only this test's config reader fails; real scheduler/store and production fallback remain active.
-  test(`dispatcher uses default copy and Web Console when alert configuration is ${configuration}`, async t => {
+  test(`dispatcher uses default copy and the Origin conversation when alert configuration is ${configuration}`, async t => {
     const readConfig = () => {
       if (configuration === 'throws') throw Error('configuration unavailable');
       if (configuration === 'unreadable') return { state: 'error', error: 'unavailable' };
@@ -123,7 +123,7 @@ for (const configuration of ['missing', 'invalid', 'unreadable', 'throws']) {
     const f = await setup(t, { readConfig });
     await f.fiveFailures();
     assert.equal(f.sends.length, 1);
-    assert.deepEqual(f.sends[0].target, consoleTarget);
+    assert.deepEqual(f.sends[0].target, originTarget);
     assert.equal(f.sends[0].message, defaultMessage(5));
   });
 }
@@ -131,7 +131,7 @@ for (const configuration of ['missing', 'invalid', 'unreadable', 'throws']) {
 for (const failure of ['false', 'reject']) {
   // Transport fallback boundary: run for factory/shared notifier changes; skip unrelated scheduler changes.
   // The send substitute records calls only and never reaches a real communication channel.
-  test(`dispatcher falls back to Web Console when configured delivery returns ${failure}`, async t => {
+  test(`dispatcher falls back to the Origin conversation when configured delivery returns ${failure}`, async t => {
     const f = await setup(t, { readConfig: () => ({ state: 'ok', config: { alert_target: 'telegram:owner' } }),
       send: async (_target, _message, attempt) => {
         if (attempt === 1) { if (failure === 'reject') throw Error('transport unavailable'); return false; }
@@ -140,7 +140,7 @@ for (const failure of ['false', 'reject']) {
     await f.fiveFailures();
     assert.equal(f.sends.length, 2);
     assert.deepEqual(f.sends[0].target, { channel: 'telegram', endpoint: 'owner' });
-    assert.deepEqual(f.sends[1].target, consoleTarget);
+    assert.deepEqual(f.sends[1].target, originTarget);
     assert.equal(f.sends[0].message, defaultMessage(5));
     assert.equal(f.sends[1].message, defaultMessage(5));
   });

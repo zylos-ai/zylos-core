@@ -71,7 +71,7 @@ test('Origin authentication expiry alert includes its target runtime in the actu
   health.health='auth_failed';health.reason='authentication_failed';store.write(health);
   await service.supervisor.loop.tick();
   assert.equal(messages.length,1);
-  assert.deepEqual(messages[0].target,{channel:'web-console',endpoint:'console'});
+  assert.deepEqual(messages[0].target,{channel:'dashboard',endpoint:'origin'});
   assert.match(messages[0].message,/origin_auth_blocked/);
   assert.match(messages[0].message,/runtime=claude/);
   assert.ok(messages[0].message.includes(`oldest_at=${oldestAt}`));

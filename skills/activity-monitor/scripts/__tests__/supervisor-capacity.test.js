@@ -156,20 +156,20 @@ for (const fixed of [false, true]) {
   });
 }
 
-for (const route of ['target', 'missing', 'failed']) {
+for (const route of ['target', 'missing', 'default', 'failed']) {
   // Integration boundary: actual entry -> capacity memory warning -> renderer ->
   // unchanged guard.notify routing -> injected sender and real F12 diagnostic.
   // Run for notice/entry wiring; skip unrelated lifecycle. Runner provides fresh
   // HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/TMUX_TMPDIR; private am.sock and fixture
   // DB/scenes only, no tmux/PM2/network. Service closes before fixture cleanup.
-  test(`capacity notices use the configured destination and Web Console fallback (${route})`, async t => {
+  test(`capacity notices use the configured destination and the Origin conversation fallback (${route})`, async t => {
 
-    const f = await fixture(t, { configPatch: route === 'missing' ? {} : { alert_target: 'telegram:fixture-owner' },
+    const f = await fixture(t, { configPatch: route === 'missing' ? {} : { alert_target: route === 'default' ? 'default' : 'telegram:fixture-owner' },
       readMemory: async () => ({ source: 'cgroup2', limitBytes: 4 * 1024 ** 3, usedBytes: 3900 * 1024 ** 2 }),
       sendAlert: target => route === 'failed' && target.channel === 'telegram' ? false : true });
     await flush(); f.advance(10000); await f.round(); await flush();
     const last = f.sends.at(-1);
-    assert.equal(last.target.channel, route === 'target' ? 'telegram' : 'web-console');
+    assert.deepEqual(last.target, route === 'target' ? { channel: 'telegram', endpoint: 'fixture-owner' } : { channel: 'dashboard', endpoint: 'origin' });
     assert.equal(f.sends.length, route === 'failed' ? 2 : 1);
     assert.equal(last.message.split('\n').length, 2);
     assert.match(last.message, /^\[Zylos\] 这台机器内存快用完了/);
