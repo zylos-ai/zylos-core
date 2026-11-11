@@ -451,7 +451,8 @@ test('sleeping Origin refuses an Observer lease without starting or waking a ses
   const authGate = { enabled: true, resolveAuthContext: () => context, revalidateAuthContext: value => value };
   const manager = new ObserverManager({ coordinator, containment, authGate, runtime: 'codex',
     resolveOrigin: async () => { throw Object.assign(new Error('Origin sleeps'), { code: 'target_unavailable' }); } });
-  const service = new ObserverService({ coordinator, containment, manager, authGate });
+  // An admin key with remote access on: this case is about the sleeping Origin.
+  const service = new ObserverService({ coordinator, containment, manager, authGate, config: { chat: { allowRemote: true } } });
   let status, body;
   const res = { writeHead: value => { status = value; }, end: value => { body = JSON.parse(value); } };
   const handled = await service.handle({ method: 'POST', headers: {}, _authContext: context }, res, new URL('http://isolated.test/api/observer/leases'));

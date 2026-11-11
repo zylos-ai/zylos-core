@@ -83,7 +83,9 @@ function publicStatus(status) {
 }
 
 export class ObserverService {
-  constructor({ coordinator, containment, manager, authGate, upstreamFactory, ensureCoordinatorOwnership, historyService, sizeMonitor }) {
+  constructor({ coordinator, containment, manager, authGate, upstreamFactory, ensureCoordinatorOwnership, historyService, sizeMonitor, config = null }) {
+    // The Dashboard config object: `chat.allowRemote` also governs remote (API key) observer access.
+    this.config = config;
     this.coordinator = coordinator;
     this.historyService = historyService;
     this.containment = containment;
@@ -124,6 +126,8 @@ export class ObserverService {
     if (!this.authGate.enabled) throw new ObserverHttpError(401, 'auth_required');
     const context = req._authContext || this.authGate.resolveAuthContext(req);
     if (!context) throw new ObserverHttpError(401, 'unauthorized');
+    // The switch is checked before the key scope, in the same order as conversation access.
+    if (context.kind === 'api' && !this.remoteAllowed()) throw new ObserverHttpError(403, 'remote_chat_disabled');
     if (context.scope !== 'admin') throw new ObserverHttpError(403, 'insufficient_scope');
     if (requireOrigin && context.kind === 'cookie' && !isSameOriginRequest(req)) {
       throw new ObserverHttpError(403, 'origin_required');
@@ -167,6 +171,23 @@ export class ObserverService {
       stream.upstream.resize(size);
       stream.downstream?.sendText(JSON.stringify({ type: 'size', ...size }));
     }
+  }
+
+  /** Remote access to conversations and terminal (`chat.allowRemote`); local browser sessions never depend on it. */
+  remoteAllowed() {
+    return this.config?.chat?.allowRemote === true;
+  }
+
+  /**
+   * Called after the switch is turned off: remote viewers lose their open
+   * streams and leases now rather than at their next request.
+   */
+  closeRemoteAccess() {
+    if (this.remoteAllowed()) return 0;
+    for (const stream of [...this.streams]) {
+      if (stream.context?.kind === 'api') this._closeStream(stream, 1008, 'remote_chat_disabled');
+    }
+    return this.manager.releaseLeasesWhere(principal => principal?.kind === 'api');
   }
 
   _closeLeaseStreams(leaseId, code = 1000, reason = 'lease_closed') {
@@ -282,7 +303,13 @@ export class ObserverService {
         let body;
         try { body = req.headers['transfer-encoding'] || Number(req.headers['content-length']) > 0 ? await readJsonBody(req, 1024) : {}; } catch { throw new ObserverHttpError(400, 'target_mismatch'); }
         if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'sessionGroup')) throw new ObserverHttpError(400, 'target_mismatch');
-        sendJson(res, 201, await this.manager.createLease(context, { sessionGroup: body.sessionGroup }));
+        const lease = await this.manager.createLease(context, { sessionGroup: body.sessionGroup });
+        // The switch may have been turned off while the lease was being created, after closeRemoteAccess ran.
+        if (context.kind === 'api' && !this.remoteAllowed()) {
+          try { this.manager.releaseLease(lease.id, context); } catch {}
+          throw new ObserverHttpError(403, 'remote_chat_disabled');
+        }
+        sendJson(res, 201, lease);
         return true;
       }
       const leaseRoute = pathname.match(/^\/api\/observer\/leases\/([A-Za-z0-9_-]{32})\/(renew|release)$/);

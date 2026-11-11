@@ -129,7 +129,8 @@ test('binary policy: inline raster only, other media download, no-store and sand
 test('Observer auth protects all history routes without touching containment or leases', async () => {
   const { service: historyService } = fixture([]);
   const forbidden = () => { throw new Error('terminal state touched'); };
-  const observer = new ObserverService({ historyService,
+  // Admin keys stand for any admin caller here; remote access is on.
+  const observer = new ObserverService({ config: { chat: { allowRemote: true } }, historyService,
     coordinator: { historyStatus: async () => ({ state: 'installed', desired: { enabled: true } }), reconcileStartup: forbidden },
     containment: { reconcilePersisted: forbidden }, manager: { createLease: forbidden },
     authGate: { enabled: true, resolveAuthContext: (req) => req.headers.authorization === 'Bearer admin' ? { kind: 'api', scope: 'admin' } : req.headers.cookie ? { kind: 'cookie', scope: 'admin' } : req.headers.authorization ? { kind: 'api', scope: 'read' } : null },
@@ -207,7 +208,8 @@ test('HTTP remains available while a small history field stalls its redaction wo
   const productionRedactor = createRedactor({ workerURL, timeoutMs: 1000 });
   const { parser } = fixture([{ id: 'o:0', kind: 'text', fields: { body: 'hang' } }]);
   const service = new HistoryService({ parser, redactor: productionRedactor });
-  const observer = new ObserverService({ historyService: service,
+  // Admin keys stand for any admin caller here; remote access is on.
+  const observer = new ObserverService({ config: { chat: { allowRemote: true } }, historyService: service,
     containment: {}, manager: {},
     coordinator: { historyStatus: async () => ({ state: 'installed', desired: { enabled: true } }) },
     authGate: { enabled: true, resolveAuthContext: () => ({ kind: 'api', scope: 'admin' }) },

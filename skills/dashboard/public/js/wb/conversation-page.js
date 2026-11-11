@@ -64,6 +64,8 @@ export function mountConversationPage({
   local = () => false,
   confirm = async () => false,
   onStreamSubscription = () => {},
+  // The viewed instance refused remote access (its switch is off); the host hides this page's tab.
+  onRemoteDisabled = () => {},
   storage = globalThis.localStorage
 } = {}) {
   let autoSelectPending = false, opened = false, selectionIdentity;
@@ -1262,9 +1264,8 @@ export function mountConversationPage({
     }
   }
   const blockedNotice = node('div', undefined, 'chat-notice conversation-blocked-notice');
-  const blockedTitle = node('strong'),
-    blockedExplanation = node('span');
-  blockedNotice.append(icon(document, 'lock'), blockedTitle, blockedExplanation);
+  const blockedTitle = node('strong');
+  blockedNotice.append(icon(document, 'lock'), blockedTitle);
   function redraw() {
     if (destroyed) {
       return;
@@ -1303,9 +1304,10 @@ export function mountConversationPage({
       selectedKey = null;
       maxSeenId = null;
       unread = 0;
+      // Only a fallback: the host hides the tab and returns to the overview.
       text(blockedTitle, t('chat.remoteDisabled'));
-      text(blockedExplanation, t('chat.page.remoteExplanation'));
       root.replaceChildren(blockedNotice);
+      onRemoteDisabled();
       return;
     }
     if (page.parentNode !== root) {

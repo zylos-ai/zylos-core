@@ -26,6 +26,8 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
     },
   };
   const settings = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: false }, ...config };
+  // Every saved switch change, as the settings route reports it to its listeners.
+  const settingsChanges = [];
   const auth = new AuthGate(settings, store);
   const hubSettings = { auth: { enabled: true, password: 'scrypt:fixture' }, chat: { allowRemote: false }, ...localConfig };
   const hubAuth = new AuthGate(hubSettings, store);
@@ -42,7 +44,7 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
         const url = new URL(req.url, 'http://localhost');
         if (await (isHub ? hubAuth : auth).handle(req, res, url)) return;
         if (isHub) { await proxy.handle(req, res, url); return; }
-        if (await handleChatSettings(req, res, url, { auth, config: settings })) return;
+        if (await handleChatSettings(req, res, url, { auth, config: settings, onChange: chat => settingsChanges.push(chat) })) return;
         if (workbench && ['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(url.pathname)) {
           sendJson(res, 200, await workbench(url)); return;
         }
@@ -81,6 +83,6 @@ export async function chatHttpFixture(t, config = {}, { workbench, localConfig =
       method: route.method, headers, ...(['GET', 'HEAD'].includes(route.method) ? {} : { body }) });
     return { status: response.status, text: await response.text() };
   }
-  return { request, config: settings, localConfig: hubSettings, counts, auth, setMode: value => { mode = value; }, setRecord: value => { record = value; },
+  return { request, config: settings, localConfig: hubSettings, counts, settingsChanges, auth, setMode: value => { mode = value; }, setRecord: value => { record = value; },
     setOwner: value => { owner = value; } };
 }

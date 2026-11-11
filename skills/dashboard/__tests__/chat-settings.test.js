@@ -55,6 +55,11 @@ test('only local cookie can persist remote chat permission without losing other 
   try { process.env.ZYLOS_DIR = zylos; assert.equal(loadConfig().chat.allowRemote, true); }
   finally { process.env.ZYLOS_DIR = previous; }
   assert.deepEqual(JSON.parse((await f.request({ method: 'GET', path: '/api/chat/settings' })).text), { allowRemote: true });
+  // Only the saved change reaches listeners (closing remote observer access, republishing state).
+  assert.deepEqual(f.settingsChanges, [{ label: 'kept', allowRemote: true }]);
+  assert.equal((await f.request({ method: 'PUT', path: '/api/chat/settings' }, { body: '{"allowRemote":false}' })).status, 200);
+  assert.deepEqual(f.settingsChanges.at(-1), { label: 'kept', allowRemote: false });
+  assert.equal(f.settingsChanges.length, 2);
 });
 
 // Integration: actual filesystem temporary-write failure with

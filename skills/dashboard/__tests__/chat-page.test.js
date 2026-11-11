@@ -33,11 +33,12 @@ function fixture(testContext, { mode = 'multi', tab = 'mine', denied = false, ro
     const forbidden = isDenied && path.includes('/api/chat/');
     return { ok: !forbidden, status: forbidden ? 403 : 200, json: async () => body };
   };
-  const page = mountConversationPage({ root, document, t: translate, fetch, endpoint: path => path });
+  const refusals = [];
+  const page = mountConversationPage({ root, document, t: translate, fetch, endpoint: path => path, onRemoteDisabled: () => refusals.push(true) });
   testContext.after(() => page.destroy());
   const button = key => allNodes(root).find(node => node.dataset.action === key);
   const select = async () => { allNodes(root).find(node => node.dataset.conversationId)?.dispatch('click'); await tick(); await tick(); };
-  return { root, page, calls, button, select, tab, failMessages(id) { failedMessageId = id; }, failList() { listFailed = true; }, deny() { isDenied = true; }, holdMessage(pending) { pendingMessage = pending; } };
+  return { root, page, calls, button, select, tab, refusals, failMessages(id) { failedMessageId = id; }, failList() { listFailed = true; }, deny() { isDenied = true; }, holdMessage(pending) { pendingMessage = pending; } };
 }
 
 test('mounted content keeps plain text inert and renders validated fallback and malformed-content notice', async testContext => {
@@ -88,9 +89,10 @@ test('external tab has history but no write controls', async testContext => {
   f.page.destroy();
 });
 
-test('remote-disabled replaces the entire page with only its notice', async testContext => {
+test('remote-disabled replaces the entire page with only its fallback title and tells the host', async testContext => {
   const f = fixture(testContext, { denied: true }); await f.page.open();
-  assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
+  assert.equal(visibleText(f.root), 'Remote disabled');
+  assert.ok(f.refusals.length >= 1, 'the host hears the refusal so it can hide the tab');
   assert.equal(allNodes(f.root).filter(node => node.tagName === 'BUTTON').length, 0);
   f.page.destroy();
 });
@@ -126,6 +128,7 @@ for (const operation of ['refresh', 'stream catchup', 'select', 'older history']
   assert.ok(visibleText(f.root).includes('Example'));
   assert.ok(visibleText(f.root).includes('Private body'));
   f.deny();
+  assert.equal(f.refusals.length, 0, 'no refusal reported before the instance refuses');
   if (operation === 'select') { allNodes(f.root).find(node => node.dataset.conversationId === 'g:BB').dispatch('click'); await tick(); await tick(); }
   else if (operation === 'older history') {
     const stream = f.root.querySelector('.conversation-stream');
@@ -138,10 +141,11 @@ for (const operation of ['refresh', 'stream catchup', 'select', 'older history']
   }
   else if (operation === 'stream catchup') await catchUpConversation(f.page);
   else { f.button(operation).dispatch('click'); await tick(); await tick(); }
-  assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
+  assert.equal(visibleText(f.root), 'Remote disabled');
   assert.equal(allNodes(f.root).filter(node => node.tagName === 'BUTTON').length, 0);
-  f.page.redraw(); assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
-  await f.page.open(); assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
+  f.page.redraw(); assert.equal(visibleText(f.root), 'Remote disabled');
+  await f.page.open(); assert.equal(visibleText(f.root), 'Remote disabled');
+  assert.ok(f.refusals.length >= 1);
   f.page.destroy();
 });
 
@@ -152,10 +156,10 @@ test('late old successful message response cannot restore the remote-disabled DO
   const pending = deferred(); f.holdMessage(pending);
   await catchUpConversation(f.page); await tick();
   f.deny(); f.button('refresh').dispatch('click'); await tick(); await tick();
-  assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
+  assert.equal(visibleText(f.root), 'Remote disabled');
   pending.resolve({ ok: true, status: 200, json: async () => ({ items: [{ id: 9, direction: 'out', status: 'delivered', content: 'Late secret' }], afterCursor: 'after' }) });
   await tick(); await tick();
-  assert.equal(visibleText(f.root), 'Remote disabled' + 'chat.page.remoteExplanation');
+  assert.equal(visibleText(f.root), 'Remote disabled');
   f.page.destroy();
 });
 

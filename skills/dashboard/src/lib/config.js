@@ -146,6 +146,7 @@ export function loadConfig({ zylosDir = getZylosDir() } = {}) {
   const defaults = {
     port: 3470,
     host: '127.0.0.1',
+    // allowRemote governs remote (API key) access to both conversations and the terminal observer.
     chat: { allowRemote: false },
     zylosDir,
     dataDir,

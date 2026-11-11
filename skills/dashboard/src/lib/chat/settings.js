@@ -2,7 +2,7 @@ import { mutateConfig } from '../config-mutation.js';
 import { readJsonBody, sendJson } from '../http.js';
 import { CHAT_SETTINGS_PATH, requireChatSettingsAccess } from './access.js';
 
-export async function handleChatSettings(req, res, url, { auth, config }) {
+export async function handleChatSettings(req, res, url, { auth, config, onChange = () => {} }) {
   if (url.pathname !== CHAT_SETTINGS_PATH) return false;
   const denied = requireChatSettingsAccess(req, auth);
   if (denied) { const { status, ...body } = denied; sendJson(res, status, body); return true; }
@@ -21,6 +21,8 @@ export async function handleChatSettings(req, res, url, { auth, config }) {
     });
     config.chat = { ...saved.config.chat };
     sendJson(res, 200, { allowRemote: config.chat.allowRemote });
+    // The switch also governs the terminal observer; listeners close remote access and republish state.
+    try { onChange(config.chat); } catch { /* the setting is saved; a failed listener must not undo the reply */ }
   } catch {
     sendJson(res, 500, { error: 'chat_settings_write_failed' });
   }

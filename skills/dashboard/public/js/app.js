@@ -13,6 +13,7 @@ import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
 import { mountWorkbench } from './wb/shell.js?v=165';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=109';
+import { createRemoteAccess } from './wb/remote-access.js?v=1';
 import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=151';
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js?v=120';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
@@ -139,6 +140,15 @@ function viewedMachine() {
   return viewedAccess({ remoteAgent: state.remoteAgent, fleetAgents: state.fleet?.agents ?? [], pageRemoteAgent: REMOTE_AGENT, pageRemoteAccess: REMOTE_ACCESS });
 }
 
+const remoteAccess = createRemoteAccess({
+  viewingRemote: () => viewedMachine().viewingRemote,
+  dashboardState: () => state.dashboardState,
+  chatTab: () => document.querySelector('.tab[data-tab="chat"]'),
+  activeTab: () => activeTabName(),
+  openTab: name => activateTab?.(name),
+  onChange: () => workbench?.setViewDetail()
+});
+
 function remoteIsReadOnly() {
   const viewed = viewedMachine();
   return viewed.viewingRemote && viewed.access !== 'admin';
@@ -257,6 +267,7 @@ function renderInfoBar() {
 // ─── Render: State ───
 function renderObserverAvailability() {
   lockObserverButtons(document.querySelectorAll(OBSERVER_ACCESS_SELECTOR), { readOnly: remoteIsReadOnly() });
+  remoteAccess.sync();
 }
 
 
@@ -992,6 +1003,7 @@ async function resolveMemoryConflict(action) {
 async function refreshState() {
   const data = await refreshDashboardState(state, fetchJson);
   if (!data) return;
+  remoteAccess.noteState(data);
   state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
   if (Object.hasOwn(data, 'new_session_threshold')) {
     state.newSessionThreshold = data.new_session_threshold;
@@ -1207,6 +1219,7 @@ function releaseObserverLease(endpoints, lease) {
 }
 
 function observerRequestError(data, status) {
+  remoteAccess.noteError(data?.error);
   return Object.assign(new Error(data.error || t('observer.connect_failed')), { code: data.error, status });
 }
 
@@ -1599,6 +1612,7 @@ function applySse(name, data) {
     // The SSE state payload carries only raw state; /api/state adds the agent identity. Keep it across updates.
     const prevAgent = state.dashboardState?.agent;
     state.dashboardState = data;
+    remoteAccess.noteState(data);
     if (nextRuntimeInfo) state.dashboardState.runtime_info = nextRuntimeInfo;
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     if (Object.hasOwn(data, 'new_session_threshold')) state.newSessionThreshold = data.new_session_threshold;
@@ -1696,6 +1710,7 @@ function initTabs() {
     if (name !== 'observer') state.observer.selectionGeneration += 1;
     if (name === 'memory' && remoteIsReadOnly()) name = 'overview';
     if (name === 'observer' && ($('#observer-tab')?.hidden || remoteIsReadOnly())) name = 'overview';
+    if (remoteAccess.blocks(name)) name = 'overview';
     if (activeTabName() === 'observer' && name !== 'observer') closeObserver({ release: true }).catch(() => {});
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     markCurrentTab(document.querySelectorAll('.tab'), name);
@@ -1913,6 +1928,7 @@ function resetAgentData() {
     observerStatus.textContent = '';
   }
   state.dashboardState = null;
+  remoteAccess.reset();
   state.sourceUpdatedAt = null;
   resetMemoryState();
   // Local-only modals must not survive a switch (e.g. browser-back into a
@@ -2994,7 +3010,7 @@ initTechButton();
 watchHeader({ header: document.querySelector('.app-header') });
 // Whether the observer can be opened from a group detail, on the overview and beside the conversation alike.
 function observerOpenable(status) {
-  return !remoteIsReadOnly() && !observerRecoveryReason(status);
+  return !remoteIsReadOnly() && !remoteAccess.closed() && !observerRecoveryReason(status);
 }
 function openGroupMemory(key) {
   // Show the group's file list, not a file left open from before.
@@ -3023,6 +3039,7 @@ const stopSchedule = mountSchedule({
 window.addEventListener('pagehide', stopSchedule);
 chatPage = mountConversationPage({ root: document.querySelector('#wb-chat'), t,
   local: () => !REMOTE_AGENT && !state.remoteAgent, confirm: confirmSetting,
+  onRemoteDisabled: remoteAccess.refuse,
   onStreamSubscription: subscription => chatPush.setSubscription(subscription),
   fetch: draftFetch, draftStore: draftRestoreStore, composeDrafts: composeDraftStore,
   draftScope: () => ({ authRoot: FORM_AUTH_ROOT, instance: draftInstance(FORM_AUTH_ROOT, state.remoteAgent ?? REMOTE_AGENT ?? null) }),

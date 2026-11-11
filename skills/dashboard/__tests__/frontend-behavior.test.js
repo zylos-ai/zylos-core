@@ -8,6 +8,7 @@ import { documentFixture, node } from './fixtures/settings-dom.js';
 import { validAgentSize, validObserverSize } from '../public/js/observer-size.js';
 import { agentColor } from '../src/lib/agent-color.js';
 import { markCurrentTab, tabForPath } from '../public/js/wb/view-mode.js';
+import { createRemoteAccess } from '../public/js/wb/remote-access.js';
 import { observerPageUsable, observerRecoveryReason, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide } from '../public/js/wb/observer-page.js';
 
 function deferred() {
@@ -136,6 +137,9 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     viewedAgentName: () => context.state.remoteAgent || 'self',
     remoteIsReadOnly: () => readOnly,
     viewedMachine: () => ({ viewingRemote: Boolean(context.state.remoteAgent), access: readOnly ? 'read' : 'admin' }),
+    // The real remote access switch view; these observer cases never turn it off (its own cases are in remote-access.test.js).
+    remoteAccess: createRemoteAccess({ viewingRemote: () => Boolean(context.state.remoteAgent), dashboardState: () => context.state.dashboardState,
+      chatTab: () => null, activeTab: () => context.activeTabName(), openTab: () => {} }),
     connectSse() {},
     transitionView() {},
     refreshFleet: async () => {},
@@ -2297,7 +2301,6 @@ test('workbench shell hides unknown recovering and unavailable observer navigati
   assert.equal(click().prevented, 0); assert.equal(settings.length, 0);
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   assert.match(app, /observerAvailable: observerOpenable,/);
-  assert.match(app, /function observerOpenable\(status\) \{\n  return !remoteIsReadOnly\(\) && !observerRecoveryReason\(status\);\n\}/);
 });
 
 // Detail mounting boundary: real shell row selection and injected transport only;

@@ -133,10 +133,8 @@ function readInstalledVersions() {
 
 function refreshInstalledVersions() {
   readInstalledVersions();
-  const current = coreState?.getState();
-  if (current) {
-    current.runtime_info = buildRuntimeInfo();
-    sse.broadcast('state_change', current);
+  if (coreState?.getState()) {
+    sse.broadcast('state_change', currentState());
     scheduleFleetStateBroadcast();
   }
 }
@@ -197,6 +195,7 @@ const observerService = new ObserverService({
   containment: observerContainment,
   manager: observerManager,
   authGate: auth,
+  config,
 });
 const observerControl = new ObserverControlServer({
   dataDir: config.dataDir,
@@ -259,9 +258,7 @@ publishCoreStateChange = createCoreStateChangePublisher({ sse, buildStatePayload
 const versionChecker = new VersionChecker({
   onUpdate: () => {
     if (stateEngine) {
-      const st = coreState.getState();
-      st.runtime_info = buildRuntimeInfo();
-      sse.broadcast('state_change', st);
+      sse.broadcast('state_change', currentState());
       scheduleFleetStateBroadcast();
     }
   },
@@ -371,9 +368,7 @@ function getCostTiers() {
 // 7. State engine
 const stateEngine = new StateEngine(store, collectors, config, {
   onStateChange: (st) => {
-    const current = coreState.getState();
-    current.runtime_info = buildRuntimeInfo();
-    sse.broadcast('state_change', current);
+    sse.broadcast('state_change', currentState());
     scheduleFleetStateBroadcast();
   }
 });
@@ -488,12 +483,20 @@ const scheduleReader = createScheduleRead({ zylosDir: config.zylosDir, scheduleT
   getSnapshot: () => workbench.getSnapshot() });
 const scheduleWriter = createScheduleWrite({ zylosDir: config.zylosDir, scheduleTz });
 
+// The state every push and /api/state read starts from: runtime info, and whether remote Dashboards may open this
+// instance's conversations and terminal observer (only the switch state; no conversation or terminal data).
+function currentState() {
+  const current = coreState.getState();
+  current.runtime_info = buildRuntimeInfo();
+  current.chat_allow_remote = config.chat?.allowRemote === true;
+  return current;
+}
+
 function buildApiStatePayload() {
-  const stateData = coreState.getState();
+  const stateData = currentState();
   // Include the agent's deterministic identity color/hue; machines that read this
   // instance's state (including older dashboards) still colour it by them.
   stateData.agent = { ...config.agent, ...agentColor(config.agent?.name) };
-  stateData.runtime_info = buildRuntimeInfo();
   stateData.new_session_threshold = getNewSessionThreshold();
   stateData.system_metrics = getSystemMetrics();
   const usageObservation = coreState.getUsageObservation();
@@ -1755,7 +1758,10 @@ export function createServer() {
       return;
     }
 
-    if (await handleChatSettings(req, res, url, { auth, config })) return;
+    if (await handleChatSettings(req, res, url, { auth, config, onChange: () => {
+      observerService.closeRemoteAccess();
+      publishCoreStateChange();
+    } })) return;
     if (await handleChatAttachments(req, res, url, { auth, config, sender, attachments,
       readMode: () => loadZylosConfig(config.zylosDir).session_mode })) return;
     if (pathname.startsWith('/api/chat/conversations/')) {

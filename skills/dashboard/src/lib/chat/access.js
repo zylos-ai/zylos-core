@@ -22,7 +22,7 @@ export function requireChatAccess(req, auth, config, options) {
   if (context.kind === 'cookie' && context.scope === 'admin') return null;
   if (context.kind !== 'api') return { status: 403, error: 'chat_auth_required' };
   if (config.chat?.allowRemote !== true) {
-    return { status: 403, error: 'remote_chat_disabled', message: '对方实例未开放远端查看对话' };
+    return { status: 403, error: 'remote_chat_disabled', message: '对方实例未允许远端访问对话和终端' };
   }
   return context.scope === 'admin' ? null : { status: 403, error: 'insufficient_scope', required: 'admin' };
 }

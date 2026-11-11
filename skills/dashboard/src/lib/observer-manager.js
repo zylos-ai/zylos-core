@@ -279,6 +279,19 @@ export class ObserverManager {
     return { released: true, id: lease.id };
   }
 
+  /** Drops every lease whose holder matches; returns how many were released. */
+  releaseLeasesWhere(matches) {
+    let released = 0;
+    for (const [id, lease] of this.leases) {
+      if (!matches(lease.principal)) continue;
+      this.leases.delete(id);
+      this._dropTickets(id);
+      released += 1;
+    }
+    if (released) this._scheduleIdleStop();
+    return released;
+  }
+
   async targetStatus(sessionGroup) {
     const sessionMode = await this.sessionMode();
     let target = null;

@@ -42,7 +42,8 @@ function fixture(sessionCount) {
 async function pages(createEngine, sessionCount) {
   const data = fixture(sessionCount);
   const history = new HistoryService({ parser: data.parser, redactor: createEngine({ workerURL }) });
-  const observer = new ObserverService({ historyService: history,
+  // Admin keys stand for any admin caller here; remote access is on.
+  const observer = new ObserverService({ config: { chat: { allowRemote: true } }, historyService: history,
     containment: {}, manager: {},
     coordinator: { historyStatus: async () => ({ state: 'installed', desired: { enabled: true } }) },
     authGate: { enabled: true, resolveAuthContext: () => ({ kind: 'api', scope: 'admin' }) },

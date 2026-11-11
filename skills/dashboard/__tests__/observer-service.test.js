@@ -17,7 +17,9 @@ import { shutdownDashboardTransports } from '../src/lib/dashboard-shutdown.js';
 
 const LEASE_ID = 'a'.repeat(32);
 
-function fixture({ authEnabled = true, deferUpstream = false, initialDisplay = null, sizeMonitor, resizeAgent, starting = false, managerFactory } = {}) {
+// `config` defaults to remote access allowed, so API key cases elsewhere test their own concern.
+function fixture({ authEnabled = true, deferUpstream = false, initialDisplay = null, sizeMonitor, resizeAgent, starting = false, managerFactory,
+  config = { chat: { allowRemote: true } } } = {}) {
   const context = { kind: 'cookie', principalId: 'browser', scope: 'admin' };
   const otherContext = { kind: 'cookie', principalId: 'other-browser', scope: 'admin' };
   const apiContext = { kind: 'api', principalId: 'api-admin', scope: 'admin' };
@@ -56,6 +58,8 @@ function fixture({ authEnabled = true, deferUpstream = false, initialDisplay = n
     async createLease() { return { id: LEASE_ID, generation: 7 }; },
     renewLease() { return { id: LEASE_ID, generation: 7 }; },
     releaseLease() { return { released: true }; },
+    released: [],
+    releaseLeasesWhere(matches) { this.released.push(matches); return 1; },
     async invalidateAndDisable() { return { state: 'disabled' }; },
     async handleContainmentFailure() {},
     async shutdown() { return { stopped: true }; },
@@ -93,10 +97,10 @@ function fixture({ authEnabled = true, deferUpstream = false, initialDisplay = n
     return upstream;
   };
   const service = new ObserverService({
-    coordinator, containment, authGate, upstreamFactory, sizeMonitor,
+    coordinator, containment, authGate, upstreamFactory, sizeMonitor, config,
     manager: managerFactory ? managerFactory({ coordinator, containment, authGate }) : manager,
   });
-  return { service, upstreams, resolveConnect, containment, coordinator };
+  return { service, upstreams, resolveConnect, containment, coordinator, config, manager };
 }
 
 async function waitUntil(check, timeoutMs = 2_000) {
@@ -619,7 +623,8 @@ test('recovery cannot clear a startup failure while persisted survivors remain',
       start: async () => { starts += 1; throw new Error('unexpected start'); },
     });
     const manager = new ObserverManager({ coordinator, containment, authGate });
-    const service = new ObserverService({ coordinator, containment, manager, authGate });
+    // The admin key here stands for any admin caller; remote access is on so the case tests recovery only.
+    const service = new ObserverService({ coordinator, containment, manager, authGate, config: { chat: { allowRemote: true } } });
     const app = await startHttp(service);
     const request = async (route, method = 'POST', authenticated = true) => {
       const response = await fetch(`${app.origin}/api/observer/${route}`, {
@@ -1240,3 +1245,97 @@ test('observer status remains available when the selected Core target is unavail
     assert.equal(lease.status, 400); assert.equal((await lease.json()).error, 'target_mismatch');
   } finally { await f.service.shutdown(); await app.close(); }
 });
+
+// "Allow remote access to conversations and terminal" (`chat.allowRemote`) also governs the observer:
+// API keys (remote Dashboards) are refused while it is off; the local browser cookie never depends on it.
+test('remote observer access follows the conversation switch on every route and the upgrade', async () => {
+  const { service, upstreams, config } = fixture({ config: { chat: { allowRemote: false } } });
+  const app = await startHttp(service);
+  const bearer = { Authorization: 'Bearer admin-token' };
+  try {
+    for (const [path, method] of [['/api/observer/status', 'GET'], ['/api/observer/leases', 'POST'],
+      [`/api/observer/leases/${LEASE_ID}/release`, 'POST'], ['/api/observer/agent-size', 'POST'], ['/api/observer/enable', 'POST'],
+      ['/api/observer/history/sessions', 'GET']]) {
+      const response = await fetch(`${app.origin}${path}`, { method, headers: bearer });
+      assert.equal(response.status, 403, path);
+      assert.equal((await response.json()).error, 'remote_chat_disabled', path);
+    }
+    // The switch is checked before the key scope, as for conversations: a read key learns the switch is off.
+    const readWhileOff = await fetch(`${app.origin}/api/observer/status`, { headers: { Authorization: 'Bearer read-token' } });
+    assert.equal((await readWhileOff.json()).error, 'remote_chat_disabled');
+    const frame = await fetch(`${app.origin}/observer/frame`, { headers: { ...bearer, 'X-Observer-Lease': LEASE_ID } });
+    assert.equal(frame.status, 403);
+    await assert.rejects(connectObserverWebSocket({ port: app.server.address().port, path: '/observer/stream',
+      headers: { ...bearer, 'Sec-WebSocket-Protocol': `${OBSERVER_WEBSOCKET_PROTOCOL}, lease.${LEASE_ID}` } }), /rejected \(403\)/);
+    assert.equal(upstreams.length, 0);
+    const local = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: { Cookie: 'admin=1', Origin: app.origin } });
+    assert.equal(local.status, 201, 'the local browser is not affected');
+    // The settings route replaces config.chat in place; the next request sees it.
+    config.chat = { allowRemote: true };
+    assert.equal((await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: bearer })).status, 201);
+    const readOnly = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: { Authorization: 'Bearer read-token' } });
+    assert.equal((await readOnly.json()).error, 'insufficient_scope', 'a read key is still refused for its scope');
+  } finally {
+    await service.shutdown();
+    await app.close();
+  }
+});
+
+test('a remote lease whose creation outlasts the switch being turned off is released and refused', async () => {
+  const { service, config, manager } = fixture();
+  const app = await startHttp(service);
+  const released = [];
+  const create = manager.createLease.bind(manager);
+  // The switch goes off (and closeRemoteAccess runs) while the lease is still being created.
+  manager.createLease = async (...args) => { const lease = await create(...args); config.chat = { allowRemote: false }; service.closeRemoteAccess(); return lease; };
+  manager.releaseLease = (id, context) => { released.push([id, context.kind]); return { released: true }; };
+  try {
+    const remote = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: { Authorization: 'Bearer admin-token' } });
+    assert.equal(remote.status, 403);
+    assert.equal((await remote.json()).error, 'remote_chat_disabled');
+    assert.deepEqual(released, [[LEASE_ID, 'api']]);
+    const local = await fetch(`${app.origin}/api/observer/leases`, { method: 'POST', headers: { Cookie: 'admin=1', Origin: app.origin } });
+    assert.equal(local.status, 201, 'the local browser keeps its lease');
+    assert.equal(released.length, 1);
+  } finally {
+    await service.shutdown();
+    await app.close();
+  }
+});
+
+for (const viewer of ['remote', 'local']) {
+  test(`turning remote access off closes ${viewer === 'remote' ? 'remote streams and leases at once' : 'nothing for the local browser'}`, async () => {
+    const { service, config, manager } = fixture();
+    const app = await startHttp(service);
+    let socket;
+    try {
+      socket = await connectObserverWebSocket({ port: app.server.address().port, path: '/observer/stream',
+        headers: { ...(viewer === 'remote' ? { Authorization: 'Bearer admin-token' } : { Cookie: 'admin=1', Origin: app.origin }),
+          'Sec-WebSocket-Protocol': `${OBSERVER_WEBSOCKET_PROTOCOL}, lease.${LEASE_ID}` } });
+      socket.activate();
+      const stream = [...service.streams][0];
+      const calls = [];
+      const close = stream.downstream.close.bind(stream.downstream);
+      stream.downstream.close = (...args) => { calls.push(args); return close(...args); };
+      assert.equal(service.closeRemoteAccess(), 0, 'nothing happens while the switch is on');
+      assert.equal(service.streams.size, 1);
+      config.chat = { allowRemote: false };
+      service.closeRemoteAccess();
+      assert.equal(manager.released.length, 1);
+      const [matches] = manager.released;
+      assert.equal(matches({ kind: 'api', principalId: 'k', scope: 'admin' }), true);
+      assert.equal(matches({ kind: 'cookie', principalId: 'b', scope: 'admin' }), false);
+      if (viewer === 'remote') {
+        assert.deepEqual(calls, [[1008, 'remote_chat_disabled']]);
+        assert.equal(service.streams.size, 0);
+      } else {
+        assert.deepEqual(calls, []);
+        assert.equal(service.streams.size, 1);
+      }
+    } finally {
+      await service.shutdown();
+      socket?.destroy();
+      await app.close();
+    }
+  });
+}

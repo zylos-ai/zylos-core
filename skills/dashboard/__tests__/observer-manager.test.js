@@ -668,3 +668,19 @@ test('target status keeps installation status readable for absent or invalid gro
   code = 'unexpected_dependency_failure';
   await assert.rejects(f.manager.targetStatus('telegram:42'), { code });
 });
+
+test('turning remote access off releases only remote (API key) leases and their tickets', async () => {
+  const f = fixture();
+  const remote = context('admin');
+  const local = { kind: 'cookie', principalId: 'browser', scope: 'admin' };
+  Object.defineProperty(local, 'credentialId', { value: 'admin-session', enumerable: false });
+  const remoteLease = await f.manager.createLease(remote);
+  const localLease = await f.manager.createLease(local);
+  const ticket = f.manager.renewLease(remoteLease.id, remote).ticket;
+  assert.equal(f.manager.releaseLeasesWhere(principal => principal?.kind === 'api'), 1);
+  assert.throws(() => f.manager.validateLease(remoteLease.id, remote), (error) => error?.code === 'lease_not_found');
+  assert.equal(f.manager.consumeTicket(ticket, remoteLease.id, remote), false, 'its handshake ticket is gone too');
+  assert.equal(f.manager.validateLease(localLease.id, local).id, localLease.id, 'the local browser keeps its lease');
+  assert.equal(f.manager.releaseLeasesWhere(principal => principal?.kind === 'api'), 0);
+  f.manager.releaseLease(localLease.id, local);
+});
