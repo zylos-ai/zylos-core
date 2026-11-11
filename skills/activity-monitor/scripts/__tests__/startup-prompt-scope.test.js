@@ -174,16 +174,20 @@ test('default startup reader reopens private C4 and ignores checkpoint coverage'
   c.prepare(`INSERT INTO conversations(id,timestamp,direction,channel,endpoint_id,content,status,session_group)
     VALUES(1,?,'in','telegram','private','question','delivered','origin')`).run(new Date(clock - 29 * 60000).toISOString());
   db.createCheckpoint('origin', 1, 'already covered');
-  db.close();
+  assert.equal(c.open, true);
   const scope = { mode: 'multi', sessionGroup: 'origin', memoryDir: path.join(runnerRoot, 'no-handoff') };
   let enqueues = 0;
   const options = { onboardingPending: () => false, migrationPending: () => false,
     scopeReader: async () => scope, now: () => clock,
     execFile: async () => { enqueues++; return { stdout: '{"ok":true,"id":8}' }; } };
   assert.equal((await enqueueStartupPrompt('startup', options)).skipped, false);
-  db.getDb().prepare(`INSERT INTO conversations(id,timestamp,direction,channel,endpoint_id,content,status,session_group)
+  assert.equal(c.open, false, 'default reader must close the handle it used');
+  const replyConnection = db.getDb();
+  assert.notEqual(replyConnection, c, 'the next read must reopen C4');
+  replyConnection.prepare(`INSERT INTO conversations(id,timestamp,direction,channel,endpoint_id,content,status,session_group)
     VALUES(2,?,'out','telegram','private','reply','delivered','origin')`).run(new Date(clock).toISOString());
-  db.close();
+  assert.equal(replyConnection.open, true);
   assert.equal((await enqueueStartupPrompt('clear', options)).reason, 'nothing_pending');
+  assert.equal(replyConnection.open, false, 'default reader must close on a skip too');
   assert.equal(enqueues, 1);
 });

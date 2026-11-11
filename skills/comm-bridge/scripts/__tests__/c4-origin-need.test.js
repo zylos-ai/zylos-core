@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { fixture } from './c4-v2-test-helpers.js';
 import { enqueueStartupPrompt } from '../../../activity-monitor/scripts/session-start-prompt.js';
 
@@ -73,12 +74,25 @@ test('only bound controls left by an ended run do not need Origin', t => {
   assert.deepEqual(store.getOriginNeed(2_000_000_000), empty());
 });
 
+// Startup producer -> real Origin-need Store integration. Run for startup
+// enqueue policy or Origin-need changes; unrelated UI may skip. Official runner
+// isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR before imports; this case checks
+// the paths before opening its memory SQLite DB. No tmux/network/child starts;
+// fixture teardown closes SQLite. Force a pending reply to exercise an enqueue.
 for (const migration of [false, true]) {
   test(`unbound ${migration ? 'instruction migration' : 'ordinary'} startup prompt needs Origin`, async t => {
+    const runnerRoot = path.dirname(process.env.HOME);
+    assert.match(path.basename(runnerRoot), /^zylos-tests-/);
+    for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+      assert.ok(process.env[key]?.startsWith(runnerRoot + path.sep), key);
+    }
+    t.diagnostic(JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+      PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: ':memory:', tmux: 'unused' }));
     const { store } = fixture(t, { now: () => 100_000 });
     await enqueueStartupPrompt('startup', {
       onboardingPending: () => false, migrationPending: () => migration,
       scopeReader: async () => ({ sessionGroup: 'origin' }),
+      recentReader: async () => true,
       execFile: async (_command, args) => {
         assert.equal(args.includes('--target-run'), false);
         assert.equal(args[args.indexOf('--group') + 1], 'origin');

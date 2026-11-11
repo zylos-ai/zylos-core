@@ -19,15 +19,19 @@ const tmuxBinary = process.env.TEST_TMUX_BIN || 'tmux';
 async function launchFixture(t, runtime, withHook) {
   const {dir,socketPath}=isolatedTmux(t,{prefix:'session-runtime-sp-',tmuxArgs:['-u'],timeout:2000});
   const root = await fs.realpath(dir);
+  const runnerRoot = await fs.realpath(path.dirname(process.env.HOME));
+  assert.match(path.basename(runnerRoot), /^zylos-tests-/);
+  assert.ok(root.startsWith(runnerRoot + path.sep));
+  assert.ok(socketPath.startsWith(dir + path.sep));
   const log = path.join(root, 'c4.jsonl');
   const report = path.join(root, 'runtime.json');
   const recorder = path.join(root, 'record.mjs');
   const command = path.join(root, 'runtime.mjs');
   const harness = path.join(root, 'launch.mjs');
   const env = {PATH:process.env.PATH, HOME:root, ZYLOS_DIR:root,
-    PM2_HOME:path.join(root,'pm2'), CODEX_HOME:path.join(root,'codex'),
+    PM2_HOME:path.join(root,'pm2'), TMPDIR:path.join(root,'tmp'), CODEX_HOME:path.join(root,'codex'),
     C4_CALL_LOG:log, C4_PRODUCER:'adapter'};
-  for (const dir of ['.claude/skills/comm-bridge/scripts','memory','pm2','codex']) {
+  for (const dir of ['.claude/skills/comm-bridge/scripts','memory','pm2','tmp','codex']) {
     await fs.mkdir(path.join(root,dir),{recursive:true});
   }
   await fs.writeFile(log,'');
@@ -59,8 +63,11 @@ syncBuiltinESMExports();
 `);
   env.NODE_OPTIONS = `--import=${recorder}`;
   await fs.writeFile(path.join(root,'.env'),
-    `ZYLOS_TMUX_INHERIT=NODE_OPTIONS,C4_CALL_LOG,C4_PRODUCER,PM2_HOME,CODEX_HOME\n`);
+    `ZYLOS_TMUX_INHERIT=NODE_OPTIONS,C4_CALL_LOG,C4_PRODUCER,PM2_HOME,TMPDIR,CODEX_HOME\n`);
   if (withHook) {
+    // The fixture tests who enqueues, so supply scoped unfinished work to make
+    // the formal hook send without needing a live/recent C4 database.
+    await fs.writeFile(path.join(root,'memory/handoff.md'),'Unfinished fixture work.\n');
     await fs.writeFile(path.join(root,'.claude/settings.json'),JSON.stringify({hooks:{SessionStart:[{
       hooks:[{type:'command',command:`node ${promptHook}`}],
     }]}}));
@@ -106,6 +113,13 @@ await launched;
 for(let i=0;i<200;i++){try{await fs.access(${JSON.stringify(report)});break;}catch{}await new Promise(r=>setTimeout(r,10));}
 console.log(await fs.readFile(${JSON.stringify(report)},'utf8'));
 `);
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(env[key] === root || env[key].startsWith(root + path.sep), key);
+  }
+  t.diagnostic(JSON.stringify({ isolation: { HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
+    PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, socketPath,
+    database: 'unused: scoped handoff short-circuits recent query',
+    handoff: withHook ? path.join(root,'memory/handoff.md') : null }, runtime, withHook }));
   const {stdout} = await exec(process.execPath,[harness],{env,timeout:10000});
   const observed = JSON.parse(stdout.trim());
   const calls = (await fs.readFile(log,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));
@@ -113,6 +127,12 @@ console.log(await fs.readFile(${JSON.stringify(report)},'utf8'));
   return {observed,calls};
 }
 
+// Real adapter/formal-hook integration with a stub runtime and isolated C4
+// subprocess recorder. Run for startup producer, hook or adapter changes;
+// unrelated UI may skip. Official runner and fixture isolate HOME/ZYLOS_DIR/
+// PM2_HOME/short TMPDIR, private tmux socket and handoff paths, verified above
+// before launch. No model/PM2/live DB starts; isolatedTmux teardown kills this
+// private server and its runtime loop and removes fixture files on failure too.
 // Top-level tests are serial; simultaneous tmux creation is outside this scope.
 for (const withHook of [false,true]) {
   test(`Claude launch ${withHook?'with':'without'} SessionStart prompt hook has no adapter C4 fallback`,async t=>{
@@ -126,7 +146,7 @@ for (const withHook of [false,true]) {
       assert.equal(call.producer,'formal-hook');
       assert.match(call.words.join(' '),/c4-control\.js enqueue/);
       const content=call.words[call.words.indexOf('--content')+1];
-      assert.match(content,/reply to your human partner/);
+      assert.match(content,/use the injected context to decide whether to reply/);
       assert.equal(call.words[call.words.indexOf('--priority')+1],'2');
       assert.ok(call.words.includes('--no-ack-suffix'));
     }
