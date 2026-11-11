@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { ClaudeAdapter } from '../runtime/claude.js';
 import { resolveCodexBypassPermissions } from '../runtime-setup.js';
-import { readEnvTimezone, needsBypassAcceptance, ensureWebConsolePassword, printWebConsoleInfo } from '../../commands/init.js';
+import { readEnvTimezone, needsBypassAcceptance } from '../../commands/init.js';
 import { ZYLOS_DIR } from '../config.js';
 import { createPrivateFixture, runPrivateFixture } from '../../../test/helpers/private-instance-fixture.js';
 import { readEnvFile, writeEnvEntries } from '../env.js';
@@ -66,7 +66,7 @@ test('Codex permission preference uses dotenv and preserves explicit precedence'
   assert.throws(() => resolveCodexBypassPermissions(path.join(root, 'unreadable')), { code: 'EISDIR' });
 });
 
-test('init reads timezone, bypass preference and existing password with dotenv', () => {
+test('init reads timezone and bypass preference with dotenv', () => {
   fs.mkdirSync(ZYLOS_DIR, { recursive: true });
   const file = path.join(ZYLOS_DIR, '.env');
   assert.equal(fs.existsSync(file), false, 'runner provides a fresh isolated instance');
@@ -74,44 +74,12 @@ test('init reads timezone, bypass preference and existing password with dotenv',
     fs.writeFileSync(file, [
       'TZ=obsolete', 'export TZ="UTC" # comment',
       'export CLAUDE_BYPASS_PERMISSIONS="false" # comment',
-      'ZYLOS_WEB_PASSWORD=obsolete', "export ZYLOS_WEB_PASSWORD='fixture # password' # comment",
-      'WEB_CONSOLE_PASSWORD=fixture legacy later',
     ].join('\n'));
     const before = fs.readFileSync(file, 'utf8');
     assert.equal(readEnvTimezone(), 'UTC');
     assert.equal(needsBypassAcceptance(), false);
-    assert.equal(ensureWebConsolePassword(), 'fixture # password');
     assert.equal(fs.readFileSync(file, 'utf8'), before);
-    fs.writeFileSync(file, 'export WEB_CONSOLE_PASSWORD="fixture legacy" # comment\n');
-    assert.equal(ensureWebConsolePassword(), 'fixture legacy');
   } finally { fs.rmSync(file, { force: true }); }
-});
-
-test('init displays the parsed login password with new-key priority and legacy fallback', () => {
-  const file = path.join(ZYLOS_DIR, '.env');
-  assert.equal(fs.existsSync(file), false);
-  const originalLog = console.log;
-  const lines = [];
-  console.log = (...args) => lines.push(args.join(' '));
-  try {
-    for (const content of [
-      'ZYLOS_WEB_PASSWORD=obsolete\nexport ZYLOS_WEB_PASSWORD="fixture # displayed" # comment\nWEB_CONSOLE_PASSWORD=legacy later\n',
-      "export WEB_CONSOLE_PASSWORD='fixture # displayed' # comment\n",
-    ]) {
-      fs.writeFileSync(file, content);
-      lines.length = 0;
-      printWebConsoleInfo();
-      const output = lines.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
-      assert.match(output, /Password: +fixture # displayed /);
-      assert.equal(output.includes('obsolete'), false);
-      assert.equal(output.includes('legacy later'), false);
-      assert.equal(output.includes('# comment'), false);
-      assert.equal(fs.readFileSync(file, 'utf8'), content);
-    }
-  } finally {
-    console.log = originalLog;
-    fs.rmSync(file, { force: true });
-  }
 });
 
 test('environment entry writes recognize exported existing keys and remain append-only', () => {

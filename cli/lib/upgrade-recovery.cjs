@@ -72,7 +72,7 @@ function originalVerified(dir, j) {
       schemaRoot: j.skillsDir,
       dashboardOwnerManaged: j.dashboardOwnerManaged === true && j.firstTakeover !== true,
       expectedDatabases: expected,
-      formatVersion: 2
+      formatVersion: m.ORIGINAL_DEPLOYMENT_FORMAT_VERSION
     })], {
       encoding: 'utf8',
       timeout: 120000
@@ -125,10 +125,10 @@ function abort(dir, j) {
 function validateSnapshot(dir, j) {
   const file = path.join(j.dbBackupDir, 'manifest.json');
   const manifest = m.read(file);
-  if (manifest.formatVersion !== 2 || m.hash(file) !== j.snapshotManifestHash || manifest.id !== j.transactionId || manifest.status !== 'complete') throw Error('snapshot manifest identity mismatch');
-  const sources = m.databasePaths(manifest.formatVersion);
+  if (m.hash(file) !== j.snapshotManifestHash || manifest.id !== j.transactionId || manifest.status !== 'complete') throw Error('snapshot manifest identity mismatch');
+  const sources = m.databasePaths(m.databaseFormatForRows(manifest.databases, manifest.formatVersion));
   if (!Array.isArray(manifest.databases) || manifest.databases.length !== sources.length || manifest.databases.some((d, i) => d.source !== sources[i])) throw Error('snapshot database manifest incomplete');
-  if (sources.some((source,i) => j.initialIdentity.databases[i]?.source !== source) || j.initialIdentity.databases.length !== sources.length) throw Error('snapshot and original database identity differ');
+  if (sources.some(source => !j.initialIdentity.databases.some(row => row.source === source))) throw Error('snapshot and original database identity differ');
   m.worker(dir, j, {
     action: 'verify',
     zylosDir: j.zylosDir,

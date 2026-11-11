@@ -33,8 +33,8 @@ export function disposeMissingMessages(messages, ids) {
   }
 }
 /**
- * Whether a keydown in the composer sends the message. Enter sends and Shift+Enter starts a new line, as in the
- * Web Console; ⌘/Ctrl+Enter also sends. An Enter that commits an input method's composition never sends. On a
+ * Whether a keydown in the composer sends the message. Enter sends and Shift+Enter starts a new line;
+ * ⌘/Ctrl+Enter also sends. An Enter that commits an input method's composition never sends. On a
  * touch-first device Enter keeps starting a new line and only the send button sends: on-screen keyboards have no
  * Shift. A hardware keyboard's ⌘/Ctrl+Enter still sends there.
  */

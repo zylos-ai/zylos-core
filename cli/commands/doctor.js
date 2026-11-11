@@ -583,17 +583,14 @@ function displayServiceGroup(diag, jsonGroup) {
 
 // ── Channel discovery ────────────────────────────────────────────
 
-function getNetworkIP() {
-  const interfaces = os.networkInterfaces();
-  for (const addrs of Object.values(interfaces)) {
-    for (const addr of addrs) {
-      if (addr.family === 'IPv4' && !addr.internal) return addr.address;
-    }
-  }
-  return '';
+export function webConsoleRemovalWarnings({ skillsDir = SKILLS_DIR, env = readEnvFile() } = {}) {
+  const warnings = [];
+  if (fs.existsSync(path.join(skillsDir, 'web-console'))) warnings.push('Old Web Console code remains. Run zylos init to retry cleanup.');
+  if (env.has('WEB_CONSOLE_MAX_UPLOAD_MB')) warnings.push('WEB_CONSOLE_MAX_UPLOAD_MB remains in .env. Run zylos init to retry its rename to DASHBOARD_MAX_UPLOAD_MB.');
+  return warnings;
 }
 
-function discoverChannels(pm2Procs, env, tmuxSession, components, { zylosDir = ZYLOS_DIR } = {}) {
+export function discoverChannels(pm2Procs, env, tmuxSession, components, { zylosDir = ZYLOS_DIR } = {}) {
   const channels = [];
 
   // tmux channel — only show when session is active
@@ -606,43 +603,7 @@ function discoverChannels(pm2Procs, env, tmuxSession, components, { zylosDir = Z
     });
   }
 
-  // Web console — built-in, check PM2
-  const webConsole = pm2Procs.find(p => p.name === 'web-console');
   const caddy = pm2Procs.find(p => p.name === 'caddy');
-  if (webConsole) {
-    const caddyOnline = caddy?.pm2_env?.status === 'online';
-    const wcOnline = webConsole.pm2_env?.status === 'online';
-    const hasPassword = !!(env.get('ZYLOS_WEB_PASSWORD') || env.get('WEB_CONSOLE_PASSWORD'));
-
-    // Use domain URL if Caddy is running, otherwise localhost + network IP
-    const port = process.env.WEB_CONSOLE_PORT || '3456';
-    let action, secondaryAction, warning, hint;
-    warning = null;
-    hint = null;
-    secondaryAction = null;
-    if (caddyOnline) {
-      const domain = env.get('DOMAIN') || 'localhost';
-      const protocol = env.get('PROTOCOL') || 'https';
-      action = `${protocol}://${domain}/console/`;
-      if (!hasPassword) warning = 'no password set';
-    } else {
-      action = `http://localhost:${port}/`;
-      const ip = getNetworkIP();
-      if (ip) secondaryAction = `http://${ip}:${port}/`;
-      hint = `Tip: ${bold('zylos init')} can set up a custom domain for remote access.`;
-    }
-
-    channels.push({
-      name: 'Web Console',
-      action,
-      secondaryAction,
-      type: 'web',
-      online: wcOnline,
-      warning,
-      hint,
-    });
-  }
-
   // Dashboard — built-in, check PM2. The address is the one init prints: the public route when Caddy runs,
   // otherwise the local port.
   const dashboard = pm2Procs.find(p => p.name === 'zylos-dashboard');
@@ -863,6 +824,7 @@ export async function doctorCommand(args, upstreamSource) {
   displayAiGroup(diag, diagnostic.groups.ai_service);
   displayServiceGroup(diag, diagnostic.groups.services);
   console.log(`  ${formatAlertTargetNotice(alertTargetNotice())}`);
+  for (const warning of webConsoleRemovalWarnings()) console.log(`  ${yellow(warning)}`);
   try {
     if (readSessionMode().mode === 'multi') {
       const capacity = readPoolCapacity();

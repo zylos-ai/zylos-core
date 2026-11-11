@@ -59,7 +59,7 @@ export async function createAttachmentApiFixture(t, sandbox, { prototypeSource }
     sendJson(res, 200, values[url.pathname] || {}); return true;
   } });
   sandbox.assertIsolation();
-  fs.writeFileSync(path.join(sandbox.paths.zylos, '.env'), 'WEB_CONSOLE_MAX_UPLOAD_MB=1\n');
+  fs.writeFileSync(path.join(sandbox.paths.zylos, '.env'), 'DASHBOARD_MAX_UPLOAD_MB=1\n');
   attachments = new ChatAttachments({ store: fixture.store, c4Reader: fixture.reader, zylosDir: sandbox.paths.zylos });
   mediaAuth = new AuthGate(fixture.config, fixture.store);
   fixture.sender.attachments = attachments; fixture.history.attachments = attachments;

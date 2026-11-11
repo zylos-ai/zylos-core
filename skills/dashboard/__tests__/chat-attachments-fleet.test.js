@@ -82,7 +82,7 @@ async function fixture(t, { limit = 20 } = {}) {
   fs.mkdirSync(path.join(targetRoot, 'comm-bridge'), { recursive: true });
   fs.mkdirSync(path.join(targetRoot, 'workspace'));
   fs.mkdirSync(path.join(hubRoot, 'components/dashboard/media'), { recursive: true });
-  fs.writeFileSync(path.join(targetRoot, '.env'), `WEB_CONSOLE_MAX_UPLOAD_MB=${limit}\n`);
+  fs.writeFileSync(path.join(targetRoot, '.env'), `DASHBOARD_MAX_UPLOAD_MB=${limit}\n`);
   console.log(JSON.stringify({ isolated: true, HOME: process.env.HOME, ZYLOS_DIR: targetRoot,
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, hubRoot }));
   const db = new Database(path.join(targetRoot, 'comm-bridge/c4.db'));

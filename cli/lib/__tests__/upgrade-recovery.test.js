@@ -15,7 +15,9 @@ import {beginUpgrade,maintenance as protectionMaintenance,prepareProtectedInstal
 import {finalizeStatus} from '../upgrade-resume.js';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
-import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
+import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from './fixtures/legacy-web-console-schema.js';
+import {installLegacyWebConsoleSchema} from './helpers/legacy-web-console.js';
+import {createReleasedSnapshotFixture} from './helpers/released-snapshot.js';
 
 const require=createRequire(import.meta.url);
 const automaticRecovery = require('../upgrade-maintenance.cjs').canRecognizeProcesses();
@@ -39,7 +41,7 @@ function interceptSync(check) {
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
 // rescue, rename intents, isolation discovery, and terminal marker removal are real.
-async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=false,dashboardVersion=12}={}) {
+async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=false,dashboardVersion=12}={}) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_RECOVERY_TEST_TMPDIR || os.tmpdir(),'upgrade-recovery-')));
  const previousHome=process.env.HOME,previousPm2Home=process.env.PM2_HOME;
  process.env.HOME=root;process.env.PM2_HOME=path.join(root,'.pm2');
@@ -53,6 +55,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  const m=require(path.join(stable,'maintenance.cjs')),r=require(path.join(stable,'recovery.cjs'));
  const skillsDir=path.join(root,'.claude/skills');
  for(const item of CORE_DATABASES){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');dependencyDirectory(path.resolve('skills/comm-bridge/node_modules'),path.join(owner,'node_modules'));
+  if(item.owner==='web-console'){installLegacyWebConsoleSchema(skillsDir);continue;}
   fs.copyFileSync(path.resolve('skills',item.owner,item.schema),path.join(owner,item.schema));
   const migration=item.owner==='comm-bridge'?'c4-migrations.js':'migrations.js';
   fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
@@ -74,7 +77,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  fs.writeFileSync(path.join(dashboardRoot,'package.json'),'{"type":"module","main":"index.js"}');
  fs.writeFileSync(path.join(dashboardRoot,'src/lib/schema-owner.js'),`export const dashboardSchemaOwner={inspectSchema(db){const currentVersion=db.prepare("SELECT name FROM sqlite_master WHERE name='schema_migrations'").get()?db.prepare('SELECT MAX(version) AS n FROM schema_migrations').get().n:null;return {currentVersion,targetVersion:20,needsMigration:currentVersion!==20};},migrate(){throw Error('recovery must not migrate Dashboard');}};`);
  if(dashboard){const file=path.join(root,'components/dashboard/dashboard.db');fs.mkdirSync(path.dirname(file),{recursive:true});const db=new Database(file);db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY);CREATE TABLE events(value TEXT);INSERT INTO events VALUES (\'original\')');db.prepare('INSERT INTO schema_migrations VALUES (?)').run(dashboardVersion);db.close();}
- const snapshotResult=snapshot({zylosDir:root,transactionId:'tx',formatVersion}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
+ const snapshotResult=await createReleasedSnapshotFixture({Database,zylosDir:root,transactionId:'tx',formatVersion,snapshot}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
  fs.copyFileSync(path.join(stable,'recovery.cjs'),path.join(dir,'runner.cjs'));fs.chmodSync(path.join(dir,'runner.cjs'),0o600);
  for(const [src,dst] of [['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-installer.cjs','installer.cjs']]){fs.copyFileSync(path.resolve('cli/lib',src),path.join(dir,dst));fs.chmodSync(path.join(dir,dst),0o600);}
  const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner),{excludeNodeModules:false})}));
@@ -84,7 +87,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=2,dashboard=fals
  const prefix=path.join(root,'npm-prefix'),installedRoot=path.join(prefix,'lib/node_modules/zylos'),packageJson=path.join(installedRoot,'package.json'),originalCli=path.join(installedRoot,'cli'),binDir=path.join(prefix,'bin');
  fs.mkdirSync(originalCli,{recursive:true,mode:0o700});fs.mkdirSync(binDir,{recursive:true});fs.writeFileSync(packageJson,JSON.stringify({name:'zylos',version:dashboard?'0.9.4':'0.9.3',bin:{zylos:'cli/entry.js'}}));fs.writeFileSync(path.join(originalCli,'entry.js'),'original CLI\n');
  fs.symlinkSync(path.relative(binDir,path.join(originalCli,'entry.js')),path.join(binDir,'zylos'));
- const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',firstTakeover:!dashboard,dashboardOwnerManaged:false,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,installerStarted:true,installerStage:'install',installerExitConfirmed:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:snapshotResult.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
+ const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',firstTakeover:!dashboard,dashboardOwnerManaged:false,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,installerStarted:true,installerStage:'install',installerExitConfirmed:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:fs.existsSync(path.join(root,source))}))}};
  // Package restoration has already completed in this database recovery fixture;
  // dedicated package tests exercise replacement and verification failures.
  const originalSnapshot=path.join(dir,'code/original-package');fs.cpSync(installedRoot,originalSnapshot,{recursive:true,verbatimSymlinks:true});
@@ -129,7 +132,7 @@ test('protected preparation checks an original deployment without a Dashboard ow
  fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
  fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
  const before=fs.readFileSync(f.db('components/dashboard/dashboard.db'));
- const ctx={maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:2};
+ const ctx={maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:3};
  assert.doesNotThrow(()=>prepareProtectedInstall(ctx));
  assert.equal(f.load().phase,'prepared');
  assert.equal(ctx.dbSnapshotVerified,true);
@@ -159,7 +162,7 @@ test('post-install compensation and restored startup accept an original deployme
  assert.ok(f.calls.includes('start'));assert.ok(f.calls.includes('verify'));
 });
 
-test('beginning persists both true Dashboard decisions in the published journal',async t=>{
+for(const from of ['0.9.3','1.0.0-beta.4']) test(`beginning from ${from} keeps four original databases with a three-database snapshot format`,async t=>{
  const f=await originalDashboardTakeover(t),root=path.join(f.root,'fresh');
  const coreDir=path.join(root,'package'),skillsDir=path.join(root,'.claude/skills');
  fs.mkdirSync(path.join(coreDir,'skills/core'),{recursive:true});
@@ -169,11 +172,13 @@ test('beginning persists both true Dashboard decisions in the published journal'
  fs.copyFileSync(path.resolve('cli/lib/core-db-backup-worker.js'),path.join(coreDir,'cli/lib/core-db-backup-worker.js'));
  const services=protectionMaintenance.services;
  protectionMaintenance.services=()=>[];
- const ctx={coreDir,tempDir:coreDir,from:'0.9.3',to:'1.0.0',firstTakeover:true,dashboardOwnerManaged:true};
+ const ctx={coreDir,tempDir:coreDir,from,to:'1.0.0',firstTakeover:true,dashboardOwnerManaged:true,snapshotFormatVersion:3};
  try {
   beginUpgrade(ctx,{zylosDir:root,skillsDir});
   const journal=ctx.maintenance.read(path.join(ctx.transactionDir,'journal.json'));
   assert.equal(journal.firstTakeover,true);assert.equal(journal.dashboardOwnerManaged,true);
+  assert.deepEqual(journal.initialIdentity.databases.map(row=>row.source),ctx.maintenance.databasePaths(2));
+  assert.equal(ctx.maintenance.ORIGINAL_DEPLOYMENT_FORMAT_VERSION,2);
  } finally {ctx.releaseControl?.();protectionMaintenance.services=services;}
 });
 
@@ -214,7 +219,7 @@ for(const firstTakeover of [false,true]) for(const dashboardOwnerManaged of [fal
  });
 }
 
-for(const item of CORE_DATABASES) test(`${item.owner} controlled migration preserves structured migration failure`,async t=>{
+for(const item of CORE_DATABASES.filter(item=>item.owner!=='web-console')) test(`${item.owner} controlled migration preserves structured migration failure`,async t=>{
  const f=await fixture(t),schema=path.join(f.j.skillsDir,item.owner,item.schema);
  fs.writeFileSync(schema,`export const SUPPORTED_SCHEMA_VERSION=1,supportsNewDatabase=true,TABLES={};
  export function inspectSchema(db){return {version:db.pragma('user_version',{simple:true}),empty:false,extensions:{tables:[],columns:[]}};}
@@ -486,13 +491,13 @@ for(const verificationFails of [false,true]) test(`protected unchanged-version s
  fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
  const before=CORE_DATABASES.map(item=>fs.readFileSync(f.db(item.source)));
  const {prepareProtectedInstall}=await import('../upgrade-protection.js');
- const ctx={maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:2};
+ const ctx={maintenance:f.m,journal:f.j,transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:3};
  if(verificationFails) assert.throws(()=>prepareProtectedInstall(ctx,{verifySnapshot:()=>{throw Error('injected snapshot verification failure');}}),/injected snapshot verification failure/);
  else {
   prepareProtectedInstall(ctx);
   assert.equal(ctx.dbSnapshotVerified,true);
   assert.equal(f.load().phase,'prepared');
-  assert.equal(ctx.dbManifest.databases.length,4);
+  assert.equal(ctx.dbManifest.databases.length,3);
  }
  assert.equal(f.load().installationIntent,false);
  assert.deepEqual(CORE_DATABASES.map(item=>fs.readFileSync(f.db(item.source))),before);
@@ -506,7 +511,7 @@ for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade pe
  assert.equal(fs.existsSync(path.join(f.root,'.zylos/upgrade/active.json')),false);
  assert.equal(f.load().terminalEvidence.verified,true);
  // Deploy the actual owner openers only after code verification has finished.
- for(const item of CORE_DATABASES)fs.cpSync(path.resolve('skills',item.owner,'scripts'),path.join(f.j.skillsDir,item.owner,'scripts'),{recursive:true});
+ for(const item of CORE_DATABASES.filter(item=>item.owner!=='web-console'))fs.cpSync(path.resolve('skills',item.owner,'scripts'),path.join(f.j.skillsDir,item.owner,'scripts'),{recursive:true});
  const monitor=path.join(f.j.skillsDir,'activity-monitor');fs.mkdirSync(path.join(monitor,'scripts'),{recursive:true});
  fs.writeFileSync(path.join(monitor,'package.json'),'{"type":"module"}');
  for(const script of ['shard-registry.js','bootstrap-identity.js','bootstrap-scope.js']) {
@@ -525,8 +530,7 @@ for(const legacy of ['group-writable','backup-alias'])test(`completed upgrade pe
  fs.writeFileSync(runner,`import assert from 'node:assert/strict';
  import {getDb,close} from './.claude/skills/comm-bridge/scripts/c4-db.js';
  import {getDb as scheduler} from './.claude/skills/scheduler/scripts/database.js';
- import {openDb} from './.claude/skills/web-console/scripts/db.js';
- for(const [index,open] of [getDb,scheduler,openDb].entries()){const db=open();assert.equal(db.pragma('user_version',{simple:true}),${JSON.stringify(currentVersions)}[index]);db.close();}
+ for(const [index,open] of [getDb,scheduler].entries()){const db=open();assert.equal(db.pragma('user_version',{simple:true}),${JSON.stringify(currentVersions)}[index]);db.close();}
  close();`);
  const alias=path.join(f.root,'deployment-alias');fs.symlinkSync(f.root,alias);
  for(const deploymentRoot of [f.root,alias]) {
@@ -556,6 +560,26 @@ test('complete compensation restores old code/data, preserves rescue, removes si
  const original=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.completed,true);assert.equal(result.stage,'restored_complete');assert.ok(!fs.existsSync(f.db('scheduler/scheduler.db')));assert.ok(!fs.existsSync(f.db('comm-bridge/c4.db-wal')));
  const archived=path.join(f.root,'.backup/self-upgrade/tx');assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/comm-bridge_c4.db')),original);assert.deepEqual(fs.readFileSync(path.join(archived,'rescue/scheduler_scheduler.db')),Buffer.from('new-db'));assert.equal(f.m.discover(f.root).blocked,false);assert.deepEqual(f.calls,['stop','start','verify']);
 });
+for(const formatVersion of [1,3]) for(const unversioned of [false,true]) test(`format ${formatVersion} compensation restores its own database collection with explicit format ${!unversioned}`,async t=>{
+ const f=await fixture(t,{formatVersion});
+ if(unversioned) {
+  delete f.snapshot.manifest.formatVersion;
+  const file=path.join(f.snapshot.dbBackupDir,'manifest.json');
+  f.m.durable(file,f.snapshot.manifest);
+  f.m.update(f.dir,f.j,{snapshotManifestHash:f.m.hash(file)});
+ }
+ const web=f.db('web-console/web-console.db'),before=fs.readFileSync(web);
+ change(f);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.stage,'restored_complete',JSON.stringify(result));
+ assert.equal(result.recovery_required,false);
+ for(const row of f.snapshot.manifest.databases.filter(row=>row.status==='backed_up'))assert.equal(f.m.hash(f.db(row.source)),row.sha256);
+ if(formatVersion===3) {
+  assert.deepEqual(fs.readFileSync(web),before);
+  assert.equal(f.load().dbRestore?.['web-console/web-console.db'],undefined);
+ }
+});
+
 test('format 2 compensation preserves a Dashboard created after a missing snapshot',async t=>{
  const f=await fixture(t,{formatVersion:2,dashboard:false});
  assert.equal(f.snapshot.manifest.formatVersion,2);assert.equal(f.snapshot.manifest.databases.length,4);
@@ -780,11 +804,12 @@ test('protected recovery restores all databases after a partial migration failur
    assert.equal(db.pragma('user_version',{simple:true}),currentVersions[CORE_DATABASES.findIndex(item=>item.source===source)]);
    if(source.startsWith('comm-bridge')){assert.equal(db.prepare('SELECT count(*) AS n FROM checkpoints').get().n,0);assert.equal(db.pragma('table_info(checkpoints)').some(col=>col.name==='migration_two'),false);}
    if(source.startsWith('scheduler'))assert.equal(db.prepare('SELECT count(*) AS n FROM system_state').get().n,0);
-   if(source.startsWith('web-console'))assert.equal(db.prepare('SELECT count(*) AS n FROM sessions').get().n,0);
+   if(source.startsWith('web-console'))assert.equal(db.prepare('SELECT count(*) AS n FROM sessions').get().n,1);
   }finally{db.close();}
  }
  const journal=f.load();
- for(const item of CORE_DATABASES)assert.equal(journal.dbRestore?.[item.source]?.complete,true);
+ for(const item of CORE_DATABASES.filter(item=>item.owner!=='web-console'))assert.equal(journal.dbRestore?.[item.source]?.complete,true);
+ assert.equal(journal.dbRestore?.['web-console/web-console.db'],undefined);
 });
 test('early abort refuses altered original CLI tree before service restart or database writes',async t=>{
  const f=await fixture(t),cli=path.join(f.root,'original-cli');fs.mkdirSync(cli,{mode:0o700});fs.writeFileSync(path.join(cli,'command.js'),'original',{mode:0o600});f.j.initialIdentity.cliRoot=cli;f.j.initialIdentity.cliHash=f.m.treeHash(cli);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});fs.writeFileSync(path.join(cli,'command.js'),'changed',{mode:0o600});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/original installed CLI identity changed/);assert.ok(!f.calls.includes('start'));assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);

@@ -17,7 +17,6 @@ export { verifyApiKey, verifyCodexApiKey } from '../lib/init-api-auth.js';
  * syncs Core Skills, deploys templates, and starts services.
  */
 
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,7 +29,7 @@ import { writeEnvFile } from '../lib/env.js';
 import { writePrivateFile } from '../lib/private-file.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
 import { prompt, promptYesNo, promptChoice, promptSecret } from '../lib/prompts.js';
-import { bold, dim, green, red, yellow, cyan, bgGreen, success, error, warn, heading } from '../lib/colors.js';
+import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { commandExists } from '../lib/shell-utils.js';
 import {
   activateFreshSplitInstructions,
@@ -849,53 +848,6 @@ function installSkillDependencies() {
 }
 
 /**
- * Ensure a web-console password exists in .env.
- * Reads from ZYLOS_WEB_PASSWORD (new name), falls back to WEB_CONSOLE_PASSWORD (legacy).
- * Generates a random 16-char password if not already set.
- * Idempotent — safe to run on repeated init.
- *
- * @param {string|null} explicitPassword - Password from --web-password flag or env var
- * @returns {string} The password (existing or newly generated)
- */
-export function ensureWebConsolePassword(explicitPassword = null) {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  const newKey = 'ZYLOS_WEB_PASSWORD';
-  const oldKey = 'WEB_CONSOLE_PASSWORD';
-
-  let content = '';
-  try { content = fs.readFileSync(envPath, 'utf8'); } catch { return ''; }
-
-  // Explicit password from flag/env: write it
-  if (explicitPassword) {
-    if (content.match(new RegExp(`^${newKey}=.*$`, 'm'))) {
-      content = content.replace(new RegExp(`^${newKey}=.*$`, 'm'), `${newKey}=${explicitPassword}`);
-    } else if (content.match(new RegExp(`^${oldKey}=.*$`, 'm'))) {
-      content = content.replace(new RegExp(`^${oldKey}=.*$`, 'm'), `${newKey}=${explicitPassword}`);
-    } else {
-      content = content.trimEnd() + `\n# Web Console password\n${newKey}=${explicitPassword}\n`;
-    }
-    writeEnvFile(envPath, content);
-    return explicitPassword;
-  }
-
-  // Check new name first, then legacy
-  const values = parseDotEnv(content);
-  if (values[newKey]) return values[newKey];
-  if (values[oldKey]) return values[oldKey];
-
-  // Generate new password
-  const password = crypto.randomBytes(12).toString('base64url').slice(0, 16);
-  const entry = `\n# Web Console password\n${newKey}=${password}\n`;
-  writeEnvFile(envPath, content.trimEnd() + entry);
-  return password;
-}
-
-/**
- * Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD in .env.
- * If old name found and new name not present, rename in-place.
- */
-
-/**
  * Ensure new-session threshold defaults are explicitly set in config.json.
  * Idempotent — only writes keys that are missing.
  */
@@ -905,83 +857,6 @@ function ensureNewSessionThresholdDefaults() {
 
 export function seedFreshInstallNewSessionThresholdDefault(options = {}) {
   return migrateModelThresholds({ zylosDir: ZYLOS_DIR, ...options }).changed;
-}
-
-function migrateWebConsolePassword() {
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  let content = '';
-  try { content = fs.readFileSync(envPath, 'utf8'); } catch { return; }
-
-  const hasOld = /^WEB_CONSOLE_PASSWORD=(.+)$/m.test(content);
-  const hasNew = /^ZYLOS_WEB_PASSWORD=/m.test(content);
-
-  if (hasOld && !hasNew) {
-    content = content.replace(/^WEB_CONSOLE_PASSWORD=/m, 'ZYLOS_WEB_PASSWORD=');
-    // Update comment if present
-    content = content.replace(/^# Web Console password \(auto-generated\)$/m, '# Web Console password');
-    writeEnvFile(envPath, content);
-  }
-}
-
-/**
- * Get the first non-loopback IPv4 address (for display purposes).
- * @returns {string} IP address or empty string if none found
- */
-function getNetworkIP() {
-  const interfaces = os.networkInterfaces();
-  for (const addrs of Object.values(interfaces)) {
-    for (const addr of addrs) {
-      if (addr.family === 'IPv4' && !addr.internal) return addr.address;
-    }
-  }
-  return '';
-}
-
-/**
- * Print web console access info (URL + password).
- * Called at the end of init to show the user how to access.
- * Displayed prominently so the user doesn't miss the password.
- * Always shown even in quiet mode (essential output).
- */
-export function printWebConsoleInfo() {
-  const config = getZylosConfig();
-
-  const envPath = path.join(ZYLOS_DIR, '.env');
-  let password = '';
-  try {
-    const content = fs.readFileSync(envPath, 'utf8');
-    const values = parseDotEnv(content);
-    password = values.ZYLOS_WEB_PASSWORD || values.WEB_CONSOLE_PASSWORD || '';
-  } catch { /* */ }
-
-  if (!password) return;
-
-  const line = cyan('  ════════════════════════════════════════════════════');
-
-  console.log('');
-  console.log(line);
-  console.log('');
-  console.log(`  ${bold('  Web Console')}`);
-  console.log('');
-
-  if (config.domain) {
-    const proto = config.protocol || 'https';
-    const url = `${proto}://${config.domain}/console/`;
-    console.log(`    URL:      ${bold(url)}`);
-  } else {
-    const port = process.env.WEB_CONSOLE_PORT || '3456';
-    console.log(`    Local:    ${bold(`http://localhost:${port}/`)}`);
-    const ip = getNetworkIP();
-    if (ip) {
-      console.log(`    Network:  ${bold(`http://${ip}:${port}/`)}`);
-    }
-  }
-
-  console.log(`    Password: ${bgGreen(bold(` ${password} `))}`);
-  console.log('');
-  console.log(`    ${dim(`Save this password — also in ${ZYLOS_DIR}/.env`)}`);
-  console.log('');
-  console.log(line);
 }
 
 // ── Database initialization ─────────────────────────────────────
@@ -1009,9 +884,9 @@ function initializeDatabases() {
 
 // ── Service startup ─────────────────────────────────────────────
 
-export async function startServicesWithDashboard(opts, startServices = startCoreServices) {
+export async function startServicesWithDashboard(opts, startServices = startCoreServices, deps = {}) {
   const dashboardAccess = { zylosDir: ZYLOS_DIR, noCaddy: opts.caddy === false, quiet: opts.quiet };
-  const servicesStarted = await startServices(opts.webPassword, dashboardAccess);
+  const servicesStarted = await startServices(dashboardAccess);
   return { dashboardAccess, servicesStarted };
 }
 
@@ -1019,9 +894,8 @@ export async function startServicesWithDashboard(opts, startServices = startCore
  * Prepare and start core services via PM2 ecosystem config.
  * @returns {Promise<number>} Number of services successfully started
  */
-export async function startCoreServices(webPassword = null, dashboardAccess = null) {
+export async function startCoreServices(dashboardAccess = null) {
   installSkillDependencies();
-  ensureWebConsolePassword(webPassword);
   try {
     const generated = await provisionDashboardAuth(ZYLOS_DIR);
     if (dashboardAccess) Object.assign(dashboardAccess, generated);
@@ -1408,7 +1282,7 @@ export function isLocalAddress(addr) {
  * @param {string} [protocol='https'] - 'https' (bare domain, auto-cert) or 'http'
  * @param {number} [port] - Optional port override (used for local addresses)
  */
-function generateCaddyfile(domain, protocol = 'https', port) {
+export function generateCaddyfile(domain, protocol = 'https', port) {
   const publicDir = path.join(HTTP_DIR, 'public');
   fs.mkdirSync(publicDir, { recursive: true });
 
@@ -1441,13 +1315,6 @@ ${siteAddress} {
 
     handle /health {
         respond "OK" 200
-    }
-
-    # Web Console (core built-in)
-    redir /console /console/ permanent
-    handle /console/* {
-        uri strip_prefix /console
-        reverse_proxy localhost:3456
     }
 
     log {
@@ -1597,7 +1464,6 @@ export function parseInitFlags(args) {
     domain: null,
     https: null,   // null = not specified, true = --https, false = --no-https
     caddy: null,   // null = not specified, true = --caddy, false = --no-caddy
-    webPassword: null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -1626,8 +1492,7 @@ export function parseInitFlags(args) {
       case '--codex-api-key':
       case '--base-url':
       case '--codex-base-url':
-      case '--domain':
-      case '--web-password': {
+      case '--domain': {
         const val = args[++i];
         if (!val || val.startsWith('-')) {
           console.error(`${error(`Error: ${arg} requires a value`)}`);
@@ -1642,7 +1507,6 @@ export function parseInitFlags(args) {
         else if (arg === '--base-url') opts.baseUrl = val;
         else if (arg === '--codex-base-url') opts.codexBaseUrl = val;
         else if (arg === '--domain') opts.domain = val;
-        else if (arg === '--web-password') opts.webPassword = val;
         break;
       }
       case '--https': opts.https = true; break;
@@ -1717,9 +1581,6 @@ export function resolveFromEnv(opts, { authenticated = () => commandExists('clau
   }
   if (opts.https === null && process.env.ZYLOS_PROTOCOL) {
     opts.https = process.env.ZYLOS_PROTOCOL === 'https';
-  }
-  if (opts.webPassword === null) {
-    opts.webPassword = process.env.ZYLOS_WEB_PASSWORD || process.env.WEB_CONSOLE_PASSWORD || null;
   }
   if (opts.codexApiKey === null && (process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY)) {
     opts.codexApiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY;
@@ -2181,7 +2042,6 @@ Options:
   --domain <domain>          Configure Caddy with this domain
   --https / --no-https       Enable/disable HTTPS (default: https when domain set)
   --caddy / --no-caddy       Install/skip Caddy web server (default: install)
-  --web-password <password>  Set web console password (default: auto-generate)
 
 Non-interactive mode:
   Automatically enabled when stdin is not a TTY, or CI=true / NONINTERACTIVE=1
@@ -2192,7 +2052,7 @@ Environment variables:
   ZYLOS_UPSTREAM_CONFIG (local file, HTTPS profile URL, or direct)
   CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
   ANTHROPIC_BASE_URL, OPENAI_BASE_URL, ZYLOS_RUNTIME,
-  OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL, ZYLOS_WEB_PASSWORD
+  OPENAI_API_KEY (or CODEX_API_KEY), ZYLOS_DOMAIN, ZYLOS_PROTOCOL
 
   Resolution: CLI flag > env var > .env/config.json > interactive prompt
 
@@ -2430,9 +2290,6 @@ export async function initCommand(args) {
     // Assets were prepared for both runtimes before selected-runtime auth.
     console.log(`Non-selected runtime: use zylos auth ${selectedRuntime === 'claude' ? 'codex' : 'claude'} when needed.`);
 
-    // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
-    migrateWebConsolePassword();
-
     return continueInitAfterPersistence({ apiKey: pendingApiKey, authToken: pendingAuthToken, setupToken: pendingSetupToken, subscriptionLogin,
       claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl }, async () => {
       // Timezone: use resolved value or show current
@@ -2466,7 +2323,6 @@ export async function initCommand(args) {
           console.log(`  ${dim(`Run "zylos auth ${selectedRuntime}" to authenticate.`)}`);
         }
       }
-      printWebConsoleInfo();
       printDashboardInfo(dashboardAccess);
       if (!quiet) console.log(`\n${dim('Use "zylos add <component>" to add components.')}`);
       if (exitCode) process.exit(exitCode);
@@ -2498,9 +2354,6 @@ export async function initCommand(args) {
   // Step 7: Assets and data migrations are already prepared.
   // Assets and W7 were prepared before selected-runtime auth.
   console.log(`Non-selected runtime: use zylos auth ${selectedRuntime === 'claude' ? 'codex' : 'claude'} when needed.`);
-
-  // Migrate WEB_CONSOLE_PASSWORD → ZYLOS_WEB_PASSWORD
-  migrateWebConsolePassword();
 
   return continueInitAfterPersistence({ apiKey: pendingApiKey, authToken: pendingAuthToken, setupToken: pendingSetupToken, subscriptionLogin,
     claudeBaseUrl: pendingClaudeBaseUrl, codexBaseUrl: pendingCodexBaseUrl }, async () => {
@@ -2554,7 +2407,6 @@ export async function initCommand(args) {
       console.log(`${green(`${servicesStarted} service(s) started.`)} ${dim('Run "zylos status" to check.')}\n`);
     }
 
-    printWebConsoleInfo();
     printDashboardInfo(dashboardAccess);
 
     if (claudeJustInstalled) {

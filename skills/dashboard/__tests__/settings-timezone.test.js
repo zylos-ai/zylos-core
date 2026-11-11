@@ -116,19 +116,19 @@ test('restart sends exactly the services shown before confirmation without addin
   const pending = deferred(), value = settings({ tz: 'Asia/Singapore' }); let asks = 0;
   const f = fixture({ write: async () => value, confirm: () => ++asks === 1 ? true : pending.promise });
   await f.view.refresh(); await save(f); const restarting = f.restart.dispatch('click');
-  value.restart_services.push({ name: 'web-console', status: 'online' });
+  value.restart_services.push({ name: 'activity-monitor', status: 'online' });
   pending.resolve(true); await restarting;
   assert.deepEqual(f.restarts, [{ tz: 'Asia/Singapore', confirm: true, services: ['scheduler'] }]);
 });
 test('a partial restart retries only failed services from its new confirmation list', async () => {
   const calls = [], f = fixture({
-    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'activity-monitor' }] }),
     restart: async body => { calls.push(body); return calls.length === 1
-      ? { ok: false, restarted: ['web-console'], failed: [{ name: 'scheduler', error: 'restart_failed' }], restart_services: [{ name: 'scheduler' }] }
+      ? { ok: false, restarted: ['activity-monitor'], failed: [{ name: 'scheduler', error: 'restart_failed' }], restart_services: [{ name: 'scheduler' }] }
       : { ok: true, restarted: ['scheduler'], failed: [], restart_services: [] }; },
   });
   await f.view.refresh(); await save(f); await f.restart.dispatch('click'); await f.restart.dispatch('click');
-  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'web-console'], ['scheduler']]);
+  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'activity-monitor'], ['scheduler']]);
   assert.equal(f.pending.hidden, true);
 });
 test('a rejected restart explains its cause instead of naming an empty failed-service list', async () => {
@@ -141,43 +141,43 @@ test('a rejected restart explains its cause instead of naming an empty failed-se
 
 test('rediscovery after partial progress cannot add a successfully restarted service back to retry', async () => {
   const calls = [], f = fixture({
-    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
-    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'activity-monitor' }] }),
+    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'activity-monitor' }] }),
     restart: async body => { calls.push(body); return calls.length === 1
-      ? { ok: false, error: 'service_discovery_unavailable', restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [{ name: 'web-console' }] }
-      : { ok: true, restarted: ['web-console'], failed: [], restart_services: [] }; },
+      ? { ok: false, error: 'service_discovery_unavailable', restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [{ name: 'activity-monitor' }] }
+      : { ok: true, restarted: ['activity-monitor'], failed: [], restart_services: [] }; },
   });
   await f.view.refresh(); await save(f, 'UTC'); await f.restart.dispatch('click');
   assert.equal(f.restart.disabled, true);
   await f.root.querySelector('#settings-timezone-retry').dispatch('click');
   assert.equal(f.restart.disabled, false); await f.restart.dispatch('click');
-  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'web-console'], ['web-console']]);
+  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'activity-monitor'], ['activity-monitor']]);
 });
 
 test('an HTTP error preserves successful restart progress through rediscovery and retry', async () => {
   const calls = [], f = fixture({
-    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
-    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'activity-monitor' }] }),
+    write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }, { name: 'activity-monitor' }] }),
     restart: async body => {
       calls.push(body);
       if (calls.length === 1) {
         const error = new Error('service_discovery_unavailable'); error.code = error.message;
-        error.result = { ok: false, restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [{ name: 'web-console' }] };
+        error.result = { ok: false, restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [{ name: 'activity-monitor' }] };
         throw error;
       }
-      return { ok: true, restarted: ['web-console'], failed: [], restart_services: [] };
+      return { ok: true, restarted: ['activity-monitor'], failed: [], restart_services: [] };
     },
   });
   await f.view.refresh(); await save(f, 'UTC'); await f.restart.dispatch('click');
   assert.equal(f.restart.disabled, true); assert.equal(f.notice.textContent, 'wb.settings.timezone.discoveryUnknown');
-  assert.equal(f.root.querySelector('#settings-timezone-services').textContent, 'wb.settings.timezone.webConsole');
+  assert.equal(f.root.querySelector('#settings-timezone-services').textContent, 'wb.settings.timezone.activityMonitor');
   await f.root.querySelector('#settings-timezone-retry').dispatch('click'); await f.restart.dispatch('click');
-  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'web-console'], ['web-console']]);
+  assert.deepEqual(calls.map(call => call.services), [['scheduler', 'activity-monitor'], ['activity-monitor']]);
 });
 
 test('initial discovery failure retains the confirmed services for an explicit retry after recovery', async () => {
   const calls = [], f = fixture({
-    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'web-console' }] }),
+    read: async () => settings({ restart_services: [{ name: 'scheduler' }, { name: 'activity-monitor' }] }),
     write: async body => settings({ tz: body.tz, restart_services: [{ name: 'scheduler' }] }),
     restart: async body => {
       calls.push(body);

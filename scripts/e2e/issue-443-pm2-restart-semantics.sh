@@ -18,7 +18,6 @@ module.exports = {
     { name: 'activity-monitor', script: 'activity-monitor.js' },
     { name: 'scheduler', script: 'scheduler.js' },
     { name: 'c4-dispatcher', script: 'c4-dispatcher.js' },
-    { name: 'web-console', script: 'web-console.js' },
   ],
 };
 EOF
@@ -78,7 +77,7 @@ node "$ROOT_DIR/cli/zylos.js" restart >/dev/null
 assert_log_contains "start $ZYLOS_HOME/pm2/ecosystem.config.cjs --only activity-monitor"
 assert_log_contains "start $ZYLOS_HOME/pm2/ecosystem.config.cjs --only scheduler"
 assert_log_contains "start $ZYLOS_HOME/pm2/ecosystem.config.cjs --only c4-dispatcher"
-assert_log_contains "start $ZYLOS_HOME/pm2/ecosystem.config.cjs --only web-console"
+assert_log_not_contains "--only web-console"
 assert_log_contains "save"
 assert_log_not_contains "restart activity-monitor"
 assert_log_not_contains "restart scheduler"

@@ -3,17 +3,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
-import { EventEmitter, once } from 'node:events';
+import { EventEmitter } from 'node:events';
 import Database from '../../skills/comm-bridge/node_modules/better-sqlite3/lib/index.js';
 import { isolatedTmux, tmuxClientEnv } from '../helpers/isolated-tmux.js';
 import { CoreState } from '../../skills/dashboard/src/lib/core-state.js';
 import { createCoreStateChangePublisher } from '../../skills/dashboard/src/lib/core-state-publisher.js';
 import { SseHub } from '../../skills/dashboard/src/lib/sse.js';
 import { handleCoreAction } from '../../skills/dashboard/src/lib/core-actions.js';
-import { createConsoleStatusReader } from '../../skills/web-console/scripts/session-status.js';
 import { readSessionMode } from '../../cli/lib/config.js';
-import { readSessionState } from '../../cli/lib/session-state-reader.js';
 import { lookupRestartRequest } from '../../cli/lib/am-sock-client.js';
 
 const root = process.env.ZYLOS_DIR;
@@ -55,8 +52,6 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   sample('origin','R1','S1','busy',{last_check:Date.now(),inactive_seconds:1});await core.refresh();assert.equal(changes.length,1);
   sample('origin','R1','S1','idle',{last_check:Date.now(),inactive_seconds:0});await core.refresh();assert.equal(changes.length,2);assert.equal(changes.at(-1).state,'IDLE');
   sample('origin','R1','S1','busy',{last_check:Date.now(),inactive_seconds:0});await core.refresh();assert.equal(changes.length,3);
-  const consoleStatus=createConsoleStatusReader({readSessionMode,readSessionState,getChannelNamespace:()=>({namespace:'clone-console'})});
-  assert.equal((await consoleStatus()).runId,'RC');
   write(path.join(root,'activity-monitor/agent-status.json'),{state:'WRONG_GLOBAL'});
   const target={sessionGroup:'origin',runId:'R1',sessionId:'S1'};
   const startedAt=Date.now();
@@ -66,8 +61,13 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   const rows=db.prepare('SELECT raw_content,session_group,target_binding,created_at FROM control_queue ORDER BY id').all();
   assert.deepEqual(rows.map(row=>row.raw_content),['[KEYSTROKE]Escape','continue']);
   for(const row of rows){assert.equal(row.session_group,'origin');const binding=JSON.parse(row.target_binding);assert.equal(binding.expectedRunId,'R1');assert.equal(binding.expectedSessionId,'S1');}
-  const replaceTimer=setTimeout(()=>{fixture.tmux('set-environment','-t','zylos-group-origin','ZYLOS_RUN_ID','R2');sample('origin','R2','S2');},100);
-  const result=await handleCoreAction('chop-chop',target,{zylosDir:root});clearTimeout(replaceTimer);assert.equal(result.steps[0].ok,true);assert.equal(result.steps[1].ok,false);assert.equal(result.targetChanged,true);
+  const replaceTimer=setInterval(()=>{
+    if(db.prepare('SELECT count(*) n FROM control_queue').get().n<3)return;
+    clearInterval(replaceTimer);
+    fixture.tmux('set-environment','-t','zylos-group-origin','ZYLOS_RUN_ID','R2');sample('origin','R2','S2');
+  },5);
+  t.after(()=>clearInterval(replaceTimer));
+  const result=await handleCoreAction('chop-chop',target,{zylosDir:root});clearInterval(replaceTimer);assert.equal(result.steps[0].ok,true);assert.equal(result.steps[1].ok,false);assert.equal(result.targetChanged,true);
   assert.equal(db.prepare('SELECT count(*) n FROM control_queue').get().n,3);
   const rejected=await handleCoreAction('chop-chop',target,{zylosDir:root});assert.equal(rejected.steps.length,1);assert.equal(rejected.targetChanged,true);
   assert.equal(db.prepare('SELECT count(*) n FROM control_queue').get().n,3);
@@ -86,25 +86,10 @@ test('real Core reader, targeted control CLI and Sock retain Origin boundaries',
   const retainedScope=await core.refresh();assert.equal(retainedScope.state,'UNKNOWN');assert.equal(retainedScope.sessionGroup,'origin');
   const coldFailure=await new CoreState().refresh();assert.equal(coldFailure.state,'UNKNOWN');assert.equal(coldFailure.sessionGroup,undefined);
   write(path.join(root,'.zylos/config.json'),{session_mode:'multi'});
-  assert.equal((await consoleStatus()).runId,'RC');
-  db.prepare('INSERT INTO channel_namespaces(namespace,component_name) VALUES(?,?)').run('clone-console','web-console');
-  const listener=net.createServer();listener.listen(0,'127.0.0.1');await once(listener,'listening');const port=listener.address().port;await new Promise(resolve=>listener.close(resolve));
-  console.log('dashboard console target', JSON.stringify({address:'127.0.0.1',port,root,socket:fixture.socketPath}));
-  const consoleChild=spawn(process.execPath,['skills/web-console/scripts/server.js'],{env:{...process.env,WEB_CONSOLE_PORT:String(port),WEB_CONSOLE_BIND:'127.0.0.1'},stdio:['ignore','pipe','pipe']});
-  let output='';consoleChild.stdout.on('data',b=>output+=b);consoleChild.stderr.on('data',b=>output+=b);
-  t.after(async()=>{consoleChild.kill('SIGTERM');if(consoleChild.exitCode===null)await once(consoleChild,'exit');});
-  const base=`http://127.0.0.1:${port}`;let online=false;
-  for(let n=0;n<100;n++){if(consoleChild.exitCode!==null)throw Error(output);try{online=(await fetch(base+'/api/health')).ok;}catch{}if(online)break;await new Promise(resolve=>setTimeout(resolve,25));}
-  assert(online,output);
-  assert.equal((await (await fetch(base+'/api/status')).json()).runId,'RC');
-  const consoleFile=path.join(runDir('clone-console'),'agent-status.json');fs.utimesSync(consoleFile,new Date(0),new Date(0));
-  assert.equal((await (await fetch(base+'/api/status')).json()).reason,'stale');
-  write(consoleFile,'{broken');assert.equal((await (await fetch(base+'/api/status')).json()).reason,'unparseable');
-  fixture.tmux('kill-session','-t','zylos-group-clone-console');assert.equal((await (await fetch(base+'/api/status')).json()).state,'not_running');
+  fixture.tmux('kill-session','-t','zylos-group-clone-console');
   write(path.join(root,'.zylos/config.json'),{});assert.deepEqual(readSessionMode(),{mode:null,keyPresent:false});
   const legacyState=await core.refresh();assert.equal(legacyState.runId,'R2');assert.equal(legacyState.sessionGroup,null);
-  assert.equal((await core.currentTarget()).sessionGroup,null);assert.equal((await consoleStatus()).runId,'R2');
-  assert.equal((await (await fetch(base+'/api/status')).json()).runId,'R2');
+  assert.equal((await core.currentTarget()).sessionGroup,null);
 
   const socketPath=path.join(root,'activity-monitor/am.sock');let requests=0;let reply=false;
   fs.rmSync(socketPath,{force:true});

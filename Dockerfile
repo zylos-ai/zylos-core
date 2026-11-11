@@ -5,7 +5,7 @@
 # Run:    docker compose up -d   (see docker-compose.yml)
 #
 # This image installs Zylos and its dependencies, then starts all PM2-managed
-# services (scheduler, web-console, c4-dispatcher, activity-monitor, channels).
+# services (scheduler, c4-dispatcher, activity-monitor, Dashboard, channels).
 # The AI loop (Claude Code) runs inside a persistent tmux session so it can
 # receive heartbeat / message commands through the c4-dispatcher bridge.
 # ────────────────────────────────────────────────────────────────────────────
@@ -65,8 +65,6 @@ COPY --chown=zylos:zylos docker/dashboard-host.mjs /dashboard-host.mjs
 RUN chmod +x /entrypoint.sh
 
 # ── Ports ─────────────────────────────────────────────────────────────────────
-# Web console (web-console service, default 3456)
-EXPOSE 3456
 # Dashboard (zylos-dashboard service, default 3470)
 EXPOSE 3470
 # Caddy / reverse proxy (optional, enabled via .env)

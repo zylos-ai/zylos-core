@@ -9,15 +9,14 @@ import {protectedDataReady} from '../upgrade-protection.js';
 import {fileURLToPath} from 'node:url';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
-import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from '../../../skills/web-console/scripts/schema.js';
-import {LEGACY_CORE_DATABASES as CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,probeCoreDbVersions as probeVersions,rehearseCoreDbUpgrade as rehearse,runCoreDbWorker as worker} from '../core-db-backup.js';
-// Legacy owner tests remain three-database cases; every new snapshot is format 2.
+import {CORE_DATABASES as ALL_CORE_DATABASES,cleanupCoreDbRehearsals,createCoreDbSnapshot as snapshot,prepareRecoveryDependencies,probeCoreDbVersions as probeVersions,rehearseCoreDbUpgrade as rehearse,runCoreDbWorker as worker} from '../core-db-backup.js';
+const CORE_DATABASES=ALL_CORE_DATABASES.filter(item=>item.owner!=='dashboard');
 const createCoreDbSnapshot=options=>snapshot(options);
-const runCoreDbWorker=(payload,options)=>worker({formatVersion:payload.action==='snapshot'?2:1,...payload},options);
+const runCoreDbWorker=(payload,options)=>worker({dashboardOwnerManaged:false,...payload},options);
 const probeCoreDbVersions=(root,target,options)=>probeVersions(root,target,{...options,dashboardOwnerManaged:false});
 const rehearseCoreDbUpgrade=(root,target,options)=>rehearse(root,target,{...options,dashboardOwnerManaged:false});
 const installed=process.env.CORE_DB_TEST_SKILL || path.resolve('skills/comm-bridge');
-const currentVersions=[C4_VERSION,SCHEDULER_VERSION,WEB_VERSION];
+const currentVersions=[C4_VERSION,SCHEDULER_VERSION];
 let Database;try{Database=createRequire(path.join(installed,'package.json'))('better-sqlite3');}catch{}
 function fixture(t){const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'core-db-')));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 function skills(dir){for(const item of CORE_DATABASES){const owner=path.join(dir,'.claude','skills',item.owner);fs.mkdirSync(owner,{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{}');fs.symlinkSync(path.join(installed,'node_modules'),path.join(owner,'node_modules'));}}
@@ -32,7 +31,7 @@ test('removed ordinary migration action rejects before creating databases',t=>{
 test('version probe uses pure owner inspection, detects a missing or older database, and rejects a newer one', {skip:!Database}, async t => {
  const dir=fixture(t);skills(dir);
  const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
- const owners=await Promise.all([import('../../../skills/comm-bridge/scripts/c4-schema.js'),import('../../../skills/scheduler/scripts/schema.js'),import('../../../skills/web-console/scripts/schema.js')]);
+ const owners=await Promise.all([import('../../../skills/comm-bridge/scripts/c4-schema.js'),import('../../../skills/scheduler/scripts/schema.js')]);
  for(const item of CORE_DATABASES){
   const file=path.join(dir,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
   const db=new Database(file);try{migrateDatabase(db,owners[CORE_DATABASES.indexOf(item)],{allowNew:true,strict:false});}finally{db.close();}
@@ -40,7 +39,7 @@ test('version probe uses pure owner inspection, detects a missing or older datab
  const probe=()=>probeCoreDbVersions(dir,path.resolve('.'),{driverRoot:path.join(dir,'.claude','skills')});
  const current=probe();
  assert.equal(current.needsMigration,false);
- assert.equal(current.databases.length,3);
+ assert.equal(current.databases.length,2);
  assert.ok(current.databases.every((row,index)=>row.fromVersion===currentVersions[index]&&row.toVersion===currentVersions[index]&&!row.needsMigration));
  assert.equal(fs.existsSync(path.join(dir,'.backup/db')),false);
  const scheduler=path.join(dir,'scheduler/scheduler.db'),db=new Database(scheduler);
@@ -75,7 +74,7 @@ test('unsafe rehearsal links reject before deleting any copy', t => {
 });
 test('missing DBs do not create files; orphan sidecars stop and preserve prior group',t=>{
  const dir=fixture(t);const first=createCoreDbSnapshot({zylosDir:dir,transactionId:'one',fromVersion:'1',toVersion:'2'});
- assert.equal(first.manifest.databases.filter(d=>d.status==='missing').length,4);
+ assert.equal(first.manifest.databases.filter(d=>d.status==='missing').length,3);
  fs.mkdirSync(path.join(dir,'scheduler'));fs.writeFileSync(path.join(dir,'scheduler/scheduler.db-wal'),'orphan');
  assert.throws(()=>createCoreDbSnapshot({zylosDir:dir,transactionId:'two'}),/Orphan SQLite/);
  assert.ok(fs.existsSync(first.dbBackupDir));assert.ok(!fs.existsSync(path.join(dir,'scheduler/scheduler.db')));
@@ -134,9 +133,8 @@ test('offline preflight accepts and reports archive tables and extra columns', {
  const owners=await Promise.all([
   import('../../../skills/comm-bridge/scripts/c4-schema.js'),
   import('../../../skills/scheduler/scripts/schema.js'),
-  import('../../../skills/web-console/scripts/schema.js'),
  ]);
- const requiredTables=['checkpoints','tasks','sessions'];
+ const requiredTables=['checkpoints','tasks'];
  for(const [index,item] of CORE_DATABASES.entries()) {
   const file=path.join(dir,item.source);fs.mkdirSync(path.dirname(file),{recursive:true});
   const db=new Database(file);
@@ -146,8 +144,8 @@ test('offline preflight accepts and reports archive tables and extra columns', {
   } finally {db.close();}
  }
  const preflight=()=>runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot});
- const tables=preflight().databases;
- assert.equal(tables.length,3);
+ const tables=preflight().databases.filter(row=>row.source!=='components/dashboard/dashboard.db');
+ assert.equal(tables.length,2);
  for(const [index,row] of tables.entries()) {
   assert.equal(row.source,CORE_DATABASES[index].source);
   assert.deepEqual(row.extensions,{tables:['archive_records'],columns:[]});
@@ -157,7 +155,7 @@ test('offline preflight accepts and reports archive tables and extra columns', {
   try {db.exec(`ALTER TABLE ${requiredTables[index]} ADD COLUMN extension_value TEXT`);} finally {db.close();}
  }
  const before=CORE_DATABASES.map(item=>fs.readFileSync(path.join(dir,item.source)));
- const accepted=preflight().databases;
+ const accepted=preflight().databases.filter(row=>row.source!=='components/dashboard/dashboard.db');
  for(const [index,row] of accepted.entries()) {
   assert.deepEqual(row.extensions,{tables:['archive_records'],columns:[{table:requiredTables[index],column:'extension_value'}]});
  }
@@ -279,7 +277,7 @@ test('worker executes through a directory alias without skipping its CLI entry',
  const worker=fileURLToPath(new URL('../core-db-backup-worker.js',import.meta.url));
  fs.symlinkSync(path.dirname(worker),alias,'dir');
  const result=runCoreDbWorker({action:'snapshot',zylosDir:dir,stagingDir:dir},{workerPath:path.join(alias,path.basename(worker))});
- assert.equal(result.databases.length,4);
+ assert.equal(result.databases.length,3);
  assert.ok(result.databases.every(row=>row.status==='missing'));
 });
 
@@ -310,13 +308,13 @@ test('failed verification of a published snapshot keeps the prior verified group
  const previous=createCoreDbSnapshot({zylosDir:dir,transactionId:'previous'});
  assert.throws(()=>createCoreDbSnapshot({zylosDir:dir,transactionId:'failed-verify',verifySnapshot:()=>{throw Error('injected verification failure');}}),/injected verification failure/);
  assert.equal(fs.existsSync(path.join(previous.dbBackupDir,'manifest.json')),true);
- assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:previous.dbBackupDir,manifest:previous.manifest}).databases.length,4);
+ assert.equal(runCoreDbWorker({action:'verify',zylosDir:dir,dbBackupDir:previous.dbBackupDir,manifest:previous.manifest}).databases.length,3);
 });
 
 // Integration boundary: real SQLite/worker with temporary databases and copied
 // dependencies only; run for backup/driver-path changes, skip if unrelated.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.
-test('controlled installed migration requires installing identity, preserves snapshots and initializes historical absent web DB', {skip:!Database},t=>{
+test('controlled installed migration requires installing identity, preserves snapshots and initializes missing current databases', {skip:!Database},t=>{
  const dir=fixture(t),schemaRoot=path.join(dir,'.claude/skills');
  for(const item of CORE_DATABASES) {
   fs.cpSync(path.resolve('skills',item.owner),path.join(schemaRoot,item.owner),{recursive:true,filter:p=>!p.split(path.sep).includes('node_modules')});
@@ -351,7 +349,7 @@ test('controlled installed migration requires installing identity, preserves sna
  const digest='a'.repeat(64);
  Object.assign(j,{nodePath:process.execPath,coreManifest:[{name:'comm-bridge',existedBefore:true,backedUp:true,originalHash:digest}],originalServices:[]});
  j.initialIdentity={nodePath:process.execPath,cliRoot:path.join(dir,'package/cli'),cliHash:digest,packageJson:path.join(dir,'package/package.json'),packageHash:digest,workerPath:path.join(dir,'package/cli/lib/core-db-backup-worker.js'),workerHash:digest,ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:['comm-bridge/c4.db','scheduler/scheduler.db'].includes(source)}))};
- const ordinary=[['comm-bridge/scripts/c4-db.js','getDb',"INSERT INTO conversations(direction,channel,content) VALUES ('in','fixture','after-ready')"],['scheduler/scripts/database.js','getDb',"INSERT INTO tasks(id,name,prompt,type,next_run_at,created_at,updated_at) VALUES ('after-ready','fixture','fixture','one-time',1,1,1)"],['web-console/scripts/db.js','openDb',"INSERT INTO sessions(token,created_at,last_seen_at) VALUES ('after-ready',1,1)"]];
+ const ordinary=[['comm-bridge/scripts/c4-db.js','getDb',"INSERT INTO conversations(direction,channel,content) VALUES ('in','fixture','after-ready')"],['scheduler/scripts/database.js','getDb',"INSERT INTO tasks(id,name,prompt,type,next_run_at,created_at,updated_at) VALUES ('after-ready','fixture','fixture','one-time',1,1,1)"]];
  const open=(item)=>spawnSync(process.execPath,['--input-type=module','-e',`const mod=await import(${JSON.stringify(path.join(schemaRoot,item[0]))});const db=mod[${JSON.stringify(item[1])}]();db.exec(${JSON.stringify(item[2])});db.close();`],{encoding:'utf8',env:{...process.env,HOME:dir,ZYLOS_DIR:dir,ZYLOS_PACKAGE_ROOT:path.resolve('.'),PM2_HOME:path.join(dir,'pm2-home')}});
  m.durable(path.join(transactionDir,'journal.json'),j);m.marker(dir,transactionDir,j);
  for(const item of ordinary){const result=open(item);assert.notEqual(result.status,0);assert.match(result.stderr,/unavailable|maintenance|upgrade/i);}
@@ -363,7 +361,7 @@ test('controlled installed migration requires installing identity, preserves sna
  assert.throws(()=>runCoreDbWorker({...payload,dashboardOwnerManaged:false}),/persisted Dashboard owner state/);
  m.durable(path.join(transactionDir,'journal.json'),j);
  const result=runCoreDbWorker(payload);
- assert.equal(result.databases.length,3);assert.deepEqual(result.databases.map(row=>row.userVersion),currentVersions);
+ assert.equal(result.databases.length,3);assert.deepEqual(result.databases.filter(row=>row.source!=='components/dashboard/dashboard.db').map(row=>row.userVersion),currentVersions);
  assert.deepEqual(result.databases[0].extensions,{tables:['archive_records'],columns:[{table:'conversations',column:'extension_value'}]});
  assert.throws(()=>m.assertCoreDatabaseAvailable(dir),/maintenance|upgrade|blocked/i);
  assert.equal(runCoreDbWorker({action:'offline-preflight',zylosDir:dir,schemaRoot,requireCurrent:true}).databases.length,3);
@@ -380,7 +378,7 @@ test('controlled installed migration requires installing identity, preserves sna
  m.update(transactionDir,j,{phase:'upgrade_complete',terminalEvidence:{verified:true,kind:'code_data_services'},cleanup:{complete:true,servicesRestored:true}});
  m.unmark(dir,j);
  for(const item of ordinary){const result=open(item);assert.equal(result.status,0,result.stderr);}
- for(const [index,table] of ['conversations','tasks','sessions'].entries()) {
+ for(const [index,table] of ['conversations','tasks'].entries()) {
   const db=new Database(path.join(dir,CORE_DATABASES[index].source),{readonly:true});
   try {assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n,1);}finally{db.close();}
  }

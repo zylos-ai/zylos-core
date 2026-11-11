@@ -38,7 +38,7 @@ export function restartServicesWithDeps({
   logSuccess = console.log,
   logError = console.error,
 } = {}) {
-  const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
+  const services = ['activity-monitor', 'scheduler', 'c4-dispatcher'];
   const ecosystemPath = getCoreEcosystemPathFn();
   const fallbackServices = [];
   let saveNeeded = false;
@@ -195,7 +195,6 @@ export function startServices() {
     { name: 'activity-monitor', script: path.join(SKILLS_DIR, 'self-maintenance', 'activity-monitor.js') },
     { name: 'scheduler', script: path.join(SKILLS_DIR, 'scheduler', 'scheduler.js'), env: `NODE_ENV=production ZYLOS_DIR=${ZYLOS_DIR}` },
     { name: 'c4-dispatcher', script: path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-dispatcher.js') },
-    { name: 'web-console', script: path.join(SKILLS_DIR, 'web-console', 'server.js'), env: `WEB_CONSOLE_PORT=3456 ZYLOS_DIR=${ZYLOS_DIR}` },
   ];
 
   let started = 0;
@@ -232,7 +231,7 @@ export function startServices() {
 
 export function stopServices() {
   console.log(heading('Stopping Zylos services...'));
-  const services = ['activity-monitor', 'scheduler', 'c4-dispatcher', 'web-console'];
+  const services = ['activity-monitor', 'scheduler', 'c4-dispatcher'];
   try {
     execSync(`pm2 stop ${services.join(' ')} 2>/dev/null || true`, { stdio: 'inherit' });
     console.log(success('Services stopped.'));

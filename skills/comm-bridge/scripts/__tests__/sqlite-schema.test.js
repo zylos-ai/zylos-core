@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { guardDatabase as registeredGuardDatabase, preflightDatabase, assertCoreDatabaseAvailable, inspectLayout, planDatabaseMigration, migrateDatabase } from '../sqlite-schema.js';
 import * as c4 from '../c4-schema.js';
 import * as scheduler from '../../../scheduler/scripts/schema.js';
-import * as wc from '../../../web-console/scripts/schema.js';
+import * as wc from '../../../../cli/lib/__tests__/fixtures/legacy-web-console-schema.js';
 // Existing fault/concurrency probes replace the registered 0→1 callback.
 function guardDatabase(db, owner, options) {
   return registeredGuardDatabase(db, owner.migrate ? { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 0: { ...owner.MIGRATIONS[0], migrate: owner.migrate } } } : owner, options);
@@ -23,8 +23,8 @@ function run(root, code) {
 }
 test('actual deployed owner openers initialize and reopen known schemas without duplicate migrations',t=>{
  const root=fixture(t);
- run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();getDb();close();scheduler().close();openDb().close();`);
- for(const [dir,name,owner] of [['comm-bridge','c4',c4],['scheduler','scheduler',scheduler],['web-console','web-console',wc]]){
+ run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';getDb();close();getDb();close();scheduler().close();`);
+ for(const [dir,name,owner] of [['comm-bridge','c4',c4],['scheduler','scheduler',scheduler]]){
   const db=new Database(path.join(root,dir,name+'.db'),{readonly:true}); assert.equal(owner.inspectSchema(db).version,owner.SUPPORTED_SCHEMA_VERSION);db.close();
  }
  const db=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
@@ -77,20 +77,13 @@ test('maintenance and malformed discovery blocks normal openers without initiali
 for(const phase of ['new_data_ready','restored_complete','aborted_before_install'])test(`missing stable maintenance cannot trust ${phase} labels to release normal owner openers`,t=>{
  const root=fixture(t),dir=path.join(root,'.backup/self-upgrade/tx');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.mkdirSync(path.join(root,'.zylos/upgrade'),{recursive:true});fs.writeFileSync(path.join(root,'.zylos/upgrade/active.json'),'{}');fs.writeFileSync(path.join(dir,'journal.json'),JSON.stringify({formatVersion:1,transactionId:'tx',phase,cleanup:{complete:true},terminalEvidence:{verified:true}}),{mode:0o600});
  assert.throws(()=>assertCoreDatabaseAvailable(root),/stable maintenance entry missing/);
- run(root, `import assert from 'node:assert/strict';import fs from 'node:fs';import {getDb} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';for(const open of [getDb,scheduler,openDb])assert.throws(open,/stable maintenance entry missing/);for(const source of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db'])assert.equal(fs.existsSync(process.env.ZYLOS_DIR+'/'+source),false);`);
+ run(root, `import assert from 'node:assert/strict';import fs from 'node:fs';import {getDb} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';for(const open of [getDb,scheduler])assert.throws(open,/stable maintenance entry missing/);for(const source of ['comm-bridge/c4.db','scheduler/scheduler.db'])assert.equal(fs.existsSync(process.env.ZYLOS_DIR+'/'+source),false);`);
 });
 for(const relative of ['.zylos/upgrade/active.json','.backup/self-upgrade','.zylos/upgrade','.zylos','.backup'])test(`missing stable maintenance rejects dangling ${relative}`,t=>{
  const root=fixture(t),file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.symlinkSync(path.join(root,'absent'),file);if(relative.startsWith('.backup'))assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));else assert.throws(()=>assertCoreDatabaseAvailable(root),/unavailable/);assert.equal(fs.lstatSync(file).isSymbolicLink(),true);
 });
 test('first-adoption absence and empty active root permit schema initialization without fabricated protection',t=>{
  const root=fixture(t);assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));fs.mkdirSync(path.join(root,'.backup/self-upgrade'),{recursive:true,mode:0o700});assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));
-});
-test('web-console rejects future C4 before stale session cleanup',t=>{
- const root=fixture(t);
- run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();const wc=openDb();wc.prepare('INSERT INTO sessions VALUES(?,?,?)').run('stale',1,1);wc.close();`);
- const c4db=new Database(path.join(root,'comm-bridge/c4.db'));c4db.pragma(`user_version=${c4.SUPPORTED_SCHEMA_VERSION+1}`);c4db.close();
- const child=spawnSync(process.execPath,['skills/web-console/scripts/server.js'],{cwd:repo,env:{...process.env,ZYLOS_DIR:root},encoding:'utf8',timeout:5000});assert.notEqual(child.status,0);assert.match(child.stderr,new RegExp(`schema version ${c4.SUPPORTED_SCHEMA_VERSION+1}`));
- const wcdb=new Database(path.join(root,'web-console/web-console.db'),{readonly:true});assert.equal(wcdb.prepare('SELECT COUNT(*) AS n FROM sessions').get().n,1);wcdb.close();
 });
 
 function childModule(root, code) {
@@ -106,11 +99,11 @@ async function waitFile(file) {
 test('all deployed owners recover existing zero-byte and initialized empty version-zero files',t=>{
  for(const header of [false,true]) {
   const root=fixture(t);
-  for(const relative of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db']) {
+  for(const relative of ['comm-bridge/c4.db','scheduler/scheduler.db']) {
    const file=path.join(root,relative);fs.mkdirSync(path.dirname(file),{recursive:true});
    if(header) {const db=new Database(file);db.exec('VACUUM');db.close();assert.ok(fs.statSync(file).size>0);} else fs.writeFileSync(file,'');
   }
-  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);
+  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';getDb();close();scheduler().close();`);
   const db=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(c4.inspectSchema(db).version,c4.SUPPORTED_SCHEMA_VERSION);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM checkpoints').get().n,1);db.close();
  }
 });
@@ -176,8 +169,8 @@ for (const layout of ['symlink .zylos', 'symlink .backup', 'group writable', 'pa
   if(layout==='group writable')fs.chmodSync(path.join(stable,'maintenance.cjs'),0o664);
  }
  assert.doesNotThrow(()=>assertCoreDatabaseAvailable(root));
- run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);
- for(const [relative,owner] of [['comm-bridge/c4.db',c4],['scheduler/scheduler.db',scheduler],['web-console/web-console.db',wc]]) {
+ run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';getDb();close();scheduler().close();`);
+ for(const [relative,owner] of [['comm-bridge/c4.db',c4],['scheduler/scheduler.db',scheduler]]) {
   const db=new Database(path.join(root,relative),{readonly:true});assert.equal(owner.inspectSchema(db).version,owner.SUPPORTED_SCHEMA_VERSION);db.close();
  }
 });
@@ -188,9 +181,9 @@ test('dangling stable helper with actual materials still blocks ordinary owners'
 
 test('ordinary owners accept additional tables and columns while upgrade inspection stays strict', t => {
  const root=fixture(t);
- const openers=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';`;
- run(root,openers+`getDb();close();scheduler().close();openDb().close();`);
- for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'checkpoints'],['scheduler/scheduler.db',scheduler,'tasks'],['web-console/web-console.db',wc,'sessions']]) {
+ const openers=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';`;
+ run(root,openers+`getDb();close();scheduler().close();`);
+ for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'checkpoints'],['scheduler/scheduler.db',scheduler,'tasks']]) {
   const db=new Database(path.join(root,relative));
   db.exec(`CREATE TABLE extension_state(value TEXT); ALTER TABLE ${table} ADD COLUMN extension_value TEXT`);
   assert.doesNotThrow(()=>guardDatabase(db,owner));
@@ -198,17 +191,17 @@ test('ordinary owners accept additional tables and columns while upgrade inspect
   db.close();
   assert.doesNotThrow(()=>preflightDatabase(Database,path.join(root,relative),owner));
  }
- run(root,openers+`for(const db of [getDb(),scheduler(),openDb()]){db.prepare('INSERT INTO extension_state VALUES (?)').run('daily-write');}close();`);
- for(const relative of ['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db']) {
+ run(root,openers+`for(const db of [getDb(),scheduler()]){db.prepare('INSERT INTO extension_state VALUES (?)').run('daily-write');}close();`);
+ for(const relative of ['comm-bridge/c4.db','scheduler/scheduler.db']) {
   const db=new Database(path.join(root,relative),{readonly:true});assert.equal(db.prepare('SELECT value FROM extension_state').get().value,'daily-write');db.close();
  }
 });
 
 test('ordinary owners reopen with an unsafe NOT NULL extension while upgrade inspection rejects it', t => {
  const root=fixture(t);
- const openers=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`;
+ const openers=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';getDb();close();scheduler().close();`;
  run(root,openers);
- for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'conversations'],['scheduler/scheduler.db',scheduler,'tasks'],['web-console/web-console.db',wc,'sessions']]) {
+ for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'conversations'],['scheduler/scheduler.db',scheduler,'tasks']]) {
   const db=new Database(path.join(root,relative));
   db.exec(`ALTER TABLE ${table} ADD COLUMN my_tag TEXT NOT NULL`);
   assert.equal(guardDatabase(db,owner).version,owner.SUPPORTED_SCHEMA_VERSION);
@@ -220,8 +213,8 @@ test('ordinary owners reopen with an unsafe NOT NULL extension while upgrade ins
 
 test('upgrade inspection allows extra tables independently of extra columns for every core owner', t => {
  const root=fixture(t);
- run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';getDb();close();scheduler().close();openDb().close();`);
- for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'checkpoints'],['scheduler/scheduler.db',scheduler,'tasks'],['web-console/web-console.db',wc,'sessions']]) {
+ run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';getDb();close();scheduler().close();`);
+ for(const [relative,owner,table] of [['comm-bridge/c4.db',c4,'checkpoints'],['scheduler/scheduler.db',scheduler,'tasks']]) {
   const file=path.join(root,relative),db=new Database(file);
   try {
    db.exec('CREATE TABLE archive_records(id INTEGER PRIMARY KEY)');

@@ -30,7 +30,7 @@ function fixture(t) {
   const corePath = path.join(zylosDir, 'comm-bridge', 'c4.db');
   const env = { ...process.env, HOME: home, ZYLOS_DIR: alias,
     PM2_HOME: path.join(home, '.pm2'), TMPDIR: path.join(root, 'tmp'),
-    TMUX_TMPDIR: path.join(root, 'tmux'), WEB_CONSOLE_MAX_UPLOAD_MB: '300' };
+    TMUX_TMPDIR: path.join(root, 'tmux'), DASHBOARD_MAX_UPLOAD_MB: '300' };
   for (const dir of [home, path.dirname(dashboardPath), path.dirname(corePath),
     path.join(zylosDir, 'workspace'), env.PM2_HOME, env.TMPDIR, env.TMUX_TMPDIR]) fs.mkdirSync(dir, { recursive: true });
   fs.symlinkSync(zylosDir, alias, 'dir');
@@ -70,7 +70,7 @@ function fixture(t) {
 
 test('register and resolve use a custom symlinked installation and preserve an independent private copy', t => {
   const f = fixture(t);
-  fs.writeFileSync(path.join(f.zylosDir, '.env'), 'WEB_CONSOLE_MAX_UPLOAD_MB=1\n');
+  fs.writeFileSync(path.join(f.zylosDir, '.env'), 'DASHBOARD_MAX_UPLOAD_MB=1\n');
   const source = f.source('report.txt', 'private report');
   const before = Date.now();
   const registered = f.register(source);
@@ -113,7 +113,7 @@ test('CLI validates exact command options before opening storage', t => {
 
 test('CLI enforces target dotenv limits, source roots, image bytes and conversation ownership', t => {
   const f = fixture(t);
-  fs.writeFileSync(path.join(f.zylosDir, '.env'), 'WEB_CONSOLE_MAX_UPLOAD_MB=1\n');
+  fs.writeFileSync(path.join(f.zylosDir, '.env'), 'DASHBOARD_MAX_UPLOAD_MB=1\n');
   const exact = f.source('exact.bin', Buffer.alloc(1024 * 1024));
   assert.equal(f.register(exact).status, 0);
   const excessive = f.source('large.bin', Buffer.alloc(1024 * 1024 + 1));

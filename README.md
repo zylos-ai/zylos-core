@@ -23,7 +23,7 @@
 
 LLMs are geniuses — but they wake up with amnesia every session. No memory of yesterday, no way to reach you, no ability to act on their own.
 
-Zylos gives it a life. Memory that survives restarts. A scheduler that works while you sleep. Communication through Telegram, Lark, or a web console. Self-maintenance that keeps everything running. And because it can program, it can evolve — building new skills, integrating new services, growing alongside you.
+Zylos gives it a life. Memory that survives restarts. A scheduler that works while you sleep. Communication through Telegram, Lark, or Dashboard conversations. Self-maintenance that keeps everything running. And because it can program, it can evolve — building new skills, integrating new services, growing alongside you.
 
 Supports Claude Code (Anthropic) and Codex (OpenAI). Fully compatible with the [OpenClaw](https://github.com/openclaw/openclaw) ecosystem.
 
@@ -81,7 +81,6 @@ Automatically when no TTY is available — e.g. Docker containers (without `-it`
 | `--domain <domain>` | Domain for Caddy reverse proxy, e.g. `agent.example.com` | None |
 | `--https` / `--no-https` | Enable or disable HTTPS | `--https` when domain is set |
 | `--caddy` / `--no-caddy` | Install or skip Caddy web server | Install |
-| `--web-password <pass>` | Web console password | Auto-generated |
 
 **Environment variables:**
 
@@ -98,7 +97,6 @@ Flags can also be set via environment variables during `zylos init`. Resolution 
 | `OPENAI_BASE_URL` | `--codex-base-url` |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL` (`https` or `http`) | `--https` / `--no-https` |
-| `ZYLOS_WEB_PASSWORD` | `--web-password` |
 
 **Custom API endpoints:**
 
@@ -222,8 +220,8 @@ zylos status
 sqlite3 -readonly "${ZYLOS_DIR:-$HOME/zylos}/scheduler/scheduler.db" 'PRAGMA user_version;'
 ```
 
-For 1.0, status must show all five core services online: `scheduler`,
-`web-console`, `c4-dispatcher`, `activity-monitor`, and `zylos-dashboard`
+For 1.0, status must show all four core services online: `scheduler`,
+`c4-dispatcher`, `activity-monitor`, and `zylos-dashboard`
 (`caddy` is optional). The SQLite command must print `2`. Open the Dashboard
 URL printed by init and confirm the login page loads. For the default local
 Dashboard port, `curl --fail --location http://127.0.0.1:3470/` checks that page; use the
@@ -253,7 +251,7 @@ After startup, run `docker exec -it zylos zylos dashboard reset-password` in you
 terminal to generate and display a new Dashboard password once. This also clears
 old Dashboard sessions. Non-quiet interactive init displays its initial password once.
 
-Open `http://localhost:3456` to access the web console. Find your password with `docker logs zylos | grep -A2 "Web Console"`. See the [Docker Deployment Guide](docs/docker.md) for Docker Compose setup, environment variables, Synology NAS instructions, and more.
+Open `http://localhost:3470/` to access Dashboard and its Origin conversation. Set or reset the password with `docker exec -it zylos zylos dashboard reset-password`; startup logs never show it. See the [Docker Deployment Guide](docs/docker.md) for Docker Compose setup, environment variables, Synology NAS instructions, and more.
 
 </details>
 
@@ -325,7 +323,7 @@ graph TB
     subgraph Channels["📡 Communication Channels"]
         TG["Telegram"]
         LK["Lark"]
-        WC["Web Console"]
+        DB["Dashboard conversations / Origin"]
     end
 
     subgraph Zylos["🧬 Zylos — The Life System"]
@@ -340,7 +338,7 @@ graph TB
         CC["Claude Code / Codex<br/>(in tmux session)"]
     end
 
-    TG & LK & WC --> C4
+    TG & LK & DB --> C4
     C4 <--> CC
     MEM <--> CC
     SCH --> CC
@@ -459,7 +457,7 @@ not depend on whether `.zylos/config.json` is readable.
 The writer shares the existing config-lock protocol for `.env` writes; it does
 not lock external editors or serialize service restarts against later saves.
 Saving does not restart anything. A separate confirmation offers running core
-services from this instance that need a restart: scheduler, web-console,
+services from this instance that need a restart: scheduler,
 activity-monitor and c4-dispatcher. Restarts use their existing PM2 names without `--update-env` or injecting the Dashboard environment. The dispatcher restart sets PM2’s
 stop timeout to 10 seconds so in-flight verification can finish; stopping also
 cancels its post-send idle pacing waits. This protects ordinary graceful
@@ -483,7 +481,7 @@ the same disabled style as the reclaim setting.
 ## Communication Channels
 
 ### Built-in
-- **Web Console** — Browser-based chat interface. No external accounts needed. Included with `zylos init`.
+- **Dashboard conversations** — Browser-based chat, with Origin as the fixed conversation with your agent. Included with `zylos init`.
 
 ### Official Channels
 Install with one command:

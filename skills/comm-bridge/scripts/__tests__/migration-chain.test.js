@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { inspectLayout, planDatabaseMigration, migrateDatabase, guardDatabase } from '../sqlite-schema.js';
 import * as c4 from '../c4-schema.js';
 import * as scheduler from '../../../scheduler/scripts/schema.js';
-import * as web from '../../../web-console/scripts/schema.js';
+import * as web from '../../../../cli/lib/__tests__/fixtures/legacy-web-console-schema.js';
 const fixtures = new URL('./fixtures/migration-history/', import.meta.url);
 
 for (const [name, owner, seed, query] of [
@@ -460,7 +460,8 @@ test('historical fixture bytes match recorded immutable provenance',()=>{
  for(const entry of provenance.fixtures){
   assert.equal(crypto.createHash('sha256').update(fs.readFileSync(new URL(entry.fixture,fixtures))).digest('hex'),entry.fixtureSha256,entry.fixture);
   for(const source of entry.sources || []){
-   const bytes=fs.readFileSync(new URL(source.source,repo));
+   const file=source.source==='skills/web-console/scripts/migrations.js' ? 'cli/lib/__tests__/fixtures/legacy-web-console-migrations.js' : source.source;
+   const bytes=fs.readFileSync(new URL(file,repo));
    assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),source.sourceSha256,source.source);
    assert.equal(crypto.createHash('sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex'),source.sourceBlobSha,source.source);
   }

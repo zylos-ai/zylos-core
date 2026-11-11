@@ -51,7 +51,7 @@ export function mountTimezoneSettings(root, { document = root.ownerDocument, t =
   let generation = 0, owner = null, loaded = false, busy = false, saved = false, model = null, restartAttempted = false;
   const current = (token, machine) => generation === token && owner === machine && identity() === machine;
   const editable = () => loaded && owner === identity() && model?.writable === true && writable() && available();
-  const serviceName = name => ({ scheduler: t('wb.settings.timezone.scheduler'), 'web-console': t('wb.settings.timezone.webConsole'),
+  const serviceName = name => ({ scheduler: t('wb.settings.timezone.scheduler'),
     'activity-monitor': t('wb.settings.timezone.activityMonitor'), 'c4-dispatcher': t('wb.settings.timezone.dispatcher') })[name] ?? name;
   const services = () => Array.isArray(model?.restart_services) ? model.restart_services : [];
   function render() {

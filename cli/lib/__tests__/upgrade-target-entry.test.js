@@ -77,13 +77,13 @@ for (const version of ['0.9.4','0.9.5']) test(`${version} prechecks freeze packa
       calls.push('probe');
       assert.equal(options.dashboardOwnerManaged,false);
       fs.mkdirSync(path.join(input.installedRoot,'skills/dashboard'),{recursive:true});
-      return {databases:[{},{},{}],needsMigration:true};
+      return {databases:[{},{}],needsMigration:true};
     },
     preflight() {calls.push('preflight');},
     rehearse(root, target, options) {calls.push('rehearse'); assert.equal(options.driverRoot, path.join(input.zylosDir, '.claude/skills'));}
   });
   assert.deepEqual(calls, ['probe', 'preflight', 'rehearse']);
-  assert.equal(ctx.snapshotFormatVersion, 2);
+  assert.equal(ctx.snapshotFormatVersion, 3);
   assert.equal(ctx.firstTakeover,true);
   assert.equal(ctx.dashboardOwnerManaged,false);
   assert.equal(fs.existsSync(path.join(input.zylosDir, '.backup')), false);
@@ -107,7 +107,7 @@ for(const bundled of [false,true]) for(const version of [13,20]) test(`independe
   const before=fs.readFileSync(database),seen=[];
   const check=options=>{assert.equal(options.dashboardOwnerManaged,version>=20);};
   const ctx=inspectUpgradeSource(input,{
-    probe(root,target,options){check(options);seen.push('probe');return {databases:Array.from({length:version>=20?4:3},()=>({})),needsMigration:true};},
+    probe(root,target,options){check(options);seen.push('probe');return {databases:Array.from({length:version>=20?3:2},()=>({})),needsMigration:true};},
     preflight(root,options){check(options);seen.push('preflight');},
     rehearse(root,target,options){check(options);seen.push('rehearse');}
   });
@@ -395,7 +395,7 @@ test('downloaded precheck uses real installed SQLite without target dependencies
   const source=path.resolve('.');
   const filter=file=>!file.split(path.sep).includes('__tests__') && !file.split(path.sep).includes('node_modules');
   fs.cpSync(path.join(source,'cli/lib'),path.join(input.tempDir,'cli/lib'),{recursive:true,filter});
-  for (const name of ['comm-bridge','scheduler','web-console']) {
+  for (const name of ['comm-bridge','scheduler']) {
     const origin=path.join(source,'skills',name);
     fs.cpSync(origin,path.join(input.tempDir,'skills',name),{recursive:true,filter});
     fs.cpSync(origin,path.join(input.zylosDir,'.claude/skills',name),{recursive:true,filter});

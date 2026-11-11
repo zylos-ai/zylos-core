@@ -1,8 +1,10 @@
 # Core SQLite schema migrations
 
-Rules for changing the schema of the three core databases: C4
-(`skills/comm-bridge`), scheduler (`skills/scheduler`) and web-console
-(`skills/web-console`). The self-upgrade path (see
+Rules for changing the schema of the core databases: C4
+(`skills/comm-bridge`), scheduler (`skills/scheduler`) and Dashboard
+(`skills/dashboard`). New upgrade snapshots use format 3 for these owners;
+formats 1 and 2 keep their historical Web Console entries for reading old
+recovery records. The self-upgrade path (see
 [self-upgrade-recovery.md](self-upgrade-recovery.md)) rehearses, runs and
 checks these migrations; this page is the contract a schema change must meet.
 

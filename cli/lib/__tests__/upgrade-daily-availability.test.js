@@ -30,7 +30,7 @@ function fixture(t) {
  save();return {root,dir,stable,j,save};
 }
 function writeUsingOwners(root) {
- const code=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';import {openDb} from './skills/web-console/scripts/db.js';for(const db of [getDb(),scheduler(),openDb()]){db.exec('CREATE TABLE IF NOT EXISTS daily_probe(value TEXT)');db.prepare('INSERT INTO daily_probe VALUES (?)').run('written');}close();`;
+ const code=`import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';import {getDb as scheduler} from './skills/scheduler/scripts/database.js';for(const db of [getDb(),scheduler()]){db.exec('CREATE TABLE IF NOT EXISTS daily_probe(value TEXT)');db.prepare('INSERT INTO daily_probe VALUES (?)').run('written');}close();`;
  return spawnSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',env:{...process.env,ZYLOS_DIR:root}});
 }
 for (const phase of ['upgrade_complete','restored_complete','aborted_before_install']) test(`completed legacy three-database ${phase} history permits upgrade admission`, t => {
@@ -246,7 +246,6 @@ test('completed released cutoff history with an active marker still rejects upgr
 const realOpeners=[
  ['C4','./skills/comm-bridge/scripts/c4-db.js','getDb','comm-bridge/c4.db'],
  ['Scheduler','./skills/scheduler/scripts/database.js','getDb','scheduler/scheduler.db'],
- ['Web Console','./skills/web-console/scripts/db.js','openDb','web-console/web-console.db'],
 ];
 const cutoffShapes=[
  ['closed hooks pending','compensation_closed','pending',true,false],

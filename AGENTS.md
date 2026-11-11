@@ -149,7 +149,9 @@ This keeps code (in `skills/`) separate from runtime data (in `~/zylos/`).
 
 ### Core Database Schema Changes
 
-The C4 (`comm-bridge`), scheduler and web-console SQLite schemas are versioned.
+The C4 (`comm-bridge`), scheduler and Dashboard SQLite schemas are versioned. New
+upgrade snapshots use format 3 for those owners. Formats 1 and 2 retain their
+historical Web Console entries for reading old recovery records only.
 **Any change to a core table or column** — add, remove, rename, rebuild, change a
 column definition, or change existing rows as part of an upgrade — MUST:
 

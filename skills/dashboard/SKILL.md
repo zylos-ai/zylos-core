@@ -218,7 +218,7 @@ Take the local conversation ID from the current Dashboard reply route. `register
 accepts only ordinary readable files under the resolved instance's
 `components/dashboard/media`, `workspace`, or `/tmp`. `--kind image` requires
 PNG, JPEG, GIF or WebP magic bytes. The private copy survives moving or deleting
-the source. Both services and this command read `WEB_CONSOLE_MAX_UPLOAD_MB` from
+the source. Both services and this command read `DASHBOARD_MAX_UPLOAD_MB` from
 the actual instance's `.env`; invalid or missing values use 20 MiB. Each file is
 limited independently, with at most 20 attachments per message.
 
@@ -278,7 +278,7 @@ only its scrypt hash is saved. An existing config without a password is repaired
 without changing its other settings. Existing passwords are retained and cannot
 be displayed again. Quiet mode (including Docker startup) never prints the
 Dashboard password; it tells you to run `zylos dashboard reset-password` on the
-host or inside the container. Dashboard does not share Web Console credentials.
+host or inside the container. Dashboard uses its own authentication.
 An older installation that becomes locked because it has no configured password
 can recover with the same `zylos dashboard reset-password` command.
 

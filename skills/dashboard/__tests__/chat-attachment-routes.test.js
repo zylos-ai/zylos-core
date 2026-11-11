@@ -31,7 +31,7 @@ async function fixture(t) {
     pm2Home: process.env.PM2_HOME, tmpdir: process.env.TMPDIR, privateSocket: path.join(root, 'tmux.sock'),
     dashboardPath: path.join(root, 'components/dashboard/dashboard.db'), corePath: path.join(root, 'comm-bridge/c4.db') }));
   fs.mkdirSync(path.join(root, 'comm-bridge'));
-  fs.writeFileSync(path.join(root, '.env'), 'WEB_CONSOLE_MAX_UPLOAD_MB=1\n');
+  fs.writeFileSync(path.join(root, '.env'), 'DASHBOARD_MAX_UPLOAD_MB=1\n');
   const db = new Database(path.join(root, 'comm-bridge', 'c4.db'));
   guardDatabase(db, schema);
   db.prepare("INSERT INTO channel_namespaces(namespace,component_name) VALUES('dash','dashboard')").run();

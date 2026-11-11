@@ -12,10 +12,20 @@ const READY = new Set(['restored_data_ready', 'restored_verifying']);
 const TERMINAL = new Set(['upgrade_complete', 'restored_complete', 'aborted_before_install']);
 const DB_PATHS = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db'];
 const DASHBOARD_DB = 'components/dashboard/dashboard.db';
+const ORIGINAL_DEPLOYMENT_FORMAT_VERSION = 2;
 function databasePaths(formatVersion) {
   if (formatVersion === 1) return DB_PATHS;
   if (formatVersion === 2) return [...DB_PATHS, DASHBOARD_DB];
+  if (formatVersion === 3) return [DB_PATHS[0], DB_PATHS[1], DASHBOARD_DB];
   throw Error('unsupported snapshot manifest format');
+}
+function databaseFormatForRows(rows, formatVersion) {
+  if (!Array.isArray(rows)) throw Error('invalid database collection');
+  for (const format of formatVersion === undefined ? [1, 2, 3] : [formatVersion]) {
+    const expected = databasePaths(format);
+    if (rows.length === expected.length && expected.every(source => rows.filter(row => row?.source === source).length === 1)) return format;
+  }
+  throw Error('invalid database collection for snapshot format');
 }
 function legacyUpgradeHistory(j) {
   const paths = j.initialIdentity?.databases?.map(d => d?.source);
@@ -43,7 +53,7 @@ function completedLegacyCutoffHistory(j) {
 function originalDatabasePaths(j, {completedHistory = false} = {}) {
   const paths = j.initialIdentity?.databases?.map(d => d?.source);
   const legacyComplete = completedHistory && (legacyUpgradeHistory(j) || completedLegacyCutoffHistory(j) || TERMINAL.has(j.phase) && j.cleanup?.complete === true &&
-    j.cleanup.servicesRestored === true && !Object.hasOwn(j, 'compensationCutoff') && !Object.hasOwn(j, 'recoveryHashes') && paths?.length === DB_PATHS.length);
+    j.cleanup.servicesRestored === true && !Object.hasOwn(j, 'compensationCutoff') && !Object.hasOwn(j, 'recoveryHashes') && paths?.length === DB_PATHS.length && paths.every((p, i) => p === DB_PATHS[i]));
   const expected = databasePaths(legacyComplete ? 1 : 2);
   if (!paths || paths.length !== expected.length || paths.some((p,i) => p !== expected[i])) throw Error('invalid data-ready original database collection');
   return expected;
@@ -921,9 +931,13 @@ function validateDescriptor(dir, j, d) {
 
 }
 function preflight(dir, j, expected, {originalDeployment = false} = {}) {
+  const snapshotFormatVersion = expected ? databaseFormatForRows(expected.databases, expected.formatVersion) : 3;
   const restored = expected?.status === 'complete' && expected.databases.every(database =>
     database.status === 'missing' || j.dbRestore?.[database.source]?.complete === true);
-  const presence = expected && !restored ? expected.databases.map(database => ({
+  const originalPresence = originalDeployment && expected && (!restored || snapshotFormatVersion === 3);
+  const presence = originalPresence ? j.initialIdentity.databases.map(database => ({
+    source: database.source, status: database.exists ? 'complete' : 'missing'
+  })) : expected && !restored ? expected.databases.map(database => ({
     source: database.source, status: database.status === 'missing' ? 'missing' : 'complete'
   })) : undefined;
   return worker(dir, j, {
@@ -933,7 +947,7 @@ function preflight(dir, j, expected, {originalDeployment = false} = {}) {
     dashboardOwnerManaged: j.dashboardOwnerManaged === true && !(originalDeployment && j.firstTakeover === true),
     manifest: restored ? expected : undefined,
     expectedDatabases: presence,
-    formatVersion: 2
+    formatVersion: originalDeployment ? ORIGINAL_DEPLOYMENT_FORMAT_VERSION : snapshotFormatVersion
   });
 }
 function renameIntent(dir, j, key, source, dest, expectedHash) {
@@ -1234,6 +1248,8 @@ module.exports = {
   validateOriginalJournal,
   DB_PATHS,
   databasePaths,
+  ORIGINAL_DEPLOYMENT_FORMAT_VERSION,
+  databaseFormatForRows,
   originalDatabasePaths,
   legacyUpgradeHistory,
   READY,

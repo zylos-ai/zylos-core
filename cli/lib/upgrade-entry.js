@@ -71,11 +71,11 @@ export function inspectUpgradeSource(input, deps = {}) {
   const dashboardOwnerManaged = inspectDashboardOwnerManaged(zylosDir,{driverRoot:skillsDir});
   const options = {driverRoot:skillsDir, schemaRoot:path.join(tempDir,'skills'), dashboardOwnerManaged};
   const versions = (deps.probe ?? probeCoreDbVersions)(zylosDir, tempDir, options);
-  if (!versions || !Array.isArray(versions.databases) || versions.databases.length !== (dashboardOwnerManaged ? 4 : 3) || typeof versions.needsMigration !== 'boolean') throw new Error('Invalid database version probe result');
+  if (!versions || !Array.isArray(versions.databases) || versions.databases.length !== (dashboardOwnerManaged ? 3 : 2) || typeof versions.needsMigration !== 'boolean') throw new Error('Invalid database version probe result');
   (deps.preflight ?? preflightCoreDbUpgrade)(zylosDir, options);
   if (versions.needsMigration) (deps.rehearse ?? rehearseCoreDbUpgrade)(zylosDir, tempDir, options);
   return {coreDir, tempDir, zylosDir, skillsDir, from:source.version, to:target.version, newVersion:target.version,
-    firstTakeover, dashboardOwnerManaged, snapshotFormatVersion:2, databaseMode:versions.needsMigration ? 'migrate' : 'unchanged',
+    firstTakeover, dashboardOwnerManaged, snapshotFormatVersion:3, databaseMode:versions.needsMigration ? 'migrate' : 'unchanged',
     databaseVersions:versions, mode:'merge', steps:[], servicesWereRunning:[], servicesStopped:[],
     mergeConflicts:[], mergedFiles:[], maintenance:deps.maintenance ?? maintenance};
 }

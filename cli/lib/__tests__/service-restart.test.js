@@ -27,7 +27,8 @@ describe('restartServicesWithDeps', () => {
     });
 
     assert.equal(ok, true);
-    assert.equal(ecosystemCalls.length, 4);
+    assert.equal(ecosystemCalls.length, 3);
+    assert.equal(ecosystemCalls.some(({ names }) => names.includes('web-console')), false);
     assert.deepStrictEqual(managedCalls, [{
       name: 'scheduler',
       opts: {
@@ -49,12 +50,12 @@ describe('restartServicesWithDeps', () => {
 
     const ok = restartServicesWithDeps({
       restartFromEcosystemFn: (names) => {
-        if (names[0] === 'web-console') {
+        if (names[0] === 'c4-dispatcher') {
           throw new Error('ecosystem failed');
         }
       },
       restartManagedProcessFn: (name) => {
-        if (name === 'web-console') {
+        if (name === 'c4-dispatcher') {
           throw new Error('fallback failed');
         }
       },

@@ -42,7 +42,7 @@ for(const mode of ['none','runtime','service','incomplete-audit']) test(`downloa
       saveProtectedCode(){},prepareProtectedInstall(){},markInstallationIntent(){}}});
     mock.module(${JSON.stringify(url('core-db-backup.js'))},{namedExports:{...databases,
       assertDashboardUninstalled(){},inspectFirstDashboardTakeover:()=>false,inspectDashboardOwnerManaged:()=>false,
-      probeCoreDbVersions:()=>({databases:[{},{},{}],needsMigration:false}),preflightCoreDbUpgrade(){}}});
+      probeCoreDbVersions:()=>({databases:[{},{}],needsMigration:false}),preflightCoreDbUpgrade(){}}});
     mock.module(${JSON.stringify(url('upgrade-package.js'))},{namedExports:{...packages,saveOriginalPackage(){}}});
     mock.module(${JSON.stringify(pathToFileURL(path.join(installed,'cli/lib/self-upgrade.js')).href)},{namedExports:{runSelfUpgradeFinalize:()=>({success:true,
       serviceWarnings:${mode === 'service' ? "['Service custom-service is not online; restart it manually.']" : '[]'},
@@ -103,7 +103,7 @@ test('downloaded upgrade entry audits a real C4 database and warns for every rep
       saveProtectedCode(){},prepareProtectedInstall(){},markInstallationIntent(){}}});
     mock.module(${JSON.stringify(url('core-db-backup.js'))},{namedExports:{...databases,
       assertDashboardUninstalled(){},inspectFirstDashboardTakeover:()=>false,inspectDashboardOwnerManaged:()=>false,
-      probeCoreDbVersions:()=>({databases:[{},{},{}],needsMigration:false}),preflightCoreDbUpgrade(){}}});
+      probeCoreDbVersions:()=>({databases:[{},{}],needsMigration:false}),preflightCoreDbUpgrade(){}}});
     mock.module(${JSON.stringify(url('upgrade-package.js'))},{namedExports:{...packages,saveOriginalPackage(){}}});
     mock.module(${JSON.stringify(pathToFileURL(path.join(installed,'cli/lib/self-upgrade.js')).href)},{namedExports:{runSelfUpgradeFinalize:()=>{
       const connection=new Database(${JSON.stringify(database)},{readonly:true});

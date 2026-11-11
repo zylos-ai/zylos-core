@@ -7,7 +7,7 @@ import { sendHtml, sendJson, serveStatic, readJsonBody } from '../../src/lib/htt
 import { workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
-const serviceList = [{ name: 'scheduler', status: 'online' }, { name: 'web-console', status: 'online' }, { name: 'activity-monitor', status: 'online' }, { name: 'c4-dispatcher', status: 'online' }];
+const serviceList = [{ name: 'scheduler', status: 'online' }, { name: 'activity-monitor', status: 'online' }, { name: 'c4-dispatcher', status: 'online' }];
 async function startPage(sandbox) {
   const writes = [], restarts = [], reads = [], zones = new Map(), now = Date.now();
   const state = { initialTimezone: 'Asia/Calcutta', partialRestart: false, unavailableAfterProgress: false, rejectTimezone: false };
@@ -35,7 +35,7 @@ async function startPage(sandbox) {
           sendJson(res, 503, { ok: false, error: 'service_discovery_unavailable', restarted: ['scheduler'], failed: [], restart_status: 'unknown', restart_services: [serviceList[1]] });
         } else if (state.partialRestart) {
           state.partialRestart = false;
-          sendJson(res, 200, { ok: false, restarted: ['web-console'], failed: [{ name: 'scheduler', error: 'restart_failed' }], restart_services: [serviceList[0]] });
+          sendJson(res, 200, { ok: false, restarted: ['activity-monitor'], failed: [{ name: 'scheduler', error: 'restart_failed' }], restart_services: [serviceList[0]] });
         } else sendJson(res, 200, { ok: true, restarted: body.services, failed: [], restart_services: [] }); return;
       }
       if (route === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
@@ -166,7 +166,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
       await answer(page, false); assert.equal(api.restarts.length, restarts, 'Cancel keeps saved zone without restart');
       await page.locator('#settings-timezone-restart').click(); await answer(page, true);
       await page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
-      assert.deepEqual(api.restarts.at(-1), { path: '/fleet/admin/api/actions/restart-timezone-services', body: { tz: 'Asia/Singapore', confirm: true, services: ['scheduler', 'web-console', 'activity-monitor', 'c4-dispatcher'] } });
+      assert.deepEqual(api.restarts.at(-1), { path: '/fleet/admin/api/actions/restart-timezone-services', body: { tz: 'Asia/Singapore', confirm: true, services: ['scheduler', 'activity-monitor', 'c4-dispatcher'] } });
       assert.equal(api.restarts.length, restarts + 1); assert.deepEqual(errors, []);
     } finally { await context.close(); }
     const readOnly = await open(width, locale, '/fleet/reader');
@@ -190,7 +190,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.equal(await local.page.locator('#settings-timezone-pending').isVisible(), true);
     await local.page.locator('#settings-timezone-restart').click(); await answer(local.page, true);
     await local.page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
-    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'web-console', 'activity-monitor', 'c4-dispatcher']);
+    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'activity-monitor', 'c4-dispatcher']);
     assert.deepEqual(api.restarts.at(-1).body.services, ['scheduler'], 'Immediate retry excludes the service that already succeeded');
     assert.deepEqual(api.writes.at(-1), { path: '/api/settings/timezone', body: { tz: 'Europe/London' } });
     await local.page.locator('#settings-timezone-save').click(); await answer(local.page, true);
@@ -205,8 +205,8 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.equal(await local.page.locator('#settings-timezone-services li').count(), 1);
     await local.page.locator('#settings-timezone-restart').click(); await answer(local.page, true);
     await local.page.locator('#settings-timezone-pending').waitFor({ state: 'hidden' });
-    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'web-console', 'activity-monitor', 'c4-dispatcher']);
-    assert.deepEqual(api.restarts.at(-1).body.services, ['web-console'], 'A real HTTP503 retains prior progress across rediscovery');
+    assert.deepEqual(api.restarts.at(-2).body.services, ['scheduler', 'activity-monitor', 'c4-dispatcher']);
+    assert.deepEqual(api.restarts.at(-1).body.services, ['activity-monitor'], 'A real HTTP503 retains prior progress across rediscovery');
     const beforeLeave = api.writes.length;
     await local.page.locator('#settings-timezone-value').selectOption('America/New_York');
     await local.page.locator('#settings-timezone-save').click(); await dialog(local.page).waitFor();

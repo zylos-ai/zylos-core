@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from './core-db-backup.js';
+import { createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker, SNAPSHOT_FORMAT_VERSION, ORIGINAL_DEPLOYMENT_FORMAT_VERSION } from './core-db-backup.js';
 const require = createRequire(import.meta.url);
 export const maintenance = require('./upgrade-maintenance.cjs');
 // A live updater must survive replacement of its own installed package too.
@@ -124,7 +124,7 @@ export function beginUpgrade(ctx, {
       workerPath: path.join(ctx.coreDir, 'cli', 'lib', 'core-db-backup-worker.js'),
       workerHash: maintenance.hash(path.join(ctx.coreDir, 'cli', 'lib', 'core-db-backup-worker.js')),
       ecosystemHash: fs.existsSync(ecosystem) ? maintenance.hash(ecosystem) : null,
-      databases: maintenance.databasePaths(ctx.snapshotFormatVersion ?? 2).map(source => ({
+      databases: maintenance.databasePaths(ORIGINAL_DEPLOYMENT_FORMAT_VERSION).map(source => ({
         source,
         exists: fs.existsSync(path.join(zylosDir, source))
       }))
@@ -250,7 +250,7 @@ export function prepareProtectedInstall(ctx, overrides = {}) {
     transactionId: j.transactionId,
     fromVersion: j.from,
     toVersion: j.to,
-    formatVersion: ctx.snapshotFormatVersion ?? 2,
+    formatVersion: ctx.snapshotFormatVersion ?? SNAPSHOT_FORMAT_VERSION,
     verifySnapshot
   });
   ctx.dbBackupDir = snapshot.dbBackupDir;

@@ -4,22 +4,34 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
+export const SNAPSHOT_FORMAT_VERSION = 3;
+export const ORIGINAL_DEPLOYMENT_FORMAT_VERSION = 2;
 export const LEGACY_CORE_DATABASES = Object.freeze([
   {source:'comm-bridge/c4.db',owner:'comm-bridge',schema:'scripts/c4-schema.js'},
   {source:'scheduler/scheduler.db',owner:'scheduler',schema:'scripts/schema.js'},
   {source:'web-console/web-console.db',owner:'web-console',schema:'scripts/schema.js'},
 ]);
-export const CORE_DATABASES = Object.freeze([...LEGACY_CORE_DATABASES,
+export const ORIGINAL_DEPLOYMENT_DATABASES = Object.freeze([...LEGACY_CORE_DATABASES,
   {source:'components/dashboard/dashboard.db',owner:'dashboard',schema:'src/lib/schema-owner.js'},
 ]);
-export function databasesForFormat(formatVersion=2) {
+export const CORE_DATABASES = Object.freeze(ORIGINAL_DEPLOYMENT_DATABASES.filter(item=>item.owner!=='web-console'));
+export function databasesForFormat(formatVersion=3) {
   if(formatVersion===1) return LEGACY_CORE_DATABASES;
-  if(formatVersion===2) return CORE_DATABASES;
+  if(formatVersion===2) return ORIGINAL_DEPLOYMENT_DATABASES;
+  if(formatVersion===3) return CORE_DATABASES;
   throw Error(`Unsupported database snapshot format: ${formatVersion}`);
 }
+export function databaseFormatForRows(rows, formatVersion) {
+  if(!Array.isArray(rows)) throw Error('Invalid database collection');
+  const candidates=formatVersion===undefined ? [1,2,3] : [formatVersion];
+  for(const format of candidates) {
+    const items=databasesForFormat(format);
+    if(rows.length===items.length && items.every(item=>rows.filter(row=>row?.source===item.source).length===1)) return format;
+  }
+  throw Error('Invalid database collection for snapshot format');
+}
 export function validateSnapshotManifest(manifest) {
-  if(![1,2].includes(manifest?.formatVersion)) throw Error(`Unsupported database snapshot format: ${manifest?.formatVersion}`);
-  const items=databasesForFormat(manifest?.formatVersion);
+  const items=databasesForFormat(databaseFormatForRows(manifest?.databases,manifest?.formatVersion));
   if(manifest?.function!=='core-self-upgrade-db'||manifest.status!=='complete'||typeof manifest.id!=='string'||!Array.isArray(manifest.databases)||manifest.databases.length!==items.length) throw Error('Incomplete snapshot group');
   for(const item of items) {
     const matches=manifest.databases.filter(row=>row.source===item.source);
@@ -145,7 +157,7 @@ export async function execute(input) {
       return {dashboardOwnerManaged:version!==null && version>=20};
     } finally {db.close();}
   }
-  if(input.action==='snapshot' && input.formatVersion!==undefined && input.formatVersion!==2) throw Error('New database snapshots require formatVersion 2');
+  if(input.action==='snapshot' && input.formatVersion!==undefined && input.formatVersion!==3) throw Error('New database snapshots require formatVersion 3');
   if(input.action==='probe') {
     const Database=createRequire(import.meta.url)(input.driverPath); const db=new Database(':memory:');
     try {if(typeof db.backup!=='function') throw new Error('SQLite backup API unavailable');}finally{db.close();}
@@ -156,9 +168,9 @@ export async function execute(input) {
   let databases;
   if(input.action==='offline-preflight' && input.expectedDatabases) {
     const rows=input.expectedDatabases;
-    databases=databasesForFormat(input.formatVersion ?? (rows?.length===3 ? 1 : 2));
-    if(!Array.isArray(rows)||rows.length!==databases.length||databases.some((item,index)=>rows[index]?.source!==item.source||!['complete','missing'].includes(rows[index].status))) throw Error('Invalid original database presence evidence');
-  } else databases=input.manifest ? validateSnapshotManifest(input.manifest) : databasesForFormat(input.formatVersion ?? 2);
+    databases=databasesForFormat(databaseFormatForRows(rows,input.formatVersion));
+    if(rows.some(row=>!['complete','missing'].includes(row.status))) throw Error('Invalid original database presence evidence');
+  } else databases=input.manifest ? validateSnapshotManifest(input.manifest) : databasesForFormat(input.formatVersion ?? 3);
   const inspectDashboard=async (owner,db) => {
     const state=await owner.inspectSchema(db);
     if(!state||!Number.isInteger(state.targetVersion)||state.targetVersion<0||!Number.isInteger(state.currentVersion)||state.currentVersion<0||typeof state.needsMigration!=='boolean') throw Error('Invalid dashboard schema inspection');
@@ -271,7 +283,7 @@ export async function execute(input) {
     if(skipDashboard(item) && ['offline-preflight','upgrade-migrate'].includes(input.action)) {
       // Legacy Dashboard bytes remain protected without invoking its new owner.
       const source=path.join(input.zylosDir,item.source),absent=missing(source);
-      const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(row=>row.source===item.source);
+      const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : input.manifest?.databases?.find(row=>row.source===item.source) ?? input.expectedDatabases?.find(row=>row.source===item.source);
       if(input.action==='offline-preflight') {
         if(expected && absent && expected.status!=='missing') throw Error(`Expected database absent: ${source}`);
         const preserveMissingDashboard=standaloneSnapshot && item.owner==='dashboard' && expected?.status==='missing' && !absent;
@@ -279,7 +291,7 @@ export async function execute(input) {
         if(preserveMissingDashboard) {rows.push({source:item.source,status:'present',ownerSkipped:true});continue;}
         if(!absent) {
           const Database=driver(input);
-          if(standaloneSnapshot) {
+          if(standaloneSnapshot && expected?.status==='backed_up') {
             if(expected?.status!=='backed_up') throw Error('Missing standalone restored snapshot evidence');
             withStandaloneReadonly(Database,source,expected.sha256,inspectConnection);
           } else {
@@ -291,7 +303,7 @@ export async function execute(input) {
       rows.push({source:item.source,status:absent?'missing':'present',ownerSkipped:true});
       continue;
     }
-    const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : (input.expectedDatabases ?? input.manifest?.databases)?.find(r=>r.source===item.source);
+    const expected=input.action==='offline-preflight' && input.requireCurrent ? undefined : input.manifest?.databases?.find(row=>row.source===item.source) ?? input.expectedDatabases?.find(row=>row.source===item.source);
     const source=path.join(input.zylosDir,item.source);
     if(input.action==='verify') {
       if(!expected) throw new Error(`Missing manifest entry: ${item.source}`);
@@ -368,7 +380,7 @@ export async function execute(input) {
     if(input.action==='offline-preflight') {
       const mod=await ownerSchema(input,item);
       let state;
-      if (standaloneSnapshot) {
+      if (standaloneSnapshot && expected?.status==='backed_up') {
         if (input.manifest?.status !== 'complete' || expected?.status !== 'backed_up' || typeof expected.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(expected.sha256)) throw new Error('Missing standalone restored snapshot evidence');
         state = withStandaloneReadonly(Database, source, expected.sha256, db => {const layout=plan(db,mod); return {...inspectConnection(db),extensions:layout.extensions};});
       } else {

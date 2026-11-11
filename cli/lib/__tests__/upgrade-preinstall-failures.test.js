@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createRequire} from 'node:module';
-import {CORE_DATABASES} from '../core-db-backup.js';
+import {ORIGINAL_DEPLOYMENT_DATABASES as CORE_DATABASES} from '../core-db-backup.js';
 import {maintenance as m} from '../upgrade-protection.js';
 import {prepareProtectedInstall} from '../upgrade-protection.js';
 import {runUpgradeEntry} from '../upgrade-entry.js';
@@ -39,7 +39,7 @@ function fixture(t, fault) {
   for (const [owner,schema] of [['comm-bridge','c4-schema.js'],['scheduler','schema.js'],['web-console','schema.js']]) {
     const dest=path.join(skillsDir,owner);fs.mkdirSync(path.join(dest,'scripts'),{recursive:true});
     fs.writeFileSync(path.join(dest,'package.json'),'{"type":"module"}');
-    dependencyDirectory(path.resolve('skills',owner,'node_modules'),path.join(dest,'node_modules'));
+    dependencyDirectory(path.resolve('skills/comm-bridge/node_modules'),path.join(dest,'node_modules'));
     fs.writeFileSync(path.join(dest,'scripts',schema),`export const supportsNewDatabase=true;export const TABLES={preserved:['value']};export function inspectSchema(db){db.prepare('SELECT value FROM preserved').all();return {version:0,empty:false,extensions:{tables:[],columns:[]}};}`);
   fs.writeFileSync(path.join(dest,'scripts/sqlite-schema.js'),'export {}; // pre-chain compatibility fixture');
   }
@@ -70,7 +70,7 @@ else if(args[0]!=='save') {console.error('unexpected fake PM2 command');process.
 for(const fault of ['stop','snapshot']) test(`${fault} failure in default protected pipeline prevents installation and finalizer`,async t=>{
   const f=fixture(t,fault);let installerCalls=0,finalizerCalls=0;
   const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.tempDir,installedRoot:f.packageRoot,zylosDir:f.root},{
-    inspect:()=>({zylosDir:f.root,skillsDir:f.skillsDir,tempDir:f.tempDir,coreDir:f.packageRoot,from:'0.9.3',to:'0.9.4',firstTakeover:true,dashboardOwnerManaged:false,snapshotFormatVersion:2,steps:[]}),
+    inspect:()=>({zylosDir:f.root,skillsDir:f.skillsDir,tempDir:f.tempDir,coreDir:f.packageRoot,from:'0.9.3',to:'0.9.4',firstTakeover:true,dashboardOwnerManaged:false,snapshotFormatVersion:3,steps:[]}),
     resolveNpm:()=>'/fixture/npm-cli.js',savePackage:()=>{},
     prepare:ctx=>prepareProtectedInstall(ctx,fault==='snapshot'?{snapshot:()=>{throw Error('injected snapshot failure');}}:{}),
     install:()=>{installerCalls++;throw Error('installer must not run');},
@@ -95,7 +95,7 @@ for(const fault of ['stop','snapshot']) test(`${fault} failure in default protec
 test('missing ps reports writer-exit guidance before installation or migration',async t=>{
   const f=fixture(t,'missing-ps');let installerCalls=0,migrationCalls=0;
   const result=await runUpgradeEntry({schemaVersion:1,fromVersion:'0.9.3',tempDir:f.tempDir,installedRoot:f.packageRoot,zylosDir:f.root},{
-    inspect:()=>({zylosDir:f.root,skillsDir:f.skillsDir,tempDir:f.tempDir,coreDir:f.packageRoot,from:'0.9.3',to:'0.9.4',firstTakeover:true,dashboardOwnerManaged:false,snapshotFormatVersion:2,steps:[]}),
+    inspect:()=>({zylosDir:f.root,skillsDir:f.skillsDir,tempDir:f.tempDir,coreDir:f.packageRoot,from:'0.9.3',to:'0.9.4',firstTakeover:true,dashboardOwnerManaged:false,snapshotFormatVersion:3,steps:[]}),
     resolveNpm:()=>'/fixture/npm-cli.js',savePackage:()=>{},
     prepare:ctx=>prepareProtectedInstall(ctx),
     install:()=>{installerCalls++;throw Error('installer must not run');},

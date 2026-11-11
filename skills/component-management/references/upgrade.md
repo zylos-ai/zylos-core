@@ -110,11 +110,13 @@ changing the installed package or data with `DASHBOARD_STILL_INSTALLED`:
 
 ### Core database schema extensions
 
-Self-upgrade first reads only the SQLite `user_version` of the C4,
-scheduler, and web-console databases. If all three versions match the target
+Self-upgrade first reads the schema versions of the C4,
+scheduler, and owner-managed Dashboard databases. If all applicable versions match the target
 release, it skips database preflight, rehearsal copies, migrations,
 and upgrade structure/integrity checks. It still stops services, then creates
-and verifies all three database snapshots before installation. Protected mode retains code recovery;
+and verifies a format 3 snapshot of C4, scheduler and Dashboard before installation
+(a missing Dashboard database has a missing entry). Formats 1 and 2 remain readable
+with their historical Web Console entries. Protected mode retains code recovery;
 on same-version failure it leaves the live databases in place and retains the
 verified snapshots for manual database recovery. Backup-only mode requires
 manual recovery.

@@ -7,7 +7,7 @@ import { parse } from 'dotenv';
 import { createInstanceTimezone, replaceTimezoneValue } from '../src/lib/instance-timezone.js';
 import { withConfigLock } from '../src/lib/config-mutation.js';
 
-const ALL_SERVICES = ['scheduler', 'web-console', 'activity-monitor', 'c4-dispatcher'];
+const ALL_SERVICES = ['scheduler', 'activity-monitor', 'c4-dispatcher'];
 const SYSTEM_ZONEINFO_DIRS = ['/usr/share/zoneinfo', '/usr/lib/zoneinfo', '/usr/share/lib/zoneinfo', '/etc/zoneinfo'];
 const installedZoneinfo = () => SYSTEM_ZONEINFO_DIRS.find(directory => fs.statSync(directory, { throwIfNoEntry: false })?.isDirectory());
 
@@ -18,7 +18,7 @@ function fixture(t, options = {}) {
   const envFile = path.join(root, '.env');
   fs.writeFileSync(envFile, options.text ?? 'TZ=UTC\nOTHER=keep\n');
   const processes = ALL_SERVICES.map((name, index) => {
-    const script = ['scheduler/scripts/daemon.js', 'web-console/scripts/server.js', 'activity-monitor/scripts/activity-monitor.js', 'comm-bridge/scripts/c4-dispatcher.js'][index];
+    const script = ['scheduler/scripts/daemon.js', 'activity-monitor/scripts/activity-monitor.js', 'comm-bridge/scripts/c4-dispatcher.js'][index];
     const file = path.join(root, '.claude/skills', script);
     fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '');
     return { name, pm2_env: { status: 'online', pm_exec_path: file, ZYLOS_DIR: root } };
@@ -31,6 +31,16 @@ function fixture(t, options = {}) {
   return { root, envFile, processes, restarted, logs, timezone,
  };
 }
+
+test('timezone candidates exclude a leftover Web Console process', async t => {
+  const f = fixture(t);
+  const script = path.join(f.root, '.claude/skills/web-console/scripts/server.js');
+  fs.mkdirSync(path.dirname(script), { recursive: true }); fs.writeFileSync(script, '');
+  f.processes.push({ name: 'web-console', pm2_env: { status: 'online', pm_exec_path: script, ZYLOS_DIR: f.root } });
+  assert.deepEqual((await f.timezone.get()).restart_services.map(service => service.name), ALL_SERVICES);
+  assert.equal((await f.timezone.restart({ tz: 'UTC', confirm: true, services: ['web-console'] })).error, 'confirmation_required');
+  assert.equal(f.restarted.length, 0);
+});
 
 for (const [name, input, expected] of [
   ['unquoted comments', '# note\nTZ = UTC  # zone\nOTHER=secret\n', '# note\nTZ = Europe/London  # zone\nOTHER=secret\n'],
@@ -50,7 +60,7 @@ for (const [name, input, expected] of [
 });
 
 test('invalid timezone and unknown fields cannot change the environment', async t => {
-  const f = fixture(t), original = fs.readFileSync(f.envFile, 'utf8');
+  const f = fixture(t, { dependencies: { zoneinfoDir: null } }), original = fs.readFileSync(f.envFile, 'utf8');
   for (const body of [{ tz: 'Not/AZone' }, { tz: 'asia/tokyo' }, { tz: '+08:00' }, { tz: '-05:30' }, { tz: 'Japan' }, { tz: 'US/Eastern' }, { tz: 'Asia/Calcutta' }, { tz: 'Europe/Kiev' }, { tz: '' }, { tz: ' UTC' }, { tz: 'UTC', command: 'bad' }, null]) {
     await assert.rejects(f.timezone.save(body), { code: 'invalid_timezone', status: 400 });
   }
@@ -139,7 +149,7 @@ test('saving preserves unrelated bytes and private permissions without restartin
   assert.equal(fs.statSync(f.envFile).mode & 0o777, 0o600); assert.equal(f.restarted.length, 0);
   assert.equal(f.logs.length, 1); assert.equal(f.logs[0].includes('do-not-log'), false);
   const unchanged = await f.timezone.save({ tz: 'Europe/London' });
-  assert.equal(unchanged.changed, false); assert.equal(unchanged.restart_services.length, 4);
+  assert.equal(unchanged.changed, false); assert.equal(unchanged.restart_services.length, 3);
 });
 
 test('readable invalid current timezone remains repairable', async t => {
@@ -158,7 +168,6 @@ test('read access and nonregular environment are read-only', async t => {
 test('advisory candidates omit stopped, foreign, duplicate and unrelated processes', async t => {
   const f = fixture(t); f.processes[0].pm2_env.status = 'stopped';
   f.processes[1].pm2_env.ZYLOS_DIR = path.dirname(f.root);
-  f.processes[3].pm2_env.status = 'stopped';
   f.processes.push({ ...f.processes[2] }, { name: 'runtime', pm2_env: { status: 'online' } });
   assert.deepEqual((await f.timezone.get()).restart_services, []);
 });
@@ -210,13 +219,13 @@ test('fresh asynchronous discovery is required and errors never reuse an old lis
 
 test('confirmed restart uses only current owned candidates and preserves partial failures', async t => {
   const calls = [];
-  const f = fixture(t, { dependencies: { restartService: async (name, tz) => { calls.push([name, tz]); if (name === 'web-console') throw Error('private output'); } } });
+  const f = fixture(t, { dependencies: { restartService: async (name, tz) => { calls.push([name, tz]); if (name === 'activity-monitor') throw Error('private output'); } } });
   const result = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ALL_SERVICES });
   assert.equal(result.ok, false); assert.equal(result.status, 200);
-  assert.deepEqual(result.restarted, ['scheduler', 'activity-monitor', 'c4-dispatcher']);
-  assert.deepEqual(result.failed, [{ name: 'web-console', error: 'restart_failed' }]);
-  assert.deepEqual(result.restart_services, [{ name: 'web-console', status: 'online' }]);
-  assert.equal(calls.length, 4); assert.equal(calls.every(item => item[1] === 'UTC'), true);
+  assert.deepEqual(result.restarted, ['scheduler', 'c4-dispatcher']);
+  assert.deepEqual(result.failed, [{ name: 'activity-monitor', error: 'restart_failed' }]);
+  assert.deepEqual(result.restart_services, [{ name: 'activity-monitor', status: 'online' }]);
+  assert.equal(calls.length, 3); assert.equal(calls.every(item => item[1] === 'UTC'), true);
 });
 
 test('a timezone change between service restarts stops the sequence and retains progress', async t => {
@@ -225,7 +234,7 @@ test('a timezone change between service restarts stops the sequence and retains 
   const result = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ALL_SERVICES });
   assert.equal(result.error, 'timezone_changed'); assert.equal(result.status, 409);
   assert.deepEqual(result.restarted, ['scheduler']); assert.deepEqual(calls, ['scheduler']);
-  assert.deepEqual(result.restart_services.map(service => service.name), ['web-console', 'activity-monitor', 'c4-dispatcher']);
+  assert.deepEqual(result.restart_services.map(service => service.name), ['activity-monitor', 'c4-dispatcher']);
 });
 
 test('unchanged timezone save repairs private permissions without changing bytes', async t => {
@@ -274,21 +283,21 @@ test('confirmation restricts restarts to the displayed names even when new candi
   const displayed = (await f.timezone.get()).restart_services.map(service => service.name);
   f.processes[0].pm2_env.status = 'online';
   const result = await f.timezone.restart({ tz: 'UTC', confirm: true, services: displayed });
-  assert.deepEqual(result.restarted, ['web-console', 'activity-monitor', 'c4-dispatcher']);
+  assert.deepEqual(result.restarted, ['activity-monitor', 'c4-dispatcher']);
   assert.equal(f.restarted.some(([name]) => name === 'scheduler'), false);
 });
 
 test('a partial restart retry does not repeat successfully restarted services', async t => {
-  const calls = []; let failWebConsole = true;
+  const calls = []; let failMonitor = true;
   const f = fixture(t, { dependencies: { restartService: async name => {
-    calls.push(name); if (name === 'web-console' && failWebConsole) throw Error('unavailable');
+    calls.push(name); if (name === 'activity-monitor' && failMonitor) throw Error('unavailable');
   } } });
   const first = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ALL_SERVICES });
-  assert.deepEqual(first.restarted, ['scheduler', 'activity-monitor', 'c4-dispatcher']);
-  failWebConsole = false;
+  assert.deepEqual(first.restarted, ['scheduler', 'c4-dispatcher']);
+  failMonitor = false;
   const retry = await f.timezone.restart({ tz: 'UTC', confirm: true, services: first.restart_services.map(service => service.name) });
-  assert.deepEqual(retry.restarted, ['web-console']);
-  assert.deepEqual(calls, ['scheduler', 'web-console', 'activity-monitor', 'c4-dispatcher', 'web-console']);
+  assert.deepEqual(retry.restarted, ['activity-monitor']);
+  assert.deepEqual(calls, ['scheduler', 'activity-monitor', 'c4-dispatcher', 'activity-monitor']);
 });
 
 test('restart rediscovers ownership before every service and skips vanished candidates', async t => {
@@ -301,8 +310,8 @@ test('restart rediscovers ownership before every service and skips vanished cand
     },
   } });
   const result = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ALL_SERVICES });
-  assert.deepEqual(result.restarted, ['scheduler', 'activity-monitor', 'c4-dispatcher']);
-  assert.equal(reads, 5);
+  assert.deepEqual(result.restarted, ['scheduler', 'c4-dispatcher']);
+  assert.equal(reads, 4);
 });
 
 test('discovery failure after progress returns only the unfinished confirmed services', async t => {
@@ -314,7 +323,7 @@ test('discovery failure after progress returns only the unfinished confirmed ser
   const result = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ALL_SERVICES });
   assert.equal(result.error, 'service_discovery_unavailable');
   assert.deepEqual(result.restarted, ['scheduler']);
-  assert.deepEqual(result.restart_services.map(service => service.name), ['web-console', 'activity-monitor', 'c4-dispatcher']);
+  assert.deepEqual(result.restart_services.map(service => service.name), ['activity-monitor', 'c4-dispatcher']);
   assert.equal(result.restart_status, 'unknown');
 });
 
@@ -324,16 +333,16 @@ test('initial discovery failure preserves confirmed services for a recovered ret
     if (!available) throw Error('offline');
     return { processes: f.processes };
   } } });
-  const failed = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ['web-console'] });
+  const failed = await f.timezone.restart({ tz: 'UTC', confirm: true, services: ['activity-monitor'] });
   assert.equal(failed.error, 'service_discovery_unavailable');
   assert.equal(failed.restart_status, 'unknown');
-  assert.deepEqual(failed.restart_services.map(service => service.name), ['web-console']);
+  assert.deepEqual(failed.restart_services.map(service => service.name), ['activity-monitor']);
   assert.equal(f.restarted.length, 0);
   available = true;
   const retry = await f.timezone.restart({ tz: 'UTC', confirm: true, services: failed.restart_services.map(service => service.name) });
   assert.equal(retry.ok, true);
-  assert.deepEqual(retry.restarted, ['web-console']);
-  assert.deepEqual(f.restarted.map(([name]) => name), ['web-console']);
+  assert.deepEqual(retry.restarted, ['activity-monitor']);
+  assert.deepEqual(f.restarted.map(([name]) => name), ['activity-monitor']);
 });
 
 test('managed restart awaits the asynchronous existing helper execution and reports rejection', async t => {

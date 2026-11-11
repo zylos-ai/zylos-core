@@ -133,7 +133,7 @@ the audit and return `COMPONENT_SPAWN_FAILED`; a nonzero component exit returns
 
 ## The `void` Channel (internal-only messages)
 
-`void` is a virtual channel for internal memos (e.g. session handoffs). Messages sent to it are recorded in c4.db like any other conversation row — so session-start context injection and Memory Sync pick them up — but they are **never dispatched** to any channel send script, and display surfaces (web console, etc.) never show them. The endpoint carries the purpose/topic and is **mandatory**:
+`void` is a virtual channel for internal memos (e.g. session handoffs). Messages sent to it are recorded in c4.db like any other conversation row — so session-start context injection and Memory Sync pick them up — but they are **never dispatched** to any channel send script, and display surfaces (Dashboard, etc.) never show them. The endpoint carries the purpose/topic and is **mandatory**:
 
 ```bash
 cat <<'EOF' | node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js "void" "session-handoff"

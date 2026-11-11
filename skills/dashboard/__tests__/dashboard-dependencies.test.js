@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 const core = fileURLToPath(new URL('../../../', import.meta.url));
 const child = fileURLToPath(new URL('./helpers/dashboard-imports.js', import.meta.url));
 
-// Boundary: real module loading without the optional web console. Run when
+// Boundary: real module loading without the removed Web Console. Run when
 // Dashboard imports or dependencies change; UI-only style changes can skip it.
 test('Dashboard entry points import without the web console installed', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-imports-'));

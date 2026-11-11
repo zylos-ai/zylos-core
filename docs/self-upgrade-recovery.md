@@ -21,8 +21,10 @@ schema collisions and undeclared changes fail the rehearsal.
 Every attempt creates a private transaction under
 `.backup/self-upgrade/<transactionId>/`, freezes recovery material, saves the
 original package, stops managed services and known writers, and creates verified
-snapshots before installation. Snapshots cover C4, scheduler, web-console and the
-Dashboard database when it exists. A missing Dashboard database remains absent
+snapshots before installation. New snapshots use format 3 and cover C4, scheduler
+and Dashboard, including a missing entry when Dashboard has no database. Formats
+1 and 2 retain their original Web Console entries for old recovery records.
+A missing Dashboard database remains absent
 until its owner's normal creation path. Matching schema versions skip migration
 work but still require snapshots.
 

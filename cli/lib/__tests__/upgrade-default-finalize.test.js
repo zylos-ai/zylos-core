@@ -14,7 +14,8 @@ import { resumeFinalize } from '../upgrade-resume.js';
 import { migrateDatabase } from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
 import * as c4Schema from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import * as schedulerSchema from '../../../skills/scheduler/scripts/schema.js';
-import * as webSchema from '../../../skills/web-console/scripts/schema.js';
+import * as webSchema from './fixtures/legacy-web-console-schema.js';
+import {installLegacyWebConsoleSchema} from './helpers/legacy-web-console.js';
 
 const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
@@ -57,6 +58,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     };\n`);
   }
   for (const owner of LEGACY_CORE_DATABASES.map(item => item.owner)) {
+    if(owner==='web-console'){installLegacyWebConsoleSchema(skillsDir);fs.mkdirSync(path.join(skillsDir,owner,'node_modules'));continue;}
     const source = path.join(packageRoot, 'skills', owner), target = path.join(skillsDir, owner);
     fs.mkdirSync(target, { recursive: true });
     fs.cpSync(path.join(source, 'scripts'), path.join(target, 'scripts'), {
@@ -95,7 +97,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
   if (protectedUpgrade) {
     dir = path.join(root, '.backup/self-upgrade/tx');
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const snapshot = createCoreDbSnapshot({ zylosDir: root, transactionId: 'tx', formatVersion: 2 });
+    const snapshot = createCoreDbSnapshot({ zylosDir: root, transactionId: 'tx', formatVersion: 3 });
     const closure = prepareRecoveryDependencies(dir, root, { dashboardRoot: path.join(home, 'uninstalled-dashboard') });
     for (const [source, target] of [['upgrade-maintenance.cjs', 'maintenance.cjs'],
       ['upgrade-recovery.cjs', 'runner.cjs'], ['upgrade-installer.cjs', 'installer.cjs']]) {
@@ -118,7 +120,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
       initialIdentity: { nodePath: process.execPath, packageJson, packageHash: m.hash(packageJson),
         cliRoot, cliHash: m.treeHash(cliRoot), workerPath: closure.workerPath,
         workerHash: m.hash(closure.workerPath), ecosystemHash: null,
-        databases: snapshot.manifest.databases.map(item => ({ source: item.source, exists: item.status !== 'missing' })) } };
+        databases: m.databasePaths(2).map(source => ({source,exists:fs.existsSync(path.join(root,source))})) } };
     m.update(dir, journal); m.marker(root, dir, journal);
     Object.assign(state, { transactionId: 'tx', transactionDir: dir });
   }
@@ -130,6 +132,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
   };
   const deps = {
     zylosDir: root, maintenance: m, dashboardOwner,
+    finalizeWebConsoleRemoval:async()=>({warnings:[]}),savePm2ProcessList:()=>true,
     // The package is already deployed into this private fixture. Do not run
     // the host-oriented skill copier or invoke npm against the real host.
     syncSkills: () => ({ step: 5, name: 'sync_core_skills', status: 'done' }),

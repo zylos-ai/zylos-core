@@ -353,13 +353,13 @@ test('hot TTL metadata and writes honor present valid or invalid environment set
 });
 
 test('confirmed timezone restart retries immediately after a partial failure', async () => {
-  const body = { tz: 'Asia/Tokyo', confirm: true, services: ['web-console'] };
+  const body = { tz: 'Asia/Tokyo', confirm: true, services: ['activity-monitor'] };
   let calls = 0;
   const timezone = { restart: async request => {
     assert.deepEqual(request, body);
     calls++;
-    return calls === 1 ? { ok: false, failed: [{ name: 'web-console', error: 'restart_failed' }] }
-      : { ok: true, restarted: ['web-console'], failed: [] };
+    return calls === 1 ? { ok: false, failed: [{ name: 'activity-monitor', error: 'restart_failed' }] }
+      : { ok: true, restarted: ['activity-monitor'], failed: [] };
   } };
   const before = Date.now();
   assert.equal((await handleAction('restart-timezone-services', body, {}, { timezone })).ok, false);

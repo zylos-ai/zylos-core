@@ -52,8 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
   --timezone Asia/Shanghai \
   --domain agent.example.com \
   --https \
-  --caddy \
-  --web-password MySecurePass123
+  --caddy
 ```
 
 **何时自动进入非交互模式？**
@@ -77,7 +76,6 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 | `--domain <domain>` | Caddy 反向代理域名，如 `agent.example.com` | 无 |
 | `--https` / `--no-https` | 启用或禁用 HTTPS | 设置域名时默认 `--https` |
 | `--caddy` / `--no-caddy` | 安装或跳过 Caddy Web 服务器 | 安装 |
-| `--web-password <pass>` | Web 控制台密码 | 自动生成 |
 
 **环境变量：**
 
@@ -94,7 +92,6 @@ curl -fsSL https://raw.githubusercontent.com/zylos-ai/zylos-core/main/scripts/in
 | `OPENAI_BASE_URL` | `--codex-base-url` |
 | `ZYLOS_DOMAIN` | `--domain` |
 | `ZYLOS_PROTOCOL`（`https` 或 `http`） | `--https` / `--no-https` |
-| `ZYLOS_WEB_PASSWORD` | `--web-password` |
 
 **自定义 API 地址：**
 
@@ -197,7 +194,7 @@ zylos status
 sqlite3 -readonly "${ZYLOS_DIR:-$HOME/zylos}/scheduler/scheduler.db" 'PRAGMA user_version;'
 ```
 
-1.0 的状态中应有五个核心服务且全部 online：`scheduler`、`web-console`、
+1.0 的状态中应有四个核心服务且全部 online：`scheduler`、
 `c4-dispatcher`、`activity-monitor`、`zylos-dashboard`（`caddy` 为可选服务）。
 SQLite 命令应输出 `2`。打开 init 输出的 Dashboard URL，确认登录页能加载；
 默认本地端口可用 `curl --fail --location http://127.0.0.1:3470/` 检查，修改过端口则使用实际端口。
@@ -224,7 +221,7 @@ Docker 启动使用 quiet 模式，不会把 Dashboard 密码打印到日志。�
 Dashboard 密码；这也会清除旧的 Dashboard 登录会话。非 quiet 的交互式 init
 会显示一次初始密码。
 
-打开 `http://localhost:3456` 访问 Web 控制台。通过 `docker logs zylos | grep -A2 "Web Console"` 查看密码。更多配置（Docker Compose、环境变量、群晖 NAS 等）请参阅 [Docker 部署指南](docs/docker.md)。
+打开 `http://localhost:3470/` 访问 Dashboard 和 Origin 对话。通过 `docker exec -it zylos zylos dashboard reset-password` 设置或重置密码；启动日志不会显示密码。更多配置（Docker Compose、环境变量、群晖 NAS 等）请参阅 [Docker 部署指南](docs/docker.md)。
 
 </details>
 

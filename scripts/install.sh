@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     # Flags that take a value — forward both flag and value to zylos init
-    --timezone|--setup-token|--api-key|--codex-api-key|--base-url|--codex-base-url|--domain|--web-password|--runtime)
+    --timezone|--setup-token|--api-key|--codex-api-key|--base-url|--codex-base-url|--domain|--runtime)
       if [ -z "${2:-}" ]; then
         echo "[zylos] Error: $1 requires a value" >&2
         exit 1

@@ -6,7 +6,7 @@ import path from 'node:path';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
-import {LEGACY_CORE_DATABASES,runCoreDbWorker} from '../core-db-backup.js';
+import {CORE_DATABASES,runCoreDbWorker} from '../core-db-backup.js';
 import {migrateDatabase} from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
 
 const installed=process.env.CORE_DB_TEST_SKILL || path.resolve('skills/comm-bridge');
@@ -18,7 +18,7 @@ function fixture(t, failingOwner) {
   t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const schemaRoot=path.join(root,'schemas');
   fs.mkdirSync(schemaRoot);
-  for(const item of LEGACY_CORE_DATABASES) {
+  for(const item of CORE_DATABASES.filter(item=>item.owner!=='dashboard')) {
     const owner=path.join(schemaRoot,item.owner);
     if(item.owner!==failingOwner) {
       fs.symlinkSync(path.resolve('skills',item.owner),owner);
@@ -43,7 +43,7 @@ function fixture(t, failingOwner) {
     };
   `);
   const driverRoot=path.resolve('skills');
-  return {root,schemaRoot,payload:{zylosDir:root,schemaRoot,driverRoot,formatVersion:2}};
+  return {root,schemaRoot,payload:{zylosDir:root,schemaRoot,driverRoot,formatVersion:3}};
 }
 
 function assertFailure(error, code) {
@@ -65,7 +65,7 @@ test('migration engine gives uncoded callback failures a structured migration co
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='partial'").get(),undefined);
 });
 
-for(const item of LEGACY_CORE_DATABASES) test(`${item.owner} version probe itself classifies future owner version`,t=>{
+for(const item of CORE_DATABASES.filter(item=>item.owner!=='dashboard')) test(`${item.owner} version probe itself classifies future owner version`,t=>{
   const {root,payload,schemaRoot}=fixture(t,item.owner);
   fs.writeFileSync(path.join(schemaRoot,item.owner,item.schema),`
     export const SUPPORTED_SCHEMA_VERSION=1,supportsNewDatabase=true,TABLES={};
@@ -79,9 +79,9 @@ for(const item of LEGACY_CORE_DATABASES) test(`${item.owner} version probe itsel
   });
 });
 
-for(const item of LEGACY_CORE_DATABASES) test(`${item.owner} worker inspection preserves schema rejection and successful reads`,t=>{
+for(const item of CORE_DATABASES.filter(item=>item.owner!=='dashboard')) test(`${item.owner} worker inspection preserves schema rejection and successful reads`,t=>{
   const {root,payload}=fixture(t);
-  assert.equal(runCoreDbWorker({...payload,action:'version-probe'}).databases.length,4);
+  assert.equal(runCoreDbWorker({...payload,action:'version-probe'}).databases.length,3);
   const file=path.join(root,item.source);
   fs.mkdirSync(path.dirname(file),{recursive:true});
   const db=new Database(file);db.pragma('user_version=999');db.close();
@@ -94,7 +94,7 @@ for(const item of LEGACY_CORE_DATABASES) test(`${item.owner} worker inspection p
   assert.deepEqual(fs.readFileSync(file),before);
 });
 
-for(const owner of ['comm-bridge','scheduler','web-console','dashboard']) test(`${owner} rehearsal returns a structured migration failure without source details`,t=>{
+for(const owner of ['comm-bridge','scheduler','dashboard']) test(`${owner} rehearsal returns a structured migration failure without source details`,t=>{
   const {root,payload}=fixture(t,owner);
   if(owner==='dashboard') {
     const file=path.join(root,'components/dashboard/dashboard.db');

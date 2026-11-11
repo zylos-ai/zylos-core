@@ -232,19 +232,6 @@ module.exports = {
       min_uptime: '10s'
     },
     {
-      name: 'web-console',
-      script: path.join(SKILLS_DIR, 'web-console', 'scripts', 'server.js'),
-      cwd: HOME,
-      env: {
-        PATH: ENHANCED_PATH,
-        ZYLOS_DIR,
-        NODE_ENV: 'production'
-      },
-      autorestart: true,
-      max_restarts: 10,
-      min_uptime: '10s'
-    },
-    {
       name: 'c4-dispatcher',
       script: path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-dispatcher.js'),
       cwd: path.join(SKILLS_DIR, 'comm-bridge', 'scripts'),

@@ -20,7 +20,7 @@ if (process.argv[2] === 'fallback') {
 
 if (process.argv[2] === 'init') {
   const { startCoreServices } = await import('../../cli/commands/init.js');
-  await startCoreServices('fixture-password', { noCaddy: true });
+  await startCoreServices({ noCaddy: true });
 } else {
   const { startServices } = await import('../../cli/commands/service.js');
   startServices();

@@ -16,7 +16,7 @@ Central message hub - ALL communication with Claude goes through C4.
 ## Architecture
 
 ```
-Web Console ──┐
+Dashboard   ──┐
 Telegram    ───┼──► C4 Bridge ◄──► Claude
 Lark        ───┘
 ```

@@ -45,7 +45,7 @@ ok "Authentication configured"
 
 # ── Step 2: Workspace initialisation via zylos init ───────────────────────────
 # zylos init handles: directory structure, .env creation from template,
-# auth credential storage, timezone config, PM2 ecosystem, web console password.
+# auth credential storage, timezone config and PM2 ecosystem.
 # It uses upsert semantics — safe to re-run (won't overwrite existing values).
 # Runs every startup (no marker) so template files stay in sync after image upgrades.
 step 2 "Initializing workspace..."
@@ -112,7 +112,6 @@ upsert_env() {
 upsert_env "TELEGRAM_BOT_TOKEN" "${TELEGRAM_BOT_TOKEN:-}"
 upsert_env "LARK_APP_ID" "${LARK_APP_ID:-}"
 upsert_env "LARK_APP_SECRET" "${LARK_APP_SECRET:-}"
-upsert_env "WEB_CONSOLE_BIND" "${WEB_CONSOLE_BIND:-0.0.0.0}"
 upsert_env "CLAUDE_BYPASS_PERMISSIONS" "${CLAUDE_BYPASS_PERMISSIONS:-true}"
 upsert_env "CODEX_BYPASS_PERMISSIONS" "${CODEX_BYPASS_PERMISSIONS:-true}"
 # Codex API credentials — persist to .env so the tmux session (which sources
@@ -198,7 +197,6 @@ info "=========================================="
 ok "Zylos is ready!"
 info "=========================================="
 echo ""
-info "Web console: http://localhost:3456"
 info "Dashboard: http://localhost:${DASHBOARD_PORT:-3470}/"
 info "Set or reset the password: docker exec -it <container> zylos dashboard reset-password"
 info "Use 'docker exec <container> pm2 list' to check services."

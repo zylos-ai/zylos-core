@@ -14,7 +14,7 @@ export function resolveUploadRoot(env = process.env) {
 export function readUploadLimit(zylosDir) {
   try {
     const root = fs.realpathSync(zylosDir);
-    const value = parseDotenv(fs.readFileSync(path.join(root, '.env'), 'utf8')).WEB_CONSOLE_MAX_UPLOAD_MB;
+    const value = parseDotenv(fs.readFileSync(path.join(root, '.env'), 'utf8')).DASHBOARD_MAX_UPLOAD_MB;
     if (typeof value !== 'string' || !/^[0-9]+$/.test(value)) return DEFAULT_UPLOAD_BYTES;
     const bytes = Number(value) * 1024 * 1024;
     return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : DEFAULT_UPLOAD_BYTES;

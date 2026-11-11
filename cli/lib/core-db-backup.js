@@ -4,8 +4,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 const maintenance = createRequire(import.meta.url)('./upgrade-maintenance.cjs');
-import {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest} from './core-db-backup-worker.js';
-export {CORE_DATABASES, LEGACY_CORE_DATABASES, databasesForFormat, validateSnapshotManifest};
+import {CORE_DATABASES, LEGACY_CORE_DATABASES, ORIGINAL_DEPLOYMENT_DATABASES, SNAPSHOT_FORMAT_VERSION, ORIGINAL_DEPLOYMENT_FORMAT_VERSION, databasesForFormat, databaseFormatForRows, validateSnapshotManifest} from './core-db-backup-worker.js';
+export {CORE_DATABASES, LEGACY_CORE_DATABASES, ORIGINAL_DEPLOYMENT_DATABASES, SNAPSHOT_FORMAT_VERSION, ORIGINAL_DEPLOYMENT_FORMAT_VERSION, databasesForFormat, databaseFormatForRows, validateSnapshotManifest};
 const WORKER=fileURLToPath(new URL('./core-db-backup-worker.js',import.meta.url));
 export function assertDashboardUninstalled(zylosDir) {
   let registry;
@@ -78,13 +78,13 @@ export function preflightCoreDbUpgrade(zylosDir, {dashboardOwnerManaged=true,dri
   }
   probeCoreDbSnapshotSync(zylosDir);
   if (destination !== zylosDir) probeCoreDbSnapshotSync(destination);
-  return runCoreDbWorker({action:'offline-preflight',zylosDir,formatVersion:2,dashboardOwnerManaged,driverRoot,schemaRoot});
+  return runCoreDbWorker({action:'offline-preflight',zylosDir,formatVersion:3,dashboardOwnerManaged,driverRoot,schemaRoot});
 }
 // Pure owner inspection decides compatibility; Dashboard owns its separate
 // schema_migrations authority and never uses user_version for admission.
 export function probeCoreDbVersions(zylosDir, tempDir, {driverRoot=path.join(zylosDir,'.claude','skills'),dashboardOwnerManaged=true}={}) {
   const schemaRoot=path.join(tempDir,'skills');
-  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot,formatVersion:2,dashboardOwnerManaged});
+  return runCoreDbWorker({action:'version-probe',zylosDir,schemaRoot,driverRoot,formatVersion:3,dashboardOwnerManaged});
 }
 // Clear a fixed-name rehearsal left by an interrupted upgrade, plus older
 // random-name copies. Refuse ambiguous paths before stopping services.
@@ -141,7 +141,7 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
     const rehearsalDir=path.join(zylosDir,'.backup','db','.rehearsal');
     fs.mkdirSync(rehearsalDir,{mode:0o700});
     fs.chmodSync(rehearsalDir,0o700);
-    try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir,formatVersion:2,dashboardOwnerManaged},{workerPath});}
+    try {return runCoreDbWorker({action:'rehearse',zylosDir,schemaRoot,driverRoot,rehearsalDir,formatVersion:3,dashboardOwnerManaged},{workerPath});}
     finally {fs.rmSync(rehearsalDir,{recursive:true,force:true});}
   } finally {
     for (const directory of created.reverse()) {
@@ -150,8 +150,8 @@ export function rehearseCoreDbUpgrade(zylosDir, tempDir, {driverRoot=path.join(z
     }
   }
 }
-export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress,verifySnapshot=runCoreDbWorker,formatVersion=2}) {
-  if(formatVersion!==2) throw Error('New database snapshots require formatVersion 2');
+export function createCoreDbSnapshot({zylosDir,transactionId,fromVersion,toVersion,onProgress,verifySnapshot=runCoreDbWorker,formatVersion=3}) {
+  if(formatVersion!==3) throw Error('New database snapshots require formatVersion 3');
   if(!/^[a-zA-Z0-9_-]+$/.test(transactionId)) throw new Error('Invalid snapshot transaction ID');
   const root=path.join(zylosDir,'.backup','db');fs.mkdirSync(root,{recursive:true,mode:0o700});
   syncDir(path.dirname(root));syncDir(zylosDir);

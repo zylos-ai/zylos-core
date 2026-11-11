@@ -26,7 +26,7 @@ function fixture(t) {
   // Native dependencies are target-package dependencies; never install or touch host data.
   const dashboardRoot=path.resolve(import.meta.dirname,'..');
   const nativeModules=path.dirname(path.dirname(createRequire(path.join(repo,'skills/comm-bridge/package.json')).resolve('better-sqlite3/package.json')));
-  for(const owner of ['comm-bridge','scheduler','web-console','dashboard']) {
+  for(const owner of ['comm-bridge','scheduler','dashboard']) {
     const skill=path.join(root,'.claude/skills',owner);fs.mkdirSync(skill,{recursive:true});
     fs.writeFileSync(path.join(skill,'package.json'),'{"type":"module"}');fs.symlinkSync(nativeModules,path.join(skill,'node_modules'));
   }
@@ -41,7 +41,7 @@ function fixture(t) {
     get store(){return store;}, get importer(){return importer;},
     async import(){await importer.importStream({stream:'events:origin',file});},
     snapshot(id){
-      const result=backup.createCoreDbSnapshot({zylosDir:root,transactionId:id,fromVersion:'0.9.3',toVersion:'test-new',formatVersion:2});
+      const result=backup.createCoreDbSnapshot({zylosDir:root,transactionId:id,fromVersion:'0.9.3',toVersion:'test-new',formatVersion:3});
       const row=result.manifest.databases.find(row=>row.owner==='dashboard'||row.source==='components/dashboard/dashboard.db');
       assert.equal(row.status,'backed_up');assert.equal(row.integrityCheck,'ok');
       const copy=path.join(result.dbBackupDir,row.file);assert.equal(sha(copy),row.sha256);
@@ -56,7 +56,7 @@ function fixture(t) {
       const j={formatVersion:1,transactionId:snapshot.manifest.id,zylosDir:root,skillsDir:path.join(root,'.claude/skills'),
         phase:'installing',installationIntent:true,dbBackupDir:snapshot.dbBackupDir,
         snapshotManifestHash:maintenance.hash(path.join(snapshot.dbBackupDir,'manifest.json')),
-        initialIdentity:{databases:snapshot.manifest.databases.map(d=>({source:d.source,exists:d.status!=='missing'}))}};
+        initialIdentity:{databases:maintenance.databasePaths(2).map(source=>({source,exists:fs.existsSync(path.join(root,source))}))}};
       maintenance.update(dir,j);
       // The real recovery primitives preserve rescue/rename intents and replace the
       // whole database. No test-owned row/table copy or cursor reset is involved.

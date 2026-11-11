@@ -18,7 +18,6 @@ const currentTimezones = new Set(timezoneOptions());
 export const INSTANCE_TIMEZONE_PATH = '/api/settings/timezone';
 const SERVICES = [
   ['scheduler', 'scheduler/scripts/daemon.js'],
-  ['web-console', 'web-console/scripts/server.js'],
   ['activity-monitor', 'activity-monitor/scripts/activity-monitor.js'],
   ['c4-dispatcher', 'comm-bridge/scripts/c4-dispatcher.js'],
 ];

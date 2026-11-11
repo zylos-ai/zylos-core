@@ -17,13 +17,13 @@ image. To pin a release, use its explicit image version tag (for example, `:0.9.
 ```bash
 docker run -d --name zylos \
   -e CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE \
-  -p 3456:3456 \
+  -p 3470:3470 \
   -v zylos-data:/home/zylos/zylos \
   -v claude-config:/home/zylos/.claude \
   ghcr.io/zylos-ai/zylos-core:latest
 ```
 
-Open `http://localhost:3456` to access the web console.
+Open `http://localhost:3470/` to access Dashboard and its Origin conversation.
 
 ### Option B: Docker Compose (more config options)
 
@@ -39,7 +39,7 @@ export CLAUDE_CODE_OAUTH_TOKEN=YOUR_TOKEN_HERE
 docker compose up -d
 ```
 
-The compose file supports timezone, channel tokens (Telegram, Lark), web console password, and more — edit it or pass via environment variables.
+The compose file supports timezone, channel tokens (Telegram, Lark), the Dashboard host port, and more — edit it or pass via environment variables.
 
 ### Dashboard Password
 
@@ -57,21 +57,6 @@ sessions (including remembered logins), and restarts a running Dashboard.
 Outside Docker, use `zylos dashboard reset-password` on the host. Non-quiet
 interactive init continues to display its newly generated password once.
 
-### Web Console Password
-
-A random password is generated on first boot. Two ways to find it:
-
-**From startup logs:**
-```bash
-docker logs zylos | grep -A2 "Web Console"
-```
-
-**Via the Claude shell (after startup completes):**
-```bash
-docker exec -it zylos zylos shell
-# Then ask: "What's my web console password?"
-```
-
 ### Talk to Your Agent
 
 ```bash
@@ -79,7 +64,7 @@ docker exec -it zylos zylos shell
 docker exec -it zylos zylos shell
 ```
 
-Or open `http://localhost:3456` to use the web console.
+Or open `http://localhost:3470/` and use the Origin conversation in Dashboard.
 
 ### Verify
 
@@ -101,7 +86,7 @@ On every start, the entrypoint:
 3. Passes through any channel tokens (Telegram, Lark) to `.env`
 4. Starts PM2 services and Claude Code in a tmux session
 
-Running `zylos init` on every startup ensures that template files (skills, PM2 config) stay in sync when the Docker image is updated. The init command is idempotent — it only creates missing files and syncs templates, never overwrites user data.
+Running `zylos init` on every startup ensures that template files (skills, PM2 config) stay in sync when the Docker image is updated. It also retries Web Console removal: old code is moved to `.backup`, generated routing and password lines are removed, and the upload limit is renamed to `DASHBOARD_MAX_UPLOAD_MB`. Historical conversations and media remain intact.
 
 ## Architecture
 
@@ -110,7 +95,7 @@ docker container: zylos
 ├── tmux session: claude-main (or codex-main)  ← AI agent loop (runtime-dependent)
 └── PM2 services
     ├── scheduler                   ← cron / heartbeat
-    ├── web-console                 ← browser UI (port 3456)
+    ├── zylos-dashboard             ← browser UI and Origin (port 3470)
     ├── c4-dispatcher               ← message routing bridge
     ├── activity-monitor            ← liveness / state tracking
     ├── caddy (optional)            ← reverse proxy (port 8080)
@@ -147,8 +132,7 @@ Set variables in `docker-compose.yml`, a `.env` file alongside `docker-compose.y
 | `CLAUDE_BYPASS_PERMISSIONS` | `true` | Run Claude with `--dangerously-skip-permissions` |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram channel token |
 | `LARK_APP_ID` / `LARK_APP_SECRET` | — | Lark/Feishu app credentials |
-| `ZYLOS_WEB_PASSWORD` | — | Web console password (auto-generated if not set) |
-| `WEB_CONSOLE_PORT` | `3456` | Host port for web console |
+| `DASHBOARD_PORT` | `3470` | Host port mapped to Dashboard's container port 3470 |
 | `HTTP_PORT` | `8080` | Host port for Caddy proxy |
 
 ## Mounting Your Own `.env`
