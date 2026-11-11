@@ -22,6 +22,14 @@ const exists = target => {
 const unused = target => { if (exists(target)) throw memoryError('EXISTS', 'Target already exists'); };
 const temporaryPath = target => path.join(path.dirname(target), `.${path.basename(target)}.${randomBytes(16).toString('hex')}.tmp`);
 
+function moveWithoutOverwrite(source, target) {
+  try { fs.linkSync(source, target); }
+  catch (error) { if (error.code === 'EEXIST') throw memoryError('EXISTS', 'Target already exists'); throw error; }
+  // If removal fails, retain both copies rather than roll back published data.
+  try { fs.unlinkSync(source); }
+  catch (error) { error.message = `Destination was published but source removal failed: ${error.message}`; throw error; }
+}
+
 function publish(target, content, create = false) {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const temporary = temporaryPath(target);
@@ -103,7 +111,7 @@ export function movePage(root, requested, unarchive = false) {
   const target = resolveAllowedMemoryPath({ root, path: destination, allowed: p => pagePath(p, !unarchive) }).target;
   unused(target);
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  fs.renameSync(source, target);
+  moveWithoutOverwrite(source, target);
   rebuild(root);
   return { ok: true, path: destination };
 }
@@ -122,7 +130,7 @@ export function moveOld(root, now = new Date()) {
   }
   for (const move of moves) {
     fs.mkdirSync(path.dirname(move.target), { recursive: true, mode: 0o700 });
-    fs.renameSync(move.source, move.target);
+    moveWithoutOverwrite(move.source, move.target);
   }
   return { ok: true, paths: moves.map(move => move.path) };
 }

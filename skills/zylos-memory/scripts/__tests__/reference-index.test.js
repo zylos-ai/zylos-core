@@ -109,7 +109,7 @@ test('archive and unarchive conflicts change neither pages nor indexes', t => {
   }
 });
 
-test('move-old renames available old files unchanged and skips missing files', t => {
+test('move-old moves available old files unchanged and skips missing files', t => {
   const f = fixture(t), now = new Date(2026, 10, 11, 10, 15, 30), bytes = Buffer.from([0, 255, 10]);
   for (const name of ['projects', 'decisions', 'reorg-progress']) f.write(`reference/${name}.md`, bytes);
   const result = moveOld(f.root, now);
@@ -168,4 +168,29 @@ test('CLI dispatches all five commands and reports EXISTS without overwriting', 
   assert.equal(JSON.parse(moved.stdout).paths.length, 1);
   assert.equal(f.read(JSON.parse(moved.stdout).paths[0]), 'old bytes');
   assert.equal(run(['rebuild', '--path', name]).status, 1);
+});
+
+
+test('a destination published during a move is never overwritten', t => {
+  const f = fixture(t), source = 'reference/projects/item.md', destination = 'reference/projects/archive/item.md';
+  f.write(source, 'source bytes');
+  const link = fs.linkSync;
+  t.mock.method(fs, 'linkSync', (from, to) => {
+    fs.writeFileSync(to, 'concurrent bytes', { flag: 'wx' });
+    return link(from, to);
+  });
+  assert.throws(() => movePage(f.root, source), code('EXISTS'));
+  assert.equal(f.read(source), 'source bytes'); assert.equal(f.read(destination), 'concurrent bytes');
+  assert.equal(fs.existsSync(f.target('reference/projects/INDEX.md')), false);
+});
+
+test('source removal failure leaves both copies and reports the incomplete move', t => {
+  const f = fixture(t), source = 'reference/projects/item.md', destination = 'reference/projects/archive/item.md';
+  f.write(source, 'preserved bytes');
+  const unlink = t.mock.method(fs, 'unlinkSync', () => { throw Object.assign(new Error('removal denied'), { code: 'EACCES' }); });
+  assert.throws(() => movePage(f.root, source), error => error.code === 'EACCES' && /Destination was published but source removal failed/.test(error.message));
+  unlink.mock.restore();
+  assert.equal(f.read(source), 'preserved bytes'); assert.equal(f.read(destination), 'preserved bytes');
+  assert.throws(() => movePage(f.root, source), code('EXISTS'));
+  assert.equal(fs.existsSync(f.target('reference/projects/INDEX.md')), false);
 });
