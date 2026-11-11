@@ -69,9 +69,10 @@ export function conversationPreview(content, options = {}) {
 }
 
 /** One quote projection for the history API and Core's text history reader. */
-export function quotePreview(row, options = {}) {
+export function quotePreview(row, { singleLine = false, ...options } = {}) {
   const content = stripChatQuote(row.channel === 'internal' ? internalContent(row) : row.content);
-  return conversationPreview(content, { ...options, quote: true }).replace(/\s+/g, ' ');
+  const preview = conversationPreview(content, { ...options, quote: singleLine });
+  return singleLine ? preview.replace(/\s+/g, ' ') : preview;
 }
 
 function rowQuote(row) {

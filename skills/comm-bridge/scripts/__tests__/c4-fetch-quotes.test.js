@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { buildAnnotatedContent } from '../attachment-annotations.js';
+import { CONTENT_PREFIX, parseC4Content } from '../c4-content-schema.js';
 
 // Allocate this file's database before any production module reads its paths;
 // the official runner may execute other files concurrently under the same HOME.
@@ -21,6 +22,7 @@ for (const [key, leaf] of [['HOME', 'home'], ['ZYLOS_DIR', 'home/zylos'], ['PM2_
 const { fetchCli } = await import('../c4-public-cli.js');
 const { getDb, close } = await import('../c4-db.js');
 const { DB_PATH, SKILLS_DIR } = await import('../c4-config.js');
+const { dashboardSource, resolveDashboardQuote } = await import('../dashboard-source.js');
 after(() => {
   try { close(); fs.rmSync(fileRoot, { recursive: true, force: true }); }
   finally { for (const [key, value] of Object.entries(previous)) process.env[key] = value; }
@@ -160,4 +162,36 @@ test('JSON and unquoted text retain byte-identical public output including forei
   console.log('Compatibility SHA256:', digest);
   // Captured from the untouched product baseline using these same fixed rows.
   assert.equal(digest, '314f3321c4a48544c20e876c42d6dfcb33a9c50d95c7c1498d59068b36b5020a');
+});
+
+// Reserved groups are never Dashboard conversations. Exercise both public text
+// and real delivery lookup on a private DB; no runtime or transport is started.
+for (const reserved of ['origin', '*']) test(`reserved ${reserved} history and delivery retain literal quote markers`, t => {
+  const f = fixture(t);
+  f.add({ id: 1, session_group: reserved, content: 'Original reserved text' });
+  f.add({ id: 101, session_group: reserved, direction: 'in', content: '[quote c4_id=1]\nReserved reply' });
+  const text = fetchCli(['--begin', '101', '--end', '101']);
+  assert.equal(text.includes('(quoting '), false);
+  assert.ok(text.includes('[quote c4_id=1]\nReserved reply'));
+  const row = f.db.prepare('SELECT * FROM conversations WHERE id=101').get();
+  const delivery = dashboardSource(row.content, 'Owner', { row, lookupQuote: value => resolveDashboardQuote(value, f.db) });
+  assert.equal(delivery.includes('<replying-to>'), false);
+  assert.ok(delivery.includes('[quote c4_id=1]\nReserved reply'));
+});
+
+// Same real public text modes and private DB; these are the structured media
+// blocks stored by send-hook, not plain attachment-annotation lookalikes.
+for (const [name, args] of modes) for (const kind of ['file', 'image']) test(`${name} text quotes a structured ${kind} by attachment name`, t => {
+  const f = fixture(t);
+  const filename = kind === 'file' ? 'report.txt' : 'photo.png';
+  const content = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: 'structured-media', fallbackText: 'Media answer',
+    blocks: [{ id: 'media', type: 'x-zylos.' + kind, schemaVersion: 1, fallbackText: 'Attachment',
+      data: { attachmentId: 'private-media-id', nameSnapshot: filename } }] });
+  assert.equal(parseC4Content(content).kind, 'envelope', 'fixture must exercise the structured media path');
+  f.add({ id: 1, content });
+  f.add({ id: 101, direction: 'in', content: '[quote c4_id=1]\nFollow up' });
+  f.ready();
+  const text = fetchCli(args);
+  assert.ok(text.includes(`[quote c4_id=1]\n(quoting c4_id=1 — AI: （附件：${filename}）)\nFollow up`));
+  assert.equal(text.includes('private-media-id'), false);
 });

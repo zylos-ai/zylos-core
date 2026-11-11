@@ -88,8 +88,7 @@ function historyNotes(rows) {
   ).join('');
 }
 function conversations(rows) {
-  const candidates = rows.filter(row => row.channel === 'dashboard' && row.direction === 'in' && parseChatQuote(row.content));
-  const quoted = candidates.length ? resolveDashboardQuotes(candidates, db.getDb()) : new Map();
+  const quoted = resolveDashboardQuotes(rows, db.getDb());
   const owner = quoted.size ? readOwnerName() : null;
   return rows.map(row => {
     const route = row.direction === 'in' && row.endpoint_id !== null ? '\n' + replyVia(row, sendPath) : '';
@@ -97,7 +96,7 @@ function conversations(rows) {
     const marker = target && parseChatQuote(row.content);
     let content = row.content;
     if (marker) {
-      const preview = `(quoting c4_id=${marker.id} — ${dashboardQuoteSender(target, owner)}: ${quotePreview(target)})`;
+      const preview = `(quoting c4_id=${marker.id} — ${dashboardQuoteSender(target, owner)}: ${quotePreview(target, { singleLine: true })})`;
       const end = content.indexOf('\n');
       content = end < 0 ? content + '\n' + preview
         : content.slice(0, end + 1) + preview + '\n' + content.slice(end + 1);
