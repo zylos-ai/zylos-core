@@ -148,6 +148,19 @@ async function alertTargetInstruction() {
   return `Alert target: ${value}. System alerts go there; change it only if the owner asks.`;
 }
 
+/** The scope's existing delivered tail, shared by context and startup prompting. */
+export function readStartupConversationTail(scope, { db, withDb = withC4Db } = {}) {
+  const read = database => {
+    const coverage = scope.mode === 'multi'
+      ? database.getCoverageEnd(scope.sessionGroup) : database.getGlobalCoverageEnd();
+    const conversations = scope.mode === 'multi'
+      ? database.getDeliveredSince(scope.sessionGroup, coverage, { limit: 6 })
+      : database.getGlobalDeliveredSince(coverage, { limit: 6 });
+    return { coverage, conversations };
+  };
+  return db ? read(db) : withDb('startup conversation tail', read);
+}
+
 /** Pack complete projected messages; drop whole oldest messages to fit. */
 export async function emitC4Conversations(payload, budget = null, {
   scopeReader, withDb = withC4Db,
@@ -162,10 +175,7 @@ export async function emitC4Conversations(payload, budget = null, {
     const readScope = scopeReader ?? (await import('../../activity-monitor/scripts/bootstrap-scope.js')).bootstrapScope;
     const scope = await readScope();
     await normalHelpers();
-    const coverage = scope.mode === 'multi' ? db.getCoverageEnd(scope.sessionGroup) : db.getGlobalCoverageEnd();
-    const conversations = scope.mode === 'multi'
-      ? db.getDeliveredSince(scope.sessionGroup, coverage, { limit: 6 })
-      : db.getGlobalDeliveredSince(coverage, { limit: 6 });
+    const { coverage, conversations } = readStartupConversationTail(scope, { db });
     let unsummarized;
     try {
       unsummarized = scope.mode === 'multi'

@@ -329,6 +329,8 @@ describe('session-start-orchestrator', () => {
       childTimeoutMs: 1234,
       onboardingPending: () => false,
       scopeReader: async () => ({ sessionGroup: null }),
+      migrationPending: () => false,
+      recentReader: async () => ({ coverage: 0, conversations: [{ direction: 'in', timestamp: new Date().toISOString() }] }),
       execFile: async (...args) => { calls.push(args); return { stdout: '{"id":1}' }; },
     });
 
@@ -367,6 +369,8 @@ describe('session-start-orchestrator', () => {
       controlPath: '/tmp/c4-control.js',
       onboardingPending: () => false,
       scopeReader: async () => ({ sessionGroup: null }),
+      migrationPending: () => false,
+      recentReader: async () => ({ coverage: 0, conversations: [{ direction: 'in', timestamp: new Date().toISOString() }] }),
       execFile: () => new Promise((resolve) => { resolveChild = resolve; }),
     }).then(() => { settled = true; });
 

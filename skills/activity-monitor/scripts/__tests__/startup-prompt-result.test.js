@@ -33,3 +33,46 @@ for (const outcome of ['skipped', 'failed', 'legacy']) {
     assert.equal(record.startupControlIds.length, 0);
   });
 }
+
+// Real enqueue policy -> atomic READY publication, with private handoff/run paths,
+// injected conversation rows and no child/network/service/terminal start. Run for
+// startup skip/publication changes; unrelated rendering or queue internals skip.
+// The official runner owns HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR before imports;
+// every case checks these paths and deletes its private READY files on teardown.
+for (const source of ['startup', 'clear']) for (const sessionGroup of [null, 'origin', 'telegram:ready']) {
+  for (const last of ['empty', 'out', 'old-in']) test(`${source} publishes nothing_pending for ${sessionGroup ?? 'single'} with ${last} tail`, async t => {
+    const runnerRoot = path.dirname(process.env.HOME);
+    assert.match(path.basename(runnerRoot), /^zylos-tests-/);
+    for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) assert.ok(process.env[key]?.startsWith(runnerRoot + path.sep), key);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'startup-ready-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const memoryDir = path.join(root, 'memory'); fs.mkdirSync(memoryDir);
+    const scope = { dir: path.join(root, 'run'), memoryDir, sessionGroup, mode: sessionGroup ? 'multi' : 'single' };
+    const time = Date.parse('2026-11-11T00:00:00.000Z');
+    const conversations = last === 'empty' ? [] : [{ direction: last === 'out' ? 'out' : 'in',
+      timestamp: new Date(time - (last === 'old-in' ? 31 : 1) * 60000).toISOString() }];
+    console.info('READY publication isolation', JSON.stringify({
+      HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME,
+      TMPDIR: process.env.TMPDIR, readyFile: path.join(scope.dir, 'current-session.json'),
+      handoff: path.join(memoryDir, 'handoff.md'), database: 'injected rows only', tmux: 'unused',
+    }));
+    const record = await publishBootstrapReady({ source, session_id: 'session-fixture' }, {
+      env: { ZYLOS_RUN_ID: 'run-fixture' }, scopeReader: async () => scope,
+      identityReader: async () => ({}), now: () => time,
+      enqueue: actualSource => enqueueStartupPrompt(actualSource, {
+        onboardingPending: () => false, migrationPending: () => false,
+        scopeReader: async () => scope, now: () => time,
+        recentReader: async () => ({ coverage: 0, conversations }),
+        execFile: () => assert.fail('nothing pending must not enqueue'),
+      }),
+    });
+    const saved = JSON.parse(fs.readFileSync(path.join(scope.dir, 'current-session.json'), 'utf8'));
+    for (const value of [record, saved]) {
+      assert.deepEqual(value.startupPrompt, { state: 'skipped', reason: 'nothing_pending' });
+      assert.equal(value.startupControlIds.length, 0);
+      assert.equal(value.runId, 'run-fixture');
+      assert.equal(value.sessionId, 'session-fixture');
+    }
+    assert.deepEqual(fs.readdirSync(scope.dir), ['current-session.json']);
+  });
+}

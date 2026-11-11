@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { emitC4Conversations } from '../c4-session-init.js';
+import { emitC4Conversations, readStartupConversationTail } from '../c4-session-init.js';
+import path from 'node:path';
+
+// Official runner-owned environment; mocked C4 API only, no DB/HTTP/PM2/tmux.
+const runnerRoot = path.dirname(process.env.HOME);
+assert.match(path.basename(runnerRoot), /^zylos-tests-/);
+for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) assert.ok(process.env[key]?.startsWith(runnerRoot + path.sep), key);
+console.info('startup tail isolation', JSON.stringify(Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]]))));
 
 function fixture(mode) {
   const calls = [];
@@ -124,3 +131,29 @@ for (const mode of ['single', 'multi']) {
     assert.match(await emitC4Conversations({ agent_id: 'child' }, null, f.options), /About 300 messages unsummarized; latest 0 shown/);
   });
 }
+
+
+for (const sessionGroup of [null, 'origin', 'telegram:one']) {
+  test(`startup decision reuses the context tail read in ${sessionGroup ?? 'single global'} scope`, async () => {
+    const f = fixture(sessionGroup ? 'multi' : 'single');
+    const scope = { ...f.scope, sessionGroup, scope: sessionGroup ?? '*' };
+    const result = await readStartupConversationTail(scope, {
+      withDb: async (_label, read) => read(f.db),
+    });
+    assert.equal(result.coverage, 41);
+    assert.equal(result.conversations.length, 2);
+    assert.deepEqual(f.calls, sessionGroup
+      ? [['coverage', sessionGroup], ['tail', sessionGroup, 41, { limit: 6 }]]
+      : [['coverage'], ['tail', 41, { limit: 6 }]]);
+    assert.equal(result.conversations[1].content, 'LATEST-ENTIRE-MESSAGE');
+  });
+}
+
+test('startup tail failure propagates without querying another scope', async () => {
+  const f = fixture('multi');
+  f.db.getDeliveredSince = () => { throw Error('fixture C4 unavailable'); };
+  f.db.getGlobalDeliveredSince = () => assert.fail('must not fall back to global');
+  await assert.rejects(readStartupConversationTail(f.scope, {
+    withDb: async (_label, read) => read(f.db),
+  }), /fixture C4 unavailable/);
+});

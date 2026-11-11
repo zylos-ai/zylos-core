@@ -14,6 +14,7 @@ import path from 'path';
 import os from 'os';
 import { isMainModule } from './is-main-module.js';
 import { bootstrapScope } from './bootstrap-scope.js';
+import { readStartupConversationTail } from '../../comm-bridge/scripts/c4-session-init.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -80,15 +81,37 @@ function readStdinSource() {
   });
 }
 
-const startupPrompt = scope => [
-  'reply to your human partner if they are waiting for your reply,',
-  'then continue your ongoing tasks using the injected core context and C4 context;',
-  scope.memoryDir && fs.existsSync(path.join(scope.memoryDir, 'handoff.md'))
-    ? 'read the supplied handoff in full before resuming work,'
-    : 'no handoff is available for this scope;',
-  'and read working-memory paths on demand,',
-  'and do not query c4.db for recent conversations unless explicitly required.'
+const startupPrompt = handoff => [
+  ...(handoff ? ['Continue the unfinished work listed in the supplied handoff.'] : []),
+  'If your human partner may be waiting for a reply, use the injected context to decide whether to reply.',
+  'Read working-memory paths on demand.',
+  'Do not query c4.db for recent conversations.'
 ].join(' ');
+
+function timestampMs(value) {
+  // SQLite CURRENT_TIMESTAMP is UTC but has no zone suffix.
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+    ? value.replace(' ', 'T') + 'Z' : value;
+  const timestamp = Date.parse(normalized);
+  if (!Number.isFinite(timestamp)) throw new Error('Startup conversation timestamp is unreadable');
+  return timestamp;
+}
+
+async function hasRecentInbound(scope, recentReader, now) {
+  try {
+    const tail = await recentReader(scope);
+    if (!Array.isArray(tail?.conversations)) throw new Error('Startup conversation tail is unreadable');
+    let latest = null, latestAt = -Infinity;
+    for (const row of tail.conversations) {
+      const time = timestampMs(row.timestamp);
+      if (time >= latestAt) { latest = row; latestAt = time; }
+    }
+    return latest?.direction === 'in' && now() - latestAt <= 30 * 60 * 1000;
+  } catch {
+    // A failed read must not suppress a reminder to a potentially waiting human.
+    return true;
+  }
+}
 
 const migrationPrompt = [
   'A pending instruction migration was injected into this session\'s startup context.',
@@ -130,12 +153,22 @@ export async function enqueueStartupPrompt(source, {
   onboardingPending = isOnboardingPending,
   migrationPending = isMigrationPending,
   scopeReader = bootstrapScope,
+  recentReader = readStartupConversationTail,
+  now = Date.now,
 } = {}) {
   if (!['startup', 'clear'].includes(source)) return { skipped: true, reason: 'source', startupControlIds: [] };
   if (onboardingPending()) return { skipped: true, reason: 'onboarding_pending', startupControlIds: [] };
   const scope = await scopeReader();
 
-  const activePrompt = migrationPending() ? migrationPrompt : startupPrompt(scope);
+  let activePrompt;
+  if (migrationPending()) activePrompt = migrationPrompt;
+  else {
+    const handoff = !!scope.memoryDir && fs.existsSync(path.join(scope.memoryDir, 'handoff.md'));
+    if (!handoff && !await hasRecentInbound(scope, recentReader, now)) {
+      return { skipped: true, reason: 'nothing_pending', startupControlIds: [] };
+    }
+    activePrompt = startupPrompt(handoff);
+  }
 
   // Async execFile (not execFileSync): keeps the event loop free so this step
   // genuinely runs in parallel with the foreground step, and so the
