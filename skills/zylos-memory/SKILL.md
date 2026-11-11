@@ -25,10 +25,17 @@ session's live process. Do not choose from machine defaults or a newer desired
 configuration. Origin Sync uses Origin's actual runtime.
 
 - Claude: launch `zylos-group-sync`, `zylos-origin-sync`, or `zylos-global-sync`
-  with `run_in_background: true`; these definitions use `sonnet`.
-- Codex: use this session's native `spawn_agent` mechanism, ask the worker to
-  read this skill and the matching procedure, and use a Codex-supported worker
-  model. Do not map the Claude model name or force the parent model/effort.
+  with `run_in_background: true`; these definitions use `sonnet`. Never use a
+  `fork` type or any mechanism that inherits the parent conversation for Sync.
+- Codex: use this session's native `spawn_agent` with `fork_turns: "none"`.
+  Explicitly pass `model` using a Terra-tier model listed in the exposed
+  `spawn_agent` tool description (currently `gpt-6.1-terra`). Only when that
+  list has no Terra-tier model, omit `model` and inherit the parent model.
+  Do not pass `reasoning_effort`. Report the actual selected model in the
+  Sync result. Give the worker a self-contained message instructing it to read
+  this skill and the matching procedure. Include their paths, the requested job,
+  and all facts and environment bindings it needs; it cannot see the parent
+  conversation.
 - Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
   If background tools or the restricted memory tool are unavailable, report
   `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.

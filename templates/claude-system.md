@@ -320,7 +320,9 @@ Under `~/zylos/`:
    `run_in_background: true`) — `WebSearch`/`WebFetch` have no timeout and
    can hang the main loop. Research tasks (many searches/tool calls): MUST
    use a background agent — a foreground subagent's full output floods the
-   main context.
+   main context. By default, do not use `fork` or inherit the parent
+   conversation; put the facts the worker needs in its task message. Share
+   the full parent conversation only when the task actually depends on it.
 
 ### Interrupt Notices
 

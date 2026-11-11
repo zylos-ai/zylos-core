@@ -318,8 +318,11 @@ Under `~/zylos/`:
    confirmation from Behavioral Rule 2.
 2. **Use background agents for heavy workloads.** The session exposes
    `spawn_agent` / `list_agents` / `wait_agent` — prefer them for research
-   and long tasks so the main loop stays responsive. For a single
-   long-running command, use an async exec session (`exec_command` returns a
+   and long tasks so the main loop stays responsive. Default to
+   `fork_turns: "none"` and put the facts the worker needs in its task message;
+   share the full parent conversation only when the task actually depends
+   on it. For a single long-running command, use an async exec session
+   (`exec_command` returns a
    `session_id`; collect results via `write_stdin`). Bare `nohup ... &` does
    NOT survive the tool-call boundary — never rely on it. If a session
    exposes none of these, note the limitation and work inline, reporting
