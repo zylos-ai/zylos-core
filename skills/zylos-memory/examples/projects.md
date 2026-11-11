@@ -10,5 +10,3 @@
 ## 2026-11-10
 - Page creation and archive operations preserve existing destinations.
 - Next: document the reading and writing procedure, then request acceptance.
-- **Importance:** 2
-- **Type:** factual

@@ -236,7 +236,3 @@ about a month, or all decisions in a topic have been superseded; use
 `reference-index.js archive --path <page>`, leave paused projects in place, and
 use `reference-index.js unarchive --path <archive-page>` when mentioned again.
 On `EXISTS`, both pages remain unchanged; rename or merge them before moving.
-The commands move with link then unlink and rebuild indexes without a Sync
-lock/token check. Finish page edits before moving; if unlink fails or the
-process stops between publication and removal, both copies remain and there
-is no automatic rollback.

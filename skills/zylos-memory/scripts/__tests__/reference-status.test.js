@@ -79,15 +79,5 @@ test('large old reference files do not contribute budget or missing-file issues'
 test('reorganization proposal exports the agreed owner consent and routing text', () => {
   const text = prompts.REFERENCE_REORG_PROMPT;
   assert.equal(typeof text, 'string');
-  for (const sentence of [
-    'Read the zylos-memory skill references/reference-reorg.md and follow it.',
-    'the owner has already agreed: continue it without asking again.',
-    'in their most recent private chat, covering only three points:',
-    'you would like to reorganize the memory files; it will take some time;',
-    'afterwards memory sync will be faster and less likely to miss or duplicate records.',
-    'do not mention duration, cost, models, or file locations.',
-    'Start only after explicit agreement.',
-    'Origin does not ask or reorganize itself; it asks the thread that handles that chat.',
-    'If the owner declines or does not reply, do nothing more;',
-  ]) assert.ok(text.includes(sentence), sentence);
+  assert.equal(text, "Memory reorganization proposal: the old memory/reference/projects.md or decisions.md still exists. Read the zylos-memory skill references/reference-reorg.md and follow it. If memory/reference/reorg-progress.md exists, the owner has already agreed: continue it without asking again. Otherwise ask the owner once, in their most recent private chat, covering only three points: you would like to reorganize the memory files; it will take some time; afterwards memory sync will be faster and less likely to miss or duplicate records. Ask whether they agree; do not mention duration, cost, models, or file locations. Start only after explicit agreement. In multi-session mode Origin does not ask or reorganize itself; it asks the thread that handles that chat. If the owner declines or does not reply, do nothing more; the system will ask again later.");
 });

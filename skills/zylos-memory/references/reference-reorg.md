@@ -1,5 +1,8 @@
 # One-time Reference Reorganization
 
+Script names below mean `node <ZYLOS_DIR>/.claude/skills/zylos-memory/scripts/<name>`;
+`c4-*` scripts are in the sibling `comm-bridge/scripts/` directory.
+
 This procedure is for an owner-approved one-time reorganization, not Memory
 Sync. Ordinary Sync immediately uses the new project and decision directories
 and moves useful old material only as it is needed. This procedure finishes
@@ -13,7 +16,7 @@ owner's private conversation; memory file structure is internal information.
 Find the owner's most recent private chat with:
 
 ```sh
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js groups --active-since <milliseconds-30-days-ago> --json
+node <ZYLOS_DIR>/.claude/skills/comm-bridge/scripts/c4-db.js groups --active-since <milliseconds-30-days-ago> --json
 ```
 
 Results are ordered by recent activity, one row per conversation group with an
@@ -149,12 +152,7 @@ each batch.
    in multi mode that is the thread owning this private conversation, so it can
    notify the owner there directly.
 
-Moves publish a hard link before removing the source. If source removal fails or
-the process stops between these operations, both locations retain the same
-content; the command reports an error on removal failure and does not roll back.
-An existing destination returns `EXISTS`; use the existing rename/merge handling
-rather than overwriting it. The tool does not serialize edits against moves;
-complete edits before moving a page.
+If `move-old` returns `EXISTS`, it does not overwrite; report it.
 
 ## Interruption and resumption
 
