@@ -11,11 +11,12 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 // Run for changes to the conversation page, composer, quote/annotation modules or their styles; skip otherwise.
 // Opt-in runner and sandbox prove HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB isolation,
 // and own browser, observer, HTTP and database cleanup on failure or timeout.
-test('messages are quoted and annotated from the conversation page and the draft survives a reload',
+// Each width owns a fresh sandbox so the mobile boundary can also run on hosts without trackpad-wheel support.
+for (const width of [1280, 390]) test(`messages are quoted and annotated from the conversation page and the draft survives a reload (${width}px)`,
   { skip: !chatEnabled(), timeout: 150_000 }, async t => {
     const sandbox = createChatSandbox(t);
     await sandbox.runCase(async () => {
       const { runQuoteAnnotateBrowser } = await import('./helpers/chat-quote-browser.js');
-      await runQuoteAnnotateBrowser(t, sandbox);
+      await runQuoteAnnotateBrowser(t, sandbox, { widths: [width] });
     }, { timeoutMs: 140_000 });
   });
