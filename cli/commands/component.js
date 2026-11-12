@@ -235,7 +235,7 @@ export function formatSelfUpgradeCompletion(data) {
   }
   for (const warning of data.serviceWarnings || []) lines.push(`Service warning: ${warning}`);
   for (const warning of data.warnings || []) {
-    lines.push(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}`);
+    lines.push(typeof warning === 'string' ? `Upgrade warning: ${warning}` : `Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}`);
   }
   if (data.checkpointAudit?.state === 'incomplete') {
     lines.push(`Checkpoint audit: incomplete${data.checkpointAudit.error ? ': ' + data.checkpointAudit.error : ''}`);

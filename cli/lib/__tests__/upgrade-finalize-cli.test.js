@@ -15,15 +15,16 @@ test('completion formatter reports independent outcomes without promising restar
     dashboard: { errors: [{ item: 'route', code: 'ROUTE_FAILED', message: 'reload failed' }] },
     sessionRestart: { ok: false, error: { code: 'TIMEOUT', message: 'submission timed out' } },
     modeStatus: { state: 'unavailable', error: { message: 'session-mode status unavailable' } },
-    warnings: [{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI unavailable'}],
+    warnings: [{code:'RUNTIME_CLI_UNAVAILABLE',runtime:'codex',message:'CLI unavailable'}, 'Web Console removal needs attention.'],
     next: 'Resolve the failure before restarting.' };
   const text = formatSelfUpgradeCompletion(result);
   const json = JSON.parse(JSON.stringify(result));
   for (const expected of ['Installation: done', 'Dashboard: degraded', 'Session restart: manual_required',
     'Mode transition: unknown', 'ROUTE_FAILED: reload failed', 'TIMEOUT: submission timed out',
-    'Mode status: unavailable: session-mode status unavailable', 'Runtime warning (codex): RUNTIME_CLI_UNAVAILABLE: CLI unavailable', 'Manual runtime restart required', result.next]) {
+    'Mode status: unavailable: session-mode status unavailable', 'Runtime warning (codex): RUNTIME_CLI_UNAVAILABLE: CLI unavailable', 'Upgrade warning: Web Console removal needs attention.', 'Manual runtime restart required', result.next]) {
     assert.ok(text.includes(expected), expected);
   }
+  assert.doesNotMatch(text, /undefined/);
   assert.deepEqual(json.completion, result.completion);
   assert.equal(Object.hasOwn(json, 'instructionFilesRebuilt'), false);
   assert.doesNotMatch(text, /No action needed|restart automatically|ready/i);

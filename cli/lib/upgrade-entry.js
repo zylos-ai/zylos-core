@@ -156,7 +156,8 @@ if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process
     result = {success:false, code:error instanceof SyntaxError ? 'INVALID_UPGRADE_HANDOFF' : upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]};
   }
   for(const warning of result.serviceWarnings || []) process.stderr.write(`Service warning: ${warning}\n`);
-  for(const warning of result.warnings || []) process.stderr.write(`Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}\n`);
+  // Runtime CLI preparation returns objects; finalization adds plain notices.
+  for(const warning of result.warnings || []) process.stderr.write(typeof warning === 'string' ? `Upgrade warning: ${warning}\n` : `Runtime warning (${warning.runtime}): ${warning.code}: ${warning.message}\n`);
   for(const warning of result.corePackageWarnings || []) process.stderr.write(`Core package location warning: ${warning.message}\n`);
   for(const item of result.checkpointAudit?.items || []) {
     if(item?.repairRequired === true) process.stderr.write(`Checkpoint warning: checkpoint ${item.checkpointId} exceeds the available conversation range and requires repair.\n`);
