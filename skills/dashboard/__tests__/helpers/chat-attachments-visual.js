@@ -202,7 +202,12 @@ export async function runAttachmentVisual(t, sandbox) {
     assert.ok((await page.locator('#wb-chat .conversation-upload-label').innerText()).includes('4'));
     assert.ok((await itemNamed('补充说明.pdf').innerText()).includes('已准备'));
     assert.match(await itemNamed('交互录屏.mp4').innerText(), /上传中.*\d+%/);
-    assert.ok((await composer().innerText()).includes('支持粘贴、拖入'));
+    // The phone layout hides the compose hint by design (mobile conversation focus);
+    // the paste/drop guidance is still set and is visible on wide screens.
+    const composeHint = composer().locator('.conversation-compose-hint');
+    assert.ok((await composeHint.textContent()).includes('支持粘贴、拖入'));
+    assert.equal(await composeHint.isVisible(), width !== 390);
+    if (width !== 390) assert.ok((await composer().innerText()).includes('支持粘贴、拖入'));
     const trayLayout = await trayItems().evaluateAll(cards => cards.map(card => {
       const info = card.querySelector('.chat-attachment-info'), buttons = [...card.querySelectorAll('button')];
       const probe = document.createElement('span'); probe.style.color = 'var(--c-danger-ink)';
@@ -505,7 +510,11 @@ export async function runAttachmentVisual(t, sandbox) {
   });
   assert.equal(readonlyDrop.over, true); assert.equal(readonlyDrop.drop, true); assert.equal(uploads, uploadsBeforeReadonlyDrop);
   fixture.setProxy(fixture); expectedHttpError = (url, status) => url.pathname.startsWith('/fleet/Remote/api/chat/') && status === 403;
-  await page.goto(fixture.base + '/fleet/Remote/chat'); await page.locator('#wb-chat .conversation-blocked-notice').waitFor();
+  // A refused remote view hides the conversation tab and leaves for the overview (remote-access.js);
+  // the conversation page keeps only its fallback notice.
+  await page.goto(fixture.base + '/fleet/Remote/chat'); await page.locator('#wb-chat .conversation-blocked-notice').waitFor({ state: 'attached' });
+  await page.waitForFunction(() => document.querySelector('.tab[data-tab="chat"]').hidden
+    && document.querySelector('.tab.active')?.dataset.tab === 'overview' && !document.querySelector('#tab-overview').hidden, null, { timeout: 10_000 });
   assert.equal(await page.locator('#wb-chat [data-action="attach"]').count(), 0);
   expectedHttpError = null;
   const config = JSON.parse(fs.readFileSync(fixture.modePath, 'utf8')); fs.writeFileSync(fixture.modePath, JSON.stringify({ ...config, session_mode: 'single' }));

@@ -6,6 +6,7 @@ import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { ChatHistory } from '../src/lib/chat/history.js';
 import { ChatChangeObserver, parseChatSubscription } from '../src/lib/chat/change-observer.js';
+import { ORIGIN_CONVERSATION_ID } from '../src/lib/chat/origin.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
@@ -167,15 +168,18 @@ test('history reopens a restored database after caching an empty replacement wit
   const emptyWriter = createDb(filename);
   try { assert.equal(emptyWriter.prepare('SELECT COUNT(*) AS n FROM conversations').get().n, 0); }
   finally { emptyWriter.close(); }
-  assert.equal(f.history.list({ tab: 'mine' }).items.length, 0, 'ordinary history read caches the empty replacement');
+  // "mine" always pins the Origin conversation, with or without messages; the
+  // empty replacement has no other conversation.
+  assert.deepEqual(f.history.list({ tab: 'mine' }).items.map(item => item.id), [ORIGIN_CONVERSATION_ID],
+    'ordinary history read caches the empty replacement');
   const emptyHandle = f.reader._db, emptyGeneration = f.reader._generation;
   assert.ok(emptyHandle?.open);
   fs.renameSync(saved, filename);
 
   // No subscribe/readVersion/tick occurs between restoration and this read.
   const restored = f.history.list({ tab: 'mine' });
-  assert.equal(restored.items.length, 1, 'list must read restored data instead of the deleted empty file');
-  assert.equal(restored.items[0].id, idFor('dash:one'));
+  assert.deepEqual(restored.items.map(item => item.id), [ORIGIN_CONVERSATION_ID, idFor('dash:one')],
+    'list must read restored data instead of the deleted empty file');
   assert.equal(f.history.messages(idFor('dash:one'), { tab: 'mine' }).items[0].content, 'original stored message');
   assert.equal(emptyHandle.open, false, 'cached empty handle is closed');
   assert.equal(f.reader._generation, emptyGeneration + 1, 'existing open path advances generation once');

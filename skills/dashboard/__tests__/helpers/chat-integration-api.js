@@ -16,6 +16,7 @@ import { createDisplayNames } from '../../src/lib/workbench/display-names.js';
 import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
 import { ChatConversations, isChatLocalIdUsed } from '../../src/lib/chat/conversations.js';
 import { ChatSender } from '../../src/lib/chat/send.js';
+import { ensureOriginConversation } from '../../src/lib/chat/origin.js';
 import { ChatAttachments } from '../../src/lib/chat/attachments.js';
 import { handleChatAttachments } from '../../src/lib/chat/attachment-routes.js';
 import { ChatHistory } from '../../src/lib/chat/history.js';
@@ -85,6 +86,8 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   const db = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
   guardDatabase(db, schema);
   const store = sandbox.openDatabase(sandbox.paths.dashboardDb, filename => new Store(filename));
+  // Dashboard start registers the Origin conversation (src/index.js); mirror it.
+  ensureOriginConversation(store.db);
   const config = { configPath, auth: { enabled: true, password: 'scrypt:private-fixture' }, chat: { allowRemote: false } };
   fs.writeFileSync(configPath, JSON.stringify(config));
   const modePath = path.join(zylos, '.zylos/config.json');

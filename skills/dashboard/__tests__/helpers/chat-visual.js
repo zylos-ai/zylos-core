@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createChatApiFixture, protocolFixtures, questionContent } from './chat-integration-api.js';
 import { sendJson } from '../../src/lib/http.js';
 import { CONTENT_PREFIX } from '../../../comm-bridge/scripts/c4-content-schema.js';
+import { ORIGIN_CONVERSATION_ID } from '../../src/lib/chat/origin.js';
 
 // Actual application HTML/ESM/CSS, real HTTP chat middleware and private DBs.
 // Other dashboard panes receive a bounded operational fixture, never live data.
@@ -126,7 +127,9 @@ export async function runVisualCase(t, sandbox) {
         await page.waitForFunction(before => document.querySelectorAll('[data-conversation-id]').length > before, before);
       }
       assert.ok(groupPages > 0, 'Group pagination must load another page');
-      assert.equal(await page.locator('[data-conversation-id]').count(), 53);
+      // 52 drafts and the first conversation, after the Origin conversation pinned first.
+      assert.equal(await page.locator('[data-conversation-id]').count(), 54);
+      assert.equal(await page.locator('[data-conversation-id]').first().getAttribute('data-conversation-id'), ORIGIN_CONVERSATION_ID);
       await page.locator(`[data-conversation-id="${first.receipt.conversationId}"]`).click();
       await page.locator('#wb-chat .chat-message').first().waitFor();
       assert.equal(await page.locator('[data-action="loadOlder"]').count(), 0);
@@ -162,7 +165,9 @@ export async function runVisualCase(t, sandbox) {
               : [{ points: (block.data.parts ?? block.data.points).map(point => ({ x: point.label, y: point.value })) }];
             const points = series.flatMap(entry => entry.points);
             assert.equal(await part.locator('.chat-chart').count(), 1);
-            assert.equal(await part.locator('.chat-chart-table').count(), series.length);
+            // The text fallback keeps one table per series; the enhanced chart adds
+            // its numeric tables (conversation-chart-table) next to it.
+            assert.equal(await part.locator('.chat-chart-series .chat-chart-table').count(), series.length);
             assert.equal(await part.locator('.chat-chart-value').count(), points.length);
             const labels = await part.locator('.chat-chart-label').allTextContents();
             assert.equal(labels.length, points.length);
@@ -243,7 +248,7 @@ export async function runVisualCase(t, sandbox) {
         && document.querySelector('#wb-chat > .chat-notice'));
       assert.equal(await page.locator('#wb-chat [data-conversation-id], #wb-chat button, #wb-chat .chat-message').count(), 0);
       const notice = await page.locator('#wb-chat').innerText();
-      assert.match(notice, /未开放|not enabled|not available|disabled/i);
+      assert.match(notice, /未开放|未允许|not enabled|not allowed|not available|disabled/i);
       await save(`remote-closed-${operation}`);
       expectedChatDenial = false;
     }
