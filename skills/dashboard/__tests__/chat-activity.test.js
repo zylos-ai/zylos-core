@@ -155,6 +155,67 @@ test('a running round has no end, its open step is running and later steps come 
   assert.deepEqual(toolSteps(round.segments[0]).map(step => step.status), ['done', 'running']);
 });
 
+test('a failed stop ends the round, settles late steps and then closes unfinished steps', t => {
+  const f = fixture(t, { now: at(6) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.5);
+  f.tool('late', 1, null, { tool_name: 'Read' });
+  f.tool('unfinished', 2, null, { tool_name: 'Read' });
+  f.event('runtime_health:stop_failure', 5);
+  let round = roundOf(read(f, [1]), 1);
+  assert.equal(round.end, at(5)); assert.equal(round.state, 'done'); assert.equal(round.settling, true);
+  assert.deepEqual(toolSteps(round.segments[0]).map(step => step.status), ['running', 'running']);
+  f.event('post_tool_use', 4, { meta: { tool_use_id: 'late', tool_name: 'Read' } });
+  f.clock.now = at(24.999);
+  round = roundOf(read(f, [1]), 1);
+  assert.equal(round.settling, true);
+  assert.deepEqual(toolSteps(round.segments[0]).map(step => step.status), ['done', 'running']);
+  f.clock.now = at(25);
+  round = roundOf(read(f, [1]), 1);
+  assert.equal(round.settling, undefined);
+  assert.deepEqual(toolSteps(round.segments[0]).map(step => [step.status, step.end]), [['done', at(4)], ['incomplete', at(5)]]);
+});
+
+test('a new prompt after a failed stop starts a separate round', t => {
+  const f = fixture(t, { now: at(10) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.5);
+  f.tool('first', 1, null, { tool_name: 'Read' });
+  f.event('runtime_health:stop_failure', 5);
+  f.message(2, 6); f.event('user_prompt_submit', 6.2); f.deliver(2, 6.4);
+  f.tool('second', 7, null, { tool_name: 'Read' });
+  const result = read(f, [1, 2]);
+  assert.equal(result.rounds.length, 2);
+  const first = roundOf(result, 1), second = roundOf(result, 2);
+  assert.deepEqual(first.messageIds, [1]); assert.equal(first.end, at(5));
+  assert.deepEqual(second.messageIds, [2]); assert.equal(second.start, at(6.2));
+  assert.equal(second.end, null); assert.equal(second.state, 'running');
+  assert.equal(toolSteps(second.segments[0]).length, 1);
+  assert.equal(toolSteps(second.segments[0])[0].start, at(7));
+});
+
+test('a failed stop anchors the scan before a later long-running turn', t => {
+  const f = fixture(t, { now: at(100) });
+  f.event('user_prompt_submit', 0); f.event('runtime_health:stop_failure', 30);
+  f.event('user_prompt_submit', 40); f.deliver(900, 40.2);
+  f.message(1, 60); f.deliver(1, 60.2);
+  f.tool('visible', 61, 62, { tool_name: 'Read' }); f.event('stop', 70);
+  const round = roundOf(read(f, [1]), 1);
+  assert.ok(round, 'the prompt before the delivery lookback is still found');
+  assert.equal(round.start, at(60.2)); assert.equal(round.end, at(70));
+  assert.equal(toolSteps(round.segments[0]).length, 1);
+  assert.equal(toolSteps(round.segments[0])[0].start, at(61));
+});
+
+test('a failed stop in another group leaves the main round running', t => {
+  const f = fixture(t, { now: at(10) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.5);
+  f.tool('main', 1, null, { tool_name: 'Read' });
+  f.event('runtime_health:stop_failure', 5, { group: 'dash-owned:b' });
+  const round = roundOf(read(f, [1]), 1);
+  assert.equal(round.state, 'running'); assert.equal(round.end, null);
+  assert.equal(round.settling, undefined);
+  assert.equal(toolSteps(round.segments[0])[0].status, 'running');
+});
+
 test('failed, stopped and unfinished steps are told apart', t => {
   const f = fixture(t);
   f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0);

@@ -5,15 +5,15 @@ import { randomUUID } from 'node:crypto';
  *
  * Runtime events are recorded per group, not per message. A visible inbound message is tied to the work it caused
  * through the router's delivery event (it carries the message id), then to the runtime turn that delivery started:
- * a turn opens on a submitted prompt and closes on stop, turn completion or a Dashboard interrupt. Other inputs
- * reach the same group (scheduled tasks, messages from other groups, controls); their deliveries own their turns
- * and are never shown. Steps carry only the one-line summaries the event store already holds: no tool output,
- * no command text and no thinking.
+ * a turn opens on a submitted prompt and closes on stop, turn completion, a runtime failure (StopFailure) or a
+ * Dashboard interrupt. Other inputs reach the same group (scheduled tasks, messages from other groups, controls);
+ * their deliveries own their turns and are never shown. Steps carry only the one-line summaries the event store
+ * already holds: no tool output, no command text and no thinking.
  */
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
-const TURN_TYPES = ['deliver', 'user_prompt_submit', 'stop', 'turn_complete', 'dashboard_interrupt'];
-const END_TYPES = ['stop', 'turn_complete', 'dashboard_interrupt'];
+const TURN_TYPES = ['deliver', 'user_prompt_submit', 'stop', 'turn_complete', 'dashboard_interrupt', 'runtime_health:stop_failure'];
+const END_TYPES = ['stop', 'turn_complete', 'dashboard_interrupt', 'runtime_health:stop_failure'];
 const STEP_TYPES = ['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result',
   'subagent_start', 'subagent_stop', 'assistant_message'];
 // The router confirms a delivery after the runtime has already taken the prompt, so a turn that opened shortly
@@ -322,7 +322,7 @@ export class ChatActivity {
   _scan(range, group, sent, wanted) {
     const before = iso(sent - DELIVERY_LEAD_MS);
     const idle = this._events(`SELECT timestamp FROM runtime_events WHERE session_group=@group
-      AND event_type IN ('stop','turn_complete') AND timestamp < @at
+      AND event_type IN ('stop','turn_complete','runtime_health:stop_failure') AND timestamp < @at
       ORDER BY timestamp DESC, event_seq DESC LIMIT 1`, { group, at: before })[0];
     const from = Math.min(sent - DELIVERY_LEAD_MS, idle ? ms(idle.timestamp) : sent - DELIVERY_LEAD_MS);
     const { rows, complete } = this._boundaries(group, from, rows => {
