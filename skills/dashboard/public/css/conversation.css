@@ -1487,7 +1487,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-swipe-ready .conversation-swipe-cue{background:var(--accent);color:var(--wb-on-fill)}
 .conversation-page .conversation-quote-bar{display:flex;align-items:center;gap:10px;min-width:0;padding:6px 6px 6px 12px;border:1px solid var(--wb-line-strong);border-left:3px solid var(--accent);border-radius:10px;background:var(--wb-panel)}
 .conversation-page .conversation-quote-bar[hidden]{display:none}
-.conversation-page .conversation-quote-bar.conversation-bump{animation:conversation-bump .32s var(--c-ease)}
+.conversation-page .conversation-quote-bar.conversation-bump{animation:conversation-flash .32s var(--c-ease)}
 .conversation-page .conversation-quote-bar-icon{color:var(--accent-hover);width:16px;height:16px}
 .conversation-page .conversation-quote-bar-body{flex:1 1 0;width:0;min-width:0;display:flex;flex-direction:column;gap:1px;padding:2px 0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .conversation-page .conversation-quote-bar-who{font-size:12px;font-weight:600;color:var(--accent-hover);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

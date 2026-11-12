@@ -114,13 +114,20 @@ export async function runConversationCreateBrowser(t, sandbox, { signal }) {
     page.on('pageerror', error => { if (errors.length < 3) errors.push(error.stack); });
     const shot = async name => { if (evidence) await page.screenshot({ path: path.join(evidence, `${width}-${theme}-${name}.png`) }); };
     await page.goto(api.base + '/chat');
-    try { await page.locator('.conversation-create:visible').waitFor(); } catch (error) {
+    // Phones expose the same create action in the mobile topbar; the sidebar control is desktop-only.
+    const create = page.locator(width === 390 ? '#wb-mobile-list-create' : '.conversation-create');
+    try { await create.waitFor({ state: 'visible' }); } catch (error) {
       console.info('Creation initial failure', JSON.stringify({ errors, failed, body: (await page.locator('body').innerText()).slice(-4000), html: (await page.content()).slice(0, 500), url: page.url() }));
       await shot('initial-failure'); throw error;
     }
-    assert.equal(await page.locator('.conversation-create').isEnabled(), true);
+    assert.equal(await create.isEnabled(), true);
+    if (width === 390) {
+      assert.equal(await page.locator('.conversation-create').isVisible(), false, 'the sidebar action is replaced on phones');
+      const bounds = await create.boundingBox();
+      assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width, 'the mobile create action stays on screen');
+    }
     await shot('before-create');
-    await page.locator('.conversation-create').click();
+    await create.click();
     assert.equal(await page.locator('.conversation-create-form').count(), 0, 'there is no create-name form');
     await page.locator('.conversation-header h2:visible').filter({ hasText: '未命名对话' }).waitFor();
     assert.equal(api.writes.length, 1, 'one click issues exactly one draft creation');

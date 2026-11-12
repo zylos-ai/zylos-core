@@ -18,7 +18,7 @@ async function recordSends(context, sent) {
   });
 }
 
-export async function runQuoteAnnotateBrowser(t, sandbox) {
+export async function runQuoteAnnotateBrowser(t, sandbox, { widths = [1280, 390] } = {}) {
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE, executablePath = process.env.ZYLOS_CHAT_BROWSER_BIN;
   assert.ok(modulePath && fs.existsSync(modulePath));
   assert.ok(executablePath && fs.existsSync(executablePath));
@@ -161,7 +161,7 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
   };
 
   // ── 1280 light, mouse and trackpad ──
-  {
+  if (widths.includes(1280)) {
     const { context, page } = await openContext({ width: 1280, theme: 'light' });
     await openA(page);
     // History: the stored marker line is not shown; the quote block names the original and jumps to it.
@@ -362,7 +362,7 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
   }
 
   // ── 1280 dark: quote bar and editor ──
-  {
+  if (widths.includes(1280)) {
     const { context, page } = await openContext({ width: 1280, theme: 'dark' });
     await openA(page);
     await page.locator('#wb-chat textarea.conversation-input').fill('长'.repeat(22000));
@@ -400,7 +400,7 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
   }
 
   // ── 1280 light, slow earlier pages: a second jump while one is loading waits for it ──
-  {
+  if (widths.includes(1280)) {
     const { context, page } = await openContext({ width: 1280, theme: 'light' });
     await context.route(url => url.pathname.endsWith('/messages') && url.searchParams.get('direction') === 'before' && url.searchParams.has('cursor'),
       async route => { await delay(700); await route.fallback(); });
@@ -424,7 +424,7 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
   }
 
   // ── 1280 light, slow earlier pages: a refresh during a jump drops the page in flight without calling the original gone ──
-  {
+  if (widths.includes(1280)) {
     const { context, page } = await openContext({ width: 1280, theme: 'light' });
     await context.route(url => url.pathname.endsWith('/messages') && url.searchParams.get('direction') === 'before' && url.searchParams.has('cursor'),
       async route => { await delay(700); await route.fallback(); });
@@ -445,7 +445,7 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
   }
 
   // ── 390, touch: swipe, sheets, light and dark ──
-  for (const theme of ['light', 'dark']) {
+  for (const theme of widths.includes(390) ? ['light', 'dark'] : []) {
     const { context, page } = await openContext({ width: 390, theme, touch: true });
     await openA(page);
     const touchInput = await context.newCDPSession(page);
@@ -480,8 +480,26 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     assert.equal(await quoteBar(page).isVisible(), false, 'swiping a table does not quote');
     await swipe(row(page, plan.id).locator('.chat-message-text'), -90);
     await quoteBar(page).waitFor();
-    assert.ok(await assertLayout(page, `390 ${theme} quote bar`) >= 1);
+    // The quote feedback must stay inside the phone throughout its animation, not just after it settles.
+    const animationBounds = await quoteBar(page).evaluate(el => {
+      const animation = el.getAnimations()[0];
+      if (!animation) throw new Error('quote feedback animation is active after swiping');
+      animation.pause();
+      const duration = animation.effect.getTiming().duration;
+      const frames = [0, .25, .5, .75, 1].map(progress => {
+        animation.currentTime = duration * progress;
+        const rect = el.getBoundingClientRect();
+        return { progress, left: rect.left, right: rect.right, width: rect.width, viewport: innerWidth };
+      });
+      animation.currentTime = duration / 2;
+      return frames;
+    });
+    if (output) fs.writeFileSync(path.join(output, `quote-animate-390-${theme}.json`), JSON.stringify(animationBounds, null, 2));
     await shot(page, `390-${theme}-quote-bar`);
+    for (const frame of animationBounds) assert.ok(frame.left >= -.5 && frame.right <= frame.viewport + .5,
+      `390 ${theme} quote feedback stays on screen at ${frame.progress}: ${JSON.stringify(frame)}`);
+    assert.ok(await assertLayout(page, `390 ${theme} quote bar`) >= 1);
+    await quoteBar(page).evaluate(el => el.getAnimations().forEach(animation => animation.finish()));
     await selectText(page, plan.id, '机器翻倍');
     await markButton(page).click();
     const editor = page.locator('body > .conversation-annotation-editor');
@@ -513,7 +531,7 @@ export async function runQuoteAnnotateBrowser(t, sandbox) {
     await context.close();
   }
   // ── 1280, touch screen: swiping works at desktop width too ──
-  {
+  if (widths.includes(1280)) {
     const { context, page } = await openContext({ width: 1280, theme: 'light', touch: true });
     await openA(page);
     const touchInput = await context.newCDPSession(page);
