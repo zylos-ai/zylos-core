@@ -784,6 +784,7 @@
   "chat.page.originPinned": "Pinned conversation",
   "chat.page.originEmpty": "Talk to Origin directly here. Alerts also appear here when no other destination is set.",
   "chat.page.origin.asleep": "Asleep · a message wakes it; the first reply takes a little longer",
+  "chat.page.origin.asleepShort": "Asleep",
   "chat.page.startFailed": "Session start failed",
   "chat.page.delivery.rateLimited": "Stored · service limited; delivery resumes after recovery",
   "chat.page.delivery.recovering": "Stored · service recovering; delivery resumes after recovery",

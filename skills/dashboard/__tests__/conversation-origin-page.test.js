@@ -34,7 +34,9 @@ function originPage(t, { locale = 'en', mode = 'multi', row = originRow(mode), h
   // The group side panel listens on the document; nothing here dispatches to it.
   Object.assign(document, { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} });
   const requests = [];
-  const page = mountConversationPage({ root, document, groupLinks: {}, t: key => translations[key] ?? key, fetch: async (path, options = {}) => {
+  // Placeholders are filled as the Dashboard's own t() fills them.
+  const translate = (key, params = {}) => Object.entries(params).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value ?? ''), translations[key] ?? key);
+  const page = mountConversationPage({ root, document, groupLinks: {}, t: translate, fetch: async (path, options = {}) => {
     requests.push(path);
     const body = path === '/api/session-mode' ? { data: { sessionMode: mode } }
       : path === '/api/workbench/groups' ? { listKnown: true, rows: [row],
@@ -79,13 +81,19 @@ for (const locale of ['en', 'zh']) {
       const line = header(f.root);
       if (mode === 'multi') {
         assert.equal(line.hidden, false);
-        assert.equal(line.querySelector('.wi-ind-text').textContent, f.translations['chat.page.origin.asleep']);
+        // One word on the line; the explanation is in the tooltip and the accessible name.
+        assert.equal(line.querySelector('.wi-ind-text').textContent, f.translations['chat.page.origin.asleepShort']);
+        const explained = f.translations['chat.working.timeline'].replace('{state}', f.translations['chat.page.origin.asleep']);
+        assert.equal(line.title, explained);
+        assert.equal(line.getAttribute('aria-label'), explained);
+        assert.equal(allNodes(line).some(node => node.textContent.includes(f.translations['chat.page.origin.asleep'])), false, 'not written on the line');
         assert.equal(line.dataset.state, 'asleep');
         assert.equal(line.classList.contains('conversation-waiting'), true, 'shown muted');
       } else {
         // A single session is not reclaimed when idle; not running there means down or restarting.
         assert.equal(line.hidden, true);
-        assert.equal(allNodes(line).some(node => node.textContent === f.translations['chat.page.origin.asleep']), false);
+        assert.equal(allNodes(line).some(node => [f.translations['chat.page.origin.asleep'], f.translations['chat.page.origin.asleepShort']].includes(node.textContent)), false);
+        assert.equal(line.title.includes(f.translations['chat.page.origin.asleep']), false);
       }
     });
     test(`Origin is pinned first, fixed and writable in ${mode} (${locale})`, { timeout: 2000 }, async t => {

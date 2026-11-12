@@ -513,7 +513,8 @@ export function mountConversationPage({
     running.classList.toggle('conversation-waiting', asleep || exceptional && waiting);
     const wasBusy = running.dataset.state === 'busy';
     running.dataset.state = asleep ? 'asleep' : exceptional ? restricted ? 'restricted' : 'waiting' : working?.on ? 'busy' : 'idle';
-    const description = asleep ? t('chat.page.origin.asleep') : exceptional ? t('chat.page.' + headerLabel
+    // Asleep shows one word; the explanation (a message wakes it, the first reply is slower) is in the tooltip.
+    const description = asleep ? t('chat.page.origin.asleepShort') : exceptional ? t('chat.page.' + headerLabel
       + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : ''))
       : workingText(working, { t, scheduled: origin && s.groupProcessing === 'scheduled_task' });
     const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
@@ -524,7 +525,7 @@ export function mountConversationPage({
     if (childSuffix) caption.append(node('span', ' · ' + childSuffix, 'wi-ind-sub'));
     const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev');
     running.replaceChildren(mark, caption, chevron);
-    const accessible = t('chat.working.timeline', { state: description });
+    const accessible = t('chat.working.timeline', { state: asleep ? t('chat.page.origin.asleep') : description });
     running.setAttribute('aria-label', accessible); running.title = accessible;
     if (wasBusy && working && !working.on) {
       running.classList.add('wi-settle');

@@ -784,6 +784,7 @@
   "chat.page.originPinned": "置顶对话",
   "chat.page.originEmpty": "在这里直接和 Origin 说话；告警没有另设去处时，也会出现在这里。",
   "chat.page.origin.asleep": "休眠 · 发消息会唤醒它，第一条回复会慢一些",
+  "chat.page.origin.asleepShort": "休眠",
   "chat.page.startFailed": "会话启动失败",
   "chat.page.delivery.rateLimited": "已入库 · 服务受限，恢复后自动投递",
   "chat.page.delivery.recovering": "已入库 · 服务恢复中，恢复后自动投递",

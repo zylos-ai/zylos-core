@@ -114,7 +114,8 @@ EOF_MESSAGE
   message handed to it came from a scheduled task (handed over is not proof it
   is the one in hand: the scheduler does not wait for Origin to be idle). In
   multi mode an Origin that is not running is
-  shown asleep: the next message wakes it.
+  shown "Asleep"; hovering it explains that the next message wakes it and the
+  first reply takes a little longer.
 - Another session cannot send to `dashboard origin` directly; it asks Origin to
   relay with `c4-send internal origin`, and that internal message also appears
   here.
