@@ -29,6 +29,10 @@ Write commands (`add`, `update`, `done`, `remove`, `pause`, `resume`) and `histo
 
 To re-enable a failed one-time task or clear a task's execution group, use `update`; see `references/update.md`.
 
+To postpone unfinished work when a task is already running, directly use `update --in`, `--at`, `--cron`, or `--every`. The new time must be in the future. This completes the current execution's history as success and puts the task back in pending at the requested time, including recurring and interval tasks. There is no separate `done` step. Updates that only change the prompt, name, or other fields leave the execution running.
+
+A one-time task that runs past the timeout becomes failed and sends one timeout notification to its owning agent session, using the same session group and reply target as dispatch. Notification failure is logged without retrying or changing the failed task. Recurring and interval timeouts continue through the normal next-run calculation without notification.
+
 ## Timezone
 
 Resolves TZ: `~/zylos/.env` > `process.env.TZ` > `UTC`. Times are parsed and displayed in configured timezone. DB stores UTC. See `references/config.md` for details.

@@ -7,6 +7,8 @@ import path from 'node:path';
 import { updateNextRunTime, processCompletedTasks, handleStaleRunningTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
 import { now } from '../database.js';
 
+const notificationDependencies = { sendViaC4: () => ({ category: 'success' }) };
+
 async function withDb(fn) {
   const originalZylosDir = process.env.ZYLOS_DIR;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-daemon-'));
@@ -222,7 +224,7 @@ describe('handleStaleRunningTasks', () => {
       db.prepare('INSERT INTO task_history (task_id, executed_at, status) VALUES (?, ?, ?)')
         .run(task.id, staleTime, 'started');
 
-      handleStaleRunningTasks(db);
+      handleStaleRunningTasks(db, notificationDependencies);
 
       const updated = db.prepare('SELECT status, last_error FROM tasks WHERE id = ?').get(task.id);
       assert.equal(updated.status, 'failed');
@@ -245,7 +247,7 @@ describe('handleStaleRunningTasks', () => {
       db.prepare('INSERT INTO task_history (task_id, executed_at, status) VALUES (?, ?, ?)')
         .run(task.id, staleTime, 'started');
 
-      handleStaleRunningTasks(db);
+      handleStaleRunningTasks(db, notificationDependencies);
 
       const updated = db.prepare('SELECT status, last_error FROM tasks WHERE id = ?').get(task.id);
       assert.equal(updated.status, 'completed');
@@ -257,7 +259,7 @@ describe('handleStaleRunningTasks', () => {
     await withDb((db) => {
       insertTask(db, { type: 'one-time', cron_expression: null, status: 'running', updated_at: now() });
 
-      handleStaleRunningTasks(db);
+      handleStaleRunningTasks(db, notificationDependencies);
 
       const task = db.prepare('SELECT status FROM tasks LIMIT 1').get();
       assert.equal(task.status, 'running');  // should not be touched
@@ -269,7 +271,7 @@ describe('handleStaleRunningTasks', () => {
       const staleTime = now() - TASK_TIMEOUT - 60;
       insertTask(db, { status: 'pending', updated_at: staleTime });
 
-      handleStaleRunningTasks(db);
+      handleStaleRunningTasks(db, notificationDependencies);
 
       const task = db.prepare('SELECT status FROM tasks LIMIT 1').get();
       assert.equal(task.status, 'pending');
@@ -283,7 +285,7 @@ describe('handleStaleRunningTasks', () => {
       insertTask(db, { id: 'task-rc', type: 'recurring', cron_expression: '0 9 * * *', status: 'running', updated_at: staleTime });
       insertTask(db, { id: 'task-iv', type: 'interval', cron_expression: null, interval_seconds: 3600, status: 'running', updated_at: staleTime });
 
-      handleStaleRunningTasks(db);
+      handleStaleRunningTasks(db, notificationDependencies);
 
       const ot = db.prepare('SELECT status FROM tasks WHERE id = ?').get('task-ot');
       const rc = db.prepare('SELECT status FROM tasks WHERE id = ?').get('task-rc');

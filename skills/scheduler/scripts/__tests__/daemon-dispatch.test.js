@@ -71,7 +71,7 @@ test('unknown dispatch retains its reason and records elapsed time on timeout', 
     getConversationsByRange() { throw new Error('read unavailable'); }
   });
   t.mock.timers.tick((TASK_TIMEOUT + 1) * 1000);
-  handleStaleRunningTasks(db);
+  handleStaleRunningTasks(db, { sendViaC4: () => ({ category: 'success' }) });
   const row = read().history.find(entry => entry.id === result.historyId);
   assert.equal(row.status, 'timeout');
   assert.equal(row.error, 'RECEIVE_RESULT_UNKNOWN');
@@ -248,9 +248,9 @@ for(const category of ['C','U'])for(const type of ['one-time','interval']) test(
  t.mock.timers.enable({apis:['Date'],now:2000000000000});
  const {db,task,read}=fixture(t,{type,interval_seconds:60});let sends=0;
  const deps={...base,sendViaC4(){sends++;return {category,code:'UNCERTAIN'};},getConversationsByRange(){throw new Error('read failed');}};
- dispatchTask(db,task,deps);t.mock.timers.tick(TASK_TIMEOUT*1000);handleStaleRunningTasks(db);assert.equal(read().task.status,'running');
+ dispatchTask(db,task,deps);t.mock.timers.tick(TASK_TIMEOUT*1000);handleStaleRunningTasks(db,{sendViaC4:()=>({category:'success'})});assert.equal(read().task.status,'running');
  assert.equal(dispatchTask(db,task,deps).claimed,false);assert.equal(sends,1);
- t.mock.timers.tick(1000);handleStaleRunningTasks(db);assert.equal(read().history[0].status,'timeout');
+ t.mock.timers.tick(1000);handleStaleRunningTasks(db,{sendViaC4:()=>({category:'success'})});assert.equal(read().history[0].status,'timeout');
  assert.equal(read().task.status,type==='one-time'?'failed':'completed');processCompletedTasks(db);
  if(type==='interval'){assert.equal(read().task.status,'pending');assert.ok(read().task.next_run_at>task.next_run_at);}
 });

@@ -115,11 +115,11 @@ export function runSchedulerIteration(db, dependencies = {}) {
   if (task) dispatchDueTask(db, task, dependencies);
   processCompletedTasks(db);
   handleMissedTasks(db, dependencies, new Set(task ? [task.id] : []));
-  handleStaleRunningTasks(db);
+  handleStaleRunningTasks(db, dependencies);
 }
 
 export async function mainLoop(db, { shouldRun, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), dependencies = {} }) {
-  handleStaleRunningTasks(db);
+  handleStaleRunningTasks(db, dependencies);
   let lastCleanup = Date.now();
   while (shouldRun()) {
     try {

@@ -12,6 +12,8 @@ All commands accept `--json`. Success prints `{"ok":true,"data":{"task":{...}}}`
 
 Marks a task as completed. For recurring/interval tasks, the daemon will automatically calculate the next run time.
 
+Completion and the current started history row are committed together. Repeating `done` on a completed task is harmless. A delayed `done` on a failed task or on a pending task with a previous completion returns `TASK_WRONG_STATUS`; it cannot overwrite a timeout or cancel the next run after postponement. To postpone running work, directly use `update` with a future time instead of `done` followed by `update`.
+
 ## remove
 
 `cli.js remove <task-id>`

@@ -9,6 +9,7 @@ import { getNextRun, isValidCron, describeCron, getDefaultTimezone } from './cro
 import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-utils.js';
 import { loadTimezone } from './tz.js';
 import { resolveSavedSessionGroup, updatedReplyTarget } from './saved-session-group.js';
+import { completeTaskExecution } from './task-completion.js';
 
 let db;
 
@@ -350,30 +351,15 @@ function cmdDone(taskId, options) {
 
   const task = tasks[0];
 
-  const currentTime = now();
-
-  // Update task status
-  db.prepare(`
-    UPDATE tasks
-    SET status = 'completed', last_run_at = ?, updated_at = ?
-    WHERE id = ?
-  `).run(currentTime, currentTime, task.id);
-
-  // Update history entry
-  const historyEntry = db.prepare(`
-    SELECT id, executed_at FROM task_history
-    WHERE task_id = ? AND status = 'started'
-    ORDER BY executed_at DESC LIMIT 1
-  `).get(task.id);
-
-  if (historyEntry) {
-    const durationMs = (currentTime - historyEntry.executed_at) * 1000;
-    db.prepare(`
-      UPDATE task_history
-      SET status = 'success', completed_at = ?, duration_ms = ?
-      WHERE id = ?
-    `).run(currentTime, durationMs, historyEntry.id);
-  }
+  db.transaction(() => {
+    if (task.status === 'completed') return;
+    // A delayed done must not finish the pending run created by a reschedule.
+    if ((task.status === 'pending' && task.last_run_at != null)
+        || task.status === 'failed'
+        || !completeTaskExecution(db, task, now())) {
+      reject('TASK_WRONG_STATUS', 'Task execution is no longer running', { status: task.status }, 1);
+    }
+  }).immediate();
 
   if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id) });
   console.log(`Completed task: ${task.id}`);
@@ -670,7 +656,8 @@ function cmdUpdate(taskId, options) {
   }
 
   const reenabled = task.status === 'failed' && task.type === 'one-time' && scheduleUpdated;
-  if (reenabled) {
+  const executionFinished = task.status === 'running' && scheduleUpdated;
+  if (reenabled || executionFinished) {
     if (updates.next_run_at <= now()) {
       reject('RESCHEDULE_NOT_FUTURE', 'Rescheduled time must be in the future', { nextRunAt: updates.next_run_at }, 1);
     }
@@ -689,11 +676,21 @@ function cmdUpdate(taskId, options) {
   const setClauses = Object.keys(updates).map(key => `${key} = ?`).join(', ');
   const values = Object.values(updates);
 
-  db.prepare(`
-    UPDATE tasks SET ${setClauses} WHERE id = ?
-  `).run(...values, task.id);
+  db.transaction(() => {
+    if ((reenabled || executionFinished) && updates.next_run_at <= now()) {
+      reject('RESCHEDULE_NOT_FUTURE', 'Rescheduled time must be in the future', { nextRunAt: updates.next_run_at }, 1);
+    }
+    if (executionFinished && !completeTaskExecution(db, task, updates.updated_at)) {
+      reject('TASK_WRONG_STATUS', 'Task execution is no longer running', {}, 1);
+    }
+    const changed = db.prepare(`
+      UPDATE tasks SET ${setClauses} WHERE id = ? AND status = ? AND updated_at = ?
+    `).run(...values, task.id, executionFinished ? 'completed' : task.status,
+      executionFinished ? updates.updated_at : task.updated_at);
+    if (!changed.changes) reject('TASK_WRONG_STATUS', 'Task changed during update', {}, 1);
+  }).immediate();
 
-  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id), updatedFields, reenabled });
+  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id), updatedFields, reenabled, executionFinished });
   console.log(`\nTask updated: ${task.id}`);
   console.log(`  Updated fields: ${updatedFields.join(', ')}`);
 
@@ -702,6 +699,7 @@ function cmdUpdate(taskId, options) {
     console.log(`  Next run: ${formatTime(updates.next_run_at)} (${getRelativeTime(updates.next_run_at)})`);
   }
   if (reenabled) console.log('  Re-enabled: pending');
+  if (executionFinished) console.log('  Current execution completed; rescheduled as pending');
   console.log();
 }
 

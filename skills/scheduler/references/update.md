@@ -25,6 +25,10 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 
 When the schedule is changed, the timezone column is automatically synced to the current configured TZ.
 
+## Postpone a running task
+
+Directly update its time with `--in`, `--at`, `--cron` or `--every`. The current execution is completed using the same history handling as `done`, and the task becomes `pending` at the requested future time. Recurring and interval tasks keep that requested next time rather than recalculating it as a completed run. Prompt/name-only updates leave the task running. A past time fails with `RESCHEDULE_NOT_FUTURE` without changing the task or history; a concurrent completion or timeout fails with `TASK_WRONG_STATUS` without resurrecting the execution. Do not follow a successful postponement with `done`.
+
 ## Re-enable a failed one-time task
 
 Give a failed one-time task a new time (`--in`, `--at`, `--cron` or `--every`) that is in the future. The task returns to `pending`, its failure details are cleared, and the daemon dispatches it at the new time. A time that is not in the future is rejected with `RESCHEDULE_NOT_FUTURE` and nothing is written. An update without a new time leaves the task `failed`.
@@ -40,11 +44,11 @@ To send a task to Origin, add `--clear-reply` as well. The task then has no repl
 
 ## JSON results
 
-With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[...],"reenabled":false}}`. Every failure prints `{"ok":false,"error":{"code":"...","message":"..."}}` and exits 1.
+With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[...],"reenabled":false,"executionFinished":false}}`. `executionFinished` is true when a running execution was completed and rescheduled; `task.next_run_at` is the requested next time. Every failure prints `{"ok":false,"error":{"code":"...","message":"..."}}` and exits 1.
 
 Use `--json` whenever you need to know the outcome. Without it, some validation errors still exit 0, so the exit code alone does not prove the update was applied.
 
-Error codes: `INVALID_ARGS`, `TASK_NOT_FOUND`, `TASK_AMBIGUOUS` (`matches` lists the task IDs), `NO_UPDATES`, `RESCHEDULE_NOT_FUTURE`, `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `SESSION_GROUP_QUERY_FAILED`, `DB_WRITE_FAILED`, `INTERNAL_ERROR`, and the timezone errors.
+Error codes: `INVALID_ARGS`, `TASK_NOT_FOUND`, `TASK_AMBIGUOUS` (`matches` lists the task IDs), `TASK_WRONG_STATUS`, `NO_UPDATES`, `RESCHEDULE_NOT_FUTURE`, `SESSION_GROUP_INVALID`, `SESSION_GROUP_TOO_LONG`, `SESSION_GROUP_QUERY_FAILED`, `DB_WRITE_FAILED`, `INTERNAL_ERROR`, and the timezone errors.
 
 ## Examples
 
