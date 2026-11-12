@@ -28,10 +28,11 @@ function cliOptions(args, env, cliPath = CLI_PATH) {
   return { cwd: root, env, timeout: 15000, killSignal: 'SIGKILL' };
 }
 
-function cliRaw(args, env, cliPath = CLI_PATH) {
+function cliRaw(args, env, cliPath = CLI_PATH, { input } = {}) {
   const result = spawnSync(process.execPath, [cliPath, ...args], {
     ...cliOptions(args, env, cliPath),
     encoding: 'utf8',
+    input,
   });
   assert.equal(result.error, undefined, String(result.error));
   assert.equal(result.signal, null);
@@ -319,6 +320,7 @@ describe('c4-receive option manifest', () => {
     '--block-queue-until-idle': { field: 'require_idle', expected: 1 },
     '--json': {},
     '--content': { value: '--literal-content', field: 'content', expected: '--literal-content' },
+    '--content-stdin': { input: '--piped-content', field: 'content', expected: '--piped-content' },
   };
   const manifest = JSON.parse(fs.readFileSync(new URL('../c4-receive-options.json', import.meta.url), 'utf8'));
   for (const name of Object.keys(manifest.options)) {
@@ -332,8 +334,8 @@ describe('c4-receive option manifest', () => {
         const args = [name];
         if (Object.hasOwn(sample, 'value')) args.push(sample.value);
         if (name !== '--channel' && name !== '--no-reply') args.push('--channel', 'manifest-channel');
-        if (name !== '--content') args.push('--content', 'manifest content');
-        const result = cliRaw(args, env);
+        if (name !== '--content' && name !== '--content-stdin') args.push('--content', 'manifest content');
+        const result = cliRaw(args, env, CLI_PATH, { input: sample.input });
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stderr, '');
         if (name === '--json') {
@@ -562,6 +564,119 @@ describe('c4-receive unknown option compatibility', () => {
       });
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// --content-stdin
+// ---------------------------------------------------------------------------
+describe('c4-receive --content-stdin', () => {
+  // Boundary: the stdin body must reach c4.db unchanged, beyond the argv size
+  // limit. Run when receive parsing/storage changes; skip for unrelated send
+  // or dispatcher changes.
+  it('stores a body larger than the single-argument limit exactly as piped', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      fs.mkdirSync(path.join(tmpDir, '.claude', 'skills', 'test-channel'), { recursive: true });
+      // Linux rejects a single argv string over 128 KiB (MAX_ARG_STRLEN) with
+      // E2BIG. Three-byte characters also make the 64 KiB pipe chunks split
+      // characters, so a chunk-wise decode would corrupt them.
+      const line = '[group history] 用户说："quoted" $HOME `cmd` \\n --not-an-option\n';
+      const body = `  leading space\n${line.repeat(Math.ceil(512 * 1024 / Buffer.byteLength(line)))}\n\n`;
+      assert.ok(Buffer.byteLength(body) > 512 * 1024);
+      const r = cliRaw(['--channel', 'test-channel', '--endpoint', 'ep1', '--priority', '2', '--json', '--content-stdin'],
+        env, CLI_PATH, { input: body });
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.stderr, '');
+      const out = parseJsonStdout(r.stdout);
+      assert.equal(out.ok, true);
+      assert.equal(out.action, 'queued');
+
+      const db = openDb(tmpDir);
+      try {
+        const row = db.prepare('SELECT * FROM conversations WHERE id = ?').get(out.id);
+        assert.equal(row.content, body);
+        assert.equal(row.channel, 'test-channel');
+        assert.equal(row.endpoint_id, 'ep1');
+        assert.equal(row.priority, 2);
+        assert.equal(row.status, 'pending');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it('prints the plain queued line without --json', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const r = cliRaw(['--no-reply', '--content-stdin'], env, CLI_PATH, { input: 'plain stdin message' });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stdout, /^\[C4\] Message queued \(id=\d+\)\n$/);
+      const db = openDb(tmpDir);
+      try {
+        assert.equal(db.prepare('SELECT content FROM conversations').get().content, 'plain stdin message');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  // The combined cases are rejected before stdin is read, so they pipe nothing:
+  // writing to a receiver that has already exited could fail with EPIPE.
+  for (const { name, args, input, message } of [
+    { name: 'combined with --content', args: ['--content', 'argv body', '--content-stdin'],
+      message: '--content and --content-stdin cannot be combined' },
+    { name: 'combined with an empty --content', args: ['--content-stdin', '--content', ''],
+      message: '--content and --content-stdin cannot be combined' },
+    { name: 'given empty stdin', args: ['--content-stdin'], input: '', message: '--content-stdin received no content' },
+  ]) {
+    // Boundary: an ambiguous or empty body is rejected before c4.db is opened.
+    // Run when receive parsing/validation changes; otherwise skip.
+    it(`rejects --content-stdin ${name}`, () => {
+      withTmpDir(({ tmpDir, env }) => {
+        const r = cliRaw(['--no-reply', '--json', ...args], env, CLI_PATH, { input });
+        assert.equal(r.status, 1);
+        assert.deepEqual(parseJsonStdout(r.stdout), { ok: false, error: { code: 'INVALID_ARGS', message } });
+        assert.equal(r.stderr, '');
+        assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'c4.db')), false);
+      });
+    });
+  }
+
+  it('reports the error on stderr with usage in plain mode', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const r = cliRaw(['--no-reply', '--content-stdin'], env, CLI_PATH, { input: '' });
+      assert.equal(r.status, 1);
+      assert.match(r.stdout, /--content-stdin/);
+      assert.equal(r.stderr, 'Error: --content-stdin received no content\n');
+      assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'c4.db')), false);
+    });
+  });
+
+  // Boundary: a terminal on stdin means nothing was piped, so the receiver
+  // must fail instead of waiting for input. Needs util-linux script(1) for a
+  // pseudo-terminal; skipped elsewhere.
+  const scriptPath = ['/usr/bin/script', '/bin/script'].find((candidate) => {
+    if (process.platform !== 'linux' || !fs.existsSync(candidate)) return false;
+    const version = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
+    return version.status === 0 && version.stdout.includes('util-linux');
+  });
+  (scriptPath ? it : it.skip)('rejects --content-stdin when stdin is a terminal', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const args = ['--no-reply', '--json', '--content-stdin'];
+      const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+      const command = [process.execPath, CLI_PATH, ...args].map(quote).join(' ');
+      const result = spawnSync(scriptPath, ['-qec', command, '/dev/null'], {
+        ...cliOptions(args, env),
+        encoding: 'utf8',
+        input: '',
+      });
+      assert.equal(result.error, undefined, String(result.error));
+      assert.equal(result.status, 1, result.stdout);
+      assert.deepEqual(parseJsonStdout(result.stdout.trim()), {
+        ok: false,
+        error: { code: 'INVALID_ARGS', message: '--content-stdin requires the content to be piped on stdin' },
+      });
+      assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'c4.db')), false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
