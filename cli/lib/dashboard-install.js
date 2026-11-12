@@ -172,12 +172,13 @@ export async function verifyDashboard({ zylosDir }) {
   const deadline = Date.now() + READY_LIMIT;
   const remaining = () => Math.max(0, Math.floor(deadline - Date.now()));
   const timedOut = error => error.code === 'verify_timeout' || ['TimeoutError', 'AbortError'].includes(error.name);
-  const health = async (url, expectedPid, redirected = false) => {
+  const health = async (url, expectedPid) => {
     const timeout = remaining();
     if (!timeout) throw Object.assign(Error('Dashboard verification timed out'), { code: 'verify_timeout' });
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(timeout) });
     if (!response.ok) {
-      if (!redirected && [301, 302, 307, 308].includes(response.status)) {
+      // Only http -> https on the same address is followed, so at most one hop.
+      if ([301, 302, 307, 308].includes(response.status)) {
         const location = response.headers.get('location');
         let next;
         try { if (location) next = new URL(location, url); } catch {}
@@ -186,9 +187,11 @@ export async function verifyDashboard({ zylosDir }) {
           && next.hostname === current.hostname && next.port === current.port
           && next.pathname === current.pathname && next.search === current.search
           && !next.username && !next.password && !next.hash) {
-          return health(next.href, expectedPid, true);
+          await response.body?.cancel().catch(() => {});
+          return health(next.href, expectedPid);
         }
       }
+      await response.body?.cancel().catch(() => {});
       throw Object.assign(Error(`Dashboard health returned HTTP ${response.status}`), { httpStatus: response.status });
     }
     const body = await response.json();
@@ -197,7 +200,7 @@ export async function verifyDashboard({ zylosDir }) {
   const failed = (item, code, location, httpStatus) => {
     checks[item] = false;
     errors.push({ item, code, location, ...(Number.isInteger(httpStatus)
-      ? { message: `Dashboard health returned HTTP ${httpStatus}` } : {}) });
+      ? { message: `Dashboard health returned HTTP ${httpStatus} at ${location}` } : {}) });
   };
   let loc;
   try { loc = settings(zylosDir); }

@@ -391,7 +391,7 @@ for(const [label,location,protocol] of [
  }]});
  const result=await verifyDashboard({zylosDir:f.dir});
  assert.equal(result.state,'degraded');assert.equal(result.checks.health,true);assert.equal(result.checks.route,false);
- assert.equal(result.errors[0].code,'route_failed');assert.equal(result.errors[0].message,'Dashboard health returned HTTP 301');
+ assert.equal(result.errors[0].code,'route_failed');assert.equal(result.errors[0].message,`Dashboard health returned HTTP 301 at ${result.errors[0].location}`);assert.match(result.errors[0].location,/\/dashboard\/api\/health$/);
  assert.equal(f.requests.length,2);
 });
 
@@ -410,7 +410,7 @@ for(const status of [300,303,404,503])test(`public health reports HTTP ${status}
   response.json=()=>assert.fail('failed response body');return response;
  }]});
  const result=await verifyDashboard({zylosDir:f.dir});
- assert.equal(result.errors[0].code,'route_failed');assert.match(result.errors[0].message,new RegExp(`HTTP ${status}$`));
+ assert.equal(result.errors[0].code,'route_failed');assert.match(result.errors[0].message,new RegExp(`HTTP ${status} at http:\\/\\/dashboard\\.example\\.test\\/dashboard\\/api\\/health$`));
  assert.equal(f.requests.length,2);
 });
 
