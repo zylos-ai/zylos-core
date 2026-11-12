@@ -89,8 +89,8 @@ for (const scenario of ['unrecognized route', 'deploy failure', 'read failure'])
     fs.mkdirSync(path.dirname(caddyfile));
     fs.mkdirSync(path.dirname(caddyBin));
     fs.writeFileSync(caddyBin, 'fixture');
-    const related = ['    handle /console/* {', '        uri strip_prefix /console', '        reverse_proxy localhost:3456'];
-    const original = 'example.com {\n    # Web Console (core built-in)\n' + related.join('\n') + '\n    }\n}\n';
+    const related = ['    handle /console/* {', '        uri strip_prefix /console'];
+    const original = 'example.com {\n    # Web Console (core built-in)\n' + related.join('\n') + '\n        reverse_proxy localhost:3456\n    }\n}\n';
     const content = scenario === 'unrecognized route' ? original.replace('    # Web Console (core built-in)\n', '') : original;
     if (scenario === 'read failure') fs.mkdirSync(caddyfile);
     else fs.writeFileSync(caddyfile, content);
@@ -111,6 +111,8 @@ for (const scenario of ['unrecognized route', 'deploy failure', 'read failure'])
     assert.ok(actions[0].includes(caddyfile));
     assert.ok(actions[0].includes(`${caddyBin} validate --config ${caddyfile} --adapter caddyfile and pm2 reload caddy`));
     assert.match(actions[0], /keep every other route unchanged/);
+    assert.match(actions[0], /obsolete Web Console routes \(the \/console handling\);/);
+    assert.doesNotMatch(actions[0], /localhost:3456/);
     if (scenario !== 'read failure') {
       for (const line of related) assert.ok(actions[0].includes(line));
       assert.equal(fs.readFileSync(caddyfile, 'utf8'), content);

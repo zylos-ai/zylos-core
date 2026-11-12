@@ -51,7 +51,7 @@ export function inspectWebConsoleRoute(content) {
     if (!match[0]) continue;
     lines.push({raw:match[0], text:match[0].trim(), offset:match.index});
   }
-  const related = lines.filter(line => /\/console|:3456/.test(line.raw));
+  const related = lines.filter(line => /\/console/.test(line.raw));
   const markers = lines.map((line, index) => line.text === marker ? index : -1).filter(index => index >= 0);
   if (!related.length && !markers.length) return {state:'absent', related:[]};
   const refusal = {state:'manual', related:related.map(line => line.raw.replace(/\r?\n$/, ''))};
@@ -75,7 +75,7 @@ export function removeWebConsoleRoute({zylosDir, noCaddy = false, deploy = valid
   const caddyfile = path.join(zylosDir, 'http/Caddyfile');
   const caddyBin = path.join(zylosDir, 'bin/caddy');
   if (noCaddy || !fs.existsSync(caddyfile) || !fs.existsSync(caddyBin)) return {changed:false, warnings:[]};
-  const manual = (related = []) => `Agent action required: Web Console has been removed, but ${caddyfile} still contains Web Console routes that were not removed automatically:\n${related.length ? related.join('\n') + '\n' : ''}Read this Caddyfile and remove only the obsolete Web Console routes (the /console handling and anything proxying to localhost:3456); keep every other route unchanged. Then run ${caddyBin} validate --config ${caddyfile} --adapter caddyfile and pm2 reload caddy, and include the result in your upgrade report.`;
+  const manual = (related = []) => `Agent action required: Web Console has been removed, but ${caddyfile} still contains Web Console routes that were not removed automatically:\n${related.length ? related.join('\n') + '\n' : ''}Read this Caddyfile and remove only the obsolete Web Console routes (the /console handling); keep every other route unchanged. Then run ${caddyBin} validate --config ${caddyfile} --adapter caddyfile and pm2 reload caddy, and include the result in your upgrade report.`;
   try {
     const original = fs.readFileSync(caddyfile, 'utf8');
     const inspection = inspectWebConsoleRoute(original);

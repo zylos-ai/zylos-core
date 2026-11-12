@@ -30,7 +30,7 @@ function fixture(t, content) {
 
 function instruction(root, related = []) {
   const caddyfile = path.join(root, 'http/Caddyfile');
-  return `Agent action required: Web Console has been removed, but ${caddyfile} still contains Web Console routes that were not removed automatically:\n${related.length ? related.join('\n') + '\n' : ''}Read this Caddyfile and remove only the obsolete Web Console routes (the /console handling and anything proxying to localhost:3456); keep every other route unchanged. Then run ${path.join(root, 'bin/caddy')} validate --config ${caddyfile} --adapter caddyfile and pm2 reload caddy, and include the result in your upgrade report.`;
+  return `Agent action required: Web Console has been removed, but ${caddyfile} still contains Web Console routes that were not removed automatically:\n${related.length ? related.join('\n') + '\n' : ''}Read this Caddyfile and remove only the obsolete Web Console routes (the /console handling); keep every other route unchanged. Then run ${path.join(root, 'bin/caddy')} validate --config ${caddyfile} --adapter caddyfile and pm2 reload caddy, and include the result in your upgrade report.`;
 }
 
 for (const redirect of [false, true]) {
@@ -40,6 +40,41 @@ for (const redirect of [false, true]) {
     assert.equal(result.state, 'generated');
     assert.equal(result.content, before.slice(0, -1) + after);
     assert.equal(inspectWebConsoleRoute(result.content).state, 'absent');
+  });
+}
+
+for (const [name, suffix] of [
+  ['same-site route', '    handle /other/* {\n        reverse_proxy localhost:3456\n    }\n' + after],
+  ['other site', after + 'other.example {\n    reverse_proxy localhost:3456\n}\n'],
+]) {
+  for (const redirect of [false, true]) {
+    test(`removes generated route ${redirect ? 'with' : 'without'} redirect while preserving unrelated ${name} on port 3456`, t => {
+      const original = before + route(redirect) + suffix;
+      const expected = before.slice(0, -1) + suffix;
+      const {root, caddyfile} = fixture(t, original);
+      let deployments = 0;
+      const result = removeWebConsoleRoute({zylosDir:root, deploy:(next, old, options) => {
+        deployments++;
+        assert.equal(old, original);
+        assert.equal(next, expected);
+        return validateAndDeploy(next, old, {...options, validate:() => {}, reload:() => {}});
+      }});
+      assert.equal(deployments, 1);
+      assert.deepEqual(result, {changed:true, warnings:[`Removed the generated Web Console route from ${caddyfile}.`]});
+      assert.equal(fs.readFileSync(caddyfile, 'utf8'), expected);
+      assert.deepEqual(inspectWebConsoleRoute(expected), {state:'absent', related:[]});
+      assert.deepEqual(removeWebConsoleRoute({zylosDir:root, deploy:() => assert.fail('deploy unrelated route')}), {changed:false, warnings:[]});
+    });
+  }
+
+  test(`silently preserves only an unrelated ${name} on port 3456`, t => {
+    const original = before + suffix;
+    const {root, caddyfile} = fixture(t, original);
+    const inode = fs.statSync(caddyfile).ino;
+    assert.deepEqual(inspectWebConsoleRoute(original), {state:'absent', related:[]});
+    assert.deepEqual(removeWebConsoleRoute({zylosDir:root, deploy:() => assert.fail('deploy unrelated route')}), {changed:false, warnings:[]});
+    assert.equal(fs.readFileSync(caddyfile, 'utf8'), original);
+    assert.equal(fs.statSync(caddyfile).ino, inode);
   });
 }
 
@@ -66,7 +101,7 @@ for (const [name, content] of [
     assert.equal(called, false);
     assert.equal(result.changed, false);
     assert.equal(fs.readFileSync(caddyfile, 'utf8'), content);
-    const related = content.split(/\r?\n/).filter(line => /\/console|:3456/.test(line));
+    const related = content.split(/\r?\n/).filter(line => /\/console/.test(line));
     assert.deepEqual(result.warnings, [instruction(root, related)]);
   });
 }
@@ -87,7 +122,7 @@ for (const phase of ['validation', 'reload']) {
     }});
     assert.match(failure, phase === 'validation' ? /Caddy validation failed/ : /original Caddyfile restored/);
     assert.equal(result.changed, false);
-    const related = original.split('\n').filter(line => /\/console|:3456/.test(line));
+    const related = original.split('\n').filter(line => /\/console/.test(line));
     assert.deepEqual(result.warnings, [failure, instruction(root, related)]);
     assert.equal(fs.readFileSync(caddyfile, 'utf8'), original);
     assert.deepEqual(fs.readdirSync(path.dirname(caddyfile)), ['Caddyfile']);
