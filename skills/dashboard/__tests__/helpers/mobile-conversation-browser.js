@@ -135,6 +135,27 @@ export async function runMobileConversationBrowser(t, sandbox) {
     console.info('Mobile captures:', JSON.stringify(captures)); return;
   }
   const noOverflow = async page => assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no horizontal overflow');
+  // The document can stay narrow while a control is clipped by its container.
+  // Inspect the rendered control rectangles too, with a bounded fail-first scan.
+  const controlsFit = async (page, state) => {
+    const result = await page.evaluate(() => {
+      const controls = document.querySelectorAll('button,input,textarea,select,a[href],[role="button"]');
+      if (controls.length > 256) return { failure: { reason: 'fixture control limit', count: controls.length } };
+      let checked = 0;
+      for (const el of controls) {
+        const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
+        if (!rect.width || !rect.height || style.visibility === 'hidden' || style.display === 'none' || style.pointerEvents === 'none' || el.closest('[inert]')) continue;
+        // Quote actions deliberately use a one-pixel clipped accessibility target
+        // until selected; those are not the visible controls being measured.
+        if (rect.width <= 1 && rect.height <= 1 && style.clip !== 'auto') continue;
+        checked++;
+        if (rect.left < 0 || rect.right > innerWidth) return { checked, failure: { tag: el.tagName, class: el.className, action: el.dataset.action, text: (el.textContent || el.getAttribute('aria-label') || '').slice(0, 80), left: rect.left, right: rect.right, viewport: innerWidth } };
+      }
+      return { checked, failure: null };
+    });
+    assert.equal(result.failure, null, state + ' control outside viewport: ' + JSON.stringify(result.failure));
+    assert.ok(result.checked > 0, state + ' measured visible controls');
+  };
   const menu = page => page.locator('.conversation-menu-sheet');
   const rendered = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await t.test('desktop remains unchanged and mobile chrome is absent', async () => {
@@ -172,7 +193,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
       }
       const openMore = async () => { await page.locator('#wb-mobile-more').click(); await page.locator('#wb-mobile-more-sheet').waitFor(); };
       await openMore();
-      await page.setViewportSize({ width: 761, height: 844 }); await rendered(page);
+      await page.setViewportSize({ width: 761, height: 844 });
+      await page.waitForFunction(() => document.querySelector('#wb-mobile-more-sheet').hidden);
       assert.equal(await page.locator('#wb-mobile-more-sheet').evaluate(el => el.hidden), true, 'leaving the phone closes More state');
       await page.setViewportSize({ width: 390, height: 844 }); await rendered(page);
       assert.equal(await page.locator('#wb-mobile-more-sheet').isVisible(), false, 'returning to the phone does not reopen More');
@@ -194,6 +216,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
         assert.equal(await unavailable.page.locator('[data-mobile-action="observer"]').isVisible(), false, 'unavailable source stays absent in More');
         assert.deepEqual(unavailable.errors, []);
       } finally { await unavailable.context.close(); fixture.setObserverBlocked(false); }
+      await controlsFit(page, 'More');
       await shot(page, 'mobile-390-zh-more');
       const before = await page.locator('#wb-detail-toggle').isChecked();
       await page.locator('[data-mobile-action="detail"]').click();
@@ -254,6 +277,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       const bounds = await page.locator('.wb-group-side').boundingBox();
       assert.ok(bounds.x <= 1 && bounds.y <= 1 && bounds.width >= 388 && bounds.height >= 842, 'group detail fills phone viewport');
       assert.equal(await page.locator('.wb-group-side .wb-d-top > .wb-icon-btn').isVisible(), false, 'phone group detail has only the top back button');
+      await controlsFit(page, 'group detail');
       await shot(page, 'mobile-390-zh-group');
       await page.setViewportSize({ width: 1280, height: 900 }); await rendered(page);
       assert.equal(await page.locator('.wb-group-side .wb-d-top > .wb-icon-btn').isVisible(), true, 'desktop keeps the detail close action');
@@ -272,6 +296,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.match(await menu(page).innerText(), /Telegram|telegram/);
       await page.keyboard.press('Escape'); assert.equal(await page.locator('.conversation-read-only').isVisible(), true);
       assert.equal(await page.locator('.conversation-composer').count(), 0, 'external conversation retains read-only footer');
+      await controlsFit(page, 'read-only conversation');
       await shot(page, 'mobile-390-zh-read-only');
       assert.deepEqual(f.errors, []);
     } finally { await f.context.close(); }
@@ -336,20 +361,45 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.equal(await page.locator('.conversation-menu-toggle').evaluate(el => el === document.activeElement), true);
     } finally { release(); clearTimeout(sendTimeout); await f.context.close(); }
   });
-  await t.test('retry hint appears only after an uncertain send', async () => {
-    const f = await open(); const page = f.page;
-    try {
-      await select(page);
-      assert.equal(await page.locator('.conversation-mobile-retry-hint').isVisible(), false);
-      await page.route('**/api/chat/conversations/*/send', route => route.abort('failed'));
-      await page.locator('.conversation-input').fill('核对未确定的投递');
-      await page.locator('.conversation-send').click();
-      await page.locator('.conversation-mobile-retry-hint').waitFor({ state: 'visible' });
-      assert.match(await page.locator('.conversation-mobile-retry-hint').innerText(), /如需重试/);
-      assert.equal(await page.locator('.conversation-compose-hint').isVisible(), false, 'permanent hint stays hidden');
-      await shot(page, 'mobile-390-retry');
-      assert.deepEqual(f.errors, []);
-    } finally { await f.context.close(); }
+  await t.test('retry controls and hint stay inside narrow mobile screens', async () => {
+    for (const width of [390, 360, 430]) {
+      const f = await open({ width }); const page = f.page;
+      try {
+        await select(page);
+        assert.equal(await page.locator('.conversation-mobile-retry-hint').isVisible(), false);
+        await page.route('**/api/chat/conversations/*/send', route => route.abort('failed'));
+        await page.locator('.conversation-input').fill('核对未确定的投递');
+        await page.locator('.conversation-send').click();
+        await page.locator('.conversation-mobile-retry-hint').waitFor({ state: 'visible' });
+        assert.match(await page.locator('.conversation-mobile-retry-hint').innerText(), /如需重试/);
+        assert.equal(await page.locator('.conversation-compose-hint').isVisible(), false, 'permanent hint stays hidden');
+        // A network failure initially locks retry. The existing status check can
+        // authorize an explicit retry without clearing the uncertain receipt.
+        await page.route('**/api/chat/conversations/*', route => route.fulfill({ status: 200, json: {
+          conversation: { id: ID, sessionGroup: GROUP, channel: 'dashboard', displayName: '发布流程核对' },
+          stored: null, retryAllowed: true, preserveInput: true,
+        } }));
+        await page.locator('.conversation-receipt button').click();
+        await page.waitForFunction(() => !document.querySelector('.conversation-send[data-action="retry"]').disabled);
+        const bounds = await page.evaluate(() => {
+          const read = selector => { const el = document.querySelector(selector), rect = el.getBoundingClientRect(); return { left: rect.left, right: rect.right, width: rect.width, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }; };
+          return { viewport: innerWidth, detail: read('.conversation-detail'), composer: read('.conversation-composer'), input: read('.conversation-input'), check: read('.conversation-receipt button'), retry: read('.conversation-send[data-action="retry"]'), hint: read('.conversation-mobile-retry-hint') };
+        });
+        console.info('Retry control bounds:', JSON.stringify(bounds));
+        if (evidence) fs.writeFileSync(path.join(evidence, `retry-${width}-bounds.json`), JSON.stringify(bounds, null, 2));
+        await shot(page, `mobile-${width}-retry`);
+        for (const name of ['check', 'retry']) {
+          assert.ok(bounds[name].left >= 0 && bounds[name].right <= bounds.viewport, `${width}: ${name} button fits viewport: ${JSON.stringify(bounds[name])}`);
+          assert.ok(bounds[name].scrollWidth <= bounds[name].clientWidth, `${width}: ${name} button text fits its control`);
+        }
+        assert.ok(bounds.hint.scrollWidth <= bounds.hint.clientWidth, `${width}: complete retry hint fits its container`);
+        assert.ok(bounds.hint.left >= 0 && bounds.hint.right <= bounds.viewport, `${width}: retry hint container fits viewport`);
+        await page.locator('.conversation-receipt button').click({ trial: true });
+        await page.locator('.conversation-send[data-action="retry"]').click({ trial: true });
+        await controlsFit(page, width + ' retry conversation');
+        assert.deepEqual(f.errors, []);
+      } finally { await f.context.close(); }
+    }
   });
   await t.test('single-mode Origin menu omits unavailable group detail', async () => {
     const f = await open({ sessionMode: 'single' }); const page = f.page;
@@ -381,6 +431,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await page.locator('.conversation-push-status').waitFor({ state: 'visible' });
       assert.match(await page.locator('.conversation-push-status').innerText(), /轮询/);
       assert.match(await page.locator('.conversation-running').innerText(), /正在处理/);
+      await controlsFit(page, 'disconnected running conversation');
       await shot(page, 'mobile-390-disconnected-running');
       await page.locator('.conversation-running').click(); await page.locator('.wb-group-side').waitFor();
       assert.match(await page.locator('.wb-group-side .wb-detail-tabs [aria-selected="true"]').innerText(), /时间线/);
