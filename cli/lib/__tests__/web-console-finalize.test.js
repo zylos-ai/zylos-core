@@ -8,6 +8,7 @@ import { finalizeWebConsoleRemoval, webConsoleProcesses, inspectWebConsoleTasks,
 import { completeUpgradeFinalization, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
 import { startServicesWithDashboard } from '../../commands/init.js';
 import { protectedSuccess, maintenance, deployUpgradeBootstrap } from '../upgrade-protection.js';
+import { removeWebConsoleRoute } from '../web-console-route.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'console-finalize-'));
@@ -81,6 +82,44 @@ test('individual failures remain warnings and later cleanup continues without va
   assert.equal(result.warnings.length, 4);
   assert.doesNotMatch(JSON.stringify(result), /private-value/);
 });
+
+for (const scenario of ['unrecognized route', 'deploy failure', 'read failure']) {
+  test(`finalizer preserves the Agent instruction after Caddy ${scenario}`, async t => {
+    const root = fixture(t), caddyfile = path.join(root, 'http/Caddyfile'), caddyBin = path.join(root, 'bin/caddy');
+    fs.mkdirSync(path.dirname(caddyfile));
+    fs.mkdirSync(path.dirname(caddyBin));
+    fs.writeFileSync(caddyBin, 'fixture');
+    const related = ['    handle /console/* {', '        uri strip_prefix /console', '        reverse_proxy localhost:3456'];
+    const original = 'example.com {\n    # Web Console (core built-in)\n' + related.join('\n') + '\n    }\n}\n';
+    const content = scenario === 'unrecognized route' ? original.replace('    # Web Console (core built-in)\n', '') : original;
+    if (scenario === 'read failure') fs.mkdirSync(caddyfile);
+    else fs.writeFileSync(caddyfile, content);
+    let routeResult;
+    const result = await finalizeWebConsoleRemoval({zylosDir:root, dashboardUrl:'http://127.0.0.1:3470/'}, {
+      run:() => '[]', inspectTasks:() => [],
+      removeRoute:options => {
+        routeResult = removeWebConsoleRoute({...options, deploy:() => {
+          assert.equal(scenario, 'deploy failure');
+          return {success:false, error:'Caddy validation failed; Caddyfile unchanged.'};
+        }});
+        return routeResult;
+      },
+    });
+    const actions = result.warnings.filter(warning => warning.startsWith('Agent action required:'));
+    assert.equal(actions.length, 1);
+    assert.deepEqual(result.warnings.slice(0, routeResult.warnings.length), routeResult.warnings);
+    assert.ok(actions[0].includes(caddyfile));
+    assert.ok(actions[0].includes(`${caddyBin} validate --config ${caddyfile} --adapter caddyfile and pm2 reload caddy`));
+    assert.match(actions[0], /keep every other route unchanged/);
+    if (scenario !== 'read failure') {
+      for (const line of related) assert.ok(actions[0].includes(line));
+      assert.equal(fs.readFileSync(caddyfile, 'utf8'), content);
+    } else assert.equal(fs.statSync(caddyfile).isDirectory(), true);
+    if (scenario === 'deploy failure') assert.equal(result.warnings[0], 'Caddy validation failed; Caddyfile unchanged.');
+    assert.match(result.warnings.at(-1), /^Web Console has been removed\. Open Dashboard/);
+    assert.equal(result.pm2Changed, false);
+  });
+}
 
 test('scheduler inspection reads both legacy destinations without changing database bytes', t => {
   const root = fixture(t), file = path.join(root, 'scheduler/scheduler.db');

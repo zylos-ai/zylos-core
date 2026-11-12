@@ -28,6 +28,11 @@ function fixture(t, content) {
   return {root, caddyfile};
 }
 
+function instruction(root, related = []) {
+  const caddyfile = path.join(root, 'http/Caddyfile');
+  return `Agent action required: Web Console has been removed, but ${caddyfile} still contains Web Console routes that were not removed automatically:\n${related.length ? related.join('\n') + '\n' : ''}Read this Caddyfile and remove only the obsolete Web Console routes (the /console handling and anything proxying to localhost:3456); keep every other route unchanged. Then run ${path.join(root, 'bin/caddy')} validate --config ${caddyfile} --adapter caddyfile and pm2 reload caddy, and include the result in your upgrade report.`;
+}
+
 for (const redirect of [false, true]) {
   test(`removes generated route ${redirect ? 'with' : 'without'} redirect and preserves surrounding bytes`, () => {
     const original = before + route(redirect) + after;
@@ -61,12 +66,43 @@ for (const [name, content] of [
     assert.equal(called, false);
     assert.equal(result.changed, false);
     assert.equal(fs.readFileSync(caddyfile, 'utf8'), content);
-    assert.match(result.warnings.join('\n'), /Web Console has been removed/);
-    assert.ok(result.warnings.join('\n').includes(caddyfile));
-    assert.match(result.warnings.join('\n'), /pm2 reload caddy/);
-    for (const line of content.split(/\r?\n/).filter(line => /\/console|:3456/.test(line))) assert.ok(result.warnings.join('\n').includes(line));
+    const related = content.split(/\r?\n/).filter(line => /\/console|:3456/.test(line));
+    assert.deepEqual(result.warnings, [instruction(root, related)]);
   });
 }
+
+for (const phase of ['validation', 'reload']) {
+  test(`${phase} failure reports the error before the Agent instruction`, t => {
+    const original = before + route(true) + after;
+    const {root, caddyfile} = fixture(t, original);
+    let failure;
+    const result = removeWebConsoleRoute({zylosDir:root, deploy:(next, old, options) => {
+      const deployed = validateAndDeploy(next, old, {...options,
+        validate:() => { if (phase === 'validation') throw Error('invalid route'); },
+        reload:() => { throw Error('reload unavailable'); },
+      });
+      assert.equal(deployed.success, false);
+      failure = deployed.error;
+      return deployed;
+    }});
+    assert.match(failure, phase === 'validation' ? /Caddy validation failed/ : /original Caddyfile restored/);
+    assert.equal(result.changed, false);
+    const related = original.split('\n').filter(line => /\/console|:3456/.test(line));
+    assert.deepEqual(result.warnings, [failure, instruction(root, related)]);
+    assert.equal(fs.readFileSync(caddyfile, 'utf8'), original);
+    assert.deepEqual(fs.readdirSync(path.dirname(caddyfile)), ['Caddyfile']);
+  });
+}
+
+test('unreadable Caddyfile supplies an Agent instruction without affected lines', t => {
+  const {root, caddyfile} = fixture(t, '');
+  fs.unlinkSync(caddyfile);
+  fs.mkdirSync(caddyfile);
+  const result = removeWebConsoleRoute({zylosDir:root, deploy:() => assert.fail('deploy after read failure')});
+  assert.deepEqual(result, {changed:false, warnings:[instruction(root)]});
+  assert.equal(fs.statSync(caddyfile).isDirectory(), true);
+  assert.deepEqual(fs.readdirSync(caddyfile), []);
+});
 
 test('missing Caddy, missing Caddyfile and no-Caddy option silently skip', t => {
   const {root, caddyfile} = fixture(t, before + route(true) + after);

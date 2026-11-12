@@ -75,7 +75,7 @@ export function removeWebConsoleRoute({zylosDir, noCaddy = false, deploy = valid
   const caddyfile = path.join(zylosDir, 'http/Caddyfile');
   const caddyBin = path.join(zylosDir, 'bin/caddy');
   if (noCaddy || !fs.existsSync(caddyfile) || !fs.existsSync(caddyBin)) return {changed:false, warnings:[]};
-  const manual = related => `Web Console has been removed. Remove the obsolete lines from ${caddyfile}${related.length ? ':\n' + related.join('\n') : '.'}\nReload with: pm2 reload caddy`;
+  const manual = (related = []) => `Agent action required: Web Console has been removed, but ${caddyfile} still contains Web Console routes that were not removed automatically:\n${related.length ? related.join('\n') + '\n' : ''}Read this Caddyfile and remove only the obsolete Web Console routes (the /console handling and anything proxying to localhost:3456); keep every other route unchanged. Then run ${caddyBin} validate --config ${caddyfile} --adapter caddyfile and pm2 reload caddy, and include the result in your upgrade report.`;
   try {
     const original = fs.readFileSync(caddyfile, 'utf8');
     const inspection = inspectWebConsoleRoute(original);
@@ -85,6 +85,6 @@ export function removeWebConsoleRoute({zylosDir, noCaddy = false, deploy = valid
     if (!result.success) return {changed:false, warnings:[result.error, manual(inspection.related)]};
     return {changed:true, warnings:[`Removed the generated Web Console route from ${caddyfile}.`]};
   } catch {
-    return {changed:false, warnings:[`Could not inspect ${caddyfile}. Web Console has been removed; inspect its obsolete routes manually. Reload with: pm2 reload caddy`]};
+    return {changed:false, warnings:[manual()]};
   }
 }
