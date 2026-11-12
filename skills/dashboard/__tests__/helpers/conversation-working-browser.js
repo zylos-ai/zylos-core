@@ -16,7 +16,7 @@ const OTHER_ID = 'g:' + Buffer.from(OTHER).toString('hex').toUpperCase();
 const NOW = Date.UTC(2026, 10, 11, 10, 30);
 const iso = value => new Date(value).toISOString();
 
-export async function startWorkingPage(sandbox) {
+export async function startWorkingPage(sandbox, { now = NOW } = {}) {
   let scene = 'main', failGroups = false, title = '工作状态示例';
   let messages = null, activity = null, mainSince;
   const counts = { groups: 0, sends: 0, messages: 0, activity: 0 }, missing = new Set(), streams = new Set();
@@ -24,19 +24,19 @@ export async function startWorkingPage(sandbox) {
   const activeId = () => isOrigin() ? ORIGIN_ID : ID;
   const group = () => isOrigin() ? 'origin' : GROUP;
   const working = () => {
-    const turn = ['main', 'main-long', 'scheduled-short', 'scheduled-long', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - (scene === 'main-long' ? 121 : scene === 'scheduled-long' ? 65 : 3) * 60000 } : null;
+    const turn = ['main', 'main-long', 'scheduled-short', 'scheduled-long', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: now - (scene === 'main-long' ? 121 : scene === 'scheduled-long' ? 65 : 3) * 60000 } : null;
     if (turn && mainSince !== undefined) turn.since = mainSince;
-    const subagents = ['both', 'sub'].includes(scene) ? { count: 2, since: NOW - 13 * 60000, lastActivityAt: NOW - 30000 } : null;
+    const subagents = ['both', 'sub'].includes(scene) ? { count: 2, since: now - 13 * 60000, lastActivityAt: now - 30000 } : null;
     if (scene === 'unavailable') return null;
     return { on: !!(turn || subagents), since: turn || subagents ? Math.min(...[turn?.since, subagents?.since].filter(Number.isFinite)) : null, turn, tools: 0, subagents };
   };
   const snapshot = url => {
-    const value = workbenchAnswer(url, NOW);
+    const value = workbenchAnswer(url, now);
     const row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
     row.sessionGroup = group(); row.origin = isOrigin(); row.presence = scene === 'asleep' ? 'not_running' : 'running'; row.processing = scene.startsWith('scheduled-') ? 'scheduled_task' : null; row.name = { displayName: title }; row.state = { kind: 'idle' }; row.duration = 75;
     row.tools = []; row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
-    row.working = working(); row.preview = { text: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000), channel: 'dashboard' };
-    row.wait = ({ queue: { kind: 'pool_wait' }, starting: { kind: 'starting' }, rate: { kind: 'rate_wait', cooldownUntil: NOW / 1000 + 3600 }, auth: { kind: 'auth_wait' } })[scene] ?? null;
+    row.working = working(); row.preview = { text: '请继续整理这份资料', timestamp: iso(now - 4 * 60000), channel: 'dashboard' };
+    row.wait = ({ queue: { kind: 'pool_wait' }, starting: { kind: 'starting' }, rate: { kind: 'rate_wait', cooldownUntil: now / 1000 + 3600 }, auth: { kind: 'auth_wait' } })[scene] ?? null;
     value.rows = [row]; value.counts = { busy: 0, idle: 1, waiting: 0, unknown: 0, error: 0, not_running: 0 };
     value.instance.runtimeHealth = { claude: { health: scene.startsWith('unknown-') ? null : ({ rate: 'rate_limited', auth: 'auth_failed' })[scene] ?? 'ok' } };
     return value;
@@ -52,15 +52,15 @@ export async function startWorkingPage(sandbox) {
     if (p.startsWith('/api/chat/conversations/')) {
       const id = decodeURIComponent(p.split('/')[4]);
       if (p.endsWith('/messages') && messages) { counts.messages++; return { items: messages, nextCursor: null, afterCursor: 'after-' + (messages.at(-1)?.id ?? 0), tz: 'UTC' }; }
-      if (p.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: 'dashboard', content: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000) }, { id: 2, direction: 'out', channel: 'dashboard', content: '已经整理好了，后台子任务会继续核对。', timestamp: iso(NOW - 2 * 60000) }], nextCursor: null, afterCursor: 'after-2', tz: 'UTC' };
-      if (p.endsWith('/activity')) { counts.activity++; return activity ?? { now: iso(NOW), items: [] }; }
+      if (p.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: 'dashboard', content: '请继续整理这份资料', timestamp: iso(now - 4 * 60000) }, { id: 2, direction: 'out', channel: 'dashboard', content: '已经整理好了，后台子任务会继续核对。', timestamp: iso(now - 2 * 60000) }], nextCursor: null, afterCursor: 'after-2', tz: 'UTC' };
+      if (p.endsWith('/activity')) { counts.activity++; return activity ?? { now: iso(now), items: [] }; }
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };
       return { conversation: conversation(id), stored: true, conversationId: id, deliveryState: null, error: null };
     }
-    if (p.startsWith('/api/workbench/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(NOW - 20 * 60000), endAt: iso(NOW - 30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
+    if (p.startsWith('/api/workbench/groups/') && p.endsWith('/runs')) return { runs: [{ runId: 'run-tg', startAt: iso(now - 20 * 60000), endAt: iso(now - 30000), n: 2, endReason: 'running' }], totalRuns: 1, totalEvents: 2, unattributed: 0 };
     if (p.startsWith('/api/workbench/groups/') && p.endsWith('/messages')) return { messages: [] };
-    if (p === '/api/timeline') return { events: [{ id: 'working-1', event_seq: 1, event_type: 'user_prompt_submit', run_id: 'run-tg', session_group: GROUP, timestamp: iso(NOW - 3 * 60000), metadata: {} }] };
-    return workbenchAnswer(url, NOW);
+    if (p === '/api/timeline') return { events: [{ id: 'working-1', event_seq: 1, event_type: 'user_prompt_submit', run_id: 'run-tg', session_group: GROUP, timestamp: iso(now - 3 * 60000), metadata: {} }] };
+    return workbenchAnswer(url, now);
   };
   const server = http.createServer((req, res) => {
     try {
@@ -472,5 +472,3 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     fs.writeFileSync(path.join(evidence, 'working-measurements.json'), JSON.stringify(measurements, null, 2));
   }
 }
-
-export { NOW as workingBrowserNow };
