@@ -29,6 +29,7 @@ Creates a new scheduled task. Exactly one timing option is required.
 | `--miss-threshold <seconds>` | Skip if overdue by more than this | 300 |
 | `--reply-channel "<source>"` | Reply channel (e.g., "telegram", "lark") | none |
 | `--reply-endpoint "<endpoint>"` | Reply endpoint (e.g., user ID) | none |
+| `--json` | Structured success or error result | off |
 
 ## Examples
 
@@ -72,12 +73,17 @@ Don't use for: user notifications, time-sensitive tasks, high-priority alerts.
 
 ### Reply Configuration
 
-`--reply-channel` and `--reply-endpoint` specify where results are sent.
+`--reply-channel` and `--reply-endpoint` specify where results are sent. Supply both with nonempty values, or omit both. A missing partner or empty value returns `INVALID_ARGS` without creating the task.
 
 ```bash
 --reply-channel "telegram" --reply-endpoint "8101553026"     # Telegram user
 --reply-channel "lark" --reply-endpoint "chat_xxx topic_yyy" # Lark topic
---reply-channel "telegram"                                    # Broadcast
 ```
 
-Endpoint structure depends on channel implementation. Can contain multiple space-separated values.
+Endpoint structure depends on channel implementation. It can contain multiple space-separated values.
+
+## Structured Result
+
+With `--json`, creation returns `{"ok":true,"data":{"task":{...}}}`. Errors return `{"ok":false,"error":{"code":"...","message":"..."}}` and exit 1. Without it, creation retains the usual text output and exit behavior.
+
+Natural-language durations use one reference instant for both parsing and measuring the delay.
