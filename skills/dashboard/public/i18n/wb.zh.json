@@ -1118,5 +1118,11 @@
   "wb.inst.poolModelWindow": "近 {days} 天",
   "wb.inst.poolFloor": "内存只够 Origin，同时运行上限按 1 运行",
   "wb.wait.pool_waitTech": "等池位 · 第 {position} 个",
-  "chat.page.queueing": "排队中"
+  "chat.page.queueing": "排队中",
+  "chat.page.menu": "对话菜单",
+  "chat.page.pinned": "置顶",
+  "wb.mobile.more": "更多",
+  "wb.mobile.darkTheme": "深色主题",
+  "wb.mobile.sections": "Dashboard 分区",
+  "wb.mobile.observerHint": "仅在本机开放时出现"
 }

@@ -1118,5 +1118,11 @@
   "wb.inst.poolModelWindow": "over the last {days} days",
   "wb.inst.poolFloor": "Memory fits only Origin; running with a limit of 1",
   "wb.wait.pool_waitTech": "Waiting for a slot · position {position}",
-  "chat.page.queueing": "Queueing"
+  "chat.page.queueing": "Queueing",
+  "chat.page.menu": "Conversation actions",
+  "chat.page.pinned": "Pinned",
+  "wb.mobile.more": "More",
+  "wb.mobile.darkTheme": "Dark theme",
+  "wb.mobile.sections": "Dashboard sections",
+  "wb.mobile.observerHint": "Only shown when available on this machine"
 }

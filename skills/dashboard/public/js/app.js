@@ -7,7 +7,8 @@ import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/set
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=164';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=172';
+import { mountConversationPage } from './wb/conversation-page.js?v=173';
+import { mountMobileNavigation } from './wb/mobile-navigation.js?v=1';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
 import { mountWorkbench } from './wb/shell.js?v=165';
@@ -257,6 +258,7 @@ function renderIdentityChrome() {
   }
   // dashboardState is the viewed instance's own state (cleared while switching), like the name above.
   renderBrandVersion($('#tab-bar-core-version'), state.dashboardState?.runtime_info);
+  mobileNavigation?.sync();
 }
 
 function renderInfoBar() {
@@ -268,6 +270,7 @@ function renderInfoBar() {
 function renderObserverAvailability() {
   lockObserverButtons(document.querySelectorAll(OBSERVER_ACCESS_SELECTOR), { readOnly: remoteIsReadOnly() });
   remoteAccess.sync();
+  mobileNavigation?.sync();
 }
 
 
@@ -1541,6 +1544,7 @@ function showFleetView(opts = {}) {
   refreshFleet().catch(() => {});
   transitionView('fleet', opts);
   scheduleFleetFallback();
+  mobileNavigation?.sync();
 }
 
 function showAgentDetail(opts = {}) {
@@ -1550,6 +1554,7 @@ function showAgentDetail(opts = {}) {
   refreshChat();
   clearFleetFallback();
   syncMemoryPinned();
+  mobileNavigation?.sync();
 }
 
 function clearFleetFallback() {
@@ -1690,7 +1695,7 @@ function scheduleSseReconnect() {
 }
 
 // ─── Tabs ───
-let usagePage = null, workbench = null, chatPage = null;
+let usagePage = null, workbench = null, chatPage = null, mobileNavigation = null;
 let activateTab;
 function refreshChat() {
   if (activeTabName() === 'chat' && !state.fleetViewActive) return chatPage?.open();
@@ -1723,6 +1728,7 @@ function initTabs() {
     if (name === 'settings') refreshSettingsPage();
     refreshUsage();
     refreshChat();
+    mobileNavigation?.sync();
     if (name === 'memory') loadMemoryTree().catch(() => {});
     if (name !== 'observer') state.observer.focus = null;
     if (name === 'observer') {
@@ -2674,9 +2680,11 @@ function openSettingsModal(section = 'defaults') {
   document.querySelectorAll('.tab').forEach(node => node.classList.remove('active'));
   markCurrentTab(document.querySelectorAll('.tab'), 'settings');
   document.querySelectorAll('.tab-panel').forEach(node => { const active = node.id === 'tab-settings'; node.hidden = !active; node.classList.toggle('active', active); });
+  refreshChat();
   window.history.pushState({ tab: 'settings' }, '', api(`${remotePrefix()}/settings`));
   settingsPage?.select(section);
   refreshSettingsPage();
+  mobileNavigation?.sync();
 }
 function closeSettingsModal() {
   settingsLoader?.invalidate();
@@ -3066,7 +3074,15 @@ document.querySelector('#wb-detail-toggle')?.addEventListener('change', usageDet
 document.addEventListener('dashboard-locale-change', usageDetailChange);
 refreshUsage();
 refreshChat();
+mobileNavigation = mountMobileNavigation({ document, t,
+  getView: () => ({ tab: activeTabName(), fleet: state.fleetViewActive }),
+  onTab: name => {
+    if (state.fleetViewActive) showAgentDetail({ navigation: false });
+    document.querySelector(`.tab[data-tab="${name}"]`)?.click();
+  },
+});
 window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); usagePage.destroy(); chatPage.destroy();
+  mobileNavigation.destroy();
   document.removeEventListener('dashboard-locale-change', chatLocaleChange);
   document.querySelector('#wb-detail-toggle')?.removeEventListener('change', chatLocaleChange);
   document.querySelector('#wb-detail-toggle')?.removeEventListener('change', usageDetailChange);

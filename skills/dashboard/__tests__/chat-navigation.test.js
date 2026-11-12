@@ -9,7 +9,13 @@ import { FleetProxy } from '../src/lib/fleet-proxy.js';
 // Run for chat navigation/static-route changes; skip status/text-only changes.
 // The runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no DB, PM2 or tmux is used.
 test('fleet conversation page serves the shared frontend and schema under the browser prefix', async t => {
-  for (const name of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) assert.ok(process.env[name]?.startsWith('/tmp/') || process.env[name]?.startsWith('/var/'));
+  const testRoot = path.dirname(process.env.TMPDIR);
+  for (const name of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    const value = process.env[name];
+    assert.ok(value && path.isAbsolute(value));
+    const relative = path.relative(testRoot, value);
+    assert.ok(relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  }
   console.info('chat navigation isolation', JSON.stringify(Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(name => [name, process.env[name]]))), 'DB/PM2/tmux: unused');
   const rootDir = fileURLToPath(new URL('../public', import.meta.url));
   let upstream = 0;

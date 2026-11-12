@@ -9,7 +9,7 @@ import { createConversationState, isOriginConversation } from './conversation-st
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=158';
-import { createGroupSide } from './group-side.js?v=164';
+import { createGroupSide } from './group-side.js?v=165';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=5';
@@ -250,6 +250,8 @@ export function mountConversationPage({
     tabButtons[tab] = button;
     tabs.append(button);
   }
+  const externalTabLabel = node('span', t('chat.page.externalSection'), 'conversation-mobile-label');
+  tabButtons.external.append(externalTabLabel);
   const reload = action('refresh', () => state.refresh(), 'restart', 'wb-icon-btn conversation-reload');
   listToolbar.append(tabs, reload);
   const create = action('create', async () => {
@@ -292,7 +294,7 @@ export function mountConversationPage({
     const current = currentSnapshot.conversation ?? currentSnapshot.items.find(item => item.id === currentSnapshot.selectedId);
     showGroupSide(current?.sessionGroup ?? current?.session_group, currentSnapshot.selectedId, { tab: 'timeline' });
   });
-  const renameToggle = action('rename', () => {
+  const toggleRename = () => {
     renaming = !renaming;
     renameForm.hidden = !renaming;
     if (renaming) {
@@ -300,15 +302,21 @@ export function mountConversationPage({
       renameInput.focus();
       renameInput.select();
     }
-  }, 'edit', 'wb-icon-btn');
-  titleLine.append(title, renameToggle);
+  };
+  const renameToggle = action('rename', toggleRename, 'edit', 'wb-icon-btn');
+  const connectionDot = node('span', undefined, 'conversation-connection-dot');
+  connectionDot.setAttribute('aria-hidden', 'true');
+  titleLine.append(title, connectionDot, renameToggle);
   heading.append(titleLine, subtitle, running);
   const streamHint = node('span', undefined, 'conversation-push-status');
   streamHint.setAttribute('role', 'status');
   heading.append(streamHint);
   const headerActions = node('div', undefined, 'conversation-header-actions');
   const group = action('chat.page.groupInfo', () => toggleGroupSide(), 'chev');
-  headerActions.append(group);
+  const menuToggle = action('chat.page.menu', () => openConversationMenu(), 'more', 'wb-icon-btn conversation-menu-toggle');
+  menuToggle.setAttribute('aria-haspopup', 'dialog');
+  menuToggle.setAttribute('aria-expanded', 'false');
+  headerActions.append(group, menuToggle);
   // Collapses the conversation list on wider screens; remembered like the dashboard's other view preferences.
   const listToggle = action('chat.page.hideList', () => toggleList(), 'menu', 'wb-icon-btn conversation-list-toggle');
   listToggle.dataset.action = 'listToggle';
@@ -326,7 +334,7 @@ export function mountConversationPage({
   const renameCancel = action('chat.page.cancel', () => {
     renaming = false;
     renameForm.hidden = true;
-    renameToggle.focus();
+    (view?.innerWidth <= 760 ? menuToggle : renameToggle).focus();
   });
   renameForm.append(renameInput, renameSave, renameCancel);
   renameForm.addEventListener('submit', event => {
@@ -388,6 +396,8 @@ export function mountConversationPage({
   const send = action('send', () => {}, 'send', 'wb-btn wb-btn-primary conversation-send');
   send.type = 'submit';
   const hint = node('p', t('chat.page.sendHint'), 'conversation-compose-hint');
+  const mobileRetryHint = node('p', undefined, 'conversation-mobile-retry-hint');
+  mobileRetryHint.hidden = true;
   const attach = action('attach', () => fileInput.click(), 'paperclip', 'wb-icon-btn conversation-attach');
   const fileInput = node('input'); fileInput.type = 'file'; fileInput.multiple = true;
   fileInput.hidden = true; fileInput.dataset.action = 'chooseFiles'; fileInput.setAttribute('aria-label', t('chat.attach'));
@@ -443,7 +453,7 @@ export function mountConversationPage({
     onRemove: key => state.removeAnnotation(key),
     onLocate: id => locate(id) });
   composeBox.append(attach, annotations.count, input, send, fileInput);
-  composer.append(receipt, trayLabel, tray, uploadNotice, composeNotice, quoteBar, composeBox, hint);
+  composer.append(receipt, trayLabel, tray, uploadNotice, composeNotice, quoteBar, mobileRetryHint, composeBox, hint);
   input.addEventListener('input', () => state.setInput(input.value));
   input.addEventListener('keydown', event => {
     if (composerKeySends(event, { touch: touchFirst(view) })) {
@@ -462,6 +472,60 @@ export function mountConversationPage({
   });
   detail.append(header, renameForm, notices, history, composer, readOnlyFooter);
   page.append(sidebar, detail);
+  const menuScrim = node('button', undefined, 'conversation-menu-scrim');
+  menuScrim.type = 'button';
+  menuScrim.hidden = true;
+  menuScrim.setAttribute('aria-label', t('chat.page.cancel'));
+  menuScrim.tabIndex = -1;
+  menuScrim.addEventListener('click', () => closeConversationMenu());
+  const menuSheet = node('section', undefined, 'conversation-menu-sheet');
+  menuSheet.hidden = true;
+  menuSheet.tabIndex = -1;
+  menuSheet.setAttribute('role', 'dialog');
+  menuSheet.setAttribute('aria-modal', 'true');
+  menuSheet.setAttribute('aria-label', t('chat.page.menu'));
+  const menuSource = node('span'), menuConnection = node('span');
+  const menuInfo = (symbol, contents) => {
+    const row = node('div', undefined, 'conversation-menu-info');
+    row.append(icon(document, symbol), contents);
+    return row;
+  };
+  const menuRename = action('rename', () => { closeConversationMenu(false); toggleRename(); }, 'edit', 'conversation-menu-item conversation-menu-rename');
+  menuRename.dataset.action = 'page.menuRename';
+  const menuGroup = action('chat.page.groupInfo', () => { closeConversationMenu(false); toggleGroupSide(); }, 'activity', 'conversation-menu-item conversation-menu-group');
+  menuGroup.dataset.action = 'page.menuGroup';
+  const menuDeliveryHint = node('span', t('chat.page.sendHint'));
+  menuSheet.append(node('div', undefined, 'conversation-menu-grab'), menuInfo('monitor', menuSource),
+    menuInfo('activity', menuConnection), node('div', undefined, 'conversation-menu-divider'), menuRename, menuGroup,
+    menuInfo('help', menuDeliveryHint));
+  page.append(menuScrim, menuSheet);
+  function closeConversationMenu(focus = true) {
+    if (menuSheet.hidden) return;
+    menuSheet.hidden = menuScrim.hidden = true;
+    menuToggle.setAttribute('aria-expanded', 'false');
+    if (focus) menuToggle.focus();
+  }
+  function openConversationMenu() {
+    if (!currentSnapshot?.selectedId || view?.innerWidth > 760) return;
+    menuSheet.hidden = menuScrim.hidden = false;
+    menuToggle.setAttribute('aria-expanded', 'true');
+    ([menuRename, menuGroup].find(button => !button.hidden && !button.disabled) ?? menuSheet).focus();
+  }
+  const menuKeydown = event => {
+    if (menuSheet.hidden) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeConversationMenu();
+    } else if (event.key === 'Tab') {
+      const buttons = [menuRename, menuGroup].filter(button => !button.hidden && !button.disabled);
+      const first = buttons[0], last = buttons.at(-1);
+      if (!first || event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        ((event.shiftKey ? last : first) ?? menuSheet).focus();
+      }
+    }
+  };
+  menuSheet.addEventListener('keydown', menuKeydown);
   // The group's detail opens beside the conversation (over it on narrow screens), never on the overview.
   let groupSideFor = null;
   const groupSide = groupLinks ? createGroupSide({ document, t, fetch: fetcher, endpoint, identity: () => typeof identity === 'function' ? identity() : identity,
@@ -473,7 +537,7 @@ export function mountConversationPage({
       // Hiding inside the preserved change keeps the reading position (or the pin to the bottom) as the column widens.
       preserveAttachmentLayout(() => { hide(); page.classList.toggle('conversation-has-side', false); });
       group.setAttribute('aria-expanded', 'false');
-      if (focus && !group.hidden) group.focus();
+      if (focus && !group.hidden) (view?.innerWidth <= 760 ? menuToggle : group).focus();
     } }) : null;
   if (groupSide) {
     page.append(groupSide.element);
@@ -569,7 +633,7 @@ export function mountConversationPage({
     const atBottom = input.scrollHeight - oldTop - input.clientHeight <= 2;
     input.style.height = '0px';
     const height = input.value ? input.scrollHeight : parseFloat(view.getComputedStyle(input).minHeight);
-    input.style.height = `${Math.min(180, height)}px`;
+    input.style.height = `${Math.min(view.innerWidth <= 760 ? 132 : 180, height)}px`;
     input.style.overflowY = input.value && input.scrollHeight > input.clientHeight ? 'auto' : 'hidden';
     input.scrollTop = atBottom ? input.scrollHeight : oldTop;
   }
@@ -597,6 +661,17 @@ export function mountConversationPage({
   }
   function mobileDetail(open) {
     page.classList.toggle('conversation-detail-open', open);
+    closeConversationMenu(false);
+    syncMobileFocus();
+    scheduleFit();
+  }
+  function syncMobileFocus() {
+    const focus = opened && !page.hidden && !currentSnapshot?.blocked && !!currentSnapshot?.selectedId
+      && page.classList.contains('conversation-detail-open') && view?.innerWidth <= 760;
+    if (document.documentElement.dataset.conversationFocus !== String(focus)) {
+      document.documentElement.dataset.conversationFocus = String(focus);
+    }
+    if (!focus) closeConversationMenu(false);
   }
   function updateUnread() {
     latest.hidden = !unread;
@@ -1222,6 +1297,7 @@ export function mountConversationPage({
   }
   function fitPage() {
     fitFrame = null;
+    syncMobileFocus();
     if (destroyed || !view || page.hidden || !page.isConnected || !page.getClientRects().length) {
       return;
     }
@@ -1232,7 +1308,9 @@ export function mountConversationPage({
     const anchorTop = anchor?.getBoundingClientRect().top;
     updateInputPlaceholder();
     fitInput();
-    const available = Math.max(0, Math.floor(view.innerHeight - page.getBoundingClientRect().top));
+    const mobileTabs = view.innerWidth <= 760 ? document.querySelector('#wb-mobile-nav') : null;
+    const bottomNavigation = mobileTabs?.getBoundingClientRect().height ?? 0;
+    const available = Math.max(0, Math.floor(view.innerHeight - page.getBoundingClientRect().top - bottomNavigation));
     if (available !== fittedHeight) {
       fittedHeight = available;
       page.style.height = `${available}px`;
@@ -1274,6 +1352,7 @@ export function mountConversationPage({
     const before = captureHistory();
     const s = state.snapshot();
     currentSnapshot = s;
+    syncMobileFocus();
     instanceTimeZone = s.tz ?? null;
     for (const {
       button,
@@ -1285,6 +1364,10 @@ export function mountConversationPage({
     }
     text(gapLabel, t('chat.page.historyGap'));
     text(hint, t('chat.page.sendHint'));
+    text(externalTabLabel, t('chat.page.externalSection'));
+    text(menuDeliveryHint, t('chat.page.sendHint'));
+    menuSheet.setAttribute('aria-label', t('chat.page.menu'));
+    menuScrim.setAttribute('aria-label', t('chat.page.cancel'));
     text(updateNotice, t('chat.page.updateRetry'));
     sidebar.setAttribute('aria-label', t('chat.conversations'));
     detail.setAttribute('aria-label', t('chat.history'));
@@ -1317,6 +1400,7 @@ export function mountConversationPage({
     const key = `${s.tab}:${s.selectedId ?? ''}`;
     const switched = selectedKey !== key;
     if (switched || s.blocked) {
+      closeConversationMenu(false);
       selectedKey = key;
       annotations.hide();
       locateNotice = null;
@@ -1367,10 +1451,11 @@ export function mountConversationPage({
           top = node('span', undefined, 'conversation-list-title');
         const name = node('strong'),
           channel = node('span', undefined, 'conversation-list-channel'),
+          pinned = node('span', t('chat.page.pinned'), 'conversation-pinned'),
           draft = node('span', t('chat.draft'), 'conversation-draft'),
           time = node('time', undefined, 'conversation-list-time');
         const preview = node('span', undefined, 'chat-preview');
-        top.append(name, channel, draft, time);
+        top.append(name, pinned, channel, draft, time);
         body.append(top, preview);
         button.append(symbol, body);
         button.addEventListener('click', () => {
@@ -1387,6 +1472,7 @@ export function mountConversationPage({
           button,
           name,
           channel,
+          pinned,
           draft,
           time,
           preview
@@ -1406,6 +1492,10 @@ export function mountConversationPage({
       row.channel.hidden = s.tab === 'mine' || !itemChannel;
       text(row.channel, channelLabel(itemChannel));
       text(row.name, nameOf(item));
+      const pinned = s.tab === 'mine' && isOriginConversation(item.id);
+      row.button.dataset.origin = String(pinned);
+      row.pinned.hidden = !pinned;
+      text(row.pinned, t('chat.page.pinned'));
       const preview = item.preview || t(item.draft ? 'chat.page.blankPreview' : 'chat.page.noMessages');
       let previewPrefix = '';
       if (item.preview && item.previewDirection === 'in') {
@@ -1454,6 +1544,9 @@ export function mountConversationPage({
     updateNotice.hidden = !s.updateError;
     streamHint.dataset.streamState = s.streamState;
     text(streamHint, t('chat.page.push.' + s.streamState));
+    connectionDot.dataset.streamState = s.streamState;
+    connectionDot.title = t('chat.page.push.' + s.streamState);
+    text(menuConnection, t('chat.page.push.' + s.streamState));
     const current = s.conversation ?? s.items.find(item => item.id === s.selectedId);
     text(title, nameOf(current, s.tab === 'external'));
     updateWorkingIndicator(s);
@@ -1469,10 +1562,14 @@ export function mountConversationPage({
       headerIcon.dataset.icon = symbol;
     }
     text(subtitle, channelLabel(channel) + ' · ' + t(origin ? 'chat.page.originPinned' : s.tab === 'mine' ? 'chat.page.selfCreated' : 'chat.page.readOnly'));
+    text(menuSource, subtitle.textContent);
     renameToggle.hidden = !s.canRename;
+    menuRename.hidden = !s.canRename;
+    menuRename.disabled = s.loading || s.sending;
     renameSave.disabled = s.loading || s.sending;
     // In single, Origin's workbench row has no group key, so there is no group detail to open beside it.
     group.hidden = !groupSide || !(current?.sessionGroup ?? current?.session_group) || isDraft(s) || origin && s.mode === 'single';
+    menuGroup.hidden = group.hidden;
     // The side panel belongs to the conversation it was opened from.
     if (groupSide?.open && (group.hidden || s.selectedId !== groupSideFor)) groupSide.close({ focus: false });
     historyStart.hidden = !s.selectedId || isDraft(s) || !s.historyLoaded
@@ -1545,6 +1642,8 @@ export function mountConversationPage({
     attach.title = [t('chat.attach'), limits].filter(Boolean).join(' · ');
     const keys = s.retryRequired ? t('chat.page.retryHint') : touchFirst(view) ? '' : t('chat.page.keyHint');
     text(hint, [keys, t('chat.upload.pasteDrop'), limits, t('chat.page.sendHint')].filter(Boolean).join(' · '));
+    mobileRetryHint.hidden = !s.retryRequired;
+    text(mobileRetryHint, s.retryRequired ? t('chat.page.retryHint') : '');
     attach.hidden = !s.canWrite;
     attach.disabled = !s.canWrite || !!s.sending || s.retryRequired && !s.canRetry;
     fileInput.disabled = attach.disabled;
@@ -1645,11 +1744,14 @@ export function mountConversationPage({
       groupSide?.close({ focus: false });
       annotations.hide();
       page.hidden = true;
+      syncMobileFocus();
       state.close();
     },
     redraw() { redraw(); groupSide?.redraw(); },
     clearDrafts(scope) { uploadTray.clearForAuthentication(scope?.instance ? { instance: scope.instance } : undefined); state.clearDrafts(scope); },
     destroy() {
+      closeConversationMenu(false);
+      document.documentElement.dataset.conversationFocus = 'false';
       deletion.invalidate();
       groupSide?.destroy();
       destroyed = true;

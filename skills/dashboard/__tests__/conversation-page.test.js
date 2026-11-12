@@ -262,7 +262,7 @@ for (const allowed of [false, true]) test(`conversation list ${allowed ? 'shows'
 test('mounted conversation page forwards language headers without adding query parameters', async t => {
   for (const locale of ['zh', 'en']) {
     const document = pageDocument(), root = document.createElement('div'), reads = [];
-    document.documentElement = { lang: locale };
+    document.documentElement.lang = locale;
     const sessionGroup = 'dashboard:locale-header', id = 'g:' + Buffer.from(sessionGroup).toString('hex').toUpperCase();
     const page = mountConversationPage({ root, document, fetch: async (path, options) => {
       if (path.startsWith('/api/chat/conversations?') || path.includes('/messages?')) reads.push({ path, options });
@@ -481,7 +481,7 @@ test('initial ready catchup releases the loading notice without manual header re
 for (const locale of ['en', 'zh']) for (const retainedMessages of [0, 2]) for (const countsEstimated of [false, true]) {
   test(`completed deletion ${retainedMessages ? 'shows retained memory' : 'omits retention notice'} in ${locale} with ${countsEstimated ? 'estimated' : 'exact'} counts`, async t => {
     const document = conversationDocument(), root = document.createElement('div');
-    document.documentElement = { lang: locale };
+    document.documentElement.lang = locale;
     const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
     const translate = (key, args = {}) => (translations[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(args[name]));
     const result = { ok: true, pending: false, retainedMessages, groupDataRetained: retainedMessages > 0, countsEstimated };

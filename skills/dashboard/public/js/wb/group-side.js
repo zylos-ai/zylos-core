@@ -20,7 +20,8 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
   back.type = 'button';
   back.append(icon(document, 'back'));
   back.addEventListener('click', () => close());
-  bar.append(back);
+  const mobileTitle = element(document, 'span', t('wb.detail.title'), 'wb-group-side-mobile-title');
+  bar.append(back, mobileTitle);
   const body = element(document, 'div', undefined, 'wb-group-side-detail');
   aside.append(bar, body);
   let key = null, snapshot = null, timer = null, opening = false, restoreFocus = true, generation = 0, stopped = false, initialTab = 'overview';
@@ -51,6 +52,7 @@ export function createGroupSide({ document, t = key => key, fetch = globalThis.f
     aside.setAttribute('aria-label', t('wb.detail.title'));
     back.setAttribute('aria-label', t('chat.page.backToConversation'));
     back.title = t('chat.page.backToConversation');
+    mobileTitle.textContent = t('wb.detail.title');
   }
   function openDetail() {
     // Opening first closes the previous selection; that close is not the panel closing.

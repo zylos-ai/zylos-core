@@ -137,6 +137,25 @@ export async function runWorkbenchBrowser(t, sandbox) {
     return { page, context, errors, shot: async name => { if (evidence) await page.screenshot({ path: path.join(evidence, `${width}-${name}.png`) }); } };
   }
 
+  // Mobile chrome delegates to the same existing controls; desktop uses them directly.
+  async function section(page, name) {
+    if (page.viewportSize().width > 760) {
+      await page.locator(name === 'settings' ? '#wb-settings-btn' : `.tab[data-tab="${name}"]`).click();
+    } else if (['overview', 'chat', 'schedule', 'memory'].includes(name)) {
+      await page.locator(`[data-mobile-tab="${name}"]`).click();
+    } else {
+      await page.locator('#wb-mobile-more').click();
+      await page.locator(`[data-mobile-action="${name === 'trends' ? 'usage' : name}"]`).click();
+    }
+  }
+  async function machinesControl(page) {
+    if (page.viewportSize().width <= 760) {
+      await page.locator('#wb-mobile-more').click();
+      return page.locator('[data-mobile-action="machines"]');
+    }
+    return page.locator('#fleet-manage-btn');
+  }
+
   // Asking before acting: each action that changes the running agent opens the in-page question; cancelling
   // sends nothing and confirming sends exactly one request.
   async function confirmFlow(page, button, action, body) {
@@ -259,7 +278,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
 
     // Overview and group detail: icon, name and state share the first row; the actions are the second row, starting
     // at the icon's left edge, one row of equal-height buttons with the conversation first.
-    await page.locator('.tab[data-tab="overview"]').click();
+    await section(page, 'overview');
     await page.locator('#wb-board .wb-row').first().waitFor();
     await check('overview');
     await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
@@ -291,7 +310,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await shot('group-memory');
 
     // Schedule: six numbers in two rows of three; the next-day timeline stays inside the screen.
-    await page.locator('.tab[data-tab="schedule"]').click();
+    await section(page, 'schedule');
     await page.locator('.wb-sched-row').first().waitFor();
     await page.locator('.wb-sched-kpi .wb-sched-kpi-item').first().waitFor();
     const sched = await check('schedule');
@@ -315,11 +334,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await english.page.locator('.wb-d-top .wb-d-sub').waitFor();
     phoneHeader(await checkEnglish('detail-english'), 'English');
     await english.page.keyboard.press('Escape');
-    await english.page.locator('.tab[data-tab="trends"]').click();
+    await section(english.page, 'trends');
     await english.page.locator('#wb-usage-range > button').first().waitFor();
     assert.equal((await english.page.locator('#wb-usage-range > button').allTextContents()).length, 5, 'four ranges and the custom dates');
     await checkEnglish('usage-english');
-    await english.page.locator('.tab[data-tab="memory"]').click();
+    await section(english.page, 'memory');
     await english.page.locator('#memory-tree .memory-file').first().waitFor();
     await checkEnglish('memory-english');
     assert.deepEqual(english.errors, []);
@@ -355,7 +374,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     const { page, context, errors, shot } = await open(390, 844, '/');
     await page.locator('#wb-board .wb-row').first().waitFor();
     // Arrive from the overview so one Back too many would show up as leaving settings.
-    await page.locator('#wb-settings-btn').click();
+    await section(page, 'settings');
     await page.locator('.wb-set-drawer-btn').waitFor({ state: 'visible' });
     const label = name => page.locator(`[data-settings-section="${name}"] > span`).first().textContent();
     let state = await drawerState(page);
@@ -436,7 +455,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
   await step('phone settings drawer: Forward onto its old entry and Back again keep unsaved edits', async () => {
     const { page, context, errors } = await open(390, 844, '/');
     await page.locator('#wb-board .wb-row').first().waitFor();
-    await page.locator('#wb-settings-btn').click();
+    await section(page, 'settings');
     await page.locator('.wb-set-drawer-btn').waitFor({ state: 'visible' });
     await openDrawer(page);
     await page.locator('[data-settings-section="pricing"]').click();
@@ -482,7 +501,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     const start = async () => {
       const opened = await open(390, 844, '/');
       await opened.page.locator('#wb-board .wb-row').first().waitFor();
-      await opened.page.locator('#wb-settings-btn').click();
+      await section(opened.page, 'settings');
       await opened.page.locator('.wb-set-drawer-btn').waitFor({ state: 'visible' });
       return opened;
     };
@@ -590,19 +609,19 @@ export async function runWorkbenchBrowser(t, sandbox) {
         .map(tab => `${tab.dataset.tab}=${tab.getAttribute('aria-current')}`));
       await page.locator('#wb-board .wb-row').first().waitFor();
       assert.deepEqual(await current(), ['overview=page'], `${width}: overview is current`);
-      await page.locator('.tab[data-tab="trends"]').click();
+      await section(page, 'trends');
       await page.locator('#wb-usage-range > button').first().waitFor();
       assert.deepEqual(await current(), ['trends=page'], `${width}: usage is current`);
       const top = await page.evaluate(() => {
         const usage = document.querySelector('.wb-usage-page');
         return { headings: usage.querySelectorAll('h1, h2').length, first: usage.firstElementChild.className,
-          gap: Math.round(usage.querySelector('.wb-usage-controls').getBoundingClientRect().top - document.querySelector('.app-header').getBoundingClientRect().bottom) };
+          gap: Math.round(usage.querySelector('.wb-usage-controls').getBoundingClientRect().top - document.querySelector(innerWidth <= 760 ? '.wb-mobile-topbar' : '.app-header').getBoundingClientRect().bottom) };
       });
       assert.equal(top.headings, 0, `${width}: no page heading repeats the nav`);
       assert.match(top.first, /wb-usage-controls/);
       assert.ok(top.gap >= 8 && top.gap <= 40, `${width}: the controls sit just under the header (${top.gap}px)`);
       await shot(`usage-top-${theme}`);
-      await page.locator('#wb-settings-btn').click();
+      await section(page, 'settings');
       await page.locator('#tab-settings.active').waitFor();
       assert.deepEqual(await current(), ['settings=page'], `${width}: settings is current`);
       assert.deepEqual(errors, []);
@@ -714,10 +733,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.deepEqual(errors, []);
   });
 
-  // The machines page has no sections. On phones the navigation has a row of its own, so there it takes no space and
-  // the header is only its first row; opening a machine brings the row back. Wider screens keep the hidden navigation
-  // in place on the brand row, so the header is as tall on the machines page as on a machine's page.
-  await step('machines page: on phones the empty section row takes no space, and returns with a machine; wider headers keep their height', async () => {
+  // Phone views share a compact top row and bottom navigation; desktop keeps the original header geometry.
+  await step('machines page: compact phone chrome and unchanged desktop header height', async () => {
     for (const [width, height, theme] of [[390, 844, 'light'], [390, 844, 'dark'], [800, 800, 'light'], [1280, 800, 'light']]) {
       const label = `${width} ${theme}`;
       const { page, context, errors, shot } = await open(width, height, '/');
@@ -731,7 +748,8 @@ export async function runWorkbenchBrowser(t, sandbox) {
         const box = node => node.getBoundingClientRect(), nav = document.querySelector('.app-header .tab-bar');
         const head = box(document.querySelector('.app-header'));
         const rowBottom = Math.max(...['.header-left', '.header-actions'].map(selector => box(document.querySelector(`.app-header ${selector}`)).bottom));
-        return { height: head.height, belowFirstRow: head.bottom - rowBottom, navBoxes: nav.getClientRects().length, navVisibility: getComputedStyle(nav).visibility, scroll: document.documentElement.scrollWidth > innerWidth };
+        const mobile = box(document.querySelector('.wb-mobile-topbar')), mobileNav = box(document.querySelector('#wb-mobile-nav'));
+        return { mobileHeight: mobile.height, mobileTop: mobile.top, mobileNavHeight: mobileNav.height, mobileNavBottom: mobileNav.bottom, height: head.height, belowFirstRow: head.bottom - rowBottom, navBoxes: nav.getClientRects().length, navVisibility: getComputedStyle(nav).visibility, scroll: document.documentElement.scrollWidth > innerWidth };
       });
       const machines = await header();
       await shot(`machines-${theme}`);
@@ -739,10 +757,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await settled(page, false);
       const machine = await header();
       if (width <= 760) {
-        assert.equal(machines.navBoxes, 0, `${label}: the machines page has no section row`);
-        assert.ok(machines.belowFirstRow <= 1.5, `${label}: the header ends with its first row (only its border below), got ${machines.belowFirstRow}`);
-        assert.ok(machine.navBoxes > 0 && machine.navVisibility === 'visible', `${label}: a machine's page shows the sections`);
-        assert.ok(machine.belowFirstRow >= 39, `${label}: the sections take their own row again, got ${machine.belowFirstRow}`);
+        assert.equal(machines.height, 0, `${label}: the old header is hidden on the machines page`);
+        assert.equal(machine.height, 0, `${label}: the old header remains hidden with a machine`);
+        assert.ok(machines.mobileHeight >= 40 && machines.mobileHeight <= 64 && machines.mobileTop === 0, `${label}: machines use one compact top row`);
+        assert.equal(machines.mobileHeight, machine.mobileHeight, `${label}: the compact row keeps its height`);
+        assert.ok(machine.mobileNavHeight >= 40 && Math.abs(machine.mobileNavBottom - height) <= 1, `${label}: a machine has fixed bottom navigation`);
       } else {
         assert.equal(machines.navVisibility, 'hidden', `${label}: the machines page hides the sections in place`);
         assert.equal(machines.height, machine.height, `${label}: the header keeps its height between the machines page and a machine's page`);
@@ -750,8 +769,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       assert.equal(machines.scroll || machine.scroll, false, `${label}: no sideways scrolling`);
       await shot(`machine-${theme}`);
       // The sections work once a machine is open.
-      const memory = page.locator('.app-header .tab[data-tab="memory"]');
-      await memory.click();
+      await section(page, 'memory');
       await page.waitForFunction(() => document.querySelector('.app-header .tab[data-tab="memory"]').getAttribute('aria-current') === 'page');
       assert.deepEqual(errors, []);
       await context.close();
@@ -767,22 +785,24 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const { page, context, errors, shot } = await open(width, width === 390 ? 844 : 800, '/');
       await answerFleet(page, { spark: '1.0.0-beta.7' });
       await page.reload();
-      const icon = page.locator('#fleet-manage-btn'), path = () => new URL(page.url()).pathname;
+      const path = () => new URL(page.url()).pathname;
       await settled(page, true);
       assert.equal(await page.locator('#back-to-fleet').count(), 0, `${width}: no back button`);
       await shot('icon-machines');
       await page.locator('#agent-fleet-root .agent-open[data-self="true"]').click();
       await settled(page, false);
-      assert.equal(await icon.isVisible(), true, `${width}: this machine's page has the icon`);
+      const icon = await machinesControl(page);
+      assert.equal(await icon.isVisible(), true, `${width}: this machine's page has its machines control`);
+      if (width <= 760) await page.keyboard.press('Escape');
       await shot('icon-this-machine');
-      await icon.click();
+      await (await machinesControl(page)).click();
       await settled(page, true);
       await page.locator('#agent-fleet-root .agent-open[data-agent="spark"]').click();
       await settled(page, false);
       await page.waitForFunction(() => document.querySelector('#tab-bar-agent-name').textContent === 'spark');
       assert.equal(path(), '/fleet/spark/');
       await shot('icon-remote');
-      await icon.click();
+      await (await machinesControl(page)).click();
       await settled(page, true);
       assert.equal(path(), '/', `${width}: the remote view is left for the machines page`);
       assert.equal(await page.locator('#tab-bar-agent-name').textContent(), 'browser-case', `${width}: this machine again`);
