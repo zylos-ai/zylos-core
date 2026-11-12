@@ -1583,6 +1583,23 @@ test('new activity during an eviction check abandons that group and another cand
   }
 });
 
+test('a message arriving before the eviction check is answered abandons that group in the same round', async () => {
+  for (const path of EVICTION_PATHS) {
+    const f = evictionFixture(['a', 'b']), asked = f.now;
+    const messages = { a: 0, b: 0 };
+    f.db.getLastActivity = group => ({ ts: messages[group] });
+    await evictionRound(f, path);
+    const [check] = f.controls;
+    assert.equal(check.sessionGroup, 'a', path);
+    f.now = asked + 5000; check.status = 'running'; messages.a = f.now;
+    await evictionRound(f, path);
+    assert.equal(check.status, 'running', `${path}: the check is still unanswered`);
+    assert.equal(f.fences.size, 0, path);
+    assert.equal(f.lifecycle.evictionPreparation.has('a'), false, `${path}: the slot is not held until the deadline`);
+    assert.deepEqual(f.controls.map(control => control.sessionGroup), ['a', 'b'], `${path}: the next candidate is asked`);
+  }
+});
+
 test('session activity after the eviction check deadline counts as new activity', async () => {
   for (const path of EVICTION_PATHS) {
     const f = evictionFixture(), asked = f.now;
