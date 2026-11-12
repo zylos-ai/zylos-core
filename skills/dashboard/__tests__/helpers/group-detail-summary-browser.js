@@ -170,8 +170,12 @@ export async function runGroupDetailSummaryBrowser(t, sandbox) {
         await checkCard(f.page, overview, scene, level, false);
         await shot(f.page, `${width}-${theme}-${level}-${scene}-overview`, '#wb-side');
         await overview.locator('[data-action="viewConversation"]').click();
-        await f.page.locator('#wb-chat [data-action="page.groupInfo"]').waitFor();
-        await f.page.locator('#wb-chat [data-action="page.groupInfo"]').click();
+        if (width <= 760) {
+          await f.page.locator('#wb-chat .conversation-menu-toggle').click();
+          await f.page.locator('#wb-chat [data-action="page.menuGroup"]').click();
+        } else {
+          await f.page.locator('#wb-chat [data-action="page.groupInfo"]').click();
+        }
         const side = f.page.locator('#wb-chat .wb-group-side');
         await side.locator('.wb-d-title').filter({ hasText: '组详情示例' }).waitFor();
         await side.locator('.wb-now-title').first().waitFor();
