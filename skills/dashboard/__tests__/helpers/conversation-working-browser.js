@@ -16,14 +16,16 @@ const OTHER_ID = 'g:' + Buffer.from(OTHER).toString('hex').toUpperCase();
 const NOW = Date.UTC(2026, 10, 11, 10, 30);
 const iso = value => new Date(value).toISOString();
 
-async function startPage(sandbox) {
+export async function startWorkingPage(sandbox) {
   let scene = 'main', failGroups = false, title = '工作状态示例';
-  const counts = { groups: 0, sends: 0 }, missing = new Set(), streams = new Set();
+  let messages = null, activity = null, mainSince;
+  const counts = { groups: 0, sends: 0, messages: 0, activity: 0 }, missing = new Set(), streams = new Set();
   const isOrigin = () => scene.startsWith('scheduled-') || scene === 'asleep';
   const activeId = () => isOrigin() ? ORIGIN_ID : ID;
   const group = () => isOrigin() ? 'origin' : GROUP;
   const working = () => {
     const turn = ['main', 'main-long', 'scheduled-short', 'scheduled-long', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - (scene === 'main-long' ? 121 : scene === 'scheduled-long' ? 65 : 3) * 60000 } : null;
+    if (turn && mainSince !== undefined) turn.since = mainSince;
     const subagents = ['both', 'sub'].includes(scene) ? { count: 2, since: NOW - 13 * 60000, lastActivityAt: NOW - 30000 } : null;
     if (scene === 'unavailable') return null;
     return { on: !!(turn || subagents), since: turn || subagents ? Math.min(...[turn?.since, subagents?.since].filter(Number.isFinite)) : null, turn, tools: 0, subagents };
@@ -49,8 +51,9 @@ async function startPage(sandbox) {
     }
     if (p.startsWith('/api/chat/conversations/')) {
       const id = decodeURIComponent(p.split('/')[4]);
+      if (p.endsWith('/messages') && messages) { counts.messages++; return { items: messages, nextCursor: null, afterCursor: 'after-' + (messages.at(-1)?.id ?? 0), tz: 'UTC' }; }
       if (p.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: 'dashboard', content: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000) }, { id: 2, direction: 'out', channel: 'dashboard', content: '已经整理好了，后台子任务会继续核对。', timestamp: iso(NOW - 2 * 60000) }], nextCursor: null, afterCursor: 'after-2', tz: 'UTC' };
-      if (p.endsWith('/activity')) return { now: iso(NOW), items: [] };
+      if (p.endsWith('/activity')) { counts.activity++; return activity ?? { now: iso(NOW), items: [] }; }
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };
       return { conversation: conversation(id), stored: true, conversationId: id, deliveryState: null, error: null };
     }
@@ -66,6 +69,7 @@ async function startPage(sandbox) {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
         const data = { version: 1, tab: url.searchParams.get('chat_tab') || 'mine', conversationId: url.searchParams.get('chat_conversation'), ids: [] };
         res.write(`event: chat_ready\ndata: ${JSON.stringify(data)}\n\n`);
+        res.fixtureSubscription = data;
         streams.add(res); res.on('close', () => streams.delete(res)); return;
       }
       if (url.pathname.startsWith('/api/')) {
@@ -88,12 +92,18 @@ async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
-  return { base: await sandbox.startHttp(server), counts, missing, activeId, setScene(value) { scene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; } };
+  return { base: await sandbox.startHttp(server), counts, missing, activeId,
+    setScene(value) { scene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; },
+    setMessages(value) { messages = value; }, setActivity(value) { activity = value; },
+    setMainSince(value) { mainSince = value; },
+    publish() {
+      for (const stream of streams) stream.write(`event: chat_messages_changed\ndata: ${JSON.stringify({ ...stream.fixtureSubscription, ids: messages?.map(item => item.id) ?? [] })}\n\n`);
+    } };
 }
 
 export async function runConversationWorkingBrowser(t, sandbox) {
   console.info('Working browser isolation:', JSON.stringify(sandbox.assertIsolation()));
-  const fixture = await startPage(sandbox);
+  const fixture = await startWorkingPage(sandbox);
   const { chromium } = await import(pathToFileURL(process.env.ZYLOS_CHAT_BROWSER_MODULE));
   const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
@@ -462,3 +472,5 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     fs.writeFileSync(path.join(evidence, 'working-measurements.json'), JSON.stringify(measurements, null, 2));
   }
 }
+
+export { NOW as workingBrowserNow };
