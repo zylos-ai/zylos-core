@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { openDashboardTab, openGroupDetail, openMobileMore } from './browser-navigation.js';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -140,7 +141,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
       await page.goto(base + '/');
       if (width <= 760) {
         // The phone exposes Observer through More; the desktop tab remains a hidden proxy source.
-        await page.locator('#wb-mobile-more').click();
+        await openMobileMore(page);
         const observer = page.locator('[data-mobile-action="observer"]');
         await observer.waitFor({ state: 'visible' });
         assert.equal(await observer.isEnabled(), true, 'the phone Observer entry is available');
@@ -156,19 +157,8 @@ export async function runObserverBrowser(t, sandbox, signal) {
       throw error;
     }
   }
-  const openTab = async (page, name) => {
-    if (page.viewportSize().width > 760) return page.locator(`.tab[data-tab="${name}"]`).click();
-    if (name === 'observer') {
-      await page.locator('#wb-mobile-more').click();
-      return page.locator('[data-mobile-action="observer"]').click();
-    }
-    return page.locator(`[data-mobile-tab="${name}"]`).click();
-  };
-  const openGroupInfo = async page => {
-    if (page.viewportSize().width > 760) return page.locator('#wb-chat [data-action="page.groupInfo"]').click();
-    await page.locator('#wb-chat .conversation-menu-toggle').click();
-    return page.locator('#wb-chat [data-action="page.menuGroup"]').click();
-  };
+  const openTab = openDashboardTab;
+  const openGroupInfo = openGroupDetail;
   const select = (page, group) => page.locator('#observer-group-select').selectOption(group);
   async function observing(page, group = GROUP) { await openTab(page, 'observer'); await select(page, group); await page.waitForFunction(() => window.__observerSockets.length > 0); }
   const leaseWrites = start => writes.slice(start).filter(row => row.path === '/api/observer/leases');

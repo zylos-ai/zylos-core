@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { openGroupDetail } from './browser-navigation.js';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -316,8 +317,8 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       // Initial opening and the expanded phone tap target are tested with pointer input.
       await indicator(f.page).focus(); await f.page.keyboard.press('Enter'); await side.locator('.wi-now').waitFor();
       assert.equal(await side.evaluate(node => node === window.originalDetailSide), true, 'open sidebar keeps its mounted panel');
-      await f.page.locator('#wb-chat [data-action="page.groupInfo"]').focus(); await f.page.keyboard.press('Enter'); assert.equal(await side.isVisible(), false);
-      await f.page.locator('#wb-chat [data-action="page.groupInfo"]').click(); await side.locator('.wb-now-card').waitFor();
+      await openGroupDetail(f.page, { keyboard: true }); assert.equal(await side.isVisible(), false);
+      await openGroupDetail(f.page); await side.locator('.wb-now-card').waitFor();
       assert.equal(await side.locator('.wb-detail-tabs [aria-selected="true"]').innerText(), '概况');
       await f.page.evaluate(() => window.detailObserver.disconnect());
     } finally { await f.context.close(); }

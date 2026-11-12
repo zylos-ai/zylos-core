@@ -13,12 +13,13 @@ registerHooks({
   }
 });
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
+const { renderOverview } = await import('../public/js/wb/detail-overview.js');
 
 // The conversation page's group detail side panel, through the real page, panel and group detail modules on the
-// injected DOM (in-memory fetch; no browser, sockets, storage, subprocesses or network). The overview is never
-// mounted here, so every group read comes from the panel itself. Pixel layout (the narrowed conversation, the
-// full-screen panel on phones) is covered by the screenshots, not here. Run for changes to the panel, the
-// conversation page header or the group detail component.
+// injected DOM (in-memory fetch; no browser, sockets, storage, subprocesses or network). The overview renderer
+// is also called directly for content parity; every mounted-page group read comes from the panel itself.
+// Pixel layout (the narrowed conversation, the full-screen panel on phones) is covered by the screenshots,
+// not here. Run for changes to the panel, the conversation page header or the group detail component.
 const sessionGroup = 'dashboard:42';
 const conversationId = 'g:' + Buffer.from(sessionGroup).toString('hex').toUpperCase();
 const otherGroup = 'dashboard:43';
@@ -370,3 +371,97 @@ test('the conversation group sidebar keeps current state without repeating the l
   assert.equal(f.side().textContent.includes('wb.board.lastReceived'), false);
   assert.equal(allNodes(f.side()).some(node => node.classList.contains('wb-now-raw')), false);
 });
+
+function summaryTranslation(locale) {
+  const labels = JSON.parse(readFileSync(new URL('../public/i18n/wb.' + locale + '.json', import.meta.url), 'utf8'));
+  return (key, params = {}) => (labels[key] ?? key).replace(/\{([^}]+)\}/g, (match, name) => params[name] ?? match);
+}
+
+// Content variants run through the actual overview renderer with both preview-origin policies. The mounted
+// sidebar tests above cover its wiring to that policy. The browser cases retain
+// navigation, viewport geometry and screenshots; this fixed twelve-case matrix needs no layout or browser.
+for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) for (const scene of ['idle', 'busy', 'waiting']) {
+  test(`${locale} ${level} ${scene}: group summaries keep content and evidence in their intended regions`, () => {
+    const now = Date.now(), preview = 'The received message must stay a subtitle';
+    const translate = summaryTranslation(locale), zh = locale === 'zh';
+    const current = { ...listedRow, state: { kind: scene }, duration: 75,
+      preview: { text: preview, timestamp: now - 90000, channel: 'dashboard', source: { kind: 'channel' } },
+      tools: scene === 'busy' ? [{ name: 'Read' }, { name: 'WebSearch' }] : [],
+      queue: { known: true, pending: { count: scene === 'waiting' ? 1 : 0 }, running: { count: scene === 'busy' ? 1 : 0 } },
+      wait: scene === 'waiting' ? { kind: 'rate_wait', runtime: 'claude', cooldownUntil: Math.floor(now / 1000) + 3600 } : null,
+      live: { ...listedRow.live, status: { valid: true, state: scene === 'waiting' ? 'idle' : scene, sampledAt: now } } };
+    const events = scene === 'busy' ? [1, 2].map(id => ({ event_seq: id, event_type: 'subagent_start',
+      agent_id: 'helper-' + id, run_id: 'run-1', metadata: { name: 'Background helper ' + id } })) : [];
+    const ok = { ok: true, readAt: now };
+    const snapshot = { readAt: now, sources: { status: ok, c4: scene === 'waiting' ? { ok: false, reason: 'messages_unreadable', readAt: now } : ok,
+      q: ok, ov: ok, accounts: { claude: ok, codex: ok } },
+      instance: { runtimeHealth: { claude: { health: scene === 'waiting' ? 'rate_limited' : 'ok', updatedAt: now } } } };
+    const document = eventDocument();
+    document.documentElement.lang = locale;
+    const overview = document.createElement('div');
+    for (const showPreview of [true, false]) {
+      const root = showPreview ? overview : document.createElement('div');
+      renderOverview(root, current, { currentEvents: events }, { document, t: translate, level, snapshot,
+        currentTime: now, showLastReceived: showPreview, onObserve() {} });
+      const nodes = selector => root.querySelectorAll(selector);
+      const card = root.querySelector('.wb-now-card'), titles = nodes('.wb-now-title');
+      assert.ok(card, 'current-state card is rendered');
+      assert.equal(titles.some(node => node.textContent.includes(preview)), false, 'received text never becomes a current-state title');
+      assert.equal(nodes('.wb-now-sub').some(node => node.textContent.includes(preview)), showPreview, 'only the overview repeats received text as a subtitle');
+      assert.equal(nodes('.wb-now-raw').length, showPreview && level === 'technical' ? 1 : 0, 'received text and its raw fold share the same origin policy');
+      if (level === 'plain') assert.equal(titles.length, 1, 'plain summaries stay on one title line');
+      if (scene === 'idle') {
+        assert.equal(titles.length, 1);
+        assert.equal(titles[0].textContent, level === 'plain' ? zh ? '空闲 · 已 1 分钟' : 'Idle · for 1 minute'
+          : (zh ? '空闲' : 'Idle') + '1m15s');
+      } else if (scene === 'busy') {
+        if (level === 'plain') {
+          assert.equal(titles[0].textContent, zh ? '读文件、搜索网页 · 后台子任务 2 个' : 'Read file, Search web · 2 background subtasks');
+          assert.equal(nodes('.wb-subs').length, 0, 'the plain count replaces separate technical tags');
+          if (!zh) assert.equal(titles[0].textContent.includes('、'), false, 'English tool names use their locale separator');
+        } else {
+          assert.deepEqual(nodes('.wb-detail-tool').map(node => node.textContent), ['Read', 'WebSearch']);
+          const tags = nodes('.wb-subs .wb-tag');
+          assert.equal(tags.length, 2);
+          assert.ok(tags[0].textContent.includes('Background helper 1'));
+          assert.ok(tags[1].textContent.includes('Background helper 2'));
+        }
+      } else if (level === 'plain') {
+        assert.match(titles[0].textContent, zh ? /^额度已用完，.+恢复。1 条消息在等/ : /^Allowance exhausted; recovers at .+\. 1 messages are waiting/);
+        assert.doesNotMatch(titles[0].textContent, /恢复时间未知|recovery time unknown/);
+      } else {
+        assert.equal(titles[0].textContent, zh ? '等待' : 'Waiting');
+        assert.match(nodes('.wb-now-sub')[0].textContent, /rate_wait/);
+      }
+      const terminal = card.querySelectorAll('[data-observer-group]');
+      assert.equal(terminal.length, level === 'technical' ? 1 : 0);
+      if (terminal.length) {
+        const label = zh ? '终端' : 'Terminal';
+        assert.equal(terminal[0].textContent, label);
+        assert.equal(terminal[0].title, label);
+        assert.equal(terminal[0].getAttribute('aria-label'), label);
+      }
+      const evidence = card.querySelector('.wb-detail-evidence');
+      assert.equal(Boolean(evidence), level === 'technical' && scene === 'waiting', 'only technical waiting summaries offer evidence');
+      if (evidence) {
+        assert.equal(evidence.open, false, 'supporting evidence starts folded');
+        assert.ok(evidence.querySelector('summary'));
+        assert.ok(evidence.querySelector('table'), 'the fold contains its supporting table');
+        assert.ok(evidence.textContent.includes(zh ? '会话忙闲' : 'Session activity'));
+        assert.match(evidence.textContent, /claude · rate_limited/);
+        assert.match(evidence.textContent, /messages_unreadable/);
+        assert.equal(evidence.querySelectorAll('tr').some(node => node.dataset.updateKey.startsWith('accounts')), false, 'healthy nested accounts are not failed sources');
+      }
+    }
+    if (scene === 'waiting') {
+      const healthy = { ...snapshot, sources: { ...snapshot.sources, c4: ok } };
+      renderOverview(overview, current, {}, { document, t: translate, level, snapshot: healthy, onObserve() {} });
+      const evidence = overview.querySelector('.wb-detail-evidence');
+      if (level === 'technical') {
+        assert.ok(evidence.textContent.includes(zh ? '数据来源全部正常' : 'All data sources are healthy'));
+        assert.equal(evidence.querySelectorAll('tr').filter(node => node.dataset.updateKey === 'sources').length, 1);
+        assert.doesNotMatch(evidence.textContent, /messages_unreadable/);
+      } else assert.equal(evidence, null, 'healthy waiting sources do not expose evidence in plain view either');
+    }
+  });
+}

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { openDashboardTab, openMobileMore } from './browser-navigation.js';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -138,19 +139,10 @@ export async function runWorkbenchBrowser(t, sandbox) {
   }
 
   // Mobile chrome delegates to the same existing controls; desktop uses them directly.
-  async function section(page, name) {
-    if (page.viewportSize().width > 760) {
-      await page.locator(name === 'settings' ? '#wb-settings-btn' : `.tab[data-tab="${name}"]`).click();
-    } else if (['overview', 'chat', 'schedule', 'memory'].includes(name)) {
-      await page.locator(`[data-mobile-tab="${name}"]`).click();
-    } else {
-      await page.locator('#wb-mobile-more').click();
-      await page.locator(`[data-mobile-action="${name === 'trends' ? 'usage' : name}"]`).click();
-    }
-  }
+  const section = openDashboardTab;
   async function machinesControl(page) {
     if (page.viewportSize().width <= 760) {
-      await page.locator('#wb-mobile-more').click();
+      await openMobileMore(page);
       return page.locator('[data-mobile-action="machines"]');
     }
     return page.locator('#fleet-manage-btn');

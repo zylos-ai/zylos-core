@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createChatApiFixture, protocolFixtures, questionContent } from './chat-integration-api.js';
 import { sendJson } from '../../src/lib/http.js';
 import { dataError } from '../../../comm-bridge/scripts/c4-session-group.js';
+import { conversationAction, openConversationMenu, openGroupDetail } from './browser-navigation.js';
 
 // Real product entry, schema, state, API and database. No source rewriting or eval.
 export async function runConversationVisual(t, sandbox) {
@@ -111,7 +112,7 @@ export async function runConversationVisual(t, sandbox) {
         const box = await control.boundingBox();
         assert.ok(box && box.width >= 40 && box.height >= 40, selector + ' has a usable phone target');
       }
-      await page.locator('#wb-chat .conversation-menu-toggle').click();
+      await openConversationMenu(page);
       const renameBox = await page.locator('#wb-chat .conversation-menu-rename').boundingBox();
       assert.ok(renameBox && renameBox.width >= 40 && renameBox.height >= 40, 'menu rename has a usable phone target');
       await page.keyboard.press('Escape');
@@ -338,7 +339,7 @@ export async function runConversationVisual(t, sandbox) {
       const rounds = [];
       let previous = before;
       for (let round = 0; round < 2; round++) {
-        await groupInfo.click();
+        await openGroupDetail(page);
         await groupSide.waitFor({ state: 'visible' });
         await settleLayout();
         const opened = await measure(before.anchor);
@@ -407,8 +408,7 @@ export async function runConversationVisual(t, sandbox) {
   // aria-label, as on desktop, so no English label is cut; "View conversation" keeps its words elsewhere.
   // The phone header opens it from the conversation menu.
   assert.equal(await groupInfo.isVisible(), false);
-  await page.locator('#wb-chat .conversation-menu-toggle').click();
-  await page.locator('.conversation-menu-group').click();
+  await openGroupDetail(page);
   await groupSide.waitFor({ state: 'visible' });
   // The detail redraws its header, replacing these buttons, whenever one of its reads arrives. A locator finds
   // elements in one call and measures them in the next, so a redraw in between leaves it measuring removed
@@ -515,7 +515,7 @@ export async function runConversationVisual(t, sandbox) {
   await page.locator('#wb-chat [data-action="create"]').click();
   await page.locator('#wb-chat [aria-current="true"][data-conversation-id^="d:"]').waitFor({ state: 'attached' });
   assert.equal(draftWrites, writesBefore + 1);
-  await page.locator('#wb-chat .conversation-title-line [data-action="rename"]').click();
+  await conversationAction(page, 'rename');
   await page.locator('#wb-chat .conversation-rename input').fill('Named browser draft');
   await page.locator('#wb-chat .conversation-rename button[type="submit"]').click();
   await page.locator('#wb-chat .conversation-title-line h2').filter({ hasText: 'Named browser draft' }).waitFor();

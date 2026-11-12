@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { conversationAction, openConversationMenu, openGroupDetail, openMobileMore } from './browser-navigation.js';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -351,7 +352,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
         assert.equal(await page.locator(`#tab-${name}`).isVisible(), true, name + ' uses original tab');
         assert.equal(await page.locator(`[data-mobile-tab="${name}"]`).getAttribute('aria-current'), 'page');
       }
-      const openMore = async () => { await page.locator('#wb-mobile-more').click(); await page.locator('#wb-mobile-more-sheet').waitFor(); };
+      const openMore = () => openMobileMore(page);
       await openMore();
       await page.setViewportSize({ width: 761, height: 844 });
       await page.waitForFunction(() => document.querySelector('#wb-mobile-more-sheet').hidden);
@@ -370,7 +371,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await observer.waitFor({ state: 'hidden' });
       const unavailable = await open({ observerBlocked: true, detail: 'technical' });
       try {
-        await unavailable.page.locator('#wb-mobile-more').click();
+        await openMobileMore(unavailable.page);
         await unavailable.page.locator('#wb-mobile-more-sheet').waitFor();
         assert.equal(await unavailable.page.locator('#observer-tab').evaluate(el => el.hidden), true, 'recovery-blocked observer hides original source');
         assert.equal(await unavailable.page.locator('[data-mobile-action="observer"]').isVisible(), false, 'unavailable source stays absent in More');
@@ -419,7 +420,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       const flush = await page.locator('.conversation-header').boundingBox();
       assert.ok(Math.abs(flush.x) <= 1 && Math.abs(flush.y) <= 1 && flush.width >= 389, 'focus header starts flush at viewport edges');
       await shot(page, 'mobile-390-zh');
-      await page.locator('.conversation-menu-toggle').click(); await menu(page).waitFor();
+      await openConversationMenu(page); await menu(page).waitFor();
       assert.equal(await page.locator('.conversation-menu-rename').isVisible(), true);
       assert.equal(await page.locator('.conversation-menu-group').isVisible(), true);
       assert.equal(await menu(page).locator('.wb-ico-wifi').count(), 1);
@@ -428,11 +429,11 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.equal(await menu(page).locator('.conversation-menu-summary').innerText(), '运行状态、时间线、用量');
       assert.match(await menu(page).innerText(), /Dashboard/); assert.match(await menu(page).innerText(), /发送|投递/);
       await shot(page, 'mobile-390-zh-conversation-menu');
-      await page.locator('.conversation-menu-rename').click();
+      await conversationAction(page, 'rename');
       assert.equal(await page.locator('.conversation-rename').isVisible(), true);
       assert.equal(await page.locator('.conversation-rename input').getAttribute('maxlength'), '40');
       await page.locator('.conversation-rename [data-action="page.cancel"]').click();
-      await page.locator('.conversation-menu-toggle').click(); await page.locator('.conversation-menu-group').click();
+      await openGroupDetail(page);
       await page.locator('.wb-group-side').waitFor();
       const bounds = await page.locator('.wb-group-side').boundingBox();
       assert.ok(bounds.x <= 1 && bounds.y <= 1 && bounds.width >= 388 && bounds.height >= 842, 'group detail fills phone viewport');
@@ -447,11 +448,11 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.equal(await page.locator('html').getAttribute('data-conversation-focus'), 'false');
       assert.equal(await page.locator('#wb-mobile-nav').isVisible(), true);
       await page.locator(`[data-conversation-id="${ORIGIN_ID}"]`).click();
-      await page.locator('.conversation-menu-toggle').click(); assert.equal(await page.locator('.conversation-menu-rename').isVisible(), false, 'Origin keeps existing fixed name');
+      await openConversationMenu(page); assert.equal(await page.locator('.conversation-menu-rename').isVisible(), false, 'Origin keeps existing fixed name');
       await page.keyboard.press('Escape'); await page.locator('.conversation-back').click();
       await page.locator('.conversation-tabs [data-action="external"]').click();
       await page.locator(`[data-conversation-id="${EXT_ID}"]`).click();
-      await page.locator('.conversation-menu-toggle').click();
+      await openConversationMenu(page);
       assert.equal(await page.locator('.conversation-menu-rename').isVisible(), false);
       assert.match(await menu(page).innerText(), /Telegram|telegram/);
       await page.keyboard.press('Escape'); assert.equal(await page.locator('.conversation-read-only').isVisible(), true);
@@ -486,7 +487,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await page.locator('.tab[data-tab="overview"]').click();
       await page.locator('#tab-overview').waitFor({ state: 'visible' });
       await page.setViewportSize({ width: 390, height: 844 }); await rendered(page);
-      await page.locator('#wb-mobile-more').click(); await page.locator('#wb-mobile-more-sheet').waitFor();
+      await openMobileMore(page); await page.locator('#wb-mobile-more-sheet').waitFor();
       await page.goBack(); await rendered(page);
       await page.waitForFunction(() => document.documentElement.dataset.conversationFocus === 'true');
       assert.equal(await page.locator('#wb-mobile-more-sheet').evaluate(el => el.hidden), true, 'history focus entry closes More state');
@@ -567,7 +568,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
     try {
       await page.locator(`[data-conversation-id="${ORIGIN_ID}"]`).click();
       await page.locator('.conversation-header-actions > .wb-btn').waitFor({ state: 'hidden' });
-      await page.locator('.conversation-menu-toggle').click(); await menu(page).waitFor();
+      await openConversationMenu(page); await menu(page).waitFor();
       assert.equal(await page.locator('.conversation-menu-group').isVisible(), false, 'menu mirrors unavailable original group action');
       assert.equal(await page.locator('.conversation-menu-rename').isVisible(), false);
       assert.deepEqual(f.errors, []);
