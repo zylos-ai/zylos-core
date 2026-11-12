@@ -581,6 +581,24 @@ export async function runMobileConversationBrowser(t, sandbox) {
         await noOverflow(f.page);
         // Check the list state before conversation focus hides the bottom navigation.
         await shot(f.page, `navigation-${width}-${locale}-${theme}`);
+        const tabs = await f.page.locator('.conversation-tabs [role="tab"]').evaluateAll(buttons => buttons.map(button => {
+          const label = [...button.querySelectorAll(':scope > span')].find(span => getComputedStyle(span).display !== 'none');
+          const box = button.getBoundingClientRect();
+          return { text: label.textContent, scrollWidth: button.scrollWidth, clientWidth: button.clientWidth,
+            scrollHeight: button.scrollHeight, clientHeight: button.clientHeight,
+            labelScrollWidth: label.scrollWidth, labelClientWidth: label.clientWidth,
+            labelScrollHeight: label.scrollHeight, labelClientHeight: label.clientHeight,
+            width: box.width, height: box.height };
+        }));
+        if (evidence) fs.writeFileSync(path.join(evidence, `list-tabs-${width}-${locale}-${theme}.json`), JSON.stringify(tabs, null, 2));
+        assert.equal(tabs.length, 2, 'both conversation list tabs are present');
+        assert.deepEqual(tabs.map(tab => tab.text), locale === 'en' ? ['My conversations', 'External channels'] : ['我的对话', '外部渠道'], 'conversation tabs use the approved labels');
+        for (const tab of tabs) {
+          assert.ok(tab.scrollWidth <= tab.clientWidth, `${width} ${locale}: ${tab.text} tab fits horizontally ${JSON.stringify(tab)}`);
+          assert.ok(tab.labelScrollWidth <= tab.labelClientWidth, `${width} ${locale}: ${tab.text} caption fits horizontally ${JSON.stringify(tab)}`);
+          assert.ok(tab.scrollHeight <= tab.clientHeight && tab.labelScrollHeight <= tab.labelClientHeight, `${width} ${locale}: ${tab.text} fits vertically`);
+          if (width < 761) assert.ok(Math.abs(tab.width - tabs[0].width) <= 1 && tab.height === 32, 'list tabs keep their equal-width 32px touch targets');
+        }
         if (width < 761) {
           const labels = await f.page.locator('#wb-mobile-nav .wb-mobile-tab').evaluateAll(buttons => buttons.map(button => {
             const label = button.querySelector(':scope > span'), box = button.getBoundingClientRect();

@@ -573,7 +573,7 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await page.locator('#wb-chat .conversation-message-status:visible').count(), 0, 'pending external inbound has no stale delivery label');
   assert.equal(await page.locator('#wb-chat .conversation-read-only').isVisible(), true);
   assert.equal(await page.locator('#wb-chat .conversation-external-section').isVisible(), true);
-  assert.match(await page.locator('#wb-chat .conversation-external-section').innerText(), /Other channels/i);
+  assert.match(await page.locator('#wb-chat .conversation-external-section').innerText(), /External channels · read only/i);
   await screenshot('external-read-only');
   await page.setViewportSize({ width: 390, height: 844 });
   await page.locator('#wb-chat .conversation-back').click();

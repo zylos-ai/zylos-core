@@ -250,7 +250,7 @@ export function mountConversationPage({
     tabButtons[tab] = button;
     tabs.append(button);
   }
-  const externalTabLabel = node('span', t('chat.page.externalSection'), 'conversation-mobile-label');
+  const externalTabLabel = node('span', t('chat.external'), 'conversation-mobile-label');
   tabButtons.external.append(externalTabLabel);
   const reload = action('refresh', () => state.refresh(), 'restart', 'wb-icon-btn conversation-reload');
   listToolbar.append(tabs, reload);
@@ -1396,7 +1396,7 @@ export function mountConversationPage({
     }
     text(gapLabel, t('chat.page.historyGap'));
     text(hint, t('chat.page.sendHint'));
-    text(externalTabLabel, t('chat.page.externalSection'));
+    text(externalTabLabel, t('chat.external'));
     text(menuDeliveryHint, t('chat.page.sendHint'));
     text(menuGroupSummary, t('chat.page.groupSummary'));
     menuSheet.setAttribute('aria-label', t('chat.page.menu'));
