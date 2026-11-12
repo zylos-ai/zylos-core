@@ -19,7 +19,7 @@ Shows the 5 nearest pending tasks with relative time.
 
 `cli.js running`
 
-Shows deliveries currently in progress or awaiting receipt confirmation (`running`). Successful receipts end automatically; `done` does not settle unresolved deliveries.
+Shows deliveries currently in progress or awaiting receipt confirmation (`running`). Successful receipts end automatically; `done` does not settle unresolved deliveries. Unconfirmed receipts older than 180 seconds are marked delivery-failed without resending the occurrence; periodic tasks then resume their cadence.
 
 ## history
 

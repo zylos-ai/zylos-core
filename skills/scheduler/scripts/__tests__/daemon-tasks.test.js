@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { updateNextRunTime, processCompletedTasks } from '../daemon-tasks.js';
+import { updateNextRunTime, processCompletedTasks, settleStaleDeliveries } from '../daemon-tasks.js';
 import { now } from '../database.js';
 
 async function withDb(fn) {
@@ -206,4 +206,113 @@ describe('processCompletedTasks', () => {
       assert.equal(c.status, 'pending');
     });
   });
+});
+
+// Actual recovery/SQLite boundary. Run for interrupted delivery handling changes;
+// unrelated UI changes may skip. The official runner isolates all instance paths,
+// withDb creates a private scheduler DB and closes/removes it in finally. There
+// is no sender, external network, PM2 or tmux; recovery cannot send a notification.
+describe('settleStaleDeliveries', () => {
+  for (const type of ['one-time', 'recurring', 'interval']) for (const started of [true, false]) {
+    it(`${type} abandoned claim ${started ? 'with' : 'without'} started history respects the exact receipt limit`, async t => {
+      const initial = Date.parse('2030-01-01T00:00:00Z');
+      t.mock.timers.enable({ apis: ['Date'], now: initial });
+      await withDb(db => {
+        const task = insertTask(db, { type, status: 'running', updated_at: initial / 1000,
+          cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
+          interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC' });
+        db.prepare("INSERT INTO task_history(task_id,executed_at,completed_at,status,error,duration_ms) VALUES(?,1,2,'failed','OLD_FAILURE',1000)").run(task.id);
+        let historyId;
+        if (started) {
+          // Only the latest started occurrence belongs to this claim.
+          db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,?,'started','OLDER_UNFINISHED')").run(task.id, initial / 1000 - 500);
+          historyId = Number(db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,?,'started','RECEIVE_RESULT_UNKNOWN')").run(task.id, initial / 1000).lastInsertRowid);
+        }
+        const read = () => ({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id),
+          history: db.prepare('SELECT * FROM task_history WHERE task_id=? ORDER BY id').all(task.id) });
+        const before = read();
+        for (const age of [179, 180]) {
+          t.mock.timers.setTime(initial + age * 1000); settleStaleDeliveries(db);
+          assert.deepEqual(read(), before);
+        }
+        if (started) {
+          // An unrelated task update must not extend the receipt's age.
+          db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(initial / 1000 + 170, task.id);
+        }
+        t.mock.timers.setTime(initial + 181000); settleStaleDeliveries(db);
+        const after = read();
+        assert.equal(after.task.status, type === 'one-time' ? 'failed' : 'pending');
+        assert.equal(after.task.last_error, 'DELIVERY_RESULT_UNKNOWN');
+        assert.equal(after.task.failed_at, type === 'one-time' ? initial / 1000 + 181 : null);
+        assert.equal(after.task.updated_at, initial / 1000 + 181);
+        if (type !== 'one-time') assert.equal(after.task.next_run_at,
+          initial / 1000 + (type === 'recurring' ? 1800 : 1981));
+        assert.deepEqual(after.history.slice(0, started ? -1 : undefined), before.history.slice(0, started ? -1 : undefined));
+        if (started) {
+          const latest = after.history.at(-1);
+          assert.equal(latest.id, historyId); assert.equal(latest.status, 'failed');
+          assert.equal(latest.error, 'DELIVERY_RESULT_UNKNOWN');
+          assert.equal(latest.completed_at, initial / 1000 + 181); assert.equal(latest.duration_ms, 181000);
+        }
+        settleStaleDeliveries(db); assert.deepEqual(read(), after);
+      });
+    });
+  }
+
+  for (const winner of ['completed delivery', 'new claim', 'refreshed task']) {
+    it(`stale enumeration cannot overwrite a concurrent ${winner}`, async t => {
+      const current = Date.parse('2030-01-01T01:00:00Z');
+      t.mock.timers.enable({ apis: ['Date'], now: current });
+      await withDb(db => {
+        const old = current / 1000 - 181;
+        const task = insertTask(db, { type: 'one-time', status: 'running', updated_at: old, cron_expression: null });
+        const historyId = Number(db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,?,'started')").run(task.id, old).lastInsertRowid);
+        const prepare = db.prepare.bind(db); let raced = false;
+        const read = () => ({ task: prepare('SELECT * FROM tasks WHERE id=?').get(task.id),
+          history: prepare('SELECT * FROM task_history WHERE task_id=? ORDER BY id').all(task.id) });
+        let concurrent;
+        t.mock.method(db, 'prepare', sql => {
+          const statement = prepare(sql);
+          if (sql.includes('COALESCE(h.executed_at,t.updated_at)')) {
+            const all = statement.all.bind(statement);
+            t.mock.method(statement, 'all', (...args) => {
+              const rows = all(...args); assert.equal(rows.length, 1);
+              db.transaction(() => {
+                if (winner !== 'refreshed task') {
+                  prepare("UPDATE task_history SET status='success',completed_at=?,duration_ms=? WHERE id=?").run(current / 1000, 181000, historyId);
+                }
+                // Keep the old timestamp for replacement/closed rows to exercise
+                // status and exact-history guards independently of updated_at.
+                prepare('UPDATE tasks SET status=?,updated_at=? WHERE id=?').run(
+                  winner === 'completed delivery' ? 'completed' : 'running',
+                  winner === 'refreshed task' ? current / 1000 : old, task.id);
+                if (winner === 'new claim') prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,?,'started')").run(task.id, current / 1000);
+              }).immediate();
+              raced = true; concurrent = read(); return rows;
+            });
+          }
+          return statement;
+        });
+        settleStaleDeliveries(db); assert.equal(raced, true); assert.deepEqual(read(), concurrent);
+      });
+    });
+  }
+
+  for (const type of ['one-time', 'interval']) {
+    it(`${type} unknown-result accounting rolls back history and task together`, async t => {
+      const current = Date.parse('2030-01-01T01:00:00Z');
+      t.mock.timers.enable({ apis: ['Date'], now: current });
+      await withDb(db => {
+        const task = insertTask(db, { type, status: 'running', updated_at: current / 1000 - 181,
+          cron_expression: null, interval_seconds: type === 'interval' ? 1800 : null });
+        db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,?,'started')").run(task.id, current / 1000 - 181);
+        const read = () => ({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id),
+          history: db.prepare('SELECT * FROM task_history WHERE task_id=? ORDER BY id').all(task.id) });
+        const before = read();
+        db.exec(`CREATE TRIGGER fail_unknown_settlement BEFORE UPDATE ON tasks WHEN NEW.status='${type === 'one-time' ? 'failed' : 'pending'}' BEGIN SELECT RAISE(ABORT,'settlement fail'); END`);
+        assert.throws(() => settleStaleDeliveries(db), /settlement fail/);
+        assert.deepEqual(read(), before);
+      });
+    });
+  }
 });

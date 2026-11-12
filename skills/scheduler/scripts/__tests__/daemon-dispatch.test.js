@@ -111,38 +111,41 @@ for (const category of ['T', 'R']) test(`failed dispatch records elapsed time an
   assert.equal(row.duration_ms, (row.completed_at - row.executed_at) * 1000);
 });
 
-for (const [category, code] of [['U', 'RECEIVE_RESULT_UNKNOWN'], ['C', 'UNHEALTHY_NOTIFY_FAILED']])
-test(`uncertain dispatch records reason without completing history: ${category}`, t => {
+test('unconfirmed delivery retains its reason while the receipt may still arrive', t => {
   const { db, task, read } = fixture(t);
   db.prepare("INSERT INTO task_history(task_id,executed_at,status,error,duration_ms) VALUES(?,1,'failed','OLDER_FAILURE',3000)").run(task.id);
   const previous = read().history[0];
   const result = dispatchTask(db, task, { ...base,
-    sendViaC4: () => ({ category, code }),
+    sendViaC4: () => ({ category: 'U', code: 'RECEIVE_RESULT_UNKNOWN' }),
     getConversationsByRange() { throw new Error('read unavailable'); }
   });
-  const row = read();
-  const history = row.history.find(entry => entry.id === result.historyId);
-  assert.equal(history.status, 'started');
-  assert.equal(history.error, code);
-  assert.equal(history.duration_ms, null);
-  assert.equal(history.completed_at, null);
-  assert.equal(row.task.status, 'running');
-  assert.equal(row.task.last_error, code);
+  const row = read(), history = row.history.find(entry => entry.id === result.historyId);
+  assert.equal(history.status, 'started'); assert.equal(history.error, 'RECEIVE_RESULT_UNKNOWN');
+  assert.equal(history.duration_ms, null); assert.equal(history.completed_at, null);
+  assert.equal(row.task.status, 'running'); assert.equal(row.task.last_error, 'RECEIVE_RESULT_UNKNOWN');
   assert.deepEqual(row.history[0], previous);
 });
 
-test('unknown delivery is not reclassified or notified after an hour', t => {
-  t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
-  const { db, task, read } = fixture(t); let sends = 0;
-  const deps = { ...base, sendViaC4() { sends++; return { category: 'U' }; },
-    getConversationsByRange() { throw new Error('read unavailable'); } };
-  dispatchTask(db, task, deps);
-  const unresolved = read();
-  t.mock.timers.tick(3601000);
-  runSchedulerIteration(db, deps);
-  assert.deepEqual(read(), unresolved);
-  assert.equal(sends, 1);
-  assert.equal(read().history[0].error, 'RECEIVE_RESULT_UNKNOWN');
+for (const type of ['one-time', 'recurring', 'interval'])
+for (const code of ['UNHEALTHY_NOTIFY_FAILED', 'UNHEALTHY_NOTIFY_UNCERTAIN'])
+test(`${type} persisted delivery succeeds despite ${code}`, t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  const { db, task, read } = fixture(t, { type,
+    cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
+    interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC' });
+  let sends = 0;
+  const result = dispatchTask(db, task, { ...base, sendViaC4() {
+    sends++; t.mock.timers.tick(7000); return { category: 'C', code };
+  } });
+  assert.equal(result.claimed, true); assert.equal(sends, 1);
+  const row = read(), history = row.history[0];
+  assert.equal(row.task.status, type === 'one-time' ? 'completed' : 'pending');
+  assert.equal(history.status, 'success'); assert.equal(history.error, code);
+  assert.equal(history.completed_at, start / 1000 + 7); assert.equal(history.duration_ms, 7000);
+  assert.equal(row.task.last_error, code); assert.equal(row.task.failed_at, null);
+  if (type !== 'one-time') assert.equal(row.task.next_run_at,
+    start / 1000 + (type === 'recurring' ? 1800 : 1807));
 });
 
 for(const mode of ['success','UNHEALTHY_NOTIFY_FAILED','UNHEALTHY_NOTIFY_UNCERTAIN'])
@@ -153,7 +156,7 @@ for(const mode of ['success','UNHEALTHY_NOTIFY_FAILED','UNHEALTHY_NOTIFY_UNCERTA
     if(mode!=='success')assert.deepEqual(result.receipt.error.persisted,['D1']);
     return result;}};
   const result=dispatchTask(db,task,deps);assert.equal(result.claimed,true);
-  const row=read();assert.equal(row.task.status,mode==='success'?'completed':'running');assert.equal(row.history[0].status,mode==='success'?'success':'started');
+  const row=read();assert.equal(row.task.status,'completed');assert.equal(row.history[0].status,'success');
   if(mode!=='success')assert.equal(row.task.last_error,mode.split(':')[0]);
   assert.deepEqual(dispatchTask(db,task,deps),{claimed:false});assert.equal(sends,1);
   assert.equal(real.rows().filter(row=>row.direction==='in').length,1);
@@ -309,17 +312,50 @@ for(const type of ['one-time','interval']) test(`zero-commit retries stop beyond
  if(type==='interval')assert.ok(read().task.next_run_at>task.next_run_at);
 });
 
-for(const category of ['C','U']) for(const type of ['one-time','interval'])
-test(`${category} keeps an unresolved delivery without automatic timeout: ${type}`, t => {
-  t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
-  const { db, task, read } = fixture(t, { type, interval_seconds: 60 }); let sends = 0;
-  const deps = { ...base, sendViaC4() { sends++; return { category, code: 'UNCERTAIN' }; },
+for (const type of ['one-time', 'recurring', 'interval'])
+test(`unknown ${type} delivery expires in a daemon iteration without resending`, t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  const { db, task, read } = fixture(t, { type,
+    cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
+    interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC' });
+  let sends = 0;
+  const deps = { ...base, sendViaC4() { sends++; return { category: 'U' }; },
     getConversationsByRange() { throw new Error('read failed'); } };
   dispatchTask(db, task, deps);
   const unresolved = read();
-  t.mock.timers.tick(7200000); runSchedulerIteration(db, deps);
-  assert.deepEqual(read(), unresolved);
-  assert.equal(dispatchTask(db, task, deps).claimed, false); assert.equal(sends, 1);
+  for (const age of [179, 180]) {
+    t.mock.timers.setTime(start + age * 1000); runSchedulerIteration(db, deps);
+    assert.deepEqual(read(), unresolved); assert.equal(sends, 1);
+  }
+  t.mock.timers.setTime(start + 181000); runSchedulerIteration(db, deps);
+  const after = read();
+  assert.equal(sends, 1); assert.equal(after.history[0].status, 'failed');
+  assert.equal(after.history[0].error, 'DELIVERY_RESULT_UNKNOWN');
+  assert.equal(after.history[0].completed_at, start / 1000 + 181);
+  assert.equal(after.history[0].duration_ms, 181000);
+  assert.equal(after.task.status, type === 'one-time' ? 'failed' : 'pending');
+  assert.equal(after.task.last_error, 'DELIVERY_RESULT_UNKNOWN');
+  assert.equal(after.task.failed_at, type === 'one-time' ? start / 1000 + 181 : null);
+  if (type !== 'one-time') assert.equal(after.task.next_run_at,
+    start / 1000 + (type === 'recurring' ? 1800 : 1981));
+  runSchedulerIteration(db, deps); assert.deepEqual(read(), after); assert.equal(sends, 1);
+});
+
+for (const type of ['one-time', 'recurring', 'interval'])
+test(`daemon startup closes an abandoned ${type} claim without sending`, async t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start + 181000 });
+  const { db, task, read } = fixture(t, { type, status: 'running',
+    updated_at: start / 1000, cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
+    interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC' });
+  db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,?,'started')").run(task.id, start / 1000);
+  let sends = 0;
+  await mainLoop(db, { shouldRun: () => false, dependencies: { ...base,
+    sendViaC4: () => { sends++; assert.fail('startup recovery must not send'); } } });
+  assert.equal(sends, 0); assert.equal(read().history[0].status, 'failed');
+  assert.equal(read().history[0].error, 'DELIVERY_RESULT_UNKNOWN');
+  assert.equal(read().task.status, type === 'one-time' ? 'failed' : 'pending');
 });
 
 test('real recent/range reads find full execution after a non-maximum-id lower bound',t=>{

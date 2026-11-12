@@ -1,6 +1,6 @@
 /** One Scheduler execution: claim, receive once, and account for that history id. */
 import { now, cleanupHistory } from './database.js';
-import { updateNextRunTime, processCompletedTasks } from './daemon-tasks.js';
+import { updateNextRunTime, processCompletedTasks, settleStaleDeliveries } from './daemon-tasks.js';
 import { sendViaC4 } from './runtime.js';
 import { resolveDispatchSessionGroup } from './dispatch-session-group.js';
 import { getRecentConversations, getConversationsByRange } from '../../comm-bridge/scripts/c4-db.js';
@@ -56,19 +56,20 @@ export function dispatchTask(db, candidate, dependencies = {}) {
       .get(task.id, historyId);
     if (!live) return;
     const timestamp = now();
-    if (result.category === 'success') {
-      db.prepare("UPDATE task_history SET status='success',completed_at=?,duration_ms=(?-executed_at)*1000 WHERE id=? AND status='started'")
-        .run(timestamp, timestamp, historyId);
+    if (result.category === 'success' || result.category === 'C') {
+      const warning = result.category === 'C' ? result.code ?? null : null;
+      db.prepare("UPDATE task_history SET status='success',completed_at=?,duration_ms=(?-executed_at)*1000,error=COALESCE(?,error) WHERE id=? AND status='started'")
+        .run(timestamp, timestamp, warning, historyId);
       if (task.type === 'one-time') {
-        db.prepare("UPDATE tasks SET status='completed',last_run_at=?,updated_at=?,last_error=NULL,failed_at=NULL WHERE id=?")
-          .run(timestamp, timestamp, task.id);
+        db.prepare("UPDATE tasks SET status='completed',last_run_at=?,updated_at=?,last_error=?,failed_at=NULL WHERE id=?")
+          .run(timestamp, timestamp, warning, task.id);
       } else {
         updateNextRunTime(db, task);
-        db.prepare('UPDATE tasks SET last_error=NULL,failed_at=NULL WHERE id=?').run(task.id);
+        db.prepare('UPDATE tasks SET last_error=?,failed_at=NULL WHERE id=?').run(warning, task.id);
       }
       return;
     }
-    if (result.category === 'C' || result.category === 'U') {
+    if (result.category === 'U') {
       db.prepare('UPDATE tasks SET last_error=? WHERE id=?').run(result.code, task.id);
       db.prepare("UPDATE task_history SET error=? WHERE id=? AND status='started'")
         .run(result.code, historyId);
@@ -87,7 +88,7 @@ export function dispatchTask(db, candidate, dependencies = {}) {
       db.prepare('UPDATE tasks SET last_error=? WHERE id=?').run(result.code, task.id);
     }
   }).immediate();
-  if (result.category !== 'success') {
+  if (result.category !== 'success' && result.category !== 'C') {
     console.error(`[Scheduler] Dispatch ${task.id} #${historyId}: ${result.code} (${result.category})`);
   }
   return { claimed: true, historyId, ...result };
@@ -122,6 +123,7 @@ export function handleMissedTasks(db, dependencies = {}, alreadyHandled = new Se
 }
 
 export function runSchedulerIteration(db, dependencies = {}) {
+  settleStaleDeliveries(db);
   const task = db.prepare("SELECT * FROM tasks WHERE status='pending' AND next_run_at<=? ORDER BY priority ASC,next_run_at ASC LIMIT 1").get(now());
   if (task) dispatchDueTask(db, task, dependencies);
   processCompletedTasks(db);
@@ -129,6 +131,7 @@ export function runSchedulerIteration(db, dependencies = {}) {
 }
 
 export async function mainLoop(db, { shouldRun, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), dependencies = {} }) {
+  settleStaleDeliveries(db);
   let lastCleanup = Date.now();
   while (shouldRun()) {
     try {

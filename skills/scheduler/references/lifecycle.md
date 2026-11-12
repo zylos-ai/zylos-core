@@ -10,11 +10,11 @@ All commands accept `--json`. Success prints `{"ok":true,"data":{"task":{...}}}`
 
 `cli.js done <task-id>`
 
-Compatibility no-op for old sessions and prompts. Successful delivery is recorded automatically when C4 acknowledges receipt, including an unknown result confirmed by readback. This only means delivered, not that the agent finished the work. One-time tasks become completed; recurring/interval tasks are immediately scheduled again from the delivery time.
+Compatibility no-op for old sessions and prompts. Successful delivery is recorded automatically when C4 acknowledges receipt, including a committed C receipt with a notification warning or an unknown U result confirmed by readback. This only means delivered, not that the agent finished the work. One-time tasks become completed; recurring/interval tasks are immediately scheduled again from the delivery time.
 
 `done` exits 0 and prints “任务送达时已自动结束，无需 done”. With `--json`, it returns `{"ok":true,"data":{"task":{...},"alreadyCompleted":true,"reason":"DELIVERY_COMPLETES_AUTOMATICALLY"}}`. It never changes the task or history, including pending, paused, failed or unresolved delivery rows. Unknown or ambiguous IDs keep the normal validation errors.
 
-There is no one-hour work timeout or scheduled timeout reminder. Old timeout history remains historical evidence, not a new delivery failure. Upgrade migration treats legacy running tasks with started histories as delivered, and is idempotent.
+There is no one-hour work timeout or scheduled timeout reminder. A receipt left unconfirmed for more than 180 seconds is settled at daemon startup or on a regular iteration as failed with `DELIVERY_RESULT_UNKNOWN`. That same occurrence is never resent and no reminder is sent. Periodic tasks resume at their next scheduled occurrence; one-time tasks stay failed and can be re-enabled. The 180-second limit is four times the 45-second receive bound, with time for readback and accounting; deliveries at or below the limit are untouched. Old timeout history remains historical evidence, not a new delivery failure. Upgrade migration treats legacy running tasks with started histories as delivered, and is idempotent.
 
 ## remove
 

@@ -12,7 +12,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 1. Scheduler checks for pending tasks that are due.
 2. It submits them to C4 as Core scheduler messages, without reading session health or waiting for an online/idle session.
 3. C4 handles execution control (target group, health gates, idle waiting and priority).
-4. A successful C4 receipt ends this delivery immediately: history becomes success, one-time tasks become completed, and recurring/interval tasks return to pending for the next occurrence. Success means delivered to C4, not that the agent has finished the work. Unknown results count as success only after readback confirms receipt.
+4. A successful C4 receipt ends this delivery immediately: history becomes success, one-time tasks become completed, and recurring/interval tasks return to pending for the next occurrence. Success means delivered to C4, not that the agent has finished the work. Committed C receipts also count as delivered even when session notification fails; their warning is retained. Unknown U results count as success only after readback confirms receipt.
 
 ## CLI
 
@@ -33,7 +33,7 @@ For recurring and interval tasks, `update --at` or `--in` changes only the next 
 
 `done` is a compatibility no-op for old prompts: it exits 0 and returns `alreadyCompleted: true` with `--json`, without changing the task or history. Delivery messages no longer ask the agent to call it.
 
-There is no work-completion timeout or timeout notification. `running` exists only while receipt is in progress or unconfirmed; delivery failures keep their existing handling. No automatic retry guesses whether an interrupted receipt succeeded. On upgrade, legacy running tasks and their started histories are treated as delivered once: one-time tasks complete, periodic tasks resume their saved cadence.
+There is no work-completion timeout or timeout notification. `running` exists only while receipt is in progress or unconfirmed. At startup and every daemon iteration, an unconfirmed or interrupted delivery older than 180 seconds is closed as failed with `DELIVERY_RESULT_UNKNOWN`, without resending that occurrence or sending a reminder. This bound is four times the 45-second receive timeout, allowing readback/accounting to finish. The latest started history time defines delivery age (task update time is used only when no started row exists). A periodic task schedules its next occurrence; a one-time task remains visibly failed and can be re-enabled with `update`. On upgrade, legacy running tasks and their started histories are treated as delivered once: one-time tasks complete, periodic tasks resume their saved cadence.
 
 ## Timezone
 
