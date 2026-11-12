@@ -838,13 +838,14 @@ export function restartErroredServices(ctx, deps = {}) {
   // Core members are unknown, so every candidate is reported instead.
   let core;
   try { core = new Set(fs.existsSync(ecosystemPath) ? maintenance.ecosystemServiceNames(ecosystemPath) : []); }
-  catch { return finish(pending.map(warning), []); }
+  catch { return finish(pending.map(warning), [], pending); }
+  const skipped = [];
   for (const name of pending) {
     if (!core.has(name)) continue;
     try {
       restartFn(name, {ecosystemPath, stdio:'pipe', fallbackToPlainRestartOnError:false});
       started.push(name);
-    } catch { warnings.push(warning(name)); }
+    } catch { warnings.push(warning(name)); skipped.push(name); }
   }
   const online = new Set();
   const timeoutMs = deps.timeoutMs ?? 30000;
@@ -860,8 +861,8 @@ export function restartErroredServices(ctx, deps = {}) {
   if (restored.length) {
     try { execute('pm2 save 2>/dev/null', {stdio:'pipe', timeout:30000}); } catch {}
   }
-  return finish(warnings, restored);
-  function finish(added, restoredNames) {
+  return finish(warnings, restored, [...skipped, ...started.filter(name => !online.has(name))]);
+  function finish(added, restoredNames, missed) {
     if (added.length) {
       ctx.serviceWarnings = [...new Set([...(ctx.serviceWarnings || []), ...added])];
       if (ctx.journal) {
@@ -869,7 +870,8 @@ export function restartErroredServices(ctx, deps = {}) {
         if (ctx.transactionDir) maintenance.update(ctx.transactionDir, ctx.journal, {serviceWarnings:ctx.serviceWarnings});
       }
     }
-    return result('done', restoredNames.length ? restoredNames.join(', ') : 'none restarted');
+    const parts = [...(restoredNames.length ? [restoredNames.join(', ')] : []), ...(missed.length ? ['not restarted: ' + missed.join(', ')] : [])];
+    return result('done', parts.length ? parts.join('; ') : 'none restarted');
   }
 }
 

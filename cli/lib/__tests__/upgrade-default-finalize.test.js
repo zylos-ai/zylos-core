@@ -295,6 +295,26 @@ test('a Core service that stays errored after migration is reported without fail
   assert.equal(state()[0].status, 'errored');
   assert.deepEqual(ctx.serviceWarnings, ['Service c4-dispatcher is not online; restart it manually.']);
   assert.deepEqual(f.load().serviceWarnings, ctx.serviceWarnings);
+  assert.equal(step.message, 'not restarted: c4-dispatcher');
+});
+
+// Without a readable Core ecosystem the Core members are unknown: nothing is
+// started, and every recorded service is reported instead of skipped silently.
+test('an unreadable Core ecosystem reports every recorded service and the upgrade still succeeds', async t => {
+  const f = fixture(t, { from: '1.0.0', to: '1.0.0', olderDatabases: true, firstTakeover: false });
+  const state = statefulPm2(f, [
+    { name: 'c4-dispatcher', status: 'errored', pid: 0, script: path.join(f.root, '.claude/skills/comm-bridge/index.js') },
+    { name: 'scheduler', status: 'errored', pid: 0, script: path.join(f.root, '.claude/skills/scheduler/index.js') },
+  ]);
+  f.write('pm2/ecosystem.config.cjs', 'throw Error("unreadable ecosystem");\n');
+  f.m.update(f.dir, f.load(), { erroredServices: ['c4-dispatcher', 'scheduler'] });
+  const result = await f.run();
+  assert.equal(result.success, true, JSON.stringify(result));
+  const expected = ['c4-dispatcher', 'scheduler'].map(name => `Service ${name} is not online; restart it manually.`);
+  assert.deepEqual(result.serviceWarnings, expected);
+  assert.deepEqual(f.load().serviceWarnings, expected);
+  assert.ok(state().every(p => p.status === 'errored'));
+  assert.equal(result.steps.find(item => item.name === 'restart_errored_services').message, 'not restarted: c4-dispatcher, scheduler');
 });
 
 test('recorded services are not restarted when the upgrade does not migrate databases', async t => {
