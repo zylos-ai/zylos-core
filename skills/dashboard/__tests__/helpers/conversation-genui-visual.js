@@ -248,14 +248,26 @@ export async function runConversationGenuiVisual(t, sandbox) {
     await field(root, 'notes').scrollIntoViewIfNeeded(); await capture(`controls-${width}-${theme}`);
     const user = page.locator(`[data-message-id="${scenes.controls.receipt.messageId}"]`);
     const shortAi = page.locator(`[data-message-id="${scenes.controls.shortAi.id}"]`);
+    // The controls above scroll later content into view; measure the message after bringing it back.
+    await user.scrollIntoViewIfNeeded();
     const userBox = await user.locator('.conversation-message-body').boundingBox();
     const shortAiBox = await shortAi.locator('.conversation-message-body').boundingBox();
-    if(output)fs.writeFileSync(path.join(output,'latest-message-dimensions.json'),JSON.stringify({width,theme,userBox,shortAiBox},null,2));
+    const userLayout = await user.evaluate(el => {
+      const row = el.getBoundingClientRect(), stream = el.closest('.conversation-stream').getBoundingClientRect();
+      const avatar = el.querySelector('.conversation-avatar').getBoundingClientRect();
+      return { left:row.left, right:row.right, available:row.width-avatar.width-parseFloat(getComputedStyle(el).columnGap),
+        top:Math.max(0,stream.top), bottom:Math.min(innerHeight,stream.bottom) };
+    });
+    if(output)fs.writeFileSync(path.join(output,'latest-message-dimensions.json'),JSON.stringify({width,theme,userBox,shortAiBox,userLayout},null,2));
     assert.ok(userBox.width>150&&userBox.width<=Math.min(600,width-50),'user text bubble retains readable intrinsic width rather than collapsing');
-    if(width===390) assert.ok(userBox.width>=220&&userBox.width<=320,'phone user bubble matches the roughly286px baseline: '+JSON.stringify(userBox));
+    if(width===390) {
+      assert.ok(userBox.width>=220&&userBox.width<=userLayout.available+.5,'phone user bubble fits beside its avatar: '+JSON.stringify({userBox,userLayout}));
+      assert.ok(userBox.x>=userLayout.left-.5&&userBox.x+userBox.width<=userLayout.right+.5,'phone user bubble stays inside its message row');
+      assert.ok(userBox.y>=userLayout.top-.5&&userBox.y+userBox.height<=userLayout.bottom+.5,'phone user bubble is visible after scrolling to it');
+    }
     assert.ok(shortAiBox.width>70&&shortAiBox.width<500,'short AI reply does not expand to900px');
-    measurements.push({ width, theme, userBubble:userBox,shortAiBubble:shortAiBox });
-    await user.scrollIntoViewIfNeeded(); await capture(`messages-${width}-${theme}`);
+    measurements.push({ width, theme, userBubble:userBox,shortAiBubble:shortAiBox,userLayout });
+    await capture(`messages-${width}-${theme}`);
   }
   if(prototypeSource && output){
     const prototypePage=await context.newPage();
