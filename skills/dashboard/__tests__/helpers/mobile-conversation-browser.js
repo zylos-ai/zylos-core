@@ -86,7 +86,7 @@ async function startPage(sandbox, publicDir) {
   });
   sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
   return { base: await sandbox.startHttp(server), missing, actions,
-    setScene(value) { scene = value; }, setSessionMode(value) { sessionMode = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
+    setScene(value) { scene = value; }, reconnect() { connected = true; }, setSessionMode(value) { sessionMode = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
 }
 
 export async function runMobileConversationBrowser(t, sandbox) {
@@ -101,7 +101,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   const captures = [], measurements = [];
   const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi' } = {}) => {
-    fixture.setScene(scene); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
+    fixture.reconnect(); fixture.setScene(scene); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
     const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC' });
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
@@ -121,18 +121,34 @@ export async function runMobileConversationBrowser(t, sandbox) {
     assert.ok(size.width <= size.viewport + 1, name + ' no horizontal overflow');
     if (evidence) { const file = path.join(evidence, name + '.png'); await page.screenshot({ path: file, animations: 'disabled' }); captures.push(file); }
   };
-  // Baseline capture is an opt-in evidence mode using untouched git-archived public files.
-  // It has the same fixture and clock as final desktop screenshots, not altered product text.
-  if (process.env.ZYLOS_MOBILE_BASELINE_PUBLIC) {
-    const f = await open({ width: 1280 }); await select(f.page); await shot(f.page, 'desktop-1280-zh-before');
-    await f.page.locator('.tab[data-tab="overview"]').click(); await shot(f.page, 'overview-1280-zh-before');
-    await f.context.close();
-    if (process.env.ZYLOS_MOBILE_PROTOTYPE_SOURCE) {
-      const reference = await browser.newContext({ viewport: { width: 390, height: 844 } }); sandbox.addCleanup(() => reference.close());
-      const page = await reference.newPage(); await page.goto(fixture.base + '/__prototype'); await shot(page, 'approved-prototype-390-focus');
-      await page.locator('[data-act="back"]').click(); await shot(page, 'approved-prototype-390-list'); await reference.close();
+  const headerScenes = [
+    { width: 1280, theme: 'light', name: 'header-1280-light' },
+    { width: 1280, theme: 'dark', name: 'header-1280-dark' },
+    { width: 900, theme: 'light', name: 'header-900-light' },
+    { width: 900, theme: 'dark', name: 'header-900-dark' },
+    { width: 1280, scene: 'running', name: 'header-1280-running' },
+    { width: 1280, disconnected: true, name: 'header-1280-polling' },
+    { width: 390, name: 'header-390-mobile' },
+  ];
+  const prepareHeader = async (page, options) => {
+    await select(page);
+    await page.locator('.conversation-connection-dot[data-stream-state="live"]').waitFor({ state: 'attached' });
+    if (options.scene === 'running') await page.waitForFunction(() => document.querySelector('.conversation-running').textContent.includes('正在处理'));
+    if (options.disconnected) {
+      fixture.disconnect();
+      await page.locator('.conversation-push-status[data-stream-state="polling"]').waitFor({ state: 'attached' });
     }
-    console.info('Mobile captures:', JSON.stringify(captures)); return;
+    await page.evaluate(() => document.fonts.ready);
+  };
+  // Untouched git-archived public files use the identical fixture and clock for
+  // before/after images. This mode captures evidence without asserting new layout.
+  if (process.env.ZYLOS_MOBILE_BASELINE_PUBLIC) {
+    for (const options of headerScenes) {
+      const f = await open(options);
+      try { await prepareHeader(f.page, options); await shot(f.page, options.name + '-before'); }
+      finally { await f.context.close(); }
+    }
+    console.info('Header baseline captures:', JSON.stringify(captures)); return;
   }
   const noOverflow = async page => assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no horizontal overflow');
   // The document can stay narrow while a control is clipped by its container.
@@ -158,18 +174,82 @@ export async function runMobileConversationBrowser(t, sandbox) {
   };
   const menu = page => page.locator('.conversation-menu-sheet');
   const rendered = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await t.test('desktop remains unchanged and mobile chrome is absent', async () => {
-    const f = await open({ width: 1280 });
+  await t.test('desktop header uses two rows and keeps status actions readable', async () => {
+    const headerMetrics = async page => page.evaluate(() => {
+      const box = selector => {
+        const el = document.querySelector(selector), r = el.getBoundingClientRect(), css = getComputedStyle(el);
+        return { x: r.x, y: r.y, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height,
+          scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, whiteSpace: css.whiteSpace, overflow: css.overflow,
+          textOverflow: css.textOverflow, fontSize: Number.parseFloat(css.fontSize), text: el.textContent, title: el.title, role: el.getAttribute('role') };
+      };
+      return { viewport: innerWidth, header: box('.conversation-header'), title: box('.conversation-title-line'),
+        subtitle: box('.conversation-subtitle'), running: box('.conversation-running'),
+        push: box('.conversation-push-status'), group: box('.conversation-header-actions > .wb-btn') };
+    });
+    const compact = m => {
+      assert.ok(m.header.height <= 76, 'header fits two compact text rows: ' + JSON.stringify(m));
+      assert.ok(Math.abs(m.running.top - m.group.top) <= 1, 'status and group align on one row');
+      for (const name of ['running', 'group']) {
+        assert.ok(m[name].top >= m.title.top - 1 && m[name].bottom <= m.title.bottom + 1, name + ' stays within title row');
+        assert.ok(m[name].x >= 0 && m[name].right <= m.viewport, name + ' is inside viewport');
+        assert.ok(m[name].scrollWidth <= m[name].clientWidth, name + ' text remains complete');
+        assert.ok(m[name].fontSize > 0, name + ' text remains visible');
+      }
+      assert.ok(m.title.right <= m.running.x && m.running.right <= m.push.x && m.push.right <= m.group.x,
+        'title, status, connection and group occupy separate ordered columns');
+      assert.ok(m.subtitle.top >= m.title.bottom - 1 && m.subtitle.bottom <= m.header.bottom, 'source is the second row');
+      assert.equal(m.push.whiteSpace, 'nowrap');
+      assert.equal(m.push.textOverflow, 'ellipsis');
+      assert.equal(m.push.role, 'status');
+      assert.equal(m.push.title, m.push.text, 'hover exposes complete connection text');
+    };
+    for (const options of headerScenes) {
+      const f = await open(options), page = f.page;
+      try {
+        await prepareHeader(page, options);
+        if (options.width > 760) {
+          const m = await headerMetrics(page); compact(m);
+          measurements.push({ name: options.name, ...m });
+          assert.equal(await page.locator('#wb-mobile-nav').isVisible(), false);
+          assert.equal(await page.locator('.conversation-menu-toggle').isVisible(), false);
+          assert.equal(await page.locator('.app-header').isVisible(), true);
+          const rename = page.locator('.conversation-title-line button');
+          await rename.focus(); await page.keyboard.press('Tab');
+          assert.equal(await page.locator('.conversation-running').evaluate(el => el === document.activeElement), true, 'status follows rename');
+          await page.keyboard.press('Tab');
+          assert.equal(await page.locator('.conversation-header-actions > .wb-btn').evaluate(el => el === document.activeElement), true, 'group follows status');
+          await rename.evaluate(el => el.blur()); await page.locator('body').click({ position: { x: 2, y: 2 } });
+        } else {
+          assert.equal(await page.locator('#wb-mobile-nav').isVisible(), false);
+          assert.equal(await page.locator('.conversation-running').isVisible(), false);
+          assert.equal(await page.locator('.conversation-push-status').isVisible(), false);
+          assert.equal(await page.locator('.conversation-menu-toggle').isVisible(), true);
+        }
+        await shot(page, options.name + '-after');
+        assert.deepEqual(f.errors, []);
+      } finally { await f.context.close(); }
+    }
+    for (const width of [900, 761]) {
+      const f = await open({ width, scene: 'running' }), page = f.page;
+      try {
+        await prepareHeader(page, { scene: 'running', disconnected: true });
+        const m = await headerMetrics(page); compact(m);
+        measurements.push({ name: 'header-narrow-running-polling', ...m });
+        assert.ok(m.push.scrollWidth > m.push.clientWidth, 'long polling hint truncates before status or group');
+        assert.match(m.push.text, /轮询/);
+        await page.locator('.conversation-running').click(); await page.locator('.wb-group-side').waitFor();
+        assert.match(await page.locator('.wb-group-side .wb-detail-tabs [aria-selected="true"]').innerText(), /时间线/);
+        assert.deepEqual(f.errors, []);
+      } finally { await f.context.close(); }
+    }
+    const edge = await open({ width: 760, scene: 'running' });
     try {
-      await select(f.page); await shot(f.page, 'desktop-1280-zh');
-      assert.equal(await f.page.locator('#wb-mobile-nav').isVisible(), false);
-      assert.equal(await f.page.locator('.wb-mobile-topbar').isVisible(), false);
-      assert.equal(await f.page.locator('.conversation-menu-toggle').isVisible(), false);
-      assert.equal(await f.page.locator('.conversation-compose-hint').isVisible(), true);
-      assert.equal(await f.page.locator('.app-header').isVisible(), true);
-      await f.page.locator('.tab[data-tab="overview"]').click(); await shot(f.page, 'overview-1280-zh');
-      assert.deepEqual(f.errors, []);
-    } finally { await f.context.close(); }
+      await prepareHeader(edge.page, { scene: 'running' });
+      assert.equal(await edge.page.locator('.conversation-running').isVisible(), true, 'phone running status retains its separate row');
+      assert.equal(await edge.page.locator('.conversation-menu-toggle').isVisible(), true);
+      assert.equal(await edge.page.locator('.conversation-header-actions > .wb-btn').isVisible(), false);
+      await noOverflow(edge.page);
+    } finally { await edge.context.close(); }
   });
   await t.test('bottom tabs and More delegate to existing controls and visibility', async () => {
     const f = await open(); const page = f.page;
@@ -406,7 +486,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
     const f = await open({ sessionMode: 'single' }); const page = f.page;
     try {
       await page.locator(`[data-conversation-id="${ORIGIN_ID}"]`).click();
-      await page.locator('.conversation-header-actions > button:not(.conversation-menu-toggle)').waitFor({ state: 'hidden' });
+      await page.locator('.conversation-header-actions > .wb-btn').waitFor({ state: 'hidden' });
       await page.locator('.conversation-menu-toggle').click(); await menu(page).waitFor();
       assert.equal(await page.locator('.conversation-menu-group').isVisible(), false, 'menu mirrors unavailable original group action');
       assert.equal(await page.locator('.conversation-menu-rename').isVisible(), false);

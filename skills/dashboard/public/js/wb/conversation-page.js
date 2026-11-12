@@ -307,16 +307,15 @@ export function mountConversationPage({
   const connectionDot = node('span', undefined, 'conversation-connection-dot');
   connectionDot.setAttribute('aria-hidden', 'true');
   titleLine.append(title, connectionDot, renameToggle);
-  heading.append(titleLine, subtitle, running);
+  heading.append(titleLine, subtitle);
   const streamHint = node('span', undefined, 'conversation-push-status');
   streamHint.setAttribute('role', 'status');
-  heading.append(streamHint);
   const headerActions = node('div', undefined, 'conversation-header-actions');
   const group = action('chat.page.groupInfo', () => toggleGroupSide(), 'chev');
   const menuToggle = action('chat.page.menu', () => openConversationMenu(), 'more', 'wb-icon-btn conversation-menu-toggle');
   menuToggle.setAttribute('aria-haspopup', 'dialog');
   menuToggle.setAttribute('aria-expanded', 'false');
-  headerActions.append(group, menuToggle);
+  headerActions.append(running, streamHint, group, menuToggle);
   // Collapses the conversation list on wider screens; remembered like the dashboard's other view preferences.
   const listToggle = action('chat.page.hideList', () => toggleList(), 'menu', 'wb-icon-btn conversation-list-toggle');
   listToggle.dataset.action = 'listToggle';
@@ -1552,6 +1551,7 @@ export function mountConversationPage({
     updateNotice.hidden = !s.updateError;
     streamHint.dataset.streamState = s.streamState;
     text(streamHint, t('chat.page.push.' + s.streamState));
+    streamHint.title = streamHint.textContent;
     connectionDot.dataset.streamState = s.streamState;
     connectionDot.title = t('chat.page.push.' + s.streamState);
     text(menuConnection, t('chat.page.push.' + s.streamState));
