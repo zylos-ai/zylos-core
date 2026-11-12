@@ -73,7 +73,6 @@ async function startPage(sandbox, publicDir) {
         if (value === undefined && missing.size < 10) missing.add(`${req.method} ${url.pathname}`);
         sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' }); return;
       }
-      if (url.pathname === '/__prototype' && process.env.ZYLOS_MOBILE_PROTOTYPE_SOURCE) { sendHtml(res, 200, fs.readFileSync(process.env.ZYLOS_MOBILE_PROTOTYPE_SOURCE, 'utf8')); return; }
       if (['/', '/chat', '/memory', '/schedule', '/usage', '/settings'].includes(url.pathname)) {
         sendHtml(res, 200, fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8').replaceAll('__BASE_PATH__', '').replaceAll('__ASSET_ROOT__', '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin')); return;
       }
@@ -242,12 +241,25 @@ export async function runMobileConversationBrowser(t, sandbox) {
         assert.deepEqual(f.errors, []);
       } finally { await f.context.close(); }
     }
+    const side = await open({ width: 1280, scene: 'running' });
+    try {
+      await prepareHeader(side.page, { scene: 'running' });
+      await side.page.locator('.conversation-list-toggle').click();
+      await side.page.locator('.conversation-header-actions > .wb-btn').click();
+      await side.page.locator('.conversation-page.conversation-list-collapsed.conversation-has-side').waitFor();
+      const m = await headerMetrics(side.page); compact(m);
+      measurements.push({ name: 'header-list-collapsed-side-open', ...m });
+      assert.deepEqual(side.errors, []);
+    } finally { await side.context.close(); }
     const edge = await open({ width: 760, scene: 'running' });
     try {
       await prepareHeader(edge.page, { scene: 'running' });
       assert.equal(await edge.page.locator('.conversation-running').isVisible(), true, 'phone running status retains its separate row');
       assert.equal(await edge.page.locator('.conversation-menu-toggle').isVisible(), true);
       assert.equal(await edge.page.locator('.conversation-header-actions > .wb-btn').isVisible(), false);
+      const title = await edge.page.locator('.conversation-title-line').boundingBox();
+      const running = await edge.page.locator('.conversation-running').boundingBox();
+      assert.ok(running.y >= title.y + title.height, 'phone status stays below the title');
       await noOverflow(edge.page);
     } finally { await edge.context.close(); }
   });

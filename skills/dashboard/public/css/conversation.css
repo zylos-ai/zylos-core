@@ -1711,6 +1711,6 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-subtitle { grid-column:3 / -1; grid-row:2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
   .conversation-page .conversation-header .conversation-running { grid-column:4; grid-row:1; align-self:center; height:28px; min-width:max-content; margin:0; }
   .conversation-page .conversation-push-status { grid-column:5; grid-row:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .conversation-page .conversation-header-actions>.wb-btn { grid-column:6; grid-row:1; width:auto; height:28px; padding:0 7px; gap:5px; font-size:11.5px; white-space:nowrap; }
-  .conversation-page .conversation-header-actions .wb-ico { width:13px; height:13px; }
+  .conversation-page .conversation-header .conversation-header-actions>.wb-btn { grid-column:6; grid-row:1; width:auto; height:28px; padding:0 7px; gap:5px; font-size:11.5px; white-space:nowrap; }
+  .conversation-page .conversation-header .conversation-header-actions .wb-ico { width:13px; height:13px; }
 }
