@@ -93,7 +93,7 @@ export function handleStaleRunningTasks(db, dependencies = {}) {
     try {
       const destination = resolveDispatchSessionGroup(db, task, null, dependencies);
       const result = (dependencies.sendViaC4 || sendViaC4)(
-        `[Scheduled Task Timeout: ${task.id}]\nTask "${task.name}" did not finish within ${TASK_TIMEOUT} seconds and is now failed. Review the unfinished work and reschedule if needed.`,
+        `[Scheduled Task Timeout: ${task.id}]\nTask "${task.name}" did not finish within ${TASK_TIMEOUT} seconds and is now failed. To reschedule unfinished work, run: ~/zylos/.claude/skills/scheduler/scripts/cli.js update ${task.id} --in "30 minutes". If the work is already complete, ignore this notification or run: ~/zylos/.claude/skills/scheduler/scripts/cli.js done ${task.id}`,
         { priority: task.priority, requireIdle: task.require_idle === 1,
           sessionComponent: destination.session_component, sessionGroupName: destination.session_group_name,
           replyChannel: task.reply_channel, replyEndpoint: task.reply_endpoint });

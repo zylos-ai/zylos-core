@@ -12,7 +12,7 @@ All commands accept `--json`. Success prints `{"ok":true,"data":{"task":{...}}}`
 
 Marks a task as completed. For recurring/interval tasks, the daemon will automatically calculate the next run time.
 
-Completion and the current started history row are committed together. Repeating `done` on a completed task is harmless. A delayed `done` on a failed task or on a pending task with a previous completion returns `TASK_WRONG_STATUS`; it cannot overwrite a timeout or cancel the next run after postponement. To postpone running work, directly use `update` with a future time instead of `done` followed by `update`.
+Completion and the current started history row are committed together. Repeating `done` on a completed task is harmless and exits 0. On a pending task with a previous completion, `done` exits 0 without writing anything: text output explains that the execution was already closed by rescheduling or timeout and shows the next run time; JSON adds `alreadyClosed: true`, `reason: "EXECUTION_ALREADY_CLOSED"` and `nextRunAt`. The task stays pending at its existing next time. If a one-time task timed out but the work has since finished, `done` marks it completed and exits 0; the timeout history remains recorded. To postpone running work, directly use `update` with a future time instead of `done` followed by `update`.
 
 ## remove
 

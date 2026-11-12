@@ -351,16 +351,22 @@ function cmdDone(taskId, options) {
 
   const task = tasks[0];
 
+  const alreadyClosed = task.status === 'pending' && task.last_run_at != null;
   db.transaction(() => {
-    if (task.status === 'completed') return;
+    if (task.status === 'completed' || alreadyClosed) return;
     // A delayed done must not finish the pending run created by a reschedule.
-    if ((task.status === 'pending' && task.last_run_at != null)
-        || task.status === 'failed'
-        || !completeTaskExecution(db, task, now())) {
+    if (!completeTaskExecution(db, task, now())) {
       reject('TASK_WRONG_STATUS', 'Task execution is no longer running', { status: task.status }, 1);
     }
   }).immediate();
 
+  if (alreadyClosed) {
+    if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id),
+      alreadyClosed: true, reason: 'EXECUTION_ALREADY_CLOSED', nextRunAt: task.next_run_at });
+    console.log(`Current execution already closed by rescheduling or timeout; no changes: ${task.id}`);
+    console.log(`  Next run: ${formatTime(task.next_run_at)} (${getRelativeTime(task.next_run_at)})`);
+    return;
+  }
   if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id) });
   console.log(`Completed task: ${task.id}`);
 
@@ -683,11 +689,7 @@ function cmdUpdate(taskId, options) {
     if (executionFinished && !completeTaskExecution(db, task, updates.updated_at)) {
       reject('TASK_WRONG_STATUS', 'Task execution is no longer running', {}, 1);
     }
-    const changed = db.prepare(`
-      UPDATE tasks SET ${setClauses} WHERE id = ? AND status = ? AND updated_at = ?
-    `).run(...values, task.id, executionFinished ? 'completed' : task.status,
-      executionFinished ? updates.updated_at : task.updated_at);
-    if (!changed.changes) reject('TASK_WRONG_STATUS', 'Task changed during update', {}, 1);
+    db.prepare(`UPDATE tasks SET ${setClauses} WHERE id = ?`).run(...values, task.id);
   }).immediate();
 
   if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id), updatedFields, reenabled, executionFinished });
