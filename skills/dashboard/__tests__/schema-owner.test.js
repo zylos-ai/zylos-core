@@ -15,6 +15,17 @@ function fixture(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return path.join(dir, 'dashboard.db');
 }
+// Existing data is migrated only through the explicit owner path (upgrade
+// worker or first takeover); ordinary Store opens refuse it unchanged.
+function migrateFile(file) {
+  const db = new Database(file);
+  try { return owner.migrate(db); } finally { db.close(); }
+}
+function assertStoreRefuses(file) {
+  const before = fs.readFileSync(file);
+  assert.throws(() => new Store(file), { code: 'SCHEMA_UPGRADE_REQUIRED' });
+  assert.deepEqual(fs.readFileSync(file), before);
+}
 function legacy(file) {
   const db = new Database(file);
   migrateSchema13(db);
@@ -33,13 +44,15 @@ test('first Store open creates a missing database; owner only consumes open hand
   assert.deepEqual(owner.migrate(store.db), {currentVersion:TARGET_SCHEMA_VERSION,targetVersion:TARGET_SCHEMA_VERSION,needsMigration:false});
   assert.equal(store.db.open, true, 'owner must not close the caller handle');
 });
-test('first Store open schema 13 migration preserves history/auth, nullable identity, constraints and reentry', t => {
+test('explicit schema 13 migration preserves history/auth, nullable identity, constraints and reentry', t => {
   const file=fixture(t); legacy(file);
   const before=fs.readFileSync(file);
   const probe = new Database(file, {readonly:true,fileMustExist:true});
   assert.equal(probe.prepare('SELECT MAX(version) v FROM schema_migrations').get().v,13);
   probe.close();
   assert.deepEqual(fs.readFileSync(file),before);
+  assertStoreRefuses(file);
+  migrateFile(file);
   const migrated = new Store(file); migrated.close();
   const db=new Database(file); t.after(()=>db.close());
   assert.deepEqual(db.prepare('SELECT session_group,run_id FROM runtime_events WHERE id=?').get('old'),{session_group:null,run_id:null});
@@ -58,7 +71,8 @@ test('first Store open schema 13 migration preserves history/auth, nullable iden
 test('migration 20 DDL failure rolls back all its changes and version', t => {
   const file=fixture(t);legacy(file);
   let db=new Database(file);db.exec('ALTER TABLE runtime_events ADD COLUMN run_id TEXT');db.close();
-  assert.throws(()=>new Store(file),/duplicate column/);
+  assertStoreRefuses(file);
+  assert.throws(()=>migrateFile(file),/duplicate column/);
   db=new Database(file);t.after(()=>db.close());
   assert.equal(db.prepare('SELECT MAX(version) v FROM schema_migrations').get().v,13);
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='core_log_cursors'").get(),undefined);
@@ -74,21 +88,24 @@ test('newer schema with user_version zero rejects writes; inspection remains rea
   assert.throws(()=>owner.migrate(handle),{code:'SCHEMA_TOO_NEW'});
   assert.deepEqual(fs.readFileSync(file),before);
 });
-test('first Store open initializes its schema alongside unrelated tables', t => {
+test('explicit migration initializes its schema alongside unrelated tables', t => {
   const file=fixture(t);
   const db=new Database(file);
   db.exec('CREATE TABLE unrelated(x); INSERT INTO unrelated VALUES(42)');
   db.close();
+  assertStoreRefuses(file);
+  migrateFile(file);
   const store=new Store(file); t.after(()=>store.close());
   assert.equal(store.db.prepare('SELECT x FROM unrelated').get().x,42);
   assert.deepEqual(owner.inspectSchema(store.db),{currentVersion:TARGET_SCHEMA_VERSION,targetVersion:TARGET_SCHEMA_VERSION,needsMigration:false});
 });
-test('first Store open attempts legacy migration without a layout admission check', t => {
+test('explicit migration attempts legacy migration without a layout admission check', t => {
   const file=fixture(t);
   const db=new Database(file);
   db.exec('CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY); INSERT INTO schema_migrations VALUES(13)');
   db.close();
-  assert.throws(()=>new Store(file),/no such table: runtime_events/);
+  assertStoreRefuses(file);
+  assert.throws(()=>migrateFile(file),/no such table: runtime_events/);
   const result=new Database(file); t.after(()=>result.close());
   assert.equal(result.prepare('SELECT MAX(version) v FROM schema_migrations').get().v,13);
   assert.equal(result.prepare("SELECT name FROM sqlite_master WHERE name='core_log_cursors'").get(),undefined);
@@ -96,6 +113,7 @@ test('first Store open attempts legacy migration without a layout admission chec
 test('legacy auto_vacuum stays NONE across migration (no startup VACUUM)', t => {
   const file=fixture(t);legacy(file);
   const db=new Database(file);db.pragma('auto_vacuum=NONE');db.exec('VACUUM');db.close();
+  migrateFile(file);
   const store=new Store(file); store.close();
   const result=new Database(file);t.after(()=>result.close());
   assert.equal(result.pragma('auto_vacuum',{simple:true}),0);
@@ -117,9 +135,11 @@ test('supported version missing Store required column is rejected', t => {
   assert.throws(()=>owner.inspectSchema(handle),/no such column/);
 });
 
-for (const version of [14, 15, 16, 17, 18, 19]) test(`first Store open migrates older schema ${version} without a source-version admission gate`, t => {
+for (const version of [14, 15, 16, 17, 18, 19]) test(`explicit migration upgrades older schema ${version} without a source-version admission gate`, t => {
   const file = fixture(t); legacy(file);
   const db = new Database(file); db.prepare('INSERT INTO schema_migrations(version) VALUES(?)').run(version); db.close();
+  assertStoreRefuses(file);
+  migrateFile(file);
   const store = new Store(file); t.after(() => store.close());
   assert.equal(owner.inspectSchema(store.db).currentVersion,TARGET_SCHEMA_VERSION);
   assert.equal(store.db.prepare('SELECT token_hash FROM auth_sessions').get().token_hash,'retained');
@@ -437,4 +457,35 @@ for (const [shape, sql] of [
   const db = new Database(file); t.after(() => db.close());
   db.exec('DROP INDEX idx_chat_conversations_drafts_page'); if (sql) db.exec(sql);
   assert.throws(() => owner.inspectSchema(db), /Unsupported Dashboard draft page index/);
+});
+
+// Store opening only checks: an empty file is built at the current layout; any
+// existing older or newer layout is refused with the file and sidecars untouched.
+test('Store builds an empty database but refuses older or newer data unchanged', t => {
+  const file = fixture(t);
+  const sidecars = () => ['-wal', '-shm'].filter(suffix => fs.existsSync(file + suffix));
+  fs.writeFileSync(file, '');
+  const created = new Store(file);
+  try {
+    assert.equal(created.db.pragma('journal_mode', { simple: true }), 'wal');
+    assert.deepEqual(owner.inspectSchema(created.db), { currentVersion: TARGET_SCHEMA_VERSION, targetVersion: TARGET_SCHEMA_VERSION, needsMigration: false });
+  } finally { created.close(); }
+  new Store(file).close();
+  fs.rmSync(file);
+  legacy(file);
+  const before = fs.readFileSync(file);
+  assert.throws(() => new Store(file), error => error.code === 'SCHEMA_UPGRADE_REQUIRED' && error.schemaVersion === 13
+    && error.supportedVersion === TARGET_SCHEMA_VERSION
+    && error.message === `${file}: schema version 13 is older than supported ${TARGET_SCHEMA_VERSION}; run "zylos upgrade" to migrate. The database was not changed.`);
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.deepEqual(sidecars(), []);
+  migrateFile(file);
+  const newer = new Database(file);
+  newer.prepare('INSERT INTO schema_migrations(version) VALUES (?)').run(TARGET_SCHEMA_VERSION + 1);
+  newer.pragma('journal_mode = DELETE');
+  newer.close();
+  const newerBytes = fs.readFileSync(file);
+  assert.throws(() => new Store(file), { code: 'SCHEMA_TOO_NEW' });
+  assert.deepEqual(fs.readFileSync(file), newerBytes);
+  assert.deepEqual(sidecars(), []);
 });

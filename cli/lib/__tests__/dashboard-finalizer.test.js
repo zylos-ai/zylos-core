@@ -95,7 +95,7 @@ for (const failHook of [false, true]) test(`finalizer child preserves JSON stdou
 // UI-only edits. Runner isolates HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR, fixture
 // owns the SQLite database and uses a private pm2 stub plus loopback health port.
 // No real PM2/tmux/service is started; bounded finalizer steps finish before cleanup.
-test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard degraded', async t => {
+test('takeover migration 20 failure restores the copy, leaves Core upgrade_complete and Dashboard degraded', async t => {
   const { root, data, env } = fixture(t);
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({port: await closedLoopbackPort(), auth: {enabled: true, password: 'fixture-hash'}}));
   const dbPath = path.join(data, 'dashboard.db');
@@ -117,6 +117,9 @@ test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard
   store.close();
   const transactionDir = path.join(root, 'transaction');
   fs.mkdirSync(transactionDir);
+  // The cutoff copy is the rollback material for the takeover migration.
+  assert.deepEqual(dashboardOwner.copyDashboardDb(root, transactionDir), { ok: true, error: null });
+  const copied = fs.readFileSync(path.join(transactionDir, 'dashboard/db-copy/dashboard.db'));
   const journal = { firstTakeover: true, phase: 'compensation_closed', transactionId: 'fixture', snapshotManifestHash: 'a'.repeat(64),
     compensationCutoff: { formatVersion: 1, closed: true, transactionId: 'fixture', snapshotManifestHash: 'a'.repeat(64), closedAt: '2026-10-27T00:00:00.000Z', writer: 'finalizer' } };
   fs.writeFileSync(path.join(transactionDir, 'journal.json'), JSON.stringify(journal));
@@ -124,27 +127,34 @@ test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard
   const ctx = { zylosDir: root, firstDashboardTakeover: true, from: '0.9.3', to: 'new', servicesWereRunning: [], steps: [], mergeConflicts: [], mergedFiles: [],
     transactionDir, transactionId: 'fixture', journal,
     maintenance: { ...maintenance, finishTerminal: () => { terminalCalls++; } } };
-  const priorPath = process.env.PATH, priorFail = process.env.FAIL_MIGRATION;
-  process.env.PATH = env.PATH; process.env.FAIL_MIGRATION = '1';
+  const priorPath = process.env.PATH;
+  process.env.PATH = env.PATH;
   let result;
   try {
     result = await completeUpgradeFinalization(ctx, { ...prerequisites(), dashboardOwner, protectedSuccess: undefined,
       restart: () => { restartCalls++; return {ok: true, data: {result: 'exit_enqueued'}}; } });
-  } finally {
-    process.env.PATH = priorPath;
-    if (priorFail === undefined) delete process.env.FAIL_MIGRATION; else process.env.FAIL_MIGRATION = priorFail;
-  }
-  assert.equal(fs.readFileSync(path.join(root, 'migration-error'), 'utf8'), 'fixture migration20 failed');
+  } finally { process.env.PATH = priorPath; }
+  // The migration fails before the service is started, not inside the service.
+  const pm2Calls = fs.existsSync(path.join(root, 'pm2-calls'))
+    ? fs.readFileSync(path.join(root, 'pm2-calls'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+  assert.equal(pm2Calls.some(args => args[0] === 'start'), false, JSON.stringify(pm2Calls));
+  assert.equal(fs.existsSync(path.join(root, 'migration-error')), false);
   assert.equal(result.success, true);
   assert.equal(result.completion.install, 'done');
   assert.equal(result.completion.dashboard, 'degraded');
   assert.equal(restartCalls, 1);
   assert.equal(result.completion.sessionRestart, 'single_exit_enqueued');
+  const registration = result.dashboard.errors.find(error => error.item === 'registration');
+  assert.equal(registration?.code, 'dashboard_migration_failed', JSON.stringify(result.dashboard));
+  assert.match(registration.message, /restored from the takeover copy/);
+  assert.match(registration.message, /fixture migration20 failed/);
   assert.ok(result.dashboard.errors.some(error => error.code === 'health_failed'), JSON.stringify(result.dashboard));
   const persisted = JSON.parse(fs.readFileSync(path.join(transactionDir, 'journal.json'), 'utf8'));
   assert.equal(persisted.phase, 'upgrade_complete');
   assert.deepEqual(persisted.terminalEvidence, { verified: true, kind: 'code_data_services' });
   assert.equal(terminalCalls, 1);
+  assert.deepEqual(fs.readFileSync(dbPath), copied);
+  for (const suffix of ['-wal', '-shm']) assert.equal(fs.existsSync(dbPath + suffix), false);
   const db = new Database(dbPath, { readonly: true });
   try {
     assert.equal(db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 13);
@@ -155,10 +165,12 @@ test('real Store migration 20 failure leaves Core upgrade_complete and Dashboard
     }
     assert.equal(db.pragma('table_info(metric_points)').some(column => column.name === 'session_group'), false);
   } finally { db.close(); }
-  // Positive control: the same real Store succeeds once the injected fault is removed.
+  assert.throws(() => new Store(dbPath), error => error.code === 'SCHEMA_UPGRADE_REQUIRED');
+  // Positive control: the same takeover migration succeeds once the injected fault is removed.
   const repair = new Database(dbPath);
   repair.exec('DROP TRIGGER reject_migration20');
   repair.close();
+  assert.deepEqual(dashboardOwner.migrateTakeoverDashboardDb({ zylosDir: root, transactionDir }), { state: 'migrated', version: TARGET_SCHEMA_VERSION });
   const recovered = new Store(dbPath);
   try { assert.equal(recovered.db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, TARGET_SCHEMA_VERSION); }
   finally { recovered.close(); }

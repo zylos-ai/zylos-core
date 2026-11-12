@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../src/lib/store.js';
+import { migrateDashboardFile } from './helpers/explicit-migration.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema13 } from './fixtures/schema13.js';
 import { runMetricMaintenance } from '../src/lib/metric-maintenance.js';
@@ -20,6 +21,7 @@ function fixture(t, { legacy = false } = {}) {
     migrateSchema13(db);
     db.exec('CREATE TABLE retained (value TEXT); INSERT INTO retained VALUES (\'keep me\')');
     db.close();
+    migrateDashboardFile(file);
   }
   const store = new Store(file);
   t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });

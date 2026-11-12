@@ -6,6 +6,7 @@ import path from 'node:path';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { dashboardSchemaOwner as owner } from '../src/lib/schema-owner.js';
 import { Store } from '../src/lib/store.js';
+import { migrateDashboardFile } from './helpers/explicit-migration.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 
 function fixture(t) {
@@ -24,6 +25,8 @@ function fixture(t) {
 // identities. Run on question schema/owner changes; UI-only edits may skip.
 test('Question schema upgrade preserves historical Dashboard tables and records', t => {
   const f = fixture(t), before = f.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
+  assert.throws(() => new Store(f.file), { code: 'SCHEMA_UPGRADE_REQUIRED' });
+  f.db.close(); migrateDashboardFile(f.file);
   const store = f.reopen();
   for (const { name } of before) assert.ok(store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name), name);
   assert.equal(store.db.prepare('SELECT token_hash FROM auth_sessions').get().token_hash, 'retained');

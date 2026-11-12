@@ -58,7 +58,61 @@ export function copyDashboardDb(zylosDir, txDir) {
   } catch (error) { return { ok: false, error: { code: 'db_copy_failed', message: error.message } }; }
 }
 
-export function applyDashboardRegistration({ zylosDir }) {
+const DASHBOARD_SCHEMA_SCRIPT = `const [schemaUrl, driverUrl, file, action] = process.argv.slice(1);
+const { inspectDatabase, migrateDatabase } = await import(schemaUrl);
+const { default: Database } = await import(driverUrl);
+try {
+  const db = new Database(file, { fileMustExist: true, timeout: 5000 });
+  try {
+    if (action === 'migrate') migrateDatabase(db);
+    process.stdout.write(JSON.stringify(inspectDatabase(db)));
+  } finally { db.close(); }
+} catch (error) { process.stderr.write(String(error?.message ?? error)); process.exitCode = 1; }`;
+function dashboardSchema(loc, root, action) {
+  // Resolve like the Dashboard's own ESM imports do: from the real location of
+  // its schema module, so a symlinked skill still finds the sibling SQLite driver.
+  const schemaFile = fs.realpathSync(path.join(loc.code, 'src/lib/schema.js'));
+  const driver = path.join(path.dirname(schemaFile), '../../../comm-bridge/scripts/sqlite-driver.js');
+  let output;
+  try {
+    output = run(process.execPath, ['--input-type=module', '-e', DASHBOARD_SCHEMA_SCRIPT,
+      pathToFileURL(schemaFile).href, pathToFileURL(driver).href, loc.db, action], root, 120000);
+  } catch (error) {
+    const detail = String(error.stderr || '').trim() || (error.code === 'ETIMEDOUT' ? 'timed out' : error.message);
+    throw Error(`Dashboard schema ${action} failed: ${detail}`);
+  }
+  return JSON.parse(output);
+}
+function restoreDashboardCopy(loc, copy) {
+  for (const suffix of ['', '-wal', '-shm']) {
+    const source = path.join(copy, 'dashboard.db' + suffix);
+    if (fs.existsSync(source)) fs.copyFileSync(source, loc.db + suffix);
+    else {
+      // A sidecar the copy did not have must not be replayed onto the restored file.
+      try { fs.unlinkSync(loc.db + suffix); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
+}
+// The worker skips a legacy standalone Dashboard database during the upgrade
+// migration; the first takeover migrates it here, before the service starts.
+// The copy taken at cutoff is the rollback material for a failed migration.
+export function migrateTakeoverDashboardDb({ zylosDir, transactionDir }) {
+  const loc = locations(zylosDir);
+  if (!fs.existsSync(loc.db)) return { state: 'absent' };
+  if (!dashboardSchema(loc, zylosDir, 'inspect').needsMigration) return { state: 'unchanged' };
+  const copy = transactionDir ? path.join(transactionDir, 'dashboard/db-copy') : null;
+  if (!copy || !fs.existsSync(path.join(copy, 'dashboard.db'))) throw Error('Legacy Dashboard database copy is missing; the database was not migrated');
+  try {
+    const state = dashboardSchema(loc, zylosDir, 'migrate');
+    if (state.needsMigration) throw Error('Dashboard migration remains incomplete');
+    return { state: 'migrated', version: state.currentVersion };
+  } catch (error) {
+    restoreDashboardCopy(loc, copy);
+    throw Error(`Dashboard database migration failed; the database was restored from the takeover copy (${error.message})`);
+  }
+}
+
+export function applyDashboardRegistration({ zylosDir, transactionDir }) {
   try {
     const loc = settings(zylosDir);
     // Core's service phase publishes the shared template and records creation
@@ -73,6 +127,8 @@ export function applyDashboardRegistration({ zylosDir }) {
         : error.code === 'ETIMEDOUT' ? ' (timed out)' : '';
       throw Error(`Dashboard configuration setup failed${detail}`);
     }
+    try { migrateTakeoverDashboardDb({ zylosDir, transactionDir }); }
+    catch (error) { return { state: 'failed', error: { code: 'dashboard_migration_failed', message: error.message } }; }
     // Lifecycle output is not part of the finalizer JSON protocol. Never forward
     // it: older hooks may include generated credentials even on stderr.
     run('pm2', ['start', loc.ecosystem, '--only', name, '--update-env'], zylosDir);

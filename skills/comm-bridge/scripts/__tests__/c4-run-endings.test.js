@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { fixture } from './c4-v2-test-helpers.js';
 import { createStore } from '../c4-v2-store.js';
-import { guardDatabase } from '../sqlite-schema.js';
+import { guardDatabase, migrateDatabase } from '../sqlite-schema.js';
+// Existing layouts are migrated only by the explicit upgrade path, with the
+// options ordinary openers used before they became check-only.
+const migrateExisting = (db, candidate) => migrateDatabase(db, candidate, { allowNew: candidate.supportsNewDatabase === true, strict: false });
+
 import * as owner from '../c4-schema.js';
 import * as historicalOwner from './helpers/c4-v2-owner.js';
 import { seedV1, oldRows, snapshot } from './helpers/c4-v2-fixtures.js';
@@ -249,7 +253,7 @@ test('run-ending readers propagate failures and normalize busy errors', () => {
 
 test('run-ending migration preserves v1 rows and creates empty ending and occupancy tables', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db, { extensions: true });
-  const before = oldRows(db); guardDatabase(db, historicalOwner);
+  const before = oldRows(db); migrateExisting(db, historicalOwner);
   assert.equal(db.pragma('user_version', { simple: true }), 2);
   assert.deepEqual(oldRows(db), before);
   assert.deepEqual(db.prepare('SELECT * FROM run_endings').all(), []);

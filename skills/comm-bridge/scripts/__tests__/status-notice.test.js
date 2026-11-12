@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { guardDatabase } from '../sqlite-schema.js';
+import { guardDatabase, migrateDatabase } from '../sqlite-schema.js';
+// Existing layouts are migrated only by the explicit upgrade path, with the
+// options ordinary openers used before they became check-only.
+const migrateExisting = (db, candidate) => migrateDatabase(db, candidate, { allowNew: candidate.supportsNewDatabase === true, strict: false });
+
 import * as schema from '../c4-schema.js';
 import { reserveStatusNoticeCooldown, clearStatusNoticeCooldownReservation } from '../c4-db.js';
 import { normalizeStatusEndpoint, statusNoticeKey, reserveStatusNotice, sendStatusNotice } from '../status-notice.js';
@@ -303,7 +307,8 @@ test('diagnostic log rotates at 100 KB and preserves normalized target and notic
 test('an experimental schema2 lacking the current layout is rejected without changing its data', t => {
   const db=new Database(':memory:');t.after(()=>db.close());
   db.exec("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES('history'); PRAGMA user_version=2");
-  assert.throws(()=>guardDatabase(db,schema),/missing/);
+  assert.throws(()=>guardDatabase(db,schema),{code:'SCHEMA_UPGRADE_REQUIRED'});
+  assert.throws(()=>migrateExisting(db,schema),/missing/);
   assert.equal(db.pragma('user_version',{simple:true}),2);
   assert.equal(db.prepare('SELECT value FROM retained').get().value,'history');
 });

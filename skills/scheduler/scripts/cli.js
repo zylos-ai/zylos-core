@@ -10,7 +10,15 @@ import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-ut
 import { loadTimezone } from './tz.js';
 import { resolveSavedSessionGroup, updatedReplyTarget } from './saved-session-group.js';
 
-let db;
+// Opens on first use: help, unknown commands and argument errors that need no
+// task data finish before the database is touched.
+const db = new Proxy({}, {
+  get(_, key) {
+    const connection = getDb();
+    const value = connection[key];
+    return typeof value === 'function' ? value.bind(connection) : value;
+  },
+});
 
 function reject(code, message, extra = {}, textExitCode = 0, textHint) {
   throw Object.assign(new Error(message), { code, extra, textExitCode, textHint, text: `Error: ${message}` });
@@ -704,7 +712,6 @@ function main() {
   }
 
   const { command, args, options } = parseArgs(process.argv.slice(2));
-  db = getDb();
 
   switch (command) {
     case 'list':

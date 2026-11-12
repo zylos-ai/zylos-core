@@ -42,8 +42,8 @@ test('the server answers message pages with the instance time zone from .env', {
   process.env.DASHBOARD_PORT = '0';
   let server;
   const stores = new Set(), timers = new Set();
-  const migrate = Store.prototype.migrate, schedule = globalThis.setInterval;
-  t.mock.method(Store.prototype, 'migrate', function (...args) { stores.add(this); return migrate.apply(this, args); });
+  const checkSchema = Store.prototype.checkSchema, schedule = globalThis.setInterval;
+  t.mock.method(Store.prototype, 'checkSchema', function (...args) { stores.add(this); return checkSchema.apply(this, args); });
   t.mock.method(globalThis, 'setInterval', (...args) => { const timer = schedule(...args); timers.add(timer); return timer; });
   t.after(async () => {
     for (const timer of timers) clearInterval(timer);

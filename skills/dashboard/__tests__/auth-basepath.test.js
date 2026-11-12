@@ -8,6 +8,7 @@ import test, { mock } from 'node:test';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { generateApiKey, hashApiKey } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
+import { migrateDashboardFile } from './helpers/explicit-migration.js';
 import { migrateSchema13 } from './fixtures/schema13.js';
 import { installMemoryScripts, memoryTestEnv, memoryTempRoot } from './fixtures/memory-installation.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
@@ -1091,6 +1092,8 @@ test('API key migration v11 preserves ids, sessions, and active-name uniqueness'
     db.close();
   }
 
+  assert.throws(() => new Store(dbPath), { code: 'SCHEMA_UPGRADE_REQUIRED' });
+  migrateDashboardFile(dbPath);
   const store = new Store(dbPath);
   try {
     // Assert the v11 migration ran, not that it is the newest one — later
@@ -1155,8 +1158,9 @@ test('API key migration v11 rolls back failed rebuild and can retry', () => {
     db.close();
   }
 
+  assert.throws(() => new Store(dbPath), { code: 'SCHEMA_UPGRADE_REQUIRED' });
   assert.throws(
-    () => new Store(dbPath),
+    () => migrateDashboardFile(dbPath),
     /UNIQUE constraint failed: api_keys\.name/
   );
 
@@ -1182,6 +1186,7 @@ test('API key migration v11 rolls back failed rebuild and can retry', () => {
     inspectDb.close();
   }
 
+  migrateDashboardFile(dbPath);
   const store = new Store(dbPath);
   try {
     assert.equal(store.db.prepare('SELECT version FROM schema_migrations WHERE version = 11').get().version, 11);
@@ -1784,9 +1789,9 @@ test('state and fleet thresholds follow the actual session model across engine a
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-threshold-state-'));
   let server;
   const stores = new Set(), timers = new Set();
-  const migrate = Store.prototype.migrate, schedule = globalThis.setInterval;
-  t.mock.method(Store.prototype, 'migrate', function (...args) {
-    stores.add(this); return migrate.apply(this, args);
+  const checkSchema = Store.prototype.checkSchema, schedule = globalThis.setInterval;
+  t.mock.method(Store.prototype, 'checkSchema', function (...args) {
+    stores.add(this); return checkSchema.apply(this, args);
   });
   t.mock.method(globalThis, 'setInterval', (...args) => {
     const timer = schedule(...args); timers.add(timer); return timer;

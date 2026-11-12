@@ -5,7 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { copyDashboardDb, applyDashboardRegistration, applyDashboardRoute, verifyDashboard, restoreDashboardService } from '../dashboard-install.js';
+import { copyDashboardDb, applyDashboardRegistration, applyDashboardRoute, verifyDashboard, restoreDashboardService, migrateTakeoverDashboardDb } from '../dashboard-install.js';
+import Database from '../../../skills/comm-bridge/scripts/sqlite-driver.js';
+import { Store } from '../../../skills/dashboard/src/lib/store.js';
+import { TARGET_SCHEMA_VERSION } from '../../../skills/dashboard/src/lib/schema.js';
+import { migrateSchema13 } from '../../../skills/dashboard/__tests__/fixtures/schema13.js';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 const MANAGED_PID=43210;
 function fixture(t) {
@@ -46,6 +50,68 @@ test('registration uses one managed service, preserves config bytes, never insta
  assert.equal(fs.readFileSync(path.join(data,'config.json'),'utf8'),config);
  assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'.claude/settings.json'))).hooks.Stop[0].hooks[0].command,'third-party');
  const calls=fs.readFileSync(path.join(dir,'pm2-calls'),'utf8');assert.equal(calls.split('\n').filter(l=>l.includes('"start"')).length,2);
+});
+// First takeover: a legacy standalone Dashboard database is migrated here, before
+// the service starts, with the cutoff copy as rollback material.
+function legacyDashboard(data, {failAt}={}) {
+ const file=path.join(data,'dashboard.db'), db=new Database(file);
+ migrateSchema13(db);
+ db.exec("INSERT INTO runtime_events(id,ingest_id,event_seq,timestamp,event_type,category) VALUES('retained','retained',1,'2026-01-01','prompt','activity')");
+ if(failAt)db.exec(`CREATE TRIGGER reject_migration BEFORE INSERT ON schema_migrations WHEN NEW.version=${failAt} BEGIN SELECT RAISE(ABORT,'fixture migration failed'); END;`);
+ db.close();
+ return file;
+}
+const pm2Starts=dir=>fs.existsSync(path.join(dir,'pm2-calls'))?fs.readFileSync(path.join(dir,'pm2-calls'),'utf8').split('\n').filter(l=>l.includes('"start"')).length:0;
+const version=file=>{const db=new Database(file,{readonly:true});try{return db.prepare('SELECT MAX(version) v FROM schema_migrations').get().v;}finally{db.close();}};
+test('first takeover migrates a legacy Dashboard database before starting the service',t=>{
+ const {dir,data}=fixture(t),tx=path.join(dir,'tx');
+ const file=legacyDashboard(data);
+ assert.throws(()=>new Store(file),error=>error.code==='SCHEMA_UPGRADE_REQUIRED');
+ assert.equal(copyDashboardDb(dir,tx).ok,true);
+ assert.deepEqual(applyDashboardRegistration({zylosDir:dir,transactionDir:tx}),{state:'done'});
+ assert.equal(pm2Starts(dir),1);
+ assert.equal(version(file),TARGET_SCHEMA_VERSION);
+ const store=new Store(file);
+ try{assert.equal(store.db.prepare('SELECT id FROM runtime_events').get().id,'retained');}finally{store.close();}
+ // A retried registration sees a current database and changes nothing.
+ assert.deepEqual(migrateTakeoverDashboardDb({zylosDir:dir,transactionDir:tx}),{state:'unchanged'});
+});
+test('a failed takeover migration restores the cutoff copy and does not start the service',t=>{
+ const {dir,data}=fixture(t),tx=path.join(dir,'tx');
+ const file=legacyDashboard(data,{failAt:TARGET_SCHEMA_VERSION});
+ assert.equal(copyDashboardDb(dir,tx).ok,true);
+ const copy=fs.readFileSync(path.join(tx,'dashboard/db-copy/dashboard.db'));
+ const result=applyDashboardRegistration({zylosDir:dir,transactionDir:tx});
+ assert.equal(result.state,'failed');
+ assert.equal(result.error.code,'dashboard_migration_failed');
+ assert.match(result.error.message,/restored from the takeover copy/);
+ assert.match(result.error.message,/fixture migration failed/);
+ assert.equal(pm2Starts(dir),0);
+ assert.deepEqual(fs.readFileSync(file),copy);
+ for(const suffix of ['-wal','-shm'])assert.equal(fs.existsSync(file+suffix),false);
+ assert.equal(version(file),13);
+});
+test('takeover refuses to migrate a legacy Dashboard database without the cutoff copy',t=>{
+ const {dir,data}=fixture(t),tx=path.join(dir,'tx');
+ const file=legacyDashboard(data),before=fs.readFileSync(file);
+ for(const transactionDir of [undefined,tx]){
+  const result=applyDashboardRegistration({zylosDir:dir,transactionDir});
+  assert.equal(result.state,'failed');
+  assert.equal(result.error.code,'dashboard_migration_failed');
+  assert.match(result.error.message,/copy is missing; the database was not migrated/);
+ }
+ assert.equal(pm2Starts(dir),0);
+ assert.deepEqual(fs.readFileSync(file),before);
+ assert.equal(version(file),13);
+});
+test('takeover leaves an absent or current Dashboard database alone',t=>{
+ const {dir,data}=fixture(t);
+ assert.deepEqual(migrateTakeoverDashboardDb({zylosDir:dir}),{state:'absent'});
+ assert.equal(fs.existsSync(path.join(data,'dashboard.db')),false);
+ new Store(path.join(data,'dashboard.db')).close();
+ const before=fs.readFileSync(path.join(data,'dashboard.db'));
+ assert.deepEqual(migrateTakeoverDashboardDb({zylosDir:dir}),{state:'unchanged'});
+ assert.deepEqual(fs.readFileSync(path.join(data,'dashboard.db')),before);
 });
 test('missing Caddy skips managed routing',t=>{
  const {dir,bin}=fixture(t);fs.unlinkSync(path.join(bin,'caddy'));

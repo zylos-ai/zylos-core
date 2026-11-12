@@ -8,6 +8,7 @@ import {createRequire} from 'node:module';
 import {Store} from '../../../skills/dashboard/src/lib/store.js';
 import {TARGET_SCHEMA_VERSION} from '../../../skills/dashboard/src/lib/schema.js';
 import {migrateSchema13} from '../../../skills/dashboard/__tests__/fixtures/schema13.js';
+import {migrateDashboardFile} from '../../../skills/dashboard/__tests__/helpers/explicit-migration.js';
 import {inspectUpgradeSource} from '../upgrade-entry.js';
 import {createCoreDbSnapshot,runCoreDbWorker,validateSnapshotManifest,probeCoreDbVersions,rehearseCoreDbUpgrade,prepareRecoveryDependencies,inspectDashboardOwnerManaged} from '../core-db-backup.js';
 
@@ -305,7 +306,7 @@ function legacyDashboard(file) {
 
 // Migration integration: run for Dashboard schema/owner changes, skip UI-only.
 // Private roots/SQLite and bounded worker children; fixture owns cleanup, no live services.
-test('schema 13 skips all owner actions before cutoff and migrates only on first Store open', t => {
+test('schema 13 skips all owner actions before cutoff; Store refuses it until the explicit takeover migration', t => {
   const f = controlledMigration(t, false);
   legacyDashboard(f.source);
   const before = fs.readFileSync(f.source);
@@ -322,6 +323,13 @@ test('schema 13 skips all owner actions before cutoff and migrates only on first
   const beforeOpen = new Database(f.source,{readonly:true,fileMustExist:true});
   assert.equal(beforeOpen.prepare('SELECT MAX(version) version FROM schema_migrations').get().version,13);
   beforeOpen.close();
+  // An ordinary open no longer migrates: it refuses and leaves the file untouched.
+  assert.throws(() => new Store(f.source), error => error.code === 'SCHEMA_UPGRADE_REQUIRED'
+    && error.schemaVersion === 13 && error.supportedVersion === TARGET_SCHEMA_VERSION
+    && /zylos upgrade/.test(error.message) && /not changed/.test(error.message));
+  assert.deepEqual(fs.readFileSync(f.source),before);
+  for (const suffix of ['-wal','-shm']) assert.equal(fs.existsSync(f.source+suffix),false);
+  migrateDashboardFile(f.source);
   const store = new Store(f.source);
   try {
     assert.equal(store.db.prepare('SELECT MAX(version) version FROM schema_migrations').get().version,TARGET_SCHEMA_VERSION);

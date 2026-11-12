@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Store } from '../src/lib/store.js';
+import { migrateDashboardFile } from './helpers/explicit-migration.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { MetricResolver } from '../src/lib/metric-resolver.js';
 
@@ -64,6 +65,8 @@ test('v13 adds indexes idempotently without changing cost totals', t => {
     ALTER TABLE runtime_events DROP COLUMN run_id;
     DELETE FROM schema_migrations WHERE version>=13;
   `);
+  assert.throws(() => new Store(file), { code: 'SCHEMA_UPGRADE_REQUIRED' });
+  migrateDashboardFile(file);
   const migrated = new Store(file);
   assert.equal(migrated.db.prepare('SELECT MAX(version) v FROM schema_migrations').get().v, TARGET_SCHEMA_VERSION);
   assert.deepEqual([migrated.aggregateCost(), migrated.aggregateCost({ sessionId: 's' }), migrated.aggregateCost({ since: '2026-10-27' })], before);

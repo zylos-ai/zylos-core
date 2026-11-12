@@ -11,8 +11,14 @@ import * as c4 from '../c4-schema.js';
 import * as scheduler from '../../../scheduler/scripts/schema.js';
 import * as wc from '../../../../cli/lib/__tests__/fixtures/legacy-web-console-schema.js';
 // Existing fault/concurrency probes replace the registered 0→1 callback.
+const withProbe = owner => owner.migrate ? { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 0: { ...owner.MIGRATIONS[0], migrate: owner.migrate } } } : owner;
 function guardDatabase(db, owner, options) {
-  return registeredGuardDatabase(db, owner.migrate ? { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 0: { ...owner.MIGRATIONS[0], migrate: owner.migrate } } } : owner, options);
+  return registeredGuardDatabase(db, withProbe(owner), options);
+}
+// Existing layouts are migrated only by the explicit upgrade path, with the
+// options ordinary openers used before they became check-only.
+function migrateExisting(db, owner) {
+  return migrateDatabase(db, withProbe(owner), { allowNew: owner.supportsNewDatabase === true, strict: false });
 }
 const repo = fileURLToPath(new URL('../../../../', import.meta.url));
 const sql = fs.readFileSync(new URL('../../init-db.sql', import.meta.url), 'utf8');
@@ -35,7 +41,7 @@ test('known C4 legacy fields/backfill/retag migrate together and only once',t=>{
  const legacy=sql.replace(/    delivery_action TEXT[^\n]*\n/,'').replace(/    raw_content TEXT[^\n]*\n/,'').replace(/-- C4 unhealthy[\s\S]*?-- Create initial checkpoint/,'-- Create initial checkpoint');db.exec(legacy);
  db.prepare("INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES('in','web-console','session-handoff','history')").run();
  db.prepare("INSERT INTO control_queue(content,created_at,updated_at) VALUES(?,1,1)").run('work ---- ack via: node example ack --id 1');db.close();
- run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';getDb();close();`);
+ const legacyDb=new Database(path.join(root,'comm-bridge/c4.db'));migrateExisting(legacyDb,c4);legacyDb.close();
  const check=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(check.pragma('user_version',{simple:true}),c4.SUPPORTED_SCHEMA_VERSION);assert.equal(check.prepare('SELECT raw_content FROM control_queue').get().raw_content,'work');assert.equal(check.prepare('SELECT channel FROM conversations').get().channel,'void');check.prepare("UPDATE control_queue SET raw_content=NULL").run();check.close();
  run(root, `import {getDb,close} from './skills/comm-bridge/scripts/c4-db.js';getDb();close();`);
  const reopened=new Database(path.join(root,'comm-bridge/c4.db'));assert.equal(reopened.prepare('SELECT raw_content FROM control_queue').get().raw_content,null);reopened.close();
@@ -47,22 +53,23 @@ test('future versions are rejected before write pragmas and migration',t=>{
 test('version-zero adoption preserves an unknown legacy table while building the required baseline',()=>{
  const db=new Database(':memory:');assert.throws(()=>guardDatabase(db,{...wc,migrate(){assert.fail('migration');}},{readonly:true}),/missing/);
  db.exec('CREATE TABLE unknown(x); INSERT INTO unknown VALUES (7)');
- assert.equal(guardDatabase(db,wc).version,1);
+ assert.equal(migrateExisting(db,wc).version,1);
  assert.equal(db.prepare('SELECT x FROM unknown').get().x,7);
  assert.equal(db.pragma('user_version',{simple:true}),1);
  db.close();
 });
 test('failure rolls back schema, data and version; readonly inspection never migrates',()=>{
  const db=new Database(':memory:');db.exec(sql);
- assert.throws(()=>guardDatabase(db,{...c4,migrate(connection){connection.exec("CREATE TABLE rollback_test(x); UPDATE checkpoints SET summary='changed';");throw new Error('injected');}}),/injected/);
+ assert.throws(()=>migrateExisting(db,{...c4,migrate(connection){connection.exec("CREATE TABLE rollback_test(x); UPDATE checkpoints SET summary='changed';");throw new Error('injected');}}),/injected/);
  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='rollback_test'").get(),undefined);assert.equal(db.prepare('SELECT summary FROM checkpoints').get().summary,'initial');assert.equal(db.pragma('user_version',{simple:true}),0);
- guardDatabase(db,{...c4,migrate(){assert.fail('readonly migration');}},{readonly:true});assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
+ for(const options of [{readonly:true},{}])assert.throws(()=>guardDatabase(db,{...c4,migrate(){assert.fail('ordinary open migration');}},options),{code:'SCHEMA_UPGRADE_REQUIRED'});
+ assert.equal(db.pragma('user_version',{simple:true}),0);assert.equal(db.prepare('SELECT summary FROM checkpoints').get().summary,'initial');db.close();
 });
 test('lock re-read honors another initializer and rejects a newly future database',()=>{
  for(const nextVersion of [c4.SUPPORTED_SCHEMA_VERSION,c4.SUPPORTED_SCHEMA_VERSION+1]) {
   const db=new Database(':memory:');guardDatabase(db,c4);db.pragma('user_version=0');let inspected=0;let migrated=false;
   const owner={...c4,inspectSchema(connection,options){if(++inspected===2) connection.pragma(`user_version=${nextVersion}`);return c4.inspectSchema(connection,options);},migrate(){migrated=true;}};
-  if(nextVersion>c4.SUPPORTED_SCHEMA_VERSION)assert.throws(()=>guardDatabase(db,owner),/exceeds supported/);else guardDatabase(db,owner);
+  if(nextVersion>c4.SUPPORTED_SCHEMA_VERSION)assert.throws(()=>migrateExisting(db,owner),/exceeds supported/);else migrateExisting(db,owner);
   assert.equal(migrated,false);db.close();
  }
 });
@@ -129,7 +136,7 @@ test('version-zero view reaches migration callback while readonly preflight neve
  const root=fixture(t),file=path.join(root,'empty');fs.writeFileSync(file,'');const before=fs.readFileSync(file);
  assert.throws(()=>preflightDatabase(Database,file,wc,{allowMissing:true}),/missing/);assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(file+'-wal'),false);
  const db=new Database(':memory:');db.exec('CREATE VIEW unknown AS SELECT 1 AS x');let reached=false;
- assert.throws(()=>guardDatabase(db,{...wc,migrate(){reached=true;}}),/missing sessions\.token/);
+ assert.throws(()=>migrateExisting(db,{...wc,migrate(){reached=true;}}),/missing sessions\.token/);
  assert.equal(reached,true);assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
 });
 test('version-zero migration needs no changes declaration and validates the complete v1 layout before commit',()=>{
@@ -146,7 +153,7 @@ test('empty initialization requires owner capability and a regular file; malform
 });
 test('SQLite automatic transaction rollback preserves the original migration error',()=>{
  const db=new Database(':memory:');db.exec(sql);
- assert.throws(()=>guardDatabase(db,{...c4,migrate(connection){connection.exec('CREATE TABLE unique_migration(x INTEGER UNIQUE); INSERT INTO unique_migration VALUES(1); INSERT OR ROLLBACK INTO unique_migration VALUES(1);');}}),error=>error.code==='SQLITE_CONSTRAINT_UNIQUE' && /UNIQUE constraint failed/.test(error.message));
+ assert.throws(()=>migrateExisting(db,{...c4,migrate(connection){connection.exec('CREATE TABLE unique_migration(x INTEGER UNIQUE); INSERT INTO unique_migration VALUES(1); INSERT OR ROLLBACK INTO unique_migration VALUES(1);');}}),error=>error.code==='SQLITE_CONSTRAINT_UNIQUE' && /UNIQUE constraint failed/.test(error.message));
  assert.equal(db.inTransaction,false);assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='unique_migration'").get(),undefined);assert.equal(db.pragma('user_version',{simple:true}),0);db.close();
 });
 test('invalid schema versions are distinguished from future supported-range versions',()=>{
@@ -276,4 +283,37 @@ test('extension allowance never bypasses required schema definitions or versions
   db.pragma('user_version=2');
   assert.throws(inspect,/exceeds supported/);
  } finally {db.close();}
+});
+
+const history=name=>fs.readFileSync(new URL(`./fixtures/migration-history/${name}`,import.meta.url),'utf8');
+const digest=file=>fs.readFileSync(file).toString('base64');
+for(const [label,owner,layout] of [['c4',c4,'c4-v0.9.0-v1.sql'],['scheduler',scheduler,'scheduler-v0.9.0-v1.sql']]) test(`ordinary ${label} open reports an older database without changing it; explicit migration still upgrades it`,t=>{
+ const root=fixture(t),file=path.join(root,`${label}.db`);
+ const seed=new Database(file);seed.exec(history(layout));assert.equal(seed.pragma('user_version',{simple:true}),1);seed.close();
+ const before=digest(file);
+ for(const options of [{},{readonly:true}]) {
+  const db=new Database(file,options);
+  assert.throws(()=>registeredGuardDatabase(db,owner),error=>{
+   assert.equal(error.code,'SCHEMA_UPGRADE_REQUIRED');assert.equal(error.schemaVersion,1);assert.equal(error.supportedVersion,owner.SUPPORTED_SCHEMA_VERSION);
+   assert.equal(error.message,`${file}: schema version 1 is older than supported ${owner.SUPPORTED_SCHEMA_VERSION}; run "zylos upgrade" to migrate. The database was not changed.`);
+   return true;
+  });
+  assert.equal(db.inTransaction,false);db.close();
+  assert.equal(digest(file),before);for(const suffix of ['-wal','-shm','-journal'])assert.equal(fs.existsSync(file+suffix),false);
+ }
+ const explicit=new Database(file);assert.equal(migrateDatabase(explicit,owner,{strict:false}).version,owner.SUPPORTED_SCHEMA_VERSION);
+ assert.equal(registeredGuardDatabase(explicit,owner).version,owner.SUPPORTED_SCHEMA_VERSION);explicit.close();
+});
+test('ordinary open builds a missing or empty database at the current layout but never one with objects at version zero',t=>{
+ const root=fixture(t);
+ for(const [name,prepare] of [['missing',()=>{}],['empty',file=>fs.writeFileSync(file,'')]]) {
+  const file=path.join(root,name);prepare(file);
+  const db=new Database(file);assert.equal(registeredGuardDatabase(db,c4).version,c4.SUPPORTED_SCHEMA_VERSION);db.close();
+  const readonly=new Database(file,{readonly:true});assert.equal(registeredGuardDatabase(readonly,c4).version,c4.SUPPORTED_SCHEMA_VERSION);readonly.close();
+ }
+ const emptyReadonly=path.join(root,'empty-readonly');fs.writeFileSync(emptyReadonly,'');
+ const readonly=new Database(emptyReadonly,{readonly:true});assert.throws(()=>registeredGuardDatabase(readonly,c4),/missing schema tables/);readonly.close();assert.equal(fs.statSync(emptyReadonly).size,0);
+ const legacy=new Database(':memory:');legacy.exec(sql);
+ assert.throws(()=>registeredGuardDatabase(legacy,c4),{code:'SCHEMA_UPGRADE_REQUIRED',message:/^in-memory database: schema version 0 is older than supported/});
+ assert.equal(legacy.pragma('user_version',{simple:true}),0);legacy.close();
 });

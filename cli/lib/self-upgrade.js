@@ -983,7 +983,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
         };
         try {
           persistItem({state:'pending',attempts:(saved?.attempts || 0)+1,lastError:null});
-          const result=await owner[name]({zylosDir:root});
+          const result=await owner[name]({zylosDir:root,transactionDir:ctx.transactionDir});
           const accepted = result.state==='done' || item==='route' && result.state==='skipped';
           if(!accepted)throw Object.assign(Error(result.error?.message || result.message || `${name}: ${result.state}`),
             {code:result.error?.code || result.code,location:result.error?.location || result.location});

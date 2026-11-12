@@ -2,7 +2,7 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { migrateDatabase } from './schema.js';
+import { inspectDatabase, migrateDatabase } from './schema.js';
 
 export class Store {
   constructor(dbPath) {
@@ -14,10 +14,10 @@ export class Store {
     if (this.db.pragma('page_count', { simple: true }) === 0) {
       this.db.pragma('auto_vacuum = INCREMENTAL');
     }
-    this.db.pragma('journal_mode = WAL');
     this.db.pragma('busy_timeout = 5000');
     try {
-      this.migrate();
+      this.checkSchema();
+      this.db.pragma('journal_mode = WAL');
       this._prepareStatements();
     } catch (error) {
       this.db.close();
@@ -25,8 +25,20 @@ export class Store {
     }
   }
 
-  migrate() {
-    migrateDatabase(this.db);
+  // Opening only checks. Existing data is migrated by the upgrade transaction
+  // or the first Dashboard takeover; an empty file is built at the current layout.
+  checkSchema() {
+    const empty = this.db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get() === undefined;
+    if (empty) { migrateDatabase(this.db); return; }
+    const { currentVersion, targetVersion, needsMigration } = inspectDatabase(this.db);
+    if (currentVersion > targetVersion) {
+      throw Object.assign(new Error(`Dashboard schema ${currentVersion} is newer than supported ${targetVersion}`), { code: 'SCHEMA_TOO_NEW' });
+    }
+    if (needsMigration) {
+      throw Object.assign(new Error(`${this.db.name}: schema version ${currentVersion} is older than supported ${targetVersion}; run "zylos upgrade" to migrate. The database was not changed.`), {
+        code: 'SCHEMA_UPGRADE_REQUIRED', schemaVersion: currentVersion, supportedVersion: targetVersion,
+      });
+    }
   }
 
   _prepareStatements() {

@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { migrateDatabase } from '../sqlite-schema.js';
+import * as c4Schema from '../c4-schema.js';
 
 const DB_CLI_PATH = fileURLToPath(new URL('../c4-db.js', import.meta.url));
 const RECEIVE_PATH = fileURLToPath(new URL('../c4-receive.js', import.meta.url));
@@ -66,7 +68,17 @@ describe('void channel migration (#689)', () => {
       insert.run('out', 'web-console', 'console', 'normal console message');
       insert.run('out', 'telegram', 'session-handoff', 'not a web-console row');
       legacy.close();
+      const file = path.join(tmpDir, 'comm-bridge', 'c4.db');
+      const before = fs.readFileSync(file);
+      // An ordinary read reports the required upgrade and leaves the layout alone.
+      const refused = dbCli(['recent', '10'], env);
+      assert.notEqual(refused.status, 0);
+      assert.match(refused.stderr, /SCHEMA_UPGRADE_REQUIRED/);
+      assert.deepEqual(fs.readFileSync(file), before);
       // The explicit 0→1 migration runs once before reads.
+      const upgrade = new Database(file);
+      migrateDatabase(upgrade, c4Schema, { strict: false });
+      upgrade.close();
       const { stdout, status } = dbCli(['recent', '10'], env);
       assert.equal(status, 0);
 
@@ -139,6 +151,26 @@ describe('group query CLI', () => {
         assert.equal(JSON.parse(result.stdout).ok, false);
         assert.equal(JSON.parse(result.stdout).error.code, 'INVALID_ARGS');
       }
+    });
+  });
+});
+
+describe('commands that need no data', () => {
+  it('help, unknown commands and argument errors never create or change the database', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const file = path.join(tmpDir, 'comm-bridge', 'c4.db');
+      const noData = [[], ['--help'], ['-h'], ['unknown-command'], ['recent', '1', '2'], ['insert', 'in'], ['checkpoint'], ['rejection']];
+      for (const args of noData) {
+        dbCli(args, env);
+        assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge')), false, `${args.join(' ') || '(none)'} created C4 data`);
+      }
+      const v1 = new Database((fs.mkdirSync(path.dirname(file), { recursive: true }), file));
+      v1.exec(fs.readFileSync(new URL('./fixtures/migration-history/c4-v0.9.0-v1.sql', import.meta.url), 'utf8'));
+      v1.close();
+      const before = fs.readFileSync(file);
+      for (const args of noData) dbCli(args, env);
+      assert.deepEqual(fs.readFileSync(file), before);
+      for (const suffix of ['-wal', '-shm', '-journal']) assert.equal(fs.existsSync(file + suffix), false);
     });
   });
 });

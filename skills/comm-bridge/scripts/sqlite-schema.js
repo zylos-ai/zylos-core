@@ -334,13 +334,22 @@ export function migrateDatabase(db, owner, { allowNew = false, strict = true, al
   return owner.inspectSchema(db, options);
 }
 
+function databaseLabel(db) {
+  return db.name && db.name !== ':memory:' ? db.name : 'in-memory database';
+}
+
+// Ordinary openers only check. Migration of existing data belongs to the
+// upgrade transaction (snapshot, worker migration, readback); an ordinary
+// open may only build a missing or empty database at the current layout.
 export function guardDatabase(db, owner, { readonly = false } = {}) {
   readonly ||= db.readonly;
-  if (readonly) {
-    const { steps, target, ...current } = planDatabaseMigration(db, owner, { strict: false });
-    return current;
-  }
-  return migrateDatabase(db, owner, { allowNew: owner.supportsNewDatabase === true, strict: false });
+  const allowNew = !readonly && owner.supportsNewDatabase === true;
+  const { steps, target, ...current } = planDatabaseMigration(db, owner, { allowNew, strict: false });
+  if (!steps.length) return current;
+  if (current.empty && allowNew) return migrateDatabase(db, owner, { allowNew: true, strict: false });
+  throw Object.assign(new Error(`${databaseLabel(db)}: schema version ${current.version} is older than supported ${target}; run "zylos upgrade" to migrate. The database was not changed.`), {
+    code: 'SCHEMA_UPGRADE_REQUIRED', schemaVersion: current.version, supportedVersion: target,
+  });
 }
 
 export function preflightDatabase(Database, dbPath, owner, { allowMissing = false } = {}) {

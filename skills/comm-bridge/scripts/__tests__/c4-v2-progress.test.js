@@ -2,7 +2,11 @@ import { fixture as storeFixture } from './c4-v2-test-helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { guardDatabase } from '../sqlite-schema.js';
+import { guardDatabase, migrateDatabase } from '../sqlite-schema.js';
+// Existing layouts are migrated only by the explicit upgrade path, with the
+// options ordinary openers used before they became check-only.
+const migrateExisting = (db, candidate) => migrateDatabase(db, candidate, { allowNew: candidate.supportsNewDatabase === true, strict: false });
+
 import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
 function fixture(t) {
@@ -143,7 +147,7 @@ for (const [name, ends, baseline] of [
   const checkpoint = db.prepare('INSERT INTO checkpoints(id,summary,end_conversation_id) VALUES(?,?,?)');
   ends.forEach((end, i) => checkpoint.run(i + 1, `historical ${i}`, end));
   db.prepare("INSERT INTO conversations(id,direction,channel,content,status) VALUES(1000,'out','legacy','old boundary','delivered')").run();
-  guardDatabase(db, owner);
+  migrateExisting(db, owner);
   const store = createStore(db, { validateComponent: () => true });
   const rows = ['one', 'two', 'three'].map(content => store.insertConversation('out', 'g', 'e', content));
   assert.deepEqual(rows.map(row => row.id), [1001, 1002, 1003]);

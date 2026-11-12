@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { guardDatabase } from '../sqlite-schema.js';
+import { guardDatabase, migrateDatabase } from '../sqlite-schema.js';
+// Existing layouts are migrated only by the explicit upgrade path, with the
+// options ordinary openers used before they became check-only.
+const migrateExisting = (db, candidate) => migrateDatabase(db, candidate, { allowNew: candidate.supportsNewDatabase === true, strict: false });
+
 import * as owner from '../c4-schema.js';
 import { createStore } from '../c4-v2-store.js';
 import { seedV1, oldRows, snapshot } from './helpers/c4-v2-fixtures.js';
@@ -12,7 +16,7 @@ test('historical v1 over-bound checkpoint survives migration and reports exact f
   const last = db.prepare('SELECT id FROM checkpoints ORDER BY id DESC LIMIT 1').get().id;
   db.prepare('UPDATE checkpoints SET end_conversation_id=? WHERE id=?').run(max + 1000, last);
   const historical = oldRows(db);
-  guardDatabase(db, owner);
+  migrateExisting(db, owner);
   assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
   assert.deepEqual(oldRows(db), historical, 'migration must not clamp historical end or rewrite old fields');
   const store = createStore(db), before = snapshot(db), changes = db.prepare('SELECT total_changes() AS n').get().n;
@@ -25,7 +29,7 @@ test('historical v1 over-bound checkpoint survives migration and reports exact f
 });
 test('healthy migrated historical database audits empty and preserves initial NULL end', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db);
-  const historical = oldRows(db); guardDatabase(db, owner); db.pragma('query_only = ON');
+  const historical = oldRows(db); migrateExisting(db, owner); db.pragma('query_only = ON');
   assert.deepEqual(createStore(db).auditCheckpoints(), []); assert.deepEqual(oldRows(db), historical);
 });
 test('audit distinguishes latest baseline from global maximum coverage across multiple bad rows', t => {

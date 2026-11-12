@@ -17,6 +17,11 @@ function database(t, options) {
   seedV1(db, options);
   return db;
 }
+// Existing v1 layouts are migrated only by the explicit upgrade path, with the
+// options ordinary openers used before they became check-only.
+function migrateExisting(db, candidate) {
+  return migrateDatabase(db, candidate, { allowNew: candidate.supportsNewDatabase === true, strict: false });
+}
 function changedOwner(migrate) {
   return { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 1: { ...owner.MIGRATIONS[1], migrate } } };
 }
@@ -49,7 +54,7 @@ test('empty database executes 0→1→2 with initial checkpoint', t => {
   const calls = [];
   const counted = { ...owner, MIGRATIONS: Object.fromEntries(Object.entries(owner.MIGRATIONS).map(([from, step]) =>
     [from, { ...step, migrate(connection, options) { calls.push([Number(from), step.to]); step.migrate(connection, options); } }])) };
-  guardDatabase(db, counted);
+  migrateExisting(db, counted);
   assert.deepEqual(calls, [[0, 1], [1, 2]]);
   assertIndexes(db);
   const check = () => {
@@ -81,7 +86,7 @@ function transition(db, run, source = 'single', target = 'multi', phase = 'gatin
   return db.prepare('INSERT INTO mode_transitions(run_id,source_mode,target_mode,phase,created_at,updated_at) VALUES(?,?,?,?,1,1)').run(run, source, target, phase);
 }
 test('seven exact indexes, binary keys, namespace and transition/config constraints', t => {
-  const db = database(t); guardDatabase(db, owner); assertIndexes(db);
+  const db = database(t); migrateExisting(db, owner); assertIndexes(db);
   const ns = db.prepare('INSERT INTO channel_namespaces VALUES(?,?)');
   for (const name of ['a', 'a'.repeat(32), 'foo-2_x']) ns.run(name, `component:${name}`);
   for (const name of ['', 'Origin', 'origin', 'void', 'internal', 'a'.repeat(33), 'a\0b', 'a b', '1foo', 'a.b', 'é'])
@@ -109,7 +114,7 @@ test('seven exact indexes, binary keys, namespace and transition/config constrai
 });
 
 test('repeated guards do not invoke migrations or change live fences/transitions', t => {
-  const db = database(t); guardDatabase(db, owner);
+  const db = database(t); migrateExisting(db, owner);
   db.exec("INSERT INTO drain_fences VALUES('telegram','upgrade','run',123)"); transition(db, 'run');
   const before = snapshot(db); let calls = 0;
   const counted = changedOwner(() => { calls++; });
@@ -121,7 +126,7 @@ test('repeated guards do not invoke migrations or change live fences/transitions
 test('user tables, columns and values survive v1→2', t => {
   const db = database(t, { extensions: true });
   const before = oldRows(db), tags = db.prepare('SELECT id,user_tag FROM conversations ORDER BY id').all();
-  guardDatabase(db, owner); assertMigrated(db, before);
+  migrateExisting(db, owner); assertMigrated(db, before);
   const check = () => {
     assert.deepEqual(db.prepare('SELECT * FROM user_notes').all(), [{ id: 1, note: 'retained' }]);
     assert.deepEqual(db.prepare('SELECT id,user_tag FROM conversations ORDER BY id').all(), tags);
@@ -134,18 +139,18 @@ for (const name of NEW_TABLES) test(`${name} collision rejected before callback 
   const before = snapshot(db); let calls = 0;
   const candidate = changedOwner(connection => { calls++; migrateToV2(connection); });
   const check = () => {
-    assert.throws(() => guardDatabase(db, candidate), /already exists|collid/);
+    assert.throws(() => migrateExisting(db, candidate), /already exists|collid/);
     assert.equal(calls, 0); assert.deepEqual(snapshot(db), before);
   };
   check();
   // A swallowed precondition exception is detected by the same throws assertion.
-  assert.throws(() => assert.throws(() => { try { guardDatabase(db, candidate); } catch {} }), assert.AssertionError);
+  assert.throws(() => assert.throws(() => { try { migrateExisting(db, candidate); } catch {} }), assert.AssertionError);
 });
 for (const [table, column] of [['conversations','session_group'],['conversations','session_id'],['checkpoints','session_group'],['checkpoints','no_content'],['control_queue','session_group'],['control_queue','target_binding']])
   test(`existing ${table}.${column} is not silently adopted`, t => {
     const db = database(t); db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
     const before = snapshot(db); let calls = 0;
-    assert.throws(() => guardDatabase(db, changedOwner(() => { calls++; })), /already exists|collid/);
+    assert.throws(() => migrateExisting(db, changedOwner(() => { calls++; })), /already exists|collid/);
     assert.equal(calls, 0); assert.deepEqual(snapshot(db), before);
   });
 
@@ -161,11 +166,11 @@ function interrupted(db, { commit = false } = {}) {
 }
 test('fifth-table exception rolls back and permits clean reentry; premature commit is detected', t => {
   const db = database(t), before = snapshot(db);
-  assert.throws(() => guardDatabase(db, changedOwner(interrupted)), /injected after fifth/);
+  assert.throws(() => migrateExisting(db, changedOwner(interrupted)), /injected after fifth/);
   assert.deepEqual(snapshot(db), before); assert.equal(db.inTransaction, false);
-  guardDatabase(db, owner); assertMigrated(db, oldRowsFromSnapshot(before));
+  migrateExisting(db, owner); assertMigrated(db, oldRowsFromSnapshot(before));
   const mutant = database(t), original = snapshot(mutant);
-  assert.throws(() => guardDatabase(mutant, changedOwner(connection => interrupted(connection, { commit: true }))), /injected/);
+  assert.throws(() => migrateExisting(mutant, changedOwner(connection => interrupted(connection, { commit: true }))), /injected/);
   assert.throws(() => assert.deepEqual(snapshot(mutant), original), assert.AssertionError);
 });
 function oldRowsFromSnapshot(state) {
@@ -176,16 +181,16 @@ test('SIGKILL after fifth table recovers on reopen and migration reentry', t => 
   const file = path.join(dir, 'test.db'); let db = new Database(file); seedV1(db); const before = snapshot(db); db.close();
   const code = `import Database from ${JSON.stringify(import.meta.resolve('better-sqlite3'))};
     import * as owner from ${JSON.stringify(new URL('../c4-schema.js', import.meta.url).href)};
-    import {guardDatabase} from ${JSON.stringify(new URL('../sqlite-schema.js', import.meta.url).href)};
+    import {migrateDatabase} from ${JSON.stringify(new URL('../sqlite-schema.js', import.meta.url).href)};
     import {migrateToV2} from ${JSON.stringify(new URL('../c4-migrations-v2.js', import.meta.url).href)};
     const db=new Database(process.argv[1]);
-    guardDatabase(db,{...owner,MIGRATIONS:{...owner.MIGRATIONS,1:{...owner.MIGRATIONS[1],migrate(connection){
+    migrateDatabase(db,{...owner,MIGRATIONS:{...owner.MIGRATIONS,1:{...owner.MIGRATIONS[1],migrate(connection){
       migrateToV2({exec(sql){connection.exec(sql.split('CREATE TABLE group_runtime_overrides')[0]); process.kill(process.pid,'SIGKILL');}});
-    }}}});`;
+    }}}},{allowNew:true,strict:false});`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code, file], { encoding: 'utf8', timeout: 10000 });
   assert.equal(child.signal, 'SIGKILL', child.stderr);
   db = new Database(file); t.after(() => db.close()); assert.deepEqual(snapshot(db), before);
-  guardDatabase(db, owner); assertMigrated(db, oldRowsFromSnapshot(before));
+  migrateExisting(db, owner); assertMigrated(db, oldRowsFromSnapshot(before));
 });
 
 for (const tag of ['v0.1.0', 'v0.4.11', 'v0.5.2']) test(`${tag} retains 0→1 retag before 1→2`, t => {
@@ -193,7 +198,7 @@ for (const tag of ['v0.1.0', 'v0.4.11', 'v0.5.2']) test(`${tag} retains 0→1 re
   db.exec(fs.readFileSync(new URL(`./fixtures/migration-history/c4-${tag}.sql`, import.meta.url), 'utf8'));
   db.exec("INSERT INTO conversations(direction,channel,endpoint_id,content) VALUES('in','web-console','session-handoff','history')");
   assert.deepEqual(planDatabaseMigration(db, owner).steps.map(({ from, to }) => [from, to]), [[0,1],[1,2]]);
-  guardDatabase(db, owner);
+  migrateExisting(db, owner);
   const check = () => {
     assert.equal(db.pragma('user_version', { simple: true }), 2);
     assert.deepEqual(db.prepare('SELECT channel,content,session_group FROM conversations').all(), [{ channel: 'void', content: 'history', session_group: '' }]);
@@ -202,7 +207,7 @@ for (const tag of ['v0.1.0', 'v0.4.11', 'v0.5.2']) test(`${tag} retains 0→1 re
 });
 
 test('frozen v1 owner refuses v2 without writes', t => {
-  const db = database(t); guardDatabase(db, owner); const before = snapshot(db);
+  const db = database(t); migrateExisting(db, owner); const before = snapshot(db);
   assert.throws(() => v1.inspectSchema(db), /schema version 2 exceeds supported 1/);
   assert.throws(() => guardDatabase(db, v1), /schema version 2 exceeds supported 1/);
   assert.deepEqual(snapshot(db), before);
@@ -210,7 +215,7 @@ test('frozen v1 owner refuses v2 without writes', t => {
 });
 test('historical out-of-range checkpoint is preserved for subsequent read-only audit', t => {
   const db = database(t); db.exec('UPDATE checkpoints SET end_conversation_id=1006 WHERE id=2');
-  const before = oldRows(db); guardDatabase(db, owner); assertMigrated(db, before);
+  const before = oldRows(db); migrateExisting(db, owner); assertMigrated(db, before);
 });
 
 test('oracle: maybeTables plus IF NOT EXISTS wrongly accepts a matching user table', t => {
@@ -223,7 +228,7 @@ test('oracle: maybeTables plus IF NOT EXISTS wrongly accepts a matching user tab
     ...owner.MIGRATIONS[1], changes: { ...changes, addTables, maybeTables: { drain_fences } },
     migrate(connection) { migrateToV2({ exec(sql) { connection.exec(sql.replace('CREATE TABLE drain_fences', 'CREATE TABLE IF NOT EXISTS drain_fences')); } }); },
   } } };
-  assert.throws(() => assert.throws(() => guardDatabase(db, mutant), /collid/), assert.AssertionError);
+  assert.throws(() => assert.throws(() => migrateExisting(db, mutant), /collid/), assert.AssertionError);
   assert.equal(db.pragma('user_version', { simple: true }), 2);
 });
 
@@ -232,7 +237,7 @@ for (const name of [...Object.keys(indexSql), 'IDX_MODE_TRANSITIONS_OPEN']) {
     const db = database(t);
     db.exec(`CREATE TABLE user_extra(x); INSERT INTO user_extra VALUES('preserved'); CREATE INDEX ${name} ON user_extra(x)`);
     const before = snapshot(db);
-    assert.throws(() => guardDatabase(db, owner), /index .* already exists/i);
+    assert.throws(() => migrateExisting(db, owner), /index .* already exists/i);
     assert.deepEqual(snapshot(db), before);
     assert.equal(db.inTransaction, false);
   });
@@ -243,7 +248,7 @@ test('oracle: IF NOT EXISTS hides user index collision and loses open-transition
   const unsafe = changedOwner(connection => migrateToV2({ exec(sql) {
     connection.exec(sql.replace(/CREATE (UNIQUE )?INDEX (?!IF NOT EXISTS)/g, 'CREATE $1INDEX IF NOT EXISTS '));
   } }));
-  assert.throws(() => assert.throws(() => guardDatabase(db, unsafe), /already exists/), assert.AssertionError);
+  assert.throws(() => assert.throws(() => migrateExisting(db, unsafe), /already exists/), assert.AssertionError);
   assert.equal(db.pragma('user_version', { simple: true }), 2);
   assert.equal(db.prepare("SELECT tbl_name FROM sqlite_master WHERE name='idx_mode_transitions_open'").get().tbl_name, 'user_extra');
   transition(db, 'first');

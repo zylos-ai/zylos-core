@@ -8,6 +8,26 @@ recovery records. The self-upgrade path (see
 [self-upgrade-recovery.md](self-upgrade-recovery.md)) rehearses, runs and
 checks these migrations; this page is the contract a schema change must meet.
 
+## Who runs a migration
+
+Only the upgrade migrates existing data. Ordinary opens (`c4-db.js` and
+`scheduler` `getDb`, `c4-read-store`, group deletion, the Dashboard `Store`) go
+through `guardDatabase` / `Store.checkSchema`, which only check:
+
+- current version: open normally;
+- missing file or empty file: build it at the current layout (a new install);
+- older version, including a version-0 file that already has objects: refuse
+  with `SCHEMA_UPGRADE_REQUIRED`, naming the database, its version and the
+  supported version, and leave the file unchanged; read-only opens refuse too;
+- newer version: refuse with `SCHEMA_TOO_NEW`.
+
+`migrateDatabase` is the explicit path. It runs in the upgrade worker inside
+the protected transaction, and once more in the first Dashboard takeover: a
+legacy standalone Dashboard database, which the worker skips, is migrated in
+`applyDashboardRegistration` before the service starts, with the copy taken at
+cutoff restored if that fails. A test that needs an older database at the
+current layout must migrate it explicitly first.
+
 ## When a migration step is required
 
 Any change to a core table or column requires a new schema version and one

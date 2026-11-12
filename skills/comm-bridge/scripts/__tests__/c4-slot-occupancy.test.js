@@ -5,7 +5,11 @@ import { once } from 'node:events';
 import Database from 'better-sqlite3';
 import { fixture } from './c4-v2-test-helpers.js';
 import { createStore } from '../c4-v2-store.js';
-import { guardDatabase } from '../sqlite-schema.js';
+import { guardDatabase, migrateDatabase } from '../sqlite-schema.js';
+// Existing layouts are migrated only by the explicit upgrade path, with the
+// options ordinary openers used before they became check-only.
+const migrateExisting = (db, candidate) => migrateDatabase(db, candidate, { allowNew: candidate.supportsNewDatabase === true, strict: false });
+
 import * as owner from '../c4-schema.js';
 import * as historicalOwner from './helpers/c4-v2-owner.js';
 import { seedV1, oldRows, snapshot } from './helpers/c4-v2-fixtures.js';
@@ -298,7 +302,7 @@ test('two concurrent connections competing for the last slot yield exactly one w
 
 test('migration adds empty occupancy with exact constraints and preserves historical rows', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db, { extensions: true });
-  const before = oldRows(db); guardDatabase(db, historicalOwner);
+  const before = oldRows(db); migrateExisting(db, historicalOwner);
   assert.equal(db.pragma('user_version', { simple: true }), 2); assert.deepEqual(oldRows(db), before);
   assert.equal(rows(db).length, 0);
   const insert = db.prepare('INSERT INTO slot_occupancy(session_group,run_id,state,held_until,created_at) VALUES(?,?,?,?,?)');
@@ -307,7 +311,7 @@ test('migration adds empty occupancy with exact constraints and preserves histor
 
 test('schema two missing occupancy is rejected without changing schema or existing rows', t => {
   const db = new Database(':memory:'); t.after(() => db.close()); seedV1(db);
-  guardDatabase(db, historicalOwner);
+  migrateExisting(db, historicalOwner);
   const store = createStore(db, { readConfig: () => ({ state: 'ok', config: { session_mode: 'multi' } }) });
   store.recordRunEnd('test:a', { runId: 'r', reason: 'unexpected' });
   db.exec('DROP TABLE slot_occupancy'); const before = snapshot(db);
