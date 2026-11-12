@@ -234,6 +234,9 @@ export function buildCleanEnv({ processEnv, dotenvVars, manifest, platform, uid,
   for (const name of PROXY_VARS) {
     if (processEnv[name]) env[name] = processEnv[name];
   }
+  if (processEnv.TMUX_TMPDIR) {
+    env.TMUX_TMPDIR = processEnv.TMUX_TMPDIR;
+  }
   if (processEnv.IS_SANDBOX) {
     env.IS_SANDBOX = processEnv.IS_SANDBOX;
   } else if (uid === 0) {
