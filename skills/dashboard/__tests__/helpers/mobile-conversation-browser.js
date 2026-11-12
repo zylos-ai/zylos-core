@@ -574,11 +574,33 @@ export async function runMobileConversationBrowser(t, sandbox) {
     } finally { await f.context.close(); }
   });
   await t.test('locale, theme and narrow mobile widths fit without overflow', async () => {
-    for (const options of [{ width: 390, locale: 'en' }, { width: 390, theme: 'dark' }, { width: 360 }, { width: 430 }, { width: 360, theme: 'dark' }, { width: 430, theme: 'dark' }]) {
+    for (const options of [{ width: 390, locale: 'en' }, { width: 360, locale: 'en' }, { width: 390 }, { width: 390, theme: 'dark' }, { width: 360 }, { width: 430 }, { width: 360, theme: 'dark' }, { width: 430, theme: 'dark' }, { width: 1280, locale: 'en' }]) {
       const f = await open(options);
       try {
-        await noOverflow(f.page); await select(f.page); await noOverflow(f.page);
-        const width = options.width, name = width === 390 ? options.locale === 'en' ? 'mobile-390-en' : 'mobile-390-dark' : `mobile-${width}-${options.theme || 'light'}`;
+        const width = options.width, locale = options.locale || 'zh', theme = options.theme || 'light';
+        await noOverflow(f.page);
+        // Check the list state before conversation focus hides the bottom navigation.
+        await shot(f.page, `navigation-${width}-${locale}-${theme}`);
+        if (width < 761) {
+          const labels = await f.page.locator('#wb-mobile-nav .wb-mobile-tab').evaluateAll(buttons => buttons.map(button => {
+            const label = button.querySelector(':scope > span'), box = button.getBoundingClientRect();
+            return { text: label.textContent, scrollWidth: label.scrollWidth, clientWidth: label.clientWidth,
+              scrollHeight: label.scrollHeight, clientHeight: label.clientHeight, width: box.width, height: box.height };
+          }));
+          if (evidence) fs.writeFileSync(path.join(evidence, `navigation-${width}-${locale}-${theme}.json`), JSON.stringify(labels, null, 2));
+          assert.equal(labels.length, 5, 'all five bottom navigation labels are present');
+          if (locale === 'en') assert.deepEqual(labels.map(label => label.text), ['Overview', 'Conversations', 'Schedule', 'Memory', 'More'], 'navigation wording stays unchanged');
+          for (const label of labels) {
+            assert.ok(label.scrollWidth <= label.clientWidth, `${width} ${locale}: ${label.text} fits horizontally ${JSON.stringify(label)}`);
+            assert.ok(label.scrollHeight <= label.clientHeight, `${width} ${locale}: ${label.text} fits vertically`);
+            assert.ok(Math.abs(label.width - width / 5) <= 1 && label.height === 56, 'navigation keeps equal-width 56px touch targets');
+          }
+        } else {
+          assert.equal(await f.page.locator('#wb-mobile-nav').isVisible(), false, 'desktop keeps its original header');
+          assert.equal(await f.page.locator('.app-header').isVisible(), true);
+        }
+        await select(f.page); await noOverflow(f.page);
+        const name = width === 390 ? locale === 'en' ? 'mobile-390-en' : theme === 'dark' ? 'mobile-390-dark' : 'mobile-390-light' : `mobile-${width}-${locale}-${theme}`;
         await shot(f.page, name);
         measurements.push({ ...options, width: await f.page.evaluate(() => document.documentElement.scrollWidth) });
         assert.deepEqual(f.errors, []);
