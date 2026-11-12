@@ -383,7 +383,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
         await page.waitForFunction(() => !document.querySelector('.conversation-send[data-action="retry"]').disabled);
         const bounds = await page.evaluate(() => {
           const read = selector => { const el = document.querySelector(selector), rect = el.getBoundingClientRect(); return { left: rect.left, right: rect.right, width: rect.width, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }; };
-          return { viewport: innerWidth, detail: read('.conversation-detail'), composer: read('.conversation-composer'), input: read('.conversation-input'), check: read('.conversation-receipt button'), retry: read('.conversation-send[data-action="retry"]'), hint: read('.conversation-mobile-retry-hint') };
+          return { viewport: innerWidth, detail: read('.conversation-detail'), composer: read('.conversation-composer'), composeBox: read('.conversation-compose-box'), input: read('.conversation-input'), check: read('.conversation-receipt button'), retry: read('.conversation-send[data-action="retry"]'), hint: read('.conversation-mobile-retry-hint') };
         });
         console.info('Retry control bounds:', JSON.stringify(bounds));
         if (evidence) fs.writeFileSync(path.join(evidence, `retry-${width}-bounds.json`), JSON.stringify(bounds, null, 2));
@@ -392,6 +392,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
           assert.ok(bounds[name].left >= 0 && bounds[name].right <= bounds.viewport, `${width}: ${name} button fits viewport: ${JSON.stringify(bounds[name])}`);
           assert.ok(bounds[name].scrollWidth <= bounds[name].clientWidth, `${width}: ${name} button text fits its control`);
         }
+        assert.ok(Math.abs(bounds.retry.left - bounds.composeBox.left) <= 1 && Math.abs(bounds.retry.right - bounds.composeBox.right) <= 1, `${width}: explicit retry spans the input area: ${JSON.stringify(bounds)}`);
         assert.ok(bounds.hint.scrollWidth <= bounds.hint.clientWidth, `${width}: complete retry hint fits its container`);
         assert.ok(bounds.hint.left >= 0 && bounds.hint.right <= bounds.viewport, `${width}: retry hint container fits viewport`);
         await page.locator('.conversation-receipt button').click({ trial: true });
