@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { startSupervisor } from '../supervisor-main.js';
+import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import * as poolReader from '../../../../cli/lib/session-pool-config.js';
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -15,7 +16,7 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch =
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify(config));
   assert.notEqual(root, process.env.ZYLOS_DIR);
   let reads = 0, observations = 0;
-  const currentScenes = initialScenes, fences = new Map(), sends = [];
+  const currentScenes = initialScenes, fences = new Map(), sends = [], controls = [];
   const diagnostics = () => {
     const file = path.join(root, 'activity-monitor', 'supervisor-events.jsonl');
     return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
@@ -30,10 +31,11 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch =
       getLastActivity: () => 0, getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
       listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: [] }),
       listPendingSessionGroups: () => [], listPendingContinuations: () => [], getOriginNeed: () => ({ inbound: { count: 0, oldestAt: null }, controls: { count: 0, oldestAt: null } }), listRunEndings: () => [],
-      getLastCompletedModeTransition: () => null, getControlById: () => null,
+      getLastCompletedModeTransition: () => null, getControlById: id => controls.find(row => row.id === id) ?? null,
+      insertControl: (content, options) => { const row = { id: controls.length + 1, content, ...options, status: 'pending' }; controls.push(row); return row; },
       resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) },
     scenes: { observe: async () => { observations++; return currentScenes.map(scene => ({ ...scene })); },
-      readIdentity: async () => ({ present: false }), observeGroup: async group => currentScenes.find(scene => scene.sessionGroup === group) ?? { present: false },
+      readIdentity: async () => ({ present: false }), bindTarget: scene => ({ expectedRunId: scene.runId }), observeGroup: async group => currentScenes.find(scene => scene.sessionGroup === group) ?? { present: false },
       listRuns: async () => [], readRun: async () => null },
     legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
     readSyncMarker: () => ({ held: false, stale: false }),
@@ -41,7 +43,7 @@ async function fixture(t, { mode = 'multi', fixed = 7, readMemory, configPatch =
     loopOptions: { schedule: () => 1, cancel: () => {} } });
   t.after(async () => { await service.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const round = async () => { await service.supervisor.loop.tick(); await flush(); };
-  return { root, service, round, logs, sends, fences, currentScenes, diagnostics, reads: () => reads, observations: () => observations,
+  return { root, service, round, logs, sends, fences, controls, currentScenes, diagnostics, reads: () => reads, observations: () => observations,
     setMode: value => { config = { ...config, session_mode: value }; },
     setFixed: value => { config = { ...config, session_pool_size: value }; },
     advance: ms => { time += ms; },
@@ -220,21 +222,32 @@ test('entry renderer failure is handled and the next capacity calculation contin
   } finally { process.off('unhandledRejection', listener); }
 });
 
-// Integration boundary: real pressure candidate -> beginReclaim -> F12 and
-// guard.notify, with effective startup eviction threshold. Run for pressure
-// wiring/idle duration changes; skip other lifecycle work. All five runner
-// paths isolated; private am.sock, in-memory DB/scenes, no tmux/PM2/network.
-// No process is stopped; only the real beginReclaim fence is observed.
+// Integration boundary: real pressure candidate -> pre-reclaim check control ->
+// its answer -> beginReclaim -> F12 and guard.notify, with effective startup
+// eviction threshold. Run for pressure wiring/idle duration/eviction check
+// changes; skip other lifecycle work. All five runner paths isolated; private
+// am.sock, in-memory DB/controls/scenes, no tmux/PM2/network. No process is
+// stopped; only the check row and the real beginReclaim fence are observed.
 test('entry pressure writes its selected group only to diagnostics', async t => {
   const group = { sessionGroup: 'private-group', present: true, ready: true, state: 'idle',
-    runId: 'private-run', sessionId: 'session', createdAt: 0, idleSince: 0, processRunning: false };
+    runId: 'private-run', sessionId: 'session', createdAt: 0, idleSince: 0, processRunning: true };
   const f = await fixture(t, { fixed: null, initialScenes: [group], configPatch: { session_evict_min_idle_seconds: 659 },
     readMemory: async () => ({ source: 'host', limitBytes: 4 * 1024 ** 3, usedBytes: 3900 * 1024 ** 2 }) });
   await flush(); f.advance(10000); await f.round(); await flush();
-  assert.equal(f.fences.get(group.sessionGroup)?.reason, 'evict');
+  assert.equal(f.fences.size, 0, 'the check control precedes the fence');
+  assert.equal(f.controls.length, 1);
+  const [check] = f.controls;
+  assert.equal(check.sessionGroup, group.sessionGroup); assert.deepEqual(check.targetBinding, { expectedRunId: group.runId });
+  assert.equal(check.requireIdle, true); assert.equal(check.content, PRE_RECLAIM_CHECK_PROMPT);
+  assert.equal(f.diagnostics().some(row => row.event === 'capacity_pressure_evict'), false);
   const notice = f.sends.find(row => row.message.includes('这台机器内存快用完了'));
   assert.ok(notice); assert.match(notice.message, /things may slow down or become unstable/);
   assert.doesNotMatch(notice.message, /private-group|private-run|4089446400/);
+  check.status = 'done';
+  f.advance(10000); await f.round(); await flush();
+  assert.equal(f.fences.get(group.sessionGroup)?.reason, 'evict');
+  assert.equal(f.controls.length, 1);
+  for (const row of f.sends) assert.doesNotMatch(row.message, /private-group|private-run/);
   const event = f.diagnostics().find(row => row.event === 'capacity_pressure_evict');
   assert.equal(event?.session_group, group.sessionGroup); assert.equal(event?.k, 1);
 });
