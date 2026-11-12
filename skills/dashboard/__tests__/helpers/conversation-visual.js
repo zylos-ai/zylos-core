@@ -105,20 +105,31 @@ export async function runConversationVisual(t, sandbox) {
     assert.equal(await page.locator('#attachmentButton').count(), 0);
     if (width === 390) {
       assert.equal(await page.locator('#wb-chat .conversation-header [data-action="refreshMessages"],#wb-chat .conversation-header [data-action="refreshStatus"]').count(), 0);
-      for (const selector of ['.conversation-back', '[data-action="rename"]', '[data-action="send"]']) {
+      // The phone header keeps back and the conversation menu; rename lives in that menu.
+      for (const selector of ['.conversation-back', '.conversation-menu-toggle', '[data-action="send"]']) {
         const control = page.locator('#wb-chat ' + selector).first();
         const box = await control.boundingBox();
         assert.ok(box && box.width >= 40 && box.height >= 40, selector + ' has a usable phone target');
       }
+      await page.locator('#wb-chat .conversation-menu-toggle').click();
+      const renameBox = await page.locator('#wb-chat .conversation-menu-rename').boundingBox();
+      assert.ok(renameBox && renameBox.width >= 40 && renameBox.height >= 40, 'menu rename has a usable phone target');
+      await page.keyboard.press('Escape');
+      await page.locator('#wb-chat .conversation-menu-rename').waitFor({ state: 'hidden' });
     }
     assert.match(await page.locator(`#wb-chat [data-conversation-id="${first.receipt.conversationId}"] .conversation-list-time`).innerText(), /\d{1,2}:\d{2}/, 'same-day older list entry uses a clock time');
     if (width === 390) {
       await page.locator('#wb-chat .conversation-back').click();
-      for (const selector of ['.conversation-tabs [data-action="mine"]', '.conversation-tabs [data-action="external"]', '[data-action="create"]']) {
+      // Phone list: "mine"/"external" are a 32px segmented control, and creating a
+      // conversation moved to the mobile navigation header.
+      for (const selector of ['.conversation-tabs [data-action="mine"]', '.conversation-tabs [data-action="external"]']) {
         const box = await page.locator('#wb-chat ' + selector).boundingBox();
-        assert.ok(box && box.height >= 40, selector + ' has a 40px phone height');
+        assert.ok(box && box.height >= 32 && box.width >= 40, selector + ' keeps the segmented phone tab size');
       }
-      await page.locator('#wb-chat [data-action="create"]').click();
+      assert.equal(await page.locator('#wb-chat [data-action="create"]').isVisible(), false);
+      const createBox = await page.locator('#wb-mobile-list-create').boundingBox();
+      assert.ok(createBox && createBox.width >= 40 && createBox.height >= 40, 'mobile create has a usable phone target');
+      await page.locator('#wb-mobile-list-create').click();
       await page.locator('#wb-chat [aria-current="true"][data-conversation-id^="d:"]').waitFor({ state: 'attached' });
       const composerBox = await page.locator('#wb-chat .conversation-input').boundingBox();
       assert.ok(composerBox && composerBox.height >= 40, 'new conversation input has a 40px phone height');
@@ -176,7 +187,8 @@ export async function runConversationVisual(t, sandbox) {
       assert.ok(measurement.firstTop >= measurement.inputTop && measurement.lastBottom <= measurement.inputBottom + 1, `${width} ${name}: all lines remain visible`);
       assert.ok(measurement.inputRight <= measurement.buttonLeft && measurement.buttonTop >= measurement.inputTop - 1 && measurement.buttonBottom <= measurement.inputBottom + 1, `${width} ${name}: send stays beside the editor`);
       if (name === 'multi-line') assert.ok(measurement.height > 4 * measurement.lineHeight, 'editor grows beyond its initial line');
-      else assert.ok(measurement.height <= 41, 'empty and one-line editors keep a one-line height (the 40px control height)');
+      // The phone editor uses the 44px mobile control height (as mobile-conversation-browser checks).
+      else assert.ok(measurement.height <= (width === 390 ? 46 : 41), 'empty and one-line editors keep a one-line height (the 40px desktop / 44px phone control height)');
       composerMeasurements.push({ width, name, ...measurement });
       await screenshot(`composer-${width}-${name}`);
     }
@@ -393,7 +405,10 @@ export async function runConversationVisual(t, sandbox) {
   await select();
   // On phones the group detail covers the screen. Its secondary actions are 40x40 icons named by their
   // aria-label, as on desktop, so no English label is cut; "View conversation" keeps its words elsewhere.
-  await groupInfo.click();
+  // The phone header opens it from the conversation menu.
+  assert.equal(await groupInfo.isVisible(), false);
+  await page.locator('#wb-chat .conversation-menu-toggle').click();
+  await page.locator('.conversation-menu-group').click();
   await groupSide.waitFor({ state: 'visible' });
   // The detail redraws its header, replacing these buttons, whenever one of its reads arrives. A locator finds
   // elements in one call and measures them in the next, so a redraw in between leaves it measuring removed
@@ -411,8 +426,10 @@ export async function runConversationVisual(t, sandbox) {
     assert.equal(action.labelWidth, 0, `${action.name}: the group detail action is an icon on a phone`);
     assert.ok(action.width >= 40 && action.height >= 40, `${action.name}: the group detail action is a 40x40 phone target (${action.width}x${action.height})`);
   }
+  // A phone group detail has only its top back button; the close action is desktop-only.
   for (const { selector, box } of sideTargets.controls) {
-    assert.ok(box && box.height >= 40, `${selector} has a usable phone target in the group detail`);
+    if (selector === '[aria-label="Close"]') assert.ok(!box || box.height === 0, 'the phone group detail has no close action');
+    else assert.ok(box && box.height >= 40, `${selector} has a usable phone target in the group detail`);
   }
   await screenshot('group-detail-390-english');
   await groupSide.locator('.wb-group-side-back').click();
@@ -575,10 +592,15 @@ export async function runConversationVisual(t, sandbox) {
   expectedDenied = true;
   await allowRemote(false);
   await page.locator('#wb-chat [data-action="refresh"]').click();
-  await page.locator('#wb-chat .conversation-blocked-notice').waitFor();
+  // A refused remote view hides the conversation tab and leaves for the overview (remote-access.js);
+  // the conversation page keeps only its fallback notice and none of the private content.
+  await page.locator('#wb-chat .conversation-blocked-notice').waitFor({ state: 'attached' });
+  await page.waitForFunction(() => document.querySelector('.tab[data-tab="chat"]').hidden
+    && document.querySelector('.tab.active')?.dataset.tab === 'overview' && !document.querySelector('#tab-overview').hidden, null, { timeout: 10_000 });
   assert.equal(await page.locator('#wb-chat .chat-message, #wb-chat .chat-composer, #wb-chat [data-conversation-id]').count(), 0);
-  assert.equal((await page.locator('#wb-chat').innerText()).includes('Compare cache approaches'), false);
-  await screenshot('remote-closed');
+  assert.equal((await page.locator('#wb-chat').textContent()).includes('Compare cache approaches'), false);
+  // The overview, unlike the conversation page, may scroll; capture it without the page-fit checks.
+  if (output) { const file = path.join(output, 'remote-closed.png'); await page.screenshot({ path: file, fullPage: false }); shots.push(file); }
   expectedDenied = false;
   // Restore the historical-only UTF-8 fixture before exercising ordinary mode conversion.
   // This page case does not claim converter support for legacy non-ASCII group keys.
