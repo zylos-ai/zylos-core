@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
+import SharedDatabase from '../../skills/comm-bridge/scripts/sqlite-driver.js';
 import { cleanupWebConsoleEnv } from './web-console-env.js';
 import { removeWebConsoleRoute } from './web-console-route.js';
 import { dashboardAccessAddress } from './dashboard-access.js';
@@ -26,7 +26,7 @@ export function webConsoleProcesses(output, skillsDir) {
 export function inspectWebConsoleTasks(zylosDir, {Database} = {}) {
   const file = path.join(zylosDir, 'scheduler/scheduler.db');
   if (!fs.existsSync(file)) return [];
-  const Driver = Database || createRequire(path.join(zylosDir, '.claude/skills/comm-bridge/package.json'))('better-sqlite3');
+  const Driver = Database || SharedDatabase;
   const db = new Driver(file, {readonly:true, fileMustExist:true});
   try {
     return db.prepare("SELECT id FROM tasks WHERE reply_channel = 'web-console' OR session_component = 'web-console'").all().map(row => String(row.id));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
+import Database from '../../../skills/comm-bridge/scripts/sqlite-driver.js';
 import { finalizeWebConsoleRemoval, webConsoleProcesses, inspectWebConsoleTasks, webConsoleRemovalNotice } from '../web-console-finalize.js';
 import { completeUpgradeFinalization, step11_startCoreServices, step12_verifyServices } from '../self-upgrade.js';
 import { startServicesWithDashboard } from '../../commands/init.js';
@@ -126,14 +126,15 @@ for (const scenario of ['unrecognized route', 'deploy failure', 'read failure'])
 test('scheduler inspection reads both legacy destinations without changing database bytes', t => {
   const root = fixture(t), file = path.join(root, 'scheduler/scheduler.db');
   fs.mkdirSync(path.dirname(file));
-  const Database = createRequire(new URL('../../../skills/comm-bridge/package.json', import.meta.url))('better-sqlite3');
   const db = new Database(file);
   db.exec("CREATE TABLE tasks (id TEXT, session_component TEXT, reply_channel TEXT); INSERT INTO tasks VALUES ('reply-only','origin','web-console'),('session-only','web-console','lark'),('unrelated','dashboard','lark');");
   db.close();
   const before = fs.readFileSync(file);
-  const ids = inspectWebConsoleTasks(root, {Database});
-  assert.deepEqual(ids, ['reply-only', 'session-only']);
-  assert.equal(fs.readFileSync(file).equals(before), true);
+  for (const options of [undefined, {Database}]) {
+    const ids = inspectWebConsoleTasks(root, options);
+    assert.deepEqual(ids, ['reply-only', 'session-only']);
+    assert.equal(fs.readFileSync(file).equals(before), true);
+  }
 });
 
 function finalizationDeps(calls, extras = {}) {
