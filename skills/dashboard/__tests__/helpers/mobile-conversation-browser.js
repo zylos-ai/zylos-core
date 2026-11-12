@@ -12,16 +12,18 @@ const ID = 'g:' + Buffer.from(GROUP).toString('hex').toUpperCase();
 const EXT_ID = 'g:' + Buffer.from(EXTERNAL).toString('hex').toUpperCase();
 const ORIGIN_ID = 'g:' + Buffer.from('origin').toString('hex').toUpperCase();
 const NOW = Date.UTC(2026, 10, 12, 5, 30);
+const DEFAULT_TITLE = '发布流程核对';
+const LONG_TITLE = '发布流程核对'.repeat(7).slice(0, 40);
 const iso = offset => new Date(NOW + offset).toISOString();
 
 // Fixed existing API contracts over private loopback: the real entry/modules/styles
 // render them. No database, runtime, channel, outbound request or backend extension.
 async function startPage(sandbox, publicDir) {
-  let scene = 'idle', connected = true, observerBlocked = false, sessionMode = 'multi';
+  let scene = 'idle', connected = true, observerBlocked = false, sessionMode = 'multi', title = DEFAULT_TITLE;
   const streams = new Set(), missing = new Set(), actions = [];
   const conversation = id => ({ id, localId: 'mobile-browser', sessionGroup: id === EXT_ID ? EXTERNAL : id === ORIGIN_ID ? 'origin' : GROUP,
-    channel: id === EXT_ID ? 'telegram' : 'dashboard', state: 'active', displayName: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : '发布流程核对',
-    display_name: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : '发布流程核对', origin: id === ORIGIN_ID });
+    channel: id === EXT_ID ? 'telegram' : 'dashboard', state: 'active', displayName: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : title,
+    display_name: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : title, origin: id === ORIGIN_ID });
   const messages = [{ id: 1, direction: 'in', channel: 'dashboard', content: '发版流程改好了吗？', timestamp: iso(-5 * 60000), status: 'delivered' },
     { id: 2, direction: 'out', channel: 'dashboard', content: '改好了，新流程是这样：\n\n1. 推 server 的 tag，流水线自动打包\n2. 测试服先装，冒烟通过再正常升级\n3. 服务端升好后，再发布 App\n\n本地不再编译，也不用再手动传包。\n\n**已验证：** 打包结果与之前的内容一致。\n\n**还没验证：** 真正的流水线发版要等第一次推 tag 才会跑。', timestamp: iso(-2 * 60000), status: 'sent' }];
   const answer = url => {
@@ -42,7 +44,7 @@ async function startPage(sandbox, publicDir) {
     if (p === '/api/fleet/agents') return { self: { name: 'luna' }, agents: [] };
     if (p === '/api/workbench/groups') {
       const value = workbenchAnswer(url, NOW), row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
-      row.sessionGroup = GROUP; row.name = { displayName: '发布流程核对' }; row.state = { kind: 'idle' }; row.tools = [];
+      row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: 'idle' }; row.tools = [];
       row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
       row.working = { on: scene === 'running', since: scene === 'running' ? NOW - 3 * 60000 : null, turn: scene === 'running' ? { since: NOW - 3 * 60000 } : null, tools: 0, subagents: null };
       value.rows = [row, { ...row, sessionGroup: 'origin', origin: true, name: null, working: { on: false, since: null, turn: null, tools: 0, subagents: null } }];
@@ -85,7 +87,7 @@ async function startPage(sandbox, publicDir) {
   });
   sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
   return { base: await sandbox.startHttp(server), missing, actions,
-    setScene(value) { scene = value; }, reconnect() { connected = true; }, setSessionMode(value) { sessionMode = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
+    setScene(value) { scene = value; }, setTitle(value) { title = value; }, reconnect() { connected = true; }, setSessionMode(value) { sessionMode = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
 }
 
 export async function runMobileConversationBrowser(t, sandbox) {
@@ -99,8 +101,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   const captures = [], measurements = [];
-  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi' } = {}) => {
-    fixture.reconnect(); fixture.setScene(scene); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
+  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE } = {}) => {
+    fixture.reconnect(); fixture.setScene(scene); fixture.setTitle(title); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
     const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC' });
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
@@ -128,6 +130,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
     { width: 1280, scene: 'running', name: 'header-1280-running' },
     { width: 1280, disconnected: true, name: 'header-1280-polling' },
     { width: 390, name: 'header-390-mobile' },
+    { width: 1280, title: LONG_TITLE, scene: 'running', disconnected: true, name: 'header-1280-long-title' },
+    { width: 900, title: LONG_TITLE, scene: 'running', disconnected: true, name: 'header-900-long-title' },
   ];
   const prepareHeader = async (page, options) => {
     await select(page);
@@ -177,11 +181,13 @@ export async function runMobileConversationBrowser(t, sandbox) {
     const headerMetrics = async page => page.evaluate(() => {
       const box = selector => {
         const el = document.querySelector(selector), r = el.getBoundingClientRect(), css = getComputedStyle(el);
+        const range = document.createRange(); range.selectNodeContents(el);
         return { x: r.x, y: r.y, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height,
+          textRight: range.getBoundingClientRect().right,
           scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, whiteSpace: css.whiteSpace, overflow: css.overflow,
           textOverflow: css.textOverflow, fontSize: Number.parseFloat(css.fontSize), text: el.textContent, title: el.title, role: el.getAttribute('role') };
       };
-      return { viewport: innerWidth, header: box('.conversation-header'), title: box('.conversation-title-line'),
+      return { viewport: innerWidth, header: box('.conversation-header'), title: box('.conversation-title-line'), titleText: box('.conversation-title-line h2'),
         subtitle: box('.conversation-subtitle'), running: box('.conversation-running'),
         push: box('.conversation-push-status'), group: box('.conversation-header-actions > .wb-btn') };
     });
@@ -207,7 +213,21 @@ export async function runMobileConversationBrowser(t, sandbox) {
       try {
         await prepareHeader(page, options);
         if (options.width > 760) {
-          const m = await headerMetrics(page); compact(m);
+          const m = await headerMetrics(page);
+          console.info('Header scene metrics:', JSON.stringify({ name: options.name, ...m }));
+          compact(m);
+          if (options.width === 1280 && !options.title) {
+            assert.ok(m.group.x - m.push.textRight <= 16, 'connection text stays beside group details on a wide screen');
+            assert.ok(m.titleText.scrollWidth <= m.titleText.clientWidth, 'short title remains complete');
+          }
+          if (options.title) {
+            assert.equal(m.titleText.text.length, 40, 'fixture supplies a long title');
+            assert.ok(m.titleText.scrollWidth > m.titleText.clientWidth, 'long title exercises truncation pressure');
+            assert.ok(m.push.scrollWidth > m.push.clientWidth, 'connection hint yields space before a long title');
+          }
+          if (m.titleText.scrollWidth > m.titleText.clientWidth) {
+            assert.ok(m.push.scrollWidth > m.push.clientWidth, 'title only truncates after the connection hint is truncated');
+          }
           measurements.push({ name: options.name, ...m });
           assert.equal(await page.locator('#wb-mobile-nav').isVisible(), false);
           assert.equal(await page.locator('.conversation-menu-toggle').isVisible(), false);
@@ -228,6 +248,16 @@ export async function runMobileConversationBrowser(t, sandbox) {
         assert.deepEqual(f.errors, []);
       } finally { await f.context.close(); }
     }
+    const medium = await open({ width: 1280, title: LONG_TITLE.slice(0, 20), scene: 'running' });
+    try {
+      await prepareHeader(medium.page, { scene: 'running', disconnected: true });
+      const m = await headerMetrics(medium.page); compact(m);
+      measurements.push({ name: 'header-medium-title', ...m });
+      if (m.titleText.scrollWidth > m.titleText.clientWidth) {
+        assert.ok(m.push.scrollWidth > m.push.clientWidth, 'medium title only truncates after connection hint truncation');
+      }
+      assert.deepEqual(medium.errors, []);
+    } finally { await medium.context.close(); }
     for (const width of [900, 761]) {
       const f = await open({ width, scene: 'running' }), page = f.page;
       try {

@@ -1636,7 +1636,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-load-more { margin:4px 0 16px; }
 
   .conversation-page .conversation-header { display:grid; grid-template-columns:44px minmax(0,1fr) 44px; grid-template-rows:52px auto auto; gap:0; padding:0 4px; min-height:52px; background:var(--nav-bg); }
-  .conversation-page .conversation-header .conversation-heading { display:contents; }
+  .conversation-page .conversation-header :is(.conversation-heading,.conversation-title-row) { display:contents; }
   .conversation-page .conversation-header :is(.conversation-list-toggle,.conversation-channel-icon,.conversation-subtitle) { display:none; }
   .conversation-page .conversation-back { grid-column:1; grid-row:1; }
   .conversation-page .conversation-title-line { grid-column:2; grid-row:1; height:52px; padding:0 4px; gap:8px; }
@@ -1694,23 +1694,15 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .wb-group-side-mobile-title { display:block; min-width:0; font-size:16px; font-weight:600; }
 }
 
-/* Keep desktop status controls on the title row; the source occupies row two. */
+/* The title absorbs spare space; status actions stay together at content width. */
 @media (min-width:761px) {
-  .conversation-page .conversation-header {
-    display:grid;
-    grid-template-columns:auto auto minmax(0,2fr) auto minmax(0,1fr) auto;
-    grid-template-rows:28px auto;
-    column-gap:10px;
-    row-gap:3px;
-    padding:8px 16px;
-  }
-  .conversation-page .conversation-header :is(.conversation-heading,.conversation-header-actions) { display:contents; }
-  .conversation-page .conversation-list-toggle { grid-column:1; grid-row:1 / 3; }
-  .conversation-page .conversation-channel-icon { grid-column:2; grid-row:1 / 3; }
-  .conversation-page .conversation-title-line { grid-column:3; grid-row:1; height:28px; }
-  .conversation-page .conversation-subtitle { grid-column:3 / -1; grid-row:2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .conversation-page .conversation-header .conversation-running { grid-column:4; grid-row:1; align-self:center; height:28px; min-width:max-content; margin:0; }
-  .conversation-page .conversation-push-status { grid-column:5; grid-row:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .conversation-page .conversation-header .conversation-header-actions>.wb-btn { grid-column:6; grid-row:1; width:auto; height:28px; padding:0 7px; gap:5px; font-size:11.5px; white-space:nowrap; }
+  .conversation-page .conversation-header { padding:8px 16px; }
+  .conversation-page .conversation-title-row { display:flex; align-items:center; gap:10px; min-width:0; height:28px; }
+  .conversation-page .conversation-title-line { flex:1 1 auto; min-width:0; height:28px; }
+  .conversation-page .conversation-header-actions { display:contents; }
+  .conversation-page .conversation-subtitle { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .conversation-page .conversation-header .conversation-running { flex:none; align-self:center; height:28px; min-width:max-content; margin:0; }
+  .conversation-page .conversation-push-status { flex:0 1 auto; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .conversation-page .conversation-header .conversation-header-actions>.wb-btn { flex:none; width:auto; height:28px; padding:0 7px; gap:5px; font-size:11.5px; white-space:nowrap; }
   .conversation-page .conversation-header .conversation-header-actions .wb-ico { width:13px; height:13px; }
 }

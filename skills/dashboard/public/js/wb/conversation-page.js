@@ -307,7 +307,8 @@ export function mountConversationPage({
   const connectionDot = node('span', undefined, 'conversation-connection-dot');
   connectionDot.setAttribute('aria-hidden', 'true');
   titleLine.append(title, connectionDot, renameToggle);
-  heading.append(titleLine, subtitle);
+  const titleRow = node('div', undefined, 'conversation-title-row');
+  heading.append(titleRow, subtitle);
   const streamHint = node('span', undefined, 'conversation-push-status');
   streamHint.setAttribute('role', 'status');
   const headerActions = node('div', undefined, 'conversation-header-actions');
@@ -316,13 +317,14 @@ export function mountConversationPage({
   menuToggle.setAttribute('aria-haspopup', 'dialog');
   menuToggle.setAttribute('aria-expanded', 'false');
   headerActions.append(running, streamHint, group, menuToggle);
+  titleRow.append(titleLine, headerActions);
   // Collapses the conversation list on wider screens; remembered like the dashboard's other view preferences.
   const listToggle = action('chat.page.hideList', () => toggleList(), 'menu', 'wb-icon-btn conversation-list-toggle');
   listToggle.dataset.action = 'listToggle';
   const listEntry = actions.at(-1);
   let listCollapsed = false;
   try { listCollapsed = storage?.getItem(LIST_KEY) === 'collapsed'; } catch {}
-  header.append(listToggle, back, headerIcon, heading, headerActions);
+  header.append(listToggle, back, headerIcon, heading);
   const renameForm = node('form', undefined, 'conversation-rename');
   renameForm.hidden = true;
   const renameInput = node('input', undefined, 'wb-input');
