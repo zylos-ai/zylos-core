@@ -70,7 +70,7 @@ for (const locale of ['en', 'zh']) {
         const line = header(f.root);
         assert.equal(line.hidden, false);
         const caption = line.querySelector('.wi-ind-text').textContent;
-        assert.ok(caption === f.translations[key] || caption.startsWith(f.translations[key] + ' · '), caption);
+        assert.equal(caption, f.translations[key]);
         assert.equal(line.dataset.state, options.working.on ? 'busy' : 'idle');
         assert.equal(line.classList.contains('conversation-restricted'), false);
       });

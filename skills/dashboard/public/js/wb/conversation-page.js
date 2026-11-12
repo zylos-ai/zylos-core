@@ -1,4 +1,4 @@
-import { workingParts, workingText } from './working-display.js?v=3';
+import { workingParts, workingText } from './working-display.js?v=4';
 import { createUploadTray } from './chat-upload-tray.js?v=2';
 import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
@@ -9,7 +9,7 @@ import { createConversationState, isOriginConversation } from './conversation-st
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=159';
-import { createGroupSide } from './group-side.js?v=167';
+import { createGroupSide } from './group-side.js?v=168';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=5';
@@ -84,7 +84,7 @@ export function mountConversationPage({
   const activityOpen = new Map(),
     trailingActivity = new Map(),
     activityEntries = new Map();
-  let workingClock = null, settleTimer = null;
+  let settleTimer = null;
   let activityTimer = null,
     followAfterGesture = false,
     growthDuringGesture = 0,
@@ -586,25 +586,22 @@ export function mountConversationPage({
     const wasBusy = running.dataset.state === 'busy';
     running.dataset.state = asleep ? 'asleep' : exceptional ? restricted ? 'restricted' : 'waiting' : working?.on ? 'busy' : 'idle';
     // Asleep shows one word; the explanation (a message wakes it, the first reply is slower) is in the tooltip.
-    const now = Date.now();
     const description = asleep ? t('chat.page.origin.asleepShort') : exceptional ? t('chat.page.' + headerLabel
       + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : ''))
-      : workingText(working, { t, now, scheduled: origin && s.groupProcessing === 'scheduled_task' });
+      : workingText(working, { t, scheduled: origin && s.groupProcessing === 'scheduled_task' });
     const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
     if (!exceptional && working?.on) mark.classList.add('wi-spin');
-    const captionParts = !asleep && !exceptional ? workingParts(working, { t, now,
+    const captionParts = !asleep && !exceptional ? workingParts(working, { t,
       scheduled: origin && s.groupProcessing === 'scheduled_task' }) : null;
     const caption = node('span', captionParts?.main ?? description, 'wi-ind-text wi-ind-desktop');
-    if (captionParts?.duration) caption.append(node('span', ' · ' + captionParts.duration, 'wi-ind-dur'));
     if (captionParts?.children) caption.append(node('span', ' · ' + captionParts.children, 'wi-ind-sub'));
-    const mobileCaption = !exceptional && working?.on ? workingParts(working, { t, now,
+    const mobileCaption = !exceptional && working?.on ? workingParts(working, { t,
       scheduled: origin && s.groupProcessing === 'scheduled_task', compact: true }) : null;
     const compact = mobileCaption ? node('span', mobileCaption.main, 'wi-ind-text wi-ind-mobile') : null;
-    if (mobileCaption?.duration) compact.append(node('span', ' · ' + mobileCaption.duration, 'wi-ind-dur'));
     const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev');
     const existingComet = [...running.children].find(child => child.classList.contains('wi-comet'));
     if (!exceptional && working?.on && existingComet) {
-      // The one-second clock refreshes the caption without restarting the border animation.
+      // Snapshot updates refresh the caption without restarting the border animation.
       for (const child of [...running.children]) if (child !== existingComet) child.remove();
       running.append(mark, caption, ...(compact ? [compact] : []), chevron);
     } else {
@@ -630,11 +627,6 @@ export function mountConversationPage({
     } else if (!working || working.on) {
       running.classList.remove('wi-settle');
     }
-    const ticking = opened && !page.hidden && working?.on;
-    if (ticking && workingClock === null && view?.setInterval) workingClock = view.setInterval(() => {
-      if (!destroyed && !document.hidden) updateWorkingIndicator(currentSnapshot);
-    }, 1000);
-    if (!ticking && workingClock !== null) { view?.clearInterval(workingClock); workingClock = null; }
   }
   function toggleGroupSide() {
     if (!groupSide) return;
@@ -1771,8 +1763,6 @@ export function mountConversationPage({
     close() {
       autoSelectPending = false;
       opened = false;
-      if (workingClock !== null) view?.clearInterval(workingClock);
-      workingClock = null;
       deletion.invalidate();
       deletionResult = null;
       groupSide?.close({ focus: false });
@@ -1796,9 +1786,8 @@ export function mountConversationPage({
       gesture.destroy();
       quoteGesture.destroy();
       annotations.destroy();
-      if (workingClock !== null) view?.clearInterval(workingClock);
       if (settleTimer !== null) view?.clearTimeout(settleTimer);
-      workingClock = settleTimer = null;
+      settleTimer = null;
       if (activityTimer !== null) view?.clearInterval(activityTimer);
       activityTimer = null;
       if (fitFrame !== null) {

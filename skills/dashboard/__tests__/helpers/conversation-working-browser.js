@@ -132,6 +132,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     await wait(async () => (await indicator(page).textContent()).includes(expected), `indicator shows ${expected}`);
     assert.match(await indicator(page).getAttribute('title'), locale === 'zh' ? /点按查看时间线/ : /timeline/i);
     assert.match(await indicator(page).getAttribute('aria-label'), locale === 'zh' ? /点按查看时间线/ : /timeline/i);
+    for (const value of [await indicator(page).innerText(), await indicator(page).getAttribute('title'), await indicator(page).getAttribute('aria-label')]) assert.doesNotMatch(value, /分钟|小时|\bminutes?\b|\bhours?\b|\d+h|\d+ min/);
   };
   const shot = async (page, name, { moving = false } = {}) => {
     await page.evaluate(() => document.fonts.ready);
@@ -162,7 +163,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     // Unknown health wording exists before the optional group read makes it visible.
     await indicator(page).locator('.wi-ind-desktop').waitFor({ state: 'visible' });
     assert.equal(await indicator(page).locator('.wi-ind-desktop').isVisible(), true, 'full caption is visible on desktop');
-    assert.equal((await indicator(page).innerText()).replace(/\s+/g, ' ').trim(), expected, 'desktop visibly keeps the complete original wording');
+    assert.equal((await indicator(page).innerText()).replace(/\s+/g, ' ').trim(), expected, 'desktop caption omits elapsed time');
     assert.equal(await indicator(page).locator('.wi-ind-mobile').isVisible(), false, 'compact caption does not duplicate desktop text');
   };
   const checkPhonePill = async (page, expected, { longTitle = false } = {}) => {
@@ -220,7 +221,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     if (await page.locator('html').getAttribute('data-theme') === 'light') assert.equal(m.color, 'rgb(82, 97, 112)');
     assert.equal(m.background, m.expectedBackground); assert.equal(m.weight, '450'); assert.equal(m.fontSize, '13px');
   };
-  const scenes = { main: '正在工作 · 3 分钟', both: '正在工作 · 3 分钟 · 后台子任务 2 个', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲', rate: '服务受限，恢复后自动投递', auth: '需要认证', queue: '排队中', starting: '会话启动中', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
+  const scenes = { main: '正在工作', both: '正在工作 · 后台子任务 2 个', sub: '后台子任务 2 个', idle: '空闲', rate: '服务受限，恢复后自动投递', auth: '需要认证', queue: '排队中', starting: '会话启动中', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
   let failed = false;
   for (const width of [1280, 390]) for (const theme of ['light', 'dark']) for (const [scene, expected] of Object.entries(scenes)) {
     await t.test(`${width} ${theme} ${scene}: mounted conversation shows the group working state`, async () => {
@@ -234,7 +235,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           assert.equal(spinning, ['main', 'both', 'sub'].includes(scene) ? 1 : 0);
           await checkComet(f.page, ['main', 'both', 'sub'].includes(scene));
           if (width <= 760 && ['main', 'both', 'sub'].includes(scene)) {
-            await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : '正在工作 · 3 分钟');
+            await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : '正在工作');
           }
           if (width <= 760 && scene === 'idle') {
             assert.equal(await indicator(f.page).isVisible(), false);
@@ -263,7 +264,11 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     const f = await open({ clock: true });
     try {
       await checkText(f.page, '正在工作'); const before = fixture.counts.groups;
-      await f.page.clock.fastForward(4999); assert.equal(fixture.counts.groups, before);
+      await indicator(f.page).locator('.wi-ind-desktop').evaluate(node => { window.beforePollingCaption = node; });
+      await f.page.clock.fastForward(4000);
+      assert.equal(await indicator(f.page).locator('.wi-ind-desktop').evaluate(node => node === window.beforePollingCaption), true,
+        'the caption is not rebuilt by a per-second clock before the busy poll');
+      await f.page.clock.fastForward(999); assert.equal(fixture.counts.groups, before);
       await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups === before + 1, 'busy reads at five seconds');
       fixture.setScene('idle'); await f.page.clock.fastForward(5000); await checkText(f.page, '空闲');
       assert.equal(await indicator(f.page).locator('.wi-spin').count(), 0);
@@ -338,9 +343,9 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     await t.test(`${width} ${theme} ${scene}: long title preserves the compact pill`, async () => {
       const f = await open({ width, theme, scene, title: '工作状态标题'.repeat(7).slice(0, 40), clock: true });
       try {
-        await checkText(f.page, ({ main: '正在工作 · 3 分钟', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲' })[scene]);
+        await checkText(f.page, ({ main: '正在工作', sub: '后台子任务 2 个', idle: '空闲' })[scene]);
         if (scene !== 'idle') {
-          await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : '正在工作 · 3 分钟', { longTitle: true });
+          await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : '正在工作', { longTitle: true });
           const box = await indicator(f.page).boundingBox();
           await f.page.mouse.click(box.x + box.width / 2, box.y - 8);
           await f.page.locator('#wb-chat .wb-group-side .wi-now').waitFor();
@@ -357,12 +362,12 @@ export async function runConversationWorkingBrowser(t, sandbox) {
   }
   // Boundary: rendered compact wording, caption geometry and desktop/mobile breakpoint.
   // Run for phone wording/header changes; unrelated backend work may skip.
-  // Fixed snapshots preserve duration, scheduled-origin selection and child counts.
+  // Fixed snapshots vary turn age while preserving scheduled-origin selection and child counts.
   const compactCases = [
-    { scene: 'main-long', zh: '正在工作 · 2 小时 1 分', en: 'Working · 2h 1m', fullZh: '正在工作 · 2 小时 1 分钟', fullEn: 'Working · 2 hours 1 minute' },
-    { scene: 'scheduled-short', zh: '定时任务 · 3 分钟', en: 'Scheduled · 3 min', fullZh: '正在执行定时任务 · 3 分钟', fullEn: 'Running a scheduled task · 3 minutes' },
-    { scene: 'scheduled-long', zh: '定时任务 · 1 小时 5 分', en: 'Scheduled · 1h 5m', fullZh: '正在执行定时任务 · 1 小时 5 分钟', fullEn: 'Running a scheduled task · 1 hour 5 minutes' },
-    { scene: 'sub', zh: '后台子任务 2 个', en: '2 subtasks', fullZh: '后台子任务 2 个 · 13 分钟', fullEn: '2 background tasks · 13 minutes' },
+    { scene: 'main-long', zh: '正在工作', en: 'Working', fullZh: '正在工作', fullEn: 'Working' },
+    { scene: 'scheduled-short', zh: '定时任务', en: 'Scheduled', fullZh: '正在执行定时任务', fullEn: 'Running a scheduled task' },
+    { scene: 'scheduled-long', zh: '定时任务', en: 'Scheduled', fullZh: '正在执行定时任务', fullEn: 'Running a scheduled task' },
+    { scene: 'sub', zh: '后台子任务 2 个', en: '2 subtasks', fullZh: '后台子任务 2 个', fullEn: '2 background tasks' },
   ];
   for (const width of [360, 390]) for (const locale of ['zh', 'en']) for (const item of compactCases) {
     await t.test(`${width} ${locale} ${item.scene}: compact wording preserves the complete label`, async () => {
@@ -408,18 +413,25 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       assert.equal(await indicator(f.page).evaluate(node => node.classList.contains('wi-settle')), false);
     } finally { await f.context.close(); }
   });
-  await t.test('border light moves along its SVG path', async () => {
+  await t.test('border light continues along its SVG path across a working refresh', async () => {
     const f = await open();
     try {
       await checkText(f.page, '正在工作'); await checkComet(f.page, true);
-      await indicator(f.page).locator('.wi-comet').evaluate(node => { window.originalComet = node; });
-      await new Promise(resolve => setTimeout(resolve, 1150));
+      const originalTime = await indicator(f.page).locator('.wi-comet').evaluate(node => {
+        window.originalComet = node;
+        return node.querySelector('rect').getAnimations()[0]?.currentTime;
+      });
+      assert.ok(Number.isFinite(originalTime), 'initial comet animation has a timeline');
+      const reads = fixture.counts.groups;
+      fixture.setScene('both');
+      await wait(() => fixture.counts.groups > reads, 'busy polling fetches the changed working snapshot');
+      await checkText(f.page, '正在工作 · 后台子任务 2 个');
       const continuity = await indicator(f.page).locator('.wi-comet').evaluate(node => ({
         sameNode: node === window.originalComet,
         time: node.querySelector('rect').getAnimations()[0]?.currentTime,
       }));
-      assert.equal(continuity.sameNode, true, 'one-second label refresh preserves the animated SVG');
-      assert.ok(continuity.time > 1000, 'comet animation continues beyond a label refresh');
+      assert.equal(continuity.sameNode, true, 'polled snapshot refresh preserves the animated SVG while the caption changes');
+      assert.ok(continuity.time > originalTime + 1000, 'comet animation time continues across the five-second busy refresh');
       const rect = indicator(f.page).locator('.wi-comet rect').first();
       const before = await rect.evaluate(node => parseFloat(getComputedStyle(node).strokeDashoffset));
       await shot(f.page, 'motion-before', { moving: true });

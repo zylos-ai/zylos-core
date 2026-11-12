@@ -157,7 +157,7 @@ test('working detail duration starts at the earliest current work without changi
   assert.equal(allNodes(head).find(node => node.classList.contains('wb-dur'))?.textContent, '12m');
 });
 
-test('working English text uses singular task hour and minute labels', async () => {
+test('working captions keep singular task labels without elapsed time', async () => {
   const fs = await import('node:fs');
   const { workingText } = await import('../public/js/wb/working-display.js');
   const labels = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
@@ -165,9 +165,8 @@ test('working English text uses singular task hour and minute labels', async () 
   const now = 10 * 3600000;
   const working = { on: true, since: now - 65 * 60000, turn: null, tools: 0,
     subagents: { count: 1, since: now - 65 * 60000, lastActivityAt: now } };
-  assert.equal(workingText(working, { now, t: translate }), '1 background task · 1 hour 5 minutes');
-  assert.equal(workingText({ ...working, turn: { since: now - 60000 }, subagents: null }, { now, t: translate }), 'Working · 1 minute');
-  assert.equal(workingText({ ...working, turn: { since: now - 121 * 60000 }, subagents: null }, { now, t: translate }), 'Working · 2 hours 1 minute');
+  assert.equal(workingText(working, { t: translate }), '1 background task');
+  assert.equal(workingText({ ...working, turn: { since: now - 60000 }, subagents: null }, { t: translate }), 'Working');
 });
 
 test('the working line names a scheduled task only for a turn known to be one', async () => {
@@ -177,45 +176,30 @@ test('the working line names a scheduled task only for a turn known to be one', 
   const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
   const now = 10 * 3600000, turn = { since: now - 60000 };
   const children = { count: 2, since: now - 120000, lastActivityAt: now };
-  assert.equal(workingText({ on: true, turn, subagents: null }, { now, t: translate, scheduled: true }), 'Running a scheduled task · 1 minute');
-  assert.equal(workingText({ on: true, turn, subagents: children }, { now, t: translate, scheduled: true }), 'Running a scheduled task · 1 minute · 2 background tasks');
+  assert.equal(workingText({ on: true, turn, subagents: null }, { t: translate, scheduled: true }), 'Running a scheduled task');
+  assert.equal(workingText({ on: true, turn, subagents: children }, { t: translate, scheduled: true }), 'Running a scheduled task · 2 background tasks');
   // Only background tasks left: the turn is over, so the scheduled wording does not apply.
-  assert.equal(workingText({ on: true, turn: null, subagents: children }, { now, t: translate, scheduled: true }), '2 background tasks · 2 minutes');
-  assert.equal(workingText({ on: false }, { now, t: translate, scheduled: true }), labels['wb.state.idle']);
+  assert.equal(workingText({ on: true, turn: null, subagents: children }, { t: translate, scheduled: true }), '2 background tasks');
+  assert.equal(workingText({ on: false }, { t: translate, scheduled: true }), labels['wb.state.idle']);
 });
 
-for (const locale of ['zh', 'en']) {
-  const chinese = locale === 'zh';
-  const cases = [
-    { name: 'three minute main turn', minutes: 3, compactMain: chinese ? '正在工作' : 'Working',
-      compactDuration: chinese ? '3 分钟' : '3 min', full: chinese ? '正在工作 · 3 分钟 · 后台子任务 2 个' : 'Working · 3 minutes · 2 background tasks' },
-    { name: 'one hour main turn', minutes: 65, compactMain: chinese ? '正在工作' : 'Working',
-      compactDuration: chinese ? '1 小时 5 分' : '1h 5m', full: chinese ? '正在工作 · 1 小时 5 分钟 · 后台子任务 2 个' : 'Working · 1 hour 5 minutes · 2 background tasks' },
-    { name: 'two hour main turn', minutes: 121, compactMain: chinese ? '正在工作' : 'Working',
-      compactDuration: chinese ? '2 小时 1 分' : '2h 1m', full: chinese ? '正在工作 · 2 小时 1 分钟 · 后台子任务 2 个' : 'Working · 2 hours 1 minute · 2 background tasks' },
-    { name: 'three minute scheduled turn', minutes: 3, scheduled: true, compactMain: chinese ? '定时任务' : 'Scheduled',
-      compactDuration: chinese ? '3 分钟' : '3 min', full: chinese ? '正在执行定时任务 · 3 分钟 · 后台子任务 2 个' : 'Running a scheduled task · 3 minutes · 2 background tasks' },
-    { name: 'one hour scheduled turn', minutes: 65, scheduled: true, compactMain: chinese ? '定时任务' : 'Scheduled',
-      compactDuration: chinese ? '1 小时 5 分' : '1h 5m', full: chinese ? '正在执行定时任务 · 1 小时 5 分钟 · 后台子任务 2 个' : 'Running a scheduled task · 1 hour 5 minutes · 2 background tasks' },
-    { name: 'background tasks without a main turn', minutes: 65, scheduled: true, subonly: true,
-      compactMain: chinese ? '后台子任务 2 个' : '2 subtasks', compactDuration: null,
-      full: chinese ? '后台子任务 2 个 · 1 小时 5 分钟' : '2 background tasks · 1 hour 5 minutes' },
-  ];
-  for (const example of cases) test(`compact working parts preserve full wording for ${example.name} in ${locale}`, async () => {
-    const fs = await import('node:fs');
-    const { workingParts, workingText } = await import('../public/js/wb/working-display.js');
-    const labels = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
-    const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
-    const now = 10 * 3600000, since = now - example.minutes * 60000;
-    const working = { on: true, since, turn: example.subonly ? null : { since },
-      subagents: { count: 2, since, lastActivityAt: now } };
-    const options = { now, t: translate, scheduled: example.scheduled };
-    const compact = workingParts(working, { ...options, compact: true });
-    assert.equal(compact.main, example.compactMain);
-    assert.equal(compact.duration, example.compactDuration);
-    assert.equal(compact.children, null, 'the compact main turn omits the background suffix');
-    assert.equal(workingText(working, options), example.full, 'desktop and accessible wording stays complete');
-    const full = workingParts(working, options);
-    assert.equal([full.main, full.duration, full.children].filter(Boolean).join(' · '), example.full);
-  });
-}
+for (const locale of ['zh', 'en']) test(`working captions omit elapsed time in ${locale}`, async () => {
+  const fs = await import('node:fs');
+  const { workingParts, workingText } = await import('../public/js/wb/working-display.js');
+  const labels = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+  const t = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
+  const zh = locale === 'zh', now = 10 * 3600000;
+  for (const minutes of [0, 3, 65, 121]) for (const scheduled of [false, true]) {
+    const since = now - minutes * 60000;
+    const working = { on: true, turn: { since }, subagents: { count: 2, since } };
+    const options = { t, scheduled };
+    const main = scheduled ? (zh ? '正在执行定时任务' : 'Running a scheduled task') : (zh ? '正在工作' : 'Working');
+    const children = zh ? '后台子任务 2 个' : '2 background tasks';
+    assert.deepEqual(workingParts(working, options), { main, children });
+    assert.equal(workingText(working, options), `${main} · ${children}`);
+    const compactMain = scheduled ? (zh ? '定时任务' : 'Scheduled') : (zh ? '正在工作' : 'Working');
+    assert.deepEqual(workingParts(working, { ...options, compact: true }), { main: compactMain, children: null });
+    assert.deepEqual(workingParts({ ...working, turn: null }, { ...options, compact: true }), {
+      main: zh ? '后台子任务 2 个' : '2 subtasks', children: null });
+  }
+});
