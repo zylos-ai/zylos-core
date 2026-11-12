@@ -183,8 +183,18 @@ The CLI checks for updates and prepares analysis metadata. JSON output includes:
 - `current`, `latest`, `hasUpdate` — version info
 - `changelog` — filtered changelog text
 - `localChanges` — local modifications to core skills
+- `pendingMigrations` — only when `hasUpdate` is `false` and live databases are
+  older than the installed code: one entry per database (`source`,
+  `fromVersion`, `toVersion`). The check exits non-zero if the database probe
+  itself fails.
 
-**If already at latest version, inform user and stop.**
+**If already at latest version:**
+- `pendingMigrations` present: no new release, but these databases still need
+  migrating. Tell the user which databases (`source`, `fromVersion` →
+  `toVersion`) and that services stop during the migration, ask for
+  confirmation, then run `zylos upgrade --self --yes --json` (Step 3; there are
+  no changelog or template changes to review).
+- no `pendingMigrations`: inform the user it is up to date and stop.
 
 ### Step 2: Analyze Changes, Compare Templates, and Confirm
 
@@ -351,7 +361,24 @@ Smart merge will handle modifications automatically.
 Reply "upgrade zylos confirm" to proceed.
 ```
 
-If already up to date, reply: `zylos-core is up to date (v0.1.0)`
+If already at the latest version and `pendingMigrations` is present, reply with
+the databases instead (no changelog or template analysis):
+
+```
+zylos-core is up to date (v0.1.0), but these databases need migration:
+- comm-bridge/c4.db: 1 -> 3
+- scheduler/scheduler.db: 1 -> 3
+
+Services stop during the migration and restart afterwards.
+
+Reply "upgrade zylos confirm" to proceed.
+```
+
+After "upgrade zylos confirm", run `zylos upgrade --self --yes --json` and
+continue with Step 2 below (there are no templates to deploy).
+
+If already up to date and there is no `pendingMigrations`, reply:
+`zylos-core is up to date (v0.1.0)`
 
 ### Step 2 — User confirms
 
