@@ -15,9 +15,11 @@ test('quota values stay on one line across locales, themes and screen widths',
     }, { timeoutMs: 80_000 });
   });
 
-// Boundary: the real Machines page entry and assets with fixture APIs on loopback.
-// Run for fleet composition/layout changes; skip backend-only changes. No live
-// backend/DB/PM2/tmux is started; sandbox proofs and cleanup match the case above.
+// Boundary: the real Machines page entry and assets with fixture APIs on a loopback
+// static server; no backend, auth, polling, DB, PM2 or tmux is started. Run when
+// the Machines page composition or layout changes; skip backend-only changes. The
+// opt-in harness proves private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB paths
+// before allocation and reclaims the server, browser and profile on every exit.
 test('machines page places cards directly after the summary on phone and desktop',
   { skip: !chatEnabled(), timeout: 45_000 }, async t => {
     const sandbox = createChatSandbox(t);

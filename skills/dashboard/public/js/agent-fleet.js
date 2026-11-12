@@ -262,7 +262,6 @@ export function buildAgentFleetView(fleet, options = {}) {
       rate7dPct: pctValue(agent.rate_limit_7d_pct),
       rate7dRecord: { recordedAt: agent.rate_limit_7d_recorded_at, live: agent.rate_limit_7d_live },
       sessionCostLabel: money(agent.session_cost ?? agent.cost),
-      dailyCost: Number.isFinite(Number(agent.daily_cost)) && agent.daily_cost != null ? Number(agent.daily_cost) : null,
       dailyCostLabel: money(agent.daily_cost),
       weeklyCostLabel: money(agent.weekly_cost),
       cpuPct: agent.cpu_pct,
