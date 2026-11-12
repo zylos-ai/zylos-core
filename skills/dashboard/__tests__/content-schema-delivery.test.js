@@ -12,7 +12,11 @@ import { COMPONENT_DEFINITIONS, REGISTERED_COMPONENT_KEYS, VIEW_SCHEMA, FORM_CON
 const publicRoot = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const schemaPath = fileURLToPath(new URL('../../comm-bridge/scripts/c4-content-schema.js', import.meta.url));
 const appReference = source => /src="__ASSET_ROOT__\/(js\/app\.js\?v=\d+)"/.exec(source)?.[1];
-const currentAppPath = appReference(fs.readFileSync(path.join(publicRoot, 'index.html'), 'utf8'));
+const entrySource = fs.readFileSync(path.join(publicRoot, 'index.html'), 'utf8');
+const stylesheetReference = source => /href="__ASSET_ROOT__\/(css\/conversation\.css\?v=\d+)"/.exec(source)?.[1];
+const currentStylesheetPath = stylesheetReference(entrySource);
+assert.ok(currentStylesheetPath, 'the source entry page versions its conversation stylesheet');
+const currentAppPath = appReference(entrySource);
 assert.ok(currentAppPath, 'the source entry page versions its application module');
 function privateEnvironment() {
   const canonical = value => {
@@ -75,7 +79,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
     const entryPage = await fetch(origin + prefix + '/_assets/index.html');
     assert.equal(entryPage.status, 200);
     const pageText = await entryPage.text();
-    assert.match(pageText, /css\/conversation\.css\?v=148"/, 'the entry page invalidates the conversation stylesheet cache');
+    assert.equal(stylesheetReference(pageText), currentStylesheetPath, 'delivery preserves the current conversation stylesheet cache version');
     const appPath = appReference(pageText);
     assert.equal(appPath, currentAppPath, 'delivery preserves the current entry page application cache version');
     const cache = new Map();

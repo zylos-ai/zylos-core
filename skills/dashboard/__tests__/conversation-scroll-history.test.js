@@ -19,6 +19,11 @@ const rows = (start, count) => Array.from({ length: count }, (_, index) => ({ id
 // Page teardown owns controller timers; frame draining and request logs are bounded.
 function fixture(t, { initial = rows(100, 10), cursor = 'older-1', older } = {}) {
   const document = createDocument(), root = document.createElement('div'), frames = new Map();
+  // This page-only fixture has no Dashboard shell or bottom navigation.
+  document.querySelector = selector => {
+    assert.equal(selector, '#wb-mobile-nav', 'only the page layout shell lookup is expected');
+    return null;
+  };
   let serial = 0, stream, list, olderReads = 0, inFlight = 0, maxInFlight = 0;
   const requests = [];
   const makeElement = document.createElement;
