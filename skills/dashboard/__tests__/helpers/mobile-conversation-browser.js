@@ -137,7 +137,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
   const prepareHeader = async (page, options) => {
     await select(page);
     await page.locator('.conversation-connection-dot[data-stream-state="live"]').waitFor({ state: 'attached' });
-    if (options.scene === 'running') await page.waitForFunction(() => document.querySelector('.conversation-running').textContent.includes('正在处理'));
+    if (options.scene === 'running') await page.waitForFunction(() => document.querySelector('.conversation-running').textContent.includes('正在工作'));
     if (options.disconnected) {
       fixture.disconnect();
       await page.locator('.conversation-push-status[data-stream-state="polling"]').waitFor({ state: 'attached' });
@@ -206,7 +206,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
         return { x: r.x, y: r.y, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height,
           textRight: range.getBoundingClientRect().right,
           paddingRight: Number.parseFloat(css.paddingRight), borderRight: Number.parseFloat(css.borderRightWidth), lineHeight: Number.parseFloat(css.lineHeight),
-          scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, whiteSpace: css.whiteSpace, overflow: css.overflow,
+          scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, caption: el.querySelector('.wi-ind-text') ? { scrollWidth: el.querySelector('.wi-ind-text').scrollWidth, clientWidth: el.querySelector('.wi-ind-text').clientWidth } : null, whiteSpace: css.whiteSpace, overflow: css.overflow,
           textOverflow: css.textOverflow, fontSize: Number.parseFloat(css.fontSize), text: el.textContent, title: el.title, role: el.getAttribute('role') };
       };
       return { viewport: innerWidth, header: box('.conversation-header'), title: box('.conversation-title-line'), titleText: box('.conversation-title-line h2'),
@@ -219,7 +219,10 @@ export async function runMobileConversationBrowser(t, sandbox) {
       for (const name of ['running', 'group']) {
         assert.ok(m[name].top >= m.title.top - 1 && m[name].bottom <= m.title.bottom + 1, name + ' stays within title row');
         assert.ok(m[name].x >= 0 && m[name].right <= m.viewport, name + ' is inside viewport');
-        assert.ok(m[name].scrollWidth <= m[name].clientWidth, name + ' text remains complete');
+        // The comet intentionally overflows the pill border; measure its actual
+        // caption rather than counting that decorative SVG as text overflow.
+        const label = m[name].caption ?? m[name];
+        assert.ok(label.scrollWidth <= label.clientWidth, name + ' text remains complete');
         assert.ok(m[name].fontSize > 0, name + ' text remains visible');
       }
       assert.ok(m.title.right <= m.running.x && m.running.right <= m.push.x && m.push.right <= m.group.x,
@@ -316,12 +319,15 @@ export async function runMobileConversationBrowser(t, sandbox) {
     try {
       await prepareHeader(edge.page, { scene: 'running' });
       await phoneHeaderFits(edge.page);
-      assert.equal(await edge.page.locator('.conversation-running').isVisible(), true, 'phone running status retains its separate row');
+      assert.equal(await edge.page.locator('.conversation-running').isVisible(), true, 'phone running status remains available in the title row');
       assert.equal(await edge.page.locator('.conversation-menu-toggle').isVisible(), true);
       assert.equal(await edge.page.locator('.conversation-header-actions > .wb-btn').isVisible(), false);
       const title = await edge.page.locator('.conversation-title-line').boundingBox();
       const running = await edge.page.locator('.conversation-running').boundingBox();
-      assert.ok(running.y >= title.y + title.height, 'phone status stays below the title');
+      assert.ok(running.y >= title.y - 15 && running.y + running.height <= title.y + title.height + 15, 'phone status stays in the title row');
+      assert.equal(await edge.page.locator('.conversation-header').evaluate(node => { const css = getComputedStyle(node); return node.getBoundingClientRect().height - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth); }), 52);
+      const toggle = await edge.page.locator('.conversation-menu-toggle').boundingBox();
+      assert.ok(title.x + title.width <= running.x && running.x + running.width <= toggle.x, 'phone pill sits between title and menu');
       await noOverflow(edge.page);
     } finally { await edge.context.close(); }
   });
@@ -585,7 +591,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await select(page); fixture.disconnect();
       await page.locator('.conversation-push-status').waitFor({ state: 'visible' });
       assert.match(await page.locator('.conversation-push-status').innerText(), /轮询/);
-      assert.match(await page.locator('.conversation-running').innerText(), /正在处理/);
+      assert.match(await page.locator('.conversation-running').innerText(), /正在工作/);
       await controlsFit(page, 'disconnected running conversation');
       await shot(page, 'mobile-390-disconnected-running');
       await page.locator('.conversation-running').click(); await page.locator('.wb-group-side').waitFor();

@@ -1578,6 +1578,22 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .wi-ind[data-state="busy"]{margin-left:0;border-color:color-mix(in srgb,var(--wb-work) 24%,transparent);background:color-mix(in srgb,var(--wb-work) 11%,transparent);color:color-mix(in srgb,var(--wb-work) 68%,var(--text));font-weight:550}
 .wi-ind[data-state="busy"]:hover{background:color-mix(in srgb,var(--wb-work) 18%,transparent);color:color-mix(in srgb,var(--wb-work) 60%,var(--text))}
 .wi-ind[data-state="busy"] .wi-spin{color:var(--wb-work);animation:conversation-activity-spin 1s linear infinite}
+/* A short colored tail follows the busy pill's existing border. */
+.conversation-header{--wi-c1:#1b9d75;--wi-c2:#14b3a3;--wi-c3:#1fb5c9;--wi-c4:#3f8ff0;--wi-c5:#7a6cf0;--wi-c6:#c45fe0;--wi-c7:#ff6fa8;--wi-glow:rgba(196,95,224,.6)}
+:root[data-theme="dark"] .conversation-header{--wi-c1:#43c7b5;--wi-c2:#4fd6c4;--wi-c3:#5fd8ea;--wi-c4:#7aa8ff;--wi-c5:#a593ff;--wi-c6:#e08cff;--wi-c7:#ff9cc6;--wi-glow:rgba(190,160,255,.7)}
+.conversation-header .wi-ind[data-state="busy"]{position:relative}
+.conversation-header .wi-comet{position:absolute;left:-1px;top:-1px;width:calc(100% + 2px);height:calc(100% + 2px);overflow:visible;pointer-events:none;--wi-rx:13.25px;--wi-t:2.6s}
+.conversation-header .wi-comet rect{x:.75px;y:.75px;width:calc(100% - 1.5px);height:calc(100% - 1.5px);rx:var(--wi-rx);ry:var(--wi-rx);fill:none;stroke-width:2px;stroke-linecap:round;animation:wi-comet var(--wi-t) linear infinite}
+.conversation-header .wi-comet rect:nth-child(1){stroke:var(--wi-c1);opacity:.2;stroke-dasharray:20 80}
+.conversation-header .wi-comet rect:nth-child(2){stroke:var(--wi-c2);opacity:.32;stroke-dasharray:17 83;animation-delay:calc(var(--wi-t) * -.03)}
+.conversation-header .wi-comet rect:nth-child(3){stroke:var(--wi-c3);opacity:.46;stroke-dasharray:14 86;animation-delay:calc(var(--wi-t) * -.06)}
+.conversation-header .wi-comet rect:nth-child(4){stroke:var(--wi-c4);opacity:.62;stroke-dasharray:11 89;animation-delay:calc(var(--wi-t) * -.09)}
+.conversation-header .wi-comet rect:nth-child(5){stroke:var(--wi-c5);opacity:.78;stroke-dasharray:8 92;animation-delay:calc(var(--wi-t) * -.12)}
+.conversation-header .wi-comet rect:nth-child(6){stroke:var(--wi-c6);opacity:.92;stroke-dasharray:5 95;animation-delay:calc(var(--wi-t) * -.15)}
+.conversation-header .wi-comet rect:nth-child(7){stroke:var(--wi-c7);opacity:1;stroke-width:2.6px;stroke-dasharray:3 97;animation-delay:calc(var(--wi-t) * -.17);filter:drop-shadow(0 0 3px var(--wi-glow))}
+@keyframes wi-comet{from{stroke-dashoffset:0}to{stroke-dashoffset:-100}}
+.conversation-header .wi-ind[data-state="busy"]:has(.wi-comet) .wi-spin{display:none}
+.conversation-header .wi-ind[data-state="busy"]:has(.wi-comet){padding-left:10px}
 .wi-ind .wi-ind-sub{color:var(--text-dim);font-weight:450}
 .wi-ind.wi-settle{animation:wi-settle 1.2s ease-out}
 .wi-ind.wi-settle .wi-dot{animation:wi-dot-settle 1.2s ease-out}
@@ -1635,7 +1651,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .chat-preview { font-size:13px; line-height:1.5; }
   .conversation-page .conversation-load-more { margin:4px 0 16px; }
 
-  .conversation-page .conversation-header { display:grid; grid-template-columns:44px minmax(0,1fr) 44px; grid-template-rows:52px auto auto; gap:0; padding:0 4px; min-height:52px; background:var(--nav-bg); }
+  .conversation-page .conversation-header { display:grid; grid-template-columns:44px minmax(0,1fr) auto 44px; grid-template-rows:52px auto; gap:0; padding:0 4px; min-height:52px; background:var(--nav-bg); }
   .conversation-page .conversation-header :is(.conversation-heading,.conversation-title-row) { display:contents; }
   .conversation-page .conversation-header :is(.conversation-list-toggle,.conversation-channel-icon,.conversation-subtitle) { display:none; }
   .conversation-page .conversation-back { grid-column:1; grid-row:1; }
@@ -1645,16 +1661,22 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-connection-dot { display:block; flex:none; width:8px; height:8px; border-radius:50%; background:var(--state-busy); }
   .conversation-page .conversation-connection-dot[data-stream-state=live] { background:var(--state-idle); }
   .conversation-page .conversation-header-actions { display:contents; }
-  .conversation-page .conversation-menu-toggle { grid-column:3; grid-row:1; align-self:center; }
+  .conversation-page .conversation-menu-toggle { grid-column:4; grid-row:1; align-self:center; }
   .conversation-page .conversation-header-actions>.wb-btn { display:none; }
   .conversation-page .conversation-menu-toggle { display:inline-flex; }
   .conversation-page :is(.conversation-back,.conversation-menu-toggle) { width:44px; min-width:44px; height:44px; min-height:44px; padding:0; border:0; color:var(--text-dim); }
   .conversation-page :is(.conversation-back,.conversation-menu-toggle)>.wb-ico { width:20px; height:20px; }
   .conversation-page .conversation-push-status { grid-column:1/-1; grid-row:2; margin:0 -4px; padding:6px 16px; border-top:1px solid var(--wb-line); background:color-mix(in srgb,var(--state-busy) 10%,transparent); color:var(--state-busy); font-size:12px; }
   .conversation-page .conversation-push-status[data-stream-state=live] { display:none; }
-  .conversation-page .conversation-header .conversation-running { grid-column:1/-1; grid-row:3; display:flex; align-self:stretch; gap:8px; width:calc(100% + 8px); min-height:34px; margin:0 -4px; padding:7px 16px; border:0; border-top:1px solid var(--wb-line); border-radius:0; background:var(--bg-card); color:var(--text-dim); font-size:13px; line-height:1.5; }
+  .conversation-page .conversation-header .conversation-running { position:relative; grid-column:3; grid-row:1; display:inline-flex; align-self:center; gap:3px; width:auto; max-width:46vw; min-height:22px; height:22px; margin:0 2px 0 4px; padding:0 6px 0 9px; border:1px solid var(--wb-line); border-radius:11px; background:var(--bg-card); color:var(--text-dim); font-size:11px; font-weight:550; line-height:1; }
+  .conversation-page .conversation-header .conversation-running[data-state=busy] { border-color:color-mix(in srgb,var(--wb-work) 24%,transparent); background:color-mix(in srgb,var(--wb-work) 11%,transparent); color:color-mix(in srgb,var(--wb-work) 68%,var(--text)); }
+  .conversation-page .conversation-header .conversation-running.conversation-restricted { color:var(--wb-wait); }
+  .conversation-page .conversation-header .conversation-running.conversation-waiting { color:var(--text-muted); }
+  .conversation-page .conversation-running :is(.wi-ind-sub,.wi-ind-dur) { display:none; }
+  .conversation-page .conversation-running::after { content:""; position:absolute; left:-4px; right:-2px; top:-11px; bottom:-11px; }
+  .conversation-header .wi-comet { --wi-rx:10.25px; --wi-t:2.2s; }
   .conversation-page .conversation-header .conversation-running[data-state=idle] { display:none; }
-  .conversation-page .conversation-running .wi-ind-chev { margin-left:auto; }
+  .conversation-page .conversation-running .wi-ind-chev { width:11px; height:11px; margin-left:0; }
   .conversation-page .conversation-rename { gap:6px; padding:8px 8px 8px 12px; background:var(--bg-card); }
   .conversation-page .conversation-rename input { height:40px; font-size:16px; }
   .conversation-page .conversation-rename>.wb-btn { height:40px; padding:0 10px; }
@@ -1705,4 +1727,10 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-push-status { flex:0 1 auto; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
   .conversation-page .conversation-header .conversation-header-actions>.wb-btn { flex:none; width:auto; height:28px; padding:0 7px; gap:5px; font-size:11.5px; white-space:nowrap; }
   .conversation-page .conversation-header .conversation-header-actions .wb-ico { width:13px; height:13px; }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .conversation-header .wi-comet{display:none}
+  .conversation-header .wi-ind[data-state="busy"]:has(.wi-comet) .wi-spin{display:inline-block;animation:none}
+  .conversation-header .wi-ind[data-state="busy"]:has(.wi-comet){padding-left:6px}
 }

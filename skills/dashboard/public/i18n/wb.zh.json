@@ -1,5 +1,5 @@
 {
-  "chat.working.processing": "正在处理",
+  "chat.working.processing": "正在工作",
   "chat.working.scheduled": "正在执行定时任务",
   "chat.working.child": "后台子任务 {count} 个",
   "chat.working.children": "后台子任务 {count} 个",

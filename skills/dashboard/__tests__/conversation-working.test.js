@@ -121,7 +121,7 @@ test('working timeline selection survives the side panel placeholder and reuses 
 test('working timeline summary retains each start time and disappears when work finishes', async t => {
   const document = createDocument(), root = document.createElement('div');
   document.documentElement = { lang: 'zh' };
-  const labels = { 'chat.working.processing': '正在处理', 'chat.working.children': '后台子任务 {count} 个',
+  const labels = { 'chat.working.processing': '正在工作', 'chat.working.children': '后台子任务 {count} 个',
     'chat.working.now': '现在：{state}', 'chat.working.since': '{time} 起', 'chat.working.latest': '最近一步 {time}' };
   const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
   const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' },
@@ -133,7 +133,7 @@ test('working timeline summary retains each start time and disappears when work 
   await detail.open('dashboard:a', { rows: [row], listKnown: true }, { tab: 'timeline' });
   const line = allNodes(root).find(node => node.classList.contains('wi-now'));
   assert.ok(line, 'busy timeline has a current-work summary');
-  assert.equal(line.textContent, '现在：正在处理 · 00:20 起；后台子任务 2 个 · 00:10 起 · 最近一步 00:30');
+  assert.equal(line.textContent, '现在：正在工作 · 00:20 起；后台子任务 2 个 · 00:10 起 · 最近一步 00:30');
   assert.equal(allNodes(line).some(node => node.classList.contains('wi-now-sub')), true);
   await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, turn: null, tools: 0, subagents: null } }], listKnown: true });
   assert.equal(allNodes(root).some(node => node.classList.contains('wi-now')), false, 'idle timeline has no green work summary');
@@ -166,8 +166,8 @@ test('working English text uses singular task hour and minute labels', async () 
   const working = { on: true, since: now - 65 * 60000, turn: null, tools: 0,
     subagents: { count: 1, since: now - 65 * 60000, lastActivityAt: now } };
   assert.equal(workingText(working, { now, t: translate }), '1 background task · 1 hour 5 minutes');
-  assert.equal(workingText({ ...working, turn: { since: now - 60000 }, subagents: null }, { now, t: translate }), 'Processing · 1 minute');
-  assert.equal(workingText({ ...working, turn: { since: now - 121 * 60000 }, subagents: null }, { now, t: translate }), 'Processing · 2 hours 1 minute');
+  assert.equal(workingText({ ...working, turn: { since: now - 60000 }, subagents: null }, { now, t: translate }), 'Working · 1 minute');
+  assert.equal(workingText({ ...working, turn: { since: now - 121 * 60000 }, subagents: null }, { now, t: translate }), 'Working · 2 hours 1 minute');
 });
 
 test('the working line names a scheduled task only for a turn known to be one', async () => {

@@ -48,6 +48,11 @@ export function createDocument() {
     node.dispatch = (name, event = {}) => { if (!(name === 'click' && node.disabled)) dispatch(name, event); };
     return node;
   };
+  document.createElementNS = (namespace, tag) => {
+    const node = document.createElement(tag);
+    node.namespaceURI = namespace;
+    return node;
+  };
   return document;
 }
 function selectors(selector) {

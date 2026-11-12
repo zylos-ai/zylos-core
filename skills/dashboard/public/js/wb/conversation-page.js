@@ -1,4 +1,4 @@
-import { workingText } from './working-display.js?v=2';
+import { workingDuration, workingText } from './working-display.js?v=2';
 import { createUploadTray } from './chat-upload-tray.js?v=2';
 import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
@@ -586,17 +586,41 @@ export function mountConversationPage({
     const wasBusy = running.dataset.state === 'busy';
     running.dataset.state = asleep ? 'asleep' : exceptional ? restricted ? 'restricted' : 'waiting' : working?.on ? 'busy' : 'idle';
     // Asleep shows one word; the explanation (a message wakes it, the first reply is slower) is in the tooltip.
+    const now = Date.now();
     const description = asleep ? t('chat.page.origin.asleepShort') : exceptional ? t('chat.page.' + headerLabel
       + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : ''))
-      : workingText(working, { t, scheduled: origin && s.groupProcessing === 'scheduled_task' });
+      : workingText(working, { t, now, scheduled: origin && s.groupProcessing === 'scheduled_task' });
     const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
     if (!exceptional && working?.on) mark.classList.add('wi-spin');
     const childSuffix = !exceptional && working?.turn && working.subagents
       ? t(working.subagents.count === 1 ? 'chat.working.child' : 'chat.working.children', { count: working.subagents.count }) : null;
-    const caption = node('span', childSuffix ? description.slice(0, -(childSuffix.length + 3)) : description, 'wi-ind-text');
+    const duration = !exceptional && working?.on
+      ? workingDuration(working.turn?.since ?? working.subagents?.since, { t, now }) : null;
+    const mainText = childSuffix ? description.slice(0, -(childSuffix.length + 3)) : description;
+    // Split only the duration produced by workingText, preserving its shared wording and order.
+    const caption = node('span', duration ? mainText.slice(0, -(duration.length + 3)) : mainText, 'wi-ind-text');
+    if (duration) caption.append(node('span', ' · ' + duration, working.turn ? 'wi-ind-time' : 'wi-ind-dur'));
     if (childSuffix) caption.append(node('span', ' · ' + childSuffix, 'wi-ind-sub'));
     const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev');
-    running.replaceChildren(mark, caption, chevron);
+    const existingComet = [...running.children].find(child => child.classList.contains('wi-comet'));
+    if (!exceptional && working?.on && existingComet) {
+      // The one-second clock refreshes the caption without restarting the border animation.
+      for (const child of [...running.children]) if (child !== existingComet) child.remove();
+      running.append(mark, caption, chevron);
+    } else {
+      running.replaceChildren(mark, caption, chevron);
+    }
+    if (!exceptional && working?.on && !existingComet) {
+      const comet = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      comet.setAttribute('class', 'wi-comet');
+      comet.setAttribute('aria-hidden', 'true');
+      for (let i = 0; i < 7; i++) {
+        const trail = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        trail.setAttribute('pathLength', '100');
+        comet.append(trail);
+      }
+      running.prepend(comet);
+    }
     const accessible = t('chat.working.timeline', { state: asleep ? t('chat.page.origin.asleep') : description });
     running.setAttribute('aria-label', accessible); running.title = accessible;
     if (wasBusy && working && !working.on) {

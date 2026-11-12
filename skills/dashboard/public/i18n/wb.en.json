@@ -1,5 +1,5 @@
 {
-  "chat.working.processing": "Processing",
+  "chat.working.processing": "Working",
   "chat.working.scheduled": "Running a scheduled task",
   "chat.working.child": "{count} background task",
   "chat.working.children": "{count} background tasks",

@@ -15,8 +15,8 @@ const NOW = Date.UTC(2026, 10, 11, 10, 30);
 const iso = value => new Date(value).toISOString();
 
 async function startPage(sandbox) {
-  let scene = 'main', failGroups = false;
-  const counts = { groups: 0, sends: 0 }, missing = new Set();
+  let scene = 'main', failGroups = false, title = '工作状态示例';
+  const counts = { groups: 0, sends: 0 }, missing = new Set(), streams = new Set();
   const working = () => {
     const turn = ['main', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - 3 * 60000 } : null;
     const subagents = ['both', 'sub'].includes(scene) ? { count: 2, since: NOW - 13 * 60000, lastActivityAt: NOW - 30000 } : null;
@@ -26,7 +26,7 @@ async function startPage(sandbox) {
   const snapshot = url => {
     const value = workbenchAnswer(url, NOW);
     const row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
-    row.sessionGroup = GROUP; row.name = { displayName: '工作状态示例' }; row.state = { kind: 'idle' }; row.duration = 75;
+    row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: 'idle' }; row.duration = 75;
     row.tools = []; row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
     row.working = working(); row.preview = { text: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000), channel: 'dashboard' };
     row.wait = ({ queue: { kind: 'pool_wait' }, starting: { kind: 'starting' }, rate: { kind: 'rate_wait', cooldownUntil: NOW / 1000 + 3600 }, auth: { kind: 'auth_wait' } })[scene] ?? null;
@@ -34,13 +34,13 @@ async function startPage(sandbox) {
     value.instance.runtimeHealth = { claude: { health: scene.startsWith('unknown-') ? null : ({ rate: 'rate_limited', auth: 'auth_failed' })[scene] ?? 'ok' } };
     return value;
   };
-  const conversation = id => ({ id, localId: 'working-browser', sessionGroup: id === ID ? GROUP : OTHER, channel: id === ID ? 'dashboard' : 'telegram', state: 'active', displayName: id === ID ? '工作状态示例' : '外部会话' });
+  const conversation = id => ({ id, localId: 'working-browser', sessionGroup: id === ID ? GROUP : OTHER, channel: id === ID ? 'dashboard' : 'telegram', state: 'active', displayName: id === ID ? title : '外部会话' });
   const answer = url => {
     const p = url.pathname;
     if (p === '/api/workbench/groups') { counts.groups++; return snapshot(url); }
     if (p === '/api/chat/conversations') {
       const external = url.searchParams.get('tab') === 'external';
-      return { items: [{ ...conversation(external ? OTHER_ID : ID), session_group: external ? OTHER : GROUP, display_name: external ? '外部会话' : '工作状态示例' }], nextCursor: null, tz: 'UTC' };
+      return { items: [{ ...conversation(external ? OTHER_ID : ID), session_group: external ? OTHER : GROUP, display_name: external ? '外部会话' : title }], nextCursor: null, tz: 'UTC' };
     }
     if (p.startsWith('/api/chat/conversations/')) {
       const id = decodeURIComponent(p.split('/')[4]);
@@ -57,7 +57,12 @@ async function startPage(sandbox) {
   const server = http.createServer((req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
-      if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
+      if (url.pathname === '/api/stream') {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+        const data = { version: 1, tab: url.searchParams.get('chat_tab') || 'mine', conversationId: url.searchParams.get('chat_conversation'), ids: [] };
+        res.write(`event: chat_ready\ndata: ${JSON.stringify(data)}\n\n`);
+        streams.add(res); res.on('close', () => streams.delete(res)); return;
+      }
       if (url.pathname.startsWith('/api/')) {
         if (url.pathname === '/api/workbench/groups' && failGroups) { counts.groups++; sendJson(res, 503, { error: 'fixture_unavailable' }); return; }
         if (req.method === 'POST' && url.pathname.endsWith('/send')) {
@@ -77,7 +82,8 @@ async function startPage(sandbox) {
       sendJson(res, 404, { error: 'not_found' });
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
-  return { base: await sandbox.startHttp(server), counts, missing, setScene(value) { scene = value; }, fail(value) { failGroups = value; } };
+  sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
+  return { base: await sandbox.startHttp(server), counts, missing, setScene(value) { scene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; } };
 }
 
 export async function runConversationWorkingBrowser(t, sandbox) {
@@ -89,8 +95,8 @@ export async function runConversationWorkingBrowser(t, sandbox) {
   sandbox.addCleanup(() => browser.close());
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR, captures = [];
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
-  const open = async ({ width = 1280, theme = 'light', scene = 'main', clock = false, reducedMotion = 'no-preference' } = {}) => {
-    fixture.setScene(scene); fixture.fail(false);
+  const open = async ({ width = 1280, theme = 'light', scene = 'main', clock = false, reducedMotion = 'no-preference', title = '工作状态示例' } = {}) => {
+    fixture.setScene(scene); fixture.setTitle(title); fixture.fail(false);
     const context = await browser.newContext({ viewport: { width, height: 960 }, locale: 'zh-CN', timezoneId: 'UTC', reducedMotion });
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
@@ -122,13 +128,52 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     assert.match(await indicator(page).getAttribute('title'), /点按查看时间线/);
     assert.match(await indicator(page).getAttribute('aria-label'), /点按查看时间线/);
   };
-  const shot = async (page, name) => {
+  const shot = async (page, name, { moving = false } = {}) => {
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'no horizontal document overflow');
-    if (evidence) await page.screenshot({ path: path.join(evidence, name + '.png'), animations: 'disabled' });
+    if (evidence) await page.screenshot({ path: path.join(evidence, name + '.png'), ...(moving ? {} : { animations: 'disabled' }) });
     captures.push(name);
   };
-  const scenes = { main: '正在处理 · 3 分钟', both: '正在处理 · 3 分钟 · 后台子任务 2 个', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲', rate: '服务受限', auth: '认证', queue: '排队', starting: '启动', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
+  const checkComet = async (page, busy) => {
+    const pill = indicator(page);
+    assert.equal(await pill.locator('.wi-comet').count(), busy ? 1 : 0, 'only busy state owns a comet');
+    if (!busy) return;
+    assert.equal(await pill.locator('.wi-comet').getAttribute('aria-hidden'), 'true');
+    assert.equal(await pill.locator('.wi-comet rect[pathLength="100"]').count(), 7);
+    assert.equal(await pill.locator('.wi-spin').isVisible(), false, 'comet replaces the visible spinner');
+    assert.equal(await pill.locator('.wi-ind-chev').isVisible(), true, 'timeline arrow remains visible');
+    const timing = await pill.locator('.wi-comet rect').first().evaluate(node => {
+      const css = getComputedStyle(node); return { name: css.animationName, duration: css.animationDuration, timing: css.animationTimingFunction };
+    });
+    assert.equal(timing.name, 'wi-comet');
+    assert.equal(timing.duration, await page.evaluate(() => innerWidth <= 760) ? '2.2s' : '2.6s');
+    assert.equal(timing.timing, 'linear');
+  };
+  const checkPhonePill = async (page, expected, { longTitle = false } = {}) => {
+    const m = await page.evaluate(() => {
+      const box = selector => {
+        const el = document.querySelector(selector), r = el.getBoundingClientRect(), css = getComputedStyle(el);
+        return { x: r.x, top: r.top, right: r.right, bottom: r.bottom, height: r.height, width: r.width,
+          scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, overflow: css.overflow, textOverflow: css.textOverflow,
+          fontSize: css.fontSize, borderY: parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth), text: el.innerText };
+      };
+      return { header: box('.conversation-header'), title: box('.conversation-title-line'), text: box('.conversation-title-line h2'),
+        pill: box('.conversation-running'), caption: box('.conversation-running .wi-ind-text'), menu: box('.conversation-menu-toggle'),
+        hit: (() => { const css = getComputedStyle(document.querySelector('.conversation-running'), '::after'); return { top: parseFloat(css.top), bottom: parseFloat(css.bottom) }; })() };
+    });
+    assert.equal(m.header.height - m.header.borderY, 52, 'busy state adds no separate status row');
+    assert.equal(m.pill.height, 22); assert.equal(m.pill.fontSize, '11px');
+    assert.ok(m.pill.top >= m.header.top && m.pill.bottom <= m.header.bottom, 'pill stays inside title row');
+    assert.ok(m.title.right <= m.pill.x + 1 && m.pill.right <= m.menu.x + 1, 'title, pill and menu never overlap');
+    assert.equal(m.pill.text.replace(/\s+/g, ' ').trim(), expected, 'phone shows the compact complete label');
+    assert.ok(m.caption.scrollWidth <= m.caption.clientWidth, 'pill caption is not clipped');
+    assert.ok(m.pill.height - m.hit.top - m.hit.bottom >= 44, 'pseudo-element expands the tap target');
+    if (longTitle) {
+      assert.ok(m.text.scrollWidth > m.text.clientWidth, 'long title yields space to the pill');
+      assert.equal(m.text.textOverflow, 'ellipsis');
+    }
+  };
+  const scenes = { main: '正在工作 · 3 分钟', both: '正在工作 · 3 分钟 · 后台子任务 2 个', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲', rate: '服务受限', auth: '认证', queue: '排队', starting: '启动', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
   let failed = false;
   for (const width of [1280, 390]) for (const theme of ['light', 'dark']) for (const [scene, expected] of Object.entries(scenes)) {
     await t.test(`${width} ${theme} ${scene}: mounted conversation shows the group working state`, async () => {
@@ -139,6 +184,26 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           await checkText(f.page, expected);
           const spinning = await indicator(f.page).locator('.wi-spin').count();
           assert.equal(spinning, ['main', 'both', 'sub'].includes(scene) ? 1 : 0);
+          await checkComet(f.page, ['main', 'both', 'sub'].includes(scene));
+          if (width <= 760 && ['main', 'both', 'sub'].includes(scene)) {
+            await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : '正在工作 · 3 分钟');
+          }
+          if (width <= 760 && scene === 'idle') {
+            assert.equal(await indicator(f.page).isVisible(), false);
+            assert.equal(await f.page.locator('.conversation-header').evaluate(node => { const css = getComputedStyle(node); return node.getBoundingClientRect().height - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth); }), 52);
+          }
+          if (width <= 760 && ['rate', 'auth', 'queue'].includes(scene)) {
+            const colors = await indicator(f.page).evaluate((node, scene) => {
+              const probe = document.createElement('span');
+              probe.style.color = scene === 'queue' ? 'var(--text-muted)' : 'var(--wb-wait)';
+              probe.style.background = 'var(--bg-card)'; node.append(probe);
+              const actual = getComputedStyle(node), expected = getComputedStyle(probe);
+              const values = { color: actual.color, expected: expected.color, background: actual.backgroundColor, neutral: expected.backgroundColor };
+              probe.remove(); return values;
+            }, scene);
+            assert.equal(colors.color, colors.expected, 'waiting/restricted phone state retains its semantic color');
+            assert.equal(colors.background, colors.neutral, 'nonbusy phone state keeps its neutral background');
+          }
           if (scene.startsWith('unknown-')) assert.equal(await indicator(f.page).evaluate(node => node.classList.contains('conversation-restricted')), true, 'unknown health keeps the warning presentation');
         } else await wait(async () => !await indicator(f.page).isVisible(), 'unavailable working is hidden');
         assert.equal(await f.page.locator('.wi-proto-bar').count(), 0, 'prototype switcher is not in the product');
@@ -160,11 +225,13 @@ export async function runConversationWorkingBrowser(t, sandbox) {
   await t.test('working polling follows busy and idle cadence and clears unreadable state', async () => {
     const f = await open({ clock: true });
     try {
-      await checkText(f.page, '正在处理'); const before = fixture.counts.groups;
+      await checkText(f.page, '正在工作'); const before = fixture.counts.groups;
       await f.page.clock.fastForward(4999); assert.equal(fixture.counts.groups, before);
       await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups === before + 1, 'busy reads at five seconds');
       fixture.setScene('idle'); await f.page.clock.fastForward(5000); await checkText(f.page, '空闲');
       assert.equal(await indicator(f.page).locator('.wi-spin').count(), 0);
+      await checkComet(f.page, false);
+      assert.equal(await indicator(f.page).evaluate(node => node.classList.contains('wi-settle')), true, 'busy to idle keeps settle effect');
       const idleReads = fixture.counts.groups;
       await f.page.clock.fastForward(29999); assert.equal(fixture.counts.groups, idleReads, 'idle avoids the former busy cadence');
       await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups > idleReads, 'idle reads at thirty seconds');
@@ -175,7 +242,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
   await t.test('hidden document stops working reads and showing it resumes the current group', async () => {
     const f = await open({ clock: true });
     try {
-      await checkText(f.page, '正在处理');
+      await checkText(f.page, '正在工作');
       // This case controls only the browser document visibility boundary; it does not claim OS tab suspension.
       await f.page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
       const before = fixture.counts.groups; await f.page.clock.fastForward(65000);
@@ -208,7 +275,10 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       await side.locator('.wb-detail-tabs button').filter({ hasText: '概况' }).click();
       await side.locator('.wb-now-card').waitFor();
       await side.evaluate(node => { window.originalDetailSide = node; window.originalDetailHeader = node.querySelector('.wb-d-title'); });
-      await indicator(f.page).click(); await side.locator('.wi-now').waitFor();
+      // The open detail overlay covers the header's pointer target. Use the
+      // same button's real keyboard activation to exercise switching its mounted panel.
+      // Initial opening and the expanded phone tap target are tested with pointer input.
+      await indicator(f.page).focus(); await f.page.keyboard.press('Enter'); await side.locator('.wi-now').waitFor();
       assert.equal(await side.evaluate(node => node === window.originalDetailSide), true, 'open sidebar keeps its mounted panel');
       await f.page.locator('#wb-chat [data-action="page.groupInfo"]').focus(); await f.page.keyboard.press('Enter'); assert.equal(await side.isVisible(), false);
       await f.page.locator('#wb-chat [data-action="page.groupInfo"]').click(); await side.locator('.wb-now-card').waitFor();
@@ -219,8 +289,63 @@ export async function runConversationWorkingBrowser(t, sandbox) {
   await t.test('reduced motion keeps the working glyph still', async () => {
     const f = await open({ reducedMotion: 'reduce' });
     try {
-      await checkText(f.page, '正在处理');
+      await checkText(f.page, '正在工作');
+      assert.equal(await indicator(f.page).locator('.wi-comet').count(), 1, 'busy DOM still owns the reduced-motion comet');
+      assert.equal(await indicator(f.page).locator('.wi-comet').isVisible(), false, 'reduced motion hides the entire light');
+      assert.equal(await indicator(f.page).locator('.wi-spin').isVisible(), true, 'still glyph returns');
       assert.equal(await indicator(f.page).locator('.wi-spin').evaluate(node => getComputedStyle(node).animationName), 'none');
+      await shot(f.page, 'reduced-motion');
+    } finally { await f.context.close(); }
+  });
+  for (const width of [390, 360]) for (const theme of ['light', 'dark']) for (const scene of ['main', 'sub', 'idle']) {
+    await t.test(`${width} ${theme} ${scene}: long title preserves the compact pill`, async () => {
+      const f = await open({ width, theme, scene, title: '工作状态标题'.repeat(7).slice(0, 40), clock: true });
+      try {
+        await checkText(f.page, ({ main: '正在工作 · 3 分钟', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲' })[scene]);
+        if (scene !== 'idle') {
+          await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : '正在工作 · 3 分钟', { longTitle: true });
+          const box = await indicator(f.page).boundingBox();
+          await f.page.mouse.click(box.x + box.width / 2, box.y - 8);
+          await f.page.locator('#wb-chat .wb-group-side .wi-now').waitFor();
+          await f.page.locator('.wb-group-side-back').click();
+        } else {
+          assert.equal(await indicator(f.page).isVisible(), false);
+          assert.equal(await f.page.locator('.conversation-header').evaluate(node => { const css = getComputedStyle(node); return node.getBoundingClientRect().height - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth); }), 52);
+        }
+        await shot(f.page, `${width}-${theme}-${scene}-long-title`);
+        assert.equal(f.errors.length, 0, f.errors[0]);
+      } finally { await f.context.close(); }
+    });
+  }
+  await t.test('busy transitions replace the comet without leaving stale light', async () => {
+    const f = await open({ clock: true });
+    try {
+      await checkText(f.page, '正在工作'); await checkComet(f.page, true);
+      fixture.setScene('idle'); await f.page.clock.fastForward(5000); await checkText(f.page, '空闲'); await checkComet(f.page, false);
+      fixture.setScene('main'); await f.page.clock.fastForward(30000); await checkText(f.page, '正在工作'); await checkComet(f.page, true);
+      assert.equal(await indicator(f.page).evaluate(node => node.classList.contains('wi-settle')), false);
+    } finally { await f.context.close(); }
+  });
+  await t.test('border light moves along its SVG path', async () => {
+    const f = await open();
+    try {
+      await checkText(f.page, '正在工作'); await checkComet(f.page, true);
+      await indicator(f.page).locator('.wi-comet').evaluate(node => { window.originalComet = node; });
+      await new Promise(resolve => setTimeout(resolve, 1150));
+      const continuity = await indicator(f.page).locator('.wi-comet').evaluate(node => ({
+        sameNode: node === window.originalComet,
+        time: node.querySelector('rect').getAnimations()[0]?.currentTime,
+      }));
+      assert.equal(continuity.sameNode, true, 'one-second label refresh preserves the animated SVG');
+      assert.ok(continuity.time > 1000, 'comet animation continues beyond a label refresh');
+      const rect = indicator(f.page).locator('.wi-comet rect').first();
+      const before = await rect.evaluate(node => parseFloat(getComputedStyle(node).strokeDashoffset));
+      await shot(f.page, 'motion-before', { moving: true });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const after = await rect.evaluate(node => parseFloat(getComputedStyle(node).strokeDashoffset));
+      await shot(f.page, 'motion-after', { moving: true });
+      assert.ok(Number.isFinite(before) && Number.isFinite(after) && before !== after, 'dashoffset changes after about half a second');
+      if (evidence) fs.writeFileSync(path.join(evidence, 'motion.json'), JSON.stringify({ before, after, intervalMs: 500 }, null, 2));
     } finally { await f.context.close(); }
   });
   await t.test('a stored send refreshes healthy group state after two seconds', async () => {
@@ -234,13 +359,13 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       const before = fixture.counts.groups; fixture.setScene('main');
       await f.page.clock.fastForward(1999); assert.equal(fixture.counts.groups, before);
       await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups > before, 'post-store refresh runs even healthy account');
-      await checkText(f.page, '正在处理');
+      await checkText(f.page, '正在工作');
     } finally { await f.context.close(); }
   });
   await t.test('leaving the selected local conversation cancels its working timer', async () => {
     const f = await open({ clock: true });
     try {
-      await checkText(f.page, '正在处理');
+      await checkText(f.page, '正在工作');
       await f.page.locator('#wb-chat [data-action="external"]').click();
       const before = fixture.counts.groups; await f.page.clock.fastForward(20000);
       assert.equal(fixture.counts.groups, before, 'external list never keeps local working timer');
