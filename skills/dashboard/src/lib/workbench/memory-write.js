@@ -54,7 +54,7 @@ export function createMemoryWriter({ zylosDir, env = process.env, execute = exec
       LOCK_TIMEOUT: ['memory_lock_timeout', 503],
       INVALID_MEMORY_PATH: ['invalid_memory_path', 400],
       MEMORY_FILE_NOT_FOUND: ['memory_file_not_found', 404],
-      INVALID_INPUT: ['invalid_memory_write', 400],
+      INVALID_INPUT: [text === '' ? 'memory_write_empty' : 'invalid_memory_write', 400],
     };
     const [message, status] = Object.hasOwn(mapping, code) ? mapping[code] : ['memory_write_failed', 500];
     throw writeError(message, status, {

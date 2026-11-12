@@ -384,6 +384,34 @@ test('unknown save result reads disk once and compares returned text without res
   assert.equal(writes, 2); assert.equal(reads, 2);
 });
 
+test('empty memory save keeps the draft and rejects before any request or readback', async () => {
+  const state = { draft: '', file: { text: 'original', sha256: 'old' } };
+  let writes = 0, reads = 0;
+  await assert.rejects(saveMemoryOnce({ path: 'state.md', text: state.draft, sha256: state.file.sha256,
+    request: async () => { writes++; }, readFile: async () => { reads++; } }), error => error.code === 'memory_write_empty');
+  assert.equal(writes, 0); assert.equal(reads, 0);
+  assert.equal(state.draft, ''); assert.equal(state.file.text, 'original');
+  const messages = { zh: '不能保存为空文件，草稿已保留。', en: "A memory file can't be saved empty. Your draft is kept." };
+  for (const [locale, message] of Object.entries(messages)) {
+    const pack = JSON.parse(await readFile(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'));
+    assert.equal(memoryWriteMessage('memory_write_empty', key => pack[key]), message);
+  }
+  assert.equal(memoryWriteMessage('invalid_memory_write', t), null);
+});
+
+test('whitespace memory saves are submitted unchanged and server empty rejection uses the same code', async () => {
+  let writes = 0, reads = 0;
+  const text = ' \n';
+  await saveMemoryOnce({ path: 'state.md', text, sha256: 'old', request: async (url, options) => {
+    writes++; assert.equal(JSON.parse(options.body).text, text); return { text };
+  } });
+  const error = { code: 'memory_write_empty' };
+  await assert.rejects(saveMemoryOnce({ path: 'state.md', text: 'draft', sha256: 'old',
+    request: async () => { writes++; throw error; }, readFile: async () => { reads++; } }), value => value === error);
+  assert.equal(writes, 2); assert.equal(reads, 0);
+  assert.equal(memoryWriteMessage(error.code, t), 'wb.memory.writeEmpty');
+});
+
 test('sync busy preserves the write rejection without a readback and has a specific message', async () => {
   const error = { code: 'memory_sync_busy' }; let reads = 0;
   await assert.rejects(saveMemoryOnce({ path: 'x', text: 'draft', sha256: 'old', request: async () => { throw error; }, readFile: async () => { reads++; } }), value => value === error);

@@ -68,7 +68,7 @@ export function memoryWriteMessage(code, t) {
   const keys = {
     memory_sync_busy: 'syncBusy', memory_lock_timeout: 'lockTimeout',
     memory_write_unavailable: 'writeUnavailable', memory_write_failed: 'writeFailed',
-    memory_write_unknown: 'writeUnknown',
+    memory_write_unknown: 'writeUnknown', memory_write_empty: 'writeEmpty',
   };
   return keys[code] ? t('wb.memory.' + keys[code]) : null;
 }
@@ -128,6 +128,7 @@ export function renderMemoryPreservingEditor(render, document) {
 }
 
 export async function saveMemoryOnce({ request, readFile, path, text, sha256, isCurrent = () => true }) {
+  if (text === '') throw Object.assign(new Error('Cannot save an empty memory file'), { code: 'memory_write_empty' });
   try {
     const saved = await request(`/api/memory/file?path=${encodeURIComponent(path)}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, sha256 }),

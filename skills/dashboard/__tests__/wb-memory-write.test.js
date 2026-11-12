@@ -153,6 +153,34 @@ for (const [code, error, status] of [
   });
 }
 
+test('Core INVALID_INPUT for empty content gives the dedicated empty-file error', async t => {
+  let input;
+  const f = fixture(t, { execute: async (_binary, _args, _options, text) => {
+    input = text;
+    throw Object.assign(new Error('rejected'), { code: 1, ...failedEnvelope('INVALID_INPUT') });
+  } });
+  await assertFailure(f.browser, relative, { ...f.args, text: '' }, 'memory_write_empty', 400);
+  assert.equal(input, '');
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+});
+
+test('Core INVALID_INPUT for nonempty whitespace content keeps the generic write error', async t => {
+  const f = fixture(t, { execute: async () => failedEnvelope('INVALID_INPUT') });
+  await assertFailure(f.browser, relative, { ...f.args, text: ' \n' }, 'invalid_memory_write', 400);
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+});
+
+test('empty content does not relabel other Core failures as an empty-file error', async t => {
+  for (const [code, error, status] of [
+    ['SYNC_BUSY', 'memory_sync_busy', 409], ['IO_ERROR', 'memory_write_failed', 500],
+  ]) {
+    const f = fixture(t, { execute: async () => failedEnvelope(code) });
+    await assertFailure(f.browser, relative, { ...f.args, text: '' }, error, status,
+      error === 'memory_write_failed' ? code : undefined);
+    assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+  }
+});
+
 for (const [title, execute] of [
   ['non-JSON output', async () => ({ stdout: 'partial text' })],
   ['an invalid envelope', async () => ({ stdout: '{}' })],

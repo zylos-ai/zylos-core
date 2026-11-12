@@ -340,6 +340,7 @@
   "wb.memory.sizeBudget": "{size}, budget {budget}",
   "wb.memory.overBudget": "{size} over budget",
   "wb.memory.warning": "Above warning threshold",
+  "wb.memory.writeEmpty": "A memory file can't be saved empty. Your draft is kept.",
   "wb.memory.syncBusy": "Memory sync is running. Save again after it finishes; your draft is kept.",
   "wb.memory.lockTimeout": "Memory lock wait timed out. Your draft is kept.",
   "wb.memory.writeUnavailable": "Memory saving is unavailable because the Core write entry is missing. Your draft is kept.",

@@ -340,6 +340,7 @@
   "wb.memory.sizeBudget": "大小 {size}，预算 {budget}",
   "wb.memory.overBudget": "超出预算 {size}",
   "wb.memory.warning": "超过预警阈值",
+  "wb.memory.writeEmpty": "不能保存为空文件，草稿已保留。",
   "wb.memory.syncBusy": "记忆整理正在进行，稍后再存。草稿已保留。",
   "wb.memory.lockTimeout": "等待记忆锁超时。草稿已保留。",
   "wb.memory.writeUnavailable": "Core 写入入口缺失，暂时无法保存。草稿已保留。",
