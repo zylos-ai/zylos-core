@@ -79,5 +79,5 @@ test('large old reference files do not contribute budget or missing-file issues'
 test('reorganization instruction exports the system-triggered archival text', () => {
   const text = prompts.REFERENCE_REORG_PROMPT;
   assert.equal(typeof text, 'string');
-  assert.equal(text, 'Memory reorganization: the old memory/reference/projects.md or decisions.md still exists at its original path. Read the zylos-memory skill references/reference-reorg.md and follow it now, without asking the owner. Start one background worker on a cheaper model: it rebuilds pages only for in-progress work listed in state files, then archives both old files unchanged into memory/reference/legacy/. If a reorganization worker you started is still running, do nothing. Do not wait for it. Do not message the owner or anyone else about this reorganization, including when it finishes.');
+  assert.equal(text, 'Memory reorganization: the old memory/reference/projects.md or decisions.md still exists at its original path. Read the zylos-memory skill references/reference-reorg.md and follow it now. Start one background worker on a cheaper model: it rebuilds pages only for in-progress work listed in state files, then archives both old files unchanged into memory/reference/legacy/. If a reorganization worker you started is still running, do nothing. Do not wait for it.');
 });

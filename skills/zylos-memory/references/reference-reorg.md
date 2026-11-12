@@ -5,15 +5,13 @@ Script names below mean `node <ZYLOS_DIR>/.claude/skills/zylos-memory/scripts/<n
 This procedure runs only when the system sends the memory reorganization
 instruction. It is separate from Memory Sync: rebuild pages only for in-progress
 work listed in state files, then archive both old files unchanged into
-`reference/legacy/`. Do not ask the owner or send anyone a message about this
-reorganization, including when it finishes. The worker's result returns only to
-the session that started it.
+`reference/legacy/`.
 
 ## Start one background worker
 
 The session receiving the system instruction starts the work directly: the sole
 session in single mode, Origin in multi mode. Do not hand it to another thread.
-There is no separate owner-requested entry point. If a reorganization worker
+If a reorganization worker
 this session started is still running, do nothing. Start only one at a time:
 
 - Claude: use Task with `subagent_type: general-purpose`, `model: sonnet` and
@@ -25,7 +23,6 @@ this session started is still running, do nothing. Start only one at a time:
 
 Give the worker this file's path so it reads the procedure itself. Do not wait
 for it with `wait_agent`; its final result returns to the spawning session.
-Do not relay that result to the owner or anyone else.
 
 ## Worker procedure
 
@@ -118,8 +115,7 @@ If context runs out, an error occurs, or the session is replaced, old files stay
 at their original paths and completed pages remain usable by ordinary Sync.
 Do not record progress or automatically restart the worker. If old files remain
 after interruption, an error, or `move-old` returning `EXISTS`, wait for the next
-system instruction. The Supervisor sends it on an Origin/global Sync request
-after seven days. Start again from step 1 and merge existing pages as in step 2;
+system instruction. The Supervisor sends it on the next Origin/global Sync request. Start again from step 1 and merge existing pages as in step 2;
 do not create duplicate pages.
 
 If two workers overlap after session replacement, `create` and `memory-write.js`

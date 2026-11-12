@@ -69,18 +69,16 @@ test('guidance audits every aged completed index row and stale navigation paths'
   assert.match(audit, /legacy archive file, including navigation lines that still refer to the old paths/);
 });
 
-test('reorganization starts from the system instruction in the receiving session without messaging', () => {
+test('reorganization starts from the system instruction in the receiving session', () => {
   const text = normalize(reorg);
   assert.match(text, /sole session in single mode, Origin in multi mode/);
   assert.match(text, /If a reorganization worker this session started is still running, do nothing/);
-  assert.match(text, /Do not ask the owner or send anyone a message/);
-  assert.match(text, /Do not relay that result to the owner or anyone else/);
-  assert.match(text, /no separate owner-requested entry point/);
   assert.match(text, /`model: sonnet`/);
   assert.match(text, /`gpt-6\.1-terra`, with `fork_turns: "none"`/);
   assert.match(text, /Do not wait for it with `wait_agent`/);
-  assert.match(REFERENCE_REORG_PROMPT, /follow it now, without asking the owner/);
-  assert.match(REFERENCE_REORG_PROMPT, /Do not message the owner or anyone else/);
+  assert.doesNotMatch(reorg, /owner/i);
+  assert.doesNotMatch(REFERENCE_REORG_PROMPT, /owner/i);
+  assert.doesNotMatch(skill, /reference-reorg|one-time[^\n]*reorganization/i);
 });
 
 test('reorganization finds in-progress work in global and every group state without date inference', () => {
@@ -111,7 +109,7 @@ test('reorganization looks up existing and archived pages before searching point
 });
 
 test('reorganization writes only project pages and generated indexes without rebuilding decisions', () => {
-  for (const source of [reorg, skill]) {
+  for (const source of [reorg]) {
     const text = normalize(source);
     assert.match(text, /system.*instruction/);
     assert.match(text, /`reference\/projects\/\*\*` \(including `unarchive`\)/);
@@ -139,7 +137,8 @@ test('interrupted reorganization waits for the next instruction and merges inste
   const text = normalize(reorg.slice(reorg.indexOf('## Interruption')));
   assert.match(text, /Do not record progress or automatically restart the worker/);
   assert.match(text, /wait for the next system instruction/);
-  assert.match(text, /after seven days/);
+  assert.match(text, /next Origin\/global Sync request/);
+  assert.doesNotMatch(text, /seven days|7 days/i);
   assert.match(text, /Start again from step 1 and merge existing pages/);
   assert.match(text, /do not create duplicate pages/);
   assert.match(text, /`EXISTS` or `MEMORY_CONFLICT`, rereads, and merges/);
@@ -148,7 +147,7 @@ test('interrupted reorganization waits for the next instruction and merges inste
 
 
 test('reorganization gives complete memory-relative paths and forbids probe pages and shell file changes', () => {
-  for (const source of [reorg, skill]) {
+  for (const source of [reorg]) {
     const text = normalize(source);
     assert.match(text, /Every `--path` is relative to the memory directory and includes the category folder/);
     for (const command of [

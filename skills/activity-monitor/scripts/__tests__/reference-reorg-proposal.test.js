@@ -5,8 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { prepareReferenceReorg } from '../reference-reorg-proposal.js';
 
-const now = Date.parse('2026-11-11T10:00:00Z');
-const week = 7 * 24 * 60 * 60 * 1000;
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reorg-proposal-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -14,83 +12,52 @@ function fixture(t) {
   fs.mkdirSync(path.join(memory, 'reference'), { recursive: true });
   const target = path.join(memory, 'reference-reorg-state.json');
   const old = name => fs.writeFileSync(path.join(memory, 'reference', name), 'old bytes');
-  const state = text => fs.writeFileSync(target, text);
-  return { root, memory, target, old, state, run: (at = now, io = fs) => prepareReferenceReorg({ root, now: at, io }) };
+  const unchanged = () => {
+    assert.equal(fs.existsSync(target), false);
+    assert.deepEqual(fs.readdirSync(memory), ['reference']);
+  };
+  return { root, memory, old, unchanged, run: (io = fs) => prepareReferenceReorg({ root, io }) };
 }
 
-test('no old files leaves the question state untouched without reading it', t => {
+test('no old files makes reorganization unnecessary without creating files', t => {
   const f = fixture(t);
-  assert.equal(f.run(now, { ...fs, readFileSync: () => { throw new Error('unexpected read'); } }), false);
-  assert.equal(fs.existsSync(f.target), false);
+  assert.equal(f.run(), false);
+  f.unchanged();
 });
 
 for (const name of ['projects.md', 'decisions.md']) {
-  test(`an old ${name} records only the current ISO question time`, t => {
+  test(`an old ${name} requests reorganization on every check without creating files`, t => {
     const f = fixture(t); f.old(name);
     assert.equal(f.run(), true);
-    assert.deepEqual(JSON.parse(fs.readFileSync(f.target)), { lastAskedAt: new Date(now).toISOString() });
-    assert.equal(fs.readFileSync(path.join(f.memory, 'reference', name), 'utf8'), 'old bytes');
-    assert.equal(fs.readdirSync(f.memory).some(name => name.endsWith('.tmp')), false);
-  });
-}
-
-test('a proposal is suppressed before seven days and eligible exactly at seven days', t => {
-  const f = fixture(t); f.old('projects.md');
-  assert.equal(f.run(), true);
-  const original = fs.readFileSync(f.target, 'utf8');
-  assert.equal(f.run(now + week - 1), false);
-  assert.equal(fs.readFileSync(f.target, 'utf8'), original);
-  assert.equal(f.run(now + week), true);
-  assert.deepEqual(JSON.parse(fs.readFileSync(f.target)), { lastAskedAt: new Date(now + week).toISOString() });
-});
-
-test('missing or unreadable JSON content is treated as never asked', t => {
-  const f = fixture(t); f.old('projects.md');
-  for (const content of ['broken JSON', '{}', 'null', '{"lastAskedAt":"not a date"}']) {
-    f.state(content);
     assert.equal(f.run(), true);
-    assert.deepEqual(JSON.parse(fs.readFileSync(f.target)), { lastAskedAt: new Date(now).toISOString() });
-  }
-});
-
-test('read permission errors propagate without writing question state', t => {
-  const f = fixture(t); f.old('projects.md'); f.state('{"lastAskedAt":"old"}');
-  const io = { ...fs, readFileSync: () => { throw Object.assign(new Error('read denied'), { code: 'EACCES' }); },
-    writeFileSync: () => { throw new Error('unexpected write'); } };
-  assert.throws(() => f.run(now, io), error => error.code === 'EACCES');
-  assert.equal(fs.readFileSync(f.target, 'utf8'), '{"lastAskedAt":"old"}');
-});
-
-test('old-file permission errors propagate without reading or writing question state', t => {
-  const f = fixture(t);
-  const io = { ...fs,
-    statSync: () => { throw Object.assign(new Error('old file denied'), { code: 'EACCES' }); },
-    readFileSync: () => { throw new Error('unexpected state read'); },
-    writeFileSync: () => { throw new Error('unexpected state write'); },
-  };
-  assert.throws(() => f.run(now, io), error => error.code === 'EACCES');
-  assert.equal(fs.existsSync(f.target), false);
-});
-
-for (const method of ['writeFileSync', 'renameSync']) {
-  test(`${method} failure preserves prior question state and cleans the temporary file`, t => {
-    const f = fixture(t); f.old('projects.md'); f.state('{}');
-    const io = { ...fs, [method]: () => { throw Object.assign(new Error('write denied'), { code: 'EACCES' }); } };
-    assert.throws(() => f.run(now, io), error => error.code === 'EACCES');
-    assert.equal(fs.readFileSync(f.target, 'utf8'), '{}');
-    assert.equal(fs.readdirSync(f.memory).some(name => name.endsWith('.tmp')), false);
+    assert.equal(fs.readFileSync(path.join(f.memory, 'reference', name), 'utf8'), 'old bytes');
+    f.unchanged();
   });
 }
 
-test('state publication writes a same-directory temporary file before rename', t => {
-  const f = fixture(t); f.old('projects.md');
-  const calls = [];
-  const io = { ...fs,
-    writeFileSync: (target, content, options) => { calls.push(['write', target]); fs.writeFileSync(target, content, options); },
-    renameSync: (source, target) => { calls.push(['rename', source, target]); fs.renameSync(source, target); },
-  };
-  assert.equal(f.run(now, io), true);
-  assert.deepEqual(calls.map(call => call[0]), ['write', 'rename']);
-  assert.equal(path.dirname(calls[0][1]), f.memory);
-  assert.equal(calls[1][1], calls[0][1]); assert.equal(calls[1][2], f.target);
+test('both old files are eligible until both original paths are absent', t => {
+  const f = fixture(t); f.old('projects.md'); f.old('decisions.md');
+  assert.equal(f.run(), true);
+  fs.unlinkSync(path.join(f.memory, 'reference/projects.md'));
+  assert.equal(f.run(), true);
+  fs.unlinkSync(path.join(f.memory, 'reference/decisions.md'));
+  assert.equal(f.run(), false);
+  f.unchanged();
 });
+
+for (const name of ['projects.md', 'decisions.md']) {
+  for (const code of ['EACCES', 'EIO']) {
+    test(`${name} stat ${code} propagates without creating files`, t => {
+      const f = fixture(t);
+      const expected = Object.assign(new Error('old file unavailable'), { code });
+      const io = {
+        statSync: file => {
+          if (file === path.join(f.memory, 'reference', name)) throw expected;
+          return fs.statSync(file);
+        },
+      };
+      assert.throws(() => f.run(io), error => error === expected);
+      f.unchanged();
+    });
+  }
+}
