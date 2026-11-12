@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseSupervisorConfiguration } from '../supervisor-configuration.js';
+import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 
 const worker = fileURLToPath(new URL('./fixtures/supervisor-configuration-worker.js', import.meta.url));
 const repository = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -52,8 +53,20 @@ test('entry honors the 1M Claude 30% threshold and configured 60s TTL from confi
   assert.equal(resolved.originSyncThreshold, 20);
   assert.equal(resolved.syncBatchLimit, 40);
   assert.equal(resolved.syncThreshold, 15);
-  assert.equal(result.controls.length, 1, '50% usage must rotate with the configured 30% threshold');
-  assert.deepEqual(result.fences, [{ sessionGroup: 'a', reason: 'ttl', runId: 'run-a' }], '120s idle must expire a 60s TTL');
+  const rotations = result.controls.filter(control => control.content.startsWith('Context usage has reached the session threshold.'));
+  const reclaimChecks = result.controls.filter(control => control.content === PRE_RECLAIM_CHECK_PROMPT);
+  assert.equal(rotations.length, 1, '50% usage must rotate with the configured 30% threshold');
+  assert.equal(rotations[0].sessionGroup, 'a');
+  assert.equal(rotations[0].bypassState, true);
+  assert.equal(rotations[0].appendAckSuffix, false);
+  assert.equal(rotations[0].targetBinding.expectedRunId, 'run-a');
+  assert.equal(reclaimChecks.length, 1, '120s idle must start the pre-reclaim check for a configured 60s TTL');
+  assert.equal(reclaimChecks[0].sessionGroup, 'a');
+  assert.equal(reclaimChecks[0].requireIdle, true);
+  assert.equal(reclaimChecks[0].appendAckSuffix, true);
+  assert.equal(reclaimChecks[0].targetBinding.expectedRunId, 'run-a');
+  assert.equal(result.controls.length, 2, 'rotation and TTL preparation must each send only one control');
+  assert.deepEqual(result.fences, [], 'TTL reclaim must wait for its pre-reclaim check acknowledgment');
   assert.equal(result.refreshed.mode, 'single');
   assert.equal(result.refreshed.hotTtlSeconds, 999, 'hot TTL refreshes with the next configuration read');
   for (const key of ['evictMinIdleSeconds', 'syncMinIntervalSeconds'])
@@ -71,6 +84,8 @@ test('entry gives valid environment settings priority over real config.json', t 
   assert.equal(result.configuration.syncMaxIntervalSeconds, 2000);
   assert.equal(result.configuration.originSyncThreshold, 35);
   assert.equal(result.configuration.syncBatchLimit, 80);
+  assert.equal(result.controls.filter(control => control.content === PRE_RECLAIM_CHECK_PROMPT).length, 0,
+    '120s idle must not start a pre-reclaim check for an environment-selected 300s TTL');
   assert.deepEqual(result.fences, [], '120s idle must not expire an environment-selected 300s TTL');
 });
 
