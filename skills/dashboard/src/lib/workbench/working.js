@@ -1,4 +1,4 @@
-export const END_TYPES = ['stop', 'turn_complete', 'dashboard_interrupt'];
+export const END_TYPES = ['stop', 'turn_complete', 'dashboard_interrupt', 'runtime_health:stop_failure'];
 export const TOOL_TYPES = ['pre_tool_use', 'post_tool_use', 'post_tool_failure'];
 export const CHILD_TYPES = ['subagent_start', 'subagent_stop'];
 export const eventTime = event => typeof event.timestamp === 'number' ? event.timestamp : Date.parse(event.timestamp);

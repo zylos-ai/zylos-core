@@ -2,8 +2,8 @@ import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=85';
 import { channelIcon, platformLabel, statePill } from './board.js?v=153';
-import { groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=163';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=165';
+import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=164';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=166';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=108';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=115';
 import { renderNameEditor } from './name-edit.js?v=115';
@@ -91,7 +91,7 @@ export function plainMeta(row, t = key => key, { now = Date.now(), locale } = {}
 
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
   t = key => key, writable = () => true, detail = () => 'plain', identity = () => '', showLastReceived = true,
-  onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, confirm, observable = () => false, onObserve = () => {},
+  onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, conversationAvailable = () => true, confirm, observable = () => false, onObserve = () => {},
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
     totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null, level: null,
@@ -141,15 +141,13 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     }
     // State and actions share one wrapper: on phones it becomes the second row under the title.
     const sub = element(document, 'div', undefined, 'wb-d-sub');
-    const displayRow = ['busy', 'idle'].includes(row.state?.kind)
-      ? { ...row, state: { ...row.state, kind: row.working ? row.working.on ? 'busy' : 'idle' : 'unknown' }, duration: row.working?.on && Number.isFinite(row.working.since)
-        ? Math.max(0, (now() - row.working.since) / 1000) : null } : row;
+    const displayRow = detailDisplayRow(row, now());
     sub.append(statePill(document, displayRow, { t, level: getLevel() }));
     top.append(box, heading, sub);
     const actions = element(document, 'div', undefined, 'wb-d-acts');
     // Opening the conversation is the main action, so it leads the action row.
     // Origin has its own conversation in both modes (its single-mode row has no group).
-    if (typeof onConversation === 'function' && (row.origin === true || row.sessionGroup)) {
+    if (typeof onConversation === 'function' && conversationAvailable() && (row.origin === true || row.sessionGroup)) {
       const conversation = element(document, 'button', undefined, 'wb-btn wb-btn-primary wb-d-conv');
       conversation.append(element(document, 'span', t('chat.page.viewConversation'), 'wb-conv-label'));
       conversation.type = 'button';

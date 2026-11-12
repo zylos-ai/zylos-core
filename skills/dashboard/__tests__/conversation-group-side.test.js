@@ -362,7 +362,7 @@ test('the group detail sits beside the conversation only where about 600px of it
 test('the conversation group sidebar keeps current state without repeating the last received preview', async t => {
   const labels = JSON.parse(readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url), 'utf8'));
   const translate = (key, params) => Object.entries(params ?? {}).reduce((text, [name, value]) => text.replaceAll('{'+name+'}', value), labels[key] ?? key);
-  const f = await fixture(t, { translate, groupRow: { ...listedRow, state: { kind: 'idle' }, duration: 75,
+  const f = await fixture(t, { translate, groupRow: { ...listedRow, state: { kind: 'idle' }, working: { on: false }, duration: 75,
     preview: { text: 'private preview already shown in conversation', channel: 'dashboard', timestamp: 1000 } } });
   await f.openSide();
   const title = allNodes(f.side()).find(node => node.classList.contains('wb-now-title'));
@@ -384,7 +384,7 @@ for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) f
   test(`${locale} ${level} ${scene}: group summaries keep content and evidence in their intended regions`, () => {
     const now = Date.now(), preview = 'The received message must stay a subtitle';
     const translate = summaryTranslation(locale), zh = locale === 'zh';
-    const current = { ...listedRow, state: { kind: scene }, duration: 75,
+    const current = { ...listedRow, state: { kind: scene }, working: { on: scene === 'busy', since: scene === 'busy' ? now - 75000 : null }, duration: 75,
       preview: { text: preview, timestamp: now - 90000, channel: 'dashboard', source: { kind: 'channel' } },
       tools: scene === 'busy' ? [{ name: 'Read' }, { name: 'WebSearch' }] : [],
       queue: { known: true, pending: { count: scene === 'waiting' ? 1 : 0 }, running: { count: scene === 'busy' ? 1 : 0 } },

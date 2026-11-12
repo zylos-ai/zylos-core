@@ -3,7 +3,7 @@ import { boardController, renderBoard, renderDistribution } from './board.js?v=1
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip } from './instance-strip.js?v=157';
 import { renderAttention } from './attention-bar.js?v=150';
-import { createGroupDetail } from './detail.js?v=165';
+import { createGroupDetail } from './detail.js?v=166';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
 import { createHostPanel } from './host-panel.js?v=159';
 import { element, icon } from './plain-text.js?v=106';
@@ -12,7 +12,7 @@ import { watchRows } from './label-fit.js?v=1';
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
   endpoint = path => path, identity = () => endpoint('/api/workbench/groups'),
   observerStatus = () => null, observerAvailable = () => true, onObserve = () => {},
-  writable = () => true, onMemory = () => {}, onConversation, instanceInfo = () => ({}),
+  writable = () => true, onMemory = () => {}, onConversation, conversationAvailable = () => true, instanceInfo = () => ({}),
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
   const board = document.querySelector('#wb-board');
   if (!board) return { openGroup: async () => {}, setViewDetail() {}, destroy() {} };
@@ -182,7 +182,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   };
   groupDetail = createGroupDetail({ root: document.querySelector('#wb-side'), document, t,
     fetch: (path, options) => fetch(endpoint(path), options), identity, writable,
-    detail: () => mode.detailLevel(), isVisible: visible, onMemory, onConversation, onObserve,
+    detail: () => mode.detailLevel(), isVisible: visible, onMemory, onConversation, conversationAvailable, onObserve,
     observable: row => groupObservable(observerEntry(), row),
     onRename: () => controller.refresh(), onClose: () => { if (!stopped) redraw(); },
   });

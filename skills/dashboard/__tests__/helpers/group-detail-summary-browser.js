@@ -134,6 +134,9 @@ export async function runGroupDetailSummaryBrowser(t, sandbox) {
         await visibleRegions(overview);
         await shot(f.page, `${width}-light-overview`, '#wb-side');
         await overview.locator('[data-action="viewConversation"]').click();
+        await f.page.locator(`.conversation-list-item[data-conversation-id="${ID}"][aria-current="true"]`).waitFor({ state: 'attached' });
+        assert.equal(await f.page.locator('.tab[data-tab="chat"]').evaluate(el => el.classList.contains('active')), true);
+        if (width === 390) await f.page.waitForFunction(() => document.documentElement.dataset.conversationFocus === 'true');
         await openGroupDetail(f.page);
         const side = f.page.locator('#wb-chat .wb-group-side');
         await visibleRegions(side);

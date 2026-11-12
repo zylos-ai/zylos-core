@@ -154,7 +154,7 @@ test('working detail duration starts at the earliest current work without changi
   assert.equal(row.state.kind, 'idle');
   await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, turn: null, tools: 0, subagents: null } }], listKnown: true });
   const head = allNodes(root).find(node => node.classList.contains('wb-group-head'));
-  assert.equal(allNodes(head).some(node => node.classList.contains('wb-dur')), false);
+  assert.equal(allNodes(head).find(node => node.classList.contains('wb-dur'))?.textContent, '12m');
 });
 
 test('working English text uses singular task hour and minute labels', async () => {

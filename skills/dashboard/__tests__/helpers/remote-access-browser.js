@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 import { startPage } from './workbench-browser.js';
+import path from 'node:path';
+import { GROUP } from '../fixtures/workbench-browser-api.js';
 
 const REMOTE = 'spark';
 const REFUSAL = { error: 'remote_chat_disabled', message: '对方实例未允许远端访问对话和终端' };
@@ -25,14 +27,14 @@ export async function runRemoteAccessBrowser(t, sandbox) {
   sandbox.addCleanup(() => browser.close());
 
   // `refuse` names what the remote refuses right now: 'chat', 'observer' or nothing.
-  async function openRemote(refuse) {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: 'en-US', timezoneId: 'UTC' });
+  async function openRemote(refuse, { width = 1280 } = {}) {
+    const context = await browser.newContext({ viewport: { width, height: 844 }, locale: 'en-US', timezoneId: 'UTC' });
     sandbox.addCleanup(() => context.close());
     // The observer entry is offered at the technical detail level.
     await context.addInitScript(() => { try { localStorage.setItem('zylos-dashboard-locale', 'en'); localStorage.setItem('zylos-dashboard-detail-level', 'technical'); } catch {} });
     const page = await context.newPage();
-    const errors = [], refusals = [];
-    page.on('pageerror', error => errors.push(error.message));
+    const errors = [], refusals = [], chatRequests = [];
+    page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
     await page.route('**/*', async route => {
       const url = new URL(route.request().url());
       if (!url.href.startsWith(base + '/')) return route.abort();
@@ -43,6 +45,10 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       const remote = url.pathname.match(/^\/fleet\/([^/]+)(\/api\/.*)$/);
       if (!remote) return route.fallback();
       const apiPath = remote[2];
+      if (apiPath.startsWith('/api/chat/')) {
+        assert.ok(chatRequests.length < 100, 'chat request capture is bounded');
+        chatRequests.push(apiPath);
+      }
       // No push stream: its every (re)open reads the state again, and a state allowing remote access read after a
       // refusal rightly means the switch is back on. Without it no state is read after the entry read in this case.
       if (apiPath === '/api/stream') return route.abort();
@@ -50,18 +56,62 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       if (kind && kind === refuse.now) { refusals.push(apiPath); return route.fulfill({ status: 403, json: REFUSAL }); }
       if (apiPath === '/api/observer/status') return route.fulfill({ json: OBSERVER_STATUS });
       let value = workbenchAnswer(new URL(apiPath + url.search, 'http://fixture'), Date.now());
-      if (apiPath === '/api/state' && value) value = { ...value, agent: { name: REMOTE }, chat_allow_remote: true };
+      if (apiPath === '/api/workbench/groups' && value) value = { ...value, rows: value.rows.map(row => row.sessionGroup === GROUP
+        ? { ...row, tools: [], working: { on: false, since: null, turn: null, tools: 0, subagents: null } } : row) };
+      if (apiPath === '/api/state' && value) value = { ...value, agent: { name: REMOTE }, chat_allow_remote: refuse.allow !== false };
       return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });
     });
     await page.goto(base + '/');
     await page.locator(`#agent-fleet-root .agent-open[data-agent="${REMOTE}"]`).click();
     await page.waitForFunction(() => !document.querySelector('#agent-detail').hidden);
-    return { page, context, errors, refusals };
+    return { page, context, errors, refusals, chatRequests };
   }
   const shown = (page, tab) => page.locator(`.tab[data-tab="${tab}"]`).isVisible();
   const activeTab = page => page.evaluate(() => document.querySelector('.tab.active')?.dataset.tab);
   const leftForOverview = page => page.waitForFunction(() => document.querySelector('.tab[data-tab="chat"]').hidden
     && document.querySelector('.tab.active')?.dataset.tab === 'overview' && !document.querySelector('#tab-overview').hidden, null, { timeout: 10_000 });
+
+  // Real permission-state reads and group actions at phone/desktop widths. Run
+  // for group conversation entry/remote access wiring; skip unrelated backend
+  // work. The shared sandbox owns all loopback HTTP and browser resources.
+  for (const width of [390, 1280]) await t.test(`${width}: group conversation action follows the remote access switch`, async () => {
+    const policy = { now: null, allow: false };
+    const { page, context, errors, chatRequests } = await openRemote(policy, { width });
+    try {
+      await page.locator(`.wb-row[data-group="${GROUP}"]`).click();
+      const side = page.locator('#wb-side'), action = side.locator('[data-action="viewConversation"]');
+      await side.waitFor();
+      assert.equal(await action.count(), 0);
+      assert.equal(await side.locator('.wb-group-head .wb-idle').count(), 1, 'header follows idle working despite busy runtime state');
+      assert.match(await side.locator('.wb-now-title').first().innerText(), /Idle/, 'now card uses the same working state');
+      assert.equal(chatRequests.length, 0, 'closed remote access makes no chat requests');
+      const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
+      if (evidence && width === 390) {
+        fs.mkdirSync(evidence, { recursive: true });
+        await page.screenshot({ path: path.join(evidence, 'remote-group-chat-closed-390.png') });
+      }
+      policy.allow = true;
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await action.waitFor();
+      if (evidence && width === 390) await page.screenshot({ path: path.join(evidence, 'remote-group-chat-open-390.png') });
+      // Retain a previously offered action to exercise a delayed callback after
+      // permission closes, the same guard used when returning from observer.
+      const stale = await action.elementHandle();
+      policy.allow = false;
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await action.waitFor({ state: 'detached' });
+      const reopened = page.waitForRequest(request => {
+        const pathname = new URL(request.url()).pathname;
+        return pathname.includes('/api/workbench/groups/') && pathname.endsWith('/runs');
+      }, { timeout: 3000 });
+      await stale.evaluate(el => el.click());
+      await reopened;
+      await side.waitFor();
+      assert.equal(await activeTab(page), 'overview');
+      assert.equal(chatRequests.length, 0, 'delayed conversation action falls back to group overview');
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  });
 
   await t.test('a conversation request refused while the conversation tab is open hides the tab and returns to the overview', async () => {
     const refuse = { now: null };

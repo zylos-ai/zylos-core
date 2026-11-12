@@ -26,6 +26,7 @@ const t = (key, params) => key + (params ? ' ' + JSON.stringify(params) : '');
 const response = (value, status = 200) => ({ ok: status < 400, status, json: async () => value });
 const run = (id, start = 1000, end = 2000) => ({ runId: id, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), n: 2, endReason: 'ttl' });
 const row = (sessionGroup = 'telegram:a', extra = {}) => ({ sessionGroup, presence: 'running', state: { kind: 'busy' },
+  working: { on: (extra.state?.kind ?? 'busy') === 'busy', since: 900000 },
   live: { runId: 'run-a', sessionId: 'session-a' }, tools: [], queue: { pending: { count: 1 }, running: { count: 0 } },
   contextPct: 42, createdAt: 1000, launchConfig: { runtime: 'claude', mode: 'default' }, ...extra });
 const emptyRuns = { runs: [], totalEvents: 17, totalRuns: 5, unattributed: 0 };
@@ -1197,7 +1198,7 @@ test('the conversation button leads the action row, as the primary action beside
 
 test('the idle now card leads with the current state and duration while received text stays secondary', () => {
   const document = createDocument();
-  const said = row('telegram:a', { state: { kind: 'idle' }, duration: 75, preview: { text: 'please check the layout', channel: 'telegram', timestamp: 1000 } });
+  const said = row('telegram:a', { state: { kind: 'idle' }, working: { on: false }, duration: 75, preview: { text: 'please check the layout', channel: 'telegram', timestamp: 1000 } });
   let root = document.createElement('div');
   renderOverview(root, said, {}, { document, t });
   const card = allNodes(root).find(node => node.classList.contains('wb-now-card'));
@@ -1216,7 +1217,7 @@ test('the idle now card leads with the current state and duration while received
   const fallback = allNodes(root).find(node => node.classList.contains('wb-now-sub')).textContent;
   assert.match(fallback, /^wb\.board\.lastReceivedAt \{"channel":"wb\.platform\.openmax","time":"[^"]+"\}$/);
   root = document.createElement('div');
-  renderOverview(root, row('telegram:b', { state: { kind: 'idle' }, duration: 30 }), {}, { document, t });
+  renderOverview(root, row('telegram:b', { state: { kind: 'idle' }, working: { on: false }, duration: 30 }), {}, { document, t });
   assert.match(allNodes(root).find(node => node.classList.contains('wb-now-title')).textContent, /wb\.state\.idle.*wb\.detail\.idleElapsed/);
 });
 
@@ -1601,7 +1602,7 @@ test('plain busy and waiting summaries stay on one current-state line', () => {
 });
 
 test('received previews and their raw fold are omitted together from conversation details', async tctx => {
-  const current = row('telegram:side', { state: { kind: 'idle' }, duration: 75,
+  const current = row('telegram:side', { state: { kind: 'idle' }, working: { on: false }, duration: 75,
     preview: { text: 'already visible in the conversation', timestamp: 1000, channel: 'telegram', source: { kind: 'channel' } } });
   for (const level of ['plain', 'technical']) {
     let rawReads = 0;
@@ -1752,4 +1753,59 @@ test('plain idle time uses readable elapsed units from the existing state durati
     assert.equal(titles.length, 1);
     assert.equal(titles[0].textContent, example[expectedIndex], locale + ' duration ' + example[0]);
   }
+});
+
+
+test('conversation availability redraws the group action when remote access changes', async () => {
+  let available = false;
+  const f = detailFixture(async path => response(defaultRead(path)), {
+    conversationAvailable: () => available, onConversation: () => {},
+  });
+  try {
+    const current = row();
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    const shown = () => allNodes(f.root).some(node => node.dataset.action === 'viewConversation');
+    assert.equal(shown(), false);
+    available = true; f.controller.setViewDetail(); assert.equal(shown(), true);
+    available = false; f.controller.setViewDetail(); assert.equal(shown(), false);
+  } finally { f.controller.destroy(); }
+});
+
+for (const level of ['plain', 'technical']) for (const working of [false, true]) {
+  test(`group header and now card share ${working ? 'busy' : 'idle'} working in ${level} detail`, async () => {
+    const f = detailFixture(async path => response(defaultRead(path)), { detail: () => level, now: () => 900000 });
+    try {
+      const current = row('telegram:a', { state: { kind: working ? 'idle' : 'busy' },
+        working: { on: working, since: working ? 840000 : null }, duration: 6 });
+      await f.controller.open(current, { rows: [current], listKnown: true });
+      const kind = working ? 'busy' : 'idle';
+      const header = allNodes(f.root).find(node => node.classList.contains('wb-group-head'));
+      assert.ok(allNodes(header).some(node => node.classList.contains('wb-' + kind)));
+      const now = allNodes(f.root).find(node => node.classList.contains('wb-now-title'));
+      assert.match(now.textContent, new RegExp('wb.state.' + kind));
+      assert.doesNotMatch(now.textContent, new RegExp('wb.state.' + (working ? 'idle' : 'busy')));
+      if (!working) {
+        const card = allNodes(f.root).find(node => node.classList.contains('wb-now-card'));
+        assert.equal(allNodes(header).some(node => node.classList.contains('wb-dur')), false,
+          'header does not relabel the runtime busy duration as idle time');
+        assert.equal(allNodes(card).some(node => node.classList.contains('wb-dur')), false,
+          'now card does not relabel the runtime busy duration as idle time');
+      }
+      assert.equal(current.state.kind, working ? 'idle' : 'busy', 'runtime snapshot remains unchanged');
+    } finally { f.controller.destroy(); }
+  });
+}
+
+
+for (const level of ['plain', 'technical']) test(`group summaries agree on unknown when working is unavailable in ${level} detail`, async () => {
+  const f = detailFixture(async path => response(defaultRead(path)), { detail: () => level });
+  try {
+    const current = row('telegram:a', { state: { kind: 'busy' }, working: null });
+    await f.controller.open(current, { rows: [current], listKnown: true });
+    const header = allNodes(f.root).find(node => node.classList.contains('wb-group-head'));
+    assert.ok(allNodes(header).some(node => node.classList.contains('wb-unknown')));
+    const now = allNodes(f.root).find(node => node.classList.contains('wb-now-title'));
+    assert.match(now.textContent, /wb.state.unknown/);
+    assert.doesNotMatch(now.textContent, /wb.state.busy|wb.state.idle/);
+  } finally { f.controller.destroy(); }
 });

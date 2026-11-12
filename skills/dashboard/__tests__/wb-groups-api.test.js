@@ -1026,7 +1026,7 @@ for (const kind of ['main', 'children', 'stale child']) test(`working API projec
   else assert.deepEqual(row.working, { on: false, since: null, turn: null, tools: 0, subagents: null });
 });
 
-for (const endType of ['stop', 'turn_complete', 'dashboard_interrupt']) test(`working uses source-time ${endType} and insertion-order ties without child shadowing`, async t => {
+for (const endType of ['stop', 'turn_complete', 'dashboard_interrupt', 'runtime_health:stop_failure']) test(`working uses source-time ${endType} and insertion-order ties without child shadowing`, async t => {
   const { f, add, read } = workingFixture(t);
   add('user_prompt_submit', 6000);
   add(endType, 9000); // Ingested later, but older than the prompt.
@@ -1261,4 +1261,18 @@ test('working keeps an old open turn and its elapsed anchor while a main tool ru
   add('user_prompt_submit', 45 * 60000);
   f.live.get('telegram:g0').status.value.active_tool_details = [{ id: 'still-running', name: 'Bash', input: {} }];
   assert.deepEqual((await read()).working, { on: true, since, turn: { since }, tools: 1, subagents: null });
+});
+
+
+// Private Store/Core fixtures only: run for working terminal-event queries or
+// reduction changes; skip unrelated UI changes. No live runtime/channel starts.
+test('working ends a failed main turn even after a newer diagnostic event', async t => {
+  const { f, add, read } = workingFixture(t);
+  add('user_prompt_submit', 9000);
+  add('assistant_message', 6000);
+  add('runtime_health:stop_failure', 3000);
+  add('runtime_health:recovered', 1000);
+  assert.equal((await read()).working.on, false);
+  add('user_prompt_submit', 0); f.advance(2100);
+  assert.equal((await read()).working.on, true, 'a new prompt opens a fresh turn');
 });

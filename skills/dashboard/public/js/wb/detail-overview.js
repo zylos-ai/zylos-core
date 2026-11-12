@@ -180,6 +180,16 @@ function idleDuration(seconds, t) {
     remaining ? minuteText(remaining) : null].filter(Boolean).join(' ');
 }
 
+/** Busy/idle follow event-derived working, as in conversation headers; preserve exceptional runtime states. */
+export function detailDisplayRow(row, now = Date.now()) {
+  if (!['busy', 'idle'].includes(row.state?.kind)) return row;
+  const working = row.working;
+  const kind = working ? working.on ? 'busy' : 'idle' : 'unknown';
+  const duration = working?.on && Number.isFinite(working.since) ? Math.max(0, (now - working.since) / 1000)
+    : kind === 'idle' && row.state.kind === 'idle' ? row.duration : null;
+  return { ...row, state: { ...row.state, kind }, duration };
+}
+
 function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastReceived, agents }) {
   const kind = row.state?.kind ?? 'unknown';
   const card = element(document, 'div', undefined, 'wb-now-card');
@@ -282,7 +292,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   };
   const now = section('wb.detail.now', 'wb-detail-now', 'activity');
   const agents = activeSubagents(data.currentEvents ?? [], row.live?.runId);
-  const card = nowCard(document, row, { ...data, now: currentTime }, { level, t, snapshot, onRaw, showLastReceived, agents });
+  const card = nowCard(document, detailDisplayRow(row, currentTime), { ...data, now: currentTime }, { level, t, snapshot, onRaw, showLastReceived, agents });
   now.append(card);
   if (technical(level) && agents.length) {
     const subs = element(document, 'div', undefined, 'wb-subs');
