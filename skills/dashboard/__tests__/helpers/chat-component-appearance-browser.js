@@ -365,6 +365,26 @@ async function checkChartDataTables(page, { width, theme, output }) {
         const table = tables.nth(i);
         assert.deepEqual(await table.locator('tbody th[scope="row"]').allTextContents(), contract.labels, id + ' preserves each point/category label');
         assert.deepEqual(await table.locator('tbody .conversation-chart-value').allTextContents(), contract.tables[i], id + ' exact formatted values');
+        // Compare glyph edges, not cell boxes: left-aligned headers and right-aligned
+        // values share the same column box but do not form a readable numeric column.
+        const alignment = await table.evaluate(node => {
+          const edge = cell => {
+            const range = document.createRange(); range.selectNodeContents(cell);
+            return { text: cell.textContent, right: range.getBoundingClientRect().right, align: getComputedStyle(cell).textAlign };
+          };
+          return [...node.tHead.rows[0].cells].slice(1).map((header, index) => ({
+            column: index + 1, header: edge(header),
+            cells: [...node.tBodies[0].rows].map(row => edge(row.cells[index + 1])),
+          }));
+        });
+        if (output) fs.writeFileSync(path.join(output, `chart-alignment-${id}-${i}-${width}-${theme}.json`), JSON.stringify(alignment, null, 2));
+        for (const column of alignment) {
+          assert.equal(column.header.align, 'right', id + ' numeric header aligns right');
+          for (const cell of column.cells) {
+            assert.equal(cell.align, 'right', id + ' numeric cell aligns right');
+            assert.ok(Math.abs(column.header.right - cell.right) <= 1, id + ' numeric header and cell text share the right edge: ' + JSON.stringify({ header: column.header, cell }));
+          }
+        }
         assert.ok(await table.locator('thead th[scope="col"]').count() >= 2, 'table has semantic column headers');
         assert.equal(await table.locator('tbody th[scope="row"]').count(), contract.tables[i].length, 'every data row has a semantic label');
       }
