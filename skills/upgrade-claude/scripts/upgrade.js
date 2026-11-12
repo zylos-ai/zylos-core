@@ -51,7 +51,7 @@ async function enqueueExit() {
   }
 }
 
-function cancelExit(controls) {
+export function cancelExit(controls) {
   if (!controls) return;
   for (const [name, id] of [['/exit', controls.exitControlId], ['check', controls.checkControlId]]) {
     try {
