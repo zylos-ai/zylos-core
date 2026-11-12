@@ -30,6 +30,8 @@ test('legacy waits idle, sends exit once, confirms disappearance; busy target fo
   const entries = await migration.findLegacySessions(); await migration.advanceLegacy(entries); await migration.advanceLegacy(entries);
   assert.deepEqual(calls.filter(x => x[0]==='exit'), [['exit','claude-main']]);
   live.delete('claude-main'); await migration.advanceLegacy(entries);
+  now = 299999; await migration.advanceLegacy(entries);
+  assert.equal(calls.some(x => x[0] === 'stop'), false);
   now = 300000; await migration.advanceLegacy(entries);
   assert.deepEqual(calls.find(x => x[0]==='stop'), ['stop','codex',{tmuxName:'codex-main',expectedRunId:'old'}]);
   assert.deepEqual(calls.filter(x => x[0]==='legacy_tmux_stopped').map(x => x[1].reason), ['exited','forced']);
@@ -42,6 +44,96 @@ test('unknown legacy runtime never guesses adapter; failed stop remains pending'
   const entries=await migration.findLegacySessions(); now=300001; await migration.advanceLegacy(entries); assert.equal(stopCount,0);
   runtime='claude';await migration.advanceLegacy(entries); assert.equal(stopCount,1);assert.equal(entries[0].stopped,false);
 });
+
+for (const runtime of ['claude', 'codex']) {
+  test(`${runtime} legacy exit gets sixty seconds from successful submission`, async () => {
+    let now = 0, stops = 0;
+    const events = [];
+    const migration = createLegacyMigration({ now: () => now,
+      readLegacy: async name => ({ present: name === 'claude-main', tmuxName: name, runtime, runId: null }),
+      readLegacyStatus: async () => ({ state: 'idle', idle_seconds: 3 }),
+      sendExit: async () => { now += 50; },
+      getSessionAdapter: () => ({ stop: async () => { stops++; } }),
+      diagnostic: (event, fields) => events.push({ event, ...fields }),
+    });
+    const entries = await migration.findLegacySessions();
+    now = 10000; await migration.advanceLegacy(entries);
+    assert.equal(entries[0].exitSentAt, 10050);
+    now = 70049; await migration.advanceLegacy(entries); assert.equal(stops, 0);
+    now = 70050; await migration.advanceLegacy(entries); assert.equal(stops, 1);
+    await migration.advanceLegacy(entries); assert.equal(stops, 1);
+    assert.deepEqual(events, [
+      { event: 'legacy_exit_forced', tmuxName: 'claude-main', reason: 'exit_timeout' },
+      { event: 'legacy_tmux_stopped', tmuxName: 'claude-main', reason: 'forced' },
+    ]);
+  });
+}
+
+test('failed exit submission does not start the sixty second timer', async () => {
+  let now = 0, stops = 0;
+  const migration = createLegacyMigration({ now: () => now,
+    readLegacy: async name => ({ present: name === 'claude-main', tmuxName: name, runtime: 'codex', runId: null }),
+    readLegacyStatus: async () => ({ state: 'idle', idle_seconds: 3 }),
+    sendExit: async () => { throw Error('submission failed'); },
+    getSessionAdapter: () => ({ stop: async () => { stops++; } }),
+  });
+  const entries = await migration.findLegacySessions(); await migration.advanceLegacy(entries);
+  now = 60000; await migration.advanceLegacy(entries);
+  assert.equal(entries[0].exitSent, false); assert.equal(entries[0].exitSentAt, undefined);
+  assert.equal(stops, 0);
+  now = 300000; await migration.advanceLegacy(entries); assert.equal(stops, 1);
+});
+
+for (const runtime of ['claude', 'codex']) {
+  test(`${runtime} disappearance before the exit deadline skips forced stop`, async () => {
+    let now = 0, present = true, exits = 0, stops = 0;
+    const events = [];
+    const migration = createLegacyMigration({ now: () => now,
+      readLegacy: async name => ({ present: present && name === 'claude-main', tmuxName: name, runtime, runId: null }),
+      readLegacyStatus: async () => ({ state: 'idle', idle_seconds: 3 }),
+      sendExit: async () => { exits++; },
+      getSessionAdapter: () => ({ stop: async () => { stops++; } }),
+      diagnostic: (event, fields) => events.push({ event, ...fields }),
+    });
+    const entries = await migration.findLegacySessions(); await migration.advanceLegacy(entries);
+    await migration.advanceLegacy(entries); await migration.advanceLegacy(entries);
+    assert.equal(exits, 1);
+    present = false; now = 59999; await migration.advanceLegacy(entries);
+    assert.equal(entries[0].stopped, true); assert.equal(stops, 0);
+    now = 60000; await migration.advanceLegacy(entries); assert.equal(stops, 0);
+    assert.deepEqual(events, [{ event: 'legacy_tmux_stopped', tmuxName: 'claude-main', reason: 'exited' }]);
+  });
+}
+
+for (const reason of ['exit_timeout', 'startup_timeout']) {
+  test(`${reason} logs forced exit once while failed stops keep retrying`, async () => {
+    let now = 0, stops = 0;
+    const events = [];
+    const migration = createLegacyMigration({ now: () => now,
+      readLegacy: async name => ({ present: name === 'claude-main', tmuxName: name, runtime: 'claude', runId: null }),
+      readLegacyStatus: async () => ({ state: reason === 'exit_timeout' ? 'idle' : 'busy', idle_seconds: 3 }),
+      sendExit: async () => {},
+      getSessionAdapter: () => ({ stop: async () => { if (++stops <= 3) throw Error('stop failed'); } }),
+      diagnostic: (event, fields) => events.push({ event, ...fields }),
+    });
+    const entries = await migration.findLegacySessions();
+    await migration.advanceLegacy(entries);
+    now = reason === 'exit_timeout' ? 60000 : 300000;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await migration.advanceLegacy(entries);
+      assert.equal(stops, attempt); assert.equal(entries[0].stopped, false);
+      now += 1000;
+    }
+    await migration.advanceLegacy(entries);
+    assert.equal(stops, 4); assert.equal(entries[0].stopped, true);
+    await migration.advanceLegacy(entries); assert.equal(stops, 4);
+    assert.deepEqual(events.filter(row => row.event === 'legacy_exit_forced'), [
+      { event: 'legacy_exit_forced', tmuxName: 'claude-main', reason },
+    ]);
+    assert.equal(events.filter(row => row.event === 'legacy_stop_unconfirmed').length, 3);
+    assert.equal(events.filter(row => row.event === 'legacy_tmux_stopped').length, 1);
+  });
+}
 
 
 for (const health of ['ok', 'auth_failed']) {

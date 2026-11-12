@@ -57,17 +57,23 @@ export function createLegacyMigration({ readLegacy, readLegacyStatus, sendExit, 
           entry.stopped = true;
           diagnostic('legacy_tmux_stopped', { tmuxName: entry.tmuxName, reason: entry.forced ? 'forced' : 'exited' }); return;
         }
-        if (now() - startedAt < 300000) {
+        const exitTimedOut = entry.exitSent && now() - entry.exitSentAt >= 60000;
+        if (!exitTimedOut && now() - startedAt < 300000) {
           if (!entry.exitSent) {
             const status = await readLegacyStatus(entry.tmuxName);
             if (status?.state === 'idle' && status.idle_seconds >= idleSeconds) {
-              await sendExit(live); entry.exitSent = true;
+              await sendExit(live); entry.exitSent = true; entry.exitSentAt = now();
             }
           }
           return;
         }
         if (!['claude', 'codex'].includes(live.runtime)) {
           diagnostic('stop_unconfirmed', { tmuxName: entry.tmuxName, reason: 'runtime_unknown' }); return;
+        }
+        if (!entry.exitForcedLogged) {
+          entry.exitForcedLogged = true;
+          diagnostic('legacy_exit_forced', { tmuxName: entry.tmuxName,
+            reason: exitTimedOut ? 'exit_timeout' : 'startup_timeout' });
         }
         await getSessionAdapter(live.runtime).stop({ tmuxName: entry.tmuxName, expectedRunId: live.runId ?? null });
         entry.forced = true; entry.stopped = true;
