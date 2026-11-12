@@ -172,16 +172,32 @@ export async function verifyDashboard({ zylosDir }) {
   const deadline = Date.now() + READY_LIMIT;
   const remaining = () => Math.max(0, Math.floor(deadline - Date.now()));
   const timedOut = error => error.code === 'verify_timeout' || ['TimeoutError', 'AbortError'].includes(error.name);
-  const health = async (url, expectedPid) => {
+  const health = async (url, expectedPid, redirected = false) => {
     const timeout = remaining();
     if (!timeout) throw Object.assign(Error('Dashboard verification timed out'), { code: 'verify_timeout' });
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(timeout) });
+    if (!response.ok) {
+      if (!redirected && [301, 302, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        let next;
+        try { if (location) next = new URL(location, url); } catch {}
+        const current = new URL(url);
+        if (next && current.protocol === 'http:' && next.protocol === 'https:'
+          && next.hostname === current.hostname && next.port === current.port
+          && next.pathname === current.pathname && next.search === current.search
+          && !next.username && !next.password && !next.hash) {
+          return health(next.href, expectedPid, true);
+        }
+      }
+      throw Object.assign(Error(`Dashboard health returned HTTP ${response.status}`), { httpStatus: response.status });
+    }
     const body = await response.json();
-    if (!response.ok || body.ok !== true || body.service !== name || body.pid !== expectedPid) throw Error('Dashboard health failed');
+    if (body.ok !== true || body.service !== name || body.pid !== expectedPid) throw Error('Dashboard health failed');
   };
-  const failed = (item, code, location) => {
+  const failed = (item, code, location, httpStatus) => {
     checks[item] = false;
-    errors.push({ item, code, location });
+    errors.push({ item, code, location, ...(Number.isInteger(httpStatus)
+      ? { message: `Dashboard health returned HTTP ${httpStatus}` } : {}) });
   };
   let loc;
   try { loc = settings(zylosDir); }
@@ -189,6 +205,7 @@ export async function verifyDashboard({ zylosDir }) {
   const localUrl = `http://127.0.0.1:${loc.port}/api/health`;
   let confirmedPid;
   let observedFailure = false;
+  let healthHttpStatus;
   do {
     const timeout = remaining();
     if (!timeout) break;
@@ -205,10 +222,11 @@ export async function verifyDashboard({ zylosDir }) {
     catch (error) {
       if (timedOut(error)) break;
       observedFailure = true;
+      healthHttpStatus = error.httpStatus;
     }
     if (remaining()) await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining())));
   } while (remaining());
-  if (!checks.health) failed('health', observedFailure ? 'health_failed' : 'verify_timeout', localUrl);
+  if (!checks.health) failed('health', observedFailure ? 'health_failed' : 'verify_timeout', localUrl, healthHttpStatus);
 
   let routeLocation = path.join(zylosDir, '.zylos/config.json');
   if (isCaddyAvailable(zylosDir)) try {
@@ -225,6 +243,6 @@ export async function verifyDashboard({ zylosDir }) {
       await health(routeLocation, confirmedPid);
       checks.route = true;
     }
-  } catch (error) { failed('route', timedOut(error) ? 'verify_timeout' : 'route_failed', routeLocation); }
+  } catch (error) { failed('route', timedOut(error) ? 'verify_timeout' : 'route_failed', routeLocation, error.httpStatus); }
   return { state: errors.length ? 'degraded' : 'ready', checks, errors };
 }

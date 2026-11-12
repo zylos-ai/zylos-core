@@ -350,6 +350,99 @@ test('public verification makes one health request at the fixed Dashboard prefix
  assert.equal(wrongService.state,'degraded');assert.equal(wrongService.errors[0].code,'route_failed');assert.equal(requests.length,3);
 });
 
+function redirectFixture(t, { protocol = 'http', replies }) {
+ const f=fixture(t), requests=[];
+ fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
+ fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'dashboard.example.test',protocol}));
+ const healthy=()=>new Response(JSON.stringify({ok:true,service:'zylos-dashboard',pid:MANAGED_PID}));
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  assert.equal(options.redirect,'manual');assert.ok(options.signal instanceof AbortSignal);
+  requests.push(String(url));
+  if(requests.length===1){assert.match(String(url),/^http:\/\/127\.0\.0\.1:\d+\/api\/health$/);return healthy();}
+  assert.ok(requests.length<=replies.length+1,'unexpected extra request');
+  return replies[requests.length-2]();
+ });
+ return {...f,requests,healthy};
+}
+
+for(const status of [301,302,307,308])test(`public health follows one HTTP ${status} upgrade and validates its process`,async t=>{
+ const f=redirectFixture(t,{replies:[()=>new Response('<html>redirect</html>',{status,headers:{location:'https://dashboard.example.test/dashboard/api/health'}}),
+  ()=>f.healthy()]});
+ assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true,route:true},errors:[]});
+ assert.deepEqual(f.requests.slice(1),['http://dashboard.example.test/dashboard/api/health','https://dashboard.example.test/dashboard/api/health']);
+});
+
+for(const [label,location,protocol] of [
+ ['different host','https://other.example.test/dashboard/api/health','http'],
+ ['downgrade','http://dashboard.example.test/dashboard/api/health','https'],
+ ['different path','https://dashboard.example.test/login','http'],
+ ['different port','https://dashboard.example.test:8443/dashboard/api/health','http'],
+ ['query change','https://dashboard.example.test/dashboard/api/health?next=1','http'],
+ ['fragment','https://dashboard.example.test/dashboard/api/health#next','http'],
+ ['credentials','https://user:password@dashboard.example.test/dashboard/api/health','http'],
+ ['same scheme','http://dashboard.example.test/dashboard/api/health','http'],
+ ['relative location','/dashboard/api/health','http'],
+ ['malformed location','https://[','http'],
+ ['missing location',null,'http'],
+])test(`public health rejects a redirect with ${label} before parsing HTML`,async t=>{
+ const f=redirectFixture(t,{protocol,replies:[()=>{
+  const response=new Response('<html>not json</html>',{status:301,headers:location?{location}:{}});
+  response.json=()=>assert.fail('non-success body must not be parsed');return response;
+ }]});
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.state,'degraded');assert.equal(result.checks.health,true);assert.equal(result.checks.route,false);
+ assert.equal(result.errors[0].code,'route_failed');assert.equal(result.errors[0].message,'Dashboard health returned HTTP 301');
+ assert.equal(f.requests.length,2);
+});
+
+test('public health refuses a second redirect without parsing its body',async t=>{
+ const f=redirectFixture(t,{replies:[()=>new Response('',{status:308,headers:{location:'https://dashboard.example.test/dashboard/api/health'}}),()=>{
+  const response=new Response('<html>redirect again</html>',{status:302,headers:{location:'https://dashboard.example.test/dashboard/api/health'}});
+  response.json=()=>assert.fail('second redirect body');return response;
+ }]});
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.errors[0].code,'route_failed');assert.match(result.errors[0].message,/HTTP 302/);assert.equal(f.requests.length,3);
+});
+
+for(const status of [300,303,404,503])test(`public health reports HTTP ${status} without parsing the response`,async t=>{
+ const f=redirectFixture(t,{replies:[()=>{
+  const response=new Response('<html>failure</html>',{status,headers:{location:'https://dashboard.example.test/dashboard/api/health'}});
+  response.json=()=>assert.fail('failed response body');return response;
+ }]});
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.errors[0].code,'route_failed');assert.match(result.errors[0].message,new RegExp(`HTTP ${status}$`));
+ assert.equal(f.requests.length,2);
+});
+
+for(const body of [{ok:false,service:'zylos-dashboard',pid:MANAGED_PID},
+ {ok:true,service:'other',pid:MANAGED_PID},{ok:true,service:'zylos-dashboard',pid:MANAGED_PID+1}]) {
+ test(`redirected public health retains ${body.ok===false?'ok':body.service==='other'?'service':'pid'} validation`,async t=>{
+  const f=redirectFixture(t,{replies:[()=>new Response('',{status:301,headers:{location:'https://dashboard.example.test/dashboard/api/health'}}),
+   ()=>new Response(JSON.stringify(body))]});
+  const result=await verifyDashboard({zylosDir:f.dir});
+  assert.equal(result.errors[0].code,'route_failed');assert.equal(result.checks.route,false);assert.equal(f.requests.length,3);
+ });
+}
+
+test('redirected health uses the remainder of the existing verification deadline',async t=>{
+ let now=1000;t.mock.method(Date,'now',()=>now);
+ const f=redirectFixture(t,{replies:[()=>{
+  now+=30001;return new Response('',{status:301,headers:{location:'https://dashboard.example.test/dashboard/api/health'}});
+ }]});
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.errors[0].code,'verify_timeout');assert.equal(f.requests.length,2);
+});
+
+test('local health reports its HTTP status before parsing HTML',async t=>{
+ const f=fixture(t);let now=1000;t.mock.method(Date,'now',()=>now);
+ t.mock.method(globalThis,'fetch',async()=>{
+  now+=30001;const response=new Response('<html>not ready</html>',{status:503});
+  response.json=()=>assert.fail('failed local body');return response;
+ });
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.errors[0].code,'health_failed');assert.match(result.errors[0].message,/HTTP 503/);
+});
+
 test('verification omits public routing when managed Caddy is unavailable',async t=>{
  const f=await healthFixture(t,(_req,res)=>healthy(res));
  fs.unlinkSync(path.join(f.bin,'caddy'));
