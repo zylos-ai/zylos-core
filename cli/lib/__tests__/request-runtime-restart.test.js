@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { requestRuntimeRestart } from '../request-runtime-restart.js';
+import { requestRuntimeRestart, enqueueSingleUpgradeExit } from '../request-runtime-restart.js';
+import { SINGLE_UPGRADE_RESTART_CHECK_PROMPT } from '../../../skills/activity-monitor/scripts/reclaim-prompts.js';
 
 const base={now:()=>100,deadlineAt:1000,requestId:'producer',readMode:()=>({mode:'multi'}),readTransition:()=>null,
   enqueueExit:()=>{throw new Error('wrong fallback');}};
@@ -94,4 +95,36 @@ test('supervisor post-upgrade submission reaches a real socket that starts liste
     }})});
   assert.equal(result.ok,true);assert.equal(result.data.runCount,2);assert.equal(attempts,2);
   assert.equal(connections,1);assert.equal(requests.length,1);assert.equal(requests[0].requestId,'delayed-upgrade');
+});
+
+test('single upgrade queues one check with a 60 second acknowledgment deadline before /exit',async()=>{
+  const runs=[];
+  const controls=await enqueueSingleUpgradeExit({loadPrompt:async()=>SINGLE_UPGRADE_RESTART_CHECK_PROMPT,
+    run:async args=>{runs.push(args);return {id:runs.length+40,supersededCount:0};}});
+  assert.deepEqual(runs,[
+    ['--content',SINGLE_UPGRADE_RESTART_CHECK_PROMPT,'--priority','1','--block-queue-until-idle','--ack-deadline','60'],
+    ['--content','/exit','--priority','1','--block-queue-until-idle','--no-ack-suffix'],
+  ]);
+  assert.deepEqual(controls,{checkControlId:41,exitControlId:42});
+});
+
+test('single upgrade queues nothing when the check prompt cannot be loaded',async()=>{
+  let runs=0;
+  await assert.rejects(enqueueSingleUpgradeExit({loadPrompt:async()=>{throw Object.assign(new Error('missing'),{code:'CHECK_PROMPT_UNAVAILABLE'});},run:async()=>{runs++;}}),
+    {code:'CHECK_PROMPT_UNAVAILABLE'});
+  assert.equal(runs,0);
+});
+
+test('single upgrade returns once both controls are queued, inside every caller deadline',async()=>{
+  // The ordinary producer has a 10 second budget and the post-upgrade call none; queueing takes no part of the
+  // 60 second check window, so neither reports deadline_exceeded even when queueing itself is slow.
+  for(const afterServiceRestart of [false,true]) {
+    let now=100;const runs=[];
+    const result=await requestRuntimeRestart({...base,now:()=>now,deadlineAt:undefined,afterServiceRestart,readMode:()=>({mode:'single'}),
+      send:()=>{throw new Error('must not send');},
+      enqueueExit:()=>enqueueSingleUpgradeExit({loadPrompt:async()=>SINGLE_UPGRADE_RESTART_CHECK_PROMPT,
+        run:async args=>{runs.push(args[1]);now+=6000;return {id:runs.length};}})});
+    assert.deepEqual(result,{ok:true,data:{result:'exit_enqueued',mode:'single',checkControlId:1,exitControlId:2}});
+    assert.deepEqual(runs,[SINGLE_UPGRADE_RESTART_CHECK_PROMPT,'/exit']);
+  }
 });

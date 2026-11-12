@@ -9,7 +9,7 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import * as c4Schema from '../../../comm-bridge/scripts/c4-schema.js';
 import { migrateDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
+import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, SINGLE_UPGRADE_RESTART_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
 
 const schedulerCli = fileURLToPath(new URL('../../../scheduler/scripts/cli.js', import.meta.url));
 const ADD = /run node "([^"]+)" add "<[^"]+>" --in "<delay>" --json in this session/;
@@ -17,7 +17,9 @@ const LIST = /run node "([^"]+)" list --json and check this session group's task
 const IDLE_REASON = 'This session group has been idle and will be reclaimed.';
 const UPGRADE_REASON = 'This session group will be restarted for an upgrade.';
 const CONFIG_REASON = 'The launch configuration changed and this session group will be restarted with it.';
-const PROMPTS = { idle: PRE_RECLAIM_CHECK_PROMPT, upgrade: UPGRADE_RESTART_CHECK_PROMPT, config: CONFIG_RECLAIM_PROMPT };
+const SINGLE_UPGRADE_REASON = 'This session will be restarted for an upgrade. In single-session mode it is the only session group and $ZYLOS_SESSION_GROUP is unset.';
+const PROMPTS = { idle: PRE_RECLAIM_CHECK_PROMPT, upgrade: UPGRADE_RESTART_CHECK_PROMPT, config: CONFIG_RECLAIM_PROMPT,
+  singleUpgrade: SINGLE_UPGRADE_RESTART_CHECK_PROMPT };
 // The shared check of waiting work, as it appears in the idle reclaim text.
 const sharedCheck = PRE_RECLAIM_CHECK_PROMPT.slice(PRE_RECLAIM_CHECK_PROMPT.indexOf('check the actual current state'),
   PRE_RECLAIM_CHECK_PROMPT.indexOf('Then write the session handoff.'));
@@ -29,6 +31,22 @@ test('idle reclaim and eviction check text stays word for word the same', () => 
     + 'If the item has already been waiting for more than a day without progress, do not schedule another wake-up for it; state this in the session handoff and tell the person responsible for it. '
     + `Otherwise create a one-time scheduled task that wakes this session group to check it: run node "${schedulerCli}" add "<self-contained instructions for the check>" --in "<delay>" --json in this session, without any --reply option, so the task is saved to this session group, and confirm it reports ok:true. `
     + 'Then write the session handoff. If nothing is waiting on an external event, acknowledge directly.');
+});
+
+test('multi-session upgrade and configuration restart texts stay word for word the same', () => {
+  const check = PRE_RECLAIM_CHECK_PROMPT.slice(`${IDLE_REASON} Before acknowledging this control, `.length,
+    PRE_RECLAIM_CHECK_PROMPT.length - 'Then write the session handoff. If nothing is waiting on an external event, acknowledge directly.'.length);
+  assert.equal(UPGRADE_RESTART_CHECK_PROMPT, `${UPGRADE_REASON} Before acknowledging this control, ${check}`
+    + 'Then write the session handoff. If nothing is waiting on an external event, acknowledge directly.');
+  assert.equal(CONFIG_RECLAIM_PROMPT, `${CONFIG_REASON} Before submitting ready_for_config_reclaim, ${check}`
+    + 'Then complete required background work and the session handoff, then submit ready_for_config_reclaim through the supervisor. '
+    + 'After acceptance, finish this control and the current turn.');
+});
+
+test('single-session upgrade check states the single-session reason and otherwise matches the idle check', () => {
+  assert.ok(SINGLE_UPGRADE_RESTART_CHECK_PROMPT.startsWith(`${SINGLE_UPGRADE_REASON} Before acknowledging this control, `));
+  assert.equal(SINGLE_UPGRADE_RESTART_CHECK_PROMPT.slice(SINGLE_UPGRADE_REASON.length), PRE_RECLAIM_CHECK_PROMPT.slice(IDLE_REASON.length));
+  assert.doesNotMatch(SINGLE_UPGRADE_REASON, /idle|reclaimed|launch configuration/);
 });
 
 test('upgrade check states its own reason and otherwise matches the idle check', () => {
@@ -103,18 +121,21 @@ test('scheduler commands written in the check prompt save and list the task unde
   createStore(() => c4, { validateComponent: () => true }).registerChannelNamespace('telegram', 'tg');
   const [, addCli] = PRE_RECLAIM_CHECK_PROMPT.match(ADD);
   const [, listCli] = PRE_RECLAIM_CHECK_PROMPT.match(LIST);
+  assert.deepEqual([SINGLE_UPGRADE_RESTART_CHECK_PROMPT.match(ADD)[1], SINGLE_UPGRADE_RESTART_CHECK_PROMPT.match(LIST)[1]], [addCli, listCli]);
   const run = (cli, args, group) => {
-    const env = { PATH: process.env.PATH, HOME: root, ZYLOS_DIR: root, TMPDIR: root, TZ: 'UTC', ZYLOS_SESSION_GROUP: group };
+    const env = { PATH: process.env.PATH, HOME: root, ZYLOS_DIR: root, TMPDIR: root, TZ: 'UTC',
+      ...(group === undefined ? {} : { ZYLOS_SESSION_GROUP: group }) };
     const result = spawnSync(process.execPath, [cli, ...args], { env, encoding: 'utf8', timeout: 30_000 });
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
   };
-  const cases = [['tg:g-1', ['telegram', 'g-1']], ['tg:g:2', ['telegram', 'g:2']], ['origin', [null, null]]];
+  // undefined: the single session, which has no ZYLOS_SESSION_GROUP; its task, like Origin's, has no group.
+  const cases = [['tg:g-1', ['telegram', 'g-1']], ['tg:g:2', ['telegram', 'g:2']], ['origin', [null, null]], [undefined, [null, null]]];
   const created = [];
   for (const [group, expected] of cases) {
-    const answer = run(addCli, ['add', `Check PR CI for ${group}`, '--in', '30 minutes', '--json'], group);
+    const answer = run(addCli, ['add', `Check PR CI for ${group ?? 'single'}`, '--in', '30 minutes', '--json'], group);
     assert.equal(answer.ok, true);
-    const [task] = run(listCli, ['list', '--json'], group).filter(row => row.prompt === `Check PR CI for ${group}`);
+    const [task] = run(listCli, ['list', '--json'], group).filter(row => row.prompt === `Check PR CI for ${group ?? 'single'}`);
     assert.deepEqual([task.session_component, task.session_group_name], expected);
     assert.equal(task.status, 'pending'); assert.equal(task.type, 'one-time'); assert.equal(task.reply_channel, null);
     created.push(task.id);

@@ -15,3 +15,9 @@ test('runtime upgrade does not restart after install failure; steady single pres
   const calls=[];await upgradeRuntime({readMode:()=>({mode:'single'}),readTransition:()=>null,enqueue:()=>{calls.push('enqueue');return 1;},waitForExit:()=>{calls.push('wait');return true;},install:()=>calls.push('install')});
   assert.deepEqual(calls,['enqueue','wait','install']);
 });
+test('steady single upgrade cancels both its queued check and /exit when the runtime does not exit',async()=>{
+  const controls={checkControlId:7,exitControlId:8};let cancelled,installs=0;
+  await assert.rejects(upgradeRuntime({readMode:()=>({mode:'single'}),readTransition:()=>null,enqueue:async()=>controls,
+    waitForExit:()=>false,cancel:received=>{cancelled=received;},install:()=>installs++}),{code:'EXIT_UNCONFIRMED'});
+  assert.deepEqual(cancelled,controls);assert.equal(installs,0);
+});

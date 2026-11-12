@@ -22,6 +22,11 @@ export const PRE_RECLAIM_CHECK_PROMPT = checkControlPrompt('This session group h
 // Sent before each session group restarts for an upgrade.
 export const UPGRADE_RESTART_CHECK_PROMPT = checkControlPrompt('This session group will be restarted for an upgrade.');
 
+// Sent before the single session exits for an upgrade. That session has no ZYLOS_SESSION_GROUP; a scheduler task it
+// saves has no session group and wakes this same session, which the check's Origin wording covers.
+export const SINGLE_UPGRADE_RESTART_CHECK_PROMPT = checkControlPrompt('This session will be restarted for an upgrade. '
+  + 'In single-session mode it is the only session group and $ZYLOS_SESSION_GROUP is unset.');
+
 // The single control sent when a group's launch configuration changed; it carries the same check before the handoff.
 export const CONFIG_RECLAIM_PROMPT = 'The launch configuration changed and this session group will be restarted with it. '
   + `Before submitting ready_for_config_reclaim, ${WAITING_WORK_CHECK}`

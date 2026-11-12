@@ -15,12 +15,13 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadCoreModule } from '../../activity-monitor/scripts/core-modules.js';
 import { getModeTransition } from '../../comm-bridge/scripts/c4-db.js';
-const { requestRuntimeRestart } = await loadCoreModule('request-runtime-restart.js');
+const { requestRuntimeRestart, enqueueSingleUpgradeExit, SINGLE_UPGRADE_CHECK_ACK_DEADLINE_SECONDS } = await loadCoreModule('request-runtime-restart.js');
 const { readSessionMode } = await loadCoreModule('config.js');
 
 const ZYLOS_DIR = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
 const C4_CONTROL = path.join(ZYLOS_DIR, '.claude/skills/comm-bridge/scripts/c4-control.js');
-const MAX_EXIT_WAIT = 120; // Wait up to 120 seconds for Claude to exit
+// Up to 120 seconds for Claude to exit, after at most the check's acknowledgment window.
+const MAX_EXIT_WAIT = SINGLE_UPGRADE_CHECK_ACK_DEADLINE_SECONDS + 120;
 
 function ts() {
   return new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -38,30 +39,27 @@ function sleep(seconds) {
   execSync(`sleep ${seconds}`);
 }
 
-function enqueueExit() {
+// The waiting-work check is queued ahead of /exit; see enqueueSingleUpgradeExit.
+async function enqueueExit() {
   try {
-    const output = execFileSync(
-      'node',
-      [C4_CONTROL, 'enqueue', '--content', '/exit', '--priority', '1', '--block-queue-until-idle', '--no-ack-suffix'],
-      { encoding: 'utf8', stdio: 'pipe' }
-    );
-    const match = output.match(/control\s+(\d+)/);
-    const controlId = match ? match[1] : null;
-    log(`/exit enqueued via control queue (id=${controlId})`);
-    return controlId;
+    const controls = await enqueueSingleUpgradeExit();
+    log(`check (id=${controls.checkControlId}) and /exit (id=${controls.exitControlId}) enqueued via control queue`);
+    return controls;
   } catch (err) {
-    logError(`Failed to enqueue /exit: ${err.message}`);
+    logError(`Failed to enqueue the check and /exit: ${err.message}`);
     throw err;
   }
 }
 
-function cancelExit(controlId) {
-  if (!controlId) return;
-  try {
-    execFileSync('node', [C4_CONTROL, 'ack', '--id', controlId], { stdio: 'pipe' });
-    log(`Cancelled queued /exit (id=${controlId})`);
-  } catch {
-    logError(`WARNING: Failed to cancel queued /exit (id=${controlId})`);
+function cancelExit(controls) {
+  if (!controls) return;
+  for (const [name, id] of [['/exit', controls.exitControlId], ['check', controls.checkControlId]]) {
+    try {
+      execFileSync('node', [C4_CONTROL, 'ack', '--id', String(id)], { stdio: 'pipe' });
+      log(`Cancelled queued ${name} (id=${id})`);
+    } catch {
+      logError(`WARNING: Failed to cancel queued ${name} (id=${id})`);
+    }
   }
 }
 
@@ -127,9 +125,9 @@ export async function upgradeRuntime({ readMode = readSessionMode, readTransitio
     await install();
     return requestRestart();
   }
-  const controlId = await enqueue();
+  const controls = await enqueue();
   if (!await waitForExit()) {
-    await cancel(controlId);
+    await cancel(controls);
     throw Object.assign(new Error('Runtime did not exit before upgrade deadline'), {code:'EXIT_UNCONFIRMED'});
   }
   await install();

@@ -118,6 +118,16 @@ begins again, and sessions do not wait for each other's answers. A run that
 cannot be bound as a target gets no check, and missing reclaim dependencies
 stop the restart before any check is sent.
 
+In steady single-session mode an upgrade restart (`zylos upgrade`,
+`upgrade-claude`, `restart-claude`) has no Supervisor step: the producer queues
+the same check, opening with a single-session reason, and then `/exit`. Both
+are priority 1 and require-idle; the check has the ack suffix and a 60-second
+ack deadline. The dispatcher delivers the check first and `/exit` only once the
+session is idle after the check's turn, or after the check expires unanswered
+or undelivered at its deadline. Queued controls go before new messages, so
+activity during the wait neither overtakes nor removes `/exit`. Each restart
+request queues one check, and the producer returns as soon as both are queued.
+
 A launch configuration change still sends a single control with its 5-minute
 ack deadline and the `ready_for_config_reclaim` flow. Its text now carries the
 same check of waiting work, with the configuration change as the reason,

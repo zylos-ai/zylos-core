@@ -63,5 +63,6 @@ node ~/zylos/.claude/skills/restart-claude/scripts/restart.js --json
 
 The script reads the session mode and active transition. In multi mode or during
 a transition it submits `restart_all`; steady single mode retains the queued
-`/exit` path. It reports a refusal or an unknown outcome without automatically
+`/exit` path, with the same waiting-work check queued ahead of it (at most 60
+seconds). It reports a refusal or an unknown outcome without automatically
 resubmitting. An accepted request does not mean replacement sessions are ready.

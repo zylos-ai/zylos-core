@@ -75,7 +75,7 @@ events before it is restarted.
 In steady single mode, the existing ordering remains:
 
 
-1. **Enqueue /exit**: Puts `/exit` into the control queue (priority=1, block_queue_until_idle) — dispatcher handles idle detection and message blocking
-2. **Wait for exit**: Monitors Claude process until it exits (up to 120s); aborts if timeout
+1. **Enqueue the check, then /exit**: Puts the waiting-work check (priority=1, block_queue_until_idle, 60-second ack deadline) and then `/exit` (priority=1, block_queue_until_idle) into the control queue — dispatcher delivers the check first, `/exit` after the check's turn or its deadline, and handles idle detection and message blocking
+2. **Wait for exit**: Monitors Claude process until it exits (up to 180s: the 60-second check window plus 120s); aborts if timeout, cancelling both queued controls
 3. **Upgrade**: Runs native installer (`curl -fsSL https://claude.ai/install.sh | bash`)
 4. **Replacement**: the dispatcher starts replacement sessions after the old sessions exit
