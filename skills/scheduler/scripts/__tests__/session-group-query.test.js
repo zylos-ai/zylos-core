@@ -128,7 +128,7 @@ test('fixed Origin and no-address destinations reach Origin without querying', t
   assert.equal(inbound[2].channel, 'system'); assert.equal(inbound[2].endpoint_id, null);
 });
 
-test('query failure dispatches overall without saving, preserves warning through done and retries next time', t => {
+test('query failure dispatches overall without saving, preserves its history warning on receipt and retries next time', t => {
   const f = schedulerQueryFixture(t); f.install({}, 'telegram', { exit: 4, stderr: 'fixture query failure' });
   const task = f.legacy({ last_error: 'prior-task-detail' }); const logs = [];
   f.db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,0,'failed','prior-history-detail')").run(task.id);
@@ -145,6 +145,8 @@ test('query failure dispatches overall without saving, preserves warning through
   assert.deepEqual(pair(f.read(task.id)), [null, null]); assert.equal(f.read(task.id).last_error, 'prior-task-detail');
   assert.equal(f.c4.prepare("SELECT session_group FROM conversations WHERE direction='in'").get().session_group, 'telegram');
   assert.equal(logs.length, 1); assert.match(logs[0], /SESSION_GROUP_QUERY_FAILED/); assert.match(logs[0], /fixture query failure/);
+  assert.equal(f.read(task.id).status, 'completed');
+  assert.equal(currentHistory().status, 'success');
   f.cliData(['done', task.id]);
   assert.equal(currentHistory().status, 'success'); assert.equal(currentHistory().error, 'SESSION_GROUP_QUERY_FAILED');
   f.db.prepare("UPDATE tasks SET status='pending' WHERE id=?").run(task.id);
@@ -153,13 +155,14 @@ test('query failure dispatches overall without saving, preserves warning through
   assert.equal(f.queries().length, 2); assert.deepEqual(pair(f.read(task.id)), ['telegram', 'recovered']);
 });
 
-for (const category of ['C', 'U', 'T', 'R']) test(`delivery ${category} error overrides the query warning`, t => {
+for (const category of ['C', 'U', 'T', 'R']) test(`delivery ${category} diagnostic overrides the query warning`, t => {
   const f = schedulerQueryFixture(t); f.install({}, 'telegram', { exit: 4 });
   const task = f.legacy(); const code = 'DELIVERY_' + category;
   const deps = { ...delivery(f, () => ({ category, code })), diagnostic: () => {},
     getConversationsByRange: () => { throw new Error('readback unavailable'); } };
   dispatchTask(f.db, task, deps);
   const expected = category === 'U' ? 'RECEIVE_RESULT_UNKNOWN' : code;
+  assert.equal(f.history(task.id)[0].status, category === 'C' ? 'success' : category === 'U' ? 'started' : 'failed');
   assert.equal(f.history(task.id)[0].error, expected);
   assert.equal(f.read(task.id).last_error, expected);
   assert.deepEqual(pair(f.read(task.id)), [null, null]);
@@ -191,7 +194,7 @@ test('history warning write failure still dispatches the temporary overall group
   assert.equal(f.c4.prepare("SELECT count(*) n FROM conversations WHERE direction='in' AND session_group='telegram'").get().n, 1);
   assert.deepEqual(pair(f.read(task.id)), [null, null]);
   assert.equal(f.read(task.id).last_error, 'unchanged');
-  assert.equal(f.history(task.id)[0].status, 'started');
+  assert.equal(f.history(task.id)[0].status, 'success');
   assert.equal(f.history(task.id)[0].error, null);
   assert.equal(logs.length, 2);
   assert.ok(logs.every(line => line.includes(task.id) && !/[\r\n]/.test(line) && line.length < 1000));

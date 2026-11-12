@@ -108,7 +108,6 @@ Examples:
   ~/zylos/.claude/skills/scheduler/scripts/cli.js add "Check updates" --every "1 hour"
   ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --priority 1
   ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --block-queue-until-idle
-  ~/zylos/.claude/skills/scheduler/scripts/cli.js done task-abc123
 `;
 
 function parseArgs(args) {

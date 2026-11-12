@@ -57,15 +57,17 @@ export function dispatchTask(db, candidate, dependencies = {}) {
     if (!live) return;
     const timestamp = now();
     if (result.category === 'success' || result.category === 'C') {
+      // Ordinary receipt success preserves existing diagnostic details. A committed
+      // receipt with a notification warning overrides them, without failing delivery.
       const warning = result.category === 'C' ? result.code ?? null : null;
       db.prepare("UPDATE task_history SET status='success',completed_at=?,duration_ms=(?-executed_at)*1000,error=COALESCE(?,error) WHERE id=? AND status='started'")
         .run(timestamp, timestamp, warning, historyId);
       if (task.type === 'one-time') {
-        db.prepare("UPDATE tasks SET status='completed',last_run_at=?,updated_at=?,last_error=?,failed_at=NULL WHERE id=?")
+        db.prepare("UPDATE tasks SET status='completed',last_run_at=?,updated_at=?,last_error=COALESCE(?,last_error),failed_at=NULL WHERE id=?")
           .run(timestamp, timestamp, warning, task.id);
       } else {
         updateNextRunTime(db, task);
-        db.prepare('UPDATE tasks SET last_error=?,failed_at=NULL WHERE id=?').run(warning, task.id);
+        db.prepare('UPDATE tasks SET last_error=COALESCE(?,last_error),failed_at=NULL WHERE id=?').run(warning, task.id);
       }
       return;
     }

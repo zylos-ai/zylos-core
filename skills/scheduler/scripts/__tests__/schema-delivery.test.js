@@ -5,6 +5,7 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { guardDatabase, migrateDatabase, planDatabaseMigration } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import * as owner from '../schema.js';
 import { migrateToV3 } from '../migrations-v3.js';
+import { processCompletedTasks } from '../daemon-tasks.js';
 
 const fixtures = new URL('../../../comm-bridge/scripts/__tests__/fixtures/migration-history/', import.meta.url);
 const timestamp = Date.parse('2030-01-01T00:02:00Z') / 1000;
@@ -47,7 +48,7 @@ function verify(db, before) {
   for (const id of ['legacy-once', 'legacy-cron', 'legacy-interval', 'legacy-without-history']) {
     const task = db.prepare('SELECT * FROM tasks WHERE id=?').get(id);
     const original = before.tasks.find(row => row.id === id);
-    assert.equal(task.status, task.type === 'one-time' ? 'completed' : 'pending');
+    assert.equal(task.status, 'completed');
     assert.equal(task.last_run_at, timestamp);
     assert.equal(task.updated_at, timestamp);
     assert.equal(task.last_error, null);
@@ -55,10 +56,7 @@ function verify(db, before) {
     assert.equal(task.timezone, original.timezone);
     assert.equal(task.cron_expression, original.cron_expression);
     assert.equal(task.interval_seconds, original.interval_seconds);
-    const expected = task.type === 'recurring'
-      ? Date.parse('2030-01-01T01:00:00Z') / 1000
-      : task.type === 'interval' ? timestamp + 1800 : original.next_run_at;
-    assert.equal(task.next_run_at, expected);
+    assert.equal(task.next_run_at, original.next_run_at);
     const started = db.prepare("SELECT * FROM task_history WHERE task_id=? AND executed_at=?").get(id, timestamp - 60);
     if (started) {
       assert.equal(started.status, 'success');
@@ -128,16 +126,37 @@ test('new scheduler database traverses the full migration chain without runs to 
   assert.deepEqual(planDatabaseMigration(db, owner).steps, []);
 });
 
-test('invalid legacy cadence rolls back row conversions and schema version', t => {
+test('installed daemon schedules migrated periodic rows once without replaying the delivered occurrence', t => {
   t.mock.timers.enable({ apis: ['Date'], now: timestamp * 1000 });
-  for (const type of ['recurring', 'interval']) {
-    const db = legacy(t, 'scheduler-v0.9.0-v1.sql');
-    owner.MIGRATIONS[1].migrate(db); db.pragma('user_version = 2');
-    addTasks(db);
-    if (type === 'recurring') db.prepare("UPDATE tasks SET cron_expression='invalid' WHERE id='legacy-cron'").run();
-    else db.prepare("UPDATE tasks SET interval_seconds=0 WHERE id='legacy-interval'").run();
-    const before = snapshot(db);
-    assert.throws(() => migrateDatabase(db, owner), /Invalid cron|invalid interval/);
-    assert.deepEqual(snapshot(db), before);
-  }
+  const db = legacy(t, 'scheduler-v0.9.0-v1.sql');
+  addTasks(db); migrateDatabase(db, owner);
+  const before = db.prepare('SELECT * FROM task_history ORDER BY id').all();
+  // Resumption can be later than migration; the interval starts from this pass.
+  t.mock.timers.tick(5000);
+  processCompletedTasks(db);
+  const cron = db.prepare("SELECT * FROM tasks WHERE id='legacy-cron'").get();
+  const interval = db.prepare("SELECT * FROM tasks WHERE id='legacy-interval'").get();
+  assert.equal(cron.status, 'pending');
+  assert.equal(cron.next_run_at, Date.parse('2030-01-01T01:00:00Z') / 1000);
+  assert.equal(cron.timezone, 'Asia/Shanghai');
+  assert.equal(interval.status, 'pending');
+  assert.equal(interval.next_run_at, timestamp + 5 + 1800);
+  assert.equal(db.prepare("SELECT status FROM tasks WHERE id='legacy-once'").get().status, 'completed');
+  assert.deepEqual(db.prepare('SELECT * FROM task_history ORDER BY id').all(), before);
+  const scheduled = snapshot(db);
+  t.mock.timers.tick(5000); processCompletedTasks(db);
+  assert.deepEqual(snapshot(db), scheduled);
+});
+
+test('delivery row conversion and schema version roll back together on migration failure', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: timestamp * 1000 });
+  const db = legacy(t, 'scheduler-v0.9.0-v1.sql');
+  owner.MIGRATIONS[1].migrate(db); db.pragma('user_version = 2');
+  addTasks(db);
+  const before = snapshot(db);
+  const failing = { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 2: {
+    ...owner.MIGRATIONS[2], migrate(connection) { migrateToV3(connection); throw new Error('after delivery conversion'); },
+  } } };
+  assert.throws(() => migrateDatabase(db, failing), /after delivery conversion/);
+  assert.deepEqual(snapshot(db), before);
 });

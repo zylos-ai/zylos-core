@@ -58,9 +58,33 @@ test(`successful ${type} delivery ends its exact history and advances from deliv
   assert.equal(after.task.status, type === 'one-time' ? 'completed' : 'pending');
   assert.equal(after.task.last_run_at, start / 1000 + 7);
   assert.equal(after.task.updated_at, start / 1000 + 7);
-  assert.equal(after.task.last_error, null); assert.equal(after.task.failed_at, null);
+  assert.equal(after.task.last_error, 'OLD_FAILURE'); assert.equal(after.task.failed_at, null);
   assert.equal(after.task.next_run_at, type === 'one-time' ? task.next_run_at
     : type === 'recurring' ? start / 1000 + 1800 : start / 1000 + 1807);
+});
+
+for (const category of ['success', 'C'])
+test(`${category} delivery settles only its new history when an older occurrence is still started`, t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  const { db, task, read } = fixture(t);
+  const olderId = Number(db.prepare(`INSERT INTO task_history
+    (task_id,executed_at,status,error,completed_at,duration_ms)
+    VALUES(?,?,'started','OLDER_UNRESOLVED_RECEIPT',NULL,NULL)`)
+    .run(task.id, start / 1000 - 90).lastInsertRowid);
+  const olderBytes = JSON.stringify(read().history[0]);
+  const warning = category === 'C' ? 'UNHEALTHY_NOTIFY_UNCERTAIN' : undefined;
+  const result = dispatchTask(db, task, { ...base, sendViaC4() {
+    t.mock.timers.tick(5000); return { category, ...(warning ? { code: warning } : {}) };
+  } });
+  const after = read();
+  assert.equal(after.history.length, 2); assert.notEqual(result.historyId, olderId);
+  assert.equal(after.history[0].id, olderId);
+  assert.equal(JSON.stringify(after.history[0]), olderBytes);
+  const current = after.history.find(row => row.id === result.historyId);
+  assert.equal(current.status, 'success'); assert.equal(current.executed_at, start / 1000);
+  assert.equal(current.completed_at, start / 1000 + 5); assert.equal(current.duration_ms, 5000);
+  assert.equal(current.error, warning ?? null); assert.equal(after.task.status, 'completed');
 });
 
 for (const type of ['recurring', 'interval'])

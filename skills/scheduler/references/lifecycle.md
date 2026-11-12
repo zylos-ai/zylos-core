@@ -14,7 +14,7 @@ Compatibility no-op for old sessions and prompts. Successful delivery is recorde
 
 `done` exits 0 and prints “任务送达时已自动结束，无需 done”. With `--json`, it returns `{"ok":true,"data":{"task":{...},"alreadyCompleted":true,"reason":"DELIVERY_COMPLETES_AUTOMATICALLY"}}`. It never changes the task or history, including pending, paused, failed or unresolved delivery rows. Unknown or ambiguous IDs keep the normal validation errors.
 
-There is no one-hour work timeout or scheduled timeout reminder. A receipt left unconfirmed for more than 180 seconds is settled at daemon startup or on a regular iteration as failed with `DELIVERY_RESULT_UNKNOWN`. That same occurrence is never resent and no reminder is sent. Periodic tasks resume at their next scheduled occurrence; one-time tasks stay failed and can be re-enabled. The 180-second limit is four times the 45-second receive bound, with time for readback and accounting; deliveries at or below the limit are untouched. Old timeout history remains historical evidence, not a new delivery failure. Upgrade migration treats legacy running tasks with started histories as delivered, and is idempotent.
+There is no one-hour work timeout or scheduled timeout reminder. A receipt left unconfirmed for more than 180 seconds is settled at daemon startup or on a regular iteration as failed with `DELIVERY_RESULT_UNKNOWN`. That same occurrence is never resent and no reminder is sent. Periodic tasks resume at their next scheduled occurrence; one-time tasks stay failed and can be re-enabled. The 180-second limit is four times the 45-second receive bound, with time for readback and accounting; deliveries at or below the limit are untouched. Old timeout history remains historical evidence, not a new delivery failure. Upgrade migration treats legacy running tasks as delivered once and closes their started histories. It marks tasks completed without npm dependencies or cron calculation, preserving saved timing fields. The installed daemon advances periodic tasks to their next future occurrence; it does not resend the migrated occurrence or catch up downtime cron slots, and intervals advance from daemon resumption. One-time tasks stay completed. This idempotent legacy compatibility rule differs from the bounded failure rule for new unknown receipts.
 
 ## remove
 
@@ -35,7 +35,6 @@ Pauses a pending task. Paused tasks are skipped by the daemon.
 Resumes a paused task back to pending status.
 
 ```bash
-cli.js done task-abc
 cli.js remove task-abc
 cli.js pause task-abc
 cli.js resume task-abc

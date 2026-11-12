@@ -763,3 +763,31 @@ test('legacy timeout can retain its re-enable action without claiming a delivery
   assert.doesNotMatch(textOf(h.root), /上次送达失败/);
   assert.ok(buttons(h.root, '改时间并重新启用').length);
 });
+
+test('weekly delivery failure note ignores a timeout-heavy day when selecting the day and count', async context => {
+  const value = { ...page(), daily7d: { days: [
+    { date: '2027-01-12', success: 2, timeout: 80, failed: 0 },
+    { date: '2027-01-13', success: 1, timeout: 7, failed: 1 },
+    { date: '2027-01-14', success: 4, timeout: 5, failed: 2 },
+  ] } };
+  const h = harness(context, () => value);
+  await tick();
+  const legend = allNodes(h.root).find(node => node.classList.contains('wb-sched-legend'));
+  const note = allNodes(legend).find(node => node.classList.contains('wb-sched-note'));
+  assert.equal(note.textContent, '最多送达失败：01-14（2 次）');
+  const timeouts = allNodes(legend).find(node => node.classList.contains('wb-timeout'));
+  assert.match(timeouts.textContent, /超时92/);
+});
+
+test('weekly delivery summary keeps legacy timeouts visible without a false worst-failure note', async context => {
+  const value = { ...page(), daily7d: { days: [
+    { date: '2027-01-12', success: 0, timeout: 60, failed: 0 },
+    { date: '2027-01-13', success: 0, timeout: 4, failed: 0 },
+  ] } };
+  const h = harness(context, () => value);
+  await tick();
+  const legend = allNodes(h.root).find(node => node.classList.contains('wb-sched-legend'));
+  assert.equal(allNodes(legend).filter(node => node.classList.contains('wb-sched-note')).length, 0);
+  const timeouts = allNodes(legend).find(node => node.classList.contains('wb-timeout'));
+  assert.match(timeouts.textContent, /超时64/);
+});
