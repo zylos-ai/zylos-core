@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { upgradeRuntime, cancelExit } from '../../../skills/upgrade-claude/scripts/upgrade.js';
-import { enqueueSingleUpgradeExit } from '../request-runtime-restart.js';
+
+// The boundary case below installs skills under ZYLOS_DIR. The runner gives every file of a batch the same
+// ZYLOS_DIR and runs them concurrently, so this file uses its own directory under the runner's TMPDIR,
+// removed when the file ends. Both modules read ZYLOS_DIR when they load, hence the dynamic imports after it.
+const privateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'zylos-runtime-order-'));
+after(() => fs.rmSync(privateRoot, { recursive: true, force: true }));
+process.env.ZYLOS_DIR = path.join(privateRoot, 'zylos');
+fs.mkdirSync(process.env.ZYLOS_DIR);
+const { upgradeRuntime, cancelExit } = await import('../../../skills/upgrade-claude/scripts/upgrade.js');
+const { enqueueSingleUpgradeExit } = await import('../request-runtime-restart.js');
 
 test('runtime upgrade multi/transition installs before one supervisor request, without global exit polling',async()=>{
   for(const [mode,transition] of [['multi',null],['single',{phase:'gating'}]]) {
@@ -29,20 +37,16 @@ test('steady single upgrade cancels both its queued check and /exit when the run
 });
 
 // Boundary: the real queueing helper and the real cancellation, each running the installed c4-control script
-// against the C4 database in the runner's isolated ZYLOS_DIR (the repository's skills are linked in as installed).
+// against the C4 database in this file's private ZYLOS_DIR (the repository's skills are linked in as installed).
 // No session, tmux or service is involved.
-test('steady single upgrade giving up acknowledges both its queued check and /exit, and nothing else', async t => {
-  const zylosDir = fs.realpathSync(process.env.ZYLOS_DIR ?? '/nonexistent');
+test('steady single upgrade giving up acknowledges both its queued check and /exit, and nothing else', async () => {
+  const zylosDir = fs.realpathSync(process.env.ZYLOS_DIR);
   const realHome = fs.realpathSync(os.userInfo().homedir);
   assert.ok(!zylosDir.startsWith(realHome + path.sep), 'ZYLOS_DIR must be isolated from the real home');
   const skills = path.join(zylosDir, '.claude/skills'), repository = fileURLToPath(new URL('../../../', import.meta.url));
   fs.mkdirSync(skills, { recursive: true });
-  const linked = [];
-  t.after(() => { for (const link of linked) fs.unlinkSync(link); });
   for (const skill of ['comm-bridge', 'activity-monitor', 'scheduler']) {
-    const link = path.join(skills, skill);
-    assert.equal(fs.existsSync(link), false, `${link} must not exist yet`);
-    fs.symlinkSync(path.join(repository, 'skills', skill), link); linked.push(link);
+    fs.symlinkSync(path.join(repository, 'skills', skill), path.join(skills, skill));
   }
   const control = args => execFileSync(process.execPath, [path.join(skills, 'comm-bridge/scripts/c4-control.js'), ...args],
     { encoding: 'utf8', timeout: 30000 }).trim();
