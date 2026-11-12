@@ -43,6 +43,27 @@ replacement. Ambiguous identities, damaged snapshots or unconfirmed exits retain
 isolation and require operator handling. A failed upgrade remains a failure even
 when compensation completes.
 
+Before database compensation captures or moves any file, recovery checks that
+no other process has a Core database, `-wal` or `-shm` open (`/proc` on Linux,
+`lsof` on macOS). It waits up to 10 seconds; if a file is still open it stops
+without touching anything and reports the IDs of the processes holding them.
+Stop the related services, then run `zylos recovery resume`. Where nothing can be observed
+(macOS without `lsof`), the journal records `databaseHolderCheck: unavailable`.
+
+A connection that closes after the rescue copy was taken (it opened after the
+check, or the check could not see it) is the last one: SQLite merges the
+`-wal` into the main file and deletes `-wal` and `-shm`, whether or not that
+connection wrote. Compensation then accepts the main file's new hash only when
+the rescue captured a `-wal`, both sidecars are gone from their place and from
+the displaced material, and a check that could actually run finds no other
+process holding the database; it records
+the hash as `merged` in the journal and moves that file aside. Once the main
+file has moved, each recorded sidecar that is neither in place nor displaced
+is recorded as `vanished`; one that reappears stops the rollback. The rescue
+copies keep the failed generation and the snapshot is restored. A main
+file that is missing, or changed while a sidecar remains, still stops the
+rollback, as does any change to the snapshot or the packages.
+
 After migration and runtime preparation, the finalizer records the compensation
 cutoff before publishing shared settings and instructions. Failures after this
 point require forward repair and never restore the old snapshot:
