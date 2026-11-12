@@ -359,6 +359,82 @@ test('verification omits public routing when managed Caddy is unavailable',async
  assert.deepEqual(f.requests,['/api/health']);
 });
 
+// A front proxy may redirect the configured http public URL to https. These
+// cases stub fetch, so no request leaves the process.
+const PUBLIC_HTTP='http://dashboard.example.test/dashboard/api/health';
+const PUBLIC_HTTPS='https://dashboard.example.test/dashboard/api/health';
+function healthReply(pid=MANAGED_PID) {return new Response(JSON.stringify({ok:true,service:'zylos-dashboard',pid}),{headers:{'content-type':'application/json'}});}
+function redirectReply(status,location) {return new Response('<html><body>Moved</body></html>',{status,headers:{...location==null?{}:{location},'content-type':'text/html'}});}
+function publicFixture(t,protocol,replies) {
+ const f=fixture(t),requests=[];
+ fs.writeFileSync(path.join(f.data,'config.json'),JSON.stringify({port:3470,auth:{enabled:true,password:'fixture-hash'}}));
+ fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
+ fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'dashboard.example.test',protocol}));
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  assert.equal(options.redirect,'manual');
+  if(url==='http://127.0.0.1:3470/api/health')return healthReply();
+  requests.push(url);
+  const reply=replies[url]?.shift();
+  return reply ? reply() : new Response('unexpected request',{status:404});
+ });
+ return {...f,requests};
+}
+
+for(const status of [301,302,307,308]) test(`public verification follows one ${status} upgrade from http to https on the same host`,async t=>{
+ const f=publicFixture(t,'http',{[PUBLIC_HTTP]:[()=>redirectReply(status,PUBLIC_HTTPS)],[PUBLIC_HTTPS]:[()=>healthReply()]});
+ assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true,route:true},errors:[]});
+ assert.deepEqual(f.requests,[PUBLIC_HTTP,PUBLIC_HTTPS]);
+});
+
+test('public verification checks the managed pid after following the https upgrade',async t=>{
+ const f=publicFixture(t,'http',{[PUBLIC_HTTP]:[()=>redirectReply(308,PUBLIC_HTTPS)],[PUBLIC_HTTPS]:[()=>healthReply(MANAGED_PID+1)]});
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.state,'degraded');assert.equal(result.checks.health,true);assert.equal(result.checks.route,false);
+ assert.deepEqual(result.errors.map(error=>error.code),['route_failed']);
+ assert.deepEqual(f.requests,[PUBLIC_HTTP,PUBLIC_HTTPS]);
+});
+
+for(const [title,protocol,location] of [
+ ['to another host','http','https://elsewhere.example.test/dashboard/api/health'],
+ ['to another path','http','https://dashboard.example.test/login'],
+ ['that downgrades https to http','https','http://dashboard.example.test/dashboard/api/health'],
+]) test(`public verification does not follow a redirect ${title}`,async t=>{
+ const from=protocol==='http'?PUBLIC_HTTP:PUBLIC_HTTPS;
+ const f=publicFixture(t,protocol,{[from]:[()=>redirectReply(301,location)],[location]:[()=>healthReply()]});
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.state,'degraded');assert.equal(result.checks.route,false);
+ assert.deepEqual(result.errors.map(error=>[error.code,error.location]),[['route_failed',from]]);
+ assert.match(result.errors[0].message,/HTTP 301/);
+ assert.deepEqual(f.requests,[from]);
+});
+
+test('public verification does not follow a second redirect',async t=>{
+ const f=publicFixture(t,'http',{[PUBLIC_HTTP]:[()=>redirectReply(301,PUBLIC_HTTPS)],[PUBLIC_HTTPS]:[()=>redirectReply(308,PUBLIC_HTTPS),()=>healthReply()]});
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.equal(result.state,'degraded');assert.deepEqual(result.errors.map(error=>error.code),['route_failed']);
+ assert.match(result.errors[0].message,/HTTP 308/);
+ assert.deepEqual(f.requests,[PUBLIC_HTTP,PUBLIC_HTTPS]);
+});
+
+for(const [title,replies,status] of [
+ ['redirect without a location',{[PUBLIC_HTTP]:[()=>redirectReply(301,null)]},301],
+ ['error page after the https upgrade',{[PUBLIC_HTTP]:[()=>redirectReply(301,PUBLIC_HTTPS)],[PUBLIC_HTTPS]:[()=>new Response('<html>Bad Gateway</html>',{status:502,headers:{'content-type':'text/html'}})]},502],
+]) test(`a non-2xx HTML ${title} is reported by status rather than as unparsable JSON`,async t=>{
+ const f=publicFixture(t,'http',replies);
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.deepEqual(result.errors.map(error=>error.code),['route_failed']);
+ assert.match(result.errors[0].message,new RegExp(`HTTP ${status}`));
+ assert.doesNotMatch(result.errors[0].message,/JSON/);
+});
+
+test('local health failure reports the HTTP status',async t=>{
+ let now=1000;
+ const f=await healthFixture(t,(_req,res)=>{now+=30001;res.writeHead(503,{'content-type':'text/html'});res.end('<html>starting</html>');});
+ t.mock.method(Date,'now',()=>now);
+ const result=await verifyDashboard({zylosDir:f.dir});
+ assert.deepEqual(result.errors.map(error=>[error.code,error.message]),[['health_failed','Dashboard health returned HTTP 503']]);
+});
+
 test('health diagnostics retain observed failure when the shared window ends',async t=>{
  const f=fixture(t);let now=1000,calls=0;
  t.mock.method(Date,'now',()=>now);

@@ -167,21 +167,48 @@ export function restoreDashboardService({ zylosDir }) {
   } catch (error) { return { state: 'failed', error: { code: 'registration_failed', message: (startError || error).message } }; }
 }
 
+const REDIRECT_STATUSES = new Set([301, 302, 307, 308]);
+
+// A front proxy may upgrade the configured http URL to https. Only that exact
+// upgrade (same host name, path and query, no credentials) is followed.
+function httpsUpgrade(from, location) {
+  if (typeof location !== 'string' || !location) return null;
+  let source, target;
+  try { source = new URL(from); target = new URL(location, source); } catch { return null; }
+  if (source.protocol !== 'http:' || target.protocol !== 'https:') return null;
+  if (target.hostname !== source.hostname || target.pathname !== source.pathname || target.search !== source.search) return null;
+  if (target.username || target.password || target.hash) return null;
+  return target.href;
+}
+
 export async function verifyDashboard({ zylosDir }) {
   const checks = {}, errors = [];
   const deadline = Date.now() + READY_LIMIT;
   const remaining = () => Math.max(0, Math.floor(deadline - Date.now()));
   const timedOut = error => error.code === 'verify_timeout' || ['TimeoutError', 'AbortError'].includes(error.name);
-  const health = async (url, expectedPid) => {
+  const request = async url => {
     const timeout = remaining();
     if (!timeout) throw Object.assign(Error('Dashboard verification timed out'), { code: 'verify_timeout' });
-    const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(timeout) });
-    const body = await response.json();
-    if (!response.ok || body.ok !== true || body.service !== name || body.pid !== expectedPid) throw Error('Dashboard health failed');
+    return fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(timeout) });
   };
-  const failed = (item, code, location) => {
+  const health = async (url, expectedPid) => {
+    let response = await request(url);
+    if (REDIRECT_STATUSES.has(response.status)) {
+      const target = httpsUpgrade(url, response.headers?.get('location'));
+      await response.body?.cancel();
+      if (!target) throw Error(`Dashboard health returned HTTP ${response.status} to a location other than the same URL over https`);
+      response = await request(target);
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw Error(`Dashboard health returned HTTP ${response.status}`);
+    }
+    const body = await response.json();
+    if (body?.ok !== true || body.service !== name || body.pid !== expectedPid) throw Error('Dashboard health failed');
+  };
+  const failed = (item, code, location, message) => {
     checks[item] = false;
-    errors.push({ item, code, location });
+    errors.push(message ? { item, code, location, message } : { item, code, location });
   };
   let loc;
   try { loc = settings(zylosDir); }
@@ -189,6 +216,7 @@ export async function verifyDashboard({ zylosDir }) {
   const localUrl = `http://127.0.0.1:${loc.port}/api/health`;
   let confirmedPid;
   let observedFailure = false;
+  let healthError;
   do {
     const timeout = remaining();
     if (!timeout) break;
@@ -205,10 +233,11 @@ export async function verifyDashboard({ zylosDir }) {
     catch (error) {
       if (timedOut(error)) break;
       observedFailure = true;
+      healthError = error.message;
     }
     if (remaining()) await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining())));
   } while (remaining());
-  if (!checks.health) failed('health', observedFailure ? 'health_failed' : 'verify_timeout', localUrl);
+  if (!checks.health) failed('health', observedFailure ? 'health_failed' : 'verify_timeout', localUrl, healthError);
 
   let routeLocation = path.join(zylosDir, '.zylos/config.json');
   if (isCaddyAvailable(zylosDir)) try {
@@ -225,6 +254,6 @@ export async function verifyDashboard({ zylosDir }) {
       await health(routeLocation, confirmedPid);
       checks.route = true;
     }
-  } catch (error) { failed('route', timedOut(error) ? 'verify_timeout' : 'route_failed', routeLocation); }
+  } catch (error) { failed('route', timedOut(error) ? 'verify_timeout' : 'route_failed', routeLocation, error.message); }
   return { state: errors.length ? 'degraded' : 'ready', checks, errors };
 }
