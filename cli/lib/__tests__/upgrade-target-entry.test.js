@@ -105,15 +105,18 @@ for(const bundled of [false,true]) for(const version of [13,20]) test(`independe
   const marker=path.join(input.zylosDir,'.claude/skills/dashboard/.zylos/core-managed.json');
   fs.mkdirSync(path.dirname(marker),{recursive:true});fs.writeFileSync(marker,'ignored old marker');
   const before=fs.readFileSync(database),seen=[];
-  const check=options=>{assert.equal(options.dashboardOwnerManaged,version>=20);};
+  // Core owns the database at the owner-managed baseline, or at any version once
+  // the installed Core already ships Dashboard (the first takeover has run).
+  const managed=version>=20||bundled;
+  const check=options=>{assert.equal(options.dashboardOwnerManaged,managed);};
   const ctx=inspectUpgradeSource(input,{
-    probe(root,target,options){check(options);seen.push('probe');return {databases:Array.from({length:version>=20?3:2},()=>({})),needsMigration:true};},
+    probe(root,target,options){check(options);seen.push('probe');return {databases:Array.from({length:managed?3:2},()=>({})),needsMigration:true};},
     preflight(root,options){check(options);seen.push('preflight');},
     rehearse(root,target,options){check(options);seen.push('rehearse');}
   });
   assert.deepEqual(seen,['probe','preflight','rehearse']);
-  assert.equal(ctx.firstTakeover,!bundled);assert.equal(ctx.dashboardOwnerManaged,version>=20);
-  assert.deepEqual(fs.readFileSync(database),before);
+  assert.equal(ctx.firstTakeover,!bundled);assert.equal(ctx.dashboardOwnerManaged,managed);
+  assert.ok(fs.readFileSync(database).equals(before),'Dashboard database changed');
   assert.equal(fs.existsSync(path.join(input.zylosDir,'.backup')),false);
 });
 

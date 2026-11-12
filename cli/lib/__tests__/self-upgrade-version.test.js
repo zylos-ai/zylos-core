@@ -21,12 +21,12 @@ const NEXT = `${MAJOR + 1}.0.0`;
 const escapeVersion = version => version.replaceAll('.', '\\.');
 const DATABASE_CONTENT = 'isolated version-selection database sentinel\n';
 const HISTORY = path.join(ROOT, 'skills/comm-bridge/scripts/__tests__/fixtures/migration-history');
-const sha256 = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const sha256 = file => fs.existsSync(file) ? crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') : null;
 
 // These tests exercise the real CLI across its version selector, GitHub client,
 // archive downloader and target handoff. Only external commands and downloaded
 // target/recovery materials are fixtures; installed product sources stay intact.
-function fixture(t, { pages = [[]], target = NEXT, downloadFails = false, c4 = 'current' } = {}) {
+function fixture(t, { pages = [[]], target = NEXT, downloadFails = false, c4 = 'current', deployment = true } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'suv-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -56,7 +56,7 @@ function fixture(t, { pages = [[]], target = NEXT, downloadFails = false, c4 = '
   }
   fs.mkdirSync(path.dirname(databases[2]), { recursive: true });
   fs.writeFileSync(databases[2], DATABASE_CONTENT);
-  const databaseHashes = databases.map(sha256);
+  let databaseHashes = databases.map(sha256);
   fs.mkdirSync(path.join(zylos, '.claude/skills'), { recursive: true });
   for (const owner of ['comm-bridge', 'scheduler']) fs.symlinkSync(path.join(ROOT, 'skills', owner), path.join(zylos, '.claude/skills', owner));
   const stable = path.join(zylos, '.zylos/upgrade');
@@ -126,7 +126,7 @@ process.exit(99);
     ? fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(JSON.parse) : [];
   const run = args => {
     for (const value of [home, zylos, pm2, tmp, tmux, ...databases]) {
-      assert.ok(fs.realpathSync(value).startsWith(root + path.sep), value);
+      assert.ok((fs.existsSync(value) ? fs.realpathSync(value) : value).startsWith(root + path.sep), value);
     }
     assert.equal(env.PATH, bin);
     for (const command of ['curl', 'gh', 'pm2', 'tmux', 'npm']) {
@@ -144,8 +144,10 @@ process.exit(99);
     assert.deepEqual(dangerous, [], 'service/install commands must stay unused');
     return result;
   };
+  // An uninitialized machine: no deployment directory at all.
+  if (!deployment) { fs.rmSync(zylos, { recursive: true }); databaseHashes = databases.map(sha256); }
   return {
-    run, calls, handoffFile,
+    run, calls, handoffFile, zylosDir: zylos,
     recoveryCalls: () => fs.existsSync(recoveryFile) ? fs.readFileSync(recoveryFile, 'utf8') : '',
   };
 }
@@ -413,3 +415,19 @@ for (const explicit of [false, true]) {
     assertNoWork(f, { tagLookup: !explicit });
   });
 }
+
+// Boundary: --check on a machine without a deployment directory has no
+// databases to report; it must not fail on the missing directory or create it.
+// Run when the check's database probe changes; skip for execution-only changes.
+for (const explicit of [false, true]) test(`check without a deployment directory reports the version only${explicit ? ' (explicit --version)' : ''}`, t => {
+  const f = fixture(t, { deployment: false });
+  const args = ['upgrade', '--self', '--check', ...(explicit ? ['--version', CURRENT] : [])];
+  const output = parsed(f.run([...args, '--json']));
+  assert.equal(output.hasUpdate, false);
+  assert.equal(output.pendingMigrations, undefined);
+  assert.match(output.reply, explicit ? /No upgrade will run/ : /up to date/);
+  const plain = f.run(args);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(fs.existsSync(f.zylosDir), false);
+  assertNoWork(f, { tagLookup: !explicit });
+});

@@ -30,16 +30,17 @@ function fixture(t) {
  t.after(()=>{for(const [key,value] of Object.entries(prior)){if(value===undefined)delete process.env[key];else process.env[key]=value;}fs.rmSync(dir,{recursive:true,force:true});});
  return {dir,data,code,bin};
 }
-test('best-effort copy preserves old main/WAL/SHM and missing does not create tx',t=>{
+test('best-effort copy preserves old main/WAL/SHM/journal and missing does not create tx',t=>{
  const {dir,data}=fixture(t),tx=path.join(dir,'tx');
  assert.deepEqual(copyDashboardDb(dir,tx),{ok:true,error:null});assert.equal(fs.existsSync(tx),false);
  fs.writeFileSync(path.join(data,'dashboard.db-wal'),'orphan wal');
  fs.writeFileSync(path.join(data,'dashboard.db-shm'),'orphan shm');
  assert.deepEqual(copyDashboardDb(dir,tx),{ok:true,error:null});assert.equal(fs.existsSync(tx),false);
  assert.equal(fs.readFileSync(path.join(data,'dashboard.db-wal'),'utf8'),'orphan wal');
- for(const suffix of ['','-wal','-shm'])fs.writeFileSync(path.join(data,'dashboard.db'+suffix),'unchanged'+suffix);
+ // A hot -journal (Dashboard stopped mid-transaction) belongs to the copy too.
+ for(const suffix of ['','-wal','-shm','-journal'])fs.writeFileSync(path.join(data,'dashboard.db'+suffix),'unchanged'+suffix);
  assert.equal(copyDashboardDb(dir,tx).ok,true);
- for(const suffix of ['','-wal','-shm'])assert.equal(fs.readFileSync(path.join(tx,'dashboard/db-copy/dashboard.db'+suffix),'utf8'),'unchanged'+suffix);
+ for(const suffix of ['','-wal','-shm','-journal'])assert.equal(fs.readFileSync(path.join(tx,'dashboard/db-copy/dashboard.db'+suffix),'utf8'),'unchanged'+suffix);
  assert.equal(fs.readFileSync(path.join(data,'dashboard.db'),'utf8'),'unchanged');
 });
 test('registration uses one managed service, preserves config bytes, never installs hooks',t=>{
