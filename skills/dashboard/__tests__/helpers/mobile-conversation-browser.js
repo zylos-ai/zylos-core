@@ -14,15 +14,16 @@ const ORIGIN_ID = 'g:' + Buffer.from('origin').toString('hex').toUpperCase();
 const NOW = Date.UTC(2026, 10, 12, 5, 30);
 const DEFAULT_TITLE = '发布流程核对';
 const LONG_TITLE = '发布流程核对'.repeat(7).slice(0, 40);
+const LONG_SOURCE = '跨地区项目沟通渠道'.repeat(12);
 const iso = offset => new Date(NOW + offset).toISOString();
 
 // Fixed existing API contracts over private loopback: the real entry/modules/styles
 // render them. No database, runtime, channel, outbound request or backend extension.
 async function startPage(sandbox, publicDir) {
-  let scene = 'idle', connected = true, observerBlocked = false, sessionMode = 'multi', title = DEFAULT_TITLE;
+  let scene = 'idle', connected = true, observerBlocked = false, sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard';
   const streams = new Set(), missing = new Set(), actions = [];
   const conversation = id => ({ id, localId: 'mobile-browser', sessionGroup: id === EXT_ID ? EXTERNAL : id === ORIGIN_ID ? 'origin' : GROUP,
-    channel: id === EXT_ID ? 'telegram' : 'dashboard', state: 'active', displayName: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : title,
+    channel: id === EXT_ID ? 'telegram' : id === ORIGIN_ID ? 'dashboard' : channel, state: 'active', displayName: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : title,
     display_name: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : title, origin: id === ORIGIN_ID });
   const messages = [{ id: 1, direction: 'in', channel: 'dashboard', content: '发版流程改好了吗？', timestamp: iso(-5 * 60000), status: 'delivered' },
     { id: 2, direction: 'out', channel: 'dashboard', content: '改好了，新流程是这样：\n\n1. 推 server 的 tag，流水线自动打包\n2. 测试服先装，冒烟通过再正常升级\n3. 服务端升好后，再发布 App\n\n本地不再编译，也不用再手动传包。\n\n**已验证：** 打包结果与之前的内容一致。\n\n**还没验证：** 真正的流水线发版要等第一次推 tag 才会跑。', timestamp: iso(-2 * 60000), status: 'sent' }];
@@ -87,7 +88,7 @@ async function startPage(sandbox, publicDir) {
   });
   sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
   return { base: await sandbox.startHttp(server), missing, actions,
-    setScene(value) { scene = value; }, setTitle(value) { title = value; }, reconnect() { connected = true; }, setSessionMode(value) { sessionMode = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
+    setScene(value) { scene = value; }, setTitle(value) { title = value; }, setChannel(value) { channel = value; }, reconnect() { connected = true; }, setSessionMode(value) { sessionMode = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
 }
 
 export async function runMobileConversationBrowser(t, sandbox) {
@@ -101,8 +102,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   const captures = [], measurements = [];
-  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE } = {}) => {
-    fixture.reconnect(); fixture.setScene(scene); fixture.setTitle(title); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
+  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard' } = {}) => {
+    fixture.reconnect(); fixture.setScene(scene); fixture.setTitle(title); fixture.setChannel(channel); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
     const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC' });
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
@@ -130,8 +131,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
     { width: 1280, scene: 'running', name: 'header-1280-running' },
     { width: 1280, disconnected: true, name: 'header-1280-polling' },
     { width: 390, name: 'header-390-mobile' },
-    { width: 1280, title: LONG_TITLE, scene: 'running', disconnected: true, name: 'header-1280-long-title' },
-    { width: 900, title: LONG_TITLE, scene: 'running', disconnected: true, name: 'header-900-long-title' },
+    { width: 1280, title: LONG_TITLE, channel: LONG_SOURCE, scene: 'running', disconnected: true, name: 'header-1280-long-title' },
+    { width: 900, title: LONG_TITLE, channel: LONG_SOURCE, scene: 'running', disconnected: true, name: 'header-900-long-title' },
   ];
   const prepareHeader = async (page, options) => {
     await select(page);
@@ -177,6 +178,26 @@ export async function runMobileConversationBrowser(t, sandbox) {
   };
   const menu = page => page.locator('.conversation-menu-sheet');
   const rendered = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const phoneHeaderFits = async page => {
+    const m = await page.evaluate(() => {
+      const box = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x, top: r.top, right: r.right, bottom: r.bottom, height: r.height }; };
+      const header = document.querySelector('.conversation-header'), css = getComputedStyle(header);
+      return { viewport: innerWidth, header: box('.conversation-header'), back: box('.conversation-back'),
+        title: box('.conversation-title-line'), menu: box('.conversation-menu-toggle'),
+        contentRight: header.getBoundingClientRect().right - Number.parseFloat(css.paddingRight) - Number.parseFloat(css.borderRightWidth) };
+    });
+    for (const name of ['back', 'title', 'menu']) {
+      assert.ok(m[name].height > 0 && m[name].top >= m.header.top - 1 && m[name].bottom <= m.header.top + 53,
+        name + ' stays inside the first 52px phone header row: ' + JSON.stringify(m));
+    }
+    assert.ok(Math.abs(m.back.top - m.menu.top) <= 1, 'phone back and menu align');
+    const center = r => (r.top + r.bottom) / 2;
+    assert.ok(Math.abs(center(m.title) - center(m.back)) <= 1 && Math.abs(center(m.title) - center(m.menu)) <= 1,
+      'phone title, back and menu share a row');
+    assert.ok(m.back.right <= m.title.x + 1 && m.title.right <= m.menu.x + 1, 'phone menu follows the title at the right');
+    assert.ok(Math.abs(m.contentRight - m.menu.right) <= 1, 'phone menu reaches the content right edge');
+    measurements.push({ name: 'phone-header-row', ...m });
+  };
   await t.test('desktop header uses two rows and keeps status actions readable', async () => {
     const headerMetrics = async page => page.evaluate(() => {
       const box = selector => {
@@ -184,6 +205,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
         const range = document.createRange(); range.selectNodeContents(el);
         return { x: r.x, y: r.y, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height,
           textRight: range.getBoundingClientRect().right,
+          paddingRight: Number.parseFloat(css.paddingRight), borderRight: Number.parseFloat(css.borderRightWidth), lineHeight: Number.parseFloat(css.lineHeight),
           scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, whiteSpace: css.whiteSpace, overflow: css.overflow,
           textOverflow: css.textOverflow, fontSize: Number.parseFloat(css.fontSize), text: el.textContent, title: el.title, role: el.getAttribute('role') };
       };
@@ -203,6 +225,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.ok(m.title.right <= m.running.x && m.running.right <= m.push.x && m.push.right <= m.group.x,
         'title, status, connection and group occupy separate ordered columns');
       assert.ok(m.subtitle.top >= m.title.bottom - 1 && m.subtitle.bottom <= m.header.bottom, 'source is the second row');
+      const rightGap = m.header.right - m.header.paddingRight - m.header.borderRight - m.group.right;
+      assert.ok(rightGap >= -1 && rightGap <= 16, 'status actions stay anchored to the header content right edge');
       assert.equal(m.push.whiteSpace, 'nowrap');
       assert.equal(m.push.textOverflow, 'ellipsis');
       assert.equal(m.push.role, 'status');
@@ -224,6 +248,12 @@ export async function runMobileConversationBrowser(t, sandbox) {
             assert.equal(m.titleText.text.length, 40, 'fixture supplies a long title');
             assert.ok(m.titleText.scrollWidth > m.titleText.clientWidth, 'long title exercises truncation pressure');
             assert.ok(m.push.scrollWidth > m.push.clientWidth, 'connection hint yields space before a long title');
+            assert.ok(m.subtitle.text.startsWith(LONG_SOURCE), 'existing channel label renders the long source');
+            assert.equal(m.subtitle.whiteSpace, 'nowrap');
+            assert.equal(m.subtitle.overflow, 'hidden');
+            assert.equal(m.subtitle.textOverflow, 'ellipsis');
+            assert.ok(m.subtitle.height <= m.subtitle.lineHeight + 1, 'long source stays on one line');
+            assert.ok(m.subtitle.scrollWidth > m.subtitle.clientWidth, 'long source exercises ellipsis pressure');
           }
           if (m.titleText.scrollWidth > m.titleText.clientWidth) {
             assert.ok(m.push.scrollWidth > m.push.clientWidth, 'title only truncates after the connection hint is truncated');
@@ -243,6 +273,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
           assert.equal(await page.locator('.conversation-running').isVisible(), false);
           assert.equal(await page.locator('.conversation-push-status').isVisible(), false);
           assert.equal(await page.locator('.conversation-menu-toggle').isVisible(), true);
+          await phoneHeaderFits(page);
         }
         await shot(page, options.name + '-after');
         assert.deepEqual(f.errors, []);
@@ -284,6 +315,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
     const edge = await open({ width: 760, scene: 'running' });
     try {
       await prepareHeader(edge.page, { scene: 'running' });
+      await phoneHeaderFits(edge.page);
       assert.equal(await edge.page.locator('.conversation-running').isVisible(), true, 'phone running status retains its separate row');
       assert.equal(await edge.page.locator('.conversation-menu-toggle').isVisible(), true);
       assert.equal(await edge.page.locator('.conversation-header-actions > .wb-btn').isVisible(), false);
