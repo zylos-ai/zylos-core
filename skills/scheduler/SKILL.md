@@ -12,7 +12,7 @@ Enables Claude to work autonomously by dispatching scheduled tasks via C4 comm-b
 1. Scheduler checks for pending tasks that are due.
 2. It submits them to C4 as Core scheduler messages, without reading session health or waiting for an online/idle session.
 3. C4 handles execution control (target group, health gates, idle waiting and priority).
-4. A queued task still needs the existing `done` completion call; queueing does not prove the work finished.
+4. A successful C4 receipt ends this delivery immediately: history becomes success, one-time tasks become completed, and recurring/interval tasks return to pending for the next occurrence. Success means delivered to C4, not that the agent has finished the work. Unknown results count as success only after readback confirms receipt.
 
 ## CLI
 
@@ -29,11 +29,11 @@ Write commands (`add`, `update`, `done`, `remove`, `pause`, `resume`) and `histo
 
 To re-enable a failed one-time task or clear a task's execution group, use `update`; see `references/update.md`.
 
-For recurring and interval tasks, `update --at` or `--in` changes only the next run: the type, cron/interval and saved schedule timezone stay unchanged. After that run is marked `done`, cron resumes at its next matching time; an interval resumes from completion. The requested time is parsed in the current configured TZ. Use `--cron` or `--every` to replace the cadence or periodic type. One-time updates keep their existing behavior. Text output explicitly says only the next run changed; JSON includes `nextRunOnly: true`.
+For recurring and interval tasks, `update --at` or `--in` changes only the next run: the type, cron/interval and saved schedule timezone stay unchanged. After that occurrence is delivered, cron resumes at its next matching time; an interval resumes from delivery time. The requested time is parsed in the current configured TZ. Use `--cron` or `--every` to replace the cadence or periodic type. One-time updates keep their existing behavior. Text output explicitly says only the next run changed; JSON includes `nextRunOnly: true`.
 
-To postpone unfinished work when a task is already running, directly use `update --in`, `--at`, `--cron`, or `--every`. The new time must be in the future. This completes the current execution's history as success and puts the task back in pending at the requested time, including recurring and interval tasks. There is no separate `done` step. Updates that only change the prompt, name, or other fields leave the execution running.
+`done` is a compatibility no-op for old prompts: it exits 0 and returns `alreadyCompleted: true` with `--json`, without changing the task or history. Delivery messages no longer ask the agent to call it.
 
-A one-time task that runs past the timeout becomes failed and sends one timeout notification to its owning agent session, using the same session group and reply target as dispatch. Notification failure is logged without retrying or changing the failed task. Recurring and interval timeouts continue through the normal next-run calculation without notification.
+There is no work-completion timeout or timeout notification. `running` exists only while receipt is in progress or unconfirmed; delivery failures keep their existing handling. No automatic retry guesses whether an interrupted receipt succeeded. On upgrade, legacy running tasks and their started histories are treated as delivered once: one-time tasks complete, periodic tasks resume their saved cadence.
 
 ## Timezone
 

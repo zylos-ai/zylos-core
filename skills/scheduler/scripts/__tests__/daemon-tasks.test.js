@@ -4,10 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { updateNextRunTime, processCompletedTasks, handleStaleRunningTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
+import { updateNextRunTime, processCompletedTasks } from '../daemon-tasks.js';
 import { now } from '../database.js';
-
-const notificationDependencies = { sendViaC4: () => ({ category: 'success' }) };
 
 async function withDb(fn) {
   const originalZylosDir = process.env.ZYLOS_DIR;
@@ -206,94 +204,6 @@ describe('processCompletedTasks', () => {
       assert.equal(a.status, 'pending');
       assert.equal(b.status, 'completed');  // one-time stays completed
       assert.equal(c.status, 'pending');
-    });
-  });
-});
-
-// ---- handleStaleRunningTasks ----
-
-describe('handleStaleRunningTasks', () => {
-  it('marks stale one-time task as failed', async (t) => {
-    t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
-    await withDb((db) => {
-      const staleTime = now() - TASK_TIMEOUT - 60;
-      insertTask(db, { type: 'one-time', cron_expression: null, status: 'running', updated_at: staleTime });
-
-      // Insert a history entry
-      const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
-      db.prepare('INSERT INTO task_history (task_id, executed_at, status) VALUES (?, ?, ?)')
-        .run(task.id, staleTime, 'started');
-
-      handleStaleRunningTasks(db, notificationDependencies);
-
-      const updated = db.prepare('SELECT status, last_error FROM tasks WHERE id = ?').get(task.id);
-      assert.equal(updated.status, 'failed');
-      assert.equal(updated.last_error, 'Task timed out');
-
-      const history = db.prepare('SELECT * FROM task_history WHERE task_id = ?').get(task.id);
-      assert.equal(history.status, 'timeout');
-      assert.equal(history.error, 'TASK_TIMEOUT');
-      assert.equal(history.completed_at - history.executed_at, TASK_TIMEOUT + 60);
-      assert.equal(history.duration_ms, (history.completed_at - history.executed_at) * 1000);
-    });
-  });
-
-  it('marks stale recurring task as completed (for rescheduling)', async () => {
-    await withDb((db) => {
-      const staleTime = now() - TASK_TIMEOUT - 60;
-      insertTask(db, { type: 'recurring', cron_expression: '0 9 * * *', status: 'running', updated_at: staleTime });
-
-      const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
-      db.prepare('INSERT INTO task_history (task_id, executed_at, status) VALUES (?, ?, ?)')
-        .run(task.id, staleTime, 'started');
-
-      handleStaleRunningTasks(db, notificationDependencies);
-
-      const updated = db.prepare('SELECT status, last_error FROM tasks WHERE id = ?').get(task.id);
-      assert.equal(updated.status, 'completed');
-      assert.equal(updated.last_error, 'Task timed out');
-    });
-  });
-
-  it('ignores recently updated running tasks', async () => {
-    await withDb((db) => {
-      insertTask(db, { type: 'one-time', cron_expression: null, status: 'running', updated_at: now() });
-
-      handleStaleRunningTasks(db, notificationDependencies);
-
-      const task = db.prepare('SELECT status FROM tasks LIMIT 1').get();
-      assert.equal(task.status, 'running');  // should not be touched
-    });
-  });
-
-  it('ignores non-running tasks', async () => {
-    await withDb((db) => {
-      const staleTime = now() - TASK_TIMEOUT - 60;
-      insertTask(db, { status: 'pending', updated_at: staleTime });
-
-      handleStaleRunningTasks(db, notificationDependencies);
-
-      const task = db.prepare('SELECT status FROM tasks LIMIT 1').get();
-      assert.equal(task.status, 'pending');
-    });
-  });
-
-  it('handles multiple stale tasks with different types', async () => {
-    await withDb((db) => {
-      const staleTime = now() - TASK_TIMEOUT - 60;
-      insertTask(db, { id: 'task-ot', type: 'one-time', cron_expression: null, status: 'running', updated_at: staleTime });
-      insertTask(db, { id: 'task-rc', type: 'recurring', cron_expression: '0 9 * * *', status: 'running', updated_at: staleTime });
-      insertTask(db, { id: 'task-iv', type: 'interval', cron_expression: null, interval_seconds: 3600, status: 'running', updated_at: staleTime });
-
-      handleStaleRunningTasks(db, notificationDependencies);
-
-      const ot = db.prepare('SELECT status FROM tasks WHERE id = ?').get('task-ot');
-      const rc = db.prepare('SELECT status FROM tasks WHERE id = ?').get('task-rc');
-      const iv = db.prepare('SELECT status FROM tasks WHERE id = ?').get('task-iv');
-
-      assert.equal(ot.status, 'failed');     // one-time → failed
-      assert.equal(rc.status, 'completed');  // recurring → completed (will be rescheduled)
-      assert.equal(iv.status, 'completed');  // interval → completed (will be rescheduled)
     });
   });
 });

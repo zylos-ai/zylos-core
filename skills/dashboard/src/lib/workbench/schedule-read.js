@@ -7,7 +7,7 @@ import { dateKey, localToOffsetIso } from './schedule-tz.js';
 const CRON_MODULE = new URL('../../../../scheduler/scripts/cron-utils.js', import.meta.url).href;
 const TIME_MODULE = new URL('../../../../scheduler/scripts/time-utils.js', import.meta.url).href;
 const ENABLED = new Set(['pending', 'running']);
-const BAD = new Set(['failed', 'timeout']);
+const BAD = new Set(['failed']);
 const DAY = 86400;
 const PREVIEW_RUNS = 3;
 const MAX_RUNS = 2000;

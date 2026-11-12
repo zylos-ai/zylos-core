@@ -1,7 +1,8 @@
 import { migrateSchema } from './migrations.js';
 import { migrateToV2 } from './migrations-v2.js';
+import { migrateToV3 } from './migrations-v3.js';
 import { inspectLayout } from '../../comm-bridge/scripts/sqlite-schema.js';
-export const SUPPORTED_SCHEMA_VERSION = 2;
+export const SUPPORTED_SCHEMA_VERSION = 3;
 export const supportsNewDatabase = true;
 // Unmarked released layouts enter the explicit schema migration chain at 0.
 export const MIGRATIONS = Object.freeze({
@@ -13,6 +14,11 @@ export const MIGRATIONS = Object.freeze({
       session_group_name: { type: 'TEXT', pk: false },
     } } },
     migrate: migrateToV2,
+  }),
+  2: Object.freeze({
+    to: 3,
+    changes: {},
+    migrate: migrateToV3,
   }),
 });
 export const TABLES = {

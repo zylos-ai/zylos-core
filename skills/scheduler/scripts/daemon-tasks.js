@@ -6,13 +6,9 @@
 import { now } from './database.js';
 import { getNextRun } from './cron-utils.js';
 import { formatTime } from './time-utils.js';
-import { sendViaC4 } from './runtime.js';
-import { resolveDispatchSessionGroup } from './dispatch-session-group.js';
-
-export const TASK_TIMEOUT = 3600;  // 1 hour
 
 /**
- * Update next_run_at for recurring/interval tasks after completion
+ * Update next_run_at for recurring/interval tasks after delivery
  */
 export function updateNextRunTime(db, task) {
   let nextRun;
@@ -54,52 +50,6 @@ export function processCompletedTasks(db) {
       db.prepare(`
         UPDATE tasks SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?
       `).run(error.message, now(), task.id);
-    }
-  }
-}
-
-/**
- * Handle stale running tasks (orphaned due to compaction/crash)
- * Tasks running for more than TASK_TIMEOUT seconds are considered stale
- */
-export function handleStaleRunningTasks(db, dependencies = {}) {
-  const currentTime = now();
-  const staleThreshold = currentTime - TASK_TIMEOUT;
-
-  const staleTasks = db.prepare(`
-    SELECT * FROM tasks
-    WHERE status = 'running'
-    AND updated_at < ?
-  `).all(staleThreshold);
-
-  for (const task of staleTasks) {
-    const timedOut = db.transaction(() => {
-      // Recheck after acquiring the write lock: done may have won the race.
-      const changed = db.prepare(`
-        UPDATE tasks SET status = ?, last_error = 'Task timed out', updated_at = ?
-        WHERE id = ? AND status = 'running' AND updated_at < ?
-      `).run(task.type === 'one-time' ? 'failed' : 'completed', currentTime, task.id, staleThreshold);
-      if (!changed.changes) return false;
-      console.log(`[${new Date().toISOString()}] Task ${task.id} (${task.name}) timed out after ${TASK_TIMEOUT}s`);
-      db.prepare(`
-        UPDATE task_history SET status = 'timeout', completed_at = ?,
-          error = COALESCE(error, 'TASK_TIMEOUT'), duration_ms = (? - executed_at) * 1000
-        WHERE task_id = ? AND status = 'started'
-      `).run(currentTime, currentTime, task.id);
-      return true;
-    }).immediate();
-    if (!timedOut || task.type !== 'one-time') continue;
-    // Notify only the winner of the timeout transition, outside the write lock.
-    try {
-      const destination = resolveDispatchSessionGroup(db, task, null, dependencies);
-      const result = (dependencies.sendViaC4 || sendViaC4)(
-        `[Scheduled Task Timeout: ${task.id}]\nTask "${task.name}" did not finish within ${TASK_TIMEOUT} seconds and is now failed. To reschedule unfinished work, run: ~/zylos/.claude/skills/scheduler/scripts/cli.js update ${task.id} --in "30 minutes". If the work is already complete, ignore this notification or run: ~/zylos/.claude/skills/scheduler/scripts/cli.js done ${task.id}`,
-        { priority: task.priority, requireIdle: task.require_idle === 1,
-          sessionComponent: destination.session_component, sessionGroupName: destination.session_group_name,
-          replyChannel: task.reply_channel, replyEndpoint: task.reply_endpoint });
-      if (result.category !== 'success') throw new Error(result.code || result.category);
-    } catch (error) {
-      console.error(`[Scheduler] Timeout notification for ${task.id} failed: ${String(error.message).replace(/[\r\n]/g, ' ').slice(0, 600)}`);
     }
   }
 }

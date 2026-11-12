@@ -114,12 +114,12 @@ test('schedule read reports counts, sections, recent results and last error from
   assert.deepEqual([counts('recurring'), counts('interval'), counts('one-time')], [16, 2, 38]);
   const recent = rows.filter(row => row.executed_at >= NOW - 7 * DAY);
   const success = recent.filter(row => row.status === 'success').length;
-  const bad = recent.filter(row => ['failed', 'timeout'].includes(row.status)).length;
+  const bad = recent.filter(row => row.status === 'failed').length;
   assert.deepEqual(page.kpi, {
     enabled: 26, paused: 8, running: 5, next24h: 12 + 24 + 10, partialPreview: false,
     runs7d: recent.length, bad7d: bad, successRate7d: success / (success + bad),
   });
-  assert.equal(bad, 4);
+  assert.equal(bad, 3);
   const byId = new Map(page.tasks.map(task => [task.id, task]));
   const completed = (await f.reader().detail(ids.completed)).task;
   assert.equal(completed.status, 'completed');
@@ -136,12 +136,12 @@ test('schedule read reports counts, sections, recent results and last error from
   assert.equal(failed.showLastError, true);
   assert.equal(failed.lastError, 'Missed execution window');
   assert.equal(failed.reenable, true);
-  assert.equal(byId.get(ids.timedOut).showLastError, true);
-  assert.equal(byId.get(ids.timedOut).lastError, 'Task timed out');
+  assert.equal(byId.get(ids.timedOut).showLastError, false);
+  assert.equal(byId.get(ids.timedOut).lastError, null);
   assert.equal(byId.get(ids.recovered).showLastError, false);
   assert.equal(byId.get(ids.recovered).lastError, null);
   assert.equal(completed.showLastError, false);
-  assert.equal(page.tasks.filter(task => task.showLastError).length, 2);
+  assert.equal(page.tasks.filter(task => task.showLastError).length, 1);
   assert.equal(page.daily7d.tz, 'Asia/Singapore');
   assert.equal(page.daily7d.utcFallback, false);
   assert.equal(page.daily7d.days.length, 7);
@@ -574,4 +574,32 @@ test('minute rules match real zoned cron runs and only eligible rules use arithm
     const reference = createCronIterator(expression, tz, new Date(start * 1000));
     for (const run of actual) assert.equal(run, reference.next(), `${expression} ${tz}`);
   }
+});
+
+
+test('legacy timeouts stay in history but do not become delivery failures or lower delivery rate', async t => {
+  const f = fixture(t);
+  const legacy = f.task({ type: 'interval', interval_seconds: 1800, last_error: 'Task timed out' });
+  f.run(legacy.id, { executed_at: NOW - 100, status: 'timeout', error: 'TASK_TIMEOUT', completed_at: NOW - 50 });
+  const reader = f.reader();
+  const onlyTimeouts = await reader.read();
+  assert.equal(onlyTimeouts.kpi.bad7d, 0);
+  assert.equal(onlyTimeouts.kpi.successRate7d, null);
+  assert.equal(onlyTimeouts.daily7d.days.at(-1).timeout, 1);
+  assert.equal(onlyTimeouts.tasks[0].showLastError, false);
+  assert.equal(onlyTimeouts.tasks[0].lastError, null);
+  assert.equal(reader.history(legacy.id).rows[0].status, 'timeout');
+  assert.equal(reader.history(legacy.id).rows[0].error, 'TASK_TIMEOUT');
+  const delivered = f.task({ status: 'completed' });
+  f.run(delivered.id, { executed_at: NOW - 90, status: 'success', completed_at: NOW - 89 });
+  const rejected = f.task({ last_error: 'RECEIVE_FAILED' });
+  f.run(rejected.id, { executed_at: NOW - 80, status: 'failed', completed_at: NOW - 79, error: 'RECEIVE_FAILED' });
+  const uncertain = f.task({ status: 'running', last_error: 'RECEIVE_RESULT_UNKNOWN' });
+  f.run(uncertain.id, { executed_at: NOW - 70, status: 'started', error: 'RECEIVE_RESULT_UNKNOWN' });
+  const mixed = await reader.read();
+  assert.equal(mixed.kpi.bad7d, 1);
+  assert.equal(mixed.kpi.successRate7d, 0.5);
+  assert.equal(mixed.kpi.running, 1);
+  assert.equal(mixed.tasks.find(task => task.id === rejected.id).showLastError, true);
+  assert.equal(mixed.tasks.find(task => task.id === uncertain.id).showLastError, false);
 });

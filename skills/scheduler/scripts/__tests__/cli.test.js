@@ -279,7 +279,7 @@ describe('cli list', () => {
 });
 
 describe('cli done', () => {
-  it('preserves an unknown dispatch reason when completing history', (t) => {
+  it('does not settle an unknown delivery when old callers invoke done', (t) => {
     withTmpDir(({ dbPath, env }) => {
       cli(['add', 'complete uncertain dispatch', '--in', '30 minutes'], env);
       const db = new Database(dbPath);
@@ -299,12 +299,12 @@ describe('cli done', () => {
         assert.equal(result.category, 'U');
         cli(['done', task.id], env);
         const history = db.prepare('SELECT * FROM task_history WHERE id=?').get(result.historyId);
-        assert.equal(history.status, 'success');
+        assert.equal(history.status, 'started');
         assert.equal(history.error, 'RECEIVE_RESULT_UNKNOWN');
-        assert.ok(history.duration_ms >= 7000);
-        assert.equal(history.duration_ms, (history.completed_at - history.executed_at) * 1000);
+        assert.equal(history.duration_ms, null);
+        assert.equal(history.completed_at, null);
         const updated = db.prepare('SELECT status,last_error FROM tasks WHERE id=?').get(task.id);
-        assert.equal(updated.status, 'completed');
+        assert.equal(updated.status, 'running');
         assert.equal(updated.last_error, 'RECEIVE_RESULT_UNKNOWN');
       } finally {
         db.close();
@@ -312,15 +312,16 @@ describe('cli done', () => {
     });
   });
 
-  it('completes a task and updates history', () => {
+  it('keeps a pending task unchanged and explains automatic delivery completion', () => {
     withTmpDir(({ dbPath, env }) => {
       cli(['add', 'complete me', '--cron', '0 9 * * *'], env);
       const db = new Database(dbPath);
       try {
         const task = db.prepare('SELECT id FROM tasks LIMIT 1').get();
-        cli(['done', task.id], env);
+        const output = cli(['done', task.id], env);
+        assert.match(output, /任务送达时已自动结束，无需 done/);
         const updated = db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id);
-        assert.equal(updated.status, 'completed');
+        assert.equal(updated.status, 'pending');
       } finally {
         db.close();
       }
@@ -523,7 +524,7 @@ describe('cli running', () => {
   it('shows safe to compact when no running tasks', () => {
     withTmpDir(({ env }) => {
       const output = cli(['running'], env);
-      assert.ok(output.includes('No running') || output.includes('Safe to compact'));
+      assert.ok(output.includes('No running') || output.includes('No deliveries in progress'));
     });
   });
 });
@@ -563,7 +564,7 @@ describe('cli partial ID match', () => {
         const prefix = task.id.substring(0, 10);
         cli(['done', prefix], env);
         const updated = db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id);
-        assert.equal(updated.status, 'completed');
+        assert.equal(updated.status, 'pending');
       } finally {
         db.close();
       }

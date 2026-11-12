@@ -9,7 +9,6 @@ import { getNextRun, isValidCron, describeCron, getDefaultTimezone } from './cro
 import { parseTime, parseDuration, formatTime, getRelativeTime } from './time-utils.js';
 import { loadTimezone } from './tz.js';
 import { resolveSavedSessionGroup, updatedReplyTarget } from './saved-session-group.js';
-import { completeTaskExecution } from './task-completion.js';
 
 let db;
 
@@ -55,7 +54,7 @@ Commands:
   add <prompt> [options]  Add a new task
   update <task-id> [options]  Update an existing task
   remove <task-id>        Remove a task
-  done <task-id>          Mark task as completed
+  done <task-id>          Compatibility no-op; deliveries finish automatically
   pause <task-id>         Pause a task
   resume <task-id>        Resume a paused task
   history [task-id]       Show execution history
@@ -355,29 +354,9 @@ function cmdDone(taskId, options) {
 
   const task = tasks[0];
 
-  const alreadyClosed = task.status === 'pending' && task.last_run_at != null;
-  db.transaction(() => {
-    if (task.status === 'completed' || alreadyClosed) return;
-    // A delayed done must not finish the pending run created by a reschedule.
-    if (!completeTaskExecution(db, task, now())) {
-      reject('TASK_WRONG_STATUS', 'Task execution is no longer running', { status: task.status }, 1);
-    }
-  }).immediate();
+  if (options.json) return success({ task, alreadyCompleted: true, reason: 'DELIVERY_COMPLETES_AUTOMATICALLY' });
+  console.log(`任务送达时已自动结束，无需 done：${task.id}`);
 
-  if (alreadyClosed) {
-    if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id),
-      alreadyClosed: true, reason: 'EXECUTION_ALREADY_CLOSED', nextRunAt: task.next_run_at });
-    console.log(`Current execution already closed by rescheduling or timeout; no changes: ${task.id}`);
-    console.log(`  Next run: ${formatTime(task.next_run_at)} (${getRelativeTime(task.next_run_at)})`);
-    return;
-  }
-  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id) });
-  console.log(`Completed task: ${task.id}`);
-
-  // If recurring/interval, scheduler will handle next run
-  if (task.type !== 'one-time') {
-    console.log('(Scheduler will calculate next run time)');
-  }
 }
 
 function cmdPause(taskId, options) {
@@ -519,11 +498,11 @@ function cmdRunning() {
   `).all();
 
   if (tasks.length === 0) {
-    console.log('\n  No running tasks. Safe to compact.\n');
+    console.log('\n  No deliveries in progress.\n');
     return;
   }
 
-  console.log('\n  ⚠️  Running Tasks (complete these before compacting!):\n');
+  console.log('\n  Deliveries in progress or awaiting confirmation:\n');
   console.log('  ID              | Started            | Name');
   console.log('  ' + '-'.repeat(60));
 
@@ -535,7 +514,7 @@ function cmdRunning() {
     console.log(`  ${id} | ${started} | ${name}`);
   }
 
-  console.log('\n  Run "cli.js done <task-id>" to complete them before /compact\n');
+  console.log('\n  Delivery success is recorded automatically; done does not change these rows.\n');
 }
 
 function cmdUpdate(taskId, options) {
@@ -675,8 +654,7 @@ function cmdUpdate(taskId, options) {
   }
 
   const reenabled = task.status === 'failed' && task.type === 'one-time' && scheduleUpdated;
-  const executionFinished = task.status === 'running' && scheduleUpdated;
-  if (reenabled || executionFinished) {
+  if (reenabled) {
     if (updates.next_run_at <= now()) {
       reject('RESCHEDULE_NOT_FUTURE', 'Rescheduled time must be in the future', { nextRunAt: updates.next_run_at }, 1);
     }
@@ -696,16 +674,13 @@ function cmdUpdate(taskId, options) {
   const values = Object.values(updates);
 
   db.transaction(() => {
-    if ((reenabled || executionFinished) && updates.next_run_at <= now()) {
+    if (reenabled && updates.next_run_at <= now()) {
       reject('RESCHEDULE_NOT_FUTURE', 'Rescheduled time must be in the future', { nextRunAt: updates.next_run_at }, 1);
-    }
-    if (executionFinished && !completeTaskExecution(db, task, updates.updated_at)) {
-      reject('TASK_WRONG_STATUS', 'Task execution is no longer running', {}, 1);
     }
     db.prepare(`UPDATE tasks SET ${setClauses} WHERE id = ?`).run(...values, task.id);
   }).immediate();
 
-  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id), updatedFields, reenabled, executionFinished, ...(nextRunOnly ? { nextRunOnly: true } : {}) });
+  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id), updatedFields, reenabled, ...(nextRunOnly ? { nextRunOnly: true } : {}) });
   console.log(`\nTask updated: ${task.id}`);
   console.log(`  Updated fields: ${updatedFields.join(', ')}`);
 
@@ -715,7 +690,6 @@ function cmdUpdate(taskId, options) {
   }
   if (nextRunOnly) console.log('  Only the next run changed; recurring schedule and timezone unchanged');
   if (reenabled) console.log('  Re-enabled: pending');
-  if (executionFinished) console.log('  Current execution completed; rescheduled as pending');
   console.log();
 }
 

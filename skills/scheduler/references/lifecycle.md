@@ -10,9 +10,11 @@ All commands accept `--json`. Success prints `{"ok":true,"data":{"task":{...}}}`
 
 `cli.js done <task-id>`
 
-Marks a task as completed. For recurring/interval tasks, the daemon will automatically calculate the next run time.
+Compatibility no-op for old sessions and prompts. Successful delivery is recorded automatically when C4 acknowledges receipt, including an unknown result confirmed by readback. This only means delivered, not that the agent finished the work. One-time tasks become completed; recurring/interval tasks are immediately scheduled again from the delivery time.
 
-Completion and the current started history row are committed together. Repeating `done` on a completed task is harmless and exits 0. On a pending task with a previous completion, `done` exits 0 without writing anything: text output explains that the execution was already closed by rescheduling or timeout and shows the next run time; JSON adds `alreadyClosed: true`, `reason: "EXECUTION_ALREADY_CLOSED"` and `nextRunAt`. The task stays pending at its existing next time. If a one-time task timed out but the work has since finished, `done` marks it completed and exits 0; the timeout history remains recorded. To postpone running work, directly use `update` with a future time instead of `done` followed by `update`.
+`done` exits 0 and prints “任务送达时已自动结束，无需 done”. With `--json`, it returns `{"ok":true,"data":{"task":{...},"alreadyCompleted":true,"reason":"DELIVERY_COMPLETES_AUTOMATICALLY"}}`. It never changes the task or history, including pending, paused, failed or unresolved delivery rows. Unknown or ambiguous IDs keep the normal validation errors.
+
+There is no one-hour work timeout or scheduled timeout reminder. Old timeout history remains historical evidence, not a new delivery failure. Upgrade migration treats legacy running tasks with started histories as delivered, and is idempotent.
 
 ## remove
 

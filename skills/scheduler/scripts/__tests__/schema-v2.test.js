@@ -14,7 +14,7 @@ function seed(t, name) {
 }
 const snapshot = db => ({ layout: db.prepare('SELECT * FROM sqlite_master ORDER BY name').all(), rows: db.prepare('SELECT * FROM tasks ORDER BY id').all(), version: db.pragma('user_version', { simple: true }) });
 function verify(db, before) {
-  assert.equal(db.pragma('user_version', { simple: true }), 2);
+  assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
   const rows = db.prepare('SELECT * FROM tasks ORDER BY id').all();
   assert.deepEqual(rows.map(({ session_component, session_group_name, ...row }) => row), before.rows);
   assert.ok(rows.every(row => row.session_component === null && row.session_group_name === null));
@@ -35,7 +35,7 @@ test('DDL or version publish failure rolls back both new columns, rows and versi
     if (phase === 'ddl') failed = { ...owner, MIGRATIONS: { ...owner.MIGRATIONS, 1: { ...owner.MIGRATIONS[1], migrate(connection) { owner.MIGRATIONS[1].migrate(connection); throw new Error('after DDL'); } } } };
     else {
       const pragma = db.pragma.bind(db);
-      db.pragma = (statement, ...args) => { if (statement === 'user_version = 2') throw new Error('before version'); return pragma(statement, ...args); };
+      db.pragma = (statement, ...args) => { if (statement === `user_version = ${owner.SUPPORTED_SCHEMA_VERSION}`) throw new Error('before version'); return pragma(statement, ...args); };
       failed = owner;
     }
     assert.throws(() => migrateDatabase(db, failed), /after DDL|before version/);

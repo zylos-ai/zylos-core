@@ -7,341 +7,82 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import { runSchedulerIteration, mainLoop } from '../daemon-dispatch.js';
-import { processCompletedTasks, handleStaleRunningTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
-import { completeTaskExecution } from '../task-completion.js';
+import { dispatchTask } from '../daemon-dispatch.js';
 
 const clockCliPath = fileURLToPath(new URL('./helpers/scheduler-cli-clock.js', import.meta.url));
 const cliPath = fileURLToPath(new URL('../cli.js', import.meta.url));
 
-function startExecution(f, task, age = 15) {
-  const timestamp = Math.floor(Date.now() / 1000) - age;
-  f.db.prepare("UPDATE tasks SET status='running',updated_at=? WHERE id=?").run(timestamp, task.id);
-  return Number(f.db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,?,'started','retained warning')")
-    .run(task.id, timestamp).lastInsertRowid);
-}
-
-// Real CLI + scheduler boundary: run for completion, reschedule, timeout or routing
-// changes; unrelated changes may skip. Fixture paths are read back before use.
-// All receive/query calls are injected; no tmux, PM2, live C4 or network is used.
-for (const [type, schedule] of [
-  ['one-time', ['--in', '20 minutes']],
-  ['recurring', ['--cron', '*/15 * * * *']],
-  ['interval', ['--every', '20 minutes']],
-]) test(`running ${type} reschedule completes history and dispatches at the new time`, t => {
-  const f = fixture(t);
-  const task = f.add('unfinished work', type === 'recurring' ? ['--cron', '0 9 * * *']
-    : type === 'interval' ? ['--every', '1 hour'] : []);
-  assert.equal(task.type, type);
-  const historyId = startExecution(f, task);
-  const result = f.success(['update', task.id, ...schedule]);
-  assert.equal(result.executionFinished, true);
-  assert.equal(result.task.type, type);
-  assert.equal(result.task.status, 'pending');
-  assert.ok(result.task.next_run_at > Date.now() / 1000);
-  const history = f.history(task.id)[0];
-  assert.equal(history.id, historyId);
-  assert.equal(history.status, 'success');
-  assert.equal(history.error, 'retained warning');
-  assert.equal(history.duration_ms, (history.completed_at - history.executed_at) * 1000);
-  assert.equal(result.task.last_run_at, history.completed_at);
-  processCompletedTasks(f.db);
-  assert.equal(f.row(task.id).next_run_at, result.task.next_run_at);
-  const before = f.row(task.id);
-  const lateDone = f.success(['done', task.id]);
-  assert.equal(lateDone.alreadyClosed, true);
-  assert.equal(lateDone.reason, 'EXECUTION_ALREADY_CLOSED');
-  assert.equal(lateDone.nextRunAt, result.task.next_run_at);
-  const text = f.run(['done', task.id]);
-  assert.equal(text.status, 0);
-  assert.match(text.stdout, /already closed by rescheduling or timeout; no changes/);
-  assert.match(text.stdout, /Next run:/);
-  assert.deepEqual(f.row(task.id), before);
-  let sends = 0;
-  const dependencies = { getRecentConversations: () => [], sendViaC4() { sends++; return { category: 'success' }; } };
-  runSchedulerIteration(f.db, dependencies);
-  assert.equal(sends, 0);
-  t.mock.timers.enable({ apis: ['Date'], now: result.task.next_run_at * 1000 });
-  runSchedulerIteration(f.db, dependencies);
-  assert.equal(sends, 1);
-  assert.equal(f.row(task.id).status, 'running');
-  assert.equal(f.history(task.id).length, 2);
-  assert.equal(f.history(task.id)[1].status, 'started');
-});
-
-// Actual CLI -> private SQLite -> real daemon dispatch -> CLI done -> reschedule.
-// Run when timing updates or completion changes; skip unrelated scheduler/UI changes.
-// Outer runner and fixture isolate HOME/ZYLOS_DIR/PM2_HOME/CODEX_HOME/short TMPDIR;
-// C4 queries/sends are injected, no tmux/socket/network/live DB. Child timeout is
-// 15 seconds and fixture teardown closes DB and removes all private resources.
+// Real CLI/private SQLite/daemon boundary. Run when update, delivery or done
+// semantics change; skip unrelated UI. Outer runner + fixture isolate all env
+// paths and DB; injected C4 query/send, no tmux/PM2/network. Child timeout15s;
+// fixture finally closes DB and removes private files.
 for (const [type, create] of [
-  ['recurring', ['--cron', '0 9 * * *']],
-  ['interval', ['--every', '30 minutes']],
-]) for (const timing of [['--at', '2030-01-01 01:00'], ['--in', '1 hour']]) for (const status of ['pending', 'running']) {
-  test(`${status} ${type} ${timing[0]} override preserves cadence and returns to its original schedule after done`, t => {
+  ['recurring', ['--cron', '0 9 * * *']], ['interval', ['--every', '30 minutes']],
+]) for (const timing of [['--at', '2030-01-01 01:00'], ['--in', '1 hour']]) {
+  test(`${type} ${timing[0]} override returns to its original cadence after delivery without done`, t => {
     const initial = Date.parse('2030-01-01T00:00:00Z');
     t.mock.timers.enable({ apis: ['Date'], now: initial });
     const f = fixture(t, { time: initial });
-    const task = f.add('periodic work', create);
-    // The currently configured parse zone differs from the saved cadence zone.
+    const task = f.add('periodic delivery', create);
     f.db.prepare('UPDATE tasks SET timezone=? WHERE id=?').run('Asia/Shanghai', task.id);
     const before = f.row(task.id);
-    const oldHistory = status === 'running' ? startExecution(f, task) : null;
-    const result = f.success(['update', task.id, ...timing, '--prompt', 'postponed work']);
-    assert.equal(result.nextRunOnly, true);
-    assert.equal(result.executionFinished, status === 'running');
-    assert.equal(result.task.type, before.type);
-    assert.equal(result.task.cron_expression, before.cron_expression);
-    assert.equal(result.task.interval_seconds, before.interval_seconds);
-    assert.equal(result.task.timezone, before.timezone);
+    const result = f.success(['update', task.id, ...timing, '--prompt', 'postponed delivery']);
+    assert.equal(result.nextRunOnly, true); assert.equal('executionFinished' in result, false);
+    for (const key of ['type', 'cron_expression', 'interval_seconds', 'timezone']) assert.equal(result.task[key], before[key]);
     assert.equal(result.task.next_run_at, initial / 1000 + 3600);
-    assert.equal(result.task.prompt, 'postponed work');
-    assert.equal(result.task.status, 'pending');
-    assert.equal(result.updatedFields.includes('type'), false);
-    if (oldHistory) {
-      assert.equal(f.history(task.id)[0].id, oldHistory);
-      assert.equal(f.history(task.id)[0].status, 'success');
-    }
-    const text = f.run(['update', task.id, ...timing]);
-    assert.equal(text.status, 0);
+    assert.equal(result.task.status, 'pending'); assert.equal(result.updatedFields.includes('type'), false);
+    const text = f.run(['update', task.id, ...timing]);assert.equal(text.status, 0);
     assert.match(text.stdout, /Only the next run changed; recurring schedule and timezone unchanged/);
-    assert.match(text.stdout, new RegExp(`Type: ${type}`));
-    const target = result.task.next_run_at;
-    processCompletedTasks(f.db);
-    assert.equal(f.row(task.id).next_run_at, target);
-    let sends = 0;
-    const deps = { getRecentConversations: () => [], sendViaC4: () => { sends++; return { category: 'success' }; } };
-    t.mock.timers.setTime(target * 1000 - 1000);
-    runSchedulerIteration(f.db, deps); assert.equal(sends, 0);
-    t.mock.timers.setTime(target * 1000);
-    runSchedulerIteration(f.db, deps); assert.equal(sends, 1);
-    assert.equal(f.row(task.id).status, 'running');
-    const completedAt = target + 120;
-    t.mock.timers.setTime(completedAt * 1000); f.env.SCHEDULER_TEST_TIME = String(completedAt * 1000);
-    f.success(['done', task.id]);
-    assert.equal(f.history(task.id).at(-1).status, 'success');
-    processCompletedTasks(f.db);
-    const resumed = f.row(task.id);
-    assert.equal(resumed.status, 'pending'); assert.equal(resumed.type, type);
-    assert.equal(resumed.timezone, 'Asia/Shanghai');
-    assert.equal(resumed.cron_expression, before.cron_expression);
-    assert.equal(resumed.interval_seconds, before.interval_seconds);
-    // 09:00 Shanghai is 01:00 UTC; completion was 01:02, so cron resumes next day.
-    assert.equal(resumed.next_run_at, type === 'recurring' ? initial / 1000 + 25 * 3600 : completedAt + 1800);
+    const target = result.task.next_run_at;let sends = 0;
+    const deps = { getRecentConversations: () => [], sendViaC4: message => {
+      sends++; assert.doesNotMatch(message, /After completing this task|cli\.js done/);
+      t.mock.timers.tick(120000);return { category: 'success' };
+    } };
+    t.mock.timers.setTime(target * 1000 - 1000);runSchedulerIteration(f.db, deps);assert.equal(sends, 0);
+    t.mock.timers.setTime(target * 1000);runSchedulerIteration(f.db, deps);assert.equal(sends, 1);
+    const delivered = f.row(task.id), history = f.history(task.id);
+    assert.equal(history.at(-1).status, 'success');assert.equal(history.at(-1).duration_ms, 120000);
+    assert.equal(delivered.status, 'pending');
+    for (const key of ['type', 'cron_expression', 'interval_seconds', 'timezone']) assert.equal(delivered[key], before[key]);
+    assert.equal(delivered.next_run_at, type === 'recurring' ? initial / 1000 + 25 * 3600 : target + 120 + 1800);
+    const done = f.success(['done', task.id]);assert.equal(done.alreadyCompleted, true);
+    assert.deepEqual(f.row(task.id), delivered);assert.deepEqual(f.history(task.id), history);
   });
 }
 
-test('running reschedule rejects a past time without changing execution', t => {
-  const f = fixture(t);
-  const task = f.add('reject past time');
-  startExecution(f, task);
-  const before = f.row(task.id);
-  const history = f.history(task.id);
-  f.fail(['update', task.id, '--at', '2000-01-01 12:00'], 'RESCHEDULE_NOT_FUTURE');
-  assert.deepEqual(f.row(task.id), before);
-  assert.deepEqual(f.history(task.id), history);
-  const changed = f.success(['update', task.id, '--prompt', 'revised work']);
-  assert.equal(changed.executionFinished, false);
-  assert.equal(changed.task.status, 'running');
-  assert.deepEqual(f.history(task.id), history);
-});
-
-test('done on a recurring task returned to pending succeeds without changing its next run', t => {
-  const f = fixture(t);
-  const task = f.add('completed recurring work', ['--cron', '0 9 * * *']);
-  startExecution(f, task);
-  f.success(['done', task.id]);
-  processCompletedTasks(f.db);
-  const before = f.row(task.id);
-  const history = f.history(task.id);
-  assert.equal(before.status, 'pending');
-  assert.ok(before.last_run_at != null);
-  const result = f.success(['done', task.id]);
-  assert.equal(result.alreadyClosed, true);
-  assert.equal(result.reason, 'EXECUTION_ALREADY_CLOSED');
-  assert.equal(result.nextRunAt, before.next_run_at);
-  const text = f.run(['done', task.id]);
-  assert.equal(text.status, 0);
-  assert.match(text.stdout, /already closed by rescheduling or timeout; no changes/);
-  assert.match(text.stdout, /Next run:/);
-  assert.deepEqual(f.row(task.id), before);
-  assert.deepEqual(f.history(task.id), history);
-});
-
-test('done completes a timed-out one-time task and preserves its timeout history', t => {
-  const f = fixture(t);
-  for (const json of [true, false]) {
-    const task = f.add(`late completion ${json}`);
-    startExecution(f, task, TASK_TIMEOUT + 10);
-    handleStaleRunningTasks(f.db, { sendViaC4: () => ({ category: 'success' }) });
-    assert.equal(f.row(task.id).status, 'failed');
-    const history = f.history(task.id);
-    assert.equal(history[0].status, 'timeout');
-    if (json) {
-      const result = f.success(['done', task.id]);
-      assert.equal(result.task.status, 'completed');
-      assert.equal(result.alreadyClosed, undefined);
-    } else {
-      const result = f.run(['done', task.id]);
-      assert.equal(result.status, 0);
-      assert.match(result.stdout, /Completed task:/);
+for (const [type, create] of [ ['one-time', []], ['recurring', ['--cron', '*/30 * * * *']], ['interval', ['--every', '30 minutes']] ]) {
+  test(`legacy done never changes a ${type} task or history in any status`, t => {
+    const f = fixture(t);const task = f.add('compatibility', create);
+    for (const status of ['pending','running','completed','failed','paused']) {
+      f.db.prepare('UPDATE tasks SET status=?,last_error=? WHERE id=?').run(status, 'retained', task.id);
+      f.db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,1,'started','retained history')").run(task.id);
+      const before = f.row(task.id), history = f.history(task.id);
+      const result = f.success(['done', task.id]);assert.equal(result.alreadyCompleted, true);
+      assert.equal(result.reason, 'DELIVERY_COMPLETES_AUTOMATICALLY');assert.deepEqual(result.task, before);
+      const text = f.run(['done', task.id]);assert.equal(text.status, 0);assert.match(text.stdout,/任务送达时已自动结束，无需 done/);
+      assert.deepEqual(f.row(task.id),before);assert.deepEqual(f.history(task.id),history);
     }
-    assert.equal(f.row(task.id).status, 'completed');
-    assert.deepEqual(f.history(task.id), history);
-  }
-});
-
-test('repeated done succeeds on a completed task without changing rows', t => {
-  const f = fixture(t);
-  const task = f.add('repeated completion');
-  startExecution(f, task);
-  f.success(['done', task.id]);
-  const before = f.row(task.id);
-  const history = f.history(task.id);
-  assert.deepEqual(f.success(['done', task.id]).task, before);
-  const result = f.run(['done', task.id]);
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /Completed task:/);
-  assert.deepEqual(f.row(task.id), before);
-  assert.deepEqual(f.history(task.id), history);
-});
-
-test('running absolute reschedule preserves the recurring cadence and explains completion', t => {
-  const f = fixture(t);
-  const task = f.add('absolute postponement', ['--cron', '0 9 * * *']);
-  startExecution(f, task);
-  const result = f.run(['update', task.id, '--at', 'tomorrow 9am']);
-  assert.equal(result.status, 0);
-  assert.match(result.stdout, /Current execution completed/);
-  assert.match(result.stdout, /Next run:/);
-  assert.equal(f.row(task.id).type, 'recurring');
-  assert.equal(f.row(task.id).cron_expression, task.cron_expression);
-  assert.match(result.stdout, /Only the next run changed/);
-  assert.equal(f.row(task.id).status, 'pending');
-});
-
-test('completion rejects stale snapshots after timeout, done and reschedule win', t => {
-  const f = fixture(t);
-  for (const winner of ['timeout', 'done', 'reschedule']) {
-    const task = f.add(winner);
-    startExecution(f, task, TASK_TIMEOUT + 10);
-    const snapshot = f.row(task.id);
-    if (winner === 'timeout') handleStaleRunningTasks(f.db, { sendViaC4: () => ({ category: 'success' }) });
-    else f.success([winner === 'done' ? 'done' : 'update', task.id,
-      ...(winner === 'reschedule' ? ['--in', '30 minutes'] : [])]);
-    const before = f.row(task.id);
-    const history = f.history(task.id);
-    assert.equal(f.db.transaction(() => completeTaskExecution(f.db, snapshot, Math.floor(Date.now() / 1000))).immediate(), false);
-    assert.deepEqual(f.row(task.id), before);
-    assert.deepEqual(f.history(task.id), history);
-  }
-});
-
-for (const failure of [null, 'rejected', 'thrown']) test(`one-time timeout notifies its saved session once: ${failure || 'success'}`, t => {
-  const f = fixture(t);
-  const task = f.add('timed out');
-  f.db.prepare('UPDATE tasks SET session_component=?,session_group_name=?,reply_channel=?,reply_endpoint=? WHERE id=?')
-    .run('lark', 'private-group', 'lark', 'private-endpoint', task.id);
-  startExecution(f, task, TASK_TIMEOUT + 10);
-  let sends = 0;
-  const dependencies = { query() { throw new Error('saved group must not query'); }, sendViaC4(message, route) {
-    sends++;
-    assert.match(message, /Scheduled Task Timeout:/);
-    assert.ok(message.includes(task.id));
-    assert.ok(message.includes(`cli.js update ${task.id} --in "30 minutes"`));
-    assert.ok(message.includes(`cli.js done ${task.id}`));
-    assert.match(message, /already complete, ignore this notification/);
-    assert.equal(f.row(task.id).status, 'failed');
-    assert.equal(f.history(task.id)[0].status, 'timeout');
-    assert.equal(route.sessionComponent, 'lark');
-    assert.equal(route.sessionGroupName, 'private-group');
-    assert.equal(route.replyChannel, 'lark');
-    assert.equal(route.replyEndpoint, 'private-endpoint');
-    if (failure === 'thrown') throw new Error('send failed');
-    return { category: failure ? 'R' : 'success', code: 'SEND_REJECTED' };
-  } };
-  const errors = [];
-  t.mock.method(console, 'error', message => errors.push(message));
-  runSchedulerIteration(f.db, dependencies);
-  handleStaleRunningTasks(f.db, dependencies);
-  assert.equal(sends, 1);
-  assert.equal(f.row(task.id).status, 'failed');
-  assert.equal(f.history(task.id)[0].status, 'timeout');
-  assert.equal(errors.length, failure ? 1 : 0);
-});
-
-test('startup timeout notification uses injected routing and recurring timeouts stay silent', async t => {
-  const f = fixture(t);
-  const single = f.add('startup timeout');
-  const recurring = f.add('recurring timeout', ['--cron', '0 9 * * *']);
-  const interval = f.add('interval timeout', ['--every', '1 hour']);
-  for (const task of [single, recurring, interval]) startExecution(f, task, TASK_TIMEOUT + 10);
-  let sends = 0;
-  await mainLoop(f.db, { shouldRun: () => false, dependencies: { sendViaC4(_message, route) {
-    sends++;
-    assert.equal(route.sessionComponent, null);
-    assert.equal(route.replyChannel, null);
-    return { category: 'success' };
-  } } });
-  assert.equal(sends, 1);
-  assert.equal(f.row(single.id).status, 'failed');
-  for (const task of [recurring, interval]) assert.equal(f.row(task.id).status, 'completed');
-});
-
-test('timeout enumeration cannot overwrite a reschedule committed by another connection', t => {
-  const f = fixture(t);
-  const task = f.add('concurrent postponement');
-  startExecution(f, task, TASK_TIMEOUT + 10);
-  const prepare = f.db.prepare.bind(f.db);
-  let interleaved = false;
-  t.mock.method(f.db, 'prepare', sql => {
-    const statement = prepare(sql);
-    if (sql.includes("WHERE status = 'running'") && sql.includes('updated_at <')) {
-      const all = statement.all.bind(statement);
-      t.mock.method(statement, 'all', (...args) => {
-        const rows = all(...args);
-        f.success(['update', task.id, '--in', '30 minutes']);
-        interleaved = true;
-        return rows;
-      });
-    }
-    return statement;
   });
-  let sends = 0;
-  handleStaleRunningTasks(f.db, { sendViaC4() { sends++; return { category: 'success' }; } });
-  assert.equal(interleaved, true);
-  assert.equal(sends, 0);
-  assert.equal(f.row(task.id).status, 'pending');
-  assert.equal(f.history(task.id)[0].status, 'success');
+}
+
+test('done during receipt cannot close the claimed delivery before its result', t => {
+  const f=fixture(t),task=f.add('in-flight compatibility');
+  const result=dispatchTask(f.db,task,{getRecentConversations:()=>[],sendViaC4:()=>{
+    const before=f.row(task.id),history=f.history(task.id);
+    f.success(['done',task.id]);assert.deepEqual(f.row(task.id),before);assert.deepEqual(f.history(task.id),history);
+    return {category:'success'};
+  }});
+  assert.equal(result.category,'success');assert.equal(f.row(task.id).status,'completed');assert.equal(f.history(task.id).at(-1).status,'success');
 });
 
-test('competing timeout sweeps notify only the successful transition', t => {
-  const f = fixture(t);
-  const task = f.add('competing timeout sweeps');
-  startExecution(f, task, TASK_TIMEOUT + 10);
-  const prepare = f.db.prepare.bind(f.db);
-  let interleaved = false;
-  let sends = 0;
-  const dependencies = { sendViaC4() { sends++; return { category: 'success' }; } };
-  t.mock.method(f.db, 'prepare', sql => {
-    const statement = prepare(sql);
-    if (sql.includes("WHERE status = 'running'") && sql.includes('updated_at <')) {
-      const all = statement.all.bind(statement);
-      t.mock.method(statement, 'all', (...args) => {
-        const rows = all(...args);
-        if (!interleaved) {
-          interleaved = true;
-          handleStaleRunningTasks(f.db, dependencies);
-        }
-        return rows;
-      });
-    }
-    return statement;
-  });
-  handleStaleRunningTasks(f.db, dependencies);
-  assert.equal(interleaved, true);
-  assert.equal(sends, 1);
-  assert.equal(f.row(task.id).status, 'failed');
-  assert.equal(f.history(task.id)[0].status, 'timeout');
+test('updating a delivery in flight does not settle its task or started history', t => {
+  const f=fixture(t),task=f.add('unresolved receipt',['--cron','0 9 * * *']);
+  f.db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(task.id);
+  f.db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,1,'started')").run(task.id);
+  const history=f.history(task.id);
+  const result=f.success(['update',task.id,'--in','1 hour']);
+  assert.equal(result.task.status,'running');assert.equal(result.task.type,'recurring');
+  assert.equal('executionFinished' in result,false);assert.deepEqual(f.history(task.id),history);
 });
 
 // These cases cover the real CLI/store boundary, including private-file failures.
@@ -442,9 +183,9 @@ test('scheduler write commands return one structured result and their persisted 
   assert.deepEqual(resumed, { task: f.row(task.id) });
   assert.equal(resumed.task.status, 'pending');
   const done = f.success(['done', task.id]);
-  assert.deepEqual(done, { task: f.row(task.id) });
-  assert.equal(done.task.status, 'completed');
-  assert.deepEqual(JSON.parse(f.run(['list', '--json']).stdout), []);
+  assert.deepEqual(done, { task: f.row(task.id), alreadyCompleted: true, reason: 'DELIVERY_COMPLETES_AUTOMATICALLY' });
+  assert.equal(done.task.status, 'pending');
+  assert.equal(JSON.parse(f.run(['list', '--json']).stdout)[0].id, task.id);
   assert.deepEqual(f.success(['remove', task.id]), { id: task.id });
   assert.equal(f.row(task.id), undefined);
 });

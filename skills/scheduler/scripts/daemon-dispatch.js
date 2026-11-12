@@ -1,6 +1,6 @@
 /** One Scheduler execution: claim, receive once, and account for that history id. */
 import { now, cleanupHistory } from './database.js';
-import { updateNextRunTime, processCompletedTasks, handleStaleRunningTasks } from './daemon-tasks.js';
+import { updateNextRunTime, processCompletedTasks } from './daemon-tasks.js';
 import { sendViaC4 } from './runtime.js';
 import { resolveDispatchSessionGroup } from './dispatch-session-group.js';
 import { getRecentConversations, getConversationsByRange } from '../../comm-bridge/scripts/c4-db.js';
@@ -27,7 +27,7 @@ export function dispatchTask(db, candidate, dependencies = {}) {
   const { task, historyId } = claim;
   console.log(`[Scheduler] Dispatching task ${task.id} (${task.name}) #${historyId}`);
   const marker = executionMarker(task.id, historyId);
-  const prompt = `${marker}\n${task.prompt}\n\n---- After completing this task, run: ~/zylos/.claude/skills/scheduler/scripts/cli.js done ${task.id}`;
+  const prompt = `${marker}\n${task.prompt}`;
   let result;
   let lowerId;
   try {
@@ -50,13 +50,24 @@ export function dispatchTask(db, candidate, dependencies = {}) {
       }
     }
   }
-  // done may run in another process while receive is in flight. Both task and
-  // this exact history row must still be live before changing either of them.
+  // Account only for the claimed task and exact delivery history row.
   db.transaction(() => {
     const live = db.prepare("SELECT 1 FROM tasks t JOIN task_history h ON h.task_id=t.id WHERE t.id=? AND t.status='running' AND h.id=? AND h.status='started'")
       .get(task.id, historyId);
-    if (!live || result.category === 'success') return;
+    if (!live) return;
     const timestamp = now();
+    if (result.category === 'success') {
+      db.prepare("UPDATE task_history SET status='success',completed_at=?,duration_ms=(?-executed_at)*1000 WHERE id=? AND status='started'")
+        .run(timestamp, timestamp, historyId);
+      if (task.type === 'one-time') {
+        db.prepare("UPDATE tasks SET status='completed',last_run_at=?,updated_at=?,last_error=NULL,failed_at=NULL WHERE id=?")
+          .run(timestamp, timestamp, task.id);
+      } else {
+        updateNextRunTime(db, task);
+        db.prepare('UPDATE tasks SET last_error=NULL,failed_at=NULL WHERE id=?').run(task.id);
+      }
+      return;
+    }
     if (result.category === 'C' || result.category === 'U') {
       db.prepare('UPDATE tasks SET last_error=? WHERE id=?').run(result.code, task.id);
       db.prepare("UPDATE task_history SET error=? WHERE id=? AND status='started'")
@@ -115,11 +126,9 @@ export function runSchedulerIteration(db, dependencies = {}) {
   if (task) dispatchDueTask(db, task, dependencies);
   processCompletedTasks(db);
   handleMissedTasks(db, dependencies, new Set(task ? [task.id] : []));
-  handleStaleRunningTasks(db, dependencies);
 }
 
 export async function mainLoop(db, { shouldRun, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), dependencies = {} }) {
-  handleStaleRunningTasks(db, dependencies);
   let lastCleanup = Date.now();
   while (shouldRun()) {
     try {

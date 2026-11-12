@@ -15,7 +15,6 @@ import { dispatchTask, executionMarker } from '../daemon-dispatch.js';
 import { sendViaC4 } from '../runtime.js';
 import { queryComponentSessionGroup } from '../../../comm-bridge/scripts/c4-component-session-group.js';
 import { mainLoop, handleMissedTasks, runSchedulerIteration } from '../daemon-dispatch.js';
-import { handleStaleRunningTasks, processCompletedTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
 import { realReceive } from './fixtures/real-receive.js';
 const receiveFixture=fileURLToPath(new URL('./fixtures/receive-result.mjs',import.meta.url));
 function fixture(t, overrides={}) {
@@ -28,6 +27,75 @@ function fixture(t, overrides={}) {
 }
 const base={getRecentConversations:()=>[],getConversationsByRange:()=>[]};
 function receive(mode, options={}) {return (message,route)=>sendViaC4(message,route,{receivePath:receiveFixture,execute(cmd,args,settings){return execFileSync(cmd,args,{...settings,...options,env:{...process.env,...options.env,RECEIVE_FIXTURE_MODE:mode}});}});}
+
+// Real scheduler/SQLite boundary: run after delivery accounting or cadence changes;
+// unrelated UI changes may skip. The official runner supplies isolated HOME,
+// ZYLOS_DIR, PM2_HOME, CODEX_HOME, short TMPDIR and private TMUX_TMPDIR. C4 queries
+// and receives are injected; no live socket/network/PM2/database is touched.
+for (const type of ['one-time', 'recurring', 'interval'])
+test(`successful ${type} delivery ends its exact history and advances from delivery time`, t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  const { db, task, read } = fixture(t, { type, cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
+    interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC',
+    last_error: 'OLD_FAILURE', failed_at: start / 1000 - 99 });
+  db.prepare("INSERT INTO task_history(task_id,executed_at,completed_at,status,error,duration_ms) VALUES(?,1,2,'failed','OLD_FAILURE',1000)").run(task.id);
+  const previous = read().history[0];
+  const result = dispatchTask(db, task, { ...base, sendViaC4(message) {
+    const claimed = read();
+    assert.equal(claimed.task.status, 'running');
+    assert.equal(claimed.history.at(-1).status, 'started');
+    assert.equal(message, executionMarker(task.id, claimed.history.at(-1).id) + '\n' + task.prompt);
+    assert.doesNotMatch(message, /After completing this task|cli\.js done/);
+    t.mock.timers.tick(7000); return { category: 'success' };
+  } });
+  const after = read(), history = after.history.at(-1);
+  assert.equal(result.category, 'success');
+  assert.equal(history.id, result.historyId); assert.equal(history.status, 'success');
+  assert.equal(history.executed_at, start / 1000); assert.equal(history.completed_at, start / 1000 + 7);
+  assert.equal(history.duration_ms, 7000); assert.equal(history.error, null);
+  assert.deepEqual(after.history[0], previous);
+  assert.equal(after.task.status, type === 'one-time' ? 'completed' : 'pending');
+  assert.equal(after.task.last_run_at, start / 1000 + 7);
+  assert.equal(after.task.updated_at, start / 1000 + 7);
+  assert.equal(after.task.last_error, null); assert.equal(after.task.failed_at, null);
+  assert.equal(after.task.next_run_at, type === 'one-time' ? task.next_run_at
+    : type === 'recurring' ? start / 1000 + 1800 : start / 1000 + 1807);
+});
+
+for (const type of ['recurring', 'interval'])
+test(`half-hour ${type} delivers at two consecutive occurrences without done`, t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  const { db, read } = fixture(t, { type, cron_expression: type === 'recurring' ? '*/30 * * * *' : null,
+    interval_seconds: type === 'interval' ? 1800 : null, timezone: 'UTC', next_run_at: start / 1000 });
+  let sends = 0;
+  const deps = { ...base, sendViaC4: () => { sends++; return { category: 'success' }; } };
+  runSchedulerIteration(db, deps);
+  assert.equal(sends, 1); assert.equal(read().task.status, 'pending');
+  assert.equal(read().task.next_run_at, start / 1000 + 1800);
+  t.mock.timers.tick(1799000); runSchedulerIteration(db, deps); assert.equal(sends, 1);
+  t.mock.timers.tick(1000); runSchedulerIteration(db, deps);
+  assert.equal(sends, 2); assert.equal(read().task.status, 'pending');
+  assert.equal(read().task.next_run_at, start / 1000 + 3600);
+  assert.equal(read().history.length, 2);
+  for (const row of read().history) {
+    assert.equal(row.status, 'success'); assert.equal(row.completed_at, row.executed_at);
+    assert.equal(row.duration_ms, 0); assert.equal(row.error, null);
+  }
+});
+
+for (const type of ['one-time', 'interval'])
+test(`successful ${type} accounting rolls back task and history together on database failure`, t => {
+  const { db, task, read } = fixture(t, { type, interval_seconds: 1800 }); let sends = 0;
+  const status = type === 'one-time' ? 'completed' : 'pending';
+  db.exec(`CREATE TRIGGER fail_delivery_result BEFORE UPDATE ON tasks WHEN NEW.status='${status}' BEGIN SELECT RAISE(ABORT,'delivery account failure'); END`);
+  assert.throws(() => dispatchTask(db, task, { ...base, sendViaC4: () => { sends++; return { category: 'success' }; } }), /delivery account failure/);
+  assert.equal(sends, 1); assert.equal(read().task.status, 'running');
+  assert.equal(read().history.length, 1); assert.equal(read().history[0].status, 'started');
+  assert.equal(read().history[0].completed_at, null); assert.equal(read().history[0].duration_ms, null);
+  assert.equal(dispatchTask(db, task, { ...base, sendViaC4: () => assert.fail('must not resend') }).claimed, false);
+});
 
 for (const category of ['T', 'R']) test(`failed dispatch records elapsed time and reason: ${category}`, t => {
   t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
@@ -63,32 +131,29 @@ test(`uncertain dispatch records reason without completing history: ${category}`
   assert.deepEqual(row.history[0], previous);
 });
 
-test('unknown dispatch retains its reason and records elapsed time on timeout', t => {
+test('unknown delivery is not reclassified or notified after an hour', t => {
   t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
-  const { db, task, read } = fixture(t);
-  const result = dispatchTask(db, task, { ...base,
-    sendViaC4: () => ({ category: 'U' }),
-    getConversationsByRange() { throw new Error('read unavailable'); }
-  });
-  t.mock.timers.tick((TASK_TIMEOUT + 1) * 1000);
-  handleStaleRunningTasks(db, { sendViaC4: () => ({ category: 'success' }) });
-  const row = read().history.find(entry => entry.id === result.historyId);
-  assert.equal(row.status, 'timeout');
-  assert.equal(row.error, 'RECEIVE_RESULT_UNKNOWN');
-  assert.equal(row.completed_at - row.executed_at, TASK_TIMEOUT + 1);
-  assert.equal(row.duration_ms, (row.completed_at - row.executed_at) * 1000);
-  assert.equal(read().task.last_error, 'Task timed out');
+  const { db, task, read } = fixture(t); let sends = 0;
+  const deps = { ...base, sendViaC4() { sends++; return { category: 'U' }; },
+    getConversationsByRange() { throw new Error('read unavailable'); } };
+  dispatchTask(db, task, deps);
+  const unresolved = read();
+  t.mock.timers.tick(3601000);
+  runSchedulerIteration(db, deps);
+  assert.deepEqual(read(), unresolved);
+  assert.equal(sends, 1);
+  assert.equal(read().history[0].error, 'RECEIVE_RESULT_UNKNOWN');
 });
 
 for(const mode of ['success','UNHEALTHY_NOTIFY_FAILED','UNHEALTHY_NOTIFY_UNCERTAIN'])
- test(`committed ${mode} remains running and does not resend`,t=>{
+ test(`committed ${mode} keeps its delivery outcome and does not resend`,t=>{
   const {db,task,read}=fixture(t,{reply_channel:'telegram',reply_endpoint:'target',session_component:'telegram'});let sends=0;
   const real=realReceive(t,mode==='success'?{}:{health:'unavailable',...(mode==='UNHEALTHY_NOTIFY_UNCERTAIN'?{noticeExit:7}:{})});
   const deps={...base,sendViaC4(...args){sends++;const result=real.send(...args);
     if(mode!=='success')assert.deepEqual(result.receipt.error.persisted,['D1']);
     return result;}};
   const result=dispatchTask(db,task,deps);assert.equal(result.claimed,true);
-  const row=read();assert.equal(row.task.status,'running');assert.equal(row.history[0].status,'started');
+  const row=read();assert.equal(row.task.status,mode==='success'?'completed':'running');assert.equal(row.history[0].status,mode==='success'?'success':'started');
   if(mode!=='success')assert.equal(row.task.last_error,mode.split(':')[0]);
   assert.deepEqual(dispatchTask(db,task,deps),{claimed:false});assert.equal(sends,1);
   assert.equal(real.rows().filter(row=>row.direction==='in').length,1);
@@ -115,8 +180,8 @@ for(const [label, route, expected] of [
 ]) test(`real Scheduler dispatch D1 routing: ${label}`,t=>{
  const {db,task,read}=fixture(t,route);const real=realReceive(t);
  const result=dispatchTask(db,task,{...base,sendViaC4:real.send});
- assert.equal(result.category,'success');assert.equal(read().task.status,'running');
- assert.equal(read().history[0].status,'started');
+ assert.equal(result.category,'success');assert.equal(read().task.status,'completed');
+ assert.equal(read().history[0].status,'success');
  const rows=real.rows();assert.equal(rows.length,1);
  const row=rows[0];assert.deepEqual([row.channel,row.endpoint_id,row.session_group],expected);
  assert.equal(row.direction,'in');assert.equal(row.status,'pending');
@@ -147,7 +212,7 @@ test('unknown receipt finds exact execution in mixed D1 statuses and absorbed gr
  getConversationsByRange(start,end){reads++;assert.equal(exited,true);assert.equal(start,4);assert.equal(end,Number.MAX_SAFE_INTEGER);return [
  {id:4,direction:'in',content:executionMarker(task.id,999)+'\nold',status:'delivered'},
  ...['pending','running','delivered','failed'].map((status,i)=>({id:50+i,direction:'in',content:marker+'\n'+('x'.repeat(5000)),status,session_group:'origin'}))];}});
- assert.equal(result.category,'success');assert.equal(reads,1);assert.equal(read().task.status,'running');assert.equal(read().history[0].status,'started');
+ assert.equal(result.category,'success');assert.equal(reads,1);assert.equal(read().task.status,'completed');assert.equal(read().history[0].status,'success');
 });
 
 test('full marker rejects old history, substrings, prefix and outbound false matches',t=>{
@@ -165,17 +230,17 @@ for(const mode of ['timeout'])for(const outcome of ['found','absent','failed'])
  const result=dispatchTask(db,task,{...base,sendViaC4(message,options){marker=message.split('\n')[0];const value=receive(mode,{timeout:mode==='timeout'?500:45000,env:{RECEIVE_FIXTURE_EXITED:exited}})(message,options);returned=true;return value;},
  getConversationsByRange(){assert.equal(returned,true);if(mode==='timeout')assert.equal(fs.readFileSync(exited,'utf8'),'exited');if(outcome==='failed')throw new Error('read failed');return outcome==='found'?[{direction:'in',content:marker+'\ntext'}]:[];}});
  assert.equal(result.category,{found:'success',absent:'T',failed:'U'}[outcome]);
- assert.equal(read().task.status,outcome==='absent'?'pending':'running');
- assert.equal(read().history[0].status,outcome==='absent'?'failed':'started');
+ assert.equal(read().task.status,{found:'completed',absent:'pending',failed:'running'}[outcome]);
+ assert.equal(read().history[0].status,{found:'success',absent:'failed',failed:'started'}[outcome]);
  });
 
-for(const category of ['R','T','C','U','success']) test(`late ${category} accounting cannot overwrite done`,t=>{
+for(const category of ['R','T','C','U','success']) test(`late ${category} accounting cannot overwrite an already closed delivery`,t=>{
  const {db,task,read}=fixture(t);
  dispatchTask(db,task,{...base,sendViaC4(){db.transaction(()=>{
- db.prepare("UPDATE tasks SET status='completed',last_error='done' WHERE id=?").run(task.id);
+ db.prepare("UPDATE tasks SET status='completed',last_error='closed elsewhere' WHERE id=?").run(task.id);
  db.prepare("UPDATE task_history SET status='success',completed_at=99 WHERE task_id=?").run(task.id);
  })();return {category,code:'TEST'};},getConversationsByRange(){throw new Error('unknown');}});
- assert.equal(read().task.status,'completed');assert.equal(read().task.last_error,'done');assert.equal(read().history[0].status,'success');assert.equal(read().history[0].completed_at,99);
+ assert.equal(read().task.status,'completed');assert.equal(read().task.last_error,'closed elsewhere');assert.equal(read().history[0].status,'success');assert.equal(read().history[0].completed_at,99);
 });
 
 test('claim and history insertion are one transaction',t=>{
@@ -232,7 +297,7 @@ for(const mode of ['single','multi'])
  test(`missed loop ignores actual ${mode} machine / origin / target status files`,async t=>{
   const {db,read}=fixture(t,{type:'interval',interval_seconds:60,next_run_at:Math.floor(Date.now()/1000)-400,miss_threshold:600,session_component:'telegram',session_group_name:'team'});let sends=0;
   await withStatusFiles(t,mode,()=>handleMissedTasks(db,{...base,sendViaC4(){sends++;return {category:'success'};}}));
-  assert.equal(sends,1);assert.equal(read().task.status,'running');
+  assert.equal(sends,1);assert.equal(read().task.status,'pending');
  });
 
 for(const type of ['one-time','interval']) test(`zero-commit retries stop beyond miss window: ${type}`,t=>{
@@ -244,17 +309,18 @@ for(const type of ['one-time','interval']) test(`zero-commit retries stop beyond
  if(type==='interval')assert.ok(read().task.next_run_at>task.next_run_at);
 });
 
-for(const category of ['C','U'])for(const type of ['one-time','interval']) test(`${category} retains execution until 3600s stale: ${type}`,t=>{
- t.mock.timers.enable({apis:['Date'],now:2000000000000});
- const {db,task,read}=fixture(t,{type,interval_seconds:60});let sends=0;
- const deps={...base,sendViaC4(){sends++;return {category,code:'UNCERTAIN'};},getConversationsByRange(){throw new Error('read failed');}};
- dispatchTask(db,task,deps);t.mock.timers.tick(TASK_TIMEOUT*1000);handleStaleRunningTasks(db,{sendViaC4:()=>({category:'success'})});assert.equal(read().task.status,'running');
- assert.equal(dispatchTask(db,task,deps).claimed,false);assert.equal(sends,1);
- t.mock.timers.tick(1000);handleStaleRunningTasks(db,{sendViaC4:()=>({category:'success'})});assert.equal(read().history[0].status,'timeout');
- assert.equal(read().task.status,type==='one-time'?'failed':'completed');processCompletedTasks(db);
- if(type==='interval'){assert.equal(read().task.status,'pending');assert.ok(read().task.next_run_at>task.next_run_at);}
+for(const category of ['C','U']) for(const type of ['one-time','interval'])
+test(`${category} keeps an unresolved delivery without automatic timeout: ${type}`, t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 2000000000000 });
+  const { db, task, read } = fixture(t, { type, interval_seconds: 60 }); let sends = 0;
+  const deps = { ...base, sendViaC4() { sends++; return { category, code: 'UNCERTAIN' }; },
+    getConversationsByRange() { throw new Error('read failed'); } };
+  dispatchTask(db, task, deps);
+  const unresolved = read();
+  t.mock.timers.tick(7200000); runSchedulerIteration(db, deps);
+  assert.deepEqual(read(), unresolved);
+  assert.equal(dispatchTask(db, task, deps).claimed, false); assert.equal(sends, 1);
 });
-
 
 test('real recent/range reads find full execution after a non-maximum-id lower bound',t=>{
  const {db,task,read}=fixture(t);
@@ -268,8 +334,8 @@ test('real recent/range reads find full execution after a non-maximum-id lower b
    put.run(message+'\n'+('long'.repeat(3000)),2,'failed','origin');
    return {category:'U'};
  }});
- assert.equal(result.category,'success');assert.equal(read().task.status,'running');
- assert.equal(read().history[0].status,'started');
+ assert.equal(result.category,'success');assert.equal(read().task.status,'completed');
+ assert.equal(read().history[0].status,'success');
 });
 
 test('retry with extended window sends once per scheduler iteration, then expires',t=>{
@@ -280,7 +346,7 @@ test('retry with extended window sends once per scheduler iteration, then expire
  t.mock.timers.tick(201000);runSchedulerIteration(db,deps);assert.equal(calls,1);assert.ok(read().task.next_run_at>task.next_run_at);
 });
 
-// Review P3-1: a stored zero uses the established five-minute default.
+// A stored zero uses the established five-minute default.
 test('miss_threshold zero uses the default window, then expires',t=>{
  t.mock.timers.enable({apis:['Date'],now:2000000000000});
  const {db,read}=fixture(t,{miss_threshold:0});let sends=0;
@@ -288,37 +354,6 @@ test('miss_threshold zero uses the default window, then expires',t=>{
  runSchedulerIteration(db,deps);assert.equal(sends,1);assert.equal(read().task.status,'pending');
  t.mock.timers.tick(301000);runSchedulerIteration(db,deps);
  assert.equal(sends,1);assert.equal(read().task.status,'failed');
-});
-
-// Review P3-2: the stale list can become obsolete before its write lock is held.
-test('stale cleanup preserves done committed by another connection after enumeration',t=>{
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scheduler-stale-race-'));
- t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
- const db=new Database(path.join(dir,'scheduler.db'));guardDatabase(db,schema);
- const other=new Database(path.join(dir,'scheduler.db'));t.after(()=>{other.close();db.close();});
- const timestamp=Math.floor(Date.now()/1000);
- db.prepare("INSERT INTO tasks(id,name,prompt,type,next_run_at,status,created_at,updated_at) VALUES('stale-race','Race','run','one-time',?,'running',?,?)").run(timestamp-4000,timestamp-4000,timestamp-4000);
- db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES('stale-race',?,'started')").run(timestamp-4000);
- const prepare=db.prepare.bind(db);let completed=false;
- t.mock.method(db,'prepare',sql=>{
-  const stmt=prepare(sql);
-  if(sql.includes("status = 'running'") && sql.includes('SELECT *')) {
-   const all=stmt.all.bind(stmt);
-   t.mock.method(stmt,'all',(...args)=>{
-    const rows=all(...args);assert.equal(rows.length,1);
-    other.transaction(()=>{
-     other.prepare("UPDATE tasks SET status='completed',last_error='done',updated_at=? WHERE id='stale-race'").run(timestamp);
-     other.prepare("UPDATE task_history SET status='success',completed_at=? WHERE task_id='stale-race'").run(timestamp);
-    }).immediate();completed=true;return rows;
-   });
-  }
-  return stmt;
- });
- handleStaleRunningTasks(db);assert.equal(completed,true);
- const task=prepare("SELECT * FROM tasks WHERE id='stale-race'").get();
- const history=prepare("SELECT * FROM task_history WHERE task_id='stale-race'").get();
- assert.equal(task.status,'completed');assert.equal(task.last_error,'done');assert.equal(task.updated_at,timestamp);
- assert.equal(history.status,'success');assert.equal(history.completed_at,timestamp);
 });
 
 test('dispatch, duplicate claim and missed window remain observable in logs',t=>{
@@ -421,9 +456,9 @@ for (const origin of ['window', 'dispatch']) test(`rescheduled ${origin} failure
   assert.equal(sends.length, 1); assert.ok(sends[0].message.includes(updated.task.prompt));
   assert.equal(sends[0].route.sessionComponent, 'telegram'); assert.equal(sends[0].route.sessionGroupName, null);
   assert.equal(sends[0].route.replyChannel, 'telegram'); assert.equal(sends[0].route.replyEndpoint, '1001');
-  const after = f.read(id); assert.equal(after.task.status, 'running');
+  const after = f.read(id); assert.equal(after.task.status, 'completed');
   assert.deepEqual(after.history.slice(0, 2), history);
-  assert.equal(after.history.length, 3); assert.equal(after.history[2].status, 'started');
+  assert.equal(after.history.length, 3); assert.equal(after.history[2].status, 'success');
   assert.equal(after.history[2].executed_at, updated.task.next_run_at);
   assert.deepEqual(f.read(control), untouched);
   runSchedulerIteration(f.db, dependencies); assert.equal(sends.length, 1);
@@ -468,7 +503,7 @@ test('real scheduler daemon dispatches a re-enabled task to its saved private C4
   }
   const after = f.read(id);
   assert.equal(after.history.length, 3, output); assert.deepEqual(after.history.slice(0, 2), previous);
-  assert.equal(after.history[2].status, 'started', output);
+  assert.equal(after.history[2].status, 'success', output);
   assert.ok(after.history[2].executed_at >= updated.task.next_run_at);
   assert.equal(inbound.length, 1, output); assert.equal(inbound[0].direction, 'in');
   assert.equal(inbound[0].session_group, 'telegram:dm-1001'); assert.equal(inbound[0].channel, 'telegram');

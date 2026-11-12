@@ -268,7 +268,7 @@ test('an unknown write result re-reads the list once and a re-enable moves the t
   assert.match(textOf(h.root), /已失效/);
   allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
   await tick();
-  assert.match(textOf(h.root), /上次出错：Missed execution window/);
+  assert.match(textOf(h.root), /上次送达失败：Missed execution window/);
   assert.match(textOf(h.root), /在 Origin 执行 · 结果不另外发送/);
   buttons(h.root, '改时间并重新启用')[0].dispatch('click');
   const form = allNodes(h.root).find(node => node.tagName === 'FORM');
@@ -547,7 +547,7 @@ test('completed pages keep server counts and timeline and follow fresh cursors o
   assert.equal(listRows(h).length, 30);
   assert.equal(allNodes(h.root).filter(node => node.classList.contains('wb-sched-dot')).length, 1);
   assert.ok(allNodes(h.root).some(node => node.textContent === '全部120'));
-  assert.ok(allNodes(h.root).some(node => node.textContent === '已完成101'));
+  assert.ok(allNodes(h.root).some(node => node.textContent === '已送达101'));
   buttons(h.root, '加载更多')[0].dispatch('click');
   await tick();
   assert.equal(listRows(h).length, 60);
@@ -725,4 +725,41 @@ test('all search pages combine active and completed matches without repeating ac
   assert.equal(listRows(h).length, 61, 'combined search retains expanded page depth');
   const searches = h.calls.filter(call => call.path.includes('q=match'));
   assert.ok(searches.at(-1).path.includes('cursor='));
+});
+
+
+test('delivery rates exclude old timeouts while history preserves them without a last-error card', async context => {
+  const rows = [
+    { id: 3, status: 'timeout', executedAt: 1799999990, completedAt: 1800000000, duration: 10000, error: 'TASK_TIMEOUT' },
+    { id: 2, status: 'success', executedAt: 1799999980, completedAt: 1799999981, duration: 1000, error: null },
+    { id: 1, status: 'failed', executedAt: 1799999970, completedAt: 1799999971, duration: 1000, error: 'RECEIVE_FAILED' },
+  ];
+  const item = task({ recent: rows.slice().reverse(), showLastError: false, lastError: null });
+  const value = { ...page([item]), kpi: { ...page().kpi, runs7d: 3, bad7d: 1, successRate7d: 0.5 },
+    daily7d: { days: [{ date: '2027-01-15', success: 1, timeout: 1, failed: 1 }] } };
+  const h = harness(context, path => path.includes('/history') ? { rows, next: null } : value);
+  await tick();
+  assert.match(textOf(h.root), /送达率/);
+  assert.match(textOf(h.root), /其中送达失败/);
+  const ring = allNodes(h.root).find(node => node.classList.contains('wb-sched-ring'));
+  assert.equal(ring.style['--ok'], '50%');
+  assert.equal(ring.style['--late'], '50%');
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
+  await tick();
+  const numbers = allNodes(h.root).find(node => node.classList.contains('wb-detail-numbers'));
+  assert.match(numbers.textContent, /50%/);
+  assert.match(textOf(h.root), /TASK_TIMEOUT/);
+  assert.match(textOf(h.root), /超时/);
+  assert.equal(allNodes(h.root).filter(node => node.classList.contains('wb-sched-error-card')).length, 0);
+});
+
+test('legacy timeout can retain its re-enable action without claiming a delivery failure', async context => {
+  const item = task({ id: 'legacy-timeout', type: 'one-time', status: 'failed', reenable: true,
+    showLastError: false, lastError: null, recent: [] });
+  const h = harness(context, path => path.includes('/history') ? { rows: [], next: null } : page([item]));
+  await tick();
+  allNodes(h.root).find(node => node.classList.contains('wb-sched-select')).dispatch('click');
+  await tick();
+  assert.doesNotMatch(textOf(h.root), /上次送达失败/);
+  assert.ok(buttons(h.root, '改时间并重新启用').length);
 });

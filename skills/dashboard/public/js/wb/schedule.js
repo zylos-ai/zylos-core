@@ -527,11 +527,11 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const body = element(document, 'div', undefined, 'wb-sched-week');
     const totals = { success: 0, timeout: 0, failed: 0 };
     for (const item of days) for (const key of Object.keys(totals)) totals[key] += item[key] ?? 0;
-    const finished = totals.success + totals.timeout + totals.failed;
+    const finished = totals.success + totals.failed;
     const ring = element(document, 'div', undefined, 'wb-sched-ring');
-    const ok = finished ? totals.success / finished * 100 : 0, late = finished ? totals.timeout / finished * 100 : 0;
+    const ok = finished ? totals.success / finished * 100 : 0;
     ring.style.setProperty('--ok', `${ok}%`);
-    ring.style.setProperty('--late', `${ok + late}%`);
+    ring.style.setProperty('--late', `${ok}%`);
     if (!finished) ring.classList.add('wb-no-runs');
     const hole = element(document, 'div', undefined, 'wb-sched-ring-hole');
     hole.append(element(document, 'b', kpi.successRate7d == null ? '—' : `${Math.round(kpi.successRate7d * 100)}%`),
@@ -543,9 +543,9 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       line.append(icon(document, name, 'xs'), element(document, 'span', t(resultKey(key))), element(document, 'b', totals[key]));
       legend.append(line);
     }
-    const worst = days.reduce((top, item) => (item.timeout + item.failed) > (top ? top.timeout + top.failed : 0) ? item : top, null);
+    const worst = days.reduce((top, item) => item.failed > (top?.failed ?? 0) ? item : top, null);
     if (worst) legend.append(element(document, 'small', t('wb.schedule.week.worst',
-      { date: worst.date.slice(5), n: worst.timeout + worst.failed }), 'wb-sched-note'));
+      { date: worst.date.slice(5), n: worst.failed }), 'wb-sched-note'));
     const chart = element(document, 'div', undefined, 'wb-sched-days');
     const peak = Math.max(1, ...days.map(item => item.success + item.timeout + item.failed));
     days.forEach((item, index) => {
@@ -829,7 +829,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const body = element(document, 'div', undefined, 'wb-detail-body');
     sideBody = body;
     const rows = history?.rows ?? [];
-    const finished = rows.filter(run => run.status !== 'started');
+    const finished = rows.filter(run => ['success', 'failed'].includes(run.status));
     const rate = finished.length ? `${Math.round(finished.filter(run => run.status === 'success').length / finished.length * 100)}%` : '—';
     const typical = median(finished.filter(run => run.status === 'success').map(run => run.duration));
     const upcoming = nextRun(task);
@@ -851,7 +851,8 @@ export function mountSchedule({ document = globalThis.document, window = globalT
       const card = element(document, 'div', undefined, 'wb-sched-error-card');
       const head = element(document, 'div', undefined, 'wb-now-title');
       head.append(icon(document, 'alert'), element(document, 'span',
-        t('wb.schedule.lastError', { error: task.lastError ?? t('wb.schedule.result.failed') }), 'wb-sched-error'));
+        task.showLastError ? t('wb.schedule.lastError', { error: task.lastError ?? t('wb.schedule.result.failed') })
+          : t('wb.schedule.reenable'), 'wb-sched-error'));
       card.append(head);
       if (task.reenable) card.append(element(document, 'p', t('wb.schedule.reenableHint'), 'wb-now-sub'));
       if (task.reenable && writable()) {
