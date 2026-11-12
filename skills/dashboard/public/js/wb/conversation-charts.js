@@ -339,6 +339,58 @@ function breakdownLegend(document, block, locale) {
   return list;
 }
 
+function chartTableData(block, { locale, timeZone, noValue, tableHeaders }) {
+  const data = block.data, zone = instanceZone(timeZone ?? null);
+  const value = amount => amount === null ? noValue : formatted(amount, data.unit, data.format, locale);
+  const pointLabel = x => {
+    const stamp = data.xType === 'date' ? chartDay(x, zone) : new Date(x).getTime();
+    if (data.xType === 'date' && Number.isFinite(stamp)) return new Intl.DateTimeFormat(locale,
+      { year: 'numeric', month: 'short', day: 'numeric' }).format(stamp);
+    if (data.xType === 'datetime' && Number.isFinite(stamp)) return formatZoned(stamp, locale,
+      { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }, zone);
+    return String(x);
+  };
+  let tables;
+  if (block.type === 'time_series') {
+    tables = data.series.map(series => ({ caption: series.label,
+      headers: [data.xLabel || tableHeaders[['date', 'datetime'].includes(data.xType) ? 1 : 0], tableHeaders[2]],
+      rows: series.points.map(point => [pointLabel(point.x), point.y === null ? noValue
+        : formatted(point.y, series.unit ?? data.yUnit, data.format, locale)]) }));
+  } else {
+    const parts = block.type === 'breakdown', points = parts ? data.parts : data.points;
+    const total = parts ? points.reduce((sum, point) => sum + point.value, 0) : 0;
+    const percent = new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 0 });
+    tables = [{ headers: [data.xLabel || tableHeaders[0], tableHeaders[2], ...(parts ? [tableHeaders[3]] : [])],
+      rows: points.map(point => [point.label, value(point.value), ...(parts ? [total > 0 ? percent.format(point.value / total) : noValue] : [])]) }];
+  }
+  if (data.reference && tables.length) tables.at(-1).rows.push([data.reference.label, value(data.reference.value)]);
+  return tables;
+}
+
+function numericTables(document, tables) {
+  return tables.map(({ caption, headers, rows }) => {
+    const table = element(document, 'table', undefined, 'chat-chart-table conversation-chart-table');
+    if (caption) table.append(element(document, 'caption', caption));
+    const head = element(document, 'thead'), header = element(document, 'tr');
+    for (const text of headers) {
+      const cell = element(document, 'th', text); cell.setAttribute('scope', 'col'); header.append(cell);
+    }
+    head.append(header); table.append(head);
+    const body = element(document, 'tbody');
+    for (const values of rows) {
+      const row = element(document, 'tr');
+      values.forEach((text, index) => {
+        const cell = element(document, index ? 'td' : 'th', text,
+          index === 1 ? 'conversation-chart-value' : index === 2 ? 'conversation-chart-share' : undefined);
+        if (!index) cell.setAttribute('scope', 'row');
+        row.append(cell);
+      });
+      body.append(row);
+    }
+    table.append(body); return table;
+  });
+}
+
 /**
  * The page mounts after attachment and destroys before dropping its message DOM. `timeZone` returns the instance
  * time zone daily points are read in; each mount re-reads it, so a changed zone redraws the chart.
@@ -353,7 +405,14 @@ export function conversationChartResource({ document, block, fallback, t = key =
     `${block.data.points.length * 34 + (block.data.reference ? 18 : 0) + (block.data.yLabel ? 32 : 0)}px`);
   fallback.insertBefore(plot, fallback.querySelector('.chat-chart-series'));
   const axes = fallback.querySelector('.chat-chart-axes'), axisDescription = axes?.textContent;
+  const staticEntries = [...fallback.querySelectorAll('.chat-chart-series, .chat-chart-baseline')];
   let chart, appearance, details, detailsSummary, legend, destroyed = false;
+  function updateData(palette) {
+    const tables = chartTableData(block, palette);
+    canvas.setAttribute('aria-label', [block.data.title ?? block.data.summary ?? block.fallbackText,
+      ...tables.map(table => [table.caption, ...table.rows.map(row => row.join(': '))].filter(Boolean).join('; '))].filter(Boolean).join('. '));
+    if (details) details.replaceChildren(detailsSummary, ...numericTables(document, tables));
+  }
   return { node: fallback,
     mount() {
       if (destroyed || canvas.isConnected === false) return;
@@ -366,6 +425,7 @@ export function conversationChartResource({ document, block, fallback, t = key =
         const palette = { text: read('--text-dim'), strong: read('--text'), muted,
           grid: muted ? alpha(muted, 0.14) : undefined, surface: read('--bg-elevated'),
           tooltipBg: read('--text'), tooltipText: read('--bg'), font: read('font-family'),
+          tableHeaders: ['category', 'time', 'value', 'share'].map(name => t('chat.chart.' + name)),
           noValue: t('chat.block.noValue'), locale: document.documentElement?.lang || undefined, timeZone: timeZone() || undefined };
         const signature = JSON.stringify(palette);
         if (chart) {
@@ -379,6 +439,7 @@ export function conversationChartResource({ document, block, fallback, t = key =
               const nextLegend = breakdownLegend(document, block, palette.locale);
               legend.replaceWith(nextLegend); legend = nextLegend;
             }
+            updateData(palette);
             appearance = signature;
           }
           if (detailsSummary) detailsSummary.textContent = t('chat.chart.data');
@@ -394,12 +455,14 @@ export function conversationChartResource({ document, block, fallback, t = key =
           fallback.insertBefore(legend, plot.nextSibling ?? fallback.querySelector('.chat-chart-series'));
         }
         appearance = signature;
-        details = element(document, 'details', undefined, 'conversation-chart-data');
-        detailsSummary = element(document, 'summary', t('chat.chart.data'));
-        details.append(detailsSummary);
-        const entries = [...fallback.querySelectorAll('.chat-chart-series, .chat-chart-baseline')];
-        for (const entry of entries) details.append(entry);
-        if (entries.length) fallback.append(details);
+        // Category value marks already expose every value, including missing values.
+        if (config.options.plugins.conversationValues?.kind !== 'category') {
+          details = element(document, 'details', undefined, 'conversation-chart-data');
+          detailsSummary = element(document, 'summary', t('chat.chart.data'));
+          fallback.append(details);
+        }
+        updateData(palette);
+        for (const entry of staticEntries) entry.hidden = true;
         if (axes) {
           if (block.type === 'category_series') axes.textContent = block.data.xLabel ?? '';
           axes.hidden = block.type !== 'category_series' || !block.data.xLabel;
@@ -410,10 +473,9 @@ export function conversationChartResource({ document, block, fallback, t = key =
         chart = undefined; appearance = undefined; plot.hidden = true;
         if (axes) { axes.textContent = axisDescription; axes.hidden = false; }
         legend?.remove(); legend = undefined;
-        if (details) {
-          for (const entry of [...details.querySelectorAll('.chat-chart-series, .chat-chart-baseline')]) fallback.insertBefore(entry, plot);
-          details.remove(); details = undefined; detailsSummary = undefined;
-        }
+        for (const entry of staticEntries) entry.hidden = false;
+        if (details) { details.remove(); details = undefined; detailsSummary = undefined; }
+        fallback.classList.remove('conversation-chart-enhanced');
       }
     },
     destroy() {

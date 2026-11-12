@@ -1372,6 +1372,9 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-page .chat-chart-table :is(th, td) { padding: 8px 4px; border-top: 1px solid var(--c-line); }
 .conversation-page .chat-chart-table tr:first-child :is(th, td) { border-top: 0; }
 .conversation-page .chat-chart-table th { font-weight: 400; color: var(--c-ink-2); }
+.conversation-page .conversation-chart-table { margin-top:8px; }
+.conversation-page .conversation-chart-table caption { text-align:left; padding:4px 0; font-weight:550; }
+.conversation-page .conversation-chart-table :is(.conversation-chart-value,.conversation-chart-share) { text-align:right; }
 .conversation-page .chat-block-citations { display: grid; gap: 4px; margin: 16px 0 0; padding: 0; list-style: none; font-size: 12px; line-height: 16px; color: var(--c-ink-meta); }
 
 /* File / image cards */

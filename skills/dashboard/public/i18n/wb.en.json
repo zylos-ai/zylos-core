@@ -1,4 +1,8 @@
 {
+  "chat.chart.category": "Category",
+  "chat.chart.time": "Time",
+  "chat.chart.value": "Value",
+  "chat.chart.share": "Share",
   "chat.working.mobile.processing": "Working",
   "chat.working.mobile.scheduled": "Scheduled",
   "chat.working.mobile.child": "{count} subtask",

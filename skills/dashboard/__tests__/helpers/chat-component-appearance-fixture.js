@@ -27,6 +27,20 @@ blocks.push(
     { key: 'kind', label: '主体类型', type: 'single_select', required: true, defaultValue: 'company', options: [{ id: 'person', label: '个人' }, { id: 'company', label: '企业' }] },
   ], action: { type: 'form.submit', target: 'answer.form' } } },
 );
+// Fixed chart contracts exercise enhanced numeric tables and the unchanged fallback.
+const chartDataFixtures = [
+  { id: 'chart-data-category', type: 'category_series', data: { title: '每日合并数量', unit: '项',
+    points: [{ key: 'mon', label: '第一天', value: 2 }, { key: 'tue', label: '第二天', value: 19 }, { key: 'wed', label: '第三天', value: 29 }, { key: 'thu', label: '第四天', value: null }],
+    reference: { label: '目标线', value: 10 } } },
+  { id: 'chart-data-line', type: 'time_series', data: { title: '响应时间', xType: 'date', xLabel: '日期', yLabel: '耗时', yUnit: 'ms', format: { maximumFractionDigits: 2 },
+    series: [{ key: 'latency', label: '响应时间', points: [{ x: '2026-11-10', y: 1.25 }, { x: '2026-11-11', y: 2.5 }, { x: '2026-11-12', y: null }, { x: '2026-11-13', y: 3.75 }] }] } },
+  { id: 'chart-data-multi', type: 'time_series', data: { title: '完成率与耗时', xType: 'number', xLabel: '批次', format: { maximumFractionDigits: 1 },
+    series: [{ key: 'completion', label: '完成率', unit: '%', points: [{ x: 1, y: 12.5 }, { x: 2, y: 25 }, { x: 3, y: null }] },
+      { key: 'duration', label: '任务耗时', unit: 'ms', points: [{ x: 1, y: 1200 }, { x: 2, y: 2500 }, { x: 3, y: 500 }] }] } },
+  { id: 'chart-data-breakdown', type: 'breakdown', data: { title: '交付状态分布', unit: '项', parts: [{ key: 'done', label: '完成', value: 14 }, { key: 'review', label: '评审', value: 5 }, { key: 'wait', label: '等待', value: 1 }] } },
+];
+blocks.push(...chartDataFixtures);
+window.chartDataFixtureIds = chartDataFixtures.map(block => block.id);
 const resources = [];
 for (const [index, value] of blocks.entries()) {
   const block = { ...value, schemaVersion: 1, fallbackText: value.id };

@@ -70,16 +70,17 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     catch (error) { throw new Error(error.message + '; errors=' + errors.join('; ') + '; missing=' + missing.join('; ')); }
     await page.locator('#image .chat-attachment-image-content').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.querySelector('#image .chat-attachment-image-content').naturalWidth === 160 && document.querySelector('#tray .chat-attachment-image-content').naturalWidth === 160);
-    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 10);
+    await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 14);
     await page.evaluate(() => document.fonts.ready);
     const failedImage = page.locator('#tray-failed-image');
     await failedImage.scrollIntoViewIfNeeded();
     const failedImageShot = await failedImage.screenshot({ animations: 'disabled', scale: 'css' });
-    const failedImagePixel = await page.evaluate(async bytes => {
+    const failedImagePixels = await page.evaluate(async bytes => {
       const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(bytes), c => c.charCodeAt(0))], { type: 'image/png' }));
       const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
       const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0); bitmap.close();
-      return [...context.getImageData(Math.floor(canvas.width / 2), 0, 1, 1).data];
+      // Fractional layout positions can place the one-pixel outline in row 0 or 1 of the crop.
+      return Array.from({ length: Math.min(3, canvas.height) }, (_, y) => [...context.getImageData(Math.floor(canvas.width / 2), y, 1, 1).data]);
     }, failedImageShot.toString('base64'));
     const output = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     if (output) {
@@ -231,7 +232,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     assert.equal(actual.spacing['markdown-first'].gaps.length, 1, 'ordinary markdown and file remain adjacent');
     assert.ok(Math.abs(actual.spacing['markdown-first'].gaps[0] - 12) <= 1, 'ordinary markdown-to-file flow keeps its 12px gap');
     assert.ok(Math.abs(actual.spacing['card-ending'].lastBottomOffset) <= 1, 'last card aligns with message content bottom');
-    actual.failedImagePixel = failedImagePixel;
+    actual.failedImagePixels = failedImagePixels;
     actual.pressed = await pressedContrast(page, context);
     assert.match(actual.answerText, /你的回答/); assert.match(actual.answerText, /LRU/);
     assert.ok(actual.answerTop < actual.choicesTop, 'accepted answer is visually before readonly options');
@@ -296,11 +297,13 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.equal(actual.errorStyles[state].statusColor, actual.dangerInk, state + ' status text uses danger ink');
       assert.ok(actual.errorStyles[state].status, state + ' tray item retains the status text');
     }
-    assert.ok(failedImagePixel.slice(0, 3).every((value, i) => Math.abs(value - actual.dangerRgb[i]) <= 12), 'failed image top-edge midpoint remains visible danger ink above its placeholder: ' + JSON.stringify({ pixel: failedImagePixel, expected: actual.dangerRgb }));
+    assert.ok(failedImagePixels.some(pixel => pixel.slice(0, 3).every((value, i) => Math.abs(value - actual.dangerRgb[i]) <= 12)), 'failed image top-edge midpoint remains visible danger ink above its placeholder: ' + JSON.stringify({ pixels: failedImagePixels, expected: actual.dangerRgb }));
     assert.ok(actual.widths.every(value => value <= 720), 'rich cards stay within the shared width');
     assert.ok(actual.scroll <= width, 'no horizontal overflow');
     assert.equal(errors.length, 0, errors.join('; ')); assert.equal(outside.length, 0, outside.join('; ')); assert.equal(missing.length, 0, missing.join('; '));
     console.info('component appearance passed', JSON.stringify({ width, theme, ...actual }));
+    await checkChartDataTables(page, { width, theme, output });
+    await checkChartLoadingFallback(browser, origin, { width, theme, output });
     await context.close();
   } finally {
     await browser?.close(); server.closeAllConnections(); if (server.listening) await new Promise(resolve => server.close(resolve));
@@ -330,4 +333,93 @@ async function pressedContrast(page, context) {
       }));
     }, selectors);
   } finally { await cdp.detach(); }
+}
+
+// Boundary: real chart enhancement, tooltip formatting, accessible data and shipped CSS.
+// Run for chart data/presentation changes; unrelated backend/runtime changes may skip.
+async function checkChartDataTables(page, { width, theme, output }) {
+  const expected = {
+    'chart-data-category': { title: '每日合并数量', values: ['2 项', '19 项', '29 项', '无数据', '10 项'], labels: ['第一天', '第二天', '第三天', '第四天', '目标线'], tables: [] },
+    'chart-data-line': { title: '响应时间', values: ['1.25 ms', '2.5 ms', '无数据', '3.75 ms'], labels: ['2026年11月10日', '2026年11月11日', '2026年11月12日', '2026年11月13日'], tables: [['1.25 ms', '2.5 ms', '无数据', '3.75 ms']] },
+    'chart-data-multi': { title: '完成率与耗时', values: ['12.5 %', '25 %', '无数据', '1,200 ms', '2,500 ms', '500 ms'], labels: ['1', '2', '3'], tables: [['12.5 %', '25 %', '无数据'], ['1,200 ms', '2,500 ms', '500 ms']] },
+    'chart-data-breakdown': { title: '交付状态分布', values: ['14 项', '5 项', '1 项', '70%', '25%', '5%'], labels: ['完成', '评审', '等待'], tables: [['14 项', '5 项', '1 项']], shares: ['70%', '25%', '5%'] },
+  };
+  for (const [id, contract] of Object.entries(expected)) {
+    const card = page.locator('#' + id), canvas = card.locator('canvas');
+    assert.equal(await canvas.getAttribute('role'), 'img');
+    const accessible = await canvas.getAttribute('aria-label');
+    assert.ok(accessible.includes(contract.title), id + ' accessible title');
+    for (const label of contract.labels) assert.ok(accessible.includes(label), id + ' accessible row label ' + label);
+    for (const value of contract.values) assert.ok(accessible.includes(value), id + ' accessible value ' + value);
+    const details = card.locator('details.conversation-chart-data');
+    assert.equal(await details.count(), contract.tables.length ? 1 : 0, id + ' has only necessary disclosure');
+    const fallback = card.locator('.chat-chart-series');
+    for (let i = 0; i < await fallback.count(); i++) assert.equal(await fallback.nth(i).isVisible(), false, id + ' static bars are hidden after enhancement');
+    if (contract.tables.length) {
+      await details.locator('summary').click();
+      assert.equal(await details.getAttribute('open'), '');
+      assert.equal(await details.locator('canvas,svg,.chat-chart-bar,.chat-chart-graphic').count(), 0, 'disclosure is numeric tables without another graphic');
+      const tables = details.locator('table.conversation-chart-table');
+      assert.equal(await tables.count(), contract.tables.length);
+      for (let i = 0; i < contract.tables.length; i++) {
+        const table = tables.nth(i);
+        assert.deepEqual(await table.locator('tbody th[scope="row"]').allTextContents(), contract.labels, id + ' preserves each point/category label');
+        assert.deepEqual(await table.locator('tbody .conversation-chart-value').allTextContents(), contract.tables[i], id + ' exact formatted values');
+        assert.ok(await table.locator('thead th[scope="col"]').count() >= 2, 'table has semantic column headers');
+        assert.equal(await table.locator('tbody th[scope="row"]').count(), contract.tables[i].length, 'every data row has a semantic label');
+      }
+      if (contract.shares) assert.deepEqual(await details.locator('.conversation-chart-share').allTextContents(), contract.shares);
+      const tooltipRows = await card.evaluate((node, id) => {
+        const chart = Chart.getChart(node.querySelector('canvas'));
+        const callback = chart.options.plugins.tooltip.callbacks.label;
+        if (id === 'chart-data-breakdown') return [chart.data.datasets.map(dataset => callback({ dataset, parsed: { x: dataset.data[0] } }).split(': ').slice(1).join(': '))];
+        return chart.data.datasets.map(dataset => dataset.data.map(point => point.y === null ? '无数据' : callback({ dataset, parsed: { y: point.y } }).split(': ').slice(1).join(': ')));
+      }, id);
+      assert.deepEqual(tooltipRows, contract.tables, id + ' table values match real Chart.js tooltip formatting');
+      if (id === 'chart-data-line') {
+        const tooltipDates = await card.evaluate(node => {
+          const chart = Chart.getChart(node.querySelector('canvas'));
+          return chart.data.datasets[0].data.map(point => chart.options.plugins.tooltip.callbacks.title([{ parsed: { x: point.x } }]));
+        });
+        assert.deepEqual(tooltipDates, contract.labels, 'date rows match the real full tooltip dates');
+      }
+    }
+    if (output) { fs.mkdirSync(output, { recursive: true }); await card.screenshot({ path: path.join(output, `${id}-${width}-${theme}.png`), animations: 'disabled', scale: 'css' }); }
+  }
+}
+
+// Boundary: an actual blocked Chart.js dependency retains the complete shipped static renderer.
+// Run for chart enhancement/fallback changes; unrelated backend/runtime changes may skip.
+async function checkChartLoadingFallback(browser, origin, { width, theme, output }) {
+  const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN', timezoneId: 'UTC' });
+  try {
+    const blocked = [], errors = [];
+    await context.route('**/*', route => {
+      const url = route.request().url();
+      if (url === origin + '/vendor/chart.umd.js' || url === origin + '/js/chartjs-adapter-date-fns.bundle.min.js') { blocked.push(url); return route.abort(); }
+      return url.startsWith(origin + '/') ? route.continue() : route.abort();
+    });
+    const page = await context.newPage(); page.setDefaultTimeout(10_000);
+    page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
+    await page.goto(origin); await page.waitForFunction(() => window.componentFixtureReady === true);
+    assert.equal(blocked.length, 2, 'Chart.js and its dependent adapter failed to load');
+    assert.equal(await page.evaluate(() => typeof Chart), 'undefined');
+    assert.equal(await page.locator('.conversation-chart-enhanced').count(), 0);
+    assert.equal(await page.locator('details.conversation-chart-data').count(), 0);
+    const card = page.locator('#chart-data-category');
+    assert.equal(await card.locator('.chat-chart-series').isVisible(), true);
+    assert.equal(await card.locator('.conversation-chart-plot').isVisible(), false);
+    assert.deepEqual(await card.locator('.chat-chart-value').allTextContents(), ['2 项', '19 项', '29 项', '无数据']);
+    assert.equal(await card.locator('.chat-chart-bar').count(), 3, 'fallback keeps all existing non-null bars');
+    assert.equal(await card.locator('.chat-chart-baseline').innerText(), '目标线: 10 项');
+    const staticValues = { 'chart-data-line': ['1.25 ms', '2.5 ms', '无数据', '3.75 ms'], 'chart-data-multi': ['12.5 %', '25 %', '无数据', '1,200 ms', '2,500 ms', '500 ms'], 'chart-data-breakdown': ['14 项', '5 项', '1 项'] };
+    for (const id of ['chart-data-line', 'chart-data-multi', 'chart-data-breakdown']) {
+      const block = page.locator('#' + id);
+      assert.ok(await block.locator('.chat-chart-series').count() > 0);
+      assert.deepEqual(await block.locator('.chat-chart-value').allTextContents(), staticValues[id], id + ' fallback retains every value');
+      for (const section of await block.locator('.chat-chart-series').all()) assert.equal(await section.isVisible(), true, id + ' complete static series stays visible');
+    }
+    if (output) await card.screenshot({ path: path.join(output, `chart-data-fallback-${width}-${theme}.png`), animations: 'disabled', scale: 'css' });
+    assert.equal(errors.length, 0, errors.join('; '));
+  } finally { await context.close(); }
 }

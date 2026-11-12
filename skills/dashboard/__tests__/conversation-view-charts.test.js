@@ -173,12 +173,188 @@ test('breakdown uses one nonnegative stack with part legends and value formattin
   assert.equal(config.options.plugins.conversationValues.format(0.3), '30%');
 });
 
-function chartRoot(Chart, block = seriesBlock()) {
+function chartRoot(Chart, block = seriesBlock(), options = {}) {
   const document = createDocument(); document.defaultView = { Chart };
   const envelope = { version: 1, kind: 'message', messageId: 'chart-message', fallbackText: 'Traffic', blocks: [block] };
-  const content = renderConversationContent({ document, row: row(envelope), t });
+  const content = renderConversationContent({ document, row: row(envelope), t, ...options });
   return { document, content };
 }
+
+for (const locale of ['en-US', 'de-DE']) for (const [style, values] of [
+  [undefined, [1234.5, null, -2]], ['percent', [0.125, null, 0]], ['duration', [61.25, null, 5400]],
+]) test(`enhanced time data matches tooltip values and keeps null gaps for ${style ?? 'decimal'} in ${locale}`, t => {
+  const block = seriesBlock('number');
+  if (style) block.data.format = { style };
+  block.data.series[0].points = values.map((y, x) => ({ x, y }));
+  block.data.series[1].points = [{ x: 0, y: style === 'percent' ? 0.5 : 2048 }];
+  block.data.series[1].unit = 'bytes';
+  let config;
+  const { document, content } = chartRoot(class { constructor(canvas, value) { config = value; } resize() {} destroy() {} }, block);
+  t.after(() => content.destroy());
+  document.documentElement.lang = locale;
+  content.mount();
+  const details = content.querySelector('details.conversation-chart-data');
+  const tables = details.querySelectorAll('table.conversation-chart-table');
+  assert.equal(tables.length, 2, 'each series keeps its independent x sequence');
+  assert.equal(details.querySelector('.chat-chart-bar'), null);
+  assert.equal(details.querySelector('.chat-chart-graphic'), null);
+  const canvas = content.querySelector('canvas'), accessible = canvas.getAttribute('aria-label');
+  assert.equal(canvas.getAttribute('role'), 'img');
+  assert.ok(accessible.includes('Requests'));
+  for (const [index, series] of block.data.series.entries()) {
+    const table = tables[index], headers = table.querySelectorAll('thead th');
+    assert.ok(headers.length >= 2 && headers.every(header => header.getAttribute('scope') === 'col'));
+    assert.ok(table.textContent.includes(series.label));
+    const rows = table.querySelectorAll('tbody tr');
+    assert.equal(rows.length, series.points.length, 'missing entries stay in their original positions');
+    for (const [pointIndex, point] of series.points.entries()) {
+      const row = rows[pointIndex];
+      assert.equal(row.querySelector('th').getAttribute('scope'), 'row');
+      assert.equal(row.querySelector('th').textContent, String(point.x));
+      const value = row.querySelector('td.conversation-chart-value').textContent;
+      if (point.y === null) assert.equal(value, 'chat.block.noValue');
+      else assert.equal(config.options.plugins.tooltip.callbacks.label({ parsed: { y: point.y }, dataset: config.data.datasets[index] }), `${series.label}: ${value}`);
+      assert.ok(accessible.includes(series.label));
+      assert.ok(accessible.includes(value), `${series.label} ${pointIndex}: every formatted value is accessible`);
+    }
+  }
+});
+
+test('enhanced category charts omit disclosures while exposing all values and the reference to assistive technology', t => {
+  const block = { id: 'channels', type: 'category_series', schemaVersion: 1, fallbackText: 'Channel data',
+    data: { title: 'Channels', unit: 'req', points: [{ key: 'a', label: 'Web', value: -1234.5 },
+      { key: 'b', label: 'API', value: null }, { key: 'c', label: 'Worker', value: 0 }], reference: { label: 'Target', value: 12 } } };
+  const { content } = chartRoot(class { resize() {} destroy() {} }, block);
+  t.after(() => content.destroy());
+  const original = content.querySelector('.chat-chart-series'), baseline = content.querySelector('.chat-chart-baseline');
+  content.mount(); content.mount();
+  assert.equal(content.querySelector('details'), null);
+  assert.equal(content.querySelector('.chat-chart-series'), original);
+  assert.equal(content.querySelector('.chat-chart-baseline'), baseline);
+  assert.equal(original.hidden, true); assert.equal(baseline.hidden, true);
+  const canvas = content.querySelector('canvas'), accessible = canvas.getAttribute('aria-label');
+  assert.equal(canvas.getAttribute('role'), 'img');
+  for (const text of ['Channels', 'Web', '-1,234.5 req', 'API', 'chat.block.noValue', 'Worker', '0 req', 'Target', '12 req']) {
+    assert.ok(accessible.includes(text), text);
+  }
+});
+
+test('breakdown numeric tables contain values and shares and refresh with the existing chart locale', t => {
+  const block = { id: 'budget', type: 'breakdown', schemaVersion: 1, fallbackText: 'Budget data', data: {
+    title: 'Budget', unit: 'USD', parts: [{ key: 'a', label: 'Product', value: 1234.5 }, { key: 'b', label: 'Operations', value: 2 }]
+  } };
+  let creates = 0, updates = 0, instance;
+  const { document, content } = chartRoot(class {
+    constructor(canvas, config) { creates++; this.options = config.options; this.data = config.data; instance = this; }
+    update() { updates++; } resize() {} destroy() {}
+  }, block);
+  t.after(() => content.destroy());
+  for (const locale of ['en-US', 'de-DE']) {
+    document.documentElement.lang = locale; content.mount(); content.mount();
+    const details = content.querySelector('details.conversation-chart-data');
+    assert.equal(content.querySelectorAll('details.conversation-chart-data').length, 1);
+    const table = details.querySelector('table.conversation-chart-table');
+    assert.equal(table.querySelectorAll('thead th').length, 3);
+    assert.equal(details.querySelector('.chat-chart-bar'), null);
+    const rows = table.querySelectorAll('tbody tr'), accessible = content.querySelector('canvas').getAttribute('aria-label');
+    assert.equal(rows.length, 2);
+    for (const [index, part] of block.data.parts.entries()) {
+      const row = rows[index], value = row.querySelector('.conversation-chart-value').textContent;
+      const share = row.querySelector('.conversation-chart-share').textContent;
+      assert.equal(row.querySelector('th').textContent, part.label);
+      assert.equal(instance.options.plugins.tooltip.callbacks.label({ parsed: { x: part.value }, dataset: instance.data.datasets[index] }), `${part.label}: ${value}`);
+      assert.equal(share, new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 0 }).format(part.value / 1236.5));
+      assert.ok(accessible.includes(value)); assert.ok(accessible.includes(share));
+    }
+    assert.equal(rows[0].querySelector('.conversation-chart-value').textContent, locale === 'en-US' ? '1,234.5 USD' : '1.234,5 USD');
+  }
+  assert.equal(creates, 1); assert.equal(updates, 1);
+});
+
+test('time table labels follow the tooltip instance zone and use UTC when their zone becomes unknown', async t => {
+  const { setInstanceZone } = await import('../public/js/wb/instance-zone.js?v=100');
+  setInstanceZone('Asia/Shanghai');
+  t.after(() => setInstanceZone(null));
+  const block = seriesBlock('datetime'), instant = '2026-11-01T16:30:00Z';
+  block.data.series = [{ key: 'requests', label: 'Requests', points: [{ x: instant, y: 12 }] }];
+  let zone = 'Asia/Shanghai', creates = 0, instance;
+  const { content, document } = chartRoot(class {
+    constructor(canvas, config) { creates++; this.options = config.options; this.data = config.data; instance = this; }
+    update() {} resize() {} destroy() {}
+  }, block, { chartTimeZone: () => zone });
+  t.after(() => content.destroy());
+  document.documentElement.lang = 'en-US';
+  let previous;
+  for (const nextZone of ['Asia/Shanghai', 'UTC', null]) {
+    zone = nextZone; content.mount();
+    const label = content.querySelector('details tbody th').textContent;
+    const tooltip = instance.options.plugins.tooltip.callbacks.title([{ parsed: { x: Date.parse(instant) } }]);
+    assert.equal(label, tooltip, 'table time uses the same zone and precision as the hovered point');
+    assert.ok(content.querySelector('canvas').getAttribute('aria-label').includes(label));
+    if (previous && nextZone !== null) assert.notEqual(label, previous, 'a zone refresh changes the data description');
+    if (nextZone === null) {
+      assert.equal(label, new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short',
+        day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(Date.parse(instant)),
+      'an unknown chart zone does not inherit the shared Dashboard zone');
+    }
+    previous = label;
+  }
+  assert.equal(creates, 1);
+});
+
+for (const type of ['time_series', 'breakdown']) test(`existing ${type} data headers refresh when the same language pack becomes available`, t => {
+  const block = type === 'time_series' ? seriesBlock('datetime') : { id: 'budget', type: 'breakdown', schemaVersion: 1,
+    fallbackText: 'Budget data', data: { title: 'Budget', parts: [{ key: 'a', label: 'Product', value: 30 }, { key: 'b', label: 'Operations', value: 70 }] } };
+  delete block.data.xLabel;
+  let ready = false, creates = 0, updates = 0;
+  const labels = { 'chat.chart.category': 'Category', 'chat.chart.time': 'Time', 'chat.chart.value': 'Value',
+    'chat.chart.share': 'Share', 'chat.chart.data': 'Chart data' };
+  const translate = key => ready ? labels[key] ?? key : key;
+  const { document, content } = chartRoot(class {
+    constructor() { creates++; } update() { updates++; } resize() {} destroy() {}
+  }, block, { t: translate });
+  t.after(() => content.destroy());
+  document.documentElement.lang = 'en-US'; content.mount();
+  const originalDetails = content.querySelector('details');
+  assert.equal(originalDetails.querySelector('thead th').textContent, type === 'time_series' ? 'chat.chart.time' : 'chat.chart.category');
+  const originalValues = originalDetails.querySelectorAll('.conversation-chart-value').map(cell => cell.textContent);
+  ready = true; content.mount(); content.mount();
+  assert.equal(document.documentElement.lang, 'en-US');
+  assert.equal(content.querySelector('details'), originalDetails);
+  assert.equal(content.querySelectorAll('details').length, 1);
+  for (const table of originalDetails.querySelectorAll('table')) {
+    assert.deepEqual(table.querySelectorAll('thead th').map(cell => cell.textContent),
+      type === 'time_series' ? ['Time', 'Value'] : ['Category', 'Value', 'Share']);
+  }
+  assert.deepEqual(originalDetails.querySelectorAll('.conversation-chart-value').map(cell => cell.textContent), originalValues);
+  assert.equal(creates, 1); assert.equal(updates, 1);
+});
+
+test('breakdown update failure restores original fallback and a later mount recovers without duplicate disclosures', t => {
+  const block = { id: 'budget', type: 'breakdown', schemaVersion: 1, fallbackText: 'Budget data', data: {
+    title: 'Budget', unit: 'USD', parts: [{ key: 'a', label: 'Product', value: 30 }, { key: 'b', label: 'Operations', value: 70 }]
+  } };
+  let fail = false, creates = 0, destroys = 0;
+  const { document, content } = chartRoot(class {
+    constructor() { creates++; } update() { if (fail) throw new Error('Chart refresh unavailable'); }
+    resize() {} destroy() { destroys++; }
+  }, block);
+  t.after(() => content.destroy());
+  const original = content.querySelector('.chat-chart-series'), bars = original.querySelectorAll('.chat-chart-bar');
+  document.documentElement.lang = 'en-US'; content.mount();
+  assert.equal(original.hidden, true); assert.ok(content.querySelector('details'));
+  fail = true; document.documentElement.lang = 'de-DE'; content.mount();
+  assert.equal(content.querySelector('.conversation-chart-plot').hidden, true);
+  assert.equal(content.querySelector('details'), null); assert.equal(content.querySelector('.conversation-chart-legend'), null);
+  assert.equal(content.querySelector('.chat-chart-series'), original); assert.equal(original.hidden, false);
+  assert.equal(original.querySelectorAll('.chat-chart-bar').length, bars.length);
+  for (const bar of bars) assert.ok(allNodes(original).includes(bar), 'original static bars remain intact');
+  assert.equal(content.querySelector('.conversation-chart-enhanced'), null); assert.equal(destroys, 1);
+  fail = false; content.mount(); content.mount();
+  assert.equal(content.querySelector('.conversation-chart-plot').hidden, false); assert.equal(original.hidden, true);
+  assert.equal(content.querySelectorAll('details').length, 1); assert.equal(content.querySelectorAll('.conversation-chart-legend').length, 1);
+  assert.equal(creates, 2); assert.equal(destroys, 1);
+});
 
 test('Chart.js initializes only after mount and repeated mounts resize without duplicates', () => {
   const calls = [];
@@ -189,7 +365,11 @@ test('Chart.js initializes only after mount and repeated mounts resize without d
   assert.equal(calls.filter(([kind]) => kind === 'create').length, 1);
   assert.equal(calls.filter(([kind]) => kind === 'resize').length, 1);
   assert.equal(content.querySelector('.conversation-chart-plot').hidden, false);
-  assert.equal(content.querySelector('.conversation-chart-data').querySelectorAll('table').length, 2);
+  const details = content.querySelector('.conversation-chart-data');
+  assert.equal(details.querySelectorAll('table').length, 2);
+  assert.equal(details.querySelector('.chat-chart-bar'), null, 'enhanced data is a numeric table without fallback bars');
+  assert.equal(details.querySelector('.chat-chart-graphic'), null);
+  assert.ok(content.querySelectorAll('.chat-chart-series').every(section => section.hidden), 'original fallback is retained but hidden');
   assert.equal(content.querySelector('.chat-chart-axes').hidden, true, 'rendered charts omit the repeated axis description');
   content.destroy(); content.destroy(); content.mount();
   assert.equal(calls.filter(([kind]) => kind === 'destroy').length, 1);
@@ -226,6 +406,8 @@ for (const [name, labels, description] of [
   assert.equal(axes.textContent, description, 'the unenhanced fallback retains every axis title');
   content.mount();
   assert.equal(content.querySelector('.conversation-chart-plot').hidden, false);
+  assert.equal(content.querySelector('details'), null, 'category direct values need no duplicate data disclosure');
+  assert.ok(content.querySelectorAll('.chat-chart-series').every(section => section.hidden));
   assert.equal(axes.textContent, labels.xLabel ?? '');
   assert.equal(axes.hidden, !labels.xLabel, 'only the repeated numeric title is omitted');
 });
@@ -245,6 +427,7 @@ test('a resize failure after a successful render restores the static axis descri
   assert.equal(content.querySelector('.conversation-chart-plot').hidden, true);
   assert.equal(content.querySelector('details'), null);
   assert.equal(content.querySelectorAll('table').length, 2);
+  assert.ok(content.querySelectorAll('.chat-chart-series').every(section => !section.hidden), 'complete fallback is restored');
   assert.ok(content.textContent.includes('4,200 req'));
   assert.equal(disposed, 1);
 });
@@ -264,6 +447,7 @@ test('a category chart update failure restores both original axis titles', t => 
   assert.equal(content.querySelector('.conversation-chart-plot').hidden, true);
   assert.equal(content.querySelector('details'), null);
   assert.equal(content.querySelectorAll('table').length, 1);
+  assert.ok(content.querySelectorAll('.chat-chart-series').every(section => !section.hidden));
   assert.equal(disposed, 1);
 });
 

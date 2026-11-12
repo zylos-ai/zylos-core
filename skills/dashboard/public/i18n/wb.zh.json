@@ -1,4 +1,8 @@
 {
+  "chat.chart.category": "类别",
+  "chat.chart.time": "时间",
+  "chat.chart.value": "数值",
+  "chat.chart.share": "占比",
   "chat.working.mobile.processing": "正在工作",
   "chat.working.mobile.scheduled": "定时任务",
   "chat.working.mobile.child": "后台子任务 {count} 个",
