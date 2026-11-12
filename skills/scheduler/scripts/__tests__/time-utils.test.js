@@ -4,6 +4,16 @@ import { describe, it } from 'node:test';
 import { parseTime, parseDuration, formatTime, getRelativeTime } from '../time-utils.js';
 
 describe('parseDuration', () => {
+  it('measures natural durations from the same instant used for parsing', t => {
+    const reference = Date.parse('2030-01-01T00:00:00.999Z');
+    t.mock.timers.enable({ apis: ['Date'], now: reference });
+    // A later clock read crosses a second boundary while the parser still
+    // receives the original Date. Both sides must use the original instant.
+    t.mock.method(Date, 'now', () => reference + 1500);
+    assert.equal(parseDuration('1 hour 30 minutes'), 5400);
+    assert.equal(parseDuration('an hour'), 3600);
+  });
+
   it('parses natural language durations', () => {
     const result = parseDuration('30 minutes');
     assert.ok(result >= 1790 && result <= 1810, `expected ~1800, got ${result}`);

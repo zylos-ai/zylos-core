@@ -14,7 +14,8 @@ function cli(args, env = {}) {
   return execFileSync('node', [CLI_PATH, ...args], {
     env: { ...process.env, ...env },
     stdio: 'pipe',
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 10000
   });
 }
 
@@ -22,15 +23,24 @@ function cli(args, env = {}) {
 function cliRaw(args, env = {}) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
     env: { ...process.env, ...env },
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 10000
   });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
 
+// Boundary: actual CLI plus private SQLite. Run for command/output/timing changes;
+// unrelated UI changes may skip. Every child has private env paths logged before
+// launch and a 10-second bound; finally removes fixtures, with no live services.
 function withTmpDir(fn) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-cli-'));
-  const dbPath = path.join(tmpDir, 'scheduler', 'scheduler.db');
-  const env = { ZYLOS_DIR: tmpDir, TZ: 'UTC' };
+  const dbPath = path.join(tmpDir, 'instance', 'scheduler', 'scheduler.db');
+  const env = { ZYLOS_DIR: path.join(tmpDir, 'instance'), TZ: 'UTC' };
+  for (const [key, name] of Object.entries({ HOME: 'home', PM2_HOME: 'pm2', CODEX_HOME: 'codex', TMPDIR: 'tmp', TMUX_TMPDIR: 'tmux' })) {
+    env[key] = path.join(tmpDir, name); fs.mkdirSync(env[key]);
+  }
+  fs.mkdirSync(env.ZYLOS_DIR);
+  console.log('CLI legacy isolation:', JSON.stringify({ ...env, dbPath: path.join(env.ZYLOS_DIR, 'scheduler', 'scheduler.db'), pm2: 'not launched', tmux: 'not launched' }));
   try {
     return fn({ tmpDir, dbPath, env });
   } finally {
