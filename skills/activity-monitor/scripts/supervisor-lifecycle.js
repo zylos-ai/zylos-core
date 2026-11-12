@@ -432,7 +432,8 @@ export class SupervisorLifecycle {
     if (this.activeSubagents(scene, context)) return;
     const range = await this.d.db.getUnsummarizedRange(group);
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
-    const todo = [];
+    // Every TTL reclaim first asks for a check of work waiting on external events; Sync, when due, follows it.
+    const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
     if (range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
     if (group === 'origin') {
       const backlog = await this.d.db.getOriginSyncBacklog();
@@ -450,7 +451,6 @@ export class SupervisorLifecycle {
       controlIds.push(control.id);
     }
     if (controlIds.length) this.ttlPreparation.set(group, { controlIds, runId: scene.runId, at: now, partial });
-    else if (!todo.length) await this.beginReclaim(scene, 'ttl', context);
   }
 
   async checkEviction(scenes, context) {

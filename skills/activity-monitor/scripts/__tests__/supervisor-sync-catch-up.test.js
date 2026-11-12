@@ -38,7 +38,7 @@ function fixture(mode = 'multi', configuration = {}) {
     groupRunDir: group => `/isolated/${group}`,
     bindTarget: scene => ({ expectedRunId: scene.runId }),
     prompts: { GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
-      PRE_RECLAIM_SYNC_PROMPT: 'prepare', SYNC_BACKLOG_ALERT: kind => `alert:${kind}` },
+      PRE_RECLAIM_CHECK_PROMPT: 'check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', SYNC_BACKLOG_ALERT: kind => `alert:${kind}` },
   };
   f.deps = deps;
   f.context = () => ({ configuration: f.configuration, scenes: [{ ...f.scene }],

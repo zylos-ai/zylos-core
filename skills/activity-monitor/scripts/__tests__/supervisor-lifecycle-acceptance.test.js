@@ -9,6 +9,7 @@ import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT } from '../../../zylos-memory/scripts/sync-prompts.js';
+import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 
 function localFixture(t, Class = SupervisorLifecycle, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-acceptance-'));
@@ -192,31 +193,68 @@ test('absent Origin Sync creates one real unbound demand and preserves deduplica
 
 // Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.
 // Run for Origin TTL preparation/reclaim changes; unrelated machine tasks may skip.
-test('Origin TTL persists both bound preparations and reclaims only after both terminate', async t => {
+test('Origin TTL persists the check before both Sync preparations and reclaims only after all terminate', async t => {
   const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
   f.scene.createdAt = f.now - 2_000_000;
   f.db.getLastActivity = () => null;
   f.db.getControlById = id => sql.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
   f.db.getUnsummarizedRange = () => ({ count: 1, firstAt: f.now - 2_000_000 });
   f.db.getOriginSyncBacklog = () => ({ total: 1, groups: [{ count: 1, pendingCheckpoints: 0 }] });
-  f.deps.prompts = { PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT };
+  f.deps.prompts = { PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT };
   let stops = 0; f.deps.stop = () => { stops++; f.scene = { ...f.scene, present: false, ready: false }; };
   await f.lifecycle.checkTtl(f.scene, f.context);
   const rows = sql.db.prepare('SELECT * FROM control_queue ORDER BY id').all();
-  assert.deepEqual(rows.map(row => row.raw_content), [PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT]);
+  assert.deepEqual(rows.map(row => row.raw_content), [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT]);
   for (const row of rows) {
     assert.equal(row.session_group, 'origin'); assert.equal(row.require_idle, 1); assert.ok(row.content.includes(' ---- ack via:'));
     assert.equal(JSON.parse(row.target_binding).expectedRunId, 'old-run'); assert.ok(Number.isInteger(row.ack_deadline_at));
   }
   assert.equal(sql.store.getOriginNeed().controls.count, 0);
   await f.lifecycle.checkTtl(f.scene, f.context); assert.equal(sql.store.getDrainFence('origin'), null);
-  sql.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(rows[0].id);
-  await f.lifecycle.checkTtl(f.scene, f.context); assert.equal(sql.store.getDrainFence('origin'), null);
-  sql.db.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(rows[1].id);
+  for (const row of rows.slice(0, -1)) {
+    sql.db.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(row.id);
+    await f.lifecycle.checkTtl(f.scene, f.context); assert.equal(sql.store.getDrainFence('origin'), null);
+  }
+  sql.db.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(rows.at(-1).id);
   await f.lifecycle.checkTtl(f.scene, f.context);
   const fence = sql.store.getDrainFence('origin'); assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'old-run');
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
   assert.equal(stops, 1); assert.equal(sql.store.getDrainFence('origin'), null);
-  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 2);
+  assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 3);
   assert.equal(sql.store.getOriginNeed().controls.count, 0);
+});
+
+// Boundary: real C4 binding, acknowledgment and drain-fence persistence; tmux is fake.
+// Run for TTL preparation/reclaim changes; unrelated machine tasks may skip.
+test('TTL without Sync backlog sends only the bound check control and reclaims once it terminates', async t => {
+  for (const group of ['a', 'origin']) for (const status of ['done', 'timeout']) await t.test(`${group} ${status}`, async t => {
+    const sql = databaseFixture(t), f = localFixture(t, SupervisorLifecycle, { db: sql.store });
+    f.scene = { ...f.scene, sessionGroup: group, createdAt: f.now - 2_000_000 };
+    f.db.getLastActivity = () => null;
+    f.db.getControlById = id => sql.db.prepare('SELECT * FROM control_queue WHERE id=?').get(id);
+    f.db.getUnsummarizedRange = () => ({ count: 0, firstAt: null });
+    f.db.getOriginSyncBacklog = () => ({ total: 0, groups: [] });
+    f.deps.prompts = { PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT, PRE_RECLAIM_ORIGIN_SYNC_PROMPT };
+    let stops = 0; f.deps.stop = () => { stops++; f.scene = { ...f.scene, present: false, ready: false }; };
+    await f.lifecycle.checkTtl(f.scene, f.context);
+    const rows = sql.db.prepare('SELECT * FROM control_queue ORDER BY id').all();
+    assert.deepEqual(rows.map(row => row.raw_content), [PRE_RECLAIM_CHECK_PROMPT]);
+    const [row] = rows;
+    assert.equal(row.session_group, group); assert.equal(row.require_idle, 1); assert.ok(row.content.includes(' ---- ack via:'));
+    assert.equal(JSON.parse(row.target_binding).expectedRunId, 'old-run');
+    assert.equal(row.ack_deadline_at, Math.floor((f.now + 300000) / 1000));
+    assert.equal(sql.store.getDrainFence(group), null);
+    // An unacknowledged check, queued or delivered, keeps the session group alive.
+    for (const current of ['pending', 'running']) {
+      sql.db.prepare('UPDATE control_queue SET status=? WHERE id=?').run(current, row.id);
+      f.now += 60_000; await f.lifecycle.checkTtl(f.scene, f.context);
+      assert.equal(sql.store.getDrainFence(group), null); assert.equal(stops, 0);
+    }
+    sql.db.prepare('UPDATE control_queue SET status=? WHERE id=?').run(status, row.id);
+    await f.lifecycle.checkTtl(f.scene, f.context);
+    const fence = sql.store.getDrainFence(group); assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'old-run');
+    assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+    assert.equal(stops, 1); assert.equal(sql.store.getDrainFence(group), null);
+    assert.equal(sql.db.prepare('SELECT count(*) FROM control_queue').pluck().get(), 1);
+  });
 });

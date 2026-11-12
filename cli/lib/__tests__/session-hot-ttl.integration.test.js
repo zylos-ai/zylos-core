@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../test/helpers/ready-tmux-target.js';
 
 // Covers Dashboard's locked write -> same Supervisor's fresh configuration ->
-// real TTL fence and identity-guarded stop on a private tmux server/SQLite DB.
+// real pre-reclaim check control, its acknowledgment, then the TTL fence and
+// identity-guarded stop on a private tmux server/SQLite DB.
 // Run for TTL writes, effective configuration or reclaim wiring changes; text
 // and unrelated settings may skip. The clock advances the idle observation,
 // rather than waiting five minutes. No authenticated model process is started.
@@ -40,6 +41,7 @@ test('saving idle reclamation takes effect in the same Supervisor and stops only
       socket: f.socketPath, env: Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'TMUX'].map(k => [k, process.env[k]])) }));
     db = await import('../../../skills/comm-bridge/scripts/c4-db.js');
     const { startSupervisor } = await import('../../../skills/activity-monitor/scripts/supervisor-main.js');
+    const { PRE_RECLAIM_CHECK_PROMPT } = await import('../../../skills/activity-monitor/scripts/reclaim-prompts.js');
     const { SupervisorScenes } = await import('../../../skills/activity-monitor/scripts/supervisor-scenes.js');
     const { handleAction, getActionsMeta } = await import('../../../skills/dashboard/src/lib/actions.js');
     const realNow = Date.now(), now = realNow + 600000;
@@ -72,6 +74,12 @@ test('saving idle reclamation takes effect in the same Supervisor and stops only
     assert.equal(before.hotTtlSeconds, 1800); assert.equal(after.hotTtlSeconds, 300);
     const next = context(after);
     await supervisor.lifecycle.checkTtl(scene, next);
+    assert.equal(db.getDrainFence('origin'), null, 'the check control precedes the fence');
+    const [check, ...extra] = db.getDb().prepare("SELECT * FROM control_queue WHERE session_group='origin' ORDER BY id").all();
+    assert.equal(extra.length, 0); assert.equal(check.raw_content, PRE_RECLAIM_CHECK_PROMPT);
+    assert.equal(JSON.parse(check.target_binding).expectedRunId, scene.runId); assert.equal(check.require_idle, 1);
+    assert.equal(db.ackControl(check.id).status, 'done');
+    await supervisor.lifecycle.checkTtl(scene, next);
     const fence = db.getDrainFence('origin');
     assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, scene.runId);
     assert.equal(await supervisor.lifecycle.advanceReclaim(fence, next), 'done');
@@ -83,7 +91,7 @@ test('saving idle reclamation takes effect in the same Supervisor and stops only
     assert.equal(meta.session_hot_ttl.seconds, 300);
     console.log('Immediate idle reclamation:', JSON.stringify({ pid, beforeSeconds: before.hotTtlSeconds,
       afterSeconds: after.hotTtlSeconds, effectiveMinutes: meta.session_hot_ttl.minutes, idleSeconds: (now - scene.createdAt) / 1000,
-      fence: fence.reason, stopped: true, keeperPresent: true, memoryRetained: true, restarts: 0,
+      checkControl: 'done', fence: fence.reason, stopped: true, keeperPresent: true, memoryRetained: true, restarts: 0,
       clock: 'injected now ten minutes after private session creation' }));
   } finally {
     await service?.stop(); db?.close();

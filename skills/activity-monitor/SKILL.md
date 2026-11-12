@@ -47,10 +47,29 @@ The eviction minimum remains a startup setting and requires a restart to change.
 Both TTL and capacity eviction use the latest C4 message, runtime creation,
 same-run reclaim cancellation reset, or session activity (hooks/transcript).
 Missing or non-finite session activity is ignored. TTL waits for the configured
-interval after that latest activity. Once the same run is preparing for TTL
-reclaim, its own PRE_RECLAIM Sync activity does not restart or cancel that
-preparation; a new C4 message still cancels it.
-Completed preparation stays pending until the same run is idle, without restarting TTL or sending another PRE_RECLAIM Sync.
+interval after that latest activity.
+
+Every TTL reclaim, Origin included, is preceded by preparation controls bound
+to the current run, each require-idle, with the ack suffix and a 5-minute ack
+deadline. The first is always the pre-reclaim check: it asks the agent to
+verify the real state of in-progress work (PR/CI, replies awaited from others,
+pending handoffs) and, for anything still waiting on an external event, to
+create a one-time scheduled task that wakes this session group and to write the
+handoff before acknowledging; with nothing waiting it acknowledges directly.
+The task is created with the scheduler `add` command without a reply option,
+which saves the session's own group (Origin saves none and runs in Origin).
+The PRE_RECLAIM Sync control follows when the group has unsummarized
+conversations, then for Origin the Origin Sync control when Origin has a Sync
+backlog, so Sync records the handoff and task the check left. Reclaim begins
+only after every preparation control is terminal (`done`, `timeout` once the
+ack deadline passes without an ack, `superseded`, `failed` or `cancelled`)
+and the same run is idle; while any is still pending or running the group is
+not reclaimed. If only some controls could be written, preparation restarts
+from the check after the written ones terminate.
+
+Once the same run is preparing for TTL reclaim, its own preparation activity
+does not restart or cancel that preparation; a new C4 message still cancels it.
+Completed preparation stays pending until the same run is idle, without restarting TTL or sending further preparation controls.
 
 Subagent events with `agent_id` are tracked separately for the current run and
 session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended
@@ -61,7 +80,7 @@ They never change the main agent's `state`, `idleSince`, `tools`, or
 `lastActivityAt`, so require-idle delivery still uses only main-agent state.
 During TTL preparation, child activity is masked just like the preparing
 session's own activity: completed preparation is retained until children stop
-being active and the main agent is idle, without another PRE_RECLAIM Sync.
+being active and the main agent is idle, without further preparation controls.
 Its cutoff remains available through the fence's final child-activity recheck
 and is cleared when reclaim completes; ordinary recent child activity still
 resets eligibility even if the child stops between observations.

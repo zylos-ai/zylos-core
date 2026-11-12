@@ -53,10 +53,11 @@ function fixture(Class = SupervisorLifecycle) {
     requests: { read: () => f.requests, remove: id => { f.requests = f.requests.filter(r => r.requestId !== id); } },
     bindTarget: s => ({ expectedRunId: s.runId }),
     diagnostic: e => f.events.push(e),
-    prompts: { PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
+    prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
       ROTATION_PROMPT: () => 'rotate', CONFIG_RECLAIM_PROMPT: () => 'config', SYNC_BACKLOG_ALERT: reader => `alert:${reader}` },
   };
   f.lifecycle = new Class(f.deps, { now: () => f.now });
+  f.settle = (status = 'done') => { for (const control of f.controls) control.status = status; };
   f.fence = (reason = 'ttl', group = 'a') => { const row = { sessionGroup: group, reason, runId: `run-${group}` }; f.fences.set(group, row); return row; };
   return f;
 }
@@ -175,21 +176,22 @@ test('ordinary final in-flight race records cancellation before cleanup and rema
 test('TTL preparation cancels on new messages or replaced run without fencing', async () => {
   for (const change of ['message', 'replacement']) {
     const f = fixture(); f.unsummarized = 2;
-    await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.controls.length, 1); assert.equal(f.fences.size, 0);
-    assert.equal(f.controls[0].requireIdle, true); assert.equal(f.controls[0].appendAckSuffix, true);
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
+    assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
+    for (const control of f.controls) { assert.equal(control.requireIdle, true); assert.equal(control.appendAckSuffix, true); }
     if (change === 'message') f.lastActivity = f.now + 1; else f.scenes[0].runId = 'new';
-    f.controls[0].status = 'done'; f.now += 10;
+    f.settle(); f.now += 10;
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
   }
 });
 test('TTL preparation accepts terminal outcomes only after idle and same-run checks', async () => {
   for (const status of ['done', 'timeout', 'superseded', 'failed', 'cancelled']) {
     const f = fixture(); f.unsummarized = 1;
-    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = status;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.settle(status);
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.get('a')?.reason, 'ttl');
   }
   const f = fixture(); f.unsummarized = 1;
-  await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = 'done'; f.scenes[0].state = 'busy';
+  await f.lifecycle.checkTtl(f.scenes[0], f.context); f.settle(); f.scenes[0].state = 'busy';
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
 });
 test('completed TTL preparation waits through busy activity and idle confirmation without another Sync', async () => {
@@ -197,14 +199,14 @@ test('completed TTL preparation waits through busy activity and idle confirmatio
     const f = fixture(); f.unsummarized = 1;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     const preparation = f.lifecycle.ttlPreparation.get('a');
-    f.controls[0].status = status; f.scenes[0].state = 'busy';
+    f.settle(status); f.scenes[0].state = 'busy';
     for (const elapsed of [1, 10_000, 90_000]) {
       f.now = preparation.at + elapsed;
       f.scenes[0].lastActivityAt = f.now;
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
       assert.equal(f.fences.size, 0);
-      assert.equal(f.controls.length, 1);
+      assert.equal(f.controls.length, 2);
       assert.equal(f.lifecycle.ttlReset.has('a'), false);
     }
     f.scenes[0].state = 'idle'; f.scenes[0].idleSince = f.now;
@@ -217,8 +219,7 @@ test('completed TTL preparation waits through busy activity and idle confirmatio
     assert.equal(f.fences.get('a')?.reason, 'ttl');
     assert.equal(f.fences.get('a')?.runId, preparation.runId);
     assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
-    assert.equal(f.controls.length, 1);
-    assert.equal(f.controls[0].content, 'prepare');
+    assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
     assert.equal(f.lifecycle.ttlReset.has('a'), false);
     assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
     assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
@@ -228,7 +229,7 @@ test('new C4 activity or a replacement run cancels completed TTL preparation whi
   for (const change of ['message', 'replacement']) {
     const f = fixture(); f.unsummarized = 1;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
-    f.controls[0].status = 'done'; f.scenes[0].state = 'busy';
+    f.settle(); f.scenes[0].state = 'busy';
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.lifecycle.ttlPreparation.has('a'), true);
     f.now += 10;
@@ -236,7 +237,7 @@ test('new C4 activity or a replacement run cancels completed TTL preparation whi
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
     assert.equal(f.fences.size, 0);
-    assert.equal(f.controls.length, 1);
+    assert.equal(f.controls.length, 2);
     assert.equal(f.lifecycle.ttlReset.has('a'), false);
   }
 });
@@ -246,21 +247,21 @@ test('completed TTL preparation waits for every held Sync marker to release', as
       const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = 1;
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       const preparation = f.lifecycle.ttlPreparation.get(group);
-      f.controls[0].status = 'done';
+      f.settle();
       f.deps.readSyncMarker = args => { f.markerReads.push(args); return { held: args.kind === heldKind, stale: false }; };
       for (const elapsed of [1, 90_000]) {
         f.now = preparation.at + elapsed; f.scenes[0].lastActivityAt = f.now;
         await f.lifecycle.checkTtl(f.scenes[0], f.context);
         assert.equal(f.lifecycle.ttlPreparation.get(group), preparation);
         assert.equal(f.fences.size, 0);
-        assert.equal(f.controls.length, 1);
+        assert.equal(f.controls.length, 2);
       }
       assert.ok(f.markerReads.some(args => args.kind === heldKind && args.currentRunId === preparation.runId));
       f.deps.readSyncMarker = () => ({ held: false, stale: false });
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       assert.equal(f.fences.get(group)?.reason, 'ttl');
       assert.equal(f.lifecycle.ttlPreparation.get(group), preparation);
-      assert.equal(f.controls.length, 1);
+      assert.equal(f.controls.length, 2);
       assert.equal(f.lifecycle.ttlReset.has(group), false);
       assert.equal(await f.lifecycle.advanceReclaim(f.fences.get(group), f.context), 'done');
       assert.equal(f.lifecycle.ttlPreparation.has(group), false);
@@ -305,7 +306,10 @@ test('subagent events reset TTL and eviction clocks; stopped and expired childre
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
     f.now++;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
-    assert.equal(f.fences.get('a')?.reason, 'ttl'); assert.equal(f.controls.length, 0);
+    assert.deepEqual(f.controls.map(control => control.content), ['check']); assert.equal(f.fences.size, 0);
+    f.settle();
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.fences.get('a')?.reason, 'ttl');
     assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
     assert.deepEqual(f.stops, ['run-a']);
   }
@@ -329,7 +333,7 @@ test('pre-reclaim child activity retains completed preparation until child and m
   const f = fixture(); f.unsummarized = 1;
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   const preparation = f.lifecycle.ttlPreparation.get('a');
-  f.controls[0].status = 'done';
+  f.settle();
   for (const elapsed of [1, 90_000]) {
     f.now = preparation.at + elapsed;
     f.scenes[0].lastSubagentActivityAt = f.now;
@@ -337,7 +341,7 @@ test('pre-reclaim child activity retains completed preparation until child and m
     f.scenes[0].activeSubagents = [{ agentId: 'sync-child', lastActivityAt: f.now }];
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
-    assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 1);
+    assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 2);
   }
   f.scenes[0].activeSubagents = []; f.scenes[0].lastSubagentActivityAt = ++f.now;
   f.scenes[0].state = 'busy';
@@ -346,7 +350,7 @@ test('pre-reclaim child activity retains completed preparation until child and m
   f.scenes[0].state = 'idle'; f.scenes[0].idleSince = f.now;
   f.now += 2999; await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
   f.now++; await f.lifecycle.checkTtl(f.scenes[0], f.context);
-  assert.equal(f.fences.get('a')?.reason, 'ttl'); assert.equal(f.controls.length, 1);
+  assert.equal(f.fences.get('a')?.reason, 'ttl'); assert.equal(f.controls.length, 2);
   assert.equal(f.lifecycle.ttlReset.has('a'), false);
   assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
   assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
@@ -355,7 +359,7 @@ test('pre-reclaim child activity retains completed preparation until child and m
 test('preparing Sync child starting after the TTL fence delays stop without resetting preparation', async () => {
   for (const phase of ['sample', 'final']) {
     const f = fixture(); f.unsummarized = 1;
-    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.controls[0].status = 'done';
+    await f.lifecycle.checkTtl(f.scenes[0], f.context); f.settle();
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     const preparation = f.lifecycle.ttlPreparation.get('a'), fence = f.fences.get('a');
     f.now++;
@@ -368,20 +372,20 @@ test('preparing Sync child starting after the TTL fence delays stop without rese
     Object.assign(f.scenes[0], { activeSubagents: [], lastSubagentActivityAt: ++f.now });
     f.deps.observeGroup = () => f.scenes[0];
     assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
-    assert.equal(f.lifecycle.ttlPreparation.has('a'), false); assert.equal(f.controls.length, 1);
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), false); assert.equal(f.controls.length, 2);
   }
 });
 test('new C4 or replacement still cancels preparation while its child is active', async () => {
   for (const change of ['message', 'replacement']) {
     const f = fixture(); f.unsummarized = 1;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
-    f.controls[0].status = 'done'; f.now++;
+    f.settle(); f.now++;
     f.scenes[0].activeSubagents = [{ agentId: 'sync-child', lastActivityAt: f.now }];
     f.scenes[0].lastSubagentActivityAt = f.now;
     if (change === 'message') f.lastActivity = f.now; else f.scenes[0].runId = 'replacement';
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.lifecycle.ttlPreparation.has('a'), false); assert.equal(f.fences.size, 0);
-    assert.equal(f.controls.length, 1);
+    assert.equal(f.controls.length, 2);
   }
 });
 test('fresh subagent observations guard fence creation and final TTL or eviction stop only', async () => {
@@ -451,13 +455,17 @@ test('require_idle control delivers from unchanged main idle state while a backg
   assert.equal(result.delivered, true); assert.equal(sends, 1);
   assert.equal(c4.db.prepare('SELECT status FROM control_queue WHERE id=?').pluck().get(control.id), 'running');
 });
-test('Origin idle TTL fences and reclaims without writing a wake control; single has no TTL', async () => {
+test('Origin idle TTL without backlog writes only the check control, then fences and reclaims; single has no TTL', async () => {
   const f = fixture(); f.scenes = [scene('origin')];
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.deepEqual(f.controls.map(control => control.content), ['check']); assert.equal(f.fences.size, 0);
+  assert.equal(f.controls[0].sessionGroup, 'origin'); assert.equal(f.controls[0].targetBinding.expectedRunId, 'run-origin');
+  f.settle();
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   const fence = f.fences.get('origin');
   assert.equal(fence.reason, 'ttl'); assert.equal(fence.runId, 'run-origin');
   assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
-  assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.controls.length, 0); assert.equal(f.fences.size, 0);
+  assert.deepEqual(f.stops, ['run-origin']); assert.equal(f.controls.length, 1); assert.equal(f.fences.size, 0);
   const single = fixture(); single.context.configuration.mode = 'single'; single.scenes = [scene(null)];
   await single.lifecycle.checkTtl(single.scenes[0], single.context);
   assert.equal(await single.lifecycle.beginReclaim(single.scenes[0], 'ttl', single.context), false);
@@ -468,15 +476,18 @@ test('Origin TTL waits every preparation control and binds both Sync kinds to th
     const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = summarized;
     f.backlog = { total: 1, groups: [{ count: 1, pendingCheckpoints: 0 }] };
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
-    assert.deepEqual(f.controls.map(control => control.content), summarized ? ['prepare', 'prepare origin'] : ['prepare origin']);
+    assert.deepEqual(f.controls.map(control => control.content), summarized ? ['check', 'prepare', 'prepare origin'] : ['check', 'prepare origin']);
     for (const control of f.controls) {
       assert.equal(control.targetBinding.expectedRunId, 'run-origin');
       assert.equal(control.sessionGroup, 'origin'); assert.equal(control.requireIdle, true);
       assert.equal(control.appendAckSuffix, true); assert.equal(control.ackDeadlineAt, Math.floor((f.now + 300000) / 1000));
     }
     await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
-    f.controls[0].status = 'done';
-    if (summarized) { await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0); f.controls[1].status = 'timeout'; }
+    for (const control of f.controls.slice(0, -1)) {
+      control.status = 'done';
+      await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0);
+    }
+    f.controls.at(-1).status = 'timeout';
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.fences.get('origin')?.reason, 'ttl');
   }
@@ -485,27 +496,27 @@ test('Origin pending checkpoints alone require pre-reclaim Origin Sync', async (
   const f = fixture(); f.scenes = [scene('origin')];
   f.backlog = { total: 0, groups: [{ count: 0, pendingCheckpoints: 1 }] };
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
-  assert.deepEqual(f.controls.map(control => control.content), ['prepare origin']); assert.equal(f.fences.size, 0);
+  assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare origin']); assert.equal(f.fences.size, 0);
 });
 test('partial Origin TTL preparation retries remaining Sync after all saved controls terminate', async () => {
   const f = fixture(); f.scenes = [scene('origin')]; f.unsummarized = 1;
   f.backlog = { total: 1, groups: [{ count: 1 }] };
   let binds = 0;
   f.deps.bindTarget = current => {
-    if (++binds === 2) throw Object.assign(new Error('not ready'), { code: 'TARGET_NOT_READY' });
+    if (++binds === 3) throw Object.assign(new Error('not ready'), { code: 'TARGET_NOT_READY' });
     return { expectedRunId: current.runId };
   };
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
-  assert.deepEqual(f.controls.map(control => control.content), ['prepare']);
+  assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
   assert.equal(f.lifecycle.ttlPreparation.get('origin').partial, true);
-  await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0); assert.equal(binds, 2);
-  f.controls[0].status = 'done'; f.unsummarized = 0;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.size, 0); assert.equal(binds, 3);
+  f.settle(); f.unsummarized = 0;
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.fences.size, 0); assert.equal(f.lifecycle.ttlPreparation.has('origin'), false);
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
-  assert.deepEqual(f.controls.map(control => control.content), ['prepare', 'prepare origin']);
+  assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare', 'check', 'prepare origin']);
   assert.equal(f.lifecycle.ttlPreparation.get('origin').partial, false);
-  f.controls[1].status = 'done';
+  f.settle();
   await f.lifecycle.checkTtl(f.scenes[0], f.context); assert.equal(f.fences.get('origin')?.reason, 'ttl');
 });
 test('pre-reclaim database failure leaves preparation unsaved and retries from current backlog', async () => {
@@ -514,7 +525,8 @@ test('pre-reclaim database failure leaves preparation unsaved and retries from c
   const insert = f.db.insertControl;
   f.db.insertControl = (content, options) => { if (content === 'prepare origin') throw new Error('database unavailable'); return insert(content, options); };
   await assert.rejects(f.lifecycle.checkTtl(f.scenes[0], f.context), /database unavailable/);
-  assert.equal(f.controls.length, 1); assert.equal(f.lifecycle.ttlPreparation.has('origin'), false); assert.equal(f.fences.size, 0);
+  assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
+  assert.equal(f.lifecycle.ttlPreparation.has('origin'), false); assert.equal(f.fences.size, 0);
 });
 test('Origin Sync ownership delays TTL while outgoing activity or replacement cancels preparation', async () => {
   for (const change of ['marker', 'outbound', 'replacement']) {
@@ -549,9 +561,9 @@ test('old C4 and session activity still prepare and reclaim after TTL', async ()
   const f = fixture(); f.unsummarized = 1;
   f.lastActivity = f.now - 1800001; f.scenes[0].lastActivityAt = f.lastActivity;
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
-  assert.equal(f.controls.length, 1); assert.equal(f.controls[0].content, 'prepare');
+  assert.deepEqual(f.controls.map(control => control.content), ['check', 'prepare']);
   assert.equal(f.fences.size, 0);
-  f.controls[0].status = 'done';
+  f.settle();
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.fences.get('a')?.reason, 'ttl');
 });
@@ -560,8 +572,10 @@ test('missing or non-finite session activity preserves existing TTL eligibility'
     const f = fixture();
     if (value !== undefined) f.scenes[0].lastActivityAt = value;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.deepEqual(f.controls.map(control => control.content), ['check']); assert.equal(f.fences.size, 0);
+    f.settle();
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.fences.get('a')?.reason, 'ttl');
-    assert.equal(f.controls.length, 0);
   }
 });
 test('pre-reclaim Sync activity retains preparation and reclaims the same idle run', async () => {
@@ -574,13 +588,13 @@ test('pre-reclaim Sync activity retains preparation and reclaims the same idle r
     f.scenes[0].idleSince = f.now - 4000;
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
-    assert.equal(f.controls.length, 1); assert.equal(f.fences.size, 0);
-    f.controls[0].status = 'done';
+    assert.equal(f.controls.length, 2); assert.equal(f.fences.size, 0);
+    f.settle();
     await f.lifecycle.checkTtl(f.scenes[0], f.context);
     assert.equal(f.fences.get('a')?.reason, 'ttl');
     assert.equal(f.fences.get('a')?.runId, 'run-a');
     assert.equal(f.lifecycle.ttlPreparation.get('a'), preparation);
-    assert.equal(f.controls.length, 1);
+    assert.equal(f.controls.length, 2);
     assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
     assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
   }
@@ -590,12 +604,12 @@ test('new C4 activity still cancels preparation after pre-reclaim Sync activity'
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   const preparation = f.lifecycle.ttlPreparation.get('a');
   f.now += 10000; f.scenes[0].lastActivityAt = preparation.at + 5000;
-  f.lastActivity = preparation.at + 6000; f.controls[0].status = 'done';
+  f.lastActivity = preparation.at + 6000; f.settle();
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
   assert.equal(f.fences.size, 0);
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
-  assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 1);
+  assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 2);
 });
 // Capacity pressure must use the shared activity clock, not a momentary idle
 // sample. Run for eviction/config/activity changes; unrelated Sync changes may
@@ -958,6 +972,9 @@ test('reclaim preflight rejects unavailable or malformed Sync dependencies befor
 test('TTL without backlog and restart requests cannot leave fences when is unavailable', async () => {
   const f = fixture(); f.scenes.push(scene('origin'));
   f.deps.readSyncMarker = () => { throw Object.assign(new Error(' unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' }); };
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.deepEqual(f.controls.map(control => control.content), ['check']); assert.equal(f.fences.size, 0);
+  f.settle();
   await assert.rejects(f.lifecycle.checkTtl(f.scenes[0], f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
   f.requests = [{ reason: 'upgrade', requestId: 'upgrade', runIds: ['run-a', 'run-origin'] }];
   await assert.rejects(f.lifecycle.advanceRestarts(f.context), { code: 'DEPENDENCY_UNAVAILABLE' });
@@ -1189,8 +1206,8 @@ test('rejected runtime bindings leave rotation and TTL retryable on the next rou
     assert.deepEqual(reported, []);
     f.deps.bindTarget = s => ({ expectedRunId: s.runId });
     await f.lifecycle.each(f.scenes, s => f.lifecycle[method](s, f.context));
-    assert.equal(f.controls.length, 1);
-    assert.equal(f.controls[0].targetBinding.expectedRunId, f.scenes[0].runId);
+    assert.equal(f.controls.length, method === 'checkTtl' ? 2 : 1);
+    for (const control of f.controls) assert.equal(control.targetBinding.expectedRunId, f.scenes[0].runId);
   }
 });
 
@@ -1240,11 +1257,11 @@ test('persisted lifecycle prompts reject replacement runs and never count as Ori
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
       assert.equal(f.lifecycle.ttlPreparation.size, 0);
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
-      assert.equal(c4.db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 1);
+      assert.equal(c4.db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 2);
       assert.equal(f.fences.size, 0);
       f.now += 1_800_001;
       await f.lifecycle.checkTtl(f.scenes[0], f.context);
-      assert.equal(c4.db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 2);
+      assert.equal(c4.db.prepare('SELECT COUNT(*) FROM control_queue').pluck().get(), 4);
       assert.equal(f.lifecycle.ttlPreparation.get(group).runId, 'replacement');
     }
   });

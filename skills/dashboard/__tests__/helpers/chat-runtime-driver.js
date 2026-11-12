@@ -178,13 +178,16 @@ try {
   check(oldIdentity.ready && oldIdentity.runtime === runtime, 'Real native runtime reached READY in multi group');
   if (scenario === 'ttl') {
     const { GROUP_SYNC_PROMPT, PRE_RECLAIM_SYNC_PROMPT } = await load('skills/zylos-memory/scripts/sync-prompts.js');
+    const { PRE_RECLAIM_CHECK_PROMPT } = await load('skills/activity-monitor/scripts/reclaim-prompts.js');
     const { readSyncMarker } = await load('skills/zylos-memory/scripts/sync-lock.js');
     const { emitC4Conversations } = await load('skills/comm-bridge/scripts/c4-session-init.js');
     const { groupRunDir } = await load('cli/lib/session-group-paths.js');
     const controls = prompt => api.db.prepare('SELECT id,status FROM control_queue WHERE session_group=? AND raw_content=? ORDER BY id')
       .all(current.sessionGroup, prompt);
     const assertPreparing = async () => {
-      assert.equal(controls(PRE_RECLAIM_SYNC_PROMPT).length, 0, 'TTL preparation started before route-history fixture was ready');
+      for (const prompt of [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT]) {
+        assert.equal(controls(prompt).length, 0, 'TTL preparation started before route-history fixture was ready');
+      }
       const identity = await scenes.readIdentity(current.sessionGroup);
       assert.ok(identity.present && identity.runId === oldIdentity.runId, 'Native run changed during route-history preparation');
     };
@@ -207,7 +210,9 @@ try {
       // a worker and fetch the old range. Do not await between this read/write.
       if (ordinary.length && (ordinary[0].status !== 'done' || coreDb.getCoverageEnd(current.sessionGroup) === 0 || marker.reason !== 'missing')) return false;
       if (!ordinary.length && marker.reason !== 'missing') return false;
-      assert.equal(controls(PRE_RECLAIM_SYNC_PROMPT).length, 0, 'TTL preparation overtook the fixture checkpoint');
+      for (const prompt of [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT]) {
+        assert.equal(controls(prompt).length, 0, 'TTL preparation overtook the fixture checkpoint');
+      }
       const range = coreDb.getUnsummarizedRange(current.sessionGroup);
       const questionEnd = Math.max(...outbound(current.sessionGroup).map(row => row.id));
       check(range.safeEnd >= questionEnd, 'Fixture checkpoint frontier covers the original question outputs');
