@@ -55,6 +55,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
   ]));
   const buttons = ['install', 'enable', 'disable', 'uninstall'].map((name) => settings[`#observer-${name}`]);
   const calls = [];
+  const mobileNavigationSyncs = [];
   const sockets = [];
   const history = [];
   const intervals = [];
@@ -83,6 +84,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
     },
     settingsLoader: { invalidate() {} },
     settingsPage: null,
+    mobileNavigation: { sync() { mobileNavigationSyncs.push(context.state.remoteAgent); } },
     settingsModal: { querySelector: (selector) => settings[selector], querySelectorAll: () => buttons },
     $: (selector) => elements[selector],
     document: {
@@ -168,6 +170,7 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
   vm.runInContext(source, context);
   return {
     calls,
+    mobileNavigationSyncs,
     context,
     elements,
     history,
@@ -1073,8 +1076,12 @@ test('Observer navigation fetches target status, waits for it, and discards dela
   const alpha = harness.context.enterRemoteAgent('alpha', { push: false }).then(() => { alphaSettled = true; });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(alphaSettled, false);
+  assert.equal(harness.mobileNavigationSyncs.at(-1), 'alpha', 'navigation sync sees the selected remote target');
+  const alphaSyncs = harness.mobileNavigationSyncs.length;
 
   await harness.context.enterRemoteAgent('bravo', { push: false });
+  assert.ok(harness.mobileNavigationSyncs.length > alphaSyncs, 'switching targets synchronizes mobile navigation again');
+  assert.equal(harness.mobileNavigationSyncs.at(-1), 'bravo');
   assert.equal(harness.context.state.observer.status.state, 'installed');
   assert.equal(observerPageShown(harness), true);
 
