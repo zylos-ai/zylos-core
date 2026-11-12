@@ -10,6 +10,7 @@ const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.met
 const GROUP = 'dashboard:working-browser';
 const OTHER = 'telegram:working-browser';
 const ID = 'g:' + Buffer.from(GROUP).toString('hex').toUpperCase();
+const ORIGIN_ID = 'g:' + Buffer.from('origin').toString('hex').toUpperCase();
 const OTHER_ID = 'g:' + Buffer.from(OTHER).toString('hex').toUpperCase();
 const NOW = Date.UTC(2026, 10, 11, 10, 30);
 const iso = value => new Date(value).toISOString();
@@ -17,8 +18,11 @@ const iso = value => new Date(value).toISOString();
 async function startPage(sandbox) {
   let scene = 'main', failGroups = false, title = '工作状态示例';
   const counts = { groups: 0, sends: 0 }, missing = new Set(), streams = new Set();
+  const isOrigin = () => scene.startsWith('scheduled-') || scene === 'asleep';
+  const activeId = () => isOrigin() ? ORIGIN_ID : ID;
+  const group = () => isOrigin() ? 'origin' : GROUP;
   const working = () => {
-    const turn = ['main', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - 3 * 60000 } : null;
+    const turn = ['main', 'main-long', 'scheduled-short', 'scheduled-long', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - (scene === 'main-long' ? 121 : scene === 'scheduled-long' ? 65 : 3) * 60000 } : null;
     const subagents = ['both', 'sub'].includes(scene) ? { count: 2, since: NOW - 13 * 60000, lastActivityAt: NOW - 30000 } : null;
     if (scene === 'unavailable') return null;
     return { on: !!(turn || subagents), since: turn || subagents ? Math.min(...[turn?.since, subagents?.since].filter(Number.isFinite)) : null, turn, tools: 0, subagents };
@@ -26,7 +30,7 @@ async function startPage(sandbox) {
   const snapshot = url => {
     const value = workbenchAnswer(url, NOW);
     const row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
-    row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: 'idle' }; row.duration = 75;
+    row.sessionGroup = group(); row.origin = isOrigin(); row.presence = scene === 'asleep' ? 'not_running' : 'running'; row.processing = scene.startsWith('scheduled-') ? 'scheduled_task' : null; row.name = { displayName: title }; row.state = { kind: 'idle' }; row.duration = 75;
     row.tools = []; row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
     row.working = working(); row.preview = { text: '请继续整理这份资料', timestamp: iso(NOW - 4 * 60000), channel: 'dashboard' };
     row.wait = ({ queue: { kind: 'pool_wait' }, starting: { kind: 'starting' }, rate: { kind: 'rate_wait', cooldownUntil: NOW / 1000 + 3600 }, auth: { kind: 'auth_wait' } })[scene] ?? null;
@@ -34,13 +38,13 @@ async function startPage(sandbox) {
     value.instance.runtimeHealth = { claude: { health: scene.startsWith('unknown-') ? null : ({ rate: 'rate_limited', auth: 'auth_failed' })[scene] ?? 'ok' } };
     return value;
   };
-  const conversation = id => ({ id, localId: 'working-browser', sessionGroup: id === ID ? GROUP : OTHER, channel: id === ID ? 'dashboard' : 'telegram', state: 'active', displayName: id === ID ? title : '外部会话' });
+  const conversation = id => ({ id, localId: 'working-browser', sessionGroup: id === OTHER_ID ? OTHER : group(), channel: id === OTHER_ID ? 'telegram' : 'dashboard', state: 'active', origin: id === ORIGIN_ID, displayName: id === OTHER_ID ? '外部会话' : title });
   const answer = url => {
     const p = url.pathname;
     if (p === '/api/workbench/groups') { counts.groups++; return snapshot(url); }
     if (p === '/api/chat/conversations') {
       const external = url.searchParams.get('tab') === 'external';
-      return { items: [{ ...conversation(external ? OTHER_ID : ID), session_group: external ? OTHER : GROUP, display_name: external ? '外部会话' : title }], nextCursor: null, tz: 'UTC' };
+      return { items: [{ ...conversation(external ? OTHER_ID : activeId()), session_group: external ? OTHER : group(), display_name: external ? '外部会话' : title }], nextCursor: null, tz: 'UTC' };
     }
     if (p.startsWith('/api/chat/conversations/')) {
       const id = decodeURIComponent(p.split('/')[4]);
@@ -83,7 +87,7 @@ async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
-  return { base: await sandbox.startHttp(server), counts, missing, setScene(value) { scene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; } };
+  return { base: await sandbox.startHttp(server), counts, missing, activeId, setScene(value) { scene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; } };
 }
 
 export async function runConversationWorkingBrowser(t, sandbox) {
@@ -93,23 +97,23 @@ export async function runConversationWorkingBrowser(t, sandbox) {
   const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
   sandbox.addCleanup(() => browser.close());
-  const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR, captures = [];
+  const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR, captures = [], measurements = [];
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
-  const open = async ({ width = 1280, theme = 'light', scene = 'main', clock = false, reducedMotion = 'no-preference', title = '工作状态示例' } = {}) => {
+  const open = async ({ width = 1280, theme = 'light', scene = 'main', clock = false, reducedMotion = 'no-preference', locale = 'zh', title = '工作状态示例' } = {}) => {
     fixture.setScene(scene); fixture.setTitle(title); fixture.fail(false);
-    const context = await browser.newContext({ viewport: { width, height: 960 }, locale: 'zh-CN', timezoneId: 'UTC', reducedMotion });
+    const context = await browser.newContext({ viewport: { width, height: 960 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC', reducedMotion });
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
-    await context.addInitScript(({ theme }) => {
-      try { localStorage.setItem('zylos-dashboard-theme', theme); localStorage.setItem('zylos-dashboard-locale', 'zh'); } catch {}
-    }, { theme });
+    await context.addInitScript(({ theme, locale }) => {
+      try { localStorage.setItem('zylos-dashboard-theme', theme); localStorage.setItem('zylos-dashboard-locale', locale); } catch {}
+    }, { theme, locale });
     const page = await context.newPage(); page.setDefaultTimeout(7000);
     const errors = []; page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
     await page.clock.install({ time: new Date(NOW) });
     if (clock) await page.clock.pauseAt(new Date(NOW + 2000));
     await page.goto(fixture.base + '/chat');
     try {
-      await page.locator(`#wb-chat [data-conversation-id="${ID}"]`).click();
+      await page.locator(`#wb-chat [data-conversation-id="${fixture.activeId()}"]`).click();
       await page.locator('#wb-chat .conversation-message').first().waitFor();
     } catch (error) {
       console.error('Working mount failure:', JSON.stringify({ errors, missing: [...fixture.missing], text: (await page.locator('body').innerText()).slice(0, 2000) }));
@@ -123,10 +127,10 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     const end = Date.now() + 7000;
     while (!await predicate()) { assert.ok(Date.now() < end, description); await new Promise(resolve => setTimeout(resolve, 10)); }
   };
-  const checkText = async (page, expected) => {
+  const checkText = async (page, expected, locale = 'zh') => {
     await wait(async () => (await indicator(page).textContent()).includes(expected), `indicator shows ${expected}`);
-    assert.match(await indicator(page).getAttribute('title'), /点按查看时间线/);
-    assert.match(await indicator(page).getAttribute('aria-label'), /点按查看时间线/);
+    assert.match(await indicator(page).getAttribute('title'), locale === 'zh' ? /点按查看时间线/ : /timeline/i);
+    assert.match(await indicator(page).getAttribute('aria-label'), locale === 'zh' ? /点按查看时间线/ : /timeline/i);
   };
   const shot = async (page, name, { moving = false } = {}) => {
     await page.evaluate(() => document.fonts.ready);
@@ -148,6 +152,17 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     assert.equal(timing.name, 'wi-comet');
     assert.equal(timing.duration, await page.evaluate(() => innerWidth <= 760) ? '2.2s' : '2.6s');
     assert.equal(timing.timing, 'linear');
+    if (await page.locator('html').getAttribute('data-theme') === 'dark') {
+      const colors = await pill.locator('.wi-comet rect').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).stroke));
+      assert.deepEqual(colors, ['rgb(67, 199, 181)', 'rgb(79, 214, 196)', 'rgb(95, 216, 234)', 'rgb(122, 168, 255)', 'rgb(165, 147, 255)', 'rgb(224, 140, 255)', 'rgb(255, 156, 198)'], 'dark comet keeps the approved seven-color palette');
+    }
+  };
+  const checkDesktopCaption = async (page, expected) => {
+    // Unknown health wording exists before the optional group read makes it visible.
+    await indicator(page).locator('.wi-ind-desktop').waitFor({ state: 'visible' });
+    assert.equal(await indicator(page).locator('.wi-ind-desktop').isVisible(), true, 'full caption is visible on desktop');
+    assert.equal((await indicator(page).innerText()).replace(/\s+/g, ' ').trim(), expected, 'desktop visibly keeps the complete original wording');
+    assert.equal(await indicator(page).locator('.wi-ind-mobile').isVisible(), false, 'compact caption does not duplicate desktop text');
   };
   const checkPhonePill = async (page, expected, { longTitle = false } = {}) => {
     const m = await page.evaluate(() => {
@@ -155,25 +170,56 @@ export async function runConversationWorkingBrowser(t, sandbox) {
         const el = document.querySelector(selector), r = el.getBoundingClientRect(), css = getComputedStyle(el);
         return { x: r.x, top: r.top, right: r.right, bottom: r.bottom, height: r.height, width: r.width,
           scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, overflow: css.overflow, textOverflow: css.textOverflow,
-          fontSize: css.fontSize, borderY: parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth), text: el.innerText };
+          fontSize: css.fontSize, maxWidth: css.maxWidth, borderY: parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth), text: el.innerText };
       };
       return { header: box('.conversation-header'), title: box('.conversation-title-line'), text: box('.conversation-title-line h2'),
-        pill: box('.conversation-running'), caption: box('.conversation-running .wi-ind-text'), menu: box('.conversation-menu-toggle'),
+        pill: box('.conversation-running'), caption: box('.conversation-running .wi-ind-mobile'), menu: box('.conversation-menu-toggle'),
         hit: (() => { const css = getComputedStyle(document.querySelector('.conversation-running'), '::after'); return { top: parseFloat(css.top), bottom: parseFloat(css.bottom) }; })() };
     });
+    assert.equal(await indicator(page).locator('.wi-ind-mobile').isVisible(), true);
+    assert.equal(await indicator(page).locator('.wi-ind-desktop').isVisible(), false);
+    measurements.push({ kind: 'compact', expected, ...m });
     assert.equal(m.header.height - m.header.borderY, 52, 'busy state adds no separate status row');
     assert.equal(m.pill.height, 22); assert.equal(m.pill.fontSize, '11px');
     assert.ok(m.pill.top >= m.header.top && m.pill.bottom <= m.header.bottom, 'pill stays inside title row');
     assert.ok(m.title.right <= m.pill.x + 1 && m.pill.right <= m.menu.x + 1, 'title, pill and menu never overlap');
     assert.equal(m.pill.text.replace(/\s+/g, ' ').trim(), expected, 'phone shows the compact complete label');
     assert.ok(m.caption.scrollWidth <= m.caption.clientWidth, 'pill caption is not clipped');
+    const limit = await page.evaluate(() => innerWidth * .46);
+    assert.ok(Math.abs(parseFloat(m.pill.maxWidth) - limit) < .1, 'phone pill keeps its explicit 46vw bound');
+    assert.ok(m.pill.width <= limit + 1, 'rendered pill respects the bound');
     assert.ok(m.pill.height - m.hit.top - m.hit.bottom >= 44, 'pseudo-element expands the tap target');
     if (longTitle) {
       assert.ok(m.text.scrollWidth > m.text.clientWidth, 'long title yields space to the pill');
       assert.equal(m.text.textOverflow, 'ellipsis');
     }
   };
-  const scenes = { main: '正在工作 · 3 分钟', both: '正在工作 · 3 分钟 · 后台子任务 2 个', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲', rate: '服务受限', auth: '认证', queue: '排队', starting: '启动', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
+  const checkPhoneStatus = async (page, scene, locale = 'zh') => {
+    const m = await indicator(page).evaluate(node => {
+      const r = node.getBoundingClientRect(), css = getComputedStyle(node);
+      const title = document.querySelector('.conversation-title-line').getBoundingClientRect();
+      const caption = node.querySelector('.wi-ind-text');
+      const probe = document.createElement('span'); probe.style.color = 'var(--text-dim)'; probe.style.background = 'var(--bg-card)'; node.append(probe);
+      const expected = getComputedStyle(probe), result = { top: r.top, width: r.width, titleBottom: title.bottom,
+        captionWidth: caption.clientWidth, textWidth: caption.scrollWidth, captionHeight: caption.clientHeight, textHeight: caption.scrollHeight, text: node.innerText, state: node.dataset.state, color: css.color, expectedColor: expected.color,
+        background: css.backgroundColor, expectedBackground: expected.backgroundColor, weight: css.fontWeight,
+        fontSize: css.fontSize, gridRow: css.gridRowStart, maxWidth: css.maxWidth };
+      probe.remove(); return result;
+    });
+    measurements.push({ kind: 'nonworking', scene, locale, ...m });
+    const labels = { zh: { rate: '服务受限，恢复后自动投递', auth: '需要认证', queue: '排队中', asleep: '休眠' },
+      en: { rate: 'Service limited · delivery resumes after recovery', auth: 'Authentication required', queue: 'Queueing', asleep: 'Asleep' } };
+    assert.equal(m.state, { rate: 'restricted', auth: 'restricted', queue: 'waiting', asleep: 'asleep' }[scene]);
+    assert.equal(m.text.replace(/\s+/g, ' ').trim(), labels[locale][scene], 'each nonworking state retains its complete visible wording');
+    assert.ok(m.textHeight <= m.captionHeight, 'wrapped nonworking label is not vertically clipped');
+    assert.ok(m.top >= m.titleBottom, 'nonworking status remains below the title');
+    assert.equal(m.gridRow, '3');
+    assert.ok(m.textWidth <= m.captionWidth, 'nonworking status label stays complete');
+    assert.equal(m.color, m.expectedColor, 'nonworking status keeps the base neutral color');
+    if (await page.locator('html').getAttribute('data-theme') === 'light') assert.equal(m.color, 'rgb(82, 97, 112)');
+    assert.equal(m.background, m.expectedBackground); assert.equal(m.weight, '450'); assert.equal(m.fontSize, '13px');
+  };
+  const scenes = { main: '正在工作 · 3 分钟', both: '正在工作 · 3 分钟 · 后台子任务 2 个', sub: '后台子任务 2 个 · 13 分钟', idle: '空闲', rate: '服务受限，恢复后自动投递', auth: '需要认证', queue: '排队中', starting: '会话启动中', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
   let failed = false;
   for (const width of [1280, 390]) for (const theme of ['light', 'dark']) for (const [scene, expected] of Object.entries(scenes)) {
     await t.test(`${width} ${theme} ${scene}: mounted conversation shows the group working state`, async () => {
@@ -182,6 +228,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
         f = await open({ width, theme, scene, clock: true });
         if (expected) {
           await checkText(f.page, expected);
+          if (width > 760) await checkDesktopCaption(f.page, expected);
           const spinning = await indicator(f.page).locator('.wi-spin').count();
           assert.equal(spinning, ['main', 'both', 'sub'].includes(scene) ? 1 : 0);
           await checkComet(f.page, ['main', 'both', 'sub'].includes(scene));
@@ -192,18 +239,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
             assert.equal(await indicator(f.page).isVisible(), false);
             assert.equal(await f.page.locator('.conversation-header').evaluate(node => { const css = getComputedStyle(node); return node.getBoundingClientRect().height - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth); }), 52);
           }
-          if (width <= 760 && ['rate', 'auth', 'queue'].includes(scene)) {
-            const colors = await indicator(f.page).evaluate((node, scene) => {
-              const probe = document.createElement('span');
-              probe.style.color = scene === 'queue' ? 'var(--text-muted)' : 'var(--wb-wait)';
-              probe.style.background = 'var(--bg-card)'; node.append(probe);
-              const actual = getComputedStyle(node), expected = getComputedStyle(probe);
-              const values = { color: actual.color, expected: expected.color, background: actual.backgroundColor, neutral: expected.backgroundColor };
-              probe.remove(); return values;
-            }, scene);
-            assert.equal(colors.color, colors.expected, 'waiting/restricted phone state retains its semantic color');
-            assert.equal(colors.background, colors.neutral, 'nonbusy phone state keeps its neutral background');
-          }
+          if (width <= 760 && ['rate', 'auth', 'queue'].includes(scene)) await checkPhoneStatus(f.page, scene);
           if (scene.startsWith('unknown-')) assert.equal(await indicator(f.page).evaluate(node => node.classList.contains('conversation-restricted')), true, 'unknown health keeps the warning presentation');
         } else await wait(async () => !await indicator(f.page).isVisible(), 'unavailable working is hidden');
         assert.equal(await f.page.locator('.wi-proto-bar').count(), 0, 'prototype switcher is not in the product');
@@ -314,8 +350,53 @@ export async function runConversationWorkingBrowser(t, sandbox) {
         }
         await shot(f.page, `${width}-${theme}-${scene}-long-title`);
         assert.equal(f.errors.length, 0, f.errors[0]);
-      } finally { await f.context.close(); }
+      } catch (error) { failed = true; throw error; } finally { await f.context.close(); }
     });
+    if (failed) return;
+  }
+  // Boundary: rendered compact wording, caption geometry and desktop/mobile breakpoint.
+  // Run for phone wording/header changes; unrelated backend work may skip.
+  // Fixed snapshots preserve duration, scheduled-origin selection and child counts.
+  const compactCases = [
+    { scene: 'main-long', zh: '正在工作 · 2 小时 1 分', en: 'Working · 2h 1m', fullZh: '正在工作 · 2 小时 1 分钟', fullEn: 'Working · 2 hours 1 minute' },
+    { scene: 'scheduled-short', zh: '定时任务 · 3 分钟', en: 'Scheduled · 3 min', fullZh: '正在执行定时任务 · 3 分钟', fullEn: 'Running a scheduled task · 3 minutes' },
+    { scene: 'scheduled-long', zh: '定时任务 · 1 小时 5 分', en: 'Scheduled · 1h 5m', fullZh: '正在执行定时任务 · 1 小时 5 分钟', fullEn: 'Running a scheduled task · 1 hour 5 minutes' },
+    { scene: 'sub', zh: '后台子任务 2 个', en: '2 subtasks', fullZh: '后台子任务 2 个 · 13 分钟', fullEn: '2 background tasks · 13 minutes' },
+  ];
+  for (const width of [360, 390]) for (const locale of ['zh', 'en']) for (const item of compactCases) {
+    await t.test(`${width} ${locale} ${item.scene}: compact wording preserves the complete label`, async () => {
+      const f = await open({ width, locale, scene: item.scene, title: locale === 'zh' ? '工作状态标题'.repeat(7).slice(0, 40) : 'Release workflow verification long title', clock: true });
+      try {
+        const full = locale === 'zh' ? item.fullZh : item.fullEn;
+        await checkText(f.page, full, locale);
+        await checkPhonePill(f.page, item[locale], { longTitle: true });
+        assert.ok((await indicator(f.page).getAttribute('title')).includes(full), 'tooltip preserves complete wording');
+        assert.ok((await indicator(f.page).getAttribute('aria-label')).includes(full), 'accessible label preserves complete wording');
+        await shot(f.page, `${width}-${locale}-${item.scene}-compact`);
+        await f.page.setViewportSize({ width: 1280, height: 960 });
+        await checkDesktopCaption(f.page, full);
+        await f.page.setViewportSize({ width, height: 960 });
+        await checkPhonePill(f.page, item[locale], { longTitle: true });
+        await indicator(f.page).click(); await f.page.locator('.wb-group-side .wi-now').waitFor();
+        assert.match(await f.page.locator('.wb-group-side .wi-now').innerText(), locale === 'zh' ? /现在.*正在工作|现在.*后台子任务/ : /Now.*Working|Now.*background tasks/i);
+        assert.equal(f.errors.length, 0, f.errors[0]);
+      } catch (error) { failed = true; throw error; } finally { await f.context.close(); }
+    });
+    if (failed) return;
+  }
+  // Boundary: existing nonworking states and their full phone status row.
+  // Run for phone header/status styling or wording changes; unrelated backend work may skip.
+  for (const width of [360, 390]) for (const locale of ['zh', 'en']) for (const scene of ['rate', 'auth', 'queue', 'asleep']) {
+    await t.test(`${width} ${locale} ${scene}: nonworking status retains its base row`, async () => {
+      const f = await open({ width, locale, scene, clock: true });
+      try {
+        await wait(async () => await indicator(f.page).isVisible(), 'nonworking status is visible');
+        await checkPhoneStatus(f.page, scene, locale); await checkComet(f.page, false);
+        await shot(f.page, `${width}-${locale}-${scene}-status-row`);
+        assert.equal(f.errors.length, 0, f.errors[0]);
+      } catch (error) { failed = true; throw error; } finally { await f.context.close(); }
+    });
+    if (failed) return;
   }
   await t.test('busy transitions replace the comet without leaving stale light', async () => {
     const f = await open({ clock: true });
@@ -375,5 +456,8 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     } finally { await f.context.close(); }
   });
   console.info('Working capture inventory:', JSON.stringify({ captures, missing: [...fixture.missing] }));
-  if (evidence) fs.writeFileSync(path.join(evidence, 'captures.json'), JSON.stringify(captures, null, 2));
+  if (evidence) {
+    fs.writeFileSync(path.join(evidence, 'captures.json'), JSON.stringify(captures, null, 2));
+    fs.writeFileSync(path.join(evidence, 'working-measurements.json'), JSON.stringify(measurements, null, 2));
+  }
 }

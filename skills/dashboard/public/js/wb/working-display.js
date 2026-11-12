@@ -10,14 +10,32 @@ export function workingDuration(since, { now = Date.now(), t = key => key } = {}
   return [t(hours === 1 ? 'chat.working.hour' : 'chat.working.hours', { count: hours }), minuteText(minutes % 60)].join(' ');
 }
 
-/** `scheduled`: the latest message handed to Origin came from a scheduled task (only Origin reports this); otherwise the generic wording. */
-export function workingText(working, { now = Date.now(), t = key => key, scheduled = false } = {}) {
-  if (!working) return '';
-  if (!working.on) return t('wb.state.idle');
-  const children = working.subagents?.count > 0 ? t(working.subagents.count === 1 ? 'chat.working.child' : 'chat.working.children', { count: working.subagents.count }) : null;
-  const duration = workingDuration(working.turn?.since ?? working.subagents?.since, { now, t });
-  const main = working.turn && scheduled ? t('chat.working.scheduled') : working.turn || !children ? t('chat.working.processing') : children;
-  return [main, duration, working.turn ? children : null].filter(Boolean).join(' · ');
+function compactDuration(since, { now, t }) {
+  if (!Number.isFinite(since)) return null;
+  const minutes = Math.floor(Math.max(0, now - since) / 60000);
+  if (minutes < 1) return t('chat.working.mobile.lessMinute');
+  if (minutes < 60) return t('chat.working.mobile.minutes', { count: minutes });
+  return t('chat.working.mobile.hours', { hours: Math.floor(minutes / 60), minutes: minutes % 60 });
+}
+
+/** Shared caption parts; compact wording belongs only to the phone working pill.
+ * `scheduled` is true only for an Origin turn handed off by the scheduler. */
+export function workingParts(working, { now = Date.now(), t = key => key, scheduled = false, compact = false } = {}) {
+  if (!working) return { main: '', duration: null, children: null };
+  if (!working.on) return { main: t('wb.state.idle'), duration: null, children: null };
+  const prefix = compact ? 'chat.working.mobile.' : 'chat.working.';
+  const children = working.subagents?.count > 0
+    ? t(prefix + (working.subagents.count === 1 ? 'child' : 'children'), { count: working.subagents.count }) : null;
+  const since = working.turn?.since ?? working.subagents?.since;
+  const duration = compact ? compactDuration(since, { now, t }) : workingDuration(since, { now, t });
+  const main = working.turn && scheduled ? t(prefix + 'scheduled') : working.turn || !children ? t(prefix + 'processing') : children;
+  return { main, duration: compact && !working.turn && children ? null : duration,
+    children: !compact && working.turn ? children : null };
+}
+
+export function workingText(working, options = {}) {
+  const { main, duration, children } = workingParts(working, options);
+  return [main, duration, children].filter(Boolean).join(' · ');
 }
 
 export function workingNowText(working, { t = key => key, locale } = {}) {

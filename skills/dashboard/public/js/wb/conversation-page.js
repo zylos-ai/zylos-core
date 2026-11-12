@@ -1,4 +1,4 @@
-import { workingDuration, workingText } from './working-display.js?v=2';
+import { workingParts, workingText } from './working-display.js?v=3';
 import { createUploadTray } from './chat-upload-tray.js?v=2';
 import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
@@ -592,23 +592,23 @@ export function mountConversationPage({
       : workingText(working, { t, now, scheduled: origin && s.groupProcessing === 'scheduled_task' });
     const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
     if (!exceptional && working?.on) mark.classList.add('wi-spin');
-    const childSuffix = !exceptional && working?.turn && working.subagents
-      ? t(working.subagents.count === 1 ? 'chat.working.child' : 'chat.working.children', { count: working.subagents.count }) : null;
-    const duration = !exceptional && working?.on
-      ? workingDuration(working.turn?.since ?? working.subagents?.since, { t, now }) : null;
-    const mainText = childSuffix ? description.slice(0, -(childSuffix.length + 3)) : description;
-    // Split only the duration produced by workingText, preserving its shared wording and order.
-    const caption = node('span', duration ? mainText.slice(0, -(duration.length + 3)) : mainText, 'wi-ind-text');
-    if (duration) caption.append(node('span', ' · ' + duration, working.turn ? 'wi-ind-time' : 'wi-ind-dur'));
-    if (childSuffix) caption.append(node('span', ' · ' + childSuffix, 'wi-ind-sub'));
+    const captionParts = !asleep && !exceptional ? workingParts(working, { t, now,
+      scheduled: origin && s.groupProcessing === 'scheduled_task' }) : null;
+    const caption = node('span', captionParts?.main ?? description, 'wi-ind-text wi-ind-desktop');
+    if (captionParts?.duration) caption.append(node('span', ' · ' + captionParts.duration, 'wi-ind-dur'));
+    if (captionParts?.children) caption.append(node('span', ' · ' + captionParts.children, 'wi-ind-sub'));
+    const mobileCaption = !exceptional && working?.on ? workingParts(working, { t, now,
+      scheduled: origin && s.groupProcessing === 'scheduled_task', compact: true }) : null;
+    const compact = mobileCaption ? node('span', mobileCaption.main, 'wi-ind-text wi-ind-mobile') : null;
+    if (mobileCaption?.duration) compact.append(node('span', ' · ' + mobileCaption.duration, 'wi-ind-dur'));
     const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev');
     const existingComet = [...running.children].find(child => child.classList.contains('wi-comet'));
     if (!exceptional && working?.on && existingComet) {
       // The one-second clock refreshes the caption without restarting the border animation.
       for (const child of [...running.children]) if (child !== existingComet) child.remove();
-      running.append(mark, caption, chevron);
+      running.append(mark, caption, ...(compact ? [compact] : []), chevron);
     } else {
-      running.replaceChildren(mark, caption, chevron);
+      running.replaceChildren(mark, caption, ...(compact ? [compact] : []), chevron);
     }
     if (!exceptional && working?.on && !existingComet) {
       const comet = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

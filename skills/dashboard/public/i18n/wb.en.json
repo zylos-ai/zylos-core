@@ -1,4 +1,11 @@
 {
+  "chat.working.mobile.processing": "Working",
+  "chat.working.mobile.scheduled": "Scheduled",
+  "chat.working.mobile.child": "{count} subtask",
+  "chat.working.mobile.children": "{count} subtasks",
+  "chat.working.mobile.lessMinute": "<1 min",
+  "chat.working.mobile.minutes": "{count} min",
+  "chat.working.mobile.hours": "{hours}h {minutes}m",
   "chat.working.processing": "Working",
   "chat.working.scheduled": "Running a scheduled task",
   "chat.working.child": "{count} background task",

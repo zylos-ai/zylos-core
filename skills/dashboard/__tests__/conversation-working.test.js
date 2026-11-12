@@ -183,3 +183,39 @@ test('the working line names a scheduled task only for a turn known to be one', 
   assert.equal(workingText({ on: true, turn: null, subagents: children }, { now, t: translate, scheduled: true }), '2 background tasks · 2 minutes');
   assert.equal(workingText({ on: false }, { now, t: translate, scheduled: true }), labels['wb.state.idle']);
 });
+
+for (const locale of ['zh', 'en']) {
+  const chinese = locale === 'zh';
+  const cases = [
+    { name: 'three minute main turn', minutes: 3, compactMain: chinese ? '正在工作' : 'Working',
+      compactDuration: chinese ? '3 分钟' : '3 min', full: chinese ? '正在工作 · 3 分钟 · 后台子任务 2 个' : 'Working · 3 minutes · 2 background tasks' },
+    { name: 'one hour main turn', minutes: 65, compactMain: chinese ? '正在工作' : 'Working',
+      compactDuration: chinese ? '1 小时 5 分' : '1h 5m', full: chinese ? '正在工作 · 1 小时 5 分钟 · 后台子任务 2 个' : 'Working · 1 hour 5 minutes · 2 background tasks' },
+    { name: 'two hour main turn', minutes: 121, compactMain: chinese ? '正在工作' : 'Working',
+      compactDuration: chinese ? '2 小时 1 分' : '2h 1m', full: chinese ? '正在工作 · 2 小时 1 分钟 · 后台子任务 2 个' : 'Working · 2 hours 1 minute · 2 background tasks' },
+    { name: 'three minute scheduled turn', minutes: 3, scheduled: true, compactMain: chinese ? '定时任务' : 'Scheduled',
+      compactDuration: chinese ? '3 分钟' : '3 min', full: chinese ? '正在执行定时任务 · 3 分钟 · 后台子任务 2 个' : 'Running a scheduled task · 3 minutes · 2 background tasks' },
+    { name: 'one hour scheduled turn', minutes: 65, scheduled: true, compactMain: chinese ? '定时任务' : 'Scheduled',
+      compactDuration: chinese ? '1 小时 5 分' : '1h 5m', full: chinese ? '正在执行定时任务 · 1 小时 5 分钟 · 后台子任务 2 个' : 'Running a scheduled task · 1 hour 5 minutes · 2 background tasks' },
+    { name: 'background tasks without a main turn', minutes: 65, scheduled: true, subonly: true,
+      compactMain: chinese ? '后台子任务 2 个' : '2 subtasks', compactDuration: null,
+      full: chinese ? '后台子任务 2 个 · 1 小时 5 分钟' : '2 background tasks · 1 hour 5 minutes' },
+  ];
+  for (const example of cases) test(`compact working parts preserve full wording for ${example.name} in ${locale}`, async () => {
+    const fs = await import('node:fs');
+    const { workingParts, workingText } = await import('../public/js/wb/working-display.js');
+    const labels = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+    const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
+    const now = 10 * 3600000, since = now - example.minutes * 60000;
+    const working = { on: true, since, turn: example.subonly ? null : { since },
+      subagents: { count: 2, since, lastActivityAt: now } };
+    const options = { now, t: translate, scheduled: example.scheduled };
+    const compact = workingParts(working, { ...options, compact: true });
+    assert.equal(compact.main, example.compactMain);
+    assert.equal(compact.duration, example.compactDuration);
+    assert.equal(compact.children, null, 'the compact main turn omits the background suffix');
+    assert.equal(workingText(working, options), example.full, 'desktop and accessible wording stays complete');
+    const full = workingParts(working, options);
+    assert.equal([full.main, full.duration, full.children].filter(Boolean).join(' · '), example.full);
+  });
+}

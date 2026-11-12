@@ -1,4 +1,11 @@
 {
+  "chat.working.mobile.processing": "正在工作",
+  "chat.working.mobile.scheduled": "定时任务",
+  "chat.working.mobile.child": "后台子任务 {count} 个",
+  "chat.working.mobile.children": "后台子任务 {count} 个",
+  "chat.working.mobile.lessMinute": "不到 1 分钟",
+  "chat.working.mobile.minutes": "{count} 分钟",
+  "chat.working.mobile.hours": "{hours} 小时 {minutes} 分",
   "chat.working.processing": "正在工作",
   "chat.working.scheduled": "正在执行定时任务",
   "chat.working.child": "后台子任务 {count} 个",
