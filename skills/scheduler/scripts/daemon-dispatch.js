@@ -135,11 +135,7 @@ export function runSchedulerIteration(db, dependencies = {}) {
 }
 
 export async function mainLoop(db, { shouldRun, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), dependencies = {} }) {
-  try {
-    settleStaleDeliveries(db);
-  } catch (error) {
-    console.error(`[${new Date().toISOString()}] Scheduler error: ${error.message}`);
-  }
+  settleStaleDeliveries(db);
   let lastCleanup = Date.now();
   while (shouldRun()) {
     try {

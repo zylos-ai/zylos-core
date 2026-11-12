@@ -16,9 +16,11 @@ export function updateNextRunTime(db, task) {
   let nextRun;
 
   try {
-    if (task.type === 'recurring' && task.cron_expression) {
+    if (task.type === 'recurring') {
+      if (!task.cron_expression) throw new Error('Missing cron expression for recurring task');
       nextRun = getNextRun(task.cron_expression, task.timezone);
-    } else if (task.type === 'interval' && task.interval_seconds) {
+    } else if (task.type === 'interval') {
+      if (!task.interval_seconds) throw new Error('Missing interval seconds for interval task');
       nextRun = now() + task.interval_seconds;
     } else {
       return; // One-time task, no update needed

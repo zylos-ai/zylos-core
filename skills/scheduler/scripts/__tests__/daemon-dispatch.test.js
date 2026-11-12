@@ -382,6 +382,32 @@ test(`daemon startup closes an abandoned ${type} claim without sending`, async t
   assert.equal(read().task.status, type === 'one-time' ? 'failed' : 'pending');
 });
 
+// Boundary: actual scheduler iteration with private in-memory SQLite and an
+// injected receipt. Run for periodic schedule validation/accounting changes;
+// unrelated UI changes may skip. No daemon process, socket or live service.
+for (const [type, reason] of [
+  ['recurring', 'Missing cron expression for recurring task'],
+  ['interval', 'Missing interval seconds for interval task'],
+]) test(`${type} delivery with a missing schedule fails the task while retaining successful history`, t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  const { db, read } = fixture(t, { type, cron_expression: null, interval_seconds: null, timezone: 'UTC' });
+  let sends = 0;
+  const deps = { ...base, sendViaC4() { sends++; return { category: 'success' }; } };
+  runSchedulerIteration(db, deps);
+  const after = read();
+  assert.equal(sends, 1); assert.equal(after.task.status, 'failed');
+  assert.equal(after.task.last_error, reason);
+  assert.equal(after.history.length, 1); assert.equal(after.history[0].status, 'success');
+  assert.equal(after.history[0].error, null);
+  assert.equal(after.history[0].completed_at, start / 1000);
+  assert.equal(after.history[0].duration_ms, 0);
+  const accounted = JSON.stringify(after);
+  t.mock.timers.tick(400000);
+  for (let iteration = 0; iteration < 3; iteration++) runSchedulerIteration(db, deps);
+  assert.equal(sends, 1); assert.equal(JSON.stringify(read()), accounted);
+});
+
 // Boundary: actual daemon iteration/startup and SQLite accounting for damaged
 // saved schedules. Run after rescheduling or stale-delivery changes; UI-only
 // changes may skip. Uses only the private/in-memory fixture and injected receive,
