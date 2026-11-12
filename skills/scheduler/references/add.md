@@ -73,7 +73,7 @@ Don't use for: user notifications, time-sensitive tasks, high-priority alerts.
 
 ### Reply Configuration
 
-`--reply-channel` and `--reply-endpoint` specify where results are sent. Supply both with nonempty values, or omit both. A missing partner or empty value returns `INVALID_ARGS` without creating the task.
+`--reply-channel` and `--reply-endpoint` specify where results are sent. Supply both with nonempty values, or omit both. A missing partner or empty value returns `INVALID_ARGS` without creating the task. This new rejection exits 1 in both text and JSON modes.
 
 ```bash
 --reply-channel "telegram" --reply-endpoint "8101553026"     # Telegram user

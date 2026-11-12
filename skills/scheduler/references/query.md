@@ -25,7 +25,7 @@ Shows tasks currently in `running` status. Useful to check before session compac
 
 `cli.js history [task-id] [--limit <1-1000>] [--json]`
 
-Shows the 20 most recent execution history entries by default. `--limit` accepts integers from 1 through 1000; out-of-range or invalid values are rejected. Optionally filter by task ID (supports partial match).
+Shows the 20 most recent execution history entries by default. `--limit` accepts integers from 1 through 1000; out-of-range or invalid values are rejected with exit code 1. Optionally filter by task ID (supports partial match).
 
 With `--json`, returns `{"ok":true,"data":{"rows":[...],"ambiguousPrefix":[]}}`. History rows omit `prompt`. When a prefix matches several tasks, `data.ambiguousPrefix` contains their matching task IDs; otherwise it is an empty array. Matching tasks' histories remain in the result rather than selecting one task silently. Invalid arguments return a structured error with exit 1; without `--json`, the existing text format and exit behavior are retained.
 

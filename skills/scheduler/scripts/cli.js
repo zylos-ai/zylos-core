@@ -19,13 +19,14 @@ function success(data) {
   return true;
 }
 
-function fail(code, message, details = {}, textLines = []) {
+function fail(code, message, details = {}, textLines = [], textExitCode = 0) {
   if (jsonOutput) {
     console.log(JSON.stringify({ ok: false, error: { code, message, ...details } }));
     process.exitCode = 1;
   } else {
     console.error(`Error: ${message}`);
     for (const line of textLines) console.error(line);
+    process.exitCode = textExitCode;
   }
 }
 
@@ -44,23 +45,26 @@ function replyPair(channel, endpoint) {
 
 function findTask(taskId, status) {
   if (!taskId) { fail('INVALID_ARGS', 'Task ID is required'); return null; }
-  const suffix = status && !jsonOutput ? ' AND status = ?' : '';
+  const suffix = status ? ' AND status = ?' : '';
   const params = [escapeLike(taskId) + '%', ...(suffix ? [status] : [])];
   const tasks = db.prepare(`SELECT * FROM tasks WHERE id LIKE ? ESCAPE '!'${suffix}`).all(...params);
   const qualifier = status === 'pending' ? 'Pending ' : status === 'paused' ? 'Paused ' : '';
   if (!tasks.length) {
-    fail('TASK_NOT_FOUND', `${status && !jsonOutput ? qualifier + 'task' : 'Task'} not found: ${taskId}`);
+    if (status) {
+      const task = db.prepare("SELECT * FROM tasks WHERE id LIKE ? ESCAPE '!'").get(escapeLike(taskId) + '%');
+      if (task) {
+        fail('TASK_WRONG_STATUS', `${qualifier}task not found: ${taskId}`, { status: task.status });
+        return null;
+      }
+    }
+    fail('TASK_NOT_FOUND', `${status ? qualifier + 'task' : 'Task'} not found: ${taskId}`);
     return null;
   }
   if (tasks.length > 1) {
-    const kind = status && !jsonOutput ? ` ${status}` : '';
+    const kind = status ? ` ${status}` : '';
     fail('TASK_AMBIGUOUS', `Ambiguous task ID prefix '${taskId}' matches multiple${kind} tasks:`,
       { matches: tasks.map(task => task.id) },
       [...tasks.map(task => `  - ${task.id}`), 'Please provide a more specific prefix.']);
-    return null;
-  }
-  if (status && tasks[0].status !== status) {
-    fail('TASK_WRONG_STATUS', `Task must be ${status}`, { status: tasks[0].status });
     return null;
   }
   return tasks[0];
@@ -172,8 +176,8 @@ function parseArgs(args) {
       } else {
         // Regular flag with value
         const value = args[i + 1];
-        result.options[key] = value?.startsWith('--') ? undefined : value;
-        i += value === undefined || value.startsWith('--') ? 1 : 2;
+        result.options[key] = value;
+        i += 2;
       }
     } else {
       result.args.push(arg);
@@ -294,7 +298,7 @@ function cmdAdd(args, options) {
   const replyChannel = options['reply-channel'] || null;
   const replyEndpoint = options['reply-endpoint'] || null;
   if ((has(options, 'reply-channel') || has(options, 'reply-endpoint')) && !replyPair(replyChannel, replyEndpoint)) {
-    fail('INVALID_ARGS', '--reply-channel and --reply-endpoint must both be nonempty');
+    fail('INVALID_ARGS', '--reply-channel and --reply-endpoint must both be nonempty', {}, [], 1);
     return;
   }
 
@@ -551,7 +555,7 @@ function cmdUpdate(taskId, options) {
     const channel = has(options, 'reply-channel') ? options['reply-channel'] : task.reply_channel;
     const endpoint = has(options, 'reply-endpoint') ? options['reply-endpoint'] : task.reply_endpoint;
     if (!replyPair(channel, endpoint)) {
-      fail('INVALID_ARGS', '--reply-channel and --reply-endpoint must both be nonempty');
+      fail('INVALID_ARGS', '--reply-channel and --reply-endpoint must both be nonempty', {}, [], 1);
       return;
     }
     if (has(options, 'reply-channel')) { updates.reply_channel = channel; updatedFields.push('reply_channel'); }
@@ -627,7 +631,7 @@ function cmdUpdate(taskId, options) {
     updatedFields.push(...(nextRunOnly ? ['next_run_at'] : ['type', 'schedule']));
     if (task.type === 'one-time' && task.status === 'failed') {
       if (updates.next_run_at <= now()) {
-        fail('RESCHEDULE_NOT_FUTURE', 'A failed task must be rescheduled to a future time');
+        fail('RESCHEDULE_NOT_FUTURE', 'A failed task must be rescheduled to a future time', {}, [], 1);
         return;
       }
       updates.status = 'pending';
@@ -665,7 +669,7 @@ function cmdUpdate(taskId, options) {
 
   if (scheduleUpdated) {
     console.log(`  Type: ${updates.type || task.type}`);
-    if (nextRunOnly) console.log('  只改了下一次，周期和时区不变 (next run only)');
+    if (nextRunOnly) console.log('  Only the next run changed; recurring schedule and timezone unchanged');
     console.log(`  Next run: ${formatTime(updates.next_run_at)} (${getRelativeTime(updates.next_run_at)})`);
   }
   console.log();
@@ -675,7 +679,8 @@ function cmdUpdate(taskId, options) {
 
 function main() {
   const { command, args, options } = parseArgs(process.argv.slice(2));
-  jsonOutput = options.json === true && command !== 'list';
+  const jsonCommands = ['add', 'update', 'done', 'complete', 'remove', 'rm', 'delete', 'pause', 'resume', 'history'];
+  jsonOutput = jsonCommands.includes(command) && process.argv.slice(2).includes('--json');
   try {
     process.env.TZ = loadTimezone();
   } catch (error) {
@@ -688,33 +693,11 @@ function main() {
 
   try {
     if (jsonOutput) {
-      const writeOptions = ['json', 'in', 'at', 'cron', 'every', 'priority', 'name',
-        'block-queue-until-idle', 'require-idle', 'reply-channel', 'reply-endpoint', 'miss-threshold'];
-      const allowed = command === 'add' ? writeOptions
-        : command === 'update' ? [...writeOptions, 'prompt', 'clear-reply', 'no-block-queue-until-idle', 'no-require-idle']
-        : command === 'history' ? ['json', 'limit'] : ['json'];
-      const booleanOptions = ['json', 'block-queue-until-idle', 'require-idle', 'clear-reply',
-        'no-block-queue-until-idle', 'no-require-idle'];
       for (const [key, value] of Object.entries(options)) {
-        if (!allowed.includes(key) || (!booleanOptions.includes(key) && (value === undefined || value === ''))) {
+        if (value === undefined || value === '') {
           fail('INVALID_ARGS', `Invalid or missing option: --${key}`);
           return;
         }
-      }
-      for (const key of ['priority', 'miss-threshold']) {
-        if (has(options, key) && !/^\d+$/.test(options[key])) {
-          fail('INVALID_ARGS', `Invalid integer option: --${key}`);
-          return;
-        }
-      }
-      if (['in', 'at', 'cron', 'every'].filter(key => has(options, key)).length > 1) {
-        fail('INVALID_ARGS', 'Specify only one timing option');
-        return;
-      }
-      if ((command === 'add' ? args.length < 1 : !['history', 'help', '--help', '-h'].includes(command) && args.length !== 1)
-        || (command === 'history' && args.length > 1)) {
-        fail('INVALID_ARGS', 'Invalid command arguments');
-        return;
       }
     }
     db = getDb();

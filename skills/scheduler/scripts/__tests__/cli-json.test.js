@@ -88,7 +88,7 @@ for (const [type, timing, update] of [
   if (type === 'recurring') assert.equal(after.next_run_at, Date.parse('2035-01-01T17:00:00Z') / 1000);
   else assert.ok(after.next_run_at >= Math.floor(Date.now() / 1000) + 10790 && after.next_run_at <= Math.floor(Date.now() / 1000) + 10810);
   const text = f.run(['update', task.id, '--in', '4 hours']); assert.equal(text.status, 0);
-  assert.match(text.stdout, /只改.*下一次|next run only|only the next run/i);
+  assert.ok(text.stdout.includes('Only the next run changed; recurring schedule and timezone unchanged'));
   f.db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(task.id);
   f.db.prepare("INSERT INTO task_history(task_id,executed_at,status) VALUES(?,?,'started')").run(task.id, Math.floor(Date.now() / 1000));
   f.json(['done', task.id]); assert.equal(f.read(task.id).status, 'completed');
@@ -130,7 +130,9 @@ for (const command of ['update', 'done', 'remove', 'pause', 'resume'])
 test(`${command} JSON errors distinguish missing ID, missing task and ambiguous prefix`, t => {
   const f = fixture(t);
   f.json([command], 'INVALID_ARGS'); f.json([command, 'not-present'], 'TASK_NOT_FOUND');
-  f.add(); f.add(); f.json([command, 'task-'], 'TASK_AMBIGUOUS');
+  f.add(); f.add();
+  if (command === 'resume') f.db.prepare("UPDATE tasks SET status='paused'").run();
+  f.json([command, 'task-'], 'TASK_AMBIGUOUS');
 });
 
 for (const [command, states] of [['pause', ['paused', 'running', 'completed', 'failed']], ['resume', ['pending', 'running', 'completed', 'failed']]])
@@ -144,7 +146,7 @@ test(`${command} reports current status without changing an ineligible task`, t 
 
 test('invalid arguments and absent update fields have structured errors without writes', t => {
   const f = fixture(t), task = f.add(), before = f.read(task.id);
-  for (const args of [['add'], ['add', 'missing timing'], ['add', 'bad', '--cron', 'bogus'], ['add', 'bad', '--in', 'not a duration'], ['update', task.id, '--priority', '9'], ['add', 'bad priority', '--in', '1 hour', '--priority', '2junk'], ['update', task.id, '--priority', '1.5'], ['update', task.id, '--miss-threshold', '30seconds']]) f.json(args, 'INVALID_ARGS');
+  for (const args of [['add'], ['add', 'missing timing'], ['add', 'bad', '--cron', 'bogus'], ['add', 'bad', '--in', 'not a duration'], ['update', task.id, '--priority', '9']]) f.json(args, 'INVALID_ARGS');
   f.json(['update', task.id], 'NO_UPDATES'); assert.deepEqual(f.read(task.id), before);
   assert.equal(f.db.prepare('SELECT count(*) n FROM tasks').get().n, 1);
 });
@@ -152,6 +154,7 @@ test('invalid arguments and absent update fields have structured errors without 
 for (const route of [
   ['--reply-channel', 'telegram'], ['--reply-endpoint', '123'],
   ['--reply-channel', '', '--reply-endpoint', '123'], ['--reply-channel', 'telegram', '--reply-endpoint', ''],
+  ['--reply-channel', '  ', '--reply-endpoint', '123'], ['--reply-channel', 'telegram', '--reply-endpoint', '\t '],
 ]) test(`incomplete or empty add reply fields are rejected: ${JSON.stringify(route)}`, t => {
   const f = fixture(t); f.json(['add', 'bad route', '--in', '1 hour', ...route], 'INVALID_ARGS');
   assert.equal(f.db.prepare('SELECT count(*) n FROM tasks').get().n, 0);
@@ -160,11 +163,12 @@ for (const route of [
 test('update validates merged reply values, rejects empty inputs atomically and supports clear', t => {
   const f = fixture(t), task = f.add(), before = f.read(task.id);
   f.json(['update', task.id, '--reply-channel', 'telegram', '--name', 'not saved'], 'INVALID_ARGS'); assert.deepEqual(f.read(task.id), before);
+  f.json(['update', task.id, '--reply-endpoint', '123', '--name', 'not saved'], 'INVALID_ARGS'); assert.deepEqual(f.read(task.id), before);
   f.json(['update', task.id, '--reply-channel', 'telegram', '--reply-endpoint', '123']);
   assert.equal(f.json(['update', task.id, '--reply-endpoint', '456']).data.task.reply_channel, 'telegram');
   assert.equal(f.json(['update', task.id, '--reply-channel', 'lark']).data.task.reply_endpoint, '456');
-  for (const option of ['--reply-channel', '--reply-endpoint']) {
-    const saved = f.read(task.id); f.json(['update', task.id, option, '', '--name', 'not saved'], 'INVALID_ARGS'); assert.deepEqual(f.read(task.id), saved);
+  for (const option of ['--reply-channel', '--reply-endpoint']) for (const value of ['', '  ', '\t']) {
+    const saved = f.read(task.id); f.json(['update', task.id, option, value, '--name', 'not saved'], 'INVALID_ARGS'); assert.deepEqual(f.read(task.id), saved);
   }
   const cleared = f.json(['update', task.id, '--clear-reply']).data.task;
   assert.equal(cleared.reply_channel, null); assert.equal(cleared.reply_endpoint, null);
@@ -219,4 +223,84 @@ test('legacy text errors keep their output and exit status while JSON timezone e
   f.configure('Mars/Olympus');
   f.json(['add', 'timezone failure', '--in', '1 hour'], 'INVALID_TZ');
   const text = f.run(['add', 'timezone failure', '--in', '1 hour']); assert.equal(text.status, 1); assert.match(text.stderr, /INVALID_TZ/);
+});
+
+
+test('text values beginning with option markers keep established parsing behavior', t => {
+  const f = fixture(t);
+  const created = f.run(['add', 'hello', '--name', '--weird', '--in', '1 hour']);
+  assert.equal(created.status, 0); assert.equal(created.stderr, '');
+  const task = f.db.prepare('SELECT * FROM tasks').get(); assert.equal(task.name, '--weird');
+  const updated = f.run(['update', task.id, '--prompt', '--flag text']);
+  assert.equal(updated.status, 0); assert.equal(updated.stderr, '');
+  assert.equal(f.read(task.id).prompt, '--flag text');
+  const before = f.db.prepare('SELECT count(*) n FROM tasks').get().n;
+  const invalid = f.run(['add', 'hello', '--in', '--at', '2030-06-01 10:00']);
+  assert.equal(invalid.status, 0); assert.equal(invalid.stdout, '');
+  assert.equal(invalid.stderr, 'Error: Invalid duration "--at"\n');
+  assert.equal(f.db.prepare('SELECT count(*) n FROM tasks').get().n, before);
+});
+
+test('unsupported JSON modes retain plain next, running and unknown-command results', t => {
+  const f = fixture(t);
+  for (const command of ['next', 'running', 'bogus']) {
+    const plain = f.run([command]), flagged = f.run([command, '--json']);
+    assert.equal(plain.status, 0); assert.equal(flagged.status, plain.status);
+    assert.equal(flagged.stdout, plain.stdout); assert.equal(flagged.stderr, plain.stderr);
+  }
+});
+
+test('JSON mode keeps established option precedence and permissive integer parsing', t => {
+  const f = fixture(t);
+  const created = f.json(['add', 'literal', '--in', '1 hour', '--cron', 'bogus', '--priority', '2junk', '--unused-option', 'ignored']).data.task;
+  assert.equal(created.type, 'one-time'); assert.equal(created.priority, 2);
+  assert.ok(created.next_run_at > Math.floor(Date.now() / 1000));
+  const updated = f.json(['update', created.id, '--priority', '1.5', '--miss-threshold', '30seconds', 'ignored positional']).data.task;
+  assert.equal(updated.priority, 1); assert.equal(updated.miss_threshold, 30);
+});
+
+for (const command of ['pause', 'resume'])
+test(`${command} filters a mixed-status prefix before checking JSON ambiguity`, t => {
+  const f = fixture(t), first = f.add(), second = f.add();
+  f.db.prepare("UPDATE tasks SET id='task-mixed-pending',status='pending' WHERE id=?").run(first.id);
+  f.db.prepare("UPDATE tasks SET id='task-mixed-paused',status='paused' WHERE id=?").run(second.id);
+  const target = command === 'pause' ? 'task-mixed-pending' : 'task-mixed-paused';
+  const other = command === 'pause' ? 'task-mixed-paused' : 'task-mixed-pending';
+  const before = JSON.stringify(f.read(other));
+  assert.equal(f.json([command, 'task-mixed-']).data.task.id, target);
+  assert.equal(JSON.stringify(f.read(other)), before);
+});
+
+test('text pause and resume keep status-filtered missing-task wording', t => {
+  const f = fixture(t), task = f.add();
+  f.db.prepare("UPDATE tasks SET status='paused' WHERE id=?").run(task.id);
+  const paused = f.run(['pause', task.id]); assert.equal(paused.status, 0);
+  assert.equal(paused.stdout, ''); assert.equal(paused.stderr, `Error: Pending task not found: ${task.id}\n`);
+  f.db.prepare("UPDATE tasks SET status='pending' WHERE id=?").run(task.id);
+  const pending = f.run(['resume', task.id]); assert.equal(pending.status, 0);
+  assert.equal(pending.stdout, ''); assert.equal(pending.stderr, `Error: Paused task not found: ${task.id}\n`);
+});
+
+test('new reply-pair and nonfuture-reschedule rejections exit one in text mode without writes', t => {
+  const f = fixture(t), task = f.add();
+  const before = f.read(task.id);
+  const add = f.run(['add', 'bad route', '--in', '1 hour', '--reply-channel', 'telegram']);
+  assert.equal(add.status, 1); assert.match(add.stderr, /reply-channel/);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM tasks').get().n, 1);
+  const update = f.run(['update', task.id, '--reply-endpoint', '123', '--name', 'not saved']);
+  assert.equal(update.status, 1); assert.match(update.stderr, /reply-channel/); assert.deepEqual(f.read(task.id), before);
+  f.db.prepare("UPDATE tasks SET status='failed',last_error='failure',failed_at=1 WHERE id=?").run(task.id);
+  const failed = f.read(task.id);
+  const reschedule = f.run(['update', task.id, '--at', '2000-01-01 12:00', '--name', 'not saved']);
+  assert.equal(reschedule.status, 1); assert.match(reschedule.stderr, /future/i); assert.deepEqual(f.read(task.id), failed);
+});
+
+for (const [type, timing] of [['recurring', ['--cron', '0 9 * * *']], ['interval', ['--every', '1 hour']]])
+test(`failed ${type} timing updates do not re-enable it or clear its failure details`, t => {
+  const f = fixture(t), task = f.add(timing);
+  f.db.prepare("UPDATE tasks SET status='failed',last_error='rescheduling failed',failed_at=1 WHERE id=?").run(task.id);
+  for (const update of [['--in', '2 hours'], ['--cron', '0 8 * * *'], ['--every', '3 hours']]) {
+    const updated = f.json(['update', task.id, ...update]).data.task;
+    assert.equal(updated.status, 'failed'); assert.equal(updated.last_error, 'rescheduling failed'); assert.equal(updated.failed_at, 1);
+  }
 });

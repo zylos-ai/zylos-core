@@ -29,11 +29,11 @@ For recurring and interval tasks, `--at` / `--in` changes only `next_run_at`. Th
 
 ## Re-enable a Failed One-time Task
 
-Update a failed one-time task with a future `--in`, `--at`, `--cron`, or `--every` time. It returns to pending and clears `last_error` and `failed_at`. If the resulting time is not in the future, `RESCHEDULE_NOT_FUTURE` is returned without writing any changes. Updating other fields without a new time leaves the task failed.
+Update a failed one-time task with a future `--in`, `--at`, `--cron`, or `--every` time. It returns to pending and clears `last_error` and `failed_at`. If the resulting time is not in the future, `RESCHEDULE_NOT_FUTURE` is returned without writing any changes, with exit code 1 in both text and JSON modes. Updating other fields without a new time leaves the task failed.
 
 ## Reply Configuration
 
-Reply channel and endpoint must form a nonempty pair. Updates first merge supplied values with the saved reply values, then validate the result. You can change only the endpoint when a channel is already saved, for example. A missing partner or explicit empty value returns `INVALID_ARGS` without changing the task. `--clear-reply` clears both.
+Reply channel and endpoint must form a nonempty pair. Updates first merge supplied values with the saved reply values, then validate the result. You can change only the endpoint when a channel is already saved, for example. A missing partner or explicit empty value returns `INVALID_ARGS` without changing the task; this new rejection exits 1 in both text and JSON modes. `--clear-reply` clears both.
 
 ## Structured Result
 
