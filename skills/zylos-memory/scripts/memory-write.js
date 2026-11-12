@@ -62,6 +62,7 @@ export async function writeMemory({ path: inputPath, sha256: expected, content, 
       !(typeof content === 'string' || Buffer.isBuffer(content))) {
     throw memoryError('INVALID_INPUT', 'Expected a sha256 hex digest and new content');
   }
+  if (content.length === 0) throw memoryError('INVALID_INPUT', 'New content must not be empty');
   const root = env.ZYLOS_DIR || path.join(env.HOME || process.env.HOME, 'zylos');
   resolveFile(root, rel, io);
   const scope = await writeScope(rel, env);

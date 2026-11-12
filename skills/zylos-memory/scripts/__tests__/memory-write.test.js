@@ -66,13 +66,53 @@ test('conflict returns the current raw-byte hash and text without changing the f
   assert.deepEqual(fs.readdirSync(f.memory), ['identity.md']);
 });
 
-test('expected hashes use raw bytes and empty replacement content is allowed', async t => {
+test('expected hashes use raw bytes for nonempty replacement content', async t => {
   const f = fixture(t);
   const original = Buffer.from([0xff, 0x00, 0xc3, 0xa9]);
   fs.writeFileSync(f.file, original);
-  const result = await writeMemory({ ...f.settings, sha256: digest(original), content: Buffer.alloc(0) }, { currentRunId: liveRun });
-  assert.equal(result.sha256, digest(Buffer.alloc(0)));
-  assert.equal(fs.statSync(f.file).size, 0);
+  const replacement = Buffer.from([0x00, 0xff, 0x0a]);
+  const result = await writeMemory({ ...f.settings, sha256: digest(original), content: replacement }, { currentRunId: liveRun });
+  assert.equal(result.sha256, digest(replacement));
+  assert.deepEqual(fs.readFileSync(f.file), replacement);
+});
+
+for (const content of ['', Buffer.alloc(0)]) {
+  test(`empty ${typeof content === 'string' ? 'string' : 'buffer'} content is refused without changing file bytes`, async t => {
+    const f = fixture(t);
+    const original = Buffer.from([0xff, 0x00, 0xc3, 0xa9]);
+    fs.writeFileSync(f.file, original);
+    await assert.rejects(writeMemory({ ...f.settings, sha256: digest(original), content }, {
+      currentRunId: async () => assert.fail('empty input reached runtime observation'),
+    }), { code: 'INVALID_INPUT' });
+    assert.deepEqual(fs.readFileSync(f.file), original);
+    assert.deepEqual(fs.readdirSync(f.memory), ['identity.md']);
+  });
+}
+
+// Integration boundary: actual public CLI rejects empty stdin before runtime
+// observation. Run for writer input-validation/CLI changes; skip otherwise.
+// The runner and fixture isolate HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; the child
+// reads only fixture paths, has a bounded lifetime, and opens no tmux/socket/DB.
+test('CLI refuses empty stdin and preserves the existing file', { timeout: 10000 }, t => {
+  const f = fixture(t);
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(f.env[key].startsWith(f.root + path.sep));
+  }
+  const args = [new URL('../memory-write.js', import.meta.url).pathname,
+    '--path', 'identity.md', '--sha256', f.settings.sha256];
+  t.diagnostic(JSON.stringify({ args, paths: Object.fromEntries(
+    ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, f.env[key]])),
+    tmux: 'unused', socket: 'unused', database: 'unused' }));
+  const result = spawnSync(process.execPath, args, {
+    env: f.env, input: '', encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL',
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 1, result.stderr);
+  const response = JSON.parse(result.stdout);
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, 'INVALID_INPUT');
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+  assert.deepEqual(fs.readdirSync(f.memory), ['identity.md']);
 });
 
 test('invalid paths and non-files are rejected before any runtime observation', async t => {

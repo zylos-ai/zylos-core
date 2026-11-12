@@ -95,7 +95,7 @@ test('reorganization finds in-progress work in global and every group state with
 
 test('reorganization looks up existing and archived pages before searching pointed-to old sections', () => {
   const pages = normalize(between(reorg, '2. **Rebuild', '3. **Do not rebuild'));
-  assert.match(pages, /Check `reference\/projects\/INDEX.md` and search `reference\/projects\/`, including `archive\/`/);
+  assert.match(pages, /First read both `reference\/projects\/INDEX.md` and `reference\/projects\/archive\/INDEX.md`\. Then search by project names and aliases with `grep -ril` in `reference\/projects\/` \(including `archive\/`\)/);
   assert.match(pages, /first run `reference-index.js unarchive --path reference\/projects\/archive\/<name>.md`/);
   assert.match(pages, /Read old sections pointed to by state first/);
   assert.match(pages, /search the latest projects archive in `reference\/legacy\/`/);
@@ -126,7 +126,8 @@ test('reorganization writes only project pages and generated indexes without reb
 
 test('reorganization builds pages before archival and reports archive collisions without retrying', () => {
   const finish = normalize(between(reorg, '4. **Finish', '## Writing rules'));
-  assert.match(finish, /Run `reference-index.js rebuild`, then `reference-index.js move-old`/);
+  assert.match(finish, /Only after every `create`, `unarchive`, and `memory-write` operation in step 2 has returned `ok`, run `reference-index.js rebuild`, then `reference-index.js move-old`, each as a separate command/);
+  assert.match(finish, /If any operation returns `SYNC_BUSY`, `MEMORY_CONFLICT`, or any other error, follow the writing rules and retry until it succeeds; do not run `move-old` while any write remains unsuccessful/);
   assert.match(finish, /date-time filenames without overwriting existing files/);
   assert.match(finish, /If `move-old` returns `EXISTS`, nothing moved: report it in the result returned to the spawning session and do not retry/);
   assert.match(finish, /Build pages first and move old files last/);
@@ -174,4 +175,9 @@ test('reorganization excludes consent, date-based selection, Origin-only reads a
   const state = between(reorg, '1. **Identify', '2. **Rebuild');
   assert.doesNotMatch(state, /only Origin/i);
   assert.doesNotMatch(sync, /reorganization progress (?:page|file)/i);
+});
+
+test('existing page writes use a complete heredoc rather than command output', () => {
+  const existing = normalize(between(reorg, '- Existing pages:', 'Only write'));
+  assert.match(existing, /Put the complete new page content in a heredoc before passing it to `memory-write.js`; do not pipe output from `sed`, `awk`, or similar commands directly into the writer/);
 });

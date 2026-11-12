@@ -41,9 +41,11 @@ for it with `wait_agent`; its final result returns to the spawning session.
    are missing or list no in-progress work, create no pages and go to step 4.
 
 2. **Rebuild or supplement one project at a time.** For each matter:
-   - Check `reference/projects/INDEX.md` and search `reference/projects/`,
-     including `archive/`, for matching names or `Keys`. A match is an existing
-     page. If it is in `archive/`, first run
+   - First read both `reference/projects/INDEX.md` and
+     `reference/projects/archive/INDEX.md`. Then search by project names and
+     aliases with `grep -ril` in `reference/projects/` (including `archive/`)
+     for matching names or `Keys`. A match is an existing page. If it is in
+     `archive/`, first run
      `reference-index.js unarchive --path reference/projects/archive/<name>.md` because the project is in progress.
    - Read old sections pointed to by state first. Then search the old
      `projects.md` by name and aliases with line numbers; if it has left its
@@ -74,8 +76,12 @@ for it with `wait_agent`; its final result returns to the spawning session.
    `reference/legacy/` as described in the system memory directory guidance.
    Standing rules remain in `preferences.md`; do not change that file.
 
-4. **Finish with rebuild, then move-old.** Run `reference-index.js rebuild`,
-   then `reference-index.js move-old`. This moves both old files intact into
+4. **Finish with rebuild, then move-old.** Only after every `create`, `unarchive`,
+   and `memory-write` operation in step 2 has returned `ok`, run
+   `reference-index.js rebuild`, then `reference-index.js move-old`, each as a
+   separate command. If any operation returns `SYNC_BUSY`, `MEMORY_CONFLICT`,
+   or any other error, follow the writing rules and retry until it succeeds;
+   do not run `move-old` while any write remains unsuccessful. This moves both old files intact into
    `reference/legacy/` with date-time filenames without overwriting existing
    files. If `move-old` returns `EXISTS`, nothing moved: report it in the result
    returned to the spawning session and do not retry. Build pages first and move
@@ -100,6 +106,9 @@ Write/Edit or shell redirection to write memory. Use these writing methods:
   `EXISTS` means read and handle the existing page.
 - Existing pages: `memory-write.js --path reference/projects/<name>.md --sha256 <hash-read-with-the-file>`,
   with the new content from stdin, as described in [the locked writer](memory-write.md).
+  Put the complete new page content in a heredoc before passing it to
+  `memory-write.js`; do not pipe output from `sed`, `awk`, or similar commands
+  directly into the writer.
   `MEMORY_CONFLICT` leaves the file unchanged: reread, merge again and retry.
   `SYNC_BUSY` means retry later. `MEMORY_FILE_NOT_FOUND` can mean Sync moved the
   page into or out of archive: locate it again before writing.
