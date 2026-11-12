@@ -14,3 +14,15 @@ test('quota values stay on one line across locales, themes and screen widths',
       await runQuotaBrowser(sandbox);
     }, { timeoutMs: 80_000 });
   });
+
+// Boundary: the real Machines page entry and assets with fixture APIs on loopback.
+// Run for fleet composition/layout changes; skip backend-only changes. No live
+// backend/DB/PM2/tmux is started; sandbox proofs and cleanup match the case above.
+test('machines page places cards directly after the summary on phone and desktop',
+  { skip: !chatEnabled(), timeout: 45_000 }, async t => {
+    const sandbox = createChatSandbox(t);
+    await sandbox.runCase(async () => {
+      const { runFleetPageBrowser } = await import('./helpers/quota-browser.js');
+      await runFleetPageBrowser(sandbox);
+    }, { timeoutMs: 35_000 });
+  });

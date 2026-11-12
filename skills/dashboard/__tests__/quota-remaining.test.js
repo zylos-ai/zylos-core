@@ -64,7 +64,7 @@ test('strip meters and percentage text use the same remaining hue and localized 
       assert.equal(amount.style.color, quotaColor(remaining));
       assert.equal(box.title, t('wb.quotaRemaining', { pct: remaining }));
     }
-    const labels = Object.fromEntries(['rate7d','quotaHead','quotaRemaining','quotaUnknown'].map(key => [key, values['wb.fleet.' + key]]));
+    const labels = Object.fromEntries(['rate7d','quotaRemaining','quotaUnknown'].map(key => [key, values['wb.fleet.' + key]]));
     const html = renderAgentFleetHtml({ agents: [{ name: 'remote', state: 'IDLE', rate_limit_7d_pct: 90 }] }, { labels });
     assert.ok(html.includes(t('wb.quotaRemaining', { pct: 10 })));
     assert.match(html, /--wb-quota-color:hsl\(12 75% var\(--wb-quota-lightness\)\)/);
@@ -92,7 +92,7 @@ test('strip rounds fractional weekly quota in both percentage text and tooltip',
   }
 });
 
-test('recorded quota shows its instance-local time in strip and both fleet views', () => {
+test('recorded quota shows its instance-local time in strip and fleet cards', () => {
   setInstanceZone('Asia/Shanghai');
   const now = Date.parse('2026-11-10T00:10:00+08:00');
   for (const locale of ['en', 'zh']) for (const sameDay of [true, false]) {
@@ -111,7 +111,7 @@ test('recorded quota shows its instance-local time in strip and both fleet views
     const self = fleetSelfFromSnapshot(snapshot);
     const html = renderAgentFleetHtml({ agents: [{ name: 'local', self: true, state: 'IDLE' },
       { name: 'remote', state: 'IDLE', rate_limit_7d_pct: 7, rate_limit_7d_recorded_at: recordedAt, rate_limit_7d_live: false }] }, { self, labels });
-    assert.equal((html.match(/class="wb-quota-recorded"/g) ?? []).length, 4, 'local and remote in card and comparison');
+    assert.equal((html.match(/class="wb-quota-recorded"/g) ?? []).length, 2, 'local and remote cards each show the recorded time');
     assert.ok(html.includes(t('wb.quotaRecordedHint')));
     assert.doesNotMatch(html, /2026/);
     sample.live = true;

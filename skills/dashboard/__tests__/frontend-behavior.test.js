@@ -405,12 +405,13 @@ test('this machine reads both weekly quotas from the raw groups snapshot, Claude
   const self = fleetSelfFromSnapshot(snapshot);
   assert.deepEqual(self.accounts, { claude: 42, codex: 35 });
   assert.deepEqual(fleetSelfFromSnapshot({ instance: { accounts: { claude: { utilization: 7 } } } }).accounts, { claude: 7, codex: null });
-  const html = renderAgentFleetHtml({ agents: [{ name: 'local', self: true, state: 'IDLE', daily_cost: 1 }] }, { self });
+  const html = renderAgentFleetHtml({ agents: [{ name: 'local', self: true, state: 'IDLE', daily_cost: 1, weekly_cost: 2 }] }, { self });
   const card = html.slice(html.indexOf('wb-f-card self'));
   assert.match(card, /Claude<\/span><span class="wb-qbar-tr"><i style="width:58%">/);
   assert.match(card, /Codex<\/span><span class="wb-qbar-tr"><i style="width:65%">/);
-  const compare = html.slice(html.indexOf('wb-f-compare'), html.indexOf('wb-f-card'));
-  assert.match(compare, /Codex<\/span><span class="wb-qbar-tr"><i style="width:65%">/);
+  assert.match(card, /Today \/ 7 days<b>\$1\.00 \/ \$2\.00<\/b>/);
+  assert.doesNotMatch(html, /wb-f-compare|wb-f-cmp/);
+  assert.match(html, /<\/span>\s*<\/div>\s*<div class="wb-f-grid">/);
 });
 
 test('single and unreadable fleet cards hide capacity and occupancy with or without samples', () => {

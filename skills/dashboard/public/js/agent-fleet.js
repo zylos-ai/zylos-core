@@ -168,7 +168,6 @@ export function defaultAgentFleetLabels() {
     groups: 'Groups',
     host: 'CPU · Memory · Disk',
     rate7d: '7d left',
-    quotaHead: '7-day quota remaining',
     quotaRemaining: '7-day quota remaining {pct}%',
     quotaUnknown: 'No data',
     quotaRecorded: 'Recorded {time}',
@@ -183,11 +182,6 @@ export function defaultAgentFleetLabels() {
     refresh: 'Refresh status',
     readOnly: 'Read-only',
     admin: 'Admin',
-    compareTitle: 'Quota and cost',
-    reachableN: '{count} reachable',
-    unreachableN: '{count} unreachable',
-    instance: 'Machine',
-    todayCost: 'Today',
     groupCount: '{count} groups',
     allIdle: 'all idle',
     pool: 'running {used}',
@@ -411,20 +405,6 @@ function renderTile(tile, labels) {
   </div>`;
 }
 
-// Technical view: every machine on one row — remaining weekly quota and today's cost.
-function renderCompare(view) {
-  const { labels } = view, ok = view.tiles.filter((tile) => !tile.offline), bad = view.tiles.length - ok.length;
-  const maxCost = Math.max(0.0001, ...ok.map((tile) => tile.dailyCost ?? 0));
-  const rows = view.tiles.map((tile) => {
-    const name = `<span class="wb-f-nm"><span class="wb-hdot${tile.offline ? ' err' : ''}"></span><span title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}${tile.isSelf ? ` (${escapeHtml(labels.self)})` : ''}</span></span>`;
-    if (tile.offline) return `<div class="wb-f-row">${name}<span class="wb-f-na">${escapeHtml(tile.stateLabel)}${tile.lastSeenText ? ` · ${escapeHtml(fill(labels.lastSeen, { time: tile.lastSeenText }))}` : ''}</span></div>`;
-    const cost = tile.dailyCost == null ? '' : `<div class="wb-qbar"><span></span><span class="wb-qbar-tr"><i class="wb-qbar-cost" style="width:${(tile.dailyCost / maxCost * 100).toFixed(1)}%"></i></span><b>${escapeHtml(tile.dailyCostLabel)}</b></div>`;
-    return `<div class="wb-f-row">${name}${quotaBars(tile, labels)}<div class="wb-qbars">${cost}</div></div>`;
-  }).join('');
-  return `<section class="wb-set-card wb-tech wb-f-compare"><div class="wb-set-card-h"><h4><i class="wb-ico wb-ico-activity wb-ico-xs" aria-hidden="true"></i><span>${escapeHtml(labels.compareTitle)}</span></h4><span class="wb-set-card-sub">${escapeHtml(fill(labels.reachableN, { count: ok.length }))}${bad ? ` · <span class="wb-txt-err">${escapeHtml(fill(labels.unreachableN, { count: bad }))}</span>` : ''}</span></div>
-    <div class="wb-f-cmp"><span class="wb-f-hd">${escapeHtml(labels.instance)}</span><span class="wb-f-hd">${escapeHtml(labels.quotaHead)}</span><span class="wb-f-hd">${escapeHtml(labels.todayCost)}</span>${rows}</div></section>`;
-}
-
 function renderAgentFleetViewHtml(view) {
   const { labels } = view;
   const working = view.counts.busy + view.counts.thinking;
@@ -447,7 +427,6 @@ function renderAgentFleetViewHtml(view) {
   const empty = view.tiles.length <= 1 ? `<p class="wb-note wb-f-empty">${escapeHtml(labels.empty)}</p>` : '';
   return `<section class="agent-fleet" data-fleet-count="${view.tiles.length}">
     ${summary}
-    ${view.tiles.length ? renderCompare(view) : ''}
     <div class="wb-f-grid">
       ${view.tiles.map((tile) => renderTile(tile, labels)).join('')}
     </div>

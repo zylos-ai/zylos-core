@@ -23,8 +23,8 @@ import { createUsagePage } from './wb/usage.js?v=157';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=158';
-import { createFleetSounds } from './fleet-sounds.js?v=158';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=159';
+import { createFleetSounds } from './fleet-sounds.js?v=159';
 import { refreshDashboardState } from './state-refresh.js?v=99';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
@@ -213,8 +213,8 @@ function agentFleetLabels() {
   const fleet = key => t('wb.fleet.' + key);
   return {
     ...Object.fromEntries(['title', 'subtitle', 'manage', 'shortAuth', 'shortDown', 'shortVersion', 'fixAuth', 'fixDown', 'fixVersion', 'lastSeen',
-      'todayWeek', 'groups', 'host', 'rate7d', 'quotaHead', 'quotaRemaining', 'quotaUnknown', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
-      'compareTitle', 'reachableN', 'unreachableN', 'instance', 'todayCost', 'groupCount', 'allIdle', 'pool', 'poolOf', 'empty'].map(key => [key, fleet(key)])),
+      'todayWeek', 'groups', 'host', 'rate7d', 'quotaRemaining', 'quotaUnknown', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
+      'groupCount', 'allIdle', 'pool', 'poolOf', 'empty'].map(key => [key, fleet(key)])),
     groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'not_running'].map(key => [key, t('wb.state.' + key)])),
     busy: t('agent_fleet.busy'),
     thinking: t('agent_fleet.thinking'),
