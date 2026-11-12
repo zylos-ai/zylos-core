@@ -599,7 +599,8 @@ export async function runConversationVisual(t, sandbox) {
     && document.querySelector('.tab.active')?.dataset.tab === 'overview' && !document.querySelector('#tab-overview').hidden, null, { timeout: 10_000 });
   assert.equal(await page.locator('#wb-chat .chat-message, #wb-chat .chat-composer, #wb-chat [data-conversation-id]').count(), 0);
   assert.equal((await page.locator('#wb-chat').textContent()).includes('Compare cache approaches'), false);
-  // The overview, unlike the conversation page, may scroll; capture it without the page-fit checks.
+  // The overview, unlike the conversation page, may scroll vertically; it still must not scroll sideways.
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   if (output) { const file = path.join(output, 'remote-closed.png'); await page.screenshot({ path: file, fullPage: false }); shots.push(file); }
   expectedDenied = false;
   // Restore the historical-only UTF-8 fixture before exercising ordinary mode conversion.

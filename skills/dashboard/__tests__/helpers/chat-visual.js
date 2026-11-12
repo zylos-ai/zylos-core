@@ -248,7 +248,7 @@ export async function runVisualCase(t, sandbox) {
         && document.querySelector('#wb-chat > .chat-notice'));
       assert.equal(await page.locator('#wb-chat [data-conversation-id], #wb-chat button, #wb-chat .chat-message').count(), 0);
       const notice = await page.locator('#wb-chat').innerText();
-      assert.match(notice, /未开放|未允许|not enabled|not allowed|not available|disabled/i);
+      assert.match(notice, /未允许|not allowed/i);
       await save(`remote-closed-${operation}`);
       expectedChatDenial = false;
     }
