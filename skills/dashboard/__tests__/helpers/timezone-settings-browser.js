@@ -152,7 +152,9 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
       await page.locator('#settings-timezone-pending').waitFor({ state: 'visible' });
       assert.deepEqual(api.writes.at(-1), { path: '/fleet/admin/api/settings/timezone', body: { tz: 'Asia/Singapore' } });
       assert.equal(api.writes.length, before + 1); assert.equal(api.restarts.length, restarts, 'Saving never restarts');
-      assert.equal(await page.locator('#settings-timezone-services li').count(), 4);
+      assert.deepEqual(await page.locator('#settings-timezone-services li').allTextContents(), locale === 'zh'
+        ? ['任务调度', '活动监护', '消息投递']
+        : ['Scheduler', 'Activity monitor', 'Message dispatcher']);
       await shot('saved');
       await page.locator('#settings-timezone-restart').click();
       await dialog(page).waitFor();
@@ -200,7 +202,7 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     await local.page.waitForFunction(() => document.querySelector('#settings-timezone-retry').hidden === false);
     assert.equal(await local.page.locator('#settings-timezone-restart').isDisabled(), true);
     assert.equal(await local.page.locator('#settings-timezone-services li').count(), 1);
-    assert.equal(await local.page.locator('#settings-timezone-services li').innerText(), 'Web console');
+    assert.equal(await local.page.locator('#settings-timezone-services li').innerText(), 'Activity monitor');
     await local.page.locator('#settings-timezone-retry').click();
     assert.equal(await local.page.locator('#settings-timezone-services li').count(), 1);
     await local.page.locator('#settings-timezone-restart').click(); await answer(local.page, true);
