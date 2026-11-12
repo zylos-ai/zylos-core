@@ -72,15 +72,18 @@ describe('Docker wiring for Dashboard', () => {
   test('the image exposes 3470 and ships the listen step next to the entrypoint', () => {
     const dockerfile = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8');
     expect(dockerfile).toMatch(/^EXPOSE 3470$/m);
-    expect(dockerfile).toMatch(/^EXPOSE 3456$/m);
+    expect(dockerfile).not.toMatch(/^EXPOSE 3456$/m);
     expect(dockerfile).toMatch(/^COPY --chown=zylos:zylos docker\/dashboard-host\.mjs \/dashboard-host\.mjs$/m);
   });
 
   test('compose maps the Dashboard port and passes it into the container', () => {
     const compose = yaml.load(fs.readFileSync(path.join(root, 'docker-compose.yml'), 'utf8'));
     const service = compose.services.zylos;
-    expect(service.ports).toEqual(expect.arrayContaining(['${DASHBOARD_PORT:-3470}:3470', '${WEB_CONSOLE_PORT:-3456}:3456']));
+    expect(service.ports).toContain('${DASHBOARD_PORT:-3470}:3470');
+    expect(service.ports.some(port => port.includes('3456'))).toBe(false);
     expect(service.environment.DASHBOARD_PORT).toBe('${DASHBOARD_PORT:-3470}');
+    expect(service.environment).not.toHaveProperty('WEB_CONSOLE_BIND');
+    expect(service.environment).not.toHaveProperty('ZYLOS_WEB_PASSWORD');
   });
 
   test('the entrypoint sets the listen address after init and before services start, then prints the Dashboard lines', () => {
@@ -93,5 +96,6 @@ describe('Docker wiring for Dashboard', () => {
     expect(services).toBeGreaterThan(listen);
     const banner = entrypoint.slice(entrypoint.indexOf('ok "Zylos is ready!"'));
     expect(banner).toContain('info "Dashboard: http://localhost:${DASHBOARD_PORT:-3470}/"\ninfo "Set or reset the password: docker exec -it <container> zylos dashboard reset-password"\n');
+    expect(entrypoint).not.toMatch(/WEB_CONSOLE_BIND|Web console:/);
   });
 });

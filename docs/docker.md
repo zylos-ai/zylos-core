@@ -131,6 +131,7 @@ Set variables in `docker-compose.yml`, a `.env` file alongside `docker-compose.y
 | `CLAUDE_BYPASS_PERMISSIONS` | `true` | Run Claude with `--dangerously-skip-permissions` |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram channel token |
 | `LARK_APP_ID` / `LARK_APP_SECRET` | — | Lark/Feishu app credentials |
+| `DASHBOARD_PORT` | `3470` | Host port mapped to Dashboard's container port 3470 |
 | `HTTP_PORT` | `8080` | Host port for Caddy proxy |
 
 ## Mounting Your Own `.env`
