@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fixture as databaseFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { SupervisorRunEndings } from '../supervisor-run-endings.js';
 import { routerFixture } from '../../../comm-bridge/scripts/__tests__/helpers/router-fixture.js';
+import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
 import { SupervisorLifecycle, evictionDemand } from '../supervisor-lifecycle.js';
 
 // Integration boundary: real Store, reconciliation, lifecycle completion and slot
@@ -280,6 +281,8 @@ test('lower capacity admits a waiting group only after both required idle reclai
       return live ? { ...live, sessionGroup: group, createdAt: live.createdAt * 1000 } : { present: false };
     },
     readSyncMarker: () => ({ held: false, stale: false }),
+    bindTarget: scene => ({ expectedRunId: scene.runId, tmuxTarget: { serverGeneration: 'private-server', sessionId: '$1', paneId: '%1' } }),
+    prompts: { PRE_RECLAIM_CHECK_PROMPT },
     stop: async scene => {
       assert.equal(f.scene.get(scene.sessionGroup)?.runId, scene.runId);
       stops.push(scene.sessionGroup);
@@ -300,7 +303,18 @@ test('lower capacity admits a waiting group only after both required idle reclai
   assert.deepEqual((await lifecycle.evictionCandidates(context.scenes, context)).map(scene => scene.sessionGroup),
     ['test:oldest', 'test:older']);
   assert.deepEqual(await lifecycle.checkEviction(context.scenes, context),
-    { waiting: 1, free: -1, inflight: 0, need: 2, selected: 2 });
+    { waiting: 1, free: -1, inflight: 0, need: 2, selected: 0, preparing: 2 });
+  const checks = () => f.sqlite.prepare('SELECT id, session_group, status FROM control_queue WHERE raw_content=? ORDER BY id').all(PRE_RECLAIM_CHECK_PROMPT);
+  assert.deepEqual(checks().map(row => row.session_group), ['test:oldest', 'test:older']);
+  assert.equal(f.db.listDrainFences().length, 0);
+  // One check is acknowledged; the other is still unanswered when its short deadline passes.
+  f.sqlite.prepare("UPDATE control_queue SET status='done' WHERE id=?").run(checks()[0].id);
+  f.advance(60000);
+  assert.deepEqual(await lifecycle.checkEviction(context.scenes, context),
+    { waiting: 1, free: -1, inflight: 0, need: 2, selected: 2, preparing: 0 });
+  assert.equal(checks().length, 2);
+  // C4 marks the unanswered check timed out at the same deadline.
+  f.sqlite.prepare("UPDATE control_queue SET status='timeout' WHERE id=?").run(checks()[1].id);
   assert.equal(f.db.getDrainFence('test:busy'), null);
   assert.equal(f.db.getDrainFence('test:recent'), null);
 

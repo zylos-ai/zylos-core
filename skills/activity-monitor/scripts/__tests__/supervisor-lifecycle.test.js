@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SupervisorLifecycle, evictionDemand } from '../supervisor-lifecycle.js';
+import { SupervisorLifecycle, evictionDemand, EVICTION_CHECK_ACK_TIMEOUT_MS } from '../supervisor-lifecycle.js';
 import { SessionActivity } from '../session-activity.js';
 import { publishSessionStatus } from '../status-writer.js';
 import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
@@ -619,9 +619,13 @@ test('capacity eviction skips a recent idle session and selects an older one', a
   f.scenes = [scene('recent', { lastActivityAt: f.now - 4000 }),
     scene('older', { lastActivityAt: f.now - 300001 })];
   f.pending = [{ sessionGroup: 'waiting' }];
+  const first = await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(first.selected, 0); assert.equal(first.preparing, 1); assert.equal(f.fences.size, 0);
+  assert.deepEqual(f.controls.map(control => [control.sessionGroup, control.content]), [['older', 'check']]);
+  f.settle();
   const result = await f.lifecycle.checkEviction(f.scenes, f.context);
   assert.equal(result.selected, 1); assert.deepEqual([...f.fences.keys()], ['older']);
-  assert.equal(f.fences.get('older').reason, 'evict'); assert.equal(f.controls.length, 0);
+  assert.equal(f.fences.get('older').reason, 'evict'); assert.equal(f.controls.length, 1);
 });
 test('capacity eviction leaves new groups queued when every idle session is recent', async () => {
   const f = fixture(); f.context.configuration.capacity = 2;
@@ -645,6 +649,9 @@ test('capacity eviction honors the default and configured minimum idle boundary'
       if (seconds !== undefined) f.context.configuration.evictMinIdleSeconds = seconds;
       f.scenes[0].lastActivityAt = f.now - ((seconds ?? 300) * 1000 + offset);
       f.pending = [{ sessionGroup: 'waiting' }];
+      const first = await f.lifecycle.checkEviction(f.scenes, f.context);
+      assert.equal(first.preparing, offset < 0 ? 0 : 1); assert.equal(f.fences.size, 0);
+      f.settle();
       const result = await f.lifecycle.checkEviction(f.scenes, f.context);
       assert.equal(result.selected, offset < 0 ? 0 : 1);
       assert.equal(f.fences.size, offset < 0 ? 0 : 1);
@@ -667,6 +674,8 @@ test('capacity LRU includes session activity among otherwise eligible sessions',
   const f = fixture(); f.context.configuration.capacity = 2;
   f.scenes = [scene('a', { lastActivityAt: f.now - 400000 }), scene('b', { lastActivityAt: f.now - 500000 })];
   f.pending = [{ sessionGroup: 'waiting' }];
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.deepEqual(f.controls.map(control => control.sessionGroup), ['b']); f.settle();
   const result = await f.lifecycle.checkEviction(f.scenes, f.context);
   assert.equal(result.selected, 1); assert.deepEqual([...f.fences.keys()], ['b']);
 });
@@ -676,6 +685,8 @@ test('LRU uses occupied slots and discounts only quota-releasing fences', async 
   assert.deepEqual(evictionDemand(scenes.filter(s => s.sessionGroup !== 'origin').map(s => ({ sessionGroup: s.sessionGroup })), pending, [{ sessionGroup: 'a', reason: 'model_config' }], 2), { waiting: 1, free: 0, inflight: 0, need: 1 });
   const f = fixture(); f.scenes = scenes; f.context.configuration.capacity = 2; f.pending = pending;
   f.requests = [{ reason: 'manual_restart' }]; // Origin-only manual work cannot suspend ordinary pool eviction.
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.deepEqual(f.controls.map(control => control.sessionGroup), ['a']); f.settle();
   await f.lifecycle.checkEviction(f.scenes, f.context); assert.equal(f.fences.get('a')?.reason, 'evict');
   f.scenes = [scene('a', { state: 'busy' })]; f.fences.clear();
   await f.lifecycle.checkEviction(f.scenes, f.context); assert.equal(f.fences.size, 0);
@@ -1171,6 +1182,8 @@ test('LRU selects the oldest activity among multiple eligible idle groups regard
     f.scenes = order.map(group => scene(group)); f.pending = [{ sessionGroup: 'waiting' }];
     const activity = { oldest: 100, middle: 200, newer: 300 };
     f.db.getLastActivity = group => ({ ts: activity[group] });
+    await f.lifecycle.checkEviction(f.scenes, f.context);
+    assert.deepEqual(f.controls.map(control => control.sessionGroup), ['oldest']); f.settle();
     const result = await f.lifecycle.checkEviction(f.scenes, f.context);
     assert.equal(result.need, 1); assert.equal(result.selected, 1);
     assert.deepEqual([...f.fences.keys()], ['oldest']);
@@ -1378,8 +1391,11 @@ test('negative free occupancy evicts the required idle runs without changing hel
   f.scenes=[scene('a'),scene('b')]; f.pending=[{sessionGroup:'new'}];
   f.slots=[{sessionGroup:'a',state:'running'},{sessionGroup:'b',state:'running'},
     {sessionGroup:'held',state:'held'},{sessionGroup:'starting',state:'running'}];
+  const first=await f.lifecycle.checkEviction(f.scenes,f.context);
+  assert.deepEqual(first,{waiting:1,free:-1,inflight:0,need:2,selected:0,preparing:2});
+  assert.deepEqual(f.controls.map(control=>control.sessionGroup),['a','b']); f.settle();
   const result=await f.lifecycle.checkEviction(f.scenes,f.context);
-  assert.deepEqual(result,{waiting:1,free:-1,inflight:0,need:2,selected:2});
+  assert.deepEqual(result,{waiting:1,free:-1,inflight:0,need:2,selected:2,preparing:0});
   assert.deepEqual([...f.fences.keys()],['a','b']);
   assert.equal(f.slots.find(row=>row.sessionGroup==='held').state,'held');
 });
@@ -1465,6 +1481,9 @@ test('reclaim start diagnostics distinguish demand from memory pressure without 
         start = event;
       }
     };
+    if (pressure) assert.equal(await f.lifecycle.checkCapacityPressure(f.context), null);
+    else assert.equal((await f.lifecycle.checkEviction(f.scenes, f.context)).preparing, 1);
+    assert.equal(start, undefined, 'no reclaim starts before the check terminates'); f.settle();
     if (pressure) assert.equal((await f.lifecycle.checkCapacityPressure(f.context)).sessionGroup, 'a');
     else assert.equal((await f.lifecycle.checkEviction(f.scenes, f.context)).selected, 1);
     assert.equal(start.session_group, 'a');
@@ -1480,6 +1499,136 @@ test('eviction diagnostics do not report a reclaim start before a fence is saved
   const f = fixture();
   f.pending = [{ sessionGroup: 'waiting' }];
   f.db.setDrainFence = () => {};
+  await f.lifecycle.checkEviction(f.scenes, f.context); f.settle();
   assert.equal((await f.lifecycle.checkEviction(f.scenes, f.context)).selected, 0);
   assert.equal(f.events.some(event => event.event === 'reclaim_started'), false);
+});
+
+// Both eviction paths ask the selected group to check waiting work first and wait only briefly.
+// Run for eviction, memory-pressure, or check-control changes; unrelated Sync changes may skip.
+const EVICTION_PATHS = ['capacity_demand', 'memory_pressure'];
+function evictionFixture(groups = ['a']) {
+  const f = fixture();
+  f.scenes = groups.map((group, index) => scene(group, { lastActivityAt: 1000 + index }));
+  f.context.configuration.capacity = groups.length; f.pending = [{ sessionGroup: 'waiting' }];
+  return f;
+}
+const evictionRound = (f, path) => path === 'memory_pressure'
+  ? f.lifecycle.checkCapacityPressure(f.context) : f.lifecycle.checkEviction(f.scenes, f.context);
+
+test('eviction sends a bound check first and fences only after the check is answered', async () => {
+  for (const path of EVICTION_PATHS) {
+    const f = evictionFixture(), asked = f.now;
+    await evictionRound(f, path);
+    assert.equal(f.fences.size, 0, path);
+    assert.equal(f.controls.length, 1, path);
+    const [control] = f.controls;
+    assert.equal(control.content, 'check'); assert.equal(control.sessionGroup, 'a');
+    assert.deepEqual(control.targetBinding, { expectedRunId: 'run-a' });
+    assert.equal(control.requireIdle, true); assert.equal(control.appendAckSuffix, true);
+    assert.equal(control.ackDeadlineAt, Math.floor((asked + 60000) / 1000));
+    f.now += 30000; control.status = 'running';
+    await evictionRound(f, path);
+    assert.equal(f.fences.size, 0, `${path}: no fence while the check is unanswered`);
+    control.status = 'done';
+    await evictionRound(f, path);
+    assert.equal(f.fences.get('a')?.reason, 'evict', path);
+    assert.equal(f.events.find(event => event.event === 'reclaim_started').subreason, path);
+    assert.equal(f.controls.length, 1, path);
+  }
+});
+
+test('an unanswered eviction check stops waiting at its 60 second deadline', async () => {
+  assert.equal(EVICTION_CHECK_ACK_TIMEOUT_MS, 60000);
+  for (const path of EVICTION_PATHS) {
+    const f = evictionFixture(), asked = f.now;
+    await evictionRound(f, path); f.controls[0].status = 'running';
+    f.now = asked + 59999;
+    await evictionRound(f, path);
+    assert.equal(f.fences.size, 0, `${path}: still waiting one millisecond before the deadline`);
+    f.now = asked + 60000;
+    await evictionRound(f, path);
+    assert.equal(f.fences.get('a')?.reason, 'evict', path);
+    assert.equal(f.controls.length, 1, path);
+  }
+});
+
+test('an answered eviction check waits for its turn to finish, bounded by the deadline', async () => {
+  for (const path of EVICTION_PATHS) {
+    const f = evictionFixture(), asked = f.now;
+    await evictionRound(f, path);
+    f.now = asked + 10000; f.settle(); f.scenes[0].state = 'busy'; f.scenes[0].lastActivityAt = f.now;
+    await evictionRound(f, path);
+    assert.equal(f.fences.size, 0, path);
+    f.now = asked + 20000; f.scenes[0].state = 'idle'; f.scenes[0].idleSince = asked + 12000;
+    await evictionRound(f, path);
+    assert.equal(f.fences.get('a')?.reason, 'evict', `${path}: the check's own activity is not new activity`);
+  }
+});
+
+test('new activity during an eviction check abandons that group and another candidate is asked', async () => {
+  for (const path of EVICTION_PATHS) {
+    const f = evictionFixture(['a', 'b']), asked = f.now;
+    const messages = { a: 0, b: 0 };
+    f.db.getLastActivity = group => ({ ts: messages[group] });
+    await evictionRound(f, path);
+    assert.deepEqual(f.controls.map(control => control.sessionGroup), ['a'], path);
+    f.now = asked + 5000; messages.a = f.now; f.settle();
+    await evictionRound(f, path);
+    assert.equal(f.fences.size, 0, `${path}: a C4 message cancels the eviction of that group`);
+    assert.deepEqual(f.controls.map(control => control.sessionGroup), ['a', 'b'], path);
+    f.settle();
+    await evictionRound(f, path);
+    assert.deepEqual([...f.fences.keys()], ['b'], path);
+  }
+});
+
+test('session activity after the eviction check deadline counts as new activity', async () => {
+  for (const path of EVICTION_PATHS) {
+    const f = evictionFixture(), asked = f.now;
+    await evictionRound(f, path);
+    f.now = asked + 61000; f.scenes[0].lastActivityAt = asked + 60500;
+    await evictionRound(f, path);
+    assert.equal(f.fences.size, 0, path);
+    assert.equal(f.lifecycle.evictionPreparation.size, 0, path);
+  }
+});
+
+test('a pending eviction check is sent once and holds the demand while it waits', async () => {
+  for (const path of EVICTION_PATHS) {
+    const f = evictionFixture(['a', 'b']), asked = f.now;
+    for (const elapsed of [0, 1, 20000, 40000, 59999]) {
+      f.now = asked + elapsed;
+      const result = await evictionRound(f, path);
+      if (path === 'capacity_demand') { assert.equal(result.selected, 0); assert.equal(result.preparing, 1); }
+      else assert.equal(result, null);
+      if (elapsed) f.controls[0].status = 'running';
+    }
+    assert.deepEqual(f.controls.map(control => control.sessionGroup), ['a'], `${path}: one check, no second group asked`);
+    assert.equal(f.fences.size, 0, path);
+  }
+});
+
+test('an eviction check for a replaced run is dropped and the new run is asked again', async () => {
+  for (const path of EVICTION_PATHS) {
+    const f = evictionFixture();
+    await evictionRound(f, path); f.settle();
+    f.scenes[0].runId = 'run-a2';
+    await evictionRound(f, path);
+    assert.equal(f.fences.size, 0, path);
+    assert.deepEqual(f.controls.map(control => control.targetBinding.expectedRunId), ['run-a', 'run-a2'], path);
+  }
+});
+
+test('the eviction check deadline is injectable and validated separately from the TTL timeout', async () => {
+  const f = evictionFixture();
+  f.lifecycle = new SupervisorLifecycle(f.deps, { now: () => f.now, evictionAckTimeoutMs: 5000 });
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(f.controls[0].ackDeadlineAt, Math.floor((f.now + 5000) / 1000));
+  f.now += 5000; f.controls[0].status = 'running';
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(f.fences.get('a')?.reason, 'evict');
+  for (const evictionAckTimeoutMs of [0, -1, Infinity, NaN]) {
+    assert.throws(() => new SupervisorLifecycle(f.deps, { evictionAckTimeoutMs }), TypeError);
+  }
 });

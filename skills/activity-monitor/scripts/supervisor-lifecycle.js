@@ -13,6 +13,8 @@ const targetOf = group => group === null ? { machine: true } : { sessionGroup: g
 const finite = value => Number.isFinite(value);
 const manualGroup = request => request.mode === 'single' ? '*' : request.sessionGroup ?? 'origin';
 const manualTarget = request => request.mode === 'single' ? null : request.sessionGroup ?? 'origin';
+// Capacity eviction waits only briefly for its pre-reclaim check; TTL keeps the longer acknowledgment timeout.
+export const EVICTION_CHECK_ACK_TIMEOUT_MS = 60000;
 
 export function sceneRotationThreshold(scene, configuration) {
   if (!['claude', 'codex'].includes(scene.runtime)) return null;
@@ -50,7 +52,7 @@ export function evictionDemand(slots, pending, fences, capacity) {
  */
 export class SupervisorLifecycle {
   constructor(deps, { now = Date.now, idleConfirmMs = 3000, rotationCooldownMs = 300000,
-    syncCheckMs = 60000, ackTimeoutMs = 300000 } = {}) {
+    syncCheckMs = 60000, ackTimeoutMs = 300000, evictionAckTimeoutMs = EVICTION_CHECK_ACK_TIMEOUT_MS } = {}) {
     this.d = deps;
     this.now = now;
     this.idleConfirmMs = idleConfirmMs;
@@ -58,7 +60,10 @@ export class SupervisorLifecycle {
     this.syncCheckMs = Math.min(syncCheckMs, 60000);
     this.ackTimeoutMs = ackTimeoutMs;
     if (!(ackTimeoutMs > 0) || !finite(ackTimeoutMs)) throw new TypeError('A finite acknowledgment timeout is required');
+    this.evictionAckTimeoutMs = evictionAckTimeoutMs;
+    if (!(evictionAckTimeoutMs > 0) || !finite(evictionAckTimeoutMs)) throw new TypeError('A finite eviction acknowledgment timeout is required');
     this.ttlPreparation = new Map();
+    this.evictionPreparation = new Map();
     this.ttlReset = new Map();
     this.rotationSent = new Map();
     this.configurationSent = new Map();
@@ -352,6 +357,7 @@ export class SupervisorLifecycle {
       else await this.completeRun(fence, context);
     }
     this.ttlPreparation.delete(group);
+    this.evictionPreparation.delete(group);
     for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
       this.warnings.delete(JSON.stringify(['reclaim', fence.sessionGroup, fence.runId, fence.reason, name]));
     }
@@ -359,13 +365,14 @@ export class SupervisorLifecycle {
     return 'done';
   }
 
-  async lastActivity(scene, sessionActivityBefore = Infinity) {
+  // Session and child activity from sessionActivityBefore through sessionActivityAfter is the
+  // preparing session's own work and is ignored; C4 messages always count.
+  async lastActivity(scene, sessionActivityBefore = Infinity, sessionActivityAfter = Infinity) {
     if (!finite(scene.createdAt)) throw error('INVALID_OBSERVATION', 'Runtime creation time is unknown');
     const reset = this.ttlReset.get(scene.sessionGroup);
-    const sessionActivity = finite(scene.lastActivityAt) && scene.lastActivityAt < sessionActivityBefore
-      ? scene.lastActivityAt : 0;
-    const subagentActivity = finite(scene.lastSubagentActivityAt) && scene.lastSubagentActivityAt < sessionActivityBefore
-      ? scene.lastSubagentActivityAt : 0;
+    const counted = value => finite(value) && (value < sessionActivityBefore || value > sessionActivityAfter);
+    const sessionActivity = counted(scene.lastActivityAt) ? scene.lastActivityAt : 0;
+    const subagentActivity = counted(scene.lastSubagentActivityAt) ? scene.lastSubagentActivityAt : 0;
     return Math.max(activityTime(await this.d.db.getLastActivity(scene.sessionGroup)), scene.createdAt,
       reset?.runId === scene.runId ? reset.at : 0, sessionActivity, subagentActivity);
   }
@@ -383,8 +390,16 @@ export class SupervisorLifecycle {
     if (!finite(last)) return false;
     const preparation = reason === 'ttl' ? this.ttlPreparation.get(scene.sessionGroup) : null;
     if (preparation?.runId === scene.runId && last >= preparation.at) return false;
+    const [from, until] = reason === 'evict' ? this.evictionCheckWindow(scene) : [Infinity, Infinity];
+    if (last >= from && last <= until) return false;
     const seconds = reason === 'ttl' ? context.configuration.hotTtlSeconds ?? 1800 : context.configuration.evictMinIdleSeconds ?? 300;
     return this.now() - last < seconds * 1000;
+  }
+
+  // The pending eviction check's own run activity, bounded by its acknowledgment deadline.
+  evictionCheckWindow(scene) {
+    const preparation = this.evictionPreparation.get(scene.sessionGroup);
+    return preparation?.runId === scene.runId ? [preparation.at, preparation.deadline] : [Infinity, Infinity];
   }
 
   prompt(name, ...args) {
@@ -475,12 +490,61 @@ export class SupervisorLifecycle {
         occupied_slots: slots.length, pool_limit: context.configuration.capacity,
         candidate_count: candidates.length, no_evictable_candidate: candidates.length === 0 });
     }
-    let selected = 0;
-    for (const scene of candidates) {
-      if (selected >= demand.need) break;
-      if (await this.beginReclaim(scene, 'evict', context, { subreason: 'capacity_demand' })) selected++;
+    let selected = 0, preparing = 0;
+    const count = outcome => { if (outcome === 'started') selected++; else if (outcome === 'waiting') preparing++; };
+    // A group already asked to check counts toward demand while it answers, so no other group is asked meanwhile.
+    for (const [group, preparation] of [...this.evictionPreparation]) {
+      if (selected + preparing >= demand.need) break;
+      const scene = scenes.find(item => item.sessionGroup === group);
+      if (!scene || scene.runId !== preparation.runId) { this.evictionPreparation.delete(group); continue; }
+      count(await this.prepareEviction(scene, context, preparation.subreason));
     }
-    return { ...demand, selected };
+    for (const scene of candidates) {
+      if (selected + preparing >= demand.need) break;
+      if (this.evictionPreparation.has(scene.sessionGroup)) continue;
+      count(await this.prepareEviction(scene, context, 'capacity_demand'));
+    }
+    return { ...demand, selected, preparing };
+  }
+
+  // Before an eviction the selected group gets one bound check control and a short wait. A terminal
+  // check, or its deadline passing, lets the eviction proceed; new activity in the group abandons it.
+  async prepareEviction(scene, context, subreason) {
+    const group = scene.sessionGroup;
+    // A started reclaim keeps its preparation until it completes; it is not prepared or begun again.
+    if (context.fences.some(fence => fence.sessionGroup === group)) return null;
+    const preparation = this.evictionPreparation.get(group);
+    if (preparation && preparation.runId !== scene.runId) this.evictionPreparation.delete(group);
+    else if (preparation) {
+      if (await this.lastActivity(scene, preparation.at, preparation.deadline) > preparation.at) {
+        this.evictionPreparation.delete(group);
+        return null;
+      }
+      const control = await this.d.db.getControlById(preparation.controlId);
+      const expired = this.now() >= preparation.deadline;
+      if (!TERMINAL_CONTROLS.has(control?.status) && !expired) return 'waiting';
+      // An answered check may still be finishing its turn; that wait also ends at the deadline.
+      if (!expired && (this.activeSubagents(scene, context) || !await this.idle(scene, context))) return 'waiting';
+      const started = await this.beginReclaim(scene, 'evict', context, { subreason: preparation.subreason });
+      if (!started) this.evictionPreparation.delete(group);
+      return started ? 'started' : null;
+    }
+    if (group === 'origin' || group === null || !scene.present || !scene.ready || !scene.runId) return null;
+    if (!await this.allowed(group, context)) return null;
+    const fresh = await this.observe(group, context);
+    if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return null;
+    if (this.subagentReclaimBlocked(fresh, 'evict', context)) return null;
+    if (!(await this.evictionCandidates([fresh], context)).length) return null;
+    if (!await this.beforeWrite(group, context, scene)) return null;
+    const targetBinding = await this.bindCurrentRun(scene);
+    if (!targetBinding) return null;
+    const now = this.now();
+    const control = await this.d.db.insertControl(this.prompt('PRE_RECLAIM_CHECK_PROMPT'), {
+      sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
+      ackDeadlineAt: Math.floor((now + this.evictionAckTimeoutMs) / 1000),
+    });
+    this.evictionPreparation.set(group, { controlId: control.id, runId: scene.runId, at: now, deadline: now + this.evictionAckTimeoutMs, subreason });
+    return 'waiting';
   }
 
   async evictionCandidates(scenes, context) {
@@ -489,7 +553,7 @@ export class SupervisorLifecycle {
       if (scene.observationError) throw scene.observationError;
       if (!scene.present || !scene.ready || !scene.sessionGroup || scene.sessionGroup === 'origin' || scene.state !== 'idle' || context.fences.some(f => f.sessionGroup === scene.sessionGroup)) continue;
       if (this.activeSubagents(scene, context)) continue;
-      const last = await this.lastActivity(scene);
+      const last = await this.lastActivity(scene, ...this.evictionCheckWindow(scene));
       if (now - last < minIdle) continue;
       candidates.push({ ...scene, last });
     }
@@ -498,9 +562,15 @@ export class SupervisorLifecycle {
 
   async checkCapacityPressure(context) {
     if (context.fences.some(fence => fence.sessionGroup !== 'origin' && CAPACITY_REASONS.has(fence.reason))) return null;
+    for (const [group, preparation] of [...this.evictionPreparation]) {
+      const scene = context.scenes.find(item => item.sessionGroup === group);
+      if (!scene || scene.runId !== preparation.runId) { this.evictionPreparation.delete(group); continue; }
+      const outcome = await this.prepareEviction(scene, context, preparation.subreason);
+      if (outcome) return outcome === 'started' ? scene : null;
+    }
     const [candidate] = await this.evictionCandidates(context.scenes, context);
     if (!candidate) return null;
-    return await this.beginReclaim(candidate, 'evict', context, { subreason: 'memory_pressure' }) ? candidate : null;
+    return await this.prepareEviction(candidate, context, 'memory_pressure') === 'started' ? candidate : null;
   }
 
   async checkRotation(scene, context) {
