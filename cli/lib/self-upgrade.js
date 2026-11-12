@@ -812,6 +812,67 @@ export function step12_verifyServices(ctx, deps = {}) {
   return { step: 12, name: 'verify_services', status: 'failed', error: `Timed out after ${TIMEOUT_MS / 1000}s`, duration: Date.now() - startTime };
 }
 
+/**
+ * Restart Core services that had exited on an older database before a
+ * migrating upgrade. They were not running, so they are not part of the
+ * original service set: a service that still does not come online only adds a
+ * warning and never fails the completed upgrade. Dashboard is restored by its
+ * owner; Web Console is being removed.
+ */
+export function restartErroredServices(ctx, deps = {}) {
+  const startTime = Date.now();
+  const result = (status, message) => ({step:7, name:'restart_errored_services', status, ...(message ? {message} : {}), duration:Date.now()-startTime});
+  const running = new Set(ctx.servicesWereRunning || []);
+  const pending = (ctx.journal?.databaseMode === 'migrate' && Array.isArray(ctx.journal.erroredServices) ? ctx.journal.erroredServices : [])
+    .filter(name => typeof name === 'string' && !running.has(name) && !['zylos-dashboard', 'web-console'].includes(name));
+  if (!pending.length) return result('skipped', 'no errored services');
+  const maintenance = maintenanceFor(ctx);
+  const execute = deps.execSync ?? execSync;
+  const restartFn = deps.restartManagedProcess ?? createPm2Helpers({exec:(command, options = {}) => execute(command, {...options, timeout:30000})}).restartManagedProcess;
+  const zylosDir = deps.zylosDir ?? ctx.zylosDir ?? ZYLOS_DIR;
+  const ecosystemPath = ctx.serviceEcosystemPath || path.join(zylosDir, 'pm2', 'ecosystem.config.cjs');
+  const warning = name => `Service ${name} is not online; restart it manually.`;
+  const warnings = [], started = [];
+  // Only Core ecosystem members are restarted; other errored services belong
+  // to components and keep their state. Without a readable ecosystem the
+  // Core members are unknown, so every candidate is reported instead.
+  let core;
+  try { core = new Set(fs.existsSync(ecosystemPath) ? maintenance.ecosystemServiceNames(ecosystemPath) : []); }
+  catch { return finish(pending.map(warning), []); }
+  for (const name of pending) {
+    if (!core.has(name)) continue;
+    try {
+      restartFn(name, {ecosystemPath, stdio:'pipe', fallbackToPlainRestartOnError:false});
+      started.push(name);
+    } catch { warnings.push(warning(name)); }
+  }
+  const online = new Set();
+  const timeoutMs = deps.timeoutMs ?? 30000;
+  while (started.length) {
+    try {
+      for (const service of maintenance.services(ctx.journal)) if (service.status === 'online' && service.pid > 0) online.add(service.name);
+    } catch {}
+    if (started.every(name => online.has(name)) || Date.now() - startTime >= timeoutMs) break;
+    try { execute('sleep 1', {stdio:'pipe', timeout:5000}); } catch { break; }
+  }
+  for (const name of started) if (!online.has(name)) warnings.push(warning(name));
+  const restored = started.filter(name => online.has(name));
+  if (restored.length) {
+    try { execute('pm2 save 2>/dev/null', {stdio:'pipe', timeout:30000}); } catch {}
+  }
+  return finish(warnings, restored);
+  function finish(added, restoredNames) {
+    if (added.length) {
+      ctx.serviceWarnings = [...new Set([...(ctx.serviceWarnings || []), ...added])];
+      if (ctx.journal) {
+        ctx.journal.serviceWarnings = ctx.serviceWarnings;
+        if (ctx.transactionDir) maintenance.update(ctx.transactionDir, ctx.journal, {serviceWarnings:ctx.serviceWarnings});
+      }
+    }
+    return result('done', restoredNames.length ? restoredNames.join(', ') : 'none restarted');
+  }
+}
+
 function commitSkillBaselines(ctx) {
   for (const baseline of ctx.pendingBaselines || []) {
     if (JSON.stringify(generateManifest(baseline.srcDir).files) !== JSON.stringify(baseline.manifest.files)) {
@@ -966,6 +1027,7 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
     try {
       await run(7,'start_core_services',()=> (deps.startServices || (c=>step11_startCoreServices(c,{zylosDir:root})))(coreCtx));
       await run(7,'verify_core_services',()=> (deps.verifyServices || step12_verifyServices)(coreCtx));
+      await run(7,'restart_errored_services',()=> (deps.restartErroredServices || (c=>restartErroredServices(c,{zylosDir:root})))(coreCtx));
     } finally {
       ctx.journal=coreCtx.journal;
       ctx.serviceWarnings=coreCtx.serviceWarnings || [];
@@ -1028,7 +1090,9 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
       }
     }
     let restoreFailed=false;
-    if(!ctx.firstDashboardTakeover && (ctx.servicesWereRunning || []).includes('zylos-dashboard')) {
+    // A Dashboard that exited on its older database is restored like a running one.
+    const dashboardErrored=ctx.journal?.databaseMode==='migrate' && (ctx.journal.erroredServices || []).includes('zylos-dashboard');
+    if(!ctx.firstDashboardTakeover && ((ctx.servicesWereRunning || []).includes('zylos-dashboard') || dashboardErrored)) {
       try {
         const restored=await owner.restoreDashboardService({zylosDir:root});
         if(restored?.state!=='done') throw Object.assign(Error(restored?.error?.message || 'Dashboard restore failed'),{code:'registration_failed'});

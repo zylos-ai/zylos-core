@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
-import { runSelfUpgradeFinalize, resumeUpgradeFinalization, step5_syncCoreSkills } from '../self-upgrade.js';
+import { runSelfUpgradeFinalize, resumeUpgradeFinalization, restartErroredServices, step5_syncCoreSkills } from '../self-upgrade.js';
 import { LEGACY_CORE_DATABASES, createCoreDbSnapshot, prepareRecoveryDependencies, runCoreDbWorker } from '../core-db-backup.js';
 import { prepareUpgradeRuntime, prepareUpgradeRuntimeClis } from '../upgrade-runtime-preparation.js';
 import { preparePostCutoff } from '../upgrade-post-cutoff.js';
@@ -234,6 +234,76 @@ test('same-version protected finalizer migrates older C4 and scheduler databases
   assert.equal(userVersion(path.join(f.root, 'scheduler/scheduler.db')), schedulerSchema.SUPPORTED_SCHEMA_VERSION);
   assertDataPreserved(f);
   assert.ok(f.calls.includes('start'));
+});
+
+// PM2 stand-in for one fixture: keeps process state in a private file and
+// answers only the commands the finalizer issues. It never starts a daemon.
+function statefulPm2(f, processes, { comesOnline = true } = {}) {
+  const stateFile = path.join(f.home, 'pm2-state.json');
+  fs.writeFileSync(stateFile, JSON.stringify(processes));
+  fs.writeFileSync(path.join(f.home, 'bin/pm2'), `#!${process.execPath}
+const fs=require('node:fs');const args=process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(f.pm2Calls)},JSON.stringify(args)+'\\n');
+const state=JSON.parse(fs.readFileSync(${JSON.stringify(stateFile)},'utf8'));
+if(args[0]==='jlist'){process.stdout.write(JSON.stringify(state.map(p=>({name:p.name,pid:p.pid,pm2_env:{status:p.status,pm_exec_path:p.script}}))));process.exit(0);}
+if(args[0]==='save')process.exit(0);
+if(args[0]==='start'&&args[2]==='--only'){const p=state.find(item=>item.name===args[3]);if(!p)process.exit(1);
+ Object.assign(p,${comesOnline}?{status:'online',pid:4242}:{status:'errored',pid:0});fs.writeFileSync(${JSON.stringify(stateFile)},JSON.stringify(state));process.exit(0);}
+process.exit(91);
+`, { mode: 0o700 });
+  f.write('pm2/ecosystem.config.cjs', `module.exports={apps:[{name:'c4-dispatcher'},{name:'scheduler'},{name:'zylos-dashboard'}]};\n`);
+  return () => JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+}
+
+// A service that refused the older database exits and PM2 marks it errored.
+// It was not running, so only the recorded set is restarted after migration;
+// Dashboard goes through its owner's restore, and component services are left alone.
+test('same-version finalizer restarts Core services that exited on the older databases', async t => {
+  const f = fixture(t, { from: '1.0.0', to: '1.0.0', olderDatabases: true, firstTakeover: false });
+  const skill = name => path.join(f.root, '.claude/skills', name, 'index.js');
+  const state = statefulPm2(f, [
+    { name: 'c4-dispatcher', status: 'errored', pid: 0, script: skill('comm-bridge') },
+    { name: 'zylos-dashboard', status: 'errored', pid: 0, script: skill('dashboard') },
+    { name: 'zylos-lark', status: 'errored', pid: 0, script: skill('lark') },
+  ]);
+  f.m.update(f.dir, f.load(), { erroredServices: ['c4-dispatcher', 'zylos-dashboard', 'zylos-lark'] });
+  const restores = [];
+  const dashboardOwner = { ...f.deps.dashboardOwner, restoreDashboardService: () => { restores.push('dashboard'); return { state: 'done' }; } };
+  const result = await f.run({ dashboardOwner });
+  assert.equal(result.success, true, JSON.stringify(result));
+  const after = Object.fromEntries(state().map(p => [p.name, p.status]));
+  assert.equal(after['c4-dispatcher'], 'online');
+  assert.equal(after['zylos-lark'], 'errored');
+  assert.deepEqual(restores, ['dashboard']);
+  assert.equal(result.dashboard.state, 'ready');
+  assert.equal(Object.hasOwn(result, 'serviceWarnings'), false);
+  const step = result.steps.find(item => item.name === 'restart_errored_services');
+  assert.equal(step.message, 'c4-dispatcher');
+  const calls = fs.readFileSync(f.pm2Calls, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(calls.filter(args => args[0] === 'start').map(args => args[3]), ['c4-dispatcher']);
+});
+
+test('a Core service that stays errored after migration is reported without failing the upgrade', async t => {
+  const f = fixture(t, { from: '1.0.0', to: '1.0.0', olderDatabases: true, firstTakeover: false });
+  const state = statefulPm2(f, [{ name: 'c4-dispatcher', status: 'errored', pid: 0,
+    script: path.join(f.root, '.claude/skills/comm-bridge/index.js') }], { comesOnline: false });
+  const journal = f.load();
+  f.m.update(f.dir, journal, { erroredServices: ['c4-dispatcher'] });
+  const ctx = { zylosDir: f.root, transactionDir: f.dir, journal, maintenance: f.m, servicesWereRunning: [] };
+  const step = restartErroredServices(ctx, { timeoutMs: 1500 });
+  assert.equal(step.status, 'done');
+  assert.equal(state()[0].status, 'errored');
+  assert.deepEqual(ctx.serviceWarnings, ['Service c4-dispatcher is not online; restart it manually.']);
+  assert.deepEqual(f.load().serviceWarnings, ctx.serviceWarnings);
+});
+
+test('recorded services are not restarted when the upgrade does not migrate databases', async t => {
+  const f = fixture(t, { databaseMode: 'unchanged' });
+  const journal = f.load();
+  journal.erroredServices = ['c4-dispatcher'];
+  const step = restartErroredServices({ zylosDir: f.root, journal, maintenance: f.m, servicesWereRunning: [] });
+  assert.equal(step.status, 'skipped');
+  assert.equal(fs.existsSync(f.pm2Calls), false);
 });
 
 test('protected finalizer reports persisted unchanged database mode and verified snapshot',async t=>{

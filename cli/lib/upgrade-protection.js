@@ -97,6 +97,10 @@ export function beginUpgrade(ctx, {
   });
   const packageJson = path.join(ctx.coreDir, 'package.json'),
     ecosystem = path.join(zylosDir, 'pm2', 'ecosystem.config.cjs');
+  const databaseMode = ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate';
+  const managedServices = maintenance.services({
+    skillsDir
+  });
   const j = {
     formatVersion: 1,
     transactionId: id,
@@ -108,13 +112,16 @@ export function beginUpgrade(ctx, {
     firstTakeover: ctx.firstTakeover,
     dashboardOwnerManaged: ctx.dashboardOwnerManaged,
     phase: 'preparing',
-    databaseMode: ctx.databaseMode === 'unchanged' ? 'unchanged' : 'migrate',
+    databaseMode,
     installationIntent: false,
     automaticResume: maintenance.canRecognizeProcesses(),
     coreManifest: manifest,
-    originalServices: maintenance.services({
-      skillsDir
-    }).filter(s => s.status === 'online'),
+    originalServices: managedServices.filter(s => s.status === 'online'),
+    // Services refuse to start on a database older than their code, so PM2
+    // leaves them errored (or still cycling) until the migration has run.
+    // Forward completion restarts them; recovery never does.
+    erroredServices: databaseMode === 'migrate' ?
+      [...new Set(managedServices.filter(s => ['errored', 'waiting restart', 'launching'].includes(s.status)).map(s => s.name))] : [],
     knownProcesses: [],
     initialIdentity: {
       cliRoot: path.join(ctx.coreDir, 'cli'),

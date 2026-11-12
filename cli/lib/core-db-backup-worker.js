@@ -371,7 +371,10 @@ export async function execute(input) {
     const absent=missing(source);
     if(absent) {
       if(expected&&expected.status!=='missing') throw new Error(`Expected database absent: ${source}`);
-      if(input.action==='offline-preflight') {
+      // Only current owners create a missing database. A retired owner (Web
+      // Console) is listed for original-deployment evidence alone; 1.0
+      // deployments no longer ship its code, so it is not loaded.
+      if(input.action==='offline-preflight' && CORE_DATABASES.includes(item)) {
         const mod=await ownerSchema(input,item);
         if(!mod.supportsNewDatabase) throw new Error(`Owner cannot initialize missing database: ${item.owner}`);
         // Loading a pure module alone does not prove the actual Node/native

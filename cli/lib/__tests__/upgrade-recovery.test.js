@@ -44,7 +44,9 @@ function interceptSync(check) {
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
 // rescue, rename intents, isolation discovery, and terminal marker removal are real.
-async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=false,dashboardVersion=12,olderDatabases=false,sourceVersion=dashboard?'0.9.4':'0.9.3'}={}) {
+async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=false,dashboardVersion=12,olderDatabases=false,sourceVersion=dashboard?'0.9.4':'0.9.3',webConsole=true}={}) {
+ // webConsole=false is the 1.0 layout: neither the Web Console skill nor its database.
+ const owners=CORE_DATABASES.filter(item=>webConsole||item.owner!=='web-console');
  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_RECOVERY_TEST_TMPDIR || os.tmpdir(),'upgrade-recovery-')));
  const previousHome=process.env.HOME,previousPm2Home=process.env.PM2_HOME;
  process.env.HOME=root;process.env.PM2_HOME=path.join(root,'.pm2');
@@ -57,7 +59,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
  for(const [src,dst] of [['../../skills/comm-bridge/scripts/remove-owned-tree.js','remove-owned-tree.mjs'],['upgrade-maintenance.cjs','maintenance.cjs'],['upgrade-recovery.cjs','recovery.cjs']])fs.copyFileSync(path.resolve('cli/lib',src),path.join(stable,dst));
  let m=require(path.join(stable,'maintenance.cjs')),r=require(path.join(stable,'recovery.cjs'));
  const skillsDir=path.join(root,'.claude/skills');
- for(const item of CORE_DATABASES){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');dependencyDirectory(path.resolve('skills/comm-bridge/node_modules'),path.join(owner,'node_modules'));
+ for(const item of owners){const owner=path.join(skillsDir,item.owner);fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');dependencyDirectory(path.resolve('skills/comm-bridge/node_modules'),path.join(owner,'node_modules'));
   if(item.owner==='web-console'){installLegacyWebConsoleSchema(skillsDir);continue;}
   fs.copyFileSync(path.resolve('skills',item.owner,item.schema),path.join(owner,item.schema));
   const migration=item.owner==='comm-bridge'?'c4-migrations.js':'migrations.js';
@@ -65,7 +67,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
   if(item.owner==='scheduler')for(const file of ['migrations-v2.js','migrations-v3.js'])fs.copyFileSync(path.resolve('skills/scheduler/scripts',file),path.join(owner,'scripts',file));
  }
  for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
- for(const item of CORE_DATABASES){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
+ for(const item of owners){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
   // Older C4/scheduler layouts come from the released v1 samples.
   const older=olderDatabases&&{'comm-bridge':'c4-v0.9.0-v1.sql',scheduler:'scheduler-v0.9.0-v1.sql'}[item.owner];
   if(older){db.exec(fs.readFileSync(path.resolve('skills/comm-bridge/scripts/__tests__/fixtures/migration-history',older),'utf8'));if(wal)db.pragma('journal_mode=WAL');db.close();continue;}
@@ -92,7 +94,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
  m=require(path.join(staging,'maintenance.cjs'));m.retainRemoval(m.hash(path.join(staging,'remove-owned-tree.mjs')));r=require(path.join(staging,'runner.cjs'));
  fs.renameSync(staging,dir);
  const snapshotResult=await createReleasedSnapshotFixture({Database,zylosDir:root,transactionId:'tx',formatVersion,snapshot}),closure=prepareRecoveryDependencies(dir,root,{dashboardRoot});
- const coreManifest=CORE_DATABASES.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner),{excludeNodeModules:false})}));
+ const coreManifest=owners.map(item=>({name:item.owner,existedBefore:true,backedUp:true,originalHash:m.treeHash(path.join(skillsDir,item.owner),{excludeNodeModules:false})}));
  for(const e of coreManifest)fs.cpSync(path.join(skillsDir,e.name),path.join(dir,'code/skills',e.name),{recursive:true,verbatimSymlinks:true});
  // Match saveProtectedCode: the disposable code root is private.
  fs.chmodSync(path.join(dir,'code'),0o700);
@@ -152,6 +154,24 @@ test('protected preparation checks an original deployment without a Dashboard ow
  assert.equal(fs.existsSync(f.dashboardRoot),false);
 });
 
+// A 1.0 deployment has no Web Console skill or database (new installs never
+// create them; the removal moves them away). The original-deployment check of a
+// migrating upgrade still lists Web Console, and must not load its absent owner.
+test('protected preparation of a migrating upgrade checks a 1.0 deployment without Web Console',async t=>{
+ const f=await fixture(t,{webConsole:false,olderDatabases:true});
+ assert.equal(fs.existsSync(path.join(f.j.skillsDir,'web-console')),false);
+ assert.equal(fs.existsSync(f.db('web-console/web-console.db')),false);
+ f.m.update(f.dir,f.j,{installationIntent:false,phase:'code_saved',databaseMode:'migrate'});
+ fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
+ fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
+ const ctx={maintenance:f.m,journal:f.load(),transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:3};
+ assert.doesNotThrow(()=>prepareProtectedInstall(ctx));
+ assert.equal(f.load().phase,'prepared');
+ const original=f.m.preflight(f.dir,f.load(),null,{originalDeployment:true});
+ assert.equal(original.databases.find(row=>row.source==='web-console/web-console.db').status,'missing');
+ assert.equal(fs.existsSync(path.join(f.j.skillsDir,'web-console')),false);
+});
+
 test('post-install compensation and restored startup accept an original deployment without a Dashboard owner',async t=>{
  const f=await originalDashboardTakeover(t);
  const dashboardFile=f.db('components/dashboard/dashboard.db');
@@ -191,6 +211,33 @@ for(const from of ['0.9.3','1.0.0-beta.4']) test(`beginning from ${from} keeps f
   assert.equal(journal.firstTakeover,true);assert.equal(journal.dashboardOwnerManaged,true);
   assert.deepEqual(journal.initialIdentity.databases.map(row=>row.source),ctx.maintenance.databasePaths(2));
   assert.equal(ctx.maintenance.ORIGINAL_DEPLOYMENT_FORMAT_VERSION,2);
+ } finally {ctx.releaseControl?.();protectionMaintenance.services=services;}
+});
+
+// Services that exited on an older database are not running, so they are kept
+// apart from the original running set that recovery restores.
+for(const databaseMode of ['migrate','unchanged']) test(`beginning a ${databaseMode} upgrade records services that exited before it`,async t=>{
+ const f=await originalDashboardTakeover(t),root=path.join(f.root,'fresh');
+ const coreDir=path.join(root,'package'),skillsDir=path.join(root,'.claude/skills');
+ fs.mkdirSync(path.join(coreDir,'skills/core'),{recursive:true});
+ fs.mkdirSync(path.join(coreDir,'cli/lib'),{recursive:true});
+ fs.mkdirSync(path.join(skillsDir,'core'),{recursive:true});
+ fs.writeFileSync(path.join(coreDir,'package.json'),'{}');
+ fs.copyFileSync(path.resolve('cli/lib/core-db-backup-worker.js'),path.join(coreDir,'cli/lib/core-db-backup-worker.js'));
+ const services=protectionMaintenance.services;
+ const script=name=>path.join(skillsDir,name,'index.js');
+ protectionMaintenance.services=()=>[
+  {name:'scheduler',status:'online',pid:11,script:script('scheduler')},
+  {name:'c4-dispatcher',status:'errored',pid:0,script:script('comm-bridge')},
+  {name:'zylos-dashboard',status:'waiting restart',pid:0,script:script('dashboard')},
+  {name:'activity-monitor',status:'stopped',pid:0,script:script('activity-monitor')},
+ ];
+ const ctx={coreDir,tempDir:coreDir,from:'1.0.0',to:'1.0.0',firstTakeover:false,dashboardOwnerManaged:true,snapshotFormatVersion:3,databaseMode};
+ try {
+  beginUpgrade(ctx,{zylosDir:root,skillsDir});
+  const journal=ctx.maintenance.read(path.join(ctx.transactionDir,'journal.json'));
+  assert.deepEqual(journal.originalServices.map(service=>service.name),['scheduler']);
+  assert.deepEqual(journal.erroredServices,databaseMode==='migrate'?['c4-dispatcher','zylos-dashboard']:[]);
  } finally {ctx.releaseControl?.();protectionMaintenance.services=services;}
 });
 
