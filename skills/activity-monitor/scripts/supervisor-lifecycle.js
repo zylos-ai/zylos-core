@@ -15,6 +15,8 @@ const manualGroup = request => request.mode === 'single' ? '*' : request.session
 const manualTarget = request => request.mode === 'single' ? null : request.sessionGroup ?? 'origin';
 // Capacity eviction waits only briefly for its pre-reclaim check; TTL keeps the longer acknowledgment timeout.
 export const EVICTION_CHECK_ACK_TIMEOUT_MS = 60000;
+// An upgrade restart also waits only briefly for its check, and restarts even when the session stays active.
+export const UPGRADE_CHECK_ACK_TIMEOUT_MS = 60000;
 
 export function sceneRotationThreshold(scene, configuration) {
   if (!['claude', 'codex'].includes(scene.runtime)) return null;
@@ -52,7 +54,8 @@ export function evictionDemand(slots, pending, fences, capacity) {
  */
 export class SupervisorLifecycle {
   constructor(deps, { now = Date.now, idleConfirmMs = 3000, rotationCooldownMs = 300000,
-    syncCheckMs = 60000, ackTimeoutMs = 300000, evictionAckTimeoutMs = EVICTION_CHECK_ACK_TIMEOUT_MS } = {}) {
+    syncCheckMs = 60000, ackTimeoutMs = 300000, evictionAckTimeoutMs = EVICTION_CHECK_ACK_TIMEOUT_MS,
+    upgradeAckTimeoutMs = UPGRADE_CHECK_ACK_TIMEOUT_MS } = {}) {
     this.d = deps;
     this.now = now;
     this.idleConfirmMs = idleConfirmMs;
@@ -62,8 +65,11 @@ export class SupervisorLifecycle {
     if (!(ackTimeoutMs > 0) || !finite(ackTimeoutMs)) throw new TypeError('A finite acknowledgment timeout is required');
     this.evictionAckTimeoutMs = evictionAckTimeoutMs;
     if (!(evictionAckTimeoutMs > 0) || !finite(evictionAckTimeoutMs)) throw new TypeError('A finite eviction acknowledgment timeout is required');
+    this.upgradeAckTimeoutMs = upgradeAckTimeoutMs;
+    if (!(upgradeAckTimeoutMs > 0) || !finite(upgradeAckTimeoutMs)) throw new TypeError('A finite upgrade acknowledgment timeout is required');
     this.ttlPreparation = new Map();
     this.evictionPreparation = new Map();
+    this.upgradePreparation = new Map();
     this.ttlReset = new Map();
     this.rotationSent = new Map();
     this.configurationSent = new Map();
@@ -358,6 +364,7 @@ export class SupervisorLifecycle {
     }
     this.ttlPreparation.delete(group);
     this.evictionPreparation.delete(group);
+    this.upgradePreparation.delete(fence.runId);
     for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
       this.warnings.delete(JSON.stringify(['reclaim', fence.sessionGroup, fence.runId, fence.reason, name]));
     }
@@ -704,12 +711,40 @@ export class SupervisorLifecycle {
         await this.refreshAuthorities(context);
         if (context.transition) return;
         this.d.requests.remove(request.requestId);
+        for (const runId of request.runIds) this.upgradePreparation.delete(runId);
         context.restartRequests = context.restartRequests.filter(item => item.requestId !== request.requestId);
         await this.event('restart_done', { requestId: request.requestId });
         return;
       }
-      for (const scene of remaining) if (scene.ready) await this.beginReclaim(scene, 'upgrade', context);
+      for (const scene of remaining) {
+        if (scene.ready && await this.prepareUpgrade(scene, context)) await this.beginReclaim(scene, 'upgrade', context);
+      }
     });
+  }
+
+  // Each run due for an upgrade restart gets one bound check control. The restart proceeds once that check is
+  // terminal or its short deadline passes; new activity does not cancel it, because the upgrade must restart.
+  async prepareUpgrade(scene, context) {
+    const preparation = this.upgradePreparation.get(scene.runId);
+    if (preparation) {
+      if (this.now() >= preparation.deadline) return true;
+      return TERMINAL_CONTROLS.has((await this.d.db.getControlById(preparation.controlId))?.status);
+    }
+    // A started restart continues as before; other fences and manual work keep their existing precedence.
+    if (context.fences.some(fence => fence.sessionGroup === scene.sessionGroup)) return true;
+    if (!await this.beforeWrite(scene.sessionGroup, context, scene)) return false;
+    // Missing reclaim dependencies stop the upgrade before anything is sent, as they would stop its fence.
+    await this.checkReclaimDependencies(scene, context);
+    const targetBinding = await this.bindCurrentRun(scene);
+    // Without a bindable current run there is nobody to ask; the restart's own guards decide.
+    if (!targetBinding) return true;
+    const now = this.now();
+    const control = await this.d.db.insertControl(this.prompt('UPGRADE_RESTART_CHECK_PROMPT'), {
+      sessionGroup: scene.sessionGroup, targetBinding, requireIdle: true, appendAckSuffix: true,
+      ackDeadlineAt: Math.floor((now + this.upgradeAckTimeoutMs) / 1000),
+    });
+    this.upgradePreparation.set(scene.runId, { controlId: control.id, at: now, deadline: now + this.upgradeAckTimeoutMs });
+    return false;
   }
 
   manualBlocked(request, context) {

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SupervisorLifecycle, evictionDemand, EVICTION_CHECK_ACK_TIMEOUT_MS } from '../supervisor-lifecycle.js';
+import { SupervisorLifecycle, evictionDemand, EVICTION_CHECK_ACK_TIMEOUT_MS, UPGRADE_CHECK_ACK_TIMEOUT_MS } from '../supervisor-lifecycle.js';
+import { CONFIG_RECLAIM_PROMPT } from '../reclaim-prompts.js';
 import { SessionActivity } from '../session-activity.js';
 import { publishSessionStatus } from '../status-writer.js';
 import { fixture as c4Fixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
@@ -53,7 +54,7 @@ function fixture(Class = SupervisorLifecycle) {
     requests: { read: () => f.requests, remove: id => { f.requests = f.requests.filter(r => r.requestId !== id); } },
     bindTarget: s => ({ expectedRunId: s.runId }),
     diagnostic: e => f.events.push(e),
-    prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
+    prompts: { PRE_RECLAIM_CHECK_PROMPT: 'check', UPGRADE_RESTART_CHECK_PROMPT: 'upgrade check', PRE_RECLAIM_SYNC_PROMPT: 'prepare', PRE_RECLAIM_ORIGIN_SYNC_PROMPT: 'prepare origin', GROUP_SYNC_PROMPT: 'group sync', ORIGIN_SYNC_PROMPT: 'origin sync',
       ROTATION_PROMPT: () => 'rotate', CONFIG_RECLAIM_PROMPT: () => 'config', SYNC_BACKLOG_ALERT: reader => `alert:${reader}` },
   };
   f.lifecycle = new Class(f.deps, { now: () => f.now });
@@ -1648,4 +1649,113 @@ test('the eviction check deadline is injectable and validated separately from th
   for (const evictionAckTimeoutMs of [0, -1, Infinity, NaN]) {
     assert.throws(() => new SupervisorLifecycle(f.deps, { evictionAckTimeoutMs }), TypeError);
   }
+});
+
+// An upgrade restart asks each due run to check waiting work first, waits at most 60 seconds, and always restarts.
+// Run for upgrade restart or check-control changes; unrelated Sync or eviction changes may skip.
+function upgradeFixture(groups = ['a']) {
+  const f = fixture();
+  f.scenes = groups.map(group => scene(group));
+  f.requests = [{ reason: 'upgrade', requestId: 'upgrade', runIds: groups.map(group => `run-${group}`) }];
+  return f;
+}
+
+test('upgrade restart sends a bound check first and fences only after it is answered', async () => {
+  const f = upgradeFixture(), asked = f.now;
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(f.fences.size, 0);
+  assert.equal(f.controls.length, 1);
+  const [control] = f.controls;
+  assert.equal(control.content, 'upgrade check'); assert.equal(control.sessionGroup, 'a');
+  assert.deepEqual(control.targetBinding, { expectedRunId: 'run-a' });
+  assert.equal(control.requireIdle, true); assert.equal(control.appendAckSuffix, true);
+  assert.equal(control.ackDeadlineAt, Math.floor((asked + 60000) / 1000));
+  f.now = asked + 30000; control.status = 'running';
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(f.fences.size, 0, 'no fence while the check is unanswered');
+  control.status = 'done';
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(f.fences.get('a')?.reason, 'upgrade');
+  assert.equal(f.controls.length, 1);
+});
+
+test('an unanswered upgrade check stops waiting at its 60 second deadline', async () => {
+  assert.equal(UPGRADE_CHECK_ACK_TIMEOUT_MS, 60000);
+  const f = upgradeFixture(), asked = f.now;
+  await f.lifecycle.advanceRestarts(f.context); f.controls[0].status = 'running';
+  f.now = asked + 59999;
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(f.fences.size, 0, 'still waiting one millisecond before the deadline');
+  f.now = asked + 60000;
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(f.fences.get('a')?.reason, 'upgrade');
+  assert.equal(f.controls.length, 1);
+});
+
+test('new activity during the upgrade check does not cancel the restart', async () => {
+  for (const answer of ['done', 'deadline']) {
+    const f = upgradeFixture(), asked = f.now;
+    await f.lifecycle.advanceRestarts(f.context);
+    f.now = asked + 5000; f.lastActivity = f.now; f.scenes[0].lastActivityAt = f.now;
+    f.scenes[0].lastSubagentActivityAt = f.now;
+    await f.lifecycle.advanceRestarts(f.context);
+    assert.equal(f.fences.size, 0, answer);
+    if (answer === 'done') f.settle(); else { f.controls[0].status = 'running'; f.now = asked + 60000; }
+    await f.lifecycle.advanceRestarts(f.context);
+    assert.equal(f.fences.get('a')?.reason, 'upgrade', `${answer}: the upgrade still restarts`);
+    assert.equal(f.controls.length, 1, answer);
+  }
+});
+
+test('each upgrade run is checked once and groups do not wait for each other', async () => {
+  const f = upgradeFixture(['a', 'b']), asked = f.now;
+  for (const elapsed of [0, 1, 20000]) {
+    f.now = asked + elapsed;
+    await f.lifecycle.advanceRestarts(f.context);
+  }
+  assert.deepEqual(f.controls.map(control => control.sessionGroup), ['a', 'b']);
+  assert.equal(f.fences.size, 0);
+  f.controls[0].status = 'done'; f.controls[1].status = 'running';
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.deepEqual([...f.fences.keys()], ['a'], 'the answered group restarts while the other still waits');
+  // A restart cancelled by a busy session is begun again without a second check.
+  f.scenes[0].state = 'busy';
+  assert.equal(await f.lifecycle.advanceReclaim({ ...f.fences.get('a') }, f.context), 'cancelled');
+  assert.equal(f.fences.size, 0);
+  f.scenes[0].state = 'idle';
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.deepEqual([...f.fences.keys()], ['a']);
+  assert.deepEqual(f.controls.map(control => control.sessionGroup), ['a', 'b']);
+  f.now = asked + 60000;
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.deepEqual([...f.fences.keys()].sort(), ['a', 'b']);
+  assert.equal(f.controls.length, 2);
+});
+
+test('the upgrade check deadline is injectable and validated separately', async () => {
+  const f = upgradeFixture();
+  f.lifecycle = new SupervisorLifecycle(f.deps, { now: () => f.now, upgradeAckTimeoutMs: 5000 });
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(f.controls[0].ackDeadlineAt, Math.floor((f.now + 5000) / 1000));
+  f.now += 5000; f.controls[0].status = 'running';
+  await f.lifecycle.advanceRestarts(f.context);
+  assert.equal(f.fences.get('a')?.reason, 'upgrade');
+  for (const upgradeAckTimeoutMs of [0, -1, Infinity, NaN]) {
+    assert.throws(() => new SupervisorLifecycle(f.deps, { upgradeAckTimeoutMs }), TypeError);
+  }
+});
+
+test('configuration restart still sends one control with the check and the five minute deadline', async () => {
+  const f = fixture(); f.expected = { runtime: 'claude', mode: 'override', model: 'm', effort: 'high' };
+  f.deps.prompts = { ...f.deps.prompts, CONFIG_RECLAIM_PROMPT };
+  await f.lifecycle.reconcileConfiguration(f.context);
+  assert.equal(f.controls.length, 1);
+  const [control] = f.controls;
+  assert.equal(control.content, CONFIG_RECLAIM_PROMPT);
+  assert.match(control.content, /waiting on an external event[\s\S]*one-time scheduled task[\s\S]*submit ready_for_config_reclaim/);
+  assert.equal(control.ackDeadlineAt, Math.floor((f.now + 300000) / 1000));
+  assert.equal(control.appendAckSuffix, true); assert.equal(control.priority, 1); assert.equal(control.bypassState, true);
+  assert.equal(f.fences.size, 0);
+  await f.lifecycle.reconcileConfiguration(f.context);
+  assert.equal(f.controls.length, 1, 'no second control within the cooldown');
 });

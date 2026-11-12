@@ -9,42 +9,84 @@ import Database from '../../../comm-bridge/scripts/sqlite-driver.js';
 import * as c4Schema from '../../../comm-bridge/scripts/c4-schema.js';
 import { migrateDatabase } from '../../../comm-bridge/scripts/sqlite-schema.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
-import { PRE_RECLAIM_CHECK_PROMPT } from '../reclaim-prompts.js';
+import { CONFIG_RECLAIM_PROMPT, PRE_RECLAIM_CHECK_PROMPT, UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
 
 const schedulerCli = fileURLToPath(new URL('../../../scheduler/scripts/cli.js', import.meta.url));
 const ADD = /run node "([^"]+)" add "<[^"]+>" --in "<delay>" --json in this session/;
 const LIST = /run node "([^"]+)" list --json and check this session group's tasks with status "pending"/;
+const IDLE_REASON = 'This session group has been idle and will be reclaimed.';
+const UPGRADE_REASON = 'This session group will be restarted for an upgrade.';
+const CONFIG_REASON = 'The launch configuration changed and this session group will be restarted with it.';
+const PROMPTS = { idle: PRE_RECLAIM_CHECK_PROMPT, upgrade: UPGRADE_RESTART_CHECK_PROMPT, config: CONFIG_RECLAIM_PROMPT };
+// The shared check of waiting work, as it appears in the idle reclaim text.
+const sharedCheck = PRE_RECLAIM_CHECK_PROMPT.slice(PRE_RECLAIM_CHECK_PROMPT.indexOf('check the actual current state'),
+  PRE_RECLAIM_CHECK_PROMPT.indexOf('Then write the session handoff.'));
+
+test('idle reclaim and eviction check text stays word for word the same', () => {
+  assert.equal(PRE_RECLAIM_CHECK_PROMPT, 'This session group has been idle and will be reclaimed. Before acknowledging this control, check the actual current state of your in-progress work (for example a PR and its CI, replies you are waiting for from others, pending handoffs). '
+    + 'If any work is still waiting on an external event, handle each such item before writing the session handoff. '
+    + `First run node "${schedulerCli}" list --json and check this session group's tasks with status "pending" (their session_group_name is everything after the first colon of $ZYLOS_SESSION_GROUP, and is empty when it has no colon, as for Origin); if one already covers the same check, do not create another. `
+    + 'If the item has already been waiting for more than a day without progress, do not schedule another wake-up for it; state this in the session handoff and tell the person responsible for it. '
+    + `Otherwise create a one-time scheduled task that wakes this session group to check it: run node "${schedulerCli}" add "<self-contained instructions for the check>" --in "<delay>" --json in this session, without any --reply option, so the task is saved to this session group, and confirm it reports ok:true. `
+    + 'Then write the session handoff. If nothing is waiting on an external event, acknowledge directly.');
+});
+
+test('upgrade check states its own reason and otherwise matches the idle check', () => {
+  assert.ok(UPGRADE_RESTART_CHECK_PROMPT.startsWith(`${UPGRADE_REASON} `));
+  assert.doesNotMatch(UPGRADE_RESTART_CHECK_PROMPT, /idle|reclaimed|launch configuration/);
+  assert.equal(UPGRADE_RESTART_CHECK_PROMPT.slice(UPGRADE_REASON.length), PRE_RECLAIM_CHECK_PROMPT.slice(IDLE_REASON.length));
+});
+
+test('configuration restart prompt carries the check before the handoff and ready_for_config_reclaim', () => {
+  assert.ok(CONFIG_RECLAIM_PROMPT.startsWith(`${CONFIG_REASON} `));
+  assert.doesNotMatch(CONFIG_RECLAIM_PROMPT, /idle|upgrade|acknowledg/i);
+  assert.ok(sharedCheck.length > 500);
+  const check = CONFIG_RECLAIM_PROMPT.indexOf(sharedCheck);
+  assert.ok(check > 0, 'the same check text, not a separate copy');
+  const handoff = CONFIG_RECLAIM_PROMPT.indexOf('Then complete required background work and the session handoff', check + sharedCheck.length);
+  const submit = CONFIG_RECLAIM_PROMPT.indexOf('submit ready_for_config_reclaim through the supervisor', handoff);
+  assert.ok(handoff > check && submit > handoff, 'check, then handoff, then readiness');
+  assert.ok(CONFIG_RECLAIM_PROMPT.endsWith('After acceptance, finish this control and the current turn.'));
+});
 
 test('check prompt asks to verify waiting work, leave a wake-up and handoff, or acknowledge directly', () => {
-  for (const phrase of ['idle and will be reclaimed', 'Before acknowledging this control',
-    'actual current state', 'CI', 'waiting for from others', 'pending handoffs', 'waiting on an external event',
-    'one-time scheduled task', 'wakes this session group', 'ok:true', 'write the session handoff', 'acknowledge directly']) {
+  for (const phrase of ['idle and will be reclaimed', 'Before acknowledging this control', 'acknowledge directly']) {
     assert.ok(PRE_RECLAIM_CHECK_PROMPT.includes(phrase), phrase);
   }
-  assert.doesNotMatch(PRE_RECLAIM_CHECK_PROMPT, /--reply-(channel|endpoint|session-group) /);
-  const [, cli] = PRE_RECLAIM_CHECK_PROMPT.match(ADD) ?? [];
-  assert.equal(cli, schedulerCli);
-  assert.ok(fs.statSync(cli).isFile());
+  for (const [name, prompt] of Object.entries(PROMPTS)) {
+    for (const phrase of ['actual current state', 'CI', 'waiting for from others', 'pending handoffs', 'waiting on an external event',
+      'one-time scheduled task', 'wakes this session group', 'ok:true', 'session handoff']) {
+      assert.ok(prompt.includes(phrase), `${name}: ${phrase}`);
+    }
+    assert.doesNotMatch(prompt, /--reply-(channel|endpoint|session-group) /);
+    const [, cli] = prompt.match(ADD) ?? [];
+    assert.equal(cli, schedulerCli, name);
+  }
+  assert.ok(fs.statSync(schedulerCli).isFile());
 });
 
 test('check prompt reuses a pending task of this group instead of creating another', () => {
-  const [, cli] = PRE_RECLAIM_CHECK_PROMPT.match(LIST) ?? [];
-  assert.equal(cli, schedulerCli);
-  for (const phrase of ['session_group_name is everything after the first colon of $ZYLOS_SESSION_GROUP',
-    'empty when it has no colon, as for Origin', 'if one already covers the same check, do not create another']) {
-    assert.ok(PRE_RECLAIM_CHECK_PROMPT.includes(phrase), phrase);
+  for (const [name, prompt] of Object.entries(PROMPTS)) {
+    const [, cli] = prompt.match(LIST) ?? [];
+    assert.equal(cli, schedulerCli, name);
+    for (const phrase of ['session_group_name is everything after the first colon of $ZYLOS_SESSION_GROUP',
+      'empty when it has no colon, as for Origin', 'if one already covers the same check, do not create another']) {
+      assert.ok(prompt.includes(phrase), `${name}: ${phrase}`);
+    }
+    assert.ok(prompt.search(LIST) < prompt.search(ADD), `${name}: list comes before add`);
   }
-  assert.ok(PRE_RECLAIM_CHECK_PROMPT.search(LIST) < PRE_RECLAIM_CHECK_PROMPT.search(ADD), 'list comes before add');
 });
 
 test('check prompt stops renewing wake-ups for work stalled over a day and hands it to its owner', () => {
-  const stop = PRE_RECLAIM_CHECK_PROMPT.indexOf('already been waiting for more than a day without progress');
-  assert.ok(stop >= 0);
-  for (const phrase of ['do not schedule another wake-up for it', 'state this in the session handoff',
-    'tell the person responsible for it']) {
-    assert.ok(PRE_RECLAIM_CHECK_PROMPT.indexOf(phrase) > stop, phrase);
+  for (const [name, prompt] of Object.entries(PROMPTS)) {
+    const stop = prompt.indexOf('already been waiting for more than a day without progress');
+    assert.ok(stop >= 0, name);
+    for (const phrase of ['do not schedule another wake-up for it', 'state this in the session handoff',
+      'tell the person responsible for it']) {
+      assert.ok(prompt.indexOf(phrase) > stop, `${name}: ${phrase}`);
+    }
+    assert.ok(stop < prompt.search(ADD), `${name}: the stop rule applies before a new task is created`);
   }
-  assert.ok(stop < PRE_RECLAIM_CHECK_PROMPT.search(ADD), 'the stop rule applies before a new task is created');
 });
 
 // Boundary: the prompt's own scheduler commands against the real scheduler CLI and a private

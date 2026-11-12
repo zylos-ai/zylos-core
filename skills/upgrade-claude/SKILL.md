@@ -68,7 +68,9 @@ In multi mode or during a mode transition, the script installs first and then
 submits `restart_all`. The runtime installer must preserve existing running
 processes; verify this for the installed runtime distribution before using that
 upgrade path. A refused or unknown restart result is reported without automatic
-resubmission. Supervisor acceptance does not mean new sessions are ready.
+resubmission. Supervisor acceptance does not mean new sessions are ready: each
+running session first gets up to 60 seconds to check work waiting on external
+events before it is restarted.
 
 In steady single mode, the existing ordering remains:
 

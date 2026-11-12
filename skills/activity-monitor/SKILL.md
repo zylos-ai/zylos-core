@@ -107,6 +107,22 @@ toward the slots being freed, so no further group is asked meanwhile. A
 delivered but unanswered check holds the fence as in-flight work until C4
 expires it at the same deadline.
 
+An upgrade restart (`restart_all`) sends each running session listed in the
+request, Origin included, its own check control before that session's fence:
+the same check steps, opening with the upgrade as the reason, bound to the
+current run, require-idle, with the ack suffix and a 60-second ack deadline.
+The restart begins once the check is terminal or the deadline passes. New
+activity does not cancel it, since the upgrade must restart every listed run.
+Each run is asked once, including when a busy session cancels and the restart
+begins again, and sessions do not wait for each other's answers. A run that
+cannot be bound as a target gets no check, and missing reclaim dependencies
+stop the restart before any check is sent.
+
+A launch configuration change still sends a single control with its 5-minute
+ack deadline and the `ready_for_config_reclaim` flow. Its text now carries the
+same check of waiting work, with the configuration change as the reason,
+before the handoff and the readiness submission.
+
 ## Status File Format
 
 ```json
