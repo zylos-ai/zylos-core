@@ -1,27 +1,11 @@
 # Locked memory file writes and appends
 
 Component callers can replace an existing regular file under `$ZYLOS_DIR/memory`
-without racing a Memory Sync that has already read it. First read the complete
-page and its matching raw-byte hash together:
-
-```sh
-node scripts/memory-write.js --read --path reference/preferences.md
-```
-
-Read success is `{ "ok": true, "data": { "path": "...", "sha256": "...", "text": "..." } }`.
-The hash and complete text come from the same byte snapshot. Read mode uses the
-same memory-relative path and symlink restrictions as writing; missing files
-return `MEMORY_FILE_NOT_FOUND`, invalid or escaping paths return `INVALID_MEMORY_PATH`.
-It takes no lock, creates or changes no files, ignores active Sync markers, and
-does not consume stdin or observe runtime identity.
-
-For callers that need whole-file replacement, use the hash from the read response
-or the previous successful write. Do not obtain a standalone hash with `sha256sum`
-or another command that omits the page content. After `MEMORY_CONFLICT`, reread
-with `--read`, merge the complete content, and retry with that new snapshot's hash.
-These read and replacement modes remain available for other callers; one-time
-reference reorganization uses only append mode for existing pages.
-Supply complete new content via stdin when writing:
+without racing a Memory Sync that has already read it. Read the complete file
+(for example with the Read tool) and retain its raw-byte hash. After
+`MEMORY_CONFLICT`, read the file again, merge the current content with your
+changes, and rewrite with the new hash. One-time reference reorganization uses
+only append mode for existing pages. Supply complete new content on stdin:
 
 ```sh
 node scripts/memory-write.js --path reference/preferences.md --sha256 EXPECTED_SHA256 < new-content

@@ -54,15 +54,6 @@ async function writeScope(rel, env) {
   return { runDir: paths.groupRunDir(group, env), group, readSessionMode: config.readSessionMode };
 }
 
-/** Return one file snapshot's text and raw-byte hash without taking a lock. */
-export function readMemory({ path: inputPath, env = process.env } = {}, { io = fs } = {}) {
-  const rel = relativePath(inputPath);
-  const root = env.ZYLOS_DIR || path.join(env.HOME || process.env.HOME, 'zylos');
-  const { real } = resolveFile(root, rel, io);
-  const bytes = io.readFileSync(real);
-  return { path: rel, sha256: sha256(bytes), text: bytes.toString('utf8') };
-}
-
 /** Save an existing memory file; Sync admission and publication share its lock. */
 export async function writeMemory({ path: inputPath, sha256: expected, content, env = process.env, waitMs } = {},
   { currentRunId = readCurrentRunId, io = fs } = {}) {
@@ -181,13 +172,13 @@ export async function runMemoryWriteCli(argv = process.argv.slice(2), {
   input = () => fs.readFileSync(0), output = text => process.stdout.write(text),
 } = {}) {
   try {
-    const args = options(argv, ['path', 'sha256', 'keys', 'moved-from'], ['read', 'append']);
-    if (args.positional.length || args.path === undefined || (args.read && args.append) ||
-        ((args.read || args.append) ? args.sha256 !== undefined : args.sha256 === undefined) ||
+    const args = options(argv, ['path', 'sha256', 'keys', 'moved-from'], ['append']);
+    if (args.positional.length || args.path === undefined ||
+        (args.append ? args.sha256 !== undefined : args.sha256 === undefined) ||
         (!args.append && (args.keys !== undefined || args['moved-from'] !== undefined))) {
-      throw memoryError('INVALID_INPUT', 'Usage: memory-write.js --read --path PATH | --append --path PATH [--keys VALUES] [--moved-from VALUES] < paragraph | --path PATH --sha256 HASH < content');
+      throw memoryError('INVALID_INPUT', 'Usage: memory-write.js --append --path PATH [--keys VALUES] [--moved-from VALUES] < paragraph | --path PATH --sha256 HASH < content');
     }
-    const data = args.read ? readMemory({ path: args.path, env }) : args.append ?
+    const data = args.append ?
       await appendMemory({ path: args.path, keys: args.keys, movedFrom: args['moved-from'], content: input(), env, waitMs }, { currentRunId }) :
       await writeMemory({ path: args.path, sha256: args.sha256, content: input(), env, waitMs }, { currentRunId });
     output(JSON.stringify({ ok: true, data }) + '\n');

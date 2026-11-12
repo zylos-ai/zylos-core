@@ -196,5 +196,5 @@ test('existing pages use only locked appends without caller hash or replacement 
   assert.match(normalize(reorg), /Tell it to use only `memory-write.js --append` for existing pages; new pages still use `reference-index.js create`/);
   assert.doesNotMatch(reorg, /--read|--sha256|sha256sum|hash|MEMORY_CONFLICT/);
   assert.match(normalize(writer), /Append mode neither needs nor accepts `--sha256`/);
-  assert.match(normalize(writer), /After `MEMORY_CONFLICT`, reread with `--read`, merge the complete content, and retry with that new snapshot's hash/);
+  assert.match(normalize(writer), /After `MEMORY_CONFLICT`, read the file again, merge the current content with your changes, and rewrite with the new hash/);
 });
