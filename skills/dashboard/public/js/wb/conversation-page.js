@@ -494,10 +494,17 @@ export function mountConversationPage({
   menuRename.dataset.action = 'page.menuRename';
   const menuGroup = action('chat.page.groupInfo', () => { closeConversationMenu(false); toggleGroupSide(); }, 'activity', 'conversation-menu-item conversation-menu-group');
   menuGroup.dataset.action = 'page.menuGroup';
+  const menuGroupCopy = node('span', undefined, 'conversation-menu-copy');
+  const menuGroupSummary = node('span', t('chat.page.groupSummary'), 'conversation-menu-summary');
+  menuGroup.label.replaceWith(menuGroupCopy);
+  menuGroupCopy.append(menuGroup.label, menuGroupSummary);
+  const menuGroupChevron = icon(document, 'chev');
+  menuGroupChevron.classList.add('conversation-menu-chevron');
+  menuGroup.append(menuGroupChevron);
   const menuDeliveryHint = node('span', t('chat.page.sendHint'));
   menuSheet.append(node('div', undefined, 'conversation-menu-grab'), menuInfo('monitor', menuSource),
-    menuInfo('activity', menuConnection), node('div', undefined, 'conversation-menu-divider'), menuRename, menuGroup,
-    menuInfo('help', menuDeliveryHint));
+    menuInfo('wifi', menuConnection), node('div', undefined, 'conversation-menu-divider'), menuRename, menuGroup,
+    menuInfo('info', menuDeliveryHint));
   page.append(menuScrim, menuSheet);
   function closeConversationMenu(focus = true) {
     if (menuSheet.hidden) return;
@@ -633,7 +640,7 @@ export function mountConversationPage({
     const atBottom = input.scrollHeight - oldTop - input.clientHeight <= 2;
     input.style.height = '0px';
     const height = input.value ? input.scrollHeight : parseFloat(view.getComputedStyle(input).minHeight);
-    input.style.height = `${Math.min(view.innerWidth <= 760 ? 132 : 180, height)}px`;
+    input.style.height = `${Math.min(180, height)}px`;
     input.style.overflowY = input.value && input.scrollHeight > input.clientHeight ? 'auto' : 'hidden';
     input.scrollTop = atBottom ? input.scrollHeight : oldTop;
   }
@@ -1366,6 +1373,7 @@ export function mountConversationPage({
     text(hint, t('chat.page.sendHint'));
     text(externalTabLabel, t('chat.page.externalSection'));
     text(menuDeliveryHint, t('chat.page.sendHint'));
+    text(menuGroupSummary, t('chat.page.groupSummary'));
     menuSheet.setAttribute('aria-label', t('chat.page.menu'));
     menuScrim.setAttribute('aria-label', t('chat.page.cancel'));
     text(updateNotice, t('chat.page.updateRetry'));

@@ -1681,7 +1681,11 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-menu-item:hover { background:var(--wb-hover); }
   .conversation-menu-item:focus-visible { outline:2px solid var(--wb-accent-line); outline-offset:-2px; }
   .conversation-menu-item>.wb-ico { width:20px; height:20px; flex:none; color:var(--text-dim); }
+  .conversation-menu-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .conversation-menu-summary { font-size:12px; line-height:1.5; color:var(--text-muted); }
+  .conversation-menu-item>.conversation-menu-chevron { width:16px; height:16px; margin-left:auto; }
   .conversation-page>.wb-group-side { inset:0; }
+  .conversation-page>.wb-group-side .wb-d-top>.wb-icon-btn { display:none; }
   .conversation-page .wb-group-side-bar { min-height:52px; gap:6px; padding:0 4px; border-bottom:1px solid var(--wb-line); background:var(--nav-bg); }
   .conversation-page .wb-group-side-back { width:44px; height:44px; padding:0; }
   .conversation-page .wb-group-side-mobile-title { display:block; min-width:0; font-size:16px; font-weight:600; }

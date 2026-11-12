@@ -231,6 +231,7 @@ function pageDocument() {
       child.parentNode = node;
     };
     node.append = (...children) => children.forEach(child => node.insertBefore(child, null));
+    node.replaceWith = replacement => { const parent = node.parentNode; if (parent) { parent.insertBefore(replacement, node); node.remove(); } };
     node.replaceChildren = (...children) => {
       node.children.forEach(child => { child.parentNode = null; });
       node.children = [];

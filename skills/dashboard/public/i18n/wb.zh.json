@@ -706,6 +706,7 @@
   "chat.page.blankPreview": "空白对话 · 发出第一条消息后才创建",
   "chat.page.cancel": "取消",
   "chat.page.groupInfo": "组详情",
+  "chat.page.groupSummary": "运行状态、时间线、用量",
   "chat.page.historyGap": "中间还有更早的新消息",
   "chat.page.loadGap": "补读中间消息",
   "chat.page.newMessages": "{count} 条新消息",

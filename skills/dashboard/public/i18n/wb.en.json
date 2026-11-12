@@ -706,6 +706,7 @@
   "chat.page.blankPreview": "Blank conversation · created after your first message",
   "chat.page.cancel": "Cancel",
   "chat.page.groupInfo": "Group details",
+  "chat.page.groupSummary": "Runtime status, timeline and usage",
   "chat.page.historyGap": "More new messages are missing in between.",
   "chat.page.loadGap": "Load missing messages",
   "chat.page.newMessages": "{count} new messages",

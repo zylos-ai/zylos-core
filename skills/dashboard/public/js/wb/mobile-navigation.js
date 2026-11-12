@@ -19,10 +19,7 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
   const brand = node('span', undefined, 'wb-mobile-brand'); brand.id = 'wb-mobile-brand';
   heading.append(title, brand); topbar.append(heading);
   const labels = [];
-  // Plain mode hides the desktop Observer tab in CSS, independently of its
-  // availability flag. Mirror both source conditions while that header is offscreen.
-  const menuAvailable = (name, target) => Boolean(target && !target.hidden &&
-    (name !== 'observer' || document.documentElement.dataset.detail === 'technical'));
+  const menuAvailable = target => Boolean(target && !target.hidden);
   const button = (cls, ico, key) => {
     const el = node('button', undefined, cls); el.type = 'button';
     if (ico) el.append(icon(document, ico));
@@ -61,7 +58,7 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
     if (mark) { mark.setAttribute('aria-hidden', 'true'); el.append(mark); el.setAttribute('role', 'switch'); }
     el.addEventListener('click', () => {
       const target = original(selector);
-      if (!menuAvailable(name, target) || target.disabled) return;
+      if (!menuAvailable(target) || target.disabled) return;
       if (!toggle) close(false);
       if (tab) onTab(tab); else target.click();
       sync();
@@ -135,7 +132,7 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
     more.classList.toggle('active', !SECTIONS.some(([name]) => name === active));
     for (const row of menuRows) {
       const target = original(row.selector);
-      row.el.hidden = !menuAvailable(row.name, target); row.el.disabled = Boolean(target?.disabled);
+      row.el.hidden = !menuAvailable(target); row.el.disabled = Boolean(target?.disabled);
       if (row.toggle) row.el.setAttribute('aria-checked', String(row.name === 'detail'
         ? original('#wb-detail-toggle')?.checked === true : document.documentElement.dataset.theme === 'dark'));
     }
@@ -152,10 +149,16 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
   document.documentElement.classList.add('wb-mobile-ready');
   const mutations = view.MutationObserver ? new view.MutationObserver(sync) : null;
   mutations?.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-detail', 'data-conversation-focus'] });
-  const header = original('.app-header');
-  if (header) mutations?.observe(header, { subtree: true, attributes: true, childList: true, characterData: true, attributeFilter: ['hidden', 'disabled', 'class', 'aria-pressed'] });
-  const chat = original('#wb-chat');
-  if (chat) mutations?.observe(chat, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'disabled'] });
+  // Navigation and identity changes call sync() through the app. Only source
+  // controls' availability can change independently; message DOM is not a source.
+  const controls = [
+    ...SECTIONS.map(([name]) => original(`.tab[data-tab="${name}"]`)),
+    ...menuRows.map(row => original(row.selector)),
+    original('.conversation-reload'), original('.conversation-create'),
+  ];
+  for (const control of new Set(controls.filter(Boolean))) {
+    mutations?.observe(control, { attributes: true, attributeFilter: ['hidden', 'disabled'] });
+  }
   const detailToggle = original('#wb-detail-toggle'); detailToggle?.addEventListener('change', sync);
   document.addEventListener('dashboard-locale-change', sync); document.addEventListener('keydown', keydown);
   view.addEventListener('resize', sync);

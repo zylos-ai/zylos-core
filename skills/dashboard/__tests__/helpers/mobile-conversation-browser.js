@@ -17,7 +17,7 @@ const iso = offset => new Date(NOW + offset).toISOString();
 // Fixed existing API contracts over private loopback: the real entry/modules/styles
 // render them. No database, runtime, channel, outbound request or backend extension.
 async function startPage(sandbox, publicDir) {
-  let scene = 'idle', connected = true, observerBlocked = false;
+  let scene = 'idle', connected = true, observerBlocked = false, sessionMode = 'multi';
   const streams = new Set(), missing = new Set(), actions = [];
   const conversation = id => ({ id, localId: 'mobile-browser', sessionGroup: id === EXT_ID ? EXTERNAL : id === ORIGIN_ID ? 'origin' : GROUP,
     channel: id === EXT_ID ? 'telegram' : 'dashboard', state: 'active', displayName: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : '发布流程核对',
@@ -34,6 +34,7 @@ async function startPage(sandbox, publicDir) {
       if (p.endsWith('/status') || p.endsWith('/questions')) return { items: [], nextCursor: null };
       return { conversation: conversation(id) };
     }
+    if (p === '/api/session-mode') return { ok: true, data: { sessionMode, transition: null } };
     if (p === '/api/settings/timezone') return { tz: 'UTC', writable: true, restart_status: 'known', restart_services: [] };
     if (p === '/api/observer/status' && observerBlocked) return { state: 'not_installed', startupError: 'teardown_failed' };
     if (p === '/api/state') return { state: 'IDLE', agent: { name: 'luna' }, session_mode: 'multi', runtime_info: { runtime: 'claude', zylos_version: '1.0.0-beta.7' } };
@@ -85,7 +86,7 @@ async function startPage(sandbox, publicDir) {
   });
   sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
   return { base: await sandbox.startHttp(server), missing, actions,
-    setScene(value) { scene = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
+    setScene(value) { scene = value; }, setSessionMode(value) { sessionMode = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
 }
 
 export async function runMobileConversationBrowser(t, sandbox) {
@@ -99,8 +100,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   const captures = [], measurements = [];
-  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain' } = {}) => {
-    fixture.setScene(scene); fixture.setObserverBlocked(observerBlocked);
+  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi' } = {}) => {
+    fixture.setScene(scene); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
     const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC' });
     sandbox.addCleanup(() => context.close());
     await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
@@ -135,6 +136,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
   }
   const noOverflow = async page => assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'no horizontal overflow');
   const menu = page => page.locator('.conversation-menu-sheet');
+  const rendered = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await t.test('desktop remains unchanged and mobile chrome is absent', async () => {
     const f = await open({ width: 1280 });
     try {
@@ -156,6 +158,11 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.match(await page.locator('#wb-mobile-brand').innerText(), /luna.*1\.0\.0-beta\.7/);
       assert.equal(await page.locator('#wb-mobile-list-refresh').isVisible(), true);
       assert.equal(await page.locator('#wb-mobile-list-create').isVisible(), true);
+      await page.waitForFunction(() => { const chat = document.querySelector('.conversation-page').getBoundingClientRect(), nav = document.querySelector('#wb-mobile-nav').getBoundingClientRect(); return chat.height > 100 && Math.abs(chat.bottom - nav.top) <= 1; });
+      const listBounds = await page.locator('.conversation-page').boundingBox(), navigationBounds = await page.locator('#wb-mobile-nav').boundingBox();
+      assert.ok(Math.abs(listBounds.y + listBounds.height - navigationBounds.y) <= 1, 'conversation list ends above fixed navigation');
+      assert.equal(await page.locator(`[data-conversation-id="${ORIGIN_ID}"] .conversation-pinned`).isVisible(), true, 'Origin is pinned');
+      assert.equal(await page.locator(`[data-conversation-id="${ID}"] .conversation-pinned`).isVisible(), false, 'ordinary conversation is not pinned');
       await shot(page, 'mobile-390-zh-list');
       for (const name of ['overview', 'schedule', 'memory', 'chat']) {
         await page.locator(`[data-mobile-tab="${name}"]`).click();
@@ -164,6 +171,11 @@ export async function runMobileConversationBrowser(t, sandbox) {
         assert.equal(await page.locator(`[data-mobile-tab="${name}"]`).getAttribute('aria-current'), 'page');
       }
       const openMore = async () => { await page.locator('#wb-mobile-more').click(); await page.locator('#wb-mobile-more-sheet').waitFor(); };
+      await openMore();
+      await page.setViewportSize({ width: 761, height: 844 }); await rendered(page);
+      assert.equal(await page.locator('#wb-mobile-more-sheet').evaluate(el => el.hidden), true, 'leaving the phone closes More state');
+      await page.setViewportSize({ width: 390, height: 844 }); await rendered(page);
+      assert.equal(await page.locator('#wb-mobile-more-sheet').isVisible(), false, 'returning to the phone does not reopen More');
       await openMore();
       for (const name of ['usage', 'settings', 'machines', 'detail', 'theme']) assert.equal(await page.locator(`[data-mobile-action="${name}"]`).isVisible(), true);
       const observer = page.locator('[data-mobile-action="observer"]');
@@ -227,6 +239,10 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await page.locator('.conversation-menu-toggle').click(); await menu(page).waitFor();
       assert.equal(await page.locator('.conversation-menu-rename').isVisible(), true);
       assert.equal(await page.locator('.conversation-menu-group').isVisible(), true);
+      assert.equal(await menu(page).locator('.wb-ico-wifi').count(), 1);
+      assert.equal(await menu(page).locator('.wb-ico-info').count(), 1);
+      assert.equal(await menu(page).locator('.conversation-menu-chevron.wb-ico-chev').count(), 1);
+      assert.equal(await menu(page).locator('.conversation-menu-summary').innerText(), '运行状态、时间线、用量');
       assert.match(await menu(page).innerText(), /Dashboard/); assert.match(await menu(page).innerText(), /发送|投递/);
       await shot(page, 'mobile-390-zh-conversation-menu');
       await page.locator('.conversation-menu-rename').click();
@@ -237,7 +253,11 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await page.locator('.wb-group-side').waitFor();
       const bounds = await page.locator('.wb-group-side').boundingBox();
       assert.ok(bounds.x <= 1 && bounds.y <= 1 && bounds.width >= 388 && bounds.height >= 842, 'group detail fills phone viewport');
+      assert.equal(await page.locator('.wb-group-side .wb-d-top > .wb-icon-btn').isVisible(), false, 'phone group detail has only the top back button');
       await shot(page, 'mobile-390-zh-group');
+      await page.setViewportSize({ width: 1280, height: 900 }); await rendered(page);
+      assert.equal(await page.locator('.wb-group-side .wb-d-top > .wb-icon-btn').isVisible(), true, 'desktop keeps the detail close action');
+      await page.setViewportSize({ width: 390, height: 844 }); await rendered(page);
       await page.locator('.wb-group-side-back').click(); assert.equal(await page.locator('.wb-group-side').isVisible(), false);
       await page.locator('.conversation-back').click();
       assert.equal(await page.locator('html').getAttribute('data-conversation-focus'), 'false');
@@ -267,9 +287,26 @@ export async function runMobileConversationBrowser(t, sandbox) {
       await page.locator('#wb-settings-btn').click();
       await page.locator('#tab-settings').waitFor({ state: 'visible' });
       await page.setViewportSize({ width: 390, height: 844 });
+      await rendered(page);
       await page.locator('.wb-mobile-topbar').waitFor({ state: 'visible' });
       assert.equal(await page.locator('#wb-mobile-nav').isVisible(), true, 'Settings retains mobile navigation after a desktop chat');
       assert.equal(await page.locator('html').getAttribute('data-conversation-focus'), 'false');
+      assert.deepEqual(f.errors, []);
+    } finally { await f.context.close(); }
+  });
+  await t.test('history entering a focused conversation closes More', async () => {
+    const f = await open({ width: 1280 }); const page = f.page;
+    try {
+      await select(page);
+      await page.locator('.tab[data-tab="overview"]').click();
+      await page.locator('#tab-overview').waitFor({ state: 'visible' });
+      await page.setViewportSize({ width: 390, height: 844 }); await rendered(page);
+      await page.locator('#wb-mobile-more').click(); await page.locator('#wb-mobile-more-sheet').waitFor();
+      await page.goBack(); await rendered(page);
+      await page.waitForFunction(() => document.documentElement.dataset.conversationFocus === 'true');
+      assert.equal(await page.locator('#wb-mobile-more-sheet').evaluate(el => el.hidden), true, 'history focus entry closes More state');
+      await page.locator('.conversation-back').click();
+      assert.equal(await page.locator('#wb-mobile-more-sheet').isVisible(), false, 'back to the list leaves More closed');
       assert.deepEqual(f.errors, []);
     } finally { await f.context.close(); }
   });
@@ -298,6 +335,32 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.equal(await menu(page).isVisible(), false);
       assert.equal(await page.locator('.conversation-menu-toggle').evaluate(el => el === document.activeElement), true);
     } finally { release(); clearTimeout(sendTimeout); await f.context.close(); }
+  });
+  await t.test('retry hint appears only after an uncertain send', async () => {
+    const f = await open(); const page = f.page;
+    try {
+      await select(page);
+      assert.equal(await page.locator('.conversation-mobile-retry-hint').isVisible(), false);
+      await page.route('**/api/chat/conversations/*/send', route => route.abort('failed'));
+      await page.locator('.conversation-input').fill('核对未确定的投递');
+      await page.locator('.conversation-send').click();
+      await page.locator('.conversation-mobile-retry-hint').waitFor({ state: 'visible' });
+      assert.match(await page.locator('.conversation-mobile-retry-hint').innerText(), /如需重试/);
+      assert.equal(await page.locator('.conversation-compose-hint').isVisible(), false, 'permanent hint stays hidden');
+      await shot(page, 'mobile-390-retry');
+      assert.deepEqual(f.errors, []);
+    } finally { await f.context.close(); }
+  });
+  await t.test('single-mode Origin menu omits unavailable group detail', async () => {
+    const f = await open({ sessionMode: 'single' }); const page = f.page;
+    try {
+      await page.locator(`[data-conversation-id="${ORIGIN_ID}"]`).click();
+      await page.locator('.conversation-header-actions > button:not(.conversation-menu-toggle)').waitFor({ state: 'hidden' });
+      await page.locator('.conversation-menu-toggle').click(); await menu(page).waitFor();
+      assert.equal(await page.locator('.conversation-menu-group').isVisible(), false, 'menu mirrors unavailable original group action');
+      assert.equal(await page.locator('.conversation-menu-rename').isVisible(), false);
+      assert.deepEqual(f.errors, []);
+    } finally { await f.context.close(); }
   });
   await t.test('locale, theme and narrow mobile widths fit without overflow', async () => {
     for (const options of [{ width: 390, locale: 'en' }, { width: 390, theme: 'dark' }, { width: 360 }, { width: 430 }, { width: 360, theme: 'dark' }, { width: 430, theme: 'dark' }]) {
