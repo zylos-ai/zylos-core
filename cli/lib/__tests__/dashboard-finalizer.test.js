@@ -36,11 +36,6 @@ import net from 'node:net';
 const root=process.env.ZYLOS_DIR, code=path.join(root,'.claude/skills/dashboard');
 const args=process.argv.slice(2);
 fs.appendFileSync(path.join(root,'pm2-calls'),JSON.stringify(args)+'\\n');
-if(args[0]==='start' && process.env.FAIL_MIGRATION==='1') {
-  const {Store}=await import(${JSON.stringify(path.join(repo, 'skills/dashboard/src/lib/store.js'))});
-  try {new Store(path.join(root,'components/dashboard/dashboard.db')).close();}
-  catch(error) {fs.writeFileSync(path.join(root,'migration-error'),error.message);process.exit(1);}
-}
 if(args[0]==='jlist')console.log(JSON.stringify([{name:'zylos-dashboard',pid:4242,pm2_env:{status:'online',pm_exec_path:path.join(code,'src/index.js'),pm_cwd:code}}]));
 `, { mode: 0o755 });
   for (const item of ['home','pm2-home','tmp']) fs.mkdirSync(path.join(root,item));
@@ -138,7 +133,6 @@ test('takeover migration 20 failure restores the copy, leaves Core upgrade_compl
   const pm2Calls = fs.existsSync(path.join(root, 'pm2-calls'))
     ? fs.readFileSync(path.join(root, 'pm2-calls'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
   assert.equal(pm2Calls.some(args => args[0] === 'start'), false, JSON.stringify(pm2Calls));
-  assert.equal(fs.existsSync(path.join(root, 'migration-error')), false);
   assert.equal(result.success, true);
   assert.equal(result.completion.install, 'done');
   assert.equal(result.completion.dashboard, 'degraded');
@@ -153,7 +147,7 @@ test('takeover migration 20 failure restores the copy, leaves Core upgrade_compl
   assert.equal(persisted.phase, 'upgrade_complete');
   assert.deepEqual(persisted.terminalEvidence, { verified: true, kind: 'code_data_services' });
   assert.equal(terminalCalls, 1);
-  assert.deepEqual(fs.readFileSync(dbPath), copied);
+  assert.ok(fs.readFileSync(dbPath).equals(copied), `${dbPath} changed`);
   for (const suffix of ['-wal', '-shm']) assert.equal(fs.existsSync(dbPath + suffix), false);
   const db = new Database(dbPath, { readonly: true });
   try {

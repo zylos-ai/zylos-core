@@ -40,6 +40,10 @@ const NO_DATA = [
   ['add'], ['add', 'prompt only'], ['add', 'bad duration', '--in', 'soon-ish'], ['add', 'bad cron', '--cron', 'nope'],
   ['add', 'bad priority', '--in', '5 minutes', '--priority', '9'],
   ['update'], ['remove'], ['done'], ['pause'], ['resume'], ['history', '--limit', '0'],
+  ['update', 'abc', '--priority', '9'], ['update', 'abc', '--miss-threshold', '-1'],
+  ['update', 'abc', '--in', 'soon-ish'], ['update', 'abc', '--at', 'not a time'],
+  ['update', 'abc', '--cron', 'nope'], ['update', 'abc', '--every', 'often'],
+  ['update', 'abc', '--clear-session-group', '--reply-channel', 'x'],
 ];
 
 test('help, unknown commands and argument errors finish without creating the database', t => {
@@ -47,6 +51,7 @@ test('help, unknown commands and argument errors finish without creating the dat
   for (const args of NO_DATA) {
     const child = f.run(args);
     assert.equal(child.error, undefined, `${args.join(' ')}: ${child.error}`);
+    if (args[0] === 'update' && args.length > 1) assert.match(child.stderr + child.stdout, /Error: (Priority|miss-threshold|Invalid|Could not parse|--clear-session-group)/, args.join(' '));
     assert.equal(fs.existsSync(path.join(f.zylosDir, 'scheduler')), false, `${args.join(' ') || '(none)'} created scheduler data`);
   }
   assert.match(f.run(['--help']).stdout, /Usage:/);
@@ -75,7 +80,7 @@ test('a data command on an older database reports the required upgrade and chang
   assert.notEqual(text.status, 0);
   assert.match(text.stderr, /SCHEMA_UPGRADE_REQUIRED/);
   assert.match(text.stderr, new RegExp(`scheduler\\.db: schema version 1 is older than supported ${owner.SUPPORTED_SCHEMA_VERSION}`));
-  assert.match(text.stderr, /run "zylos upgrade" to migrate\. The database was not changed\./);
+  assert.match(text.stderr, /and was not migrated; run "zylos upgrade --self" to migrate it\./);
   const json = f.run(['list', '--json']);
   assert.notEqual(json.status, 0);
   assert.equal(JSON.parse(json.stdout).error.code, 'SCHEMA_UPGRADE_REQUIRED');

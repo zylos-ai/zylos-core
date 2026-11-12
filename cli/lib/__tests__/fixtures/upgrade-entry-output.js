@@ -32,6 +32,6 @@ mock.module(at('upgrade-package.js'), { namedExports: { saveOriginalPackage: idl
 mock.module(at('core-db-backup.js'), { namedExports: {
   probeCoreDbVersions: () => ({ databases: [{}, {}], needsMigration: false }),
   preflightCoreDbUpgrade: idle, rehearseCoreDbUpgrade: () => assert.fail('no migration in output fixture'),
-  inspectFirstDashboardTakeover: () => false, inspectDashboardOwnerManaged: () => false,
+  inspectFirstDashboardTakeover: () => false, inspectCoreManagesDashboardDb: () => false,
   assertDashboardUninstalled: idle,
 } });

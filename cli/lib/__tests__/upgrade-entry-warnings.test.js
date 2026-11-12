@@ -41,7 +41,7 @@ for(const mode of ['none','runtime','service','incomplete-audit']) test(`downloa
       maintenanceFor:()=>m,beginUpgrade(ctx){ctx.transactionDir=${JSON.stringify(path.join(root,'transaction'))};},
       saveProtectedCode(){},prepareProtectedInstall(){},markInstallationIntent(){}}});
     mock.module(${JSON.stringify(url('core-db-backup.js'))},{namedExports:{...databases,
-      assertDashboardUninstalled(){},inspectFirstDashboardTakeover:()=>false,inspectDashboardOwnerManaged:()=>false,
+      assertDashboardUninstalled(){},inspectFirstDashboardTakeover:()=>false,inspectCoreManagesDashboardDb:()=>false,
       probeCoreDbVersions:()=>({databases:[{},{}],needsMigration:false}),preflightCoreDbUpgrade(){}}});
     mock.module(${JSON.stringify(url('upgrade-package.js'))},{namedExports:{...packages,saveOriginalPackage(){}}});
     mock.module(${JSON.stringify(pathToFileURL(path.join(installed,'cli/lib/self-upgrade.js')).href)},{namedExports:{runSelfUpgradeFinalize:()=>({success:true,
@@ -102,7 +102,7 @@ test('downloaded upgrade entry audits a real C4 database and warns for every rep
       maintenanceFor:()=>m,beginUpgrade(ctx){ctx.transactionDir=${JSON.stringify(path.join(root,'transaction'))};},
       saveProtectedCode(){},prepareProtectedInstall(){},markInstallationIntent(){}}});
     mock.module(${JSON.stringify(url('core-db-backup.js'))},{namedExports:{...databases,
-      assertDashboardUninstalled(){},inspectFirstDashboardTakeover:()=>false,inspectDashboardOwnerManaged:()=>false,
+      assertDashboardUninstalled(){},inspectFirstDashboardTakeover:()=>false,inspectCoreManagesDashboardDb:()=>false,
       probeCoreDbVersions:()=>({databases:[{},{}],needsMigration:false}),preflightCoreDbUpgrade(){}}});
     mock.module(${JSON.stringify(url('upgrade-package.js'))},{namedExports:{...packages,saveOriginalPackage(){}}});
     mock.module(${JSON.stringify(pathToFileURL(path.join(installed,'cli/lib/self-upgrade.js')).href)},{namedExports:{runSelfUpgradeFinalize:()=>{

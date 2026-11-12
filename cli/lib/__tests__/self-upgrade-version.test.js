@@ -4,6 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import crypto from 'node:crypto';
+import Database from '../../../skills/comm-bridge/scripts/sqlite-driver.js';
+import { migrateDatabase } from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
+import * as c4Schema from '../../../skills/comm-bridge/scripts/c4-schema.js';
+import * as schedulerSchema from '../../../skills/scheduler/scripts/schema.js';
 
 const ROOT = path.resolve(import.meta.dirname, '../../..');
 const CLI = path.join(ROOT, 'cli/zylos.js');
@@ -15,11 +20,13 @@ const MAJOR = Number(CURRENT_CORE.split('.')[0]);
 const NEXT = `${MAJOR + 1}.0.0`;
 const escapeVersion = version => version.replaceAll('.', '\\.');
 const DATABASE_CONTENT = 'isolated version-selection database sentinel\n';
+const HISTORY = path.join(ROOT, 'skills/comm-bridge/scripts/__tests__/fixtures/migration-history');
+const sha256 = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
 // These tests exercise the real CLI across its version selector, GitHub client,
 // archive downloader and target handoff. Only external commands and downloaded
 // target/recovery materials are fixtures; installed product sources stay intact.
-function fixture(t, { pages = [[]], target = NEXT, downloadFails = false } = {}) {
+function fixture(t, { pages = [[]], target = NEXT, downloadFails = false, c4 = 'current' } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'suv-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home');
@@ -33,12 +40,25 @@ function fixture(t, { pages = [[]], target = NEXT, downloadFails = false } = {})
   const callsFile = path.join(root, 'commands.jsonl');
   const handoffFile = path.join(root, 'handoff.json');
   const recoveryFile = path.join(root, 'recovery.jsonl');
+  // An already-current version checks the live databases, so C4 and scheduler
+  // are real databases at the installed layout, opened with the live skills'
+  // driver; the historical web-console file is never opened.
   const databases = ['comm-bridge/c4.db', 'scheduler/scheduler.db', 'web-console/web-console.db']
     .map(relative => path.join(zylos, relative));
-  for (const file of databases) {
+  for (const [file, sql, owner] of [[databases[0], 'c4-v0.9.0-v1.sql', c4Schema], [databases[1], 'scheduler-v0.9.0-v1.sql', schedulerSchema]]) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, DATABASE_CONTENT);
+    const db = new Database(file);
+    try {
+      db.exec(fs.readFileSync(path.join(HISTORY, sql), 'utf8'));
+      if (owner !== c4Schema || c4 !== 'older') migrateDatabase(db, owner, { strict: false });
+      if (owner === c4Schema && c4 === 'newer') db.pragma(`user_version = ${c4Schema.SUPPORTED_SCHEMA_VERSION + 1}`);
+    } finally { db.close(); }
   }
+  fs.mkdirSync(path.dirname(databases[2]), { recursive: true });
+  fs.writeFileSync(databases[2], DATABASE_CONTENT);
+  const databaseHashes = databases.map(sha256);
+  fs.mkdirSync(path.join(zylos, '.claude/skills'), { recursive: true });
+  for (const owner of ['comm-bridge', 'scheduler']) fs.symlinkSync(path.join(ROOT, 'skills', owner), path.join(zylos, '.claude/skills', owner));
   const stable = path.join(zylos, '.zylos/upgrade');
   fs.mkdirSync(stable, { recursive: true });
   fs.mkdirSync(path.join(zylos, '.backup/self-upgrade'), { recursive: true });
@@ -119,7 +139,7 @@ process.exit(99);
     });
     assert.equal(result.error, undefined, String(result.error));
     assert.equal(result.signal, null);
-    for (const file of databases) assert.equal(fs.readFileSync(file, 'utf8'), DATABASE_CONTENT);
+    assert.deepEqual(databases.map(sha256), databaseHashes);
     const dangerous = calls().filter(call => !['gh', 'curl'].includes(call.command));
     assert.deepEqual(dangerous, [], 'service/install commands must stay unused');
     return result;
@@ -135,10 +155,13 @@ function parsed(result) {
   return JSON.parse(result.stdout);
 }
 
-function assertNoWork(f) {
+function assertNoWork(f, { tagLookup = false } = {}) {
   assert.equal(f.recoveryCalls(), '');
   assert.equal(fs.existsSync(f.handoffFile), false);
-  assert.equal(f.calls().filter(call => call.command === 'curl').length, 0);
+  // The default check looks up release tags; it never downloads an archive.
+  const curl = f.calls().filter(call => call.command === 'curl');
+  if (tagLookup) assert.ok(curl.every(call => call.args.at(-1).startsWith('https://api.github.com/repos/zylos-ai/zylos-core/tags')), JSON.stringify(curl));
+  else assert.equal(curl.length, 0);
 }
 
 // Boundary: top-level version dispatch vs upgrade's value flag. Run when CLI
@@ -350,3 +373,43 @@ test('explicit upgrade with a missing tag never downloads or executes a target',
   assert.ok(f.calls().filter(call => call.command === 'curl')
     .every(call => new URL(call.args.at(-1)).pathname.endsWith('/tags')));
 });
+
+// Boundary: --check with no newer version still reads the live databases, so an
+// older database is reported as pending migration instead of "up to date", and a
+// failed probe fails the check. Run when check output or the database probe
+// changes; skip for execution-only changes. Read-only: no recovery, no download.
+for (const explicit of [false, true]) {
+  const args = ['upgrade', '--self', '--check', ...(explicit ? ['--version', CURRENT] : [])];
+  test(`check reports older databases as pending migration${explicit ? ' (explicit --version)' : ''}`, t => {
+    const f = fixture(t, { c4: 'older' });
+    const output = parsed(f.run([...args, '--json']));
+    assert.equal(output.hasUpdate, false);
+    assert.deepEqual(output.pendingMigrations, [{ source: 'comm-bridge/c4.db', status: 'present', fromVersion: 1, toVersion: c4Schema.SUPPORTED_SCHEMA_VERSION, needsMigration: true }]);
+    assert.match(output.reply, /1 database\(s\) need migration \(comm-bridge\/c4\.db 1 → \d+\)\. Run "zylos upgrade --self --yes" to migrate them\./);
+    assert.doesNotMatch(output.reply, /No upgrade will run/);
+    const plain = f.run(args);
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.match(plain.stdout, /need migration .*zylos upgrade --self --yes/);
+    assertNoWork(f, { tagLookup: !explicit });
+  });
+  test(`check with current databases is unchanged${explicit ? ' (explicit --version)' : ''}`, t => {
+    const f = fixture(t);
+    const output = parsed(f.run([...args, '--json']));
+    assert.equal(output.pendingMigrations, undefined);
+    assert.match(output.reply, explicit ? /No upgrade will run/ : /up to date/);
+    assertNoWork(f, { tagLookup: !explicit });
+  });
+  test(`check fails when the database probe fails${explicit ? ' (explicit --version)' : ''}`, t => {
+    const f = fixture(t, { c4: 'newer' });
+    const json = f.run([...args, '--json']);
+    assert.equal(json.status, 1, json.stdout + json.stderr);
+    const output = JSON.parse(json.stdout);
+    assert.equal(output.success, false);
+    assert.equal(output.code, 'SCHEMA_TOO_NEW');
+    const plain = f.run(args);
+    assert.equal(plain.status, 1);
+    assert.match(plain.stderr, /Database version check failed/);
+    assert.doesNotMatch(plain.stdout, /up to date|No upgrade will run/);
+    assertNoWork(f, { tagLookup: !explicit });
+  });
+}

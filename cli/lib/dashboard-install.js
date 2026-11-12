@@ -51,7 +51,7 @@ export function copyDashboardDb(zylosDir, txDir) {
     }
     const target = path.join(txDir, 'dashboard/db-copy');
     fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-    for (const suffix of ['', '-wal', '-shm']) {
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
       if (fs.existsSync(db+suffix)) fs.copyFileSync(db+suffix, path.join(target, 'dashboard.db'+suffix));
     }
     return { ok: true, error: null };
@@ -84,7 +84,9 @@ function dashboardSchema(loc, root, action) {
   return JSON.parse(output);
 }
 function restoreDashboardCopy(loc, copy) {
-  for (const suffix of ['', '-wal', '-shm']) {
+  // A migration child that died leaves its WAL or hot journal behind; replayed
+  // onto the restored file it would bring the half-done migration back.
+  for (const suffix of ['', '-wal', '-shm', '-journal']) {
     const source = path.join(copy, 'dashboard.db' + suffix);
     if (fs.existsSync(source)) fs.copyFileSync(source, loc.db + suffix);
     else {

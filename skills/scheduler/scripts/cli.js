@@ -529,6 +529,32 @@ function cmdUpdate(taskId, options) {
     reject('INVALID_ARGS', 'Task ID is required');
   }
 
+  // Argument errors are reported before the database is opened.
+  const priority = options.priority ? parseInt(options.priority, 10) : undefined;
+  if (options.priority && (!Number.isInteger(priority) || priority < 1 || priority > 3)) {
+    reject('INVALID_ARGS', 'Priority must be 1-3');
+  }
+  if (options['clear-session-group'] && ['reply-channel', 'reply-endpoint', 'reply-session-group'].some(key => Object.hasOwn(options, key))) {
+    reject('INVALID_ARGS', '--clear-session-group cannot be combined with reply target options', {}, 1);
+  }
+  const threshold = options['miss-threshold'] ? parseInt(options['miss-threshold'], 10) : undefined;
+  if (options['miss-threshold'] && (!Number.isInteger(threshold) || threshold < 0)) {
+    reject('INVALID_ARGS', 'miss-threshold must be a positive integer');
+  }
+  let seconds, nextRunAt, intervalSeconds;
+  if (options.in) {
+    seconds = parseDuration(options.in);
+    if (!seconds) reject('INVALID_ARGS', `Invalid duration "${options.in}"`);
+  } else if (options.at) {
+    nextRunAt = parseTime(options.at);
+    if (!nextRunAt) reject('INVALID_ARGS', `Could not parse time "${options.at}"`);
+  } else if (options.cron) {
+    if (!isValidCron(options.cron)) reject('INVALID_ARGS', `Invalid cron expression "${options.cron}"`);
+  } else if (options.every) {
+    intervalSeconds = parseDuration(options.every);
+    if (!intervalSeconds) reject('INVALID_ARGS', `Invalid interval "${options.every}"`);
+  }
+
   // Support partial ID match
   const tasks = db.prepare(`
     SELECT * FROM tasks WHERE id LIKE ? ESCAPE '!'
@@ -560,10 +586,6 @@ function cmdUpdate(taskId, options) {
 
   // Update priority
   if (options.priority) {
-    const priority = parseInt(options.priority, 10);
-    if (!Number.isInteger(priority) || priority < 1 || priority > 3) {
-      reject('INVALID_ARGS', 'Priority must be 1-3');
-    }
     updates.priority = priority;
     updatedFields.push('priority');
   }
@@ -577,9 +599,6 @@ function cmdUpdate(taskId, options) {
     updatedFields.push('require_idle');
   }
 
-  if (options['clear-session-group'] && ['reply-channel', 'reply-endpoint', 'reply-session-group'].some(key => Object.hasOwn(options, key))) {
-    reject('INVALID_ARGS', '--clear-session-group cannot be combined with reply target options', {}, 1);
-  }
   const replyUpdates = options['clear-session-group']
     ? { session_component: null, session_group_name: null,
       ...(options['clear-reply'] ? updatedReplyTarget(task, options) : {}) }
@@ -589,10 +608,6 @@ function cmdUpdate(taskId, options) {
 
   // Update miss_threshold
   if (options['miss-threshold']) {
-    const threshold = parseInt(options['miss-threshold'], 10);
-    if (!Number.isInteger(threshold) || threshold < 0) {
-      reject('INVALID_ARGS', 'miss-threshold must be a positive integer');
-    }
     updates.miss_threshold = threshold;
     updatedFields.push('miss_threshold');
   }
@@ -602,10 +617,6 @@ function cmdUpdate(taskId, options) {
   // Update schedule (type and next_run_at)
   let scheduleUpdated = false;
   if (options.in) {
-    const seconds = parseDuration(options.in);
-    if (!seconds) {
-      reject('INVALID_ARGS', `Invalid duration "${options.in}"`);
-    }
     if (!nextRunOnly) {
       updates.type = 'one-time';
       updates.cron_expression = null;
@@ -614,10 +625,6 @@ function cmdUpdate(taskId, options) {
     updates.next_run_at = now() + seconds;
     scheduleUpdated = true;
   } else if (options.at) {
-    const nextRunAt = parseTime(options.at);
-    if (!nextRunAt) {
-      reject('INVALID_ARGS', `Could not parse time "${options.at}"`);
-    }
     if (!nextRunOnly) {
       updates.type = 'one-time';
       updates.cron_expression = null;
@@ -627,19 +634,12 @@ function cmdUpdate(taskId, options) {
     scheduleUpdated = true;
   } else if (options.cron) {
     const cronExpression = options.cron;
-    if (!isValidCron(cronExpression)) {
-      reject('INVALID_ARGS', `Invalid cron expression "${cronExpression}"`);
-    }
     updates.type = 'recurring';
     updates.cron_expression = cronExpression;
     updates.interval_seconds = null;
     updates.next_run_at = getNextRun(cronExpression);
     scheduleUpdated = true;
   } else if (options.every) {
-    const intervalSeconds = parseDuration(options.every);
-    if (!intervalSeconds) {
-      reject('INVALID_ARGS', `Invalid interval "${options.every}"`);
-    }
     updates.type = 'interval';
     updates.cron_expression = null;
     updates.interval_seconds = intervalSeconds;

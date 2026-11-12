@@ -74,7 +74,7 @@ describe('void channel migration (#689)', () => {
       const refused = dbCli(['recent', '10'], env);
       assert.notEqual(refused.status, 0);
       assert.match(refused.stderr, /SCHEMA_UPGRADE_REQUIRED/);
-      assert.deepEqual(fs.readFileSync(file), before);
+      assert.ok(fs.readFileSync(file).equals(before), `${file} changed`);
       // The explicit 0→1 migration runs once before reads.
       const upgrade = new Database(file);
       migrateDatabase(upgrade, c4Schema, { strict: false });
@@ -169,7 +169,7 @@ describe('commands that need no data', () => {
       v1.close();
       const before = fs.readFileSync(file);
       for (const args of noData) dbCli(args, env);
-      assert.deepEqual(fs.readFileSync(file), before);
+      assert.ok(fs.readFileSync(file).equals(before), `${file} changed`);
       for (const suffix of ['-wal', '-shm', '-journal']) assert.equal(fs.existsSync(file + suffix), false);
     });
   });

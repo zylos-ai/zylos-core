@@ -1023,6 +1023,16 @@ function detectCoreSkillChanges() {
   return results;
 }
 
+// Already at the latest version, but present databases are older than the
+// installed code: only the protected upgrade migrates them.
+function pendingMigrationsText(migrations) {
+  const list = migrations.map(row => `${row.source} ${row.fromVersion} → ${row.toVersion}`).join(', ');
+  return `${migrations.length} database(s) need migration (${list}). Run "zylos upgrade --self --yes" to migrate them.`;
+}
+function pendingMigrationsReply(current, migrations) {
+  return `zylos-core is up to date (v${current}), but ${pendingMigrationsText(migrations)}`;
+}
+
 /**
  * Handle --self --check: check for zylos-core updates only (no lock needed).
  * Explicit versions check only precedence and tag existence; other checks
@@ -1042,12 +1052,32 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
     process.exit(1);
   }
 
+  // No newer version: the upgrade still runs when a present database is older
+  // than the installed code. A deployment without its directory has none.
+  let migrations = null;
+  if (!check.hasUpdate && !branch) {
+    try {
+      migrations = fs.existsSync(ZYLOS_DIR)
+        ? pendingDatabaseMigrations({ zylosDir: ZYLOS_DIR, installedRoot: path.resolve(import.meta.dirname, '../..') })
+        : [];
+    } catch (error) {
+      const failure = { success: false, code: upgradeFailureCode(error), error: upgradeFailureMessage(error) };
+      if (jsonOutput) console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check, ...failure,
+        reply: 'Database version check failed: ' + failure.error }, null, 2));
+      else console.error('Error: Database version check failed: ' + failure.error);
+      process.exit(1);
+    }
+  }
+  const pending = migrations?.length ? { pendingMigrations: migrations } : {};
+
   if (version !== undefined) {
     const message = check.hasUpdate
       ? 'Version constraints satisfied and exact release tag found. Starting-version acceptance is determined by the target upgrade entry.'
-      : 'Already at this version (SemVer precedence). No upgrade will run; the target tag and starting-version acceptance were not checked.';
+      : migrations.length
+        ? `Already at this version (SemVer precedence), but ${pendingMigrationsText(migrations)}`
+        : 'Already at this version (SemVer precedence). No upgrade will run; the target tag and starting-version acceptance were not checked.';
     const reply = `zylos-core: ${check.current} -> ${check.latest}. ${message}`;
-    if (jsonOutput) console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check, message, reply }, null, 2));
+    if (jsonOutput) console.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check, ...pending, message, reply }, null, 2));
     else console.log(reply);
     return;
   }
@@ -1098,10 +1128,15 @@ function handleSelfCheckOnly({ jsonOutput, branch, beta = false, version }) {
       ? allLocalChanges.map(({ skill, changes }) => ({ skill, modified: changes.modified, added: changes.added }))
       : null;
     if (mappedChanges) output.localChanges = mappedChanges;
-    output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges });
+    if (migrations?.length) {
+      output.pendingMigrations = migrations;
+      output.reply = pendingMigrationsReply(check.current, migrations);
+    } else output.reply = formatC4Reply('self-check', { ...check, changelog, localChanges: mappedChanges });
     console.log(JSON.stringify(output, null, 2));
   } else {
-    if (!check.hasUpdate && !branch) {
+    if (migrations?.length) {
+      console.log(pendingMigrationsReply(check.current, migrations));
+    } else if (!check.hasUpdate && !branch) {
       console.log(success(`${bold('zylos-core')} is up to date (v${check.current})`));
     } else {
       console.log(`${bold('zylos-core')}: ${dim(check.current)} → ${bold(check.latest)}`);
@@ -1190,17 +1225,9 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
       else outputSelfUpgradeFailure(output, local.message);
       return false;
     }
-    if (!local.hasUpdate) {
-      const pending = pendingMigrations();
-      if (!pending) return false;
-      if (!pending.length) {
-        const reply = `zylos-core is already at version ${local.current} (SemVer precedence).`;
-        if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...local, reply }));
-        else output.log(reply);
-        return true;
-      }
-      sameVersion = local;
-    }
+    // Already at this version: the database probe below decides, after the
+    // deployment check and recovery.
+    if (!local.hasUpdate) sameVersion = local;
   }
   try {
     const root=deps.zylosDir ?? ZYLOS_DIR;
@@ -1231,8 +1258,18 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
     migrations = pendingMigrations();
     if (!migrations) return false;
     if (!migrations.length) {
-      if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }));
+      if (sameVersion) {
+        const reply = `zylos-core is already at version ${check.current} (SemVer precedence).`;
+        if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check, reply }));
+        else output.log(reply);
+      } else if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }));
       else output.log('zylos-core is up to date (v' + check.current + ')');
+      return true;
+    }
+    // JSON callers cannot answer the prompt: report what is pending instead.
+    if (jsonOutput && !skipConfirm) {
+      output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check, pendingMigrations: migrations, requiresConfirmation: true,
+        reply: pendingMigrationsReply(check.current, migrations) }));
       return true;
     }
   }

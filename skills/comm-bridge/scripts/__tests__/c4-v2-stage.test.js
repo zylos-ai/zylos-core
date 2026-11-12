@@ -47,7 +47,7 @@ test('public getDb refuses historical v1 unchanged, then checks the layout the e
   const db = new Database(filename); seedV1(db); db.close(); const before = readFileSync(filename);
   const refused = child(dir, `import assert from 'node:assert/strict'; import {getDb} from ${JSON.stringify(moduleURL)};
 assert.throws(getDb, { code: 'SCHEMA_UPGRADE_REQUIRED' });`);
-  assert.equal(refused.status, 0, refused.stderr); assert.deepEqual(readFileSync(filename), before);
+  assert.equal(refused.status, 0, refused.stderr); assert.ok(readFileSync(filename).equals(before), `${filename} changed`);
   const upgrade = new Database(filename); migrateDatabase(upgrade, owner, { strict: false }); upgrade.close();
   const result = child(dir, `import assert from 'node:assert/strict'; import {getDb,close} from ${JSON.stringify(moduleURL)};
 const db=getDb(); assert.equal(db.pragma('user_version',{simple:true}),${owner.SUPPORTED_SCHEMA_VERSION});

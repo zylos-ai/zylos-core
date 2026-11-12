@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { dashboardSchemaOwner as owner } from '../src/lib/schema-owner.js';
 import { TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { Store } from '../src/lib/store.js';
-import { migrateSchema13 } from './fixtures/schema13.js';
+import { legacy, schema20 } from './fixtures/dashboard-history.js';
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-schema-'));
@@ -24,15 +24,7 @@ function migrateFile(file) {
 function assertStoreRefuses(file) {
   const before = fs.readFileSync(file);
   assert.throws(() => new Store(file), { code: 'SCHEMA_UPGRADE_REQUIRED' });
-  assert.deepEqual(fs.readFileSync(file), before);
-}
-function legacy(file) {
-  const db = new Database(file);
-  migrateSchema13(db);
-  db.exec(`
-    INSERT INTO runtime_events(id,ingest_id,event_seq,timestamp,event_type,category) VALUES('old','old',1,'2026-01-01','prompt','activity');
-    INSERT INTO auth_sessions(token_hash,created_at,last_activity_at) VALUES('retained',1,2);`);
-  db.close();
+  assert.ok(fs.readFileSync(file).equals(before), `${file} changed`);
 }
 test('first Store open creates a missing database; owner only consumes open handles', t => {
   const file = fixture(t);
@@ -180,27 +172,6 @@ test('too-new committed WAL is refused on a caller-owned readonly handle', t => 
   assert.notDeepEqual(fs.readFileSync(file), mainBefore);
 });
 
-function schema20(file) {
-  legacy(file);
-  const db = new Database(file);
-  db.exec(`
-    CREATE TABLE core_log_cursors (
-      stream TEXT NOT NULL, file_dev INTEGER NOT NULL, file_ino INTEGER NOT NULL,
-      generation INTEGER NOT NULL CHECK(generation>=1), anchor_len INTEGER NOT NULL DEFAULT 0 CHECK(anchor_len BETWEEN 0 AND 4096),
-      anchor_sha256 TEXT, file_name TEXT NOT NULL, byte_offset INTEGER NOT NULL DEFAULT 0 CHECK(byte_offset>=0),
-      status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','done','gap','source_missing')),
-      updated_at TEXT NOT NULL DEFAULT(datetime('now')), PRIMARY KEY(stream,file_dev,file_ino,generation),
-      CHECK((anchor_len=0)=(anchor_sha256 IS NULL)), CHECK(anchor_len>0 OR byte_offset=0)
-    );
-    CREATE UNIQUE INDEX idx_core_log_cursors_active ON core_log_cursors(stream,file_dev,file_ino) WHERE status='active';
-    ALTER TABLE runtime_events ADD COLUMN session_group TEXT;
-    ALTER TABLE runtime_events ADD COLUMN run_id TEXT;
-    CREATE INDEX idx_events_group_seq ON runtime_events(session_group,event_seq);
-    INSERT INTO schema_migrations(version) VALUES(20);
-    INSERT INTO metric_points(timestamp,metric_name,metric_value,source) VALUES('2026-01-01','retained',42,'fixture');
-  `);
-  db.close();
-}
 
 // Migration integration: owned historical SQLite only; run for schema/owner
 // changes, skip UI-only edits. No network/children/PM2/tmux; handles close before
@@ -476,8 +447,8 @@ test('Store builds an empty database but refuses older or newer data unchanged',
   const before = fs.readFileSync(file);
   assert.throws(() => new Store(file), error => error.code === 'SCHEMA_UPGRADE_REQUIRED' && error.schemaVersion === 13
     && error.supportedVersion === TARGET_SCHEMA_VERSION
-    && error.message === `${file}: schema version 13 is older than supported ${TARGET_SCHEMA_VERSION}; run "zylos upgrade" to migrate. The database was not changed.`);
-  assert.deepEqual(fs.readFileSync(file), before);
+    && error.message === `${file}: schema version 13 is older than supported ${TARGET_SCHEMA_VERSION} and was not migrated; run "zylos upgrade --self" to migrate it.`);
+  assert.ok(fs.readFileSync(file).equals(before), `${file} changed`);
   assert.deepEqual(sidecars(), []);
   migrateFile(file);
   const newer = new Database(file);
@@ -486,6 +457,6 @@ test('Store builds an empty database but refuses older or newer data unchanged',
   newer.close();
   const newerBytes = fs.readFileSync(file);
   assert.throws(() => new Store(file), { code: 'SCHEMA_TOO_NEW' });
-  assert.deepEqual(fs.readFileSync(file), newerBytes);
+  assert.ok(fs.readFileSync(file).equals(newerBytes), `${file} changed`);
   assert.deepEqual(sidecars(), []);
 });

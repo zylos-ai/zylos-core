@@ -18,7 +18,9 @@ through `guardDatabase` / `Store.checkSchema`, which only check:
 - missing file or empty file: build it at the current layout (a new install);
 - older version, including a version-0 file that already has objects: refuse
   with `SCHEMA_UPGRADE_REQUIRED`, naming the database, its version and the
-  supported version, and leave the file unchanged; read-only opens refuse too;
+  supported version, without migrating it, so its contents and version stay
+  as they were (a writable open that closes may still checkpoint committed WAL
+  frames into the main file); read-only opens refuse too;
 - newer version: refuse with `SCHEMA_TOO_NEW`.
 
 `migrateDatabase` is the explicit path. It runs in the upgrade worker inside
@@ -34,6 +36,17 @@ the same version probe the upgrade entry runs). If a present database needs
 migration, the installed package, copied without `node_modules`, becomes the
 target of the normal protected transaction: snapshot, worker migration, readback,
 restart, and snapshot restore on failure. Missing databases do not trigger it.
+`zylos upgrade --self --check` runs the same probe and reports the pending
+databases (`pendingMigrations`) instead of "up to date". Because this is the
+normal transaction, it also runs `npm pack` and `npm install -g` on the
+installed package, so a machine without npm registry access cannot migrate this
+way.
+
+The Dashboard database counts as Core's once its version reaches the
+owner-managed baseline (20), or, at any version, once the installed Core
+already ships Dashboard: the first takeover has then run, so a database it left
+behind (for example after a failed takeover migration) is migrated by the next
+upgrade, including a same-version one.
 
 ## When a migration step is required
 

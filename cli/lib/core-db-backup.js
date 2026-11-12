@@ -32,6 +32,16 @@ export function inspectFirstDashboardTakeover(installedRoot) {
 export function inspectDashboardOwnerManaged(zylosDir, options={}) {
   return runCoreDbWorker({action:'dashboard-state',zylosDir,...options}).dashboardOwnerManaged;
 }
+// Whether Core migrates the Dashboard database. A version at or above the
+// owner-managed baseline is Core's; so is any existing database once the
+// installed Core already ships Dashboard, because the first takeover has run and
+// no ordinary open migrates it any more.
+export function inspectCoreManagesDashboardDb(zylosDir, installedRoot, options={}) {
+  if(inspectDashboardOwnerManaged(zylosDir,options)) return true;
+  try {fs.lstatSync(path.join(zylosDir,'components/dashboard/dashboard.db'));}
+  catch(error) {if(error.code==='ENOENT')return false; throw error;}
+  return !inspectFirstDashboardTakeover(installedRoot);
+}
 function syncDir(dir){const fd=fs.openSync(dir,'r');try{maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}}
 function durableJson(file,value){const fd=fs.openSync(file,'wx',0o600);try{fs.writeFileSync(fd,JSON.stringify(value,null,2)+'\n');maintenance.fsyncFd(fd);}finally{fs.closeSync(fd);}syncDir(path.dirname(file));}
 export function runCoreDbWorker(payload,{workerPath=WORKER,nodePath=process.execPath,timeout=120000}={}) {

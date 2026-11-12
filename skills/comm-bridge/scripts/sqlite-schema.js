@@ -347,7 +347,7 @@ export function guardDatabase(db, owner, { readonly = false } = {}) {
   const { steps, target, ...current } = planDatabaseMigration(db, owner, { allowNew, strict: false });
   if (!steps.length) return current;
   if (current.empty && allowNew) return migrateDatabase(db, owner, { allowNew: true, strict: false });
-  throw Object.assign(new Error(`${databaseLabel(db)}: schema version ${current.version} is older than supported ${target}; run "zylos upgrade" to migrate. The database was not changed.`), {
+  throw Object.assign(new Error(`${databaseLabel(db)}: schema version ${current.version} is older than supported ${target} and was not migrated; run "zylos upgrade --self" to migrate it.`), {
     code: 'SCHEMA_UPGRADE_REQUIRED', schemaVersion: current.version, supportedVersion: target,
   });
 }

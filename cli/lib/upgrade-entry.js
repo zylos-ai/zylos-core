@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateUpgradeHandoff, upgradeFailureCode, upgradeFailureMessage } from './upgrade-admission.js';
-import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectDashboardOwnerManaged, assertDashboardUninstalled } from './core-db-backup.js';
+import { probeCoreDbVersions, preflightCoreDbUpgrade, rehearseCoreDbUpgrade, inspectFirstDashboardTakeover, inspectCoreManagesDashboardDb, assertDashboardUninstalled } from './core-db-backup.js';
 import { beginUpgrade, saveProtectedCode, prepareProtectedInstall, markInstallationIntent, recovery, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { saveOriginalPackage } from './upgrade-package.js';
 import { recoveryNext } from './upgrade-discovery.js';
@@ -68,7 +68,7 @@ export function inspectUpgradeSource(input, deps = {}) {
     } catch(error) {if(error.code!=='ENOENT')throw error;}
   }
   const firstTakeover = inspectFirstDashboardTakeover(coreDir);
-  const dashboardOwnerManaged = inspectDashboardOwnerManaged(zylosDir,{driverRoot:skillsDir});
+  const dashboardOwnerManaged = inspectCoreManagesDashboardDb(zylosDir,coreDir,{driverRoot:skillsDir});
   const options = {driverRoot:skillsDir, schemaRoot:path.join(tempDir,'skills'), dashboardOwnerManaged};
   const versions = (deps.probe ?? probeCoreDbVersions)(zylosDir, tempDir, options);
   if (!versions || !Array.isArray(versions.databases) || versions.databases.length !== (dashboardOwnerManaged ? 3 : 2) || typeof versions.needsMigration !== 'boolean') throw new Error('Invalid database version probe result');

@@ -35,7 +35,7 @@ export class Store {
       throw Object.assign(new Error(`Dashboard schema ${currentVersion} is newer than supported ${targetVersion}`), { code: 'SCHEMA_TOO_NEW' });
     }
     if (needsMigration) {
-      throw Object.assign(new Error(`${this.db.name}: schema version ${currentVersion} is older than supported ${targetVersion}; run "zylos upgrade" to migrate. The database was not changed.`), {
+      throw Object.assign(new Error(`${this.db.name}: schema version ${currentVersion} is older than supported ${targetVersion} and was not migrated; run "zylos upgrade --self" to migrate it.`), {
         code: 'SCHEMA_UPGRADE_REQUIRED', schemaVersion: currentVersion, supportedVersion: targetVersion,
       });
     }

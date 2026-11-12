@@ -19,7 +19,7 @@ import { copyTree } from './fs-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { getCoreEcosystemPath, createPm2Helpers } from './pm2.js';
-import { assertDashboardUninstalled as assertIndependentDashboardUninstalled, probeCoreDbVersions, inspectDashboardOwnerManaged } from './core-db-backup.js';
+import { assertDashboardUninstalled as assertIndependentDashboardUninstalled, probeCoreDbVersions, inspectCoreManagesDashboardDb } from './core-db-backup.js';
 import { recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 import { updateZylosConfigLocked, readSessionMode } from './config.js';
@@ -236,8 +236,9 @@ export function downloadCoreToTemp(version, branch) {
 export function pendingDatabaseMigrations({ zylosDir, installedRoot }) {
   const root = fs.realpathSync(zylosDir);
   const driverRoot = path.join(root, '.claude', 'skills');
-  const dashboardOwnerManaged = inspectDashboardOwnerManaged(root, { driverRoot });
-  const versions = probeCoreDbVersions(root, fs.realpathSync(installedRoot), { driverRoot, dashboardOwnerManaged });
+  const installed = fs.realpathSync(installedRoot);
+  const dashboardOwnerManaged = inspectCoreManagesDashboardDb(root, installed, { driverRoot });
+  const versions = probeCoreDbVersions(root, installed, { driverRoot, dashboardOwnerManaged });
   if (!Array.isArray(versions?.databases)) throw new Error('Invalid database version probe result');
   return versions.databases.filter(row => row.status === 'present' && row.needsMigration === true);
 }

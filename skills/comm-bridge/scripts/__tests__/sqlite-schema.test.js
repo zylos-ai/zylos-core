@@ -295,7 +295,7 @@ for(const [label,owner,layout] of [['c4',c4,'c4-v0.9.0-v1.sql'],['scheduler',sch
   const db=new Database(file,options);
   assert.throws(()=>registeredGuardDatabase(db,owner),error=>{
    assert.equal(error.code,'SCHEMA_UPGRADE_REQUIRED');assert.equal(error.schemaVersion,1);assert.equal(error.supportedVersion,owner.SUPPORTED_SCHEMA_VERSION);
-   assert.equal(error.message,`${file}: schema version 1 is older than supported ${owner.SUPPORTED_SCHEMA_VERSION}; run "zylos upgrade" to migrate. The database was not changed.`);
+   assert.equal(error.message,`${file}: schema version 1 is older than supported ${owner.SUPPORTED_SCHEMA_VERSION} and was not migrated; run "zylos upgrade --self" to migrate it.`);
    return true;
   });
   assert.equal(db.inTransaction,false);db.close();

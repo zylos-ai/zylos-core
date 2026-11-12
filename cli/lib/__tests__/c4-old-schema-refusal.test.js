@@ -25,7 +25,7 @@ function oldInstance(t) {
   const db = new Database(file); db.exec(fs.readFileSync(v1, 'utf8')); db.close();
   const before = fs.readFileSync(file);
   const unchanged = () => {
-    assert.deepEqual(fs.readFileSync(file), before);
+    assert.ok(fs.readFileSync(file).equals(before), `${file} changed`);
     assert.deepEqual(fs.readdirSync(path.dirname(file)), ['c4.db']);
   };
   return { home, zylosDir, file, unchanged };
@@ -36,7 +36,7 @@ const upgradeRequired = file => error => {
   assert.equal(error.schemaVersion, 1);
   assert.equal(error.supportedVersion, SUPPORTED_SCHEMA_VERSION);
   assert.ok(error.message.startsWith(`${file}: schema version 1 is older than supported ${SUPPORTED_SCHEMA_VERSION}`), error.message);
-  assert.match(error.message, /run "zylos upgrade" to migrate\. The database was not changed\./);
+  assert.match(error.message, /and was not migrated; run "zylos upgrade --self" to migrate it\./);
   return true;
 };
 
@@ -56,7 +56,7 @@ test('origin presence reports the refusal as an unreadable need, not as absence'
   const f = oldInstance(t);
   const facts = await readOriginFacts({ zylosDir: f.zylosDir });
   assert.equal(facts.originNeed.error.code, 'READ_FAILED');
-  assert.match(facts.originNeed.error.message, /schema version 1 is older than supported .*run "zylos upgrade"/);
+  assert.match(facts.originNeed.error.message, /schema version 1 is older than supported .*run "zylos upgrade --self"/);
   assert.equal(facts.transitionOpen, null);
   f.unchanged();
 });

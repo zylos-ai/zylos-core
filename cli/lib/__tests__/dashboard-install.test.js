@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import crypto from 'node:crypto';
 import { copyDashboardDb, applyDashboardRegistration, applyDashboardRoute, verifyDashboard, restoreDashboardService, migrateTakeoverDashboardDb } from '../dashboard-install.js';
 import Database from '../../../skills/comm-bridge/scripts/sqlite-driver.js';
 import { Store } from '../../../skills/dashboard/src/lib/store.js';
@@ -62,6 +63,7 @@ function legacyDashboard(data, {failAt}={}) {
  return file;
 }
 const pm2Starts=dir=>fs.existsSync(path.join(dir,'pm2-calls'))?fs.readFileSync(path.join(dir,'pm2-calls'),'utf8').split('\n').filter(l=>l.includes('"start"')).length:0;
+const sha=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const version=file=>{const db=new Database(file,{readonly:true});try{return db.prepare('SELECT MAX(version) v FROM schema_migrations').get().v;}finally{db.close();}};
 test('first takeover migrates a legacy Dashboard database before starting the service',t=>{
  const {dir,data}=fixture(t),tx=path.join(dir,'tx');
@@ -87,8 +89,33 @@ test('a failed takeover migration restores the cutoff copy and does not start th
  assert.match(result.error.message,/restored from the takeover copy/);
  assert.match(result.error.message,/fixture migration failed/);
  assert.equal(pm2Starts(dir),0);
- assert.deepEqual(fs.readFileSync(file),copy);
+ assert.ok(fs.readFileSync(file).equals(copy), `${file} changed`);
  for(const suffix of ['-wal','-shm'])assert.equal(fs.existsSync(file+suffix),false);
+ assert.equal(version(file),13);
+});
+for(const journal of ['wal','delete'])test(`a migration child killed mid-migration (${journal} journal) leaves no sidecar on the restored copy`,t=>{
+ const {dir,data,code}=fixture(t),tx=path.join(dir,'tx');
+ const file=legacyDashboard(data);
+ {const db=new Database(file);db.pragma(`journal_mode = ${journal}`);db.close();}
+ assert.equal(copyDashboardDb(dir,tx).ok,true);
+ const copy=sha(path.join(tx,'dashboard/db-copy/dashboard.db'));
+ // The installed Dashboard is replaced by a fixture schema module: the real
+ // inspection, and a migration that writes and then dies without closing,
+ // as a killed child would. WAL mode keeps committed frames in -wal; rollback
+ // mode keeps a hot -journal.
+ fs.unlinkSync(code);fs.mkdirSync(path.join(code,'src/lib'),{recursive:true});
+ const driverDir=path.join(dir,'.claude/skills/comm-bridge/scripts');fs.mkdirSync(driverDir,{recursive:true});
+ fs.symlinkSync(path.join(root,'skills/comm-bridge/scripts/sqlite-driver.js'),path.join(driverDir,'sqlite-driver.js'));
+ fs.writeFileSync(path.join(code,'src/lib/schema.js'),`export {inspectDatabase} from ${JSON.stringify(pathToFileURL(path.join(root,'skills/dashboard/src/lib/schema.js')).href)};
+export function migrateDatabase(db){
+ db.pragma('wal_autocheckpoint = 0');
+ if(${JSON.stringify(journal)}==='wal')db.exec("INSERT INTO schema_migrations(version) VALUES(14)");
+ else {db.exec('BEGIN IMMEDIATE');db.exec("INSERT INTO schema_migrations(version) VALUES(14)");}
+ process.kill(process.pid,'SIGKILL');
+}`);
+ assert.throws(()=>migrateTakeoverDashboardDb({zylosDir:dir,transactionDir:tx}),/restored from the takeover copy/);
+ for(const suffix of ['-wal','-shm','-journal'])assert.equal(fs.existsSync(file+suffix),false,suffix);
+ assert.equal(sha(file),copy);
  assert.equal(version(file),13);
 });
 test('takeover refuses to migrate a legacy Dashboard database without the cutoff copy',t=>{
@@ -101,7 +128,7 @@ test('takeover refuses to migrate a legacy Dashboard database without the cutoff
   assert.match(result.error.message,/copy is missing; the database was not migrated/);
  }
  assert.equal(pm2Starts(dir),0);
- assert.deepEqual(fs.readFileSync(file),before);
+ assert.ok(fs.readFileSync(file).equals(before), `${file} changed`);
  assert.equal(version(file),13);
 });
 test('takeover leaves an absent or current Dashboard database alone',t=>{
@@ -111,7 +138,7 @@ test('takeover leaves an absent or current Dashboard database alone',t=>{
  new Store(path.join(data,'dashboard.db')).close();
  const before=fs.readFileSync(path.join(data,'dashboard.db'));
  assert.deepEqual(migrateTakeoverDashboardDb({zylosDir:dir}),{state:'unchanged'});
- assert.deepEqual(fs.readFileSync(path.join(data,'dashboard.db')),before);
+ assert.ok(fs.readFileSync(path.join(data,'dashboard.db')).equals(before), `${path.join(data,'dashboard.db')} changed`);
 });
 test('missing Caddy skips managed routing',t=>{
  const {dir,bin}=fixture(t);fs.unlinkSync(path.join(bin,'caddy'));
