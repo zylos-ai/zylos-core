@@ -8,7 +8,7 @@ const BASE_VARS = ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TERM', 
 
 // Built-in allowlist exceptions — auto-inherited from processEnv when present.
 const PROXY_VARS = [
-  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'NODE_USE_ENV_PROXY',
   'http_proxy', 'https_proxy', 'no_proxy',
 ];
 

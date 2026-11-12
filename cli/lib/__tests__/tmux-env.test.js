@@ -237,10 +237,22 @@ describe('buildCleanEnv', () => {
   });
 
   it('auto-inherits proxy vars from processEnv', () => {
-    const processEnv = { ...baseProcessEnv, HTTP_PROXY: 'http://proxy:8080', https_proxy: 'http://proxy:8443' };
+    const processEnv = { ...baseProcessEnv, HTTP_PROXY: 'http://proxy:8080', https_proxy: 'http://proxy:8443', NODE_USE_ENV_PROXY: '1' };
     const { env } = buildCleanEnv({ processEnv, dotenvVars: {}, platform: 'linux' });
     assert.equal(env.HTTP_PROXY, 'http://proxy:8080');
     assert.equal(env.https_proxy, 'http://proxy:8443');
+    assert.equal(env.NODE_USE_ENV_PROXY, '1');
+  });
+
+  it('omits the Node environment proxy switch when absent from processEnv', () => {
+    const { env } = buildCleanEnv({ processEnv: baseProcessEnv, dotenvVars: {}, platform: 'linux' });
+    assert.equal(Object.hasOwn(env, 'NODE_USE_ENV_PROXY'), false);
+  });
+
+  it('preserves an explicitly disabled Node environment proxy switch', () => {
+    const processEnv = { ...baseProcessEnv, NODE_USE_ENV_PROXY: '0' };
+    const { env } = buildCleanEnv({ processEnv, dotenvVars: {}, platform: 'linux' });
+    assert.equal(env.NODE_USE_ENV_PROXY, '0');
   });
 
   it('includes TMPDIR on macOS when present', () => {
