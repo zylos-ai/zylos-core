@@ -104,10 +104,11 @@ test('reorganization looks up existing and archived pages before searching point
   assert.match(pages, /decisions directly related to this project/);
   assert.match(pages, /Record the old headings read in `Moved from`/);
   assert.match(pages, /using the page format in \[projects-format\.md\]\(projects-format\.md\) \(Status is one of `active`, `planning`, `paused`, `completed`, `abandoned`\)/);
-  assert.match(pages, /Before changing an existing page, you must read it with `memory-write.js --read --path reference\/projects\/<name>.md`, which returns its complete text and the matching `sha256` together/);
+  assert.match(pages, /Use only `memory-write.js --append --path reference\/projects\/<name>.md` for existing pages/);
   assert.match(pages, /do not change its `Status`, `Updated`, or `Description`/);
-  assert.match(pages, /Supplement only `Keys` and `Moved from`/);
-  assert.match(pages, /Append useful missing old facts in a final section named `整理补充（<date>）`/);
+  assert.match(pages, /The tool merges only these two header fields under the lock/);
+  assert.match(pages, /Supply a complete new section named `整理补充（<date>）` on stdin; the tool appends it after the current file contents/);
+  assert.match(pages, /Do not rewrite the existing page/);
 });
 
 test('reorganization writes only project pages and generated indexes without rebuilding decisions', () => {
@@ -121,15 +122,15 @@ test('reorganization writes only project pages and generated indexes without reb
   }
   assert.match(normalize(reorg), /Do not generate topic pages from the old `decisions.md`/);
   assert.match(normalize(reorg), /Standing rules remain in `preferences.md`; do not change that file/);
-  assert.match(normalize(reorg), /`MEMORY_CONFLICT` leaves the file unchanged: reread with `memory-write.js --read --path reference\/projects\/<name>.md`, merge again, and retry with the hash returned alongside the content/);
-  assert.match(normalize(reorg), /`SYNC_BUSY` means retry later/);
+  assert.match(normalize(reorg), /`SYNC_BUSY` means retry the same append after Sync finishes/);
+  assert.match(normalize(reorg), /`MEMORY_FILE_NOT_FOUND` can mean Sync moved the page into or out of archive: locate it again and append at its current path/);
   assert.match(normalize(reorg), /`MEMORY_FILE_NOT_FOUND` can mean Sync moved the page/);
 });
 
 test('reorganization builds pages before archival and reports archive collisions without retrying', () => {
   const finish = normalize(between(reorg, '4. **Finish', '## Writing rules'));
   assert.match(finish, /Run `reference-index.js rebuild`, then run `reference-index.js move-old` as a separate command, only after every `create`, `unarchive`, and `memory-write` operation in step 2 has returned `ok`/);
-  assert.match(finish, /If any operation returns `SYNC_BUSY`, `MEMORY_CONFLICT`, or any other error, follow the writing rules and retry until it succeeds; do not run `move-old` while any write remains unsuccessful/);
+  assert.match(finish, /If any operation returns `SYNC_BUSY` or any other error, follow the writing rules and retry until it succeeds; do not run `move-old` while any write remains unsuccessful/);
   assert.match(finish, /date-time filenames without overwriting existing files/);
   assert.match(finish, /If `move-old` returns `EXISTS`, nothing moved: report it in the result returned to the spawning session and do not retry/);
   assert.match(finish, /Build pages first and move old files last/);
@@ -144,7 +145,8 @@ test('interrupted reorganization waits for the next instruction and merges inste
   assert.doesNotMatch(text, /seven days|7 days/i);
   assert.match(text, /Start again from step 1 and merge existing pages/);
   assert.match(text, /do not create duplicate pages/);
-  assert.match(text, /`EXISTS` or `MEMORY_CONFLICT`, rereads with `memory-write.js --read --path reference\/projects\/<name>.md`, and merges/);
+  assert.match(text, /`create` returns `EXISTS` for an existing page; handle it with the append-only method above/);
+  assert.match(text, /Appends share one lock and read the latest page inside that lock/);
   assert.match(text, /`move-old` skips absent files/);
 });
 
@@ -156,7 +158,7 @@ test('reorganization gives complete memory-relative paths and forbids probe page
     for (const command of [
       'reference-index.js create --path reference/projects/<name>.md',
       'reference-index.js unarchive --path reference/projects/archive/<name>.md',
-      'memory-write.js --path reference/projects/<name>.md --sha256 <hash>',
+      'memory-write.js --append --path reference/projects/<name>.md',
     ]) assert.ok(text.includes(command), command);
     assert.match(text, /Do not create probe or test pages/);
     assert.match(text, /never delete, move or rename memory files with shell commands such as `rm` or `mv`/);
@@ -179,20 +181,20 @@ test('reorganization excludes consent, date-based selection, Origin-only reads a
   assert.doesNotMatch(sync, /reorganization progress (?:page|file)/i);
 });
 
-test('existing page writes use a complete heredoc rather than command output', () => {
+test('existing page supplements use complete heredoc content rather than a replacement draft', () => {
   const existing = normalize(between(reorg, '- Existing pages:', 'Only write'));
-  assert.match(existing, /Write out the complete new page content in a heredoc; do not generate it with `sed`, `awk`, or similar commands, whether piped directly into the writer or first saved to a temporary file/);
+  assert.match(existing, /Write out the complete nonempty `整理补充（<date>）` section in a heredoc, including any needed leading newlines/);
+  assert.match(existing, /It is appended verbatim; do not pass a replacement page or generate the section with `sed`, `awk`, or similar commands, whether directly piped or first saved to a temporary file/);
 });
 
-test('existing page writes use the read mode snapshot and reject standalone hashes', () => {
+test('existing pages use only locked appends without caller hash or replacement steps', () => {
   const existing = normalize(between(reorg, '- Existing pages:', 'Only write'));
-  assert.match(existing, /Before editing an existing page, you must use `memory-write.js --read --path reference\/projects\/<name>.md` to read its complete text and matching `sha256` in one response/);
-  assert.match(existing, /The write's `--sha256` must come only from that read response, the previous successful write result, or the `MEMORY_CONFLICT` response/);
-  assert.match(existing, /Never use `sha256sum` or any command that does not print the page content to obtain the hash/);
-  assert.match(existing, /`MEMORY_CONFLICT` leaves the file unchanged: reread with `memory-write.js --read --path reference\/projects\/<name>.md`, merge again, and retry with the hash returned alongside the content/);
-  for (const source of [reorg, writer]) {
-    assert.doesNotMatch(normalize(source), /sha256sum <page>|print `sha256sum|record its hash in the same step|same command that reads the page/);
-  }
-  assert.match(normalize(writer), /memory-write.js --read --path reference\/preferences.md/);
-  assert.match(normalize(writer), /The hash and complete text come from the same byte snapshot/);
+  assert.match(existing, /Existing pages: use only `memory-write.js --append --path reference\/projects\/<name>.md`/);
+  assert.match(existing, /with optional `--keys "<comma-separated values>"` and `--moved-from "<comma-separated old headings>"`/);
+  assert.match(existing, /These values supplement only `Keys` and `Moved from`, deduplicated in their existing order, then new values/);
+  assert.match(existing, /The tool reads the current page and merges and appends under the same lock as ordinary memory writes; it preserves every other header field and the body/);
+  assert.match(normalize(reorg), /Tell it to use only `memory-write.js --append` for existing pages; new pages still use `reference-index.js create`/);
+  assert.doesNotMatch(reorg, /--read|--sha256|sha256sum|hash|MEMORY_CONFLICT/);
+  assert.match(normalize(writer), /Append mode neither needs nor accepts `--sha256`/);
+  assert.match(normalize(writer), /After `MEMORY_CONFLICT`, reread with `--read`, merge the complete content, and retry with that new snapshot's hash/);
 });

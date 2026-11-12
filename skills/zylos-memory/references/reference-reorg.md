@@ -21,7 +21,9 @@ this session started is still running, do nothing. Start only one at a time:
   `gpt-6.1-terra`, with `fork_turns: "none"`. If no Terra-tier model is listed,
   omit `model` and inherit the parent model.
 
-Give the worker this file's path so it reads the procedure itself. Do not wait
+Give the worker this file's path so it reads the procedure itself. Tell it to
+use only `memory-write.js --append` for existing pages; new pages still use
+`reference-index.js create`. Do not wait
 for it with `wait_agent`; its final result returns to the spawning session.
 
 ## Worker procedure
@@ -65,12 +67,15 @@ for it with `wait_agent`; its final result returns to the spawning session.
      unfinished items, key decisions and reasons, and recent records. Record the
      old headings read in `Moved from`. Facts follow the source; retain the
      original wording when unsure.
-   - Before changing an existing page, you must read it with
-     `memory-write.js --read --path reference/projects/<name>.md`, which returns
-     its complete text and the matching `sha256` together. The page is authoritative: do not change its `Status`,
-     `Updated`, or `Description`. Supplement only `Keys` and `Moved from` in its
-     header. Append useful missing old facts in a final section named
-     `整理补充（<date>）`, and save through `memory-write.js`.
+   - If a page already exists, read it to identify useful missing facts. It is
+     authoritative: do not change its `Status`, `Updated`, or `Description`.
+     Use only `memory-write.js --append --path reference/projects/<name>.md`
+     for existing pages, with `--keys "<comma-separated values>"` and
+     `--moved-from "<comma-separated old headings>"` when needed. The tool merges
+     only these two header fields under the lock. Supply a complete new section
+     named `整理补充（<date>）` on stdin; the tool appends it after the current
+     file contents. Do not rewrite the existing page.
+
 
 3. **Do not rebuild decision pages.** Do not generate topic pages from the old
    `decisions.md`. New decisions still go into `reference/decisions/` through
@@ -81,7 +86,7 @@ for it with `wait_agent`; its final result returns to the spawning session.
 4. **Finish with rebuild, then move-old.** Run `reference-index.js rebuild`,
    then run `reference-index.js move-old` as a separate command, only after
    every `create`, `unarchive`, and `memory-write` operation in step 2 has
-   returned `ok`. If any operation returns `SYNC_BUSY`, `MEMORY_CONFLICT`,
+   returned `ok`. If any operation returns `SYNC_BUSY`
    or any other error, follow the writing rules and retry until it succeeds;
    do not run `move-old` while any write remains unsuccessful. This moves both old files intact into
    `reference/legacy/` with date-time filenames without overwriting existing
@@ -95,7 +100,7 @@ for it with `wait_agent`; its final result returns to the spawning session.
 Every `--path` is relative to the memory directory and includes the category
 folder, for example `reference-index.js create --path reference/projects/<name>.md`,
 `reference-index.js unarchive --path reference/projects/archive/<name>.md`, and
-`memory-write.js --path reference/projects/<name>.md --sha256 <hash>`.
+`memory-write.js --append --path reference/projects/<name>.md`.
 Do not create probe or test pages, and never delete, move or rename memory files
 with shell commands such as `rm` or `mv`; if a command fails, read its error or
 the script usage instead.
@@ -106,23 +111,21 @@ Write/Edit or shell redirection to write memory. Use these writing methods:
 
 - New pages: `reference-index.js create --path reference/projects/<name>.md`, with content from stdin.
   `EXISTS` means read and handle the existing page.
-- Existing pages: `memory-write.js --path reference/projects/<name>.md --sha256 <hash-read-with-the-file>`,
-  with the new content from stdin, as described in [the locked writer](memory-write.md).
-  Before editing an existing page, you must use
-  `memory-write.js --read --path reference/projects/<name>.md` to read its
-  complete text and matching `sha256` in one response. The write's `--sha256`
-  must come only from that read response, the previous successful write result,
-  or the `MEMORY_CONFLICT` response. Never use `sha256sum` or any command that
-  does not print the page content to obtain the hash: that defeats conflict
-  detection and may silently overwrite Sync's changes.
-  Write out the complete new page content in a heredoc; do not generate it with
-  `sed`, `awk`, or similar commands, whether piped directly into the writer or
-  first saved to a temporary file.
-  `MEMORY_CONFLICT` leaves the file unchanged: reread with
-  `memory-write.js --read --path reference/projects/<name>.md`, merge again,
-  and retry with the hash returned alongside the content.
-  `SYNC_BUSY` means retry later. `MEMORY_FILE_NOT_FOUND` can mean Sync moved the
-  page into or out of archive: locate it again before writing.
+- Existing pages: use only
+  `memory-write.js --append --path reference/projects/<name>.md`
+  with optional `--keys "<comma-separated values>"` and
+  `--moved-from "<comma-separated old headings>"`. These values supplement only
+  `Keys` and `Moved from`, deduplicated in their existing order, then new values.
+  The tool reads the current page and merges and appends under the same lock as
+  ordinary memory writes; it preserves every other header field and the body.
+  Write out the complete nonempty `整理补充（<date>）` section in a heredoc,
+  including any needed leading newlines. It is appended verbatim; do not pass a
+  replacement page or generate the section with `sed`, `awk`, or similar
+  commands, whether directly piped or first saved to a temporary file.
+  `SYNC_BUSY` means retry the same append after Sync finishes.
+  `MEMORY_FILE_NOT_FOUND` can mean Sync moved the page into or out of archive:
+  locate it again and append at its current path. If nothing useful is missing,
+  no append is needed.
 
 Only write `reference/projects/**` (including `unarchive`), the INDEX files
 generated by `rebuild`, and the final `move-old` operation. Do not write pages
@@ -138,8 +141,9 @@ after interruption, an error, or `move-old` returning `EXISTS`, wait for the nex
 system instruction. The Supervisor sends it on the next Origin/global Sync request. Start again from step 1 and merge existing pages as in step 2;
 do not create duplicate pages.
 
-If two workers overlap after session replacement, `create` and `memory-write.js`
-prevent overwriting: the later writer gets `EXISTS` or `MEMORY_CONFLICT`, rereads
-with `memory-write.js --read --path reference/projects/<name>.md`, and merges. A later `move-old` with no original files left does nothing.
+If two workers overlap after session replacement, `create` returns `EXISTS`
+for an existing page; handle it with the append-only method above. Appends share
+one lock and read the latest page inside that lock. A later `move-old` with no
+original files left does nothing.
 If an old file changes or disappears partway through, do not add special handling:
 changes are archived with the file, and `move-old` skips absent files.

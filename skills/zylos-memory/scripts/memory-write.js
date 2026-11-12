@@ -113,18 +113,82 @@ export async function writeMemory({ path: inputPath, sha256: expected, content, 
   }, { waitMs });
 }
 
+function mergeAppendHeaders(bytes, fields) {
+  let merged = bytes;
+  for (const [label, supplied] of [['Keys', fields.keys], ['Moved from', fields.movedFrom]]) {
+    if (supplied === undefined) continue;
+    const text = merged.toString('latin1');
+    const boundary = /\r?\n[ \t]*\r?\n/.exec(text)?.index ?? merged.length;
+    const header = text.slice(0, boundary);
+    const line = new RegExp(String.raw`^(- \*\*${label}:\*\*[ \t]*)([^\r\n]*)`, 'm').exec(header);
+    const start = line ? line.index + line[1].length : boundary;
+    const end = line ? start + line[2].length : boundary;
+    const old = line ? merged.subarray(start, end).toString('utf8') : '';
+    const values = [...new Set([...old.split(','), ...supplied.split(',')].map(value => value.trim()).filter(Boolean))];
+    if (!line && !values.length) continue;
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const prefix = line ? '' : `${start && merged[start - 1] !== 10 ? eol : ''}- **${label}:** `;
+    merged = Buffer.concat([merged.subarray(0, start), Buffer.from(prefix + values.join(', ')), merged.subarray(end)]);
+  }
+  return merged;
+}
+
+/** Merge permitted header values and append bytes while holding the writer lock. */
+export async function appendMemory({ path: inputPath, keys, movedFrom, content, env = process.env, waitMs } = {},
+  { currentRunId = readCurrentRunId, io = fs } = {}) {
+  const rel = relativePath(inputPath);
+  if (!(typeof content === 'string' || Buffer.isBuffer(content)) || content.length === 0 ||
+      [keys, movedFrom].some(value => value !== undefined && (typeof value !== 'string' || /[\r\n]/.test(value)))) {
+    throw memoryError('INVALID_INPUT', 'Expected nonempty append content and single-line header values');
+  }
+  const root = env.ZYLOS_DIR || path.join(env.HOME || process.env.HOME, 'zylos');
+  resolveFile(root, rel, io);
+  const scope = await writeScope(rel, env);
+  return withMemoryLock(scope.runDir, async () => {
+    const sessionGroup = scope.group === 'origin' && scope.readSessionMode().mode !== 'multi' ? null : scope.group;
+    const liveRun = await currentRunId({ runDir: scope.runDir, sessionGroup });
+    const kinds = scope.group === 'origin' ? [sessionGroup ? 'group' : 'global', 'origin'] : ['group'];
+    if (kinds.some(kind => readSyncMarker({ runDir: scope.runDir, kind, currentRunId: liveRun }).held)) {
+      throw memoryError('SYNC_BUSY', 'Memory Sync is running; retry after it finishes');
+    }
+    const { real, stat } = resolveFile(root, rel, io);
+    const currentBytes = io.readFileSync(real);
+    const paragraph = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+    const bytes = Buffer.concat([mergeAppendHeaders(currentBytes, { keys, movedFrom }), paragraph]);
+    const temp = path.join(path.dirname(real), `.${path.basename(real)}.${randomBytes(12).toString('hex')}.tmp`);
+    let fd, created = false;
+    try {
+      fd = io.openSync(temp, 'wx', stat.mode & 0o7777);
+      created = true;
+      io.writeFileSync(fd, bytes);
+      io.fchmodSync(fd, stat.mode & 0o7777);
+      io.closeSync(fd);
+      fd = undefined;
+      io.renameSync(temp, real);
+    } finally {
+      if (fd !== undefined) io.closeSync(fd);
+      if (created) {
+        try { io.unlinkSync(temp); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+    }
+    return { path: rel, sha256: sha256(bytes) };
+  }, { waitMs });
+}
+
 /** JSON entry point for component callers; content arrives as raw stdin bytes. */
 export async function runMemoryWriteCli(argv = process.argv.slice(2), {
   env = process.env, currentRunId = readCurrentRunId, waitMs,
   input = () => fs.readFileSync(0), output = text => process.stdout.write(text),
 } = {}) {
   try {
-    const args = options(argv, ['path', 'sha256'], ['read']);
-    if (args.positional.length || args.path === undefined ||
-        (args.read ? args.sha256 !== undefined : args.sha256 === undefined)) {
-      throw memoryError('INVALID_INPUT', 'Usage: memory-write.js --read --path RELATIVE_PATH | memory-write.js --path RELATIVE_PATH --sha256 EXPECTED_HASH < content');
+    const args = options(argv, ['path', 'sha256', 'keys', 'moved-from'], ['read', 'append']);
+    if (args.positional.length || args.path === undefined || (args.read && args.append) ||
+        ((args.read || args.append) ? args.sha256 !== undefined : args.sha256 === undefined) ||
+        (!args.append && (args.keys !== undefined || args['moved-from'] !== undefined))) {
+      throw memoryError('INVALID_INPUT', 'Usage: memory-write.js --read --path PATH | --append --path PATH [--keys VALUES] [--moved-from VALUES] < paragraph | --path PATH --sha256 HASH < content');
     }
-    const data = args.read ? readMemory({ path: args.path, env }) :
+    const data = args.read ? readMemory({ path: args.path, env }) : args.append ?
+      await appendMemory({ path: args.path, keys: args.keys, movedFrom: args['moved-from'], content: input(), env, waitMs }, { currentRunId }) :
       await writeMemory({ path: args.path, sha256: args.sha256, content: input(), env, waitMs }, { currentRunId });
     output(JSON.stringify({ ok: true, data }) + '\n');
     return 0;
