@@ -21,7 +21,7 @@ const require = createRequire(import.meta.url);
 const packageRoot = path.resolve(import.meta.dirname, '../../..');
 const Database = require(path.join(packageRoot, 'skills/comm-bridge/node_modules/better-sqlite3'));
 
-function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firstTakeover = true, databaseMode = 'migrate' } = {}) {
+function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firstTakeover = true, databaseMode = 'migrate', from = '0.9.3', to = '0.9.4', olderDatabases = false } = {}) {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(temporaryBase, 'default-finalizer-')));
   const previousHome = process.env.HOME, previousPm2Home = process.env.PM2_HOME, previousPath = process.env.PATH;
   process.env.HOME = home;
@@ -77,7 +77,12 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
     const file=path.join(root,item.source);
     fs.mkdirSync(path.dirname(file),{recursive:true});
     const db=new Database(file);
-    try {migrateDatabase(db,[c4Schema,schedulerSchema,webSchema][index],{allowNew:true,strict:false});}
+    // Older C4/scheduler layouts come from the released v1 samples.
+    const older=olderDatabases && ['c4-v0.9.0-v1.sql','scheduler-v0.9.0-v1.sql'][index];
+    try {
+      if(older)db.exec(fs.readFileSync(path.join(packageRoot,'skills/comm-bridge/scripts/__tests__/fixtures/migration-history',older),'utf8'));
+      else migrateDatabase(db,[c4Schema,schedulerSchema,webSchema][index],{allowNew:true,strict:false});
+    }
     finally {db.close();}
   }
   const database = new Database(path.join(root, 'comm-bridge/c4.db'));
@@ -92,7 +97,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
   m.runInstaller = () => { calls.push('npm'); return ''; };
   const tempDir = path.join(home, 'download');
   fs.mkdirSync(path.join(tempDir, 'skills/dashboard'), {recursive:true});
-  const state = { schemaVersion: 1, from: '0.9.3', to: '0.9.4', tempDir, zylosDir:root, firstTakeover, dashboardOwnerManaged:false };
+  const state = { schemaVersion: 1, from, to, tempDir, zylosDir:root, firstTakeover, dashboardOwnerManaged:false };
   let dir, journal;
   if (protectedUpgrade) {
     dir = path.join(root, '.backup/self-upgrade/tx');
@@ -113,7 +118,7 @@ function fixture(t, { protectedUpgrade = true, temporaryBase = os.tmpdir(), firs
       nodePath: process.execPath, phase: 'installing', installationIntent: true,
       databaseMode, firstTakeover, dashboardOwnerManaged:false, dbBackupDir: snapshot.dbBackupDir,
       snapshotManifestHash: m.hash(path.join(snapshot.dbBackupDir, 'manifest.json')),
-      from: '0.9.3', to: '0.9.4', originalServices: [],
+      from, to, originalServices: [],
       coreManifest: LEGACY_CORE_DATABASES.map(item => ({ name: item.owner, existedBefore: true,
         backedUp: true, originalHash: m.treeHash(path.join(skillsDir, item.owner)),
         dependencies:{kind:'directory',sha256:m.treeHash(path.join(skillsDir,item.owner,'node_modules'))} })),
@@ -204,6 +209,31 @@ test('default protected initial finalizer publishes real preparation, closes jou
   assert.ok(f.calls.indexOf('start') > f.calls.indexOf('ensure-memory'));
   assert.ok(f.calls.indexOf('restart') > f.calls.indexOf('verify'));
   assertDataPreserved(f);
+});
+
+// Same-version upgrade: the installed package is its own target and the only
+// work is migrating older databases. Real snapshot, worker migration and readback.
+test('same-version protected finalizer migrates older C4 and scheduler databases from a verified snapshot', async t => {
+  const f = fixture(t, { from: '1.0.0', to: '1.0.0', olderDatabases: true, firstTakeover: false });
+  const userVersion = file => { const db = new Database(file, { readonly: true }); try { return db.pragma('user_version', { simple: true }); } finally { db.close(); } };
+  for (const source of ['comm-bridge/c4.db', 'scheduler/scheduler.db']) assert.equal(userVersion(path.join(f.root, source)), 1);
+  const result = await f.run();
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(result.databaseMode, 'migrate');
+  assert.equal(result.dbSnapshotVerified, true);
+  const journal = f.load();
+  assert.equal(journal.phase, 'upgrade_complete');
+  assert.equal(journal.from, '1.0.0'); assert.equal(journal.to, '1.0.0');
+  // The snapshot keeps the original versions; the live databases read back current.
+  const manifest = JSON.parse(fs.readFileSync(path.join(journal.dbBackupDir, 'manifest.json'), 'utf8'));
+  const snapshotVersion = source => manifest.databases.find(item => item.source === source).userVersion;
+  assert.equal(snapshotVersion('comm-bridge/c4.db'), 1);
+  assert.equal(snapshotVersion('scheduler/scheduler.db'), 1);
+  for (const item of manifest.databases.filter(item => item.file)) assert.equal(userVersion(path.join(journal.dbBackupDir, item.file)), item.userVersion);
+  assert.equal(userVersion(path.join(f.root, 'comm-bridge/c4.db')), c4Schema.SUPPORTED_SCHEMA_VERSION);
+  assert.equal(userVersion(path.join(f.root, 'scheduler/scheduler.db')), schedulerSchema.SUPPORTED_SCHEMA_VERSION);
+  assertDataPreserved(f);
+  assert.ok(f.calls.includes('start'));
 });
 
 test('protected finalizer reports persisted unchanged database mode and verified snapshot',async t=>{

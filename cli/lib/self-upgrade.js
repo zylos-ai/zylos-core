@@ -19,7 +19,7 @@ import { copyTree } from './fs-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { getCoreEcosystemPath, createPm2Helpers } from './pm2.js';
-import { assertDashboardUninstalled as assertIndependentDashboardUninstalled } from './core-db-backup.js';
+import { assertDashboardUninstalled as assertIndependentDashboardUninstalled, probeCoreDbVersions, inspectDashboardOwnerManaged } from './core-db-backup.js';
 import { recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
 import { updateZylosConfigLocked, readSessionMode } from './config.js';
@@ -227,6 +227,36 @@ export function downloadCoreToTemp(version, branch) {
   }
 
   return { success: true, tempDir };
+}
+
+// Ordinary opens never migrate, so an installation already at the latest
+// version can still hold older databases. Probe them the way the upgrade entry
+// does, against the installed package's schemas. A missing database is not
+// pending: its owner's normal creation path builds it at the current layout.
+export function pendingDatabaseMigrations({ zylosDir, installedRoot }) {
+  const root = fs.realpathSync(zylosDir);
+  const driverRoot = path.join(root, '.claude', 'skills');
+  const dashboardOwnerManaged = inspectDashboardOwnerManaged(root, { driverRoot });
+  const versions = probeCoreDbVersions(root, fs.realpathSync(installedRoot), { driverRoot, dashboardOwnerManaged });
+  if (!Array.isArray(versions?.databases)) throw new Error('Invalid database version probe result');
+  return versions.databases.filter(row => row.status === 'present' && row.needsMigration === true);
+}
+
+// A same-version upgrade uses the installed package itself as its target, so
+// the protected transaction migrates the databases without changing code.
+// npm pack ignores node_modules, so they are not copied.
+export function copyInstalledCoreToTemp(installedRoot) {
+  const base = getWritableTmpBase('zylos-self-upgrade-probe-');
+  const tempDir = fs.mkdtempSync(path.join(base, 'zylos-self-upgrade-'));
+  try {
+    const source = fs.realpathSync(installedRoot);
+    fs.cpSync(source, tempDir, { recursive: true, force: true, verbatimSymlinks: true,
+      filter: file => !path.relative(source, file).split(path.sep).includes('node_modules') });
+    return { success: true, tempDir };
+  } catch (error) {
+    removeOwnedTree(base, tempDir);
+    return { success: false, error: `Installed Core package copy failed: ${error.message}` };
+  }
 }
 
 // ---------------------------------------------------------------------------

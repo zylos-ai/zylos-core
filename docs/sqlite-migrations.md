@@ -28,6 +28,13 @@ legacy standalone Dashboard database, which the worker skips, is migrated in
 cutoff restored if that fails. A test that needs an older database at the
 current layout must migrate it explicitly first.
 
+When the installed Core is already the latest version, `zylos upgrade --self`
+probes the live databases against the installed package (`pendingDatabaseMigrations`,
+the same version probe the upgrade entry runs). If a present database needs
+migration, the installed package, copied without `node_modules`, becomes the
+target of the normal protected transaction: snapshot, worker migration, readback,
+restart, and snapshot restore on failure. Missing databases do not trigger it.
+
 ## When a migration step is required
 
 Any change to a core table or column requires a new schema version and one

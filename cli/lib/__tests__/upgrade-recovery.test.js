@@ -13,6 +13,9 @@ import {runSelfUpgradeFinalize} from '../self-upgrade.js';
 import {generateManifest} from '../manifest.js';
 import {beginUpgrade,maintenance as protectionMaintenance,prepareProtectedInstall,protectedDataReady,recovery} from '../upgrade-protection.js';
 import {finalizeStatus} from '../upgrade-resume.js';
+import * as c4Schema from '../../../skills/comm-bridge/scripts/c4-schema.js';
+import * as schedulerSchema from '../../../skills/scheduler/scripts/schema.js';
+import {migrateDatabase} from '../../../skills/comm-bridge/scripts/sqlite-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as C4_VERSION} from '../../../skills/comm-bridge/scripts/c4-schema.js';
 import {SUPPORTED_SCHEMA_VERSION as SCHEDULER_VERSION} from '../../../skills/scheduler/scripts/schema.js';
 import {SUPPORTED_SCHEMA_VERSION as WEB_VERSION} from './fixtures/legacy-web-console-schema.js';
@@ -41,7 +44,7 @@ function interceptSync(check) {
 // Each test loads private copies of the real recovery and maintenance modules.
 // Only service calls are replaced: database/native worker, hashes, journal,
 // rescue, rename intents, isolation discovery, and terminal marker removal are real.
-async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=false,dashboardVersion=12}={}) {
+async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=false,dashboardVersion=12,olderDatabases=false,sourceVersion=dashboard?'0.9.4':'0.9.3'}={}) {
  const root=fs.realpathSync(fs.mkdtempSync(path.join(process.env.UPGRADE_RECOVERY_TEST_TMPDIR || os.tmpdir(),'upgrade-recovery-')));
  const previousHome=process.env.HOME,previousPm2Home=process.env.PM2_HOME;
  process.env.HOME=root;process.env.PM2_HOME=path.join(root,'.pm2');
@@ -63,6 +66,9 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
  }
  for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
  for(const item of CORE_DATABASES){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
+  // Older C4/scheduler layouts come from the released v1 samples.
+  const older=olderDatabases&&{'comm-bridge':'c4-v0.9.0-v1.sql',scheduler:'scheduler-v0.9.0-v1.sql'}[item.owner];
+  if(older){db.exec(fs.readFileSync(path.resolve('skills/comm-bridge/scripts/__tests__/fixtures/migration-history',older),'utf8'));if(wal)db.pragma('journal_mode=WAL');db.close();continue;}
   for(const [name,columns] of Object.entries(mod.TABLES)) {
    const defs=mod.COLUMN_DEFINITIONS?.[name]||{};
    const primary=columns.filter(c=>defs[c]?.pk);
@@ -91,9 +97,9 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
  // Match saveProtectedCode: the disposable code root is private.
  fs.chmodSync(path.join(dir,'code'),0o700);
  const prefix=path.join(root,'npm-prefix'),installedRoot=path.join(prefix,'lib/node_modules/zylos'),packageJson=path.join(installedRoot,'package.json'),originalCli=path.join(installedRoot,'cli'),binDir=path.join(prefix,'bin');
- fs.mkdirSync(originalCli,{recursive:true,mode:0o700});fs.mkdirSync(binDir,{recursive:true});fs.writeFileSync(packageJson,JSON.stringify({name:'zylos',version:dashboard?'0.9.4':'0.9.3',bin:{zylos:'cli/entry.js'}}));fs.writeFileSync(path.join(originalCli,'entry.js'),'original CLI\n');
+ fs.mkdirSync(originalCli,{recursive:true,mode:0o700});fs.mkdirSync(binDir,{recursive:true});fs.writeFileSync(packageJson,JSON.stringify({name:'zylos',version:sourceVersion,bin:{zylos:'cli/entry.js'}}));fs.writeFileSync(path.join(originalCli,'entry.js'),'original CLI\n');
  fs.symlinkSync(path.relative(binDir,path.join(originalCli,'entry.js')),path.join(binDir,'zylos'));
- const j={formatVersion:1,from:dashboard?'0.9.4':'0.9.3',firstTakeover:!dashboard,dashboardOwnerManaged:false,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,installerStarted:true,installerStage:'install',installerExitConfirmed:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:fs.existsSync(path.join(root,source))}))}};
+ const j={formatVersion:1,from:sourceVersion,firstTakeover:!dashboard,dashboardOwnerManaged:false,transactionId:'tx',zylosDir:root,skillsDir,nodePath:process.execPath,phase:'installing',installationIntent:true,installerStarted:true,installerStage:'install',installerExitConfirmed:true,dbBackupDir:snapshotResult.dbBackupDir,snapshotManifestHash:m.hash(path.join(snapshotResult.dbBackupDir,'manifest.json')),coreManifest,originalServices:[],initialIdentity:{nodePath:process.execPath,packageJson,packageHash:m.hash(packageJson),cliRoot:originalCli,cliHash:m.treeHash(originalCli),workerPath:closure.workerPath,workerHash:m.hash(closure.workerPath),ecosystemHash:null,databases:m.databasePaths(2).map(source=>({source,exists:fs.existsSync(path.join(root,source))}))}};
  // Package restoration has already completed in this database recovery fixture;
  // dedicated package tests exercise replacement and verification failures.
  const originalSnapshot=path.join(dir,'code/original-package');fs.cpSync(installedRoot,originalSnapshot,{recursive:true,verbatimSymlinks:true});
@@ -817,6 +823,36 @@ test('protected recovery restores all databases after a partial migration failur
  const journal=f.load();
  for(const item of CORE_DATABASES.filter(item=>item.owner!=='web-console'))assert.equal(journal.dbRestore?.[item.source]?.complete,true);
  assert.equal(journal.dbRestore?.['web-console/web-console.db'],undefined);
+});
+// Same-version upgrade: the snapshot holds older databases. C4 migrates with the
+// real owner, then the real scheduler step fails on a column it would add; recovery
+// restores both from the snapshot and restarts services.
+test('same-version transaction restores older databases and services after a failed migration',async t=>{
+ const f=await fixture(t,{olderDatabases:true,sourceVersion:'1.0.0'});
+ f.m.update(f.dir,f.j,{to:'1.0.0'});
+ const version=source=>{const db=new Database(f.db(source),{readonly:true});try{return db.pragma('user_version',{simple:true});}finally{db.close();}};
+ const sources=['comm-bridge/c4.db','scheduler/scheduler.db'];
+ for(const source of sources)assert.equal(version(source),1);
+ const c4=new Database(f.db('comm-bridge/c4.db'));
+ try{migrateDatabase(c4,c4Schema,{strict:false});c4.exec("INSERT INTO checkpoints(summary) VALUES ('new generation')");}finally{c4.close();}
+ assert.equal(version('comm-bridge/c4.db'),C4_VERSION);
+ const scheduler=new Database(f.db('scheduler/scheduler.db'));
+ try{
+  scheduler.exec('ALTER TABLE tasks ADD COLUMN session_component TEXT');
+  assert.throws(()=>migrateDatabase(scheduler,schedulerSchema,{strict:false}),/session_component/);
+ }finally{scheduler.close();}
+ f.m.update(f.dir,f.j,{error:'scheduler migration failed after C4 success'});
+ const result=f.r.resume(f.dir);
+ assert.equal(result.stage,'restored_complete',JSON.stringify(result));
+ assert.equal(result.completed,true);
+ for(const source of sources)assert.equal(version(source),1,source);
+ const restoredC4=new Database(f.db('comm-bridge/c4.db'),{readonly:true});
+ try{assert.equal(restoredC4.prepare("SELECT count(*) AS n FROM checkpoints WHERE summary='new generation'").get().n,0);}finally{restoredC4.close();}
+ const restoredScheduler=new Database(f.db('scheduler/scheduler.db'),{readonly:true});
+ try{assert.equal(restoredScheduler.pragma('table_info(tasks)').some(column=>column.name==='session_component'),false);}finally{restoredScheduler.close();}
+ const journal=f.load();
+ for(const source of sources)assert.equal(journal.dbRestore?.[source]?.complete,true);
+ assert.ok(f.calls.includes('start'),JSON.stringify(f.calls));
 });
 test('early abort refuses altered original CLI tree before service restart or database writes',async t=>{
  const f=await fixture(t),cli=path.join(f.root,'original-cli');fs.mkdirSync(cli,{mode:0o700});fs.writeFileSync(path.join(cli,'command.js'),'original',{mode:0o600});f.j.initialIdentity.cliRoot=cli;f.j.initialIdentity.cliHash=f.m.treeHash(cli);f.m.update(f.dir,f.j,{installationIntent:false,phase:'preparing'});fs.writeFileSync(path.join(cli,'command.js'),'changed',{mode:0o600});const before=fs.readFileSync(f.db('comm-bridge/c4.db'));const result=f.r.resume(f.dir);assert.equal(result.recovery_required,true);assert.match(result.error,/original installed CLI identity changed/);assert.ok(!f.calls.includes('start'));assert.deepEqual(fs.readFileSync(f.db('comm-bridge/c4.db')),before);

@@ -78,7 +78,9 @@ test('thin CLI forwards downloaded executable output and exit status without ano
         checkForCoreUpdates: () => ({success:true,hasUpdate:true,current:'0.9.3',latest:'0.9.4'}),
         checkCoreTargetVersion: () => { throw new Error('no explicit --version in this case'); },
         downloadCoreToTemp: () => ({success:true,tempDir:${JSON.stringify(root)}}),
-        readChangelog: () => '', cleanupTemp() {}
+        readChangelog: () => '', cleanupTemp() {},
+        pendingDatabaseMigrations: () => { throw new Error('an available update needs no same-version database check'); },
+        copyInstalledCoreToTemp: () => { throw new Error('an available update downloads its target'); }
       }});
       mock.module(${JSON.stringify(new URL('../request-runtime-restart.js', import.meta.url).href)}, {namedExports: {
         requestRuntimeRestart: () => { restartCalls++; return {ok:true}; }

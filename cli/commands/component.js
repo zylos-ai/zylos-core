@@ -16,6 +16,7 @@ import {
   checkCoreTargetVersion,
   downloadCoreToTemp, readChangelog as readCoreChangelog,
   cleanupTemp as cleanupCoreTemp,
+  pendingDatabaseMigrations, copyInstalledCoreToTemp,
 } from '../lib/self-upgrade.js';
 import { detectChanges } from '../lib/manifest.js';
 import { parseSkillMd } from '../lib/skill.js';
@@ -1162,6 +1163,19 @@ function outputSelfUpgradeFailure(output, message, next) {
 
 export async function upgradeSelfCore({ branch, beta = false, version, mode = 'merge', jsonOutput = false, skipConfirm = false } = {}, deps = {}) {
   const output = deps.console ?? globalThis.console;
+  const installedRoot = deps.installedRoot ?? path.resolve(import.meta.dirname, '../..');
+  // Already at the target: older databases still go through the protected
+  // transaction, with the installed package as its target. Returns null after
+  // reporting a probe failure.
+  const pendingMigrations = () => {
+    try { return (deps.pendingDatabaseMigrations ?? pendingDatabaseMigrations)({ zylosDir: deps.zylosDir ?? ZYLOS_DIR, installedRoot }); }
+    catch (error) {
+      if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]}));
+      else outputSelfUpgradeFailure(output, 'Database version check failed: ' + upgradeFailureMessage(error));
+      return null;
+    }
+  };
+  let sameVersion = null;
   if(mode!=='merge') {
     const failure={success:false,code:'INVALID_ARGS',error:'Core self-upgrade supports only --mode merge.',persisted:[]};
     if(jsonOutput)output.log(JSON.stringify(failure));
@@ -1177,10 +1191,15 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
       return false;
     }
     if (!local.hasUpdate) {
-      const reply = `zylos-core is already at version ${local.current} (SemVer precedence).`;
-      if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...local, reply }));
-      else output.log(reply);
-      return true;
+      const pending = pendingMigrations();
+      if (!pending) return false;
+      if (!pending.length) {
+        const reply = `zylos-core is already at version ${local.current} (SemVer precedence).`;
+        if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...local, reply }));
+        else output.log(reply);
+        return true;
+      }
+      sameVersion = local;
     }
   }
   try {
@@ -1195,7 +1214,7 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
     return false;
   }
   let check;
-  try { check = (deps.checkForCoreUpdates ?? checkForCoreUpdates)({ branch, beta, version }); }
+  try { check = sameVersion ?? (deps.checkForCoreUpdates ?? checkForCoreUpdates)({ branch, beta, version }); }
   catch (error) {
     if (jsonOutput) output.log(JSON.stringify({success:false, code:upgradeFailureCode(error), error:upgradeFailureMessage(error), persisted:[]}));
     else outputSelfUpgradeFailure(output, upgradeFailureMessage(error), error.next);
@@ -1207,19 +1226,29 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
     else outputSelfUpgradeFailure(output, upgradeFailureMessage(error), check.next);
     return false;
   }
+  let migrations = null;
   if (!branch && !check.hasUpdate) {
-    if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }));
-    else output.log('zylos-core is up to date (v' + check.current + ')');
-    return true;
+    migrations = pendingMigrations();
+    if (!migrations) return false;
+    if (!migrations.length) {
+      if (jsonOutput) output.log(JSON.stringify({ action: 'check', target: 'zylos-core', ...check }));
+      else output.log('zylos-core is up to date (v' + check.current + ')');
+      return true;
+    }
   }
   let tempDir;
   try {
-    const download = (deps.downloadCoreToTemp ?? downloadCoreToTemp)(check.latest, branch);
+    const download = migrations
+      ? (deps.copyInstalledCoreToTemp ?? copyInstalledCoreToTemp)(installedRoot)
+      : (deps.downloadCoreToTemp ?? downloadCoreToTemp)(check.latest, branch);
     if (!download.success) throw Object.assign(new Error(download.error || download.message || 'Core download failed.'), {code:download.code});
     tempDir = download.tempDir;
     assertDownloadedUpgradePackage(tempDir);
 
-    if (!jsonOutput) {
+    if (migrations && !jsonOutput) {
+      output.log(`${bold('zylos-core')} is up to date (v${check.current}); these databases need migration:`);
+      for (const row of migrations) output.log(`  ${row.source}: ${row.fromVersion} → ${row.toVersion}`);
+    } else if (!jsonOutput) {
       const fullChangelog = (deps.readCoreChangelog ?? readCoreChangelog)(tempDir);
       const changelog = (deps.filterChangelog ?? filterChangelog)(fullChangelog, check.current);
       const localChanges = (deps.detectCoreSkillChanges ?? detectCoreSkillChanges)();
@@ -1235,14 +1264,15 @@ export async function upgradeSelfCore({ branch, beta = false, version, mode = 'm
       if (changelog) output.log(`\n${heading('Changelog:')}\n${changelog}`);
     }
 
-    if (!skipConfirm && !await (deps.promptYesNo ?? promptYesNo)('Proceed with zylos-core upgrade? [y/N]: ')) {
+    const question = migrations ? 'Migrate them now (services stop during the migration)? [y/N]: ' : 'Proceed with zylos-core upgrade? [y/N]: ';
+    if (!skipConfirm && !await (deps.promptYesNo ?? promptYesNo)(question)) {
       if (!jsonOutput) output.log('Upgrade cancelled.');
       return true;
     }
 
     const exitCode = (deps.runDownloadedUpgrade ?? runDownloadedUpgrade)({
       schemaVersion: 1, fromVersion: check.current, tempDir,
-      installedRoot: deps.installedRoot ?? path.resolve(import.meta.dirname, '../..'),
+      installedRoot,
       zylosDir: deps.zylosDir ?? ZYLOS_DIR,
     });
     process.exitCode = exitCode;
