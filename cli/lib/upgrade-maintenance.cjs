@@ -663,6 +663,67 @@ function command(bin, args, options = {}) {
   if (r.error || r.status !== 0) throw Error(r.error?.message || String(r.stderr) || `${bin} exited ${r.status}`);
   return r.stdout;
 }
+// Processes other than this one that hold a database file open. Linux reads
+// /proc/<pid>/fd; macOS asks lsof. Descriptors this user cannot read are not
+// visible. checked is false when nothing could be observed: macOS without a
+// working lsof, or another platform.
+function databaseHolders(files) {
+  const wanted = new Map();
+  for (const file of files) {
+    wanted.set(path.resolve(file), file);
+    wanted.set(path.join(realOrRaw(path.dirname(file)), path.basename(file)), file);
+  }
+  const holders = new Map();
+  const add = (pid, file) => holders.set(pid + '\0' + file, {pid, file});
+  if (process.platform === 'linux') {
+    for (const name of fs.readdirSync('/proc').filter(entry => /^\d+$/.test(entry))) {
+      const pid = Number(name);
+      if (pid === process.pid) continue;
+      let fds;
+      try { fds = fs.readdirSync(`/proc/${pid}/fd`); } catch { continue; }
+      for (const fd of fds) {
+        let link;
+        try { link = fs.readlinkSync(`/proc/${pid}/fd/${fd}`); } catch { continue; }
+        if (!wanted.has(link)) continue;
+        add(pid, wanted.get(link));
+      }
+    }
+  } else if (process.platform === 'darwin') {
+    const present = files.filter(file => fs.existsSync(file));
+    if (!present.length) return {holders: [], checked: true};
+    // lsof also exits 1 when some listed file is not open; its output still
+    // lists the holders. Without lsof nothing can be observed.
+    const r = cp.spawnSync('lsof', ['-nP', '-Fpn', '--', ...present], {encoding:'utf8', timeout:30000});
+    if (r.error) return {holders: [], checked: false};
+    let pid;
+    for (const line of r.stdout.split('\n')) {
+      if (line[0] === 'p') pid = Number(line.slice(1));
+      else if (line[0] === 'n' && pid !== process.pid && wanted.has(line.slice(1))) add(pid, wanted.get(line.slice(1)));
+    }
+  } else return {holders: [], checked: false};
+  return {holders: [...holders.values()], checked: true};
+}
+// Rollback moves database files; a connection that closes meanwhile can merge
+// and delete its -wal/-shm under it. Before anything is captured or moved,
+// wait briefly for other processes to close the files, then stop untouched.
+// When the platform offers no way to look, the journal says so.
+function waitForDatabaseRelease(dir, j, {timeoutMs = 10000, intervalMs = 500} = {}) {
+  const files = originalDatabasePaths(j).flatMap(source => ['', '-wal', '-shm'].map(suffix => path.join(j.zylosDir, source + suffix)));
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const {holders, checked} = databaseHolders(files);
+    if (!checked) {
+      if (j.databaseHolderCheck !== 'unavailable') update(dir, j, {databaseHolderCheck: 'unavailable'});
+      return;
+    }
+    if (!holders.length) return;
+    if (Date.now() >= deadline) {
+      const pids = [...new Set(holders.map(holder => holder.pid))].sort((a, b) => a - b);
+      throw Error(`Core databases are still open in another process (pid ${pids.join(', ')}). Stop the related services, then run zylos recovery resume.`);
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, intervalMs);
+  }
+}
 function realOrRaw(file) {
   try {
     return fs.realpathSync(file);
@@ -1281,6 +1342,8 @@ module.exports = {
   ORIGINAL_DEPLOYMENT_FORMAT_VERSION,
   databaseFormatForRows,
   originalDatabasePaths,
+  databaseHolders,
+  waitForDatabaseRelease,
   legacyUpgradeHistory,
   READY,
   TERMINAL,

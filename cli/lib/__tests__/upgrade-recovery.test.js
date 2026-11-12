@@ -849,6 +849,257 @@ for(const changed of [false,true])test(`unknown or changed new ecosystem provena
  f.m.update(f.dir,f.j);const before=fs.readFileSync(dest);assert.throws(()=>f.r.restoreCore(f.dir,f.j),changed?/creation hash changed/:/provenance unknown/);assert.deepEqual(fs.readFileSync(dest),before);assert.notEqual(f.load().codeRestore.ecosystem?.complete,true);
 });
 
+// Another program keeps the failed scheduler database open: a real SQLite
+// connection in a child process running a script file, inside a read
+// transaction, closed on request or, with closeAfterMs, by itself.
+const HOLDER_SCRIPT=`const Database=require(${JSON.stringify(path.resolve('skills/comm-bridge/node_modules/better-sqlite3'))});
+const [file,closeAfterMs]=process.argv.slice(2);
+const db=new Database(file);db.pragma('wal_autocheckpoint=0');
+db.exec('BEGIN');db.prepare('SELECT count(*) AS n FROM sqlite_master').get();
+const close=()=>{db.exec('COMMIT');db.close();process.stdout.write('closed\\n');};
+process.stdout.write('ready\\n');
+if(closeAfterMs)setTimeout(close,Number(closeAfterMs));else process.stdin.once('data',close);`;
+async function databaseHolder(t,f,file,{closeAfterMs}={}){
+ const script=path.join(f.root,'database-holder.js');
+ fs.writeFileSync(script,HOLDER_SCRIPT);
+ const child=spawn(process.execPath,[script,file,...(closeAfterMs?[String(closeAfterMs)]:[])],{stdio:['pipe','pipe','inherit']});
+ t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});
+ const exited=new Promise(resolve=>child.once('exit',resolve));
+ const line=expected=>new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>reject(Error('database holder did not report '+expected)),10000);
+  const onData=chunk=>{if(String(chunk).includes(expected)){clearTimeout(timer);child.stdout.off('data',onData);resolve();}};
+  child.stdout.on('data',onData);child.once('exit',()=>{clearTimeout(timer);reject(Error('database holder exited'));});
+ });
+ await line('ready');
+ return {pid:child.pid,exited,
+  close:async()=>{const closed=line('closed');child.stdin.end('close\n');await closed;await exited;}};
+}
+// The failed scheduler database in WAL mode, as the services leave it.
+function walScheduler(f){const p=f.db('scheduler/scheduler.db'),db=new Database(p);try{db.pragma('journal_mode=WAL');db.exec("INSERT INTO system_state(key,value) VALUES ('generation','failed')");}finally{db.close();}return p;}
+const snapshotBytes=(f,source)=>fs.readFileSync(path.join(f.snapshot.dbBackupDir,f.snapshot.manifest.databases.find(item=>item.source===source).file));
+const fileState=p=>['','-wal','-shm'].map(suffix=>fs.existsSync(p+suffix)?f_hash(p+suffix):null);
+function f_hash(file){return require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');}
+const holderMessage=pids=>`Core databases are still open in another process (pid ${pids.join(', ')}). Stop the related services, then run zylos recovery resume.`;
+
+test('rollback stops before touching any file while another process has a database open, and resume completes once it closes',{timeout:60000},async t=>{
+ const f=await fixture(t);change(f);const p=walScheduler(f);
+ const holder=await databaseHolder(t,f,p);
+ assert.ok(fs.existsSync(p+'-wal')&&fs.existsSync(p+'-shm'));
+ const before={scheduler:fileState(p),c4:fileState(f.db('comm-bridge/c4.db'))};
+ const first=f.r.resume(f.dir);
+ assert.equal(first.recovery_required,true,JSON.stringify(first));
+ // The process id only: no program name or command line.
+ assert.ok(first.error.includes(holderMessage([holder.pid])),first.error);
+ assert.doesNotMatch(first.error,/database-holder|node/);
+ assert.equal(fs.existsSync(path.join(f.dir,'rescue')),false);
+ assert.equal(f.load().actions,undefined);assert.equal(f.load().databaseHolderCheck,undefined);
+ assert.deepEqual({scheduler:fileState(p),c4:fileState(f.db('comm-bridge/c4.db'))},before);
+ assert.ok(!f.calls.includes('start'));
+ await holder.close();
+ const second=f.r.resume(f.dir);
+ assert.equal(second.completed,true,JSON.stringify(second));
+ for(const source of ['comm-bridge/c4.db','scheduler/scheduler.db']){
+  assert.ok(fs.readFileSync(f.db(source)).equals(snapshotBytes(f,source)),source);
+  assert.ok(!fs.existsSync(f.db(source)+'-wal')&&!fs.existsSync(f.db(source)+'-shm'));
+ }
+ assert.ok(f.calls.includes('start'));
+});
+
+// The rescue copy was taken while a reader held the database; the reader then
+// closed before the main file moved, and SQLite deleted -wal and -shm.
+async function vanishedSidecars(t,{interrupted=false}={}){
+ const f=await fixture(t);change(f);const p=walScheduler(f);
+ const holder=await databaseHolder(t,f,p);
+ f.r.rescue(f.dir,f.j);
+ assert.equal(f.j.rescue['scheduler/scheduler.db-wal'].exists,true);
+ await holder.close();
+ assert.equal(fs.existsSync(p+'-wal')||fs.existsSync(p+'-shm'),false,'SQLite removes the sidecars on the last close');
+ if(interrupted){
+  // The journal an earlier rollback left: main file displaced, -wal intent open.
+  f.r.restoreCore(f.dir,f.j);
+  const displaced=path.join(f.dir,'rescue','displaced_scheduler_scheduler.db');
+  f.m.renameIntent(f.dir,f.j,'displace_scheduler_scheduler.db',p,displaced,f.j.rescue['scheduler/scheduler.db'].sha256);
+  assert.throws(()=>f.m.renameIntent(f.dir,f.j,'displace_scheduler_scheduler.db-wal',p+'-wal',path.join(f.dir,'rescue','displaced_scheduler_scheduler.db-wal'),f.j.rescue['scheduler/scheduler.db-wal'].sha256),/ambiguous rename state/);
+  f.m.update(f.dir,f.j,{resumePhase:f.j.phase,phase:'recovery_required',lastError:'ambiguous rename state: displace_scheduler_scheduler.db-wal'});
+ }
+ return {f,p};
+}
+for(const interrupted of [false,true]) test(`${interrupted?'resume after an interrupted rollback':'rollback'} records sidecars removed by a closing connection and restores the snapshot`,{timeout:60000},async t=>{
+ const {f,p}=await vanishedSidecars(t,{interrupted});
+ const result=f.r.resume(f.dir);
+ assert.equal(result.completed,true,JSON.stringify(result));
+ const journal=f.load();
+ assert.deepEqual(journal.dbRestore['scheduler/scheduler.db'].vanished,['-wal','-shm']);
+ assert.equal(journal.dbRestore['scheduler/scheduler.db'].merged,undefined,'a reader closing over an empty -wal leaves the main file as captured');
+ assert.equal(journal.dbRestore['comm-bridge/c4.db'].vanished,undefined);
+ assert.ok(fs.readFileSync(p).equals(snapshotBytes(f,'scheduler/scheduler.db')));
+ assert.ok(!fs.existsSync(p+'-wal')&&!fs.existsSync(p+'-shm'));
+ const archived=path.join(f.root,'.backup/self-upgrade/tx/rescue');
+ for(const suffix of ['-wal','-shm'])assert.equal(f_hash(path.join(archived,'scheduler_scheduler.db'+suffix)),journal.rescue['scheduler/scheduler.db'+suffix].sha256);
+ assert.ok(f.calls.includes('start'));
+});
+
+test('a changed snapshot still stops the rollback after sidecars vanished',{timeout:60000},async t=>{
+ const {f,p}=await vanishedSidecars(t,{interrupted:true});
+ fs.appendFileSync(path.join(f.snapshot.dbBackupDir,f.snapshot.manifest.databases.find(item=>item.source==='scheduler/scheduler.db').file),'changed');
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,true);assert.match(result.error,/hash mismatch/);
+ assert.equal(fs.existsSync(p),false);assert.equal(f.load().dbRestore,undefined);assert.ok(!f.calls.includes('start'));
+});
+test('a changed displaced main file still stops the rollback after sidecars vanished',{timeout:60000},async t=>{
+ const {f,p}=await vanishedSidecars(t,{interrupted:true});
+ fs.appendFileSync(path.join(f.dir,'rescue','displaced_scheduler_scheduler.db'),'changed');
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,true);assert.match(result.error,/renamed material hash mismatch/);
+ assert.equal(fs.existsSync(p),false);assert.ok(!f.calls.includes('start'));
+});
+test('a sidecar that reappears after being recorded as removed stops the rollback',{timeout:60000},async t=>{
+ const {f,p}=await vanishedSidecars(t,{interrupted:true});
+ const real=f.m.renameIntent;
+ f.m.renameIntent=(dir,j,key,...args)=>{if(key==='install_scheduler_scheduler.db')throw Error('simulated crash before install');return real(dir,j,key,...args);};
+ assert.equal(f.r.resume(f.dir).recovery_required,true);
+ f.m.renameIntent=real;
+ assert.deepEqual(f.load().dbRestore['scheduler/scheduler.db'].vanished,['-wal','-shm']);
+ fs.writeFileSync(p+'-wal','');
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,true);assert.match(result.error,/vanished sidecar reappeared: scheduler\/scheduler\.db-wal/);
+ assert.ok(!f.calls.includes('start'));
+});
+// A service wrote after the holder opened, so the captured -wal is not empty.
+// The holder, which never wrote, is the last to close: SQLite merges the -wal
+// into the main file and deletes -wal and -shm before the main file moves.
+async function mergedOnClose(t,{interrupted=false}={}){
+ const f=await fixture(t);change(f);const p=walScheduler(f);
+ const holder=await databaseHolder(t,f,p);
+ const service=new Database(p);try{service.exec("INSERT INTO system_state(key,value) VALUES ('service','after-open')");}finally{service.close();}
+ assert.ok(fs.statSync(p+'-wal').size>0,'the service write stays in the -wal while the holder is open');
+ f.r.rescue(f.dir,f.j);
+ const captured=f.j.rescue['scheduler/scheduler.db'].sha256;
+ await holder.close();
+ assert.equal(fs.existsSync(p+'-wal')||fs.existsSync(p+'-shm'),false,'SQLite removes the sidecars on the last close');
+ assert.notEqual(f_hash(p),captured,'the merge changed the main file');
+ if(interrupted){
+  // The journal an earlier rollback left: the displacement intent carries the captured hash.
+  f.r.restoreCore(f.dir,f.j);
+  assert.throws(()=>f.m.renameIntent(f.dir,f.j,'displace_scheduler_scheduler.db',p,path.join(f.dir,'rescue','displaced_scheduler_scheduler.db'),captured),/rename source changed/);
+  f.m.update(f.dir,f.j,{resumePhase:f.j.phase,phase:'recovery_required',lastError:'rename source changed'});
+ }
+ return {f,p,captured};
+}
+for(const interrupted of [false,true]) test(`${interrupted?'resume after an interrupted rollback':'rollback'} moves a main database merged by the last closing connection aside and restores the snapshot`,{timeout:60000},async t=>{
+ const {f,p,captured}=await mergedOnClose(t,{interrupted});
+ const merged=f_hash(p);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.completed,true,JSON.stringify(result));
+ const journal=f.load(),restore=journal.dbRestore['scheduler/scheduler.db'];
+ assert.deepEqual(restore.merged,{sha256:merged});
+ assert.deepEqual(restore.vanished,['-wal','-shm']);
+ assert.equal(journal.rescue['scheduler/scheduler.db'].sha256,captured,'the rescue record keeps the captured generation');
+ assert.equal(journal.dbRestore['comm-bridge/c4.db'].merged,undefined);
+ const archived=path.join(f.root,'.backup/self-upgrade/tx/rescue');
+ assert.equal(f_hash(path.join(archived,'displaced_scheduler_scheduler.db')),merged);
+ for(const suffix of ['','-wal','-shm'])assert.equal(f_hash(path.join(archived,'scheduler_scheduler.db'+suffix)),journal.rescue['scheduler/scheduler.db'+suffix].sha256);
+ assert.ok(fs.readFileSync(p).equals(snapshotBytes(f,'scheduler/scheduler.db')));
+ assert.ok(!fs.existsSync(p+'-wal')&&!fs.existsSync(p+'-shm'));
+ assert.ok(f.calls.includes('start'));
+});
+test('a main database changed while a sidecar remains still stops the rollback',{timeout:60000},async t=>{
+ const {f,p}=await mergedOnClose(t);
+ fs.writeFileSync(p+'-shm','');
+ const before=fs.readFileSync(p);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,true);assert.match(result.error,/rename source changed/);
+ assert.equal(f.load().dbRestore['scheduler/scheduler.db'].merged,undefined);
+ assert.ok(fs.readFileSync(p).equals(before));assert.ok(!f.calls.includes('start'));
+});
+test('a main database changed when the rescue captured no -wal still stops the rollback',{timeout:60000},async t=>{
+ const f=await fixture(t);change(f);const p=walScheduler(f);
+ f.r.rescue(f.dir,f.j);
+ assert.equal(f.j.rescue['scheduler/scheduler.db-wal'].exists,false);
+ const db=new Database(p);try{db.exec("INSERT INTO system_state(key,value) VALUES ('later','write')");}finally{db.close();}
+ assert.notEqual(f_hash(p),f.j.rescue['scheduler/scheduler.db'].sha256);
+ const before=fs.readFileSync(p);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,true);assert.match(result.error,/rename source changed/);
+ assert.ok(fs.readFileSync(p).equals(before));assert.ok(!f.calls.includes('start'));
+});
+test('a main database changed after a merge is not accepted while another process still has it open',{timeout:60000},async t=>{
+ const {f,p}=await mergedOnClose(t);
+ f.r.restoreCore(f.dir,f.j);
+ // A plain open descriptor: no SQLite connection, so no new -wal or -shm.
+ const child=spawn(process.execPath,['-e',"require('fs').openSync(process.argv[1],'r');process.stdout.write('ready\\n');setInterval(()=>{},1000);",p],{stdio:['ignore','pipe','inherit']});
+ t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('holder not ready')),10000);child.stdout.once('data',()=>{clearTimeout(timer);resolve();});});
+ assert.ok(!fs.existsSync(p+'-wal')&&!fs.existsSync(p+'-shm'));
+ assert.throws(()=>f.r.replaceDatabases(f.dir,f.j,f.r.validateSnapshot(f.dir,f.j)),/rename source changed/);
+ assert.equal(f.j.dbRestore['scheduler/scheduler.db'].merged,undefined);assert.ok(fs.existsSync(p));
+});
+test('a main database missing from its place and from the displaced material stops the rollback',{timeout:60000},async t=>{
+ const {f,p}=await mergedOnClose(t);
+ fs.unlinkSync(p);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,true);assert.match(result.error,/ambiguous rename state: displace_scheduler_scheduler\.db$/);
+ const restore=f.load().dbRestore['scheduler/scheduler.db'];
+ assert.equal(restore.merged,undefined);assert.equal(restore.vanished,undefined);
+ assert.equal(fs.existsSync(p),false);assert.ok(!f.calls.includes('start'));
+});
+test('rollback continues once a process holding a database closes it during the wait',{timeout:60000},async t=>{
+ const f=await fixture(t);change(f);const p=walScheduler(f);
+ const holder=await databaseHolder(t,f,p,{closeAfterMs:1500});
+ const result=f.r.resume(f.dir);
+ assert.equal(result.completed,true,JSON.stringify(result));
+ await holder.exited;
+ assert.ok(fs.readFileSync(p).equals(snapshotBytes(f,'scheduler/scheduler.db')));
+ assert.ok(f.calls.includes('start'));
+});
+test('resume completes after a crash between moving a sidecar aside and recording it',{timeout:60000},async t=>{
+ const f=await fixture(t);change(f);
+ const key='displace_comm-bridge_c4.db-wal',real=f.m.renameIntent;
+ f.m.renameIntent=(dir,j,action,source,dest,expectedHash)=>{
+  if(action!==key)return real(dir,j,action,source,dest,expectedHash);
+  (j.actions||={})[action]={source,dest,expectedHash,done:false};f.m.update(dir,j);
+  fs.renameSync(source,dest);throw Error('simulated crash after moving the sidecar');
+ };
+ assert.equal(f.r.resume(f.dir).recovery_required,true);
+ f.m.renameIntent=real;
+ const dest=path.join(f.dir,'rescue','displaced_comm-bridge_c4.db-wal'),p=f.db('comm-bridge/c4.db');
+ assert.ok(fs.existsSync(dest)&&!fs.existsSync(p+'-wal'));assert.equal(f.load().actions[key].done,false);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.completed,true,JSON.stringify(result));
+ const journal=f.load();
+ assert.equal(journal.actions[key].done,true);assert.equal(journal.dbRestore['comm-bridge/c4.db'].vanished,undefined);
+ assert.equal(f_hash(path.join(f.root,'.backup/self-upgrade/tx/rescue/displaced_comm-bridge_c4.db-wal')),journal.rescue['comm-bridge/c4.db-wal'].sha256);
+ assert.ok(fs.readFileSync(p).equals(snapshotBytes(f,'comm-bridge/c4.db')));
+ assert.ok(f.calls.includes('start'));
+});
+test('a database held open is found when the Zylos directory is reached through a symbolic link',{timeout:60000},async t=>{
+ const f=await fixture(t);const p=walScheduler(f);
+ const link=f.root+'-link';fs.symlinkSync(f.root,link);t.after(()=>fs.rmSync(link,{force:true}));
+ const holder=await databaseHolder(t,f,p);
+ assert.throws(()=>f.m.waitForDatabaseRelease(f.dir,{...f.j,zylosDir:link},{timeoutMs:0}),
+  error=>error.message===holderMessage([holder.pid]));
+ await holder.close();
+});
+test('a main database changed after a merge is not accepted when open files cannot be checked',{timeout:60000},async t=>{
+ const {f,p}=await mergedOnClose(t);
+ f.r.restoreCore(f.dir,f.j);
+ const platform=Object.getOwnPropertyDescriptor(process,'platform'),PATH=process.env.PATH;
+ // macOS without lsof: whether another process holds the database is unknown.
+ Object.defineProperty(process,'platform',{...platform,value:'darwin'});process.env.PATH=path.join(f.root,'no-lsof');
+ try{assert.throws(()=>f.r.replaceDatabases(f.dir,f.j,f.r.validateSnapshot(f.dir,f.j)),/rename source changed/);}
+ finally{Object.defineProperty(process,'platform',platform);process.env.PATH=PATH;}
+ assert.equal(f.j.dbRestore['scheduler/scheduler.db'].merged,undefined);assert.ok(fs.existsSync(p));
+});
+test('the journal notes when open database files cannot be checked',{timeout:60000},async t=>{
+ const f=await fixture(t);
+ const platform=Object.getOwnPropertyDescriptor(process,'platform'),PATH=process.env.PATH;
+ // macOS without lsof: nothing can be observed.
+ Object.defineProperty(process,'platform',{...platform,value:'darwin'});process.env.PATH=path.join(f.root,'no-lsof');
+ try{f.m.waitForDatabaseRelease(f.dir,f.j);}
+ finally{Object.defineProperty(process,'platform',platform);process.env.PATH=PATH;}
+ assert.equal(f.load().databaseHolderCheck,'unavailable');
+});
+
 test('protected recovery restores all databases after a partial migration failure',async t=>{
  const f=await fixture(t);
  const inserts=[['comm-bridge/c4.db',"INSERT INTO checkpoints(id,summary) VALUES (91,'new generation')"],['scheduler/scheduler.db',"INSERT INTO system_state(key,value) VALUES ('generation','new')"],['web-console/web-console.db',"INSERT INTO sessions(token) VALUES ('new-generation')"]];

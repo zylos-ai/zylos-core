@@ -249,6 +249,18 @@ function restoreCore(dir, j) {
     m.update(dir, j);
   }
 }
+// Whether a changed main file is explained by a WAL merge on close: the rescue
+// captured a -wal, both sidecars are now gone from the original place and from
+// the displaced material, and a scan that could run finds no other process
+// holding the database.
+function walMerged(dir, j, source) {
+  const target = path.join(j.zylosDir, source);
+  const displaced = suffix => path.join(dir, 'rescue', 'displaced_' + (source + suffix).replaceAll('/', '_'));
+  if (j.rescue[source + '-wal']?.exists !== true) return false;
+  if (['-wal', '-shm'].some(suffix => fs.existsSync(target + suffix) || fs.existsSync(displaced(suffix)))) return false;
+  const {holders, checked} = m.databaseHolders(['', '-wal', '-shm'].map(suffix => target + suffix));
+  return checked && holders.length === 0;
+}
 function replaceDatabases(dir, j, manifest) {
   j.dbRestore ||= {};
   for (const d of manifest.databases) {
@@ -270,10 +282,27 @@ function replaceDatabases(dir, j, manifest) {
       if (res.exists) {
         const action = 'displace_' + key.replaceAll('/', '_');
         const intent = j.actions?.[action];
-        if (intent?.done && fs.existsSync(dest) && m.hash(dest) === res.sha256) {} else if (intent && fs.existsSync(dest) && m.hash(dest) === res.sha256 && j.actions?.['install_' + d.source.replaceAll('/', '_')]) {
+        if (!suffix && !state.merged && !intent?.done && fs.existsSync(p) && !fs.existsSync(dest) && m.hash(p) !== res.sha256 && walMerged(dir, j, d.source)) {
+          // The last connection to close merged the captured -wal into the
+          // main file and deleted -wal and -shm. The rescue copies keep the
+          // failed generation; the merged main file is displaced as it is.
+          state.merged = {sha256: m.hash(p)};
+          if (intent) intent.expectedHash = state.merged.sha256;
+          m.update(dir, j);
+        }
+        const expected = !suffix && state.merged ? state.merged.sha256 : res.sha256;
+        if (state.vanished?.includes(suffix)) {
+          if (fs.existsSync(p) || fs.existsSync(dest)) throw Error('vanished sidecar reappeared: ' + key);
+        } else if (intent?.done && fs.existsSync(dest) && m.hash(dest) === expected) {} else if (intent && fs.existsSync(dest) && m.hash(dest) === expected && j.actions?.['install_' + d.source.replaceAll('/', '_')]) {
           intent.done = true;
           m.update(dir, j);
-        } else m.renameIntent(dir, j, action, p, dest, res.sha256);
+        } else if (suffix && !intent?.done && j.actions?.['displace_' + d.source.replaceAll('/', '_')]?.done === true && !fs.existsSync(p) && !fs.existsSync(dest)) {
+          // A connection that closed after the rescue capture merged and
+          // deleted this sidecar before the main file moved. Its rescue copy
+          // stays for diagnosis; the snapshot is what gets restored.
+          (state.vanished ||= []).push(suffix);
+          m.update(dir, j);
+        } else m.renameIntent(dir, j, action, p, dest, expected);
       } else if (fs.existsSync(p) && !j.actions?.['install_' + d.source.replaceAll('/', '_')]) throw Error('unexpected original DB generation');
     }
     if (d.status !== 'missing') {
@@ -429,6 +458,7 @@ function resumeWithControl(dir, {hooks}, acquireControl) {
       m.restoreOriginalPackage(dir, j);
     } else {
       const snapshot = validateSnapshot(dir, j);
+      m.waitForDatabaseRelease(dir, j);
       rescue(dir, j);
       restoreCore(dir, j);
       replaceDatabases(dir, j, snapshot);
