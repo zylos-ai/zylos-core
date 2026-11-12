@@ -1,7 +1,25 @@
 # Locked memory file writes
 
 Component callers can replace an existing regular file under `$ZYLOS_DIR/memory`
-without racing a Memory Sync that has already read it:
+without racing a Memory Sync that has already read it. First read the complete
+page and its matching raw-byte hash together:
+
+```sh
+node scripts/memory-write.js --read --path reference/preferences.md
+```
+
+Read success is `{ "ok": true, "data": { "path": "...", "sha256": "...", "text": "..." } }`.
+The hash and complete text come from the same byte snapshot. Read mode uses the
+same memory-relative path and symlink restrictions as writing; missing files
+return `MEMORY_FILE_NOT_FOUND`, invalid or escaping paths return `INVALID_MEMORY_PATH`.
+It takes no lock, creates or changes no files, ignores active Sync markers, and
+does not consume stdin or observe runtime identity.
+
+For an existing page, use the hash from that read response, the previous successful
+write, or `MEMORY_CONFLICT` together with its returned content. Do not obtain a
+standalone hash with `sha256sum` or another command that omits the page content.
+After a conflict, use read mode again, merge, then retry with that snapshot's hash.
+Supply complete new content via stdin when writing:
 
 ```sh
 node scripts/memory-write.js --path reference/preferences.md --sha256 EXPECTED_SHA256 < new-content

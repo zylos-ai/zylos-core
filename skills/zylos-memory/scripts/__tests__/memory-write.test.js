@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { writeMemory } from '../memory-write.js';
+import { readMemory, writeMemory, runMemoryWriteCli } from '../memory-write.js';
 import { MemoryBrowser } from '../../../dashboard/src/lib/memory-browser.js';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -40,6 +40,70 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return { root, env, memory, file, settings: { path: 'identity.md', sha256: digest('original\n'), content: 'updated\n', env } };
 }
+
+test('read returns the complete text and hash from one raw-byte snapshot', t => {
+  const f = fixture(t);
+  const bytes = Buffer.from('full page é\r\nsecond line\n');
+  fs.writeFileSync(f.file, bytes);
+  let reads = 0;
+  const result = readMemory({ path: 'identity.md', env: f.env }, { io: {
+    ...fs, readFileSync(file) { reads += 1; return fs.readFileSync(file); },
+  } });
+  assert.equal(reads, 1);
+  assert.deepEqual(result, { path: 'identity.md', sha256: digest(bytes), text: bytes.toString('utf8') });
+  assert.deepEqual(fs.readFileSync(f.file), bytes);
+  assert.deepEqual(fs.readdirSync(f.memory), ['identity.md']);
+  assert.equal(fs.existsSync(path.join(f.env.ZYLOS_DIR, 'activity-monitor')), false);
+});
+
+test('read refuses missing, escaping, symlink and non-file paths', t => {
+  const f = fixture(t);
+  const outside = path.join(f.root, 'outside.md');
+  fs.writeFileSync(outside, 'outside');
+  fs.symlinkSync(outside, path.join(f.memory, 'linked.md'));
+  fs.mkdirSync(path.join(f.memory, 'directory'));
+  assert.throws(() => readMemory({ path: 'missing.md', env: f.env }), { code: 'MEMORY_FILE_NOT_FOUND' });
+  for (const inputPath of ['../outside.md', outside, 'linked.md', 'directory']) {
+    assert.throws(() => readMemory({ path: inputPath, env: f.env }), { code: 'INVALID_MEMORY_PATH' });
+  }
+  assert.equal(fs.readFileSync(outside, 'utf8'), 'outside');
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+});
+
+test('read CLI ignores Sync admission and never consumes stdin or runtime identity', async t => {
+  const f = fixture(t);
+  marker(f, 'origin', 'global');
+  const before = fs.readdirSync(runDir(f, 'origin'));
+  let stdout = '';
+  const status = await runMemoryWriteCli(['--read', '--path', 'identity.md'], {
+    env: f.env,
+    input: () => assert.fail('read consumed stdin'),
+    currentRunId: async () => assert.fail('read observed runtime'),
+    output: value => { stdout += value; },
+  });
+  assert.equal(status, 0);
+  assert.deepEqual(JSON.parse(stdout), { ok: true, data: {
+    path: 'identity.md', sha256: digest('original\n'), text: 'original\n',
+  } });
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+  assert.deepEqual(fs.readdirSync(f.memory), ['identity.md']);
+  assert.deepEqual(fs.readdirSync(runDir(f, 'origin')), before);
+});
+
+test('a read snapshot detects an intervening update and preserves it until merged', async t => {
+  const f = fixture(t);
+  const read = readMemory({ path: 'identity.md', env: f.env });
+  await writeMemory({ ...f.settings, content: read.text + 'Sync added this line\n' }, { currentRunId: liveRun });
+  await assert.rejects(writeMemory({ ...f.settings, sha256: read.sha256, content: 'worker draft\n' }, {
+    currentRunId: liveRun,
+  }), error => error.code === 'MEMORY_CONFLICT' && error.current.text.includes('Sync added this line'));
+  const current = readMemory({ path: 'identity.md', env: f.env });
+  assert.ok(current.text.includes('Sync added this line'));
+  await writeMemory({ ...f.settings, sha256: current.sha256, content: current.text + 'worker supplement\n' }, {
+    currentRunId: liveRun,
+  });
+  assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\nSync added this line\nworker supplement\n');
+});
 
 test('save publishes the requested bytes and hash while preserving permissions', async t => {
   const f = fixture(t);
@@ -293,6 +357,46 @@ function cli(f, { args = ['--path', 'identity.md', '--sha256', digest('original\
   return { ...result, json: JSON.parse(result.stdout) };
 }
 
+// Integration boundary: public read CLI over real private files, including
+// missing/escaping paths and an actual held memory.lock plus active Sync marker.
+// Run for read mode/path/CLI changes; skip otherwise. Fixture and runner isolate
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; parameters are read back before spawn.
+// No tmux/socket/DB; children are bounded and holder is reaped before cleanup.
+test('public read CLI returns snapshots and path errors without waiting for Sync or its lock', { timeout: 15000 }, async t => {
+  const f = fixture(t);
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
+    assert.ok(f.env[key].startsWith(f.root + path.sep));
+  }
+  marker(f, 'origin', 'global');
+  const release = await holdLock(f, runDir(f, 'origin'));
+  try {
+    for (const [inputPath, expected] of [
+      ['identity.md', null], ['missing.md', 'MEMORY_FILE_NOT_FOUND'], ['../outside.md', 'INVALID_MEMORY_PATH'],
+    ]) {
+      const args = [new URL('../memory-write.js', import.meta.url).pathname, '--read', '--path', inputPath];
+      t.diagnostic(JSON.stringify({ args, paths: Object.fromEntries(
+        ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, f.env[key]])),
+        tmux: 'unused', socket: 'unused', database: 'unused' }));
+      const result = spawnSync(process.execPath, args, {
+        env: f.env, encoding: 'utf8', timeout: 3000, killSignal: 'SIGKILL',
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, expected ? 1 : 0, result.stderr);
+      const response = JSON.parse(result.stdout);
+      if (expected) {
+        assert.equal(response.ok, false);
+        assert.equal(response.error.code, expected);
+      } else {
+        assert.deepEqual(response, { ok: true, data: {
+          path: 'identity.md', sha256: digest('original\n'), text: 'original\n',
+        } });
+      }
+      assert.equal(fs.readFileSync(f.file, 'utf8'), 'original\n');
+      assert.deepEqual(fs.readdirSync(f.memory), ['identity.md']);
+    }
+  } finally { await release(); }
+});
+
 test('CLI emits JSON for success, conflicts and argument errors', t => {
   const f = fixture(t);
   const saved = cli(f);
@@ -305,6 +409,7 @@ test('CLI emits JSON for success, conflicts and argument errors', t => {
   assert.equal(conflict.json.error.code, 'MEMORY_CONFLICT');
   assert.deepEqual(conflict.json.error.current, { text: 'CLI content\r\n', sha256: digest('CLI content\r\n') });
   for (const args of [[], ['identity.md'], ['--path', 'identity.md'], ['--other', 'value'],
+    ['--read'], ['--read', '--path', 'identity.md', '--sha256', digest('original\n')],
     ['--path', 'identity.md', '--path', 'identity.md', '--sha256', digest('original\n')]]) {
     const result = cli(f, { args });
     assert.equal(result.status, 1, String(args));

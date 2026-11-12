@@ -7,6 +7,7 @@ const read = name => fs.readFileSync(new URL(`../../references/${name}.md`, impo
 const sync = read('sync-procedures');
 const reorg = read('reference-reorg');
 const skill = fs.readFileSync(new URL('../../SKILL.md', import.meta.url), 'utf8');
+const writer = read('memory-write');
 const normalize = text => text.replace(/\s+/g, ' ');
 const between = (text, start, end) => {
   const from = text.indexOf(start);
@@ -103,6 +104,7 @@ test('reorganization looks up existing and archived pages before searching point
   assert.match(pages, /decisions directly related to this project/);
   assert.match(pages, /Record the old headings read in `Moved from`/);
   assert.match(pages, /using the page format in \[projects-format\.md\]\(projects-format\.md\) \(Status is one of `active`, `planning`, `paused`, `completed`, `abandoned`\)/);
+  assert.match(pages, /Before changing an existing page, you must read it with `memory-write.js --read --path reference\/projects\/<name>.md`, which returns its complete text and the matching `sha256` together/);
   assert.match(pages, /do not change its `Status`, `Updated`, or `Description`/);
   assert.match(pages, /Supplement only `Keys` and `Moved from`/);
   assert.match(pages, /Append useful missing old facts in a final section named `整理补充（<date>）`/);
@@ -119,7 +121,7 @@ test('reorganization writes only project pages and generated indexes without reb
   }
   assert.match(normalize(reorg), /Do not generate topic pages from the old `decisions.md`/);
   assert.match(normalize(reorg), /Standing rules remain in `preferences.md`; do not change that file/);
-  assert.match(normalize(reorg), /`MEMORY_CONFLICT` leaves the file unchanged: reread and record the new hash, merge again and retry/);
+  assert.match(normalize(reorg), /`MEMORY_CONFLICT` leaves the file unchanged: reread with `memory-write.js --read --path reference\/projects\/<name>.md`, merge again, and retry with the hash returned alongside the content/);
   assert.match(normalize(reorg), /`SYNC_BUSY` means retry later/);
   assert.match(normalize(reorg), /`MEMORY_FILE_NOT_FOUND` can mean Sync moved the page/);
 });
@@ -142,7 +144,7 @@ test('interrupted reorganization waits for the next instruction and merges inste
   assert.doesNotMatch(text, /seven days|7 days/i);
   assert.match(text, /Start again from step 1 and merge existing pages/);
   assert.match(text, /do not create duplicate pages/);
-  assert.match(text, /`EXISTS` or `MEMORY_CONFLICT`, rereads, and merges/);
+  assert.match(text, /`EXISTS` or `MEMORY_CONFLICT`, rereads with `memory-write.js --read --path reference\/projects\/<name>.md`, and merges/);
   assert.match(text, /`move-old` skips absent files/);
 });
 
@@ -182,10 +184,15 @@ test('existing page writes use a complete heredoc rather than command output', (
   assert.match(existing, /Write out the complete new page content in a heredoc; do not generate it with `sed`, `awk`, or similar commands, whether piped directly into the writer or first saved to a temporary file/);
 });
 
-test('existing page writes reuse the hash recorded when the page was read', () => {
+test('existing page writes use the read mode snapshot and reject standalone hashes', () => {
   const existing = normalize(between(reorg, '- Existing pages:', 'Only write'));
-  assert.match(existing, /When reading the page to edit, record its hash in the same step \(for example, print `sha256sum <page>` in the same command that reads the page\)/);
-  assert.match(existing, /Pass that recorded read-time hash to `--sha256` when writing/);
-  assert.match(existing, /Do not recalculate the hash in the write command or in preparation for writing: that defeats conflict detection and may silently overwrite Sync's changes/);
-  assert.match(existing, /`MEMORY_CONFLICT` leaves the file unchanged: reread and record the new hash, merge again and retry/);
+  assert.match(existing, /Before editing an existing page, you must use `memory-write.js --read --path reference\/projects\/<name>.md` to read its complete text and matching `sha256` in one response/);
+  assert.match(existing, /The write's `--sha256` must come only from that read response, the previous successful write result, or the `MEMORY_CONFLICT` response/);
+  assert.match(existing, /Never use `sha256sum` or any command that does not print the page content to obtain the hash/);
+  assert.match(existing, /`MEMORY_CONFLICT` leaves the file unchanged: reread with `memory-write.js --read --path reference\/projects\/<name>.md`, merge again, and retry with the hash returned alongside the content/);
+  for (const source of [reorg, writer]) {
+    assert.doesNotMatch(normalize(source), /sha256sum <page>|print `sha256sum|record its hash in the same step|same command that reads the page/);
+  }
+  assert.match(normalize(writer), /memory-write.js --read --path reference\/preferences.md/);
+  assert.match(normalize(writer), /The hash and complete text come from the same byte snapshot/);
 });

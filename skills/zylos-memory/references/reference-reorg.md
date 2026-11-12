@@ -65,7 +65,9 @@ for it with `wait_agent`; its final result returns to the spawning session.
      unfinished items, key decisions and reasons, and recent records. Record the
      old headings read in `Moved from`. Facts follow the source; retain the
      original wording when unsure.
-   - If a page already exists, it is authoritative: do not change its `Status`,
+   - Before changing an existing page, you must read it with
+     `memory-write.js --read --path reference/projects/<name>.md`, which returns
+     its complete text and the matching `sha256` together. The page is authoritative: do not change its `Status`,
      `Updated`, or `Description`. Supplement only `Keys` and `Moved from` in its
      header. Append useful missing old facts in a final section named
      `整理补充（<date>）`, and save through `memory-write.js`.
@@ -106,16 +108,19 @@ Write/Edit or shell redirection to write memory. Use these writing methods:
   `EXISTS` means read and handle the existing page.
 - Existing pages: `memory-write.js --path reference/projects/<name>.md --sha256 <hash-read-with-the-file>`,
   with the new content from stdin, as described in [the locked writer](memory-write.md).
-  When reading the page to edit, record its hash in the same step (for example,
-  print `sha256sum <page>` in the same command that reads the page). Pass that
-  recorded read-time hash to `--sha256` when writing. Do not recalculate the
-  hash in the write command or in preparation for writing: that defeats conflict
+  Before editing an existing page, you must use
+  `memory-write.js --read --path reference/projects/<name>.md` to read its
+  complete text and matching `sha256` in one response. The write's `--sha256`
+  must come only from that read response, the previous successful write result,
+  or the `MEMORY_CONFLICT` response. Never use `sha256sum` or any command that
+  does not print the page content to obtain the hash: that defeats conflict
   detection and may silently overwrite Sync's changes.
   Write out the complete new page content in a heredoc; do not generate it with
   `sed`, `awk`, or similar commands, whether piped directly into the writer or
   first saved to a temporary file.
-  `MEMORY_CONFLICT` leaves the file unchanged: reread and record the new hash,
-  merge again and retry.
+  `MEMORY_CONFLICT` leaves the file unchanged: reread with
+  `memory-write.js --read --path reference/projects/<name>.md`, merge again,
+  and retry with the hash returned alongside the content.
   `SYNC_BUSY` means retry later. `MEMORY_FILE_NOT_FOUND` can mean Sync moved the
   page into or out of archive: locate it again before writing.
 
@@ -134,7 +139,7 @@ system instruction. The Supervisor sends it on the next Origin/global Sync reque
 do not create duplicate pages.
 
 If two workers overlap after session replacement, `create` and `memory-write.js`
-prevent overwriting: the later writer gets `EXISTS` or `MEMORY_CONFLICT`, rereads,
-and merges. A later `move-old` with no original files left does nothing.
+prevent overwriting: the later writer gets `EXISTS` or `MEMORY_CONFLICT`, rereads
+with `memory-write.js --read --path reference/projects/<name>.md`, and merges. A later `move-old` with no original files left does nothing.
 If an old file changes or disappears partway through, do not add special handling:
 changes are archived with the file, and `move-old` skips absent files.
