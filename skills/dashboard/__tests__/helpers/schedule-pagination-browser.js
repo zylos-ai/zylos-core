@@ -132,7 +132,7 @@ export async function runSchedulePaginationBrowser(t, sandbox) {
         await search.fill('');
         await search.dispatchEvent('change');
         await page.waitForFunction(() => document.querySelectorAll('.wb-sched-row').length === 19);
-        await filters.getByRole('button', { name: /^已完成/ }).click();
+        await filters.getByRole('button', { name: /^已送达/ }).click();
         await page.waitForFunction(() => document.querySelectorAll('.wb-sched-row').length === 30);
         await more.scrollIntoViewIfNeeded();
         await more.click();
