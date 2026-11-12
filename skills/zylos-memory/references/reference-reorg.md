@@ -76,10 +76,10 @@ for it with `wait_agent`; its final result returns to the spawning session.
    `reference/legacy/` as described in the system memory directory guidance.
    Standing rules remain in `preferences.md`; do not change that file.
 
-4. **Finish with rebuild, then move-old.** Only after every `create`, `unarchive`,
-   and `memory-write` operation in step 2 has returned `ok`, run
-   `reference-index.js rebuild`, then `reference-index.js move-old`, each as a
-   separate command. If any operation returns `SYNC_BUSY`, `MEMORY_CONFLICT`,
+4. **Finish with rebuild, then move-old.** Run `reference-index.js rebuild`,
+   then run `reference-index.js move-old` as a separate command, only after
+   every `create`, `unarchive`, and `memory-write` operation in step 2 has
+   returned `ok`. If any operation returns `SYNC_BUSY`, `MEMORY_CONFLICT`,
    or any other error, follow the writing rules and retry until it succeeds;
    do not run `move-old` while any write remains unsuccessful. This moves both old files intact into
    `reference/legacy/` with date-time filenames without overwriting existing
@@ -106,10 +106,16 @@ Write/Edit or shell redirection to write memory. Use these writing methods:
   `EXISTS` means read and handle the existing page.
 - Existing pages: `memory-write.js --path reference/projects/<name>.md --sha256 <hash-read-with-the-file>`,
   with the new content from stdin, as described in [the locked writer](memory-write.md).
-  Put the complete new page content in a heredoc before passing it to
-  `memory-write.js`; do not pipe output from `sed`, `awk`, or similar commands
-  directly into the writer.
-  `MEMORY_CONFLICT` leaves the file unchanged: reread, merge again and retry.
+  When reading the page to edit, record its hash in the same step (for example,
+  print `sha256sum <page>` in the same command that reads the page). Pass that
+  recorded read-time hash to `--sha256` when writing. Do not recalculate the
+  hash in the write command or in preparation for writing: that defeats conflict
+  detection and may silently overwrite Sync's changes.
+  Write out the complete new page content in a heredoc; do not generate it with
+  `sed`, `awk`, or similar commands, whether piped directly into the writer or
+  first saved to a temporary file.
+  `MEMORY_CONFLICT` leaves the file unchanged: reread and record the new hash,
+  merge again and retry.
   `SYNC_BUSY` means retry later. `MEMORY_FILE_NOT_FOUND` can mean Sync moved the
   page into or out of archive: locate it again before writing.
 

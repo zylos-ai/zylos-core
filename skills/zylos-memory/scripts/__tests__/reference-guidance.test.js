@@ -119,14 +119,14 @@ test('reorganization writes only project pages and generated indexes without reb
   }
   assert.match(normalize(reorg), /Do not generate topic pages from the old `decisions.md`/);
   assert.match(normalize(reorg), /Standing rules remain in `preferences.md`; do not change that file/);
-  assert.match(normalize(reorg), /`MEMORY_CONFLICT` leaves the file unchanged: reread, merge again and retry/);
+  assert.match(normalize(reorg), /`MEMORY_CONFLICT` leaves the file unchanged: reread and record the new hash, merge again and retry/);
   assert.match(normalize(reorg), /`SYNC_BUSY` means retry later/);
   assert.match(normalize(reorg), /`MEMORY_FILE_NOT_FOUND` can mean Sync moved the page/);
 });
 
 test('reorganization builds pages before archival and reports archive collisions without retrying', () => {
   const finish = normalize(between(reorg, '4. **Finish', '## Writing rules'));
-  assert.match(finish, /Only after every `create`, `unarchive`, and `memory-write` operation in step 2 has returned `ok`, run `reference-index.js rebuild`, then `reference-index.js move-old`, each as a separate command/);
+  assert.match(finish, /Run `reference-index.js rebuild`, then run `reference-index.js move-old` as a separate command, only after every `create`, `unarchive`, and `memory-write` operation in step 2 has returned `ok`/);
   assert.match(finish, /If any operation returns `SYNC_BUSY`, `MEMORY_CONFLICT`, or any other error, follow the writing rules and retry until it succeeds; do not run `move-old` while any write remains unsuccessful/);
   assert.match(finish, /date-time filenames without overwriting existing files/);
   assert.match(finish, /If `move-old` returns `EXISTS`, nothing moved: report it in the result returned to the spawning session and do not retry/);
@@ -179,5 +179,13 @@ test('reorganization excludes consent, date-based selection, Origin-only reads a
 
 test('existing page writes use a complete heredoc rather than command output', () => {
   const existing = normalize(between(reorg, '- Existing pages:', 'Only write'));
-  assert.match(existing, /Put the complete new page content in a heredoc before passing it to `memory-write.js`; do not pipe output from `sed`, `awk`, or similar commands directly into the writer/);
+  assert.match(existing, /Write out the complete new page content in a heredoc; do not generate it with `sed`, `awk`, or similar commands, whether piped directly into the writer or first saved to a temporary file/);
+});
+
+test('existing page writes reuse the hash recorded when the page was read', () => {
+  const existing = normalize(between(reorg, '- Existing pages:', 'Only write'));
+  assert.match(existing, /When reading the page to edit, record its hash in the same step \(for example, print `sha256sum <page>` in the same command that reads the page\)/);
+  assert.match(existing, /Pass that recorded read-time hash to `--sha256` when writing/);
+  assert.match(existing, /Do not recalculate the hash in the write command or in preparation for writing: that defeats conflict detection and may silently overwrite Sync's changes/);
+  assert.match(existing, /`MEMORY_CONFLICT` leaves the file unchanged: reread and record the new hash, merge again and retry/);
 });
