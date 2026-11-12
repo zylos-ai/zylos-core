@@ -92,6 +92,10 @@ Update Options (same as Add, plus):
   --clear-session-group   Clear the execution group, keeping reply configuration;
                           with a reply target, the next run queries its execution group
 
+Update timing:
+  --in / --at             Change only the next run of recurring/interval tasks; cadence and timezone stay unchanged
+  --cron / --every        Replace the recurring schedule/type
+
 Write Options (add/update/remove/pause/resume/done):
   --json                  Single-line success/error envelope; JSON errors exit 1
 
@@ -607,6 +611,8 @@ function cmdUpdate(taskId, options) {
     updatedFields.push('miss_threshold');
   }
 
+  // A temporary time override preserves a periodic task's saved cadence and zone.
+  const nextRunOnly = (task.type === 'recurring' || task.type === 'interval') && Boolean(options.in || options.at);
   // Update schedule (type and next_run_at)
   let scheduleUpdated = false;
   if (options.in) {
@@ -614,9 +620,11 @@ function cmdUpdate(taskId, options) {
     if (!seconds) {
       reject('INVALID_ARGS', `Invalid duration "${options.in}"`);
     }
-    updates.type = 'one-time';
-    updates.cron_expression = null;
-    updates.interval_seconds = null;
+    if (!nextRunOnly) {
+      updates.type = 'one-time';
+      updates.cron_expression = null;
+      updates.interval_seconds = null;
+    }
     updates.next_run_at = now() + seconds;
     scheduleUpdated = true;
   } else if (options.at) {
@@ -624,9 +632,11 @@ function cmdUpdate(taskId, options) {
     if (!nextRunAt) {
       reject('INVALID_ARGS', `Could not parse time "${options.at}"`);
     }
-    updates.type = 'one-time';
-    updates.cron_expression = null;
-    updates.interval_seconds = null;
+    if (!nextRunOnly) {
+      updates.type = 'one-time';
+      updates.cron_expression = null;
+      updates.interval_seconds = null;
+    }
     updates.next_run_at = nextRunAt;
     scheduleUpdated = true;
   } else if (options.cron) {
@@ -652,8 +662,11 @@ function cmdUpdate(taskId, options) {
   }
 
   if (scheduleUpdated) {
-    updates.timezone = getDefaultTimezone();
-    updatedFields.push('type', 'schedule');
+    if (!nextRunOnly) {
+      updates.timezone = getDefaultTimezone();
+      updatedFields.push('type');
+    }
+    updatedFields.push('schedule');
   }
 
   // Check if any updates were provided
@@ -692,14 +705,15 @@ function cmdUpdate(taskId, options) {
     db.prepare(`UPDATE tasks SET ${setClauses} WHERE id = ?`).run(...values, task.id);
   }).immediate();
 
-  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id), updatedFields, reenabled, executionFinished });
+  if (options.json) return success({ task: db.prepare('SELECT * FROM tasks WHERE id=?').get(task.id), updatedFields, reenabled, executionFinished, ...(nextRunOnly ? { nextRunOnly: true } : {}) });
   console.log(`\nTask updated: ${task.id}`);
   console.log(`  Updated fields: ${updatedFields.join(', ')}`);
 
   if (scheduleUpdated) {
-    console.log(`  Type: ${updates.type}`);
+    console.log(`  Type: ${updates.type || task.type}`);
     console.log(`  Next run: ${formatTime(updates.next_run_at)} (${getRelativeTime(updates.next_run_at)})`);
   }
+  if (nextRunOnly) console.log('  Only the next run changed; recurring schedule and timezone unchanged');
   if (reenabled) console.log('  Re-enabled: pending');
   if (executionFinished) console.log('  Current execution completed; rescheduled as pending');
   console.log();

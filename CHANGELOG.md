@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Owner channel rule**: the system instructions now name Dashboard as the owner channel (Web Console is no longer mentioned) and tell the agent to clear the alert target when the owner changes.
 
 ### Fixed
+- Scheduler `update --at` and `--in` now postpone only the next run of recurring and interval tasks while preserving their cadence and timezone.
 - Dashboard memory editor explains why an empty file cannot be saved and keeps the draft.
 - **Deleting conversations that used subagents**: deletion counts and unlinks leaf output links inside the session's owned directories without following their targets; symbolic links at deletion roots or in parent paths remain rejected. A failed safety check now explains that deletion has not started, while failures after confirmation keep the existing retry flow.
 - **Account quota after switching providers**: Dashboard uses the newest account sample, including a replied session with no quota, instead of reviving an older subscription allowance. Initial Claude samples before any API reply remain inconclusive; live-only callers keep their existing behavior.

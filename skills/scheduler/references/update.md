@@ -23,7 +23,7 @@ All `add` timing options (`--in`, `--at`, `--cron`, `--every`) plus:
 | `--miss-threshold <seconds>` | Update miss threshold |
 | `--json` | Print a single-line result; see [JSON results](#json-results) |
 
-When the schedule is changed, the timezone column is automatically synced to the current configured TZ.
+For recurring and interval tasks, `--at` / `--in` changes only `next_run_at`, keeping the type, cron expression, interval and saved schedule timezone. The requested time is parsed in the current configured TZ. After that run completes, cron returns to the next matching time in its saved zone; intervals advance from completion as usual. `--cron` / `--every` still replaces the periodic schedule/type and syncs the timezone to the current configured TZ. One-time tasks keep their existing timing and timezone behavior.
 
 ## Postpone a running task
 
@@ -44,7 +44,7 @@ To send a task to Origin, add `--clear-reply` as well. The task then has no repl
 
 ## JSON results
 
-With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[...],"reenabled":false,"executionFinished":false}}`. `executionFinished` is true when a running execution was completed and rescheduled; `task.next_run_at` is the requested next time. Every failure prints `{"ok":false,"error":{"code":"...","message":"..."}}` and exits 1.
+With `--json`, success prints `{"ok":true,"data":{"task":{...},"updatedFields":[...],"reenabled":false,"executionFinished":false}}`. `nextRunOnly: true` is included only when a recurring/interval task receives a next-run-only `--at` / `--in` override; it explicitly means the cadence and saved zone were preserved. `executionFinished` is true when a running execution was completed and rescheduled; `task.next_run_at` is the requested next time. Every failure prints `{"ok":false,"error":{"code":"...","message":"..."}}` and exits 1.
 
 Use `--json` whenever you need to know the outcome. Without it, some validation errors still exit 0, so the exit code alone does not prove the update was applied.
 

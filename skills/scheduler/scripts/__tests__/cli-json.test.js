@@ -10,6 +10,7 @@ import { runSchedulerIteration, mainLoop } from '../daemon-dispatch.js';
 import { processCompletedTasks, handleStaleRunningTasks, TASK_TIMEOUT } from '../daemon-tasks.js';
 import { completeTaskExecution } from '../task-completion.js';
 
+const clockCliPath = fileURLToPath(new URL('./helpers/scheduler-cli-clock.js', import.meta.url));
 const cliPath = fileURLToPath(new URL('../cli.js', import.meta.url));
 
 function startExecution(f, task, age = 15) {
@@ -66,6 +67,68 @@ for (const [type, schedule] of [
   assert.equal(f.history(task.id).length, 2);
   assert.equal(f.history(task.id)[1].status, 'started');
 });
+
+// Actual CLI -> private SQLite -> real daemon dispatch -> CLI done -> reschedule.
+// Run when timing updates or completion changes; skip unrelated scheduler/UI changes.
+// Outer runner and fixture isolate HOME/ZYLOS_DIR/PM2_HOME/CODEX_HOME/short TMPDIR;
+// C4 queries/sends are injected, no tmux/socket/network/live DB. Child timeout is
+// 15 seconds and fixture teardown closes DB and removes all private resources.
+for (const [type, create] of [
+  ['recurring', ['--cron', '0 9 * * *']],
+  ['interval', ['--every', '30 minutes']],
+]) for (const timing of [['--at', '2030-01-01 01:00'], ['--in', '1 hour']]) for (const status of ['pending', 'running']) {
+  test(`${status} ${type} ${timing[0]} override preserves cadence and returns to its original schedule after done`, t => {
+    const initial = Date.parse('2030-01-01T00:00:00Z');
+    t.mock.timers.enable({ apis: ['Date'], now: initial });
+    const f = fixture(t, { time: initial });
+    const task = f.add('periodic work', create);
+    // The currently configured parse zone differs from the saved cadence zone.
+    f.db.prepare('UPDATE tasks SET timezone=? WHERE id=?').run('Asia/Shanghai', task.id);
+    const before = f.row(task.id);
+    const oldHistory = status === 'running' ? startExecution(f, task) : null;
+    const result = f.success(['update', task.id, ...timing, '--prompt', 'postponed work']);
+    assert.equal(result.nextRunOnly, true);
+    assert.equal(result.executionFinished, status === 'running');
+    assert.equal(result.task.type, before.type);
+    assert.equal(result.task.cron_expression, before.cron_expression);
+    assert.equal(result.task.interval_seconds, before.interval_seconds);
+    assert.equal(result.task.timezone, before.timezone);
+    assert.equal(result.task.next_run_at, initial / 1000 + 3600);
+    assert.equal(result.task.prompt, 'postponed work');
+    assert.equal(result.task.status, 'pending');
+    assert.equal(result.updatedFields.includes('type'), false);
+    if (oldHistory) {
+      assert.equal(f.history(task.id)[0].id, oldHistory);
+      assert.equal(f.history(task.id)[0].status, 'success');
+    }
+    const text = f.run(['update', task.id, ...timing]);
+    assert.equal(text.status, 0);
+    assert.match(text.stdout, /Only the next run changed; recurring schedule and timezone unchanged/);
+    assert.match(text.stdout, new RegExp(`Type: ${type}`));
+    const target = result.task.next_run_at;
+    processCompletedTasks(f.db);
+    assert.equal(f.row(task.id).next_run_at, target);
+    let sends = 0;
+    const deps = { getRecentConversations: () => [], sendViaC4: () => { sends++; return { category: 'success' }; } };
+    t.mock.timers.setTime(target * 1000 - 1000);
+    runSchedulerIteration(f.db, deps); assert.equal(sends, 0);
+    t.mock.timers.setTime(target * 1000);
+    runSchedulerIteration(f.db, deps); assert.equal(sends, 1);
+    assert.equal(f.row(task.id).status, 'running');
+    const completedAt = target + 120;
+    t.mock.timers.setTime(completedAt * 1000); f.env.SCHEDULER_TEST_TIME = String(completedAt * 1000);
+    f.success(['done', task.id]);
+    assert.equal(f.history(task.id).at(-1).status, 'success');
+    processCompletedTasks(f.db);
+    const resumed = f.row(task.id);
+    assert.equal(resumed.status, 'pending'); assert.equal(resumed.type, type);
+    assert.equal(resumed.timezone, 'Asia/Shanghai');
+    assert.equal(resumed.cron_expression, before.cron_expression);
+    assert.equal(resumed.interval_seconds, before.interval_seconds);
+    // 09:00 Shanghai is 01:00 UTC; completion was 01:02, so cron resumes next day.
+    assert.equal(resumed.next_run_at, type === 'recurring' ? initial / 1000 + 25 * 3600 : completedAt + 1800);
+  });
+}
 
 test('running reschedule rejects a past time without changing execution', t => {
   const f = fixture(t);
@@ -142,7 +205,7 @@ test('repeated done succeeds on a completed task without changing rows', t => {
   assert.deepEqual(f.history(task.id), history);
 });
 
-test('running absolute reschedule retains the existing conversion to one-time and explains completion', t => {
+test('running absolute reschedule preserves the recurring cadence and explains completion', t => {
   const f = fixture(t);
   const task = f.add('absolute postponement', ['--cron', '0 9 * * *']);
   startExecution(f, task);
@@ -150,7 +213,9 @@ test('running absolute reschedule retains the existing conversion to one-time an
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Current execution completed/);
   assert.match(result.stdout, /Next run:/);
-  assert.equal(f.row(task.id).type, 'one-time');
+  assert.equal(f.row(task.id).type, 'recurring');
+  assert.equal(f.row(task.id).cron_expression, task.cron_expression);
+  assert.match(result.stdout, /Only the next run changed/);
   assert.equal(f.row(task.id).status, 'pending');
 });
 
@@ -282,7 +347,7 @@ test('competing timeout sweeps notify only the successful transition', t => {
 // These cases cover the real CLI/store boundary, including private-file failures.
 // Run for scheduler CLI/schema/routing changes; unrelated UI changes may skip them.
 // Children never call tmux/PM2; introducing those calls requires a private tmux socket.
-function fixture(t) {
+function fixture(t, { time } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-json-'));
   const home = path.join(root, 'home');
   const zylos = path.join(home, 'zylos');
@@ -292,6 +357,7 @@ function fixture(t) {
     TMPDIR: tmp, TMUX_TMPDIR: tmp, TZ: 'UTC', ZYLOS_SESSION_GROUP: 'origin' };
   for (const key of ['TMUX', 'ZYLOS_RUN_ID', 'CLAUDE_SESSION_ID', 'CODEX_SESSION_ID']) delete env[key];
   for (const dir of [tmp, path.join(zylos, 'scheduler'), path.join(zylos, '.claude/skills/telegram')]) fs.mkdirSync(dir, { recursive: true });
+  if (time !== undefined) { env.SCHEDULER_TEST_TIME = String(time); env.NODE_NO_WARNINGS = '1'; }
   fs.writeFileSync(path.join(zylos, '.env'), 'TZ=UTC\n');
   for (const target of [home, zylos, env.PM2_HOME, tmp, dbPath]) assert.ok(target.startsWith(root + path.sep));
   console.log(JSON.stringify({ schedulerJsonFixture: root, HOME: home, ZYLOS_DIR: zylos,
@@ -305,7 +371,8 @@ function fixture(t) {
   });
   const run = (args, merged = false) => {
     const command = merged ? 'sh' : process.execPath;
-    const commandArgs = merged ? ['-c', 'exec "$@" 2>&1', 'scheduler-cli', process.execPath, cliPath, ...args] : [cliPath, ...args];
+    const entry = env.SCHEDULER_TEST_TIME === undefined ? cliPath : clockCliPath;
+    const commandArgs = merged ? ['-c', 'exec "$@" 2>&1', 'scheduler-cli', process.execPath, entry, ...args] : [entry, ...args];
     const result = spawnSync(command, commandArgs, { env, encoding: 'utf8', timeout: 15000 });
     assert.equal(result.error, undefined);
     return result;
