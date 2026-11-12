@@ -66,8 +66,9 @@ export function dispatchTask(db, candidate, dependencies = {}) {
         db.prepare("UPDATE tasks SET status='completed',last_run_at=?,updated_at=?,last_error=COALESCE(?,last_error),failed_at=NULL WHERE id=?")
           .run(timestamp, timestamp, warning, task.id);
       } else {
-        updateNextRunTime(db, task);
-        db.prepare('UPDATE tasks SET last_error=COALESCE(?,last_error),failed_at=NULL WHERE id=?').run(warning, task.id);
+        if (updateNextRunTime(db, task)) {
+          db.prepare('UPDATE tasks SET last_error=COALESCE(?,last_error),failed_at=NULL WHERE id=?').run(warning, task.id);
+        }
       }
       return;
     }
@@ -86,8 +87,9 @@ export function dispatchTask(db, candidate, dependencies = {}) {
       db.prepare("UPDATE tasks SET status='failed',last_error=?,failed_at=?,updated_at=? WHERE id=?")
         .run(result.code, timestamp, timestamp, task.id);
     } else {
-      updateNextRunTime(db, task);
-      db.prepare('UPDATE tasks SET last_error=? WHERE id=?').run(result.code, task.id);
+      if (updateNextRunTime(db, task)) {
+        db.prepare('UPDATE tasks SET last_error=? WHERE id=?').run(result.code, task.id);
+      }
     }
   }).immediate();
   if (result.category !== 'success' && result.category !== 'C') {
@@ -133,7 +135,11 @@ export function runSchedulerIteration(db, dependencies = {}) {
 }
 
 export async function mainLoop(db, { shouldRun, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), dependencies = {} }) {
-  settleStaleDeliveries(db);
+  try {
+    settleStaleDeliveries(db);
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Scheduler error: ${error.message}`);
+  }
   let lastCleanup = Date.now();
   while (shouldRun()) {
     try {

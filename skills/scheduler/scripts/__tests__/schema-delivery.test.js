@@ -25,10 +25,14 @@ function addTasks(db) {
     ['legacy-interval', 'interval', null, 1800, 'running'],
     ['legacy-without-history', 'one-time', null, null, 'running'],
     ['untouched-pending', 'interval', null, 1800, 'pending'],
+    ['untouched-pending-interval-after-run', 'interval', null, 1800, 'pending'],
+    ['untouched-pending-cron-after-run', 'recurring', '0 9 * * *', null, 'pending'],
     ['untouched-failed', 'one-time', null, null, 'failed'],
     ['untouched-paused', 'recurring', '0 9 * * *', null, 'paused'],
     ['untouched-completed', 'one-time', null, null, 'completed'],
   ]) insert.run(id, id, type, cron, seconds, timestamp - 300, status, timestamp - 60, timestamp - 60);
+  db.prepare("UPDATE tasks SET last_run_at=? WHERE id IN ('untouched-pending-interval-after-run','untouched-pending-cron-after-run')")
+    .run(timestamp - 1800);
   const history = db.prepare('INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,?,?,?)');
   for (const id of ['legacy-once', 'legacy-cron', 'legacy-interval']) {
     history.run(id, timestamp - 60, 'started', 'SESSION_GROUP_QUERY_FAILED');
@@ -70,6 +74,13 @@ function verify(db, before) {
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_history').get().n, before.history.length);
   for (const row of before.tasks.filter(row => row.id.startsWith('untouched-'))) {
     const actual = db.prepare('SELECT * FROM tasks WHERE id=?').get(row.id);
+    if (row.id.endsWith('-after-run')) {
+      assert.equal(row.status, 'pending');
+      assert.equal(row.last_run_at, timestamp - 1800);
+      assert.equal(actual.status, row.status);
+      assert.equal(actual.last_run_at, row.last_run_at);
+      assert.equal(actual.next_run_at, row.next_run_at);
+    }
     // Source-v1 rows gain only the already-released routing columns.
     assert.deepEqual(Object.fromEntries(Object.keys(row).map(key => [key, actual[key]])), row);
   }

@@ -382,6 +382,83 @@ test(`daemon startup closes an abandoned ${type} claim without sending`, async t
   assert.equal(read().task.status, type === 'one-time' ? 'failed' : 'pending');
 });
 
+// Boundary: actual daemon iteration/startup and SQLite accounting for damaged
+// saved schedules. Run after rescheduling or stale-delivery changes; UI-only
+// changes may skip. Uses only the private/in-memory fixture and injected receive,
+// with bounded mainLoop iterations and no daemon child, socket or live service.
+function insertUnrelatedDueTask(db, task) {
+  const sibling = { ...task, id: 'unrelated-due', name: 'Unrelated due task',
+    type: 'one-time', cron_expression: null, timezone: 'UTC', status: 'pending',
+    updated_at: Math.floor(Date.now() / 1000), next_run_at: Math.floor(Date.now() / 1000), priority: 3 };
+  const keys = Object.keys(sibling);
+  db.prepare(`INSERT INTO tasks(${keys.join(',')}) VALUES(${keys.map(() => '?').join(',')})`).run(...Object.values(sibling));
+  return sibling;
+}
+
+for (const [invalid, fields] of [
+  ['cron', { cron_expression: 'bogus', timezone: 'UTC' }],
+  ['timezone', { cron_expression: '*/30 * * * *', timezone: 'Mars/Olympus' }],
+]) for (const entry of ['iteration', 'startup'])
+test(`invalid saved ${invalid} fails only its abandoned task during daemon ${entry}`, async t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start + 200000 });
+  const { db, task, read } = fixture(t, { type: 'recurring', status: 'running', priority: 1,
+    updated_at: start / 1000, ...fields });
+  db.prepare("INSERT INTO task_history(task_id,executed_at,status,error) VALUES(?,?,'started','RECEIVE_RESULT_UNKNOWN')")
+    .run(task.id, start / 1000);
+  const sibling = insertUnrelatedDueTask(db, task), sent = [];
+  const deps = { ...base, sendViaC4(message) { sent.push(message); return { category: 'success' }; } };
+  if (entry === 'startup') {
+    let iterations = 0;
+    await mainLoop(db, { shouldRun: () => iterations < 2, sleep: async () => { iterations++; }, dependencies: deps });
+    assert.equal(iterations, 2);
+  } else {
+    runSchedulerIteration(db, deps);
+    runSchedulerIteration(db, deps);
+  }
+  const after = read();
+  assert.equal(after.task.status, 'failed');
+  assert.match(after.task.last_error, /^Invalid cron expression "/);
+  assert.equal(after.task.updated_at, start / 1000 + 200);
+  assert.equal(after.history.length, 1); assert.equal(after.history[0].status, 'failed');
+  assert.equal(after.history[0].error, 'DELIVERY_RESULT_UNKNOWN');
+  assert.equal(after.history[0].completed_at, start / 1000 + 200);
+  assert.equal(after.history[0].duration_ms, 200000);
+  assert.equal(sent.length, 1); assert.ok(sent[0].startsWith(`[Scheduled Task: ${sibling.id} #`));
+  assert.equal(db.prepare('SELECT status FROM tasks WHERE id=?').get(sibling.id).status, 'completed');
+  const preserved = JSON.stringify(after);
+  runSchedulerIteration(db, deps);
+  assert.equal(sent.length, 1); assert.equal(JSON.stringify(read()), preserved);
+});
+
+for (const category of ['success', 'C', 'R'])
+test(`${category} receipt keeps its history when the saved timezone cannot be rescheduled`, t => {
+  const start = Date.parse('2030-01-01T00:00:00Z');
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  const { db, task, read } = fixture(t, { type: 'recurring', priority: 1,
+    cron_expression: '*/30 * * * *', timezone: 'Mars/Olympus', next_run_at: start / 1000 });
+  const sibling = insertUnrelatedDueTask(db, task), sent = [];
+  const code = category === 'C' ? 'UNHEALTHY_NOTIFY_UNCERTAIN' : category === 'R' ? 'INVALID_ARGS' : undefined;
+  const deps = { ...base, sendViaC4(message) {
+    sent.push(message);
+    return message.startsWith(`[Scheduled Task: ${task.id} #`) ? { category, ...(code ? { code } : {}) } : { category: 'success' };
+  } };
+  runSchedulerIteration(db, deps);
+  const after = read();
+  assert.equal(sent.length, 1); assert.equal(after.task.status, 'failed');
+  assert.match(after.task.last_error, /^Invalid cron expression "/);
+  assert.notEqual(after.task.last_error, code);
+  assert.equal(after.history.length, 1);
+  assert.equal(after.history[0].status, category === 'R' ? 'failed' : 'success');
+  assert.equal(after.history[0].error, code ?? null);
+  assert.equal(after.history[0].completed_at, start / 1000); assert.equal(after.history[0].duration_ms, 0);
+  runSchedulerIteration(db, deps);
+  assert.equal(sent.length, 2); assert.ok(sent[1].startsWith(`[Scheduled Task: ${sibling.id} #`));
+  assert.equal(db.prepare('SELECT status FROM tasks WHERE id=?').get(sibling.id).status, 'completed');
+  runSchedulerIteration(db, deps);
+  assert.equal(sent.length, 2); assert.deepEqual(read(), after);
+});
+
 test('real recent/range reads find full execution after a non-maximum-id lower bound',t=>{
  const {db,task,read}=fixture(t);
  const messages=c4.getDb();
