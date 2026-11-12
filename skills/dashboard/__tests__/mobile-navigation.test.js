@@ -80,3 +80,33 @@ test('mobile navigation watches availability controls without watching conversat
   } finally { navigation.destroy(); }
   assert.equal(f.observer.disconnects, 1);
 });
+
+
+test('mobile navigation discovers conversation controls created after mounting', () => {
+  const f = navigationDocument(), { document } = f;
+  f.reload.remove(); f.create.remove();
+  const navigation = mountMobileNavigation({ document, t: key => key, getView: () => ({ tab: 'chat' }) });
+  try {
+    const reload = document.querySelector('#wb-mobile-list-refresh');
+    const create = document.querySelector('#wb-mobile-list-create');
+    assert.equal(reload.hidden, true);
+    assert.equal(create.hidden, true);
+    f.chat.append(f.reload, f.create);
+    navigation.sync(); navigation.sync();
+    for (const control of [f.reload, f.create]) {
+      const records = f.observations.filter(record => record.target === control);
+      assert.equal(records.length, 1, 'late controls are watched exactly once');
+      assert.deepEqual(records[0].options.attributeFilter, ['hidden', 'disabled']);
+    }
+    assert.equal(reload.hidden, false); assert.equal(create.hidden, false);
+    for (const [source, proxy] of [[f.reload, reload], [f.create, create]]) {
+      source.hidden = true; source.disabled = true; f.observer.callback();
+      assert.equal(proxy.hidden, true); assert.equal(proxy.disabled, true);
+      source.hidden = false; source.disabled = false; f.observer.callback();
+      assert.equal(proxy.hidden, false); assert.equal(proxy.disabled, false);
+      let clicks = 0; source.addEventListener('click', () => clicks++);
+      proxy.click(); assert.equal(clicks, 1);
+    }
+  } finally { navigation.destroy(); }
+  assert.equal(f.observer.disconnects, 1);
+});

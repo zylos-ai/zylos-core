@@ -138,6 +138,7 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
     }
     for (const [proxy, selector] of [[listRefresh, '.conversation-reload'], [listCreate, '.conversation-create']]) {
       const target = original(selector);
+      watch(target);
       proxy.hidden = active !== 'chat' || !target || target.hidden;
       proxy.disabled = Boolean(target?.disabled);
       const label = target?.getAttribute('aria-label') || target?.getAttribute('title');
@@ -156,9 +157,13 @@ export function mountMobileNavigation({ document, t, getView = () => ({ tab: 'ov
     ...menuRows.map(row => original(row.selector)),
     original('.conversation-reload'), original('.conversation-create'),
   ];
-  for (const control of new Set(controls.filter(Boolean))) {
+  const watched = new Set();
+  function watch(control) {
+    if (!control || watched.has(control)) return;
+    watched.add(control);
     mutations?.observe(control, { attributes: true, attributeFilter: ['hidden', 'disabled'] });
   }
+  controls.forEach(watch);
   const detailToggle = original('#wb-detail-toggle'); detailToggle?.addEventListener('change', sync);
   document.addEventListener('dashboard-locale-change', sync); document.addEventListener('keydown', keydown);
   view.addEventListener('resize', sync);

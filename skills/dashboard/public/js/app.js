@@ -8,7 +8,7 @@ import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-a
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=167';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
 import { mountConversationPage } from './wb/conversation-page.js?v=184';
-import { mountMobileNavigation } from './wb/mobile-navigation.js?v=2';
+import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
 import { mountWorkbench } from './wb/shell.js?v=168';
@@ -2972,6 +2972,13 @@ await initI18n();
 await refreshObserverStatus({ quiet: true });
 initSettingsPage();
 initTabs();
+mobileNavigation = mountMobileNavigation({ document, t,
+  getView: () => ({ tab: activeTabName(), fleet: state.fleetViewActive }),
+  onTab: name => {
+    if (state.fleetViewActive) showAgentDetail({ navigation: false });
+    document.querySelector(`.tab[data-tab="${name}"]`)?.click();
+  },
+});
 initFleetMode();
 initLogout();
 initInfoBarButtons();
@@ -3076,13 +3083,6 @@ document.querySelector('#wb-detail-toggle')?.addEventListener('change', usageDet
 document.addEventListener('dashboard-locale-change', usageDetailChange);
 refreshUsage();
 refreshChat();
-mobileNavigation = mountMobileNavigation({ document, t,
-  getView: () => ({ tab: activeTabName(), fleet: state.fleetViewActive }),
-  onTab: name => {
-    if (state.fleetViewActive) showAgentDetail({ navigation: false });
-    document.querySelector(`.tab[data-tab="${name}"]`)?.click();
-  },
-});
 window.addEventListener('pagehide', () => { workbench.destroy(); closeSettingsModal(); usagePage.destroy(); chatPage.destroy();
   mobileNavigation.destroy();
   document.removeEventListener('dashboard-locale-change', chatLocaleChange);

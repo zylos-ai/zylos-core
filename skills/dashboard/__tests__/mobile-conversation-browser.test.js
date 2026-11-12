@@ -9,10 +9,10 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 // TMPDIR/socket/database paths before allocation. No DB/runtime/channel starts.
 // Browser, contexts, SSE and HTTP are lifecycle-bound, including failed cases.
 test('conversation header and mobile navigation preserve existing actions',
-  { skip: !chatEnabled(), timeout: 150000 }, async t => {
+  { skip: !chatEnabled(), timeout: 270000 }, async t => {
     const sandbox = createChatSandbox(t);
     await sandbox.runCase(async () => {
       const { runMobileConversationBrowser } = await import('./helpers/mobile-conversation-browser.js');
       await runMobileConversationBrowser(t, sandbox);
-    }, { timeoutMs: 140000 });
+    }, { timeoutMs: 260000 });
   });

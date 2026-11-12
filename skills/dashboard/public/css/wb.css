@@ -1542,6 +1542,8 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 /* Phone navigation. The original header remains the desktop layout and owns all actions. */
 .wb-mobile-topbar, .wb-mobile-tabs, .wb-mobile-scrim, .wb-mobile-sheet { display: none; }
 @media (max-width: 760px) {
+  /* Keep the desktop shell hidden until mobile navigation and the address tab are ready. */
+  html:not(.wb-mobile-ready) :is(.app-header, .view-stack) { visibility: hidden; }
   html.wb-mobile-ready { --wb-header-h: 52px; }
   html.wb-mobile-ready body { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
   html.wb-mobile-ready .app-header { display: none; }
@@ -1559,7 +1561,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-mobile-icon-button > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .wb-mobile-icon-button:disabled { opacity: .4; cursor: default; }
   html.wb-mobile-ready .wb-mobile-tabs {
-    position: fixed; z-index: 40; bottom: 0; left: 0; right: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+    position: fixed; z-index: 40; bottom: 0; left: 0; right: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
     padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid var(--wb-line); background: var(--nav-bg);
     backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   }

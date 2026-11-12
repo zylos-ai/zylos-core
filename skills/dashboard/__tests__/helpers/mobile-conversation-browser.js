@@ -22,6 +22,7 @@ const iso = offset => new Date(NOW + offset).toISOString();
 // render them. No database, runtime, channel, outbound request or backend extension.
 async function startPage(sandbox, publicDir) {
   let scene = 'idle', connected = true, observerBlocked = false, sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard';
+  let listGate = null, releaseList = () => {};
   const streams = new Set(), missing = new Set(), actions = [];
   const conversation = id => ({ id, localId: 'mobile-browser', sessionGroup: id === EXT_ID ? EXTERNAL : id === ORIGIN_ID ? 'origin' : GROUP,
     channel: id === EXT_ID ? 'telegram' : id === ORIGIN_ID ? 'dashboard' : channel, state: 'active', displayName: id === EXT_ID ? 'Howard' : id === ORIGIN_ID ? 'Origin' : title,
@@ -58,7 +59,7 @@ async function startPage(sandbox, publicDir) {
     if (p.startsWith('/api/workbench/groups/') && p.endsWith('/messages')) return { messages: [] };
     return workbenchAnswer(url, NOW);
   };
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
       if (url.pathname === '/api/stream') {
@@ -68,6 +69,7 @@ async function startPage(sandbox, publicDir) {
         res.write(`event: chat_ready\ndata: ${JSON.stringify(data)}\n\n`); streams.add(res); res.on('close', () => streams.delete(res)); return;
       }
       if (url.pathname.startsWith('/api/')) {
+        if (req.method === 'GET' && url.pathname === '/api/chat/conversations' && listGate) await listGate;
         if (req.method !== 'GET') {
           actions.push({ method: req.method, path: url.pathname });
           if (req.method === 'PATCH' && url.pathname.startsWith('/api/chat/conversations/')) { sendJson(res, 200, { conversation: conversation(ID) }); return; }
@@ -87,8 +89,12 @@ async function startPage(sandbox, publicDir) {
       sendJson(res, 404, { error: 'not_found' });
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
-  sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
+  sandbox.addCleanup(() => { releaseList(); for (const stream of streams) stream.end(); });
   return { base: await sandbox.startHttp(server), missing, actions,
+    holdConversationList() {
+      listGate = new Promise(resolve => { releaseList = () => { listGate = null; resolve(); }; });
+      return releaseList;
+    },
     setScene(value) { scene = value; }, setTitle(value) { title = value; }, setChannel(value) { channel = value; }, reconnect() { connected = true; }, setSessionMode(value) { sessionMode = value; }, setObserverBlocked(value) { observerBlocked = value; }, disconnect() { connected = false; for (const stream of streams) stream.end(); } };
 }
 
@@ -103,19 +109,149 @@ export async function runMobileConversationBrowser(t, sandbox) {
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
   const captures = [], measurements = [];
-  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard' } = {}) => {
+  // Boundary: real startup ordering, stylesheet visibility and late control
+  // subscriptions. Run for mobile chrome/bootstrap changes; backend-only work
+  // may skip. All requests stay in this sandbox's loopback fixture.
+  await t.test('slow phone refresh first reveals the address tab with mobile navigation', async () => {
+    for (const [pathname, tab] of [['/chat', 'chat'], ['/', 'overview']]) {
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'zh-CN' });
+      sandbox.addCleanup(() => context.close());
+      let releaseFleet, fleetArrived, holdFleet = false, fleetTimer;
+      const fleetGate = new Promise(resolve => { releaseFleet = resolve; });
+      const fleetRequest = new Promise((resolve, reject) => {
+        fleetArrived = resolve;
+        fleetTimer = setTimeout(() => reject(new Error('held fleet request did not arrive')), 60_000);
+      });
+      try {
+        await context.route('**/*', async route => {
+          const url = route.request().url();
+          if (!url.startsWith(fixture.base + '/')) return route.abort();
+          if (holdFleet && new URL(url).pathname === '/api/fleet') {
+            clearTimeout(fleetTimer);
+            fleetArrived();
+            await fleetGate;
+          }
+          return route.continue();
+        });
+        await context.addInitScript(() => {
+          localStorage.setItem('zylos-dashboard-locale', 'zh');
+          window.startupFrames = { count: 0, preReady: null, firstVisible: null, failure: null };
+          const visible = el => el && el.getBoundingClientRect().height > 0 &&
+            getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+          const check = () => {
+            const result = window.startupFrames;
+            result.count++;
+            const header = document.querySelector('.app-header'), stack = document.querySelector('.view-stack');
+            const ready = document.documentElement.classList.contains('wb-mobile-ready');
+            const visibility = { header: header ? getComputedStyle(header).visibility : null, stack: stack ? getComputedStyle(stack).visibility : null };
+            if (!ready && header && stack) result.preReady ??= visibility;
+            if (visible(header) || visible(stack) || visible(document.querySelector('.wb-mobile-topbar'))) {
+              const active = document.querySelector('.tab.active')?.dataset.tab;
+              result.firstVisible ??= { ready, active, header: visible(header) };
+              const expected = location.pathname === '/chat' ? 'chat' : 'overview';
+              if (!ready || visible(header) || active !== expected) result.failure = { ready, active, header: visible(header), visibility };
+            }
+            if (!result.failure && result.count < 2400) requestAnimationFrame(check);
+          };
+          requestAnimationFrame(check);
+        });
+        const page = await context.newPage();
+        page.setDefaultTimeout(60_000);
+        await page.goto(fixture.base + pathname);
+        await page.locator('.conversation-reload').waitFor({ state: 'attached' });
+        holdFleet = true;
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Network.enable');
+        await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 400,
+          downloadThroughput: -1, uploadThroughput: -1, connectionType: 'cellular3g' });
+        await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+        const capture = async stage => {
+          if (evidence) await page.screenshot({ path: path.join(evidence, `startup-${tab}-${stage}.png`) });
+        };
+        // Cold assets retain 400ms request latency and 6x CPU throttling without
+        // making the assertion budget depend on the growing static download size.
+        await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+        await page.reload({ waitUntil: 'commit' });
+        await capture('waiting');
+        await fleetRequest;
+        assert.equal(await page.locator('#wb-mobile-nav').count(), 1,
+          'mobile navigation must mount before the fleet request starts');
+        assert.equal(await page.locator('.app-header').isVisible(), false);
+        assert.equal(await page.locator(`#tab-${tab}`).evaluate(el => el.hidden), false);
+        assert.equal(await page.locator(`[data-mobile-tab="${tab}"]`).getAttribute('aria-current'), 'page');
+        await capture('navigation');
+        releaseFleet();
+        if (tab === 'chat') {
+          await page.locator('.conversation-reload').waitFor({ state: 'attached' });
+          await page.locator('#wb-mobile-list-refresh').waitFor();
+          await page.waitForFunction(() => ['.conversation-reload', '.conversation-create',
+            '#wb-mobile-list-refresh', '#wb-mobile-list-create'].every(selector => document.querySelector(selector)?.disabled === false));
+          // Hold a real refresh in loading state. No source-property writes or
+          // app sync call: late MutationObserver subscriptions update the copies.
+          const releaseList = fixture.holdConversationList();
+          try {
+            const arrived = page.waitForRequest(request => new URL(request.url()).pathname === '/api/chat/conversations', { timeout: 10_000 });
+            const disabled = await page.evaluate(async () => {
+              // Click the real source: the mobile proxy's own click handler
+              // calls sync(), which would hide a missing observer subscription.
+              document.querySelector('.conversation-reload').click();
+              await new Promise(requestAnimationFrame);
+              return ['.conversation-reload', '.conversation-create', '#wb-mobile-list-refresh',
+                '#wb-mobile-list-create'].map(selector => document.querySelector(selector)?.disabled);
+            });
+            await arrived;
+            assert.deepEqual(disabled, [true, true, true, true],
+              'late controls and their mobile copies become disabled by the next frame');
+          } finally { releaseList(); }
+          await page.waitForFunction(() => ['.conversation-reload', '.conversation-create',
+            '#wb-mobile-list-refresh', '#wb-mobile-list-create'].every(selector => document.querySelector(selector)?.disabled === false));
+          await page.locator('.conversation-tabs [role="tab"]').nth(1).click();
+          await page.waitForFunction(() => document.querySelector('.conversation-create')?.hidden === true &&
+            document.querySelector('#wb-mobile-list-create')?.hidden === true);
+          await page.locator('.conversation-tabs [role="tab"]').nth(0).click();
+          await page.waitForFunction(() => document.querySelector('.conversation-create')?.hidden === false &&
+            document.querySelector('#wb-mobile-list-create')?.hidden === false);
+        } else await page.locator('#wb-board .wb-row').first().waitFor();
+        await capture('stable');
+        const frames = await page.evaluate(() => window.startupFrames);
+        assert.equal(frames.failure, null, 'unexpected visible startup frame: ' + JSON.stringify(frames.failure));
+        assert.deepEqual(frames.preReady, { header: 'hidden', stack: 'hidden' }, 'pre-navigation shell visibility is recorded, not awaited');
+        assert.equal(frames.firstVisible?.ready, true);
+        assert.equal(frames.firstVisible?.active, tab);
+        assert.equal(frames.firstVisible?.header, false);
+        console.info('Throttled startup:', JSON.stringify({ pathname, cpu: 6, latency: 400, bytesPerSecond: 'unlimited', frames }));
+        if (evidence) fs.writeFileSync(path.join(evidence, `startup-${tab}.json`), JSON.stringify(frames, null, 2));
+      } finally { clearTimeout(fleetTimer); releaseFleet(); await context.close(); }
+    }
+  });
+  const open = async ({ width = 390, locale = 'zh', theme = 'light', scene = 'idle', observerBlocked = false, detail = 'plain', sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard', remote = false } = {}) => {
     fixture.reconnect(); fixture.setScene(scene); fixture.setTitle(title); fixture.setChannel(channel); fixture.setObserverBlocked(observerBlocked); fixture.setSessionMode(sessionMode);
     const context = await browser.newContext({ viewport: { width, height: width < 761 ? 844 : 900 }, locale: locale === 'zh' ? 'zh-CN' : 'en-US', timezoneId: 'UTC' });
     sandbox.addCleanup(() => context.close());
-    await context.route('**/*', route => route.request().url().startsWith(fixture.base + '/') ? route.continue() : route.abort());
+    const remoteState = { allow: true, reads: 0 }, prefix = '/fleet/phone';
+    await context.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (!url.href.startsWith(fixture.base + '/')) return route.abort();
+      if (!remote || !url.pathname.startsWith(prefix + '/')) return route.continue();
+      if (url.pathname === prefix + '/') return route.fulfill({ contentType: 'text/html', body:
+        fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8').replaceAll('__BASE_PATH__', prefix)
+          .replaceAll('__ASSET_ROOT__', prefix + '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin') });
+      const target = fixture.base + url.pathname.slice(prefix.length) + url.search;
+      if (url.pathname === prefix + '/api/state') {
+        remoteState.reads++;
+        const response = await route.fetch({ url: target });
+        return route.fulfill({ json: { ...await response.json(), chat_allow_remote: remoteState.allow } });
+      }
+      return route.continue({ url: target });
+    });
     await context.addInitScript(({ locale, theme, detail }) => { if (window !== window.top) return; localStorage.setItem('zylos-dashboard-locale', locale); localStorage.setItem('zylos-dashboard-theme', theme); localStorage.setItem('zylos-dashboard-detail-level', detail); }, { locale, theme, detail });
     const page = await context.newPage(); page.setDefaultTimeout(7000);
     const errors = []; page.on('pageerror', error => { if (errors.length < 5) errors.push(error.stack || error.message); });
     await page.clock.install({ time: new Date(NOW) });
-    await page.goto(fixture.base + '/chat');
-    try { await page.locator(`[data-conversation-id="${ID}"]`).waitFor(); }
+    await page.goto(fixture.base + (remote ? prefix + '/' : '/chat'));
+    try { await page.locator(remote ? '#wb-board .wb-row' : `[data-conversation-id="${ID}"]`).first().waitFor(); }
     catch (error) { if (evidence) { await page.screenshot({path:path.join(evidence, 'mount-failure.png')}); fs.writeFileSync(path.join(evidence, 'mount-failure.html'), await page.content()); } console.error('Mobile mount:', JSON.stringify({ errors, missing: [...fixture.missing], text: (await page.locator('body').innerText()).slice(0, 1500) })); throw error; }
-    return { page, context, errors };
+    return { page, context, errors, remoteState };
   };
   const select = async page => { await page.locator(`[data-conversation-id="${ID}"]`).click(); await page.locator('.conversation-message').first().waitFor(); };
   const shot = async (page, name) => {
@@ -124,6 +260,59 @@ export async function runMobileConversationBrowser(t, sandbox) {
     assert.ok(size.width <= size.viewport + 1, name + ' no horizontal overflow');
     if (evidence) { const file = path.join(evidence, name + '.png'); await page.screenshot({ path: file, animations: 'disabled' }); captures.push(file); }
   };
+  // Boundary: remote state reads drive hidden navigation through real access policy;
+  // visible mobile navigation items share all available columns;
+  // hidden source controls also collapse in the topbar and More sheet.
+  // Run for mobile navigation/layout changes; unrelated backend work may skip.
+  await t.test('hidden phone tabs leave equal columns and no empty action slots', async () => {
+    const f = await open({ remote: true }), page = f.page;
+    try {
+      const checkColumns = async count => {
+        const boxes = await page.locator('#wb-mobile-nav > button:visible').evaluateAll(nodes => nodes.map(el => {
+          const rect = el.getBoundingClientRect(); return { left: rect.left, right: rect.right, width: rect.width };
+        }));
+        assert.equal(boxes.length, count);
+        assert.ok(Math.abs(boxes[0].left) <= 1);
+        assert.ok(Math.abs(boxes.at(-1).right - 390) <= 1, 'last item reaches the right edge');
+        for (let i = 0; i < boxes.length; i++) {
+          assert.ok(Math.abs(boxes[i].width - 390 / count) <= 1, 'visible items divide the viewport equally');
+          if (i) assert.ok(Math.abs(boxes[i].left - boxes[i - 1].right) <= 1, 'no empty columns');
+        }
+      };
+      await checkColumns(5);
+      f.remoteState.allow = false;
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.locator('[data-mobile-tab="chat"]').waitFor({ state: 'hidden' });
+      await checkColumns(4);
+      const polledState = page.waitForResponse(response => new URL(response.url()).pathname === '/fleet/phone/api/state');
+      const readsBeforePoll = f.remoteState.reads;
+      await page.clock.runFor(30_000);
+      await polledState;
+      assert.ok(f.remoteState.reads > readsBeforePoll, 'periodic refresh reads the real remote state again');
+      assert.equal(await page.locator('.tab[data-tab="chat"]').evaluate(el => el.hidden), true, 'remote closure survives the periodic state refresh');
+      await checkColumns(4);
+      const topbar = await page.locator('.wb-mobile-topbar').evaluate(el => {
+        const heading = el.querySelector('h1').getBoundingClientRect(), bar = el.getBoundingClientRect();
+        return { right: bar.right, headingRight: heading.right, padding: parseFloat(getComputedStyle(el).paddingRight),
+          actions: [...el.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0).length };
+      });
+      assert.equal(topbar.actions, 0);
+      assert.ok(Math.abs(topbar.right - topbar.headingRight - topbar.padding) <= 1, 'heading fills the topbar without action slots');
+      await openMobileMore(page);
+      const usage = await page.locator('[data-mobile-action="usage"]').boundingBox();
+      const settings = await page.locator('[data-mobile-action="settings"]').boundingBox();
+      assert.equal(await page.locator('[data-mobile-action="observer"]').isVisible(), false);
+      assert.ok(Math.abs(settings.y - usage.y - usage.height) <= 1, 'hidden terminal action leaves no menu gap');
+      await shot(page, 'mobile-390-hidden-chat-more');
+      await page.keyboard.press('Escape');
+      await shot(page, 'mobile-390-hidden-chat-navigation');
+      f.remoteState.allow = true;
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.locator('[data-mobile-tab="chat"]').waitFor();
+      await checkColumns(5);
+      assert.deepEqual(f.errors, []);
+    } finally { await f.context.close(); }
+  });
   const headerScenes = [
     { width: 1280, theme: 'light', name: 'header-1280-light' },
     { width: 1280, theme: 'dark', name: 'header-1280-dark' },
