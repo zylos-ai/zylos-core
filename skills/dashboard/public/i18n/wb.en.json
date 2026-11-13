@@ -1076,6 +1076,7 @@
   "wb.settings.timezone.restarted": "Services restarted. The saved time zone is now applied.",
   "chat.delete.button": "Delete conversation",
   "chat.delete.retry": "Retry deletion",
+  "chat.delete.short": "Delete",
   "chat.delete.draftConfirm": "Remove this draft? It has no sent messages. Uploaded attachments will be retained. This cannot be undone.",
   "chat.delete.confirm": "Delete the completed messages covered by this preview? It shows {messages} messages and {attachments} removable attachments. The AI session will stop after current work finishes. Later messages and data whose ownership cannot be proven will be kept. Main memory, usage and backups remain. Deleted messages no longer count toward message totals. This cannot be undone.",
   "chat.delete.deleting": "Finishing current work and deleting…",

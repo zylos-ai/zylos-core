@@ -1008,6 +1008,32 @@ button.conversation-activity-head:focus-visible { outline:2px solid var(--accent
 .conversation-delete:hover { color:var(--danger,#b42318); }
 .conversation-delete span { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .conversation-delete-status { flex-basis:100%; padding:0 9px 7px; font-size:11px; line-height:1.5; color:var(--text-dim); overflow-wrap:anywhere; }
+.conversation-delete-short { display:none; }
+/* Desktop: the trash shows on the hovered or keyboard-focused row; a row showing a deletion status keeps its button shown. */
+@media (min-width:761px) and (hover:hover) {
+  .conversation-list-row:not([data-deletion-state]) .conversation-delete:not(:focus-visible) { opacity:0; }
+  .conversation-list-row:hover .conversation-delete:not(:focus-visible) { opacity:1; }
+  .conversation-list-row:has(:focus-visible) .conversation-delete:not(:focus-visible) { opacity:1; }
+}
+/* Phone: a leftward swipe slides the row over to reveal its delete button (see conversation-swipe.js). */
+@media (max-width:760px) {
+  .conversation-page .conversation-list-row { position:relative; gap:0; touch-action:pan-y; }
+  .conversation-page .conversation-list-row .conversation-list-item { position:relative; z-index:1; transition:transform .18s ease; }
+  .conversation-page .conversation-list-row:is(.conversation-swiping,.conversation-swipe-open) { overflow:hidden; border-radius:10px; }
+  .conversation-page :is(.conversation-swiping,.conversation-swipe-open) .conversation-list-item:not(.selected) { background:var(--wb-side); }
+  .conversation-page .conversation-swiping .conversation-list-item { transform:translateX(var(--conversation-swipe-offset,0)); transition:none; }
+  .conversation-page .conversation-swipe-open .conversation-list-item { transform:translateX(-88px); }
+  .conversation-page .conversation-list-row:not([data-deletion-state]) .conversation-delete {
+    position:absolute; top:0; right:0; width:88px; height:72px; border:0; border-radius:10px;
+    background:var(--wb-err); color:#fff; font-size:14px; font-weight:600; visibility:hidden; -webkit-tap-highlight-color:transparent;
+  }
+  .conversation-page .conversation-list-row:is(.conversation-swiping,.conversation-swipe-open) .conversation-delete { visibility:visible; }
+  .conversation-page .conversation-list-row:not([data-deletion-state]) .conversation-delete>.wb-ico { display:none; }
+  .conversation-page .conversation-list-row:not([data-deletion-state]) .conversation-delete>.conversation-delete-short { position:static; display:inline; width:auto; height:auto; overflow:visible; clip-path:none; }
+}
+@media (max-width:760px) and (prefers-reduced-motion:reduce) {
+  .conversation-page .conversation-list-row .conversation-list-item { transition:none; }
+}
 
 /* Internal relays share the normal directional message geometry. */
 .conversation-internal { --conversation-internal-bg:#f1eee7; }

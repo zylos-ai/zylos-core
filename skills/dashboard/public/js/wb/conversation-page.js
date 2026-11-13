@@ -13,6 +13,7 @@ import { createGroupSide } from './group-side.js?v=168';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=5';
+import { createRowSwipe } from './conversation-swipe.js?v=1';
 import { renderInternalMessage } from './conversation-internal.js?v=4';
 import { composeContent, contentBytes, displayRow, previewLine, readableText, shortStamp, storedContent, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=1';
 import { createQuoteGesture } from './chat-quote-gesture.js?v=1';
@@ -174,6 +175,7 @@ export function mountConversationPage({
       deletionResult = { ...result, identity: typeof identity === 'function' ? identity() : identity };
       return state.deleted(id);
     } });
+  const swipe = createRowSwipe({ document, enabled: () => view?.innerWidth <= 760 });
   let uploadRedrawQueued = false;
   const uploadTray = createUploadTray({ fetch: fetcher,
     createXHR: () => new view.XMLHttpRequest(),
@@ -502,9 +504,19 @@ export function mountConversationPage({
   const menuGroupChevron = icon(document, 'chev');
   menuGroupChevron.classList.add('conversation-menu-chevron');
   menuGroup.append(menuGroupChevron);
+  // The non-gesture way to delete on phones: the open conversation, through the same confirmation.
+  const menuDelete = action('chat.delete.button', () => {
+    const item = deletableItem(currentSnapshot, currentSnapshot?.selectedId);
+    closeConversationMenu(false);
+    if (!item) return;
+    // Back on the list, where the row shows how the deletion went.
+    mobileDetail(false);
+    return removeConversation(item);
+  }, 'trash', 'conversation-menu-item conversation-menu-delete');
+  menuDelete.dataset.action = 'page.menuDelete';
   const menuDeliveryHint = node('span', t('chat.page.sendHint'));
   menuSheet.append(node('div', undefined, 'conversation-menu-grab'), menuInfo('monitor', menuSource),
-    menuInfo('wifi', menuConnection), node('div', undefined, 'conversation-menu-divider'), menuRename, menuGroup,
+    menuInfo('wifi', menuConnection), node('div', undefined, 'conversation-menu-divider'), menuRename, menuGroup, menuDelete,
     menuInfo('info', menuDeliveryHint));
   page.append(menuScrim, menuSheet);
   function closeConversationMenu(focus = true) {
@@ -517,7 +529,7 @@ export function mountConversationPage({
     if (!currentSnapshot?.selectedId || view?.innerWidth > 760) return;
     menuSheet.hidden = menuScrim.hidden = false;
     menuToggle.setAttribute('aria-expanded', 'true');
-    ([menuRename, menuGroup].find(button => !button.hidden && !button.disabled) ?? menuSheet).focus();
+    ([menuRename, menuGroup, menuDelete].find(button => !button.hidden && !button.disabled) ?? menuSheet).focus();
   }
   const menuKeydown = event => {
     if (menuSheet.hidden) return;
@@ -525,7 +537,7 @@ export function mountConversationPage({
       event.preventDefault();
       closeConversationMenu();
     } else if (event.key === 'Tab') {
-      const buttons = [menuRename, menuGroup].filter(button => !button.hidden && !button.disabled);
+      const buttons = [menuRename, menuGroup, menuDelete].filter(button => !button.hidden && !button.disabled);
       const first = buttons[0], last = buttons.at(-1);
       if (!first || event.shiftKey && document.activeElement === first || !event.shiftKey && document.activeElement === last) {
         event.preventDefault();
@@ -682,6 +694,16 @@ export function mountConversationPage({
     // Only when nothing else took the focus meanwhile (the disabled editor leaves it on the page body).
     const focusFree = !document.activeElement || document.activeElement === document.body || document.activeElement === input;
     if (refocus && focusFree && !destroyed && selectedKey === selected && !input.disabled) input.focus();
+  }
+  // A listed conversation this local page may delete.
+  function deletableItem(s, id) {
+    if (!s?.canDelete || !local() || !id) return null;
+    const item = s.items.find(row => row.id === id);
+    return item && deletionPath(item) ? item : null;
+  }
+  function removeConversation(item) {
+    swipe.close();
+    return deletion.remove(item);
   }
   function mobileDetail(open) {
     page.classList.toggle('conversation-detail-open', open);
@@ -1483,17 +1505,24 @@ export function mountConversationPage({
         top.append(name, pinned, channel, draft, time);
         body.append(top, preview);
         button.append(symbol, body);
-        button.addEventListener('click', () => {
+        button.addEventListener('click', event => {
+          // A tap that ends a swipe or puts a revealed delete button back does not open the conversation.
+          if (swipe.consumeTap(wrapper)) { event.preventDefault?.(); return; }
           mobileDetail(true);
           autoSelectPending = false;
           void state.select(item.id);
         });
-        const remove = action('chat.delete.button', () => deletion.remove(item), 'trash', 'wb-icon-btn conversation-delete');
+        const remove = action('chat.delete.button', () => removeConversation(item), 'trash', 'wb-icon-btn conversation-delete');
+        // The phone's revealed button reads the short word; its accessible name stays the full action.
+        const short = node('span', t('chat.delete.short'), 'conversation-delete-short');
+        short.setAttribute('aria-hidden', 'true');
+        remove.append(short);
         const notice = node('span', undefined, 'conversation-delete-status');
         notice.setAttribute('role', 'status');
         wrapper.append(button, remove, notice);
+        swipe.attach(wrapper);
         row = {
-          wrapper, remove, notice,
+          wrapper, remove, short, notice,
           button,
           name,
           channel,
@@ -1505,14 +1534,21 @@ export function mountConversationPage({
         listRows.set(item.id, row);
       }
       const deletionState = deletion.status(item);
+      // A row with a deletion status keeps its delete or retry button shown on desktop and inline on phones.
+      const shownState = ['deleting', 'pending', 'error', 'stale', 'preview_error'].includes(deletionState?.state)
+        ? deletionState.state : null;
+      if (shownState) row.wrapper.dataset.deletionState = shownState;
+      else delete row.wrapper.dataset.deletionState;
+      if (shownState && swipe.isOpen(row.wrapper)) swipe.close(row.wrapper);
       row.remove.hidden = !s.canDelete || !local() || !deletionPath(item);
       row.remove.disabled = deletionState?.busy === true;
       const deletionLabel = deletionState?.state === 'pending' || deletionState?.state === 'error' ? 'chat.delete.retry' : 'chat.delete.button';
       text(row.remove.label, t(deletionLabel));
       row.remove.setAttribute('aria-label', t(deletionLabel) + ': ' + nameOf(item));
       row.remove.setAttribute('title', t(deletionLabel));
-      row.notice.hidden = !deletionState?.state || !['deleting', 'pending', 'error', 'stale', 'preview_error'].includes(deletionState.state);
-      text(row.notice, row.notice.hidden ? '' : t(deletionState.errorKey ?? 'chat.delete.' + deletionState.state));
+      text(row.short, t(deletionLabel === 'chat.delete.retry' ? 'chat.delete.retry' : 'chat.delete.short'));
+      row.notice.hidden = !shownState;
+      text(row.notice, shownState ? t(deletionState.errorKey ?? 'chat.delete.' + shownState) : '');
       const itemChannel = channelOf(item);
       row.channel.hidden = s.tab === 'mine' || !itemChannel;
       text(row.channel, channelLabel(itemChannel));
@@ -1596,6 +1632,9 @@ export function mountConversationPage({
     // In single, Origin's workbench row has no group key, so there is no group detail to open beside it.
     group.hidden = !groupSide || !(current?.sessionGroup ?? current?.session_group) || isDraft(s) || origin && s.mode === 'single';
     menuGroup.hidden = group.hidden;
+    const menuItem = deletableItem(s, s.selectedId);
+    menuDelete.hidden = !menuItem;
+    menuDelete.disabled = !!menuItem && deletion.status(menuItem)?.busy === true;
     // The side panel belongs to the conversation it was opened from.
     if (groupSide?.open && (group.hidden || s.selectedId !== groupSideFor)) groupSide.close({ focus: false });
     historyStart.hidden = !s.selectedId || isDraft(s) || !s.historyLoaded
@@ -1785,6 +1824,7 @@ export function mountConversationPage({
       view?.removeEventListener('resize', scheduleFit);
       gesture.destroy();
       quoteGesture.destroy();
+      swipe.destroy();
       annotations.destroy();
       if (settleTimer !== null) view?.clearTimeout(settleTimer);
       settleTimer = null;

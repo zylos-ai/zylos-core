@@ -1076,6 +1076,7 @@
   "wb.settings.timezone.restarted": "服务已重启，已保存的时区现已生效。",
   "chat.delete.button": "删除对话",
   "chat.delete.retry": "重试删除",
+  "chat.delete.short": "删除",
   "chat.delete.draftConfirm": "移除此草稿？它没有已发送的消息。上传附件将保留，此操作无法撤销。",
   "chat.delete.confirm": "删除本次预览范围内的已完成消息？预览显示 {messages} 条消息、{attachments} 个可删除附件。AI 会在当前工作结束后停止。后来的消息及无法确认归属的数据会保留；主记忆、用量和备份不变。删除的消息不再计入消息数，此操作无法撤销。",
   "chat.delete.deleting": "正在等待当前工作结束并删除…",
