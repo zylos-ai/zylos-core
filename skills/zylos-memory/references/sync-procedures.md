@@ -24,6 +24,15 @@ release exactly once too. If release fails, append that warning to the original
 result; do not replace the original outcome or retry release. Never use an
 unrestricted writer to repair a tool failure.
 
+Before creating any export, run `mktemp -d` to create a unique private directory
+(mode 0700), retain its returned path, and put every export inside it. Never
+reuse a fixed filename in shared `/tmp`, or redirect conversation text into a
+second file. `--out` creates each file exclusively with mode 0600. On success,
+no input, or failure, remove only this run's private directory and its exports
+before releasing the token; report a cleanup failure. TOKEN_MISMATCH remains an
+immediate stop, so do not attempt cleanup after it. No script-side cleanup state
+or new background mechanism is involved.
+
 `LEGACY_READ_ONLY` is not a required-step failure: old `reference/projects.md`,
 `reference/decisions.md`, and `reference/legacy/**`
 are read-only through `edit_memory`, even when an old path no longer exists.
@@ -60,6 +69,18 @@ A hash check or first/last markers do not replace reading the content. Keep
 export file hashes separate from batch receipt hashes: receipt `sha256` hashes
 the canonical projected database rows, not the rendered export file bytes.
 
+Use byte ranges even when a file contains one very long line. For example,
+`dd if="<returned absolute path>" bs=1 skip=0 count=8192 status=none` reads
+bytes [0,8192). Continue at skip=8188, then 16376, increasing by 8188 until the
+reported file size is reached; the four-byte overlap keeps UTF-8 characters
+readable across boundaries. Each command must return its actual text, not
+counts, grep matches, word frequencies, or a summary. If output is truncated,
+reduce the range and reread it. Record every completely read half-open range
+`[start,end)` (end capped at file size); the ranges must cover every byte with
+no gap. Include this per-file range ledger in the Sync result. Never claim a
+full read from a hash match or analysis of an unread suffix. This byte method
+preserves direct/export byte parity and valid JSON without adding hard wrapping.
+
 ## Group Sync
 
 This also applies to the origin group's own working state. Set kind=group;
@@ -75,10 +96,13 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    frontier, is the checkpoint target. A read
    failure ends the run before any cleanup/rotation.
 3. Run `sync-files.js cleanup --token T`, then `sync-files.js rotate --token T`.
-   Read the current group state, then run the read-only `sync-files.js list`
+   Run the read-only `sync-files.js list`
    without `--token`; adding `--token` returns `INVALID_INPUT` and ends this run.
    Save the complete returned object as `inputs`:
-   `{"scope":...,"segments":[{"id":...,"path":"<absolute>","bytes":...,"sha256":...}],"sessions":[{"path":"<absolute>","bytes":...,"sha256":...}]}`.
+   `{"scope":...,"statePath":"<absolute state path>","segments":[{"id":...,"path":"<absolute>","bytes":...,"sha256":...}],"sessions":[{"path":"<absolute>","bytes":...,"sha256":...}]}`.
+   Read state only at the returned `statePath`. Session selection starts at
+   state `synced_at`'s date; an unknown/invalid date selects the latest seven
+   calendar days. The script returns the paths; never choose or glob them.
    Read every listed segment in segment-ID order and every listed session file,
    in full; verify each byte count/hash. Use only the returned absolute paths,
    never constructed segment/session names. A missing state starts from an
@@ -105,7 +129,9 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    `{"followedUpIds":[],"batch":<receipt>,"inputs":<complete list object>}`
    on stdin to `sync-files.js commit --token T`, replacing the empty array only
    with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
-   exact current listed inputs and their hashes, and the state's segment IDs.
+   the exact current segment IDs, absolute paths and hashes, and the state's
+   segment IDs. Session logs are read inputs, but are not immutable commit
+   inputs: a main-session note appended during Sync must not reject commit.
    A mismatch fails the run; never omit inputs or fabricate a receipt to retry.
    Commit preserves the formal state's remaining absorbed lines and original
    title byte-for-byte, removing the title only when every item is removed.
@@ -116,7 +142,8 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 ## Origin Sync
 
 This is a separate job from the origin group's working-state Sync. It only
-runs in the origin session, uses kind=origin, and never calls sync-files.
+runs in the origin session, uses kind=origin. Its only sync-files operation is
+the read-only `list --group G` below; never run group cleanup/rotate/commit.
 
 1. Acquire, then read `c4-db.js origin-sync backlog --json`. No candidates means
    release and return. Save each group's cursorFrom S, upTo, and cursorUpdatedAt.
@@ -139,8 +166,15 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
    cursor for G advances. With budget exhausted, a group with new summaries may
    advance raw cursor to max(S,min(C,upTo)); with no new summary skip both cursors.
    The proposed summary cursor is the saved K, not a summary's covered end.
-4. For each group actually processed, read its dated logs since cursorUpdatedAt's
-   date. Do not read its state or inbox. Failed required logs prevent that
+4. For each group actually processed, run
+   `sync-files.js list --group G --since <saved cursorUpdatedAt Unix seconds>`
+   and read the absolute paths in its `sessions` array. If cursorUpdatedAt is
+   unknown, omit `--since` to select the latest seven calendar days. Like Group
+   Sync this includes the starting date in the configured timezone. The command
+   also accepts an ISO date or timestamp when supplied explicitly.
+   It returns only scope and sessions for `--group`; it never reads candidate
+   state or inbox. No group paths or globs may be constructed by the worker.
+   Failed required logs prevent that
    group's merge/advance. For projects and decisions, read the complete category
    `INDEX.md` first (a missing INDEX is an empty table), then read only the
    relevant pages in full. If unmatched, Grep that category including `archive/`,

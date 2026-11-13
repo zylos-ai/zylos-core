@@ -369,10 +369,11 @@ export function assertSuccessfulSync(f, result, expectedIds, { copied = false } 
   const stateRead = reads.find(event => readPath(event) === f.statePath && event.sequence < checkpoints[0].sequence);
   const listing = events.find(event => isScript(event, 'sync-files', 'list'));
   assert.ok(stateRead && listing && statusOkay(listing), 'State and uncommitted segment listing were read');
-  assert.ok(rotate.sequence < stateRead.sequence && stateRead.sequence < listing.sequence);
-  assertCompleteReads(f, events, { path: f.statePath, bytes: Buffer.byteLength(f.before.state), sha256: f.before.stateHash }, rotate.sequence, listing.sequence);
+  assert.ok(rotate.sequence < listing.sequence && listing.sequence < stateRead.sequence);
+  assertCompleteReads(f, events, { path: f.statePath, bytes: Buffer.byteLength(f.before.state), sha256: f.before.stateHash }, listing.sequence, checkpoints[0].sequence);
   const inputs = JSON.parse(listing.result.stdout), { segments, sessions } = inputs;
   assert.equal(inputs.scope, f.scope);
+  assert.equal(inputs.statePath, f.statePath);
   assert.deepEqual(payload.inputs, inputs, 'Commit preserves the exact listed input manifest');
   assert.deepEqual([...header.inboxCommitted].sort(), segments.map(item => item.id).sort(), 'Every listed segment is committed');
   const segmentReads = segments.map(item => assertCompleteReads(f, events, item, listing.sequence, checkpoints[0].sequence));
@@ -438,7 +439,7 @@ export function assertRotationFlow(f, result) {
   if (f.kind === 'global') assertSuccessfulSync(f, result, []);
   else {
     assert.equal(result.snapshot.stateHash, f.before.stateHash, 'Origin job must not change its own group Pending');
-    assert.ok(!events.some(event => isScript(event, 'sync-files')));
+    assert.ok(events.filter(event => isScript(event, 'sync-files')).every(event => event.effective.args[0] === 'list' && event.effective.args.includes('--group')), 'Origin only lists candidate log paths');
     assert.ok(!events.some(event => event.request.name === 'read_file' && /session-groups\/[^/]+\/(?:state\.md|inbox)/.test(event.effective.path)));
     const advances = events.filter(event => isScript(event, 'origin-cursor', 'advance'));
     assert.equal(advances.length, 1); assert.ok(statusOkay(advances[0])); assert.ok(rotation.sequence < advances[0].sequence);

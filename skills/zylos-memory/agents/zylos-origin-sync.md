@@ -14,7 +14,10 @@ Claude normally uses `mcp__zylos-memory__edit_memory`, Codex
 `mcp__zylos_memory__edit_memory`. If absent, discover an exposed tool ending in
 `edit_memory` before reporting `TOOL_UNAVAILABLE`; never use native editing or
 shell writes as a fallback. Truncated output is unread: reread with smaller
-limits/ranges before advancing a cursor. Origin uses its separate procedure and
-never calls `sync-files.js`. Follow the common failure/release rules and
+limits/ranges before advancing a cursor. Use `sync-files.js list --group G --since <cursorUpdatedAt>`
+only to obtain candidate session-log absolute paths; do not read its state or
+segments. Origin never runs group cleanup/rotate/commit. Use a unique private
+export directory, remove it before release, and report every read byte range
+as specified by the procedure. Follow the common failure/release rules and
 return a concise result to the requesting session. Do not perform business
 work or send external user replies.

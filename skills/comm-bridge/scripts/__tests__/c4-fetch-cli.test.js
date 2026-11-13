@@ -122,11 +122,42 @@ describe('c4-fetch --unsummarized', () => {
       assert.equal(result.status, 0, result.stderr);
       const metadata = JSON.parse(result.stdout).data;
       assert.equal(metadata.batch.after, 1); assert.equal(metadata.batch.end, 2);
+      const full = cli(['--unsummarized', '--limit', '2', '--out', path.join(tmpDir, 'two-rows'), '--json'], env);
+      assert.equal(full.status, 0, full.stderr);
+      const two = JSON.parse(full.stdout).data;
+      assert.equal(two.count, 2); assert.equal(two.firstId, 2); assert.equal(two.lastId, 3);
+      assert.equal(two.batch.after, 1); assert.equal(two.batch.end, 3);
       const empty = cli(['--unsummarized', '--after', '3', '--out', path.join(tmpDir, 'empty'), '--json'], env);
       assert.equal(empty.status, 0, empty.stderr);
       const receipt = JSON.parse(empty.stdout).data;
       assert.equal(receipt.count, 0); assert.equal(receipt.firstId, null); assert.equal(receipt.lastId, null);
       assert.equal(receipt.batch.after, 3); assert.equal(receipt.batch.end, 3);
+    });
+  });
+
+  it('reads a long single-line export completely with bounded overlapping byte ranges', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const database = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
+      try {
+        const content = 'x'.repeat(120 * 1024) + '\u4e2d\u6587\ud83c\udf0d';
+        database.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('out','system',?,'delivered','foo')").run(content);
+        const out = path.join(tmpDir, 'long-line');
+        const result = cli(['--unsummarized', '--group', 'foo', '--out', out, '--json'], env);
+        assert.equal(result.status, 0, result.stderr);
+        const metadata = JSON.parse(result.stdout).data;
+        const chunks = [];
+        for (let start = 0; start < metadata.bytes; start += 8188) {
+          const read = spawnSync('dd', [`if=${out}`, 'bs=1', `skip=${start}`, 'count=8192', 'status=none'],
+            { ...childOptions(env), encoding: null, maxBuffer: 16384 });
+          assert.equal(read.status, 0, read.stderr?.toString());
+          assert.equal(read.stdout.length, Math.min(8192, metadata.bytes - start));
+          chunks.push(read.stdout.subarray(0, Math.min(8188, metadata.bytes - start)));
+        }
+        const reconstructed = Buffer.concat(chunks);
+        assert.equal(reconstructed.length, metadata.bytes);
+        assert.equal(createHash('sha256').update(reconstructed).digest('hex'), metadata.sha256);
+        assert.ok(reconstructed.includes(Buffer.from(content)));
+      } finally { database.close(); }
     });
   });
 

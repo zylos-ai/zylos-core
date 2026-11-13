@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
-import { checkpoint, rotate, commit } from '../sync-files.js';
+import { checkpoint, rotate, commit, list } from '../sync-files.js';
+import { createBatchReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
+import { projectConversation } from '../../../comm-bridge/scripts/c4-query-format.js';
 import { renderStateSkeleton } from '../state-format.js';
 import { advance } from '../origin-cursor.js';
 import { acquire, memoryScope } from '../sync-lock.js';
@@ -26,19 +28,26 @@ async function fixture(t, group = 'origin') {
     db.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,?)').run(group, rows.at(-1).id);
     return rows;
   })();
-  return { root, ...scope, db, store, seed, seedGroup, tokens, settings: { env, token }, deps: { database: store } };
+  const database = { ...store, getConversationsByRange: (begin, end) => db.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ? ORDER BY id').all(begin, end) };
+  const batch = end => {
+    const after = scope.scope === '*' ? store.getGlobalCoverageEnd() : store.getCoverageEnd(scope.scope);
+    const rows = database.getConversationsByRange(after + 1, end)
+      .filter(row => row.status === 'delivered' && (scope.scope === '*' || row.session_group === scope.scope));
+    return createBatchReceipt(rows.map(projectConversation), { scope: scope.scope, after, end });
+  };
+  return { root, ...scope, db, store, seed, seedGroup, batch, tokens, settings: { env, token }, deps: { database } };
 }
 test('checkpoint invokes real transaction for group/global and preserves rejection code', async t => {
   for (const group of ['origin', null]) {
     const f = await fixture(t, group); f.seed(1); f.seed(2, 'origin', 'pending'); f.seed(3);
     const initialCount = f.db.prepare('SELECT count(*) AS n FROM checkpoints').get().n;
-    const cp = await checkpoint({ ...f.settings, end: 1, summary: 'summary' }, f.deps);
+    const cp = await checkpoint({ ...f.settings, end: 1, summary: 'summary', batch: f.batch(1) }, f.deps);
     assert.equal(cp.session_group, group ?? '*');
-    await assert.rejects(checkpoint({ ...f.settings, end: 3, summary: 'bad' }, f.deps), { code: 'CHECKPOINT_GAP' });
+    await assert.rejects(checkpoint({ ...f.settings, end: 3, summary: 'bad', batch: f.batch(3) }, f.deps), { code: 'CHECKPOINT_GAP' });
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM checkpoints').get().n, initialCount + 1);
-    const empty = await checkpoint({ ...f.settings, end: 1, noContent: true }, f.deps);
+    const empty = await checkpoint({ ...f.settings, end: 1, noContent: true, batch: f.batch(1) }, f.deps);
     assert.equal(empty.no_content, 1); assert.equal(empty.summary, null);
-    await assert.rejects(checkpoint({ ...f.settings, end: 1, summary: '' }, f.deps), { code: 'SUMMARY_INVALID' });
+    await assert.rejects(checkpoint({ ...f.settings, end: 1, summary: '', batch: f.batch(1) }, f.deps), { code: 'SUMMARY_INVALID' });
   }
 });
 test('Origin cursor advances both real DB columns or neither on invalid input/old token', async t => {
@@ -71,12 +80,14 @@ test('real consumer: 18 rows with inbox and 250 rows in two committed batches', 
       processed.push(...rows.map(row => row.id));
       const id = await rotate(f.settings, f.deps);
       const summary = `messages ${rows[0].id}-${rows.at(-1).id}${id ? '; commitment: finish quote' : ''}`;
-      const cp = await checkpoint({ ...f.settings, end: rows.at(-1).id, summary }, f.deps);
+      const batch = f.batch(rows.at(-1).id);
+      const inputs = await list(f.settings);
+      const cp = await checkpoint({ ...f.settings, end: rows.at(-1).id, summary, batch }, f.deps);
       checkpointEnds.push(cp.end_conversation_id);
       const text = renderStateSkeleton({ scope: 'telegram:test', syncedAt: '2026-10-19T05:30:02Z' })
         .replace('coverage= ', `coverage=${cp.end_conversation_id} `).replace('inbox_committed= ', `inbox_committed=${id || ''} `);
       fs.writeFileSync(path.join(f.memoryDir, `state.md.${f.settings.token}.tmp`), text);
-      await commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps);
+      await commit({ ...f.settings, input: { followedUpIds: [], inputs, batch } }, f.deps);
       if (id) assert.equal(fs.existsSync(path.join(f.memoryDir, `inbox.${id}.md`)), false);
     }
     assert.deepEqual(processed, Array.from({ length: total }, (_, i) => i + 1));
@@ -91,7 +102,7 @@ test('single consumer: 16 source groups produce one global checkpoint', async t 
   const range = f.store.getGlobalUnsummarizedRange();
   const rows = f.store.getGlobalUnsummarizedConversations({ upToConversationId: range.safeEnd, limit: 200 });
   assert.equal(rows.length, 16);
-  const cp = await checkpoint({ ...f.settings, end: range.safeEnd, summary: 'all source groups' }, f.deps);
+  const cp = await checkpoint({ ...f.settings, end: range.safeEnd, summary: 'all source groups', batch: f.batch(range.safeEnd) }, f.deps);
   assert.equal(cp.session_group, '*');
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM checkpoints WHERE end_conversation_id IS NOT NULL').get().n, 1);
   assert.equal(f.store.getGlobalUnsummarizedRange().count, 0);
