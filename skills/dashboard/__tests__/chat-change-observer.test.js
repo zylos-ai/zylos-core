@@ -5,6 +5,8 @@ import path from 'node:path';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { ChatHistory } from '../src/lib/chat/history.js';
+import { ChatConversations } from '../src/lib/chat/conversations.js';
+import { Store } from '../src/lib/store.js';
 import { ChatChangeObserver, parseChatSubscription } from '../src/lib/chat/change-observer.js';
 import { ORIGIN_CONVERSATION_ID } from '../src/lib/chat/origin.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
@@ -468,4 +470,27 @@ test('internal relay inserts invalidate each selected history without changing e
   assert.equal(f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('dash:one') }, { afterId: 3 }).listChanged, false);
   assert.equal(f.history.chatChangeSnapshot({ tab: 'external', conversationId: idFor('telegram:peer') }, { afterId: 3 }).listChanged, false);
   assert.throws(() => f.history.chatChangeSnapshot({ tab: 'mine', conversationId: idFor('unknown:peer') }), /chat_conversation_not_found/);
+});
+
+// Real C4 and Dashboard SQLite in the gated sandbox. Run for observer name hints
+// or external conversation naming; rendering-only changes can skip. Same gate,
+// isolation readback and cleanup as above; the Dashboard store closes in t.after.
+test('a group display name change sends a dirty hint to external list and conversation subscribers', gate, t => {
+  const f = fixture(t);
+  f.write({ id: 1, channel: 'lark', group: 'lark:group-oc_team', endpoint: 'oc_team', status: 'delivered' });
+  const store = new Store(f.sandbox.paths.dashboardDb);
+  t.after(() => store.close());
+  f.history.conversations = new ChatConversations({ store });
+  const list = f.subscribe({ tab: 'external', conversationId: null });
+  const open = f.subscribe({ tab: 'external', conversationId: idFor('lark:group-oc_team') });
+  f.timers.tick();
+  const counts = () => [list.events.length, open.events.length];
+  const before = counts();
+  store.writeGroupDisplayName('lark:group-oc_team', 'Product team', 'human');
+  f.timers.tick();
+  assert.deepEqual(counts(), before.map(count => count + 1));
+  for (const stream of [list, open]) assert.equal(stream.events.at(-1).event, 'chat_messages_changed');
+  assert.equal(f.history.list({ tab: 'external' }).items[0].display_name, 'Product team');
+  f.timers.tick();
+  assert.deepEqual(counts(), before.map(count => count + 1), 'an unchanged name sends no further hint');
 });

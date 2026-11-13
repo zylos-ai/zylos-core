@@ -448,6 +448,12 @@ export function createConversationState({
       deletionAllowed = data.deletionAllowed === true;
       items = more || quiet ? merge(items, data.items) : data.items;
       items.sort(listOrder);
+      // An external conversation's header name comes from its list row, copied
+      // when it was opened; a later list carries a renamed or cleared name.
+      if (currentTab === 'external') for (const row of data.items) {
+        const cached = cells.get(`external:${row.id}`);
+        if (cached?.conversation && Object.hasOwn(row, 'display_name')) cached.conversation = { ...cached.conversation, display_name: row.display_name };
+      }
       if (more) listDepth++;
       if (!quiet || listDepth === 1) nextCursor = data.nextCursor ?? null;
       if (!more) lastListAt = now();

@@ -204,7 +204,9 @@ export class ChatHistory {
         WHERE ${visible} AND ${where}
         ORDER BY COALESCE(julianday(c.timestamp), 0) DESC, c.id DESC LIMIT 1`, parameters)[0];
       const registered = tab === 'mine' ? this.conversations?.findByGroup(row.session_group) : null;
-      const name = tab === 'mine' ? this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name : null;
+      // A stored group display name wins in both tabs; without one, an external
+      // conversation keeps its session group name and legacy rows stay unnamed history.
+      const name = row.session_group === '' ? null : this.conversations?.store.getGroupDisplayName(row.session_group)?.display_name;
       return { ...row, previewDirection: latest?.direction ?? null, preview: conversationPreview(previewContent(latest), { external: tab === 'external', locale }),
         display_name: registered ? name ?? registered.displayName : name ?? (row.session_group === '' ? '旧历史' : tab === 'mine'
           ? row.session_group.slice(row.session_group.indexOf(':') + 1) : row.session_group),
