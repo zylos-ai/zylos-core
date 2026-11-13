@@ -625,15 +625,33 @@ export class SupervisorLifecycle {
     if (this.lastSyncCheck !== null && now - this.lastSyncCheck < this.syncCheckMs) return;
     if (context.restartRequestsError || context.transition || context.fences.some(fence => fence.sessionGroup === '*')) return;
     this.lastSyncCheck = now;
+    const single = modeOf(context) === 'single';
+    let endings = new Map(), multiSince = null;
+    const groups = scenes.filter(scene => !scene.observationError && scene.present && scene.ready &&
+      this.allowed(scene.sessionGroup, context)).map(scene => scene.sessionGroup);
+    if (!single && groups.length) {
+      try {
+        const [records, transition] = await Promise.all([
+          this.d.db.listRunEndings(groups), this.d.db.getLastCompletedModeTransition(),
+        ]);
+        endings = new Map(records.map(row => [row.sessionGroup, row.endedAt * 1000]));
+        if (transition?.target_mode === 'multi') multiSince = transition.updated_at * 1000;
+      } catch (cause) {
+        this.d.reportError?.(cause, { phase: 'sync-backlog-boundary' });
+      }
+    }
     await this.each(scenes, async scene => {
       if (scene.observationError) throw scene.observationError;
       if (!await this.allowed(scene.sessionGroup, context)) return;
       if (!scene.present || !scene.ready) return;
-      const single = modeOf(context) === 'single';
       const kind = single ? 'global' : 'group';
       const range = single ? await this.d.db.getGlobalUnsummarizedRange() : await this.d.db.getUnsummarizedRange(scene.sessionGroup);
+      const boundaries = single ? [scene.createdAt] : [endings.get(scene.sessionGroup), multiSince];
+      const known = boundaries.filter(finite);
+      const inherited = range.firstAt !== null && range.firstAt !== undefined && known.length > 0 &&
+        activityTime(range.firstAt) <= Math.max(...known);
       await this.syncScope(scene, kind, { count: range.count, firstAt: range.firstAt,
-        firstConversationId: range.firstConversationId, nonempty: range.count > 0 }, context);
+        firstConversationId: range.firstConversationId, nonempty: range.count > 0, inherited }, context);
     });
     if (modeOf(context) === 'multi' && this.allowed('origin', context)) {
       const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
@@ -703,7 +721,7 @@ export class SupervisorLifecycle {
     if (!range.nonempty || (!catchingUp && this.syncSent.has(key) && now - this.syncSent.get(key) < min)) return;
     const rotationThreshold = sceneRotationThreshold(scene, config);
     const due = range.count > threshold || lag >= max || kind !== 'origin' &&
-      (this.syncRuns.get(key) !== scene.runId || rotationThreshold !== null && finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold);
+      (this.syncRuns.get(key) !== scene.runId && range.inherited === true || rotationThreshold !== null && finite(scene.usagePercent) && scene.usagePercent >= 0.8 * rotationThreshold);
     if (!catchingUp && !due) return;
     if (typeof this.d.readSyncMarker !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Sync marker reader is unavailable');
     const marker = await this.d.readSyncMarker({ runDir: scene.runDir, kind, currentRunId: scene.runId });
