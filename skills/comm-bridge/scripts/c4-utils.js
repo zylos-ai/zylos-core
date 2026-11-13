@@ -16,8 +16,12 @@ export function buildReplyViaSuffix(channel, endpointId) {
   return ` ---- reply via: node ${path.join(__dirname, 'c4-send.js')} "${channel}" "${endpointId}"`;
 }
 
-export function hasLegacyReplyViaSuffix(content = '') {
-  return /---- reply via: node\b.*\bc4-send\.js\b/.test(content);
+// Only a trailing suffix that routes to this exact channel/endpoint may stand
+// in for the dispatcher-built one; a marker elsewhere in the body (e.g. typed
+// by a group member) must never suppress the real reply route.
+export function hasMatchingReplyViaSuffix(content = '', channel, endpointId) {
+  const m = content.match(/---- reply via: node\s+\S*c4-send\.js\s+"([^"]*)"\s+"([^"]*)"\s*$/);
+  return !!m && m[1] === String(channel) && m[2] === String(endpointId);
 }
 
 // Fallback counter for spills without a conversation id: two spills within
