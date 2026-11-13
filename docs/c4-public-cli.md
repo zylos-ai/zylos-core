@@ -77,8 +77,8 @@ Other independent commands:
 - `c4-db.js origin-sync backlog [--json]`
 - `c4-fetch.js --begin ID --end ID [--json]` preserves the requested historical range.
 - `c4-fetch.js --checkpoints [--group GROUP] --after END [--json]`
-- `c4-fetch.js --origin-sync --group GROUP --summaries-only [--json]`
-- `c4-fetch.js --origin-sync --group GROUP --raw-only --after COVERAGE [--limit N] [--json]`
+- `c4-fetch.js --origin-sync --group GROUP --summaries-only [--out FILE] [--json]`
+- `c4-fetch.js --origin-sync --group GROUP --raw-only --after COVERAGE [--limit N] [--out FILE] [--json]`; `--out` writes the direct output to a new 0600 file and prints only metadata with an absolute path and a receipt (see `skills/comm-bridge/references/c4-fetch.md`).
 - `c4-fetch.js --origin-sync --group GROUP [--limit N] [--json]` reads both parts in one snapshot.
 - `c4-fetch.js --absorbed --run-id UUID [--summary [--scope-after GROUP] | --id ID [--field text|endpoint] [--out FILE] | --after ID] [--limit N] [--json]`
 

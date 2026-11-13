@@ -91,7 +91,7 @@ const describeFile = file => {
   const content = fs.readFileSync(file);
   return { path: path.resolve(file), bytes: content.length, sha256: createHash('sha256').update(content).digest('hex') };
 };
-async function describeInputs({ env = process.env, group, since, now = Date.now } = {}, includeSessions = true) {
+async function describeInputs({ env = process.env, group, now = Date.now } = {}, includeSessions = true, deps = {}) {
   const current = await memoryScope(env);
   if (group !== undefined && group !== current.scope && current.scope !== 'origin') throw memoryError('SCOPE_UNBOUND', 'Only Origin can list another group');
   const { memoryDir, scope, root } = group === undefined ? current : await memoryScope({ ...env, ZYLOS_SESSION_GROUP: group });
@@ -106,23 +106,23 @@ async function describeInputs({ env = process.env, group, since, now = Date.now 
   // Subtract calendar days after timezone conversion, including today as day 7.
   const fallback = new Date(`${today}T00:00:00Z`);
   fallback.setUTCDate(fallback.getUTCDate() - 6);
-  let sinceDate = since;
-  if (since !== undefined) {
-    if (/^\d+$/.test(String(since))) {
-      const seconds = Number(since);
-      sinceDate = Number.isSafeInteger(seconds) && Number.isFinite(new Date(seconds * 1000).getTime()) ? new Date(seconds * 1000).toISOString() : null;
-    }
-    if (group === undefined || typeof sinceDate !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/.test(sinceDate) || !Number.isFinite(Date.parse(sinceDate))) throw inputError('Expected a group and Unix seconds or an ISO date/timestamp for since');
+  // Origin starts at the date of this group's Origin cursor update; group Sync
+  // starts at state synced_at. Neither boundary is supplied by the worker.
+  let syncedAt = null;
+  if (group === undefined) syncedAt = header.valid ? / \| synced_at=([^| ]+)/.exec(official.split(/\r?\n/, 1)[0])?.[1] : null;
+  else {
+    const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
+    const updatedAt = database.getOriginSyncCursor(scope)?.updatedAt;
+    if (Number.isSafeInteger(updatedAt) && updatedAt > 0) syncedAt = new Date(updatedAt * 1000).toISOString();
   }
-  const syncedAt = sinceDate ?? (header.valid ? / \| synced_at=([^| ]+)/.exec(official.split(/\r?\n/, 1)[0])?.[1] : null);
   const cutoff = syncedAt ? (/^\d{4}-\d{2}-\d{2}$/.test(syncedAt) ? syncedAt : dateInTimeZone(new Date(syncedAt), timezone)) : fallback.toISOString().slice(0, 10);
   const sessionsDir = path.join(memoryDir, 'sessions');
   const sessions = names(sessionsDir).filter(name => /^\d{4}-\d{2}-\d{2}\.md$/.test(name) && name.slice(0, 10) >= cutoff && name.slice(0, 10) <= today).sort()
     .map(name => describeFile(path.join(sessionsDir, name)));
   return group === undefined ? { scope, statePath, segments, sessions } : { scope, sessions };
 }
-export async function list(settings = {}) {
-  return describeInputs(settings);
+export async function list(settings = {}, deps = {}) {
+  return describeInputs(settings, true, deps);
 }
 export async function checkpoint({ end, summary, batch, noContent = false, ...settings }, deps = {}) {
   return guard(settings, async ({ scope }) => {
@@ -165,14 +165,14 @@ export async function commit({ input, ...settings }, deps = {}) {
 
 if (isMain(import.meta.url)) await runCli(async () => {
   const [command, ...args] = process.argv.slice(2);
-  const parsed = options(args, command === 'checkpoint' ? ['token', 'batch'] : command === 'list' ? ['token', 'group', 'since'] : ['token'], command === 'checkpoint' ? ['no-content'] : []);
+  const parsed = options(args, command === 'checkpoint' ? ['token', 'batch'] : command === 'list' ? ['token', 'group'] : ['token'], command === 'checkpoint' ? ['no-content'] : []);
   if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0) || (command === 'list' && parsed.token)) throw inputError('Invalid command or arguments');
   if (command !== 'list') requireSyncToken(parsed.token);
   const settings = { token: parsed.token };
   let result;
   if (command === 'cleanup') result = await cleanup(settings);
   if (command === 'rotate') result = await rotate(settings);
-  if (command === 'list') result = await list({ group: parsed.group, since: parsed.since });
+  if (command === 'list') result = await list({ group: parsed.group });
   if (command === 'checkpoint') result = await checkpoint({ ...settings, batch: parseJson(parsed.batch), end: nonnegativeInteger(parsed.positional[0], 'checkpoint end'), noContent: !!parsed['no-content'], summary: parsed['no-content'] ? null : readInput() });
   if (command === 'commit') result = await commit({ ...settings, input: readInput() });
   if (result !== undefined) console.log(JSON.stringify(result));

@@ -20,15 +20,32 @@ A datetime without an offset is UTC, like the conversation timestamps in the out
 `--unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] --out FILE`
 creates a new private file (mode 0600), refusing to overwrite an existing path.
 The file contains exactly the ordinary direct output, including when `--json`
-is selected. Stdout contains only export metadata: `path`, `count`, `firstId`,
-`lastId`, `bytes`, `sha256`, and `batch` (inside the usual data envelope with
-`--json`). Read the entire file and verify its byte count and SHA-256 before
+is selected. Stdout contains only export metadata: the absolute `path` (the
+script resolves a relative `FILE`), `count`, `firstId`, `lastId`, `bytes`,
+`sha256`, and `batch` (inside the usual data envelope with `--json`). Read the entire file and verify its byte count and SHA-256 before
 summarizing it. `sha256` hashes the file bytes; `batch.sha256` instead hashes
 stable projected conversation fields and is the receipt used by checkpoint
 verification. The receipt's `after` honors actual coverage and `--after`;
 its `end` is the last returned row ID, or the query's upper bound for an empty
 batch. A limit cannot authorize checkpointing unread rows. No receipt is stored
 on the host. An export with a reversed receipt range is rejected.
+
+Origin Sync exports its two reads the same way:
+`--origin-sync --group G --summaries-only --out FILE` and
+`--origin-sync --group G --raw-only --after C [--limit N] --out FILE`. The file
+again equals the direct output byte for byte, and the metadata has the same
+fields with `receipt` instead of `batch`; `count`, `firstId` and `lastId` count
+checkpoints for the summary read. The summary receipt is
+`{scope, after, end, coverageEnd, count, sha256}`: `after` is the group's
+current Origin summary cursor, `end` the last returned checkpoint ID (equal to
+`after` when there is none), `coverageEnd` the coverage C of the same snapshot,
+and `sha256` hashes stable checkpoint fields. The raw receipt is
+`{scope, after, end, count, sha256}`: `after` is max(current Origin raw cursor,
+`--after`), `end` the last returned row when the limit stopped the read and
+otherwise the snapshot's upper bound, and `sha256` hashes the same projected
+conversation fields as `batch`. `origin-cursor.js advance` recomputes both from
+the database. The combined Origin read (neither `--summaries-only` nor
+`--raw-only`) rejects `--out`.
 
 Create a unique private directory with `mktemp -d` (0700) and place exports
 inside it, never at reusable shared `/tmp` paths. Remove that run's directory

@@ -232,6 +232,6 @@ export function createStore(database, dependencies = {}) {
       return result;
     });
   }
-  Object.defineProperty(api, 'queries', { value: { originSummaries: progress.originSummaries, originCombined: progress.originCombined, readAbsorbed: transitions.readAbsorbed, unsummarized: progress.unsummarizedQuery, listGroups } });
+  Object.defineProperty(api, 'queries', { value: { originSummaries: progress.originSummaries, originCombined: progress.originCombined, originRaw: progress.originRaw, readAbsorbed: transitions.readAbsorbed, unsummarized: progress.unsummarizedQuery, listGroups } });
   return api;
 }
