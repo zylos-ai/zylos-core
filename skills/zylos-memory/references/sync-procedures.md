@@ -160,35 +160,36 @@ runs in the origin session, uses kind=origin. Its only sync-files operation is
 the read-only `list --group G` below; never run group cleanup/rotate/commit.
 
 1. Acquire, then read `c4-db.js origin-sync backlog --json`. No candidates means
-   release and return. Save each group's cursorFrom S, upTo, and cursorUpdatedAt.
-   Process oldest bookmarks first. The raw-row budget is the Origin budget
-   resolved above; checkpoint summaries do not consume it.
-2. For each candidate G, fetch
-   `c4-fetch.js --origin-sync --group G --summaries-only`. Save C=coverageEnd
-   and K=checkpointId from this same read alongside all summaries. If that
-   group's read fails, skip its merge and cursor advance, record why, and
-   continue other groups unless the failure is TOKEN_MISMATCH (stop and
-   release once, as in the common rules).
-   Truncated output is unread: reread in smaller supported pages/ranges until
-   every required summary is read; never advance based on a truncated preview.
-3. If budget remains, fetch
-   `c4-fetch.js --origin-sync --group G --raw-only --after C --limit <remaining>`.
-   Use the **saved first C**, never a newly read coverage. Deduct the actual row
-   count. When the result is complete, the proposed raw cursor is saved upTo;
-   when the query is limited it is the last returned ID. Tool-output truncation
-   is unread: repeat with a smaller `--limit` and read the complete result before
-   choosing a cursor. If this read fails, neither
-   cursor for G advances. With budget exhausted, a group with new summaries may
-   advance raw cursor to max(S,min(C,upTo)); with no new summary skip both cursors.
-   The proposed summary cursor is the saved K, not a summary's covered end.
-4. For each group actually processed, run
-   `sync-files.js list --group G --since <saved cursorUpdatedAt Unix seconds>`
-   and read the absolute paths in its `sessions` array. If cursorUpdatedAt is
-   unknown, omit `--since` to select the latest seven calendar days. Like Group
-   Sync this includes the starting date in the configured timezone. The command
-   also accepts an ISO date or timestamp when supplied explicitly.
-   It returns only scope and sessions for `--group`; it never reads candidate
-   state or inbox. No group paths or globs may be constructed by the worker.
+   release and return. Process oldest bookmarks first. The raw-row budget is the
+   Origin budget resolved above; checkpoint summaries do not consume it. Create
+   this run's private export directory as in the common rules.
+2. For each candidate G, export
+   `c4-fetch.js --origin-sync --group G --summaries-only --out <private dir>/<n>-summaries`
+   (n is a run-local counter). Stdout is metadata: the absolute `path`, `count`,
+   `firstId`, `lastId`, `bytes`, `sha256`, and a summary `receipt`
+   `{"scope":...,"after":...,"end":...,"coverageEnd":...,"count":...,"sha256":...}`.
+   Save the receipt unchanged; C is its `coverageEnd`. Read the whole file at
+   the returned path by the byte-range rule above (8192-byte ranges with a
+   four-byte overlap), including when it is one long JSON line. A truncated range
+   is unread: reread it in smaller ranges. If that group's export or read fails,
+   skip its merge and cursor advance, record why, and continue other groups
+   unless the failure is TOKEN_MISMATCH (stop and release once, as in the
+   common rules).
+3. If budget remains, export
+   `c4-fetch.js --origin-sync --group G --raw-only --after C --limit <remaining> --out <private dir>/<n>-raw`,
+   using the saved C. Deduct the metadata `count`, save its raw `receipt`
+   (`scope`, `after`, `end`, `count`, `sha256`) unchanged, and read the whole
+   file the same way. A limited read's receipt ends at its last returned row;
+   the cursor cannot move past it. If this export or read fails, neither cursor
+   for G advances. With budget exhausted, skip the raw export; the raw receipt
+   is then `null`.
+4. For each group actually processed, run the read-only `sync-files.js list --group G`
+   and save the complete returned object as that group's `inputs`. The script
+   chooses the first log date from G's Origin cursor update (the latest seven
+   calendar days when there is no cursor), in the configured timezone. Read each
+   returned `sessions[].path` in full. It returns only scope and sessions for
+   `--group`; it never reads candidate state or inbox. No export, group or log
+   paths or globs may be constructed by the worker.
    Failed required logs prevent that
    group's merge/advance. For projects and decisions, read the complete category
    `INDEX.md` first (a missing INDEX is an empty table), then read only the
@@ -234,12 +235,19 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
 
    Audit errors are report-only and do not block advancement, except
    `TOKEN_MISMATCH`, which stops everything except the export cleanup and the
-   one release in the common rules. For each successful group call
-   `origin-cursor.js advance --group G --synced <proposed-raw>
-   --checkpoint <saved-K> --token T`. A cursor rejection leaves that group
-   unadvanced; report it and continue eligible groups. TOKEN_MISMATCH stops
-   all later operations and internal prompts; release once and report, as in
-   the common rules.
+   one release in the common rules. For each successful group run
+   `origin-cursor.js advance --group G --token T` with stdin
+   `{"summary":<summary receipt>,"raw":<raw receipt or null>,"inputs":<list --group G result>}`,
+   all exactly as returned. The script recomputes both receipts from the
+   database and the session-log list, then sets the summary cursor to the
+   summary receipt's `end` and the raw cursor to the raw receipt's `end`; without
+   a raw receipt, new summaries move the raw cursor to max(S,min(C,upTo)) and no
+   new summary means no advance. Never supply cursor numbers. A missing or
+   malformed `--token` is the call error in the common rules. Any other
+   rejection (`INVALID_INPUT`, `INPUT_CHANGED` or `CURSOR_INVALID`) leaves both
+   cursors for that group unchanged; report it and continue eligible groups.
+   TOKEN_MISMATCH stops all later operations and internal prompts; release once
+   and report, as in the common rules.
 8. Cross-group correlation prompts. Prompt only **strong** correlations: both
    groups' records point to the same task, the same object, or the same person's
    same matter (including commitments that contradict each other). A similar

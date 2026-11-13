@@ -448,7 +448,10 @@ export function assertRotationFlow(f, result) {
     assert.equal(advances.length, 1); assert.ok(statusOkay(advances[0])); assert.ok(rotation.sequence < advances[0].sequence);
     const summaries = events.find(event => isScript(event, 'c4-fetch') && event.effective.args.includes('--summaries-only'));
     assert.ok(summaries && statusOkay(summaries) && summaries.sequence < advances[0].sequence, 'Advance follows the first successful summary read');
-    const { coverageEnd, checkpointId } = JSON.parse(summaries.result.stdout);
+    // The summary read is exported with --out; stdout carries its receipt.
+    const metadata = JSON.parse(summaries.result.stdout), receipt = metadata.data?.receipt ?? metadata.receipt;
+    assert.ok(receipt, 'Summary read must be exported with a receipt');
+    const { coverageEnd, end: checkpointId } = receipt;
     assert.ok(Number.isSafeInteger(checkpointId) && checkpointId > 0);
     const cursor = result.snapshot.cursors.find(row => row.session_group === f.sourceGroup);
     assert.equal(cursor.synced_id, coverageEnd); assert.equal(cursor.checkpoint_id, checkpointId);

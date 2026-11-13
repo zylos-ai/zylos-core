@@ -78,10 +78,12 @@ For exported batches and listed inputs, read every byte in bounded ranges and
 verify the reported byte count and SHA-256 using read-only tools. Truncated
 output is unread: retry with a smaller limit/range until complete. Do not infer
 completion from the first/last lines or a successful hash check alone. Use
-returned absolute paths; never synthesize segment or session paths.
+returned absolute paths; never synthesize export, segment or session paths.
 Follow the procedure's private export-directory cleanup and per-file byte-range
 ledger, including for a single long line. Origin obtains log paths through
 read-only `sync-files.js list --group G`, without reading state or segments.
+Origin exports both of its reads with `--out` and advances cursors only by
+passing the unchanged receipts and list result to `origin-cursor.js advance`.
 Do not read an entire old file into a script. Memory writes still use only the
 documented tools and scripts.
 Do not use native Edit/Write/patch, shell redirects into memory, or a fallback

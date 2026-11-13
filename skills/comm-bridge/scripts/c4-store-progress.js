@@ -4,6 +4,12 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
   const scope = group => group === '*' ? { sql: '', args: [] } : { sql: ' AND session_group=?', args: [requireGroup(group)] };
   const baseline = c => get(c, "SELECT COALESCE(end_conversation_id,0) AS n FROM checkpoints WHERE session_group='*' ORDER BY id DESC LIMIT 1")?.n ?? 0;
   const coverage = (c, group) => Math.max(group === '*' ? 0 : baseline(c), get(c, 'SELECT COALESCE(MAX(end_conversation_id),0) AS n FROM checkpoints WHERE session_group=?', group).n);
+  // The one Origin raw-row selection; reads, exports and receipt checks share it.
+  const originRows = (c, group, after, upTo, limit) => {
+    const l = limitClause(limit);
+    return all(c, `SELECT * FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} ORDER BY id${l.sql}`, group, after, upTo, ...l.args);
+  };
+  const originCursor = (c, group) => get(c, 'SELECT synced_id,checkpoint_id,updated_at FROM origin_sync_cursors WHERE session_group=?', group);
   function frontier(c, group, start = coverage(c, group)) {
     const f = scope(group);
     const gap = get(c, `SELECT MIN(id) AS n FROM conversations WHERE id>?${f.sql} AND direction='in' AND status NOT IN ('delivered','failed','switch_absorbed')`, start, ...f.args).n;
@@ -84,8 +90,28 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     getContentCheckpointsSince: (group, afterEnd) => { requireGroup(group, { global: true }); return snapshot(c => all(c, 'SELECT * FROM checkpoints WHERE session_group=? AND end_conversation_id>? AND no_content=0 ORDER BY id', group, Math.max(afterEnd, group === '*' ? 0 : baseline(c)))); },
     getOriginSyncConversations: (group, { afterConversationId, rawAfter, upToConversationId, limit }) => groupRead(group, c => {
       if (![afterConversationId, rawAfter].every(n => Number.isSafeInteger(n) && n >= 0)) throw dataError('INVALID_ARGS', 'Both fixed read boundaries are required');
-      upper(c, group, upToConversationId); const l = limitClause(limit, true);
-      return all(c, `SELECT * FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} ORDER BY id${l.sql}`, group, Math.max(afterConversationId, rawAfter), upToConversationId, ...l.args);
+      upper(c, group, upToConversationId); limitClause(limit, true);
+      return originRows(c, group, Math.max(afterConversationId, rawAfter), upToConversationId, limit);
+    }),
+    getOriginSyncCursor: group => groupRead(group, c => {
+      const row = originCursor(c, group);
+      return row ? { syncedId: row.synced_id, checkpointId: row.checkpoint_id, updatedAt: row.updated_at } : null;
+    }),
+    // One snapshot of everything an Origin receipt check recomputes.
+    getOriginSyncReceiptInputs: (group, { summaryAfter, summaryEnd, rawAfter, rawEnd }) => groupRead(group, c => {
+      const bounds = [summaryAfter, summaryEnd, ...(rawAfter === undefined && rawEnd === undefined ? [] : [rawAfter, rawEnd])];
+      if (!bounds.every(n => Number.isSafeInteger(n) && n >= 0)) throw dataError('INVALID_ARGS', 'Receipt boundaries must be nonnegative integers');
+      const cursor = originCursor(c, group), summaries = originSummarySnapshot(c, group, summaryAfter), base = baseline(c);
+      // Coverage is monotonic in checkpoint id, so a read's coverage is the
+      // coverage through summaryEnd or through one later checkpoint.
+      const through = get(c, 'SELECT MAX(end_conversation_id) AS n FROM checkpoints WHERE session_group=? AND id<=?', group, summaryEnd).n;
+      const later = all(c, 'SELECT end_conversation_id AS n FROM checkpoints WHERE session_group=? AND id>? ORDER BY id', group, summaryEnd).map(row => Math.max(base, row.n));
+      return {
+        checkpointId: cursor?.checkpoint_id ?? 0,
+        cursorFrom: Math.max(cursor?.synced_id ?? 0, base), coverageEnds: [Math.max(base, through ?? 0), ...later], frontier: frontier(c, group),
+        summaries: summaries.rows.filter(row => row.id <= summaryEnd),
+        rows: rawAfter === undefined ? null : originRows(c, group, rawAfter, rawEnd),
+      };
     }),
     advanceOriginSyncCursor: (group, { syncedId, checkpointId }) => write(c => {
       requireGroup(group);
@@ -118,9 +144,9 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
     }),
   };
   function originSummarySnapshot(c, group, afterCheckpointId) {
-    const cursor = afterCheckpointId ?? get(c, 'SELECT checkpoint_id FROM origin_sync_cursors WHERE session_group=?', group)?.checkpoint_id ?? 0;
+    const cursor = afterCheckpointId ?? originCursor(c, group)?.checkpoint_id ?? 0;
     const rows = all(c, 'SELECT * FROM checkpoints WHERE session_group=? AND id>? AND end_conversation_id>? AND no_content=0 ORDER BY id', group, cursor, baseline(c));
-    return { rows, coverageEnd: coverage(c, group), checkpointId: rows.at(-1)?.id ?? cursor };
+    return { rows, coverageEnd: coverage(c, group), afterCheckpointId: cursor, checkpointId: rows.at(-1)?.id ?? cursor };
   }
   function originSummaries(group, afterCheckpointId) {
     requireGroup(group);
@@ -128,14 +154,27 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
   }
   function originCombined(group, { limit } = {}) {
     requireGroup(group);
-    const l = limitClause(limit);
+    limitClause(limit);
     return snapshot(c => {
       const summaries = originSummarySnapshot(c, group);
-      const cursor = get(c, 'SELECT synced_id FROM origin_sync_cursors WHERE session_group=?', group)?.synced_id ?? 0;
+      const cursor = originCursor(c, group)?.synced_id ?? 0;
       const after = Math.max(cursor, baseline(c), summaries.coverageEnd), upTo = frontier(c, group);
-      const rows = all(c, `SELECT * FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} ORDER BY id${l.sql}`, group, after, upTo, ...l.args);
+      const rows = originRows(c, group, after, upTo, limit);
       const more = rows.length && get(c, `SELECT 1 FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} LIMIT 1`, group, rows.at(-1).id, upTo);
       return { summaries: summaries.rows, coverageEnd: summaries.coverageEnd, checkpointId: summaries.checkpointId, rows, safeEnd: upTo, upTo: more ? rows.at(-1).id : upTo };
+    });
+  }
+  // Raw Origin read: the lower bound honors the cursor, and end is the last
+  // returned id when limited, otherwise this snapshot's upper bound.
+  function originRaw(group, { after, limit } = {}) {
+    requireGroup(group);
+    if (!Number.isSafeInteger(after) || after < 0) throw dataError('INVALID_ARGS', 'after must be a nonnegative integer');
+    limitClause(limit);
+    return snapshot(c => {
+      const lower = Math.max(originCursor(c, group)?.synced_id ?? 0, baseline(c), after), upTo = frontier(c, group);
+      const rows = upTo > lower ? originRows(c, group, lower, upTo, limit) : [];
+      const more = rows.length && get(c, `SELECT 1 FROM conversations WHERE session_group=? AND id>? AND id<=? AND ${loadable} LIMIT 1`, group, rows.at(-1).id, upTo);
+      return { rows, after: lower, end: more ? rows.at(-1).id : Math.max(lower, upTo) };
     });
   }
   function unsummarizedQuery({ group = '*', upToConversationId, limit, afterConversationId } = {}) {
@@ -149,5 +188,5 @@ export function progressFunctions({ read, write, snapshot, get, all, run, second
       return { rows, checkpointEnd: latest?.end_conversation_id ?? 0, checkpointSummary: latest?.summary ?? null, safeEnd, upTo: more ? rows.at(-1).id : requested };
     });
   }
-  return { api, coverage, frontier, checkpoint, originSummaries, originCombined, unsummarizedQuery };
+  return { api, coverage, frontier, checkpoint, originSummaries, originCombined, originRaw, unsummarizedQuery };
 }

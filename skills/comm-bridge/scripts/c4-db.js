@@ -475,6 +475,8 @@ export const getGlobalUnsummarizedConversations = (...args) => store.getGlobalUn
 export const getContentCheckpointsSince = (...args) => store.getContentCheckpointsSince(...args);
 export const getOriginSyncConversations = (...args) => store.getOriginSyncConversations(...args);
 export const advanceOriginSyncCursor = (...args) => store.advanceOriginSyncCursor(...args);
+export const getOriginSyncCursor = (...args) => store.getOriginSyncCursor(...args);
+export const getOriginSyncReceiptInputs = (...args) => store.getOriginSyncReceiptInputs(...args);
 export const getOriginSyncBacklog = (...args) => store.getOriginSyncBacklog(...args);
 export const takeSlot = (...args) => store.takeSlot(...args);
 export const releaseSlot = (...args) => store.releaseSlot(...args);
