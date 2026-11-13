@@ -100,7 +100,7 @@ export function createSupervisor(deps) {
   admission=new SupervisorAdmission({db,store:deps.requestStore,readMode,listRuns:()=>scenes.listRuns(),readRun:group=>scenes.readRun(group),
     resolveLaunchConfig:async group=>db.resolveSessionLaunchConfig({sessionGroup:group,sessionMode:(await readMode()).mode}),
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
-    deferReclaim:async request=>lifecycle.deferReclaim(request,{configuration:await readConfiguration()}),
+    deferReclaim:async request=>lifecycle.deferReclaim(request,{configuration:await (deps.readReclaimConfiguration ?? readConfiguration)()}),
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
   const endings=new SupervisorRunEndings({db,readIdentity:group=>scenes.readIdentity(group),isObservable:()=>!scenes.guard?.episodes.has(scenes.socketKey),env:deps.env,alert:deps.alert,diagnostic,reportError,now});
@@ -233,7 +233,14 @@ export function createSupervisor(deps) {
     },
   },deps.loopOptions);
   const connectionHandler=createSupervisorConnectionHandler({admission,router,isOpen:()=>admission.open && !stopping,readRun:group=>scenes.readRun(group),readMode,
-    onDelivered:notification=>observer.notifyDelivered({...notification,sessionGroup:notification.sessionGroup ?? 'origin'}),onHealthEvents:()=>{void loop.tick();},log});
+    onDelivered:async notification=>{
+      observer.notifyDelivered({...notification,sessionGroup:notification.sessionGroup ?? 'origin'});
+      await admission.serialize(async()=>{
+        const live=await scenes.readRun(notification.sessionGroup);
+        if(live?.runId!==notification.runId || live.runtime!==notification.runtime)return;
+        lifecycle.messageDelivered({...notification,sessionGroup:notification.sessionGroup ?? 'origin'});
+      });
+    },onHealthEvents:()=>{void loop.tick();},log});
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };

@@ -32,12 +32,12 @@ the Zylos data directory, with valid environment values taking precedence:
 | --- | --- | --- |
 | `session_hot_ttl_seconds` | [`ZYLOS_SESSION_HOT_TTL_SECONDS`](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment) | 1800 seconds |
 | `session_evict_min_idle_seconds` | `ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS` | 300 seconds |
-| `session_reclaim_defer_max_seconds` | `ZYLOS_SESSION_RECLAIM_DEFER_MAX_SECONDS` | 1800 seconds |
-| `session_reclaim_defer_alert_seconds` | `ZYLOS_SESSION_RECLAIM_DEFER_ALERT_SECONDS` | 7200 seconds |
+| `session_reclaim_defer_alert_count` | `ZYLOS_SESSION_RECLAIM_DEFER_ALERT_COUNT` | 4 requests |
 
 Values must be positive safe integers. An invalid environment value falls back
 to the config file; an invalid or missing config value falls back to the default.
-Hot TTL and both reclaim deferral settings are refreshed on each Supervisor round. Dashboard's global idle-reclaim
+Hot TTL refreshes on each Supervisor round. The deferral alert count is read
+fresh when a deferral is requested. Dashboard's global idle-reclaim
 setting accepts 5–1440 whole minutes and writes seconds through the existing
 config lock; the next TTL check uses the saved value without a restart. Existing
 positive second values remain valid. The page is read-only in single-session
@@ -59,18 +59,18 @@ and whose result it needs (background command, Monitor, subagent or workflow)
 can hold reclaim. Apply for a delay before acknowledging the control:
 
 ```bash
-node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --minutes 20 --reason "watching CI of my PR"
+node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --reason "watching CI of my PR"
 ```
 
 Confirm `ok:true`, then acknowledge. The command derives the session group and
 run ID from the current environment and uses the existing supervisor socket.
 It rejects missing preparation, a different run, an already-started reclaim,
-a capacity check past its response deadline, or minutes outside 1 through the
-configured single-request maximum. A range refusal includes `maxMinutes` and
-the CLI states the effective allowed range, including configuration overrides.
-Upgrade and configuration restarts cannot
-be delayed. Deferral records live only in the existing in-memory preparations;
-a supervisor restart loses them and sends a fresh check.
+a capacity check past its response deadline, or an upgrade/configuration restart.
+An accepted request cancels this reclaim or eviction preparation and resets the
+idle clock immediately. TTL and eviction ordering both use this reset; the group
+must become idle for the configured eviction minimum before it can be selected
+again. Consecutive request counts and reasons live only in memory; a supervisor
+restart loses them.
 
 Otherwise write the handoff from current records, leaving completed items out.
 Waiting for people, reviews or decisions needs only that handoff: replies wake
@@ -92,24 +92,19 @@ from the check after the written ones terminate.
 Once the same run is preparing for TTL reclaim, its own preparation activity
 does not restart or cancel that preparation; a new C4 message still cancels it.
 Completed preparation stays pending until the same run is idle, without restarting TTL or sending further preparation controls.
-This behavior is unchanged when no deferral was requested. With deferral,
-terminal controls followed by confirmed quiet establish an activity baseline.
-Later runtime/transcript activity cancels the preparation and starts a fresh
-idle interval. If the delay expires without activity, a fresh check replaces
-the preparation; the session can apply again or release reclaim. During the
-delay it is excluded from capacity and memory-pressure eviction, which try
-other idle groups or leave demand queued. Cumulative delay within one idle
-interval reaching the configured alert threshold sends the owner one alert
-with the group and each request's reason; it never forces reclaim. Activity
-starting a new idle interval clears this history.
+This behavior is unchanged when no deferral was requested. An accepted deferral
+cancels the current preparation; after the fresh idle interval, the next check
+starts a new preparation. Capacity eviction keeps its existing ordering by idle
+time. Consecutive deferrals reaching the configured count send the owner one
+alert with the group and each reason, without forcing reclaim. Dispatching a new
+incoming message to the group clears the count and permits another alert after
+another full sequence. Actual reclaim or a new run also clears the count.
 
-Runtime behavior differs: in Codex 0.166, completion of a background terminal
-records a `completed` entry in the session log but does not automatically start
-a new conversation turn. That log update still counts as session activity, so
-the supervisor cancels the deferral and later issues another check, but the
-session does not automatically continue processing the background result. If
-the next step depends on that result, record it in the handoff or arrange for
-the task itself to send a completion message back.
+Codex does not automatically start a new turn when a background task finishes.
+After deferral resets the idle clock, the session returns at the next idle check
+(by default, about 30 minutes later). If the next step depends on the background
+result, record it in the handoff or arrange for the task itself to send a
+completion message back.
 
 Subagent events with `agent_id` are tracked separately for the current run and
 session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended

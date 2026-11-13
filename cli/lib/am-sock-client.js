@@ -45,9 +45,8 @@ export function validateReply(request, reply) {
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'unchanged'])
         : reply.result === 'rejected' && oneOf(reply.reason, configReasons);
     case 'defer_reclaim':
-      return reply.ok ? reply.result === 'accepted' && integer(reply.deferUntil)
-        : reply.result === 'rejected' && oneOf(reply.reason, ['no_preparation', 'run_changed', 'reclaim_started', 'minutes_out_of_range', 'preparation_expired', 'restart_pending', 'requests_unreadable'])
-          && (reply.reason !== 'minutes_out_of_range' || Number.isFinite(reply.maxMinutes) && reply.maxMinutes > 0);
+      return reply.ok ? reply.result === 'accepted'
+        : reply.result === 'rejected' && oneOf(reply.reason, ['no_preparation', 'run_changed', 'reclaim_started', 'preparation_expired', 'restart_pending', 'requests_unreadable']);
     case 'manual_restart':
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'already_stopped'])
         : (reply.result === 'stale_target' && nonempty(reply.currentRunId)) || (reply.result === 'rejected' && oneOf(reply.reason, manualReasons));

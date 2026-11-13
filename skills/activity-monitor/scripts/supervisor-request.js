@@ -22,7 +22,7 @@ export async function readyForConfigReclaim({ env = process.env, send = submit }
     persisted: result.sent && !result.reply ? null : [] } };
 }
 
-export async function deferReclaim({ minutes, reason, env = process.env, send = submit } = {}) {
+export async function deferReclaim({ reason, env = process.env, send = submit } = {}) {
   const sessionGroup = env.ZYLOS_SESSION_GROUP, expectedRunId = env.ZYLOS_RUN_ID;
   try {
     if (!sessionGroup || !expectedRunId) throw new Error('Missing session identity');
@@ -30,18 +30,15 @@ export async function deferReclaim({ minutes, reason, env = process.env, send = 
   } catch {
     return { ok: false, error: { code: 'NO_SESSION_ENV', message: 'A valid session group and run identity are required', persisted: [] } };
   }
-  if (!Number.isFinite(minutes) || typeof reason !== 'string' || !reason.trim()) {
-    return { ok: false, error: { code: 'INVALID_ARGS', message: 'Expected finite minutes and a nonempty reason', persisted: [] } };
+  if (typeof reason !== 'string' || !reason.trim()) {
+    return { ok: false, error: { code: 'INVALID_ARGS', message: 'Expected a nonempty reason', persisted: [] } };
   }
   const response = await send({ version: 1, type: 'defer_reclaim', requestId: `defer-${randomUUID()}`,
-    sessionGroup, expectedRunId, minutes, reason });
+    sessionGroup, expectedRunId, reason });
   if (response.kind === 'accepted') return { ok: true, data: { result: response.reply.result,
-    deferUntil: response.reply.deferUntil, sessionGroup, expectedRunId } };
-  const maxMinutes = response.reply?.reason === 'minutes_out_of_range' ? response.reply.maxMinutes : undefined;
+    sessionGroup, expectedRunId } };
   return { ok: false, error: { code: response.reply?.reason ?? response.reply?.code ?? response.kind,
-    message: maxMinutes !== undefined ? `Reclaim deferral minutes must be between 1 and ${maxMinutes}`
-      : response.sent && !response.reply ? 'Submission result is unknown; do not assume reclaim was deferred' : 'Reclaim deferral was not accepted',
-    ...(maxMinutes !== undefined ? { maxMinutes } : {}),
+    message: response.sent && !response.reply ? 'Submission result is unknown; do not assume reclaim was deferred' : 'Reclaim deferral was not accepted',
     persisted: response.sent && !response.reply ? null : [] } };
 }
 
@@ -58,12 +55,12 @@ async function main(argv) {
     const values = {};
     while (args.length) {
       const flag = args.shift();
-      if (!['--minutes', '--reason'].includes(flag) || values[flag] !== undefined || !args.length) {
-        printResult({ok:false,error:{code:'INVALID_ARGS',message:'Expected defer-reclaim --minutes N --reason TEXT [--json]',persisted:[]}},json); return;
+      if (!['--reason'].includes(flag) || values[flag] !== undefined || !args.length) {
+        printResult({ok:false,error:{code:'INVALID_ARGS',message:'Expected defer-reclaim --reason TEXT [--json]',persisted:[]}},json); return;
       }
       values[flag] = args.shift();
     }
-    try { printResult(await deferReclaim({ minutes: Number(values['--minutes']), reason: values['--reason'] }), json); }
+    try { printResult(await deferReclaim({ reason: values['--reason'] }), json); }
     catch (error) { printResult({ok:false,error:{code:error.code ?? 'REQUEST_FAILED',message:error.message,persisted:[]}},json); }
     return;
   }

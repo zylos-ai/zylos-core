@@ -71,6 +71,7 @@ export class SupervisorLifecycle {
     this.evictionPreparation = new Map();
     this.upgradePreparation = new Map();
     this.ttlReset = new Map();
+    this.reclaimDeferrals = new Map();
     this.rotationSent = new Map();
     this.configurationSent = new Map();
     this.syncSent = new Map();
@@ -145,6 +146,7 @@ export class SupervisorLifecycle {
   }
 
   stopped(scene, context) {
+    if (this.reclaimDeferrals.get(scene.sessionGroup)?.runId === scene.runId) this.reclaimDeferrals.delete(scene.sessionGroup);
     const current = context.scenes.find(item => item.runId === scene.runId &&
       (item.sessionGroup === scene.sessionGroup || scene.sessionGroup === null && item.sessionGroup === 'origin'));
     if (current) Object.assign(current, { present: false, ready: false, processRunning: false });
@@ -366,6 +368,7 @@ export class SupervisorLifecycle {
     this.ttlPreparation.delete(group);
     this.evictionPreparation.delete(group);
     this.upgradePreparation.delete(fence.runId);
+    if (this.reclaimDeferrals.get(group)?.runId === fence.runId) this.reclaimDeferrals.delete(group);
     for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
       this.warnings.delete(JSON.stringify(['reclaim', fence.sessionGroup, fence.runId, fence.reason, name]));
     }
@@ -397,7 +400,7 @@ export class SupervisorLifecycle {
     const last = scene.lastSubagentActivityAt;
     if (!finite(last)) return false;
     const preparation = reason === 'ttl' ? this.ttlPreparation.get(scene.sessionGroup) : null;
-    if (preparation?.runId === scene.runId && last >= (preparation.activityCutoffAt ?? preparation.at)) return false;
+    if (preparation?.runId === scene.runId && last >= preparation.at) return false;
     const [from, until] = reason === 'evict' ? this.evictionCheckWindow(scene) : [Infinity, Infinity];
     if (last >= from && last <= until) return false;
     const seconds = reason === 'ttl' ? context.configuration.hotTtlSeconds ?? 1800 : context.configuration.evictMinIdleSeconds ?? 300;
@@ -407,8 +410,7 @@ export class SupervisorLifecycle {
   // The pending eviction check's own run activity, bounded by its acknowledgment deadline.
   evictionCheckWindow(scene) {
     const preparation = this.evictionPreparation.get(scene.sessionGroup);
-    return preparation?.runId === scene.runId
-      ? [preparation.activityCutoffAt ?? preparation.at, preparation.defer?.until ? Infinity : preparation.deadline] : [Infinity, Infinity];
+    return preparation?.runId === scene.runId ? [preparation.at, preparation.deadline] : [Infinity, Infinity];
   }
 
   prompt(name, ...args) {
@@ -426,8 +428,14 @@ export class SupervisorLifecycle {
     }
   }
 
+  // Only the existing conversation-dispatch signal resets consecutive requests.
+  // Transcript, tool and control activity must not erase a deferral history.
+  messageDelivered({ sessionGroup, runId }) {
+    if (this.reclaimDeferrals.get(sessionGroup)?.runId === runId) this.reclaimDeferrals.delete(sessionGroup);
+  }
+
   async deferReclaim(request, context) {
-    const reject = (reason, details = {}) => ({ ok: false, result: 'rejected', reason, ...details });
+    const reject = reason => ({ ok: false, result: 'rejected', reason });
     const group = request.sessionGroup;
     await this.refreshAuthorities(context);
     if (context.fences.some(fence => fence.sessionGroup === group || fence.sessionGroup === '*')) return reject('reclaim_started');
@@ -440,62 +448,27 @@ export class SupervisorLifecycle {
     if (context.transition || configurationChanged || context.restartRequests.some(row =>
       row.reason === 'upgrade' && row.runIds.includes(scene.runId) || row.reason === 'manual_restart' &&
       (manualTarget(row) === group || row.mode === 'single'))) return reject('restart_pending');
-    if (preparation.controlId && this.now() >= preparation.deadline) return reject('preparation_expired');
-    const max = context.configuration.reclaimDeferMaxSeconds ?? 1800;
-    if (!finite(request.minutes) || request.minutes < 1 || request.minutes * 60 > max) return reject('minutes_out_of_range', { maxMinutes: max / 60 });
-    const now = this.now();
-    const previous = preparation.defer;
-    const totalMs = (previous?.totalMs ?? 0) + (previous?.until ? Math.max(0, Math.min(now, previous.until) - previous.startedAt) : 0);
-    const defer = { totalMs, until: now + request.minutes * 60000, startedAt: now,
-      reasons: [...(previous?.reasons ?? []), request.reason], alerted: previous?.alerted ?? false,
-      ...(previous?.quietAt !== undefined ? { quietAt: previous.quietAt, quietActivity: previous.quietActivity } : {}) };
-    // One deferred preparation owns all existing checks of this idle period.
     const eviction = this.evictionPreparation.get(group);
-    if (preparation.controlIds && eviction?.runId === scene.runId) {
-      preparation.controlIds.push(eviction.controlId);
-      this.evictionPreparation.delete(group);
-    }
-    preparation.defer = defer;
-    await this.event('reclaim_deferred', { session_group: group, run_id: scene.runId,
-      reason: request.reason, defer_until: defer.until });
-    return { ok: true, result: 'accepted', deferUntil: defer.until };
-  }
-
-  async deferredPreparation(scene, preparation, context) {
-    const defer = preparation?.defer;
-    if (!defer?.until) return null;
-    const group = scene.sessionGroup, now = this.now();
-    const activity = await this.lastActivity(scene);
-    if (scene.runId !== preparation.runId || defer.quietAt !== undefined && activity > defer.quietActivity) {
-      this.ttlPreparation.delete(group); this.evictionPreparation.delete(group);
-      this.ttlReset.set(group, { runId: scene.runId, at: now });
-      return 'cancelled';
-    }
-    const elapsed = defer.totalMs + Math.max(0, Math.min(now, defer.until) - defer.startedAt);
-    if (!defer.alerted && elapsed >= (context.configuration.reclaimDeferAlertSeconds ?? 7200) * 1000) {
-      defer.alerted = true;
+    if (eviction?.runId === scene.runId && this.now() >= eviction.deadline) return reject('preparation_expired');
+    const now = this.now();
+    this.ttlPreparation.delete(group);
+    this.evictionPreparation.delete(group);
+    // lastActivity already includes ttlReset for both TTL and eviction ordering.
+    this.ttlReset.set(group, { runId: scene.runId, at: now });
+    const previous = this.reclaimDeferrals.get(group);
+    const history = previous?.runId === scene.runId ? previous : { runId: scene.runId, count: 0, reasons: [], alerted: false };
+    history.count++;
+    history.reasons.push(request.reason);
+    this.reclaimDeferrals.set(group, history);
+    await this.event('reclaim_deferred', { session_group: group, run_id: scene.runId, reason: request.reason });
+    if (!history.alerted && history.count >= (context.configuration.reclaimDeferAlertCount ?? 4)) {
+      history.alerted = true;
       const event = { event: 'reclaim_defer_alert', session_group: group, run_id: scene.runId,
-        reasons: [...defer.reasons], message: `Reclaim deferrals reached the alert duration: ${defer.reasons.join('; ')}` };
+        reasons: [...history.reasons], message: `Consecutive reclaim deferrals for ${group}: ${history.reasons.join('; ')}` };
       await this.event(event.event, event);
       if (this.d.alert) Promise.resolve().then(() => this.d.alert(event)).catch(cause => this.d.reportError?.(cause, { phase: 'lifecycle_alert' }));
     }
-    if (now >= defer.until) {
-      defer.totalMs = elapsed; defer.until = null; defer.startedAt = null;
-      delete defer.quietAt; delete defer.quietActivity;
-      return 'expired';
-    }
-    const ids = preparation.controlIds ?? [preparation.controlId];
-    let confirmed = true;
-    for (const id of ids) if (!TERMINAL_CONTROLS.has((await this.d.db.getControlById(id))?.status)) confirmed = false;
-    if (defer.quietAt === undefined && confirmed && !this.activeSubagents(scene, context) && await this.idle(scene, context)) {
-      defer.quietAt = now; defer.quietActivity = activity;
-    }
-    return 'waiting';
-  }
-
-  reclaimDeferred(scene) {
-    return [this.ttlPreparation.get(scene.sessionGroup), this.evictionPreparation.get(scene.sessionGroup)]
-      .some(preparation => preparation?.runId === scene.runId && preparation.defer?.until);
+    return { ok: true, result: 'accepted' };
   }
 
   async checkTtl(scene, context) {
@@ -503,24 +476,11 @@ export class SupervisorLifecycle {
     const group = scene.sessionGroup;
     if (modeOf(context) !== 'multi' || !group || !await this.allowed(group, context)) return;
     if (!scene.present || !scene.ready) { this.ttlPreparation.delete(group); return; }
-    let preparation = this.ttlPreparation.get(group);
-    let carry;
-    if (preparation?.defer?.until) {
-      const result = await this.deferredPreparation(scene, preparation, context);
-      if (result !== 'expired') return;
-      carry = preparation;
-      this.ttlPreparation.delete(group); preparation = null;
-    } else if (this.reclaimDeferred(scene)) {
-      // The ordinary TTL round also observes deferred eviction checks when
-      // capacity demand has disappeared; no separate timer is needed.
-      const eviction = this.evictionPreparation.get(group);
-      if (eviction?.defer?.until) await this.prepareEviction(scene, context, eviction.subreason);
-      return;
-    }
+    const preparation = this.ttlPreparation.get(group);
     // Preparation starts only after TTL expiry. Its own Sync activity must not
     // restart that clock; C4 messages and the other activity sources still can.
     const now = this.now(), last = await this.lastActivity(scene,
-      preparation?.runId === scene.runId ? preparation.activityCutoffAt ?? preparation.at : carry?.activityCutoffAt ?? carry?.at ?? Infinity);
+      preparation?.runId === scene.runId ? preparation.at : Infinity);
     const ttl = (context.configuration.hotTtlSeconds ?? 1800) * 1000;
     if (preparation && (preparation.runId !== scene.runId || last > preparation.at)) {
       this.ttlPreparation.delete(group);
@@ -541,7 +501,7 @@ export class SupervisorLifecycle {
     if (this.activeSubagents(scene, context)) return;
     const range = await this.d.db.getUnsummarizedRange(group);
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
-    // Every TTL reclaim starts with the background-work and handoff check; Sync, when due, follows it.
+    // Every TTL reclaim first asks for a check of work waiting on external events; Sync, when due, follows it.
     const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
     if (range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
     if (group === 'origin') {
@@ -559,8 +519,7 @@ export class SupervisorLifecycle {
       });
       controlIds.push(control.id);
     }
-    if (controlIds.length) this.ttlPreparation.set(group, { controlIds, runId: scene.runId, at: now, partial,
-      ...(carry ? { defer: carry.defer, activityCutoffAt: carry.activityCutoffAt ?? carry.at } : {}) });
+    if (controlIds.length) this.ttlPreparation.set(group, { controlIds, runId: scene.runId, at: now, partial });
   }
 
   async checkEviction(scenes, context) {
@@ -608,16 +567,10 @@ export class SupervisorLifecycle {
     const group = scene.sessionGroup;
     // A started reclaim keeps its preparation until it completes; it is not prepared or begun again.
     if (context.fences.some(fence => fence.sessionGroup === group)) return null;
-    let preparation = this.evictionPreparation.get(group);
-    let carry;
-    if (preparation?.defer?.until) {
-      const result = await this.deferredPreparation(scene, preparation, context);
-      if (result !== 'expired') return null;
-      carry = preparation; this.evictionPreparation.delete(group); preparation = null;
-    }
+    const preparation = this.evictionPreparation.get(group);
     if (preparation && preparation.runId !== scene.runId) this.evictionPreparation.delete(group);
     else if (preparation) {
-      if (await this.lastActivity(scene, ...this.evictionCheckWindow(scene)) > preparation.at) {
+      if (await this.lastActivity(scene, preparation.at, preparation.deadline) > preparation.at) {
         this.evictionPreparation.delete(group);
         return null;
       }
@@ -635,7 +588,7 @@ export class SupervisorLifecycle {
     const fresh = await this.observe(group, context);
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return null;
     if (this.subagentReclaimBlocked(fresh, 'evict', context)) return null;
-    if (!carry && !(await this.evictionCandidates([fresh], context)).length) return null;
+    if (!(await this.evictionCandidates([fresh], context)).length) return null;
     if (!await this.beforeWrite(group, context, scene)) return null;
     const targetBinding = await this.bindCurrentRun(scene);
     if (!targetBinding) return null;
@@ -644,8 +597,7 @@ export class SupervisorLifecycle {
       sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
       ackDeadlineAt: Math.floor((now + this.evictionAckTimeoutMs) / 1000),
     });
-    this.evictionPreparation.set(group, { controlId: control.id, runId: scene.runId, at: now, deadline: now + this.evictionAckTimeoutMs, subreason,
-      ...(carry ? { defer: carry.defer, activityCutoffAt: carry.activityCutoffAt ?? carry.at } : {}) });
+    this.evictionPreparation.set(group, { controlId: control.id, runId: scene.runId, at: now, deadline: now + this.evictionAckTimeoutMs, subreason });
     return 'waiting';
   }
 
@@ -654,7 +606,6 @@ export class SupervisorLifecycle {
     for (const scene of scenes) {
       if (scene.observationError) throw scene.observationError;
       if (!scene.present || !scene.ready || !scene.sessionGroup || scene.sessionGroup === 'origin' || scene.state !== 'idle' || context.fences.some(f => f.sessionGroup === scene.sessionGroup)) continue;
-      if (this.reclaimDeferred(scene)) continue;
       if (this.activeSubagents(scene, context)) continue;
       const last = await this.lastActivity(scene, ...this.evictionCheckWindow(scene));
       if (now - last < minIdle) continue;

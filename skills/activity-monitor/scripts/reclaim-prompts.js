@@ -5,7 +5,7 @@ const SCHEDULER_CLI = fileURLToPath(new URL('../../scheduler/scripts/cli.js', im
 const SUPERVISOR_REQUEST_CLI = fileURLToPath(new URL('./supervisor-request.js', import.meta.url));
 
 const DEFER_RUNNING_WORK = 'Only one thing can hold the reclaim: work this session itself started that is still running and whose result it is waiting for — a background command, a Monitor watcher, a background subagent or workflow. '
-  + `If there is such work, run \`node "${SUPERVISOR_REQUEST_CLI}" defer-reclaim --minutes <N> --reason "<what is still running>"\`, confirm it reports ok:true, then acknowledge this control.`;
+  + `If there is such work, run \`node "${SUPERVISOR_REQUEST_CLI}" defer-reclaim --reason "<what is still running>"\`, confirm it reports ok:true, then acknowledge this control.`;
 const INTERRUPTED_RUNNING_WORK = 'If work this session itself started is still running (a background command, a Monitor watcher, a background subagent or workflow), '
   + 'it will be interrupted by this restart: name it in the session handoff so the next session can rerun or check it.';
 const HANDOFF_CHECK = 'Otherwise write the session handoff: list open business items as they stand now, checking each against its current record and leaving out any that have finished. '

@@ -23,7 +23,7 @@ export function validSupervisorRequest(request) {
       && (!Object.hasOwn(request, 'sessionGroup') || validGroup(request.sessionGroup));
     case 'ready_for_config_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId);
     case 'defer_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId)
-      && typeof request.minutes === 'number' && nonempty(request.reason) && request.reason.trim().length > 0;
+      && nonempty(request.reason) && request.reason.trim().length > 0;
     case 'mode_switch': return ['single', 'multi'].includes(request.target);
     case 'start_attempt': return true; // The runtime owner validates its complete request in the runtime queue.
     default: return false;

@@ -368,8 +368,8 @@ test('deferral admission shares the lifecycle queue and does not persist restart
   const f = fixture(t); let release, entered = false;
   const block = f.admission.serialize(() => new Promise(resolve => { release = resolve; }));
   await Promise.resolve();
-  f.admission.deferReclaim = request => { entered = true; return { ok: true, result: 'accepted', deferUntil: f.deps.now() + request.minutes * 60000 }; };
-  const request = { version: 1, type: 'defer_reclaim', requestId: 'defer', sessionGroup: 'telegram:a', expectedRunId: 'r1', minutes: 1, reason: 'command' };
+  f.admission.deferReclaim = request => { entered = true; return { ok: true, result: 'accepted' }; };
+  const request = { version: 1, type: 'defer_reclaim', requestId: 'defer', sessionGroup: 'telegram:a', expectedRunId: 'r1', reason: 'command' };
   const pending = f.admission.handle(request);
   await Promise.resolve(); assert.equal(entered, false);
   release(); await block;
@@ -388,7 +388,7 @@ test('direct deferral admission rejects a whitespace-only reason before dispatch
   const f = fixture(t);
   f.admission.deferReclaim = () => assert.fail('invalid raw requests must not reach lifecycle');
   const result = await f.admission.handle({ version: 1, type: 'defer_reclaim', requestId: 'blank-reason',
-    sessionGroup: 'telegram:a', expectedRunId: 'r1', minutes: 1, reason: '   ' });
+    sessionGroup: 'telegram:a', expectedRunId: 'r1', reason: '   ' });
   assert.equal(result.ok, false); assert.equal(result.code, 'invalid_request');
   assert.equal(fs.existsSync(f.file), false);
 });
