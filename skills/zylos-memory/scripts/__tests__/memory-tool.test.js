@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { createMemoryEditor, serveMemoryTools } from '../memory-mcp-server.js';
-import { acquire, memoryScope, withMemoryLock } from '../sync-lock.js';
+import { acquire, memoryScope, readMarker, withMemoryLock } from '../sync-lock.js';
 
 for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) {
   assert.ok(process.env[key]);
@@ -44,11 +44,42 @@ test('local: group, origin and global use marker-derived target scopes', async (
   assert.equal((await global.editor(create(global.token, 'session-groups/origin/state.md'))).code, 'PATH_NOT_ALLOWED');
 });
 
+test('local: a missing or malformed token is a call error that keeps the lock for a retry', async () => {
+  const f = await fixture('global');
+  const target = path.join(f.dir, 'memory', 'identity.md');
+  const required = { ok: false, code: 'INVALID_INPUT', message: 'token is required: pass the T printed by sync-lock.js acquire' };
+  const { token: _omitted, ...missing } = create(f.token, 'identity.md');
+  for (const call of [missing, create(undefined, 'identity.md'), create('', 'identity.md'),
+    create(f.token.toUpperCase(), 'identity.md'), create(f.token.slice(1), 'identity.md'), create([f.token], 'identity.md')]) {
+    assert.deepEqual(await f.editor(call), required);
+    assert.equal(readMarker(f.scope.runDir, 'global').marker.token, f.token);
+    assert.equal(fs.existsSync(target), false);
+  }
+  assert.equal((await f.editor(create('0'.repeat(32), 'identity.md'))).code, 'TOKEN_MISMATCH');
+  assert.equal(readMarker(f.scope.runDir, 'global').marker.token, f.token);
+  // The MCP client does not enforce the schema, so a call without the field reaches the server.
+  const input = new PassThrough(), output = new PassThrough();
+  let received = ''; output.on('data', chunk => { received += chunk; });
+  const done = serveMemoryTools({ input, output, editor: f.editor });
+  for (const request of [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'edit_memory', arguments: missing } },
+    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'edit_memory', arguments: create(f.token, 'identity.md') } },
+  ]) input.write(JSON.stringify(request) + '\n');
+  input.end(); await done;
+  const frames = received.trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(frames.map(frame => frame.id), [1, 2, 3]);
+  assert.equal(frames[1].result.isError, true);
+  assert.deepEqual(JSON.parse(frames[1].result.content[0].text), required);
+  assert.equal(frames[2].result.isError, false);
+  assert.deepEqual(JSON.parse(frames[2].result.content[0].text), { ok: true, path: 'identity.md', bytes: 7 });
+  assert.equal(fs.readFileSync(target, 'utf8'), 'content');
+});
+
 test('local: model role claims are rejected and the server environment stays bound', async () => {
   const f = await fixture('global');
   assert.equal((await f.editor({ ...create(f.token, 'identity.md'), kind: 'global' })).code, 'INVALID_INPUT');
   assert.equal((await f.editor(create('0'.repeat(32), 'identity.md'))).code, 'TOKEN_MISMATCH');
-  assert.equal((await f.editor(create(undefined, 'identity.md'))).code, 'TOKEN_MISMATCH');
   const unbound = createMemoryEditor({ ZYLOS_DIR: f.dir });
   assert.equal((await unbound(create(f.token, 'identity.md'))).code, 'SCOPE_UNBOUND');
   // Server captures its own environment at startup, independent of later mutation.

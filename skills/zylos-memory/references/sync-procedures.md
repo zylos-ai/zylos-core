@@ -33,6 +33,16 @@ before releasing the token; report a cleanup failure. TOKEN_MISMATCH remains an
 immediate stop, so do not attempt cleanup after it. No script-side cleanup state
 or new background mechanism is involved.
 
+A missing or malformed token is a call error, not lost ownership: `edit_memory`
+and the token-taking scripts then return `INVALID_INPUT` (exit 1) with the
+message `token is required: pass the T printed by sync-lock.js acquire`. Add
+the token (`token` for `edit_memory`, `--token T` for scripts) and retry that
+call once. It is not a required-step failure: do not stop and do not release;
+the lock is still yours. Handle the retry's result under the rules above.
+Every `edit_memory` call carries T, for example
+`{"op":"edit","path":"<path relative to memory>","expected":"<old text>","replacement":"<new text>","token":"T"}`;
+for `create`, omit `expected`.
+
 `LEGACY_READ_ONLY` is not a required-step failure: old `reference/projects.md`,
 `reference/decisions.md`, and `reference/legacy/**`
 are read-only through `edit_memory`, even when an old path no longer exists.

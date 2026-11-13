@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { verifyBatchReceipt } from '../../comm-bridge/scripts/c4-sync-batch.js';
-import { guard, memoryScope, memoryError } from './sync-lock.js';
+import { guard, memoryScope, memoryError, requireSyncToken } from './sync-lock.js';
 import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry, inboxSegmentName as segment } from './state-format.js';
 import { inputError, isMain, options, parseJson, nonnegativeInteger, readInput, runCli } from './sync-cli.js';
 import { loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
@@ -166,7 +166,8 @@ export async function commit({ input, ...settings }, deps = {}) {
 if (isMain(import.meta.url)) await runCli(async () => {
   const [command, ...args] = process.argv.slice(2);
   const parsed = options(args, command === 'checkpoint' ? ['token', 'batch'] : command === 'list' ? ['token', 'group', 'since'] : ['token'], command === 'checkpoint' ? ['no-content'] : []);
-  if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0) || (command !== 'list' && !parsed.token) || (command === 'list' && parsed.token)) throw inputError('Invalid command or arguments');
+  if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0) || (command === 'list' && parsed.token)) throw inputError('Invalid command or arguments');
+  if (command !== 'list') requireSyncToken(parsed.token);
   const settings = { token: parsed.token };
   let result;
   if (command === 'cleanup') result = await cleanup(settings);

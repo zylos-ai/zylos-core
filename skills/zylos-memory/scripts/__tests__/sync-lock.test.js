@@ -89,6 +89,25 @@ test('expiry during a guarded operation cannot admit a contender', async () => {
   assert.notEqual(next, token);
 });
 
+test('guard reports a missing or malformed token as input and keeps the marker for a retry', async t => {
+  const env = fixture('lark:oc_token');
+  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
+  const scope = await memoryScope(env);
+  const token = await acquire({ kind: 'group', env }, { currentRunId });
+  const file = path.join(scope.runDir, 'sync.lock'), held = fs.readFileSync(file, 'utf8');
+  let calls = 0;
+  for (const value of [undefined, '', token.toUpperCase(), token.slice(1), `${token}0`, [token]]) {
+    await assert.rejects(guard({ kind: 'group', token: value, env }, () => { calls++; }),
+      { code: 'INVALID_INPUT', exitCode: 1, message: 'token is required: pass the T printed by sync-lock.js acquire' });
+    assert.equal(fs.readFileSync(file, 'utf8'), held);
+  }
+  await assert.rejects(guard({ kind: 'group', token: 'c'.repeat(32), env }, () => { calls++; }), { code: 'TOKEN_MISMATCH', exitCode: 3 });
+  assert.equal(fs.readFileSync(file, 'utf8'), held);
+  assert.equal(calls, 0);
+  assert.equal(await guard({ kind: 'group', token, env }, ({ marker }) => marker.token), token);
+  await release({ kind: 'group', token, env });
+});
+
 // each ownership predicate rejects independently; no live tmux read.
 test('shared guard checks token, kind and environment runId independently', async () => {
   const env = fixture('origin');
