@@ -108,6 +108,33 @@ test('guard reports a missing or malformed token as input and keeps the marker f
   await release({ kind: 'group', token, env });
 });
 
+// Integration boundary: real marker files and the real release CLI in a temporary
+// group root; currentRunId is supplied, so no tmux server or DB is contacted. Run
+// for release/guard/marker changes; skip otherwise. t.after removes the root.
+test('release after TOKEN_MISMATCH leaves the new owner marker; the owner release removes its own', async t => {
+  const env = fixture('lark:oc_takeover');
+  t.after(() => fs.rmSync(env.ZYLOS_DIR, { recursive: true, force: true }));
+  const scope = await memoryScope(env), file = path.join(scope.runDir, 'sync.lock');
+  const script = fileURLToPath(new URL('../sync-lock.js', import.meta.url));
+  const cli = (args, runtimeEnv) => spawnSync(process.execPath, [script, ...args], { env: { ...process.env, ...runtimeEnv }, encoding: 'utf8', timeout: 15000 });
+  const a = await acquire({ kind: 'group', env }, { currentRunId });
+  const newer = { ...env, ZYLOS_RUN_ID: 'run-2' };
+  const b = await acquire({ kind: 'group', env: newer }, { currentRunId });
+  const owned = fs.readFileSync(file, 'utf8');
+  assert.equal(JSON.parse(owned).token, b);
+  await assert.rejects(guard({ kind: 'group', token: a, env }, () => assert.fail('old owner mutated')), { code: 'TOKEN_MISMATCH', exitCode: 3 });
+  await release({ kind: 'group', token: a, env });
+  assert.equal(fs.readFileSync(file, 'utf8'), owned);
+  const viaCli = cli(['release', '--kind', 'group', '--token', a], env);
+  assert.equal(viaCli.status, 0, viaCli.stderr);
+  assert.equal(fs.readFileSync(file, 'utf8'), owned);
+  assert.equal(await guard({ kind: 'group', token: b, env: newer }, ({ marker }) => marker.token), b);
+  // Control: while the marker is still the caller's, the same release removes it.
+  const own = cli(['release', '--kind', 'group', '--token', b], newer);
+  assert.equal(own.status, 0, own.stderr);
+  assert.equal(fs.existsSync(file), false);
+});
+
 // each ownership predicate rejects independently; no live tmux read.
 test('shared guard checks token, kind and environment runId independently', async () => {
   const env = fixture('origin');

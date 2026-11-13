@@ -14,8 +14,11 @@ printed token T. An acquire exit 2 is a normal no-op only when stderr's first
 line says `Error [SYNC_BUSY]`. `LOCK_TIMEOUT` is a failure. On any acquire
 failure, do not release because no token was acquired.
 
-After acquisition, `TOKEN_MISMATCH` / exit 3 means stop immediately: no more
-script/tool operations, no release, no prompts. For any other required-step
+After acquisition, `TOKEN_MISMATCH` / exit 3 means the lock is no longer
+yours: stop immediately (no more writes, other script/tool operations, or
+prompts, except removing this run's own private export directory below), then
+release once with `sync-lock.js release --kind <kind> --token T` and report. Release removes the marker only while it still carries T, so it
+never removes another worker's lock. For any other required-step
 failure (including `WRITE_FAILED` for a failed write/publication, `LOCK_UNAVAILABLE`
 for an unavailable kernel lock, or a tool protocol error), stop later writes, release once with
 `sync-lock.js release --kind <kind> --token T`, and report failure to the
@@ -29,9 +32,9 @@ Before creating any export, run `mktemp -d` to create a unique private directory
 reuse a fixed filename in shared `/tmp`, or redirect conversation text into a
 second file. `--out` creates each file exclusively with mode 0600. On success,
 no input, or failure, remove only this run's private directory and its exports
-before releasing the token; report a cleanup failure. TOKEN_MISMATCH remains an
-immediate stop, so do not attempt cleanup after it. No script-side cleanup state
-or new background mechanism is involved.
+before releasing the token; report a cleanup failure. After TOKEN_MISMATCH,
+also remove only this run's own private export directory, then release once and
+report. No script-side cleanup state or new background mechanism is involved.
 
 A missing or malformed token is a call error, not lost ownership: `edit_memory`
 and the token-taking scripts then return `INVALID_INPUT` (exit 1) with the
@@ -49,7 +52,7 @@ are read-only through `edit_memory`, even when an old path no longer exists.
 Redirect that change to its project/topic page and continue this Sync normally.
 A failed `reference-index.js rebuild` is reported without blocking progress.
 Audit failures are also report-only, except `TOKEN_MISMATCH`, which always stops
-all operations as above.
+all operations and releases once as above.
 
 Use the restricted tool name discovered and passed by the parent (Claude:
 `mcp__zylos-memory__edit_memory`; Codex: `mcp__zylos_memory__edit_memory`). If
@@ -164,7 +167,8 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    `c4-fetch.js --origin-sync --group G --summaries-only`. Save C=coverageEnd
    and K=checkpointId from this same read alongside all summaries. If that
    group's read fails, skip its merge and cursor advance, record why, and
-   continue other groups unless the failure is TOKEN_MISMATCH.
+   continue other groups unless the failure is TOKEN_MISMATCH (stop and
+   release once, as in the common rules).
    Truncated output is unread: reread in smaller supported pages/ranges until
    every required summary is read; never advance based on a truncated preview.
 3. If budget remains, fetch
@@ -229,11 +233,13 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
       Report if there are no such pointers or the old files remain in place.
 
    Audit errors are report-only and do not block advancement, except
-   `TOKEN_MISMATCH`, which stops everything. For each successful group call
+   `TOKEN_MISMATCH`, which stops everything except the export cleanup and the
+   one release in the common rules. For each successful group call
    `origin-cursor.js advance --group G --synced <proposed-raw>
    --checkpoint <saved-K> --token T`. A cursor rejection leaves that group
    unadvanced; report it and continue eligible groups. TOKEN_MISMATCH stops
-   everything, including release and internal prompts.
+   all later operations and internal prompts; release once and report, as in
+   the common rules.
 8. Cross-group correlation prompts. Prompt only **strong** correlations: both
    groups' records point to the same task, the same object, or the same person's
    same matter (including commitments that contradict each other). A similar
@@ -287,7 +293,8 @@ state, commit, and failure sequence, with these differences:
   fragments remain. Before checkpoint, execute each item of the Origin step 7
   checklist individually and include one result sentence per item in the Sync
   report. Audit errors, including rebuild failure, are report-only and do not
-  block checkpoint, except `TOKEN_MISMATCH`.
+  block checkpoint, except `TOKEN_MISMATCH` (stop and release once, as in the
+  common rules).
 - After a substantive identity write, request rotation. Failure is reported
   but checkpoint/state/release still proceed; do not claim it will retry itself.
 - The temporary file is `state.md.T.tmp` relative to memory. Preserve absorbed
