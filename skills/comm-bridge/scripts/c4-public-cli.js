@@ -12,6 +12,16 @@ import { queryRejection } from './c4-entry-events.js';
 const query = createQueryHandlers(createStore(db.getDb));
 const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
 const invalid = message => { throw dataError('INVALID_ARGS', message); };
+function helpRequested(args, values) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return false;
+    if (arg === '--help' || arg === '-h') return true;
+    if (arg.startsWith('--') && values.includes(arg.slice(2)) &&
+        args[i + 1] !== undefined && !args[i + 1].startsWith('--')) i++;
+  }
+  return false;
+}
 const number = (raw, name, min = 0) => {
   if (!/^(0|[1-9][0-9]*)$/.test(raw ?? '') || !Number.isSafeInteger(Number(raw)) || Number(raw) < min) invalid(`${name} must be an integer >= ${min}`);
   return Number(raw);
@@ -115,6 +125,8 @@ function checkpoint(args, positionalSummary = false) {
   return o.json ? json(row) : 'Checkpoint created: ' + JSON.stringify(row) + '\n';
 }
 export function databaseCli(args) {
+  if (['unsummarized', 'groups', 'group-queues', 'origin-sync'].includes(args[0]) &&
+      helpRequested(args.slice(1), ['group', 'match', 'limit', 'active-since', 'key-match'])) return databaseCli(['--help']);
   const [command, ...rest] = args;
   if (command === 'rejection') {
     const o = options(rest, ['id'], ['json']); noPositionals(o);
@@ -190,7 +202,7 @@ export function checkpointCli(args) {
 }
 export function fetchCli(args) {
   if (!args.length) invalid('Usage: c4-fetch.js requires a query');
-  if (args.length === 1 && ['--help','-h'].includes(args[0])) return 'c4-fetch.js --unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] | --begin ID --end ID | --since DURATION|DATETIME | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID) | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
+  if (helpRequested(args, ['group', 'after', 'up-to', 'limit', 'begin', 'end', 'since', 'run-id', 'scope-after', 'id', 'field', 'out'])) return 'c4-fetch.js --unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] | --begin ID --end ID | --since DURATION|DATETIME | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID) | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
   const modes = ['unsummarized','since','checkpoints','origin-sync','absorbed'];
   const selected = modes.filter(key => args.includes('--' + key));
   if (selected.length > 1) invalid('Fetch modes are mutually exclusive');

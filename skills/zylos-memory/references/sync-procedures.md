@@ -1,24 +1,65 @@
 # Memory Sync procedures
 
-Read this file completely before running the selected procedure. Script names
-below mean `node <ZYLOS_DIR>/.claude/skills/zylos-memory/scripts/<name>`;
-`c4-*` scripts are in the sibling `comm-bridge/scripts/` directory. Use absolute
-paths and argv, or safely quoted shell commands. Send summaries, JSON, and
+Read this file completely before running the selected procedure. Use these
+installed command paths; `~/zylos` is the default ZYLOS_DIR (substitute the
+inherited absolute ZYLOS_DIR when different).
+
+| Script | Installed path |
+|---|---|
+| sync-lock.js | `~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js` |
+| sync-files.js | `~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js` |
+| origin-cursor.js | `~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js` |
+| reference-index.js | `~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js` |
+| memory-append.js | `~/zylos/.claude/skills/zylos-memory/scripts/memory-append.js` |
+| request-rotation.js | `~/zylos/.claude/skills/zylos-memory/scripts/request-rotation.js` |
+| c4-fetch.js | `~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js` |
+| c4-db.js | `~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js` |
+| c4-send.js | `~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js` |
+
+The zylos-memory scripts, c4-fetch.js, and c4-db.js accept `--help` or `-h`
+without reading/writing run data or acquiring a lock. Use argv, or safely
+quoted shell commands. Send summaries, JSON, and
 message bodies on stdin using a quoted heredoc. Never interpolate body text
 into a command. Group names come only from the inherited session binding.
 
 ## Common completion and failure rules
 
-Acquire with `sync-lock.js acquire --kind <group|origin|global>`; retain the
+Acquire with `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js acquire --kind <group|origin|global>`; retain the
 printed token T. An acquire exit 2 is a normal no-op only when stderr's first
 line says `Error [SYNC_BUSY]`. `LOCK_TIMEOUT` is a failure. On any acquire
 failure, do not release because no token was acquired.
 
 After acquisition, `TOKEN_MISMATCH` / exit 3 means stop immediately: no more
-script/tool operations, no release, no prompts. For any other required-step
-failure (including `WRITE_FAILED` for a failed write/publication, `LOCK_UNAVAILABLE`
-for an unavailable kernel lock, or a tool protocol error), stop later writes, release once with
-`sync-lock.js release --kind <kind> --token T`, and report failure to the
+script/tool operations, no release, no prompts. Report the failure.
+
+For normal Sync CLI argument validation and `edit_memory` fragment validation,
+correct the following call errors and retry only that failed operation at most
+TWO times per step (the initial call plus at most two corrected retries).
+These attempts do not fail the required step or release its token:
+
+- `INVALID_INPUT`: correct the arguments or input content, including a missing
+  required CLI argument. Pass T as `token` to `edit_memory` or `--token T` to scripts.
+  If a token error is `TOKEN_MISMATCH`, use the immediate-stop rule above.
+- `FRAGMENT_CONFLICT`: reread the current file, reconsider the edit, and supply
+  a unique expected fragment.
+- `EXISTS`: for a single-file create/archive/unarchive collision, reread the
+  existing pages and choose another name or merge through the permitted writer.
+- `STATE_DOCUMENT_INVALID`: correct the token-named temporary state through
+  `edit_memory`, then retry commit; the formal state has not been replaced.
+
+This allowance applies only where validation rejected the operation before
+publishing its target. It does not cover migration apply outside this Sync
+flow, which can retain backups on validation errors. It also excludes
+`node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js move-old`: a later collision can follow an already completed
+move. Report that failure and preserve all prior moves; do not retry it
+automatically. Never replay a committed prefix or restart a sequence to retry
+one failed operation. Earlier checkpoints, file edits, and successful moves stay.
+
+If two corrected retries still fail, use the applicable failure handling below.
+Every later step uses these rules before treating a call as failed.
+`WRITE_FAILED`, `LOCK_UNAVAILABLE`, `LOCK_TIMEOUT`, and tool protocol errors
+receive no retry. For any other required-step failure, stop later writes, release once with
+`node ~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js release --kind <kind> --token T`, and report failure to the
 requesting session with the steps already committed. On success or no input,
 release exactly once too. If release fails, append that warning to the original
 result; do not replace the original outcome or retry release. Never use an
@@ -28,9 +69,21 @@ unrestricted writer to repair a tool failure.
 `reference/decisions.md`, and `reference/legacy/**`
 are read-only through `edit_memory`, even when an old path no longer exists.
 Redirect that change to its project/topic page and continue this Sync normally.
-A failed `reference-index.js rebuild` is reported without blocking progress.
-Audit failures are also report-only, except `TOKEN_MISMATCH`, which always stops
-all operations as above.
+A failed `node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js rebuild` is reported without blocking progress.
+After any applicable corrected retries, audit failures are also report-only.
+The immediate-stop token rule above applies throughout every procedure.
+
+For example, an Origin/global worker calls the restricted `edit_memory` tool
+with the actual acquired token substituted for T and an exact fragment read
+from the target (paths are relative to memory):
+
+```json
+{"op":"edit","path":"reference/projects/example.md","expected":"- **Status:** planning","replacement":"- **Status:** active","token":"T"}
+```
+
+Do not call a shell writer for this edit. The same token is required when
+creating the temporary state with `{"op":"create","path":"state.md.T.tmp","replacement":"<complete state document>","token":"T"}`;
+Group Sync uses `session-groups/G/state.md.T.tmp` instead.
 
 If the restricted tool is missing, report `TOOL_UNAVAILABLE`, do not commit,
 and release once if T was obtained. A checkpoint may already have committed;
@@ -54,22 +107,22 @@ values in subsequent fetch commands.
 This also applies to the origin group's own working state. Set kind=group;
 G is the inherited `ZYLOS_SESSION_GROUP`.
 
-1. Acquire. Read `c4-db.js unsummarized --group G --json`. If count is zero,
+1. Acquire. Read `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js unsummarized --group G --json`. If count is zero,
    release and report no input. Do not cleanup, rotate, or consume inbox.
-2. Fetch `c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit <batchLimit>`.
+2. Fetch `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit <batchLimit>`.
    Save its rows, latest summary, and returned batch end. The end printed for
    this batch, not a later observed frontier, is the checkpoint target. A read
    failure ends the run before any cleanup/rotation.
-3. Run `sync-files.js cleanup --token T`, then `sync-files.js rotate --token T`.
-   Read the current group state, then run the read-only `sync-files.js list`
-   without `--token`; adding `--token` returns `INVALID_INPUT` and ends this run.
+3. Run `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js cleanup --token T`, then `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js rotate --token T`.
+   Read the current group state, then run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`
+   (no token is needed; a supplied `--token` is ignored).
    Read every listed
    uncommitted segment in segment-ID order. Read dated session logs from the
    state's synced date onward; if the header/date is unknown, read the latest
    seven days. A missing state starts from an empty four-section state. A bad
    header means no committed segment set: include all uncommitted inputs.
 4. Compare state coverage with the latest content checkpoint. If behind, use
-   `c4-fetch.js --checkpoints --group G --after <coverage>` to read **all**
+   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --checkpoints --group G --after <coverage>` to read **all**
    missing content summaries. Empty or unknown coverage uses 0. Do not recover
    from only the latest summary; two interrupted runs may leave several.
 5. Reconcile old state, all difference summaries, this batch, segments, and logs
@@ -81,10 +134,10 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    prove delivery; uncertain or failed sends are not completion evidence.
    Do **not** copy the block into the temporary state. Keep a separate
    `followedUpIds` array; no progress means an empty array.
-7. Send the summary on stdin to `sync-files.js checkpoint <batch-end> --token T`.
+7. Send the summary on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint <batch-end> --token T`.
    Only after success, use `edit_memory` to create/edit
    `session-groups/G/state.md.T.tmp` relative to memory. Then send JSON
-   `{"followedUpIds":[...]}` on stdin to `sync-files.js commit --token T`.
+   `{"followedUpIds":[...]}` on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`.
    Commit preserves the formal state's remaining absorbed lines and original
    title byte-for-byte, removing the title only when every item is removed.
 8. Check the resulting content, release once, and report. Do not edit shared
@@ -96,17 +149,17 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 This is a separate job from the origin group's working-state Sync. It only
 runs in the origin session, uses kind=origin, and never calls sync-files.
 
-1. Acquire, then read `c4-db.js origin-sync backlog --json`. No candidates means
+1. Acquire, then read `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js origin-sync backlog --json`. No candidates means
    release and return. Save each group's cursorFrom S, upTo, and cursorUpdatedAt.
    Process oldest bookmarks first. The raw-row budget is the Origin budget
    resolved above; checkpoint summaries do not consume it.
 2. For each candidate G, fetch
-   `c4-fetch.js --origin-sync --group G --summaries-only`. Save C=coverageEnd
+   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group G --summaries-only`. Save C=coverageEnd
    and K=checkpointId from this same read alongside all summaries. If that
-   group's read fails, skip its merge and cursor advance, record why, and
-   continue other groups unless the failure is TOKEN_MISMATCH.
+   group's read fails after applicable corrected retries, skip its merge and
+   cursor advance, record why, and continue other groups under the common rules.
 3. If budget remains, fetch
-   `c4-fetch.js --origin-sync --group G --raw-only --after C --limit <remaining>`.
+   `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group G --raw-only --after C --limit <remaining>`.
    Use the **saved first C**, never a newly read coverage. Deduct the actual row
    count. When the result is complete, the proposed raw cursor is saved upTo;
    when truncated it is the last returned ID. If this read fails, neither
@@ -126,23 +179,38 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
    create a missing file. Projects and decisions are written only to pages in
    their new directories, never to old files or `legacy/`. Update the page's
    `Status`/`Updated` header and append dated progress, then run
-   `reference-index.js rebuild`. On `LEGACY_READ_ONLY`, redirect the edit to
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js rebuild`. On `LEGACY_READ_ONLY`, redirect the edit to
    the corresponding page; this does not fail the step. Report a rebuild
-   failure without blocking cursor advancement. On fragment conflict, reread
-   and reconsider. A group
+   failure without blocking cursor advancement. Use the common corrected-call
+   retry rule for necessary edits. A group
    with unfinished necessary edits cannot advance; if several depend on one
    failed shared edit, all those groups remain unadvanced. Partial committed
    files stay; there is no cross-file rollback.
 6. For a substantive identity change already written, call
-   `request-rotation.js --reason identity`. Report TRANSITION_OPEN or enqueue
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/request-rotation.js --reason identity`. Report TRANSITION_OPEN or enqueue
    failure as rotation incomplete; it does not undo the identity write or
    block successful groups' cursor advancement. Do not promise an automatic retry.
-7. Before any cursor advance or checkpoint, execute every item in this numbered
-   audit checklist, including on the first Sync with no pages. Check shared file
+7. Before any cursor advance or checkpoint, run the read-only
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js check-navigation`. Its JSON contains
+   `navigation: {count, locations}` for references.md old-path navigation and
+   `headings: {count, locations}` for old-heading pointers; each location has
+   `path`, `line`, and `text`. The checker reads shared identity/references,
+   reference pages (including archived pages), and user profiles. It skips
+   legacy sources, the old monolithic files, generated indexes, and working
+   histories. Heading-pointer candidates conservatively include plain old-file
+   references as well as anchors and file:line references; inspect the reported
+   lines before choosing a replacement.
+   Use the corresponding count to decide whether
+   item 2 or 4 needs manual inspection. A zero count means report "no action
+   needed" for that item and skip its manual inspection. If the check fails,
+   report it and inspect both items manually; do not assume a zero count.
+   Execute items 1 and 3 every run, including on the first Sync with no pages.
+   Check shared file
    content/size as part of the audit. In the Sync report, write one result sentence
    for each item: what was done, why no action was needed, or what failed.
-   1. Run `reference-index.js rebuild`.
-   2. Only after rebuild succeeds and both category INDEX files exist, replace
+   1. Run `node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js rebuild`.
+   2. When `navigation.count` is nonzero, inspect the reported locations.
+      Only after rebuild succeeds and both category INDEX files exist, replace
       references.md navigation that still names the old files as read/write
       locations with `reference/projects/INDEX.md` and
       `reference/decisions/INDEX.md`. Otherwise report why navigation was not changed.
@@ -152,17 +220,18 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
       pages, and restore archived pages mentioned again. Check every INDEX row
       whose Status is completed/abandoned and Updated is about 30 days old or
       older; archive every eligible row. Report if none qualify.
-   4. Once old files have moved into `reference/legacy/`, replace pointers to old
+   4. When `headings.count` is nonzero, inspect the reported locations.
+      Once old files have moved into `reference/legacy/`, replace pointers to old
       headings with the matching page or, if no page exists, the legacy archive
       file, including navigation lines that still refer to the old paths.
       Report if there are no such pointers or the old files remain in place.
 
-   Audit errors are report-only and do not block advancement, except
-   `TOKEN_MISMATCH`, which stops everything. For each successful group call
-   `origin-cursor.js advance --group G --synced <proposed-raw>
+   Audit errors follow the common retry/report-only rules and do not block
+   advancement. For each successful group call
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js advance --group G --synced <proposed-raw>
    --checkpoint <saved-K> --token T`. A cursor rejection leaves that group
-   unadvanced; report it and continue eligible groups. TOKEN_MISMATCH stops
-   everything, including release and internal prompts.
+   unadvanced after applicable corrected retries; report it and continue eligible
+   groups under the common failure rules.
 8. Cross-group correlation prompts. Prompt only **strong** correlations: both
    groups' records point to the same task, the same object, or the same person's
    same matter (including commitments that contradict each other). A similar
@@ -179,11 +248,11 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
      set `Status: completed` and archive it later by the normal rule.
    - **Order.** Write that record as part of the necessary shared edits
      **before** cursor advance; send only after those writes/advances, via
-     `c4-send.js internal G` with stdin.
+     `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js internal G` with stdin.
    - **Fixed format.** Each recipient group gets exactly this text, with the
      placeholders filled in (one sentence each) and nothing else:
      ```
-     [Correlation notice] Your "<this group's matter, one sentence>" relates to "<the other group's matter, one sentence>" in <other session group>: <why, one sentence>. Pointer: <C4 #id, checkpoint #id, or sessions/<date>.md>. For details, ask that group directly (c4-send internal "<other group>"); no need to reply to this message.
+     [Correlation notice] Your "<this group's matter, one sentence>" relates to "<the other group's matter, one sentence>" in <other session group>: <why, one sentence>. Pointer: <C4 #id, checkpoint #id, or sessions/<date>.md>. For details, ask that group directly (node ~/zylos/.claude/skills/comm-bridge/scripts/c4-send.js internal "<other group>"); no need to reply to this message.
      ```
      Pointers only, never raw logs. The prompt is a hint, not an instruction,
      and must be self-contained: the recipient may not have read the latest memory.
@@ -201,19 +270,19 @@ state, commit, and failure sequence, with these differences:
 
 - Omit every `--group` on unsummarized/checkpoint reads. Never read group folders.
   Multiple source groups still yield one global checkpoint.
-- As in Group Sync, run the read-only `sync-files.js list`.
-  Do not add `--token`; doing so returns `INVALID_INPUT` and ends this run.
+- As in Group Sync, run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`.
+  No token is needed; a supplied `--token` is ignored.
 - After reading global state, segments, and dated logs, read shared self files
   using the same INDEX → relevant pages → optional old-file lookup as Origin
   step 4. Complete necessary shared edits through `edit_memory` **before**
   checkpoint, writing projects/decisions only into pages. `LEGACY_READ_ONLY`
   means redirect the change to the corresponding page and continue, not a
-  failed self-write. Any other necessary self-write failure stops checkpoint,
+  failed self-write. After applicable corrected retries, any other necessary self-write failure stops checkpoint,
   temporary state, and commit; release once and report. Already written
-  fragments remain. Before checkpoint, execute each item of the Origin step 7
-  checklist individually and include one result sentence per item in the Sync
-  report. Audit errors, including rebuild failure, are report-only and do not
-  block checkpoint, except `TOKEN_MISMATCH`.
+  fragments remain. Before checkpoint, follow the Origin step 7 checker and
+  conditional checklist, and include one result sentence per item in the Sync
+  report. Audit errors, including rebuild failure, follow the common rules and
+  do not block checkpoint.
 - After a substantive identity write, request rotation. Failure is reported
   but checkpoint/state/release still proceed; do not claim it will retry itself.
 - The temporary file is `state.md.T.tmp` relative to memory. Preserve absorbed
@@ -258,9 +327,10 @@ to perform this shared-page lookup and creation; it does not write shared pages.
 
 The Sync Agent judges whether a project is done or abandoned and untouched for
 about a month, or all decisions in a topic have been superseded; use
-`reference-index.js archive --path reference/projects/<name>.md`, leave paused projects in place, and
-use `reference-index.js unarchive --path reference/projects/archive/<name>.md` when mentioned again.
+`node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js archive --path reference/projects/<name>.md`, leave paused projects in place, and
+use `node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js unarchive --path reference/projects/archive/<name>.md` when mentioned again.
 Every `--path` is relative to the memory directory and includes the category
 folder; decision-topic pages use `reference/decisions/<name>.md` or
 `reference/decisions/archive/<name>.md` instead.
-On `EXISTS`, both pages remain unchanged; rename or merge them before moving.
+For an archive/unarchive `EXISTS` collision, both pages remain unchanged;
+use the common corrected-call retry rule before moving again.

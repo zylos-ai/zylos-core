@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { resolveAllowedMemoryPath } from './self-write.js';
-import { inputError, memoryError, options, runCli } from './sync-cli.js';
+import { isSelfPath, resolveAllowedMemoryPath } from './self-write.js';
+import { helpRequested, inputError, memoryError, options, runCli } from './sync-cli.js';
 import { isMainModule } from './is-main-module.js';
 
 const statuses = { projects: ['active', 'planning', 'paused', 'completed', 'abandoned'], decisions: ['active', 'archived'] };
@@ -132,13 +132,51 @@ export function moveOld(root, now = new Date()) {
   return { ok: true, paths: moves.map(move => move.path) };
 }
 
+// Shared pages include archived topics; legacy sources and generated indexes are history.
+export function checkNavigation(root) {
+  const memory = path.resolve(root, 'memory');
+  const navigation = [], headings = [];
+  const inspect = (relative, text) => {
+    for (const [index, line] of text.split(/\r?\n/).entries()) {
+      const oldPaths = [...line.matchAll(/(?<![\w.-])(?:[~\w./-]*\/)?(?:projects|decisions)\.md(?=$|[^\w./-])/g)]
+        .filter(match => !/(?:^|\/)(?:legacy|archive)\//.test(match[0]));
+      const location = { path: relative, line: index + 1, text: line };
+      if (relative === 'references.md' && oldPaths.length) navigation.push(location);
+      if (oldPaths.length) headings.push(location);
+    }
+  };
+  const visit = relative => {
+    const lexical = path.join(memory, relative);
+    let stat;
+    try { stat = fs.lstatSync(lexical); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    if (stat.isSymbolicLink()) throw memoryError('PATH_NOT_ALLOWED', 'Navigation checks do not follow symlinks');
+    const target = resolveAllowedMemoryPath({ root, path: relative,
+      allowed: p => p === 'reference' || p === 'users' || isSelfPath(p) }).target;
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(target, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        if (entry.name.startsWith('.')) continue;
+        if (relative === 'reference' && entry.name === 'legacy') continue;
+        if (entry.name === 'INDEX.md' && /^reference\/(projects|decisions)(\/archive)?$/.test(relative)) continue;
+        if (relative === 'reference' && ['projects.md', 'decisions.md'].includes(entry.name)) continue;
+        visit(`${relative}/${entry.name}`);
+      }
+    } else if (stat.isFile() && relative.endsWith('.md')) inspect(relative, fs.readFileSync(target, 'utf8'));
+  };
+  for (const relative of ['identity.md', 'references.md', 'reference', 'users']) visit(relative);
+  return { navigation: { count: navigation.length, locations: navigation }, headings: { count: headings.length, locations: headings } };
+}
+
 if (isMainModule(import.meta.url)) await runCli(() => {
+  if (helpRequested(process.argv.slice(2), ['path'])) {
+    console.log('Usage: reference-index.js rebuild | check-navigation | create --path PATH < content | archive --path PATH | unarchive --path PATH | move-old');
+    return;
+  }
   const [command, ...argv] = process.argv.slice(2);
   const args = options(argv, ['path']);
-  if (args.positional.length || !['rebuild', 'create', 'archive', 'unarchive', 'move-old'].includes(command) ||
+  if (args.positional.length || !['rebuild', 'check-navigation', 'create', 'archive', 'unarchive', 'move-old'].includes(command) ||
       (['create', 'archive', 'unarchive'].includes(command) ? !args.path : args.path !== undefined)) throw inputError('Expected rebuild, create --path, archive --path, unarchive --path, or move-old');
   const root = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
-  const result = command === 'rebuild' ? rebuild(root) : command === 'create' ? createPage(root, args.path, fs.readFileSync(0)) :
+  const result = command === 'check-navigation' ? checkNavigation(root) : command === 'rebuild' ? rebuild(root) : command === 'create' ? createPage(root, args.path, fs.readFileSync(0)) :
     command === 'move-old' ? moveOld(root) : movePage(root, args.path, command === 'unarchive');
   console.log(JSON.stringify(result));
 });

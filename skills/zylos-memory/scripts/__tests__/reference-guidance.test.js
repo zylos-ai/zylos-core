@@ -18,24 +18,26 @@ const between = (text, start, end) => {
 
 test('guidance requires all audit items and their results before Origin cursor advance', () => {
   const origin = between(sync, '## Origin Sync', '## Single global Sync');
-  const audit = between(origin, '7. Before any cursor advance or checkpoint', '`origin-cursor.js advance');
+  const audit = between(origin, '7. Before any cursor advance or checkpoint', '`node ~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js advance');
   for (const sentence of [
-    '1. Run `reference-index.js rebuild`.',
-    '2. Only after rebuild succeeds and both category INDEX files exist',
+    '1. Run `node ~/zylos/.claude/skills/zylos-memory/scripts/reference-index.js rebuild`.',
+    '2. When `navigation.count` is nonzero',
     '3. Apply the archive/restore rule below',
-    '4. Once old files have moved into `reference/legacy/`',
+    '4. When `headings.count` is nonzero',
     'write one result sentence for each item',
   ]) assert.ok(normalize(audit).includes(sentence), sentence);
-  assert.match(audit, /Audit errors are report-only/);
-  assert.match(normalize(audit), /`TOKEN_MISMATCH`, which stops everything/);
+  assert.match(audit, /Audit errors follow the common retry\/report-only rules/);
+  assert.match(normalize(audit), /A zero count means report "no action needed" for that item and skip its manual inspection/);
+  assert.match(normalize(audit), /If the check fails, report it and inspect both items manually/);
+  assert.match(normalize(audit), /Execute items 1 and 3 every run/);
 });
 
 test('guidance places the global audit checklist before checkpoint and preserves report-only failures', () => {
   const global = between(sync, '## Single global Sync', '## Moving from old files');
-  assert.match(normalize(global), /Before checkpoint, execute each item of the Origin step 7 checklist individually/);
+  assert.match(normalize(global), /Before checkpoint, follow the Origin step 7 checker and conditional checklist/);
   assert.match(normalize(global), /one result sentence per item/);
-  assert.match(normalize(global), /do not block checkpoint, except `TOKEN_MISMATCH`/);
-  assert.equal((global.match(/Before checkpoint, execute each item/g) || []).length, 1);
+  assert.match(normalize(global), /follow the common rules and do not block checkpoint/);
+  assert.equal((global.match(/Before checkpoint, follow the Origin step 7/g) || []).length, 1);
   assert.doesNotMatch(global, /Audit content, navigation and size as in Origin step 7/);
 });
 
@@ -64,10 +66,44 @@ test('guidance treats legacy-only facts as page sources without recreating old f
 });
 
 test('guidance audits every aged completed index row and stale navigation paths', () => {
-  const audit = normalize(between(sync, '7. Before any cursor advance or checkpoint', '`origin-cursor.js advance'));
+  const audit = normalize(between(sync, '7. Before any cursor advance or checkpoint', '`node ~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js advance'));
   assert.match(audit, /Check every INDEX row whose Status is completed\/abandoned and Updated is about 30 days old or older; archive every eligible row/);
   assert.match(audit, /Include navigation lines that still refer to the old paths, even if they describe those files as read-only history/);
   assert.match(audit, /legacy archive file, including navigation lines that still refer to the old paths/);
+});
+
+test('Sync guidance centralizes corrected-call retries and preserves partial writes', () => {
+  const rules = normalize(between(sync, '## Common completion and failure rules', '## Sync limits'));
+  assert.match(rules, /at most TWO times per step \(the initial call plus at most two corrected retries\)/);
+  for (const code of ['INVALID_INPUT', 'FRAGMENT_CONFLICT', 'EXISTS', 'STATE_DOCUMENT_INVALID']) {
+    assert.ok(rules.includes(`\`${code}\`:`), code);
+  }
+  assert.match(rules, /These attempts do not fail the required step or release its token/);
+  assert.match(rules, /the formal state has not been replaced/);
+  assert.match(rules, /excludes `node ~\/zylos\/\.claude\/skills\/zylos-memory\/scripts\/reference-index.js move-old`/);
+  assert.match(rules, /a later collision can follow an already completed move/);
+  assert.match(rules, /does not cover migration apply outside this Sync flow/);
+  assert.match(rules, /Never replay a committed prefix or restart a sequence/);
+  assert.match(rules, /`WRITE_FAILED`, `LOCK_UNAVAILABLE`, `LOCK_TIMEOUT`, and tool protocol errors receive no retry/);
+  assert.match(rules, /After acquisition, `TOKEN_MISMATCH` \/ exit 3 means stop immediately: no more script\/tool operations, no release, no prompts/);
+  assert.match(rules, /including a missing required CLI argument/);
+  assert.match(rules, /If a token error is `TOKEN_MISMATCH`, use the immediate-stop rule above/);
+  assert.doesNotMatch(sync, /retry that call once/);
+  assert.doesNotMatch(sync, /adding `--token` returns|Do not add `--token`/);
+  const example = JSON.parse(/```json\n([^\n]+)\n```/.exec(sync)[1]);
+  assert.equal(example.op, 'edit');
+  assert.equal(example.token, 'T');
+  assert.ok(example.path && example.expected && example.replacement);
+});
+
+test('Sync commands use installed paths listed at the beginning of the procedure', () => {
+  const table = between(sync, '| Script | Installed path |', 'The zylos-memory scripts');
+  const paths = [...table.matchAll(/`(~\/zylos\/\.claude\/skills\/[^`]+\.js)`/g)].map(match => match[1]);
+  assert.equal(paths.length, 9);
+  const commands = [...sync.matchAll(/`node ([^`\s]+\.js)(?:\s|`)/g)];
+  assert.ok(commands.length > 20);
+  for (const [, command] of commands) assert.ok(paths.includes(command), command);
+  assert.doesNotMatch(sync.slice(sync.indexOf('## Common')), /`(?:sync-lock|sync-files|origin-cursor|reference-index|request-rotation|c4-fetch|c4-db|c4-send)\.js(?:\s|`)/);
 });
 
 test('reorganization starts from the system instruction in the receiving session', () => {

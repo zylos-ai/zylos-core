@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { guard, memoryScope, memoryError } from './sync-lock.js';
 import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry, inboxSegmentName as segment } from './state-format.js';
-import { inputError, isMain, options, parseJson, nonnegativeInteger, readInput, runCli } from './sync-cli.js';
+import { helpRequested, inputError, isMain, options, parseJson, nonnegativeInteger, readInput, runCli } from './sync-cli.js';
 
 const warn = message => console.error(`Warning: ${message}`);
 const lines = text => (text.match(/[^\n]*(?:\n|$)/g) || []).filter(Boolean).map(raw => ({ raw, text: raw.replace(/\r?\n$/, '') }));
@@ -117,9 +117,13 @@ export async function commit({ input, ...settings }, deps = {}) {
 }
 
 if (isMain(import.meta.url)) await runCli(async () => {
+  if (helpRequested(process.argv.slice(2), ['token'])) {
+    console.log('Usage: sync-files.js list [--token T] | cleanup --token T | rotate --token T | checkpoint END --token T [--no-content] < summary | commit --token T < JSON');
+    return;
+  }
   const [command, ...args] = process.argv.slice(2);
   const parsed = options(args, ['token'], command === 'checkpoint' ? ['no-content'] : []);
-  if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0) || (command !== 'list' && !parsed.token) || (command === 'list' && parsed.token)) throw inputError('Invalid command or arguments');
+  if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0) || (command !== 'list' && !parsed.token)) throw inputError('Invalid command or arguments');
   const settings = { token: parsed.token };
   let result;
   if (command === 'cleanup') result = await cleanup(settings);
