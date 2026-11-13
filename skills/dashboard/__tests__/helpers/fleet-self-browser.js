@@ -36,6 +36,29 @@ export async function runFleetSelfBrowser(t, sandbox) {
     console.log('Fleet browser connection reclaimed');
   });
 
+  await t.test('390px Chinese unknown label uses the page translation', async () => {
+    const now = Date.now(), fleet = records('UNKNOWN', false, now);
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'zh-CN', isMobile: true, hasTouch: true });
+    sandbox.addCleanup(() => context.close());
+    try {
+      await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
+      await context.route('**/_assets/vendor/chart.umd.js', route => route.fulfill({ path: chartAsset, contentType: 'text/javascript' }));
+      await context.route('**/favicon.ico', route => route.fulfill({ status: 204 }));
+      await context.addInitScript(() => {
+        try { localStorage.setItem('zylos-dashboard-locale', 'zh'); } catch {}
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(10_000);
+      await page.route('**/api/fleet', route => route.fulfill({ json: fleet }));
+      await page.goto(base + '/');
+      const label = page.locator('#agent-fleet-root .wb-f-card[data-self="true"] [data-mood="unknown"]');
+      await label.waitFor();
+      assert.equal(await label.innerText(), '未知');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      if (evidence) await page.screenshot({ path: path.join(evidence, 'self-unknown-zh-390.png'), fullPage: true });
+    } finally { await context.close(); }
+  });
+
   for (const width of [390, 1280]) for (const mode of ['single', 'multi']) {
     for (const [state, unreachable] of [['UNKNOWN', false], ['IDLE', false], ['UNKNOWN', true]]) {
       await t.test(`${width}px ${mode}: ${state} self, ${unreachable ? 'unreachable' : state} remote`, async () => {

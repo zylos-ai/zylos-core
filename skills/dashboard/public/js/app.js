@@ -24,7 +24,7 @@ import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
 import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=160';
-import { createFleetSounds } from './fleet-sounds.js?v=160';
+import { createFleetSounds } from './fleet-sounds.js?v=161';
 import { refreshDashboardState } from './state-refresh.js?v=99';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
