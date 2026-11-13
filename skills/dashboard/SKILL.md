@@ -358,9 +358,9 @@ supervisor IPC, not the whole HTTP request. Single-session observation also
 runs the existing bounded tmux commands (and may inspect the process tree),
 so its slow path can exceed 10 seconds; the default 1-second Kubernetes timeout
 is too short for that path. This recommendation does not add a server timeout.
-Without `probe=ready`, `/api/health` retains its process-health response and
-HTTP 200 behavior, without a `ready` field. Other query values also retain that
-behavior. The platform can use the presence of the top-level boolean `ready`
+Without `probe=ready`, `/api/health` returns HTTP 200 and the liveness response
+described below, without a `ready` field. Other query values use that same
+liveness response. The platform can use the presence of the top-level boolean `ready`
 to distinguish this readiness contract from older Dashboards.
 
 The readiness response contains only these public facts:
@@ -372,6 +372,42 @@ The readiness response contains only these public facts:
 | `session_mode` | `single`, `multi`, or `null` when unreadable; an unset mode means `single`. |
 | `session_running` | Boolean for an observed single session; `null` in multi mode or when observation is unavailable. |
 | `runtime_health` | `claude` and `codex`, each with `source` (`record`, `missing`, `unreadable`) and `health` (`ok`, `auth_failed`, `rate_limited`, `unavailable`, `down`, `recovering`, or `null` without a readable record). |
+
+### Process health and diagnostic sources
+
+`GET /api/health` is public on this exact path. Without a valid Dashboard
+cookie or API session it returns only `ok`, `service` (`zylos-dashboard`) and
+`bootId` (a random UUID generated once per process start). Missing, invalid or
+expired credentials, and disabled authentication, receive the public response.
+Authenticated cookies and read/admin API sessions also receive `startedAt`,
+`uptimeSeconds`, `event_loop` and `source`. Responses are not cached and vary
+on Cookie and Authorization. Process IDs are not returned over HTTP: no
+remaining HTTP consumer needs them.
+
+Installation/upgrade verification reads the private mode-0600
+`components/dashboard/health-process.json`, published atomically before the
+managed server listens. It binds `{pid, bootId}` to PM2's current Dashboard PID,
+then requires the local HTTP bootId and public routed bootId to match. A missing
+or mismatched identity fails verification. This preserves the new-process route
+check without exposing a PID publicly or creating authentication sessions.
+
+Source health is calculated at read time; retained rows for removed producers
+are ignored. No database schema or stored rows are changed. A healthy periodic
+source becomes `stale` at its threshold. An event-driven source becomes neutral
+`idle` (`reason: no_recent_activity`, `fresh: false`) during inactivity, which
+does not imply collector failure. Explicit errors/degradation remain visible;
+missing signals are `unknown`, invalid/future success timestamps are `stale`.
+
+| Returned signal | Successful observation and freshness rule |
+| --- | --- |
+| `runtime_progress.jsonl_usage` (Claude) | Usage activity `last_success`, 60 seconds; then idle. |
+| `runtime_progress.jsonl_usage` (Codex) | Rollout `last_success`, 30 seconds; then stale. An unchanged-file check uses `last_checked`, stays idle for 30 seconds, then stale if polling stops. Explicit partial-line/errors remain visible. |
+| `runtime_progress.statusline` (Claude) | Changed metrics `last_success`, 60 seconds; then idle. Unsupported on Codex. |
+| `collector_liveness.pm2_reader` | `last_success`, 180 seconds (60-second collector). |
+| `collector_liveness.system_sampler` | `last_success`, 90 seconds (30-second collector). |
+| `collector_liveness.conversation_reader` | New conversation activity `last_success`, 60 seconds; then idle. |
+| `collector_liveness.am_heartbeat` | `last_success`, 60 seconds (15-second reader). |
+| `platform.statusline` | Revalidation `last_success`, 30 seconds (2-second reader). |
 
 Missing health records do not prove whether login ever occurred. Session or
 configuration observation errors are unknown facts, not confirmed session absence.

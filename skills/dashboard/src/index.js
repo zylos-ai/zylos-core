@@ -3,6 +3,7 @@ import { readThresholdPolicy, sessionThreshold } from './lib/session-threshold.j
 import { CoreState } from './lib/core-state.js';
 import { loadCoreModule } from './lib/core-modules.js';
 import { createReadinessCheck } from './lib/readiness.js';
+import { bootId, publishHealthProcess } from './lib/health-process.js';
 import { createCoalescedBroadcast, createSessionCache, broadcastFleetSnapshot } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
 import { promisify } from 'node:util';
@@ -1117,16 +1118,18 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, readiness.ready ? 200 : 503, readiness);
       return true;
     }
-    const sourceHealth = stateEngine.getSourceHealth();
+    const details = auth.resolveAuthContext(req);
+    res.setHeader('Vary', 'Cookie, Authorization');
     sendJson(res, 200, {
       ok: true,
       service: 'zylos-dashboard',
-      pid: process.pid,
-      startedAt: startedAt.toISOString(),
-      uptimeSeconds: Math.round(process.uptime()),
-      phase: 'phase2a',
-      event_loop: eventLoopMonitor.snapshot(),
-      source: sourceHealth
+      bootId,
+      ...(details ? {
+        startedAt: startedAt.toISOString(),
+        uptimeSeconds: Math.round(process.uptime()),
+        event_loop: eventLoopMonitor.snapshot(),
+        source: stateEngine.getSourceHealth()
+      } : {})
     });
     return true;
   }
@@ -2005,7 +2008,6 @@ if (isMain && process.argv.includes('--smoke')) {
     ok: true,
     port: config.port,
     host: config.host,
-    phase: 'phase2a',
     db: dbPath,
     state: coreState.getState().state
   }, null, 2));
@@ -2032,6 +2034,7 @@ if (isMain && process.argv.includes('--smoke')) {
   let retentionRun = null;
   const retentionAbort = new AbortController();
 
+  publishHealthProcess(config.dataDir);
   server.listen(config.port, config.host, () => {
     coreLogImporter.start();
     console.log(`zylos-dashboard listening on http://${config.host}:${config.port}`);

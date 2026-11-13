@@ -8,6 +8,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { FleetProxy } from '../src/lib/fleet-proxy.js';
 import { ObserverService } from '../src/lib/observer-service.js';
+import { VersionChecker } from '../src/lib/version-checker.js';
 
 const BAD_HOSTS = ['][', 'a b', '127.0.0.1:99999', '[::1', '%'];
 const serverSockets = new WeakMap();
@@ -76,7 +77,12 @@ function assertResponse(bytes, status, reason, error) {
   assert.doesNotMatch(bytes, /ERR_INVALID_URL|TypeError|input|stack/);
 }
 
-test('Dashboard entry rejects malformed Host on HTTP and both upgrade routes with public 400', async () => {
+// Real HTTP/auth entry: run for routing, request validation or health visibility
+// changes; skip UI-only edits. The official runner/private launcher isolates
+// HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR, private tmux socket and this test DB.
+// Version checks are disabled; listeners and temporary data close in teardown.
+test('Dashboard entry rejects malformed Host on HTTP and both upgrade routes with public 400', async t => {
+  t.mock.method(VersionChecker.prototype, 'start', () => {});
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-invalid-request-'));
   fs.mkdirSync(path.join(dir, 'components/dashboard'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'components/dashboard/config.json'), JSON.stringify({ auth: { enabled: false } }));
@@ -101,7 +107,10 @@ test('Dashboard entry rejects malformed Host on HTTP and both upgrade routes wit
       assert.deepEqual(JSON.parse(response.body), { error: 'invalid_request' });
       const health = await fetch(`http://127.0.0.1:${port}/api/health`);
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).pid, process.pid);
+      const payload = await health.json();
+      assert.deepEqual(Object.keys(payload).sort(), ['bootId', 'ok', 'service']);
+      assert.equal(payload.ok, true);
+      assert.match(payload.bootId, /^[a-f0-9-]{36}$/);
     }
     const reset = new EventEmitter();
     let destroyed = false;
@@ -111,6 +120,8 @@ test('Dashboard entry rejects malformed Host on HTTP and both upgrade routes wit
     assert.equal(destroyed, true, 'entry owns socket errors before writing the rejection');
   } finally {
     await close(server);
+    await server.closeAttachments();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

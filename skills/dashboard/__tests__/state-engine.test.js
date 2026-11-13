@@ -416,12 +416,6 @@ test('Codex runtime source health ignores Claude-only runtime progress', () => {
     getSourceHealth() {
       return [
         {
-          name: 'hook_events',
-          signal_type: 'runtime_progress',
-          status: 'healthy',
-          extra: { last_success: new Date(990000).toISOString(), runtime: 'claude' }
-        },
-        {
           name: 'statusline',
           signal_type: 'runtime_progress',
           status: 'healthy',
@@ -439,9 +433,6 @@ test('Codex runtime source health ignores Claude-only runtime progress', () => {
   const { engine } = makeEngine({ store, runtime: 'codex' });
 
   const source = engine.getSourceHealth();
-  assert.equal(source.runtime_progress.hook_events.status, 'unknown');
-  assert.equal(source.runtime_progress.hook_events.fresh, false);
-  assert.equal(source.runtime_progress.hook_events.reason, 'runtime_mismatch');
   assert.equal(source.runtime_progress.statusline.status, 'unsupported');
   assert.equal(source.runtime_progress.statusline.capability, 'unsupported');
   assert.equal(source.runtime_progress.statusline.reason, 'unsupported');
@@ -583,12 +574,6 @@ test('Claude runtime source health keeps Claude runtime progress', () => {
     getSourceHealth() {
       return [
         {
-          name: 'hook_events',
-          signal_type: 'runtime_progress',
-          status: 'healthy',
-          extra: { last_success: new Date(990000).toISOString(), runtime: 'claude' }
-        },
-        {
           name: 'statusline',
           signal_type: 'runtime_progress',
           status: 'healthy',
@@ -606,7 +591,6 @@ test('Claude runtime source health keeps Claude runtime progress', () => {
   const { engine } = makeEngine({ store, runtime: 'claude' });
 
   const source = engine.getSourceHealth();
-  assert.equal(source.runtime_progress.hook_events.status, 'healthy');
   assert.equal(source.runtime_progress.statusline.status, 'healthy');
   assert.equal(source.runtime_progress.jsonl_usage.status, 'healthy');
 });
@@ -1589,4 +1573,101 @@ test('main session switch keeps subagent tools and current-session tools', () =>
 
   const names = engine.getRunningTools().map(t => t.tool_name).sort();
   assert.deepEqual(names, ['Bash', 'WebSearch'], 'subagent + current-session tools must survive the sweep');
+});
+
+function sourceHealthFixture(rows, runtime = 'claude') {
+  return makeEngine({ runtime, store: { ...makeMockStore(), getSourceHealth: () => rows } });
+}
+
+function healthRow(name, signal_type, timestamp = 1000000, status = 'healthy', extra = {}) {
+  return { name, signal_type, status, extra: { last_success: new Date(timestamp).toISOString(), ...extra } };
+}
+
+test('source health omits retired sources even when their stored rows remain', () => {
+  const rows = [healthRow('hook_events', 'runtime_progress'),
+    healthRow('hook_handler', 'collector_liveness'), healthRow('c4', 'collector_liveness')];
+  const { engine } = sourceHealthFixture(rows);
+  const source = engine.getSourceHealth();
+  assert.deepEqual(Object.keys(source.runtime_progress), ['jsonl_usage', 'statusline']);
+  assert.deepEqual(Object.keys(source.collector_liveness), ['pm2_reader', 'system_sampler', 'conversation_reader', 'am_heartbeat']);
+  assert.deepEqual(Object.keys(source.platform), ['statusline']);
+  assert.equal(rows.length, 3, 'formatting must not mutate retained data');
+});
+
+for (const [name, group, ttl] of [
+  ['pm2_reader', 'collector_liveness', 180],
+  ['system_sampler', 'collector_liveness', 90],
+  ['am_heartbeat', 'collector_liveness', 60],
+  ['statusline', 'platform', 30],
+  ['codex_rollout', 'runtime_progress', 30],
+]) {
+  test(`source health ${name} expires at its periodic check deadline`, () => {
+    const { engine, advance } = sourceHealthFixture([healthRow(name, 'collector_liveness')], name === 'codex_rollout' ? 'codex' : 'claude');
+    const entry = () => engine.getSourceHealth()[group][name === 'codex_rollout' ? 'jsonl_usage' : name];
+    advance(ttl * 1000 - 1);
+    assert.equal(entry().status, 'healthy');
+    assert.equal(entry().fresh, true);
+    advance(1);
+    assert.equal(entry().status, 'stale');
+    assert.equal(entry().fresh, false);
+    assert.equal(entry().reason, 'stale_or_not_successful');
+  });
+}
+
+for (const [name, signal, group] of [
+  ['conversation_reader', 'collector_liveness', 'collector_liveness'],
+  ['jsonl_usage', 'collector_liveness', 'runtime_progress'],
+  ['statusline', 'runtime_progress', 'runtime_progress'],
+]) {
+  test(`source health ${name} activity becomes idle without claiming a collector failure`, () => {
+    const { engine, advance } = sourceHealthFixture([healthRow(name, signal)]);
+    advance(31000);
+    assert.equal(engine.getSourceHealth()[group][name].status, 'healthy');
+    advance(29000);
+    const entry = engine.getSourceHealth()[group][name];
+    assert.equal(entry.status, 'idle');
+    assert.equal(entry.fresh, false);
+    assert.equal(entry.reason, 'no_recent_activity');
+  });
+}
+
+test('source health treats a recent unchanged Codex rollout check as idle and expires stopped checks', () => {
+  // The writer explicitly uses stale without a reason when stat.size === offset.
+  const row = healthRow('codex_rollout', 'collector_liveness', 1, 'stale', { last_checked: new Date(1000000).toISOString() });
+  const { engine, advance } = sourceHealthFixture([row], 'codex');
+  assert.equal(engine.getSourceHealth().runtime_progress.jsonl_usage.status, 'idle');
+  advance(30000);
+  assert.equal(engine.getSourceHealth().runtime_progress.jsonl_usage.status, 'stale');
+});
+
+test('source health preserves explicit failures for periodic and activity signals', () => {
+  const rows = [healthRow('pm2_reader', 'collector_liveness', 1, 'degraded', { reason: 'read_failed' }),
+    healthRow('conversation_reader', 'collector_liveness', 1, 'unavailable', { reason: 'read_failed' }),
+    healthRow('codex_rollout', 'collector_liveness', 1, 'stale', { reason: 'partial_line', last_checked: new Date(1000000).toISOString() })];
+  const { engine } = sourceHealthFixture(rows, 'codex');
+  const source = engine.getSourceHealth();
+  assert.equal(source.collector_liveness.pm2_reader.status, 'degraded');
+  assert.equal(source.collector_liveness.conversation_reader.status, 'unavailable');
+  assert.equal(source.runtime_progress.jsonl_usage.status, 'stale');
+  assert.equal(source.runtime_progress.jsonl_usage.reason, 'partial_line');
+});
+
+test('source health rejects missing, invalid and future success timestamps', () => {
+  for (const last_success of [undefined, 'not-a-date', new Date(1001000).toISOString()]) {
+    const { engine } = sourceHealthFixture([healthRow('pm2_reader', 'collector_liveness', 1, 'healthy', { last_success })]);
+    const entry = engine.getSourceHealth().collector_liveness.pm2_reader;
+    assert.equal(entry.status, 'stale');
+    assert.equal(entry.fresh, false);
+    assert.equal(entry.age_s, null);
+  }
+  const { engine } = sourceHealthFixture([]);
+  assert.equal(engine.getSourceHealth().collector_liveness.pm2_reader.status, 'unknown');
+  assert.equal(engine.getSourceHealth().collector_liveness.pm2_reader.reason, 'no_signal');
+});
+
+test('source health keeps runtime mismatch separate from expiration', () => {
+  const { engine } = sourceHealthFixture([healthRow('statusline', 'runtime_progress', 1, 'healthy', { runtime: 'codex' })]);
+  const entry = engine.getSourceHealth().runtime_progress.statusline;
+  assert.equal(entry.status, 'unknown');
+  assert.equal(entry.reason, 'runtime_mismatch');
 });

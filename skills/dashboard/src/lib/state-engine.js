@@ -908,7 +908,7 @@ export class StateEngine {
       const now = this._now();
 
       const currentRuntime = this._config.runtime || 'claude';
-      const formatEntry = (name, { runtimeScoped = false, expectedRuntime = currentRuntime, signalType = null, capability = 'supported' } = {}) => {
+      const formatEntry = (name, { runtimeScoped = false, expectedRuntime = currentRuntime, signalType = null, capability = 'supported', maxAgeS = 30, eventDriven = false, checkedWhenIdle = false } = {}) => {
         if (capability === 'unsupported') {
           return {
             fresh: false,
@@ -941,17 +941,28 @@ export class StateEngine {
             detail: `Last signal belongs to ${h.extra.runtime}, not ${expectedRuntime}`
           };
         }
-        const lastSuccess = h.extra?.last_success;
-        const ageS = lastSuccess ? Math.floor((now - new Date(lastSuccess).getTime()) / 1000) : null;
-        const fresh = ageS !== null && ageS < 30;
-        const reason = h.extra?.reason
-          || (h.status === 'unavailable' ? 'unavailable'
-            : h.status === 'stale' ? 'stale'
-              : fresh ? 'fresh' : 'stale_or_not_successful');
+        // Progress writers only report activity; silence is not a collector failure.
+        // Periodic writers, by contrast, must keep producing successful checks.
+        const timestamp = checkedWhenIdle && h.status === 'stale' && !h.extra?.reason
+          ? h.extra?.last_checked : h.extra?.last_success;
+        const elapsedS = timestamp ? (now - Date.parse(timestamp)) / 1000 : NaN;
+        const ageS = Number.isFinite(elapsedS) && elapsedS >= 0 ? Math.floor(elapsedS) : null;
+        const withinWindow = ageS !== null && elapsedS < maxAgeS;
+        const ordinaryIdle = checkedWhenIdle && h.status === 'stale' && !h.extra?.reason;
+        const status = h.status === 'healthy' && !withinWindow
+          ? (eventDriven && ageS !== null ? 'idle' : 'stale')
+          : ordinaryIdle && withinWindow ? 'idle' : h.status;
+        const fresh = withinWindow && h.status === 'healthy';
+        const reason = status === 'idle' ? 'no_recent_activity'
+          : h.status === 'healthy' && !withinWindow ? 'stale_or_not_successful'
+            : h.extra?.reason
+              || (h.status === 'unavailable' ? 'unavailable'
+                : h.status === 'stale' ? 'stale'
+                  : fresh ? 'fresh' : 'stale_or_not_successful');
         return {
           fresh,
           age_s: ageS,
-          status: h.status,
+          status,
           capability,
           reason,
           detail: sourceHealthDetail(h, reason, fresh),
@@ -961,24 +972,21 @@ export class StateEngine {
 
       return {
         runtime_progress: {
-          hook_events: formatEntry('hook_events', { runtimeScoped: true, signalType: 'runtime_progress' }),
           jsonl_usage: currentRuntime === 'codex'
-            ? formatEntry('codex_rollout', { signalType: 'collector_liveness' })
-            : formatEntry('jsonl_usage', { signalType: 'collector_liveness' }),
+            ? formatEntry('codex_rollout', { signalType: 'collector_liveness', checkedWhenIdle: true })
+            : formatEntry('jsonl_usage', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 }),
           statusline: currentRuntime === 'claude'
-            ? formatEntry('statusline', { runtimeScoped: true, expectedRuntime: 'claude', signalType: 'runtime_progress' })
+            ? formatEntry('statusline', { runtimeScoped: true, expectedRuntime: 'claude', signalType: 'runtime_progress', eventDriven: true, maxAgeS: 60 })
             : formatEntry('statusline', { capability: 'unsupported' })
         },
         collector_liveness: {
-          pm2_reader: formatEntry('pm2_reader', { signalType: 'collector_liveness' }),
-          system_sampler: formatEntry('system_sampler', { signalType: 'collector_liveness' }),
-          hook_handler: formatEntry('hook_handler', { signalType: 'collector_liveness' }),
-          conversation_reader: formatEntry('conversation_reader', { signalType: 'collector_liveness' }),
-          am_heartbeat: formatEntry('am_heartbeat', { signalType: 'collector_liveness' })
+          pm2_reader: formatEntry('pm2_reader', { signalType: 'collector_liveness', maxAgeS: 180 }),
+          system_sampler: formatEntry('system_sampler', { signalType: 'collector_liveness', maxAgeS: 90 }),
+          conversation_reader: formatEntry('conversation_reader', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 }),
+          am_heartbeat: formatEntry('am_heartbeat', { signalType: 'collector_liveness', maxAgeS: 60 })
         },
         platform: {
-          statusline: formatEntry('statusline', { signalType: 'collector_liveness' }),
-          c4: formatEntry('c4', { signalType: 'collector_liveness' })
+          statusline: formatEntry('statusline', { signalType: 'collector_liveness' })
         }
       };
     } catch {
@@ -993,6 +1001,7 @@ export class StateEngine {
 
 function sourceHealthDetail(row, reason, fresh) {
   const extra = row.extra || {};
+  if (reason === 'no_recent_activity') return 'No recent activity; this source reports only when activity occurs';
   if (reason === 'no_hook_transcript_path') return 'Waiting for a Codex hook to provide a rollout transcript path';
   if (reason === 'rollout_unreadable') return extra.error ? `Rollout transcript is unreadable: ${extra.error}` : 'Rollout transcript is unreadable';
   if (reason === 'partial_line') return 'Rollout transcript ended with an incomplete line';

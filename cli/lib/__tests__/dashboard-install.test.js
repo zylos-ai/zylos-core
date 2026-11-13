@@ -13,11 +13,14 @@ import { TARGET_SCHEMA_VERSION } from '../../../skills/dashboard/src/lib/schema.
 import { migrateSchema13 } from '../../../skills/dashboard/__tests__/fixtures/schema13.js';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..');
 const MANAGED_PID=43210;
+const BOOT_ID='b7abed88-ae31-4f20-a515-64fa8278b8ee';
+const OTHER_BOOT_ID='b7abed88-ae31-4f20-a515-64fa8278b8ef';
 function fixture(t) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dashboard-install-'));
  const bin=path.join(dir,'bin'), data=path.join(dir,'components/dashboard'), code=path.join(dir,'.claude/skills/dashboard');
  for(const p of [bin,data,path.dirname(code),path.join(dir,'http'),path.join(dir,'pm2')])fs.mkdirSync(p,{recursive:true});
  fs.symlinkSync(path.join(root,'skills/dashboard'),code,'dir');
+ fs.writeFileSync(path.join(data,'health-process.json'),JSON.stringify({pid:MANAGED_PID,bootId:BOOT_ID}),{mode:0o600});
  fs.copyFileSync(path.join(root,'templates/pm2/ecosystem.config.cjs'),path.join(dir,'pm2/ecosystem.config.cjs'));
  const prior=Object.fromEntries(['PATH','HOME','PM2_HOME','TMPDIR'].map(key=>[key,process.env[key]]));
  for(const key of ['HOME','PM2_HOME','TMPDIR']){process.env[key]=path.join(dir,key.toLowerCase());fs.mkdirSync(process.env[key]);}
@@ -243,7 +246,7 @@ async function healthFixture(t, handler) {
  fs.writeFileSync(path.join(f.data,'config.json'),JSON.stringify({port:server.address().port,auth:{enabled:true,password:'fixture-hash'}}));
  return {...f,server,requests};
 }
-function healthy(res, pid=MANAGED_PID) {res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true,service:'zylos-dashboard',pid}));}
+function healthy(res, bootId=BOOT_ID) {res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true,service:'zylos-dashboard',bootId}));}
 
 test('verification only reads local health without a public domain',async t=>{
  const f=await healthFixture(t,(_req,res)=>healthy(res));
@@ -285,16 +288,41 @@ test('verification follows a replaced managed process during the readiness windo
  fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'127.0.0.1',protocol:'https',port:proxy.address().port}));
  const result=await verifyDashboard({zylosDir:f.dir});
  assert.deepEqual(result,{state:'ready',checks:{health:true,route:true},errors:[]});
- assert.deepEqual(f.requests,['/api/health','/api/health']);assert.deepEqual(publicRequests,['/dashboard/api/health']);
+ assert.deepEqual(f.requests,['/api/health']);assert.deepEqual(publicRequests,['/dashboard/api/health']);
 });
 
 test('verification rejects health served by a different process',async t=>{
  let now=1000;
- const f=await healthFixture(t,(_req,res)=>{now+=30001;healthy(res,MANAGED_PID+1);});
+ const f=await healthFixture(t,(_req,res)=>{now+=30001;healthy(res,OTHER_BOOT_ID);});
  t.mock.method(Date,'now',()=>now);
  const result=await verifyDashboard({zylosDir:f.dir});
  assert.equal(result.state,'degraded');assert.equal(result.checks.health,false);
  assert.deepEqual(result.errors.map(error=>error.code),['health_failed']);
+});
+
+test('verification binds local bootId to the private identity of the managed PM2 process',async t=>{
+ const f=await healthFixture(t,(_req,res)=>healthy(res));
+ const identityFile=path.join(f.data,'health-process.json');
+ const original=fs.readFileSync(identityFile);
+ assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true},errors:[]});
+ assert.deepEqual(fs.readFileSync(identityFile),original);
+ assert.deepEqual(f.requests,['/api/health']);
+ // PM2 is valid and the HTTP listener is healthy throughout. Every bad local
+ // record must still fail before trusting that listener's public boot ID.
+ let now=1000;t.mock.method(Date,'now',()=>{now+=10001;return now;});
+ for(const record of [null,'not json',{},
+  {pid:MANAGED_PID-1,bootId:BOOT_ID},
+  {pid:String(MANAGED_PID),bootId:BOOT_ID},
+  {pid:MANAGED_PID,bootId:''},
+  {pid:MANAGED_PID,bootId:'not-a-uuid'},
+  {pid:MANAGED_PID}]) {
+  if(record===null)fs.unlinkSync(identityFile);
+  else fs.writeFileSync(identityFile,typeof record==='string'?record:JSON.stringify(record));
+  const result=await verifyDashboard({zylosDir:f.dir});
+  assert.equal(result.state,'degraded');assert.equal(result.checks.health,false);
+  assert.deepEqual(result.errors.map(error=>error.code),['health_failed']);
+ }
+ assert.deepEqual(f.requests,['/api/health']);
 });
 
 test('verification reports health failure after the readiness window when the managed pid stays unavailable',async t=>{
@@ -332,8 +360,8 @@ test('public verification makes one health request at the fixed Dashboard prefix
  let publicReply='matching';const requests=[];
  const proxy=http.createServer((req,res)=>{
   requests.push(req.url);
-  if(publicReply==='service-mismatch'){res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true,service:'other',pid:MANAGED_PID}));}
-  else healthy(res,publicReply==='matching'?MANAGED_PID:MANAGED_PID+1);
+  if(publicReply==='service-mismatch'){res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true,service:'other',bootId:BOOT_ID}));}
+  else healthy(res,publicReply==='matching'?BOOT_ID:OTHER_BOOT_ID);
  });
  await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));
  t.after(()=>new Promise(resolve=>{proxy.closeAllConnections();proxy.close(resolve);}));
@@ -341,7 +369,7 @@ test('public verification makes one health request at the fixed Dashboard prefix
  fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'127.0.0.1',protocol:'https',port:proxy.address().port}));
  assert.deepEqual(await verifyDashboard({zylosDir:f.dir}),{state:'ready',checks:{health:true,route:true},errors:[]});
  assert.deepEqual(requests,['/dashboard/api/health']);
- publicReply='pid-mismatch';
+ publicReply='bootId-mismatch';
  const failed=await verifyDashboard({zylosDir:f.dir});
  assert.equal(failed.state,'degraded');assert.equal(failed.checks.health,true);assert.equal(failed.checks.route,false);
  assert.equal(failed.errors[0].code,'route_failed');assert.equal(requests.length,2);
@@ -354,7 +382,7 @@ function redirectFixture(t, { protocol = 'http', replies }) {
  const f=fixture(t), requests=[];
  fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
  fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'dashboard.example.test',protocol}));
- const healthy=()=>new Response(JSON.stringify({ok:true,service:'zylos-dashboard',pid:MANAGED_PID}));
+ const healthy=()=>new Response(JSON.stringify({ok:true,service:'zylos-dashboard',bootId:BOOT_ID}));
  t.mock.method(globalThis,'fetch',async(url,options)=>{
   assert.equal(options.redirect,'manual');assert.ok(options.signal instanceof AbortSignal);
   requests.push(String(url));
@@ -414,9 +442,9 @@ for(const status of [300,303,404,503])test(`public health reports HTTP ${status}
  assert.equal(f.requests.length,2);
 });
 
-for(const body of [{ok:false,service:'zylos-dashboard',pid:MANAGED_PID},
- {ok:true,service:'other',pid:MANAGED_PID},{ok:true,service:'zylos-dashboard',pid:MANAGED_PID+1}]) {
- test(`redirected public health retains ${body.ok===false?'ok':body.service==='other'?'service':'pid'} validation`,async t=>{
+for(const body of [{ok:false,service:'zylos-dashboard',bootId:BOOT_ID},
+ {ok:true,service:'other',bootId:BOOT_ID},{ok:true,service:'zylos-dashboard',bootId:OTHER_BOOT_ID}]) {
+ test(`redirected public health retains ${body.ok===false?'ok':body.service==='other'?'service':'bootId'} validation`,async t=>{
   const f=redirectFixture(t,{replies:[()=>new Response('',{status:301,headers:{location:'https://dashboard.example.test/dashboard/api/health'}}),
    ()=>new Response(JSON.stringify(body))]});
   const result=await verifyDashboard({zylosDir:f.dir});
@@ -464,7 +492,7 @@ test('both checks share one fixed window without a renewed public allowance',asy
  const f=fixture(t);fs.mkdirSync(path.join(f.dir,'.zylos'),{recursive:true});
  fs.writeFileSync(path.join(f.dir,'.zylos/config.json'),JSON.stringify({domain:'dashboard.example.test'}));
  let now=1000,calls=0;t.mock.method(Date,'now',()=>now);
- t.mock.method(globalThis,'fetch',async()=>{calls++;now+=30001;return {ok:true,json:async()=>({ok:true,service:'zylos-dashboard',pid:MANAGED_PID})};});
+ t.mock.method(globalThis,'fetch',async()=>{calls++;now+=30001;return {ok:true,json:async()=>({ok:true,service:'zylos-dashboard',bootId:BOOT_ID})};});
  const result=await verifyDashboard({zylosDir:f.dir});
  assert.equal(calls,1);assert.equal(result.checks.health,true);assert.equal(result.checks.route,false);
  assert.equal(result.errors[0].code,'verify_timeout');

@@ -172,7 +172,7 @@ export async function verifyDashboard({ zylosDir }) {
   const deadline = Date.now() + READY_LIMIT;
   const remaining = () => Math.max(0, Math.floor(deadline - Date.now()));
   const timedOut = error => error.code === 'verify_timeout' || ['TimeoutError', 'AbortError'].includes(error.name);
-  const health = async (url, expectedPid) => {
+  const health = async (url, expectedBootId) => {
     const timeout = remaining();
     if (!timeout) throw Object.assign(Error('Dashboard verification timed out'), { code: 'verify_timeout' });
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(timeout) });
@@ -188,14 +188,14 @@ export async function verifyDashboard({ zylosDir }) {
           && next.pathname === current.pathname && next.search === current.search
           && !next.username && !next.password && !next.hash) {
           await response.body?.cancel().catch(() => {});
-          return health(next.href, expectedPid);
+          return health(next.href, expectedBootId);
         }
       }
       await response.body?.cancel().catch(() => {});
       throw Object.assign(Error(`Dashboard health returned HTTP ${response.status}`), { httpStatus: response.status });
     }
     const body = await response.json();
-    if (body.ok !== true || body.service !== name || body.pid !== expectedPid) throw Error('Dashboard health failed');
+    if (!expectedBootId || body.ok !== true || body.service !== name || body.bootId !== expectedBootId) throw Error('Dashboard health failed');
   };
   const failed = (item, code, location, httpStatus) => {
     checks[item] = false;
@@ -206,7 +206,7 @@ export async function verifyDashboard({ zylosDir }) {
   try { loc = settings(zylosDir); }
   catch { return { state: 'degraded', checks: { health: false }, errors: [{ item: 'health', code: 'health_failed', location: locations(zylosDir).config }] }; }
   const localUrl = `http://127.0.0.1:${loc.port}/api/health`;
-  let confirmedPid;
+  let confirmedBootId;
   let observedFailure = false;
   let healthHttpStatus;
   do {
@@ -217,8 +217,15 @@ export async function verifyDashboard({ zylosDir }) {
     catch {}
     try {
       if (expectedPid == null) throw Error('Dashboard managed process is unavailable');
-      await health(localUrl, expectedPid);
-      confirmedPid = expectedPid;
+      // The private startup record ties the otherwise opaque public boot ID to
+      // the PM2 process. A stale listener or record cannot pass on its own.
+      const identity = JSON.parse(fs.readFileSync(path.join(loc.data, 'health-process.json'), 'utf8'));
+      if (identity.pid !== expectedPid || typeof identity.bootId !== 'string'
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(identity.bootId)) {
+        throw Error('Dashboard process identity does not match its managed process');
+      }
+      await health(localUrl, identity.bootId);
+      confirmedBootId = identity.bootId;
       checks.health = true;
       break;
     }
@@ -243,7 +250,7 @@ export async function verifyDashboard({ zylosDir }) {
       const publicBase = new URL(`${port != null ? 'http' : protocol}://${domain}${port != null ? ':' + port : ''}`);
       if (publicBase.username || publicBase.password || publicBase.pathname !== '/' || publicBase.search || publicBase.hash) throw Error('Invalid public URL');
       routeLocation = new URL('/dashboard/api/health', publicBase).href;
-      await health(routeLocation, confirmedPid);
+      await health(routeLocation, confirmedBootId);
       checks.route = true;
     }
   } catch (error) { failed('route', timedOut(error) ? 'verify_timeout' : 'route_failed', routeLocation, error.httpStatus); }
