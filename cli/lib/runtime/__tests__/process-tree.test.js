@@ -13,10 +13,18 @@ const settle = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function children(t) {
   const started = [];
-  t.after(() => { for (const child of started) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  t.after(async () => {
+    // Each fixture owns a private process group, including shell descendants.
+    for (const {child} of started) {
+      try { process.kill(-child.pid, 'SIGKILL'); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+    await Promise.all(started.map(({closed}) => closed));
+  });
   return (file, args) => {
-    const child = spawn(file, args, { stdio: 'ignore' });
-    started.push(child);
+    const child = spawn(file, args, { stdio: 'ignore', detached: true });
+    const closed = new Promise(resolve => child.once('close', resolve));
+    started.push({child,closed});
     return child;
   };
 }
