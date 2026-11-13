@@ -18,6 +18,11 @@ limits/ranges. Read and verify all exported batch and listed input bytes/hashes;
 retain the batch receipt and full `sync-files.js list` object for checkpoint and
 commit. Never synthesize input paths. Use the procedure's private export
 directory, cleanup and complete byte-range ledger for every file, including
-long single lines. Follow the common failure/release rules and
+long single lines. Complete all three numbered Required file verification
+steps in the procedure: display the final range with `od -An -v -c`, compute and compare the actual byte
+count and SHA-256, and report both actual values and metadata matches. Missing
+verification or report evidence fails the Sync. Remove only this run's private
+export directory with `rm -r "<absolute path of this run's private directory>"`;
+do not add `-f`. Follow the common failure/release rules and
 return a concise result to the requesting session. Do not perform business
 work or send external user replies.
