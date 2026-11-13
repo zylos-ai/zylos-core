@@ -341,7 +341,12 @@ test('Origin group listing reads only candidate sessions since the cursor date',
   await assert.rejects(list({ ...settings, since: 'yesterday' }), { code: 'INVALID_INPUT' });
   const worker = await fixture(t);
   await assert.rejects(list({ ...worker.settings, group: settings.group }), { code: 'SCOPE_UNBOUND' });
-  await assert.rejects(guardedCommit({ ...settings, input: {} }, f.deps), { code: 'INVALID_INPUT' });
+  await assert.rejects(guardedCommit({ ...settings, input: { followedUpIds: [] } }, f.deps), { code: 'INVALID_INPUT' });
+});
+
+test('listing rejects a since boundary without a group', async t => {
+  const f = await fixture(t, 'origin');
+  await assert.rejects(list({ ...f.settings, since: 1792387802 }), { code: 'INVALID_INPUT' });
 });
 
 // Real lock + receipt verifier, with database reads/writes injected to observe

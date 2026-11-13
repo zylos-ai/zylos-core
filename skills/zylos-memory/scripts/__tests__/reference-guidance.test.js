@@ -49,7 +49,12 @@ test('guidance uses bounded read-only source reads available in each runtime', (
   const lookup = between(sync, '## Moving from old files', '## Archive and restore');
   assert.doesNotMatch(lookup, /TOOL_UNAVAILABLE|Read\/Glob\/Grep/);
   assert.doesNotMatch(reorg, /TOOL_UNAVAILABLE|Read\/Glob\/Grep/);
-  assert.match(normalize(skill), /Read inputs with Read \(offset\/limit\), Glob, or read-only Bash commands `grep -n`, `rg -n`, and `sed -n '<a>,<b>p'`; use Grep when available/);
+  assert.match(normalize(skill), /Read inputs with Read \(offset\/limit\), Glob, or read-only Bash commands `grep -n`, `rg -n`, `sed -n '<a>,<b>p'`, and bounded `dd` byte reads; use Grep when available/);
+  assert.match(normalize(sync), /Use byte ranges even when a file contains one very long line/);
+  assert.match(normalize(sync), /`dd if="<returned absolute path>" bs=1 skip=0 count=8192 status=none`/);
+  assert.match(normalize(sync), /Continue at skip=8188, then 16376, increasing by 8188/);
+  assert.match(normalize(sync), /the ranges must cover every byte with/);
+  assert.match(normalize(sync), /Never claim a full read from a hash match/);
   assert.match(normalize(skill), /Memory writes still use only the documented tools and scripts/);
   assert.doesNotMatch(skill, /Use Read\/Glob\/Grep for inputs and Bash only/);
 });
