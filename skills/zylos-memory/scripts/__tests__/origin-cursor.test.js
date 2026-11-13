@@ -201,6 +201,13 @@ test('Origin cursors are derived from verified receipts in each read shape', asy
   assert.equal(read.payload.summary.count, 0); assert.equal(read.payload.raw.end, raw[1].id);
   await advance({ ...settings, group: 'raw', input: read.payload }, f.deps);
   assert.deepEqual(cursorRow(f, 'raw'), { synced_id: raw[1].id, checkpoint_id: 0 });
+  // next run: the procedure reads from C (0 here, below the raw cursor); the
+  // read starts at the cursor, returns only the unread rows, and advances again
+  read = await originRead(f, 'raw');
+  assert.equal(read.summaries.coverageEnd, 0); assert.equal(read.payload.raw.after, raw[1].id);
+  assert.deepEqual(read.rows.map(row => row.id), raw.slice(2).map(row => row.id));
+  assert.deepEqual(await advance({ ...settings, group: 'raw', input: read.payload }, f.deps), { advanced: true, syncedId: raw[4].id, checkpointId: 0 });
+  assert.deepEqual(cursorRow(f, 'raw'), { synced_id: raw[4].id, checkpoint_id: 0 });
   // summary only: every raw row is already covered
   const covered = f.seedGroup('covered', 3); const coveredCp = f.store.createCheckpoint('covered', covered[2].id, 'all');
   read = await originRead(f, 'covered');
@@ -255,6 +262,11 @@ test('Origin advance rejects altered, stale or mismatched receipts and leaves bo
   await rejects(with_('summary', { end: p.summary.end + 1 }), 'INVALID_INPUT');
   await rejects(with_('summary', { count: 0 }), 'INVALID_INPUT');
   await rejects(with_('summary', { coverageEnd: records[3].id }), 'INPUT_CHANGED');
+  // budget exhausted (no raw receipt): an enlarged coverage must not move the
+  // raw cursor past rows that were never read
+  await assert.rejects(advance({ ...settings, input: { ...with_('summary', { coverageEnd: records[6].id }), raw: null } }, f.deps),
+    { code: 'INPUT_CHANGED', message: /coverage is not the coverage of its read/ });
+  assert.deepEqual(cursorRow(f, group), before);
   await rejects(with_('raw', { after: p.raw.after + 1 }), 'INPUT_CHANGED');
   await rejects({ ...with_('summary', { scope: 'telegram:other' }) }, 'INVALID_INPUT');
   await rejects({ ...p, extra: true }, 'INVALID_INPUT');
