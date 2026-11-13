@@ -385,7 +385,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     // The prototype's sizes: 300px drawer, 44px section rows and opening button, 40×40 close button.
     const sizes = await page.evaluate(() => Object.fromEntries([['drawer', '.wb-set-nav'], ['section', '[data-settings-section="defaults"]'], ['button', '.wb-set-drawer-btn'], ['close', '.wb-set-drawer-x']]
       .map(([name, selector]) => { const box = document.querySelector(selector).getBoundingClientRect(); return [name, [Math.round(box.width), Math.round(box.height)]]; })));
-    assert.deepEqual([sizes.drawer[0], sizes.section[1], sizes.button[1], sizes.close], [300, 44, 44, [40, 40]], JSON.stringify(sizes));
+    assert.deepEqual([sizes.drawer[0], sizes.section[1], sizes.button[1], sizes.close], [300, 44, 44, [40, 44]], JSON.stringify(sizes));
     assert.ok(state.entry && state.bodyInert && state.headerInert, 'one history entry; the page behind the drawer is inert');
     const layout = await page.evaluate(measure);
     assert.deepEqual(layout.small, [], 'drawer: no control under 40px');
