@@ -49,7 +49,8 @@ test('guidance keeps input drift terminal without replaying completed checkpoint
   assert.match(common, /stop later writes, release once and report the mismatch/);
   assert.match(common, /Do not replace the retained input manifest or replay a completed checkpoint/);
   assert.match(common, /A later Sync must fully reread and reconcile the actual inputs/);
-  assert.match(normalize(sync), /Exact provenance fields such as `- \*\*Moved from:\*\* projects.md "Old title"`/);
+  assert.match(normalize(sync), /In fields starting with `- \*\*Moved from:\*\* `, old-file names followed by straight- or curly-quoted titles are excluded, including multiple titles and titles with parenthetical notes/);
+  assert.match(normalize(sync), /Any old-file references remaining in the field still count/);
 });
 
 test('guidance uses bounded read-only source reads available in each runtime', () => {

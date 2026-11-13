@@ -76,6 +76,28 @@ function utcAgo(ms) {
 // -- --unsummarized --
 
 describe('c4-fetch --unsummarized', () => {
+  it('exports to a help-like output filename and preserves it on a repeated export', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const inserted = receive(['--channel', 'system', '--content', 'literal output filename'], env);
+      assert.equal(inserted.status, 0, inserted.stderr);
+      const args = ['--unsummarized', '--json'];
+      const direct = cli(args, env);
+      assert.equal(direct.status, 0, direct.stderr);
+      const exported = cli([...args, '--out', '-h'], env);
+      assert.equal(exported.status, 0, exported.stderr);
+      const metadata = JSON.parse(exported.stdout).data;
+      const out = path.join(tmpDir, '-h');
+      const bytes = fs.readFileSync(out);
+      assert.equal(metadata.path, '-h');
+      assert.equal(metadata.bytes, bytes.length);
+      assert.ok(bytes.equals(Buffer.from(direct.stdout)));
+      assert.equal(fs.statSync(out).mode & 0o777, 0o600);
+      const repeated = cli([...args, '--out', '-h'], env);
+      assert.equal(repeated.status, 1, repeated.stderr);
+      assert.equal(JSON.parse(repeated.stdout).error.code, 'INVALID_ARGS');
+      assert.ok(fs.readFileSync(out).equals(bytes));
+    });
+  });
   // Real CLI -> projected queries -> private SQLite/export files. Run when
   // export formatting or receipt boundaries change; skip unrelated changes.
   // withTmpDir and the official runner isolate and reclaim all child paths.
@@ -461,6 +483,19 @@ function withAbsorbed(fn) {
 }
 
 describe('c4-fetch absorbed public CLI', () => {
+  it('validates help-like scope and field values instead of showing help', () => {
+    withAbsorbed(({ env, args, ids }) => {
+      for (const [values, code] of [
+        [['--summary', '--scope-after', '-h'], 'SESSION_GROUP_INVALID'],
+        [['--id', String(ids[0]), '--field', '-h'], 'INVALID_ARGS'],
+      ]) {
+        const result = cli([...args, ...values, '--json'], env);
+        assert.equal(result.status, 1, result.stderr);
+        assert.equal(JSON.parse(result.stdout).error.code, code);
+        assert.equal(result.stderr, '');
+      }
+    });
+  });
   it('parses absorbed JSON --after and --limit pagination flags', () => {
     withAbsorbed(({ env, args, ids }) => {
       const page = cli([...args, '--after', String(ids[19]), '--limit', '2', '--json'], env);

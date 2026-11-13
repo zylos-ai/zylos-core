@@ -63,17 +63,25 @@ test('navigation check reports old paths and heading pointers, then clears after
 test('navigation check excludes only formatted migration provenance fields', t => {
   const f = fixture(t);
   const page = 'reference/projects/current.md';
-  const provenance = '- **Moved from:** projects.md "Old project"\n- **Moved from:** decisions.md \u201cOld decision\u201d\n';
+  const provenance = [
+    '- **Moved from:** projects.md "Old project"',
+    '- **Moved from:** decisions.md \u201cOld decision\u201d',
+    '- **Moved from:** projects.md \u201cA\u201d, projects.md \u201cB\u201d',
+    '- **Moved from:** decisions.md \u201cA\u201d(tag final TG7708); \u201cB\u201d; \u201cC\u201d',
+    '- **Moved from:** projects.md \u201cA\u201d\uff08S2b/S2c, lines 4232\u20134246\uff09',
+    '- **Moved from:** projects.md "A", decisions.md "B" (details)',
+  ].join('\n') + '\n';
   f.write(page, provenance);
   assert.deepEqual(checkNavigation(f.root), { navigation: { count: 0, locations: [] }, headings: { count: 0, locations: [] } });
   f.write(page, provenance + 'See projects.md#old-project\n');
   const result = checkNavigation(f.root);
   assert.equal(result.headings.count, 1);
-  assert.deepEqual(result.headings.locations.map(row => [row.path, row.line]), [[page, 3]]);
+  assert.deepEqual(result.headings.locations.map(row => [row.path, row.line]), [[page, 7]]);
   for (const text of [
     'Moved from projects.md "Old project"',
     '- **Moved from:** projects.md#old-project',
     '- **Moved from:** projects.md "Old project"; see decisions.md#real',
+    '- **Moved from:** projects.md "A", projects.md "B"; see decisions.md#real',
     'See - **Moved from:** projects.md "Old project"',
   ]) {
     f.write(page, text + '\n');

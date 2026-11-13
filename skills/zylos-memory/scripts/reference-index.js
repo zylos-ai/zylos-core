@@ -138,8 +138,10 @@ export function checkNavigation(root) {
   const navigation = [], headings = [];
   const inspect = (relative, text) => {
     for (const [index, line] of text.split(/\r?\n/).entries()) {
-      if (/^- \*\*Moved from:\*\* (?:projects|decisions)\.md (?:"[^"\r\n]+"|\u201c[^\u201d\r\n]+\u201d)\s*$/.test(line)) continue;
-      const oldPaths = [...line.matchAll(/(?<![\w.-])(?:[~\w./-]*\/)?(?:projects|decisions)\.md(?=$|[^\w./-])/g)]
+      const candidates = line.startsWith('- **Moved from:** ')
+        ? line.replace(/(?<![\w./-])(?:projects|decisions)\.md[ \t]+(?:"[^"\r\n]+"|\u201c[^\u201d\r\n]+\u201d)/g, '')
+        : line;
+      const oldPaths = [...candidates.matchAll(/(?<![\w.-])(?:[~\w./-]*\/)?(?:projects|decisions)\.md(?=$|[^\w./-])/g)]
         .filter(match => !/(?:^|\/)(?:legacy|archive)\//.test(match[0]));
       const location = { path: relative, line: index + 1, text: line };
       if (relative === 'references.md' && oldPaths.length) navigation.push(location);

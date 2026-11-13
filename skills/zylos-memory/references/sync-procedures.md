@@ -264,9 +264,10 @@ the read-only `list --group G` below; never run group cleanup/rotate/commit.
    `path`, `line`, and `text`. The checker reads shared identity/references,
    reference pages (including archived pages), and user profiles. It skips
    legacy sources, the old monolithic files, generated indexes, and working
-   histories. Exact provenance fields such as `- **Moved from:** projects.md "Old title"`
-   (also decisions.md and curly-quoted titles) are excluded; prose and other old-file
-   references still count. Heading-pointer candidates conservatively include plain old-file
+   histories. In fields starting with `- **Moved from:** `, old-file names followed
+   by straight- or curly-quoted titles are excluded, including multiple titles
+   and titles with parenthetical notes. Any old-file references remaining in the
+   field still count, as do references in prose. Heading-pointer candidates conservatively include plain old-file
    references as well as anchors and file:line references; inspect the reported
    lines before choosing a replacement.
    Use the corresponding count to decide whether
