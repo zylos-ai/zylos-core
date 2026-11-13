@@ -325,6 +325,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-key { color: var(--text-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-key.wb-mono { font-size: 11.5px; }
 .wb-pill { justify-self: start; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 9px 2px 8px; border: 1px solid transparent; border-radius: 20px; background: var(--wb-hover); color: var(--text); font-size: 12px; font-weight: 550; white-space: nowrap; }
+.wb-status-age { color: var(--text-dim); font-size: 11px; font-weight: 450; white-space: nowrap; }
 .wb-pill .wb-dur { color: var(--text-dim); font-weight: 450; font-variant-numeric: tabular-nums; }
 .wb-pill.wb-busy, .wb-pill.wb-starting { background: color-mix(in srgb, var(--wb-work) 13%, transparent); color: color-mix(in srgb, var(--wb-work) 65%, var(--text)); }
 .wb-pill.wb-busy .wb-dot, .wb-dist-item.wb-busy .wb-dot { background: var(--wb-work); animation: wb-breathe 2.4s ease-in-out infinite; }
@@ -1221,6 +1222,7 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-gl-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border: 0; background: none; color: var(--text); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
 .wb-gl-row:hover { background: var(--wb-hover); }
 .wb-gl-row small { margin-left: auto; color: var(--text-muted); }
+.wb-gl-row .wb-status-age { margin-left: 6px; }
 .wb-gl-empty { margin: 0; padding: 6px 8px; color: var(--text-muted); font-size: 12px; }
 .wb-gl-more { margin: 4px 8px 6px; }
 .wb-pref { display: grid; grid-template-columns: 150px minmax(0, 1fr); align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--wb-line); font-size: 13px; }

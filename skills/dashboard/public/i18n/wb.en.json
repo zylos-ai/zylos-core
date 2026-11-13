@@ -599,6 +599,7 @@
   "wb.board.standby": "Standing by, starts when a message arrives",
   "wb.inst.modeMulti": "Multiple groups",
   "wb.inst.modeSingle": "Single session",
+  "wb.state.lastStatus": "Last status: {state}, {age}",
   "wb.detail.agoSeconds": "{n}s ago",
   "wb.detail.ago": "{span} ago",
   "wb.event.toolDone": "done",

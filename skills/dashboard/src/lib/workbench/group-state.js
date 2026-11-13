@@ -1,11 +1,21 @@
 const timestamp = value => typeof value === 'number' ? value : Date.parse(value);
 
-export function classify(row, { statusError } = {}) {
+export const STALE_STATUS_DISPLAY_MS = 60_000;
+
+export function classify(row, { statusError, now = Date.now() } = {}) {
   const unknown = reason => ({ kind: 'unknown', reason: reason ?? 'no_rule' });
   if (row.presence === 'unknown' || row.live?.error || statusError) return unknown(statusError ?? row.live?.error?.code ?? row.reason);
   const wait = row.wait;
   if (wait?.kind === 'start_failed') return { kind: 'error' };
-  if (row.presence === 'running' && !row.live.status.valid) return { ...unknown(row.live.status.reason), sampledAt: row.live.status.sampledAt };
+  const status = row.live?.status;
+  const stale = row.presence === 'running' && !status?.valid && status?.reason === 'stale';
+  const age = now - status?.sampledAt;
+  if (stale && ['busy', 'idle'].includes(status.lastState) && Number.isFinite(status.sampledAt) &&
+      age >= 0 && age < STALE_STATUS_DISPLAY_MS) {
+    const state = classify({ ...row, live: { ...row.live, status: { ...status, valid: true, state: status.lastState } } }, { statusError, now });
+    return { ...state, stale: true, sampledAt: status.sampledAt };
+  }
+  if (row.presence === 'running' && !status?.valid) return { ...unknown(status?.reason), sampledAt: status?.sampledAt };
   if (row.presence === 'running' && row.live.status.state === 'busy' && (!wait || ['queued', 'unknown'].includes(wait.kind))) return { kind: 'busy' };
   if (wait && !['queued', 'unknown'].includes(wait.kind)) return { kind: 'waiting' };
   if (wait?.kind === 'unknown' && wait.pendingKnown !== false) return { kind: 'waiting' };
@@ -15,7 +25,7 @@ export function classify(row, { statusError } = {}) {
 }
 
 export function durationOf(row, { now = Date.now(), events = [] } = {}) {
-  if (row.state.kind === 'idle') return row.live.status.idleSeconds ?? null;
+  if (row.state.kind === 'idle') return (row.state.stale ? row.live.status.lastIdleSeconds : row.live.status.idleSeconds) ?? null;
   if (row.state.kind === 'waiting') {
     const start = row.wait.kind === 'starting' ? (row.createdAt == null ? null : row.createdAt * 1000) : row.wait.kind === 'fenced' ? (row.fence.createdAt == null ? null : row.fence.createdAt * 1000) : row.queue.pending.oldestAt;
     return start == null || !Number.isFinite(start) ? null : Math.max(0, (now - start) / 1000);

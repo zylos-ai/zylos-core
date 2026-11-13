@@ -43,12 +43,11 @@ test('ordered invalid reasons retain known timestamps and discard values',async(
    put(path.join(f.dir,'agent-status.json'),status());let count=0;
    const reader=createSessionReader({env:f.env,now:()=>row.now??1100,open:async()=>({close:async()=>{}}),observe:async()=>++count===1?row.first??identity:row.last??identity});
    const result=await reader.readSessionState('lark:x',{freshnessMs:200});
-   assert.deepEqual(result.usage,{value:null,valid:false,reason:row.reason,sampledAt:Object.hasOwn(row,'time')?row.time:1000,
-    lastValue:row.reason==='stale'?row.sample:null},row.reason);
+   assert.deepEqual(result.usage,{value:null,lastValue:row.reason==='stale'?row.sample:null,valid:false,reason:row.reason,sampledAt:Object.hasOwn(row,'time')?row.time:1000},row.reason);
   }
   put(path.join(f.dir,'agent-status.json'),'{broken',1000);
   const reader=createSessionReader({env:f.env,now:()=>1100,open:async()=>({close:async()=>{}}),observe:async()=>identity});
-  assert.deepEqual((await reader.readSessionState('lark:x',{freshnessMs:200})).status,{value:null,valid:false,reason:'unparseable',sampledAt:1000,lastValue:null});
+  assert.deepEqual((await reader.readSessionState('lark:x',{freshnessMs:200})).status,{value:null,lastValue:null,valid:false,reason:'unparseable',sampledAt:1000});
  }finally{f.clean();}
 });
 test('unknown runtime does not consume usage; I1 observation loss invalidates; open errors preserve uncertainty',async()=>{
@@ -98,7 +97,7 @@ test('usage freshness can be bounded apart from status freshness; identity check
   const idle=await at(43000).readSessionState('lark:x',{freshnessMs:5000});
   assert.equal(idle.usage.reason,'stale');assert.equal(idle.status.reason,'stale');
   const kept=await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity});
-  assert.deepEqual(kept.usage,{value:usage(),valid:true,reason:null,sampledAt:1000,lastValue:null});
+  assert.deepEqual(kept.usage,{value:usage(),lastValue:null,valid:true,reason:null,sampledAt:1000});
   assert.equal(kept.status.reason,'stale','the status sample keeps its own freshness');
   const bounded=await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:41999});
   assert.equal(bounded.usage.reason,'stale');
@@ -106,8 +105,7 @@ test('usage freshness can be bounded apart from status freshness; identity check
   assert.equal((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage.reason,'identity_mismatch');
   // Without an age limit, a sample with no capture time is still refused rather than taken as current.
   put(path.join(f.dir,'statusline.json'),{...usage(),zylos:{v:1,runId:'run'}});
-  assert.deepEqual((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage,
-   {value:null,valid:false,reason:'stale',sampledAt:null,lastValue:{...usage(),zylos:{v:1,runId:'run'}}});
+  assert.deepEqual((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage,{value:null,lastValue:{...usage(),zylos:{v:1,runId:'run'}},valid:false,reason:'stale',sampledAt:null});
   for(const bad of [-1,Number.NaN,'5000',null]) await assert.rejects(at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:bad}),TypeError);
  }finally{f.clean();}
 });

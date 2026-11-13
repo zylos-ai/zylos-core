@@ -2,13 +2,13 @@
 import path from 'node:path';
 import { isMainModule } from './is-main-module.js';
 import { createInterface } from 'node:readline';
-import { guard, memoryError } from './sync-lock.js';
+import { guard, memoryError, requireSyncToken } from './sync-lock.js';
 import { resolveAllowedMemoryPath, applyFragmentLocked, isSelfPath } from './self-write.js';
 
 const codes = new Set(['PATH_NOT_ALLOWED', 'TOKEN_MISMATCH', 'FRAGMENT_CONFLICT', 'EXISTS', 'INVALID_INPUT', 'LOCK_TIMEOUT', 'SCOPE_UNBOUND', 'WRITE_FAILED', 'LOCK_UNAVAILABLE', 'LEGACY_READ_ONLY']);
 export const EDIT_MEMORY_TOOL = {
   name: 'edit_memory',
-  description: 'Create or edit an authorized memory fragment using the current Sync token.',
+  description: 'Create or edit an authorized memory fragment. Every call must include token: the T printed by `sync-lock.js acquire`.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['op', 'path', 'replacement', 'token'],
     properties: { op: { type: 'string', enum: ['edit', 'create'] }, path: { type: 'string' },
@@ -28,6 +28,7 @@ export function createMemoryEditor(env = process.env, { fragment = applyFragment
           ((input.op === 'edit' || Object.hasOwn(input, 'expected')) && typeof input.expected !== 'string')) {
         throw memoryError('INVALID_INPUT', 'Expected an edit or create memory operation');
       }
+      requireSyncToken(input.token);
       return await guard({ kind: 'auto', token: input.token, env: binding }, scope => {
         const { marker } = scope;
         const temporary = path.relative(path.join(scope.root, 'memory'),

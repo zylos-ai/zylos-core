@@ -820,3 +820,19 @@ test('a custom model requests its own threshold instead of showing the current m
   assert.equal(threshold.value, '40'); assert.equal(threshold.max, '40'); assert.equal(threshold.disabled, false);
   panel.destroy();
 });
+
+
+test('settings group status labels include sample age and last-known status tooltip', () => {
+  const document = documentFixture(), root = node(document, 'div');
+  const data = snapshot(), sampledAt = Date.now() - 20000;
+  data.rows[0] = { ...data.rows[0], state: { kind: 'idle', stale: true, sampledAt },
+    live: { status: { valid: false, reason: 'stale', sampledAt, lastState: 'idle' } } };
+  const options = { snapshot: data, page: { runtime: [], runtimeTotal: 1 }, document, t, metadata: {} };
+  renderDefaults(root, options);
+  assert.ok(root.querySelector('.wb-status-age'));
+  data.rows[0].state = { kind: 'unknown', sampledAt };
+  renderDefaults(root, options);
+  const labels = root.querySelectorAll('small');
+  assert.ok(labels.some(label => label.title?.startsWith('wb.state.lastStatus:')));
+  assert.equal(root.querySelector('.wb-status-age'), null);
+});

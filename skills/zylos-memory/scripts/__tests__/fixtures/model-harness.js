@@ -405,7 +405,10 @@ export function assertFailureFlow(f, result, fault) {
     assert.match(result.final.text, fault === 'busy' ? /SYNC_BUSY|already running|busy|已.*运行|忙/i : /SCOPE_UNBOUND|fail|失败|identity|身份/i);
   } else if (fault === 'token-mismatch') {
     const index = events.findIndex(event => event.result.status === 3 || event.result.code === 'TOKEN_MISMATCH');
-    assert.ok(index >= 0); assert.equal(index, events.length - 1, 'TOKEN_MISMATCH stops all tools, including release'); assert.equal(releases.length, 0);
+    assert.ok(index >= 0); assert.equal(releases.length, 1, 'TOKEN_MISMATCH is followed by exactly one release');
+    assert.equal(events.length, index + 2, 'Only the release follows TOKEN_MISMATCH'); assert.equal(events.at(-1), releases[0]);
+    assert.ok(statusOkay(releases[0])); assert.ok(!releases[0].effective.args.includes('b'.repeat(32)), 'Release uses the worker token');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.runDir, 'sync.lock'), 'utf8')).token, 'b'.repeat(32), 'Release leaves the new owner marker');
     assert.match(result.final.text, /TOKEN_MISMATCH|token|令牌/i);
   } else {
     assert.equal(releases.length, 1, 'Required-step failure releases exactly once');

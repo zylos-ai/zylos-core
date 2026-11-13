@@ -527,3 +527,30 @@ for (const on of [true, false]) test(`unknown account health remains the header 
   assert.equal(header.classList.contains('conversation-restricted'), true);
   assert.equal(header.textContent, f.translations['chat.page.healthUnknown']);
 });
+
+
+for (const [sample, state] of [
+  [{ valid: true, state: 'busy' }, { kind: 'busy' }],
+  [{ valid: false, reason: 'stale', lastState: 'idle', sampledAt: Date.now() - 20000 }, { kind: 'idle', stale: true }],
+  [{ valid: false, reason: 'stale', lastState: 'busy', sampledAt: Date.now() - 180000 }, { kind: 'unknown' }],
+  [{ valid: false, reason: 'missing', lastState: null }, { kind: 'unknown' }],
+]) for (const [health, wait, key] of [
+  ['ok', null, 'chat.working.processing'],
+  ['rate_limited', { kind: 'rate_wait' }, 'chat.page.rateLimitedPending'],
+  ['auth_failed', { kind: 'auth_wait' }, 'chat.page.authFailed'],
+  ['ok', { kind: 'fenced' }, 'chat.page.paused'],
+]) test(`conversation header preserves ${key} for ${sample.reason ?? 'fresh'} ${state.kind} sample`, async t => {
+  const f = healthPage(t, { workbench: () => ({ listKnown: true,
+    rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
+      state, live: { status: sample }, wait,
+      working: { on: true, since: 1000, turn: { since: 1000 }, tools: 0, subagents: null } }],
+    instance: { runtimeHealth: { claude: { health } } }, sources: { status: { ok: true, readAt: 1000 } },
+  }) });
+  await f.page.openGroup(f.sessionGroup); await tick();
+  const header = f.root.querySelector('.conversation-running');
+  assert.equal(header.hidden, false);
+  const caption = key === 'chat.working.processing' ? header.querySelector('.wi-ind-desktop').textContent : header.textContent;
+  assert.equal(caption, f.translations[key]);
+  assert.equal(header.querySelector('.wb-status-age'), null);
+  assert.equal(header.dataset.stale, undefined);
+});

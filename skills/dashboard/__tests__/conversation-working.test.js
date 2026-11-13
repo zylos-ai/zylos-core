@@ -203,3 +203,19 @@ for (const locale of ['zh', 'en']) test(`working captions omit elapsed time in $
       main: zh ? '后台子任务 2 个' : '2 subtasks', children: null });
   }
 });
+
+
+test('detail preserves stale sample classification despite contradictory working events', async t => {
+  const document = createDocument(), root = document.createElement('div'), now = 900000;
+  const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run', status: {
+    valid: false, reason: 'stale', sampledAt: now - 20000, lastState: 'idle' } },
+    state: { kind: 'idle', stale: true, sampledAt: now - 20000 }, duration: null, working: { on: true, since: now - 1000 } };
+  const detail = createGroupDetail({ root, document, now: () => now, fetch: async path => ({ ok: true,
+    json: async () => path.includes('/runs') ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
+  t.after(() => detail.destroy());
+  await detail.open('dashboard:a', { rows: [row], listKnown: true });
+  const head = allNodes(root).find(node => node.classList.contains('wb-group-head'));
+  assert.equal(allNodes(head).some(node => node.classList.contains('wb-idle')), true);
+  assert.equal(allNodes(head).some(node => node.classList.contains('wb-status-age')), true);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-status-age')).length, 2);
+});

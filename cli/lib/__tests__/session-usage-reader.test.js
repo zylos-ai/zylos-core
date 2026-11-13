@@ -80,3 +80,25 @@ test('usage model facts prefer actual model and preserve the observed context cl
  assert.deepEqual(usageModelFacts(null,'codex',override),{model:null,contextWindow:null});
  assert.deepEqual(usageModelFacts(null,'claude',{mode:'default'}),{model:null,contextWindow:null});
 });
+
+
+test('last sample value is retained only after identity validation and expiry', () => {
+ const value = { state: 'busy', idle_seconds: 7 };
+ const sample = { value, sampledAt: 1000, identity: { runId: 'run', sessionId: 'session' } };
+ const read = (record = sample, first = identity, last = identity, now = 7000) => sampleResult(record, first, last, 5000, now);
+ assert.deepEqual(read(), { value: null, lastValue: value, valid: false, reason: 'stale', sampledAt: 1000 });
+ assert.deepEqual(read(sample, identity, identity, 6000), { value, lastValue: null, valid: true, reason: null, sampledAt: 1000 });
+ for (const [record, first, last, reason] of [
+  [sample, { ...identity, present: false }, identity, 'not_running'],
+  [sample, { ...identity, ready: false }, identity, 'starting'],
+  [sample, identity, { ...identity, runId: 'new' }, 'identity_changed'],
+  [{ ...sample, error: 'unparseable' }, identity, identity, 'unparseable'],
+  [{ sampledAt: null }, identity, identity, 'missing'],
+  [{ ...sample, identity: {} }, identity, identity, 'identity_missing'],
+  [{ ...sample, identity: { ...sample.identity, sessionId: 'previous' } }, identity, identity, 'identity_mismatch'],
+ ]) {
+  const result = read(record, first, last);
+  assert.equal(result.lastValue, null, reason); assert.equal(result.value, null, reason);
+  assert.equal(result.reason, reason); assert.equal(result.valid, false); assert.equal(result.sampledAt, record.sampledAt);
+ }
+});
