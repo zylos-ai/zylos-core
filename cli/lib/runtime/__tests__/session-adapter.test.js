@@ -9,8 +9,8 @@ import { ClaudeAdapter } from '../claude.js';
 import { CodexAdapter } from '../codex.js';
 
 class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
-function fixture({present = true, runId = 'r', openError, runtime = 'claude', processRunning = true} = {}) {
-  const calls = [], target = {present, runId, runtime, processRunning, tmuxSessionId:'$7', paneId:'%8'};
+function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = {}) {
+  const calls = [], target = {present, runId, runtime, tmuxSessionId:'$7', paneId:'%8'};
   const connection = {cleanupBuffer:async name => calls.push(['delete-buffer','-b',name]), close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; if (argv[0] === 'display-message') {if(!target.present)throw error('TARGET_GONE');return '$7';} return 'screen'; }};
   const dependencies = {
     openTmuxConnection:async () => { if (openError) throw openError; return connection; },
@@ -107,17 +107,16 @@ test('unreadable executable identity fails preflight before creation',async()=> 
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
 
-// Pane liveness is authoritative even if runtime process names are unavailable.
-test('isRunning projects alive/dead pane observations without another process read', async () => {
-  for (const processRunning of [true, false]) {
-    const f = fixture({processRunning});
-    assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}), {tmux:true, process:processRunning});
+// A managed session is present until its runtime-owned pane exits.
+test('isRunning projects session presence without another process read', async () => {
+  for (const runtime of ['claude', 'codex', 'unknown']) {
+    const f = fixture({runtime});
+    assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}), {tmux:true, process:true});
     assert.deepEqual(f.calls, [['close']]);
   }
-  assert.deepEqual(await fixture({runtime:'codex'}).adapter.isRunning({tmuxName:'x'}), {tmux:true, process:true});
-  assert.deepEqual(await fixture({runtime:'unknown',processRunning:false}).adapter.isRunning({tmuxName:'x'}), {tmux:true, process:false});
-  const unavailable = fixture(); delete unavailable.target.processRunning;
-  await assert.rejects(unavailable.adapter.isRunning({tmuxName:'x'}), {code:'TMUX_UNAVAILABLE'});
+  const absent = fixture({present:false});
+  assert.deepEqual(await absent.adapter.isRunning({tmuxName:'x'}), {tmux:false, process:false});
+  assert.deepEqual(absent.calls, [['close']]);
 });
 test('isRunning reports deterministic disappearance during observation as false',async()=>{
   const f=fixture();f.dependencies.observeSessionTarget=async()=>{throw error('TARGET_GONE')};

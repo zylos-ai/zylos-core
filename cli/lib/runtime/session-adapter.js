@@ -27,11 +27,7 @@ export class SessionAdapter extends RuntimeAdapter {
       connection = await this.connection();
       const target = await deps.observeSessionTarget({tmuxName, connection, readReady: async () => null, readProcessTree:this.options.readProcessTree});
       if (!target.present) return {tmux:false, process:false};
-      // The identity query supplies pane liveness; F2 supplies the runtime type.
-      if (typeof target.processRunning !== 'boolean') {
-        throw adapterError('TMUX_UNAVAILABLE','Runtime process liveness is unknown','error');
-      }
-      return {tmux:true, process:target.processRunning};
+      return {tmux:true, process:true};
     } catch (error) {
       if (['TMUX_NO_SERVER','TARGET_GONE'].includes(error.code)) return {tmux:false, process:false};
       if (error.code === 'TMUX_UNAVAILABLE') throw error;
