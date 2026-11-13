@@ -6,6 +6,7 @@ import net from 'node:net';
 import { fork } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { UPGRADE_RESTART_CHECK_PROMPT } from '../reclaim-prompts.js';
 import { HealthStore } from '../health-store.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 const worker=fileURLToPath(new URL('./fixtures/supervisor-restart-entry-worker.js',import.meta.url));
@@ -31,13 +32,28 @@ async function scenario(t,mutant=''){
  const reopened=await launch(t,f);await reopened.command('release');
  assert.equal((await request(f,restart)).result,'already_accepted');
  assert.equal((await request(f,{version:1,type:'manual_restart',requestId:restart.requestId,expectedRunId:'run-1'})).reason,'request_conflict');
+ // A present pane is a live run: upgrade must finish its bound check before reclaim.
+ const checking=await reopened.command('tick');assert.equal(checking.present,true);assert.deepEqual(checking.fences,[]);
+ const upgradeChecks=checking.controls.filter(control=>control.raw_content===UPGRADE_RESTART_CHECK_PROMPT);
+ assert.equal(upgradeChecks.length,1);
+ const check=upgradeChecks[0];
+ assert.equal(check.status,'pending');assert.equal(check.session_group,'origin');
+ assert.equal(JSON.parse(check.target_binding).expectedRunId,'run-1');assert.ok(check.ack_deadline_at>0);
+ assert.equal(checking.requests.length,1);
+ const waiting=await reopened.command('tick');assert.equal(waiting.present,true);
+ assert.equal(waiting.controls.filter(control=>control.raw_content===UPGRADE_RESTART_CHECK_PROMPT).length,1);
+ await reopened.command({expireControl:check.id});
  const first=await reopened.command('tick');assert.equal(first.present,false);assert.deepEqual(first.fences,[]);
  const second=await reopened.command('tick');assert.deepEqual(second.requests,[]);
+ assert.deepEqual(second.fences,[]);assert.equal(second.present,false);
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-keeper'));
  const events=fs.readFileSync(path.join(f.root,'activity-monitor/supervisor-events.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
  assert.equal(events.filter(e=>e.event==='restart_done'&&e.requestId===restart.requestId).length,1);
  await reopened.command('stop');
 }
+// Covers durable restart entry through real SQLite, supervisor and private tmux. Run when
+// restart admission, upgrade preparation or runtime liveness changes; skip for unrelated code.
+// readyTmuxTarget owns the socket/database; launch() kills workers even on failed assertions.
 test('actual supervisor commit-before-reply SIGKILL preserves snapshot, rejects changed content and finishes SQLite/tmux cleanup',{timeout:20000},async t=>{await scenario(t);});
 test('actual entry crash harness rejects memory-only acceptance',{timeout:15000},async t=>{await assert.rejects(scenario(t,'memory-only'),{code:'ERR_ASSERTION'});});
 

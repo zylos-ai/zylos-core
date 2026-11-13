@@ -18,7 +18,7 @@ async function observeGroup(group) {
   try {
     connection = await openTmuxConnection(options);
     const observed = await observeSessionTarget({ connection, sessionGroup: group });
-    // The shared fixture runs sleep, so this exercises the exited-runtime cleanup path.
+    // Inject exited liveness explicitly; a present shared-fixture pane is otherwise alive.
     return { ...observed, sessionGroup: group, processRunning: false };
   } finally { connection?.close(); }
 }
