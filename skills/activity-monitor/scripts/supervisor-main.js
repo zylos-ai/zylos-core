@@ -117,6 +117,7 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
   }catch(error){if(!['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code))throw error;dependencyMissing('Sync marker reader','Sync actions retain their state');}
   const healthIdentity=scene=>Number.isSafeInteger(scene.runtimePid)?{runtime:scene.runtime,session_id:scene.sessionId,claude_pid:scene.runtimePid}:null;
   supervisor=createSupervisor({env,zylosDir:root,db,scenes,readMode,missingDependencies,requestStore:new RestartRequestStore({file:path.join(directory,'restart-requests.json')}),
+    readReclaimConfiguration:async()=>parseSupervisorConfiguration(await readConfig(),env),
     readConfiguration:async()=>{
       const raw=await readConfig(), {mode,legacy}=await readMode();
       lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);

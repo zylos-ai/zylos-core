@@ -10,7 +10,7 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 // (default dependencies: the session mode file, the transition record, the
 // installed check prompt and c4-control enqueue) through the real Router
 // dispatcher, Claude session adapter and paste on a private tmux socket into a
-// line recorder that stands in for the runtime, on a private C4 database. It
+// input recorder that stands in for the runtime, on a private C4 database. It
 // shows the check is pasted before /exit and only once, /exit follows the
 // acknowledged check, an unanswered check expires after 60 seconds and /exit
 // still follows, and a busy session or a new message never drops or overtakes
@@ -45,13 +45,24 @@ test('single-session upgrade checks waiting work before /exit, at most 60 second
     fs.symlinkSync(path.join(repository, 'skills', skill), path.join(f.root, '.claude/skills', skill));
   }
   fs.mkdirSync(path.join(f.root, '.claude/skills/telegram')); // the installed channel of the test messages
-  // A line recorder named claude in place of the runtime.
+  const { SINGLE_UPGRADE_RESTART_CHECK_PROMPT } = await import('../skills/activity-monitor/scripts/reclaim-prompts.js');
+  const checkPrefix = `Meanwhile, ${SINGLE_UPGRADE_RESTART_CHECK_PROMPT.split('\n')[0]}`;
+  const checkNewlines = SINGLE_UPGRADE_RESTART_CHECK_PROMPT.split('\n').length - 1;
+  assert.ok(checkNewlines > 0, 'the approved check must retain its multiline formatting');
+  // A recorder named claude in place of the runtime. tmux converts pasted
+  // newlines to CRs with bracketed paste disabled. The known check's internal
+  // separators belong to one input; only the separately sent Enter submits it.
+  // Keep parsing state across data events: stdin chunk boundaries are unrelated
+  // to either the paste or the subsequent Enter.
   const lines = path.join(f.root, 'pasted.jsonl');
   const recorder = path.join(f.root, 'claude');
-  fs.writeFileSync(recorder, `#!${process.execPath}\nconst fs=require('node:fs');let text='';
+  fs.writeFileSync(recorder, `#!${process.execPath}\nconst fs=require('node:fs');let text='',input='',remaining=null;
 const prompt=()=>process.stdout.write('\\x1b[2J\\x1b[H\\u276f ');process.stdin.setRawMode(true);process.stdin.setEncoding('utf8');prompt();
 process.stdin.on('data',chunk=>{text+=chunk;let i;while((i=text.indexOf('\\r'))>=0){
-fs.appendFileSync(${JSON.stringify(lines)},JSON.stringify(text.slice(0,i).replace(/\\x1b\\[20[01]~/g,''))+'\\n');text=text.slice(i+1);prompt();}});
+input+=text.slice(0,i).replace(/\\x1b\\[20[01]~/g,'');text=text.slice(i+1);
+if(remaining===null)remaining=input.startsWith(${JSON.stringify(checkPrefix)})?${checkNewlines}:0;
+if(remaining>0){input+='\\n';remaining--;continue;}
+fs.appendFileSync(${JSON.stringify(lines)},JSON.stringify(input)+'\\n');input='';remaining=null;prompt();}});
 setInterval(()=>{},1000);\n`, { mode: 0o700 });
   f.tmux('set-option', '-g', 'remain-on-exit', 'off');
   f.tmux('respawn-pane', '-k', '-t', 'zylos-group-origin', recorder);
@@ -64,7 +75,6 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
   const db = await import('../skills/comm-bridge/scripts/c4-db.js');
   t.after(() => db.close());
   const { requestRuntimeRestart } = await import('../cli/lib/request-runtime-restart.js');
-  const { SINGLE_UPGRADE_RESTART_CHECK_PROMPT } = await import('../skills/activity-monitor/scripts/reclaim-prompts.js');
   const { createDispatcher } = await import('../skills/comm-bridge/scripts/router/factory.js');
 
   // The real clock plus a test-controlled jump, so delivery's own short waits still elapse.
@@ -119,6 +129,8 @@ setInterval(()=>{},1000);\n`, { mode: 0o700 });
     await run();
     assert.equal(pasted().length, 1, JSON.stringify({ pasted: pasted(), events: events.slice(-8) }));
     assert.ok(isCheck(pasted()[0])); assert.ok(pasted()[0].endsWith(`ack --id ${check.id}`));
+    assert.equal(pasted()[0].split('\n').length - 1, checkNewlines, 'all pasted check newlines are preserved inside one submitted input');
+    assert.equal(pasted()[0].includes('/exit'), false, 'the check input never contains the separately queued exit command');
     assert.equal(control(check.id).status, 'running'); assert.equal(control(exit.id).status, 'pending');
     const message = db.insertConversation('in', 'telegram', 'chat-1', 'new message during the check');
     await run();

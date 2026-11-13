@@ -117,6 +117,20 @@ test('composed socket rejects stale-run delivery without resetting observer coun
   await deliveryScenario(t, createSupervisor);
 });
 
+test('composed delivery resets lifecycle directly and rejects stale-run notifications', async t => {
+  const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
+  const send = await socketClient(t, f), delivered = [];
+  f.supervisor.lifecycle.messageDelivered = notification => delivered.push(notification);
+  const message = { version: 2, type: 'notify_delivered', requestId: 'delivery',
+    sessionGroup: scene.sessionGroup, runtime: scene.runtime, runId: scene.runId, pastedAt: f.now() };
+  assert.equal((await send(message)).type, 'ack');
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0].sessionGroup, scene.sessionGroup);
+  assert.equal(delivered[0].runId, scene.runId);
+  assert.equal((await send({ ...message, runId: 'stale-run' })).type, 'ack');
+  assert.equal(delivered.length, 1);
+});
+
 async function aggregationScenario(t, create) {
   const f = fixture(t, create);
   f.pending.push({ sessionGroup: 'telegram:a' }, { sessionGroup: 'telegram:b' }, { sessionGroup: 'codex:c' });

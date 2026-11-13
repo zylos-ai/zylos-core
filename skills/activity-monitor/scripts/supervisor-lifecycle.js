@@ -71,6 +71,7 @@ export class SupervisorLifecycle {
     this.evictionPreparation = new Map();
     this.upgradePreparation = new Map();
     this.ttlReset = new Map();
+    this.reclaimDeferrals = new Map();
     this.rotationSent = new Map();
     this.configurationSent = new Map();
     this.syncSent = new Map();
@@ -366,6 +367,7 @@ export class SupervisorLifecycle {
     this.ttlPreparation.delete(group);
     this.evictionPreparation.delete(group);
     this.upgradePreparation.delete(fence.runId);
+    if (this.reclaimDeferrals.get(group)?.runId === fence.runId) this.reclaimDeferrals.delete(group);
     for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
       this.warnings.delete(JSON.stringify(['reclaim', fence.sessionGroup, fence.runId, fence.reason, name]));
     }
@@ -423,6 +425,49 @@ export class SupervisorLifecycle {
       if (cause.code?.startsWith('TARGET_')) return null;
       throw cause;
     }
+  }
+
+  // Only the existing conversation-dispatch signal resets consecutive requests.
+  // Transcript, tool and control activity must not erase a deferral history.
+  messageDelivered({ sessionGroup, runId }) {
+    if (this.reclaimDeferrals.get(sessionGroup)?.runId === runId) this.reclaimDeferrals.delete(sessionGroup);
+  }
+
+  async deferReclaim(request, context) {
+    const reject = reason => ({ ok: false, result: 'rejected', reason });
+    const group = request.sessionGroup;
+    await this.refreshAuthorities(context);
+    if (context.fences.some(fence => fence.sessionGroup === group || fence.sessionGroup === '*')) return reject('reclaim_started');
+    const preparation = this.ttlPreparation.get(group) ?? this.evictionPreparation.get(group);
+    if (!preparation) return reject('no_preparation');
+    const scene = await this.d.observeGroup(group);
+    if (preparation.runId !== request.expectedRunId || scene?.runId !== request.expectedRunId) return reject('run_changed');
+    const configurationChanged = validLaunchConfig(scene.launchConfig) && !isDeepStrictEqual(scene.launchConfig,
+      await this.d.db.resolveSessionLaunchConfig({ sessionGroup: group, sessionMode: 'multi' }));
+    if (context.transition || configurationChanged || context.restartRequests.some(row =>
+      row.reason === 'upgrade' && row.runIds.includes(scene.runId) || row.reason === 'manual_restart' &&
+      (manualTarget(row) === group || row.mode === 'single'))) return reject('restart_pending');
+    const eviction = this.evictionPreparation.get(group);
+    if (eviction?.runId === scene.runId && this.now() >= eviction.deadline) return reject('preparation_expired');
+    const now = this.now();
+    this.ttlPreparation.delete(group);
+    this.evictionPreparation.delete(group);
+    // lastActivity already includes ttlReset for both TTL and eviction ordering.
+    this.ttlReset.set(group, { runId: scene.runId, at: now });
+    const previous = this.reclaimDeferrals.get(group);
+    const history = previous?.runId === scene.runId ? previous : { runId: scene.runId, count: 0, reasons: [], alerted: false };
+    history.count++;
+    if (!history.alerted) history.reasons.push(request.reason);
+    this.reclaimDeferrals.set(group, history);
+    await this.event('reclaim_deferred', { session_group: group, run_id: scene.runId, reason: request.reason });
+    if (!history.alerted && history.count >= (context.configuration.reclaimDeferAlertCount ?? 4)) {
+      history.alerted = true;
+      const event = { event: 'reclaim_defer_alert', session_group: group, run_id: scene.runId,
+        reasons: [...history.reasons], message: `Consecutive reclaim deferrals for ${group}: ${history.reasons.join('; ')}` };
+      await this.event(event.event, event);
+      if (this.d.alert) Promise.resolve().then(() => this.d.alert(event)).catch(cause => this.d.reportError?.(cause, { phase: 'lifecycle_alert' }));
+    }
+    return { ok: true, result: 'accepted' };
   }
 
   async checkTtl(scene, context) {

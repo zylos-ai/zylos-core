@@ -22,6 +22,8 @@ export function validSupervisorRequest(request) {
       && (!Object.hasOwn(request, 'expectedSessionId') || typeof request.expectedSessionId === 'string')
       && (!Object.hasOwn(request, 'sessionGroup') || validGroup(request.sessionGroup));
     case 'ready_for_config_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId);
+    case 'defer_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId)
+      && nonempty(request.reason) && request.reason.trim().length > 0;
     case 'mode_switch': return ['single', 'multi'].includes(request.target);
     case 'start_attempt': return true; // The runtime owner validates its complete request in the runtime queue.
     default: return false;
@@ -31,8 +33,8 @@ export function validSupervisorRequest(request) {
 /** One queue is shared with lifecycle mutations; external waits must stay outside it. */
 export class SupervisorAdmission {
   constructor({ store = new RestartRequestStore(), db, readMode, listRuns, readRun,
-    resolveLaunchConfig, preflightReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
-    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, modeSwitch, startAttempt, diagnostic, now });
+    resolveLaunchConfig, preflightReclaim, deferReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
+    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, deferReclaim, modeSwitch, startAttempt, diagnostic, now });
     this.open = false; this.tail = Promise.resolve();
   }
   serialize(operation) {
@@ -61,6 +63,9 @@ export class SupervisorAdmission {
         if (request.type === 'mode_switch') {
           return reply(await this.modeSwitch(request));
         }
+        if (request.type === 'defer_reclaim') {
+          return reply(await this.deferReclaim(request));
+        }
         if (request.type === 'ready_for_config_reclaim') {
           let rows = [];
           try { rows = this.store.read(); }
@@ -82,7 +87,7 @@ export class SupervisorAdmission {
       } catch (error) {
         if (request.type === 'delete_group' && ['DELETION_PREVIEW_STALE', 'DELETION_OWNERSHIP_MISMATCH', 'DRAFT_BECAME_ACTIVE'].includes(error.code)) return reply({ ok: false, result: 'rejected', reason: error.code });
         if (error.code !== 'requests_unreadable' || request.type === 'ready_for_config_reclaim') throw error;
-        return reply(['manual_restart', 'delete_group'].includes(request.type)
+        return reply(['manual_restart', 'delete_group', 'defer_reclaim'].includes(request.type)
           ? { ok: false, result: 'rejected', reason: error.code } : { ok: false, code: error.code });
       }
     });
