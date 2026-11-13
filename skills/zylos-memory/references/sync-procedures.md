@@ -103,6 +103,7 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    Read state only at the returned `statePath`. Session selection starts at
    state `synced_at`'s date; an unknown/invalid date selects the latest seven
    calendar days. The script returns the paths; never choose or glob them.
+   Read each `sessions[].path` individually; do not glob the `sessions/` directory.
    Read every listed segment in segment-ID order and every listed session file,
    in full; verify each byte count/hash. Use only the returned absolute paths,
    never constructed segment/session names. A missing state starts from an
