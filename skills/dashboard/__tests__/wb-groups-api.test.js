@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { collectStatus } from '../../../cli/lib/status-view.js';
-import { createGroupSnapshot, workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
+import { createGroupSnapshot, systemSample, workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
 import { createCoreCli } from '../src/lib/workbench/core-cli.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { AuthGate } from '../src/lib/auth.js';
@@ -14,7 +14,7 @@ import { Store } from '../src/lib/store.js';
 import { chatHttpFixture } from './helpers/chat-http.js';
 
 function fixture(t, { count = 1, statusError = false, modeError = false, overrideError = false,
-  c4Error = false, queueError = false, groupListError = false, noSample = false, readPm2 = () => null, groupKeys, displayNames, hotTtlSeconds } = {}) {
+  c4Error = false, queueError = false, groupListError = false, noSample = false, readPm2 = () => null, readSystem = () => null, groupKeys, displayNames, hotTtlSeconds } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-snapshot-'));
   if (hotTtlSeconds !== undefined) {
     fs.mkdirSync(path.join(root, '.zylos'));
@@ -55,7 +55,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
       events.push(filter); return [];
     } };
   const c4Reader = { getInboundTimes: () => [] };
-  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, displayNames,
+  const service = createGroupSnapshot({ zylosDir: root, store, cli, now: () => clock, readPm2, readSystem, displayNames,
     c4Reader, readConfigRuntime: () => { if (configFailure) throw new Error('config'); return configRuntime; }, loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => { if (modeError) throw new Error('config'); return { mode }; } };
       if (name === 'session-state-reader.js') return reader;
@@ -278,6 +278,26 @@ test('unreadable and malformed PM2 samples keep service counts unknown', async t
   }
   const empty = fixture(t, { readPm2: () => ({ processes: [] }) });
   assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0 });
+});
+
+// Integration: the snapshot forwards the injected host sample reader. Run for overview snapshot or system sample
+// changes; skip rendering-only edits. Same private fixture boundary as the PM2 cases; no collector or PM2 runs.
+test('the instance carries the host sample read for this snapshot and stays unknown when unreadable', async t => {
+  const sample = { collectedAt: 1799999990000, cpu_pct: 37.5, cpu_count: 8, mem_used_bytes: 2048, mem_total_bytes: 8192,
+    disk_used_pct: 61, disk_free_bytes: 4096 };
+  let reads = 0;
+  const f = fixture(t, { readSystem: () => { reads++; return sample; } });
+  const snapshot = await f.service.getSnapshot();
+  assert.equal(reads, 1);
+  assert.deepEqual(snapshot.instance.system, systemSample(sample));
+  assert.deepEqual(snapshot.instance.system, { sampledAt: 1799999990000, cpuPct: 37.5, cpuCount: 8, memUsedBytes: 2048,
+    memTotalBytes: 8192, diskUsedPct: 61, diskFreeBytes: 4096 });
+  const summary = await workbenchResponse(f.service, '/api/workbench/groups', new URLSearchParams('view=summary'));
+  assert.equal(Object.hasOwn(summary, 'instance'), false, 'the summary view stays without host details');
+  for (const read of [() => { throw new Error('read failed'); }, () => null]) {
+    const unknown = fixture(t, { readSystem: read });
+    assert.equal((await unknown.service.getSnapshot()).instance.system, null);
+  }
 });
 
 // Integration: Cross-module absent-sample boundary; run for pool projection changes.

@@ -260,6 +260,11 @@ test('instance strip shows a dash, not old numbers, when the host sample is stal
   assert.equal(sys().some(node => node.classList.contains('wb-stale')), false, 'no sample is unknown, not stale');
   instanceStrip(root, { mode: 'multi', readAt: system.sampledAt, instance: { pool: {}, system: { ...system, memTotalBytes: null, diskUsedPct: null } } }, { document, t });
   assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['50%', '—', '—'], 'a missing field alone shows a dash');
+  // A sample outside 0–100 (CPU accounting overshoot, a negative disk figure, used above total) shows the nearest bound.
+  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt, instance: { pool: {},
+    system: { ...system, cpuPct: 104.6, memUsedBytes: 5, memTotalBytes: 4, diskUsedPct: -1 } } }, { document, t });
+  assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['100%', '100%', '0%']);
+  assert.deepEqual(sys().map(node => node.title.split(' · ')[0]), ['wb.host.cpu 100%', 'wb.host.memory 100%', 'wb.host.disk 0%']);
 });
 test('selected rows are marked and the origin row keeps its own style', () => {
   const document = createDocument(), root = document.createElement('div');
