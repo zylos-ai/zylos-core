@@ -21,21 +21,21 @@ export async function runStaleStatusBrowser(t, sandbox) {
   fs.writeFileSync(file, JSON.stringify({ state: 'busy', health: 'ok', runId: identity.runId, sessionId: identity.sessionId, idle_seconds: 0 }));
   // A stopped writer: the filesystem mtime is the actual setup time and never changes.
   const sampledAt = fs.statSync(file).mtimeMs;
-  const idleFile = path.join(path.dirname(file), 'idle-status.json');
-  fs.writeFileSync(idleFile, JSON.stringify({ state: 'idle', health: 'ok', runId: identity.runId, sessionId: identity.sessionId, idle_seconds: 4 }));
   const streams = new Set(), errors = [], captures = [], reads = [];
-  let sampleMode = 'file';
+  let sampleMode = 'file', runtimeHealth = 'ok', wait = null;
   async function snapshot(url) {
     const now = Date.now();
     const data = workbenchAnswer(url, now);
     const status = await collectStatus({ mode: () => ({ mode: 'multi' }), list: () => [],
-      session: async () => ({ identity, status: sampleResult(sampleMode === 'missing' ? null : readJsonSample(sampleMode === 'idle' ? idleFile : file, 'status'), identity, identity, 5000, now) }),
+      session: async () => ({ identity, status: sampleResult(sampleMode === 'missing' ? null : readJsonSample(file, 'status'), identity, identity, 5000, now) }),
       runtimes: [], facts: async () => ({ originNeed: null }), configIssue: () => null, resolveRoot: () => sandbox.paths.zylos, now: () => now });
     const row = data.rows.find(row => row.sessionGroup === GROUP);
     row.live = status.origin;
+    row.wait = wait;
     row.state = classify(row, { now });
+    data.instance.runtimeHealth.claude = { health: runtimeHealth };
     row.name = { displayName: '状态刷新已停止的会话' };
-    row.tools = []; row.wait = null; row.working = { on: true, turn: { since: sampledAt - 1000 }, subagents: null };
+    row.tools = []; row.working = { on: true, turn: { since: sampledAt - 1000 }, subagents: null };
     row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
     row.duration = null;
     data.rows = [row]; data.counts = countRows(data.rows);
@@ -102,11 +102,11 @@ export async function runStaleStatusBrowser(t, sandbox) {
     const remaining = sampledAt + age - Date.now();
     if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
   }
-  async function check(element, stale, kind = 'busy') {
+  async function check(element, stale) {
     await element.filter({ hasText: stale ? /秒前/ : /未知/ }).waitFor({ state: 'visible' });
     const text = await element.innerText();
     if (stale) {
-      assert.match(text, kind === 'idle' ? /空闲/ : /忙|工作/);
+      assert.match(text, /忙/);
       assert.match(text, /\d+\s*秒前/);
       const age = element.locator('.wb-status-age');
       assert.equal(await age.isVisible(), true);
@@ -118,6 +118,13 @@ export async function runStaleStatusBrowser(t, sandbox) {
       assert.equal(await element.locator('.wb-status-age').count(), 0);
     }
   }
+  async function checkHeader(page, expected = '正在工作') {
+    const header = page.locator('.conversation-running');
+    await header.filter({ hasText: expected }).waitFor({ state: 'visible' });
+    assert.equal((await header.innerText()).replace(/\s+/g, ' ').trim(), expected);
+    assert.equal(await header.locator('.wb-status-age').count(), 0);
+    assert.doesNotMatch(await header.getAttribute('title') ?? '', /最后一次状态/);
+  }
   await waitAge(19000);
   for (const f of pages) {
     await f.page.reload();
@@ -126,30 +133,19 @@ export async function runStaleStatusBrowser(t, sandbox) {
     await openDashboardTab(f.page, 'chat');
     await f.page.locator(`#wb-chat [data-conversation-id="${ID}"]`).click();
     await f.page.locator('#wb-chat .conversation-message').first().waitFor();
-    await check(f.page.locator('.conversation-running'), true);
+    await checkHeader(f.page);
     await shot(f.page, `stale-${f.width}-${f.theme}-conversation`);
   }
-  // Idle has a distinct phone rule: recent stale idle remains visible, fresh idle stays compact/hidden.
-  sampleMode = 'idle';
-  for (const f of pages.filter(f => f.width === 390)) {
-    await f.page.reload();
-    await f.page.locator(`#wb-chat [data-conversation-id="${ID}"]`).click();
-    await check(f.page.locator('.conversation-running'), true, 'idle');
-    await shot(f.page, `stale-idle-${f.width}-${f.theme}-conversation`);
-  }
-  sampleMode = 'file';
   await waitAge(62000);
   for (const f of pages) {
-    await f.page.waitForFunction(() => document.querySelector('.conversation-running')?.textContent.includes('未知'));
-    await f.page.locator('.conversation-running').waitFor();
-    await check(f.page.locator('.conversation-running'), false);
+    await checkHeader(f.page);
     await shot(f.page, `unknown-${f.width}-${f.theme}-conversation`);
     if (f.width <= 760) await f.page.locator('#wb-chat .conversation-back').click();
     await openDashboardTab(f.page, 'overview');
     await check(f.page.locator('.wb-row[data-group] .wb-state').first(), false);
     await shot(f.page, `unknown-${f.width}-${f.theme}-overview`);
   }
-  // No sample carries no last-state tooltip, even if event-derived working is still on.
+  // Missing sampled state does not change the event-derived header or fabricate a last-state tooltip.
   sampleMode = 'missing';
   await pages[0].page.reload();
   const unknown = pages[0].page.locator('.wb-row[data-group] .wb-state').first();
@@ -157,9 +153,15 @@ export async function runStaleStatusBrowser(t, sandbox) {
   assert.doesNotMatch(await unknown.getAttribute('title') ?? '', /最后一次状态/);
   await openDashboardTab(pages[0].page, 'chat');
   await pages[0].page.locator(`#wb-chat [data-conversation-id="${ID}"]`).click();
-  const missingHeader = pages[0].page.locator('.conversation-running');
-  await missingHeader.waitFor(); assert.match(await missingHeader.innerText(), /未知/);
-  assert.doesNotMatch(await missingHeader.getAttribute('title') ?? '', /最后一次状态/);
+  await checkHeader(pages[0].page);
+  runtimeHealth = 'rate_limited'; wait = { kind: 'rate_wait' };
+  for (const f of pages.filter(f => f.theme === 'light')) {
+    await f.page.reload();
+    await openDashboardTab(f.page, 'chat');
+    await f.page.locator(`#wb-chat [data-conversation-id="${ID}"]`).click();
+    await checkHeader(f.page, '服务受限，恢复后自动投递');
+    await shot(f.page, `limited-${f.width}-${f.theme}-conversation`);
+  }
   assert.equal(fs.statSync(file).mtimeMs, sampledAt, 'no status writer refreshed the sample');
   assert.equal(errors.length, 0, errors.join('\n'));
   console.info('Stale status captures:', JSON.stringify(captures));
