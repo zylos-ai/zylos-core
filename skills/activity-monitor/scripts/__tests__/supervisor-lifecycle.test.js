@@ -1866,3 +1866,21 @@ test('simultaneous TTL and eviction checks have one deferred preparation and bot
   f.now += 60000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 3);
 });
+
+
+test('renewed capacity demand rechecks activity after an expired deferred eviction check', async () => {
+  const f = fixture(); f.pending = [{ sessionGroup: 'b' }];
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).ok, true);
+  f.settle(); f.pending = [];
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  f.now += 60000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 2, 'expiry still asks for a fresh check');
+  assert.equal(f.fences.size, 0, 'no capacity demand means no eviction');
+  f.settle(); f.now += 60001;
+  f.scenes[0].lastActivityAt = f.now;
+  f.pending = [{ sessionGroup: 'b' }];
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(f.lifecycle.evictionPreparation.has('a'), false, 'renewed demand discards the check after new activity');
+  assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 2);
+});

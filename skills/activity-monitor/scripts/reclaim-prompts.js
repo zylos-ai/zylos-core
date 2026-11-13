@@ -16,11 +16,12 @@ const WAKE_UP_CHECK = 'Create a wake-up only for a step of your own ongoing task
   + `Otherwise run \`node "${SCHEDULER_CLI}" add "<self-contained check>" --in "<delay>" --json\` in this session without any --reply option, and confirm it reports ok:true. `
   + 'Do not create scheduled tasks for anything else.';
 
+// Keep each check on one input line when bracketed paste is disabled.
 const checkControlPrompt = (reason, { restart = false, closing = 'Then acknowledge.' } = {}) =>
-  `${reason} During this check, do not send messages to anyone.\n\n`
-  + `1. ${restart ? INTERRUPTED_RUNNING_WORK : DEFER_RUNNING_WORK}\n`
-  + `2. ${HANDOFF_CHECK}\n`
-  + `3. ${WAKE_UP_CHECK}\n\n${closing}`;
+  `${reason} During this check, do not send messages to anyone. `
+  + `1. ${restart ? INTERRUPTED_RUNNING_WORK : DEFER_RUNNING_WORK} `
+  + `2. ${HANDOFF_CHECK} `
+  + `3. ${WAKE_UP_CHECK} ${closing}`;
 
 // TTL reclaim and capacity/memory-pressure eviction share the approved check.
 export const PRE_RECLAIM_CHECK_PROMPT = checkControlPrompt('This session group has been idle and will be reclaimed.');
