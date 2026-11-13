@@ -103,6 +103,14 @@ interval reaching the configured alert threshold sends the owner one alert
 with the group and each request's reason; it never forces reclaim. Activity
 starting a new idle interval clears this history.
 
+Runtime behavior differs: in Codex 0.166, completion of a background terminal
+records a `completed` entry in the session log but does not automatically start
+a new conversation turn. That log update still counts as session activity, so
+the supervisor cancels the deferral and later issues another check, but the
+session does not automatically continue processing the background result. If
+the next step depends on that result, record it in the handoff or arrange for
+the task itself to send a completion message back.
+
 Subagent events with `agent_id` are tracked separately for the current run and
 session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended
 child blocks TTL and capacity eviction while its last event is less than one
