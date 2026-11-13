@@ -248,15 +248,21 @@ test('AC-1: state snapshot schema has recovery fields', () => {
 
 // --- AC-2: Metric resolver ---
 
-test('AC-2: /api/health source health structure', () => {
+test('public health contains only liveness and boot identity', () => {
   const health = api('/api/health');
+  assert.deepEqual(Object.keys(health).sort(), ['bootId', 'ok', 'service']);
+  assert.equal(health.ok, true);
+});
+
+test('state source health structure', () => {
+  const health = api('/api/state');
   assert.ok(health.source, 'missing source block');
   assert.ok(health.source.runtime_progress, 'missing runtime_progress');
   assert.ok(health.source.collector_liveness, 'missing collector_liveness');
 });
 
-test('AC-2: source health freshness fields', () => {
-  const health = api('/api/health');
+test('source health freshness fields', () => {
+  const health = api('/api/state');
   for (const group of Object.values(health.source)) {
     for (const entry of Object.values(group)) {
       assert.ok('fresh' in entry, 'missing fresh field');
@@ -317,7 +323,7 @@ test('StatusLine: running service stores Core usage and reports fresh health', a
     context_pct: 42.5,
     session_cost: 0.1234
   });
-  const health = api('/api/health');
+  const health = api('/api/state');
   for (const entry of [health.source.platform.statusline, health.source.runtime_progress.statusline]) {
     assert.equal(entry.status, 'healthy');
     assert.equal(entry.fresh, true);

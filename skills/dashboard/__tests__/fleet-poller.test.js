@@ -18,6 +18,22 @@ function textResponse(body, status = 200) {
   });
 }
 
+test('fleet health probe accepts both minimal and detailed remote health objects', async () => {
+  for (const body of [
+    { ok: true, service: 'zylos-dashboard', bootId: 'remote-boot' },
+    { ok: true, service: 'zylos-dashboard', uptimeSeconds: 42, event_loop: {}, source: {} }
+  ]) {
+    const poller = new FleetPoller(makeConfig([
+      { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'zylos_ak_secret' }
+    ]), { fetch: async (_url, options) => {
+      assert.equal(options.headers.Authorization, 'Bearer zylos_ak_secret');
+      return jsonResponse(body);
+    } });
+    await poller._probeAgentLatency(poller.agents[0]);
+    assert.equal(poller.getFleet().agents[0].link.quality, 'ok');
+  }
+});
+
 function makeConfig(agents, fleet = {}) {
   return {
     fleet: {

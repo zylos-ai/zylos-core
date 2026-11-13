@@ -7,6 +7,8 @@ import test, { mock } from 'node:test';
 import { VersionChecker } from '../skills/dashboard/src/lib/version-checker.js';
 import { EventLoopMonitor } from '../skills/dashboard/src/lib/event-loop-monitor.js';
 import { StateEngine } from '../skills/dashboard/src/lib/state-engine.js';
+import { Store } from '../skills/dashboard/src/lib/store.js';
+import { generateApiKey, hashApiKey } from '../skills/dashboard/src/lib/auth.js';
 import { SupervisorAdmission } from '../skills/activity-monitor/scripts/supervisor-admission.js';
 import { createSupervisorConnectionHandler } from '../skills/activity-monitor/scripts/router-socket.js';
 import * as sessionReader from '../cli/lib/session-state-reader.js';
@@ -100,18 +102,48 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
   });
   await new Promise(resolve => dashboard.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${dashboard.address().port}`;
-  const request = async route => {
-    const response = await fetch(origin + route, { signal: AbortSignal.timeout(4000) });
+  const request = async (route, headers = {}) => {
+    const response = await fetch(origin + route, { headers, signal: AbortSignal.timeout(4000) });
+    assert.equal(response.headers.get('cache-control'), 'no-store');
     return { status: response.status, body: await response.json() };
   };
   const ready = () => request('/api/health?probe=ready');
 
-  await t.test('ordinary health retains the unchanged baseline response with the same inputs', async () => {
-    const expected = { ok: true, service: 'zylos-dashboard', pid: process.pid,
-      startedAt: '2027-01-15T08:00:00.000Z', uptimeSeconds: 12, phase: 'phase2a',
-      event_loop: { lag_ms: 0 }, source: { fixture: { healthy: true } } };
+  await t.test('ordinary public health exposes only liveness and a stable boot identity', async () => {
+    const { body: expected } = await request('/api/health');
+    assert.deepEqual(Object.keys(expected).sort(), ['bootId', 'ok', 'service']);
+    assert.equal(expected.ok, true);
+    assert.equal(expected.service, 'zylos-dashboard');
+    assert.match(expected.bootId, /^[a-f0-9-]{36}$/);
     for (const route of ['/api/health', '/api/health?probe=other']) {
       assert.deepEqual(await request(route), { status: 200, body: expected });
+      assert.deepEqual(await request(route, { Authorization: 'Bearer invalid' }), { status: 200, body: expected });
+      assert.deepEqual(await request(route, { Cookie: '__Secure-zylos_dashboard_session=invalid' }), { status: 200, body: expected });
+    }
+    assert.equal(identityReads, 0);
+  });
+  // Extends the same real HTTP/auth boundary to cookie and API-session detail
+  // admission. Run for health/auth changes; UI-only changes may skip this case.
+  await t.test('signed-in health includes diagnostics for cookie and API sessions', async () => {
+    const login = await fetch(origin + '/login', { method: 'POST', redirect: 'manual',
+      body: new URLSearchParams({ password: 'fixture-password' }), signal: AbortSignal.timeout(4000) });
+    assert.equal(login.status, 302);
+    await login.text();
+    const cookie = login.headers.getSetCookie().find(value => value.startsWith('__Secure-zylos_dashboard_session=')).split(';')[0];
+    const key = generateApiKey();
+    const database = new Store(path.join(root, 'components/dashboard/dashboard.db'));
+    try { database.insertApiKey({ name: 'health-reader', keyHash: hashApiKey(key), scope: 'read' }); }
+    finally { database.close(); }
+    const exchange = await fetch(origin + '/api/auth/token', { method: 'POST',
+      headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(4000) });
+    assert.equal(exchange.status, 200);
+    const { token } = await exchange.json();
+    const publicHealth = (await request('/api/health')).body;
+    for (const headers of [{ Cookie: cookie }, { Authorization: `Bearer ${token}` }]) {
+      assert.deepEqual(await request('/api/health', headers), { status: 200, body: {
+        ...publicHealth, startedAt: '2027-01-15T08:00:00.000Z', uptimeSeconds: 12,
+        event_loop: { lag_ms: 0 }, source: { fixture: { healthy: true } }
+      } });
     }
     assert.equal(identityReads, 0);
   });
