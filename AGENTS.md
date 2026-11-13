@@ -41,6 +41,10 @@ const path = require('path');
 module.exports = myFunction;
 ```
 
+## Dashboard Visual Design
+
+Before changing Dashboard CSS, HTML, or frontend components, read [the Dashboard visual design specification](skills/dashboard/docs/visual-design.md). Keep the specification in sync with visual changes and self-check the delivery against its review checklist. Values marked pending Howard's decision are proposals, not approved implementation requirements.
+
 ## Testing
 
 Tests never touch a live instance. The Node and Jest test runners set `HOME` and
