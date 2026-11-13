@@ -11,12 +11,12 @@ test('authentication includes pending and starting groups but not absent empty q
   const result = buildAttention(snapshot([row('pending', 'claude', 'not_running', { pending: { count: 2 } }), row('starting', 'claude', 'starting'), row('quiet', 'claude', 'not_running')], { claude: { health: 'auth_failed' } }));
   assert.deepEqual(result.problems[0].groups, ['pending', 'starting']);assert.equal(result.problems[0].extraUnknown, 0);
 });
-test('rate recovery is a reminder only and a clean sample reports its read time', () => {
+test('rate recovery is a reminder only and a clean sample reports ok without a sample time', () => {
   for (const health of ['rate_limited', 'recovering']) {
     const result = buildAttention(snapshot([], { claude: { health, cooldownUntil: 42 } }));
     assert.equal(result.problems.length, 0);assert.deepEqual(result.reminders, [{ kind: 'rate_limited', runtime: 'claude', until: 42 }]);assert.equal(result.ok, false);
   }
-  assert.equal(buildAttention(snapshot()).ok, true);assert.equal(buildAttention(snapshot()).sampledAt, 10);
+  assert.equal(buildAttention(snapshot()).ok, true);assert.equal(Object.hasOwn(buildAttention(snapshot()), 'sampledAt'), false);
 });
 test('channel service needs two PM2 samples and resets after online without snapshot-driven increments', () => {
   const counter = createChannelDownCounter(), snap = snapshot([{ ...row('a', 'claude', 'not_running'), c4: { componentName: 'telegram' } }]);

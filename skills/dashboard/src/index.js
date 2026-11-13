@@ -413,7 +413,7 @@ const c4Reader = new C4Reader(config.zylosDir);
 const displayNames = createDisplayNames({ store, zylosDir: config.zylosDir, sanitizer });
 const workbench = createGroupSnapshot({ zylosDir: config.zylosDir, store, c4Reader, sanitizer, displayNames,
   readConfigRuntime: () => loadZylosConfig(config.zylosDir).runtime ?? null,
-  readPm2: () => pm2Collector.getLatestPM2Data() });
+  readPm2: () => pm2Collector.getLatestPM2Data(), readSystem: () => systemCollector.getLatestSystemData() });
 const instanceTimezone = createInstanceTimezone({ zylosDir: config.zylosDir,
   readTimezone: scheduleTz,
   readPm2: async () => ({ processes: JSON.parse(await pm2Collector._execPm2Jlist()) }) });

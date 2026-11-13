@@ -17,7 +17,7 @@ function entry(document, { severity, glyph, text, sub, group, onSelect, t }) {
   }
   return node;
 }
-/** Attention items name the conclusion first; group items open that group's detail. */
+/** Attention items name the conclusion first; group items open that group's detail. With nothing to report the bar stays empty. */
 export function renderAttention(root, snapshot, { error, lastSuccess, now = Date.now(), document = root.ownerDocument, t = key => key, level = 'plain', onSelect = () => {} } = {}) {
   root.replaceChildren();
   if (error) root.append(entry(document, { severity: 'problem', glyph: 'alert', text: t('wb.readFailed'), t,
@@ -41,13 +41,5 @@ export function renderAttention(root, snapshot, { error, lastSuccess, now = Date
     if (level === 'technical' && details) subs.push(details);
     root.append(entry(document, { severity, glyph: severity === 'reminder' ? 'clock' : 'alert', text: t(key, values),
       sub: subs.join(' · '), group, onSelect, t }));
-  }
-  if (!error && snapshot && !items.length) {
-    const ok = element(document, 'div', undefined, 'wb-attention-ok');
-    ok.append(icon(document, 'check'), element(document, 'span', t('wb.attention.allOk')));
-    const sampled = snapshot.attention?.sampledAt ?? snapshot.readAt;
-    if (level === 'technical' && sampled != null) ok.append(element(document, 'span', ' · ' + t('wb.attention.sampled', { seconds: Math.max(0, Math.floor((now - sampled) / 1000)) }), 'wb-sub'));
-    ok.title = t('wb.attention.okHint');
-    root.append(ok);
   }
 }

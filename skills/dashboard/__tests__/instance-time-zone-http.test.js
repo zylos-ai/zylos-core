@@ -59,7 +59,7 @@ test('usage and state follow the .env time zone on every request, without a rest
     assert.equal(clockOf(series.since, zone), '00:00', 'the week starts at midnight in the instance zone');
     const summary = (await get('/api/workbench/usage?summary=cost')).costSummary;
     assert.equal(summary.tz, zone);
-    const day = summary.daily.find(row => row.total > 0);
+    const day = series.costByRuntime.find(row => row.value > 0);
     assert.ok(day, 'the cost falls in one day bucket');
     assert.equal(clockOf(day.at, zone), '00:00', 'day buckets start at midnight in the instance zone');
     assert.equal(dayOf(day.at, zone), dayOf(spent, zone), 'the cost is counted on its day in the instance zone');

@@ -104,15 +104,6 @@ export function costSummary(store, { tz, now = new Date() } = {}) {
   const weekBounds = usageBounds({ range: '7d', tz, now });
   const intervals = usageIntervals(weekBounds);
   const week = costRows(store, { ...weekBounds, intervals });
-  const days = new Map(intervals.map(({ at }) =>
-    [at, { at, claude: 0, codex: 0, total: 0 }]));
-  for (const row of week) {
-    if (!days.has(row.at)) days.set(row.at, { at: row.at, claude: 0, codex: 0, total: 0 });
-    const day = days.get(row.at);
-    day[row.runtime] = (day[row.runtime] || 0) + row.value;
-    day.total += row.value;
-  }
   const todayAt = intervals.at(-1)?.at;
-  return { ...timezone, today: summarizeCosts(week.filter(row => row.at === todayAt)),
-    sevenDay: summarizeCosts(week), daily: [...days.values()] };
+  return { ...timezone, today: summarizeCosts(week.filter(row => row.at === todayAt)), sevenDay: summarizeCosts(week) };
 }

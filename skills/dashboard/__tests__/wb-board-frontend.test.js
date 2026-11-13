@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { statePill, statusAnnotation, renderBoard, renderRow, modelCell, pendingModel, boardController, renderDistribution } from '../public/js/wb/board.js';
 import { createBoardSearch } from '../public/js/wb/board-search.js';
 import { activityStrip } from '../public/js/wb/activity-strip.js';
-import { instanceStrip } from '../public/js/wb/instance-strip.js';
+import { instanceStrip, SYSTEM_STALE_MS } from '../public/js/wb/instance-strip.js';
 import { renderHostPool } from '../public/js/wb/host-panel.js';
 import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { waitText } from '../public/js/wb/view-mode.js';
@@ -203,15 +203,63 @@ test('board header counts listed groups by state; plain view names each state', 
   assert.equal(root.children[1].textContent, '1 wb.state.busy'); assert.equal(root.children[1].title, 'wb.state.busy 1');
   assert.deepEqual(words().map(word => word.className), ['wb-dist-word wb-vh']);
 });
-test('attention shows an all-clear line, with sample age only in technical detail', () => {
+test('attention with nothing to report stays empty in both views', () => {
   const document = createDocument(), root = document.createElement('div');
-  const snapshot = { readAt: 1000, attention: { problems: [], reminders: [], sampledAt: 1000 } };
-  renderAttention(root, snapshot, { document, t, now: 6000 });
-  assert.equal(root.textContent, 'wb.attention.allOk');
-  renderAttention(root, snapshot, { document, t, now: 6000, level: 'technical' });
-  assert.equal(root.textContent, 'wb.attention.allOk · wb.attention.sampled5');
+  const snapshot = { readAt: 1000, attention: { problems: [], reminders: [] } };
+  for (const level of ['plain', 'technical']) {
+    renderAttention(root, snapshot, { document, t, now: 6000, level });
+    assert.equal(root.children.length, 0, `${level}: no all-clear line`);
+  }
   renderAttention(root, snapshot, { document, t, now: 6000, error: true, lastSuccess: null });
-  assert.equal(root.textContent, 'wb.readFailed', 'a read failure replaces the all-clear line');
+  assert.equal(root.textContent, 'wb.readFailed', 'a read failure is still reported');
+});
+test('instance strip shows CPU, memory and disk between the pool and the cost, with details on hover', () => {
+  const document = createDocument(), root = document.createElement('div'), GiB = 1073741824;
+  const system = { sampledAt: 100_000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2 * GiB, memTotalBytes: 16 * GiB, diskUsedPct: 61.6, diskFreeBytes: 40.25 * GiB };
+  const snapshot = { mode: 'multi', readAt: 130_000, instance: { pool: { used: 1, capacity: 4 }, system } };
+  for (const level of ['plain', 'technical']) {
+    instanceStrip(root, snapshot, { document, t, level, costSummary: { today: { total: 1.5 }, sevenDay: { total: 9 } } });
+    const items = root.children.filter(node => node.classList.contains('wb-inst-item'));
+    const at = name => items.findIndex(node => node.classList.contains(name));
+    assert.equal(items[0].textContent, level === 'technical' ? 'multi' : 'wb.inst.modeMulti', `${level}: the run mode stays first`);
+    assert.deepEqual([at('wb-pool'), at('wb-sys-cpu'), at('wb-sys-memory'), at('wb-sys-disk')], [1, 2, 3, 4], `${level}: pool, then CPU, memory, disk`);
+    assert.match(items[5].textContent, /\$1\.50/, `${level}: the cost follows the three`);
+    const shown = name => items[at(name)].children.at(-1).textContent;
+    // Memory is used / total: 2 of 16 GiB is 12.5%, rounded to a whole percent.
+    assert.deepEqual(['wb-sys-cpu', 'wb-sys-memory', 'wb-sys-disk'].map(shown), ['23%', '13%', '62%']);
+    assert.deepEqual(['wb-sys-cpu', 'wb-sys-memory', 'wb-sys-disk'].map(name => items[at(name)].title), [
+      'wb.host.cpu 23% · wb.inst.cpuCores8', 'wb.host.memory 13% · wb.inst.memoryUsed2.0:16.0', 'wb.host.disk 62% · wb.inst.diskFree40.3']);
+    for (const name of ['wb-sys-cpu', 'wb-sys-memory', 'wb-sys-disk']) {
+      const node = items[at(name)];
+      assert.equal(node.children[0].className, 'wb-ico wb-ico-' + name.slice(7) + ' wb-ico-xs', 'icon first, like the other items');
+      assert.equal(node.children[1].className, 'wb-sys-word wb-vh', 'the name is read out but not shown');
+      assert.equal(node.classList.contains('wb-stale'), false);
+    }
+    // The spark bars and the "all groups" chip are gone from the cost item; its title still names the scope.
+    const classes = allNodes(root).map(node => node.className);
+    assert.equal(classes.some(name => /\bwb-(spark|scope)\b/.test(name)), false, `${level}: removed items stay removed`);
+    assert.equal(root.textContent.includes('wb.usage.allGroups'), false);
+    assert.equal(items[5].title.endsWith(' · wb.usage.allGroups'), true);
+  }
+});
+test('instance strip shows a dash, not old numbers, when the host sample is stale or missing', () => {
+  const document = createDocument(), root = document.createElement('div');
+  const system = { sampledAt: Date.UTC(2026, 10, 13, 7, 5), cpuPct: 50, cpuCount: 4, memUsedBytes: 1, memTotalBytes: 4, diskUsedPct: 30, diskFreeBytes: 1 };
+  const sys = () => root.children.filter(node => node.classList.contains('wb-sys'));
+  // Within 90 seconds of the snapshot's read time the sample counts as current.
+  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt + SYSTEM_STALE_MS, instance: { pool: {}, system } }, { document, t });
+  assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['50%', '25%', '30%']);
+  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt + SYSTEM_STALE_MS + 1, instance: { pool: {}, system } }, { document, t });
+  assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['—', '—', '—']);
+  assert.equal(sys().every(node => node.classList.contains('wb-stale')), true);
+  const time = new Intl.DateTimeFormat(undefined, { timeZone: ZONE, hour: '2-digit', minute: '2-digit' }).format(system.sampledAt);
+  for (const node of sys()) assert.ok(node.title.endsWith(' · wb.inst.systemStale' + time), `the title names the last sample: ${node.title}`);
+  assert.equal(sys().some(node => /wb\.inst\.(cpuCores|memoryUsed|diskFree)/.test(node.title)), false, 'no stale details either');
+  instanceStrip(root, { mode: 'multi', readAt: 1, instance: { pool: {}, system: null } }, { document, t });
+  assert.deepEqual(sys().map(node => [node.children.at(-1).textContent, node.title.endsWith('wb.inst.systemUnknown')]), [['—', true], ['—', true], ['—', true]]);
+  assert.equal(sys().some(node => node.classList.contains('wb-stale')), false, 'no sample is unknown, not stale');
+  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt, instance: { pool: {}, system: { ...system, memTotalBytes: null, diskUsedPct: null } } }, { document, t });
+  assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['50%', '—', '—'], 'a missing field alone shows a dash');
 });
 test('selected rows are marked and the origin row keeps its own style', () => {
   const document = createDocument(), root = document.createElement('div');
@@ -330,12 +378,13 @@ test('single and unreadable instance strips retain sampled counts without capaci
   for (const mode of ['single', 'unreadable']) for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) {
     const t = poolTranslator(locale), pool = { used: 0, capacity: 119,
       capacityRecord: { valid: false, fresh: false, source: 'fallback', reason: 'floor' } };
+    const poolOf = () => root.children.find(node => node.classList.contains('wb-pool'));
     instanceStrip(root, { mode, instance: { pool } }, { document, t, level });
-    const empty = root.children[1];
+    const empty = poolOf();
     assert.equal(empty.textContent, t(level === 'technical' ? 'wb.inst.pool' : 'wb.pool') + t('wb.unknown'));
     assert.equal(allNodes(empty).some(node => node.classList.contains('wb-pool-meter')), false);
     instanceStrip(root, { mode, instance: { pool: { ...pool, ready: 2, starting: 1, waiting: 4 } } }, { document, t, level });
-    const sampled = root.children[1];
+    const sampled = poolOf();
     assert.ok(sampled.textContent.includes('3'));
     assert.ok(sampled.textContent.includes(t(level === 'technical' ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: 4 })));
     assert.equal(sampled.textContent.includes(t('wb.inst.inUse')), level === 'technical');

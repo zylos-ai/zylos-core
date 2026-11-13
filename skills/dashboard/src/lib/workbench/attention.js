@@ -34,5 +34,5 @@ export function buildAttention(snapshot, { channelDownCounter, pm2Data } = {}) {
   for (const service of services) if ((channelDownCounter?.get(service) ?? 0) >= 2) problems.push({ kind: 'channel_down', service,
     pm2Status: pm2Data?.processes.find(process => process.name === service)?.pm2_env?.status ?? null });
   for (const source of ['status', 'c4', 'q', 'ov']) if (snapshot.sources[source]?.ok === false) problems.push({ kind: 'data_unreadable', source: snapshot.sources[source].reason });
-  return { ok: problems.length === 0 && reminders.length === 0, sampledAt: snapshot.readAt, problems, reminders };
+  return { ok: problems.length === 0 && reminders.length === 0, problems, reminders };
 }
