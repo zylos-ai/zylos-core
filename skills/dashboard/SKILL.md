@@ -380,7 +380,8 @@ cookie or API session it returns only `ok`, `service` (`zylos-dashboard`) and
 `bootId` (a random UUID generated once per process start). Missing, invalid or
 expired credentials, and disabled authentication, receive the public response.
 Authenticated cookies and read/admin API sessions also receive `startedAt`,
-`uptimeSeconds`, `event_loop` and `source`. Responses are not cached and vary
+`uptimeSeconds`, `event_loop` and `source`. Health authentication does not touch
+session activity or delete expired sessions. Responses are not cached and vary
 on Cookie and Authorization. Process IDs are not returned over HTTP: no
 remaining HTTP consumer needs them.
 
@@ -406,7 +407,7 @@ missing signals are `unknown`, invalid/future success timestamps are `stale`.
 | `collector_liveness.pm2_reader` | `last_success`, 180 seconds (60-second collector). |
 | `collector_liveness.system_sampler` | `last_success`, 90 seconds (30-second collector). |
 | `collector_liveness.conversation_reader` | New conversation activity `last_success`, 60 seconds; then idle. |
-| `collector_liveness.am_heartbeat` | `last_success`, 60 seconds (15-second reader). |
+| `collector_liveness.am_heartbeat` | `last_success` is the status file's actual mtime, 60 seconds (15-second reader). Multi reads `activity-monitor/session-groups/origin/agent-status.json`; single retains `activity-monitor/agent-status.json`. Reading the same file again does not refresh it. |
 | `platform.statusline` | Revalidation `last_success`, 30 seconds (2-second reader). |
 
 Missing health records do not prove whether login ever occurred. Session or
