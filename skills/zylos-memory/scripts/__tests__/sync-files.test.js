@@ -8,6 +8,7 @@ import { cleanup, rotate, list, commit as guardedCommit, checkpoint, extractAbso
 import { createBatchReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
 import { renderStateSkeleton } from '../state-format.js';
 import { acquire, memoryScope } from '../sync-lock.js';
+import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 
 const segment = '20261019T053002123Z';
 const digest = content => createHash('sha256').update(content).digest('hex');
@@ -137,6 +138,23 @@ test('unreadable segment rejects before state replacement', async t => {
   assert.doesNotMatch(fs.readFileSync(f.state, 'utf8'), /Updated/);
 });
 
+test('post-publication segment deletion warns and later cleanup retries', async t => {
+  const f = await fixture(t); write(f);
+  const target = path.join(f.memoryDir, `inbox.${segment}.md`), unlink = fs.unlinkSync;
+  const failure = t.mock.method(fs, 'unlinkSync', file => {
+    if (file === target) throw Object.assign(new Error('delete denied'), { code: 'EACCES' });
+    return unlink(file);
+  });
+  const result = await commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps);
+  assert.equal(result.committed, true);
+  assert.match(fs.readFileSync(f.state, 'utf8'), /Updated/);
+  assert.equal(fs.existsSync(target), true);
+  assert.match(f.warnings[0], /Could not remove committed segment/);
+  failure.mock.restore();
+  await cleanup(f.settings, f.deps);
+  assert.equal(fs.existsSync(target), false);
+});
+
 test('cleanup trusts only valid headers and retains own temporary file', async t => {
   const f = await fixture(t); write(f);
   fs.writeFileSync(f.state, 'broken');
@@ -218,6 +236,7 @@ test('list describes exact segment and daily session bytes with absolute paths',
   fs.writeFileSync(session, 'session\r\n'); fs.writeFileSync(path.join(sessions, 'notes.md'), 'ignored');
   const inputs = await list(f.settings);
   assert.equal(inputs.scope, f.scope); assert.equal(inputs.segments.length, 1); assert.equal(inputs.sessions.length, 1);
+  assert.equal(inputs.statePath, f.state);
   assert.deepEqual(inputs.segments[0], { id: segment, path: path.join(f.memoryDir, `inbox.${segment}.md`), bytes: 8, sha256: digest('absorbed') });
   assert.deepEqual(inputs.sessions[0], { path: session, bytes: 9, sha256: digest('session\r\n') });
   await guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs, batch: createBatchReceipt([], { scope: f.scope, after: 0, end: 0 }) } }, f.deps);
@@ -228,7 +247,7 @@ test('list describes exact segment and daily session bytes with absolute paths',
 // Exercise the actual commit guard with stale file snapshots and changed headers;
 // rejection must preserve official state, temporary output, and input bytes.
 test('commit rejects changed, omitted, or extra inputs before publishing or deleting', async t => {
-  for (const mutation of ['segment content', 'omitted segment', 'extra segment', 'session content', 'omitted session', 'state omitted segment', 'state extra segment']) {
+  for (const mutation of ['segment content', 'segment path', 'new segment', 'omitted segment', 'extra segment', 'state omitted segment', 'state extra segment']) {
     await t.test(mutation, async t => {
       const f = await fixture(t), original = write(f);
       const piece = path.join(f.memoryDir, `inbox.${segment}.md`);
@@ -236,10 +255,10 @@ test('commit rejects changed, omitted, or extra inputs before publishing or dele
       const session = path.join(sessions, '2026-10-19.md'); fs.writeFileSync(session, 'session one');
       const inputs = await list(f.settings);
       if (mutation === 'segment content') fs.writeFileSync(piece, 'modified');
+      if (mutation === 'segment path') inputs.segments[0].path = path.join(f.memoryDir, 'other.md');
+      if (mutation === 'new segment') fs.writeFileSync(path.join(f.memoryDir, `inbox.${segment}-1.md`), 'arrived later');
       if (mutation === 'omitted segment') inputs.segments = [];
       if (mutation === 'extra segment') inputs.segments.push({ ...inputs.segments[0], id: `${segment}-1` });
-      if (mutation === 'session content') fs.writeFileSync(session, 'session two');
-      if (mutation === 'omitted session') inputs.sessions = [];
       if (mutation === 'state omitted segment') fs.writeFileSync(f.temporary, f.skeleton());
       if (mutation === 'state extra segment') fs.writeFileSync(f.temporary, fs.readFileSync(f.temporary, 'utf8').replace(`inbox_committed=${segment} `, `inbox_committed=${segment},${segment}-1 `));
       const temporary = fs.readFileSync(f.temporary, 'utf8');
@@ -247,9 +266,82 @@ test('commit rejects changed, omitted, or extra inputs before publishing or dele
       assert.equal(fs.readFileSync(f.state, 'utf8'), original);
       assert.equal(fs.readFileSync(f.temporary, 'utf8'), temporary);
       assert.equal(fs.readFileSync(piece, 'utf8'), mutation === 'segment content' ? 'modified' : 'absorbed');
-      assert.equal(fs.readFileSync(session, 'utf8'), mutation === 'session content' ? 'session two' : 'session one');
+      assert.equal(fs.readFileSync(session, 'utf8'), 'session one');
     });
   }
+});
+
+test('commit ignores session appends and metadata while matching segment identity', async t => {
+  const f = await fixture(t); write(f);
+  const sessions = path.join(f.memoryDir, 'sessions'); fs.mkdirSync(sessions);
+  const session = path.join(sessions, '2026-10-19.md'); fs.writeFileSync(session, 'first\n');
+  const inputs = await list(f.settings);
+  fs.appendFileSync(session, 'later\n');
+  fs.writeFileSync(path.join(sessions, '2026-10-20.md'), 'new day\n');
+  inputs.segments[0].bytes = -1;
+  inputs.statePath = 'metadata only';
+  const result = await guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs, batch: createBatchReceipt([], { scope: f.scope, after: 0, end: 0 }) } }, f.deps);
+  assert.equal(result.committed, true);
+  assert.equal(fs.readFileSync(session, 'utf8'), 'first\nlater\n');
+});
+
+test('list hashes non-ASCII bytes rather than JavaScript character counts', async t => {
+  const f = await fixture(t); write(f);
+  const content = '\u6c49\u5b57\ud83d\ude00\r\n';
+  fs.writeFileSync(path.join(f.memoryDir, `inbox.${segment}.md`), content);
+  const item = (await list(f.settings)).segments[0];
+  assert.equal(item.bytes, Buffer.byteLength(content));
+  assert.notEqual(item.bytes, content.length);
+  assert.equal(item.sha256, digest(Buffer.from(content)));
+});
+
+test('list uses the synced date in configured timezone and a seven-calendar-day fallback', async t => {
+  const f = await fixture(t); write(f);
+  fs.writeFileSync(path.join(f.root, '.env'), 'TZ=America/Los_Angeles\n');
+  const sessions = path.join(f.memoryDir, 'sessions'); fs.mkdirSync(sessions);
+  for (const day of ['2026-03-03', '2026-03-04', '2026-03-09', '2026-03-10', '2026-03-11']) fs.writeFileSync(path.join(sessions, `${day}.md`), day);
+  const settings = { ...f.settings, now: () => Date.parse('2026-03-11T01:00:00Z') };
+  const dates = value => value.sessions.map(item => path.basename(item.path));
+  fs.writeFileSync(f.state, f.skeleton([], { syncedAt: '2026-03-10T01:00:00Z' }));
+  assert.deepEqual(dates(await list(settings)), ['2026-03-09.md', '2026-03-10.md']);
+  fs.writeFileSync(f.state, f.skeleton([], { syncedAt: '2026-03-03T12:00:00Z' })
+    .replace(' | synced_at=2026-03-03T12:00:00Z', '').replace(' -->', ' | synced_at=2026-03-03T12:00:00Z -->'));
+  assert.deepEqual(dates(await list(settings)), ['2026-03-03.md', '2026-03-04.md', '2026-03-09.md', '2026-03-10.md']);
+  for (const official of [null, 'broken', f.skeleton().replace('scope=telegram:test', 'scope=origin')]) {
+    if (official === null) fs.unlinkSync(f.state); else fs.writeFileSync(f.state, official);
+    assert.deepEqual(dates(await list(settings)), ['2026-03-04.md', '2026-03-09.md', '2026-03-10.md']);
+  }
+});
+
+test('Origin group listing reads only candidate sessions since the cursor date', async t => {
+  const f = await fixture(t, 'origin');
+  const target = await memoryScope({ ...f.settings.env, ZYLOS_SESSION_GROUP: 'telegram:candidate' });
+  fs.mkdirSync(path.join(target.memoryDir, 'sessions'), { recursive: true });
+  // Directories at file paths prove candidate state and inbox are never read.
+  fs.mkdirSync(path.join(target.memoryDir, 'state.md'));
+  fs.mkdirSync(path.join(target.memoryDir, `inbox.${segment}.md`));
+  for (const day of ['2026-10-18', '2026-10-19', '2026-10-20']) fs.writeFileSync(path.join(target.memoryDir, 'sessions', `${day}.md`), day);
+  const settings = { ...f.settings, group: 'telegram:candidate', since: '2026-10-19T05:30:02Z', now: () => Date.parse('2026-10-20T12:00:00Z') };
+  const result = await list(settings);
+  assert.deepEqual(Object.keys(result).sort(), ['scope', 'sessions']);
+  assert.equal(result.scope, settings.group);
+  assert.deepEqual(result.sessions.map(item => path.basename(item.path)), ['2026-10-19.md', '2026-10-20.md']);
+  assert.deepEqual((await list({ ...settings, since: '2026-10-20' })).sessions.map(item => path.basename(item.path)), ['2026-10-20.md']);
+  const { db, store } = storeFixture(t);
+  db.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,1)').run(settings.group);
+  db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(1,'in','system','new','delivered',?)").run(settings.group);
+  store.advanceOriginSyncCursor(settings.group, { syncedId: 0, checkpointId: 0 });
+  db.prepare('UPDATE origin_sync_cursors SET updated_at=? WHERE session_group=?').run(Date.parse('2026-10-19T05:30:02Z') / 1000, settings.group);
+  const { cursorUpdatedAt } = store.getOriginSyncBacklog().groups[0];
+  assert.equal(typeof cursorUpdatedAt, 'number');
+  for (const since of [cursorUpdatedAt, String(cursorUpdatedAt)]) {
+    assert.deepEqual((await list({ ...settings, since })).sessions, result.sessions);
+  }
+  await assert.rejects(list({ ...settings, group: '../escape' }), { code: 'SESSION_GROUP_INVALID' });
+  await assert.rejects(list({ ...settings, since: 'yesterday' }), { code: 'INVALID_INPUT' });
+  const worker = await fixture(t);
+  await assert.rejects(list({ ...worker.settings, group: settings.group }), { code: 'SCOPE_UNBOUND' });
+  await assert.rejects(guardedCommit({ ...settings, input: {} }, f.deps), { code: 'INVALID_INPUT' });
 });
 
 // Real lock + receipt verifier, with database reads/writes injected to observe

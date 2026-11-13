@@ -47,7 +47,13 @@ test('CLI exits distinguish malformed input, ownership loss, lock timeout and su
       catch (error) { reject(error); }
     });
   }));
-  const forbidden = run('sync-files', ['list', '--group', 'origin'], env);
+  const args = ['list', '--group', 'telegram:example', '--since', '2026-10-19'];
+  const denied = run('sync-files', args, env);
+  assert.equal(denied.status, 1); assert.match(denied.stderr, /^Error \[SCOPE_UNBOUND\]:/);
+  const logs = run('sync-files', args, { ...env, ZYLOS_SESSION_GROUP: 'origin' });
+  assert.equal(logs.status, 0, logs.stderr);
+  assert.deepEqual(JSON.parse(logs.stdout), { scope: 'telegram:example', sessions: [] });
+  const forbidden = run('sync-files', ['commit', '--group', 'origin', '--token', token], env, '{}');
   assert.equal(forbidden.status, 1); assert.match(forbidden.stderr, /^Error \[INVALID_INPUT\]:/);
 });
 

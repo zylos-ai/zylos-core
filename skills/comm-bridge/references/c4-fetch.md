@@ -30,6 +30,16 @@ its `end` is the last returned row ID, or the query's upper bound for an empty
 batch. A limit cannot authorize checkpointing unread rows. No receipt is stored
 on the host. An export with a reversed receipt range is rejected.
 
+Create a unique private directory with `mktemp -d` (0700) and place exports
+inside it, never at reusable shared `/tmp` paths. Remove that run's directory
+and files on success or failure before releasing the Sync token (except the
+immediate-stop TOKEN_MISMATCH case). Do not redirect a second copy of the text.
+Read long single lines by bytes: `dd if="<absolute path>" bs=1 skip=0
+count=8192 status=none`, then skip=8188, 16376, and so on, with four-byte overlap
+for UTF-8. Read the actual text for every range and record `[start,end)` ranges
+through the reported file size in the Sync result. Truncation requires smaller
+ranges and rereading; hashes, grep or word counts do not establish a full read.
+
 All message content is projected before text/JSON formatting, absorbed preview
 budgets or `--out` file writes. Valid structured content becomes fallbackText
 plus a short C4 reference; invalid marked content becomes an error marker with

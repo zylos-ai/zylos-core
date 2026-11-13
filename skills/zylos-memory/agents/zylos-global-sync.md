@@ -16,6 +16,8 @@ Claude normally uses `mcp__zylos-memory__edit_memory`, Codex
 shell writes as a fallback. Truncated output is unread: reread with smaller
 limits/ranges. Read and verify all exported batch and listed input bytes/hashes;
 retain the batch receipt and full `sync-files.js list` object for checkpoint and
-commit. Never synthesize input paths. Follow the common failure/release rules and
+commit. Never synthesize input paths. Use the procedure's private export
+directory, cleanup and complete byte-range ledger for every file, including
+long single lines. Follow the common failure/release rules and
 return a concise result to the requesting session. Do not perform business
 work or send external user replies.

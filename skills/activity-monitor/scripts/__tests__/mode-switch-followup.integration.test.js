@@ -7,20 +7,21 @@ import { spawnSync } from 'node:child_process';
 import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { createModeSwitchConverter } from '../../../activity-monitor/scripts/mode-switch-convert.js';
 import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
-import { shellQuote } from '../../../comm-bridge/scripts/c4-query-format.js';
+import { shellQuote, projectConversation } from '../../../comm-bridge/scripts/c4-query-format.js';
+import { createBatchReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
 import { emitC4Conversations } from '../../../comm-bridge/scripts/c4-session-init.js';
 import { formatConversationsForAgent } from '../../../comm-bridge/scripts/c4-db.js';
 import { readWorkMemory } from '../../../../cli/lib/read-work-memory.js';
 import { sendInternal } from '../../../comm-bridge/scripts/c4-send-internal.js';
 import { readAbsorbedReply, sendExternal } from '../../../comm-bridge/scripts/c4-send-external.js';
-import { commit, extractAbsorbedBlock } from '../../../zylos-memory/scripts/sync-files.js';
+import { checkpoint, commit, list, extractAbsorbedBlock } from '../../../zylos-memory/scripts/sync-files.js';
 import { acquire, release, memoryScope } from '../../../zylos-memory/scripts/sync-lock.js';
 import { renderStateSkeleton } from '../../../zylos-memory/scripts/state-format.js';
 
 const repo = path.resolve(new URL('../../../..', import.meta.url).pathname);
 const cleanups = [];
-afterEach(() => { while (cleanups.length) cleanups.pop()(); });
-function fixture(source) {
+afterEach(async () => { while (cleanups.length) await cleanups.pop()(); });
+function fixture(source, { wholeGroup = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mode-switch-followup-'));
   cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'comm-bridge'), { recursive: true });
@@ -31,7 +32,7 @@ function fixture(source) {
   const sender = path.join(skills, 'demo/scripts/send.js'); fs.mkdirSync(path.dirname(sender), { recursive: true });
   const argvFile = path.join(root, 'argv.jsonl');
   fs.writeFileSync(path.join(skills, 'demo/package.json'), JSON.stringify({ type: 'module' }));
-  fs.writeFileSync(path.join(skills, 'demo/scripts/session-group.js'), "process.stdout.write('a\\n');");
+  if (!wholeGroup) fs.writeFileSync(path.join(skills, 'demo/scripts/session-group.js'), "process.stdout.write('a\\n');");
   fs.writeFileSync(sender, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2).map(x => Buffer.from(x).toString('hex'))) + '\\n'); process.exit(process.argv[2] === 'fail-route' ? 1 : 0);`);
   const target = source === 'single' ? 'multi' : 'single';
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true }); fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ runtime: 'claude', session_mode: target }));
@@ -41,7 +42,7 @@ function fixture(source) {
   fs.symlinkSync('/bin/sh', path.join(bin, 'sh'));
   env.PATH = bin; env.PM2_HOME = path.join(root, 'pm2'); env.TMUX_TMPDIR = root;
   for (const key of Object.keys(env)) if (key === 'TMUX' || /(?:TOKEN|SECRET|PASSWORD|API_KEY)/.test(key)) delete env[key];
-  const add = (body, endpoint, group = 'a') => store.insertConversation('in', 'demo', endpoint, body, { groupName: group });
+  const add = (body, endpoint, group = 'a') => store.insertConversation('in', 'demo', endpoint, body, wholeGroup ? { wholeGroup: true } : { groupName: group });
   function convert() { const { runId } = store.beginModeTransition(source, target); store.setDrainFence('*'); store.absorbForTransition(runId); const row = store.getModeTransition(); const result = createModeSwitchConverter({ db: store, zylosDir: root })(row); store.setModeTransitionPhase(runId, 'cutover'); store.setModeTransitionPhase(runId, 'complete'); return { row, ...result }; }
   function cli(name, args, { input = '', group, shell = false } = {}) {
     const childEnv = { ...env }; if (group && group !== '*') childEnv.ZYLOS_SESSION_GROUP = group;
@@ -77,8 +78,18 @@ async function commitProgress(f, scope, ids) {
   const memory = await memoryScope(env); const kind = scope === '*' ? 'global' : 'group';
   const token = await acquire({ env, kind }, { currentRunId: async () => env.ZYLOS_RUN_ID });
   const state = path.join(memory.memoryDir, 'state.md'), before = fs.readFileSync(state, 'utf8');
-  fs.writeFileSync(`${state}.${token}.tmp`, renderStateSkeleton({ scope, syncedAt: '2026-10-27T00:00:00Z' }));
-  try { await commit({ env, token, input: { followedUpIds: ids } }); } finally { await release({ env, token, kind }); }
+  try {
+    const after = scope === '*' ? f.store.getGlobalCoverageEnd() : f.store.getCoverageEnd(scope);
+    const end = scope === '*' ? f.store.getGlobalDeliveredFrontier() : f.store.getDeliveredFrontier(scope);
+    const rows = f.api.getConversationsByRange(after + 1, end)
+      .filter(row => row.status === 'delivered' && (scope === '*' || row.session_group === scope));
+    const batch = createBatchReceipt(rows.map(projectConversation), { scope, after, end });
+    const inputs = await list({ env });
+    await checkpoint({ env, token, end, summary: 'Absorbed-message follow-up progress', batch }, { database: f.api });
+    fs.writeFileSync(`${state}.${token}.tmp`, renderStateSkeleton({ scope, syncedAt: '2026-10-27T00:00:00Z' })
+      .replace('coverage= ', `coverage=${end} `));
+    await commit({ env, token, input: { followedUpIds: ids, inputs, batch } }, { database: f.api });
+  } finally { await release({ env, token, kind }); }
   const after = fs.readFileSync(state, 'utf8'); return { before, after };
 }
 
@@ -174,29 +185,60 @@ for (const source of ['single', 'multi']) test(`${source}: converted messages, r
 }, 90000);
 
 for (const source of ['single','multi']) test(`B ${source}: 1000 converted entries, actual reply progress, 10→990→empty guarded commits`, async () => {
-  const f = fixture(source); for (let n = 0; n < 1000; n++) f.add('x', 'route-' + n);
-  const converted = f.convert(), runId = converted.row.run_id, before = inputSnapshot(f), scope = source === 'single' ? 'demo:a' : '*';
+  // Whole-channel providers have no ownership-query script. Component-query
+  // providers remain covered by the route/body cases above.
+  const f = fixture(source, { wholeGroup: true }); for (let n = 0; n < 1000; n++) f.add('x', 'route-' + n);
+  const converted = f.convert(), runId = converted.row.run_id, before = inputSnapshot(f), scope = source === 'single' ? 'demo' : '*';
+  const env = { ...f.env }; if (scope !== '*') env.ZYLOS_SESSION_GROUP = scope;
+  let stopped = false, pending;
+  cleanups.push(async () => { stopped = true; await pending?.catch(() => {}); });
+  const deadline = Date.now() + 120000;
   await boot(f, scope, 'fx-b-0', converted.handoff);
   const read = JSON.parse(f.query.absorbed({ runId, limit: 100, json: true })).data;
   assert.equal(read.items.length, 100); assert.ok(read.items.every(i => i.text === 'x' && !i.textTruncated));
+  await assert.rejects(sendExternal(readAbsorbedReply(runId, '1', f.api), 'must not send', {
+    api: f.api, skillsDir: f.skills, env: { ...f.env, ZYLOS_SESSION_GROUP: 'origin' },
+  }), { code: 'CROSS_SESSION_OUTBOUND' });
+  assert.equal(argv(f).length, 0);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM conversations WHERE direction='out'").get().n, 0);
   const evidence = [];
   async function handle(ids) {
-    for (const id of ids) {
-      const full = JSON.parse(f.query.absorbed({ runId, id, json: true })).data; assert.equal(full.data, 'x');
-      // production path with the same real / transaction and argv child
-      // as the CLI; avoids 1000 extra parent Node startups in the bulk case.
-      await sendExternal(readAbsorbedReply(runId, String(id), f.api), 'ack', { api: f.api, skillsDir: f.skills, env: f.env }); evidence.push(id);
+    for (let offset = 0; offset < ids.length; offset += 4) {
+      assert.equal(stopped, false, 'Bulk processing stopped before fixture cleanup');
+      assert.ok(Date.now() < deadline, 'Bulk send deadline exceeded');
+      const batch = ids.slice(offset, offset + 4);
+      const requests = batch.map(id => {
+        const full = JSON.parse(f.query.absorbed({ runId, id, json: true })).data; assert.equal(full.data, 'x');
+        return readAbsorbedReply(runId, String(id), f.api);
+      });
+      // Bound concurrency while retaining the real transaction and argv child.
+      // allSettled drains every child even when one send rejects.
+      pending = Promise.allSettled(requests.map(request =>
+        sendExternal(request, 'ack', { api: f.api, skillsDir: f.skills, env })));
+      const results = await pending;
+      assert.equal(stopped, false, 'Bulk processing stopped before fixture cleanup');
+      for (const result of results) if (result.status === 'rejected') throw result.reason;
+      evidence.push(...batch);
     }
   }
   await handle(Array.from({ length: 10 }, (_, i) => i + 1));
   const first = await commitProgress(f, scope, evidence);
   const original = extractAbsorbedBlock(first.before), remainder = extractAbsorbedBlock(first.after);
-  assert.equal(original.entries.length, 1000); assert.equal(remainder.entries.length, 990); assert.equal(remainder.title, original.title); assert.deepEqual(remainder.entries, original.entries.slice(10));
-  const empty = await commitProgress(f, scope, []); assert.deepEqual(extractAbsorbedBlock(empty.after), remainder);
+  assert.equal(original.entries.length, 1000); assert.equal(remainder.entries.length, 990); assert.equal(remainder.title, original.title);
+  for (let i = 0; i < remainder.entries.length; i++) assert.deepEqual(remainder.entries[i], original.entries[i + 10], `retained entry ${i}`);
+  const empty = await commitProgress(f, scope, []), unchanged = extractAbsorbedBlock(empty.after);
+  assert.equal(unchanged.title, remainder.title); assert.equal(unchanged.entries.length, remainder.entries.length);
+  for (let i = 0; i < remainder.entries.length; i++) assert.deepEqual(unchanged.entries[i], remainder.entries[i], `unchanged entry ${i}`);
   await boot(f, scope, 'fx-b-replacement', converted.handoff);
   const rest = Array.from({ length: 990 }, (_, i) => i + 11); await handle(rest);
   const final = await commitProgress(f, scope, rest); assert.equal(extractAbsorbedBlock(final.after).entries.length, 0); assert.doesNotMatch(final.after, /Mode-switch messages/);
-  assert.equal(argv(f).length, 1000); assert.deepEqual(inputSnapshot(f), before);
+  const sent = argv(f); assert.equal(sent.length, 1000);
+  const sentByEndpoint = new Map(sent); assert.equal(sentByEndpoint.size, 1000);
+  for (let i = 0; i < 1000; i++) {
+    assert.equal(sentByEndpoint.get(Buffer.from('route-' + i).toString('hex')), Buffer.from('ack').toString('hex'), `endpoint/body ${i}`);
+  }
+  const after = inputSnapshot(f); assert.equal(after.length, before.length);
+  for (let i = 0; i < before.length; i++) assert.deepEqual(after[i], before[i], `input ${i}`);
 }, 180000);
 
 test('unsafe-integer IDs are rejected without misrouting or sending', () => {
