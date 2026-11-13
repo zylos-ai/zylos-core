@@ -205,8 +205,16 @@ export function createDelivery(deps, configuration = {}) {
       try { sample = await deps.readSessionState(group, { freshnessMs: 5000 }); }
       catch (cause) { emit('state_unavailable', { reason: cause.code ?? cause.message }); return { state: 'offline' }; }
       if (sample?.identity?.runId !== target.runId || sample?.identity?.runtime !== target.runtime ||
-          !sample.identity.ready || !sample.status?.valid) return { state: 'offline' };
-      return sample.status.value;
+          !sample.identity.ready) return { state: 'offline' };
+      if (sample.status?.valid) return sample.status.value;
+      if (sample.status?.reason === 'stale') {
+        emit('state_stale', { sampledAt: sample.status.sampledAt, health: sample.status.lastValue?.health ?? null });
+        // Old health is useful, but old idle/activity evidence cannot pace a lane
+        // or acknowledge a heartbeat on behalf of the live runtime.
+        return { state: 'unknown', health: sample.status.lastValue?.health ?? null };
+      }
+      if (['missing', 'unparseable'].includes(sample.status?.reason)) return { state: 'unknown' };
+      return { state: 'offline' };
     }
     async function inputState() {
       await revalidate(bound());

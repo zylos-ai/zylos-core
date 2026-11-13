@@ -43,7 +43,8 @@ test('ordered invalid reasons retain known timestamps and discard values',async(
    put(path.join(f.dir,'agent-status.json'),status());let count=0;
    const reader=createSessionReader({env:f.env,now:()=>row.now??1100,open:async()=>({close:async()=>{}}),observe:async()=>++count===1?row.first??identity:row.last??identity});
    const result=await reader.readSessionState('lark:x',{freshnessMs:200});
-   assert.deepEqual(result.usage,{value:null,valid:false,reason:row.reason,sampledAt:Object.hasOwn(row,'time')?row.time:1000},row.reason);
+   assert.deepEqual(result.usage,{value:null,valid:false,reason:row.reason,sampledAt:Object.hasOwn(row,'time')?row.time:1000,
+    ...(row.reason==='stale'?{lastValue:row.sample}:{})},row.reason);
   }
   put(path.join(f.dir,'agent-status.json'),'{broken',1000);
   const reader=createSessionReader({env:f.env,now:()=>1100,open:async()=>({close:async()=>{}}),observe:async()=>identity});
@@ -105,7 +106,8 @@ test('usage freshness can be bounded apart from status freshness; identity check
   assert.equal((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage.reason,'identity_mismatch');
   // Without an age limit, a sample with no capture time is still refused rather than taken as current.
   put(path.join(f.dir,'statusline.json'),{...usage(),zylos:{v:1,runId:'run'}});
-  assert.deepEqual((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage,{value:null,valid:false,reason:'stale',sampledAt:null});
+  assert.deepEqual((await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity})).usage,
+   {value:null,valid:false,reason:'stale',sampledAt:null,lastValue:{...usage(),zylos:{v:1,runId:'run'}}});
   for(const bad of [-1,Number.NaN,'5000',null]) await assert.rejects(at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:bad}),TypeError);
  }finally{f.clean();}
 });

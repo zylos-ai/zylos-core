@@ -134,7 +134,8 @@ export function sampleResult(sample, first, last, freshnessMs, now) {
     else if (sample.identity.runId !== first.runId || sample.identity.sessionId !== first.sessionId) reason = 'identity_mismatch';
     else if (!Number.isFinite(sampledAt) || now - sampledAt > freshnessMs) reason = 'stale';
   }
-  return { value: reason ? null : sample.value, sampledAt, valid: !reason, reason: reason || null };
+  return { value: reason ? null : sample.value, sampledAt, valid: !reason, reason: reason || null,
+    ...(reason === 'stale' ? { lastValue: sample.value } : {}) };
 }
 
 /** Model facts share the caller's validated usage identity. A captured explicit
