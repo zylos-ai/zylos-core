@@ -253,7 +253,6 @@ export class SupervisorLifecycle {
   }
 
   async beginReclaim(scene, reason, context, { subreason } = {}) {
-    if (['ttl', 'evict'].includes(reason) && this.reclaimDeferred(scene)) return false;
     if (reason === 'evict' && (scene.sessionGroup === 'origin' || scene.sessionGroup === null)) return false;
     if (reason === 'ttl' && scene.sessionGroup === null) return false;
     if (!scene.present || !scene.ready || !scene.runId || scene.sessionGroup === null) return false;
@@ -615,7 +614,7 @@ export class SupervisorLifecycle {
       const result = await this.deferredPreparation(scene, preparation, context);
       if (result !== 'expired') return null;
       carry = preparation; this.evictionPreparation.delete(group); preparation = null;
-    } else if (this.reclaimDeferred(scene)) return null;
+    }
     if (preparation && preparation.runId !== scene.runId) this.evictionPreparation.delete(group);
     else if (preparation) {
       if (await this.lastActivity(scene, ...this.evictionCheckWindow(scene)) > preparation.at) {

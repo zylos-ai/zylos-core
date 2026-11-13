@@ -382,3 +382,13 @@ test('deferral admission shares the lifecycle queue and does not persist restart
   assert.equal(refused.reason, 'requests_unreadable');
   assert.equal(validateReply({ ...request, requestId: 'defer-unreadable' }, refused), true);
 });
+
+
+test('direct deferral admission rejects a whitespace-only reason before dispatch', async t => {
+  const f = fixture(t);
+  f.admission.deferReclaim = () => assert.fail('invalid raw requests must not reach lifecycle');
+  const result = await f.admission.handle({ version: 1, type: 'defer_reclaim', requestId: 'blank-reason',
+    sessionGroup: 'telegram:a', expectedRunId: 'r1', minutes: 1, reason: '   ' });
+  assert.equal(result.ok, false); assert.equal(result.code, 'invalid_request');
+  assert.equal(fs.existsSync(f.file), false);
+});

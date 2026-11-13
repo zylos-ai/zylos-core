@@ -46,6 +46,7 @@ test('deferral request carries only current session identity and reports bounded
   assert.equal(sent.sessionGroup, 'telegram:a'); assert.equal(sent.minutes, 3); assert.equal(sent.reason, 'watcher');
   assert.equal(result.ok, true); assert.equal(result.data.deferUntil, 2000000);
   assert.equal((await deferReclaim({ minutes: 1, reason: 'watcher', env: {}, send: () => assert.fail() })).error.code, 'NO_SESSION_ENV');
+  assert.equal((await deferReclaim({ minutes: 1, reason: 'watcher', env: { ZYLOS_SESSION_GROUP: 'telegram:a' }, send: () => assert.fail() })).error.code, 'NO_SESSION_ENV');
   const rejected = await deferReclaim({ minutes: 31, reason: 'watcher', env,
     send: async () => ({ kind: 'rejected', sent: true, reply: { reason: 'minutes_out_of_range' } }) });
   assert.equal(rejected.error.code, 'minutes_out_of_range');

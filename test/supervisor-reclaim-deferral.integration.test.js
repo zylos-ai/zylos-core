@@ -91,3 +91,51 @@ test('transcript updates after deferred quiet cancel reclaim and reset the idle 
   assert.equal(lifecycle.ttlPreparation.has('a'), false);
   assert.equal(lifecycle.ttlReset.get('a').at, now); assert.equal(fences.length, 0);
 });
+
+// Boundary: actual supervisor entry -> installed memory-pressure reclaim callback
+// -> lifecycle context. The capacity sampler is replaced to capture its callback;
+// configuration parsing and callback code are real. Run when pressure-path
+// configuration changes; unrelated prompts may skip. Official runner plus private
+// paths isolate HOME/ZYLOS_DIR/PM2_HOME/TMPDIR/socket. Scenes/DB/memory are injected,
+// no tmux/PM2/network or live SQLite is used, and stop closes all owned work.
+test('memory pressure reclaim reads current deferral settings independently of the ordinary round', async t => {
+  let pressureReclaim;
+  t.mock.module('../skills/activity-monitor/scripts/pool-capacity.js', { namedExports: {
+    PoolCapacity: class {
+      constructor(options) { pressureReclaim = options.reclaim; this.lastPublished = null; }
+      async tick() { return null; }
+    },
+  } });
+  const { startSupervisor } = await import('../skills/activity-monitor/scripts/supervisor-main.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pressure-config-'));
+  const env = { HOME: root, ZYLOS_DIR: root, PM2_HOME: path.join(root, 'pm2'), TMPDIR: root,
+    TMUX_TMPDIR: root, TMUX: `${path.join(root, 'private.sock')},0,0`, PATH: process.env.PATH };
+  console.log('Pressure configuration isolation:', JSON.stringify({ env, socket: path.join(root, 'activity-monitor/am.sock'), database: 'injected' }));
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(env[key] === root || env[key].startsWith(root + path.sep));
+  let service;
+  t.after(async () => { try { await service?.stop(); } finally { fs.rmSync(root, { recursive: true, force: true }); } });
+  let raw = { session_mode: 'multi', runtime: 'claude', session_reclaim_defer_max_seconds: 60,
+    session_reclaim_defer_alert_seconds: 180 };
+  const db = { getModeTransition: () => null, listDrainFences: () => [], getDrainFence: () => null,
+    listPendingSessionGroups: () => [], getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
+    resolveSessionLaunchConfig: () => ({ runtime: 'claude', mode: 'default' }) };
+  service = await startSupervisor({ env, db, now: () => 200000, readConfig: () => raw,
+    readMode: () => ({ mode: 'multi' }), readMemoryInputs: () => assert.fail('sampler is injected'),
+    scenes: { observe: async () => [], observeGroup: async () => ({ present: false }),
+      listRuns: async () => [], readRun: async () => null, readIdentity: async () => ({ present: false }) },
+    legacyStatus: { tick() {}, close() {} }, machineTasks: { tick() {}, stop() {} },
+    loopOptions: { schedule: () => 1, cancel() {} }, sendAlert: () => assert.fail('External send forbidden'), log() {},
+  });
+  assert.equal(service.supervisor.loop.configurationError, null);
+  assert.equal(service.supervisor.loop.configuration.reclaimDeferMaxSeconds, 60);
+  assert.equal(service.supervisor.loop.configuration.reclaimDeferAlertSeconds, 180);
+  assert.equal(typeof pressureReclaim, 'function');
+  raw = { ...raw, session_reclaim_defer_max_seconds: 90, session_reclaim_defer_alert_seconds: 240 };
+  let observed;
+  service.supervisor.lifecycle.checkCapacityPressure = async context => { observed = context.configuration; return null; };
+  await pressureReclaim();
+  assert.ok(observed, 'the actual registered pressure callback reaches lifecycle');
+  assert.equal(observed.reclaimDeferMaxSeconds, 90);
+  assert.equal(observed.reclaimDeferAlertSeconds, 240);
+  assert.equal(service.supervisor.loop.configuration.reclaimDeferMaxSeconds, 60, 'no ordinary configuration refresh happened');
+});

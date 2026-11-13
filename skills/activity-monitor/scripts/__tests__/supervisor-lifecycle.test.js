@@ -1884,3 +1884,123 @@ test('renewed capacity demand rechecks activity after an expired deferred evicti
   assert.equal(f.lifecycle.evictionPreparation.has('a'), false, 'renewed demand discards the check after new activity');
   assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 2);
 });
+
+test('a replacement run cancels deferred preparation and discards prior delay history', async () => {
+  const f = fixture();
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  await f.lifecycle.deferReclaim(deferRequest({ reason: 'old command' }), f.context);
+  f.settle(); await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  f.now += 60000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  await f.lifecycle.deferReclaim(deferRequest({ reason: 'old command still running' }), f.context);
+  assert.equal(f.lifecycle.ttlPreparation.get('a').defer.totalMs, 60000);
+  f.scenes[0].runId = 'replacement-run';
+  f.scenes[0].createdAt = f.now;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+  assert.deepEqual(f.lifecycle.ttlReset.get('a'), { runId: 'replacement-run', at: f.now });
+  f.now += 1800000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest({ expectedRunId: 'replacement-run', reason: 'new command' }), f.context)).ok, true);
+  const current = f.lifecycle.ttlPreparation.get('a');
+  assert.equal(current.runId, 'replacement-run');
+  assert.equal(current.defer.totalMs, 0); assert.deepEqual(current.defer.reasons, ['new command']);
+  assert.equal(f.fences.size, 0);
+});
+
+test('a fresh check after expiry can answer and renew deferral before becoming quiet again', async () => {
+  const f = fixture();
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  await f.lifecycle.deferReclaim(deferRequest(), f.context);
+  f.settle(); await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const firstQuiet = f.lifecycle.ttlPreparation.get('a').defer.quietAt;
+  f.now += 60000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 2);
+  f.now += 100; f.scenes[0].lastActivityAt = f.now; f.scenes[0].state = 'busy';
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest({ reason: 'continued command' }), f.context)).ok, true);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.has('a'), true, 'answering the second check must not count as waking after its quiet period');
+  assert.equal(f.lifecycle.ttlPreparation.get('a').defer.quietAt, undefined);
+  f.settle(); f.now += 100; f.scenes[0].state = 'idle'; f.scenes[0].lastActivityAt = f.now;
+  f.scenes[0].idleSince = f.now - 3000;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.get('a').defer.quietAt, f.now);
+  assert.ok(f.lifecycle.ttlPreparation.get('a').defer.quietAt > firstQuiet);
+  assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 2);
+});
+
+test('a deferred check becomes quiet only after busy work and active subagents finish', async () => {
+  for (const finishing of ['busy turn', 'active subagent']) {
+    const f = fixture();
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    await f.lifecycle.deferReclaim(deferRequest(), f.context); f.settle();
+    if (finishing === 'busy turn') f.scenes[0].state = 'busy';
+    else f.scenes[0].activeSubagents = [{ lastActivityAt: f.now }];
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.get('a').defer.quietAt, undefined, finishing);
+    f.now += 100; f.scenes[0].lastActivityAt = f.now;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.has('a'), true, 'finishing activity must not cancel a check that has not become quiet');
+    assert.equal(f.lifecycle.ttlPreparation.get('a').defer.quietAt, undefined, finishing);
+    f.scenes[0].state = 'idle'; f.scenes[0].activeSubagents = [];
+    f.scenes[0].idleSince = f.now - 3000;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.get('a').defer.quietAt, f.now, finishing);
+    assert.equal(f.fences.size, 0);
+  }
+});
+
+test('short TTL deferral expires into a check without restarting idle time from its own answer', async () => {
+  const f = fixture();
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const accepted = await f.lifecycle.deferReclaim(deferRequest(), f.context);
+  f.now += 1000; f.scenes[0].lastActivityAt = f.now;
+  f.settle(); await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  f.now = accepted.deferUntil;
+  assert.ok(f.now - f.scenes[0].lastActivityAt < 1800000, 'own answer is still younger than the hot TTL');
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 2, 'expiry must issue the next check now');
+  assert.equal(f.lifecycle.ttlPreparation.get('a').at, f.now);
+  assert.equal(f.lifecycle.ttlPreparation.get('a').defer.totalMs, 60000);
+  assert.equal(f.fences.size, 0);
+});
+
+test('eviction deferral expiry rechecks even when its own answer is younger than minimum idle', async () => {
+  const f = fixture();
+  await f.lifecycle.prepareEviction(f.scenes[0], f.context, 'capacity_demand');
+  const accepted = await f.lifecycle.deferReclaim(deferRequest(), f.context);
+  f.now += 1000; f.scenes[0].lastActivityAt = f.now;
+  f.settle(); await f.lifecycle.prepareEviction(f.scenes[0], f.context, 'capacity_demand');
+  f.now = accepted.deferUntil;
+  assert.ok(f.now - f.scenes[0].lastActivityAt < 300000, 'own answer is still younger than the eviction minimum idle');
+  assert.equal(await f.lifecycle.prepareEviction(f.scenes[0], f.context, 'capacity_demand'), 'waiting');
+  assert.equal(f.controls.length, 2, 'expiry must issue a fresh capacity check despite the earlier answer activity');
+  assert.equal(f.lifecycle.evictionPreparation.get('a').at, f.now);
+  assert.equal(f.lifecycle.evictionPreparation.get('a').defer.totalMs, 60000);
+  assert.equal(f.fences.size, 0);
+});
+
+test('renewal before the next lifecycle round counts a prior delay only through its expiry', async () => {
+  const f = fixture();
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const accepted = await f.lifecycle.deferReclaim(deferRequest(), f.context);
+  f.now = accepted.deferUntil + 5000;
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest({ reason: 'renewed before observation' }), f.context)).ok, true);
+  const preparation = f.lifecycle.ttlPreparation.get('a');
+  assert.equal(preparation.defer.totalMs, 60000, 'the gap between expiry and the next request is not deferred time');
+  assert.equal(preparation.defer.startedAt, f.now);
+  assert.equal(preparation.defer.until, f.now + 60000);
+});
+
+test('deferred TTL groups are excluded from both capacity and memory pressure selection', async () => {
+  for (const pressure of [false, true]) {
+    const f = fixture(); f.scenes.push(scene('b')); f.context.configuration.capacity = 2;
+    f.pending = [{ sessionGroup: 'c' }];
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).ok, true);
+    assert.deepEqual((await f.lifecycle.evictionCandidates(f.scenes, f.context)).map(row => row.sessionGroup), ['b']);
+    if (pressure) await f.lifecycle.checkCapacityPressure(f.context);
+    else await f.lifecycle.checkEviction(f.scenes, f.context);
+    assert.equal(f.lifecycle.evictionPreparation.has('a'), false);
+    assert.equal(f.lifecycle.evictionPreparation.has('b'), true);
+    assert.equal(f.fences.size, 0);
+  }
+});
