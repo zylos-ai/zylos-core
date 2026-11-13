@@ -1937,3 +1937,78 @@ test('deferral rejects absent preparation, changed run, started reclaim, expired
   assert.equal(g.lifecycle.ttlPreparation.has('a'), true, 'a simultaneous TTL preparation cannot bypass the capacity deadline');
   assert.equal(g.lifecycle.reclaimDeferrals.has('a'), false);
 });
+
+test('voluntary release skips TTL and capacity idle thresholds and stays a cold ending', async () => {
+  for(const group of ['a','origin']){
+    const f=fixture();f.scenes=[scene(group,{createdAt:f.now-4000,idleSince:f.now-3000,lastSubagentActivityAt:f.now-1})];
+    f.context.configuration.hotTtlSeconds=1800;f.context.configuration.evictMinIdleSeconds=300;
+    assert.deepEqual(await f.lifecycle.requestRelease(f.scenes[0],f.context),{ok:true,result:'accepted'});
+    const row=f.fences.get(group);assert.equal(row.reason,'release');assert.equal(f.controls.length,0);
+    assert.equal(await f.lifecycle.advanceReclaim(row,f.context),'done');
+    assert.equal(f.endings[0].reason,'release');assert.equal(f.fences.size,0);
+  }
+});
+test('voluntary release refuses busy or active child work before creating any control or fence',async()=>{
+  for(const change of [{state:'busy'},{activeSubagents:[{lastActivityAt:2_000_000}]}]){
+    const f=fixture();Object.assign(f.scenes[0],change);
+    const result=await f.lifecycle.requestRelease(f.scenes[0],f.context);
+    assert.equal(result.reason,change.state?'not_idle':'subagent_activity');assert.equal(f.fences.size,0);assert.equal(f.controls.length,0);
+  }
+});
+test('release waits bound Sync controls without sending another pre-reclaim check',async()=>{
+  for(const group of ['a','origin']){
+    const f=fixture();f.scenes=[scene(group)];f.unsummarized=1;
+    if(group==='origin')f.backlog={total:0,groups:[{pendingCheckpoints:1}]};
+    assert.equal((await f.lifecycle.requestRelease(f.scenes[0],f.context)).result,'accepted');
+    assert.deepEqual(f.controls.map(c=>c.content),group==='origin'?['prepare','prepare origin']:['prepare']);
+    for(const c of f.controls){assert.equal(c.targetBinding.expectedRunId,`run-${group}`);assert.equal(c.sessionGroup,group);assert.equal(c.requireIdle,true);}
+    assert.equal(f.fences.size,0);
+    assert.equal((await f.lifecycle.requestRelease(f.scenes[0],f.context)).result,'already_accepted');
+    await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
+    f.settle();await f.lifecycle.advanceReleases(f.context);
+    const row=f.fences.get(group);assert.equal(row.reason,'release');
+    assert.equal(await f.lifecycle.advanceReclaim(row,f.context),'done');assert.equal(f.stops.length,1);
+  }
+});
+test('release cancels if work becomes busy or a child starts after acceptance',async()=>{
+  for(const change of [{state:'busy'},{activeSubagents:[{lastActivityAt:2_000_000}]}]){
+    const f=fixture();assert.equal((await f.lifecycle.requestRelease(f.scenes[0],f.context)).result,'accepted');
+    const row=f.fences.get('a');Object.assign(f.scenes[0],change);
+    assert.equal(await f.lifecycle.advanceReclaim(row,f.context),'cancelled');assert.equal(f.fences.size,0);
+    assert.equal(f.events.at(-1).event,'reclaim_cancelled');assert.equal(f.events.at(-1).reason,change.state?'not_idle':'subagent_activity');
+  }
+});
+test('release preparation cancels a new conversation and does not retarget a new run',async()=>{
+  for(const replacement of [false,true]){
+    const f=fixture();f.unsummarized=1;await f.lifecycle.requestRelease(f.scenes[0],f.context);
+    if(replacement)f.scenes[0].runId='replacement';else f.lastActivity=f.now+1;
+    f.settle();await f.lifecycle.advanceReleases(f.context);
+    assert.equal(f.fences.size,0);assert.equal(f.stops.length,0);assert.equal(f.lifecycle.releasePreparation.size,0);
+    assert.equal(f.events.at(-1).event,'reclaim_cancelled');
+  }
+});
+
+test('release Sync tail waits for terminal-turn idle confirmation and scoped marker release',async()=>{
+  const f=fixture();f.unsummarized=1;await f.lifecycle.requestRelease(f.scenes[0],f.context);f.settle();
+  for(const change of [{state:'busy'},{state:'idle',idleSince:f.now},{state:'idle',idleSince:0}]){
+    Object.assign(f.scenes[0],change);f.marker={held:change.idleSince===0,stale:false};
+    await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);assert.equal(f.lifecycle.releasePreparation.size,1);
+  }
+  f.marker={held:false,stale:false};await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get('a').reason,'release');
+});
+test('release reports fresh busy and child races accurately and checks idle immediately before stop',async()=>{
+  for(const change of [{state:'busy'},{activeSubagents:[{lastActivityAt:2_000_000}]}]){
+    const f=fixture();f.deps.observeGroup=()=>({...f.scenes[0],...change});
+    assert.equal((await f.lifecycle.requestRelease(f.scenes[0],f.context)).reason,change.state?'not_idle':'subagent_activity');
+    assert.equal(f.fences.size,0);
+  }
+  const f=fixture();await f.lifecycle.requestRelease(f.scenes[0],f.context);
+  f.deps.observeGroup=()=>({...f.scenes[0],state:'busy'});
+  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'),f.context),'cancelled');assert.equal(f.stops.length,0);
+});
+
+test('release preparation forgets a disappeared run without requiring another group scene',async()=>{
+  const f=fixture();f.unsummarized=1;await f.lifecycle.requestRelease(f.scenes[0],f.context);
+  f.scenes=[];await f.lifecycle.advanceReleases(f.context);
+  assert.equal(f.lifecycle.releasePreparation.size,0);assert.equal(f.events.at(-1).reason,'run_changed');
+});

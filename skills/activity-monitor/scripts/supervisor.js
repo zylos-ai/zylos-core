@@ -100,6 +100,7 @@ export function createSupervisor(deps) {
   admission=new SupervisorAdmission({db,store:deps.requestStore,readMode,listRuns:()=>scenes.listRuns(),readRun:group=>scenes.readRun(group),
     resolveLaunchConfig:async group=>db.resolveSessionLaunchConfig({sessionGroup:group,sessionMode:(await readMode()).mode}),
     preflightReclaim:(scene,context)=>lifecycle.checkReclaimDependencies(scene,context),
+    requestRelease:async scene=>lifecycle.requestRelease(scene,{configuration:{...await (deps.readReclaimConfiguration ?? readConfiguration)(),mode:(await readMode()).mode},scenes:[scene]}),
     deferReclaim:async request=>lifecycle.deferReclaim(request,{configuration:await (deps.readReclaimConfiguration ?? readConfiguration)()}),
     modeSwitch:request=>modeSwitch.handle(request),startAttempt:request=>health.registerStartAttempt(request),diagnostic,now});
   const exits=new SupervisorExits({scenes:{observeGroup:group=>scenes.observeGroup(group),stop:stopScene},db,serialize:operation=>admission.serialize(operation),readMode,diagnostic,reportError,env:deps.env});
@@ -112,7 +113,7 @@ export function createSupervisor(deps) {
     legacyPresent:deps.legacyPresent,observe:context=>scenes.observe(context),lifecycle,serialize:operation=>admission.serialize(operation),
     convert:deps.convertModeTransition ?? createModeSwitchConverter({db,zylosDir:deps.zylosDir}),
     writeMode:deps.writeMode ?? writeSessionModeAtCutover,restart:deps.restartDispatcherConfirmation,diagnostic,now});
-  const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
+  const lifecycleMethods=Object.fromEntries(['advanceManual','advanceRestarts','reconcileConfiguration','advanceReleases','advanceReclaim','checkRotation','checkTtl','checkEviction','checkSync'].map(name=>[name,(...args)=>lifecycle[name](...args)]));
   const loop=new SupervisorLoop({
     beginRound:()=>lifecycle.beginRound(),
     readConfiguration:async transition=>{

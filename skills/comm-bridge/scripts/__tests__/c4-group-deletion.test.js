@@ -141,11 +141,11 @@ test('migration chain reaches deletion schema from historical layouts with user 
     db.exec(fs.readFileSync(new URL(`./fixtures/migration-history/${historical}`, import.meta.url), 'utf8'));
     db.exec("CREATE TABLE local_notes(value TEXT); INSERT INTO local_notes VALUES('keep'); ALTER TABLE conversations ADD COLUMN local_tag TEXT");
     migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true });
-    assert.equal(db.pragma('user_version', { simple: true }), 3);
+    assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
     assert.ok(db.prepare('PRAGMA table_info(group_deletion_audit)').all().some(row => row.name === 'retained_messages'));
     assert.equal(db.prepare('SELECT value FROM local_notes').get().value, 'keep');
     assert.ok(db.prepare('PRAGMA table_info(conversations)').all().some(row => row.name === 'local_tag'));
-    migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true }); assert.equal(db.pragma('user_version', { simple: true }), 3);
+    migrateDatabase(db, owner, { allowExtraTables: true, allowExtraColumns: true }); assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
   }
 });
 

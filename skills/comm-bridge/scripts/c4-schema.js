@@ -1,12 +1,13 @@
 import { migrateSchema } from './c4-migrations.js';
 import { migrateToV2 } from './c4-migrations-v2.js';
 import { migrateToV3 } from './c4-migrations-v3.js';
+import { migrateToV4 } from './c4-migrations-v4.js';
 import { inspectLayout } from './sqlite-schema.js';
 import { rejectLegacySchemaProbe } from './upgrade-admission.js';
 
 rejectLegacySchemaProbe();
 
-export const SUPPORTED_SCHEMA_VERSION = 3;
+export const SUPPORTED_SCHEMA_VERSION = 4;
 export const supportsNewDatabase = true;
 
 export const COLUMN_DEFINITIONS = {
@@ -146,6 +147,7 @@ export const TABLES = Object.fromEntries(
 );
 
 export const MIGRATIONS = Object.freeze({
+  3: Object.freeze({ to: 4, migrate: migrateToV4, changes: { rebuildTables: ['run_endings'] } }),
   2: Object.freeze({ to: 3, migrate: migrateToV3, changes: {
     rebuildTables: ['run_endings'],
     addColumns: { drain_fences: { operation_id: { type: 'TEXT', pk: false }, actor: { type: 'TEXT', pk: false } } },

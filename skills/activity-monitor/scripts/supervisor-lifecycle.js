@@ -6,7 +6,7 @@ import { MANUAL_WAKE_PROMPT } from './origin-prompts.js';
 
 const TERMINAL_CONTROLS = new Set(['done', 'timeout', 'superseded', 'failed', 'cancelled']);
 const CAPACITY_REASONS = new Set(['ttl', 'evict', 'upgrade', 'auth']);
-const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config', 'delete']);
+const RECLAIM_REASONS = new Set([...CAPACITY_REASONS, 'mode_switch', 'model_config', 'delete', 'release']);
 const error = (code, message) => Object.assign(new Error(message), { code });
 const modeOf = context => context.configuration.mode;
 const targetOf = group => group === null ? { machine: true } : { sessionGroup: group };
@@ -69,6 +69,7 @@ export class SupervisorLifecycle {
     if (!(upgradeAckTimeoutMs > 0) || !finite(upgradeAckTimeoutMs)) throw new TypeError('A finite upgrade acknowledgment timeout is required');
     this.ttlPreparation = new Map();
     this.evictionPreparation = new Map();
+    this.releasePreparation = new Map();
     this.upgradePreparation = new Map();
     this.ttlReset = new Map();
     this.reclaimDeferrals = new Map();
@@ -263,6 +264,7 @@ export class SupervisorLifecycle {
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return false;
     if (this.subagentReclaimBlocked(fresh, reason, context)) return false;
     await this.checkReclaimDependencies(fresh, context);
+    if (reason === 'release' && !await this.idle(fresh, context)) return false;
     if (reason === 'evict' && !(await this.evictionCandidates([fresh], context)).length) return false;
     if (!await this.beforeWrite(scene.sessionGroup, context)) return false;
     await this.d.db.setDrainFence(scene.sessionGroup, { reason, runId: scene.runId });
@@ -331,6 +333,11 @@ export class SupervisorLifecycle {
           await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'subagent_activity' });
           return 'cancelled';
         }
+        if (fence.reason === 'release' && scene.processRunning && !await this.reclaimRead(fence, () => this.idle(scene, context))) {
+          await this.clear(fence, context);
+          await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'not_idle' });
+          return 'cancelled';
+        }
         await this.reclaimRead(fence, async () => {
           if (!unfenced) {
             const current = await this.d.db.getDrainFence(group);
@@ -366,6 +373,7 @@ export class SupervisorLifecycle {
     }
     this.ttlPreparation.delete(group);
     this.evictionPreparation.delete(group);
+    this.releasePreparation.delete(group);
     this.upgradePreparation.delete(fence.runId);
     if (this.reclaimDeferrals.get(group)?.runId === fence.runId) this.reclaimDeferrals.delete(group);
     for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
@@ -394,6 +402,7 @@ export class SupervisorLifecycle {
 
   subagentReclaimBlocked(scene, reason, context) {
     if (reason === 'delete') return (scene.activeSubagents?.length ?? 0) > 0;
+    if (reason === 'release') return this.activeSubagents(scene, context);
     if (!['ttl', 'evict'].includes(reason)) return false;
     if (this.activeSubagents(scene, context)) return true;
     const last = scene.lastSubagentActivityAt;
@@ -470,9 +479,87 @@ export class SupervisorLifecycle {
     return { ok: true, result: 'accepted' };
   }
 
+  // Release prepares only the existing Sync controls. They must finish before
+  // fencing, because drain fences intentionally block pending control delivery.
+  async requestRelease(scene, context) {
+    const reject = reason => ({ ok: false, result: 'rejected', reason });
+    await this.refreshAuthorities(context);
+    if (!this.allowed(scene.sessionGroup, context)) return reject('other_fence');
+    const pending = this.releasePreparation.get(scene.sessionGroup);
+    if (pending?.runId === scene.runId) return { ok: true, result: 'already_accepted' };
+    if (this.subagentReclaimBlocked(scene, 'release', context)) return reject('subagent_activity');
+    if (!await this.idle(scene, context)) return reject('not_idle');
+    const started = await this.prepareRelease(scene, context);
+    if (started) return { ok: true, result: 'accepted' };
+    const current = await this.observe(scene.sessionGroup, context);
+    if (!current.present || current.runId !== scene.runId) return reject('run_changed');
+    if (!current.ready) return reject('not_ready');
+    if (this.subagentReclaimBlocked(current, 'release', context)) return reject('subagent_activity');
+    if (!await this.idle(current, context)) return reject('not_idle');
+    return reject('other_fence');
+  }
+
+  async prepareRelease(scene, context) {
+    const group = scene.sessionGroup;
+    const range = await this.d.db.getUnsummarizedRange(group);
+    if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
+    const todo = range.count > 0 ? ['PRE_RECLAIM_SYNC_PROMPT'] : [];
+    if (group === 'origin') {
+      const backlog = await this.d.db.getOriginSyncBacklog();
+      if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
+    }
+    if (!todo.length) return this.beginReclaim(scene, 'release', context);
+    const preparation = { runId: scene.runId, at: this.now(), controlIds: [], partial: true };
+    for (const prompt of todo) {
+      if (!await this.beforeWrite(group, context, scene)) break;
+      const targetBinding = await this.bindCurrentRun(scene);
+      if (!targetBinding) break;
+      const control = await this.d.db.insertControl(this.prompt(prompt), {
+        sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
+        ackDeadlineAt: Math.floor((preparation.at + this.ackTimeoutMs) / 1000),
+      });
+      preparation.controlIds.push(control.id);
+      // Keep a successfully published control even if a later observation fails.
+      this.releasePreparation.set(group, preparation);
+    }
+    preparation.partial = preparation.controlIds.length !== todo.length;
+    return preparation.controlIds.length > 0;
+  }
+
+  async advanceReleases(context) {
+    await this.each([...this.releasePreparation.keys()].map(sessionGroup => ({ sessionGroup })), async ({ sessionGroup }) => {
+      await this.advanceRelease(this.scene(sessionGroup, context), context);
+    });
+  }
+
+  async advanceRelease(scene, context) {
+    const group = scene.sessionGroup, preparation = this.releasePreparation.get(group);
+    if (!preparation) return;
+    const cancel = async reason => {
+      this.releasePreparation.delete(group);
+      await this.event('reclaim_cancelled', { session_group: group, run_id: preparation.runId, reason });
+    };
+    if (!scene.present || !scene.ready || scene.runId !== preparation.runId) return cancel('run_changed');
+    if (!this.allowed(group, context)) return cancel('other_fence');
+    // As with TTL preparation, the Sync's own session/child activity is ignored;
+    // C4 conversation activity still cancels the voluntary request.
+    if (await this.lastActivity(scene, preparation.at) > preparation.at) return cancel('not_idle');
+    for (const id of preparation.controlIds) {
+      const control = await this.d.db.getControlById(id);
+      if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
+    }
+    // An acknowledged Sync can still be finishing its turn or holding its scoped
+    // marker. Match TTL's wait here; new conversation activity above cancels it.
+    if (this.subagentReclaimBlocked(scene, 'release', context) || !await this.idle(scene, context)) return;
+    this.releasePreparation.delete(group);
+    if (preparation.partial) return this.prepareRelease(scene, context);
+    await this.beginReclaim(scene, 'release', context);
+  }
+
   async checkTtl(scene, context) {
     if (scene.observationError) throw scene.observationError;
     const group = scene.sessionGroup;
+    if (this.releasePreparation.has(group)) return;
     if (modeOf(context) !== 'multi' || !group || !await this.allowed(group, context)) return;
     if (!scene.present || !scene.ready) { this.ttlPreparation.delete(group); return; }
     const preparation = this.ttlPreparation.get(group);

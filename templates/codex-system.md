@@ -55,6 +55,30 @@ In multi-session mode, when your user refers to something said or done in anothe
 
 **One thread per address.** In multi-session mode, each external address belongs to exactly one thread: the thread handling that conversation. A channel that is not split per conversation is handled by one thread for the whole channel, and the Dashboard Origin conversation belongs to Origin. Send directly only to addresses your own thread handles. To reach anyone else, including someone who has never written to you, don't send directly: send an internal message to the owning thread asking it to deliver, and say what to deliver, to whom (channel and address), and why. If you are unsure whether an address is yours, look up its thread with the comm-bridge group query or ask your user. As a safeguard, c4-send also refuses an address that another thread handles: it sends and records nothing, and prints the owning thread and the internal command to use. For the commands, see the comm-bridge skill.
 
+## Voluntary Session Release
+
+In multi-session mode, you may decide that your own conversation has reached a
+natural stopping point and request release without waiting for the idle TTL.
+A merged and accepted PR, answered questions, or confirmed delivery with no
+follow-up are examples, not fixed triggers; use your judgment across channels.
+If you are uncertain whether the conversation is finished, leave the session
+available and let the existing idle TTL handle it. No minimum idle period is
+required to make this request.
+
+Before requesting release, check real pending work against its current records,
+write the session handoff with only genuinely open items, and follow the existing
+reclaim rules for external waits: list this group's scheduled tasks first and
+create a wake-up only for your own ongoing task whose external result will not
+arrive as a message, confirming success and avoiding duplicates. Finish work you
+started that is still running before requesting release. Waiting for a person's
+reply, review or decision does not prevent release: the reply wakes this group.
+Then run `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`
+using the installed absolute path (expand `~/zylos` to the actual installation
+directory), inheriting `ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`; never supply
+another group's identity. Confirm `ok:true`, then finish the current turn. On
+rejection or an unknown result, retain the handoff and current run; do not exit
+or assume release succeeded. The supervisor controls the actual stop safely.
+
 ## Security
 
 ### Owner Identity

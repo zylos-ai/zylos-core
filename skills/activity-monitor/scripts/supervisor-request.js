@@ -22,6 +22,29 @@ export async function readyForConfigReclaim({ env = process.env, send = submit }
     persisted: result.sent && !result.reply ? null : [] } };
 }
 
+/** Request release of this session's own run; the supervisor owns stop admission. */
+export async function requestRelease({ env = process.env, send = submit } = {}) {
+  const sessionGroup = env.ZYLOS_SESSION_GROUP, expectedRunId = env.ZYLOS_RUN_ID;
+  try {
+    if (typeof sessionGroup !== 'string' || !sessionGroup || typeof expectedRunId !== 'string' || !expectedRunId.trim()) throw new Error('Missing session identity');
+    assertSessionGroup(sessionGroup);
+  } catch {
+    return { ok: false, error: { code: 'NO_SESSION_ENV', message: 'A valid session group and run identity are required', persisted: [] } };
+  }
+  const response = await send({ version: 1, type: 'request_release', requestId: `release-${randomUUID()}`,
+    sessionGroup, expectedRunId });
+  if (response.kind === 'accepted') return { ok: true, data: { result: response.reply.result,
+    sessionGroup, expectedRunId } };
+  const code = response.reply?.reason ?? response.reply?.code ?? response.kind;
+  return { ok: false, error: { code,
+    message: response.sent && !response.reply
+      ? 'Submission result is unknown; keep the handoff and do not exit or assume release was accepted'
+      : code === 'requests_unreadable'
+        ? 'Keep the completed handoff and current run; repair the supervisor restart-request state, retry this request, and do not exit'
+        : 'Session release was not accepted; keep the handoff and current run',
+    persisted: response.sent && !response.reply ? null : [] } };
+}
+
 export async function deferReclaim({ reason, env = process.env, send = submit } = {}) {
   const sessionGroup = env.ZYLOS_SESSION_GROUP, expectedRunId = env.ZYLOS_RUN_ID;
   try {
@@ -64,8 +87,16 @@ async function main(argv) {
     catch (error) { printResult({ok:false,error:{code:error.code ?? 'REQUEST_FAILED',message:error.message,persisted:[]}},json); }
     return;
   }
+  if (argv[0] === 'request-release') {
+    if (argv.slice(1).some(arg => arg !== '--json')) {
+      printResult({ok:false,error:{code:'INVALID_ARGS',message:'Expected request-release [--json]',persisted:[]}},json); return;
+    }
+    try { printResult(await requestRelease(), json); }
+    catch (error) { printResult({ok:false,error:{code:error.code ?? 'REQUEST_FAILED',message:error.message,persisted:[]}},json); }
+    return;
+  }
   if (argv[0] !== 'ready-for-config-reclaim' || argv.slice(1).some(arg => arg !== '--json')) {
-    printResult({ok:false,error:{code:'INVALID_ARGS',message:'Expected ready-for-config-reclaim [--json]',persisted:[]}},json);return;
+    printResult({ok:false,error:{code:'INVALID_ARGS',message:'Expected ready-for-config-reclaim, request-release, or defer-reclaim [--json]',persisted:[]}},json);return;
   }
   try { printResult(await readyForConfigReclaim(), json); }
   catch (error) { printResult({ok:false,error:{code:error.code ?? 'REQUEST_FAILED',message:error.message,persisted:[]}},json); }

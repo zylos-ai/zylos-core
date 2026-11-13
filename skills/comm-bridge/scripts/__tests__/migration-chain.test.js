@@ -282,7 +282,7 @@ test('C4 v1 migrates to current schema and retains rows and user extensions', ()
   db.exec(fs.readFileSync(new URL('c4-v0.9.0-v1.sql',fixtures),'utf8'));
   db.exec("CREATE TABLE archive_records(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO archive_records VALUES(1,'retained'); ALTER TABLE checkpoints ADD COLUMN external TEXT; UPDATE checkpoints SET external='kept'");
   const before=db.prepare('SELECT * FROM checkpoints ORDER BY id').all();
-  assert.deepEqual(planDatabaseMigration(db,c4,extensionOptions).steps.map(({from,to})=>[from,to]),[[1,2],[2,3]]);
+  assert.deepEqual(planDatabaseMigration(db,c4,extensionOptions).steps.map(({from,to})=>[from,to]),[[1,2],[2,3],[3,4]]);
   const result=migrateDatabase(db,c4,extensionOptions);
   assert.equal(result.version,c4.SUPPORTED_SCHEMA_VERSION);
   assert.deepEqual(db.prepare('SELECT id,timestamp,summary,start_conversation_id,end_conversation_id,external FROM checkpoints ORDER BY id').all(),before);

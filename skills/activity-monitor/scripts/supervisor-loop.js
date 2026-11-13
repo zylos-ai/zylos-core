@@ -114,6 +114,8 @@ export class SupervisorLoop {
           try { await d[phase](context); }
           catch (error) { await d.reportError(error, { phase }); }
         }
+        try { await d.advanceReleases?.(context); }
+        catch (error) { await d.reportError(error, { phase: 'advanceReleases' }); }
       }
     });
     // These workers may acquire lifecycle serialization for their own mutations.

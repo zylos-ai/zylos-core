@@ -392,3 +392,42 @@ test('direct deferral admission rejects a whitespace-only reason before dispatch
   assert.equal(result.ok, false); assert.equal(result.code, 'invalid_request');
   assert.equal(fs.existsSync(f.file), false);
 });
+
+const release = (overrides = {}) => ({ version: 1, type: 'request_release', requestId: 'release',
+  sessionGroup: 'telegram:a', expectedRunId: 'r1', ...overrides });
+test('release admission pins self run and orders mode, identity and conflicting work checks', async t => {
+  const f = fixture(t); let calls = 0;
+  f.admission.requestRelease = async run => { calls++; assert.equal(run.sessionGroup, 'telegram:a'); assert.equal(run.runId, 'r1'); return {ok:true,result:'accepted'}; };
+  f.state.mode = 'single'; f.state.transition = {}; f.state.run = null;
+  assert.equal((await f.admission.handle(release())).reason, 'not_multi');
+  f.state.mode = 'multi'; assert.equal((await f.admission.handle(release())).reason, 'transition_open');
+  f.state.transition = null; f.state.fences.set('*', {reason:'mode_switch'});
+  assert.equal((await f.admission.handle(release())).reason, 'transition_open'); f.state.fences.clear();
+  assert.equal((await f.admission.handle(release())).reason, 'run_changed');
+  f.state.run = {runId:'other',ready:true}; assert.equal((await f.admission.handle(release())).reason, 'run_changed');
+  f.state.run = {runId:'r1',ready:false}; assert.equal((await f.admission.handle(release())).reason, 'not_ready');
+  f.state.run.ready = true;
+  for (const reason of ['ttl','evict','upgrade','auth','model_config','delete']) {
+    f.state.fences.set('telegram:a',{reason,runId:'r1'});
+    assert.equal((await f.admission.handle(release())).reason, 'other_fence');
+  }
+  f.state.fences.set('telegram:a',{reason:'release',runId:'other'});
+  assert.equal((await f.admission.handle(release())).reason, 'other_fence'); f.state.fences.clear();
+  await f.admission.handle(manual({sessionGroup:'telegram:a'}));
+  assert.equal((await f.admission.handle(release())).reason, 'manual_restart_pending'); f.store.write([]);
+  assert.equal(calls,0); assert.equal((await f.admission.handle(release())).result,'accepted'); assert.equal(calls,1);
+  f.state.fences.set('telegram:a',{reason:'release',runId:'r1'});
+  assert.equal((await f.admission.handle(release({requestId:'retry'}))).result,'already_accepted'); assert.equal(calls,1);
+});
+test('release rejects missing self identity and unreadable intent without calling lifecycle', async t => {
+  const f=fixture(t);f.admission.requestRelease=()=>assert.fail('must not release');
+  for(const overrides of [{sessionGroup:''},{expectedRunId:''},{sessionGroup:undefined},{expectedRunId:undefined}])
+    assert.equal((await f.admission.handle(release(overrides))).code,'invalid_request');
+  fs.writeFileSync(f.file,'{');assert.equal((await f.admission.handle(release())).reason,'requests_unreadable');
+});
+test('release mode and identity refusal precedes unrelated unreadable restart intent',async t=>{
+  const f=fixture(t);fs.writeFileSync(f.file,'{');f.state.mode='single';
+  assert.equal((await f.admission.handle(release())).reason,'not_multi');
+  f.state.mode='multi';f.state.transition={};assert.equal((await f.admission.handle(release())).reason,'transition_open');
+  f.state.transition=null;f.state.run=null;assert.equal((await f.admission.handle(release())).reason,'run_changed');
+});

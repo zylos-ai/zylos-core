@@ -20,6 +20,7 @@ export default {
     '<rootDir>/test/web-console-process.integration.test.js',
     '<rootDir>/test/web-console-caddy.integration.test.js',
     '<rootDir>/test/single-upgrade-check.integration.test.js',
+    '<rootDir>/test/session-release.integration.test.js',
   ],
   globalSetup: '<rootDir>/scripts/jest-global-setup.js',
   globalTeardown: '<rootDir>/scripts/jest-global-teardown.js',
