@@ -5,7 +5,8 @@ import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/he
 // Run when stale status propagation/presentation changes; unrelated runtime changes can skip.
 // Official runner + gated sandbox prove private HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR,
 // tmux socket and database targets before startup. No tmux, PM2 or database is opened.
-// File has no writer after setup; real elapsed time crosses the display cutoff.
+// File has no writer after setup; real elapsed time crosses the board display cutoff.
+// Conversation header stays event/health-derived across stale and missing status samples.
 // Sandbox owns HTTP/browser lifecycle on success, failure and timeout.
 test('stopped status updates age from retained state to unknown on desktop and phone',
   { skip: !chatEnabled(), timeout: 180000 }, async t => {

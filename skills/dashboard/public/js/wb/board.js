@@ -24,7 +24,7 @@ export function shortDuration(seconds) {
   if (m < 60) return m + 'm' + (m < 10 ? String(s % 60).padStart(2, '0') + 's' : '');
   return Math.floor(m / 60) + 'h' + String(m % 60).padStart(2, '0') + 'm';
 }
-/** Shared sampled-status annotation for the board, detail and conversation header. */
+/** Shared sampled-status annotation for the board, detail and settings. */
 export function statusAnnotation(row, { t = key => key, now = Date.now() } = {}) {
   const status = row.live?.status;
   const at = row.state?.sampledAt ?? status?.sampledAt;

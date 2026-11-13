@@ -529,24 +529,28 @@ for (const on of [true, false]) test(`unknown account health remains the header 
 });
 
 
-for (const [kind, reason, lastState] of [
-  ['busy', 'stale', 'busy'], ['idle', 'stale', 'idle'], ['unknown', 'stale', 'busy'],
-  ['unknown', 'missing', null], ['unknown', 'identity_mismatch', null],
-]) test(`conversation header uses sampled ${kind} state for ${reason} status`, async t => {
-  const recent = kind !== 'unknown', sampledAt = Date.now() - (recent ? 20000 : 180000);
+for (const [sample, state] of [
+  [{ valid: true, state: 'busy' }, { kind: 'busy' }],
+  [{ valid: false, reason: 'stale', lastState: 'idle', sampledAt: Date.now() - 20000 }, { kind: 'idle', stale: true }],
+  [{ valid: false, reason: 'stale', lastState: 'busy', sampledAt: Date.now() - 180000 }, { kind: 'unknown' }],
+  [{ valid: false, reason: 'missing', lastState: null }, { kind: 'unknown' }],
+]) for (const [health, wait, key] of [
+  ['ok', null, 'chat.working.processing'],
+  ['rate_limited', { kind: 'rate_wait' }, 'chat.page.rateLimitedPending'],
+  ['auth_failed', { kind: 'auth_wait' }, 'chat.page.authFailed'],
+  ['ok', { kind: 'fenced' }, 'chat.page.paused'],
+]) test(`conversation header preserves ${key} for ${sample.reason ?? 'fresh'} ${state.kind} sample`, async t => {
   const f = healthPage(t, { workbench: () => ({ listKnown: true,
     rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
-      state: { kind, ...(recent ? { stale: true } : {}), sampledAt },
-      live: { status: { valid: false, reason, sampledAt, lastState } },
-      working: { on: kind === 'idle', since: sampledAt } }],
-    instance: { runtimeHealth: { claude: { health: 'ok' } } }, sources: { status: { ok: true, readAt: Date.now() } },
+      state, live: { status: sample }, wait,
+      working: { on: true, since: 1000, turn: { since: 1000 }, tools: 0, subagents: null } }],
+    instance: { runtimeHealth: { claude: { health } } }, sources: { status: { ok: true, readAt: 1000 } },
   }) });
   await f.page.openGroup(f.sessionGroup); await tick();
   const header = f.root.querySelector('.conversation-running');
   assert.equal(header.hidden, false);
-  assert.equal(header.dataset.state, kind);
-  assert.equal(header.dataset.stale, String(recent));
-  assert.ok(header.textContent.includes(f.translations['wb.state.' + kind]));
-  assert.equal(!!header.querySelector('.wb-status-age'), recent);
-  assert.equal(header.title.includes('Last status:'), reason === 'stale' && kind === 'unknown');
+  const caption = key === 'chat.working.processing' ? header.querySelector('.wi-ind-desktop').textContent : header.textContent;
+  assert.equal(caption, f.translations[key]);
+  assert.equal(header.querySelector('.wb-status-age'), null);
+  assert.equal(header.dataset.stale, undefined);
 });

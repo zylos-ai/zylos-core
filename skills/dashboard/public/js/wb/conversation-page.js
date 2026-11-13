@@ -4,8 +4,8 @@ import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
-import { annotateStatus, channelIcon, channelIcons } from './board.js?v=154';
-import { createConversationState, isOriginConversation } from './conversation-state.js?v=164';
+import { channelIcon, channelIcons } from './board.js?v=154';
+import { createConversationState, isOriginConversation } from './conversation-state.js?v=163';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=155';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=159';
@@ -579,24 +579,6 @@ export function mountConversationPage({
     preserveAttachmentLayout(applyList);
   }
   function updateWorkingIndicator(s) {
-    const sampled = s.groupStatusRow;
-    // Fresh headers keep their event-derived working display. Invalid samples use the same state as the board.
-    if (s.groupPresence === true && sampled?.live?.status?.valid === false) {
-      const kind = sampled.state?.kind ?? 'unknown';
-      running.hidden = false;
-      running.classList.remove('conversation-restricted', 'conversation-waiting', 'wi-settle');
-      running.dataset.state = kind;
-      running.dataset.stale = String(sampled.state?.stale === true);
-      const caption = t('wb.state.' + kind);
-      const glyph = { busy: 'activity', unknown: 'help', error: 'alert', waiting: 'clock' }[kind];
-      running.replaceChildren(glyph ? icon(document, glyph) : node('span', undefined, 'wi-dot'), node('span', caption, 'wi-ind-text'));
-      running.title = caption;
-      const annotation = annotateStatus(document, running, sampled, { t });
-      const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev'); running.append(chevron);
-      running.setAttribute('aria-label', [caption, annotation.age, annotation.title].filter(Boolean).join(' · '));
-      return;
-    }
-    delete running.dataset.stale;
     const rateWait = s.groupWait?.kind === 'rate_wait';
     const healthLabel = { rate_limited: 'rateLimited', recovering: 'recovering', auth_failed: 'authFailed',
       unavailable: 'unavailable', down: 'down' }[s.groupHealth];
