@@ -41,9 +41,7 @@
   display:flex;
   flex:1;
   min-width:0;
-  border:1px solid var(--wb-line-strong);
-  border-radius:8px;
-  overflow:hidden
+  overflow:visible
 }
 .conversation-tabs .wb-btn {
   justify-content:center;
@@ -52,19 +50,7 @@
   gap:5px;
   padding:0 7px;
   border:0;
-  border-radius:0;
-  font-size:12px;
-  color:var(--text-dim);
-  background:transparent;
-  font-weight:500
-}
-.conversation-tabs .wb-btn+.wb-btn {
-  border-left:1px solid var(--wb-line)
-}
-.conversation-tabs [aria-selected=true] {
-  background:var(--wb-hover);
-  color:var(--text);
-  font-weight:600
+  font-size:12px
 }
 .conversation-reload {
   width:26px;
@@ -1660,9 +1646,8 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page { border-top:0; }
   .conversation-page .conversation-sidebar { padding:12px 8px 0; gap:4px; background:var(--bg); }
   .conversation-page .conversation-list-toolbar { padding:0 8px 4px; }
-  .conversation-page .conversation-tabs { gap:4px; padding:3px; border:0; border-radius:10px; background:var(--wb-hover); }
-  .conversation-page .conversation-tabs .wb-btn { height:32px; min-height:32px; padding:0 6px; border:0; border-radius:8px; font-size:13px; white-space:nowrap; }
-  .conversation-page .conversation-tabs [aria-selected=true] { background:var(--wb-panel); box-shadow:0 1px 2px color-mix(in srgb,var(--text) 8%,transparent); }
+  .conversation-page .conversation-tabs { --wb-segment-radius:10px; }
+  .conversation-page .conversation-tabs .wb-btn { height:32px; min-height:32px; padding:0 6px; border:0; font-size:13px; white-space:nowrap; }
   .conversation-page .conversation-tabs [data-action=external]>span:not(.conversation-mobile-label) { display:none; }
   .conversation-page .conversation-mobile-label { display:inline; }
   .conversation-page :is(.conversation-reload,.conversation-create,.conversation-external-section) { display:none; }

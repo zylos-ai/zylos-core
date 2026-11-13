@@ -20,7 +20,7 @@ const iso = offset => new Date(NOW + offset).toISOString();
 
 // Fixed existing API contracts over private loopback: the real entry/modules/styles
 // render them. No database, runtime, channel, outbound request or backend extension.
-async function startPage(sandbox, publicDir) {
+export async function startPage(sandbox, publicDir = currentPublic) {
   let scene = 'idle', connected = true, observerBlocked = false, sessionMode = 'multi', title = DEFAULT_TITLE, channel = 'dashboard';
   let listGate = null, releaseList = () => {};
   const streams = new Set(), missing = new Set(), actions = [];

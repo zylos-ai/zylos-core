@@ -166,10 +166,8 @@
 .wb-input:focus, .wb-cfg-edit input:focus, .wb-cfg-edit select:focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
 #settings-hot-ttl-source { white-space: pre-line; }
 #settings-hot-ttl-minutes:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
-.wb-seg-sm { display: inline-flex; border: 1px solid var(--wb-line-strong); border-radius: 6px; overflow: hidden; vertical-align: middle; }
-.wb-seg-sm button { border: 0; background: transparent; color: var(--text-muted); font-size: 11px; line-height: 18px; padding: 0 8px; cursor: pointer; white-space: nowrap; }
-.wb-seg-sm button + button { border-left: 1px solid var(--wb-line-strong); }
-.wb-seg-sm button[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+.wb-seg-sm { display: inline-flex; vertical-align: middle; }
+.wb-seg-sm button { font-size: 11px; line-height: 18px; padding: 0 8px; cursor: pointer; white-space: nowrap; }
 .wb-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; color: var(--text-dim); border: 1px solid var(--wb-line-strong); border-radius: 5px; padding: 0 6px; line-height: 18px; white-space: nowrap; }
 /* Text in every button, segment, tab, tag and pill sits in the middle of its box: flex centring and one line
    height (Latin, Chinese, and icon with text alike), not padding. Zero specificity, so a control's own display
@@ -633,12 +631,8 @@ html[data-detail=plain] #observer-tab { display: none!important; }
 /* ─── Schedule: list on the left, the same right-edge drawer as the overview ─── */
 main:has(> #tab-schedule.active) { padding: 0 0 var(--space-xl); }
 .wb-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.wb-seg { display: inline-flex; height: var(--wb-h); border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); overflow: hidden; background: var(--wb-panel); }
-.wb-seg button { display: inline-flex; align-items: center; gap: 4px; padding: 0 11px; border: 0; background: transparent; color: var(--text-dim); font-size: 12.5px; white-space: nowrap; cursor: pointer; }
-.wb-seg button + button { border-left: 1px solid var(--wb-line-strong); }
-.wb-seg button:hover:not(:disabled) { color: var(--text); }
-.wb-seg button[aria-pressed="true"] { background: var(--wb-hover); color: var(--text); font-weight: 600; }
-.wb-seg button:disabled { opacity: .5; cursor: not-allowed; }
+.wb-seg { display: inline-flex; height: var(--wb-h); }
+.wb-seg button { display: inline-flex; align-items: center; gap: 4px; padding: 0 11px; font-size: 12.5px; white-space: nowrap; cursor: pointer; }
 .wb-seg .wb-n { color: var(--text-muted); font-weight: 450; font-variant-numeric: tabular-nums; }
 .wb-empty-state { display: grid; justify-items: center; gap: 8px; margin: 48px 16px; padding: 32px; border: 1px dashed var(--wb-line-strong); border-radius: 12px; color: var(--text-dim); text-align: center; }
 .wb-empty-state p { margin: 0; }
@@ -849,7 +843,6 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 /* ─── Memory: summary line or technical charts on top, file list on the left, file on the right ─── */
 main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 #tab-memory.active { display: flex; flex-direction: column; }
-.wb-seg button.active { background: var(--wb-hover); color: var(--text); font-weight: 600; }
 .wb-grow { flex: 1; }
 .wb-select-wrap { position: relative; display: inline-flex; min-width: 0; }
 .wb-select-wrap .wb-select { width: 100%; padding-right: 26px; }
@@ -947,7 +940,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .memory-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 4px; color: var(--text-dim); font-size: 12px; white-space: normal; }
 .memory-meta .wb-mono { color: var(--text-muted); font-size: 11.5px; }
 .memory-viewer-actions { align-items: center; gap: 8px; }
-.memory-toggle.wb-seg .memory-mode { min-width: 0; height: auto; border-radius: 0; }
+.memory-toggle.wb-seg .memory-mode { min-width: 0; height: auto; }
 .memory-edit-actions { gap: 6px; }
 .memory-status { margin: 12px 20px 0; border-color: var(--wb-line-strong); border-radius: var(--wb-r); }
 .memory-content { padding: 16px 20px 24px; }
@@ -1002,7 +995,6 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 /* Wide screens: the custom dates sit in the control row as before, and the fold's button is not shown. */
 .wb-usage-custom { display: contents; }
 .wb-usage-custom-btn { display: none !important; }
-.wb-seg .wb-usage-custom-btn.wb-on, .wb-seg .wb-usage-custom-btn[aria-expanded="true"] { background: var(--wb-hover); color: var(--text); font-weight: 600; }
 .wb-usage-status, .wb-usage-deletion-note { margin: 8px 0 0; color: var(--text-dim); font-size: 12.5px; }
 .wb-usage-status:empty { display: none; }
 #wb-usage-body > .wb-note { margin: 10px 0 0; }
@@ -1200,11 +1192,8 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-timezone-pending ul { margin: 8px 0; padding-left: 20px; color: var(--text-dim); font-size: 13px; line-height: 1.8; }
 /* Settings controls share one height: text fields, selects and buttons line up on a row. */
 .wb-set-body :is(.wb-input, .wb-select, .wb-btn) { height: var(--wb-h); }
-.wb-seg2 { display: inline-flex; height: var(--wb-h); border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); overflow: hidden; background: var(--wb-panel); }
-.wb-seg2 button { padding: 0 12px; border: 0; background: transparent; color: var(--text-dim); font-size: 12.5px; white-space: nowrap; cursor: pointer; }
-.wb-seg2 button + button { border-left: 1px solid var(--wb-line-strong); }
-.wb-seg2 button[aria-pressed="true"] { background: var(--wb-hover); color: var(--text); font-weight: 600; }
-.wb-seg2 button:disabled { opacity: .5; cursor: not-allowed; }
+.wb-seg2 { display: inline-flex; height: var(--wb-h); }
+.wb-seg2 button { padding: 0 12px; font-size: 12.5px; white-space: nowrap; cursor: pointer; }
 .wb-hdot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--wb-work); }
 .wb-hdot.warn { background: var(--wb-wait); }
 .wb-hdot.err { background: var(--wb-err); }
@@ -1603,4 +1592,42 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   html.wb-mobile-ready[data-conversation-focus="true"] body { padding-bottom: 0; }
   html.wb-mobile-ready[data-conversation-focus="true"] .wb-mobile-topbar,
   html.wb-mobile-ready[data-conversation-focus="true"] .wb-mobile-tabs { display: none; }
+}
+
+/* Shared segmented controls: a sunken track with a raised selected surface.
+   Keep geometry at each usage site; selection, hover and focus share one palette. */
+:is(.conversation-tabs, .wb-seg, .wb-seg2, .wb-seg-sm) {
+  --wb-segment-radius: var(--wb-r);
+  padding: 2px;
+  gap: 2px;
+  border: 0;
+  border-radius: var(--wb-segment-radius);
+  background: var(--c-sunken);
+}
+.wb-seg-sm { --wb-segment-radius: 6px; }
+:is(.conversation-tabs, .wb-seg, .wb-seg2, .wb-seg-sm) > :is(button, .wb-btn) {
+  border: 0;
+  border-radius: calc(var(--wb-segment-radius) - 2px);
+  background: transparent;
+  color: var(--c-ink-2);
+  box-shadow: none;
+  font-weight: 500;
+}
+:is(.conversation-tabs, .wb-seg, .wb-seg2, .wb-seg-sm) > :is(button, .wb-btn):hover:where(:not(:disabled)) {
+  background: var(--c-fill-hover);
+  color: var(--c-ink);
+}
+:is(.conversation-tabs, .wb-seg, .wb-seg2, .wb-seg-sm) > :is(button, .wb-btn):is([aria-selected="true"], [aria-pressed="true"], .active, .wb-on, [aria-expanded="true"]) {
+  background: var(--c-raised);
+  color: var(--c-ink);
+  box-shadow: var(--c-shadow-thumb);
+  font-weight: 600;
+}
+:is(.conversation-tabs, .wb-seg, .wb-seg2, .wb-seg-sm) > :is(button, .wb-btn):disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+:is(.conversation-tabs, .wb-seg, .wb-seg2, .wb-seg-sm) > :is(button, .wb-btn):focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
 }
