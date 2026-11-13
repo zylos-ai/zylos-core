@@ -55,6 +55,7 @@ export function stateMood(agent) {
   if (state === 'BUSY' && (activity.includes('thinking') || activity.includes('思考'))) return 'thinking';
   if (state === 'THINKING') return 'thinking';
   if (state === 'BUSY') return 'busy';
+  if (state === 'UNKNOWN') return 'unknown';
   return 'idle';
 }
 
@@ -74,6 +75,7 @@ function stateLabel(agent, labels, mood = stateMood(agent)) {
   if (mood === 'thinking') return labels.thinking;
   if (mood === 'stuck') return labels.stuck;
   if (mood === 'offline') return labels.offline;
+  if (mood === 'unknown') return labels.unknown;
   return labels.idle;
 }
 
@@ -132,6 +134,7 @@ export function defaultAgentFleetLabels() {
     busy: 'Working',
     thinking: 'Thinking',
     idle: 'Idle',
+    unknown: 'Unknown',
     sleeping: 'Sleeping', waking: 'Waking up', wake_overdue: 'Wake unsuccessful',
     auth_wait: 'Waiting for authentication', rate_wait: 'Waiting for rate limit',
     reclaiming: 'Reclaiming', switching: 'Switching',
@@ -359,7 +362,8 @@ function selfStates(tile, labels) {
   const order = ['busy', 'waiting', 'error', 'idle', 'not_running'];
   const total = order.reduce((sum, kind) => sum + (counts[kind] || 0), 0);
   const bar = total ? `<div class="wb-gbar" title="${escapeHtml(order.filter((kind) => counts[kind]).map((kind) => `${labels.groupStates[kind]} ${counts[kind]}`).join(' · '))}">${order.filter((kind) => counts[kind]).map((kind) => `<i class="wb-gbar-${kind}" style="flex:${counts[kind]}"></i>`).join('')}</div>` : '';
-  return `<div class="wb-f-act"><span>${escapeHtml(fill(labels.groupCount, { count: self.groups ?? total }))} · ${escapeHtml(active.join(' · ') || labels.allIdle)}${escapeHtml(pool)}</span></div>${bar}`;
+  const status = tile.mood === 'unknown' ? `<span class="wb-pill wb-unknown" data-mood="unknown"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span>` : '';
+  return `<div class="wb-f-act">${status}<span>${escapeHtml(fill(labels.groupCount, { count: self.groups ?? total }))} · ${escapeHtml(active.join(' · ') || labels.allIdle)}${escapeHtml(pool)}</span></div>${bar}`;
 }
 
 function renderTile(tile, labels) {
@@ -368,7 +372,7 @@ function renderTile(tile, labels) {
     ? `<span class="agent-link-chip link-${escapeHtml(tile.linkChip.quality)}" title="${escapeHtml(tile.linkChip.title)}">${escapeHtml(tile.linkChip.label)}</span>`
     : '';
   const multi = tile.self?.mode === 'multi';
-  const mode = tile.offline ? labels.modeUnknown : tile.self ? (multi ? labels.modeMulti : labels.modeSingle) : labels.modeSingle;
+  const mode = tile.self ? (multi ? labels.modeMulti : labels.modeSingle) : tile.offline ? labels.modeUnknown : labels.modeSingle;
   const sub = tile.isSelf
     ? `<div class="wb-f-sub"><span class="wb-f-seg">${escapeHtml(labels.self)}</span><span class="wb-f-seg wb-tech">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span></div>`
     : `<div class="wb-f-sub wb-tech"><span class="wb-f-seg"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span></span>${tile.offline ? '' : `<span class="wb-f-seg">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span>${tile.latencyLabel ? `<span class="wb-f-seg">${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}</span>` : ''}`}${linkChip}</div>`;

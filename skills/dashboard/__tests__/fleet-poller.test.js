@@ -689,19 +689,17 @@ test('stateToFleetRecord consumes API snake_case cost tiers directly (#174)', ()
   assert.equal(record.weekly_cost, 7.89);
 });
 
-test('stateToFleetRecord maps idle and self offline/unknown states', () => {
+test('state payloads give self and remote records the same reachability regardless of runtime state', () => {
   const agent = { name: 'a', color: agentColor('a') };
-  const idle = stateToFleetRecord(agent, { state: 'IDLE' }, { self: true, nowMs: 0 });
-  assert.equal(idle.health_reason, 'idle');
-  assert.equal(idle.pulse_rate, 1);
-
-  const offline = stateToFleetRecord(agent, { state: 'OFFLINE' }, { self: true, nowMs: 0 });
-  assert.equal(offline.health_reason, 'offline');
-  assert.equal(offline.pulse_rate, 0);
-
-  const unknown = stateToFleetRecord(agent, { state: 'UNKNOWN' }, { self: true, nowMs: 0 });
-  assert.equal(unknown.health_reason, 'offline');
-  assert.equal(unknown.pulse_rate, 0);
+  for (const state of ['IDLE', 'BUSY', 'UNKNOWN', 'OFFLINE']) {
+    const local = stateToFleetRecord(agent, { state }, { self: true, nowMs: 0 });
+    const remote = stateToFleetRecord(agent, { state }, { nowMs: 0 });
+    assert.equal(local.state, state);
+    assert.equal(local.health_reason, state === 'IDLE' ? 'idle' : 'ok');
+    assert.equal(local.pulse_rate, 1);
+    assert.equal(local.health_reason, remote.health_reason);
+    assert.equal(local.pulse_rate, remote.pulse_rate);
+  }
 });
 
 test('self record injected into fleet is first, flagged, and order-independent', () => {

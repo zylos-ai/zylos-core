@@ -23,8 +23,8 @@ import { createUsagePage } from './wb/usage.js?v=157';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=159';
-import { createFleetSounds } from './fleet-sounds.js?v=159';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=160';
+import { createFleetSounds } from './fleet-sounds.js?v=160';
 import { refreshDashboardState } from './state-refresh.js?v=99';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
@@ -219,6 +219,7 @@ function agentFleetLabels() {
     busy: t('agent_fleet.busy'),
     thinking: t('agent_fleet.thinking'),
     idle: t('agent_fleet.idle'),
+    unknown: t('value.unknown'),
     ...Object.fromEntries(['sleeping', 'waking', 'wake_overdue', 'auth_wait', 'rate_wait', 'reclaiming', 'switching'].map(key => [key, t(`agent_fleet.${key}`)])),
     stuck: t('agent_fleet.stuck'),
     offline: t('agent_fleet.offline'),
