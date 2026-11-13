@@ -250,18 +250,13 @@ main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 .wb-meter.wb-warn i { background: var(--wb-wait); }
 .wb-meter.wb-err i { background: var(--wb-err); }
 .wb-pool-meter { flex: none; }
-.wb-spark { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
-.wb-spark i { width: 4px; border-radius: 1px; background: color-mix(in srgb, var(--text) 22%, transparent); }
-.wb-spark i:last-child { background: var(--text-dim); }
-.wb-scope { font-size: 11px; color: var(--text-dim); background: var(--wb-hover); border-radius: 5px; padding: 1px 6px; }
+.wb-sys.wb-stale b { color: var(--text-muted); font-weight: 500; }
 .wb-inst-more { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; flex: none; padding: 3px 8px; border: 0; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); font-size: 12.5px; cursor: pointer; }
 .wb-inst-more:hover, .wb-inst-more[aria-expanded="true"] { background: var(--wb-hover); color: var(--text); }
 
 /* Attention: one line per item; group items open that group. */
 #wb-attention { display: flex; flex-direction: column; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--wb-line); }
 #wb-attention:empty { display: none; }
-.wb-attention-ok { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 12.5px; }
-.wb-attention-ok .wb-ico { color: var(--wb-work); }
 .wb-attention-item { display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 7px 10px; border: 1px solid var(--wb-line-strong); border-left: 3px solid var(--wb-err); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font-size: 13px; text-align: left; }
 .wb-attention-item b { font-weight: 550; }
 .wb-attention-item > .wb-ico { color: var(--wb-err); }
@@ -296,7 +291,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-dist-total, .wb-dist-item, .wb-legend-item, .wb-account > *, .wb-inst-more, .wb-bh-right, .wb-bh > .wb-tech-col { white-space: nowrap; }
 .wb-dist-item { display: inline-flex; align-items: center; gap: 4px; }
 /* Compact: the state word and the scope chip leave the screen but stay in the accessible text; numbers stay. */
-.wb-dist.wb-compact .wb-dist-word, .wb-instance.wb-compact .wb-scope { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.wb-dist.wb-compact .wb-dist-word { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .wb-bh-now { justify-content: space-between; }
 .wb-bh-now > span, .wb-bh-state { white-space: nowrap; }
 .wb-bh-strip { justify-content: space-between; }

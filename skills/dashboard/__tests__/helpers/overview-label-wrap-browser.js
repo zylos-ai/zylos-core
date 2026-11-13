@@ -6,7 +6,7 @@ import { startPage } from './workbench-browser.js';
 
 // Short labels on the overview: each must stay on one line as a whole.
 const LABELS = ['.wb-dist-total', '.wb-dist-item', '.wb-bh-state', '.wb-bh-now > span', '.wb-bh-right', '.wb-bh > .wb-tech-col',
-  '#wb-range button', '.wb-inst-item > :not(.wb-meter):not(.wb-spark):not(.wb-pool-note)', '.wb-inst-more', '.wb-legend-item', '.wb-row .wb-pill'];
+  '#wb-range button', '.wb-inst-item > :not(.wb-meter):not(.wb-pool-note)', '.wb-inst-more', '.wb-legend-item', '.wb-row .wb-pill'];
 const NOWRAP = ['.wb-dist-total', '.wb-dist-item', '.wb-bh-right', '.wb-bh > .wb-tech-col', '.wb-legend-item', '.wb-account > *',
   '.wb-inst-item:not(.wb-account)', '.wb-inst-more'];
 
@@ -68,7 +68,9 @@ function measureLabels({ labels, nowrap }) {
   const read = el => Boolean(el) && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden';
   const dist = document.querySelector('#wb-dist'), strip = document.querySelector('#wb-instance');
   const name = document.querySelector('.wb-bh-name');
-  const cost = strip.querySelector('.wb-scope')?.closest('.wb-inst-item');
+  const cost = strip.querySelector('.wb-ico-dollar')?.closest('.wb-inst-item');
+  const items = [...strip.querySelectorAll(':scope > .wb-inst-item')];
+  const attention = document.querySelector('#wb-attention');
   const pool = strip.querySelector('.wb-pool');
   const shownText = el => Boolean(el) && el.getBoundingClientRect().width > 1;
   return {
@@ -80,8 +82,16 @@ function measureLabels({ labels, nowrap }) {
     counts: [...dist.querySelectorAll('.wb-dist-item')].map(item => ({ text: item.textContent, title: item.title,
       wordShown: item.querySelector('.wb-dist-word').getBoundingClientRect().width > 1, wordRead: read(item.querySelector('.wb-dist-word')) })),
     costTitle: cost?.title ?? null,
-    scopeShown: (scope => Boolean(scope) && scope.getBoundingClientRect().width > 1)(strip.querySelector('.wb-scope')),
-    scopeText: strip.querySelector('.wb-scope')?.textContent ?? null, scopeRead: read(strip.querySelector('.wb-scope')),
+    removed: strip.querySelectorAll('.wb-scope, .wb-spark').length,
+    mode: items[0] && { text: items[0].textContent, shown: shownText(items[0]), title: items[0].querySelector('span')?.title ?? null },
+    attentionShown: attention.children.length > 0 || getComputedStyle(attention).display !== 'none',
+    pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    order: items.map(item => item.classList.contains('wb-pool') ? 'pool' : item.classList.contains('wb-sys')
+      ? [...item.classList].find(name => name.startsWith('wb-sys-')).slice(7) : item === cost ? 'cost' : 'other'),
+    system: [...strip.querySelectorAll('.wb-sys')].map(item => ({ amount: item.querySelector('b').textContent,
+      amountShown: shownText(item.querySelector('b')), wordShown: shownText(item.querySelector('.wb-sys-word')),
+      wordRead: read(item.querySelector('.wb-sys-word')), title: item.title,
+      inside: item.getBoundingClientRect().right <= strip.getBoundingClientRect().right + 1 })),
     pool: pool && { amount: pool.querySelector('b')?.textContent, amountShown: shownText(pool.querySelector('b')), title: pool.title,
       inside: pool.getBoundingClientRect().right <= strip.getBoundingClientRect().right + 1,
       warnings: [...pool.querySelectorAll(':scope > .wb-txt-warn')].map(el => ({ text: el.textContent, shown: shownText(el) })),
@@ -104,6 +114,10 @@ const EXPLANATIONS = {
 };
 const HOST_POOL = { zh: { title: '会话池', slots: '名额', source: '来源' }, en: { title: 'Session pool', slots: 'Slots', source: 'Source' } };
 const POOL_HINT = { zh: 'Origin 常驻，不占这里的名额', en: 'Origin is resident and does not take a slot here' };
+const SYSTEM_TITLES = {
+  zh: ['CPU 23% · 8 核', '内存 13% · 已用 2.0 / 16.0 GiB', '磁盘 62% · 剩余 40.3 GiB'],
+  en: ['CPU 23% · 8 cores', 'Memory 13% · 2.0 / 16.0 GiB used', 'Disk 62% · 40.3 GiB free'],
+};
 const WORDS = { zh: ['1 忙碌', '1 空闲', '1 未运行'], en: ['1 Busy', '1 Idle', '1 Not running'] };
 
 export async function runOverviewLabelWrapBrowser(t, sandbox) {
@@ -196,11 +210,25 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     assert.equal(result.counts.every(count => count.wordShown), !technical && !result.distCompact);
     assert.equal(result.counts.some(count => count.wordShown), !technical && !result.distCompact);
     const scope = language === 'zh' ? '全部组合计' : 'All groups combined';
-    assert.equal(result.scopeText, scope);
-    assert.equal(result.scopeRead, true, 'the scope stays in the accessibility tree');
-    assert.equal(result.scopeShown, !result.stripCompact);
-    // The cost item's title names the scope, which the compact strip takes off the screen.
+    // The run mode stays first in the strip; the cost's spark bars and scope chip and the all-clear line are gone, and the
+    // cost's title keeps the scope.
+    assert.deepEqual(result.mode, { text: technical ? 'multi' : language === 'zh' ? '多组并行' : 'Multiple groups', shown: true,
+      title: language === 'zh' ? '模式' : 'Mode' }, 'the run mode is the first item');
+    assert.equal(result.removed, 0, 'no spark bars or scope chip in the strip');
+    assert.equal(result.attentionShown, false, 'nothing to report leaves no all-clear line');
     assert.ok(result.costTitle?.endsWith(` · ${scope}`), `the cost item's title names the scope: ${result.costTitle}`);
+    // CPU, memory and disk sit between the pool and the cost as icon and number, inside the strip at every width; their
+    // names are read out but not shown, and the details are on hover.
+    assert.deepEqual(result.order.filter(name => name !== 'other'), ['pool', 'cpu', 'memory', 'disk', 'cost']);
+    assert.equal(result.pageOverflow, false, 'the page does not scroll sideways');
+    assert.deepEqual(result.system.map(item => item.amount), ['23%', '13%', '62%']);
+    for (const item of result.system) {
+      assert.equal(item.amountShown, true, `the percentage is shown: ${item.title}`);
+      assert.equal(item.inside, true, `the item stays inside the strip: ${item.title}`);
+      assert.equal(item.wordRead, true, 'the metric name stays in the accessibility tree');
+      assert.equal(item.wordShown, false, 'icon and number only, like the card asks');
+    }
+    assert.deepEqual(result.system.map(item => item.title), SYSTEM_TITLES[language]);
     // The pool keeps its capacity, its warnings and its one source note on screen; the capacity explanations are not
     // in the strip at all (the host panel shows them). The note stays read out and is in the item's title.
     const pool = result.pool;
@@ -480,9 +508,9 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       checkLabels(await measureOn(page), 'zh');
       // The widths are chosen so that only a refit gives each row the expected form; a poll (every 5s, which also
       // refits) could land in the same 2s, so the resize path itself is pinned down by wb-label-fit's unit tests.
-      // With the 480px drawer open, 1700px leaves the list 1220px, room for the full form in any font, and 800px
+      // With the 480px drawer open, 2000px leaves the list 1520px, room for the full form in any font, and 800px
       // leaves 320px, room for it in none.
-      await page.setViewportSize({ width: 1700, height: 800 });
+      await page.setViewportSize({ width: 2000, height: 800 });
       await page.waitForFunction(() => !document.querySelector('#wb-dist').classList.contains('wb-compact')
         && !document.querySelector('#wb-instance').classList.contains('wb-compact'), null, { timeout: 2000 });
       checkLabels(await measureOn(page), 'zh');
@@ -498,7 +526,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
   // strip still has its full form, so the grown strip no longer fits in any font and only the refit after the
   // strip redraw can give it its compact form.
   await t.test('a strip that grows on a poll refits without a width change', async () => {
-    const { page, context } = await open(1700, 'zh');
+    const { page, context } = await open(2000, 'zh');
     let longer = false;
     await context.route(url => url.pathname === '/api/workbench/groups', async route => {
       const response = await route.fetch();
@@ -509,8 +537,8 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     try {
       await openDetail(page);
       const compact = () => page.evaluate(() => document.querySelector('#wb-instance').classList.contains('wb-compact'));
-      let width = 1700;
-      assert.equal(await compact(), false, 'the full strip fits beside the drawer at 1700px');
+      let width = 2000;
+      assert.equal(await compact(), false, 'the full strip fits beside the drawer at 2000px');
       while (width > 900) {
         await page.setViewportSize({ width: width - 10, height: 800 });
         await nextFrames(page);

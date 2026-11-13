@@ -69,6 +69,30 @@ export function poolExplanation(record, t) {
   if (record?.reason === 'floor') parts.push(t('wb.inst.poolFloor'));
   return parts;
 }
+// The collector samples every 30 seconds; three missed rounds make the numbers stale rather than current.
+export const SYSTEM_STALE_MS = 90_000;
+const oneDecimal = bytes => (bytes / 1073741824).toFixed(1);
+/** CPU, memory (used = total minus available) and disk percentages: icon and number on screen, the name read out, details in the title. */
+export function systemItems(document, system, { t = key => key, readAt = null } = {}) {
+  const stale = system != null && !(Number.isFinite(readAt) && readAt - system.sampledAt <= SYSTEM_STALE_MS);
+  const memory = system && system.memTotalBytes > 0 && system.memUsedBytes != null ? system.memUsedBytes / system.memTotalBytes * 100 : null;
+  const specs = [
+    ['cpu', 'cpu', system?.cpuPct, system?.cpuCount > 0 ? t('wb.inst.cpuCores', { count: system.cpuCount }) : ''],
+    ['memory', 'memory', memory, memory == null ? ''
+      : t('wb.inst.memoryUsed', { used: oneDecimal(system.memUsedBytes), total: oneDecimal(system.memTotalBytes) })],
+    ['disk', 'disk', system?.diskUsedPct, system?.diskFreeBytes != null ? t('wb.inst.diskFree', { free: oneDecimal(system.diskFreeBytes) }) : ''],
+  ];
+  return specs.map(([glyph, name, value, detail]) => {
+    const label = t('wb.host.' + name), known = !stale && typeof value === 'number' && Number.isFinite(value);
+    const amount = known ? Math.round(Math.max(0, Math.min(100, value))) + '%' : '—';
+    const node = item(document, icon(document, glyph, 'xs'), element(document, 'span', label, 'wb-sys-word wb-vh'), element(document, 'b', amount));
+    node.classList.add('wb-sys', 'wb-sys-' + name);
+    if (stale) node.classList.add('wb-stale');
+    node.title = [label + ' ' + amount, known ? detail : '',
+      system == null ? t('wb.inst.systemUnknown') : stale ? t('wb.inst.systemStale', { time: clock(system.sampledAt) }) : ''].filter(Boolean).join(' · ');
+    return node;
+  });
+}
 /** One-line instance strip; the host button stays at the right end. */
 export function instanceStrip(root, snapshot, { document = root.ownerDocument, t = key => key, cost = null, costSummary = null, onHost = () => {}, hostOpen = false, level = 'plain', now = Date.now() } = {}) {
   root.replaceChildren(); const instance = snapshot.instance ?? {};
@@ -132,23 +156,13 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   if (source) poolItem.append(element(document, 'span', ' · ' + source, 'wb-sub wb-pool-note'));
   if (pool.waiting) poolItem.append(element(document, 'span', ' · ' + t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: pool.waiting }), 'wb-txt-warn'));
   poolItem.title = [t('wb.inst.poolHint'), source, ...details].filter(Boolean).join(' · ');
-  root.append(poolItem);
+  root.append(poolItem, ...systemItems(document, instance.system ?? null, { t, readAt: snapshot.readAt }));
   cost = costSummary?.today?.total ?? cost;
   const costLabel = technical ? t('wb.inst.costTech') + ' ' + t('wb.inst.today') : t('wb.cost');
   const expense = item(document, icon(document, 'dollar', 'xs'), element(document, 'span', costLabel), element(document, 'b', money(cost)));
-  // The scope chip leaves the screen in the compact strip; the title keeps it, so the cost never reads as one group's.
+  // The title names the scope, so the cost never reads as one group's.
   expense.title = costLabel + ' · ' + t('wb.usage.allGroups');
-  if (technical) {
-    expense.append(element(document, 'span', '· ' + t('wb.usage.range.7d')), element(document, 'b', costSummary == null ? '—' : money(costSummary.sevenDay?.total)));
-    const bars = element(document, 'span', undefined, 'wb-spark');
-    const daily = costSummary?.daily ?? [], max = Math.max(0, ...daily.map(row => row.total));
-    for (const row of daily) {
-      const bar = element(document, 'i'); bar.style.height = Math.max(2, max ? Math.round(row.total / max * 14) : 2) + 'px';
-      bar.title = row.at + ' · ' + money(row.total); bar.setAttribute('aria-label', bar.title); bars.append(bar);
-    }
-    expense.append(bars);
-  }
-  expense.append(element(document, 'small', t('wb.usage.allGroups'), 'wb-scope'));
+  if (technical) expense.append(element(document, 'span', '· ' + t('wb.usage.range.7d')), element(document, 'b', costSummary == null ? '—' : money(costSummary.sevenDay?.total)));
   root.append(expense);
   const services = instance.services;
   const down = services == null ? null : services.total - services.online;

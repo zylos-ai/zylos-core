@@ -32,8 +32,9 @@ function snapshot(now) {
   return { readAt: now, mode: 'multi', view: 'multi', rows: list, counts, hasOlder: false, listKnown: true, baselineRuntime: 'claude',
     overrides: { runtime: [], model: [] },
     instance: { runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'ok' } }, accounts: { claude: { used_percentage: 42 }, codex: null },
-      pool: { ready: 2, starting: 0, reclaiming: 0, waiting: 0, capacity: 4, used: 2 }, services: { online: 6, total: 6 } },
-    sources: { status: { ok: true, readAt: now }, c4: { ok: true, readAt: now } }, attention: { ok: true, sampledAt: now, problems: [], reminders: [] } };
+      pool: { ready: 2, starting: 0, reclaiming: 0, waiting: 0, capacity: 4, used: 2 }, services: { online: 6, total: 6 },
+      system: { sampledAt: now - 12000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2147483648, memTotalBytes: 17179869184, diskUsedPct: 61.6, diskFreeBytes: 43218108416 } },
+    sources: { status: { ok: true, readAt: now }, c4: { ok: true, readAt: now } }, attention: { ok: true, problems: [], reminders: [] } };
 }
 
 function schedule(now) {

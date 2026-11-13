@@ -158,8 +158,7 @@ test('pricing usage and strip costs share natural days and include legacy rows',
   assert.equal(strip.sevenDay.total, usage.totals.cost);
   assert.equal(strip.today.total, 15);
   assert.equal(Object.hasOwn(usage, 'costSummary'), false);
-  assert.equal(strip.daily.length, 7);
-  assert.equal(strip.daily.reduce((sum, day) => sum + day.total, 0), usage.totals.cost);
+  assert.deepEqual(Object.keys(strip).sort(), ['sevenDay', 'today', 'tz', 'tzFallback'], 'the strip summary has no per-day series');
   assert.equal(f.store.aggregateCost(usage), usage.totals.cost);
   assert.equal(f.store.aggregateCost({ since: '2026-11-05T16:00:00.000Z', until: usage.until }), strip.today.total);
 });

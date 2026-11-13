@@ -31,7 +31,6 @@ test('usage combines both runtimes and legacy costs while tokens use dimensions'
   assert.equal(summary.today.total, 8);
   assert.equal(summary.sevenDay.total, result.totals.cost);
   assert.equal(Object.hasOwn(result, 'costSummary'), false, 'full usage must not repeat the summary query');
-  assert.equal(summary.daily.reduce((sum, row) => sum + row.total, 0), summary.sevenDay.total);
   assert.equal(result.projects.items[0].name, 'beta');
   assert.equal(result.projects.items[0].outputTokens, 210);
   assert.equal(f.store.queryMetrics({ name: 'account_quota' }).length, 0);
@@ -72,7 +71,7 @@ test('summary and full usage label missing or invalid timezones as UTC fallback'
 });
 
 // Same private SQLite fixture; run when shared cost boundaries change. Cross
-// midnight/month observations prove each seven-day total equals seven bars.
+// midnight/month observations prove each seven-day total equals the seven day buckets.
 test('seven-day costs keep seven natural days across midnight and month boundaries', t => {
   const f = usageFixture(t);
   for (let day = 24; day <= 31; day++) f.metric(`2026-10-${day}T17:00:00.000Z`, 'claude', { cost: 1 });
@@ -81,9 +80,7 @@ test('seven-day costs keep seven natural days across midnight and month boundari
     const result = usageSeries(f.store, f.reader, { tz: 'Asia/Singapore', now });
     const summary = costSummary(f.store, { tz: 'Asia/Singapore', now });
     assert.equal(result.buckets.length, 7);
-    assert.equal(summary.daily.length, 7);
     assert.equal(summary.sevenDay.total, result.totals.cost);
-    assert.equal(summary.daily.reduce((sum, row) => sum + row.total, 0), result.totals.cost);
     assert.equal(result.totals.cost, f.store.aggregateCost(bounds) ?? 0);
     assert.equal(usageIntervals(usageBounds({ range: '24h', tz: 'Asia/Singapore', now })).length, 24);
     assert.equal(usageIntervals(usageBounds({ range: '30d', tz: 'Asia/Singapore', now })).length, 30);

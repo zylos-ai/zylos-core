@@ -21,10 +21,31 @@ function macosFreeMem() {
   }
 }
 
+// MemAvailable is the kernel's estimate of what can still be allocated without swapping. MemFree (os.freemem)
+// leaves out reclaimable page cache, so it counts most of the file cache as used.
+export function parseMeminfo(text) {
+  const get = label => {
+    const m = String(text).match(new RegExp(`^${label}:\\s+(\\d+)\\s+kB`, 'm'));
+    return m ? Number(m[1]) * 1024 : null;
+  };
+  const totalBytes = get('MemTotal'), availableBytes = get('MemAvailable');
+  if (!(totalBytes > 0) || availableBytes == null) return null;
+  return { totalBytes, availableBytes: Math.min(availableBytes, totalBytes) };
+}
+
+/** Total and available memory: Linux reads /proc/meminfo, macOS counts reclaimable pages as available. */
+export function readMemory({ platform = process.platform, readFile = fs.readFileSync } = {}) {
+  if (platform === 'linux') {
+    try { return parseMeminfo(readFile('/proc/meminfo', 'utf8')); } catch { return null; }
+  }
+  return { totalBytes: os.totalmem(), availableBytes: platform === 'darwin' ? macosFreeMem() : os.freemem() };
+}
+
 export class SystemCollector {
-  constructor(store, config) {
+  constructor(store, config, { readMemory: readMemoryNow = readMemory } = {}) {
     this.store = store;
     this.config = config;
+    this._readMemory = readMemoryNow;
     this._cache = null;
     this._timer = null;
     this._onUpdate = null;
@@ -61,10 +82,11 @@ export class SystemCollector {
     }
 
     try {
-      data.mem_total_bytes = os.totalmem();
-      const freeMem = process.platform === 'darwin' ? macosFreeMem() : os.freemem();
-      data.mem_used_bytes = data.mem_total_bytes - freeMem;
-
+      const memory = this._readMemory();
+      if (memory) {
+        data.mem_total_bytes = memory.totalBytes;
+        data.mem_used_bytes = memory.totalBytes - memory.availableBytes;
+      }
     } catch (err) {
       process.stderr.write(`[system-collector] Memory error: ${err.message}\n`);
     }

@@ -28,11 +28,20 @@ function queryAllEvents(store, filter) {
   }
 }
 
+const finiteOrNull = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
+/** The host's latest CPU, memory and disk sample with its collection time; the page judges its age against readAt. */
+export function systemSample(sample) {
+  if (!sample || typeof sample !== 'object' || !Number.isFinite(sample.collectedAt)) return null;
+  return { sampledAt: sample.collectedAt, cpuPct: finiteOrNull(sample.cpu_pct), cpuCount: finiteOrNull(sample.cpu_count),
+    memUsedBytes: finiteOrNull(sample.mem_used_bytes), memTotalBytes: finiteOrNull(sample.mem_total_bytes),
+    diskUsedPct: finiteOrNull(sample.disk_used_pct), diskFreeBytes: finiteOrNull(sample.disk_free_bytes) };
+}
+
 /** No timers: collection happens only in response to a read request. */
 export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule = defaultLoadCoreModule,
   now = Date.now, cli = createCoreCli({ zylosDir }), sanitizer = new Sanitizer(zylosDir),
   displayNames = emptyNames, readConfigRuntime = () => null, channelDownCounter = createChannelDownCounter(),
-  readPm2 = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids) } = {}) {
+  readPm2 = () => null, readSystem = () => null, readTaskNames = ids => defaultReadTaskNames(zylosDir, ids) } = {}) {
   let cache = null, inflight = null, accountsCache = null;
   const activities = new Map();
   let hotTtlMs = 1800000;
@@ -175,9 +184,11 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     } catch { /* an unreadable service sample stays unknown */ }
     const services = pm2Data ? { online: pm2Data.processes.filter(process => process.pm2_env?.status === 'online').length,
       total: pm2Data.processes.length } : null;
+    let system = null;
+    try { system = systemSample(readSystem()); } catch { /* an unreadable host sample stays unknown */ }
     const value = { readAt: at, mode, view: status?.view ?? null, rows, counts: countRows(rows), hasOlder,
       listKnown: status !== null && status.groupListError === null, baselineRuntime,
-      instance: { runtimeHealth: status?.runtimeHealth ?? null, accounts: accountsCache.accounts, pool, services },
+      instance: { runtimeHealth: status?.runtimeHealth ?? null, accounts: accountsCache.accounts, pool, services, system },
       overrides: ov.ok ? ov.data : null, sources };
     value.attention = buildAttention(value, { channelDownCounter, pm2Data });
     for (const row of rows) row.attention = value.attention.problems.filter(problem =>
