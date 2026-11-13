@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, durationOf, sortRows, countRows } from '../src/lib/workbench/group-state.js';
+import { classify, durationOf, sortRows, countRows, STALE_STATUS_DISPLAY_MS } from '../src/lib/workbench/group-state.js';
 const now = 1800000000000;
 const row = patch => ({ sessionGroup: 'a', presence: 'running', queue: { pending: { oldestAt: now - 3000 } },
   live: { runId: 'run', status: { valid: true, state: 'busy', idleSeconds: 4 } }, wait: null, ...patch });
@@ -43,4 +43,32 @@ test('sorting keeps Origin first, then attention, state order and latest activit
   assert.deepEqual(sortRows(rows).map(row => row.sessionGroup), ['origin', 'alert', 'busy-new', 'busy-old', 'error', 'waiting', 'unknown', 'idle', 'absent']);
   assert.deepEqual(countRows(rows), { busy: 2, waiting: 1, error: 1, unknown: 1, idle: 1, not_running: 3 });
   assert.equal(rows[0].sessionGroup, 'absent');
+});
+
+
+test('recent expired samples keep normal classification until the display age boundary', () => {
+  const expired = (lastState, sampledAt = now - 20_000, reason = 'stale') => row({ live: { status: {
+    valid: false, state: null, idleSeconds: null, lastState, lastIdleSeconds: 9, reason, sampledAt,
+  } } });
+  assert.deepEqual(classify(row(), { now }), { kind: 'busy' }, 'fresh samples retain their shape');
+  for (const kind of ['busy', 'idle']) {
+    const value = expired(kind);
+    assert.deepEqual(classify(value, { now }), { kind, stale: true, sampledAt: now - 20_000 });
+    assert.equal(classify(expired(kind, now - STALE_STATUS_DISPLAY_MS + 1), { now }).kind, kind);
+    assert.equal(classify(expired(kind, now - STALE_STATUS_DISPLAY_MS), { now }).kind, 'unknown');
+    assert.equal(classify(expired(kind, now - STALE_STATUS_DISPLAY_MS - 1), { now }).kind, 'unknown');
+    assert.equal(classify(expired(kind, now + 1), { now }).kind, 'unknown');
+    assert.equal(classify(expired(kind, null), { now }).kind, 'unknown');
+    assert.equal(classify(expired(kind, now - 20_000, 'identity_mismatch'), { now }).kind, 'unknown');
+  }
+  assert.equal(classify(expired(null), { now }).kind, 'unknown');
+  assert.equal(classify(expired('unrecognized'), { now }).kind, 'unknown');
+  const waiting = expired('busy'); waiting.wait = { kind: 'auth_wait' };
+  assert.deepEqual(classify(waiting, { now }), { kind: 'waiting', stale: true, sampledAt: now - 20_000 });
+  const idle = expired('idle'); idle.state = classify(idle, { now });
+  assert.equal(durationOf(idle, { now }), 9);
+  const rows = [expired('idle'), expired('busy'), expired('busy', now - STALE_STATUS_DISPLAY_MS)];
+  rows.forEach((value, index) => { value.state = classify(value, { now }); value.sessionGroup = String(index); });
+  assert.deepEqual(sortRows(rows).map(value => value.sessionGroup), ['1', '2', '0']);
+  assert.deepEqual(countRows(rows), { busy: 1, waiting: 0, error: 0, unknown: 1, idle: 1, not_running: 0 });
 });

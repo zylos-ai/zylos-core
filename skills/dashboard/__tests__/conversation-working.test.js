@@ -14,7 +14,7 @@ const { createGroupSide } = await import('../public/js/wb/group-side.js');
 // Pure controllers and injected DOM: no browser, socket, database, storage, PM2 or tmux.
 const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
 function fixture(t) {
-  let time = 1000000, token = 0, fail = false;
+  let time = 1000000, token = 0, fail = false, statusRow = null;
   let working = { on: true, since: time - 60000, turn: { since: time - 60000 }, tools: 0, subagents: null };
   const tasks = new Map(), reads = [], listeners = new Set();
   const document = { hidden: false, visibilityState: 'visible',
@@ -31,7 +31,7 @@ function fixture(t) {
         if (fail) throw new Error('offline');
         return { listKnown: true, sources: { status: { ok: true, readAt: time } },
           instance: { runtimeHealth: { claude: { health: 'ok' } } },
-          rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, working }] };
+          rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, working, ...statusRow }] };
       }
       if (u.pathname.endsWith('/send')) return { stored: true, conversationId: 'g:A' };
       if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:A', session_group: 'dashboard:a', stamp: 1 }], nextCursor: null };
@@ -42,7 +42,7 @@ function fixture(t) {
     } });
   t.after(() => { state.destroy(); assert.equal(tasks.size, 0); });
   return { state, reads, tasks, document, groupReads: () => reads.filter(row => row.path === '/api/workbench/groups'),
-    setWorking: value => { working = value; }, setFailure: value => { fail = value; },
+    setStatusRow: value => { statusRow = value; }, setWorking: value => { working = value; }, setFailure: value => { fail = value; },
     async start() { await state.open(); await state.select('g:A'); await flush(); },
     async visibility(visible) { document.hidden = !visible; document.visibilityState = visible ? 'visible' : 'hidden'; for (const fn of listeners) fn(); await flush(); },
     async advance(ms) {
@@ -202,4 +202,30 @@ for (const locale of ['zh', 'en']) test(`working captions omit elapsed time in $
     assert.deepEqual(workingParts({ ...working, turn: null }, { ...options, compact: true }), {
       main: zh ? '后台子任务 2 个' : '2 subtasks', children: null });
   }
+});
+
+
+test('conversation keeps classified sample status and clears it after a read failure', async t => {
+  const f = fixture(t);
+  const sample = { state: { kind: 'idle', stale: true, sampledAt: 980000 },
+    live: { status: { valid: false, reason: 'stale', lastState: 'idle', sampledAt: 980000 } } };
+  f.setStatusRow(sample); await f.start();
+  assert.deepEqual(f.state.snapshot().groupStatusRow, sample);
+  f.setFailure(true); await f.advance(5000);
+  assert.equal(f.state.snapshot().groupStatusRow, null);
+});
+
+test('detail preserves stale sample classification despite contradictory working events', async t => {
+  const document = createDocument(), root = document.createElement('div'), now = 900000;
+  const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run', status: {
+    valid: false, reason: 'stale', sampledAt: now - 20000, lastState: 'idle' } },
+    state: { kind: 'idle', stale: true, sampledAt: now - 20000 }, duration: null, working: { on: true, since: now - 1000 } };
+  const detail = createGroupDetail({ root, document, now: () => now, fetch: async path => ({ ok: true,
+    json: async () => path.includes('/runs') ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
+  t.after(() => detail.destroy());
+  await detail.open('dashboard:a', { rows: [row], listKnown: true });
+  const head = allNodes(root).find(node => node.classList.contains('wb-group-head'));
+  assert.equal(allNodes(head).some(node => node.classList.contains('wb-idle')), true);
+  assert.equal(allNodes(head).some(node => node.classList.contains('wb-status-age')), true);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-status-age')).length, 2);
 });

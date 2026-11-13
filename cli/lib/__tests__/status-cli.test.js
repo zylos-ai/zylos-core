@@ -147,3 +147,23 @@ for (const [need, health, pattern] of [
     assert.match(lines.join('\n'), pattern);
   } finally { console.log = log; }
 });
+
+
+test('status retains previous sample fields without changing current field meanings', async () => {
+  for (const stale of [false, true]) {
+    const observation = live(true, stale ? 'stale' : null);
+    observation.status.lastValue = stale ? { state: 'idle', idle_seconds: 19 } : null;
+    const view = await collectStatus(fixture({ session: () => observation }));
+    assert.deepEqual(view.origin.status, {
+      valid: !stale, reason: stale ? 'stale' : null, sampledAt: 1000,
+      state: stale ? null : 'idle', idleSeconds: stale ? null : 4,
+      lastState: stale ? 'idle' : null, lastIdleSeconds: stale ? 19 : null,
+    });
+  }
+  const absentView = await collectStatus(fixture({ session: () => absent }));
+  assert.equal(absentView.origin.status.lastState, null);
+  assert.equal(absentView.origin.status.lastIdleSeconds, null);
+  const failed = await collectStatus(fixture({ session: () => { throw Error('unreadable'); } }));
+  assert.equal(failed.origin.status.lastState, null);
+  assert.equal(failed.origin.status.lastIdleSeconds, null);
+});

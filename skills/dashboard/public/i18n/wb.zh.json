@@ -599,6 +599,7 @@
   "wb.board.standby": "待命中，来消息会自动开始",
   "wb.inst.modeMulti": "多组并行",
   "wb.inst.modeSingle": "单会话",
+  "wb.state.lastStatus": "最后一次状态：{state}，{age}",
   "wb.detail.agoSeconds": "{n} 秒前",
   "wb.detail.ago": "{span}前",
   "wb.event.toolDone": "完成",
