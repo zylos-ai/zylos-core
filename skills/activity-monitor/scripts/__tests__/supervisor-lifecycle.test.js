@@ -1957,6 +1957,7 @@ test('voluntary release keeps intent while active children or the requesting tur
 });
 test('release intent suppresses expired TTL preparation controls', async () => {
  const f = fixture();
+ f.scenes[0].turnOpen = false;
  f.context.configuration.hotTtlSeconds = 1;
  await f.lifecycle.requestRelease(f.scenes[0], f.context);
  await f.lifecycle.checkTtl(f.scenes[0], f.context);
@@ -1967,6 +1968,38 @@ test('release intent suppresses expired TTL preparation controls', async () => {
  const ordinary = fixture(); ordinary.context.configuration.hotTtlSeconds = 1;
  await ordinary.lifecycle.checkTtl(ordinary.scenes[0], ordinary.context);
  assert.deepEqual(ordinary.controls.map(row => row.content), ['check']);
+});
+test('closed turn waiting for release Sync suppresses expired TTL preparation', async () => {
+ const f = fixture(); f.scenes[0].turnOpen = false; f.unsummarized = 1;
+ f.context.configuration.hotTtlSeconds = 1;
+ await f.lifecycle.requestRelease(f.scenes[0], f.context);
+ await f.lifecycle.advanceReleases(f.context);
+ assert.deepEqual(f.controls.map(row => row.content), ['prepare']);
+ await f.lifecycle.checkTtl(f.scenes[0], f.context);
+ assert.deepEqual(f.controls.map(row => row.content), ['prepare']);
+ assert.equal(f.lifecycle.ttlPreparation.size, 0);
+ assert.equal(f.lifecycle.releasePreparation.size, 1);
+ assert.equal(f.fences.size, 0);
+});
+test('open turn release intent permits normal TTL preparation and completes as ttl', async () => {
+ for (const group of ['a', 'origin']) {
+  const f = fixture(); f.scenes = [scene(group, { turnOpen: true, busySince: 100 })];
+  f.context.configuration.hotTtlSeconds = 1;
+  await f.lifecycle.requestRelease(f.scenes[0], f.context);
+  await f.lifecycle.advanceReleases(f.context);
+  assert.equal(f.controls.length, 0); assert.equal(f.fences.size, 0);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.deepEqual(f.controls.map(row => row.content), ['check']);
+  const control = f.controls[0];
+  await f.lifecycle.workDelivered({ sessionGroup: group, runId: `run-${group}`, pastedAt: f.now, controlId: control.id });
+  assert.equal(f.lifecycle.releasePreparation.size, 0);
+  assert.equal(f.events.at(-1).reason, 'new_work');
+  f.settle(); await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const fence = f.fences.get(group); assert.equal(fence.reason, 'ttl');
+  assert.equal(await f.lifecycle.advanceReclaim(fence, f.context), 'done');
+  assert.equal(f.endings[0].reason, 'ttl'); assert.equal(f.lifecycle.releasePreparation.size, 0);
+  assert.equal(f.scenes.length, 0); assert.equal(f.fences.size, 0);
+ }
 });
 test('active children prevent release Sync insertion for unsummarized work', async () => {
  const f = fixture(); f.unsummarized = 1;

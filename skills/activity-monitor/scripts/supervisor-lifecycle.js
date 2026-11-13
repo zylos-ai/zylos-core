@@ -568,7 +568,7 @@ export class SupervisorLifecycle {
   async checkTtl(scene, context) {
     if (scene.observationError) throw scene.observationError;
     const group = scene.sessionGroup;
-    if (this.releasePreparation.has(group)) return;
+    if (this.releasePreparation.has(group) && scene.turnOpen !== true) return;
     if (modeOf(context) !== 'multi' || !group || !await this.allowed(group, context)) return;
     if (!scene.present || !scene.ready) { this.ttlPreparation.delete(group); return; }
     const preparation = this.ttlPreparation.get(group);
