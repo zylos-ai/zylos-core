@@ -59,9 +59,10 @@ test('guidance uses bounded read-only source reads available in each runtime', (
   assert.doesNotMatch(skill, /Use Read\/Glob\/Grep for inputs and Bash only/);
 });
 
-test('export guidance shares mandatory visible-tail and size/hash verification steps', () => {
+test('export guidance shares bounded reading and visible-tail steps', () => {
   const fetch = fs.readFileSync(new URL('../../../comm-bridge/references/c4-fetch.md', import.meta.url), 'utf8');
-  const section = text => normalize(between(text, '### Required file verification', 'A range ledger alone does not satisfy step 3.'));
+  const end = 'This supplements the text read and does not replace it.';
+  const section = text => normalize(between(text, '### Complete byte-range reads', end) + end);
   assert.equal(section(fetch), section(sync));
   for (const source of [fetch, sync]) {
     const text = section(source);
@@ -72,26 +73,18 @@ test('export guidance shares mandatory visible-tail and size/hash verification s
     assert.match(text, /every trailing space, tab and newline visible/);
     assert.match(text, /If this output is truncated, split the range and reread it/);
     assert.match(text, /supplements the text read and does not replace it/);
-    assert.match(text, /3\. Compute the actual file size with `wc -c/);
-    assert.match(text, /SHA-256 with `shasum -a 256/);
-    assert.match(text, /Compare both actual values with that file's metadata `bytes` and `sha256`/);
-    assert.match(text, /report the actual byte count and SHA-256 for each file/);
-    assert.match(text, /explicitly state that both match its metadata/);
-    assert.match(text, /Missing verification, missing report evidence or any mismatch makes this Sync run a failure/);
-    assert.match(text, /do not advance that input or claim success/);
-    assert.match(text, /File SHA-256 is distinct from the batch\/summary\/raw receipt hash/);
+    assert.doesNotMatch(text, /wc -c|shasum|report.*SHA-256/);
   }
 });
 
-test('all Sync entry points require verification evidence and remove only their own exports without force', () => {
+test('all Sync entry points preserve visible tails and remove only their own exports without force', () => {
   const fetch = fs.readFileSync(new URL('../../../comm-bridge/references/c4-fetch.md', import.meta.url), 'utf8');
   const agents = ['group', 'origin', 'global'].map(kind => fs.readFileSync(new URL(`../../agents/zylos-${kind}-sync.md`, import.meta.url), 'utf8'));
   for (const source of [skill, ...agents]) {
     const text = normalize(source);
-    assert.match(text, /all three numbered Required file verification steps/);
+    assert.match(text, /Complete byte-range reads steps/);
     assert.match(text, /`od -An -v -c`/);
-    assert.match(text, /report both actual values and metadata matches/);
-    assert.match(text, /Missing verification or report evidence fails the Sync/);
+    assert.match(text, /trailing whitespace is visible/);
   }
   for (const source of [sync, fetch, skill, ...agents]) {
     assert.ok(source.includes('rm -r "<absolute path of this run\'s private directory>"'));

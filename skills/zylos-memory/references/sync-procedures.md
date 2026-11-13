@@ -96,10 +96,10 @@ no gap. Include this per-file range ledger in the Sync result. Never claim a
 full read from a hash match or analysis of an unread suffix. This byte method
 preserves direct/export byte parity and valid JSON without adding hard wrapping.
 
-### Required file verification
+### Complete byte-range reads
 
-For every exported file and every listed input with byte/hash metadata, complete
-these numbered steps before summarizing, checkpointing or advancing its cursor:
+For every exported file and every listed input, complete these reading steps
+before summarizing, checkpointing or advancing its cursor:
 
 1. Read the entire file in bounded byte ranges and record every `[start,end)`.
    Truncated output is unread; reduce the range and reread it.
@@ -109,16 +109,6 @@ these numbered steps before summarizing, checkpointing or advancing its cursor:
    trailing space, tab and newline visible; plain command output may trim them.
    If this output is truncated, split the range and reread it with the same
    `od -An -v -c` display. This supplements the text read and does not replace it.
-3. Compute the actual file size with `wc -c < "<returned absolute path>"` and
-   SHA-256 with `shasum -a 256 "<returned absolute path>"`. Compare both actual
-   values with that file's metadata `bytes` and `sha256`. In the Sync result,
-   report the actual byte count and SHA-256 for each file and explicitly state
-   that both match its metadata. Missing verification, missing report evidence
-   or any mismatch makes this Sync run a failure; follow the existing failure
-   and release rules, and do not advance that input or claim success.
-
-File SHA-256 is distinct from the batch/summary/raw receipt hash; do not compare
-file bytes against a receipt hash. A range ledger alone does not satisfy step 3.
 
 ## Group Sync
 

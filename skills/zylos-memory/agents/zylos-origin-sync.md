@@ -21,10 +21,9 @@ paths; do not read its state or segments. Advance cursors only by passing the
 unchanged receipts and list result to `origin-cursor.js advance`; never supply
 cursor numbers. Origin never runs group cleanup/rotate/commit. Remove the
 export directory before release and report every read byte range as specified
-by the procedure. Complete all three numbered Required file verification
-steps in the procedure: display the final range with `od -An -v -c`, compute and compare the actual byte
-count and SHA-256, and report both actual values and metadata matches. Missing
-verification or report evidence fails the Sync. Remove only this run's private
+by the procedure. Follow the procedure's Complete byte-range reads steps,
+including the final range's supplementary `od -An -v -c` display so trailing
+whitespace is visible. Remove only this run's private
 export directory with `rm -r "<absolute path of this run's private directory>"`;
 do not add `-f`. Follow the common failure/release rules and
 return a concise result to the requesting session. Do not perform business

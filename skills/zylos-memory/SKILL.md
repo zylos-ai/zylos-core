@@ -80,13 +80,13 @@ output is unread: retry with a smaller limit/range until complete. Do not infer
 completion from the first/last lines or a successful hash check alone. Use
 returned absolute paths; never synthesize export, segment or session paths.
 Follow the procedure's private export-directory cleanup and per-file byte-range
-ledger, including for a single long line. Complete all three numbered Required
-file verification steps: display the final range with `od -An -v -c`, compute and
-compare the actual byte count and SHA-256, and report both actual values and
-metadata matches. Missing verification or report evidence fails the Sync.
+ledger, including for a single long line. Follow the procedure's Complete
+byte-range reads steps, including the final range's supplementary `od -An -v -c`
+display so trailing whitespace is visible.
 Remove only this run's private export directory with
 `rm -r "<absolute path of this run's private directory>"`; do not add `-f`.
-Origin obtains log paths through read-only `sync-files.js list --group G`, without reading state or segments.
+Origin obtains log paths through read-only `sync-files.js list --group G`,
+without reading state or segments.
 Origin exports both of its reads with `--out` and advances cursors only by
 passing the unchanged receipts and list result to `origin-cursor.js advance`.
 Do not read an entire old file into a script. Memory writes still use only the
