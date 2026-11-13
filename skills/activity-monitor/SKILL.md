@@ -137,9 +137,8 @@ still idle; when the deadline passes first, eviction continues without waiting
 for the answer. A new C4 message, a replaced run, or session or child activity
 after the deadline abandons that group's eviction, and candidates are selected
 again by the usual rules; the check's own activity up to its deadline is
-ignored. Each selected group gets one check, and while it waits without an
-accepted deferral it counts toward the slots being freed, so no further group
-is asked meanwhile. A
+ignored. Each selected group gets one check, and while it waits it counts
+toward the slots being freed, so no further group is asked meanwhile. A
 delivered but unanswered check holds the fence as in-flight work until C4
 expires it at the same deadline.
 

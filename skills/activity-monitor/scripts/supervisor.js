@@ -235,11 +235,7 @@ export function createSupervisor(deps) {
   const connectionHandler=createSupervisorConnectionHandler({admission,router,isOpen:()=>admission.open && !stopping,readRun:group=>scenes.readRun(group),readMode,
     onDelivered:async notification=>{
       observer.notifyDelivered({...notification,sessionGroup:notification.sessionGroup ?? 'origin'});
-      await admission.serialize(async()=>{
-        const live=await scenes.readRun(notification.sessionGroup);
-        if(live?.runId!==notification.runId || live.runtime!==notification.runtime)return;
-        lifecycle.messageDelivered({...notification,sessionGroup:notification.sessionGroup ?? 'origin'});
-      });
+      lifecycle.messageDelivered({...notification,sessionGroup:notification.sessionGroup ?? 'origin'});
     },onHealthEvents:()=>{void loop.tick();},log});
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);

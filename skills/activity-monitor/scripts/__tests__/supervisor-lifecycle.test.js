@@ -1771,15 +1771,20 @@ async function acceptTtlDeferral(f, reason = 'background command', expectedRunId
 
 test('accepted deferral immediately cancels TTL preparation and starts the entire idle interval again', async () => {
   const f = fixture();
-  await acceptTtlDeferral(f);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.has('a'), true);
+  f.now += 60000;
+  const acceptedAt = f.now;
+  assert.deepEqual(await f.lifecycle.deferReclaim(deferRequest(), f.context), { ok: true, result: 'accepted' });
+  f.settle();
   assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
   assert.equal(f.lifecycle.evictionPreparation.has('a'), false);
-  assert.deepEqual(f.lifecycle.ttlReset.get('a'), { runId: 'run-a', at: f.now });
+  assert.deepEqual(f.lifecycle.ttlReset.get('a'), { runId: 'run-a', at: acceptedAt });
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 1);
-  f.now += 1799999; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  f.now = acceptedAt + 1799999; await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.controls.length, 1);
-  f.now += 1; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  f.now = acceptedAt + 1800000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal(f.controls.length, 2); assert.equal(f.fences.size, 0);
   const event = f.events.find(event => event.event === 'reclaim_deferred');
   assert.equal(event.session_group, 'a'); assert.equal(event.run_id, 'run-a');
@@ -1825,6 +1830,7 @@ test('four consecutive deferrals alert once, delivery resets the count, and four
     assert.equal(f.fences.size, 0); assert.equal(f.stops.length, 0);
     f.now += 1800000;
   }
+  assert.deepEqual(f.lifecycle.reclaimDeferrals.get('a').reasons, ['command 1', 'command 2', 'command 3', 'command 4']);
   assert.deepEqual(alerts[0].reasons, ['command 1', 'command 2', 'command 3', 'command 4']);
   assert.match(alerts[0].message, /command 1.*command 2.*command 3.*command 4/);
   assert.equal(alerts[0].session_group ?? alerts[0].sessionGroup, 'a');
@@ -1837,6 +1843,19 @@ test('four consecutive deferrals alert once, delivery resets the count, and four
   assert.deepEqual(alerts[1].reasons, ['new command 1', 'new command 2', 'new command 3', 'new command 4']);
   assert.equal(f.events.filter(event => event.event === 'reclaim_defer_alert').length, 2);
   assert.equal(f.stops.length, 0);
+});
+
+test('configured deferral alert threshold alerts on the second accepted request', async () => {
+  const f = fixture(), alerts = []; f.deps.alert = event => alerts.push(event);
+  f.context.configuration.reclaimDeferAlertCount = 2;
+  await acceptTtlDeferral(f, 'first command');
+  assert.equal(alerts.length, 0);
+  assert.equal(f.events.filter(event => event.event === 'reclaim_defer_alert').length, 0);
+  f.now += 1800000;
+  await acceptTtlDeferral(f, 'second command');
+  assert.equal(alerts.length, 1);
+  assert.deepEqual(alerts[0].reasons, ['first command', 'second command']);
+  assert.equal(f.events.filter(event => event.event === 'reclaim_defer_alert').length, 1);
 });
 
 test('generic activity and stale delivery notifications retain the consecutive deferral history', async () => {
@@ -1865,6 +1884,23 @@ test('replacement run starts a fresh deferral history and actual reclaim removes
   assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'), f.context), 'done');
   assert.deepEqual(f.stops, ['replacement-run']);
   assert.equal(f.lifecycle.reclaimDeferrals.has('a'), false);
+  f.scenes.push(scene('a', { runId: 'next-run', createdAt: f.now }));
+  f.now += 1800000;
+  await acceptTtlDeferral(f, 'next run command', 'next-run');
+  assert.deepEqual(f.lifecycle.reclaimDeferrals.get('a'), { runId: 'next-run', count: 1, reasons: ['next run command'], alerted: false });
+});
+
+test('deferral independently checks the preparation run and the live run against the request', async () => {
+  for (const [preparedRun, liveRun] of [['run-a', 'run-b'], ['run-b', 'run-a']]) {
+    const f = fixture(); f.scenes[0].runId = preparedRun;
+    await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.lifecycle.ttlPreparation.get('a').runId, preparedRun);
+    f.scenes[0].runId = liveRun;
+    assert.deepEqual(await f.lifecycle.deferReclaim(deferRequest({ expectedRunId: 'run-b' }), f.context),
+      { ok: false, result: 'rejected', reason: 'run_changed' }, `${preparedRun} preparation, ${liveRun} live run`);
+    assert.equal(f.lifecycle.reclaimDeferrals.has('a'), false);
+    assert.equal(f.lifecycle.ttlReset.has('a'), false);
+  }
 });
 
 test('deferral rejects absent preparation, changed run, started reclaim, expired capacity check and restarts', async () => {
@@ -1878,7 +1914,10 @@ test('deferral rejects absent preparation, changed run, started reclaim, expired
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal((await f.lifecycle.deferReclaim(deferRequest({ expectedRunId: 'other' }), f.context)).reason, 'run_changed');
   f.fence(); assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'reclaim_started'); f.fences.clear();
+  f.fence('upgrade', '*'); assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'reclaim_started'); f.fences.clear();
   f.requests = [{ reason: 'upgrade', runIds: ['run-a'] }];
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending'); f.requests = [];
+  f.requests = [{ reason: 'manual_restart', mode: 'multi', sessionGroup: 'a', expectedRunId: 'run-a' }];
   assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending'); f.requests = [];
   f.expected = { runtime: 'codex', mode: 'default' };
   assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending');

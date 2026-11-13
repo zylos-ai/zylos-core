@@ -146,7 +146,6 @@ export class SupervisorLifecycle {
   }
 
   stopped(scene, context) {
-    if (this.reclaimDeferrals.get(scene.sessionGroup)?.runId === scene.runId) this.reclaimDeferrals.delete(scene.sessionGroup);
     const current = context.scenes.find(item => item.runId === scene.runId &&
       (item.sessionGroup === scene.sessionGroup || scene.sessionGroup === null && item.sessionGroup === 'origin'));
     if (current) Object.assign(current, { present: false, ready: false, processRunning: false });
@@ -458,7 +457,7 @@ export class SupervisorLifecycle {
     const previous = this.reclaimDeferrals.get(group);
     const history = previous?.runId === scene.runId ? previous : { runId: scene.runId, count: 0, reasons: [], alerted: false };
     history.count++;
-    history.reasons.push(request.reason);
+    if (!history.alerted) history.reasons.push(request.reason);
     this.reclaimDeferrals.set(group, history);
     await this.event('reclaim_deferred', { session_group: group, run_id: scene.runId, reason: request.reason });
     if (!history.alerted && history.count >= (context.configuration.reclaimDeferAlertCount ?? 4)) {

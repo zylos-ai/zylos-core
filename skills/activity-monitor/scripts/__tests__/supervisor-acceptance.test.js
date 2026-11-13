@@ -117,19 +117,10 @@ test('composed socket rejects stale-run delivery without resetting observer coun
   await deliveryScenario(t, createSupervisor);
 });
 
-test('composed delivery resets lifecycle through admission and rejects a run changed while queued', async t => {
+test('composed delivery resets lifecycle directly and rejects stale-run notifications', async t => {
   const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
   const send = await socketClient(t, f), delivered = [];
-  let inAdmission = false;
-  const serialize = f.supervisor.admission.serialize.bind(f.supervisor.admission);
-  f.supervisor.admission.serialize = operation => serialize(async () => {
-    inAdmission = true;
-    try { return await operation(); } finally { inAdmission = false; }
-  });
-  f.supervisor.lifecycle.messageDelivered = notification => {
-    assert.equal(inAdmission, true);
-    delivered.push(notification);
-  };
+  f.supervisor.lifecycle.messageDelivered = notification => delivered.push(notification);
   const message = { version: 2, type: 'notify_delivered', requestId: 'delivery',
     sessionGroup: scene.sessionGroup, runtime: scene.runtime, runId: scene.runId, pastedAt: f.now() };
   assert.equal((await send(message)).type, 'ack');
@@ -138,12 +129,6 @@ test('composed delivery resets lifecycle through admission and rejects a run cha
   assert.equal(delivered[0].runId, scene.runId);
   assert.equal((await send({ ...message, runId: 'stale-run' })).type, 'ack');
   assert.equal(delivered.length, 1);
-  f.supervisor.admission.serialize = operation => serialize(async () => {
-    scene.runId = 'replacement-run';
-    return operation();
-  });
-  assert.equal((await send(message)).type, 'ack');
-  assert.equal(delivered.length, 1, 'run replaced after socket validation reset lifecycle');
 });
 
 async function aggregationScenario(t, create) {

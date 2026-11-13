@@ -55,6 +55,7 @@ test('validates all five reply branches and mandatory relationships', () => {
     ['restart_all', { ok: true, result: 'unknown', runCount: 1 }, false],
     ['ready_for_config_reclaim', { ok: true, result: 'unchanged' }, true],
     ['defer_reclaim', { ok: true, result: 'accepted' }, true],
+    ['defer_reclaim', { ok: true, result: 'already_accepted' }, false],
     ['defer_reclaim', { ok: false, result: 'rejected', reason: 'preparation_expired' }, true],
     ['defer_reclaim', { ok: false, result: 'rejected', reason: 'run_changed' }, true],
     ['defer_reclaim', { ok: false, result: 'rejected', reason: 'unknown' }, false],
