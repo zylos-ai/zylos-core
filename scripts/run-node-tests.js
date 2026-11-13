@@ -24,6 +24,7 @@ const ROOT_NODE_TESTS = [
   'test/owned-removal-callers.integration.test.js',
   'test/test-environment-cleanup.test.js',
   'test/single-upgrade-check.integration.test.js',
+  'test/session-release.integration.test.js',
 ];
 const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'dashboard', '__tests__'),

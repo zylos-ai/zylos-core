@@ -177,13 +177,13 @@ test('release deletes only its own new running slot and cannot rewrite a newer o
   assert.equal(rows(db)[0].state, 'running');
 });
 
-for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
+for (const reason of ['ttl', 'evict', 'release', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
   test(`ending ${reason} changes only its matching slot in the record transaction`, t => {
     let now = start;
     const { db, store } = fixture(t, { now: () => now * 1000 });
     take(store); now += 7;
     store.recordRunEnd('test:a', { runId: 'first', reason });
-    if (['ttl', 'evict'].includes(reason)) assert.equal(rows(db).length, 0);
+    if (['ttl', 'evict', 'release'].includes(reason)) assert.equal(rows(db).length, 0);
     else assert.deepEqual(rows(db), [{ session_group: 'test:a', run_id: 'first', state: 'held', held_until: now + 120, created_at: start }]);
     const before = snapshot(db); now++;
     store.recordRunEnd('test:a', { runId: 'first', reason });

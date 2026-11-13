@@ -105,3 +105,14 @@ test('onboarding contains task suggestions and records first-project results via
   assert.match(text, /Memory Sync will create the project page in `memory\/reference\/projects\/`/);
   assert.doesNotMatch(text, /reference\/(?:projects|decisions)\.md/);
 });
+
+test('both runtimes give the same voluntary release preparation and channel-neutral examples',()=>{
+  const blocks=systems.map(({text})=>between(text,'## Voluntary Session Release','\n## Security'));
+  assert.equal(blocks[0],blocks[1]);
+  assert.match(blocks[0],/examples, not fixed triggers/);
+  assert.match(blocks[0],/write the session handoff/);
+  assert.match(blocks[0],/scheduled tasks first/);
+  assert.match(blocks[0],/Waiting for a person's\s+reply, review or decision does not prevent release/);
+  assert.match(blocks[0],/supervisor-request\.js request-release --json/);
+  assert.match(blocks[0],/If you are uncertain[\s\S]*existing idle TTL/);
+});

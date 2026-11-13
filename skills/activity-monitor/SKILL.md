@@ -32,6 +32,17 @@ context in the background and emit from a local cache.
 
 ## Multi-session Reclaim Configuration
 
+A multi-session agent may request release of its own run after verifying pending
+work, writing its handoff and arranging external-wait wake-ups under the existing
+reclaim rules. Use the installed absolute path to
+`node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`;
+the command inherits its group and run identity and accepts no target override.
+Acceptance starts normal reclaim processing without waiting for hot TTL or the
+capacity eviction minimum idle interval; the supervisor still checks idle state,
+active subagents, identity and operation fences. Busy or active-subagent
+rejections leave the run intact. Keep the handoff and current run on rejection
+or an unknown result. In uncertain conversations, leave release to idle TTL.
+
 The supervisor reads these settings from `.zylos/config.json` in
 the Zylos data directory, with valid environment values taking precedence:
 

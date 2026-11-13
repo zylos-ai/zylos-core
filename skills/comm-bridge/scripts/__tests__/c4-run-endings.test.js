@@ -19,7 +19,7 @@ const control = (db, id) => db.prepare('SELECT * FROM control_queue WHERE id=?')
 // Run for ending records, pending markers or their schema; skip unrelated runtime
 // activation. The official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short
 // TMPDIR. Fixtures close their own DB; no runtime/tmux/PM2/network is contacted.
-for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
+for (const reason of ['ttl', 'evict', 'release', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
   test(`run ending ${reason} records its pending marker without adding a control`, t => {
     let clockCalls = 0, db;
     const result = fixture(t, { now: () => { assert.equal(db.inTransaction, true); clockCalls++; return clock * 1000 + 999; } });
@@ -41,7 +41,7 @@ for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_s
 
 test('Origin ending reasons have the same marker policy except manual restart', t => {
   const { db, store } = fixture(t, { now: () => clock * 1000 });
-  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
+  for (const reason of ['ttl', 'evict', 'release', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
     assert.deepEqual(store.recordRunEnd('origin', { runId: reason, reason }), { recorded: true });
     const needed = ['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason);
     assert.equal(store.listRunEndings(['origin'])[0].continuationPending, Number(needed));
@@ -75,7 +75,7 @@ test('a new ending replaces the only pending marker without changing existing co
   }
 });
 
-for (const reason of ['ttl', 'evict', 'mode_switch']) {
+for (const reason of ['ttl', 'evict', 'release', 'mode_switch']) {
   test(`a new ${reason} ending does not inherit an older pending marker`, t => {
     let now = clock;
     const { db, store } = fixture(t, { now: () => now * 1000 });
@@ -143,7 +143,7 @@ test('mode transition endings write zero markers and still clear their fences', 
   assert.equal(store.getDrainFence('a'), null);
   assert.deepEqual(store.recordRunEnd('b', { runId: 'b1', reason: 'auth' }), { recorded: true });
   assert.deepEqual(store.listRunEndings(['a', 'b']).map(row => row.continuationPending), [0, 0]);
-  for (const reason of ['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
+  for (const reason of ['ttl', 'evict', 'release', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected']) {
     store.recordRunEnd('all-reasons', { runId: reason, reason });
     assert.equal(store.listRunEndings(['all-reasons'])[0].continuationPending, 0);
   }
@@ -267,7 +267,7 @@ test('current schema missing the run-ending table is rejected without recreating
   store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
   db.exec('DROP TABLE run_endings');
   const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 3, missing run_endings\.session_group/);
+  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 4, missing run_endings\.session_group/);
   assert.deepEqual(snapshot(db), before);
 });
 
@@ -281,7 +281,7 @@ test('current schema with the retired continuation column is rejected without mu
   store.recordRunEnd('a', { runId: 'a1', reason: 'unexpected' });
   db.exec('ALTER TABLE run_endings RENAME COLUMN continuation_pending TO continuation_control_id');
   const before = snapshot(db);
-  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 3, missing run_endings\.continuation_pending/);
+  assert.throws(() => guardDatabase(db, owner), /^Error: c4: unsupported schema 4, missing run_endings\.continuation_pending/);
   assert.deepEqual(snapshot(db), before);
   assert.equal(db.pragma('user_version', { simple: true }), owner.SUPPORTED_SCHEMA_VERSION);
 });

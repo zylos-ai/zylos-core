@@ -21,6 +21,7 @@ export function validSupervisorRequest(request) {
     case 'manual_restart': return (!Object.hasOwn(request, 'expectedRunId') || nonempty(request.expectedRunId))
       && (!Object.hasOwn(request, 'expectedSessionId') || typeof request.expectedSessionId === 'string')
       && (!Object.hasOwn(request, 'sessionGroup') || validGroup(request.sessionGroup));
+    case 'request_release':
     case 'ready_for_config_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId);
     case 'defer_reclaim': return validGroup(request.sessionGroup) && nonempty(request.expectedRunId)
       && nonempty(request.reason) && request.reason.trim().length > 0;
@@ -33,8 +34,8 @@ export function validSupervisorRequest(request) {
 /** One queue is shared with lifecycle mutations; external waits must stay outside it. */
 export class SupervisorAdmission {
   constructor({ store = new RestartRequestStore(), db, readMode, listRuns, readRun,
-    resolveLaunchConfig, preflightReclaim, deferReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
-    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, deferReclaim, modeSwitch, startAttempt, diagnostic, now });
+    resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic = () => {}, now = Date.now } = {}) {
+    Object.assign(this, { store, db, readMode, listRuns, readRun, resolveLaunchConfig, preflightReclaim, requestRelease, deferReclaim, modeSwitch, startAttempt, diagnostic, now });
     this.open = false; this.tail = Promise.resolve();
   }
   serialize(operation) {
@@ -77,6 +78,7 @@ export class SupervisorAdmission {
           }
           return reply(await this.config(request, rows));
         }
+        if (request.type === 'request_release') return reply(await this.release(request));
         const rows = this.store.read();
         switch (request.type) {
           case 'delete_group': return reply(await this.deleteGroup(request, rows));
@@ -87,7 +89,7 @@ export class SupervisorAdmission {
       } catch (error) {
         if (request.type === 'delete_group' && ['DELETION_PREVIEW_STALE', 'DELETION_OWNERSHIP_MISMATCH', 'DRAFT_BECAME_ACTIVE'].includes(error.code)) return reply({ ok: false, result: 'rejected', reason: error.code });
         if (error.code !== 'requests_unreadable' || request.type === 'ready_for_config_reclaim') throw error;
-        return reply(['manual_restart', 'delete_group', 'defer_reclaim'].includes(request.type)
+        return reply(['manual_restart', 'delete_group', 'defer_reclaim', 'request_release'].includes(request.type)
           ? { ok: false, result: 'rejected', reason: error.code } : { ok: false, code: error.code });
       }
     });
@@ -172,6 +174,21 @@ export class SupervisorAdmission {
     if (Object.hasOwn(request, 'sessionGroup')) row.sessionGroup = group;
     this.store.write([...rows, row]);
     return { ok: true, result: 'accepted' };
+  }
+  async release(request) {
+    const reject = reason => ({ ok: false, result: 'rejected', reason });
+    if ((await this.readMode()).mode !== 'multi') return reject('not_multi');
+    if (await this.db.getModeTransition() || await this.db.getDrainFence('*')) return reject('transition_open');
+    const run = await this.readRun(request.sessionGroup);
+    if (run?.runId !== request.expectedRunId) return reject('run_changed');
+    if (!run.ready) return reject('not_ready');
+    const fence = await this.db.getDrainFence(request.sessionGroup);
+    if (fence && (fence.reason !== 'release' || fence.runId !== request.expectedRunId)) return reject('other_fence');
+    const rows = this.store.read();
+    if (rows.some(row => row.reason === 'manual_restart' &&
+      (row.mode === 'single' ? 'origin' : row.sessionGroup ?? 'origin') === request.sessionGroup)) return reject('manual_restart_pending');
+    if (fence) return { ok: true, result: 'already_accepted' };
+    return this.requestRelease({ ...run, sessionGroup: request.sessionGroup });
   }
   async config(request, rows) {
     const reject = reason => ({ ok: false, result: 'rejected', reason });

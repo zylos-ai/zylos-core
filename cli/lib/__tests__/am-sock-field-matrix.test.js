@@ -13,6 +13,10 @@ const good = {
     ...['accepted', 'already_accepted', 'unchanged'].map(result => ({ ok: true, result })),
     ...['not_multi', 'transition_open', 'run_changed', 'not_ready', 'snapshot_unavailable', 'other_fence', 'manual_restart_pending', 'requests_unreadable'].map(reason => ({ ok: false, result: 'rejected', reason })),
   ],
+  request_release: [
+    ...['accepted', 'already_accepted'].map(result => ({ ok: true, result })),
+    ...['not_multi', 'transition_open', 'run_changed', 'not_ready', 'other_fence', 'manual_restart_pending', 'requests_unreadable', 'not_idle', 'subagent_activity'].map(reason => ({ ok: false, result: 'rejected', reason })),
+  ],
   manual_restart: [
     ...['accepted', 'already_accepted', 'already_stopped'].map(result => ({ ok: true, result })),
     { ok: false, result: 'stale_target', currentRunId: 'new-run' },
@@ -62,6 +66,9 @@ test('complete legal branch inventory, unknown extensions and every branch requi
 });
 test('literal invalid reason/code, incompatible ok/result and field relationships are uncertain replies', async () => {
   const cases = [
+    ['request_release', { ok: true, result: 'unchanged' }],
+    ['request_release', { ok: false, result: 'accepted', reason: 'not_idle' }],
+    ['request_release', { ok: false, result: 'rejected', reason: 'unknown_reason' }],
     ['restart_all', { ok: true, result: 'unknown_result', runCount: 0 }],
     ['manual_restart', { ok: false, result: 'rejected', reason: 'unknown_reason' }],
     ['mode_switch', { ok: false, code: 'unknown_code' }],

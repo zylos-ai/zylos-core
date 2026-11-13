@@ -56,7 +56,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
       requireGroup(sessionGroup);
       if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => !['runId', 'reason', 'clearFence'].includes(key))) throw dataError('INVALID_ARGS', 'Invalid run ending options');
       const { runId, reason, clearFence = false } = options;
-      if (typeof runId !== 'string' || !runId.trim() || !['ttl', 'evict', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected', 'delete'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid run ending identity or reason');
+      if (typeof runId !== 'string' || !runId.trim() || !['ttl', 'evict', 'release', 'upgrade', 'auth', 'model_config', 'mode_switch', 'manual_restart', 'unexpected', 'delete'].includes(reason)) throw dataError('INVALID_ARGS', 'Invalid run ending identity or reason');
       if (typeof clearFence !== 'boolean' && (!clearFence || typeof clearFence !== 'object' || Array.isArray(clearFence) || Object.keys(clearFence).some(key => !['expectedReason', 'expectedRunId'].includes(key)) || typeof clearFence.expectedReason !== 'string' || typeof clearFence.expectedRunId !== 'string' || !clearFence.expectedRunId)) throw dataError('INVALID_ARGS', 'Invalid fence condition');
       if (baseline().sessionMode !== 'multi') throw dataError('INVALID_ARGS', 'Run endings require multi mode');
       const previous = get(c, 'SELECT * FROM run_endings WHERE session_group=?', sessionGroup);
@@ -66,7 +66,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
         const open = get(c, "SELECT 1 FROM mode_transitions WHERE phase<>'complete'");
         const continuationPending = !open && (['upgrade', 'auth', 'model_config', 'unexpected'].includes(reason) || (reason === 'manual_restart' && sessionGroup !== 'origin')) ? 1 : 0;
         run(c, 'INSERT INTO run_endings(session_group,run_id,reason,ended_at,continuation_pending) VALUES(?,?,?,?,?) ON CONFLICT(session_group) DO UPDATE SET run_id=excluded.run_id,reason=excluded.reason,ended_at=excluded.ended_at,continuation_pending=excluded.continuation_pending', sessionGroup, runId, reason, current, continuationPending);
-        if (['ttl', 'evict'].includes(reason)) run(c, 'DELETE FROM slot_occupancy WHERE session_group=? AND run_id=?', sessionGroup, runId);
+        if (['ttl', 'evict', 'release'].includes(reason)) run(c, 'DELETE FROM slot_occupancy WHERE session_group=? AND run_id=?', sessionGroup, runId);
         else run(c, "UPDATE slot_occupancy SET state='held',held_until=? WHERE session_group=? AND run_id=? AND state='running'", current + 120, sessionGroup, runId);
       }
       if (clearFence && reason !== 'delete') clear(c, sessionGroup, clearFence === true ? {} : clearFence, clearFence !== true);
@@ -183,7 +183,7 @@ export function controlFunctions({ read, write, get, all, run, seconds, baseline
     failStaleTargetControl: id => write(c => get(c, "UPDATE control_queue SET status='timeout',last_error='STALE_TARGET',updated_at=? WHERE id=? AND status='running' AND target_binding IS NOT NULL RETURNING *", seconds(), id) ?? null),
     setDrainFence: (group, { reason = null, runId = null } = {}) => write(c => {
       const hasRun = typeof runId === 'string' && runId.length > 0;
-      const normal = ['ttl','evict','upgrade','auth','mode_switch','model_config'];
+      const normal = ['ttl','evict','release','upgrade','auth','mode_switch','model_config'];
       const valid = group === '*' ? (reason === null && runId === null) || (reason === 'manual_restart' && hasRun) : !!parseSessionGroup(group) && hasRun && (group === 'origin' ? [...normal.filter(x => x !== 'evict'), 'manual_restart'] : [...normal, 'manual_restart']).includes(reason);
       if (!valid) throw dataError('FENCE_INVALID', 'Invalid fence scope, reason or run');
       run(c, 'INSERT INTO drain_fences(session_group,reason,run_id,created_at) VALUES(?,?,?,?) ON CONFLICT(session_group) DO NOTHING', group, reason, runId, seconds());
