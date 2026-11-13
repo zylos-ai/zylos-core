@@ -12,7 +12,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { DATA_DIR, DB_PATH, CONTROL_MAX_RETRIES } from './c4-config.js';
 import { normalizeStatusEndpoint } from './status-endpoint.js';
-import { buildReplyViaSuffix, hasLegacyReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
+import { buildReplyViaSuffix, hasMatchingReplyViaSuffix, truncateForDelivery } from './c4-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export { migrateSchema, stripTrailingAckSuffix } from './c4-migrations.js';
@@ -716,7 +716,7 @@ export function formatConversationsForAgent(conversations, { spill = true } = {}
     const replyViaSuffix = (
       conv.direction === 'in' &&
       conv.endpoint_id &&
-      !hasLegacyReplyViaSuffix(content)
+      !hasMatchingReplyViaSuffix(content, conv.channel, conv.endpoint_id)
     ) ? buildReplyViaSuffix(conv.channel, conv.endpoint_id) : '';
     lines.push(`[${conv.timestamp}] ${dir} (${conv.channel}${endpoint}):`);
     lines.push(spill
