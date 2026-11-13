@@ -7,14 +7,15 @@ import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 function fixture(mode = 'multi') {
   const start = Date.parse('2026-11-13T02:00:00Z');
   const f = { now: start + 120000, firstAt: '2026-11-13 02:00:01', count: 2,
-    endings: [], completed: null, reads: [], controls: [], errors: [], held: false };
+    endings: [], completed: null, reads: [], controls: [], errors: [], held: false,
+    readError: new Error('read failed') };
   f.scene = { sessionGroup: mode === 'single' ? null : 'a', present: true, ready: true,
     runtime: 'claude', runId: 'run-a', sessionId: 'session-a', createdAt: start,
     runDir: '/isolated/run', usagePercent: 0 };
   const range = () => ({ count: f.count, firstAt: f.firstAt, firstConversationId: 1 });
   const db = {
-    listRunEndings: groups => { f.reads.push(['endings', groups]); if (f.fail === 'endings') throw new Error('read failed'); return f.endings; },
-    getLastCompletedModeTransition: () => { f.reads.push(['transition']); if (f.fail === 'transition') throw new Error('read failed'); return f.completed; },
+    listRunEndings: groups => { f.reads.push(['endings', groups]); if (f.fail === 'endings') throw f.readError; return f.endings; },
+    getLastCompletedModeTransition: () => { f.reads.push(['transition']); if (f.fail === 'transition') throw f.readError; return f.completed; },
     getModeTransition: () => null, listDrainFences: () => [],
     getUnsummarizedRange: range, getGlobalUnsummarizedRange: range,
     getOriginSyncBacklog: () => ({ total: 0, groups: [] }),
@@ -24,8 +25,10 @@ function fixture(mode = 'multi') {
   f.lifecycle = new SupervisorLifecycle({ db, requests: { read: () => [] },
     observeGroup: group => f.context.scenes.find(scene => scene.sessionGroup === group),
     readSyncMarker: () => ({ held: f.held, stale: false }), groupRunDir: () => '/isolated/origin',
-    reportError: cause => f.errors.push(cause),
-    prompts: { GROUP_SYNC_PROMPT: 'sync', ORIGIN_SYNC_PROMPT: 'origin', SYNC_BACKLOG_ALERT: () => 'alert' },
+    prepareReferenceReorg: () => false,
+    reportError: (cause, context) => f.errors.push({ cause, context }),
+    prompts: { GROUP_SYNC_PROMPT: 'sync', ORIGIN_SYNC_PROMPT: 'origin', SYNC_BACKLOG_ALERT: () => 'alert',
+      REFERENCE_REORG_PROMPT: 'reference proposal' },
   }, { now: () => f.now });
   f.check = async () => { await f.lifecycle.checkSync(f.context.scenes, f.context); f.now += 600000; };
   f.syncs = () => f.controls.filter(row => row.content === 'sync');
@@ -86,9 +89,16 @@ test('either boundary read failure leaves startup retryable while other conditio
   for (const failure of ['endings', 'transition']) {
     const f = fixture(); f.endings = [{ sessionGroup: 'a', endedAt: f.start / 1000 + 1 }]; f.fail = failure;
     await f.check(); assert.equal(f.syncs().length, 0); assert.equal(f.lifecycle.syncRuns.has(f.key), false);
+    assert.equal(f.errors.length, 1);
+    assert.equal(f.errors[0].context.phase, 'sync-backlog-boundary');
+    assert.equal(f.errors[0].cause, f.readError);
     f.fail = null; await f.check(); assert.equal(f.syncs().length, 1);
+    assert.equal(f.errors.length, 1, 'successful recovery adds no diagnostic');
     const g = fixture(); g.fail = failure; g.count = 16;
     await g.check(); assert.equal(g.syncs().length, 1, 'threshold does not depend on boundary reads');
+    assert.equal(g.errors.length, 1);
+    assert.equal(g.errors[0].context.phase, 'sync-backlog-boundary');
+    assert.equal(g.errors[0].cause, g.readError);
   }
 });
 
