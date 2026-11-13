@@ -118,6 +118,8 @@ async function readProbeResult(p) {
   return JSON.parse(fs.readFileSync(p.result, 'utf8'));
 }
 
+// Boundary: real Linux task names on a private legacy tmux pane. Run for
+// ancestor-name confirmation changes; unrelated work may skip. Fixture owns cleanup.
 test('Legacy Bootstrap confirms the kernel task name instead of a ps basename', {skip:process.platform !== 'linux',timeout:30000}, async t => {
   const f = readyTmuxTarget(t, {prefix:'bootstrap-kernel-name-',ledger:false});
   legacyClaudePane(f);
@@ -140,6 +142,9 @@ test('Legacy Bootstrap confirms the kernel task name instead of a ps basename', 
   assert.doesNotThrow(() => f.tmux('has-session','-t','=claude-main'));
 });
 
+// Boundary: stale ancestry versus real process exit while its private pane lives.
+// Run for ancestor snapshot/confirmation changes; unrelated work may skip.
+// Fixture and probe cleanup are bounded.
 test('Legacy Bootstrap drops an exited ancestor from the original real process snapshot', {skip:process.platform !== 'linux',timeout:30000}, async t => {
   let script, pidFile;
   // Register before the tmux fixture removes its private directory and marker.
