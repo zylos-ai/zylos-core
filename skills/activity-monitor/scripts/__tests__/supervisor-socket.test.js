@@ -111,3 +111,23 @@ test('socket shutdown drain waits accepted async route mutations and closed entr
   open=false;for(const type of ['route','health_events_ready','notify_delivered','auth_completed'])assert.equal(await send({type}),null);
   assert.equal(calls,1);assert.equal((await send({type:'restart_all'})).code,'entry_not_open');
 });
+
+
+test('v2 control paste notifications retain exact run/time and reject ambiguous or invalid identities', async t => {
+  const delivered = [], groups = [];
+  const exchange = await socketFixture(t, { readMode: () => ({ mode: 'multi' }),
+    readRun: group => { groups.push(group); return { runId: 'run', runtime: 'codex' }; },
+    onDelivered: event => delivered.push(event) });
+  const request = { version: 2, type: 'notify_delivered', requestId: 'control', controlId: 19,
+    sessionGroup: 'telegram:a', runId: 'run', runtime: 'codex', pastedAt: 1792000000000 };
+  assert.equal((await exchange(request)).type, 'ack');
+  assert.deepEqual(delivered, [request]);
+  assert.equal((await exchange({ ...request, runId: 'stale' })).type, 'ack');
+  assert.equal(delivered.length, 1);
+  for (const patch of [{ controlId: 0 }, { controlId: -1 }, { controlId: '19' }, { controlId: null },
+    { controlId: 1.5 }, { controlId: Number.MAX_SAFE_INTEGER + 1 }, { conversationId: 4 }, { version: 1 }]) {
+    assert.equal((await exchange({ ...request, ...patch })).code, 'invalid_request');
+  }
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(groups, ['telegram:a', 'telegram:a'], 'invalid input never reaches run lookup');
+});

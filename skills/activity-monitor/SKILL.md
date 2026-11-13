@@ -37,10 +37,11 @@ work, writing its handoff and arranging external-wait wake-ups under the existin
 reclaim rules. Use the installed absolute path to
 `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`;
 the command inherits its group and run identity and accepts no target override.
-Acceptance starts normal reclaim processing without waiting for hot TTL or the
-capacity eviction minimum idle interval; the supervisor still checks idle state,
-active subagents, identity and operation fences. Busy or active-subagent
-rejections leave the run intact. Keep the handoff and current run on rejection
+Acceptance records a group/run-scoped in-memory intent even during the current
+turn; the supervisor waits for existing idle and active-subagent protection,
+then normal Sync/reclaim, without hot TTL or capacity-eviction minimum idle.
+New delivered conversations or controls before fencing cancel the intent.
+Supervisor restart drops the intent; ordinary idle TTL remains the fallback. Keep the handoff and current run on rejection
 or an unknown result. In uncertain conversations, leave release to idle TTL.
 
 The supervisor reads these settings from `.zylos/config.json` in

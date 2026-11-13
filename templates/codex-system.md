@@ -75,7 +75,11 @@ reply, review or decision does not prevent release: the reply wakes this group.
 Then run `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`
 using the installed absolute path (expand `~/zylos` to the actual installation
 directory), inheriting `ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`; never supply
-another group's identity. Confirm `ok:true`, then finish the current turn. On
+another group's identity. An `ok:true` response registers an in-memory intent, not a completed release.
+Finish the current turn; the supervisor waits for normal idle and child/Sync
+protection. New delivered work before fencing cancels the intent; you may request
+again after that work finishes. Supervisor restart loses the intent, and normal
+idle TTL is the fallback. On
 rejection or an unknown result, retain the handoff and current run; do not exit
 or assume release succeeded. The supervisor controls the actual stop safely.
 
