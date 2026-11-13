@@ -228,3 +228,36 @@ test('concurrent first model writes pin the legacy default and preserve both new
   }
   assert.deepEqual(f.read(), { new_session_threshold: 66, keep: true, model_rotation_thresholds: { claude: { opus: 66, sonnet: 61, haiku: 62 } } });
 });
+
+test('Codex model cache is parsed again only after the file changes', t => {
+  const f = fixture(t);
+  const codexHome = path.join(f.root, 'codex'), file = path.join(codexHome, 'models_cache.json');
+  const read = () => readCodexModelWindows({ codexHome });
+  const original = fs.readFileSync;
+  let reads = 0;
+  fs.readFileSync = function (target, ...rest) { if (target === file) reads++; return original.call(this, target, ...rest); };
+  t.after(() => { fs.readFileSync = original; });
+  const windows = value => ({ models: [{ slug: 'model-a', context_window: value }] });
+
+  f.write('codex/models_cache.json', windows(200000));
+  assert.equal(read()[0].context_window, 200000);
+  for (let i = 0; i < 3; i++) assert.equal(read()[0].context_window, 200000);
+  assert.equal(reads, 1, 'an unchanged file is not read again');
+
+  // Atomic replacement, as an updater writes it.
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(windows(400000)));
+  fs.renameSync(`${file}.tmp`, file);
+  assert.equal(read()[0].context_window, 400000);
+  // In-place rewrite.
+  fs.writeFileSync(file, JSON.stringify(windows(1000000)));
+  assert.equal(read()[0].context_window, 1000000);
+  assert.equal(read()[0].context_window, 1000000);
+  assert.equal(reads, 3);
+
+  fs.writeFileSync(file, '{"models": [');
+  assert.deepEqual(read(), [], 'an unparseable cache still reads as no models');
+  fs.rmSync(file);
+  assert.deepEqual(read(), []);
+  f.write('codex/models_cache.json', windows(272000));
+  assert.equal(read()[0].context_window, 272000);
+});
