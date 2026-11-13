@@ -115,12 +115,14 @@ export class SessionActivity {
       // observation (or run start after recovery) is a conservative lower bound.
       this.busySince ??= this.lastIdleAt ?? this.startedAt;
     }else{
-      this.busySince=null;this.lastIdleAt=now;
+      // A quiet activity sample does not close a prompt's turn. Keep its
+      // original cutoff until a stop/idle hook actually closes the turn.
+      if(!this.turn){this.busySince=null;this.lastIdleAt=now;}
       if(this.idleSince===null)this.idleSince=now;
     }
     const activeSubagents=[...this.subagents].filter(([,agent])=>agent.active && now-agent.lastActivityAt<subagentTtlMs)
       .map(([agentId,agent])=>({agentId,lastActivityAt:agent.lastActivityAt}));
-    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
+    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
       activeSubagents,lastSubagentActivityAt:this.lastSubagentActivityAt};
   }
 }

@@ -18,10 +18,10 @@ const database = new Database(path.join(root, 'comm-bridge/c4.db'));
 const db = createStore(database, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), validateComponent: () => true });
 let service;
 try {
-  let state = 'busy', children = [], now = Date.now();
+  let state = 'busy', children = [], now = Date.now(), turnOpen = scenario === 'open-turn';
   const busySince = now - 10000;
   const scenes = new SupervisorScenes({ env: process.env, connectionOptions: { socketPath, binary },
-    readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state, busySince: state === 'busy' ? busySince : null, idleSince: now - 10000, activeSubagents: children }), readUsage: () => null });
+    readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state, turnOpen, busySince: state === 'busy' || turnOpen ? busySince : null, idleSince: now - 10000, activeSubagents: children }), readUsage: () => null });
   const inbound = content => group === 'origin' ? db.insertConversation('in', 'system', null, content)
     : db.insertConversation('in', 'telegram', 'test-chat', content, { groupName: 'release' });
   if (group !== 'origin') {
@@ -123,6 +123,14 @@ try {
     process.send({ ok: true, group, scenario });
   } else {
     state = 'idle';
+    if (scenario === 'open-turn') {
+      // Silence during final generation satisfies ordinary idle but the
+      // projected hook turn still prevents release through real composition.
+      now += 10000;
+      await tick(); await tick(); await stillRunning();
+      assert.equal(controls().length, 0);
+      turnOpen = false;
+    }
     if (scenario === 'child') {
       await tick(); await tick(); await stillRunning();
       assert.equal(controls().length, 0, 'active child postpones the accepted request');

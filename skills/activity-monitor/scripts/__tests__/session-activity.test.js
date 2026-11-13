@@ -221,3 +221,17 @@ test('unknown recovered busy start uses run start and transcript-only activity u
  fs.utimesSync(transcript,7,7);assert.equal(activity.read(8000).busySince,6000);
  assert.equal(activity.read(8500).busySince,6000);
 });
+
+for(const runtime of ['claude','codex'])test(`quiet samples preserve an open ${runtime} turn until its closing hook`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ activity.consume([row('prompt',{ts:6000}),row('pre_tool',{ts:6500,tool_use_id:'first'}),row('post_tool',{ts:7000,tool_use_id:'first'})]);
+ assert.equal(activity.read(7500).busySince,6000);
+ const quiet=activity.read(11000);
+ assert.equal(quiet.state,'idle');assert.equal(quiet.turnOpen,true);assert.equal(quiet.busySince,6000);
+ activity.consume([row('pre_tool',{ts:12000,tool_use_id:'request'}),row('post_tool',{ts:12600,tool_use_id:'request'})]);
+ const reply=activity.read(18800);
+ assert.equal(reply.state,'idle');assert.equal(reply.turnOpen,true);assert.equal(reply.busySince,6000);
+ activity.consume([row(runtime==='claude'?'idle':'stop',{ts:19000})]);
+ const closed=activity.read(23000);
+ assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
+});

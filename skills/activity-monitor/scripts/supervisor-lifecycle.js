@@ -477,13 +477,13 @@ export class SupervisorLifecycle {
 
   // Voluntary intent belongs only to this supervisor process. Restart drops it;
   // ordinary TTL remains the fallback. Registration never exempts any tool from
-  // activity tracking: the current turn must end before normal idle() can pass.
+  // activity tracking: release waits for a closed turn as well as normal idle().
   async requestRelease(scene, context) {
     if (modeOf(context) !== 'multi') return { ok: false, result: 'rejected', reason: 'not_multi' };
     await this.refreshAuthorities(context);
     if (!this.allowed(scene.sessionGroup, context)) return { ok: false, result: 'rejected', reason: 'other_fence' };
     if (this.releasePreparation.get(scene.sessionGroup)?.runId === scene.runId) return { ok: true, result: 'already_accepted' };
-    const cutoff = scene.state === 'busy' ? (finite(scene.busySince) ? scene.busySince : finite(scene.createdAt) ? scene.createdAt : 0) : this.now();
+    const cutoff = scene.turnOpen === true || scene.state === 'busy' ? (finite(scene.busySince) ? scene.busySince : finite(scene.createdAt) ? scene.createdAt : 0) : this.now();
     this.releasePreparation.set(scene.sessionGroup, { runId: scene.runId, cutoff, controlIds: [], prepared: false });
     const delivered = this.deliveredWork.get(scene.sessionGroup);
     if (delivered?.runId === scene.runId && delivered.pastedAt >= cutoff) {
@@ -552,7 +552,7 @@ export class SupervisorLifecycle {
       }
       // An acknowledged Sync can still be finishing its turn or holding its
       // scoped marker; children and activity must drain through normal guards.
-      if (this.subagentReclaimBlocked(scene, 'release', context) || !await this.idle(scene, context)) return;
+      if (scene.turnOpen === true || this.subagentReclaimBlocked(scene, 'release', context) || !await this.idle(scene, context)) return;
       if (!intent.prepared) await this.prepareRelease(scene, context, intent);
       if (!intent.prepared || intent.controlIds.length) {
         for (const id of intent.controlIds) {

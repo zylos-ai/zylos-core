@@ -2097,3 +2097,46 @@ test('own release Sync delivery is excluded from history before a later release 
  await f.lifecycle.workDelivered({sessionGroup:'a',runId:'foreign',pastedAt:f.now+2});
  assert.equal(f.lifecycle.deliveredWork.size,0);assert.equal(f.lifecycle.releasePreparation.size,1);
 });
+
+for(const runtime of ['claude','codex'])test(`work delivered before a quiet gap cancels the same open ${runtime} turn`,async t=>{
+ for(const duringTool of [false,true]){
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'release-quiet-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const activity=new SessionActivity({runDir:root,runId:'run-a',sessionId:'session-1',runtime,startedAt:0});t.after(()=>activity.close());
+  const row=(event,ts,id='first')=>({run_id:'run-a',session_id:'session-1',runtime,event,ts,tool_use_id:id});
+  const f=fixture();f.scenes[0].runtime=runtime;
+  activity.consume([row('prompt',6000),row('pre_tool',6500),row('post_tool',7000)]);
+  activity.read(7500);const quiet=activity.read(11000);
+  assert.equal(quiet.state,'idle');assert.equal(quiet.turnOpen,true);assert.equal(quiet.busySince,6000);
+  await f.lifecycle.workDelivered({sessionGroup:'a',runId:'run-a',pastedAt:6200,conversationId:1});
+  if(duringTool)activity.consume([row('pre_tool',12000,'request')]);
+  f.now=duringTool?12500:11000;Object.assign(f.scenes[0],activity.read(f.now));
+  assert.equal((await f.lifecycle.requestRelease(f.scenes[0],f.context)).result,'accepted');
+  assert.equal(f.lifecycle.releasePreparation.size,0);assert.equal(f.events.at(-1).reason,'new_work');
+  activity.consume([row('stop',19000)]);activity.read(19000);f.now=25001;
+  Object.assign(f.scenes[0],activity.read(f.now));await f.lifecycle.advanceReleases(f.context);
+  assert.equal(f.fences.size,0);assert.equal(f.controls.length,0);
+ }
+});
+
+for(const runtime of ['claude','codex'])test(`release waits through an idle-confirmed final ${runtime} reply until the turn closes`,async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'release-reply-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const activity=new SessionActivity({runDir:root,runId:'run-a',sessionId:'session-1',runtime,startedAt:0});t.after(()=>activity.close());
+ const row=(event,ts)=>({run_id:'run-a',session_id:'session-1',runtime,event,ts,tool_use_id:'request'});
+ const f=fixture();f.scenes[0].runtime=runtime;
+ activity.consume([row('prompt',6000),row('pre_tool',12000)]);
+ f.now=12500;Object.assign(f.scenes[0],activity.read(f.now));
+ await f.lifecycle.requestRelease(f.scenes[0],f.context);
+ activity.consume([row('post_tool',12600)]);
+ for(const now of [15700,18800]){
+  f.now=now;Object.assign(f.scenes[0],activity.read(now));
+  assert.equal(f.scenes[0].state,'idle');assert.equal(f.scenes[0].turnOpen,true);
+  await f.lifecycle.advanceReleases(f.context);
+  assert.equal(f.fences.size,0);assert.equal(f.controls.length,0);assert.equal(f.lifecycle.releasePreparation.size,1);
+ }
+ assert.equal(await f.lifecycle.idle(f.scenes[0],f.context),true,'ordinary idle remains unchanged for other reclaim reasons');
+ activity.consume([row('stop',19000)]);Object.assign(f.scenes[0],activity.read(19000));
+ f.now=22001;Object.assign(f.scenes[0],activity.read(f.now));await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
+ f.now=25001;Object.assign(f.scenes[0],activity.read(f.now));assert.equal(f.scenes[0].turnOpen,false);
+ await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get('a').reason,'release');
+ assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'),f.context),'done');assert.deepEqual(f.stops,['run-a']);
+});
