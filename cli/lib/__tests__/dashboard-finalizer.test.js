@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
@@ -181,6 +182,7 @@ test('hung health headers and bodies time out after a full step window and Core 
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     childTest.after(()=>new Promise(resolve=>{server.closeAllConnections();server.close(resolve);}));
     fs.writeFileSync(path.join(data,'config.json'),JSON.stringify({port:server.address().port}));
+    fs.writeFileSync(path.join(data,'health-process.json'),JSON.stringify({pid:4242,bootId:randomUUID()}),{mode:0o600});
     const script=`
       import {completeUpgradeFinalization} from ${JSON.stringify(path.join(repo,'cli/lib/self-upgrade.js'))};
       import * as dashboardOwner from ${JSON.stringify(path.join(repo,'cli/lib/dashboard-install.js'))};

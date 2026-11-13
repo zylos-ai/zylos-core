@@ -1,5 +1,8 @@
-import fs from 'node:fs';
 import path from 'node:path';
+import { loadCoreModule } from './core-modules.js';
+
+const { readConfigStrict } = await loadCoreModule('config-store.js');
+const { readJsonSample } = await loadCoreModule('session-usage-reader.js');
 
 const STALE_TOOL_THRESHOLD_MS = 300_000;
 const STALE_SUBAGENT_THRESHOLD_MS = 1_800_000;
@@ -800,12 +803,17 @@ export class StateEngine {
     }
 
     try {
-      const amStatusPath = path.join(
-        this._config.zylosDir,
-        'activity-monitor', 'agent-status.json'
-      );
-      const raw = fs.readFileSync(amStatusPath, 'utf8');
-      const data = JSON.parse(raw);
+      const modeConfig = readConfigStrict(path.join(this._config.zylosDir, '.zylos', 'config.json'));
+      if (modeConfig.state === 'error') throw modeConfig.error;
+      const mode = modeConfig.config?.session_mode;
+      if (mode != null && mode !== 'single' && mode !== 'multi') throw new Error('Invalid session mode');
+      const amStatusPath = path.join(this._config.zylosDir, 'activity-monitor',
+        ...(mode === 'multi' ? ['session-groups', 'origin'] : []), 'agent-status.json');
+      // Core's snapshot reader binds JSON and mtime to the same open file.
+      // Re-reading a silent producer must not manufacture a fresh heartbeat.
+      const sample = readJsonSample(amStatusPath, 'status');
+      if (sample.error) throw new Error(sample.error);
+      const data = sample.value;
       this._state.amHeartbeat = {
         state: data.state,
         health: data.health,
@@ -813,7 +821,7 @@ export class StateEngine {
         lastActivity: data.last_activity
       };
       this.store.upsertSourceHealth('am_heartbeat', 'collector_liveness', 'healthy', {
-        last_success: new Date(this._now()).toISOString(),
+        last_success: new Date(sample.sampledAt).toISOString(),
         agent_state: data.state,
         agent_health: data.health
       });

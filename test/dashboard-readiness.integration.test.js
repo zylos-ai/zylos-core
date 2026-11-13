@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import { once } from 'node:events';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import test, { mock } from 'node:test';
 import { VersionChecker } from '../skills/dashboard/src/lib/version-checker.js';
 import { EventLoopMonitor } from '../skills/dashboard/src/lib/event-loop-monitor.js';
@@ -130,10 +131,14 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal(login.status, 302);
     await login.text();
     const cookie = login.headers.getSetCookie().find(value => value.startsWith('__Secure-zylos_dashboard_session=')).split(';')[0];
+    const sessionHash = createHash('sha256').update(cookie.slice(cookie.indexOf('=') + 1)).digest('hex');
     const key = generateApiKey();
     const database = new Store(path.join(root, 'components/dashboard/dashboard.db'));
-    try { database.insertApiKey({ name: 'health-reader', keyHash: hashApiKey(key), scope: 'read' }); }
-    finally { database.close(); }
+    t.after(() => database.close());
+    database.insertApiKey({ name: 'health-reader', keyHash: hashApiKey(key), scope: 'read' });
+    const activityBefore = database.getSession(sessionHash).last_activity_at;
+    // A later clock makes a hidden session touch observable through real SQLite.
+    t.mock.timers.tick(1000);
     const exchange = await fetch(origin + '/api/auth/token', { method: 'POST',
       headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(4000) });
     assert.equal(exchange.status, 200);
@@ -145,6 +150,11 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
         event_loop: { lag_ms: 0 }, source: { fixture: { healthy: true } }
       } });
     }
+    assert.equal(database.getSession(sessionHash).last_activity_at, activityBefore,
+      'authenticated health polling must not extend the cookie idle lifetime');
+    assert.equal((await request('/api/state', { Cookie: cookie })).status, 200);
+    assert.equal(database.getSession(sessionHash).last_activity_at, activityBefore + 1000,
+      'ordinary authenticated activity still updates the cookie idle lifetime');
     assert.equal(identityReads, 0);
   });
   await t.test('missing supervisor returns 503 without requiring login', async () => {

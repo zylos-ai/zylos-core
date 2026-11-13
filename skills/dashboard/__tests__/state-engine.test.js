@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { deriveAgentState, StateEngine } from '../src/lib/state-engine.js';
 import { Sanitizer } from '../src/lib/sanitizer.js';
 
@@ -1582,6 +1585,47 @@ function sourceHealthFixture(rows, runtime = 'claude') {
 function healthRow(name, signal_type, timestamp = 1000000, status = 'healthy', extra = {}) {
   return { name, signal_type, status, extra: { last_success: new Date(timestamp).toISOString(), ...extra } };
 }
+
+for (const scenario of [
+  { mode: 'multi', rootAge: 120_000, originAge: 10_000, expected: 'healthy', state: 'idle' },
+  { mode: 'multi', rootAge: 120_000, originAge: 90_000, expected: 'stale', state: 'idle' },
+  { mode: 'single', rootAge: 10_000, originAge: 120_000, expected: 'healthy', state: 'busy' },
+  { mode: 'single', rootAge: 90_000, originAge: 10_000, expected: 'stale', state: 'busy' },
+]) test(`AM heartbeat uses ${scenario.mode} producer time with root age ${scenario.rootAge} and Origin age ${scenario.originAge}`, t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-health-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: scenario.mode }));
+  let now = 1_800_000_000_000;
+  for (const [parts, state, age] of [
+    [[], 'busy', scenario.rootAge], [['session-groups', 'origin'], 'idle', scenario.originAge],
+  ]) {
+    const file = path.join(root, 'activity-monitor', ...parts, 'agent-status.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // Content timestamps deliberately disagree: freshness comes from the actual
+    // producer write, the same mtime evidence used by Core's status reader.
+    fs.writeFileSync(file, JSON.stringify({ state, health: 'ok', last_check: now / 1000, updated_at: now }));
+    fs.utimesSync(file, (now - age) / 1000, (now - age) / 1000);
+  }
+  let row;
+  const store = { ...makeMockStore(),
+    upsertSourceHealth: (name, signal_type, status, extra) => { row = { name, signal_type, status, extra }; },
+    getSourceHealth: () => row ? [row] : [],
+  };
+  const engine = new StateEngine(store, {}, { zylosDir: root }, { now: () => now });
+  engine._readAMHeartbeat();
+  const source = engine.getSourceHealth().collector_liveness.am_heartbeat;
+  const age = (scenario.mode === 'multi' ? scenario.originAge : scenario.rootAge) / 1000;
+  assert.equal(source.status, scenario.expected);
+  assert.equal(source.fresh, scenario.expected === 'healthy');
+  assert.equal(source.age_s, age);
+  assert.equal(engine._state.amHeartbeat.state, scenario.state, 'the existing internal heartbeat receives the selected source');
+  const producerTime = row.extra.last_success;
+  now += 60_000;
+  engine._readAMHeartbeat();
+  assert.equal(row.extra.last_success, producerTime, 'another read cannot renew producer evidence');
+  assert.equal(engine.getSourceHealth().collector_liveness.am_heartbeat.status, 'stale');
+});
 
 test('source health omits retired sources even when their stored rows remain', () => {
   const rows = [healthRow('hook_events', 'runtime_progress'),

@@ -1118,7 +1118,7 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, readiness.ready ? 200 : 503, readiness);
       return true;
     }
-    const details = auth.resolveAuthContext(req);
+    const details = auth.resolveAuthContext(req, { touch: false });
     res.setHeader('Vary', 'Cookie, Authorization');
     sendJson(res, 200, {
       ok: true,
