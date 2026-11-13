@@ -427,7 +427,7 @@ export class SupervisorLifecycle {
   }
 
   async deferReclaim(request, context) {
-    const reject = reason => ({ ok: false, result: 'rejected', reason });
+    const reject = (reason, details = {}) => ({ ok: false, result: 'rejected', reason, ...details });
     const group = request.sessionGroup;
     await this.refreshAuthorities(context);
     if (context.fences.some(fence => fence.sessionGroup === group || fence.sessionGroup === '*')) return reject('reclaim_started');
@@ -442,7 +442,7 @@ export class SupervisorLifecycle {
       (manualTarget(row) === group || row.mode === 'single'))) return reject('restart_pending');
     if (preparation.controlId && this.now() >= preparation.deadline) return reject('preparation_expired');
     const max = context.configuration.reclaimDeferMaxSeconds ?? 1800;
-    if (!finite(request.minutes) || request.minutes < 1 || request.minutes * 60 > max) return reject('minutes_out_of_range');
+    if (!finite(request.minutes) || request.minutes < 1 || request.minutes * 60 > max) return reject('minutes_out_of_range', { maxMinutes: max / 60 });
     const now = this.now();
     const previous = preparation.defer;
     const totalMs = (previous?.totalMs ?? 0) + (previous?.until ? Math.max(0, Math.min(now, previous.until) - previous.startedAt) : 0);

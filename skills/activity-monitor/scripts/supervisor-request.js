@@ -37,8 +37,11 @@ export async function deferReclaim({ minutes, reason, env = process.env, send = 
     sessionGroup, expectedRunId, minutes, reason });
   if (response.kind === 'accepted') return { ok: true, data: { result: response.reply.result,
     deferUntil: response.reply.deferUntil, sessionGroup, expectedRunId } };
+  const maxMinutes = response.reply?.reason === 'minutes_out_of_range' ? response.reply.maxMinutes : undefined;
   return { ok: false, error: { code: response.reply?.reason ?? response.reply?.code ?? response.kind,
-    message: response.sent && !response.reply ? 'Submission result is unknown; do not assume reclaim was deferred' : 'Reclaim deferral was not accepted',
+    message: maxMinutes !== undefined ? `Reclaim deferral minutes must be between 1 and ${maxMinutes}`
+      : response.sent && !response.reply ? 'Submission result is unknown; do not assume reclaim was deferred' : 'Reclaim deferral was not accepted',
+    ...(maxMinutes !== undefined ? { maxMinutes } : {}),
     persisted: response.sent && !response.reply ? null : [] } };
 }
 

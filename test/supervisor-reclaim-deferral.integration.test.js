@@ -10,7 +10,7 @@ import { SessionActivity } from '../skills/activity-monitor/scripts/session-acti
 // command parsing or supervisor reply shapes change; unrelated prompts may skip.
 // All paths and the one private socket stay under a temporary test root; no
 // tmux, PM2, database or live supervisor is contacted.
-test('deferral command reports ok true without requiring the optional json flag', async t => {
+test('deferral command reports acceptance and allowed minute range as JSON', async t => {
   const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
   const net = await import('node:net'); const { spawn } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
@@ -18,6 +18,9 @@ test('deferral command reports ok true without requiring the optional json flag'
   const directory = path.join(root, 'activity-monitor'); fs.mkdirSync(directory);
   const socketPath = path.join(directory, 'am.sock');
   const sockets = new Set();
+  const replies = [{ ok: true, result: 'accepted', deferUntil: 2000000 },
+    { ok: false, result: 'rejected', reason: 'minutes_out_of_range', maxMinutes: 1.5 }];
+  let replyIndex = 0;
   let child, closed;
   const server = net.createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket));
@@ -25,7 +28,7 @@ test('deferral command reports ok true without requiring the optional json flag'
       const request = JSON.parse(bytes.toString());
       assert.equal(request.type, 'defer_reclaim'); assert.equal(request.minutes, 2); assert.equal(request.reason, 'background watcher');
       socket.end(JSON.stringify({ version: 1, type: request.type, requestId: request.requestId,
-        ok: true, result: 'accepted', deferUntil: 2000000 }) + '\n');
+        ...replies[replyIndex++] }) + '\n');
     });
   });
   await new Promise(resolve => server.listen(socketPath, resolve));
@@ -42,13 +45,21 @@ test('deferral command reports ok true without requiring the optional json flag'
   console.log('Deferral CLI isolation:', JSON.stringify({ root, socketPath, args: [script, 'defer-reclaim', '--minutes', '2', '--reason', 'background watcher'],
     env: Object.fromEntries(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR', 'TMUX'].map(key => [key, env[key]])) }));
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'TMUX_TMPDIR']) assert.ok(env[key] === root || env[key].startsWith(root + path.sep));
-  child = spawn(process.execPath, [script, 'defer-reclaim', '--minutes', '2', '--reason', 'background watcher'], { env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
-  let output = '', stderr = '';
-  child.stdout.on('data', bytes => { output += bytes; if (output.length > 16384) child.kill('SIGKILL'); });
-  child.stderr.on('data', bytes => { stderr += bytes; if (stderr.length > 16384) child.kill('SIGKILL'); });
-  closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
-  const status = await closed;
-  assert.equal(status, 0, stderr); assert.equal(JSON.parse(output).ok, true);
+  for (const accepted of [true, false]) {
+    child = spawn(process.execPath, [script, 'defer-reclaim', '--minutes', '2', '--reason', 'background watcher'], { env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 10000 });
+    let output = '', stderr = '';
+    child.stdout.on('data', bytes => { output += bytes; if (output.length > 16384) child.kill('SIGKILL'); });
+    child.stderr.on('data', bytes => { stderr += bytes; if (stderr.length > 16384) child.kill('SIGKILL'); });
+    closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+    const status = await closed;
+    assert.equal(status, accepted ? 0 : 1, stderr);
+    const result = JSON.parse(output); assert.equal(result.ok, accepted);
+    if (!accepted) {
+      assert.equal(result.error.code, 'minutes_out_of_range'); assert.equal(result.error.maxMinutes, 1.5);
+      assert.match(result.error.message, /between 1 and 1\.5/);
+    }
+  }
+  assert.equal(replyIndex, 2);
 });
 
 // Boundary: real transcript sampling composed with lifecycle deferral. Run when

@@ -66,7 +66,9 @@ Confirm `ok:true`, then acknowledge. The command derives the session group and
 run ID from the current environment and uses the existing supervisor socket.
 It rejects missing preparation, a different run, an already-started reclaim,
 a capacity check past its response deadline, or minutes outside 1 through the
-configured single-request maximum. Upgrade and configuration restarts cannot
+configured single-request maximum. A range refusal includes `maxMinutes` and
+the CLI states the effective allowed range, including configuration overrides.
+Upgrade and configuration restarts cannot
 be delayed. Deferral records live only in the existing in-memory preparations;
 a supervisor restart loses them and sends a fresh check.
 

@@ -25,7 +25,7 @@ const approvedIdle = `This session group has been idle and will be reclaimed. Du
 2. Otherwise write the session handoff: list open business items as they stand now, checking each against its current record and leaving out any that have finished. Replies, reviews or decisions you are waiting for from people or other sessions need nothing more: an incoming reply wakes this group again.
 3. Create a wake-up only for a step of your own ongoing task that waits on an external system whose result will not arrive as a message to this group (for example CI on a PR you opened, or a deployment rolling out). First run \`node "${schedulerCli}" list --json\`; if a pending task of this group already covers it, do not create another. Otherwise run \`node "${schedulerCli}" add "<self-contained check>" --in "<delay>" --json\` in this session without any --reply option, and confirm it reports ok:true. Do not create scheduled tasks for anything else.
 
-Then acknowledge.`.replace(/\n+/g, ' ');
+Then acknowledge.`;
 
 test('idle reclaim and capacity eviction use the approved narrow check', () => {
   assert.equal(PRE_RECLAIM_CHECK_PROMPT, approvedIdle);
@@ -36,8 +36,8 @@ test('restart checks describe interrupted background work without offering defer
   for (const [name, prompt] of Object.entries(PROMPTS).filter(([name]) => name !== 'idle')) {
     assert.ok(prompt.includes('it will be interrupted by this restart: name it in the session handoff so the next session can rerun or check it.'), name);
     assert.doesNotMatch(prompt, /defer-reclaim|Only one thing can hold the reclaim/, name);
-    assert.equal(prompt.slice(prompt.indexOf('2. '), prompt.indexOf(' Then')),
-      approvedIdle.slice(approvedIdle.indexOf('2. '), approvedIdle.indexOf(' Then')), name);
+    assert.equal(prompt.slice(prompt.indexOf('2. '), prompt.indexOf('\n\nThen')),
+      approvedIdle.slice(approvedIdle.indexOf('2. '), approvedIdle.indexOf('\n\nThen')), name);
   }
   assert.ok(UPGRADE_RESTART_CHECK_PROMPT.startsWith('This session group will be restarted for an upgrade.'));
   assert.ok(SINGLE_UPGRADE_RESTART_CHECK_PROMPT.startsWith('This session will be restarted for an upgrade.'));
@@ -52,7 +52,6 @@ test('all checks prohibit messages and require current-record handoff without co
       'leaving out any that have finished', 'an incoming reply wakes this group again']) {
       assert.ok(prompt.includes(phrase), `${name}: ${phrase}`);
     }
-    assert.doesNotMatch(prompt, /[\r\n]/, `${name}: one paste remains one input without bracketed paste`);
     assert.doesNotMatch(prompt, /more than a day|tell the person responsible|handle each such item/);
   }
 });

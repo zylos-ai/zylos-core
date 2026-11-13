@@ -1809,8 +1809,12 @@ test('deferral rejects missing preparation, changed run, started reclaim, out of
   await f.lifecycle.checkTtl(f.scenes[0], f.context);
   assert.equal((await f.lifecycle.deferReclaim(deferRequest({ expectedRunId: 'other' }), f.context)).reason, 'run_changed');
   for (const minutes of [0, 0.5, 31, Infinity, NaN]) {
-    assert.equal((await f.lifecycle.deferReclaim(deferRequest({ minutes }), f.context)).reason, 'minutes_out_of_range');
+    const response = await f.lifecycle.deferReclaim(deferRequest({ minutes }), f.context);
+    assert.equal(response.reason, 'minutes_out_of_range'); assert.equal(response.maxMinutes, 30);
   }
+  f.context.configuration.reclaimDeferMaxSeconds = 90;
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest({ minutes: 2 }), f.context)).maxMinutes, 1.5);
+  delete f.context.configuration.reclaimDeferMaxSeconds;
   f.fence(); assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'reclaim_started'); f.fences.clear();
   f.requests = [{ reason: 'upgrade', runIds: ['run-a'] }];
   assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending'); f.requests = [];
