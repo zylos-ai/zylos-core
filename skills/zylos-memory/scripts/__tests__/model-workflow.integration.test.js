@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { extractAbsorbedBlock } from '../sync-files.js';
 import { renderStateSkeleton } from '../state-format.js';
@@ -38,6 +39,9 @@ test('integration observer detects exact-line, title and outbound-evidence regre
   assertPreserved(good, shell, remaining.map(entry => entry.id));
 });
 
+// Real CLI, private SQLite/tmux and restricted MCP transport. Run for fixture
+// export/read changes; skip unrelated changes. readyTmuxTarget owns cleanup;
+// the official runner isolates HOME/ZYLOS_DIR/PM2_HOME and short TMPDIR.
 test('integration fixture binds real CLI and restricted stdio MCP to an isolated scope', async t => {
   const f = createFixture(t); f.prepareRound(1);
   const executor = await createToolExecutor(f); t.after(executor.close);
@@ -46,6 +50,21 @@ test('integration fixture binds real CLI and restricted stdio MCP to an isolated
   const token = acquire.stdout.trim(); assert.match(token, /^[a-f0-9]{32}$/);
   const range = await executor.execute({ name: 'run_script', arguments: { script: 'c4-db', args: ['unsummarized', '--group', f.scope, '--json'] } });
   assert.equal(range.status, 0, range.stderr); assert.equal(JSON.parse(range.stdout).data.count, 12);
+  const exported = await executor.execute({ name: 'run_script', arguments: { script: 'c4-fetch', args: ['--unsummarized', '--group', f.scope, '--out', 'batch.txt'] } });
+  assert.equal(exported.status, 0, exported.stderr);
+  const metadata = JSON.parse(exported.stdout), midpoint = Math.floor(metadata.bytes / 2);
+  const parts = [];
+  for (const [startByte, endByteExclusive] of [[0, midpoint], [midpoint, metadata.bytes]]) {
+    const read = await executor.execute({ name: 'read_file', arguments: { path: metadata.path, startByte, endByteExclusive } });
+    assert.equal(read.ok, true, read.error); parts.push(Buffer.from(read.content));
+  }
+  const content = Buffer.concat(parts);
+  assert.equal(content.length, metadata.bytes);
+  assert.equal(createHash('sha256').update(content).digest('hex'), metadata.sha256);
+  const escaped = await executor.execute({ name: 'run_script', arguments: { script: 'c4-fetch', args: ['--unsummarized', '--group', f.scope, '--out', '../escaped.txt'] } });
+  assert.equal(escaped.ok, false); assert.match(escaped.message, /escaped isolated root/);
+  const invalidRange = await executor.execute({ name: 'read_file', arguments: { path: metadata.path, startByte: metadata.bytes + 1 } });
+  assert.equal(invalidRange.ok, false); assert.match(invalidRange.message, /Invalid byte range/);
   const denied = await executor.execute({ name: 'edit_memory', arguments: { op: 'edit', path: 'identity.md', expected: 'Finch', replacement: 'Other', token } });
   assert.equal(denied.code, 'PATH_NOT_ALLOWED');
   const created = await executor.execute({ name: 'edit_memory', arguments: { op: 'create', path: `session-groups/${f.scope}/state.md.${token}.tmp`, replacement: renderStateSkeleton({ scope: f.scope, syncedAt: '2026-10-20T09:00:00Z' }), token } });
