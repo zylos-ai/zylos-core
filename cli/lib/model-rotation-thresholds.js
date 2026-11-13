@@ -35,7 +35,11 @@ export function readCodexModelWindows({ home = os.homedir(), codexHome = process
   try {
     const cache = JSON.parse(fs.readFileSync(file, 'utf8'));
     models = Array.isArray(cache.models) ? cache.models : [];
-  } catch { models = []; }
+  } catch {
+    // A transient read failure must not become a cached empty model list.
+    codexModelCache.delete(file);
+    return [];
+  }
   // Keep only a result whose file did not change while it was read.
   if (before && fileSignature(file) === before) codexModelCache.set(file, { signature: before, models });
   else codexModelCache.delete(file);

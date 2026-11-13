@@ -261,3 +261,24 @@ test('Codex model cache is parsed again only after the file changes', t => {
   f.write('codex/models_cache.json', windows(272000));
   assert.equal(read()[0].context_window, 272000);
 });
+
+test('Codex model cache recovers after a transient read failure without a file change', t => {
+  const f = fixture(t), codexHome = path.join(f.root, 'codex');
+  const file = path.join(codexHome, 'models_cache.json');
+  f.write('codex/models_cache.json', { models: [{ slug:'model-a', context_window:272000 }] });
+  const signature = fs.statSync(file), original = fs.readFileSync;
+  let fail = true, reads = 0;
+  t.mock.method(fs, 'readFileSync', function(target, ...args) {
+    if (target === file) {
+      reads++;
+      if (fail) { fail = false; throw Object.assign(new Error('temporary descriptor exhaustion'), {code:'EMFILE'}); }
+    }
+    return original.call(this, target, ...args);
+  });
+  assert.deepEqual(readCodexModelWindows({codexHome}), []);
+  assert.equal(readCodexModelWindows({codexHome})[0].context_window, 272000);
+  assert.equal(readCodexModelWindows({codexHome})[0].context_window, 272000);
+  assert.equal(reads, 2, 'successful recovery is cached');
+  assert.equal(fs.statSync(file).mtimeMs, signature.mtimeMs);
+  assert.equal(fs.statSync(file).ctimeMs, signature.ctimeMs);
+});
