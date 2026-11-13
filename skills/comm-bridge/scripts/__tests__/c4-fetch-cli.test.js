@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { verifyBatchReceipt } from '../c4-sync-batch.js';
 
 const CLI_PATH = fileURLToPath(new URL('../c4-fetch.js', import.meta.url));
 const RECEIVE_PATH = fileURLToPath(new URL('../c4-db.js', import.meta.url));
@@ -74,6 +76,60 @@ function utcAgo(ms) {
 // -- --unsummarized --
 
 describe('c4-fetch --unsummarized', () => {
+  // Real CLI -> projected queries -> private SQLite/export files. Run when
+  // export formatting or receipt boundaries change; skip unrelated changes.
+  // withTmpDir and the official runner isolate and reclaim all child paths.
+  it('exports complete Unicode text and JSON with byte parity and a verifiable receipt', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const database = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
+      const content = '\u4e2d\u6587\ud83c\udf0d\n'.repeat(15000);
+      database.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('out','system',?,'delivered','foo')").run(content);
+      database.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('out','system','foreign','delivered','bar')").run();
+      try {
+        for (const format of [[], ['--json']]) {
+          const args = ['--unsummarized', '--group', 'foo', ...format];
+          const direct = cli(args, env);
+          assert.equal(direct.status, 0, direct.stderr);
+          const out = path.join(tmpDir, format.length ? 'batch.json' : 'batch.txt');
+          const exported = cli([...args, '--out', out], env);
+          assert.equal(exported.status, 0, exported.stderr);
+          const metadata = format.length ? JSON.parse(exported.stdout).data : JSON.parse(exported.stdout);
+          const bytes = fs.readFileSync(out);
+          assert.ok(bytes.equals(Buffer.from(direct.stdout)), 'Export bytes equal direct stdout');
+          assert.equal(fs.statSync(out).mode & 0o777, 0o600);
+          assert.equal(metadata.bytes, bytes.length);
+          assert.equal(metadata.sha256, createHash('sha256').update(bytes).digest('hex'));
+          assert.equal(metadata.count, 1); assert.equal(metadata.firstId, 1); assert.equal(metadata.lastId, 1);
+          assert.equal(metadata.batch.end, 1);
+          assert.ok(!exported.stdout.includes(content.slice(0, 40)));
+          const reader = { getConversationsByRange: (begin, end) => database.prepare('SELECT * FROM conversations WHERE id BETWEEN ? AND ?').all(begin, end) };
+          assert.deepEqual(verifyBatchReceipt(metadata.batch, { scope: 'foo', end: 1, database: reader }), metadata.batch);
+          const retry = cli([...args, '--out', out], env);
+          assert.equal(retry.status, 1);
+          assert.ok(fs.readFileSync(out).equals(bytes), 'Rejected overwrite preserves export bytes');
+        }
+      } finally { database.close(); }
+    });
+  });
+
+  it('exports limited and empty batches using coverage and actual returned boundaries', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      receive(['--channel', 'system', '--content', 'covered'], env);
+      assert.equal(checkpoint(['create', '1', '--no-content'], env).status, 0);
+      receive(['--channel', 'system', '--content', 'second'], env);
+      receive(['--channel', 'system', '--content', 'third'], env);
+      const result = cli(['--unsummarized', '--limit', '1', '--after', '0', '--out', path.join(tmpDir, 'limited'), '--json'], env);
+      assert.equal(result.status, 0, result.stderr);
+      const metadata = JSON.parse(result.stdout).data;
+      assert.equal(metadata.batch.after, 1); assert.equal(metadata.batch.end, 2);
+      const empty = cli(['--unsummarized', '--after', '3', '--out', path.join(tmpDir, 'empty'), '--json'], env);
+      assert.equal(empty.status, 0, empty.stderr);
+      const receipt = JSON.parse(empty.stdout).data;
+      assert.equal(receipt.count, 0); assert.equal(receipt.firstId, null); assert.equal(receipt.lastId, null);
+      assert.equal(receipt.batch.after, 3); assert.equal(receipt.batch.end, 3);
+    });
+  });
+
   it('reports no unsummarized conversations on fresh DB', () => {
     withTmpDir(({ env }) => {
       const { stdout, status } = cli(['--unsummarized'], env);

@@ -1,6 +1,8 @@
 import { resolveDashboardQuotes, dashboardQuoteSender, readOwnerName } from './dashboard-source.js';
 import { quotePreview } from '../../dashboard/src/lib/chat/history.js';
 import path from 'node:path';
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import { SKILLS_DIR } from './c4-config.js';
 import * as db from './c4-db.js';
 import { createStore } from './c4-v2-store.js';
@@ -8,6 +10,7 @@ import { createQueryHandlers } from './c4-v2-cli.js';
 import { dataError, requireGroup } from './c4-session-group.js';
 import { formatQueryError, replyVia, projectConversation, shellQuote } from './c4-query-format.js';
 import { queryRejection } from './c4-entry-events.js';
+import { createBatchReceipt } from './c4-sync-batch.js';
 
 const query = createQueryHandlers(createStore(db.getDb));
 const sendPath = path.join(SKILLS_DIR, 'comm-bridge', 'scripts', 'c4-send.js');
@@ -190,13 +193,13 @@ export function checkpointCli(args) {
 }
 export function fetchCli(args) {
   if (!args.length) invalid('Usage: c4-fetch.js requires a query');
-  if (args.length === 1 && ['--help','-h'].includes(args[0])) return 'c4-fetch.js --unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] | --begin ID --end ID | --since DURATION|DATETIME | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID) | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
+  if (args.length === 1 && ['--help','-h'].includes(args[0])) return 'c4-fetch.js --unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] [--out FILE] | --begin ID --end ID | --since DURATION|DATETIME | --checkpoints --after ID | --origin-sync --group G (--summaries-only|--raw-only --after ID) | --absorbed --run-id UUID [--summary [--scope-after G]|--id ID [--field text|endpoint] [--out FILE]|--after ID] [--limit N]\n';
   const modes = ['unsummarized','since','checkpoints','origin-sync','absorbed'];
   const selected = modes.filter(key => args.includes('--' + key));
   if (selected.length > 1) invalid('Fetch modes are mutually exclusive');
   const mode = selected[0] ?? 'range';
   const allowed = {
-    unsummarized: [['group','after','up-to','limit'], ['unsummarized','json']],
+    unsummarized: [['group','after','up-to','limit','out'], ['unsummarized','json']],
     checkpoints: [['group','after'], ['checkpoints','json']],
     'origin-sync': [['group','after','limit'], ['origin-sync','summaries-only','raw-only','json']],
     absorbed: [['run-id','group','scope-after','after','limit','id','field','out'], ['absorbed','summary','json']],
@@ -215,7 +218,24 @@ export function fetchCli(args) {
   }
   if (mode === 'unsummarized') {
     const result = query.unsummarized({ group: o.group, upToConversationId: o['up-to'] === undefined ? undefined : number(o['up-to'], 'up-to'), limit: o.limit === undefined ? undefined : number(o.limit, 'limit', 1), afterConversationId: o.after === undefined ? undefined : number(o.after, 'after') });
-    return o.json ? json(result) : `unsummarized scope=${group(o)} checkpointEnd=${result.checkpointEnd}\n${result.checkpointSummary === null ? '' : '[Last Checkpoint Summary] ' + result.checkpointSummary + '\n'}${conversations(result.rows)}\ncount=${result.rows.length} upTo=${result.upTo} safeEnd=${result.safeEnd}\n`;
+    const output = o.json ? json(result) : `unsummarized scope=${group(o)} checkpointEnd=${result.checkpointEnd}\n${result.checkpointSummary === null ? '' : '[Last Checkpoint Summary] ' + result.checkpointSummary + '\n'}${conversations(result.rows)}\ncount=${result.rows.length} upTo=${result.upTo} safeEnd=${result.safeEnd}\n`;
+    if (o.out === undefined) return output;
+    if (!o.out || o.out.includes('\0')) invalid('Invalid output path');
+    const scope = group(o);
+    const coverage = scope === '*' ? db.getGlobalCoverageEnd() : db.getCoverageEnd(scope);
+    const batch = createBatchReceipt(result.rows, { scope, after: Math.max(coverage, o.after === undefined ? 0 : number(o.after, 'after')), end: result.rows.at(-1)?.id ?? result.upTo });
+    const metadata = { path: o.out, count: result.rows.length, firstId: result.rows[0]?.id ?? null, lastId: result.rows.at(-1)?.id ?? null,
+      bytes: Buffer.byteLength(output), sha256: createHash('sha256').update(output).digest('hex'), batch };
+    let descriptor;
+    try { descriptor = fs.openSync(o.out, 'wx', 0o600); }
+    catch (cause) { throw dataError(cause.code === 'EEXIST' ? 'INVALID_ARGS' : 'WRITE_FAILED', 'Could not create output file', { cause }); }
+    try { fs.writeFileSync(descriptor, output, 'utf8'); fs.closeSync(descriptor); }
+    catch (cause) {
+      try { fs.closeSync(descriptor); } catch {}
+      try { fs.unlinkSync(o.out); } catch {}
+      throw dataError('WRITE_FAILED', 'Could not write output file', { cause });
+    }
+    return display(metadata, o);
   }
   if (mode === 'checkpoints') return display(query.checkpoints({ group: o.group, after: number(o.after, 'after') }), o);
   if (mode === 'origin-sync') {

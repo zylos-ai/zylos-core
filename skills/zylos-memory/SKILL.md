@@ -40,6 +40,13 @@ configuration. Origin Sync uses Origin's actual runtime.
   If background tools or the restricted memory tool are unavailable, report
   `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
 
+Before launch, the parent discovers the exposed restricted memory tool and
+passes its exact name in the worker message. Claude normally exposes
+`mcp__zylos-memory__edit_memory`; Codex normally exposes
+`mcp__zylos_memory__edit_memory`. If that name is absent, discover an exposed
+tool ending in `edit_memory` before declaring `TOOL_UNAVAILABLE`. Never select
+an unrestricted writer as a substitute.
+
 For both runtimes, the parent must include a few lines in the worker's task
 message covering relevant facts from this period that are absent from the
 conversation: findings from code or logs, actions it took without mentioning
@@ -56,11 +63,17 @@ before taking a token; run only the selected procedure.
 
 ## Writing rules
 
-All Sync content edits and new memory files use `mcp__zylos-memory__edit_memory`.
+All Sync content edits and new memory files use the discovered `edit_memory`
+tool passed by the parent.
 Origin and global Sync also run the documented `reference-index.js rebuild`,
 `archive`, and `unarchive` commands to maintain generated indexes and page locations.
 Read inputs with Read (offset/limit), Glob, or read-only Bash commands
 `grep -n`, `rg -n`, and `sed -n '<a>,<b>p'`; use Grep when available.
+For exported batches and listed inputs, read every byte in bounded ranges and
+verify the reported byte count and SHA-256 using read-only tools. Truncated
+output is unread: retry with a smaller limit/range until complete. Do not infer
+completion from the first/last lines or a successful hash check alone. Use
+returned absolute paths; never synthesize segment or session paths.
 Do not read an entire old file into a script. Memory writes still use only the
 documented tools and scripts.
 Do not use native Edit/Write/patch, shell redirects into memory, or a fallback

@@ -32,7 +32,10 @@ A failed `reference-index.js rebuild` is reported without blocking progress.
 Audit failures are also report-only, except `TOKEN_MISMATCH`, which always stops
 all operations as above.
 
-If the restricted tool is missing, report `TOOL_UNAVAILABLE`, do not commit,
+Use the restricted tool name discovered and passed by the parent (Claude:
+`mcp__zylos-memory__edit_memory`; Codex: `mcp__zylos_memory__edit_memory`). If
+absent, discover an exposed tool ending in `edit_memory` before concluding it
+is unavailable. If the restricted tool is missing, report `TOOL_UNAVAILABLE`, do not commit,
 and release once if T was obtained. A checkpoint may already have committed;
 leave remaining inputs for recovery in a later triggered Sync. A crash or failed
 commit does not justify deleting inputs. Do not start another Sync merely to
@@ -49,6 +52,14 @@ uses `ZYLOS_ORIGIN_SYNC_THRESHOLD` / `origin_sync_threshold` / 50. Keep the
 resolved values for this run; do not substitute the defaults for configured
 values in subsequent fetch commands.
 
+Truncated tool output is unread. Retry a fetch with a smaller `--limit`, or a
+file read with smaller byte ranges; read all required records before progress
+advances. For an exported batch or listed input, read the entire file in bounded
+byte ranges and verify its reported byte count and SHA-256 with read-only tools.
+A hash check or first/last markers do not replace reading the content. Keep
+export file hashes separate from batch receipt hashes: receipt `sha256` hashes
+the canonical projected database rows, not the rendered export file bytes.
+
 ## Group Sync
 
 This also applies to the origin group's own working state. Set kind=group;
@@ -56,18 +67,23 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 
 1. Acquire. Read `c4-db.js unsummarized --group G --json`. If count is zero,
    release and report no input. Do not cleanup, rotate, or consume inbox.
-2. Fetch `c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit <batchLimit>`.
-   Save its rows, latest summary, and returned batch end. The end printed for
-   this batch, not a later observed frontier, is the checkpoint target. A read
+2. Fetch `c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit <batchLimit> --out <FILE>`.
+   Stdout is metadata: count, first/last IDs, file bytes and SHA-256, and a batch
+   receipt `{"scope":...,"after":...,"end":...,"sha256":...}`. Read the full
+   batch file and verify its bytes/hash. Save its rows, latest summary, and the
+   receipt unchanged. This batch's returned end, rather than a later observed
+   frontier, is the checkpoint target. A read
    failure ends the run before any cleanup/rotation.
 3. Run `sync-files.js cleanup --token T`, then `sync-files.js rotate --token T`.
    Read the current group state, then run the read-only `sync-files.js list`
    without `--token`; adding `--token` returns `INVALID_INPUT` and ends this run.
-   Read every listed
-   uncommitted segment in segment-ID order. Read dated session logs from the
-   state's synced date onward; if the header/date is unknown, read the latest
-   seven days. A missing state starts from an empty four-section state. A bad
-   header means no committed segment set: include all uncommitted inputs.
+   Save the complete returned object as `inputs`:
+   `{"scope":...,"segments":[{"id":...,"path":"<absolute>","bytes":...,"sha256":...}],"sessions":[{"path":"<absolute>","bytes":...,"sha256":...}]}`.
+   Read every listed segment in segment-ID order and every listed session file,
+   in full; verify each byte count/hash. Use only the returned absolute paths,
+   never constructed segment/session names. A missing state starts from an
+   empty four-section state. A bad header means no committed segment set:
+   include all uncommitted inputs.
 4. Compare state coverage with the latest content checkpoint. If behind, use
    `c4-fetch.js --checkpoints --group G --after <coverage>` to read **all**
    missing content summaries. Empty or unknown coverage uses 0. Do not recover
@@ -81,10 +97,16 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    prove delivery; uncertain or failed sends are not completion evidence.
    Do **not** copy the block into the temporary state. Keep a separate
    `followedUpIds` array; no progress means an empty array.
-7. Send the summary on stdin to `sync-files.js checkpoint <batch-end> --token T`.
+7. Send the summary on stdin to
+   `sync-files.js checkpoint <batch-end> --token T --batch '<receipt JSON>'`.
+   Checkpoint recomputes and verifies the receipt against the database rows.
    Only after success, use `edit_memory` to create/edit
    `session-groups/G/state.md.T.tmp` relative to memory. Then send JSON
-   `{"followedUpIds":[...]}` on stdin to `sync-files.js commit --token T`.
+   `{"followedUpIds":[],"batch":<receipt>,"inputs":<complete list object>}`
+   on stdin to `sync-files.js commit --token T`, replacing the empty array only
+   with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
+   exact current listed inputs and their hashes, and the state's segment IDs.
+   A mismatch fails the run; never omit inputs or fabricate a receipt to retry.
    Commit preserves the formal state's remaining absorbed lines and original
    title byte-for-byte, removing the title only when every item is removed.
 8. Check the resulting content, release once, and report. Do not edit shared
@@ -105,11 +127,15 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
    and K=checkpointId from this same read alongside all summaries. If that
    group's read fails, skip its merge and cursor advance, record why, and
    continue other groups unless the failure is TOKEN_MISMATCH.
+   Truncated output is unread: reread in smaller supported pages/ranges until
+   every required summary is read; never advance based on a truncated preview.
 3. If budget remains, fetch
    `c4-fetch.js --origin-sync --group G --raw-only --after C --limit <remaining>`.
    Use the **saved first C**, never a newly read coverage. Deduct the actual row
    count. When the result is complete, the proposed raw cursor is saved upTo;
-   when truncated it is the last returned ID. If this read fails, neither
+   when the query is limited it is the last returned ID. Tool-output truncation
+   is unread: repeat with a smaller `--limit` and read the complete result before
+   choosing a cursor. If this read fails, neither
    cursor for G advances. With budget exhausted, a group with new summaries may
    advance raw cursor to max(S,min(C,upTo)); with no new summary skip both cursors.
    The proposed summary cursor is the saved K, not a summary's covered end.
@@ -203,6 +229,9 @@ state, commit, and failure sequence, with these differences:
   Multiple source groups still yield one global checkpoint.
 - As in Group Sync, run the read-only `sync-files.js list`.
   Do not add `--token`; doing so returns `INVALID_INPUT` and ends this run.
+  Retain its full object, read/verify every listed file, and supply it as
+  `inputs` to commit. Pass the unchanged batch receipt to checkpoint and commit
+  as above.
 - After reading global state, segments, and dated logs, read shared self files
   using the same INDEX → relevant pages → optional old-file lookup as Origin
   step 4. Complete necessary shared edits through `edit_memory` **before**

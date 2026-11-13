@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { renderStateSkeleton } from '../state-format.js';
+import { createBatchReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
 const rootPath = fileURLToPath(new URL('../../../../', import.meta.url));
 function run(script, args, env, input = '') {
   return spawnSync(process.execPath, [fileURLToPath(new URL(`../${script}.js`, import.meta.url)), ...args], { env, input, encoding: 'utf8', timeout: 15000 });
@@ -22,17 +23,23 @@ test('CLI exits distinguish malformed input, ownership loss, lock timeout and su
   const runDir = path.join(f.root, 'activity-monitor/session-groups/origin');
   const memoryDir = path.join(f.root, 'memory'); fs.mkdirSync(memoryDir);
   const token = await acquire({ env, kind: 'global' }, { currentRunId: async () => env.ZYLOS_RUN_ID });
-  const text = renderStateSkeleton({ scope: '*', syncedAt: '2026-10-19T05:30:02Z' });
+  const batch = createBatchReceipt([], { scope: '*', after: 0, end: 0 });
+  const checkpoint = run('sync-files', ['checkpoint', '0', '--token', token, '--batch', JSON.stringify(batch)], env, 'No new conversations.');
+  assert.equal(checkpoint.status, 0, checkpoint.stderr);
+  const listing = run('sync-files', ['list'], env);
+  assert.equal(listing.status, 0, listing.stderr);
+  const payload = JSON.stringify({ followedUpIds: [], inputs: JSON.parse(listing.stdout), batch });
+  const text = renderStateSkeleton({ scope: '*', syncedAt: '2026-10-19T05:30:02Z' }).replace('coverage= |', 'coverage=0 |');
   fs.writeFileSync(path.join(memoryDir, `state.md.${token}.tmp`), text);
   const invalid = run('sync-files', ['commit', '--token', token], env, '{}');
   assert.equal(invalid.status, 1); assert.match(invalid.stderr, /^Error \[INVALID_INPUT\]:/);
-  const stale = run('sync-files', ['commit', '--token', 'b'.repeat(32)], env, '{"followedUpIds":[]}');
+  const stale = run('sync-files', ['commit', '--token', 'b'.repeat(32)], env, payload);
   assert.equal(stale.status, 3); assert.match(stale.stderr, /^Error \[TOKEN_MISMATCH\]:/);
-  const okay = run('sync-files', ['commit', '--token', token], env, '{"followedUpIds":[]}');
+  const okay = run('sync-files', ['commit', '--token', token], env, payload);
   assert.equal(okay.status, 0, okay.stderr); assert.equal(fs.readFileSync(path.join(memoryDir, 'state.md'), 'utf8'), text);
   await withMemoryLock(runDir, () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [fileURLToPath(new URL('../sync-files.js', import.meta.url)), 'commit', '--token', token], { env, stdio: ['pipe', 'pipe', 'pipe'] });
-    child.stdin.end('{"followedUpIds":[]}');
+    child.stdin.end(payload);
     let stderr = ''; child.stderr.on('data', data => { stderr += data; });
     child.on('error', reject);
     child.on('close', code => {
@@ -68,7 +75,7 @@ test('numeric CLI arguments reject invalid IDs before touching memory or databas
   const token = 'b'.repeat(32);
   for (const value of ['', ' ', '-1', '1.5', 'abc', '1e3', '0x10', '+1', ' 1', '1 ', '9007199254740992']) {
     const calls = [
-      ['sync-files', ['checkpoint', value, '--token', token]],
+      ['sync-files', ['checkpoint', value, '--token', token, '--batch', '{}']],
       ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', value, '--checkpoint', '1', '--token', token]],
       ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '1', '--checkpoint', value, '--token', token]],
     ];
@@ -80,8 +87,8 @@ test('numeric CLI arguments reject invalid IDs before touching memory or databas
   }
   assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), []);
   for (const [script, args] of [
-    ['sync-files', ['checkpoint', '0', '--token', token]],
-    ['sync-files', ['checkpoint', '1', '--token', token]],
+    ['sync-files', ['checkpoint', '0', '--token', token, '--batch', JSON.stringify(createBatchReceipt([], { scope: 'origin', after: 0, end: 0 }))]],
+    ['sync-files', ['checkpoint', '1', '--token', token, '--batch', JSON.stringify(createBatchReceipt([], { scope: 'origin', after: 0, end: 1 }))]],
     ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '0', '--checkpoint', '0', '--token', token]],
     ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '1', '--checkpoint', '1', '--token', token]],
   ]) {
