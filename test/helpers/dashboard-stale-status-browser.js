@@ -144,6 +144,7 @@ export async function runStaleStatusBrowser(t, sandbox) {
     await f.page.locator('.conversation-running').waitFor();
     await check(f.page.locator('.conversation-running'), false);
     await shot(f.page, `unknown-${f.width}-${f.theme}-conversation`);
+    if (f.width <= 760) await f.page.locator('#wb-chat .conversation-back').click();
     await openDashboardTab(f.page, 'overview');
     await check(f.page.locator('.wb-row[data-group] .wb-state').first(), false);
     await shot(f.page, `unknown-${f.width}-${f.theme}-overview`);
