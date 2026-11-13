@@ -340,5 +340,44 @@ still shows the tabs, and their requests are refused.
 
 ## HTTP API
 
+### Kubernetes readiness
+
+`GET /api/health?probe=ready` is unauthenticated and returns HTTP 503 only
+when the supervisor is absent or does not respond, or when single-session
+mode has no running session. In multi-session mode, zero running sessions
+is normal and does not prevent readiness. All other cases return HTTP 200.
+Runtime authentication failures, rate limits, missing login history, upgrades,
+restarts and mode switches are not additional readiness gates.
+
+Use this endpoint only as a readiness probe, never as a liveness probe.
+An upgrade/restart can briefly stop the supervisor or single session and
+return 503; using that as liveness would cause Kubernetes to kill the pod.
+Without `probe=ready`, `/api/health` retains its process-health response and
+HTTP 200 behavior, without a `ready` field. Other query values also retain that
+behavior. The platform can use the presence of the top-level boolean `ready`
+to distinguish this readiness contract from older Dashboards.
+
+The readiness response contains only these public facts:
+
+| Field | Values |
+| --- | --- |
+| `ready` | Boolean, agrees with HTTP 200/503. |
+| `reason` | `null`, `supervisor_unavailable`, or `session_not_running` (supervisor takes priority). |
+| `session_mode` | `single`, `multi`, or `null` when unreadable; an unset mode means `single`. |
+| `session_running` | Boolean for an observed single session; `null` in multi mode or when observation is unavailable. |
+| `runtime_health` | `claude` and `codex`, each with `source` (`record`, `missing`, `unreadable`) and `health` (`ok`, `auth_failed`, `rate_limited`, `unavailable`, `down`, `recovering`, or `null` without a readable record). |
+
+Missing health records do not prove whether login ever occurred. Session or
+configuration observation errors are unknown facts, not confirmed session absence.
+Runtime health is diagnostic only, including historical `down`/`recovering` values.
+No paths, session/run IDs, process IDs or tool details are returned.
+
+Each request uses the existing supervisor socket client with a 1000 ms deadline.
+An unsupported-version envelope receives the existing correlated `invalid_request`
+reply before admission or any writes, proving that the supervisor responds.
+The probe reads mode, single-session identity and runtime-health files through
+existing Core readers; it never launches `zylos status`, polls in the background,
+or maintains a cache.
+
 Draft, send, question and answer routes, receipts and their reconciliation rules
 are in [docs/conversation-channel.md](docs/conversation-channel.md).

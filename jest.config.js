@@ -2,6 +2,7 @@ export default {
   transform: {},
   testPathIgnorePatterns: [
     '/node_modules/',
+    '<rootDir>/test/dashboard-readiness.integration.test.js',
     '<rootDir>/test/group-deletion.integration.test.js',
     '<rootDir>/test/group-deletion-storage.integration.test.js',
     // Node test-runner file; run by scripts/run-node-tests.js.
