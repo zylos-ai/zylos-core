@@ -482,14 +482,28 @@ export async function runMobileConversationBrowser(t, sandbox) {
       }
       assert.deepEqual(medium.errors, []);
     } finally { await medium.context.close(); }
-    for (const width of [900, 761]) {
-      const f = await open({ width, scene: 'running' }), page = f.page;
+    // A short working caption can leave enough room for the full polling hint.
+    // Keep that scene, and use a real long title to require truncation pressure
+    // independently of the current status wording.
+    for (const { width, title } of [900, 761].flatMap(width =>
+      [DEFAULT_TITLE, LONG_TITLE].map(title => ({ width, title })))) {
+      const f = await open({ width, title, scene: 'running' }), page = f.page;
       try {
         await prepareHeader(page, { scene: 'running', disconnected: true });
         const m = await headerMetrics(page); compact(m);
-        measurements.push({ name: 'header-narrow-running-polling', ...m });
-        assert.ok(m.push.scrollWidth > m.push.clientWidth, 'long polling hint truncates before status or group');
+        const name = `header-${width}-running-polling-${title === LONG_TITLE ? 'long' : 'short'}-title`;
+        console.info('Header polling metrics:', JSON.stringify({ name, ...m }));
+        measurements.push({ name, ...m });
+        if (title === LONG_TITLE) {
+          assert.equal(m.titleText.text.length, 40, 'fixture supplies a long title');
+          assert.ok(m.titleText.scrollWidth > m.titleText.clientWidth, 'long title creates truncation pressure');
+          assert.ok(m.push.scrollWidth > m.push.clientWidth, 'long polling hint truncates before status or group');
+        }
+        if (m.titleText.scrollWidth > m.titleText.clientWidth) {
+          assert.ok(m.push.scrollWidth > m.push.clientWidth, 'title only truncates after the connection hint is truncated');
+        }
         assert.match(m.push.text, /轮询/);
+        await shot(page, name);
         await page.locator('.conversation-running').click(); await page.locator('.wb-group-side').waitFor();
         assert.match(await page.locator('.wb-group-side .wb-detail-tabs [aria-selected="true"]').innerText(), /时间线/);
         assert.deepEqual(f.errors, []);
