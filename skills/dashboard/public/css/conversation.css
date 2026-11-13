@@ -1017,7 +1017,9 @@ button.conversation-activity-head:focus-visible { outline:2px solid var(--accent
 }
 /* Phone: a leftward swipe slides the row over to reveal its delete button (see conversation-swipe.js). */
 @media (max-width:760px) {
-  .conversation-page .conversation-list-row { position:relative; gap:0; touch-action:pan-y; }
+  .conversation-page .conversation-list-row { position:relative; gap:0; }
+  /* Only a row that can swipe open (the test in conversation-swipe.js) keeps horizontal touch to itself. */
+  .conversation-page .conversation-list-row:not([data-deletion-state]):has(> .conversation-delete:not([hidden])) { touch-action:pan-y; }
   .conversation-page .conversation-list-row .conversation-list-item { position:relative; z-index:1; transition:transform .18s ease; }
   .conversation-page .conversation-list-row:is(.conversation-swiping,.conversation-swipe-open) { overflow:hidden; border-radius:10px; }
   .conversation-page :is(.conversation-swiping,.conversation-swipe-open) .conversation-list-item:not(.selected) { background:var(--wb-side); }

@@ -88,6 +88,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
   sandbox.addCleanup(() => browser.close());
   const metrics = [];
   let screenshots = 0;
+  const tapGaps = [];
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   for (const locale of ['zh', 'en']) for (const width of [1280, 390]) {
     const zh = locale === 'zh', phone = width === 390;
@@ -134,6 +135,29 @@ export async function runConversationDeleteBrowser(t, sandbox) {
       await page.locator('.conversation-page.conversation-detail-open').waitFor({ state: 'detached' });
       return offered;
     };
+    // A quick finger taps straight after lifting from a swipe: the browser must not take that tap for the
+    // end of a fling. The page measures the lift-to-tap gap, which must stay inside the window where a
+    // swallowed tap shows (0-150 ms).
+    const swipeThenTap = async (item, target) => {
+      const at = await target.evaluate(node => { const b = node.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; });
+      await page.evaluate(() => {
+        let lifted = null;
+        window.__tapGap = null;
+        const end = event => { lifted = event.timeStamp; };
+        const start = event => {
+          if (lifted === null) return;
+          window.__tapGap = event.timeStamp - lifted;
+          removeEventListener('touchend', end, true); removeEventListener('touchstart', start, true);
+        };
+        addEventListener('touchend', end, true); addEventListener('touchstart', start, true);
+      });
+      await swipe(item, -160);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      const gap = await page.evaluate(() => window.__tapGap);
+      assert.ok(gap !== null && gap < 100, `the tap follows the lift within 100 ms (${gap} ms)`);
+      tapGaps.push(gap);
+    };
     const revealed = item => row(item).evaluate(node => node.classList.contains('conversation-swipe-open'));
     // Phone: swipe the row, then tap its revealed button. Desktop: hover the row, then click its trash.
     // A row showing a deletion status keeps its button in place, so it is pressed directly.
@@ -141,16 +165,8 @@ export async function runConversationDeleteBrowser(t, sandbox) {
       if (await row(item).evaluate(node => 'deletionState' in node.dataset)) {
         await (phone ? remove(item).tap() : remove(item).click()); return;
       }
-      if (phone) {
-        const at = await remove(item).evaluate(node => { const b = node.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; });
-        await swipe(item, -160);
-        // A quick finger taps the revealed button straight after lifting: the browser must not take that
-        // tap for the end of a fling.
-        const lifted = Date.now();
-        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
-        assert.ok(Date.now() - lifted < 30, 'the tap follows the lift within 30 ms');
-        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      } else { await row(item).hover(); await remove(item).click(); }
+      if (phone) await swipeThenTap(item, remove(item));
+      else { await row(item).hover(); await remove(item).click(); }
     };
     await page.goto(api.base + '/chat');
     try { await row(active).waitFor(); } catch (error) {
@@ -274,20 +290,18 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.equal(await remove(active).isVisible(), true, 'its retry stays shown');
     assert.equal(await remove(active).getAttribute('title'), zh ? '重试删除' : 'Retry deletion');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
-    if (phone) {
-      // A row showing a deletion status keeps its retry in place: swiping it does not cover the button.
-      await swipe(active, -160);
-      assert.equal(await revealed(active), false);
-      assert.equal(await remove(active).evaluate(node => { const b = node.getBoundingClientRect();
-        return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest('.conversation-delete') === node; }), true);
-      // That swipe was the browser's own fling, whose suppression of the next tap is let pass first.
-      await pause(500);
-    }
     await shot('delete-error');
     // Retrying a started deletion continues its operation without another confirmation, through pending to done.
     api.state.deleteFailure = false; api.state.pending = true;
-    await startDelete(active);
+    // Phone: swiping a row that shows a deletion status leaves it in place, and its retry tapped right after works.
+    await (phone ? swipeThenTap(active, remove(active)) : startDelete(active));
     await row(active).locator('.conversation-delete-status').filter({ hasText: zh ? '再点一次删除继续' : 'Click delete again to continue' }).waitFor();
+    if (phone) {
+      assert.equal(await revealed(active), false);
+      assert.equal(await remove(active).evaluate(node => { const b = node.getBoundingClientRect();
+        return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest('.conversation-delete') === node; }), true, 'the retry stays uncovered');
+      await shot('pending-after-swipe');
+    }
     assert.equal(await dialog.count(), 0, 'retry after a started deletion failure reuses its confirmation');
     api.state.pending = false;
     await startDelete(active);
@@ -320,9 +334,13 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.equal(await page.locator('.conversation-delete:not([hidden])').count(), 1, 'the external channel row can be deleted');
     assert.equal(await externalRow.locator('.conversation-delete').evaluate(node => node.hidden), false);
     if (phone) {
-      await swipe(origin, -160);
+      // Swiping a row without delete leaves it in place, and another row tapped right after still opens.
+      await swipeThenTap(origin, externalRow.locator('.conversation-list-item'));
+      await page.locator('.conversation-page.conversation-detail-open').waitFor();
       assert.equal(await revealed(origin), false, 'a row without delete does not swipe open');
       assert.equal(await style(originRow.locator('.conversation-list-item'), 'transform'), 'none');
+      await page.locator('.conversation-back').tap();
+      await page.locator('.conversation-page.conversation-detail-open').waitFor({ state: 'detached' });
       await swipe(external, -160);
       assert.equal(await revealed(external), true);
       await originRow.locator('.conversation-list-item').tap();
@@ -352,5 +370,5 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.deepEqual(errors, []); await context.close();
   }
   if (evidence) fs.writeFileSync(path.join(evidence, 'layout.json'), JSON.stringify(metrics, null, 2));
-  console.info('Deletion browser verified', JSON.stringify({ screenshots, pairs: 4 }));
+  console.info('Deletion browser verified', JSON.stringify({ screenshots, pairs: 4, quickTaps: tapGaps.length, maxTapGapMs: Math.round(Math.max(0, ...tapGaps)) }));
 }
