@@ -68,10 +68,14 @@ test('export guidance shares bounded reading and visible-tail steps', () => {
     const text = section(source);
     assert.match(text, /before summarizing, checkpointing or advancing its cursor/);
     assert.match(text, /1\. Read the entire file in bounded byte ranges/);
-    assert.match(text, /2\. After reading the final text range, also display that same range/);
-    assert.match(text, /skip=<final-start> count=<final-count> status=none \| od -An -v -c/);
-    assert.match(text, /every trailing space, tab and newline visible/);
-    assert.match(text, /If this output is truncated, split the range and reread it/);
+    assert.match(text, /2\. After the full text read, display the last 64 bytes of every exported file and every listed input/);
+    assert.match(text, /`tail -c 64 "<returned absolute path>" \| od -An -v -c`/);
+    assert.match(text, /A file shorter than 64 bytes is displayed in full/);
+    assert.match(text, /trailing spaces, tabs and newlines visible in only a few lines/);
+    assert.match(text, /even when the final text range is 8192 bytes/);
+    assert.match(text, /Repeat for every file; do not skip files or crop this display further/);
+    assert.match(text, /Truncated output is unread and must be reread/);
+    assert.doesNotMatch(text, /skip=<final-start>|count=<final-count>|dd .*\| od/);
     assert.match(text, /supplements the text read and does not replace it/);
     assert.doesNotMatch(text, /wc -c|shasum|report.*SHA-256/);
   }
@@ -83,8 +87,9 @@ test('all Sync entry points preserve visible tails and remove only their own exp
   for (const source of [skill, ...agents]) {
     const text = normalize(source);
     assert.match(text, /Complete byte-range reads steps/);
-    assert.match(text, /`od -An -v -c`/);
-    assert.match(text, /trailing whitespace is visible/);
+    assert.match(text, /For every exported file and every listed input/);
+    assert.match(text, /`tail -c 64 "<returned absolute path>" \| od -An -v -c` after the full text read/);
+    assert.match(text, /trailing whitespace is visible in only a few lines/);
   }
   for (const source of [sync, fetch, skill, ...agents]) {
     assert.ok(source.includes('rm -r "<absolute path of this run\'s private directory>"'));

@@ -66,12 +66,14 @@ before summarizing, checkpointing or advancing its cursor:
 
 1. Read the entire file in bounded byte ranges and record every `[start,end)`.
    Truncated output is unread; reduce the range and reread it.
-2. After reading the final text range, also display that same range with
-   `dd if="<returned absolute path>" bs=1 skip=<final-start> count=<final-count> status=none | od -An -v -c`.
-   Use the final range's start and byte count from the ledger. This makes every
-   trailing space, tab and newline visible; plain command output may trim them.
-   If this output is truncated, split the range and reread it with the same
-   `od -An -v -c` display. This supplements the text read and does not replace it.
+2. After the full text read, display the last 64 bytes of every exported file
+   and every listed input with
+   `tail -c 64 "<returned absolute path>" | od -An -v -c`.
+   A file shorter than 64 bytes is displayed in full. This makes trailing spaces,
+   tabs and newlines visible in only a few lines, even when the final text range
+   is 8192 bytes. Repeat for every file; do not skip files or crop this display
+   further. Truncated output is unread and must be reread.
+   This supplements the text read and does not replace it.
 
 All message content is projected before text/JSON formatting, absorbed preview
 budgets or `--out` file writes. Valid structured content becomes fallbackText

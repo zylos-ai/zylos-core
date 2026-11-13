@@ -81,8 +81,9 @@ completion from the first/last lines or a successful hash check alone. Use
 returned absolute paths; never synthesize export, segment or session paths.
 Follow the procedure's private export-directory cleanup and per-file byte-range
 ledger, including for a single long line. Follow the procedure's Complete
-byte-range reads steps, including the final range's supplementary `od -An -v -c`
-display so trailing whitespace is visible.
+byte-range reads steps. For every exported file and every listed input, run
+`tail -c 64 "<returned absolute path>" | od -An -v -c` after the full text read
+so trailing whitespace is visible in only a few lines.
 Remove only this run's private export directory with
 `rm -r "<absolute path of this run's private directory>"`; do not add `-f`.
 Origin obtains log paths through read-only `sync-files.js list --group G`,
