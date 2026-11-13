@@ -13,28 +13,26 @@ function setup(t) {
  const exits=new SupervisorExits({scenes,db,env:f.env,readMode:()=>({mode:'multi'}),serialize:fn=>fn(),diagnostic:event=>events.push(event),reportError:error=>errors.push(error)});
  return {f,db,scenes,exits,events,errors};
 }
-// actual isolated process exit + SQLite authorities + pinned adapter stop.
+// Actual isolated runtime exit removes its tmux session; SQLite owns classification.
 test('runtime SIGKILL removes only its exited managed session and records crash', {timeout:15000},async t=>{
  const {f,scenes,exits,events,errors}=setup(t);
  f.tmux('new-session','-d','-s','fixture-manual','sleep','120');
- // Preserve the dead pane so cleanup must stop the managed session.
- f.tmux('set-option','-w','-t','=zylos-group-origin:0','remain-on-exit','on');
  const before=await scenes.observe();assert.equal(before[0].processRunning,true);await exits.advance(before);
  const adapter=new ClaudeAdapter({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env});
  const panePid=Number(f.tmux('display-message','-p','-t',before[0].tmuxTarget.paneId,'#{pane_pid}'));
  assert.equal(before[0].runtimePid,panePid);
  assert.deepEqual(await adapter.isRunning({tmuxName:before[0].tmuxName}),{tmux:true,process:true});
  process.kill(panePid,'SIGKILL');
- let stopped;
+ let observed;
  for(let attempt=0;attempt<100;attempt++){
-  stopped=await scenes.observe();
-  if(stopped[0].processRunning===false)break;
+  observed=await scenes.observe();
+  if(observed.length===0)break;
   await new Promise(resolve=>setTimeout(resolve,10));
  }
- assert.equal(stopped[0].present,true);assert.equal(stopped[0].ready,true);assert.equal(stopped[0].processRunning,false);
- assert.deepEqual(await adapter.isRunning({tmuxName:before[0].tmuxName}),{tmux:true,process:false});
- assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));
- await exits.advance(stopped);
+ assert.deepEqual(observed,[]);
+ assert.deepEqual(await adapter.isRunning({tmuxName:before[0].tmuxName}),{tmux:false,process:false});
+ assert.equal((await scenes.observeGroup('origin')).present,false);
+ await exits.advance(observed);
  assert.equal(events.length,1);assert.equal(events[0].event,'crash_detected');assert.deepEqual(errors,[]);
  assert.equal((await scenes.observeGroup('origin')).present,false);
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-manual'));

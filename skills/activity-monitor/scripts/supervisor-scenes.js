@@ -69,15 +69,13 @@ export class SupervisorScenes {
         runDir: groupRunDir(group ?? 'origin', this.env), runId: target.runId, runtime: target.runtime,
         ready: target.ready && scopeMatches(scope, target), sessionId: target.sessionId,
         createdAt: target.createdAt * 1000, currentSessionTs: target.f3?.ts ?? null,
-        processRunning: target.processRunning,
+        processRunning: true,
         launchConfig: target.launchConfig, tmuxTarget: descriptor(target), state: 'unknown', idleSince: null, usagePercent: null,
         runtimeObservation: target.runtimeObservation };
-      if (target.processRunning) {
-        scene.runtimePid = target.runtimePid;
-        if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
-          scene.proc = { pid: scene.runtimePid, alive: true, last_sample_at: this.now() };
-          if (scene.ready && scene.runtime === 'claude') scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
-        }
+      scene.runtimePid = target.runtimePid;
+      if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
+        scene.proc = { pid: scene.runtimePid, alive: true, last_sample_at: this.now() };
+        if (scene.ready && scene.runtime === 'claude') scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
       }
       if (scene.ready) {
         if (this.readActivity) {

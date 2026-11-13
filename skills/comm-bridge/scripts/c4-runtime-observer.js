@@ -35,9 +35,9 @@ export function createCoreObserver({ tmux = {} } = {}) {
           ? !Object.hasOwn(target.rawF2, 'ZYLOS_SESSION_GROUP')
           : target.rawF2.ZYLOS_SESSION_GROUP === sessionGroup;
         return {
-          hasProcess: typeof target.processRunning === 'boolean' ? target.processRunning : null,
+          hasProcess: true,
           identityVerified: Boolean(scopeMatches && target.runId &&
-            (target.processRunning === false || (['claude', 'codex'].includes(target.runtime) && target.runtime === target.launchConfig?.runtime))),
+            ['claude', 'codex'].includes(target.runtime) && target.runtime === target.launchConfig?.runtime),
           ready: target.ready, launchConfig: target.launchConfig, runId: target.runId,
         };
       }

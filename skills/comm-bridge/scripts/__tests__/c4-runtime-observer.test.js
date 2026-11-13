@@ -176,7 +176,7 @@ for (const phase of ['pane-observation', 'final-revalidation']) test(`post-obser
   const binary = execFileSync('sh', ['-c', 'command -v "$1"', 'sh', requestedBinary], {encoding:'utf8'}).trim();
   const wrapper = path.join(root, 'tmux-error-wrapper');
   const count = path.join(root, 'environment-reads');
-  // Pane PID/death now arrive in the initial observation. Also exercise the
+  // Pane PID now arrives in the initial observation. Also exercise the
   // second environment read (the observer's final identity revalidation).
   fs.writeFileSync(wrapper, `#!${process.execPath}
 const fs = require('node:fs'), cp = require('node:child_process');

@@ -146,7 +146,7 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
   // display-message returns an empty format (not an error) for an absent target.
   const observed = parseTargetObservation(output, pinned);
   if (!observed) return absent;
-  const {generation, tmuxSessionId, paneId, created, panePid, paneDead} = observed;
+  const {generation, tmuxSessionId, paneId, created, panePid} = observed;
   try {
     connection.bindTarget({ serverGeneration: generation, tmuxSessionId, paneId, tmuxName });
     const rawF2 = await environment(connection, tmuxSessionId);
@@ -154,8 +154,8 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
     const runtime = await readTargetRuntime({ connection, paneId, panePid, rawF2, readProcessTree: getTree });
     const f3 = await readReady(sessionGroup);
     const ready = Boolean(runId && validReady(f3) && f3.runId === runId);
-    const target = { present: true, tmuxName, runId, createdAt: Number(created), ...runtime, panePid, paneDead,
-      processRunning: !paneDead, runtimePid: panePid, ready, sessionId: ready ? f3.sessionId : null, runtimeSessionId: ready ? f3.sessionId : null, rawF2, f3: ready ? f3 : null, tmuxSessionId, paneId, serverGeneration: generation };
+    const target = { present: true, tmuxName, runId, createdAt: Number(created), ...runtime, panePid,
+      processRunning: true, runtimePid: panePid, ready, sessionId: ready ? f3.sessionId : null, runtimeSessionId: ready ? f3.sessionId : null, rawF2, f3: ready ? f3 : null, tmuxSessionId, paneId, serverGeneration: generation };
     bindings.set(target, { connection, tmuxSessionId, paneId, serverGeneration: generation, runId });
     return freezeDeep(target);
   } catch (error) {

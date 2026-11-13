@@ -11,7 +11,7 @@ export const TMUX_FORMAT = Object.freeze({
   paneId: '#{pane_id}', sessionPane: '#{session_id}\t#{pane_id}',
   geometry: '#{cursor_x},#{cursor_y},#{pane_width},#{pane_height}',
   cursorX: '#{cursor_x}', cursorY: '#{cursor_y}',
-  observation: '#{pid}:#{start_time}\t#{session_id}\t#{pane_id}\t#{?session_id,#{session_created},}\t#{pane_pid}\t#{pane_dead}',
+  observation: '#{pid}:#{start_time}\t#{session_id}\t#{pane_id}\t#{?session_id,#{session_created},}\t#{pane_pid}',
   sessions: '#{session_name}\t#{session_created}',
   exec: '#{session_id}\t#{pane_id}\t#{pane_dead}\t#{pane_current_command}',
   stale: 'display-message -p "ZYLOS_STALE #{pid}:#{start_time}"',
@@ -70,13 +70,13 @@ export const validPaneId = value => /^%\d+$/.test(value);
 export function parseTargetObservation(output, pinned) {
   if (!output.trim()) return null;
   const fields = output.split('\t');
-  const [generation, tmuxSessionId, paneId, created, pid, dead] = fields;
-  if (!pinned && fields.length === 6 && validGeneration(generation) && tmuxSessionId === '' && paneId === '' && created === '' && pid === '' && dead === '') return null;
-  if (fields.length !== 6 || !validGeneration(generation) || !validSessionId(tmuxSessionId) || !validPaneId(paneId) || !/^\d+$/.test(created) ||
-    !/^\d+$/.test(pid) || !Number.isSafeInteger(Number(pid)) || Number(pid) <= 0 || (dead !== '0' && dead !== '1')) {
+  const [generation, tmuxSessionId, paneId, created, pid] = fields;
+  if (!pinned && fields.length === 5 && validGeneration(generation) && tmuxSessionId === '' && paneId === '' && created === '' && pid === '') return null;
+  if (fields.length !== 5 || !validGeneration(generation) || !validSessionId(tmuxSessionId) || !validPaneId(paneId) || !/^\d+$/.test(created) ||
+    !pid || /\D/.test(pid) || !Number.isSafeInteger(Number(pid)) || Number(pid) <= 0) {
     throw tmuxError('TMUX_UNAVAILABLE', 'Invalid tmux object identity', 'error');
   }
-  return {generation, tmuxSessionId, paneId, created, panePid: Number(pid), paneDead: dead === '1'};
+  return {generation, tmuxSessionId, paneId, created, panePid: Number(pid)};
 }
 
 export function parseGuardResponse(output, error, generation) {
