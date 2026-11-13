@@ -56,7 +56,9 @@ to the current run, each require-idle, with the ack suffix and a 5-minute ack
 deadline. The first is always the pre-reclaim check. During this check, do not
 send messages to anyone. Only work this session started that is still running
 and whose result it needs (background command, Monitor, subagent or workflow)
-can hold reclaim. Apply for a delay before acknowledging the control:
+can hold reclaim. A Memory Sync is not such work: the supervisor already waits
+for it before reclaiming, so do not defer for it. Apply for a delay before
+acknowledging the control:
 
 ```bash
 node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --reason "watching CI of my PR"

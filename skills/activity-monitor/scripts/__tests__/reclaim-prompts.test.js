@@ -21,7 +21,7 @@ const PROMPTS = { idle: PRE_RECLAIM_CHECK_PROMPT, upgrade: UPGRADE_RESTART_CHECK
 // Exact approved reclaim wording; installed CLI paths are the only substitutions.
 const approvedIdle = `This session group has been idle and will be reclaimed. During this check, do not send messages to anyone.
 
-1. Only one thing can hold the reclaim: work this session itself started that is still running and whose result it is waiting for — a background command, a Monitor watcher, a background subagent or workflow. If there is such work, run \`node "${requestCli}" defer-reclaim --reason "<what is still running>"\`, confirm it reports ok:true, then acknowledge this control.
+1. Only one thing can hold the reclaim: work this session itself started that is still running and whose result it is waiting for — a background command, a Monitor watcher, a background subagent or workflow. A Memory Sync is not such work: the supervisor already waits for it before reclaiming, so do not defer for it. If there is such work, run \`node "${requestCli}" defer-reclaim --reason "<what is still running>"\`, confirm it reports ok:true, then acknowledge this control.
 2. Otherwise write the session handoff: list open business items as they stand now, checking each against its current record and leaving out any that have finished. Replies, reviews or decisions you are waiting for from people or other sessions need nothing more: an incoming reply wakes this group again.
 3. Create a wake-up only for a step of your own ongoing task that waits on an external system whose result will not arrive as a message to this group (for example CI on a PR you opened, or a deployment rolling out). First run \`node "${schedulerCli}" list --json\`; if a pending task of this group already covers it, do not create another. Otherwise run \`node "${schedulerCli}" add "<self-contained check>" --in "<delay>" --json\` in this session without any --reply option, and confirm it reports ok:true. Do not create scheduled tasks for anything else.
 
@@ -35,7 +35,7 @@ test('idle reclaim and capacity eviction use the approved narrow check', () => {
 test('restart checks describe interrupted background work without offering deferral', () => {
   for (const [name, prompt] of Object.entries(PROMPTS).filter(([name]) => name !== 'idle')) {
     assert.ok(prompt.includes('it will be interrupted by this restart: name it in the session handoff so the next session can rerun or check it.'), name);
-    assert.doesNotMatch(prompt, /defer-reclaim|Only one thing can hold the reclaim/, name);
+    assert.doesNotMatch(prompt, /defer-reclaim|Only one thing can hold the reclaim|A Memory Sync is not such work/, name);
     assert.equal(prompt.slice(prompt.indexOf('2. '), prompt.indexOf('\n\nThen')),
       approvedIdle.slice(approvedIdle.indexOf('2. '), approvedIdle.indexOf('\n\nThen')), name);
   }

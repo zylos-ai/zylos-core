@@ -5,6 +5,7 @@ const SCHEDULER_CLI = fileURLToPath(new URL('../../scheduler/scripts/cli.js', im
 const SUPERVISOR_REQUEST_CLI = fileURLToPath(new URL('./supervisor-request.js', import.meta.url));
 
 const DEFER_RUNNING_WORK = 'Only one thing can hold the reclaim: work this session itself started that is still running and whose result it is waiting for — a background command, a Monitor watcher, a background subagent or workflow. '
+  + 'A Memory Sync is not such work: the supervisor already waits for it before reclaiming, so do not defer for it. '
   + `If there is such work, run \`node "${SUPERVISOR_REQUEST_CLI}" defer-reclaim --reason "<what is still running>"\`, confirm it reports ok:true, then acknowledge this control.`;
 const INTERRUPTED_RUNNING_WORK = 'If work this session itself started is still running (a background command, a Monitor watcher, a background subagent or workflow), '
   + 'it will be interrupted by this restart: name it in the session handoff so the next session can rerun or check it.';
