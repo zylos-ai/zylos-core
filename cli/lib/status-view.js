@@ -20,7 +20,7 @@ export async function collectStatus({ mode = readSessionMode, list = listGroupTm
   const view = sessionMode === null || sessionMode === 'single' ? 'single' : 'multi';
   async function item(sessionGroup) {
     const empty = { sessionGroup, presence: 'unknown', runId: null, sessionId: null, runtime: null,
-      status: { valid: false, reason: null, state: null, idleSeconds: null, sampledAt: null }, error: null };
+      status: { valid: false, reason: null, state: null, idleSeconds: null, lastState: null, lastIdleSeconds: null, sampledAt: null }, error: null };
     try {
       const { identity, status } = await session(sessionGroup, { freshnessMs: 5000 });
       return { ...empty, presence: !identity.present ? 'not_running' : identity.ready ? 'running' : 'starting',
@@ -28,7 +28,8 @@ export async function collectStatus({ mode = readSessionMode, list = listGroupTm
         runtime: identity.present ? identity.runtime : null,
         status: { valid: status.valid, reason: status.reason, sampledAt: status.sampledAt,
           state: status.valid ? status.value.state : null,
-          idleSeconds: status.valid ? status.value.idle_seconds ?? null : null } };
+          idleSeconds: status.valid ? status.value.idle_seconds ?? null : null,
+          lastState: status.lastValue?.state ?? null, lastIdleSeconds: status.lastValue?.idle_seconds ?? null } };
     } catch (error) { return { ...empty, error: readError(error) }; }
   }
   const origin = await item(view === 'single' ? null : 'origin');

@@ -4,7 +4,7 @@ import { loadCoreModule } from './core-modules.js';
 import { tmuxError as fail } from '../../comm-bridge/scripts/tmux-protocol.js';
 const { groupRunDir, listGroupTmuxSessions, tmuxNameForGroup } = await loadCoreModule('session-group-paths.js');
 const { openTmuxConnection } = await loadCoreModule('runtime/tmux-connection.js');
-const { observeSessionTarget, readTargetRuntime, revalidateSessionTarget, readProcessTree: systemProcessTree } = await loadCoreModule('runtime/session-target.js');
+const { observeSessionTarget, revalidateSessionTarget, readProcessTree: systemProcessTree } = await loadCoreModule('runtime/session-target.js');
 const { getSessionAdapter } = await loadCoreModule('runtime/index.js');
 const { usageModelFacts } = await loadCoreModule('session-usage-reader.js');
 const { createSessionReader } = await loadCoreModule('session-state-reader-async.js');
@@ -65,20 +65,17 @@ export class SupervisorScenes {
       connection = await this.open(this.connectionOptions);
       const target = await this.observeTarget({ sessionGroup: scope, connection, readReady: this.readReady, readProcessTree: getTree });
       if (!target.present) return absent(group, this.env);
-      const process = await readTargetRuntime({ connection, paneId: target.paneId, rawF2: {}, readProcessTree: getTree });
       const scene = { sessionGroup: group, present: true, tmuxName: target.tmuxName,
         runDir: groupRunDir(group ?? 'origin', this.env), runId: target.runId, runtime: target.runtime,
         ready: target.ready && scopeMatches(scope, target), sessionId: target.sessionId,
         createdAt: target.createdAt * 1000, currentSessionTs: target.f3?.ts ?? null,
-        processRunning: process.runtimeObservation === 'absent' ? false : process.runtimeObservation === 'present' && process.runtime === target.runtime ? true : undefined,
+        processRunning: true,
         launchConfig: target.launchConfig, tmuxTarget: descriptor(target), state: 'unknown', idleSince: null, usagePercent: null,
-        runtimeObservation: process.runtimeObservation };
-      if (process.runtimeObservation === 'present') {
-        scene.runtimePid = process.runtime === target.runtime ? process.runtimePid : undefined;
-        if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
-          scene.proc = { pid: scene.runtimePid, alive: true, last_sample_at: this.now() };
-          if (scene.ready && scene.runtime === 'claude') scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
-        }
+        runtimeObservation: target.runtimeObservation };
+      scene.runtimePid = target.runtimePid;
+      if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
+        scene.proc = { pid: scene.runtimePid, alive: true, last_sample_at: this.now() };
+        if (scene.ready && scene.runtime === 'claude') scene.healthIdentity = { runtime: scene.runtime, session_id: scene.sessionId, claude_pid: scene.runtimePid };
       }
       if (scene.ready) {
         if (this.readActivity) {

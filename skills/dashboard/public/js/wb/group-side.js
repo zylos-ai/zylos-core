@@ -1,5 +1,5 @@
-import { createGroupDetail } from './detail.js?v=167';
-import { boardController } from './board.js?v=153';
+import { createGroupDetail } from './detail.js?v=168';
+import { boardController } from './board.js?v=154';
 import { element, icon } from './plain-text.js?v=106';
 
 /**

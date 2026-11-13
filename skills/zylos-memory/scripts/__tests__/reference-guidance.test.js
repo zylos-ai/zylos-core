@@ -102,9 +102,14 @@ test('Sync guidance centralizes corrected-call retries and preserves partial wri
   assert.match(rules, /does not cover migration apply outside this Sync flow/);
   assert.match(rules, /Never replay a committed prefix or restart a sequence/);
   assert.match(rules, /`WRITE_FAILED`, `LOCK_UNAVAILABLE`, `LOCK_TIMEOUT`, and tool protocol errors receive no retry/);
-  assert.match(rules, /After acquisition, `TOKEN_MISMATCH` \/ exit 3 means stop immediately: no more script\/tool operations, no release, no prompts/);
+  assert.match(rules, /After acquisition, `TOKEN_MISMATCH` \/ exit 3 means the lock is no longer yours: stop immediately/);
+  assert.match(rules, /After TOKEN_MISMATCH, also remove only this run's own private export directory, then release once and report/);
+  assert.match(rules, /Release removes the marker only while it still carries T/);
   assert.match(rules, /including a missing required CLI argument/);
   assert.match(rules, /If a token error is `TOKEN_MISMATCH`, use the immediate-stop rule above/);
+  assert.match(rules, /missing or malformed token is a call error, not lost ownership/);
+  assert.match(rules, /token is required: pass the T printed by sync-lock.js acquire/);
+  assert.match(rules, /retry under this same per-step limit/);
   assert.doesNotMatch(sync, /retry that call once/);
   assert.doesNotMatch(sync, /adding `--token` returns|Do not add `--token`/);
   const example = JSON.parse(/```json\n([^\n]+)\n```/.exec(sync)[1]);

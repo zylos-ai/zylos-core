@@ -4,6 +4,7 @@ import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { createStore } from '../../../comm-bridge/scripts/c4-v2-store.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
 import { SupervisorExits } from '../supervisor-exits.js';
+import { ClaudeAdapter } from '../../../../cli/lib/runtime/claude.js';
 function setup(t) {
  const f=readyTmuxTarget(t,{prefix:'supervisor-runtime-exit-',mode:'multi',runtimeProcess:true});
  const db=createStore(f.db,{readConfig:()=>({state:'ok',config:{runtime:'claude',session_mode:'multi'}})});
@@ -12,16 +13,26 @@ function setup(t) {
  const exits=new SupervisorExits({scenes,db,env:f.env,readMode:()=>({mode:'multi'}),serialize:fn=>fn(),diagnostic:event=>events.push(event),reportError:error=>errors.push(error)});
  return {f,db,scenes,exits,events,errors};
 }
-// actual isolated process exit + SQLite authorities + pinned adapter stop.
+// Actual isolated runtime exit removes its tmux session; SQLite owns classification.
 test('runtime SIGKILL removes only its exited managed session and records crash', {timeout:15000},async t=>{
  const {f,scenes,exits,events,errors}=setup(t);
  f.tmux('new-session','-d','-s','fixture-manual','sleep','120');
- // Keep a shell alive after its runtime child exits so cleanup must call stop.
- f.tmux('respawn-pane','-k','-t','=zylos-group-origin:0',`${f.root}/claude & wait; sleep 120`);
  const before=await scenes.observe();assert.equal(before[0].processRunning,true);await exits.advance(before);
- process.kill(before[0].runtimePid,'SIGKILL');
- assert.doesNotThrow(()=>f.tmux('has-session','-t','=zylos-group-origin'));
- await exits.advance(await scenes.observe());
+ const adapter=new ClaudeAdapter({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env});
+ const panePid=Number(f.tmux('display-message','-p','-t',before[0].tmuxTarget.paneId,'#{pane_pid}'));
+ assert.equal(before[0].runtimePid,panePid);
+ assert.deepEqual(await adapter.isRunning({tmuxName:before[0].tmuxName}),{tmux:true,process:true});
+ process.kill(panePid,'SIGKILL');
+ let observed;
+ for(let attempt=0;attempt<100;attempt++){
+  observed=await scenes.observe();
+  if(observed.length===0)break;
+  await new Promise(resolve=>setTimeout(resolve,10));
+ }
+ assert.deepEqual(observed,[]);
+ assert.deepEqual(await adapter.isRunning({tmuxName:before[0].tmuxName}),{tmux:false,process:false});
+ assert.equal((await scenes.observeGroup('origin')).present,false);
+ await exits.advance(observed);
  assert.equal(events.length,1);assert.equal(events[0].event,'crash_detected');assert.deepEqual(errors,[]);
  assert.equal((await scenes.observeGroup('origin')).present,false);
  assert.doesNotThrow(()=>f.tmux('has-session','-t','=fixture-manual'));

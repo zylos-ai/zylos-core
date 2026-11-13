@@ -66,7 +66,7 @@ test('READY identity binds the current run and pane without process ancestry', a
 test('legacy foreground identity requires a runtime ancestor in the observed pane', async () => {
   const target = { present: true, runtime: 'codex', paneId: '%3', runId: null };
   const options = { env: {}, pid: 30,
-    load: async () => ({ LEGACY_TMUX_NAMES: ['codex-main'] }),
+    load: async () => ({ LEGACY_TMUX_NAMES: ['codex-main'], confirmProcesses: async (tree, rows) => rows }),
     open: async () => ({ command: async () => '10', close() {} }), observe: async () => target,
     processTree: async () => [{ pid: 30, ppid: 20, name: 'node' },
       { pid: 20, ppid: 10, name: 'codex' }, { pid: 10, ppid: 1, name: 'sh' }] };

@@ -29,8 +29,11 @@ printed token T. An acquire exit 2 is a normal no-op only when stderr's first
 line says `Error [SYNC_BUSY]`. `LOCK_TIMEOUT` is a failure. On any acquire
 failure, do not release because no token was acquired.
 
-After acquisition, `TOKEN_MISMATCH` / exit 3 means stop immediately: no more
-script/tool operations, no release, no prompts. Report the failure.
+After acquisition, `TOKEN_MISMATCH` / exit 3 means the lock is no longer
+yours: stop immediately (no more writes, other script/tool operations, or
+prompts, except removing this run's own private export directory below), then
+release once with `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js release --kind <kind> --token T` and report. Release removes the marker only while it still carries T, so it
+never removes another worker's lock.
 
 For normal Sync CLI argument validation and `edit_memory` fragment validation,
 correct the following call errors and retry only that failed operation at most
@@ -38,7 +41,11 @@ TWO times per step (the initial call plus at most two corrected retries).
 These attempts do not fail the required step or release its token:
 
 - `INVALID_INPUT`: correct the arguments or input content, including a missing
-  required CLI argument. Pass T as `token` to `edit_memory` or `--token T` to scripts.
+  required CLI argument. A missing or malformed token is a call error, not lost
+  ownership: `edit_memory` and token-taking scripts return `INVALID_INPUT`
+  (exit 1) with `token is required: pass the T printed by sync-lock.js acquire`.
+  Pass T as `token` to `edit_memory` or `--token T` to scripts and retry under
+  this same per-step limit; the lock is still yours.
   If a token error is `TOKEN_MISMATCH`, use the immediate-stop rule above.
 - `FRAGMENT_CONFLICT`: reread the current file, reconsider the edit, and supply
   a unique expected fragment.
@@ -76,9 +83,9 @@ Before creating any export, run `mktemp -d` to create a unique private directory
 reuse a fixed filename in shared `/tmp`, or redirect conversation text into a
 second file. `--out` creates each file exclusively with mode 0600. On success,
 no input, or failure, remove only this run's private directory and its exports
-before releasing the token; report a cleanup failure. TOKEN_MISMATCH remains an
-immediate stop, so do not attempt cleanup after it. No script-side cleanup state
-or new background mechanism is involved.
+before releasing the token; report a cleanup failure. After TOKEN_MISMATCH,
+also remove only this run's own private export directory, then release once and
+report. No script-side cleanup state or new background mechanism is involved.
 
 `LEGACY_READ_ONLY` is not a required-step failure: old `reference/projects.md`,
 `reference/decisions.md`, and `reference/legacy/**`

@@ -30,23 +30,63 @@ export async function readReadyIdentity(sessionGroup) {
   } catch { return null; }
 }
 
-/** Snapshot only names and parent relationships; never reads process credentials. */
+// Snapshots whose Linux names still come from ps; each maps pid -> pending /proc name (null = exited).
+const unconfirmed = new WeakMap();
+const gone = error => error.code === 'ENOENT' || error.code === 'ESRCH';
+// A kernel task name is at most 64 bytes; a fixed buffer avoids readFile's 64 KiB
+// allocation for /proc files, which report size 0.
+const COMM_BYTES = 128;
+
+async function readCommName(pid) {
+  let handle;
+  try { handle = await fs.open(`/proc/${pid}/comm`, 'r'); }
+  catch (error) { if (gone(error)) return null; throw error; }
+  try {
+    const buffer = Buffer.allocUnsafe(COMM_BYTES);
+    let length = 0, bytesRead;
+    do {
+      ({ bytesRead } = await handle.read(buffer, length, COMM_BYTES - length, length));
+      length += bytesRead;
+    } while (bytesRead > 0 && length < COMM_BYTES);
+    return buffer.toString('utf8', 0, length).trim();
+  } catch (error) { if (gone(error)) return null; throw error; }
+  finally { await handle.close(); }
+}
+
+/**
+ * Snapshot only names and parent relationships; never reads process credentials.
+ * On Linux the name is /proc/<pid>/comm, read only for rows a caller passes to
+ * confirmProcesses, so the cost follows the walked rows rather than every process.
+ */
 export async function readProcessTree() {
   const { stdout } = await exec('ps', ['-axo', 'pid=,ppid=,comm='], { timeout: 3000, maxBuffer: 8 * 1024 * 1024 });
   const rows = stdout.trim().split('\n').map(line => {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
     return match && { pid: Number(match[1]), ppid: Number(match[2]), name: path.basename(match[3]) };
   }).filter(Boolean);
-  if (process.platform === 'linux') {
-    await Promise.all(rows.map(async row => {
-      try { row.name = (await fs.readFile(`/proc/${row.pid}/comm`, 'utf8')).trim(); }
-      catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') row.gone = true; else throw error; }
-    }));
-  }
-  return rows.filter(row => !row.gone);
+  if (process.platform === 'linux') unconfirmed.set(rows, new Map());
+  return rows;
 }
 
-export async function readTargetRuntime({ connection, paneId, rawF2, readProcessTree: getTree = readProcessTree }) {
+/**
+ * Return `rows` from `tree` with their Linux /proc names, omitting processes that
+ * exited after the snapshot. Other snapshots already carry final names.
+ */
+export async function confirmProcesses(tree, rows) {
+  const names = unconfirmed.get(tree);
+  if (!names) return rows;
+  const results = await Promise.all(rows.map(row => {
+    if (!names.has(row.pid)) names.set(row.pid, readCommName(row.pid));
+    return names.get(row.pid);
+  }));
+  return rows.filter((row, index) => {
+    if (results[index] === null) return false;
+    row.name = results[index];
+    return true;
+  });
+}
+
+export async function readTargetRuntime({ connection, paneId, panePid, rawF2, readProcessTree: getTree = readProcessTree }) {
   let launchConfig = null;
   try {
     const parsed = JSON.parse(rawF2?.ZYLOS_MODEL_CONFIG);
@@ -55,9 +95,9 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
   if (known.has(launchConfig?.runtime)) return { runtime: launchConfig.runtime, launchConfig, runtimeObservation: 'configured' };
   let runtime = 'unknown', runtimeObservation = 'unavailable', runtimePid;
   try {
-    const pid = Number((await connection.command([C.displayMessage, '-p', '-t', paneId, F.panePid])).trim());
+    const pid = panePid ?? Number((await connection.command([C.displayMessage, '-p', '-t', paneId, F.panePid])).trim());
     const rows = await getTree();
-    let layer = rows.filter(row => row.pid === pid);
+    let layer = await confirmProcesses(rows, rows.filter(row => row.pid === pid));
     const seen = new Set();
     if (Number.isInteger(pid) && pid > 0 && layer.length) runtimeObservation = 'absent';
     while (layer.length) {
@@ -73,7 +113,7 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
       }
       const parents = new Set(layer.map(row => row.pid));
       for (const id of parents) seen.add(id);
-      layer = rows.filter(row => parents.has(row.ppid) && !seen.has(row.pid));
+      layer = await confirmProcesses(rows, rows.filter(row => parents.has(row.ppid) && !seen.has(row.pid)));
     }
   } catch (error) {
     if (isTmuxError(error)) throw error;
@@ -106,15 +146,16 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
   // display-message returns an empty format (not an error) for an absent target.
   const observed = parseTargetObservation(output, pinned);
   if (!observed) return absent;
-  const {generation, tmuxSessionId, paneId, created} = observed;
+  const {generation, tmuxSessionId, paneId, created, panePid} = observed;
   try {
     connection.bindTarget({ serverGeneration: generation, tmuxSessionId, paneId, tmuxName });
     const rawF2 = await environment(connection, tmuxSessionId);
     const runId = rawF2.ZYLOS_RUN_ID || null;
-    const runtime = await readTargetRuntime({ connection, paneId, rawF2, readProcessTree: getTree });
+    const runtime = await readTargetRuntime({ connection, paneId, panePid, rawF2, readProcessTree: getTree });
     const f3 = await readReady(sessionGroup);
     const ready = Boolean(runId && validReady(f3) && f3.runId === runId);
-    const target = { present: true, tmuxName, runId, createdAt: Number(created), ...runtime, ready, sessionId: ready ? f3.sessionId : null, runtimeSessionId: ready ? f3.sessionId : null, rawF2, f3: ready ? f3 : null, tmuxSessionId, paneId, serverGeneration: generation };
+    const target = { present: true, tmuxName, runId, createdAt: Number(created), ...runtime, panePid,
+      processRunning: true, runtimePid: panePid, ready, sessionId: ready ? f3.sessionId : null, runtimeSessionId: ready ? f3.sessionId : null, rawF2, f3: ready ? f3 : null, tmuxSessionId, paneId, serverGeneration: generation };
     bindings.set(target, { connection, tmuxSessionId, paneId, serverGeneration: generation, runId });
     return freezeDeep(target);
   } catch (error) {

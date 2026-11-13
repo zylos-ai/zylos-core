@@ -126,6 +126,20 @@ test('navigation check excludes only actual legacy sources and generated indexes
     ['reference/notes/INDEX.md', 'users/legacy/profile.md']);
 });
 
+test('navigation check counts old paths beneath archive or legacy parent directories', t => {
+  const f = fixture(t);
+  f.write('references.md', [
+    'See /srv/archive/zylos/memory/reference/projects.md#active',
+    'See /srv/legacy/zylos/memory/reference/decisions.md#active',
+    'Keep /srv/archive/zylos/memory/reference/legacy/projects.md#history',
+    'Keep /srv/legacy/zylos/memory/reference/projects/archive/decisions.md#history',
+  ].join('\n'));
+  const result = checkNavigation(f.root);
+  assert.equal(result.navigation.count, 2);
+  assert.equal(result.headings.count, 2);
+  assert.deepEqual(result.navigation.locations.map(row => row.line), [1, 2]);
+});
+
 test('rebuild creates four empty indexes without reading old files', t => {
   const f = fixture(t);
   // A non-file at an old path would fail if rebuild tried to read it.

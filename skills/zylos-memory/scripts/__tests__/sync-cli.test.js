@@ -57,7 +57,7 @@ test('list ignores optional tokens while write commands still require a token', 
     const result = run('sync-files', args, env, 'not valid JSON');
     assert.equal(result.error, undefined);
     assert.equal(result.status, 1, result.stderr);
-    assert.match(result.stderr, /^Error \[INVALID_INPUT\]: Invalid command or arguments/);
+    assert.equal(result.stderr, 'Error [INVALID_INPUT]: token is required: pass the T printed by sync-lock.js acquire\n');
     assert.equal(result.stdout, '');
   }
   assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), ['memory']);
@@ -82,6 +82,12 @@ test('CLI exits distinguish malformed input, ownership loss, lock timeout and su
   const payload = JSON.stringify({ followedUpIds: [], inputs: JSON.parse(listing.stdout), batch });
   const text = renderStateSkeleton({ scope: '*', syncedAt: '2026-10-19T05:30:02Z' }).replace('coverage= |', 'coverage=0 |');
   fs.writeFileSync(path.join(memoryDir, `state.md.${token}.tmp`), text);
+  for (const args of [['commit'], ['commit', '--token', token.toUpperCase()]]) {
+    const missing = run('sync-files', args, env, '{"followedUpIds":[]}');
+    assert.equal(missing.status, 1, missing.stderr);
+    assert.equal(missing.stderr, 'Error [INVALID_INPUT]: token is required: pass the T printed by sync-lock.js acquire\n');
+    assert.equal(fs.existsSync(path.join(memoryDir, 'state.md')), false);
+  }
   const invalid = run('sync-files', ['commit', '--token', token], env, '{}');
   assert.equal(invalid.status, 1); assert.match(invalid.stderr, /^Error \[INVALID_INPUT\]:/);
   const stale = run('sync-files', ['commit', '--token', 'b'.repeat(32)], env, payload);
@@ -153,6 +159,31 @@ test('numeric CLI arguments reject invalid IDs before touching memory or databas
     assert.equal(result.status, 3, result.stderr);
     assert.match(result.stderr, /^Error \[TOKEN_MISMATCH\]:/);
   }
+});
+
+// Integration boundary: real CLI argument parsing reports a missing or malformed
+// --token as INVALID_INPUT (exit 1) before any memory, lock or database access;
+// a well-formed token that owns nothing stays TOKEN_MISMATCH (exit 3, above).
+// Run for Sync token parsing/guard changes; skip for unrelated changes. Each
+// case uses private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and t.after removes the
+// fixture. No tmux server or database is needed: no Sync marker exists.
+test('Sync scripts report a missing or malformed --token as input before touching memory', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-cli-token-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: path.join(dir, 'home'), ZYLOS_DIR: path.join(dir, 'zylos'),
+    PM2_HOME: path.join(dir, 'pm2'), TMPDIR: path.join(dir, 'tmp'),
+    ZYLOS_RUN_ID: 'token-test', ZYLOS_SESSION_GROUP: 'origin' };
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key], { recursive: true });
+  const commands = [['sync-files', ['cleanup']], ['sync-files', ['rotate']], ['sync-files', ['checkpoint', '1']],
+    ['sync-files', ['commit']], ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '1', '--checkpoint', '1']]];
+  for (const [script, args] of commands) {
+    for (const token of [null, '', 'B'.repeat(32), 'b'.repeat(31), 'g'.repeat(32)]) {
+      const result = run(script, token === null ? args : [...args, '--token', token], env, '{"followedUpIds":[]}');
+      assert.equal(result.status, 1, `${script} ${args[0]} ${JSON.stringify(token)}: ${result.stderr}`);
+      assert.equal(result.stderr, 'Error [INVALID_INPUT]: token is required: pass the T printed by sync-lock.js acquire\n');
+    }
+  }
+  assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), []);
 });
 
 // Integration boundary: real CLI -> token guard -> temporary SQLite cursor

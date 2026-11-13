@@ -142,7 +142,7 @@ export function checkNavigation(root) {
         ? line.replace(/(?<![\w./-])(?:projects|decisions)\.md[ \t]+(?:"[^"\r\n]+"|\u201c[^\u201d\r\n]+\u201d)/g, '')
         : line;
       const oldPaths = [...candidates.matchAll(/(?<![\w.-])(?:[~\w./-]*\/)?(?:projects|decisions)\.md(?=$|[^\w./-])/g)]
-        .filter(match => !/(?:^|\/)(?:legacy|archive)\//.test(match[0]));
+        .filter(match => !/(?:^|\/)reference\/(?:legacy|(?:projects|decisions)\/archive)\/(?:projects|decisions)\.md$/.test(match[0]));
       const location = { path: relative, line: index + 1, text: line };
       if (relative === 'references.md' && oldPaths.length) navigation.push(location);
       if (oldPaths.length) headings.push(location);

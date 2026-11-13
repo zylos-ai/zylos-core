@@ -1,5 +1,6 @@
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
+import { annotateStatus } from './board.js?v=154';
 import { settingsCard } from './settings.js?v=116';
 
 const running = row => ['running', 'starting'].includes(row.presence);
@@ -109,10 +110,14 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     renderHotTtl(sessionRoot, { metadata, document, t, execute, confirm, writable: () => !destroyed && writable(), lock,
       refreshLocks: () => refreshLocks() });
   }
-  function groupRow(row, meta) {
+  function groupRow(row, meta, showStatus) {
     const button = element(document, 'button', undefined, 'wb-gl-row'); button.type = 'button';
     button.append(element(document, 'span', row.name?.displayName ?? fallbackName(row, t)));
-    if (meta) button.append(element(document, 'small', meta));
+    if (meta) {
+      const label = element(document, 'small', meta);
+      if (showStatus) annotateStatus(document, label, row, { t });
+      button.append(label);
+    }
     button.addEventListener('click', () => onGroup(row.sessionGroup));
     return button;
   }
@@ -125,7 +130,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
     const redraw = query => {
       const term = query.toLocaleLowerCase();
       const shown = rows.filter(row => [row.sessionGroup, row.name?.displayName].some(value => String(value ?? '').toLocaleLowerCase().includes(term)));
-      list.replaceChildren(...(shown.length ? shown.map(row => groupRow(row, meta?.(row))) : [element(document, 'p', t('wb.noMatch'), 'wb-gl-empty')]));
+      list.replaceChildren(...(shown.length ? shown.map(row => groupRow(row, meta?.(row), meta === stateText)) : [element(document, 'p', t('wb.noMatch'), 'wb-gl-empty')]));
     };
     if (searchable) {
       const input = element(document, 'input'); input.type = 'search'; input.placeholder = t('wb.settings.searchGroups');

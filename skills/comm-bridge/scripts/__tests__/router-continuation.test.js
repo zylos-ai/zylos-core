@@ -483,7 +483,7 @@ test('real identity reader retains a marker for stale F3 and clears after curren
       if (args[0] === 'show-environment') return String.raw`ZYLOS_RUN_ID="new-run"; export ZYLOS_RUN_ID;
 ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
       assert.equal(args[0], 'display-message');
-      return `100:200\t$1\t%1\t${f.now()/1000}`;
+      return `100:200\t$1\t%1\t${f.now()/1000}\t1234`;
     } }; },
     observe: options => observeSessionTarget({ ...options,
       readReady: async () => JSON.parse(await fs.readFile(file, 'utf8')) }),

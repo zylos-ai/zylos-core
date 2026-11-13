@@ -1,6 +1,6 @@
 import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { modelCell, pendingModel, shortDuration } from './board.js?v=153';
+import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=154';
 import { toolLabel, waitText } from './view-mode.js?v=151';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=91';
 import { recentRows } from './timeline-rows.js?v=108';
@@ -182,7 +182,7 @@ function idleDuration(seconds, t) {
 
 /** Busy/idle follow event-derived working, as in conversation headers; preserve exceptional runtime states. */
 export function detailDisplayRow(row, now = Date.now()) {
-  if (!['busy', 'idle'].includes(row.state?.kind)) return row;
+  if (row.state?.stale || !['busy', 'idle'].includes(row.state?.kind)) return row;
   const working = row.working;
   const kind = working ? working.on ? 'busy' : 'idle' : 'unknown';
   const duration = working?.on && Number.isFinite(working.since) ? Math.max(0, (now - working.since) / 1000)
@@ -231,6 +231,7 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
     title.append(glyph, element(document, 'span', kind === 'not_running' ? t('wb.detail.standby') : t('wb.state.' + kind)));
     if (row.duration != null && !['not_running', 'unknown'].includes(kind)) title.append(element(document, 'span', shortDuration(row.duration), 'wb-dur'));
   }
+  annotateStatus(document, title, row, { t, now: data.now });
   if (showLastReceived && row.preview) card.append(element(document, 'p', lastReceived(row, t, { now: data.now }), 'wb-now-sub'));
   if (technical(level)) {
     // A preview labelled with its source offers the stored message, folded: headers, ids and line breaks included.

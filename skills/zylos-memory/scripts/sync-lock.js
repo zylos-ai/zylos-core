@@ -167,6 +167,13 @@ export async function release({ kind, token, env = process.env, waitMs }) {
   }, { waitMs });
 }
 
+/** A missing or malformed token is a call error; only a well-formed token can lose ownership. */
+export function requireSyncToken(token) {
+  if (typeof token !== 'string' || !/^[0-9a-f]{32}$/.test(token)) {
+    throw memoryError('INVALID_INPUT', 'token is required: pass the T printed by sync-lock.js acquire');
+  }
+}
+
 /** All guarded mutations check ownership and execute in the same F8 section. */
 export async function guard({ kind, token, env = process.env, waitMs }, action) {
   let scope;
@@ -177,7 +184,7 @@ export async function guard({ kind, token, env = process.env, waitMs }, action) 
   }
   const defaultKind = scope.kind === 'group' ? 'group' : 'global';
   checkKind(scope, kind === 'auto' ? defaultKind : kind ?? defaultKind);
-  if (!/^[0-9a-f]{32}$/.test(token || '')) throw memoryError('TOKEN_MISMATCH', 'Sync token is missing or invalid');
+  requireSyncToken(token);
   return withMemoryLock(scope.runDir, () => {
     const kinds = kind === 'auto' && scope.sessionGroup === 'origin'
       ? ['group', 'origin'] : [kind === 'auto' ? defaultKind : kind ?? defaultKind];
