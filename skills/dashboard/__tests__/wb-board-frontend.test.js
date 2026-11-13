@@ -1,7 +1,7 @@
 import test from 'node:test';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import { renderBoard, renderRow, modelCell, pendingModel, boardController, renderDistribution } from '../public/js/wb/board.js';
+import { statePill, statusAnnotation, renderBoard, renderRow, modelCell, pendingModel, boardController, renderDistribution } from '../public/js/wb/board.js';
 import { createBoardSearch } from '../public/js/wb/board-search.js';
 import { activityStrip } from '../public/js/wb/activity-strip.js';
 import { instanceStrip } from '../public/js/wb/instance-strip.js';
@@ -492,4 +492,25 @@ test('board and detail share snapshot queue positions while the pool reminder us
   }
   assert.equal(waitText(null, 'plain', poolTranslator('zh')), '');
   assert.equal(waitText({ kind: 'pool_wait', position: '<img>' }, 'plain', poolTranslator('zh')), '排队中 · 第 — 个');
+});
+
+
+test('status pills distinguish stale sample age, last-status tooltip and fresh display', () => {
+  const document = createDocument(), now = 1800000000000;
+  const value = { ...row('a', 'busy'), state: { kind: 'busy', stale: true, sampledAt: now - 20_000 },
+    live: { status: { valid: false, reason: 'stale', lastState: 'busy', sampledAt: now - 20_000 } } };
+  const stale = statePill(document, value, { t, now });
+  assert.equal(allNodes(stale).find(node => node.classList.contains('wb-status-age')).textContent, 'wb.detail.agoSeconds20');
+  assert.equal(allNodes(stale).some(node => node.classList.contains('wb-dur')), false);
+  value.state = { kind: 'unknown', sampledAt: now - 180_000 };
+  value.live.status.sampledAt = now - 180_000;
+  const unknown = statePill(document, value, { t, now });
+  assert.equal(unknown.title, 'wb.state.lastStatuswb.state.busy:wb.detail.agowb.schedule.span.minutes3');
+  assert.equal(allNodes(unknown).some(node => node.classList.contains('wb-status-age')), false);
+  value.live.status.lastState = null;
+  assert.equal(statusAnnotation(value, { t, now }).title, '');
+  value.state = { kind: 'busy' }; value.live.status = { valid: true, state: 'busy', sampledAt: now };
+  const fresh = statePill(document, value, { t, now });
+  assert.equal(allNodes(fresh).some(node => node.classList.contains('wb-status-age')), false);
+  assert.equal(allNodes(fresh).find(node => node.classList.contains('wb-dur')).textContent, '32s');
 });

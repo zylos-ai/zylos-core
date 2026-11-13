@@ -1693,7 +1693,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-running[data-state=busy] .wi-ind-mobile { display:block; }
   .conversation-page .conversation-running[data-state=busy]::after { content:""; position:absolute; left:-4px; right:-2px; top:-11px; bottom:-11px; }
   .conversation-header .wi-comet { --wi-rx:10.25px; --wi-t:2.2s; }
-  .conversation-page .conversation-header .conversation-running[data-state=idle] { display:none; }
+  .conversation-page .conversation-header .conversation-running[data-state=idle]:not([data-stale=true]) { display:none; }
   .conversation-page .conversation-running .wi-ind-chev { margin-left:auto; }
   .conversation-page .conversation-running[data-state=busy] .wi-ind-chev { width:11px; height:11px; margin-left:0; }
   .conversation-page .conversation-rename { gap:6px; padding:8px 8px 8px 12px; background:var(--bg-card); }

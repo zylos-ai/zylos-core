@@ -111,6 +111,7 @@ export function createConversationState({
   const blank = () => ({
     groupPresence: null,
     groupWorking: null,
+    groupStatusRow: null,
     groupHealth: null,
     groupWait: null,
     groupProcessing: null,
@@ -498,6 +499,7 @@ export function createConversationState({
       } : null);
     current.groupPresence = null;
     current.groupWorking = null;
+    current.groupStatusRow = null;
     current.groupHealth = null;
     current.groupWait = null;
     current.groupProcessing = null;
@@ -849,6 +851,7 @@ export function createConversationState({
     if (currentTab !== 'mine' || typeof sessionGroup !== 'string' || !sessionGroup) {
       current.groupPresence = null;
       current.groupWorking = null;
+      current.groupStatusRow = null;
       current.groupHealth = null;
       current.groupWait = null;
       current.groupProcessing = null;
@@ -876,6 +879,7 @@ export function createConversationState({
         const health = trusted ? data.instance?.runtimeHealth?.[group?.target?.runtime] : null;
         current.groupHealth = health?.health ?? null;
         current.groupWait = trusted ? group?.wait ?? null : null;
+        current.groupStatusRow = trusted && group ? { state: group.state, live: { status: group.live?.status } } : null;
         current.groupWorking = trusted && group?.presence === 'running' && typeof group?.working?.on === 'boolean' ? group.working : null;
         // Only Origin's row carries what was last handed to it, and only when that is a scheduled task.
         current.groupProcessing = trusted && origin && group?.processing === 'scheduled_task' ? 'scheduled_task' : null;
@@ -885,6 +889,7 @@ export function createConversationState({
         // An unreadable optional source must not leave a stale running marker.
         current.groupPresence = null;
         current.groupWorking = null;
+        current.groupStatusRow = null;
         current.groupHealth = null;
         current.groupWait = null;
         current.groupProcessing = null;

@@ -148,7 +148,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     for (const row of rows) {
       row.wait = waitingReason(row, { runtimeHealth, activations, now: at, pool,
         position: positions.get(row.sessionGroup), ownsSlot: owners.has(row.sessionGroup) });
-      row.state = classify(row, { statusError });
+      row.state = classify(row, { statusError, now: at });
       row.working = null;
       if (row.presence === 'running' && row.live?.runId && sources.status.ok === true) {
         const filter = { sessionGroup: row.sessionGroup, runId: row.live.runId,
