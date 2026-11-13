@@ -801,7 +801,7 @@ export async function runMobileConversationBrowser(t, sandbox) {
           assert.ok(tab.scrollWidth <= tab.clientWidth, `${width} ${locale}: ${tab.text} tab fits horizontally ${JSON.stringify(tab)}`);
           assert.ok(tab.labelScrollWidth <= tab.labelClientWidth, `${width} ${locale}: ${tab.text} caption fits horizontally ${JSON.stringify(tab)}`);
           assert.ok(tab.scrollHeight <= tab.clientHeight && tab.labelScrollHeight <= tab.labelClientHeight, `${width} ${locale}: ${tab.text} fits vertically`);
-          if (width < 761) assert.ok(Math.abs(tab.width - tabs[0].width) <= 1 && tab.height === 32, 'list tabs keep their equal-width 32px touch targets');
+          if (width < 761) assert.ok(Math.abs(tab.width - tabs[0].width) <= 1 && tab.height === 40, 'list tabs keep equal-width 40px buttons inside the shared 44px rail');
         }
         if (width < 761) {
           const labels = await f.page.locator('#wb-mobile-nav .wb-mobile-tab').evaluateAll(buttons => buttons.map(button => {
