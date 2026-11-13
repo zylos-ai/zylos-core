@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
+import { once } from 'node:events';
 import { createSupervisor } from '../supervisor.js';
 import { RestartRequestStore } from '../restart-request-store.js';
 import { groupRunDir } from '../../../../cli/lib/session-group-paths.js';
@@ -14,6 +16,58 @@ function fixture(t,{badRequests=false,readMode=()=>({mode:'multi'}),resolveLaunc
  const supervisor=createSupervisor({db,scenes,zylosDir:root,env:{ZYLOS_DIR:root},readConfiguration,readMode,resolveTargetRuntime:async()=> 'claude',requestStore:new RestartRequestStore({file}),consumeHealthEvents,checkAuth,alert,now,readSyncMarker,prepareReferenceReorg,prompts,log:item=>calls.push(item),loopOptions:{schedule:()=>1,cancel:()=>{}}});
  t.after(()=>supervisor.stop());return {supervisor,calls,file,root,scenes,db};
 }
+
+// Exercise the real Supervisor assembly and socket dispatch, with private paths
+// and live-run scene data supplied by the existing isolated fixture.
+async function deliverySocket(t,{supervisor,root}) {
+ const socketPath=path.join(root,'am.sock'),sockets=new Set();
+ const server=net.createServer(socket=>{
+  sockets.add(socket);socket.once('close',()=>sockets.delete(socket));supervisor.connectionHandler(socket);
+ });
+ server.listen(socketPath);await once(server,'listening');
+ t.after(async()=>{for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));});
+ return async request=>{
+  const socket=net.createConnection(socketPath);let output='';
+  socket.setTimeout(3000,()=>socket.destroy(new Error('Delivery acknowledgment timed out')));
+  socket.on('data',data=>{output+=data;if(output.length>4096)socket.destroy(new Error('Oversized delivery acknowledgment'));});
+  await once(socket,'connect');socket.write(JSON.stringify(request)+'\n');await once(socket,'close');
+  return JSON.parse(output);
+ };
+}
+
+for(const sessionGroup of ['telegram:control',null])test(`assembly: CONTROL delivery reaches only workDelivered (${sessionGroup ?? 'single Origin'})`,{timeout:5000},async t=>{
+ const f=fixture(t),{supervisor,scenes}=f,calls=[];
+ scenes.readRun=async()=>({runId:'r',runtime:'claude'});supervisor.admission.openEntry();
+ supervisor.observer.notifyDelivered=event=>calls.push(['health',event]);
+ supervisor.lifecycle.messageDelivered=event=>calls.push(['message',event]);
+ supervisor.lifecycle.workDelivered=async event=>calls.push(['work',event]);
+ const send=await deliverySocket(t,f);
+ const notification={version:2,type:'notify_delivered',requestId:'control',controlId:19,sessionGroup,runId:'r',runtime:'claude',pastedAt:1200};
+ assert.deepEqual(await send(notification),{version:1,type:'ack',requestId:'control'});
+ assert.deepEqual(calls,[['work',{...notification,sessionGroup:sessionGroup ?? 'origin'}]]);
+});
+
+test('assembly: message health notification stays immediate while work delivery waits for lifecycle admission',{timeout:5000},async t=>{
+ const f=fixture(t),{supervisor,scenes}=f,calls=[];
+ scenes.readRun=async()=>({runId:'r',runtime:'claude'});supervisor.admission.openEntry();
+ let release,notified;
+ const barrier=new Promise(resolve=>{release=resolve;}),observed=new Promise(resolve=>{notified=resolve;});
+ supervisor.observer.notifyDelivered=event=>calls.push(['health',event]);
+ supervisor.lifecycle.messageDelivered=event=>{calls.push(['message',event]);notified();};
+ supervisor.lifecycle.workDelivered=async event=>calls.push(['work',event]);
+ const send=await deliverySocket(t,f);
+ const queued=supervisor.admission.serialize(()=>barrier);
+ const notification={version:2,type:'notify_delivered',requestId:'message',conversationId:7,sessionGroup:'telegram:message',runId:'r',runtime:'claude',pastedAt:1200};
+ const delivery=send(notification);
+ let timeout;
+ try {
+  await Promise.race([observed,new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error('message notification waited for lifecycle admission')),2000);})]);
+  assert.deepEqual(calls,[['health',notification],['message',notification]]);
+ } finally {clearTimeout(timeout);release();}
+ await queued;
+ assert.deepEqual(await delivery,{version:1,type:'ack',requestId:'message'});
+ assert.deepEqual(calls,[['health',notification],['message',notification],['work',notification]]);
+});
 test('assembly: restore health before admission; no-launch empty round executes',async t=>{
  const {supervisor}=fixture(t);assert.equal(supervisor.admission.open,false);await supervisor.loop.start();assert.equal(supervisor.admission.open,true);assert.equal(supervisor.health.stores.size,2);
  const reply=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'empty',reason:'upgrade'});assert.equal(reply.result,'done_empty');

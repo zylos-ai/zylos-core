@@ -66,7 +66,7 @@ async function fixture(t,{missing=false,wal=false,formatVersion=3,dashboard=fals
   fs.copyFileSync(path.resolve('skills',item.owner,'scripts',migration),path.join(owner,'scripts',migration));
   if(item.owner==='scheduler')for(const file of ['migrations-v2.js','migrations-v3.js'])fs.copyFileSync(path.resolve('skills/scheduler/scripts',file),path.join(owner,'scripts',file));
  }
- for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
+ for(const file of ['sqlite-schema.js','c4-migrations-v2.js','c4-migrations-v3.js','c4-migrations-v4.js','upgrade-admission.js']) fs.copyFileSync(path.resolve('skills/comm-bridge/scripts',file),path.join(skillsDir,'comm-bridge/scripts',file));
  for(const item of owners){if(missing&&item.owner==='scheduler')continue;const mod=await import(pathToFileURL(path.join(skillsDir,item.owner,item.schema)));const p=path.join(root,item.source);fs.mkdirSync(path.dirname(p),{recursive:true});const db=new Database(p);
   // Older C4/scheduler layouts come from the released v1 samples.
   const older=olderDatabases&&{'comm-bridge':'c4-v0.9.0-v1.sql',scheduler:'scheduler-v0.9.0-v1.sql'}[item.owner];

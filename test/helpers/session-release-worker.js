@@ -19,8 +19,9 @@ const db = createStore(database, { readConfig: () => ({ state: 'ok', config: { r
 let service;
 try {
   let state = 'busy', children = [], now = Date.now();
+  const busySince = now - 10000;
   const scenes = new SupervisorScenes({ env: process.env, connectionOptions: { socketPath, binary },
-    readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state, idleSince: now - 10000, activeSubagents: children }), readUsage: () => null });
+    readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state, busySince: state === 'busy' ? busySince : null, idleSince: now - 10000, activeSubagents: children }), readUsage: () => null });
   const inbound = content => group === 'origin' ? db.insertConversation('in', 'system', null, content)
     : db.insertConversation('in', 'telegram', 'test-chat', content, { groupName: 'release' });
   if (group !== 'origin') {
@@ -64,6 +65,28 @@ try {
   service = await start();
   if (scenario === 'sync') db.insertConversation('out', 'telegram', 'test-chat', 'new completed result', { groupName: 'release' });
   if (scenario === 'child') children = [{ agentId: 'working-child', lastActivityAt: now }];
+  if (scenario.endsWith('-before-intent')) {
+    // The real socket hint has already been processed when the requester
+    // registers intent later in the same busy turn.
+    if (scenario.startsWith('conversation')) {
+      const row = inbound('work pasted during the requesting turn');
+      assert.equal(db.claimConversation(row.id), true);
+      assert.equal(db.markDelivered(row.id, { sessionId: 'session-1' }), true);
+      assert.equal((await notify({ conversationId: row.id, channel: row.channel })).type, 'ack');
+    } else {
+      const row = db.insertControl('work pasted during the requesting turn', { sessionGroup: group, appendAckSuffix: false });
+      assert.equal(db.claimControl(row.id), true);
+      assert.equal((await notify({ controlId: row.id })).type, 'ack');
+      assert.equal(coreDb.ackControl(row.id).status, 'done');
+    }
+    assert.equal((await request()).ok, true);
+    state = 'idle';
+    for (let n = 0; n < 3; n++) await tick();
+    await stillRunning();
+    const diagnostics = fs.readFileSync(supervisorDiagnosticPath(process.env), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.ok(diagnostics.some(row => row.event === 'reclaim_cancelled' && row.reason === 'new_work' && row.run_id === 'run-1'));
+    process.send({ ok: true, group, scenario });
+  } else {
   const result = await request();
   assert.equal(result.ok, true, JSON.stringify({ result, logs }));
   assert.equal(result.data.result, 'accepted');
@@ -133,6 +156,7 @@ try {
     assert.ok(db.listPendingSessionGroups().some(item => item.sessionGroup === group));
     if (group !== 'origin') assert.equal(db.takeSlot(group, { runId: 'run-2', k: 1 }).taken, true);
     process.send({ ok: true, group, scenario, ending: ending[0] });
+  }
   }
 } finally {
   await service?.stop(); coreDb.close(); database.close();

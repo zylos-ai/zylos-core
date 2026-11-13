@@ -70,6 +70,7 @@ export class SupervisorLifecycle {
     this.ttlPreparation = new Map();
     this.evictionPreparation = new Map();
     this.releasePreparation = new Map();
+    this.deliveredWork = new Map();
     this.upgradePreparation = new Map();
     this.ttlReset = new Map();
     this.reclaimDeferrals = new Map();
@@ -264,7 +265,6 @@ export class SupervisorLifecycle {
     if (!fresh.present || !fresh.ready || fresh.runId !== scene.runId) return false;
     if (this.subagentReclaimBlocked(fresh, reason, context)) return false;
     await this.checkReclaimDependencies(fresh, context);
-    if (reason === 'release' && !await this.idle(fresh, context)) return false;
     if (reason === 'evict' && !(await this.evictionCandidates([fresh], context)).length) return false;
     if (!await this.beforeWrite(scene.sessionGroup, context)) return false;
     await this.d.db.setDrainFence(scene.sessionGroup, { reason, runId: scene.runId });
@@ -333,11 +333,6 @@ export class SupervisorLifecycle {
           await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'subagent_activity' });
           return 'cancelled';
         }
-        if (fence.reason === 'release' && scene.processRunning && !await this.reclaimRead(fence, () => this.idle(scene, context))) {
-          await this.clear(fence, context);
-          await this.event('reclaim_cancelled', { session_group: group, run_id: fence.runId, reason: 'not_idle' });
-          return 'cancelled';
-        }
         await this.reclaimRead(fence, async () => {
           if (!unfenced) {
             const current = await this.d.db.getDrainFence(group);
@@ -374,6 +369,7 @@ export class SupervisorLifecycle {
     this.ttlPreparation.delete(group);
     this.evictionPreparation.delete(group);
     this.releasePreparation.delete(group);
+    if (this.deliveredWork.get(group)?.runId === fence.runId) this.deliveredWork.delete(group);
     this.upgradePreparation.delete(fence.runId);
     if (this.reclaimDeferrals.get(group)?.runId === fence.runId) this.reclaimDeferrals.delete(group);
     for (const name of ['reclaim_observation_unavailable', 'reclaim_stop_unconfirmed']) {
@@ -487,14 +483,26 @@ export class SupervisorLifecycle {
     await this.refreshAuthorities(context);
     if (!this.allowed(scene.sessionGroup, context)) return { ok: false, result: 'rejected', reason: 'other_fence' };
     if (this.releasePreparation.get(scene.sessionGroup)?.runId === scene.runId) return { ok: true, result: 'already_accepted' };
-    this.releasePreparation.set(scene.sessionGroup, { runId: scene.runId, at: this.now(), controlIds: [], prepared: false });
+    const cutoff = scene.state === 'busy' ? (finite(scene.busySince) ? scene.busySince : finite(scene.createdAt) ? scene.createdAt : 0) : this.now();
+    this.releasePreparation.set(scene.sessionGroup, { runId: scene.runId, cutoff, controlIds: [], prepared: false });
+    const delivered = this.deliveredWork.get(scene.sessionGroup);
+    if (delivered?.runId === scene.runId && delivered.pastedAt >= cutoff) {
+      this.releasePreparation.delete(scene.sessionGroup);
+      await this.event('reclaim_cancelled', { session_group: scene.sessionGroup, run_id: scene.runId, reason: 'new_work' });
+    }
     return { ok: true, result: 'accepted' };
   }
 
   async workDelivered({ sessionGroup, runId, pastedAt, controlId }) {
     const intent = this.releasePreparation.get(sessionGroup);
-    if (!intent || intent.runId !== runId || Number.isFinite(pastedAt) && pastedAt < intent.at ||
-        controlId !== undefined && intent.controlIds.includes(controlId)) return;
+    if (intent && intent.runId !== runId) return;
+    if (intent?.runId === runId && controlId !== undefined && intent.controlIds.includes(controlId)) return;
+    // One timestamp per live group/run also covers work notified before intent
+    // registration. The round prunes absent/replaced runs; nothing is persisted.
+    const at = Number.isFinite(pastedAt) ? pastedAt : this.now();
+    const previous = this.deliveredWork.get(sessionGroup);
+    if (!previous || previous.runId !== runId || at > previous.pastedAt) this.deliveredWork.set(sessionGroup, { runId, pastedAt: at });
+    if (!intent || intent.runId !== runId || at < intent.cutoff) return;
     // The intent is removed when its fence starts. Work pasted after that point
     // remains queued under the existing fence/dispatcher contract.
     this.releasePreparation.delete(sessionGroup);
@@ -526,6 +534,10 @@ export class SupervisorLifecycle {
   }
 
   async advanceReleases(context) {
+    for (const [group, delivered] of this.deliveredWork) {
+      const scene = this.scene(group, context);
+      if (!scene.present || scene.runId !== delivered.runId) this.deliveredWork.delete(group);
+    }
     await this.each([...this.releasePreparation.keys()].map(sessionGroup => ({ sessionGroup })), async ({ sessionGroup }) => {
       const intent = this.releasePreparation.get(sessionGroup), scene = this.scene(sessionGroup, context);
       if (!scene.present || !scene.ready || scene.runId !== intent.runId || modeOf(context) !== 'multi' || !this.allowed(sessionGroup, context)) {
