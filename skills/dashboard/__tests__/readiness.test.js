@@ -1,6 +1,47 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readReadiness } from '../src/lib/readiness.js';
+import { createReadinessCheck, readReadiness } from '../src/lib/readiness.js';
+
+test('overlapping readiness checks share a promise and release it after success', async () => {
+  let calls = 0, finish;
+  const check = createReadinessCheck(() => {
+    calls++;
+    return new Promise(resolve => { finish = resolve; });
+  });
+  const pending = Array.from({ length: 50 }, () => check());
+  assert.ok(pending.every(value => value === pending[0]));
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  const result = { ready: true };
+  finish(result);
+  assert.ok((await Promise.all(pending)).every(value => value === result));
+  const next = check();
+  assert.notEqual(next, pending[0]);
+  await Promise.resolve();
+  assert.equal(calls, 2);
+  finish(result);
+  await next;
+});
+
+test('failed readiness checks release the shared promise for the next request', async () => {
+  for (const synchronous of [true, false]) {
+    let calls = 0;
+    const error = new Error('check failed');
+    const check = createReadinessCheck(() => {
+      if (++calls === 1) {
+        if (synchronous) throw error;
+        return Promise.reject(error);
+      }
+      return { ready: true };
+    });
+    const pending = Array.from({ length: 20 }, () => check());
+    const results = await Promise.allSettled(pending);
+    assert.equal(calls, 1);
+    assert.ok(results.every(result => result.status === 'rejected' && result.reason === error));
+    assert.deepEqual(await check(), { ready: true });
+    assert.equal(calls, 2);
+  }
+});
 
 function fixture({ mode = 'single', present = true, health = { missing: true }, responsive = true } = {}) {
   const calls = [];

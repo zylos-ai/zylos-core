@@ -378,7 +378,13 @@ configuration observation errors are unknown facts, not confirmed session absenc
 Runtime health is diagnostic only, including historical `down`/`recovering` values.
 No paths, session/run IDs, process IDs or tool details are returned.
 
-Each request uses the existing supervisor socket client with a 1000 ms deadline.
+Overlapping readiness requests share one in-process check. Success or failure
+immediately clears the shared promise; the next request checks again. No result
+is retained, and ordinary health requests do not join this check. This public,
+unauthenticated endpoint still incurs a supervisor connection for each fresh
+check and existing tmux subprocesses in single-session mode.
+
+Each fresh check uses the existing supervisor socket client with a 1000 ms deadline.
 An unsupported-version envelope receives the existing correlated `invalid_request`
 reply before admission or any writes, proving that the supervisor responds.
 The probe reads mode, single-session identity and runtime-health files through

@@ -3,6 +3,17 @@ import { loadCoreModule } from './core-modules.js';
 
 const HEALTH_STATES = new Set(['ok', 'auth_failed', 'rate_limited', 'unavailable', 'down', 'recovering']);
 
+/** Share only an in-flight check; settlement always releases it. */
+export function createReadinessCheck(read = readReadiness) {
+  let pending = null;
+  return () => {
+    if (!pending) {
+      pending = Promise.resolve().then(read).finally(() => { pending = null; });
+    }
+    return pending;
+  };
+}
+
 /** Read on demand; runtime health is diagnostic and never an admission gate. */
 export async function readReadiness({ load = loadCoreModule } = {}) {
   let supervisor = false;

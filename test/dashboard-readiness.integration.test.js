@@ -32,10 +32,14 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: process.env.TMUX_TMPDIR,
     database: path.join(root, 'components/dashboard/dashboard.db'), socketPath, tmux: 'observation injected' }));
 
-  let present = true, identityReads = 0;
+  let present = true, identityReads = 0, identityGate = null;
   mock.module('../cli/lib/session-state-reader.js', { namedExports: { ...sessionReader,
     readLiveIdentity: async group => {
       assert.equal(group, null); identityReads++;
+      if (identityGate) {
+        dashboard.emit('probe-identity-entered');
+        await identityGate;
+      }
       return { present, ready: false, pid: 31337, runId: 'private-run', sessionId: 'private-session' };
     },
   } });
@@ -144,6 +148,39 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal(peers.size, 0);
   });
   await startSocket(handler);
+  // Covers HTTP wiring to the shared check; run for readiness/coalescing changes,
+  // skip unrelated UI changes. Uses the same isolated servers and injected identity.
+  await t.test('concurrent HTTP probes share one check while ordinary health stays independent', async () => {
+    const count = 30;
+    const before = identityReads;
+    let release, received = 0;
+    identityGate = new Promise(resolve => { release = resolve; });
+    const onRequest = req => {
+      if (req.url === '/api/health?probe=ready' && ++received === count) dashboard.emit('probe-batch-arrived');
+    };
+    dashboard.on('request', onRequest);
+    const arrived = once(dashboard, 'probe-batch-arrived', { signal: AbortSignal.timeout(3000) });
+    const entered = once(dashboard, 'probe-identity-entered', { signal: AbortSignal.timeout(3000) });
+    const requests = Array.from({ length: count }, ready);
+    try {
+      await Promise.all([arrived, entered]);
+      assert.equal((await request('/api/health')).status, 200);
+      assert.equal(identityReads, before + 1);
+      release();
+      const responses = await Promise.all(requests);
+      assert.equal(identityReads, before + 1);
+      for (const response of responses) assert.deepEqual(response, responses[0]);
+      assert.equal(responses[0].status, 200);
+      identityGate = null;
+      assert.equal((await ready()).status, 200);
+      assert.equal(identityReads, before + 2);
+    } finally {
+      dashboard.off('request', onRequest);
+      release();
+      identityGate = null;
+      await Promise.allSettled(requests);
+    }
+  });
   await t.test('single session exists even before startup readiness or login', async () => {
     const response = await ready();
     assert.equal(response.status, 200);
