@@ -1591,11 +1591,16 @@ for (const scenario of [
   { mode: 'multi', rootAge: 120_000, originAge: 90_000, expected: 'stale', state: 'idle' },
   { mode: 'single', rootAge: 10_000, originAge: 120_000, expected: 'healthy', state: 'busy' },
   { mode: 'single', rootAge: 90_000, originAge: 10_000, expected: 'stale', state: 'busy' },
-]) test(`AM heartbeat uses ${scenario.mode} producer time with root age ${scenario.rootAge} and Origin age ${scenario.originAge}`, t => {
+  { config: 'missing file', rootAge: 10_000, originAge: 120_000, expected: 'healthy', state: 'busy' },
+  { config: 'missing key', rootAge: 10_000, originAge: 120_000, expected: 'healthy', state: 'busy' },
+  { mode: 'dual', rootAge: 10_000, originAge: 120_000, expected: 'unknown', state: null },
+]) test(`AM heartbeat uses ${scenario.config ?? scenario.mode} producer time with root age ${scenario.rootAge} and Origin age ${scenario.originAge}`, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-health-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: scenario.mode }));
+  if (scenario.config !== 'missing file') {
+    fs.writeFileSync(path.join(root, '.zylos/config.json'), JSON.stringify({ session_mode: scenario.mode }));
+  }
   let now = 1_800_000_000_000;
   for (const [parts, state, age] of [
     [[], 'busy', scenario.rootAge], [['session-groups', 'origin'], 'idle', scenario.originAge],
@@ -1618,6 +1623,12 @@ for (const scenario of [
   const age = (scenario.mode === 'multi' ? scenario.originAge : scenario.rootAge) / 1000;
   assert.equal(source.status, scenario.expected);
   assert.equal(source.fresh, scenario.expected === 'healthy');
+  if (scenario.state === null) {
+    assert.equal(source.age_s, null);
+    assert.equal(engine._state.amHeartbeat, null, 'invalid mode must not select a heartbeat source');
+    assert.equal(row, undefined, 'invalid mode must not publish successful evidence');
+    return;
+  }
   assert.equal(source.age_s, age);
   assert.equal(engine._state.amHeartbeat.state, scenario.state, 'the existing internal heartbeat receives the selected source');
   const producerTime = row.extra.last_success;

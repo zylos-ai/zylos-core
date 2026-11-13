@@ -407,7 +407,7 @@ missing signals are `unknown`, invalid/future success timestamps are `stale`.
 | `collector_liveness.pm2_reader` | `last_success`, 180 seconds (60-second collector). |
 | `collector_liveness.system_sampler` | `last_success`, 90 seconds (30-second collector). |
 | `collector_liveness.conversation_reader` | New conversation activity `last_success`, 60 seconds; then idle. |
-| `collector_liveness.am_heartbeat` | `last_success` is the status file's actual mtime, 60 seconds (15-second reader). Multi reads `activity-monitor/session-groups/origin/agent-status.json`; single retains `activity-monitor/agent-status.json`. Reading the same file again does not refresh it. |
+| `collector_liveness.am_heartbeat` | `last_success` is the status file's actual mtime, 60 seconds (15-second reader). Multi reads `activity-monitor/session-groups/origin/agent-status.json`; single or unset mode (missing config file/key) reads `activity-monitor/agent-status.json`. Reading the same file again does not refresh it. |
 | `platform.statusline` | Revalidation `last_success`, 30 seconds (2-second reader). |
 
 Missing health records do not prove whether login ever occurred. Session or
