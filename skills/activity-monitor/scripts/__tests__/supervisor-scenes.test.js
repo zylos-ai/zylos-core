@@ -21,13 +21,14 @@ function service(f, options = {}) {
 // and short TMPDIR; readyTmuxTarget owns and cleans every tmux/database resource.
 test('scene joins real READY and process identity with live pane liveness', { timeout: 15000 }, async t => {
   const f = readyTmuxTarget(t, { prefix: 'supervisor-scene-', mode: 'multi' });
-  const facts = { state: 'busy', idleSince: null, busySince: 75, lastActivityAt: 100,
+  const facts = { state: 'busy', idleSince: null, busySince: 75, turnOpen: true, lastActivityAt: 100,
     activeSubagents: [{ agentId: 'child', lastActivityAt: 456 }], lastSubagentActivityAt: 456 };
   const scenes = service(f, { readActivity: () => facts }), scene = await scenes.observeGroup('origin');
   assert.equal(scene.ready, true); assert.equal(scene.runtime, 'claude'); assert.equal(scene.processRunning, true);
   assert.equal(scene.runId, 'run-1'); assert.equal(scene.sessionId, 'session-1');
   assert.equal(scene.currentSessionTs, 1); assert.equal(scene.createdAt % 1000, 0);
   assert.equal(scene.state, 'busy'); assert.equal(scene.idleSince, null); assert.equal(scene.busySince, 75); assert.equal(scene.usagePercent, null);
+  assert.equal(scene.turnOpen, true);
   assert.equal(scene.lastActivityAt, 100);
   assert.deepEqual(scene.activeSubagents, facts.activeSubagents); assert.equal(scene.lastSubagentActivityAt, 456);
   assert.deepEqual(await scenes.bindTarget(scene), { expectedRunId: 'run-1', tmuxTarget: scene.tmuxTarget });
