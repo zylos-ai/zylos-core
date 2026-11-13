@@ -16,7 +16,8 @@ export async function readBootstrapIdentity(scope, { env = process.env, pid = pr
   const ancestors = new Map();
   let current = pid;
   for (let depth = 0; depth < 128 && current > 1 && !ancestors.has(current); depth++) {
-    const row = rows.find(item => item.pid === current);
+    const found = rows.find(item => item.pid === current);
+    const [row] = found ? await targets.confirmProcesses(rows, [found]) : [];
     if (!row) break;
     ancestors.set(current, row);
     current = row.ppid;

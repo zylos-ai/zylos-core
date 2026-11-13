@@ -16,11 +16,30 @@ const legacyPercent = value => {
 };
 const cleanModel = model => typeof model === 'string' ? model.trim() : '';
 
-export function readCodexModelWindows({ home = os.homedir(), codexHome = process.env.CODEX_HOME || path.join(home, '.codex') } = {}) {
+// Codex rewrites its model cache when it updates; a changed file is parsed again,
+// an unchanged one is not. Callers treat the returned list as read-only.
+const codexModelCache = new Map();
+const fileSignature = file => {
   try {
-    const cache = JSON.parse(fs.readFileSync(path.join(codexHome, 'models_cache.json'), 'utf8'));
-    return Array.isArray(cache.models) ? cache.models : [];
-  } catch { return []; }
+    const stat = fs.statSync(file);
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  } catch { return null; }
+};
+
+export function readCodexModelWindows({ home = os.homedir(), codexHome = process.env.CODEX_HOME || path.join(home, '.codex') } = {}) {
+  const file = path.join(codexHome, 'models_cache.json');
+  const before = fileSignature(file);
+  const cached = codexModelCache.get(file);
+  if (before && cached?.signature === before) return cached.models;
+  let models;
+  try {
+    const cache = JSON.parse(fs.readFileSync(file, 'utf8'));
+    models = Array.isArray(cache.models) ? cache.models : [];
+  } catch { models = []; }
+  // Keep only a result whose file did not change while it was read.
+  if (before && fileSignature(file) === before) codexModelCache.set(file, { signature: before, models });
+  else codexModelCache.delete(file);
+  return models;
 }
 
 function isLargeWindow({ runtime, model, contextWindow, codexModels = [] }) {
