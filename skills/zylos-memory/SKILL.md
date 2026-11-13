@@ -28,11 +28,15 @@ configuration. Origin Sync uses Origin's actual runtime.
   with `run_in_background: true`; these definitions use `sonnet`. Never use a
   `fork` type or any mechanism that inherits the parent conversation for Sync.
 - Codex: use this session's native `spawn_agent` with `fork_turns: "none"`.
-  Explicitly pass `model` using a Terra-tier model listed in the exposed
-  `spawn_agent` tool description (currently `gpt-6.1-terra`). Only when that
-  list has no Terra-tier model, omit `model` and inherit the parent model.
-  Do not pass `reasoning_effort`. Report the actual selected model in the
-  Sync result. Give the worker a self-contained message instructing it to read
+  Before launch, inspect the current `spawn_agent` tool's exposed model list.
+  If it lists a Terra-tier model, pass that exact ID in `model`; do not omit
+  the field and inherit instead. Only if no Terra-tier model is listed, omit
+  `model` and record that fallback reason in the worker message. Do not guess
+  a model ID or change runtime/model configuration to make one available.
+  Do not pass `reasoning_effort`. In the Sync result, distinguish the requested
+  model (or inheritance) from the actual model verified by runtime evidence;
+  if the actual model cannot be verified, report it as unverified.
+  Give the worker a self-contained message instructing it to read
   this skill and the matching procedure. Include their paths, the requested job,
   and all facts and environment bindings it needs; it cannot see the parent
   conversation.
