@@ -23,26 +23,21 @@ export function createCoreObserver({ tmux = {} } = {}) {
   async function observe(method, options) {
     const { sessionGroup = null, sessionMode } = options ?? {};
     if (!['single', 'multi'].includes(sessionMode)) throw Object.assign(new Error('Invalid session mode'), { code: 'INVALID_ARGS' });
-    const [{ openTmuxConnection }, { observeSessionTarget, revalidateSessionTarget, readTargetRuntime }] = await loadCoreRuntime();
+    const [{ openTmuxConnection }, { observeSessionTarget, revalidateSessionTarget }] = await loadCoreRuntime();
     let connection;
     try {
       connection = await openTmuxConnection(tmux);
       const target = await observeSessionTarget({ sessionGroup: sessionMode === 'single' ? null : sessionGroup, connection });
       if (!target.present) return method === 'running' ? { hasProcess: false } : null;
-      let processState;
-      if (method === 'running') {
-        // F2 describes launch intent. Running status needs actual process evidence.
-        processState = await readTargetRuntime({ connection, paneId: target.paneId, rawF2: {} });
-      }
       await revalidateSessionTarget({ connection, target });
       if (method === 'running') {
         const scopeMatches = sessionMode === 'single'
           ? !Object.hasOwn(target.rawF2, 'ZYLOS_SESSION_GROUP')
           : target.rawF2.ZYLOS_SESSION_GROUP === sessionGroup;
         return {
-          hasProcess: processState.runtimeObservation === 'present' ? true : processState.runtimeObservation === 'absent' ? false : null,
+          hasProcess: typeof target.processRunning === 'boolean' ? target.processRunning : null,
           identityVerified: Boolean(scopeMatches && target.runId &&
-            (processState.runtimeObservation !== 'present' || processState.runtime === target.launchConfig?.runtime)),
+            (target.processRunning === false || (['claude', 'codex'].includes(target.runtime) && target.runtime === target.launchConfig?.runtime))),
           ready: target.ready, launchConfig: target.launchConfig, runId: target.runId,
         };
       }

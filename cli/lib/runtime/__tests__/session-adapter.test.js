@@ -9,14 +9,14 @@ import { ClaudeAdapter } from '../claude.js';
 import { CodexAdapter } from '../codex.js';
 
 class Adapter extends SessionAdapter { get runtimeId() { return 'claude'; } }
-function fixture({present = true, runId = 'r', openError, runtime = 'claude'} = {}) {
-  const calls = [], target = {present, runId, tmuxSessionId:'$7', paneId:'%8'};
+function fixture({present = true, runId = 'r', openError, runtime = 'claude', processRunning = true} = {}) {
+  const calls = [], target = {present, runId, runtime, processRunning, tmuxSessionId:'$7', paneId:'%8'};
   const connection = {cleanupBuffer:async name => calls.push(['delete-buffer','-b',name]), close:() => calls.push(['close']), command:async argv => { calls.push(argv); if (argv[0] === 'kill-session') target.present = false; if (argv[0] === 'display-message') {if(!target.present)throw error('TARGET_GONE');return '$7';} return 'screen'; }};
   const dependencies = {
     openTmuxConnection:async () => { if (openError) throw openError; return connection; },
     observeSessionTarget:async () => target,
     revalidateSessionTarget:async () => { calls.push(['validate']); },
-    readTargetRuntime:async () => ({runtime}),
+    readTargetRuntime:async () => { throw Error('isRunning must use pane observation'); },
   };
   const adapter = new Adapter({dependencies});
   return {adapter, dependencies, target, connection, calls};
@@ -27,8 +27,8 @@ test('absence only: no server is false; timeout remains unavailable',async () =>
   assert.deepEqual(await fixture({openError:error('TMUX_NO_SERVER')}).adapter.isRunning({tmuxName:'x'}),{tmux:false,process:false});
   await assert.rejects(fixture({openError:error('TMUX_UNAVAILABLE','timeout')}).adapter.isRunning({tmuxName:'x'}),{code:'TMUX_UNAVAILABLE',cause:'timeout'});
 });
-test('configured runtime alone cannot establish process liveness',async () => {
-  await assert.rejects(fixture({runtime:'unknown'}).adapter.isRunning({tmuxName:'x'}),{code:'TMUX_UNAVAILABLE'});
+test('pane liveness remains available when runtime identity is unknown',async () => {
+  assert.deepEqual(await fixture({runtime:'unknown'}).adapter.isRunning({tmuxName:'x'}),{tmux:true,process:true});
 });
 for (const bracketedPaste of [false, true]) test(`multiline text preserves bracketed paste=${bracketedPaste} in one guarded batch`,async () => {
   const f=fixture(); let file;
@@ -107,30 +107,27 @@ test('unreadable executable identity fails preflight before creation',async()=> 
   assert.equal(f.calls.some(c=>c[0]==='new-session'),false);
 });
 
-// Internal reader evidence keeps a readable shell-only tree distinct from failure.
-test('readable runtime absence is false; unreadable and ambiguous remain unavailable', async () => {
-  for (const runtimeObservation of ['absent', 'unavailable', 'ambiguous', undefined]) {
-    const f = fixture({runtime:'unknown'});
-    f.dependencies.readTargetRuntime = async () => ({runtime:'unknown', runtimeObservation});
-    if (runtimeObservation === 'absent') assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}), {tmux:true,process:false});
-    else await assert.rejects(f.adapter.isRunning({tmuxName:'x'}), {code:'TMUX_UNAVAILABLE'});
+// Pane liveness is authoritative even if runtime process names are unavailable.
+test('isRunning projects alive/dead pane observations without another process read', async () => {
+  for (const processRunning of [true, false]) {
+    const f = fixture({processRunning});
+    assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}), {tmux:true, process:processRunning});
+    assert.deepEqual(f.calls, [['close']]);
   }
+  assert.deepEqual(await fixture({runtime:'codex'}).adapter.isRunning({tmuxName:'x'}), {tmux:true, process:true});
+  assert.deepEqual(await fixture({runtime:'unknown',processRunning:false}).adapter.isRunning({tmuxName:'x'}), {tmux:true, process:false});
+  const unavailable = fixture(); delete unavailable.target.processRunning;
+  await assert.rejects(unavailable.adapter.isRunning({tmuxName:'x'}), {code:'TMUX_UNAVAILABLE'});
 });
-test('isRunning reports deterministic disappearance during observation or process read as false',async()=>{
-  for(const method of ['observeSessionTarget','readTargetRuntime']){
-    const code='TARGET_GONE';
-    const f=fixture();f.dependencies[method]=async()=>{throw error(code)};
-    assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}),{tmux:false,process:false});
-    assert.deepEqual(f.calls,[['close']]);
-  }
+test('isRunning reports deterministic disappearance during observation as false',async()=>{
+  const f=fixture();f.dependencies.observeSessionTarget=async()=>{throw error('TARGET_GONE')};
+  assert.deepEqual(await f.adapter.isRunning({tmuxName:'x'}),{tmux:false,process:false});
+  assert.deepEqual(f.calls,[['close']]);
 });
-
 test('isRunning cannot infer absence when the server generation changes',async()=>{
-  for(const method of ['observeSessionTarget','readTargetRuntime']){
-    const f=fixture();f.dependencies[method]=async()=>{throw error('GENERATION_CHANGED')};
-    await assert.rejects(f.adapter.isRunning({tmuxName:'x'}),{code:'TMUX_UNAVAILABLE',cause:'error'});
-    assert.deepEqual(f.calls,[['close']]);
-  }
+  const f=fixture();f.dependencies.observeSessionTarget=async()=>{throw error('GENERATION_CHANGED')};
+  await assert.rejects(f.adapter.isRunning({tmuxName:'x'}),{code:'TMUX_UNAVAILABLE',cause:'error'});
+  assert.deepEqual(f.calls,[['close']]);
 });
 
 test('runtime help leaves the event loop available and maps execution errors',async()=>{

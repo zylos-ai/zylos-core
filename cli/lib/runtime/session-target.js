@@ -86,7 +86,7 @@ export async function confirmProcesses(tree, rows) {
   });
 }
 
-export async function readTargetRuntime({ connection, paneId, rawF2, readProcessTree: getTree = readProcessTree }) {
+export async function readTargetRuntime({ connection, paneId, panePid, rawF2, readProcessTree: getTree = readProcessTree }) {
   let launchConfig = null;
   try {
     const parsed = JSON.parse(rawF2?.ZYLOS_MODEL_CONFIG);
@@ -95,7 +95,7 @@ export async function readTargetRuntime({ connection, paneId, rawF2, readProcess
   if (known.has(launchConfig?.runtime)) return { runtime: launchConfig.runtime, launchConfig, runtimeObservation: 'configured' };
   let runtime = 'unknown', runtimeObservation = 'unavailable', runtimePid;
   try {
-    const pid = Number((await connection.command([C.displayMessage, '-p', '-t', paneId, F.panePid])).trim());
+    const pid = panePid ?? Number((await connection.command([C.displayMessage, '-p', '-t', paneId, F.panePid])).trim());
     const rows = await getTree();
     let layer = await confirmProcesses(rows, rows.filter(row => row.pid === pid));
     const seen = new Set();
@@ -146,15 +146,16 @@ export async function observeSessionTarget({ sessionGroup, tmuxName = tmuxNameFo
   // display-message returns an empty format (not an error) for an absent target.
   const observed = parseTargetObservation(output, pinned);
   if (!observed) return absent;
-  const {generation, tmuxSessionId, paneId, created} = observed;
+  const {generation, tmuxSessionId, paneId, created, panePid, paneDead} = observed;
   try {
     connection.bindTarget({ serverGeneration: generation, tmuxSessionId, paneId, tmuxName });
     const rawF2 = await environment(connection, tmuxSessionId);
     const runId = rawF2.ZYLOS_RUN_ID || null;
-    const runtime = await readTargetRuntime({ connection, paneId, rawF2, readProcessTree: getTree });
+    const runtime = await readTargetRuntime({ connection, paneId, panePid, rawF2, readProcessTree: getTree });
     const f3 = await readReady(sessionGroup);
     const ready = Boolean(runId && validReady(f3) && f3.runId === runId);
-    const target = { present: true, tmuxName, runId, createdAt: Number(created), ...runtime, ready, sessionId: ready ? f3.sessionId : null, runtimeSessionId: ready ? f3.sessionId : null, rawF2, f3: ready ? f3 : null, tmuxSessionId, paneId, serverGeneration: generation };
+    const target = { present: true, tmuxName, runId, createdAt: Number(created), ...runtime, panePid, paneDead,
+      processRunning: !paneDead, runtimePid: panePid, ready, sessionId: ready ? f3.sessionId : null, runtimeSessionId: ready ? f3.sessionId : null, rawF2, f3: ready ? f3 : null, tmuxSessionId, paneId, serverGeneration: generation };
     bindings.set(target, { connection, tmuxSessionId, paneId, serverGeneration: generation, runId });
     return freezeDeep(target);
   } catch (error) {

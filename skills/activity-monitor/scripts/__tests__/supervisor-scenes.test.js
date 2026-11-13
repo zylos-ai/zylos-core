@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import fs from 'node:fs';
+import { ChildProcess } from 'node:child_process';
+import { ClaudeAdapter } from '../../../../cli/lib/runtime/claude.js';
 import { sceneRotationThreshold } from '../supervisor-lifecycle.js';
 import { readyTmuxTarget } from '../../../../test/helpers/ready-tmux-target.js';
 import { SupervisorScenes } from '../supervisor-scenes.js';
@@ -17,12 +19,12 @@ function service(f, options = {}) {
 // private tmux socket/SQLite fixture. Run for scene/activity projection changes;
 // unrelated UI work may skip. Official runner isolates HOME/ZYLOS_DIR/PM2_HOME
 // and short TMPDIR; readyTmuxTarget owns and cleans every tmux/database resource.
-test('scene joins real READY and process identity without treating configured F2 as liveness', { timeout: 15000 }, async t => {
+test('scene joins real READY and process identity with live pane liveness', { timeout: 15000 }, async t => {
   const f = readyTmuxTarget(t, { prefix: 'supervisor-scene-', mode: 'multi' });
   const facts = { state: 'idle', idleSince: 123, lastActivityAt: 100,
     activeSubagents: [{ agentId: 'child', lastActivityAt: 456 }], lastSubagentActivityAt: 456 };
   const scenes = service(f, { readActivity: () => facts }), scene = await scenes.observeGroup('origin');
-  assert.equal(scene.ready, true); assert.equal(scene.runtime, 'claude'); assert.equal(scene.processRunning, false);
+  assert.equal(scene.ready, true); assert.equal(scene.runtime, 'claude'); assert.equal(scene.processRunning, true);
   assert.equal(scene.runId, 'run-1'); assert.equal(scene.sessionId, 'session-1');
   assert.equal(scene.currentSessionTs, 1); assert.equal(scene.createdAt % 1000, 0);
   assert.equal(scene.state, 'idle'); assert.equal(scene.idleSince, 123); assert.equal(scene.usagePercent, null);
@@ -44,10 +46,10 @@ test('single lists Origin identity but machine observation retains NULL scope', 
   assert.deepEqual(machine.proc, { pid: machine.runtimePid, alive: true, last_sample_at: machine.proc.last_sample_at });
   assert.equal(Number.isFinite(machine.proc.last_sample_at), true);
 });
-test('unknown process data remains unknown and unreadable tmux is never absent', { timeout: 15000 }, async t => {
+test('pane liveness survives unavailable process scans and unreadable tmux is never absent', { timeout: 15000 }, async t => {
   const f = readyTmuxTarget(t, { prefix: 'supervisor-unknown-scene-', mode: 'multi' });
   const scenes = service(f, { readProcessTree: async () => { throw new Error('process snapshot unavailable'); } });
-  assert.equal((await scenes.observeGroup('origin')).processRunning, undefined);
+  assert.equal((await scenes.observeGroup('origin')).processRunning, true);
   const bad = service(f, { open: async () => { throw Object.assign(new Error('unobservable'), { code: 'TMUX_UNAVAILABLE' }); } });
   await assert.rejects(bad.readRun('origin'), { code: 'TMUX_UNAVAILABLE' });
 });
@@ -111,4 +113,46 @@ test('scene threshold uses the identity-validated model and observed window', {t
     assert.equal(observed.model,model);assert.equal(observed.contextWindow,window);assert.equal(observed.usagePercent,50);
     assert.equal(sceneRotationThreshold(observed,configuration),expected);
   }
+});
+
+
+// Boundary: repeated READY observations and adapter calls on a private tmux
+// socket. Run for pane observation/liveness changes; unrelated work may skip.
+// readyTmuxTarget owns isolated environment, SQLite, processes and cleanup.
+test('repeated multi READY observations and adapter liveness use pane PID without ps', {timeout:30000}, async t => {
+  const f = readyTmuxTarget(t, {prefix:'supervisor-pane-liveness-',mode:'multi'});
+  for (const group of ['alpha', 'beta']) {
+    f.tmux('new-session','-d','-s',`zylos-group-${group}`,
+      '-e','ZYLOS_RUN_ID=run-1','-e','ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',
+      '-e',`ZYLOS_SESSION_GROUP=${group}`,'sleep','120');
+    const readyPath = path.join(f.root,'activity-monitor/session-groups',group,'current-session.json');
+    fs.mkdirSync(path.dirname(readyPath),{recursive:true});
+    fs.writeFileSync(readyPath,JSON.stringify(f.ready));
+  }
+  let treeCalls = 0;
+  const forbiddenTree = async () => { treeCalls++; throw Error('READY observation scanned process tree'); };
+  const scenes = service(f, {readProcessTree:forbiddenTree});
+  const defaults = service(f);
+  const adapter = new ClaudeAdapter({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env,readProcessTree:forbiddenTree});
+  const defaultAdapter = new ClaudeAdapter({tmux:{socketPath:f.socketPath,binary:f.binary},env:f.env});
+  const spawned = [], spawn = ChildProcess.prototype.spawn;
+  t.mock.method(ChildProcess.prototype,'spawn',function(options) {
+    spawned.push(path.basename(options.file));
+    return spawn.call(this,options);
+  });
+  for (let round = 0; round < 4; round++) {
+    for (const source of [scenes, defaults]) {
+      const observed = await source.observe();
+      assert.equal(observed.length,3);
+      for (const scene of observed) {
+        const panePid = Number(f.tmux('display-message','-p','-t',scene.tmuxTarget.paneId,'#{pane_pid}'));
+        assert.equal(scene.ready,true); assert.equal(scene.processRunning,true);
+        assert.equal(scene.runtimePid,panePid); assert.equal(scene.proc.pid,panePid); assert.equal(scene.proc.alive,true);
+        assert.deepEqual(await adapter.isRunning({tmuxName:scene.tmuxName}),{tmux:true,process:true});
+        assert.deepEqual(await defaultAdapter.isRunning({tmuxName:scene.tmuxName}),{tmux:true,process:true});
+      }
+    }
+  }
+  assert.equal(treeCalls,0);
+  assert.equal(spawned.includes('ps'),false,`unexpected process snapshot: ${spawned.join(', ')}`);
 });
