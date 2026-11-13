@@ -4,6 +4,7 @@ import { createScheduleRead, nextRuns } from '../src/lib/workbench/schedule-read
 import { createScheduleTz, dateKey, localToOffsetIso } from '../src/lib/workbench/schedule-tz.js';
 import { dayBoundsUTC } from '../src/lib/metric-resolver.js';
 import { usageIntervals } from '../src/lib/workbench/cost-query.js';
+import { cachedFormatterCount, MAX_CACHED_FORMATTERS } from '../src/lib/date-format-cache.js';
 import { createCronIterator } from '../../scheduler/scripts/cron-utils.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 
@@ -100,6 +101,40 @@ test('calendar helpers build one formatter per zone however many instants they f
   const bounds = await countFormatters(() => dayBoundsUTC('America/Chicago', 6, new Date(NOW * 1000)));
   assert.equal(bounds.count, 0);
   assert.deepEqual(bounds.result, { since: '2027-11-04T05:00:00.000Z', until: '2027-11-10T12:00:00.000Z' });
+});
+
+test('the formatter cache stays within its fixed limit for many distinct zones and keeps reusing', async () => {
+  assert.equal(MAX_CACHED_FORMATTERS, 64);
+  const offsets = [];
+  for (let minutes = -720; minutes <= 840 && offsets.length < 400; minutes += 7) {
+    const sign = minutes < 0 ? '-' : '+', abs = Math.abs(minutes);
+    offsets.push(`${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`);
+  }
+  assert.equal(offsets.length, 223);
+  const at = NOW - 3600;
+  let peak = 0;
+  const built = await countFormatters(() => {
+    for (const tz of offsets) {
+      const expected = freshDate(at, tz);
+      if (dateKey(at, tz) !== expected) assert.fail(`${tz}: ${dateKey(at, tz)} !== ${expected}`);
+      peak = Math.max(peak, cachedFormatterCount());
+    }
+  });
+  // freshDate builds one per zone for comparison; dateKey adds one per zone not yet cached.
+  assert.equal(built.count, offsets.length * 2);
+  assert.ok(peak <= MAX_CACHED_FORMATTERS, `${peak} cached formatters`);
+  assert.ok(cachedFormatterCount() <= MAX_CACHED_FORMATTERS);
+  // After the cache was emptied and refilled, a recent zone is still reused across many instants.
+  const recent = offsets.at(-1);
+  const reuse = await countFormatters(() => Array.from({ length: 2000 }, (_, i) => dateKey(NOW - i * 97, recent)));
+  assert.equal(reuse.count, 0);
+  assert.equal(reuse.result[0], freshDate(NOW, recent));
+  // An emptied zone is rebuilt once, with the same result.
+  const first = offsets[0];
+  const again = await countFormatters(() => Array.from({ length: 2000 }, (_, i) => dateKey(at - i * 97, first)));
+  assert.equal(again.count, 1);
+  assert.equal(again.result[0], freshDate(at, first));
+  assert.ok(cachedFormatterCount() <= MAX_CACHED_FORMATTERS);
 });
 
 // Integration: real read-only SQLite read of a temporary scheduler.db holding about
