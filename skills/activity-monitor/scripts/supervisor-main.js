@@ -84,7 +84,9 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     // configuration still blocks lifecycle mutations, including pressure reclaim.
     const raw=await readConfig(), {mode}=await readMode();
     if(mode!=='multi' || poolReader.resolveSessionPoolBaseline({env,config:raw}).fixed)return null;
-    const context={configuration:{...configuration,...raw,...lifecycleConfiguration,mode,rotationPolicy:raw},
+    const latest = parseSupervisorConfiguration(raw,env);
+    const context={configuration:{...configuration,...raw,...lifecycleConfiguration,
+      reclaimDeferMaxSeconds:latest.reclaimDeferMaxSeconds,reclaimDeferAlertSeconds:latest.reclaimDeferAlertSeconds,mode,rotationPolicy:raw},
       transition:await db.getModeTransition(),fences:await db.listDrainFences(),restartRequests:supervisor.admission.readRequests()};
     context.scenes=await scenes.observe(context);
     if(stopping)return null;
@@ -120,8 +122,11 @@ export async function startSupervisor({ env=process.env, log=message=>console.er
     readConfiguration:async()=>{
       const raw=await readConfig(), {mode,legacy}=await readMode();
       lifecycleConfiguration ??= parseSupervisorConfiguration(raw,env);
+      const deferConfiguration = parseSupervisorConfiguration(raw,env);
       configuration={...raw,...lifecycleConfiguration,mode,legacy,capacityUnavailable:false,
         hotTtlSeconds:resolveSessionHotTtl(raw,env).seconds,
+        reclaimDeferMaxSeconds:deferConfiguration.reclaimDeferMaxSeconds,
+        reclaimDeferAlertSeconds:deferConfiguration.reclaimDeferAlertSeconds,
         rotationPolicy: raw, defaultModels: readDefaultModels({zylosDir:root,home:env.HOME,codexHome:env.CODEX_HOME}),
         codexModels: readCodexModelWindows({home:env.HOME,codexHome:env.CODEX_HOME})};
       if(mode!=='multi') {

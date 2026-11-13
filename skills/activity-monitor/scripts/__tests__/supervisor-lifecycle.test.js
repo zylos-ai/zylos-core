@@ -1752,10 +1752,117 @@ test('configuration restart still sends one control with the check and the five 
   assert.equal(f.controls.length, 1);
   const [control] = f.controls;
   assert.equal(control.content, CONFIG_RECLAIM_PROMPT);
-  assert.match(control.content, /waiting on an external event[\s\S]*one-time scheduled task[\s\S]*submit ready_for_config_reclaim/);
+  assert.match(control.content, /it will be interrupted by this restart[\s\S]*Create a wake-up only for a step of your own ongoing task[\s\S]*submit ready_for_config_reclaim/);
   assert.equal(control.ackDeadlineAt, Math.floor((f.now + 300000) / 1000));
   assert.equal(control.appendAckSuffix, true); assert.equal(control.priority, 1); assert.equal(control.bypassState, true);
   assert.equal(f.fences.size, 0);
   await f.lifecycle.reconcileConfiguration(f.context);
   assert.equal(f.controls.length, 1, 'no second control within the cooldown');
+});
+
+const deferRequest = (extra = {}) => ({ sessionGroup: 'a', expectedRunId: 'run-a', minutes: 1, reason: 'background command', ...extra });
+
+test('deferred TTL waits after acknowledgment, then renewed runtime activity resets idle time', async () => {
+  const f = fixture();
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const accepted = await f.lifecycle.deferReclaim(deferRequest(), f.context);
+  assert.equal(accepted.ok, true); assert.equal(accepted.deferUntil, f.now + 60000);
+  f.settle(); f.scenes[0].lastActivityAt = f.now + 1; f.now += 100;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.size, 0);
+  assert.equal(f.lifecycle.ttlPreparation.get('a').defer.quietAt, f.now);
+  f.now += 100; f.scenes[0].lastActivityAt = f.now;
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.has('a'), false);
+  assert.equal(f.lifecycle.ttlReset.get('a').at, f.now);
+  f.now += 1799999; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 1);
+  f.now += 1; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, 2);
+});
+
+test('deferred TTL expires into another check and cumulative elapsed delay alerts once without a fence', async () => {
+  const f = fixture(); f.context.configuration.reclaimDeferAlertSeconds = 120;
+  const alerts = []; f.deps.alert = event => alerts.push(event);
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  for (const reason of ['first command', 'second command', 'third command']) {
+    assert.equal((await f.lifecycle.deferReclaim(deferRequest({ reason }), f.context)).ok, true);
+    f.settle(); await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    f.now += 60000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+    assert.equal(f.fences.size, 0);
+  }
+  await Promise.resolve();
+  assert.equal(f.controls.length, 4); assert.equal(alerts.length, 1);
+  assert.deepEqual(alerts[0].reasons, ['first command', 'second command']);
+  assert.match(alerts[0].message, /first command.*second command/);
+  assert.equal(f.events.filter(event => event.event === 'reclaim_deferred').length, 3);
+});
+
+test('deferral rejects missing preparation, changed run, started reclaim, out of range minutes and restarts', async () => {
+  const f = fixture();
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'no_preparation');
+  f.lifecycle.upgradePreparation.set('run-a', { controlId: 1, deadline: f.now + 60000 });
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'no_preparation');
+  f.lifecycle.upgradePreparation.clear(); f.lifecycle.configurationSent.set('run-a', f.now);
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'no_preparation');
+  f.lifecycle.configurationSent.clear();
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest({ expectedRunId: 'other' }), f.context)).reason, 'run_changed');
+  for (const minutes of [0, 0.5, 31, Infinity, NaN]) {
+    assert.equal((await f.lifecycle.deferReclaim(deferRequest({ minutes }), f.context)).reason, 'minutes_out_of_range');
+  }
+  f.fence(); assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'reclaim_started'); f.fences.clear();
+  f.requests = [{ reason: 'upgrade', runIds: ['run-a'] }];
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending'); f.requests = [];
+  f.expected = { runtime: 'codex', mode: 'default' };
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'restart_pending');
+  f.expected = f.scenes[0].launchConfig; f.lifecycle.configurationSent.set('run-a', f.now);
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).ok, true, 'an obsolete config notification must not block deferral');
+});
+
+test('deferred eviction redirects demand and continues observing expiry when demand disappears', async () => {
+  const f = fixture(); f.scenes.push(scene('b')); f.context.configuration.capacity = 2;
+  f.pending = [{ sessionGroup: 'c' }];
+  await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(f.lifecycle.evictionPreparation.has('a'), true);
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).ok, true);
+  f.settle(); await f.lifecycle.checkEviction(f.scenes, f.context);
+  assert.equal(f.lifecycle.evictionPreparation.has('b'), true);
+  assert.equal(f.fences.has('a'), false);
+  f.pending = []; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  const before = f.controls.length;
+  f.now += 60000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.controls.length, before + 1);
+  assert.equal(f.fences.has('a'), false);
+});
+
+test('capacity deferral must arrive before its check deadline and awakened deferral totals start afresh', async () => {
+  const f = fixture();
+  await f.lifecycle.prepareEviction(f.scenes[0], f.context, 'capacity_demand');
+  f.now += 60000;
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).reason, 'preparation_expired');
+  const g = fixture(); await g.lifecycle.checkTtl(g.scenes[0], g.context);
+  await g.lifecycle.deferReclaim(deferRequest(), g.context); g.settle();
+  await g.lifecycle.checkTtl(g.scenes[0], g.context);
+  g.now += 1; g.scenes[0].lastActivityAt = g.now;
+  await g.lifecycle.checkTtl(g.scenes[0], g.context);
+  g.now += 1800000; await g.lifecycle.checkTtl(g.scenes[0], g.context);
+  await g.lifecycle.deferReclaim(deferRequest({ reason: 'new idle period' }), g.context);
+  assert.equal(g.lifecycle.ttlPreparation.get('a').defer.totalMs, 0);
+  assert.deepEqual(g.lifecycle.ttlPreparation.get('a').defer.reasons, ['new idle period']);
+});
+
+test('simultaneous TTL and eviction checks have one deferred preparation and both must settle', async () => {
+  const f = fixture();
+  await f.lifecycle.prepareEviction(f.scenes[0], f.context, 'capacity_demand');
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest(), f.context)).ok, true);
+  assert.equal(f.lifecycle.evictionPreparation.has('a'), false);
+  f.controls[1].status = 'done';
+  await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.get('a').defer.quietAt, undefined);
+  f.settle(); await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.lifecycle.ttlPreparation.get('a').defer.quietAt, f.now);
+  f.now += 60000; await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.size, 0); assert.equal(f.controls.length, 3);
 });

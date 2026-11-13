@@ -44,6 +44,9 @@ export function validateReply(request, reply) {
     case 'ready_for_config_reclaim':
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'unchanged'])
         : reply.result === 'rejected' && oneOf(reply.reason, configReasons);
+    case 'defer_reclaim':
+      return reply.ok ? reply.result === 'accepted' && integer(reply.deferUntil)
+        : reply.result === 'rejected' && oneOf(reply.reason, ['no_preparation', 'run_changed', 'reclaim_started', 'minutes_out_of_range', 'preparation_expired', 'restart_pending', 'requests_unreadable']);
     case 'manual_restart':
       return reply.ok ? oneOf(reply.result, ['accepted', 'already_accepted', 'already_stopped'])
         : (reply.result === 'stale_target' && nonempty(reply.currentRunId)) || (reply.result === 'rejected' && oneOf(reply.reason, manualReasons));
@@ -60,7 +63,7 @@ export function submit(request, { deadlineAt, replyMaxMs = 10000, connectRetryEv
   socketPath = path.join(ZYLOS_DIR, 'activity-monitor', 'am.sock'),
   connect = options => net.createConnection(options), now = (() => { const wall = Date.now(); const mono = performance.now(); return () => wall + performance.now() - mono; })(),
 } = {}) {
-  if (!object(request) || !oneOf(request.type, ['start_attempt', 'restart_all', 'ready_for_config_reclaim', 'manual_restart', 'mode_switch', 'delete_group'])) throw new TypeError('Unsupported supervisor request');
+  if (!object(request) || !oneOf(request.type, ['start_attempt', 'restart_all', 'ready_for_config_reclaim', 'defer_reclaim', 'manual_restart', 'mode_switch', 'delete_group'])) throw new TypeError('Unsupported supervisor request');
   if (!Number.isFinite(replyMaxMs) || replyMaxMs <= 0 || (deadlineAt !== undefined && !integer(deadlineAt))
       || (connectRetryEveryMs !== undefined && (!Number.isFinite(connectRetryEveryMs) || connectRetryEveryMs <= 0))) throw new TypeError('Invalid supervisor deadline');
   const deadline = deadlineAt ?? now() + replyMaxMs;

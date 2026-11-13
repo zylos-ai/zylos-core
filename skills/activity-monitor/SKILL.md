@@ -32,10 +32,12 @@ the Zylos data directory, with valid environment values taking precedence:
 | --- | --- | --- |
 | `session_hot_ttl_seconds` | [`ZYLOS_SESSION_HOT_TTL_SECONDS`](https://github.com/zylos-ai/zylos-core/blob/main/README.md#idle-reclaim-environment) | 1800 seconds |
 | `session_evict_min_idle_seconds` | `ZYLOS_SESSION_EVICT_MIN_IDLE_SECONDS` | 300 seconds |
+| `session_reclaim_defer_max_seconds` | `ZYLOS_SESSION_RECLAIM_DEFER_MAX_SECONDS` | 1800 seconds |
+| `session_reclaim_defer_alert_seconds` | `ZYLOS_SESSION_RECLAIM_DEFER_ALERT_SECONDS` | 7200 seconds |
 
 Values must be positive safe integers. An invalid environment value falls back
 to the config file; an invalid or missing config value falls back to the default.
-Hot TTL is refreshed on each Supervisor round. Dashboard's global idle-reclaim
+Hot TTL and both reclaim deferral settings are refreshed on each Supervisor round. Dashboard's global idle-reclaim
 setting accepts 5–1440 whole minutes and writes seconds through the existing
 config lock; the next TTL check uses the saved value without a restart. Existing
 positive second values remain valid. The page is read-only in single-session
@@ -51,13 +53,31 @@ interval after that latest activity.
 
 Every TTL reclaim, Origin included, is preceded by preparation controls bound
 to the current run, each require-idle, with the ack suffix and a 5-minute ack
-deadline. The first is always the pre-reclaim check: it asks the agent to
-verify the real state of in-progress work (PR/CI, replies awaited from others,
-pending handoffs) and, for anything still waiting on an external event, to
-create a one-time scheduled task that wakes this session group and to write the
-handoff before acknowledging; with nothing waiting it acknowledges directly.
-The task is created with the scheduler `add` command without a reply option,
-which saves the session's own group (Origin saves none and runs in Origin).
+deadline. The first is always the pre-reclaim check. During this check, do not
+send messages to anyone. Only work this session started that is still running
+and whose result it needs (background command, Monitor, subagent or workflow)
+can hold reclaim. Apply for a delay before acknowledging the control:
+
+```bash
+node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js defer-reclaim --minutes 20 --reason "watching CI of my PR"
+```
+
+Confirm `ok:true`, then acknowledge. The command derives the session group and
+run ID from the current environment and uses the existing supervisor socket.
+It rejects missing preparation, a different run, an already-started reclaim,
+a capacity check past its response deadline, or minutes outside 1 through the
+configured single-request maximum. Upgrade and configuration restarts cannot
+be delayed. Deferral records live only in the existing in-memory preparations;
+a supervisor restart loses them and sends a fresh check.
+
+Otherwise write the handoff from current records, leaving completed items out.
+Waiting for people, reviews or decisions needs only that handoff: replies wake
+the group. Create a wake-up only for a step of this session's own ongoing task
+waiting on a system that will not message this group (such as its PR's CI).
+First use scheduler `list --json` to reuse a pending task covering the same
+check. Otherwise use scheduler `add` without a reply option and confirm
+`ok:true`; it saves the session's own group (Origin saves none and runs in
+Origin). Do not create tasks for other waits.
 The PRE_RECLAIM Sync control follows when the group has unsummarized
 conversations, then for Origin the Origin Sync control when Origin has a Sync
 backlog, so Sync records the handoff and task the check left. Reclaim begins
@@ -70,6 +90,16 @@ from the check after the written ones terminate.
 Once the same run is preparing for TTL reclaim, its own preparation activity
 does not restart or cancel that preparation; a new C4 message still cancels it.
 Completed preparation stays pending until the same run is idle, without restarting TTL or sending further preparation controls.
+This behavior is unchanged when no deferral was requested. With deferral,
+terminal controls followed by confirmed quiet establish an activity baseline.
+Later runtime/transcript activity cancels the preparation and starts a fresh
+idle interval. If the delay expires without activity, a fresh check replaces
+the preparation; the session can apply again or release reclaim. During the
+delay it is excluded from capacity and memory-pressure eviction, which try
+other idle groups or leave demand queued. Cumulative delay within one idle
+interval reaching the configured alert threshold sends the owner one alert
+with the group and each request's reason; it never forces reclaim. Activity
+starting a new idle interval clears this history.
 
 Subagent events with `agent_id` are tracked separately for the current run and
 session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended
@@ -102,16 +132,19 @@ still idle; when the deadline passes first, eviction continues without waiting
 for the answer. A new C4 message, a replaced run, or session or child activity
 after the deadline abandons that group's eviction, and candidates are selected
 again by the usual rules; the check's own activity up to its deadline is
-ignored. Each selected group gets one check, and while it waits it counts
-toward the slots being freed, so no further group is asked meanwhile. A
+ignored. Each selected group gets one check, and while it waits without an
+accepted deferral it counts toward the slots being freed, so no further group
+is asked meanwhile. A
 delivered but unanswered check holds the fence as in-flight work until C4
 expires it at the same deadline.
 
 An upgrade restart (`restart_all`) sends each running session listed in the
 request, Origin included, its own check control before that session's fence:
-the same check steps, opening with the upgrade as the reason, bound to the
+the same narrow handoff and wake-up check, opening with the upgrade as the reason, bound to the
 current run, require-idle, with the ack suffix and a 60-second ack deadline.
-The restart begins once the check is terminal or the deadline passes. New
+The check names any background work that will be interrupted so the next
+session can rerun or check it; it offers no deferral. The restart begins once
+the check is terminal or the deadline passes. New
 activity does not cancel it, since the upgrade must restart every listed run.
 Each run is asked once, including when a busy session cancels and the restart
 begins again, and sessions do not wait for each other's answers. A run that
@@ -130,8 +163,9 @@ request queues one check, and the producer returns as soon as both are queued.
 
 A launch configuration change still sends a single control with its 5-minute
 ack deadline and the `ready_for_config_reclaim` flow. Its text now carries the
-same check of waiting work, with the configuration change as the reason,
-before the handoff and the readiness submission.
+same narrow handoff and wake-up check, with the configuration change as the
+reason. Background work is recorded as interrupted, without deferral, before
+the readiness submission.
 
 ## Status File Format
 

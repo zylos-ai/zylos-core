@@ -35,3 +35,20 @@ test('CLI errors retain one JSON envelope and exit 1', async () => {
     const output=JSON.parse(result.stdout);assert.equal(output.ok,false);assert.equal(output.error.code,code);assert.deepEqual(output.error.persisted,[]);
   }
 });
+
+test('deferral request carries only current session identity and reports bounded refusal', async () => {
+  const { deferReclaim } = await import('../supervisor-request.js');
+  const env = { ZYLOS_SESSION_GROUP: 'telegram:a', ZYLOS_RUN_ID: 'run' }; let sent;
+  const result = await deferReclaim({ minutes: 3, reason: 'watcher', env, send: async request => {
+    sent = request; return { kind: 'accepted', sent: true, reply: { result: 'accepted', deferUntil: 2000000 } };
+  } });
+  assert.equal(sent.type, 'defer_reclaim'); assert.equal(sent.expectedRunId, 'run');
+  assert.equal(sent.sessionGroup, 'telegram:a'); assert.equal(sent.minutes, 3); assert.equal(sent.reason, 'watcher');
+  assert.equal(result.ok, true); assert.equal(result.data.deferUntil, 2000000);
+  assert.equal((await deferReclaim({ minutes: 1, reason: 'watcher', env: {}, send: () => assert.fail() })).error.code, 'NO_SESSION_ENV');
+  const rejected = await deferReclaim({ minutes: 31, reason: 'watcher', env,
+    send: async () => ({ kind: 'rejected', sent: true, reply: { reason: 'minutes_out_of_range' } }) });
+  assert.equal(rejected.error.code, 'minutes_out_of_range');
+  const unknown = await deferReclaim({ minutes: 1, reason: 'watcher', env, send: async () => ({ kind: 'no_reply', sent: true }) });
+  assert.equal(unknown.error.persisted, null); assert.match(unknown.error.message, /do not assume/);
+});

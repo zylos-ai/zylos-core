@@ -15,6 +15,8 @@ export function parseSupervisorConfiguration(config, env = process.env) {
     ?? positiveInteger(config[key]) ?? fallback;
   return {
     hotTtlSeconds: setting('session_hot_ttl_seconds', 1800),
+    reclaimDeferMaxSeconds: setting('session_reclaim_defer_max_seconds', 1800),
+    reclaimDeferAlertSeconds: setting('session_reclaim_defer_alert_seconds', 7200),
     evictMinIdleSeconds: setting('session_evict_min_idle_seconds', 300),
     syncMinIntervalSeconds: setting('sync_min_interval_seconds', 600),
     syncMaxIntervalSeconds: setting('sync_max_interval_seconds', 21600),
