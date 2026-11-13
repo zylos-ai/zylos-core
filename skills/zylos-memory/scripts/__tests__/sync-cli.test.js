@@ -104,7 +104,9 @@ test('CLI exits distinguish malformed input, ownership loss, lock timeout and su
       catch (error) { reject(error); }
     });
   }));
-  const args = ['list', '--group', 'telegram:example', '--since', '2026-10-19'];
+  const args = ['list', '--group', 'telegram:example'];
+  const since = run('sync-files', [...args, '--since', '2026-10-19'], { ...env, ZYLOS_SESSION_GROUP: 'origin' });
+  assert.equal(since.status, 1); assert.match(since.stderr, /^Error \[INVALID_INPUT\]: Invalid option --since/);
   const denied = run('sync-files', args, env);
   assert.equal(denied.status, 1); assert.match(denied.stderr, /^Error \[SCOPE_UNBOUND\]:/);
   const logs = run('sync-files', args, { ...env, ZYLOS_SESSION_GROUP: 'origin' });
@@ -139,8 +141,6 @@ test('numeric CLI arguments reject invalid IDs before touching memory or databas
   for (const value of ['', ' ', '-1', '1.5', 'abc', '1e3', '0x10', '+1', ' 1', '1 ', '9007199254740992']) {
     const calls = [
       ['sync-files', ['checkpoint', value, '--token', token, '--batch', '{}']],
-      ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', value, '--checkpoint', '1', '--token', token]],
-      ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '1', '--checkpoint', value, '--token', token]],
     ];
     for (const [script, args] of calls) {
       const result = run(script, args, env);
@@ -148,12 +148,17 @@ test('numeric CLI arguments reject invalid IDs before touching memory or databas
       assert.match(result.stderr, /^Error \[INVALID_INPUT\]:/);
     }
   }
+  // Cursor numbers are derived by the script; the former arguments are rejected.
+  for (const args of [['--synced', '1', '--checkpoint', '1'], ['--synced', '1'], ['--checkpoint', '1']]) {
+    const result = run('origin-cursor', ['advance', '--group', 'telegram:test', ...args, '--token', token], env, '{}');
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /^Error \[INVALID_INPUT\]: Invalid option --(synced|checkpoint)/);
+  }
   assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), []);
   for (const [script, args] of [
     ['sync-files', ['checkpoint', '0', '--token', token, '--batch', JSON.stringify(createBatchReceipt([], { scope: 'origin', after: 0, end: 0 }))]],
     ['sync-files', ['checkpoint', '1', '--token', token, '--batch', JSON.stringify(createBatchReceipt([], { scope: 'origin', after: 0, end: 1 }))]],
-    ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '0', '--checkpoint', '0', '--token', token]],
-    ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '1', '--checkpoint', '1', '--token', token]],
+    ['origin-cursor', ['advance', '--group', 'telegram:test', '--token', token]],
   ]) {
     const result = run(script, args, env);
     assert.equal(result.status, 3, result.stderr);
@@ -175,7 +180,7 @@ test('Sync scripts report a missing or malformed --token as input before touchin
     ZYLOS_RUN_ID: 'token-test', ZYLOS_SESSION_GROUP: 'origin' };
   for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key], { recursive: true });
   const commands = [['sync-files', ['cleanup']], ['sync-files', ['rotate']], ['sync-files', ['checkpoint', '1']],
-    ['sync-files', ['commit']], ['origin-cursor', ['advance', '--group', 'telegram:test', '--synced', '1', '--checkpoint', '1']]];
+    ['sync-files', ['commit']], ['origin-cursor', ['advance', '--group', 'telegram:test']]];
   for (const [script, args] of commands) {
     for (const token of [null, '', 'B'.repeat(32), 'b'.repeat(31), 'g'.repeat(32)]) {
       const result = run(script, token === null ? args : [...args, '--token', token], env, '{"followedUpIds":[]}');
@@ -186,29 +191,48 @@ test('Sync scripts report a missing or malformed --token as input before touchin
   assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), []);
 });
 
-// Integration boundary: real CLI -> token guard -> temporary SQLite cursor
-// transaction for a group with raw input but no checkpoint. Run for numeric
-// parsing/cursor CLI changes; skip otherwise. readyTmuxTarget owns the private
-// tmux socket/database/root; HOME/ZYLOS_DIR/PM2_HOME/TMPDIR remain isolated.
-test('Origin cursor CLI advances raw coverage when the checkpoint cursor is zero', async t => {
+// Integration boundary: real CLI chain c4-fetch --origin-sync --out ->
+// sync-files list --group -> origin-cursor advance (receipts on stdin) against a
+// temporary SQLite database. Run when Origin reads, receipts, list or cursor CLI
+// change; skip otherwise. readyTmuxTarget owns the private tmux socket,
+// database and root; HOME/ZYLOS_DIR/PM2_HOME/TMPDIR remain isolated.
+test('Origin cursor CLI advances only to what exported receipts prove was read', async t => {
   const f = readyTmuxTarget(t, { prefix: 'origin-cursor-cli-', mode: 'multi', packageRoot: rootPath });
   const env = { ...process.env, ...f.env, ZYLOS_RUN_ID: f.ready.runId, ZYLOS_SESSION_GROUP: 'origin',
     PM2_HOME: path.join(f.root, 'pm2'), TMPDIR: path.join(f.root, 'tmp') };
   for (const key of ['PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key]);
-  console.log(JSON.stringify({ boundary: 'zero checkpoint cursor', HOME: env.HOME,
+  console.log(JSON.stringify({ boundary: 'Origin receipt CLI chain', HOME: env.HOME,
     ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR,
     socket: f.socketPath, database: path.join(f.root, 'comm-bridge/c4.db') }));
   const group = 'telegram:raw-only';
-  const id = Number(f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','system','raw input','delivered',?)").run(group).lastInsertRowid);
-  assert(id > 0);
+  const insert = f.db.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('in','system',?,'delivered',?)");
+  const ids = ['first', 'second', 'third'].map(text => Number(insert.run(text, group).lastInsertRowid));
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM checkpoints WHERE session_group=?').get(group).n, 0);
   const token = await acquire({ env, kind: 'origin' }, { currentRunId: async () => env.ZYLOS_RUN_ID });
-  const result = run('origin-cursor', ['advance', '--group', group, '--synced', String(id), '--checkpoint', '0', '--token', token], env);
+  const exports = fs.mkdtempSync(path.join(env.TMPDIR, 'origin-'));
+  const fetch = args => {
+    const result = spawnSync(process.execPath, [path.join(rootPath, 'skills/comm-bridge/scripts/c4-fetch.js'), '--origin-sync', '--group', group, ...args, '--json'], { env, encoding: 'utf8', timeout: 15000, cwd: exports });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout).data;
+  };
+  const summary = fetch(['--summaries-only', '--out', 'summaries.json']);
+  assert.equal(summary.path, path.join(exports, 'summaries.json'));
+  assert.deepEqual(summary.receipt.count, 0);
+  const raw = fetch(['--raw-only', '--after', String(summary.receipt.coverageEnd), '--limit', '2', '--out', 'raw.json']);
+  assert.deepEqual([raw.count, raw.firstId, raw.lastId, raw.receipt.end], [2, ids[0], ids[1], ids[1]]);
+  const listed = run('sync-files', ['list', '--group', group], env);
+  assert.equal(listed.status, 0, listed.stderr);
+  const cursor = () => f.db.prepare('SELECT synced_id,checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group) ?? null;
+  const input = JSON.stringify({ summary: summary.receipt, raw: raw.receipt, inputs: JSON.parse(listed.stdout) });
+  const forged = run('origin-cursor', ['advance', '--group', group, '--token', token], env, JSON.stringify({ summary: summary.receipt, raw: { ...raw.receipt, end: ids[2] }, inputs: JSON.parse(listed.stdout) }));
+  assert.equal(forged.status, 1, forged.stderr); assert.match(forged.stderr, /^Error \[INVALID_INPUT\]:/);
+  assert.equal(cursor(), null);
+  const result = run('origin-cursor', ['advance', '--group', group, '--token', token], env, input);
   assert.equal(result.status, 0, result.stderr);
-  const cursor = f.db.prepare('SELECT synced_id,checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group);
-  assert.deepEqual(cursor, { synced_id: id, checkpoint_id: 0 });
-  const invalid = run('origin-cursor', ['advance', '--group', group, '--synced', String(id), '--checkpoint', '', '--token', token], env);
-  assert.equal(invalid.status, 1, invalid.stderr);
-  assert.match(invalid.stderr, /^Error \[INVALID_INPUT\]:/);
-  assert.deepEqual(f.db.prepare('SELECT synced_id,checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group), cursor);
+  assert.deepEqual(JSON.parse(result.stdout), { advanced: true, syncedId: ids[1], checkpointId: 0 });
+  assert.deepEqual(cursor(), { synced_id: ids[1], checkpoint_id: 0 });
+  const replay = run('origin-cursor', ['advance', '--group', group, '--token', token], env, input);
+  assert.equal(replay.status, 1, replay.stderr); assert.match(replay.stderr, /^Error \[INPUT_CHANGED\]:/);
+  assert.deepEqual(cursor(), { synced_id: ids[1], checkpoint_id: 0 });
+  fs.rmSync(exports, { recursive: true, force: true });
 });

@@ -80,12 +80,8 @@ export function createQueryHandlers(store) {
     originRaw({ group, after, limit } = {}) {
       requireGroup(group); integer(after, 'after');
       if (limit !== undefined) integer(limit, 'limit', 1);
-      const cursor = store.getOriginSyncBacklog().groups.find(item => item.sessionGroup === group);
-      if (!cursor) return [];
-      return store.getOriginSyncConversations(group, {
-        afterConversationId: cursor.cursorFrom, rawAfter: after,
-        upToConversationId: cursor.upTo, limit: limit ?? Number.MAX_SAFE_INTEGER,
-      }).map(projectConversation);
+      const result = store.queries.originRaw(group, { after, limit });
+      return { ...result, rows: result.rows.map(projectConversation) };
     },
   };
 }

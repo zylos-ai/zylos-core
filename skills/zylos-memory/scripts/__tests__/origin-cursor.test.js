@@ -5,11 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 import { checkpoint, rotate, commit, list } from '../sync-files.js';
-import { createBatchReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
+import { createBatchReceipt, createOriginRawReceipt, createOriginSummaryReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
 import { projectConversation } from '../../../comm-bridge/scripts/c4-query-format.js';
 import { renderStateSkeleton } from '../state-format.js';
 import { advance } from '../origin-cursor.js';
 import { acquire, memoryScope } from '../sync-lock.js';
+import { loadTimezoneFromEnv, dateInTimeZone } from '../shared.js';
 async function fixture(t, group = 'origin') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-workflow-progress-'));
   const env = { ...process.env, ZYLOS_DIR: root, ZYLOS_RUN_ID: 'progress-test' };
@@ -37,6 +38,16 @@ async function fixture(t, group = 'origin') {
   };
   return { root, ...scope, db, store, seed, seedGroup, batch, tokens, settings: { env, token }, deps: { database } };
 }
+// The same reads and receipt functions as `c4-fetch.js --origin-sync ... --out`,
+// plus the script's own session-log list, as an Origin worker submits them.
+async function originRead(f, group, { limit, raw = true } = {}) {
+  const summaries = f.store.queries.originSummaries(group);
+  const summary = createOriginSummaryReceipt(summaries.rows, { scope: group, after: summaries.afterCheckpointId, end: summaries.checkpointId, coverageEnd: summaries.coverageEnd });
+  const read = raw ? f.store.queries.originRaw(group, { after: summaries.coverageEnd, limit }) : null;
+  const rawReceipt = read && createOriginRawReceipt(read.rows.map(projectConversation), { scope: group, after: read.after, end: read.end });
+  return { summaries, rows: read?.rows ?? [], payload: { summary, raw: rawReceipt, inputs: await list({ env: f.settings.env, group }, f.deps) } };
+}
+const cursorRow = (f, group) => f.db.prepare('SELECT synced_id,checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group) ?? null;
 test('checkpoint invokes real transaction for group/global and preserves rejection code', async t => {
   for (const group of ['origin', null]) {
     const f = await fixture(t, group); f.seed(1); f.seed(2, 'origin', 'pending'); f.seed(3);
@@ -53,18 +64,18 @@ test('checkpoint invokes real transaction for group/global and preserves rejecti
 test('Origin cursor advances both real DB columns or neither on invalid input/old token', async t => {
   const f = await fixture(t); f.seed(1, 'telegram:test'); f.seed(20, 'telegram:test');
   const cp = f.store.createCheckpoint('telegram:test', 1, 'summary');
-  const settings = { ...f.settings, token: f.tokens.origin, group: 'telegram:test', syncedId: 20, checkpointId: cp.id };
-  assert.notEqual(settings.syncedId, settings.checkpointId);
+  const { payload } = await originRead(f, 'telegram:test');
+  const settings = { ...f.settings, token: f.tokens.origin, group: 'telegram:test', input: payload };
   assert.notEqual(f.tokens.origin, f.tokens.group);
   await assert.rejects(advance({ ...settings, token: f.tokens.group }, f.deps), { code: 'TOKEN_MISMATCH' });
   await assert.rejects(checkpoint({ ...f.settings, token: f.tokens.origin, end: 1, summary: 'wrong marker' }, f.deps), { code: 'TOKEN_MISMATCH' });
-  await advance(settings, f.deps);
-  const read = () => f.db.prepare('SELECT * FROM origin_sync_cursors').get(), before = read();
-  assert.equal(before.synced_id, 20); assert.equal(before.checkpoint_id, cp.id);
-  await assert.rejects(advance({ ...settings, syncedId: 0 }, f.deps), { code: 'CURSOR_INVALID' });
-  await assert.rejects(advance({ ...settings, checkpointId: cp.id + 1 }, f.deps), { code: 'CURSOR_INVALID' });
+  assert.equal(cursorRow(f, 'telegram:test'), null);
+  assert.deepEqual(await advance(settings, f.deps), { advanced: true, syncedId: 20, checkpointId: cp.id });
+  const before = cursorRow(f, 'telegram:test');
+  assert.deepEqual(before, { synced_id: 20, checkpoint_id: cp.id });
+  await assert.rejects(advance(settings, f.deps), { code: 'INPUT_CHANGED' });
   await assert.rejects(advance({ ...settings, token: 'b'.repeat(32) }, f.deps), { code: 'TOKEN_MISMATCH' });
-  assert.deepEqual(read(), before);
+  assert.deepEqual(cursorRow(f, 'telegram:test'), before);
 });
 
 test('real consumer: 18 rows with inbox and 250 rows in two committed batches', async t => {
@@ -114,17 +125,18 @@ test('Origin real late inbox summary remains discoverable without new messages',
   const f = await fixture(t), group = 'sleeping';
   f.seedGroup(group, 100);
   const candidate = f.store.getOriginSyncBacklog().groups.find(row => row.sessionGroup === group);
-  const rows = f.store.getOriginSyncConversations(group, { afterConversationId: 0, rawAfter: 0, upToConversationId: candidate.upTo, limit: 100 });
-  assert.equal(rows.length, 100);
+  const first = await originRead(f, group, { limit: 100 });
+  assert.equal(first.rows.length, 100);
   const settings = { ...f.settings, token: f.tokens.origin, group };
-  await advance({ ...settings, syncedId: candidate.upTo, checkpointId: 0 }, f.deps);
+  assert.deepEqual(await advance({ ...settings, input: first.payload }, f.deps), { advanced: true, syncedId: candidate.upTo, checkpointId: 0 });
   assert.equal(f.store.getOriginSyncBacklog().groups.some(row => row.sessionGroup === group), false);
   const cp = f.store.createCheckpoint(group, candidate.upTo, 'late inbox fact absent from raw messages');
   const late = f.store.getOriginSyncBacklog().groups.find(row => row.sessionGroup === group);
   assert.equal(late.count, 0); assert.equal(late.pendingCheckpoints, 1);
-  const summaries = f.store.queries.originSummaries(group);
-  assert.deepEqual(summaries.rows.map(row => row.summary), ['late inbox fact absent from raw messages']);
-  await advance({ ...settings, syncedId: candidate.upTo, checkpointId: summaries.checkpointId }, f.deps);
+  const second = await originRead(f, group, { limit: 100 });
+  assert.deepEqual(second.summaries.rows.map(row => row.summary), ['late inbox fact absent from raw messages']);
+  assert.equal(second.rows.length, 0);
+  await advance({ ...settings, input: second.payload }, f.deps);
   assert.equal(f.db.prepare('SELECT checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group).checkpoint_id, cp.id);
   assert.equal(f.store.getOriginSyncBacklog().groups.some(row => row.sessionGroup === group), false);
 });
@@ -133,12 +145,16 @@ test('Origin real fixed summary snapshot preserves raw coverage across later che
   const f = await fixture(t), group = 'coverage';
   const records = f.seedGroup(group, 200);
   const first = f.store.createCheckpoint(group, records[99].id, 'covers 1-100');
-  const snapshot = f.store.queries.originSummaries(group);
+  const summaries = f.store.queries.originSummaries(group);
+  const summary = createOriginSummaryReceipt(summaries.rows, { scope: group, after: summaries.afterCheckpointId, end: summaries.checkpointId, coverageEnd: summaries.coverageEnd });
   const later = f.store.createCheckpoint(group, records[149].id, 'covers 101-150');
-  const rows = f.store.getOriginSyncConversations(group, { afterConversationId: 0, rawAfter: snapshot.coverageEnd, upToConversationId: records[199].id, limit: 200 });
-  assert.deepEqual(rows.map(row => row.id), records.slice(100).map(row => row.id));
-  await advance({ ...f.settings, token: f.tokens.origin, group, syncedId: records[199].id, checkpointId: snapshot.checkpointId }, f.deps);
-  assert.equal(snapshot.checkpointId, first.id);
+  const read = f.store.queries.originRaw(group, { after: summaries.coverageEnd, limit: 200 });
+  assert.deepEqual(read.rows.map(row => row.id), records.slice(100).map(row => row.id));
+  const raw = createOriginRawReceipt(read.rows.map(projectConversation), { scope: group, after: read.after, end: read.end });
+  // A checkpoint created after the read does not invalidate the read's coverage.
+  const result = await advance({ ...f.settings, token: f.tokens.origin, group, input: { summary, raw, inputs: await list({ env: f.settings.env, group }, f.deps) } }, f.deps);
+  assert.deepEqual(result, { advanced: true, syncedId: records[199].id, checkpointId: first.id });
+  assert.equal(summaries.checkpointId, first.id);
   assert.deepEqual(f.store.queries.originSummaries(group).rows.map(row => row.id), [later.id]);
 });
 
@@ -152,12 +168,10 @@ test('Origin real 50-row budget keeps unsummarized sleeping groups and advances 
   const rawIds = [];
   for (const candidate of candidates) {
     const group = candidate.sessionGroup;
-    const summaries = f.store.queries.originSummaries(group);
-    const rows = remaining ? f.store.getOriginSyncConversations(group, { afterConversationId: candidate.cursorFrom,
-      rawAfter: summaries.coverageEnd, upToConversationId: candidate.upTo, limit: remaining }) : [];
+    const { rows, payload } = await originRead(f, group, { limit: remaining || undefined, raw: remaining > 0 });
     remaining -= rows.length; rawIds.push(...rows.map(row => row.id));
-    const syncedId = rows.at(-1)?.id ?? Math.max(candidate.cursorFrom, Math.min(summaries.coverageEnd, candidate.upTo));
-    if (rows.length || summaries.rows.length) await advance({ ...f.settings, token: f.tokens.origin, group, syncedId, checkpointId: summaries.checkpointId }, f.deps);
+    const result = await advance({ ...f.settings, token: f.tokens.origin, group, input: payload }, f.deps);
+    assert.equal(result.advanced, !!(rows.length || payload.summary.count));
   }
   assert.equal(rawIds.length, 50);
   assert.deepEqual(rawIds, [...records[groups[0]], ...records[groups[1]].slice(0, 20)].map(row => row.id));
@@ -171,4 +185,111 @@ test('Origin real 50-row budget keeps unsummarized sleeping groups and advances 
   const next = backlog.find(row => row.sessionGroup === 'b-raw');
   const rows = f.store.getOriginSyncConversations(next.sessionGroup, { afterConversationId: next.cursorFrom, rawAfter: next.rawFrom, upToConversationId: next.upTo, limit: 50 });
   assert.deepEqual(rows.map(row => row.id), records['b-raw'].slice(20).map(row => row.id));
+});
+
+test('Origin cursors are derived from verified receipts in each read shape', async t => {
+  const f = await fixture(t);
+  const settings = { ...f.settings, token: f.tokens.origin };
+  // both: summaries and raw rows after their coverage
+  const both = f.seedGroup('both', 6); const bothCp = f.store.createCheckpoint('both', both[2].id, 'first half');
+  let read = await originRead(f, 'both');
+  assert.deepEqual(read.rows.map(row => row.id), both.slice(3).map(row => row.id));
+  assert.deepEqual(await advance({ ...settings, group: 'both', input: read.payload }, f.deps), { advanced: true, syncedId: both[5].id, checkpointId: bothCp.id });
+  // raw only: no checkpoint, a limit stops the read and the cursor at its end
+  const raw = f.seedGroup('raw', 5);
+  read = await originRead(f, 'raw', { limit: 2 });
+  assert.equal(read.payload.summary.count, 0); assert.equal(read.payload.raw.end, raw[1].id);
+  await advance({ ...settings, group: 'raw', input: read.payload }, f.deps);
+  assert.deepEqual(cursorRow(f, 'raw'), { synced_id: raw[1].id, checkpoint_id: 0 });
+  // next run: the procedure reads from C (0 here, below the raw cursor); the
+  // read starts at the cursor, returns only the unread rows, and advances again
+  read = await originRead(f, 'raw');
+  assert.equal(read.summaries.coverageEnd, 0); assert.equal(read.payload.raw.after, raw[1].id);
+  assert.deepEqual(read.rows.map(row => row.id), raw.slice(2).map(row => row.id));
+  assert.deepEqual(await advance({ ...settings, group: 'raw', input: read.payload }, f.deps), { advanced: true, syncedId: raw[4].id, checkpointId: 0 });
+  assert.deepEqual(cursorRow(f, 'raw'), { synced_id: raw[4].id, checkpoint_id: 0 });
+  // summary only: every raw row is already covered
+  const covered = f.seedGroup('covered', 3); const coveredCp = f.store.createCheckpoint('covered', covered[2].id, 'all');
+  read = await originRead(f, 'covered');
+  assert.equal(read.payload.raw.count, 0);
+  await advance({ ...settings, group: 'covered', input: read.payload }, f.deps);
+  assert.deepEqual(cursorRow(f, 'covered'), { synced_id: covered[2].id, checkpoint_id: coveredCp.id });
+  // budget exhausted: summary moves raw only to max(S, min(C, upTo))
+  const budget = f.seedGroup('budget', 4); const budgetCp = f.store.createCheckpoint('budget', budget[1].id, 'two');
+  read = await originRead(f, 'budget', { raw: false });
+  assert.equal(read.payload.raw, null);
+  await advance({ ...settings, group: 'budget', input: read.payload }, f.deps);
+  assert.deepEqual(cursorRow(f, 'budget'), { synced_id: budget[1].id, checkpoint_id: budgetCp.id });
+  // neither a new summary nor a raw read: nothing advances
+  read = await originRead(f, 'budget', { raw: false });
+  assert.deepEqual(await advance({ ...settings, group: 'budget', input: read.payload }, f.deps), { advanced: false });
+  assert.deepEqual(cursorRow(f, 'budget'), { synced_id: budget[1].id, checkpoint_id: budgetCp.id });
+});
+
+test('Origin receipts include a non-delivered outbound row exactly as the read does', async t => {
+  const f = await fixture(t), group = 'outbound';
+  const rows = f.seedGroup(group, 2);
+  f.db.prepare("UPDATE conversations SET status='pending' WHERE id=?").run(rows[1].id);
+  const read = await originRead(f, group);
+  assert.deepEqual(read.rows.map(row => [row.id, row.status]), [[rows[0].id, 'delivered'], [rows[1].id, 'pending']]);
+  await advance({ ...f.settings, token: f.tokens.origin, group, input: read.payload }, f.deps);
+  assert.deepEqual(cursorRow(f, group), { synced_id: rows[1].id, checkpoint_id: 0 });
+});
+
+test('Origin advance rejects altered, stale or mismatched receipts and leaves both cursors', async t => {
+  const f = await fixture(t), group = 'telegram:neg';
+  const records = f.seedGroup(group, 8); f.seedGroup('telegram:other', 2);
+  f.store.createCheckpoint(group, records[1].id, 'start');
+  const settings = { ...f.settings, token: f.tokens.origin, group };
+  const scoped = await memoryScope({ ...f.settings.env, ZYLOS_SESSION_GROUP: group });
+  fs.mkdirSync(path.join(scoped.memoryDir, 'sessions'), { recursive: true });
+  const today = dateInTimeZone(new Date(), loadTimezoneFromEnv(scoped.root, { ...f.settings.env }));
+  const log = path.join(scoped.memoryDir, 'sessions', `${today}.md`);
+  fs.writeFileSync(log, '# log\n');
+  assert.deepEqual((await list({ env: f.settings.env, group }, f.deps)).sessions.map(item => item.path), [path.resolve(log)]);
+  const partial = await originRead(f, group, { limit: 3 });
+  assert.equal(partial.payload.raw.end, records[4].id);
+  const before = cursorRow(f, group);
+  const rejects = async (input, code) => {
+    await assert.rejects(advance({ ...settings, input }, f.deps), { code });
+    assert.deepEqual(cursorRow(f, group), before);
+  };
+  const p = partial.payload, with_ = (part, change) => ({ ...p, [part]: { ...p[part], ...change } });
+  await rejects(with_('raw', { sha256: 'f'.repeat(64) }), 'INVALID_INPUT');
+  await rejects(with_('raw', { end: records[7].id }), 'INVALID_INPUT');
+  await rejects(with_('raw', { count: 5 }), 'INVALID_INPUT');
+  await rejects(with_('summary', { sha256: 'f'.repeat(64) }), 'INVALID_INPUT');
+  await rejects(with_('summary', { end: p.summary.end + 1 }), 'INVALID_INPUT');
+  await rejects(with_('summary', { count: 0 }), 'INVALID_INPUT');
+  await rejects(with_('summary', { coverageEnd: records[3].id }), 'INPUT_CHANGED');
+  // budget exhausted (no raw receipt): an enlarged coverage must not move the
+  // raw cursor past rows that were never read
+  await assert.rejects(advance({ ...settings, input: { ...with_('summary', { coverageEnd: records[6].id }), raw: null } }, f.deps),
+    { code: 'INPUT_CHANGED', message: /coverage is not the coverage of its read/ });
+  assert.deepEqual(cursorRow(f, group), before);
+  await rejects(with_('raw', { after: p.raw.after + 1 }), 'INPUT_CHANGED');
+  await rejects({ ...with_('summary', { scope: 'telegram:other' }) }, 'INVALID_INPUT');
+  await rejects({ ...p, extra: true }, 'INVALID_INPUT');
+  await rejects({ ...p, raw: { ...p.raw, coverageEnd: 1 } }, 'INVALID_INPUT');
+  // session-log set: one more, one fewer, or another group's list
+  await rejects({ ...p, inputs: { ...p.inputs, sessions: [...p.inputs.sessions, { path: `${log}.extra` }] } }, 'INPUT_CHANGED');
+  await rejects({ ...p, inputs: { ...p.inputs, sessions: [] } }, 'INPUT_CHANGED');
+  await rejects({ ...p, inputs: await list({ env: f.settings.env, group: 'telegram:other' }, f.deps) }, 'INPUT_CHANGED');
+  // content changed after the read
+  const original = f.db.prepare('SELECT content FROM conversations WHERE id=?').get(records[3].id).content;
+  f.db.prepare('UPDATE conversations SET content=? WHERE id=?').run('edited', records[3].id);
+  await rejects(p, 'INVALID_INPUT');
+  f.db.prepare('UPDATE conversations SET content=? WHERE id=?').run(original, records[3].id);
+  f.db.prepare('UPDATE checkpoints SET summary=? WHERE session_group=?').run('edited', group);
+  await rejects(p, 'INVALID_INPUT');
+  f.db.prepare('UPDATE checkpoints SET summary=? WHERE session_group=?').run('start', group);
+  // an appended session log is not a changed input; the cursor stops at the read end
+  fs.appendFileSync(log, '- later line\n');
+  assert.deepEqual(await advance({ ...settings, input: p }, f.deps), { advanced: true, syncedId: records[4].id, checkpointId: p.summary.end });
+  // after another advance, the old receipt no longer starts at the cursor
+  const moved = cursorRow(f, group);
+  await assert.rejects(advance({ ...settings, input: p }, f.deps), { code: 'INPUT_CHANGED' });
+  // a summary-only replay is rejected by the summary cursor alone
+  await assert.rejects(advance({ ...settings, input: { ...p, raw: null } }, f.deps), { code: 'INPUT_CHANGED', message: /summary cursor/ });
+  assert.deepEqual(cursorRow(f, group), moved);
 });

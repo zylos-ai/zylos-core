@@ -326,33 +326,27 @@ test('Origin group listing reads only candidate sessions since the cursor date',
   // Directories at file paths prove candidate state and inbox are never read.
   fs.mkdirSync(path.join(target.memoryDir, 'state.md'));
   fs.mkdirSync(path.join(target.memoryDir, `inbox.${segment}.md`));
-  for (const day of ['2026-10-18', '2026-10-19', '2026-10-20']) fs.writeFileSync(path.join(target.memoryDir, 'sessions', `${day}.md`), day);
-  const settings = { ...f.settings, group: 'telegram:candidate', since: '2026-10-19T05:30:02Z', now: () => Date.parse('2026-10-20T12:00:00Z') };
-  const result = await list(settings);
-  assert.deepEqual(Object.keys(result).sort(), ['scope', 'sessions']);
-  assert.equal(result.scope, settings.group);
-  assert.deepEqual(result.sessions.map(item => path.basename(item.path)), ['2026-10-19.md', '2026-10-20.md']);
-  assert.deepEqual((await list({ ...settings, since: '2026-10-20' })).sessions.map(item => path.basename(item.path)), ['2026-10-20.md']);
+  const days = ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-18', '2026-10-19', '2026-10-20'];
+  for (const day of days) fs.writeFileSync(path.join(target.memoryDir, 'sessions', `${day}.md`), day);
   const { db, store } = storeFixture(t);
+  const settings = { ...f.settings, group: 'telegram:candidate', now: () => Date.parse('2026-10-20T12:00:00Z') };
+  const names = result => result.sessions.map(item => path.basename(item.path));
+  // No Origin cursor yet: the latest seven calendar days, including today.
+  const fresh = await list(settings, { database: store });
+  assert.deepEqual(Object.keys(fresh).sort(), ['scope', 'sessions']);
+  assert.equal(fresh.scope, settings.group);
+  assert.deepEqual(names(fresh), days.slice(2).map(day => `${day}.md`));
   db.prepare('INSERT INTO group_heads(session_group,head_id) VALUES(?,1)').run(settings.group);
   db.prepare("INSERT INTO conversations(id,direction,channel,content,status,session_group) VALUES(1,'in','system','new','delivered',?)").run(settings.group);
   store.advanceOriginSyncCursor(settings.group, { syncedId: 0, checkpointId: 0 });
   db.prepare('UPDATE origin_sync_cursors SET updated_at=? WHERE session_group=?').run(Date.parse('2026-10-19T05:30:02Z') / 1000, settings.group);
-  const { cursorUpdatedAt } = store.getOriginSyncBacklog().groups[0];
-  assert.equal(typeof cursorUpdatedAt, 'number');
-  for (const since of [cursorUpdatedAt, String(cursorUpdatedAt)]) {
-    assert.deepEqual((await list({ ...settings, since })).sessions, result.sessions);
-  }
-  await assert.rejects(list({ ...settings, group: '../escape' }), { code: 'SESSION_GROUP_INVALID' });
-  await assert.rejects(list({ ...settings, since: 'yesterday' }), { code: 'INVALID_INPUT' });
+  // With a cursor: from the date of its last update; the worker supplies no boundary.
+  assert.deepEqual(names(await list(settings, { database: store })), ['2026-10-19.md', '2026-10-20.md']);
+  assert.deepEqual(names(await list({ ...settings, since: '2026-10-12' }, { database: store })), ['2026-10-19.md', '2026-10-20.md']);
+  await assert.rejects(list({ ...settings, group: '../escape' }, { database: store }), { code: 'SESSION_GROUP_INVALID' });
   const worker = await fixture(t);
-  await assert.rejects(list({ ...worker.settings, group: settings.group }), { code: 'SCOPE_UNBOUND' });
+  await assert.rejects(list({ ...worker.settings, group: settings.group }, { database: store }), { code: 'SCOPE_UNBOUND' });
   await assert.rejects(guardedCommit({ ...settings, input: { followedUpIds: [] } }, f.deps), { code: 'INVALID_INPUT' });
-});
-
-test('listing rejects a since boundary without a group', async t => {
-  const f = await fixture(t, 'origin');
-  await assert.rejects(list({ ...f.settings, since: 1792387802 }), { code: 'INVALID_INPUT' });
 });
 
 // Real lock + receipt verifier, with database reads/writes injected to observe

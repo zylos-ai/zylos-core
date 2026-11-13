@@ -128,6 +128,20 @@ test('Sync commands use installed paths listed at the beginning of the procedure
   assert.doesNotMatch(sync.slice(sync.indexOf('## Common')), /`(?:sync-lock|sync-files|origin-cursor|reference-index|request-rotation|c4-fetch|c4-db|c4-send)\.js(?:\s|`)/);
 });
 
+test('Origin guidance keeps exported receipts and script-selected logs through cursor advancement', () => {
+  const origin = normalize(between(sync, '## Origin Sync', '## Single global Sync'));
+  assert.match(origin, /--summaries-only --out <private dir>\/<n>-summaries/);
+  assert.match(origin, /Save the receipt unchanged; C is its `coverageEnd`/);
+  assert.match(origin, /--raw-only --after C --limit <remaining> --out <private dir>\/<n>-raw/);
+  assert.match(origin, /save its raw `receipt`/);
+  assert.match(origin, /list --group G` and save the complete returned object/);
+  assert.match(origin, /chooses the first log date from G's Origin cursor update/);
+  assert.match(origin, /"summary":<summary receipt>,"raw":<raw receipt or null>,"inputs":<list --group G result>/);
+  assert.match(origin, /Never supply cursor numbers/);
+  assert.match(origin, /`INPUT_CHANGED` receives no retry and stops later writes/);
+  assert.doesNotMatch(origin, /--synced|--checkpoint|--since/);
+});
+
 test('reorganization starts from the system instruction in the receiving session', () => {
   const text = normalize(reorg);
   assert.match(text, /sole session in single mode, Origin in multi mode/);

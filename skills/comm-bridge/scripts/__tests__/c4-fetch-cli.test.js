@@ -73,6 +73,70 @@ function utcAgo(ms) {
   return new Date(Date.now() - ms).toISOString().slice(0, 19).replace('T', ' ');
 }
 
+// -- --origin-sync --out --
+
+describe('c4-fetch --origin-sync --out', () => {
+  // Real CLI -> Origin snapshot reads -> private SQLite/export files. Run when
+  // Origin reads, export writing or receipts change; skip unrelated changes.
+  // withTmpDir and the official runner isolate and reclaim all child paths.
+  it('exports both Origin reads with byte parity, absolute paths and receipts', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const database = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'));
+      const insert = database.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('out','system',?,?,'foo')");
+      try {
+        const long = 'L'.repeat(17 * 1024) + '\u4e2d\ud83c\udf0d';
+        for (const text of ['one', 'two', long, 'four']) insert.run(text, 'delivered');
+        insert.run('pending outbound', 'pending');
+        database.prepare("INSERT INTO conversations(direction,channel,content,status,session_group) VALUES('out','system','foreign','delivered','bar')").run();
+        assert.equal(checkpoint(['create', '2', '--group', 'foo', '--summary', 'summary ' + long], env).status, 0);
+        const cp = database.prepare("SELECT id FROM checkpoints WHERE session_group='foo'").get().id;
+        for (const format of [[], ['--json']]) {
+          const reads = [['summaries', ['--summaries-only']], ['raw', ['--raw-only', '--after', '2', '--limit', '2']]];
+          for (const [name, mode] of reads) {
+            const args = ['--origin-sync', '--group', 'foo', ...mode, ...format];
+            const direct = cli(args, env);
+            assert.equal(direct.status, 0, direct.stderr);
+            const relative = `${name}${format.length ? '.json' : '.txt'}`;
+            const exported = cli([...args, '--out', relative], env);
+            assert.equal(exported.status, 0, exported.stderr);
+            const metadata = format.length ? JSON.parse(exported.stdout).data : JSON.parse(exported.stdout);
+            assert.equal(metadata.path, path.join(env.ZYLOS_DIR, relative));
+            const bytes = fs.readFileSync(metadata.path);
+            assert.ok(bytes.equals(Buffer.from(direct.stdout)), `${name} export bytes equal direct stdout`);
+            assert.equal(fs.statSync(metadata.path).mode & 0o777, 0o600);
+            assert.equal(metadata.bytes, bytes.length);
+            assert.equal(metadata.sha256, createHash('sha256').update(bytes).digest('hex'));
+            assert.ok(!exported.stdout.includes('L'.repeat(64)), 'stdout carries metadata only');
+            if (name === 'summaries') {
+              assert.deepEqual([metadata.count, metadata.firstId, metadata.lastId], [1, cp, cp]);
+              assert.deepEqual(Object.keys(metadata.receipt).sort(), ['after', 'count', 'coverageEnd', 'end', 'scope', 'sha256']);
+              assert.deepEqual([metadata.receipt.scope, metadata.receipt.after, metadata.receipt.end, metadata.receipt.coverageEnd, metadata.receipt.count], ['foo', 0, cp, 2, 1]);
+            } else {
+              // A limited read ends at its last returned row, not at the frontier.
+              assert.deepEqual([metadata.count, metadata.firstId, metadata.lastId], [2, 3, 4]);
+              assert.deepEqual(Object.keys(metadata.receipt).sort(), ['after', 'count', 'end', 'scope', 'sha256']);
+              assert.deepEqual([metadata.receipt.after, metadata.receipt.end, metadata.receipt.count], [2, 4, 2]);
+            }
+            const retry = cli([...args, '--out', relative], env);
+            assert.equal(retry.status, 1);
+            assert.ok(fs.readFileSync(metadata.path).equals(bytes), 'Rejected overwrite preserves export bytes');
+          }
+        }
+        // A complete raw read includes the non-delivered outbound row and ends at the snapshot bound.
+        const complete = JSON.parse(cli(['--origin-sync', '--group', 'foo', '--raw-only', '--after', '2', '--out', 'complete.json', '--json'], env).stdout).data;
+        assert.deepEqual([complete.count, complete.firstId, complete.lastId, complete.receipt.end], [3, 3, 5, 5]);
+        const combined = cli(['--origin-sync', '--group', 'foo', '--out', 'combined.json'], env);
+        assert.equal(combined.status, 1);
+        assert.match(combined.stderr, /out requires --summaries-only or --raw-only/);
+        assert.equal(fs.existsSync(path.join(env.ZYLOS_DIR, 'combined.json')), false);
+        const unsummarized = cli(['--unsummarized', '--group', 'foo', '--out', 'relative-batch', '--json'], env);
+        assert.equal(unsummarized.status, 0, unsummarized.stderr);
+        assert.equal(JSON.parse(unsummarized.stdout).data.path, path.join(env.ZYLOS_DIR, 'relative-batch'));
+      } finally { database.close(); }
+    });
+  });
+});
+
 // -- --unsummarized --
 
 describe('c4-fetch --unsummarized', () => {
@@ -88,7 +152,7 @@ describe('c4-fetch --unsummarized', () => {
       const metadata = JSON.parse(exported.stdout).data;
       const out = path.join(tmpDir, '-h');
       const bytes = fs.readFileSync(out);
-      assert.equal(metadata.path, '-h');
+      assert.equal(metadata.path, path.join(tmpDir, '-h'));
       assert.equal(metadata.bytes, bytes.length);
       assert.ok(bytes.equals(Buffer.from(direct.stdout)));
       assert.equal(fs.statSync(out).mode & 0o777, 0o600);
