@@ -2,21 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRowSwipe, swipeAxis, SWIPE_REVEAL_PX } from '../public/js/wb/conversation-swipe.js';
 
-// Minimal element tree: the swipe controller only reads classes, a custom property, containment and events.
+// Minimal element tree: the swipe controller only reads classes, a custom property, containment, the
+// row's delete button and deletion state, and events.
 function element(className, parent = null) {
-  const listeners = new Map(), classes = new Set(className.split(' ')), properties = new Map();
+  const listeners = new Map(), classes = new Set(className.split(' ')), properties = new Map(), children = [];
   const node = {
-    parent,
+    parent, children, dataset: {}, hidden: false,
     classList: { add: (...names) => names.forEach(name => classes.add(name)), remove: (...names) => names.forEach(name => classes.delete(name)),
       contains: name => classes.has(name) },
     style: { setProperty: (name, value) => properties.set(name, value), removeProperty: name => properties.delete(name), get: name => properties.get(name) },
     contains: other => { for (let current = other; current; current = current.parent) if (current === node) return true; return false; },
+    querySelector: selector => children.find(child => child.classList.contains(selector.slice(1))) ?? null,
     closest: selector => { for (let current = node; current; current = current.parent) if (current.classList.contains(selector.slice(1))) return current; return null; },
     addEventListener: (name, fn) => listeners.set(name, [...(listeners.get(name) ?? []), fn]),
     removeEventListener: (name, fn) => listeners.set(name, (listeners.get(name) ?? []).filter(item => item !== fn)),
     setPointerCapture() {},
     fire(name, event) { for (const fn of listeners.get(name) ?? []) fn(event); }
   };
+  parent?.children.push(node);
   return node;
 }
 function page({ enabled = () => true } = {}) {
@@ -25,11 +28,19 @@ function page({ enabled = () => true } = {}) {
     const row = element('conversation-list-row');
     return { row, body: element('conversation-list-item', row), remove: element('conversation-delete', row) };
   });
-  const swipe = createRowSwipe({ document, enabled });
+  const swipe = createRowSwipe({ document, enabled }), moves = [];
   for (const { row } of rows) swipe.attach(row);
   // Dispatches the way a browser does: document capture first, then the row the target sits in.
   const dispatch = (target, type, x, y, pointerType = 'touch') => {
     const event = { type, target, pointerId: 1, pointerType, clientX: x, clientY: y };
+    if (type === 'pointermove') {
+      target.closest('.conversation-list-row')?.fire(type, event);
+      // The browser follows each pointer move with its touch move, whose default it may scroll or fling with.
+      const touch = { cancelable: true, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+      if (pointerType === 'touch') target.closest('.conversation-list-row')?.fire('touchmove', touch);
+      moves.push(touch.defaultPrevented);
+      return;
+    }
     if (type === 'pointerdown') document.fire('pointerdown', event);
     target.closest('.conversation-list-row')?.fire(type, event);
   };
@@ -39,7 +50,7 @@ function page({ enabled = () => true } = {}) {
     const [x, y] = points.at(-1) ?? [200, 100];
     dispatch(target, 'pointerup', x, y, pointerType);
   };
-  return { swipe, rows, dispatch, drag, revealed: row => row.classList.contains('conversation-swipe-open') };
+  return { swipe, rows, dispatch, drag, moves, revealed: row => row.classList.contains('conversation-swipe-open') };
 }
 
 test('only a clearly horizontal movement counts as a swipe', () => {
@@ -126,4 +137,33 @@ test('a drag that produced no click does not swallow the next real tap', () => {
   p.drag(body, [[180, 100], [170, 100]]);
   p.dispatch(body, 'pointerdown', 120, 100); p.dispatch(body, 'pointerup', 120, 100);
   assert.equal(p.swipe.consumeTap(row), false);
+});
+
+test('a row without an offered delete button, or showing a deletion status, does not swipe open', () => {
+  const p = page(), [first, second] = p.rows;
+  first.remove.hidden = true;
+  p.drag(first.body, [[150, 100], [60, 100]]);
+  assert.equal(p.revealed(first.row), false, 'Origin, read-only and server-disallowed rows stay put');
+  assert.equal(first.row.style.get('--conversation-swipe-offset'), undefined, 'the row did not move');
+  assert.equal(p.swipe.consumeTap(first.row, { detail: 1 }), false, 'its tap still opens the conversation');
+  second.row.dataset.deletionState = 'error';
+  p.drag(second.body, [[150, 100], [60, 100]]);
+  assert.equal(p.revealed(second.row), false, 'the inline retry is never covered');
+});
+
+test('only a horizontal drag keeps the browser from scrolling or flinging with the touch', () => {
+  const p = page(), [{ body }] = p.rows;
+  p.drag(body, [[198, 130], [190, 220]]);
+  assert.deepEqual(p.moves, [false, false], 'vertical scrolling keeps its default');
+  p.moves.length = 0;
+  p.drag(body, [[194, 100], [150, 101], [90, 102]]);
+  assert.deepEqual(p.moves, [false, true, true], 'undecided moves keep it, horizontal ones do not');
+});
+
+test('a keyboard activation is never taken for the end of a drag', () => {
+  const p = page(), [{ row, body }] = p.rows;
+  p.drag(body, [[180, 100], [170, 100]]);
+  assert.equal(p.swipe.consumeTap(row, { detail: 0 }), false, 'Enter on the row after a drag that produced no click opens it');
+  p.drag(body, [[180, 100], [170, 100]]);
+  assert.equal(p.swipe.consumeTap(row, { detail: 1 }), true, 'the pointer click that ends a drag is still consumed');
 });

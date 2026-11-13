@@ -87,6 +87,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
   sandbox.addCleanup(() => browser.close());
   const metrics = [];
+  let screenshots = 0;
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   for (const locale of ['zh', 'en']) for (const width of [1280, 390]) {
     const zh = locale === 'zh', phone = width === 390;
@@ -106,11 +107,10 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     const row = item => page.locator(`.conversation-list-row:has([data-conversation-id="${item.id}"])`);
     const remove = item => row(item).locator('.conversation-delete');
     const dialog = page.getByRole('alertdialog');
-    const shot = async name => { if (evidence) await page.screenshot({ path: path.join(evidence, `${locale}-${width}-${name}.png`) }); };
+    const shot = async name => { if (evidence) { await page.screenshot({ path: path.join(evidence, `${locale}-${width}-${name}.png`) }); screenshots++; } };
     const style = (locator, property) => locator.evaluate((node, property) => getComputedStyle(node)[property], property);
-    // Real touch input through the browser's input pipeline, including its scrolling decisions. Moves are
-    // paced like a finger (one per frame, settling before lifting): an instantaneous jump reads as a fling
-    // whose end swallows the next tap.
+    // Real touch input through the browser's input pipeline, including its scrolling and fling decisions:
+    // one move per frame and the finger lifts while still moving, as a quick swipe does.
     const swipe = async (item, dx, dy = 0) => {
       const box = await row(item).locator('.conversation-list-item').boundingBox();
       const x = box.x + box.width * 0.7, y = box.y + box.height / 2;
@@ -119,8 +119,20 @@ export async function runConversationDeleteBrowser(t, sandbox) {
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + dx * step / 8, y: y + dy * step / 8 }] });
         await pause(16);
       }
-      await pause(120);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    };
+    // Phone: whether the open conversation's menu offers delete.
+    const menuOffersDelete = async name => {
+      await page.locator('.conversation-list-item').filter({ hasText: name }).tap();
+      await page.locator('.conversation-page.conversation-detail-open').waitFor();
+      await page.locator('.conversation-menu-toggle').tap();
+      await page.locator('.conversation-menu-sheet').waitFor();
+      const offered = await page.locator('.conversation-menu-delete').isVisible();
+      await page.keyboard.press('Escape');
+      await page.locator('.conversation-menu-sheet').waitFor({ state: 'hidden' });
+      await page.locator('.conversation-back').tap();
+      await page.locator('.conversation-page.conversation-detail-open').waitFor({ state: 'detached' });
+      return offered;
     };
     const revealed = item => row(item).evaluate(node => node.classList.contains('conversation-swipe-open'));
     // Phone: swipe the row, then tap its revealed button. Desktop: hover the row, then click its trash.
@@ -129,9 +141,16 @@ export async function runConversationDeleteBrowser(t, sandbox) {
       if (await row(item).evaluate(node => 'deletionState' in node.dataset)) {
         await (phone ? remove(item).tap() : remove(item).click()); return;
       }
-      if (phone) { await swipe(item, -160); assert.equal(await revealed(item), true);
-        await pause(300); await remove(item).tap(); }
-      else { await row(item).hover(); await remove(item).click(); }
+      if (phone) {
+        const at = await remove(item).evaluate(node => { const b = node.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; });
+        await swipe(item, -160);
+        // A quick finger taps the revealed button straight after lifting: the browser must not take that
+        // tap for the end of a fling.
+        const lifted = Date.now();
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+        assert.ok(Date.now() - lifted < 30, 'the tap follows the lift within 30 ms');
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      } else { await row(item).hover(); await remove(item).click(); }
     };
     await page.goto(api.base + '/chat');
     try { await row(active).waitFor(); } catch (error) {
@@ -146,6 +165,14 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.equal(layout.buttons[0].name, (zh ? '删除对话' : 'Delete conversation') + ': ' + active.displayName, 'the button has a readable name');
     metrics.push({ locale, width, ...layout });
     if (phone) {
+      // Wider than a phone, a touch screen without hover keeps the trash shown and rows do not swipe.
+      await page.setViewportSize({ width: 800, height: 844 });
+      assert.equal(await page.evaluate(() => matchMedia('(hover: hover)').matches), false);
+      assert.equal(await style(remove(active), 'visibility'), 'visible');
+      assert.equal(await style(remove(active), 'opacity'), '1');
+      await swipe(active, -160);
+      assert.equal(await revealed(active), false, 'no swipe above phone width');
+      await page.setViewportSize({ width, height: 844 });
       // No standing trash: a vertical drag scrolls, a leftward swipe reveals, a tap elsewhere puts it back.
       assert.equal(await style(remove(active), 'visibility'), 'hidden');
       await swipe(active, 0, 120);
@@ -165,6 +192,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
       assert.equal(await page.locator('.conversation-page.conversation-detail-open').count(), 0, 'that tap does not open a conversation');
     } else {
       // The trash appears for the hovered row or a keyboard-focused row only.
+      assert.equal(await page.evaluate(() => matchMedia('(hover: hover)').matches), true);
       await page.mouse.move(width - 5, 840);
       assert.equal(await style(remove(active), 'opacity'), '0');
       await row(active).hover();
@@ -182,15 +210,6 @@ export async function runConversationDeleteBrowser(t, sandbox) {
       assert.equal(await style(remove(active), 'opacity'), '0');
       await page.evaluate(() => document.activeElement?.blur());
     }
-    // A failed preview explains itself; nothing asks for confirmation and nothing is sent.
-    api.state.previewFailure = true;
-    await startDelete(active);
-    const preflight = row(active).locator('.conversation-delete-status').filter({ hasText: zh ? '无法安全访问' : 'cannot be accessed safely' });
-    await preflight.waitFor();
-    assert.equal(await dialog.count(), 0, 'a failed preflight does not ask for confirmation');
-    assert.equal(api.writes.length, 0, 'a failed preflight sends no DELETE');
-    assert.doesNotMatch(await preflight.innerText(), /private|do-not-render|尚未完成|继续同一次|same operation|finish deletion/i);
-    api.state.previewFailure = false;
     // The existing confirmation shows the preview's counts; cancelling sends nothing.
     await startDelete(active);
     await dialog.waitFor();
@@ -200,8 +219,20 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     await dialog.locator('button').first().click();
     await dialog.waitFor({ state: 'detached' });
     assert.equal(api.writes.length, 0, 'cancel sends no DELETE');
-    assert.equal(await preflight.count(), 0, 'a successful preflight followed by cancel clears its previous failure');
     assert.equal(await row(active).isVisible(), true);
+    // A failed preview explains itself; nothing asks for confirmation and nothing is sent.
+    api.state.previewFailure = true;
+    await startDelete(active);
+    const preflight = row(active).locator('.conversation-delete-status').filter({ hasText: zh ? '无法安全访问' : 'cannot be accessed safely' });
+    await preflight.waitFor();
+    assert.equal(await dialog.count(), 0, 'a failed preflight does not ask for confirmation');
+    assert.equal(api.writes.length, 0, 'a failed preflight sends no DELETE');
+    assert.doesNotMatch(await preflight.innerText(), /private|do-not-render|尚未完成|继续同一次|same operation|finish deletion/i);
+    api.state.previewFailure = false;
+    await startDelete(active); await dialog.waitFor();
+    await dialog.locator('button').first().click(); await dialog.waitFor({ state: 'detached' });
+    assert.equal(await preflight.count(), 0, 'a successful preflight followed by cancel clears its previous failure');
+    assert.equal(api.writes.length, 0);
     await startDelete(draft); await dialog.waitFor();
     assert.ok(!(await dialog.innerText()).includes(zh ? '主记忆' : 'main memory'), 'a draft gets the light confirmation');
     await dialog.locator('button').first().click(); await dialog.waitFor({ state: 'detached' });
@@ -243,6 +274,15 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     assert.equal(await remove(active).isVisible(), true, 'its retry stays shown');
     assert.equal(await remove(active).getAttribute('title'), zh ? '重试删除' : 'Retry deletion');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
+    if (phone) {
+      // A row showing a deletion status keeps its retry in place: swiping it does not cover the button.
+      await swipe(active, -160);
+      assert.equal(await revealed(active), false);
+      assert.equal(await remove(active).evaluate(node => { const b = node.getBoundingClientRect();
+        return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest('.conversation-delete') === node; }), true);
+      // That swipe was the browser's own fling, whose suppression of the next tap is let pass first.
+      await pause(500);
+    }
     await shot('delete-error');
     // Retrying a started deletion continues its operation without another confirmation, through pending to done.
     api.state.deleteFailure = false; api.state.pending = true;
@@ -275,20 +315,42 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     await page.locator('.conversation-list-item').filter({ hasText: 'Origin' }).waitFor();
     const originRow = page.locator('.conversation-list-row').filter({ hasText: 'Origin' });
     assert.equal(await originRow.locator('.conversation-delete').count(), 1);
-    assert.equal(await originRow.locator('.conversation-delete').isHidden(), true, 'Origin cannot be deleted');
+    assert.equal(await originRow.locator('.conversation-delete').evaluate(node => node.hidden), true, 'Origin cannot be deleted');
+    const externalRow = page.locator('.conversation-list-row').filter({ hasText: external.displayName });
+    assert.equal(await page.locator('.conversation-delete:not([hidden])').count(), 1, 'the external channel row can be deleted');
+    assert.equal(await externalRow.locator('.conversation-delete').evaluate(node => node.hidden), false);
+    if (phone) {
+      await swipe(origin, -160);
+      assert.equal(await revealed(origin), false, 'a row without delete does not swipe open');
+      assert.equal(await style(originRow.locator('.conversation-list-item'), 'transform'), 'none');
+      await swipe(external, -160);
+      assert.equal(await revealed(external), true);
+      await originRow.locator('.conversation-list-item').tap();
+      assert.equal(await revealed(external), false);
+      assert.equal(await menuOffersDelete('Origin'), false, 'the menu offers no delete for Origin');
+      assert.equal(await menuOffersDelete(external.displayName), true);
+    }
     await shot('external');
     api.state.removed.clear();
     await page.goto(api.base + '/fleet/reader/chat');
     await page.locator('.conversation-list-item').first().waitFor();
     assert.equal(await page.locator('.conversation-delete:not([hidden])').count(), 0); await shot('remote');
+    if (phone) assert.equal(await menuOffersDelete(active.displayName), false, 'a remote view offers no delete in the menu');
     api.state.deletionAllowed = false;
     await page.goto(api.base + '/chat'); await page.locator('.conversation-list-item').first().waitFor();
     assert.equal(await page.locator('.conversation-delete:not([hidden])').count(), 0, 'server deletionAllowed:false hides local actions');
+    if (phone) assert.equal(await menuOffersDelete(active.displayName), false, 'nor does the menu');
     await page.goto(api.base + '/usage');
     const usageNote = page.locator('.wb-usage-deletion-note:visible'); await usageNote.waitFor();
     assert.match(await usageNote.innerText(), zh ? /不再计入消息数/ : /no longer count toward message totals/);
+    const noteStyle = await usageNote.evaluate(node => {
+      const css = getComputedStyle(node), status = getComputedStyle(document.querySelector('.wb-usage-status'));
+      return { size: css.fontSize, margin: css.marginTop, color: css.color, statusColor: status.color, viewport: document.documentElement.scrollWidth };
+    });
+    assert.equal(noteStyle.size, '12.5px'); assert.equal(noteStyle.margin, '8px'); assert.equal(noteStyle.color, noteStyle.statusColor);
+    assert.equal(noteStyle.viewport, width); await shot('usage');
     assert.deepEqual(errors, []); await context.close();
   }
   if (evidence) fs.writeFileSync(path.join(evidence, 'layout.json'), JSON.stringify(metrics, null, 2));
-  console.info('Deletion browser verified', JSON.stringify({ screenshots: evidence ? 30 : 0, pairs: 4 }));
+  console.info('Deletion browser verified', JSON.stringify({ screenshots, pairs: 4 }));
 }

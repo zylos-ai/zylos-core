@@ -1024,7 +1024,7 @@ button.conversation-activity-head:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-swiping .conversation-list-item { transform:translateX(var(--conversation-swipe-offset,0)); transition:none; }
   .conversation-page .conversation-swipe-open .conversation-list-item { transform:translateX(-88px); }
   .conversation-page .conversation-list-row:not([data-deletion-state]) .conversation-delete {
-    position:absolute; top:0; right:0; width:88px; height:72px; border:0; border-radius:10px;
+    position:absolute; top:0; right:0; bottom:0; width:88px; height:auto; border:0; border-radius:10px;
     background:var(--wb-err); color:#fff; font-size:14px; font-weight:600; visibility:hidden; -webkit-tap-highlight-color:transparent;
   }
   .conversation-page .conversation-list-row:is(.conversation-swiping,.conversation-swipe-open) .conversation-delete { visibility:visible; }

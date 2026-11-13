@@ -1507,7 +1507,7 @@ export function mountConversationPage({
         button.append(symbol, body);
         button.addEventListener('click', event => {
           // A tap that ends a swipe or puts a revealed delete button back does not open the conversation.
-          if (swipe.consumeTap(wrapper)) { event.preventDefault?.(); return; }
+          if (swipe.consumeTap(wrapper, event)) { event.preventDefault?.(); return; }
           mobileDetail(true);
           autoSelectPending = false;
           void state.select(item.id);
@@ -1539,7 +1539,6 @@ export function mountConversationPage({
         ? deletionState.state : null;
       if (shownState) row.wrapper.dataset.deletionState = shownState;
       else delete row.wrapper.dataset.deletionState;
-      if (shownState && swipe.isOpen(row.wrapper)) swipe.close(row.wrapper);
       row.remove.hidden = !s.canDelete || !local() || !deletionPath(item);
       row.remove.disabled = deletionState?.busy === true;
       const deletionLabel = deletionState?.state === 'pending' || deletionState?.state === 'error' ? 'chat.delete.retry' : 'chat.delete.button';

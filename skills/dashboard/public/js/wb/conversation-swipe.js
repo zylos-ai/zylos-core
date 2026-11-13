@@ -9,8 +9,15 @@ export function swipeAxis(dx, dy) {
   return Math.abs(dx) > Math.abs(dy) * 1.5 ? 'horizontal' : 'vertical';
 }
 
+// Only a row whose delete button is offered, and that is not showing a deletion status, can be swiped open.
+const revealable = row => {
+  const button = row.querySelector?.('.conversation-delete');
+  return Boolean(button) && !button.hidden && !('deletionState' in (row.dataset ?? {}));
+};
+
 export function createRowSwipe({ document, enabled = () => true, width = SWIPE_REVEAL_PX } = {}) {
-  let open = null, drag = null, swallow = null, swallowedBy = null;
+  // `consume`: the row whose next pointer click only ends a drag or puts a revealed button back.
+  let open = null, drag = null, consume = null;
   const offset = (row, value) => value === null ? row.style.removeProperty('--conversation-swipe-offset')
     : row.style.setProperty('--conversation-swipe-offset', `${value}px`);
   function close(row = open) {
@@ -19,20 +26,18 @@ export function createRowSwipe({ document, enabled = () => true, width = SWIPE_R
     offset(row, null);
     if (open === row) open = null;
   }
-  // A press outside the revealed row only puts it back: when it lands on another row, that row's tap is consumed.
-  const outside = event => {
+  // Every press starts afresh; one outside the revealed row only puts it back, and when it lands on
+  // another row that row's tap is consumed.
+  const press = event => {
+    consume = null;
     if (!open || open.contains(event.target)) return;
-    const row = event.target.closest?.('.conversation-list-row') ?? null;
+    consume = event.target.closest?.('.conversation-list-row') ?? null;
     close();
-    swallow = row;
-    swallowedBy = event;
   };
-  document.addEventListener?.('pointerdown', outside, true);
+  document.addEventListener?.('pointerdown', press, true);
   function attach(row) {
     row.addEventListener('pointerdown', event => {
-      // A consumed tap that never produced a click must not swallow the next real one.
-      if (swallowedBy !== event) swallow = null;
-      if (event.pointerType === 'mouse' || !enabled() || event.target.closest?.('.conversation-delete')) return;
+      if (event.pointerType === 'mouse' || !enabled() || !revealable(row) || event.target.closest?.('.conversation-delete')) return;
       drag = { row, id: event.pointerId, x: event.clientX, y: event.clientY, base: open === row ? -width : 0, axis: null, at: null };
     });
     row.addEventListener('pointermove', event => {
@@ -45,6 +50,11 @@ export function createRowSwipe({ document, enabled = () => true, width = SWIPE_R
       row.classList.add('conversation-swiping');
       offset(row, drag.at);
     });
+    // A horizontal drag is the row's own gesture, not a fling: otherwise the browser suppresses the
+    // tap that follows a quick swipe, and the revealed button misses it.
+    row.addEventListener('touchmove', event => {
+      if (drag?.row === row && drag.axis === 'horizontal' && event.cancelable !== false) event.preventDefault();
+    }, { passive: false });
     const end = event => {
       if (drag?.row !== row || event.pointerId !== drag.id) return;
       const { axis, at } = drag;
@@ -53,8 +63,7 @@ export function createRowSwipe({ document, enabled = () => true, width = SWIPE_R
       offset(row, null);
       if (axis !== 'horizontal' || at === null) return;
       // The click that may follow a drag must not open the conversation.
-      swallow = row;
-      swallowedBy = null;
+      consume = row;
       if (event.type === 'pointerup' && at <= -width / 2) {
         open = row;
         row.classList.add('conversation-swipe-open');
@@ -66,18 +75,19 @@ export function createRowSwipe({ document, enabled = () => true, width = SWIPE_R
   return {
     attach,
     close,
-    isOpen: row => open === row,
-    // True when this tap on the row only ends a drag or puts the revealed button back.
-    consumeTap(row) {
-      if (swallow === row) { swallow = null; return true; }
-      swallow = null;
+    // True when this click on the row only ends a drag or puts the revealed button back. A keyboard
+    // activation (detail 0) is never taken for the end of a drag.
+    consumeTap(row, event) {
+      const pending = consume;
+      consume = null;
+      if (pending === row && event?.detail !== 0) return true;
       if (open !== row) return false;
       close(row);
       return true;
     },
     destroy() {
-      document.removeEventListener?.('pointerdown', outside, true);
-      open = drag = swallow = swallowedBy = null;
+      document.removeEventListener?.('pointerdown', press, true);
+      open = drag = consume = null;
     }
   };
 }
