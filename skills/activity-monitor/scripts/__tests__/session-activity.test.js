@@ -156,6 +156,7 @@ test('restart: recover latest turn across rotation and associate older session_s
  appendEvent(log,row('pre_tool',{ts:140,tool_use_id:'live',tool:'Bash'}));
  const result=activity.read(10000);
  assert.equal(activity.transcriptPath,transcript);assert.deepEqual(result.tools.map(tool=>tool.id),['live']);
+ assert.equal(result.busySince,120);
  assert.deepEqual(result.events.map(event=>event.event),['prompt','pre_tool','pre_tool']);
  appendEvent(log,row('post_tool',{ts:150,tool_use_id:'live'}));assert.equal(activity.read(10000).tools.length,0);
 });
@@ -194,4 +195,29 @@ test('DM F14: legacy usage stays at legacy path without a fabricated run envelop
  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root,'activity-monitor/statusline.json'))),sample);
  assert.equal(original.zylos.runId,'forged');
  assert.equal(fs.existsSync(path.join(root,'activity-monitor/session-groups')),false);
+});
+
+
+test('busy start follows the main turn across tools and completions until observed idle',t=>{
+ const {activity,row}=fixture(t);
+ assert.equal(activity.read(5000).busySince,null);
+ activity.consume([row('prompt',{ts:6000}),row('pre_tool',{ts:6500,tool_use_id:'a'}),
+  row('post_tool',{ts:7000,tool_use_id:'a'}),row('pre_tool',{ts:7500,tool_use_id:'b'})]);
+ assert.equal(activity.read(8000).busySince,6000);
+ activity.consume([row('stop',{ts:8500})]);assert.equal(activity.read(9000).busySince,6000);
+ assert.equal(activity.read(12000).busySince,null);
+ activity.consume([row('pre_tool',{ts:13000,tool_use_id:'c'}),row('pre_tool',{ts:12900,agent_id:'child'})]);
+ assert.equal(activity.read(14000).busySince,13000);
+});
+
+test('unknown recovered busy start uses run start and transcript-only activity uses last idle sample',t=>{
+ const recovered=fixture(t);
+ recovered.activity.consume([recovered.row('pre_tool',{ts:5000,tool_use_id:'a'})]);
+ assert.equal(recovered.activity.read(6000).busySince,100);
+ const {activity,root,row}=fixture(t),transcript=path.join(root,'transcript.jsonl');
+ fs.writeFileSync(transcript,'{}\n');fs.utimesSync(transcript,0.1,0.1);
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ assert.equal(activity.read(5000).state,'idle');assert.equal(activity.read(6000).state,'idle');
+ fs.utimesSync(transcript,7,7);assert.equal(activity.read(8000).busySince,6000);
+ assert.equal(activity.read(8500).busySince,6000);
 });

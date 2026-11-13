@@ -12,6 +12,7 @@ export class SessionActivity {
     this.subagents=new Map();this.lastSubagentActivityAt=null;
     this.recovered=false;this.lastActivityAt=startedAt;this.closedThrough=-Infinity;this.transcriptPath=null;
     this.transcriptFd=null;this.transcriptOffset=0;this.transcriptIdentity=null;this.turn=false;this.idleSince=null;
+    this.busySince=null;this.lastIdleAt=null;
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
   matches(row) {
@@ -60,6 +61,10 @@ export class SessionActivity {
       this.associateTranscript(row);
       if(!Number.isFinite(row.ts) || row.ts<this.startedAt)continue;
       this.lastActivityAt=Math.max(this.lastActivityAt,row.ts);
+      if(['prompt','pre_tool'].includes(row.event) && this.busySince===null) {
+        // A recovered tool can be midway through a turn whose prompt is gone.
+        this.busySince=row.event==='prompt' || this.lastIdleAt!==null ? row.ts : this.startedAt;
+      }
       if(row.event==='prompt')this.turn=true;
       const nativeId=typeof row.tool_use_id==='string' && row.tool_use_id.length>0 ? row.tool_use_id : null;
       const id=nativeId ?? (row.event==='pre_tool' ? Symbol('unidentified tool') : null);
@@ -104,10 +109,18 @@ export class SessionActivity {
     const transcriptMtimeMs=this.readTranscript();
     if(Number.isFinite(transcriptMtimeMs))this.lastActivityAt=Math.max(this.lastActivityAt,transcriptMtimeMs);
     const busy=this.tools.size>0 || now-this.lastActivityAt<3000;
-    if(busy)this.idleSince=null;else if(this.idleSince===null)this.idleSince=now;
+    if(busy){
+      this.idleSince=null;
+      // Transcript-only activity has no precise turn boundary. The last idle
+      // observation (or run start after recovery) is a conservative lower bound.
+      this.busySince ??= this.lastIdleAt ?? this.startedAt;
+    }else{
+      this.busySince=null;this.lastIdleAt=now;
+      if(this.idleSince===null)this.idleSince=now;
+    }
     const activeSubagents=[...this.subagents].filter(([,agent])=>agent.active && now-agent.lastActivityAt<subagentTtlMs)
       .map(([agentId,agent])=>({agentId,lastActivityAt:agent.lastActivityAt}));
-    return {sessionId:this.sessionId,state:busy?'busy':'idle',tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
+    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
       activeSubagents,lastSubagentActivityAt:this.lastSubagentActivityAt};
   }
 }

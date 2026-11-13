@@ -25,6 +25,7 @@ for (const [group, scenario] of [
   ['origin', 'clean'], ['telegram:release', 'clean'], ['telegram:release', 'sync'],
   ['telegram:release', 'child'], ['telegram:release', 'restart'],
   ['telegram:release', 'conversation'], ['telegram:release', 'control'],
+  ['telegram:release', 'conversation-before-intent'], ['telegram:release', 'control-before-intent'],
 ]) {
   test(`voluntary ${group} release (${scenario}) respects its pending intent and exact run`, { timeout: 30000 }, async t => {
     const realHome = fs.realpathSync(os.userInfo().homedir);

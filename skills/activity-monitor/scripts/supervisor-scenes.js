@@ -12,7 +12,7 @@ const { createSessionReader } = await loadCoreModule('session-state-reader-async
 const absent = (group, env) => ({ sessionGroup: group, present: false, ready: false, processRunning: false,
   tmuxName: tmuxNameForGroup(group ?? 'origin'), runDir: groupRunDir(group ?? 'origin', env),
   runId: null, runtime: 'unknown', sessionId: null, createdAt: null, currentSessionTs: null,
-  state: 'unknown', idleSince: null, usagePercent: null, launchConfig: null, tmuxTarget: null });
+  state: 'unknown', idleSince: null, busySince: null, usagePercent: null, launchConfig: null, tmuxTarget: null });
 const descriptor = target => ({ serverGeneration: target.serverGeneration, sessionId: target.tmuxSessionId, paneId: target.paneId });
 function validTarget(value) {
   return value && /^\d+:\d+$/.test(value.serverGeneration) && /^\$\d+$/.test(value.sessionId) && /^%\d+$/.test(value.paneId);
@@ -70,7 +70,7 @@ export class SupervisorScenes {
         ready: target.ready && scopeMatches(scope, target), sessionId: target.sessionId,
         createdAt: target.createdAt * 1000, currentSessionTs: target.f3?.ts ?? null,
         processRunning: true,
-        launchConfig: target.launchConfig, tmuxTarget: descriptor(target), state: 'unknown', idleSince: null, usagePercent: null,
+        launchConfig: target.launchConfig, tmuxTarget: descriptor(target), state: 'unknown', idleSince: null, busySince: null, usagePercent: null,
         runtimeObservation: target.runtimeObservation };
       scene.runtimePid = target.runtimePid;
       if (Number.isSafeInteger(scene.runtimePid) && scene.runtimePid > 0) {
@@ -82,7 +82,7 @@ export class SupervisorScenes {
           const activity = await this.readActivity(scene);
           if (activity) {
             // Identity never comes from status data; only explicitly normalized state facts do.
-            for (const key of ['state', 'idleSince', 'lastActivityAt', 'transcriptMtimeMs', 'tools', 'activeSubagents', 'lastSubagentActivityAt']) {
+            for (const key of ['state', 'idleSince', 'busySince', 'lastActivityAt', 'transcriptMtimeMs', 'tools', 'activeSubagents', 'lastSubagentActivityAt']) {
               if (Object.hasOwn(activity, key)) scene[key] = activity[key];
             }
           }
