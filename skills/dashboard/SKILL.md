@@ -352,6 +352,12 @@ restarts and mode switches are not additional readiness gates.
 Use this endpoint only as a readiness probe, never as a liveness probe.
 An upgrade/restart can briefly stop the supervisor or single session and
 return 503; using that as liveness would cause Kubernetes to kill the pod.
+Start with Kubernetes `timeoutSeconds: 20` and `periodSeconds: 30`, then tune
+against observed latency under load. The 1000 ms deadline below bounds only
+supervisor IPC, not the whole HTTP request. Single-session observation also
+runs the existing bounded tmux commands (and may inspect the process tree),
+so its slow path can exceed 10 seconds; the default 1-second Kubernetes timeout
+is too short for that path. This recommendation does not add a server timeout.
 Without `probe=ready`, `/api/health` retains its process-health response and
 HTTP 200 behavior, without a `ready` field. Other query values also retain that
 behavior. The platform can use the presence of the top-level boolean `ready`

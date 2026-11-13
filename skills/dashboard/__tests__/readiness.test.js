@@ -72,3 +72,33 @@ test('unreadable observations remain unknown without becoming a third rejection 
   } : incompleteLoad(name);
   assert.equal((await readReadiness(incomplete)).session_running, null);
 });
+
+test('unreadable mode with an absent session remains ready without inspecting identity', async () => {
+  const f = fixture({ present: false });
+  const original = f.load;
+  f.load = async name => name === 'config.js' ? {
+    readSessionMode: () => { throw new Error('unreadable configuration'); },
+  } : original(name);
+  const result = await readReadiness(f);
+  assert.equal(result.ready, true);
+  assert.equal(result.reason, null);
+  assert.equal(result.session_mode, null);
+  assert.equal(result.session_running, null);
+  assert.equal(f.calls.includes('identity'), false);
+});
+
+test('reader module loading failure retains both public runtime health entries', async () => {
+  const f = fixture();
+  const original = f.load;
+  f.load = async name => {
+    if (name === 'session-state-reader.js') throw new Error('reader unavailable');
+    return original(name);
+  };
+  const result = await readReadiness(f);
+  assert.equal(result.ready, true);
+  assert.equal(result.reason, null);
+  assert.equal(result.session_running, null);
+  assert.deepEqual(result.runtime_health, {
+    claude: { source: 'unreadable', health: null }, codex: { source: 'unreadable', health: null },
+  });
+});

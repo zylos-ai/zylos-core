@@ -11,6 +11,32 @@ import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
 const restart = id => ({ version: 1, type: 'restart_all', requestId: id, reason: 'upgrade' });
 const manual = (overrides = {}) => ({ version: 1, type: 'manual_restart', requestId: 'manual', expectedRunId: 'r1', ...overrides });
 const config = (overrides = {}) => ({ version: 1, type: 'ready_for_config_reclaim', requestId: 'config', expectedRunId: 'r1', sessionGroup: 'telegram:a', ...overrides });
+
+test('unsupported readiness envelope versions are rejected before entry and serialization', async () => {
+  const touched = [];
+  const forbidden = name => () => { touched.push(name); throw new Error(name); };
+  const admission = new SupervisorAdmission({ store: { read: forbidden('read'), write: forbidden('write') },
+    diagnostic: forbidden('diagnostic') });
+  admission.serialize = forbidden('serialize');
+  for (const open of [false, true]) {
+    if (open) admission.openEntry();
+    for (const request of [
+      { version: 0, type: 'restart_all', requestId: 'probe' },
+      { ...restart('probe'), version: 0 },
+    ]) {
+      assert.deepEqual(await admission.handle(request), {
+        version: 1, type: 'restart_all', requestId: 'probe', ok: false, code: 'invalid_request',
+      });
+    }
+  }
+  assert.deepEqual(touched, []);
+  admission.closeEntry();
+  assert.equal((await admission.handle(restart('valid'))).code, 'entry_not_open');
+  admission.openEntry();
+  await assert.rejects(admission.handle(restart('valid')), /serialize/);
+  assert.deepEqual(touched, ['serialize']);
+});
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'admission-')); t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const file = path.join(root, 'restart-requests.json'), store = new RestartRequestStore({ file });

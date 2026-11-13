@@ -63,20 +63,26 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
   setMode('single');
 
   let socketServer;
+  const socketServers = new Set();
   const peers = new Set();
-  const stopSocket = async () => {
+  const stopSocket = async (server = socketServer) => {
     const closed = [...peers].map(peer => once(peer, 'close'));
     for (const peer of peers) peer.destroy();
-    if (socketServer?.listening) await new Promise(resolve => socketServer.close(resolve));
+    if (server) await new Promise(resolve => server.close(resolve));
     await Promise.all(closed);
   };
-  t.after(stopSocket);
+  const stopSockets = async () => {
+    for (const server of socketServers) await stopSocket(server);
+  };
+  t.after(stopSockets);
   const startSocket = async handler => {
-    socketServer = net.createServer(peer => {
+    const server = net.createServer(peer => {
       peers.add(peer); peer.once('close', () => peers.delete(peer));
       handler(peer);
     });
-    await new Promise((resolve, reject) => { socketServer.once('error', reject); socketServer.listen(socketPath, resolve); });
+    socketServers.add(server);
+    socketServer = server;
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
   };
   const admission = new SupervisorAdmission();
   // No operational dependencies: a probe reaching any mutation would fail.
@@ -114,13 +120,27 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     let closed;
     await startSocket(peer => {
       peer.resume();
-      closed = once(peer, 'close', { signal: AbortSignal.timeout(3000) });
+      closed = once(peer, 'close');
     });
-    const before = performance.now();
-    assert.equal((await ready()).status, 503);
-    assert.ok(performance.now() - before >= 900);
-    await closed;
-    await stopSocket();
+    try {
+      const before = performance.now();
+      assert.equal((await ready()).status, 503);
+      assert.ok(performance.now() - before >= 900);
+      await closed;
+    } finally {
+      await stopSocket();
+    }
+    assert.equal(peers.size, 0);
+  });
+  await t.test('socket cleanup closes the earlier listener after a later bind fails', async () => {
+    await startSocket(peer => peer.resume());
+    const first = socketServer;
+    try {
+      await assert.rejects(startSocket(peer => peer.resume()), { code: 'EADDRINUSE' });
+    } finally {
+      await stopSockets();
+    }
+    assert.equal(first.listening, false);
     assert.equal(peers.size, 0);
   });
   await startSocket(handler);
