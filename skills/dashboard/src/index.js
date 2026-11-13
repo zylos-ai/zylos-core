@@ -2,6 +2,7 @@
 import { readThresholdPolicy, sessionThreshold } from './lib/session-threshold.js';
 import { CoreState } from './lib/core-state.js';
 import { loadCoreModule } from './lib/core-modules.js';
+import { createReadinessCheck } from './lib/readiness.js';
 import { createCoalescedBroadcast, createSessionCache, broadcastFleetSnapshot } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
 import { promisify } from 'node:util';
@@ -1107,8 +1108,15 @@ function latestMetricRow(metricName, source) {
   return rows.length > 0 ? rows[rows.length - 1] : null;
 }
 
+const checkReadiness = createReadinessCheck();
+
 async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/health') {
+    if (url.searchParams.get('probe') === 'ready') {
+      const readiness = await checkReadiness();
+      sendJson(res, readiness.ready ? 200 : 503, readiness);
+      return true;
+    }
     const sourceHealth = stateEngine.getSourceHealth();
     sendJson(res, 200, {
       ok: true,

@@ -1,4 +1,4 @@
-import { stateMood } from './agent-fleet.js?v=159';
+import { stateMood } from './agent-fleet.js?v=160';
 
 const STORAGE_KEY = 'fleet-sounds-muted';
 const WORKING_MOODS = new Set(['busy', 'thinking']);
@@ -31,8 +31,10 @@ export function computeFleetTransitions(prevMoods, agents) {
     const name = String(agent?.name || '');
     if (!name) continue;
     const mood = stateMood(agent);
-    moods.set(name, mood);
     const prev = prevMoods instanceof Map ? prevMoods.get(name) : undefined;
+    // Missing state observations do not end or restart the last known work.
+    moods.set(name, mood === 'unknown' && prev !== undefined ? prev : mood);
+    if (mood === 'unknown') continue;
     if (prev === undefined) continue;
     if (!isWorkingMood(prev) && isWorkingMood(mood)) started.push(name);
     else if (isWorkingMood(prev) && mood === 'idle') finished.push(name);

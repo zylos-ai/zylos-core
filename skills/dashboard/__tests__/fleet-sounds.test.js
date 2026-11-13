@@ -54,6 +54,30 @@ test('working -> stuck/offline does not fire finish', () => {
   assert.deepEqual(finished, []);
 });
 
+test('working to unknown does not announce completion', () => {
+  const { moods, started, finished } = computeFleetTransitions(new Map([['local', 'busy']]), [
+    agent('local', 'UNKNOWN', { self: true, pulse_rate: 1, health_reason: 'ok' }),
+  ]);
+  assert.equal(moods.get('local'), 'busy');
+  assert.deepEqual(started, []);
+  assert.deepEqual(finished, []);
+});
+
+for (const next of ['BUSY', 'IDLE']) {
+  test(`working through unknown to ${next.toLowerCase()} preserves sound transitions`, () => {
+    let current = computeFleetTransitions(new Map(), [agent('local', 'BUSY')]);
+    for (let sample = 0; sample < 3; sample++) {
+      current = computeFleetTransitions(current.moods, [agent('local', 'UNKNOWN')]);
+      assert.equal(current.moods.get('local'), 'busy');
+      assert.deepEqual(current.started, []);
+      assert.deepEqual(current.finished, []);
+    }
+    current = computeFleetTransitions(current.moods, [agent('local', next)]);
+    assert.deepEqual(current.started, []);
+    assert.deepEqual(current.finished, next === 'IDLE' ? ['local'] : []);
+  });
+}
+
 test('offline -> busy fires start (recovered agent picks up work)', () => {
   const prev = new Map([['a', 'offline']]);
   const { started } = computeFleetTransitions(prev, [agent('a', 'BUSY')]);

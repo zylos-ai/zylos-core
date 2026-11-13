@@ -326,9 +326,8 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
   const runtimeInfo = statePayload?.runtime_info || null;
   const systemMetrics = statePayload?.system_metrics || null;
   const liveState = statePayload?.state || 'UNKNOWN';
-  const offline = liveState === 'OFFLINE' || liveState === 'UNKNOWN';
-  const pulseRate = self && offline ? 0 : 1;
-  const healthReason = liveState === 'IDLE' ? 'idle' : (self && offline ? 'offline' : 'ok');
+  // A state payload proves Dashboard reachability, for self and remotes alike.
+  const healthReason = liveState === 'IDLE' ? 'idle' : 'ok';
   return sanitizeRecord({
     name,
     base_url: opts.base_url ?? agentConfig.base_url ?? null,
@@ -356,7 +355,7 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     has_subagent: hasSubagent(statePayload),
     subagent_count: subagentCount(statePayload),
     last_seen: nowIso(nowMs),
-    pulse_rate: pulseRate,
+    pulse_rate: 1,
     health_reason: healthReason,
     link: sanitizeLink(opts.link),
     updated_at: nowIso(nowMs),

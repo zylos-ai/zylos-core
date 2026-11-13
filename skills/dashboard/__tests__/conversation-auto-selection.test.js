@@ -128,6 +128,22 @@ test('phone-width pages keep the first populated list unselected', { timeout: 20
   assert.deepEqual(f.selected(), []); assert.deepEqual(f.detailReads, []);
 });
 
+test('on a phone, Enter on a row after a drag that produced no click still opens the conversation', { timeout: 2000 }, async t => {
+  const f = fixture(t, { width: 390 }), opening = f.page.open(); await flush(); await f.attach();
+  await f.resolveList(0); await opening; await f.resolveList(1);
+  const wrapper = f.root.querySelectorAll('.conversation-list-row')[1], item = wrapper.querySelector('.conversation-list-item');
+  wrapper.style.removeProperty = name => { delete wrapper.style[name]; };
+  // A short leftward drag springs back; the browser sent no click for it.
+  const pointer = (type, x) => wrapper.dispatch(type, { type, target: item, pointerId: 1, pointerType: 'touch', clientX: x, clientY: 100 });
+  const drag = () => { pointer('pointerdown', 200); pointer('pointermove', 180); pointer('pointerup', 180); };
+  drag();
+  item.dispatch('click', { detail: 1, preventDefault() {} }); await flush();
+  assert.deepEqual(f.selected(), [], 'the pointer click ending a drag does not open the conversation');
+  drag();
+  item.dispatch('click', { detail: 0, preventDefault() {} }); await flush();
+  assert.deepEqual(f.selected(), ['g:BB'], 'a keyboard activation opens it');
+});
+
 test('deleting the automatically selected conversation does not select another one', { timeout: 2000 }, async t => {
   const f = fixture(t), opening = f.page.open(); await flush(); await f.resolveList(0); await opening;
   assert.deepEqual(f.selected(), ['g:AA']); const beforeDelete = f.detailReads.length;

@@ -11,6 +11,32 @@ import { MANUAL_WAKE_PROMPT } from '../origin-prompts.js';
 const restart = id => ({ version: 1, type: 'restart_all', requestId: id, reason: 'upgrade' });
 const manual = (overrides = {}) => ({ version: 1, type: 'manual_restart', requestId: 'manual', expectedRunId: 'r1', ...overrides });
 const config = (overrides = {}) => ({ version: 1, type: 'ready_for_config_reclaim', requestId: 'config', expectedRunId: 'r1', sessionGroup: 'telegram:a', ...overrides });
+
+test('unsupported readiness envelope versions are rejected before entry and serialization', async () => {
+  const touched = [];
+  const forbidden = name => () => { touched.push(name); throw new Error(name); };
+  const admission = new SupervisorAdmission({ store: { read: forbidden('read'), write: forbidden('write') },
+    diagnostic: forbidden('diagnostic') });
+  admission.serialize = forbidden('serialize');
+  for (const open of [false, true]) {
+    if (open) admission.openEntry();
+    for (const request of [
+      { version: 0, type: 'restart_all', requestId: 'probe' },
+      { ...restart('probe'), version: 0 },
+    ]) {
+      assert.deepEqual(await admission.handle(request), {
+        version: 1, type: 'restart_all', requestId: 'probe', ok: false, code: 'invalid_request',
+      });
+    }
+  }
+  assert.deepEqual(touched, []);
+  admission.closeEntry();
+  assert.equal((await admission.handle(restart('valid'))).code, 'entry_not_open');
+  admission.openEntry();
+  await assert.rejects(admission.handle(restart('valid')), /serialize/);
+  assert.deepEqual(touched, ['serialize']);
+});
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'admission-')); t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const file = path.join(root, 'restart-requests.json'), store = new RestartRequestStore({ file });
@@ -336,4 +362,33 @@ test('manual intent and configuration reclaim exclude only their common target g
   assert.equal((await f.admission.handle(config({ sessionGroup: group }))).result, 'accepted');
   f.store.write([]);
   assert.equal((await f.admission.handle(manual({ sessionGroup: group }))).reason, 'fence_conflict');
+});
+
+test('deferral admission shares the lifecycle queue and does not persist restart state', async t => {
+  const f = fixture(t); let release, entered = false;
+  const block = f.admission.serialize(() => new Promise(resolve => { release = resolve; }));
+  await Promise.resolve();
+  f.admission.deferReclaim = request => { entered = true; return { ok: true, result: 'accepted' }; };
+  const request = { version: 1, type: 'defer_reclaim', requestId: 'defer', sessionGroup: 'telegram:a', expectedRunId: 'r1', reason: 'command' };
+  const pending = f.admission.handle(request);
+  await Promise.resolve(); assert.equal(entered, false);
+  release(); await block;
+  const result = await pending; assert.equal(result.ok, true); assert.equal(entered, true);
+  assert.equal(fs.existsSync(f.file), false);
+  const { validateReply } = await import('../../../../cli/lib/am-sock-client.js');
+  assert.equal(validateReply(request, result), true);
+  f.admission.deferReclaim = () => { throw Object.assign(new Error('unreadable'), { code: 'requests_unreadable' }); };
+  const refused = await f.admission.handle({ ...request, requestId: 'defer-unreadable' });
+  assert.equal(refused.reason, 'requests_unreadable');
+  assert.equal(validateReply({ ...request, requestId: 'defer-unreadable' }, refused), true);
+});
+
+
+test('direct deferral admission rejects a whitespace-only reason before dispatch', async t => {
+  const f = fixture(t);
+  f.admission.deferReclaim = () => assert.fail('invalid raw requests must not reach lifecycle');
+  const result = await f.admission.handle({ version: 1, type: 'defer_reclaim', requestId: 'blank-reason',
+    sessionGroup: 'telegram:a', expectedRunId: 'r1', reason: '   ' });
+  assert.equal(result.ok, false); assert.equal(result.code, 'invalid_request');
+  assert.equal(fs.existsSync(f.file), false);
 });
