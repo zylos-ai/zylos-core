@@ -135,7 +135,7 @@ export function sampleResult(sample, first, last, freshnessMs, now) {
     else if (!Number.isFinite(sampledAt) || now - sampledAt > freshnessMs) reason = 'stale';
   }
   return { value: reason ? null : sample.value, sampledAt, valid: !reason, reason: reason || null,
-    ...(reason === 'stale' ? { lastValue: sample.value } : {}) };
+    lastValue: reason === 'stale' ? sample.value : null };
 }
 
 /** Model facts share the caller's validated usage identity. A captured explicit

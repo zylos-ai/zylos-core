@@ -44,11 +44,11 @@ test('ordered invalid reasons retain known timestamps and discard values',async(
    const reader=createSessionReader({env:f.env,now:()=>row.now??1100,open:async()=>({close:async()=>{}}),observe:async()=>++count===1?row.first??identity:row.last??identity});
    const result=await reader.readSessionState('lark:x',{freshnessMs:200});
    assert.deepEqual(result.usage,{value:null,valid:false,reason:row.reason,sampledAt:Object.hasOwn(row,'time')?row.time:1000,
-    ...(row.reason==='stale'?{lastValue:row.sample}:{})},row.reason);
+    lastValue:row.reason==='stale'?row.sample:null},row.reason);
   }
   put(path.join(f.dir,'agent-status.json'),'{broken',1000);
   const reader=createSessionReader({env:f.env,now:()=>1100,open:async()=>({close:async()=>{}}),observe:async()=>identity});
-  assert.deepEqual((await reader.readSessionState('lark:x',{freshnessMs:200})).status,{value:null,valid:false,reason:'unparseable',sampledAt:1000});
+  assert.deepEqual((await reader.readSessionState('lark:x',{freshnessMs:200})).status,{value:null,valid:false,reason:'unparseable',sampledAt:1000,lastValue:null});
  }finally{f.clean();}
 });
 test('unknown runtime does not consume usage; I1 observation loss invalidates; open errors preserve uncertainty',async()=>{
@@ -98,7 +98,7 @@ test('usage freshness can be bounded apart from status freshness; identity check
   const idle=await at(43000).readSessionState('lark:x',{freshnessMs:5000});
   assert.equal(idle.usage.reason,'stale');assert.equal(idle.status.reason,'stale');
   const kept=await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:Infinity});
-  assert.deepEqual(kept.usage,{value:usage(),valid:true,reason:null,sampledAt:1000});
+  assert.deepEqual(kept.usage,{value:usage(),valid:true,reason:null,sampledAt:1000,lastValue:null});
   assert.equal(kept.status.reason,'stale','the status sample keeps its own freshness');
   const bounded=await at(43000).readSessionState('lark:x',{freshnessMs:5000,usageFreshnessMs:41999});
   assert.equal(bounded.usage.reason,'stale');

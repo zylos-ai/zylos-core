@@ -10,7 +10,7 @@ const row=(timestamp='2026-10-22T01:02:03.456Z',used=10)=>({timestamp,type:'even
 const line=value=>JSON.stringify(value)+'\n';
 test('stale sample retains only identity-validated last value without changing freshness semantics', () => {
  const value={state:'idle',health:'ok'}, sample={value,sampledAt:1000,identity:{runId:'run',sessionId:'session'}};
- assert.deepEqual(sampleResult(sample,identity,identity,5000,6000),{value,sampledAt:1000,valid:true,reason:null});
+ assert.deepEqual(sampleResult(sample,identity,identity,5000,6000),{value,sampledAt:1000,valid:true,reason:null,lastValue:null});
  assert.deepEqual(sampleResult(sample,identity,identity,5000,6001),{value:null,sampledAt:1000,valid:false,reason:'stale',lastValue:value});
  for(const [first,last,input,reason] of [
   [identity,{...identity,sessionId:'replacement'},sample,'identity_changed'],
@@ -22,7 +22,7 @@ test('stale sample retains only identity-validated last value without changing f
  ]) {
   const result=sampleResult(input,first,last,5000,9000);
   assert.equal(result.reason,reason); assert.equal(result.value,null); assert.equal(result.valid,false);
-  assert.equal(Object.hasOwn(result,'lastValue'),false);
+  assert.equal(result.lastValue,null);
  }
 });
 function fixture(){const root=fs.mkdtempSync(path.join(os.tmpdir(),'session-runtime-usage-'));const dir=path.join(root,'activity-monitor/session-groups/lark:x');fs.mkdirSync(dir,{recursive:true});const rollout=path.join(root,'rollout.jsonl');const events=path.join(dir,'events.jsonl');const event={v:1,ts:100,event:'session_start',runtime:'codex',session_group:'lark:x',run_id:'run',session_id:'session',transcript_path:rollout};fs.writeFileSync(events,line(event));fs.writeFileSync(rollout,line(row()));return {root,dir,rollout,events,event,env:{ZYLOS_DIR:root},clean:()=>fs.rmSync(root,{recursive:true,force:true})};}
