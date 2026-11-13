@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { parseTargetObservation } from '../tmux-protocol.js';
 const { openTmuxConnection, serverGeneration } = await import('../tmux-connection.js');
 const { observeSessionTarget, resolveSessionTarget, revalidateSessionTarget, readTargetRuntime } = await import('../session-target.js');
 const binary = process.env.TEST_TMUX_BIN || 'tmux';
@@ -72,7 +73,10 @@ test('configured observation reads identity and guarded environment once', async
     calls.push(argv[0]);
     return command(argv, settings);
   };
-  assert.equal((await observeSessionTarget(options)).ready, true);
+  const observed = await observeSessionTarget(options);
+  assert.equal(observed.ready, true);
+  assert.equal(observed.processRunning, true);
+  assert.equal(observed.runtimePid, Number(await command(['display-message', '-p', '-t', observed.paneId, '#{pane_pid}'])));
   assert.deepEqual(calls, ['display-message', 'show-environment']);
 });
 test('first binding adopts the observed server rather than the server at executor creation', async t => {
@@ -132,7 +136,7 @@ test('initial disappearance and generation change are detected before any sendin
   let reads=0;
   const connection={bindTarget() {},command:async args=> {
     if(args[0]==='show-environment') throw Object.assign(Error("can't find session: $1"),{code:'TMUX_COMMAND_FAILED'});
-    return reads++===0 ? '100:200\t$1\t%1\t123' : '100:200';
+    return reads++===0 ? '100:200\t$1\t%1\t123\t10\t0' : '100:200';
   }};
   await assert.rejects(observeSessionTarget({connection,tmuxName:'fixture',readReady:ready}),{code:'TARGET_GONE'});
   let generation='100:200';
@@ -142,7 +146,7 @@ test('initial disappearance and generation change are detected before any sendin
     if(generation!=='100:200') throw Object.assign(Error('Bound server changed'),{code:'GENERATION_CHANGED'});
     if(args[0]==='show-environment') return String.raw`ZYLOS_RUN_ID="r1"; export ZYLOS_RUN_ID;
 ZYLOS_MODEL_CONFIG="{\"runtime\":\"claude\"}"; export ZYLOS_MODEL_CONFIG;`;
-    return '100:200\t$1\t%1\t123';
+    return '100:200\t$1\t%1\t123\t10\t0';
   }};
   const target=await resolveSessionTarget({connection:held,tmuxName:'fixture',readReady:ready});
   commands.length=0;
@@ -158,7 +162,7 @@ test('malformed environment observation and revalidation expose TMUX_UNAVAILABLE
   const connection = {bindTarget() {}, command:async args => {
     if (args[0] === 'show-environment') return environment;
     if (args.at(-1) === '#{pane_pid}') return '10';
-    return '100:200\t$1\t%1\t123';
+    return '100:200\t$1\t%1\t123\t10\t0';
   }};
   const options = {connection, tmuxName:'fixture', readReady:ready, readProcessTree:async()=>[]};
   const target = await resolveSessionTarget(options);
@@ -207,8 +211,8 @@ test('absent target uses a conditional session timestamp and leaves the server a
     return command(argv, settings);
   };
   assert.equal((await observeSessionTarget({...options, tmuxName:'absent'})).present, false);
-  assert.equal(identityFormat.split('\t').at(-1), '#{?session_id,#{session_created},}');
-  assert.equal(tmux('display-message', '-p', '-t', '=absent:', identityFormat.split('\t').at(-1)), '');
+  assert.equal(identityFormat.split('\t')[3], '#{?session_id,#{session_created},}');
+  assert.equal(tmux('display-message', '-p', '-t', '=absent:', identityFormat.split('\t')[3]), '');
   assert.equal(tmux('display-message', '-p', '-t', '=fixture:', '#{session_name}'), 'fixture');
 });
 
@@ -216,4 +220,17 @@ test('first resolution maps a disappearing server to TARGET_GONE', async t => {
   const {connection, tmux, options} = await fixture(t);
   tmux('kill-server');
   await assert.rejects(resolveSessionTarget(options), {code:'TARGET_GONE'});
+});
+
+
+test('target observation requires strict pane PID and death fields', () => {
+  const prefix = '100:200\t$1\t%1\t123';
+  assert.deepEqual(parseTargetObservation(`${prefix}\t10\t0`), {
+    generation:'100:200', tmuxSessionId:'$1', paneId:'%1', created:'123', panePid:10, paneDead:false,
+  });
+  assert.equal(parseTargetObservation(`${prefix}\t10\t1`).paneDead, true);
+  assert.equal(parseTargetObservation('100:200\t\t\t\t\t'), null);
+  for (const suffix of ['', '\t10', '\t0\t0', '\t-1\t0', '\t1.5\t0', '\t9007199254740992\t0', '\t10\t', '\t10\t2', '\t10\tfalse', '\t10\t1\n', '\t10\t0\textra']) {
+    assert.throws(() => parseTargetObservation(prefix + suffix), {code:'TMUX_UNAVAILABLE', cause:'error'});
+  }
 });

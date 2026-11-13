@@ -52,10 +52,10 @@ test('async target observer returns exact real tmux identity and READY', async t
   assert.equal(tmux('list-clients', '-F', '#{client_pid}'), '');
 });
 
-test('F2 launch intent alone cannot claim a live runtime process', async t => {
+test('a live pane with F2 identity reports process liveness', async t => {
   const { observer } = fixture(t);
   const running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
-  assert.equal(running.hasProcess, false);
+  assert.equal(running.hasProcess, true);
   assert.equal(running.identityVerified, true); assert.equal(running.ready, true);
   assert.deepEqual(running.launchConfig, { runtime: 'claude', mode: 'default' });
 });
@@ -65,7 +65,12 @@ test('real process observation, malformed READY and scope identity are distinct'
   let running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
   assert.equal(running.hasProcess, true); assert.equal(running.identityVerified, true);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{"runtime":"codex","mode":"default"}');
-  assert.equal((await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' })).identityVerified, false);
+  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  assert.equal(running.identityVerified, true); assert.equal(running.hasProcess, true);
+  assert.equal(running.launchConfig.runtime, 'codex');
+  tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{');
+  running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
+  assert.equal(running.identityVerified, false); assert.equal(running.hasProcess, true);
   tmux('set-environment', '-t', '=zylos-group-origin', 'ZYLOS_MODEL_CONFIG', '{"runtime":"claude","mode":"default"}');
   fs.writeFileSync(readyPath, '{}');
   running = await observer.observeCoreRunning({ sessionGroup: 'origin', sessionMode: 'single' });
@@ -166,26 +171,26 @@ for (const json of [false, true]) for (const mode of ['single', 'multi']) test(`
   assert.deepEqual(db.prepare('SELECT * FROM control_queue').all(), [row]);
 });
 
-for (const phase of ['runtime-process', 'final-revalidation']) test(`post-observation ${phase} command failure maps to TMUX_UNAVAILABLE`, async t => {
+for (const phase of ['pane-observation', 'final-revalidation']) test(`post-observation ${phase} command failure maps to TMUX_UNAVAILABLE`, async t => {
   const {root,binary:requestedBinary} = fixture(t);
   const binary = execFileSync('sh', ['-c', 'command -v "$1"', 'sh', requestedBinary], {encoding:'utf8'}).trim();
   const wrapper = path.join(root, 'tmux-error-wrapper');
   const count = path.join(root, 'environment-reads');
-  // Initial observation uses configured F2. Inject failure only at the later
-  // process probe or second environment read (the observer's final revalidation).
+  // Pane PID/death now arrive in the initial observation. Also exercise the
+  // second environment read (the observer's final identity revalidation).
   fs.writeFileSync(wrapper, `#!${process.execPath}
 const fs = require('node:fs'), cp = require('node:child_process');
 const args = process.argv.slice(2), action = args.join(' ');
 let reads = fs.existsSync(${JSON.stringify(count)}) ? Number(fs.readFileSync(${JSON.stringify(count)}, 'utf8')) : 0;
 if (action.includes('show-environment')) fs.writeFileSync(${JSON.stringify(count)}, String(++reads));
-if (${JSON.stringify(phase)} === 'runtime-process' ? action.includes('#{pane_pid}') : reads === 2) {
+if (${JSON.stringify(phase)} === 'pane-observation' ? action.includes('#{pane_pid}') : reads === 2) {
   process.stdout.write('ZYLOS_OK\\n'); process.stderr.write('injected command failure\\n'); process.exit(1);
 }
 const result = cp.spawnSync(${JSON.stringify(binary)}, args, {stdio:'inherit'});
 process.exit(result.status ?? 1);
 `, {mode:0o700});
   const observer = createCoreObserver({tmux:{socketPath:path.join(root,'tmux.sock'), binary:wrapper}});
-  const method = phase === 'runtime-process' ? 'observeCoreRunning' : 'observeCoreTarget';
+  const method = phase === 'pane-observation' ? 'observeCoreRunning' : 'observeCoreTarget';
   await assert.rejects(observer[method]({sessionMode:'single'}), {code:'TMUX_UNAVAILABLE', cause:'error'});
-  assert.equal(Number(fs.readFileSync(count, 'utf8')), phase === 'runtime-process' ? 1 : 2);
+  assert.equal(fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0, phase === 'pane-observation' ? 0 : 2);
 });
