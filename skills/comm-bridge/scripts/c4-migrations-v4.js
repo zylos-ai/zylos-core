@@ -1,6 +1,6 @@
 const quote = value => `"${value.replaceAll('"', '""')}"`;
 
-/** Expand the ending reason without discarding deployment-owned columns/objects. */
+/** Leave ending reason validation to the writer, preserving deployment-owned objects. */
 export function migrateToV4(db) {
   for (const { name } of db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()) {
     if (db.prepare(`PRAGMA foreign_key_list(${quote(name)})`).all()
@@ -9,8 +9,10 @@ export function migrateToV4(db) {
     }
   }
   const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='run_endings'").get()?.sql;
-  if (!sql || !/reason\s+IN\s*\(/i.test(sql)) throw new Error('Run ending constraint is unavailable');
-  const rewritten = sql.replace(/(reason\s+IN\s*\([^)]*)\)/i, "$1,'release')")
+  const reasonCheck = /\bCHECK\s*\(\s*reason\s+IN\s*\(\s*'(?:[^']|'')*'(?:\s*,\s*'(?:[^']|'')*')*\s*\)\s*\)/gi;
+  // Unknown or ambiguous layouts must roll back rather than lose another check.
+  if (!sql || [...sql.matchAll(reasonCheck)].length !== 1) throw new Error('Run ending constraint is unavailable or ambiguous');
+  const rewritten = sql.replace(reasonCheck, '')
     .replace(/^CREATE\s+TABLE\s+(?:"run_endings"|`run_endings`|\[run_endings\]|run_endings)/i, 'CREATE TABLE run_endings_release_migration');
   const objects = db.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='run_endings' AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name").all();
   const columns = db.prepare('PRAGMA table_xinfo(run_endings)').all().filter(row => row.hidden === 0).map(row => quote(row.name)).join(',');
