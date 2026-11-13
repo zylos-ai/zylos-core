@@ -4,7 +4,7 @@ import { ACTIVITY_MONITOR_DIR } from '../c4-config.js';
 
 // A one-way hint: callers start this after paste without awaiting it. Neither
 // an acknowledgment nor a failed connection can change the delivery ledger.
-export function notifyDelivered({ conversationId, channel, sessionGroup, runId, runtime, pastedAt }, {
+export function notifyDelivered({ conversationId, controlId, channel, sessionGroup, runId, runtime, pastedAt }, {
   socketPath = path.join(ACTIVITY_MONITOR_DIR, 'am.sock'),
   timeoutMs = 5000,
   createConnection = net.createConnection,
@@ -21,7 +21,7 @@ export function notifyDelivered({ conversationId, channel, sessionGroup, runId, 
     try {
       const line = JSON.stringify({
         version: 2, type: 'notify_delivered', requestId: `dispatcher-${process.pid}-${pastedAt}`,
-        conversationId, channel, sessionGroup, runId, runtime, pastedAt,
+        conversationId, controlId, channel, sessionGroup, runId, runtime, pastedAt,
       }) + '\n';
       timer = setTimeout(settle, timeoutMs);
       socket = createConnection(socketPath);

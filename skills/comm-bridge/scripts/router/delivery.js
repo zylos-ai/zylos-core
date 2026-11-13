@@ -333,10 +333,9 @@ export function createDelivery(deps, configuration = {}) {
             const sanitized = sanitizeMessage(message);
             await io(() => adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED }));
             const pastedAt = now();
-            if (type === 'conversation') {
-              try { Promise.resolve(deps.notifyDelivered({ conversationId: row.id, channel: row.channel,
-                sessionGroup: group, runId: target.runId, runtime: target.runtime, pastedAt })).catch(() => {}); } catch {}
-            }
+            try { Promise.resolve(deps.notifyDelivered({
+              ...(type === 'conversation' ? { conversationId: row.id, channel: row.channel } : { controlId: row.id }),
+              sessionGroup: group, runId: target.runId, runtime: target.runtime, pastedAt })).catch(() => {}); } catch {}
             if (type === 'conversation' || !content.startsWith('/')) {
               const entry = periodicGroups.get(group);
               if (entry) entry.fields = fields;

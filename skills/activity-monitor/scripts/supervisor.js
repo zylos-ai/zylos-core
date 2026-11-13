@@ -234,10 +234,14 @@ export function createSupervisor(deps) {
     },
   },deps.loopOptions);
   const connectionHandler=createSupervisorConnectionHandler({admission,router,isOpen:()=>admission.open && !stopping,readRun:group=>scenes.readRun(group),readMode,
-    onDelivered:async notification=>{
-      observer.notifyDelivered({...notification,sessionGroup:notification.sessionGroup ?? 'origin'});
-      lifecycle.messageDelivered({...notification,sessionGroup:notification.sessionGroup ?? 'origin'});
-    },onHealthEvents:()=>{void loop.tick();},log});
+    onDelivered:async notification=>admission.serialize(async()=>{
+      const delivered={...notification,sessionGroup:notification.sessionGroup ?? 'origin'};
+      if(notification.controlId===undefined){
+        observer.notifyDelivered(delivered);
+        lifecycle.messageDelivered(delivered);
+      }
+      await lifecycle.workDelivered(delivered);
+    }),onHealthEvents:()=>{void loop.tick();},log});
   const drainHealthWrites=async()=>{
     while(health.queues.size)await Promise.allSettled([...health.queues.values()]);
   };

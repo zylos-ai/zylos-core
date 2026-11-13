@@ -479,27 +479,29 @@ export class SupervisorLifecycle {
     return { ok: true, result: 'accepted' };
   }
 
-  // Release prepares only the existing Sync controls. They must finish before
-  // fencing, because drain fences intentionally block pending control delivery.
+  // Voluntary intent belongs only to this supervisor process. Restart drops it;
+  // ordinary TTL remains the fallback. Registration never exempts any tool from
+  // activity tracking: the current turn must end before normal idle() can pass.
   async requestRelease(scene, context) {
-    const reject = reason => ({ ok: false, result: 'rejected', reason });
+    if (modeOf(context) !== 'multi') return { ok: false, result: 'rejected', reason: 'not_multi' };
     await this.refreshAuthorities(context);
-    if (!this.allowed(scene.sessionGroup, context)) return reject('other_fence');
-    const pending = this.releasePreparation.get(scene.sessionGroup);
-    if (pending?.runId === scene.runId) return { ok: true, result: 'already_accepted' };
-    if (this.subagentReclaimBlocked(scene, 'release', context)) return reject('subagent_activity');
-    if (!await this.idle(scene, context)) return reject('not_idle');
-    const started = await this.prepareRelease(scene, context);
-    if (started) return { ok: true, result: 'accepted' };
-    const current = await this.observe(scene.sessionGroup, context);
-    if (!current.present || current.runId !== scene.runId) return reject('run_changed');
-    if (!current.ready) return reject('not_ready');
-    if (this.subagentReclaimBlocked(current, 'release', context)) return reject('subagent_activity');
-    if (!await this.idle(current, context)) return reject('not_idle');
-    return reject('other_fence');
+    if (!this.allowed(scene.sessionGroup, context)) return { ok: false, result: 'rejected', reason: 'other_fence' };
+    if (this.releasePreparation.get(scene.sessionGroup)?.runId === scene.runId) return { ok: true, result: 'already_accepted' };
+    this.releasePreparation.set(scene.sessionGroup, { runId: scene.runId, at: this.now(), controlIds: [], prepared: false });
+    return { ok: true, result: 'accepted' };
   }
 
-  async prepareRelease(scene, context) {
+  async workDelivered({ sessionGroup, runId, pastedAt, controlId }) {
+    const intent = this.releasePreparation.get(sessionGroup);
+    if (!intent || intent.runId !== runId || Number.isFinite(pastedAt) && pastedAt < intent.at ||
+        controlId !== undefined && intent.controlIds.includes(controlId)) return;
+    // The intent is removed when its fence starts. Work pasted after that point
+    // remains queued under the existing fence/dispatcher contract.
+    this.releasePreparation.delete(sessionGroup);
+    await this.event('reclaim_cancelled', { session_group: sessionGroup, run_id: runId, reason: 'new_work' });
+  }
+
+  async prepareRelease(scene, context, intent) {
     const group = scene.sessionGroup;
     const range = await this.d.db.getUnsummarizedRange(group);
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
@@ -508,52 +510,47 @@ export class SupervisorLifecycle {
       const backlog = await this.d.db.getOriginSyncBacklog();
       if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
     }
-    if (!todo.length) return this.beginReclaim(scene, 'release', context);
-    const preparation = { runId: scene.runId, at: this.now(), controlIds: [], partial: true };
+    intent.prepared = false;
+    // Sync must be delivered before the fence, which blocks pending controls.
     for (const prompt of todo) {
-      if (!await this.beforeWrite(group, context, scene)) break;
+      if (!await this.beforeWrite(group, context, scene)) return;
       const targetBinding = await this.bindCurrentRun(scene);
-      if (!targetBinding) break;
+      if (!targetBinding) return;
       const control = await this.d.db.insertControl(this.prompt(prompt), {
         sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
-        ackDeadlineAt: Math.floor((preparation.at + this.ackTimeoutMs) / 1000),
+        ackDeadlineAt: Math.floor((this.now() + this.ackTimeoutMs) / 1000),
       });
-      preparation.controlIds.push(control.id);
-      // Keep a successfully published control even if a later observation fails.
-      this.releasePreparation.set(group, preparation);
+      intent.controlIds.push(control.id);
     }
-    preparation.partial = preparation.controlIds.length !== todo.length;
-    return preparation.controlIds.length > 0;
+    intent.prepared = true;
   }
 
   async advanceReleases(context) {
     await this.each([...this.releasePreparation.keys()].map(sessionGroup => ({ sessionGroup })), async ({ sessionGroup }) => {
-      await this.advanceRelease(this.scene(sessionGroup, context), context);
+      const intent = this.releasePreparation.get(sessionGroup), scene = this.scene(sessionGroup, context);
+      if (!scene.present || !scene.ready || scene.runId !== intent.runId || modeOf(context) !== 'multi' || !this.allowed(sessionGroup, context)) {
+        this.releasePreparation.delete(sessionGroup);
+        await this.event('reclaim_cancelled', { session_group: sessionGroup, run_id: intent.runId,
+          reason: scene.runId !== intent.runId ? 'run_changed' : 'other_fence' });
+        return;
+      }
+      for (const id of intent.controlIds) {
+        const control = await this.d.db.getControlById(id);
+        if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
+      }
+      // An acknowledged Sync can still be finishing its turn or holding its
+      // scoped marker; children and activity must drain through normal guards.
+      if (this.subagentReclaimBlocked(scene, 'release', context) || !await this.idle(scene, context)) return;
+      if (!intent.prepared) await this.prepareRelease(scene, context, intent);
+      if (!intent.prepared || intent.controlIds.length) {
+        for (const id of intent.controlIds) {
+          const control = await this.d.db.getControlById(id);
+          if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
+        }
+        if (!intent.prepared) return;
+      }
+      if (await this.beginReclaim(scene, 'release', context)) this.releasePreparation.delete(sessionGroup);
     });
-  }
-
-  async advanceRelease(scene, context) {
-    const group = scene.sessionGroup, preparation = this.releasePreparation.get(group);
-    if (!preparation) return;
-    const cancel = async reason => {
-      this.releasePreparation.delete(group);
-      await this.event('reclaim_cancelled', { session_group: group, run_id: preparation.runId, reason });
-    };
-    if (!scene.present || !scene.ready || scene.runId !== preparation.runId) return cancel('run_changed');
-    if (!this.allowed(group, context)) return cancel('other_fence');
-    // As with TTL preparation, the Sync's own session/child activity is ignored;
-    // C4 conversation activity still cancels the voluntary request.
-    if (await this.lastActivity(scene, preparation.at) > preparation.at) return cancel('not_idle');
-    for (const id of preparation.controlIds) {
-      const control = await this.d.db.getControlById(id);
-      if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
-    }
-    // An acknowledged Sync can still be finishing its turn or holding its scoped
-    // marker. Match TTL's wait here; new conversation activity above cancels it.
-    if (this.subagentReclaimBlocked(scene, 'release', context) || !await this.idle(scene, context)) return;
-    this.releasePreparation.delete(group);
-    if (preparation.partial) return this.prepareRelease(scene, context);
-    await this.beginReclaim(scene, 'release', context);
   }
 
   async checkTtl(scene, context) {

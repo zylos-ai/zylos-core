@@ -59,6 +59,9 @@ export function createSupervisorConnectionHandler({ admission, router, readRun, 
         }
         if (request.type === 'notify_delivered') {
           if (![1, 2].includes(request.version) || typeof request.requestId !== 'string' || !request.requestId) { reply({ ok: false, code: 'invalid_request' }); return; }
+          if (Object.hasOwn(request, 'controlId') && (request.version !== 2
+              || !Number.isSafeInteger(request.controlId) || request.controlId <= 0
+              || Object.hasOwn(request, 'conversationId'))) { reply({ ok: false, code: 'invalid_request' }); return; }
           if (request.version === 2) {
             if (request.sessionGroup !== null) assertSessionGroup(request.sessionGroup);
             if (typeof request.runId !== 'string' || !request.runId || typeof request.runtime !== 'string'

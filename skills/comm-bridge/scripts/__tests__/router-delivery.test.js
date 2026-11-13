@@ -522,3 +522,34 @@ for (const stopAt of ['idle hold', 'before idle hold', 'idle poll']) {
     assert.ok(order.indexOf('close') < order.indexOf('markDelivered'));
   });
 }
+
+
+test('actual control text paste reports bound control identity immediately without waiting for notification', async t => {
+  const f = setup(t), row = f.control('ordinary control ---- ack via: safe');
+  f.deps.notifyDelivered = data => { f.calls.push(['notify', data]); return new Promise(() => {}); };
+  await f.create().deliverControl(row);
+  assert.equal(row.status, 'running');
+  const order = f.calls.map(call => call[0]);
+  assert.ok(order.indexOf('paste') < order.indexOf('notify'));
+  assert.ok(order.indexOf('notify') < order.indexOf('keys'));
+  assert.deepEqual(f.calls.find(call => call[0] === 'notify')[1], {
+    controlId: row.id, sessionGroup: 'origin', runId: 'r1', runtime: 'codex', pastedAt: 100000,
+  });
+});
+
+test('no-paste controls and failed text paste never emit a delivery notification', async t => {
+  for (const variant of ['autoack', 'keystroke', 'paste_failed']) await t.test(variant, async t => {
+    const f = setup(t);
+    let row;
+    if (variant === 'autoack') {
+      f.state.active_tools = 1;
+      row = f.control('Heartbeat check [phase=normal] ---- ack via: safe', { bypass_state: 1 });
+    } else if (variant === 'keystroke') row = f.control('[KEYSTROKE]Enter');
+    else {
+      row = f.control('ordinary control');
+      f.adapter.sendText = async () => { throw error('TARGET_GONE'); };
+    }
+    await f.create().deliverControl(row);
+    assert.equal(f.calls.some(call => call[0] === 'notify'), false);
+  });
+});

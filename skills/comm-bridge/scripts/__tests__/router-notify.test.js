@@ -67,3 +67,16 @@ test('synchronous connect/write failures are discarded and never retried', async
   socket.emit('connect'); await pending;
   assert.equal(destroyed, 1);
 });
+
+
+test('control paste uses the existing v2 wire envelope with one control identity', async () => {
+  const socket = new EventEmitter(); let line;
+  socket.destroy = () => {};
+  socket.end = (value, done) => { line = JSON.parse(value); done(); };
+  const { conversationId, channel, ...identity } = fields;
+  const pending = notifyDelivered({ controlId: 27, ...identity }, { createConnection: () => socket });
+  socket.emit('connect'); await pending;
+  assert.deepEqual(line, { version: 2, type: 'notify_delivered',
+    requestId: `dispatcher-${process.pid}-${fields.pastedAt}`, controlId: 27, ...identity });
+  assert.equal(Object.hasOwn(line, 'conversationId'), false);
+});
