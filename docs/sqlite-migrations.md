@@ -178,6 +178,16 @@ refuses with the referencing table name if one exists. It does not alter
 foreign-key enforcement or check unrelated deployment foreign keys. The
 original database and schema version remain intact on refusal.
 
+The version 3-to-4 step rebuilds `run_endings` again, removing the `reason`
+`IN (...)` check while retaining `NOT NULL`. `recordRunEnd` validates the
+allowed reasons before writing; adding a reason no longer requires a database
+migration. The rebuild retains deployment columns, generated columns, indexes,
+triggers and views, and refuses incoming foreign keys. A missing, unrecognized
+or ambiguous reason check is refused and the transaction rolls back unchanged.
+Version-3 code refuses a version-4 database with `SCHEMA_TOO_NEW`; reverting an
+upgrade uses the upgrade transaction's code and database snapshot rollback,
+rather than opening the new database with old code.
+
 ## Not checked
 
 The engine checks table and column names, column definitions and row counts.
