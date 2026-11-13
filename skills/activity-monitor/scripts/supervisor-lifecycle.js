@@ -76,6 +76,7 @@ export class SupervisorLifecycle {
     this.syncSent = new Map();
     this.syncRuns = new Map();
     this.syncProgress = new Map();
+    this.referenceReorgSent = new Map();
     this.backlogSent = new Map();
     this.lastSyncCheck = null;
     this.warnings = new Set();
@@ -636,10 +637,12 @@ export class SupervisorLifecycle {
     });
     if (modeOf(context) === 'multi' && this.allowed('origin', context)) {
       const origin = scenes.find(scene => scene.sessionGroup === 'origin' && scene.present && scene.ready);
+      const originScene = { sessionGroup: 'origin', runDir: this.d.groupRunDir('origin'),
+        runId: origin?.runId ?? null, sessionId: origin?.sessionId ?? null };
       const backlog = await this.d.db.getOriginSyncBacklog();
       const times = backlog.groups.flatMap(g => [g.firstAt, g.firstCheckpointAt]).filter(v => v !== null && v !== undefined).map(activityTime);
       const rawTimes = backlog.groups.map(g => g.firstAt).filter(v => v !== null && v !== undefined).map(activityTime);
-      await this.syncScope({ sessionGroup: 'origin', runDir: this.d.groupRunDir('origin'), runId: origin?.runId ?? null }, 'origin', {
+      await this.syncScope(originScene, 'origin', {
         count: backlog.total, firstAt: times.length ? Math.min(...times) : null,
         alertFirstAt: rawTimes.length ? Math.min(...rawTimes) : null,
         nonempty: backlog.total > 0 || backlog.groups.some(g => g.pendingCheckpoints > 0),
@@ -647,8 +650,38 @@ export class SupervisorLifecycle {
     }
   }
 
+  async checkReferenceReorg(scene, kind, context) {
+    if (kind !== 'origin' && kind !== 'global') return;
+    const key = JSON.stringify([kind, scene.sessionGroup]);
+    const identity = JSON.stringify([scene.runId ?? null, scene.sessionId ?? null]);
+    const previous = this.referenceReorgSent.get(key);
+    if (previous === identity) return;
+    // Missing observations cannot reset a known session's successful send.
+    if (previous !== undefined && !scene.runId) return;
+    // An unbound proposal already queued for absent Origin belongs to its first run.
+    if (previous === '[null,null]') {
+      this.referenceReorgSent.set(key, identity);
+      return;
+    }
+    try {
+      if (!await this.beforeWrite(kind === 'global' ? null : 'origin', context, kind === 'global' ? scene : undefined)) return;
+      const proposal = this.prompt('REFERENCE_REORG_PROMPT');
+      if (typeof this.d.prepareReferenceReorg !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Reference reorganization check is unavailable');
+      if (!await this.d.prepareReferenceReorg()) return;
+      await this.d.db.insertControl(proposal, {
+        sessionGroup: kind === 'global' ? null : 'origin', priority: 3, appendAckSuffix: false,
+      });
+      // Keep only the latest identity per scope; a Supervisor restart may retry.
+      this.referenceReorgSent.set(key, identity);
+    } catch (cause) {
+      this.d.reportError?.(cause, { phase: 'reference-reorganization' });
+    }
+  }
+
   async syncScope(scene, kind, range, context) {
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid Sync backlog');
+    // Reference cleanup must not depend on backlog surviving pre-reclaim Sync.
+    await this.checkReferenceReorg(scene, kind, context);
     const now = this.now(), config = context.configuration;
     const key = JSON.stringify([kind, scene.sessionGroup]);
     const min = (config.syncMinIntervalSeconds ?? 600) * 1000, max = (config.syncMaxIntervalSeconds ?? 21600) * 1000;
@@ -677,17 +710,6 @@ export class SupervisorLifecycle {
     if (!marker || typeof marker.held !== 'boolean' || typeof marker.stale !== 'boolean') throw error('INVALID_OBSERVATION', 'Invalid Sync marker result');
     if (marker.held && !marker.stale) return;
     if (!await this.beforeWrite(modeOf(context) === 'single' ? null : scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
-    if (kind === 'origin' || kind === 'global') {
-      try {
-        const proposal = this.prompt('REFERENCE_REORG_PROMPT');
-        if (typeof this.d.prepareReferenceReorg !== 'function') throw error('DEPENDENCY_UNAVAILABLE', 'Reference reorganization check is unavailable');
-        if (await this.d.prepareReferenceReorg()) await this.d.db.insertControl(proposal, {
-          sessionGroup: modeOf(context) === 'single' ? null : 'origin', priority: 3, appendAckSuffix: false,
-        });
-      } catch (cause) {
-        this.d.reportError?.(cause, { phase: 'reference-reorganization' });
-      }
-    }
     await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
       sessionGroup: modeOf(context) === 'single' ? null : scene.sessionGroup, priority: 2, appendAckSuffix: false,
       ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000) }),
