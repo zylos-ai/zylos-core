@@ -27,6 +27,7 @@ for (const [group, scenario] of [
   ['telegram:release', 'conversation'], ['telegram:release', 'control'],
   ['telegram:release', 'conversation-before-intent'], ['telegram:release', 'control-before-intent'],
   ['telegram:release', 'open-turn'],
+  ['telegram:release', 'ttl-fallback'],
 ]) {
   test(`voluntary ${group} release (${scenario}) respects its pending intent and exact run`, { timeout: 30000 }, async t => {
     const realHome = fs.realpathSync(os.userInfo().homedir);
@@ -54,7 +55,7 @@ for (const [group, scenario] of [
     child.on('message', message => { result = message; });
     const status = await new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', resolve); });
     assert.equal(status, 0, stderr); assert.equal(result?.ok, true, stderr);
-    if (result.ending) assert.equal(result.ending.reason, 'release');
+    if (result.ending) assert.equal(result.ending.reason, scenario === 'ttl-fallback' ? 'ttl' : 'release');
     assert.doesNotThrow(() => f.tmux('has-session', '-t', '=fixture-keeper'));
   });
 }

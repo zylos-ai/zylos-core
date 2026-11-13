@@ -18,7 +18,7 @@ const database = new Database(path.join(root, 'comm-bridge/c4.db'));
 const db = createStore(database, { readConfig: () => ({ state: 'ok', config: { runtime: 'claude', session_mode: 'multi' } }), validateComponent: () => true });
 let service;
 try {
-  let state = 'busy', children = [], now = Date.now(), turnOpen = scenario === 'open-turn';
+  let state = 'busy', children = [], now = Date.now(), turnOpen = ['open-turn', 'ttl-fallback'].includes(scenario);
   const busySince = now - 10000;
   const scenes = new SupervisorScenes({ env: process.env, connectionOptions: { socketPath, binary },
     readMode: () => ({ mode: 'multi' }), readActivity: () => ({ state, turnOpen, busySince: state === 'busy' || turnOpen ? busySince : null, idleSince: now - 10000, activeSubagents: children }), readUsage: () => null });
@@ -101,6 +101,24 @@ try {
     await stillRunning();
     assert.equal(controls().length, 0, 'recreated supervisor does not restore voluntary intent');
     process.send({ ok: true, group, scenario });
+  } else if (scenario === 'ttl-fallback') {
+    // An interrupted turn with no Stop must still expire through the ordinary
+    // TTL check, delivery cancellation, fence and ending transaction.
+    state = 'idle'; now += 1800001;
+    await tick(); await stillRunning();
+    const pending = controls();
+    assert.equal(pending.length, 1); assert.equal(pending[0].raw_content, PRE_RECLAIM_CHECK_PROMPT);
+    assert.equal(db.claimControl(pending[0].id), true);
+    assert.equal((await notify({ controlId: pending[0].id })).type, 'ack');
+    assert.equal(coreDb.ackControl(pending[0].id).status, 'done');
+    for (let n = 0; n < 5 && !db.listRunEndings([group]).length; n++) await tick();
+    assert.equal((await scenes.observeGroup(group)).present, false, JSON.stringify(logs));
+    const ending = db.listRunEndings([group]);
+    assert.equal(ending.length, 1); assert.equal(ending[0].reason, 'ttl');
+    assert.equal(ending[0].runId, 'run-1'); assert.equal(ending[0].continuationPending, 0);
+    assert.deepEqual(db.listSlotOccupancy(), []); assert.equal(db.getDrainFence(group), null);
+    assert.equal(service.supervisor.lifecycle.releasePreparation.size, 0);
+    process.send({ ok: true, group, scenario, ending: ending[0] });
   } else if (['conversation', 'control'].includes(scenario)) {
     let fields;
     if (scenario === 'conversation') {
