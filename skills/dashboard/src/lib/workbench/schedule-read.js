@@ -3,6 +3,7 @@ import path from 'node:path';
 import Database from '../../../../comm-bridge/scripts/sqlite-driver.js';
 import { cronText } from '../../../public/js/wb/cron-text.js';
 import { dateKey, localToOffsetIso } from './schedule-tz.js';
+import { cachedDateTimeFormat } from '../date-format-cache.js';
 
 const CRON_MODULE = new URL('../../../../scheduler/scripts/cron-utils.js', import.meta.url).href;
 const TIME_MODULE = new URL('../../../../scheduler/scripts/time-utils.js', import.meta.url).href;
@@ -57,7 +58,7 @@ export function nextRuns(task, n, from, tz, cronUtils, { until = null } = {}) {
         const first = iterator.next();
         const step = fields[0].startsWith('*/') ? Number(fields[0].slice(2)) : 1;
         if (step === 1) return runSeries(first, 60, n, until);
-        const minute = new Intl.DateTimeFormat('en-US', { timeZone: tz, minute: 'numeric', numberingSystem: 'latn' });
+        const minute = cachedDateTimeFormat('en-US', { timeZone: tz, minute: 'numeric', numberingSystem: 'latn' });
         const runs = [];
         const limit = until === null ? n : MAX_RUNS;
         for (let at = first; runs.length < limit; at += 60) {
@@ -304,7 +305,8 @@ export function createScheduleRead({ zylosDir, scheduleTz, getSnapshot = async (
         if (BAD.has(row.status)) kpi.bad7d++;
         if (row.status === 'success') success++;
       }
-      const day = days.find(item => item.date === dateKey(row.executed_at, tz));
+      const date = dateKey(row.executed_at, tz);
+      const day = days.find(item => item.date === date);
       if (day && ['success', 'timeout', 'failed'].includes(row.status)) day[row.status]++;
     }
     kpi.successRate7d = success + kpi.bad7d === 0 ? null : success / (success + kpi.bad7d);

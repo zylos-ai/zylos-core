@@ -1,5 +1,7 @@
+import { cachedDateTimeFormat } from './date-format-cache.js';
+
 export function dayBoundsUTC(tz, daysBack = 0, now = new Date()) {
-  const fmt = new Intl.DateTimeFormat('en-US', {
+  const fmt = cachedDateTimeFormat('en-US', {
     timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric'
   });
   const parts = (date) => Object.fromEntries(fmt.formatToParts(date)

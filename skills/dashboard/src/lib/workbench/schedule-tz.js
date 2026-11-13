@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { cachedDateTimeFormat } from '../date-format-cache.js';
 
 const TZ_MODULE = new URL('../../../../scheduler/scripts/tz.js', import.meta.url).href;
 
@@ -51,7 +52,7 @@ export function createScheduleTz({ zylosDir, env = process.env, home = os.homedi
 
 function offsetMinutes(epochMs, tz) {
   const parts = {};
-  const format = new Intl.DateTimeFormat('en-US', {
+  const format = cachedDateTimeFormat('en-US', {
     timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric',
     hour: 'numeric', minute: 'numeric', second: 'numeric',
   });
@@ -86,6 +87,6 @@ export function localToOffsetIso(local, tz) {
 
 /** Calendar date (YYYY-MM-DD) of an epoch second in `tz`. */
 export function dateKey(epochSeconds, tz) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
+  return cachedDateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
     .format(new Date(epochSeconds * 1000));
 }
