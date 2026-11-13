@@ -91,6 +91,74 @@ test('non-bypass runtime/session health and require_idle gates requeue without r
   });
 });
 
+test('stale and unavailable samples allow ordinary delivery with unknown activity', async t => {
+  for (const reason of ['stale', 'missing', 'unparseable']) for (const type of ['conversation', 'control']) {
+    await t.test(`${reason} ${type}`, async t => {
+      const f = setup(t), row = type === 'conversation' ? f.message() : f.control();
+      f.deps.readSessionState = async () => ({ identity: f.target,
+        status: { valid: false, value: null, reason, sampledAt: 1,
+          ...(reason === 'stale' ? { lastValue: { ...f.state, state: 'offline' } } : {}) } });
+      const d = f.create(); t.after(() => d.stop());
+      const result = await (type === 'conversation' ? d.deliverConversation(row) : d.deliverControl(row));
+      assert.equal(result.state, 'unknown'); assert.equal(result.delivered, true);
+      assert.equal(type === 'conversation' ? f.row(row.id).status : row.status, type === 'conversation' ? 'delivered' : 'done');
+      assert.equal(f.calls.some(c => c[0] === 'diagnostic' && c[2].code === 'session_offline'), false);
+      assert.equal(f.calls.some(c => c[0] === 'diagnostic' && c[1] === 'state_stale'), reason === 'stale');
+    });
+  }
+});
+
+test('stale samples preserve health and identity rejection gates', async t => {
+  for (const kind of ['session', 'runtime', 'run', 'runtime_identity', 'ready', 'identity_changed', 'identity_mismatch', 'identity_missing']) {
+    await t.test(kind, async t => {
+      const f = setup(t), row = f.message(), identity = { ...f.target };
+      if (kind === 'run') identity.runId = 'other';
+      if (kind === 'runtime_identity') identity.runtime = 'claude';
+      if (kind === 'ready') identity.ready = false;
+      if (kind === 'runtime') f.deps.readRuntimeHealth = () => ({ publicHealth: 'unavailable' });
+      f.deps.readSessionState = async () => ({ identity, status: { valid: false, value: null,
+        reason: kind.startsWith('identity_') ? kind : 'stale', lastValue: { health: kind === 'session' ? 'unavailable' : 'ok' } } });
+      const d = f.create(); t.after(() => d.stop()); await d.deliverConversation(row);
+      assert.equal(f.row(row.id).status, 'pending'); assert.equal(f.row(row.id).retry_count, 0);
+      assert.equal(f.calls.some(c => c[0] === 'paste'), false);
+      const expected = kind === 'session' ? 'session_unhealthy' : kind === 'runtime' ? 'runtime_unavailable' : 'session_offline';
+      assert.ok(f.calls.some(c => c[0] === 'diagnostic' && c[2].code === expected));
+    });
+  }
+});
+
+test('require_idle waits for a fresh idle sample and stale activity cannot autoack heartbeat', async t => {
+  const f = setup(t), d = f.create(); t.after(() => d.stop());
+  const fresh = f.deps.readSessionState;
+  f.deps.readSessionState = async () => ({ identity: f.target, status: { valid: false, reason: 'stale', value: null,
+    lastValue: { ...f.state, active_tools: 1 } } });
+  const row = f.message(); row.require_idle = 1;
+  await d.deliverConversation(row); assert.equal(f.row(row.id).status, 'pending');
+  assert.equal(f.calls.some(c => c[0] === 'paste'), false);
+  const heartbeat = f.control('Heartbeat check [phase=normal] ---- ack via: safe', { bypass_state: 1 });
+  await d.deliverControl(heartbeat);
+  assert.equal(heartbeat.status, 'running'); assert.equal(f.calls.filter(c => c[0] === 'paste').length, 1);
+  f.deps.readSessionState = fresh; f.store.claimConversation(row.id);
+  await d.deliverConversation(row); assert.equal(f.row(row.id).status, 'delivered');
+});
+
+// Real delivery/ledger with an injected clock and terminal. Run for status or
+// idle pacing changes; skip unrelated UI. Official isolated env, no processes.
+for (const outcome of ['fresh idle', 'deadline']) test(`idle settlement polls stale samples until ${outcome}`, { timeout: 2000 }, async t => {
+  const f = setup(t), row = f.message(); row.require_idle = 1;
+  const fresh = f.deps.readSessionState; let reads = 0;
+  f.deps.readSessionState = async (...args) => {
+    reads++;
+    if (reads === 1 || (outcome === 'fresh idle' && reads === 4)) return fresh(...args);
+    return { identity: f.target, status: { valid: false, reason: 'stale', value: null, lastValue: f.state } };
+  };
+  const d = f.create({ idleHoldMs: 7, idleWaitMs: 30, idlePollMs: 10 }); t.after(() => d.stop());
+  await d.deliverConversation(row);
+  assert.equal(f.row(row.id).status, 'delivered');
+  assert.equal(reads, outcome === 'fresh idle' ? 4 : 5);
+  assert.equal(f.sleeps.filter(ms => ms === 10).length, outcome === 'fresh idle' ? 2 : 3);
+});
+
 test('binding failures do not retry business and terminate only directed control', async t => {
   for (const code of ['TARGET_GONE', 'GENERATION_CHANGED', 'RUNID_MISMATCH', 'TMUX_UNAVAILABLE']) await t.test(code, async t => {
     const f = setup(t), row = f.message(); f.deps.resolveSessionTarget = async () => { throw error(code); };

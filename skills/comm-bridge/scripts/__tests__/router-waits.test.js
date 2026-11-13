@@ -7,6 +7,8 @@ function setup(t) {
   const f = routerFixture(t); f.put('origin'); f.put('chat');
   const calls = { claims: 0, requeues: 0, controlClaims: 0, controlRequeues: 0, opens: 0, pastes: 0 };
   const status = { state: 'idle', idle_seconds: 10, health: 'ok' };
+  const sample = { valid: true, value: status };
+  const sent = [];
   const claim = f.db.claimConversation, requeue = f.db.requeueConversation;
   f.db.claimConversation = id => { calls.claims++; return claim(id); };
   f.db.requeueConversation = id => { calls.requeues++; return requeue(id); };
@@ -31,15 +33,15 @@ function setup(t) {
     openTmuxConnection: async () => { calls.opens++; return { close: async () => {}, command: async args => args.at(-1) === '#{cursor_x}' ? '2' : '0' }; },
     resolveSessionTarget: async ({ sessionGroup }) => f.scene.get(sessionGroup),
     revalidateSessionTarget: async () => {},
-    readSessionState: async group => ({ identity: f.scene.get(group), status: { valid: true, value: status } }),
-    getSessionAdapter: () => ({ sendText: async () => { calls.pastes++; }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
+    readSessionState: async group => ({ identity: f.scene.get(group), status: sample }),
+    getSessionAdapter: () => ({ sendText: async ({ text }) => { calls.pastes++; sent.push(text); }, sendKeys: async () => {}, captureScreen: async () => '❯ ' }),
     formatConversation: row => row.content,
     notifyDelivered: () => {},
   }, { periodicEnabled: false, captureEnabled: false });
   Object.assign(f.deps, { deliverConversation: delivery.deliverConversation, deliverControl: delivery.deliverControl,
     canAttemptDelivery: delivery.canAttempt, finishDeliveryWait: delivery.finishWait, sweepDeliveryWaits: delivery.sweepWaits });
   t.after(() => delivery.stop());
-  return { ...f, counts: calls, status, delivery };
+  return { ...f, counts: calls, status, sample, sent, delivery };
 }
 const transitions = f => f.events.filter(row => ['delivery_deferred', 'delivery_wait_changed', 'delivery_resumed', 'delivery_expired', 'delivery_wait_ended'].includes(row.event));
 async function seconds(f, count) { for (let i = 0; i < count; i++) { f.advance(1000); await f.rounds(); } }
@@ -124,6 +126,90 @@ test('a startup control retries after one second when the new session state beco
   assert.ok(resumed);
   assert.equal(resumed.durationMs, 1000, 'startup must resume on the first one-second retry');
   assert.equal(f.row(row.id).status, 'delivered', 'the queued user message follows the recovered startup prompt');
+});
+
+// Same isolated scheduler/delivery/SQLite boundary as above. These cases need
+// no fresh sample or terminal process; run for stale-state or startup retry
+// changes, and skip for unrelated transport/UI changes.
+test('a deferred startup resumes on stale state and releases two queued conversations in order', async t => {
+  const f = setup(t), first = f.add('chat'), second = f.add('chat');
+  f.sqlite.prepare('UPDATE conversations SET content=? WHERE id=?').run('first queued message', first.id);
+  f.sqlite.prepare('UPDATE conversations SET content=? WHERE id=?').run('second queued message', second.id);
+  const control = f.db.insertControl('startup prompt', { sessionGroup: 'chat', priority: 1, appendAckSuffix: false });
+  f.current.get('chat').startupControlIds = [control.id];
+  f.status.state = 'offline';
+  await f.create().initialize(); await f.rounds(3);
+  assert.equal(f.counts.controlClaims, 1);
+  assert.equal(f.counts.controlRequeues, 1);
+  assert.equal(f.counts.opens, 1);
+  assert.equal(f.counts.pastes, 0);
+  assert.equal(f.counts.claims, 0);
+  assert.equal(f.db.getControlById(control.id).status, 'pending');
+  for (const row of [first, second]) assert.equal(f.row(row.id).status, 'pending');
+  assert.equal(transitions(f)[0].reason, 'session_offline');
+  Object.assign(f.sample, { valid: false, value: null, reason: 'stale', sampledAt: f.now() - 60000,
+    lastValue: { ...f.status } });
+  await seconds(f, 1);
+  assert.equal(f.db.getControlById(control.id).status, 'done');
+  assert.equal(f.counts.controlClaims, 2);
+  assert.equal(f.counts.controlRequeues, 1);
+  const resumed = transitions(f).find(event => event.control_id === control.id && event.event === 'delivery_resumed');
+  assert.ok(resumed);
+  assert.equal(resumed.durationMs, 1000);
+  assert.equal(resumed.attempts, 1);
+  assert.ok(resumed.deferredChecks > 0);
+  await f.rounds(3);
+  for (const row of [first, second]) assert.equal(f.row(row.id).status, 'delivered');
+  assert.equal(f.counts.claims, 2);
+  assert.equal(f.counts.opens, 4);
+  assert.deepEqual(f.sent, ['Meanwhile, startup prompt', 'first queued message', 'second queued message']);
+  assert.equal(transitions(f).length, 2, 'stale state adds no new blocking phase');
+  assert.ok(f.events.some(event => event.event === 'state_stale' && event.control_id === control.id));
+  assert.equal(f.sample.lastValue.state, 'offline', 'old offline state must not override the live ready identity');
+});
+
+test('a startup with stale unhealthy state keeps retrying for ten minutes and drains after health recovers', async t => {
+  const f = setup(t), first = f.add('chat'), second = f.add('chat');
+  const control = f.db.insertControl('startup prompt', { sessionGroup: 'chat', priority: 1, appendAckSuffix: false });
+  assert.equal(control.ack_deadline_at, null);
+  f.current.get('chat').startupControlIds = [control.id];
+  f.status.state = 'offline';
+  await f.create().initialize(); await f.rounds(2);
+  const start = f.now();
+  Object.assign(f.sample, { valid: false, value: null, reason: 'stale', sampledAt: start - 60000,
+    lastValue: { state: 'offline', health: 'rate_limited' } });
+  for (const [at, expected] of [[1, 2], [2, 2], [3, 3], [6, 3], [7, 4], [14, 4], [15, 5],
+    [30, 5], [31, 6], [60, 6], [61, 7], [600, 24]]) {
+    await seconds(f, (start + at * 1000 - f.now()) / 1000);
+    assert.equal(f.counts.controlClaims, expected, `claims at ${at}s`);
+    assert.equal(f.counts.controlRequeues, expected, `requeues at ${at}s`);
+    assert.equal(f.counts.opens, expected, `connections at ${at}s`);
+    assert.equal(f.counts.pastes, 0);
+    assert.equal(f.counts.claims, 0);
+    assert.equal(f.db.getControlById(control.id).status, 'pending');
+    for (const row of [first, second]) assert.equal(f.row(row.id).status, 'pending');
+  }
+  const changed = transitions(f).find(event => event.event === 'delivery_wait_changed');
+  assert.equal(changed.previousReason, 'session_offline');
+  assert.equal(changed.code, 'session_unhealthy');
+  assert.equal(changed.reason, 'session_rate_limited');
+  assert.equal(transitions(f).length, 2, 'same-reason retries are silent and no deadline means no automatic expiry');
+  f.sample.lastValue.health = 'ok';
+  await seconds(f, 1);
+  assert.equal(f.counts.controlClaims, 25, 'retryAt reaches the next 30-second boundary at 601s');
+  assert.equal(f.counts.controlRequeues, 24);
+  assert.equal(f.db.getControlById(control.id).status, 'done');
+  const resumed = transitions(f).find(event => event.event === 'delivery_resumed');
+  assert.equal(resumed.attempts, 24);
+  assert.equal(resumed.durationMs, 601000);
+  assert.ok(resumed.deferredChecks > 500);
+  await f.rounds(3);
+  for (const row of [first, second]) assert.equal(f.row(row.id).status, 'delivered');
+  assert.equal(f.counts.claims, 2);
+  assert.equal(f.counts.opens, 27);
+  assert.equal(f.counts.pastes, 3);
+  assert.equal(transitions(f).length, 3);
+  assert.equal(f.sample.valid, false, 'recovery must not depend on a fresh status window');
 });
 
 test('an ordinary blocked control does not prevent queued messages from expiring', async t => {
