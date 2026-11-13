@@ -172,7 +172,7 @@
 /* Text in every button, segment, tab, tag and pill sits in the middle of its box: flex centring and one line
    height (Latin, Chinese, and icon with text alike), not padding. Zero specificity, so a control's own display
    (hidden, column layouts) and fixed line heights still apply; the pill keeps its height with min-height. */
-:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .connection-pill, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-detail-tabs button, .wb-chip, .wb-scope, .wb-scope-b) { display: inline-flex; align-items: center; }
+:where(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-tag, .wb-pill, .connection-pill, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-detail-tabs button, .wb-chip, .wb-scope-b) { display: inline-flex; align-items: center; }
 :where(.wb-btn, .header-icon-btn, .app-header .tab, .wb-seg button, .wb-seg2 button, .wb-seg-sm button, .wb-detail-tabs button, .wb-chip) { justify-content: center; }
 /* `button { font: inherit }` would bring back the page's 1.5 line height, so the line height is set at class weight. */
 :is(.wb-btn, .wb-icon-btn, .wb-link-btn, .wb-tech-btn, .header-icon-btn, .wb-set-nav-btn, .wb-set-drawer-btn, .wb-pill, .connection-pill), .wb-seg button, .wb-seg2 button, .wb-detail-tabs button, .app-header .tab, .wb-chip { line-height: 1.2; }
