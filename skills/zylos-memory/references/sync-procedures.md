@@ -57,6 +57,12 @@ one failed operation. Earlier checkpoints, file edits, and successful moves stay
 
 If two corrected retries still fail, use the applicable failure handling below.
 Every later step uses these rules before treating a call as failed.
+`INPUT_CHANGED` also receives no retry: its checkpoint/commit checks reject
+before publishing that operation's target, but changed inputs can invalidate an
+already completed checkpoint summary. Preserve that checkpoint, temporary state
+and segments, stop later writes, release once and report the mismatch. Do not
+replace the retained input manifest or replay a completed checkpoint to force a
+commit. A later Sync must fully reread and reconcile the actual inputs.
 `WRITE_FAILED`, `LOCK_UNAVAILABLE`, `LOCK_TIMEOUT`, and tool protocol errors
 receive no retry. For any other required-step failure, stop later writes, release once with
 `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js release --kind <kind> --token T`, and report failure to the
@@ -64,6 +70,15 @@ requesting session with the steps already committed. On success or no input,
 release exactly once too. If release fails, append that warning to the original
 result; do not replace the original outcome or retry release. Never use an
 unrestricted writer to repair a tool failure.
+
+Before creating any export, run `mktemp -d` to create a unique private directory
+(mode 0700), retain its returned path, and put every export inside it. Never
+reuse a fixed filename in shared `/tmp`, or redirect conversation text into a
+second file. `--out` creates each file exclusively with mode 0600. On success,
+no input, or failure, remove only this run's private directory and its exports
+before releasing the token; report a cleanup failure. TOKEN_MISMATCH remains an
+immediate stop, so do not attempt cleanup after it. No script-side cleanup state
+or new background mechanism is involved.
 
 `LEGACY_READ_ONLY` is not a required-step failure: old `reference/projects.md`,
 `reference/decisions.md`, and `reference/legacy/**`
@@ -85,7 +100,10 @@ Do not call a shell writer for this edit. The same token is required when
 creating the temporary state with `{"op":"create","path":"state.md.T.tmp","replacement":"<complete state document>","token":"T"}`;
 Group Sync uses `session-groups/G/state.md.T.tmp` instead.
 
-If the restricted tool is missing, report `TOOL_UNAVAILABLE`, do not commit,
+Use the restricted tool name discovered and passed by the parent (Claude:
+`mcp__zylos-memory__edit_memory`; Codex: `mcp__zylos_memory__edit_memory`). If
+absent, discover an exposed tool ending in `edit_memory` before concluding it
+is unavailable. If the restricted tool is missing, report `TOOL_UNAVAILABLE`, do not commit,
 and release once if T was obtained. A checkpoint may already have committed;
 leave remaining inputs for recovery in a later triggered Sync. A crash or failed
 commit does not justify deleting inputs. Do not start another Sync merely to
@@ -102,6 +120,26 @@ uses `ZYLOS_ORIGIN_SYNC_THRESHOLD` / `origin_sync_threshold` / 50. Keep the
 resolved values for this run; do not substitute the defaults for configured
 values in subsequent fetch commands.
 
+Truncated tool output is unread. Retry a fetch with a smaller `--limit`, or a
+file read with smaller byte ranges; read all required records before progress
+advances. For an exported batch or listed input, read the entire file in bounded
+byte ranges and verify its reported byte count and SHA-256 with read-only tools.
+A hash check or first/last markers do not replace reading the content. Keep
+export file hashes separate from batch receipt hashes: receipt `sha256` hashes
+the canonical projected database rows, not the rendered export file bytes.
+
+Use byte ranges even when a file contains one very long line. For example,
+`dd if="<returned absolute path>" bs=1 skip=0 count=8192 status=none` reads
+bytes [0,8192). Continue at skip=8188, then 16376, increasing by 8188 until the
+reported file size is reached; the four-byte overlap keeps UTF-8 characters
+readable across boundaries. Each command must return its actual text, not
+counts, grep matches, word frequencies, or a summary. If output is truncated,
+reduce the range and reread it. Record every completely read half-open range
+`[start,end)` (end capped at file size); the ranges must cover every byte with
+no gap. Include this per-file range ledger in the Sync result. Never claim a
+full read from a hash match or analysis of an unread suffix. This byte method
+preserves direct/export byte parity and valid JSON without adding hard wrapping.
+
 ## Group Sync
 
 This also applies to the origin group's own working state. Set kind=group;
@@ -109,18 +147,27 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 
 1. Acquire. Read `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js unsummarized --group G --json`. If count is zero,
    release and report no input. Do not cleanup, rotate, or consume inbox.
-2. Fetch `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit <batchLimit>`.
-   Save its rows, latest summary, and returned batch end. The end printed for
-   this batch, not a later observed frontier, is the checkpoint target. A read
+2. Fetch `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit <batchLimit> --out <FILE>`.
+   Stdout is metadata: count, first/last IDs, file bytes and SHA-256, and a batch
+   receipt `{"scope":...,"after":...,"end":...,"sha256":...}`. Read the full
+   batch file and verify its bytes/hash. Save its rows, latest summary, and the
+   receipt unchanged. This batch's returned end, rather than a later observed
+   frontier, is the checkpoint target. A read
    failure ends the run before any cleanup/rotation.
 3. Run `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js cleanup --token T`, then `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js rotate --token T`.
-   Read the current group state, then run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`
-   (no token is needed; a supplied `--token` is ignored).
-   Read every listed
-   uncommitted segment in segment-ID order. Read dated session logs from the
-   state's synced date onward; if the header/date is unknown, read the latest
-   seven days. A missing state starts from an empty four-section state. A bad
-   header means no committed segment set: include all uncommitted inputs.
+   Run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`.
+   No token is needed; a supplied `--token` is ignored.
+   Save the complete returned object as `inputs`:
+   `{"scope":...,"statePath":"<absolute state path>","segments":[{"id":...,"path":"<absolute>","bytes":...,"sha256":...}],"sessions":[{"path":"<absolute>","bytes":...,"sha256":...}]}`.
+   Read state only at the returned `statePath`. Session selection starts at
+   state `synced_at`'s date; an unknown/invalid date selects the latest seven
+   calendar days. The script returns the paths; never choose or glob them.
+   Read each `sessions[].path` individually; do not glob the `sessions/` directory.
+   Read every listed segment in segment-ID order and every listed session file,
+   in full; verify each byte count/hash. Use only the returned absolute paths,
+   never constructed segment/session names. A missing state starts from an
+   empty four-section state. A bad header means no committed segment set:
+   include all uncommitted inputs.
 4. Compare state coverage with the latest content checkpoint. If behind, use
    `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --checkpoints --group G --after <coverage>` to read **all**
    missing content summaries. Empty or unknown coverage uses 0. Do not recover
@@ -134,10 +181,18 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    prove delivery; uncertain or failed sends are not completion evidence.
    Do **not** copy the block into the temporary state. Keep a separate
    `followedUpIds` array; no progress means an empty array.
-7. Send the summary on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint <batch-end> --token T`.
+7. Send the summary on stdin to
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js checkpoint <batch-end> --token T --batch '<receipt JSON>'`.
+   Checkpoint recomputes and verifies the receipt against the database rows.
    Only after success, use `edit_memory` to create/edit
    `session-groups/G/state.md.T.tmp` relative to memory. Then send JSON
-   `{"followedUpIds":[...]}` on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`.
+   `{"followedUpIds":[],"batch":<receipt>,"inputs":<complete list object>}`
+   on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`, replacing the empty array only
+   with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
+   the exact current segment IDs, absolute paths and hashes, and the state's
+   segment IDs. Session logs are read inputs, but are not immutable commit
+   inputs: a main-session note appended during Sync must not reject commit.
+   Handle mismatches under the common rules; never omit inputs or fabricate a receipt to retry.
    Commit preserves the formal state's remaining absorbed lines and original
    title byte-for-byte, removing the title only when every item is removed.
 8. Check the resulting content, release once, and report. Do not edit shared
@@ -147,7 +202,8 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 ## Origin Sync
 
 This is a separate job from the origin group's working-state Sync. It only
-runs in the origin session, uses kind=origin, and never calls sync-files.
+runs in the origin session, uses kind=origin. Its only sync-files operation is
+the read-only `list --group G` below; never run group cleanup/rotate/commit.
 
 1. Acquire, then read `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-db.js origin-sync backlog --json`. No candidates means
    release and return. Save each group's cursorFrom S, upTo, and cursorUpdatedAt.
@@ -158,16 +214,27 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
    and K=checkpointId from this same read alongside all summaries. If that
    group's read fails after applicable corrected retries, skip its merge and
    cursor advance, record why, and continue other groups under the common rules.
+   Truncated output is unread: reread in smaller supported pages/ranges until
+   every required summary is read; never advance based on a truncated preview.
 3. If budget remains, fetch
    `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --origin-sync --group G --raw-only --after C --limit <remaining>`.
    Use the **saved first C**, never a newly read coverage. Deduct the actual row
    count. When the result is complete, the proposed raw cursor is saved upTo;
-   when truncated it is the last returned ID. If this read fails, neither
+   when the query is limited it is the last returned ID. Tool-output truncation
+   is unread: repeat with a smaller `--limit` and read the complete result before
+   choosing a cursor. If this read fails, neither
    cursor for G advances. With budget exhausted, a group with new summaries may
    advance raw cursor to max(S,min(C,upTo)); with no new summary skip both cursors.
    The proposed summary cursor is the saved K, not a summary's covered end.
-4. For each group actually processed, read its dated logs since cursorUpdatedAt's
-   date. Do not read its state or inbox. Failed required logs prevent that
+4. For each group actually processed, run
+   `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list --group G --since <saved cursorUpdatedAt Unix seconds>`
+   and read the absolute paths in its `sessions` array. If cursorUpdatedAt is
+   unknown, omit `--since` to select the latest seven calendar days. Like Group
+   Sync this includes the starting date in the configured timezone. The command
+   also accepts an ISO date or timestamp when supplied explicitly.
+   It returns only scope and sessions for `--group`; it never reads candidate
+   state or inbox. No group paths or globs may be constructed by the worker.
+   Failed required logs prevent that
    group's merge/advance. For projects and decisions, read the complete category
    `INDEX.md` first (a missing INDEX is an empty table), then read only the
    relevant pages in full. If unmatched, Grep that category including `archive/`,
@@ -197,7 +264,9 @@ runs in the origin session, uses kind=origin, and never calls sync-files.
    `path`, `line`, and `text`. The checker reads shared identity/references,
    reference pages (including archived pages), and user profiles. It skips
    legacy sources, the old monolithic files, generated indexes, and working
-   histories. Heading-pointer candidates conservatively include plain old-file
+   histories. Exact provenance fields such as `- **Moved from:** projects.md "Old title"`
+   (also decisions.md and curly-quoted titles) are excluded; prose and other old-file
+   references still count. Heading-pointer candidates conservatively include plain old-file
    references as well as anchors and file:line references; inspect the reported
    lines before choosing a replacement.
    Use the corresponding count to decide whether
@@ -272,6 +341,9 @@ state, commit, and failure sequence, with these differences:
   Multiple source groups still yield one global checkpoint.
 - As in Group Sync, run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`.
   No token is needed; a supplied `--token` is ignored.
+  Retain its full object, read/verify every listed file, and supply it as
+  `inputs` to commit. Pass the unchanged batch receipt to checkpoint and commit
+  as above.
 - After reading global state, segments, and dated logs, read shared self files
   using the same INDEX → relevant pages → optional old-file lookup as Origin
   step 4. Complete necessary shared edits through `edit_memory` **before**

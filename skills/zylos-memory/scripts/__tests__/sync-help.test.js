@@ -69,6 +69,7 @@ test('Sync CLI help exits successfully without runtime reads, writes or locks', 
         assert.equal(result.status, 0, `${label}: ${result.stderr}`);
         assert.equal(result.stderr, '', label);
         assert.match(result.stdout, new RegExp(`${name}\\.js`), label);
+        if (name === 'c4-fetch') assert.match(result.stdout, /--unsummarized[^|]*\[--out FILE\]/, label);
         assert.deepEqual(fs.readdirSync(fixture), [], label);
       }
     }
@@ -81,6 +82,9 @@ test('Sync CLI validates help-like option values instead of treating them as fla
   for (const [name, args] of [
     ['sync-lock', ['release', '--kind', '-h']],
     ['sync-files', ['checkpoint', '0', '--token', '-h']],
+    ['sync-files', ['list', '--group', '-h']],
+    ['sync-files', ['list', '--since', '-h']],
+    ['sync-files', ['checkpoint', '0', '--token', 'test-token', '--batch', '-h']],
     ['origin-cursor', ['advance', '--group', '-h']],
     ['reference-index', ['archive', '--path', '-h']],
     ['memory-append', ['inbox', '--kind', '-h']],

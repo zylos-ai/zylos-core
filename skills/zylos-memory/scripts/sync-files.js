@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { verifyBatchReceipt } from '../../comm-bridge/scripts/c4-sync-batch.js';
 import { guard, memoryScope, memoryError } from './sync-lock.js';
 import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry, inboxSegmentName as segment } from './state-format.js';
 import { helpRequested, inputError, isMain, options, parseJson, nonnegativeInteger, readInput, runCli } from './sync-cli.js';
+import { loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 const warn = message => console.error(`Warning: ${message}`);
 const lines = text => (text.match(/[^\n]*(?:\n|$)/g) || []).filter(Boolean).map(raw => ({ raw, text: raw.replace(/\r?\n$/, '') }));
@@ -84,20 +87,55 @@ export async function rotate(settings = {}, deps = {}) {
     return chosen;
   });
 }
-export async function list({ env = process.env } = {}) {
-  const { memoryDir, scope } = await memoryScope(env);
-  const header = parseStateHeader(readOptional(path.join(memoryDir, 'state.md')), { scope });
+const describeFile = file => {
+  const content = fs.readFileSync(file);
+  return { path: path.resolve(file), bytes: content.length, sha256: createHash('sha256').update(content).digest('hex') };
+};
+async function describeInputs({ env = process.env, group, since, now = Date.now } = {}, includeSessions = true) {
+  const current = await memoryScope(env);
+  if (group !== undefined && group !== current.scope && current.scope !== 'origin') throw memoryError('SCOPE_UNBOUND', 'Only Origin can list another group');
+  const { memoryDir, scope, root } = group === undefined ? current : await memoryScope({ ...env, ZYLOS_SESSION_GROUP: group });
+  const statePath = path.resolve(memoryDir, 'state.md'), official = group === undefined ? readOptional(statePath) : '';
+  const header = parseStateHeader(official, { scope });
   const committed = new Set(header.valid ? header.inboxCommitted : []);
-  return names(memoryDir).map(name => segment.exec(name)?.[1]).filter(id => id && !committed.has(id)).sort();
+  const segments = (group === undefined ? names(memoryDir) : []).map(name => segment.exec(name)?.[1]).filter(id => id && !committed.has(id)).sort()
+    .map(id => ({ id, ...describeFile(path.join(memoryDir, `inbox.${id}.md`)) }));
+  if (!includeSessions) return { scope, segments };
+  const timezone = loadTimezoneFromEnv(root, { ...env });
+  const today = dateInTimeZone(new Date(now()), timezone);
+  // Subtract calendar days after timezone conversion, including today as day 7.
+  const fallback = new Date(`${today}T00:00:00Z`);
+  fallback.setUTCDate(fallback.getUTCDate() - 6);
+  let sinceDate = since;
+  if (since !== undefined) {
+    if (/^\d+$/.test(String(since))) {
+      const seconds = Number(since);
+      sinceDate = Number.isSafeInteger(seconds) && Number.isFinite(new Date(seconds * 1000).getTime()) ? new Date(seconds * 1000).toISOString() : null;
+    }
+    if (group === undefined || typeof sinceDate !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/.test(sinceDate) || !Number.isFinite(Date.parse(sinceDate))) throw inputError('Expected a group and Unix seconds or an ISO date/timestamp for since');
+  }
+  const syncedAt = sinceDate ?? (header.valid ? / \| synced_at=([^| ]+)/.exec(official.split(/\r?\n/, 1)[0])?.[1] : null);
+  const cutoff = syncedAt ? (/^\d{4}-\d{2}-\d{2}$/.test(syncedAt) ? syncedAt : dateInTimeZone(new Date(syncedAt), timezone)) : fallback.toISOString().slice(0, 10);
+  const sessionsDir = path.join(memoryDir, 'sessions');
+  const sessions = names(sessionsDir).filter(name => /^\d{4}-\d{2}-\d{2}\.md$/.test(name) && name.slice(0, 10) >= cutoff && name.slice(0, 10) <= today).sort()
+    .map(name => describeFile(path.join(sessionsDir, name)));
+  return group === undefined ? { scope, statePath, segments, sessions } : { scope, sessions };
 }
-export async function checkpoint({ end, summary, noContent = false, ...settings }, deps = {}) {
+export async function list(settings = {}) {
+  return describeInputs(settings);
+}
+export async function checkpoint({ end, summary, batch, noContent = false, ...settings }, deps = {}) {
   return guard(settings, async ({ scope }) => {
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
+    const coverage = scope === '*' ? database.getGlobalCoverageEnd() : database.getCoverageEnd(scope);
+    if (batch?.after !== coverage) throw memoryError('INPUT_CHANGED', 'Batch must start at current coverage');
+    await verifyBatchReceipt(batch, { scope, end, database });
     return database.createCheckpoint(scope, end, noContent ? null : summary, { noContent });
   });
 }
 export async function commit({ input, ...settings }, deps = {}) {
-  return guard(settings, ({ memoryDir, scope }) => {
+  if (settings.group !== undefined) throw inputError('Group override is only supported by list');
+  return guard(settings, async ({ memoryDir, scope }) => {
     const payload = typeof input === 'string' ? parseJson(input) : input;
     if (!payload || Array.isArray(payload) || typeof payload !== 'object' || !Array.isArray(payload.followedUpIds) || payload.followedUpIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw inputError('Expected {followedUpIds:[positive integer IDs]}');
     const officialPath = path.join(memoryDir, 'state.md'), temporaryPath = `${officialPath}.${settings.token}.tmp`;
@@ -108,6 +146,15 @@ export async function commit({ input, ...settings }, deps = {}) {
     const combined = composeState(official, temporary, payload.followedUpIds, deps.warning);
     if (!validateStateDocument(combined, { scope })) throw memoryError('STATE_DOCUMENT_INVALID', 'State header or required sections are invalid');
     const header = parseStateHeader(combined, { scope });
+    const actual = await describeInputs(settings, false);
+    const segmentIdentity = entries => Array.isArray(entries) ? entries.map(item => [item?.id, item?.path, item?.sha256]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))) : null;
+    if (JSON.stringify(segmentIdentity(payload.inputs?.segments)) !== JSON.stringify(segmentIdentity(actual.segments))) throw memoryError('INPUT_CHANGED', 'Sync segments differ from list; read the current list and segments again');
+    const ids = actual.segments.map(item => item.id);
+    if (JSON.stringify(header.inboxCommitted.slice().sort()) !== JSON.stringify(ids.slice().sort())) throw memoryError('INPUT_CHANGED', 'State segment set must match all listed uncommitted segments');
+    const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
+    await verifyBatchReceipt(payload.batch, { scope, end: header.coverage, database });
+    const latest = database.getLatestContentCheckpoint(scope);
+    if (!latest || latest.end_conversation_id !== header.coverage) throw memoryError('INPUT_CHANGED', 'State coverage must match the completed checkpoint');
     fs.writeFileSync(temporaryPath, combined, 'utf8');
     fs.renameSync(temporaryPath, officialPath);
     // Publication is complete. A failed delete cannot roll back the state.
@@ -117,19 +164,19 @@ export async function commit({ input, ...settings }, deps = {}) {
 }
 
 if (isMain(import.meta.url)) await runCli(async () => {
-  if (helpRequested(process.argv.slice(2), ['token'])) {
-    console.log('Usage: sync-files.js list [--token T] | cleanup --token T | rotate --token T | checkpoint END --token T [--no-content] < summary | commit --token T < JSON');
+  if (helpRequested(process.argv.slice(2), ['token', 'group', 'since', 'batch'])) {
+    console.log('Usage: sync-files.js list [--token T] [--group G] [--since DATE] | cleanup --token T | rotate --token T | checkpoint END --token T --batch JSON [--no-content] < summary | commit --token T < JSON');
     return;
   }
   const [command, ...args] = process.argv.slice(2);
-  const parsed = options(args, ['token'], command === 'checkpoint' ? ['no-content'] : []);
+  const parsed = options(args, command === 'checkpoint' ? ['token', 'batch'] : command === 'list' ? ['token', 'group', 'since'] : ['token'], command === 'checkpoint' ? ['no-content'] : []);
   if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0) || (command !== 'list' && !parsed.token)) throw inputError('Invalid command or arguments');
   const settings = { token: parsed.token };
   let result;
   if (command === 'cleanup') result = await cleanup(settings);
   if (command === 'rotate') result = await rotate(settings);
-  if (command === 'list') result = await list();
-  if (command === 'checkpoint') result = await checkpoint({ ...settings, end: nonnegativeInteger(parsed.positional[0], 'checkpoint end'), noContent: !!parsed['no-content'], summary: parsed['no-content'] ? null : readInput() });
+  if (command === 'list') result = await list({ group: parsed.group, since: parsed.since });
+  if (command === 'checkpoint') result = await checkpoint({ ...settings, batch: parseJson(parsed.batch), end: nonnegativeInteger(parsed.positional[0], 'checkpoint end'), noContent: !!parsed['no-content'], summary: parsed['no-content'] ? null : readInput() });
   if (command === 'commit') result = await commit({ ...settings, input: readInput() });
   if (result !== undefined) console.log(JSON.stringify(result));
 });

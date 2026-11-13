@@ -60,6 +60,27 @@ test('navigation check reports old paths and heading pointers, then clears after
   assert.equal(JSON.parse(output.stdout).navigation.count, 1);
 });
 
+test('navigation check excludes only formatted migration provenance fields', t => {
+  const f = fixture(t);
+  const page = 'reference/projects/current.md';
+  const provenance = '- **Moved from:** projects.md "Old project"\n- **Moved from:** decisions.md \u201cOld decision\u201d\n';
+  f.write(page, provenance);
+  assert.deepEqual(checkNavigation(f.root), { navigation: { count: 0, locations: [] }, headings: { count: 0, locations: [] } });
+  f.write(page, provenance + 'See projects.md#old-project\n');
+  const result = checkNavigation(f.root);
+  assert.equal(result.headings.count, 1);
+  assert.deepEqual(result.headings.locations.map(row => [row.path, row.line]), [[page, 3]]);
+  for (const text of [
+    'Moved from projects.md "Old project"',
+    '- **Moved from:** projects.md#old-project',
+    '- **Moved from:** projects.md "Old project"; see decisions.md#real',
+    'See - **Moved from:** projects.md "Old project"',
+  ]) {
+    f.write(page, text + '\n');
+    assert.equal(checkNavigation(f.root).headings.count, 1, text);
+  }
+});
+
 test('navigation check skips missing inputs and refuses symlink traversal', t => {
   const f = fixture(t);
   assert.equal(checkNavigation(f.root).navigation.count, 0);

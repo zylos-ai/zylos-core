@@ -28,17 +28,28 @@ configuration. Origin Sync uses Origin's actual runtime.
   with `run_in_background: true`; these definitions use `sonnet`. Never use a
   `fork` type or any mechanism that inherits the parent conversation for Sync.
 - Codex: use this session's native `spawn_agent` with `fork_turns: "none"`.
-  Explicitly pass `model` using a Terra-tier model listed in the exposed
-  `spawn_agent` tool description (currently `gpt-6.1-terra`). Only when that
-  list has no Terra-tier model, omit `model` and inherit the parent model.
-  Do not pass `reasoning_effort`. Report the actual selected model in the
-  Sync result. Give the worker a self-contained message instructing it to read
+  Before launch, inspect the current `spawn_agent` tool's exposed model list.
+  If it lists a Terra-tier model, pass that exact ID in `model`; do not omit
+  the field and inherit instead. Only if no Terra-tier model is listed, omit
+  `model` and record that fallback reason in the worker message. Do not guess
+  a model ID or change runtime/model configuration to make one available.
+  Do not pass `reasoning_effort`. In the Sync result, distinguish the requested
+  model (or inheritance) from the actual model verified by runtime evidence;
+  if the actual model cannot be verified, report it as unverified.
+  Give the worker a self-contained message instructing it to read
   this skill and the matching procedure. Include their paths, the requested job,
   and all facts and environment bindings it needs; it cannot see the parent
   conversation.
 - Never use a new `codex exec`, PM2 service, or detached shell as a substitute.
   If background tools or the restricted memory tool are unavailable, report
   `TOOL_UNAVAILABLE` and stop; do not silently run an unrestricted writer.
+
+Before launch, the parent discovers the exposed restricted memory tool and
+passes its exact name in the worker message. Claude normally exposes
+`mcp__zylos-memory__edit_memory`; Codex normally exposes
+`mcp__zylos_memory__edit_memory`. If that name is absent, discover an exposed
+tool ending in `edit_memory` before declaring `TOOL_UNAVAILABLE`. Never select
+an unrestricted writer as a substitute.
 
 For both runtimes, the parent must include a few lines in the worker's task
 message covering relevant facts from this period that are absent from the
@@ -56,11 +67,21 @@ before taking a token; run only the selected procedure.
 
 ## Writing rules
 
-All Sync content edits and new memory files use `mcp__zylos-memory__edit_memory`.
+All Sync content edits and new memory files use the discovered `edit_memory`
+tool passed by the parent.
 Origin and global Sync also run the documented `reference-index.js rebuild`,
 `archive`, and `unarchive` commands to maintain generated indexes and page locations.
 Read inputs with Read (offset/limit), Glob, or read-only Bash commands
-`grep -n`, `rg -n`, and `sed -n '<a>,<b>p'`; use Grep when available.
+`grep -n`, `rg -n`, `sed -n '<a>,<b>p'`, and bounded `dd` byte reads; use Grep
+when available.
+For exported batches and listed inputs, read every byte in bounded ranges and
+verify the reported byte count and SHA-256 using read-only tools. Truncated
+output is unread: retry with a smaller limit/range until complete. Do not infer
+completion from the first/last lines or a successful hash check alone. Use
+returned absolute paths; never synthesize segment or session paths.
+Follow the procedure's private export-directory cleanup and per-file byte-range
+ledger, including for a single long line. Origin obtains log paths through
+read-only `sync-files.js list --group G`, without reading state or segments.
 Do not read an entire old file into a script. Memory writes still use only the
 documented tools and scripts.
 Do not use native Edit/Write/patch, shell redirects into memory, or a fallback

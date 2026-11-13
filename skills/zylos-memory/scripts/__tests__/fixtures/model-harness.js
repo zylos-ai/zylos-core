@@ -25,7 +25,7 @@ const scripts = Object.fromEntries(['sync-lock', 'sync-files', 'origin-cursor', 
 Object.assign(scripts, Object.fromEntries(['c4-db', 'c4-fetch'].map(name => [name, path.join(bridgeScripts, `${name}.js`)])));
 
 export const tools = [
-  { name: 'read_file', description: 'Read a complete UTF-8 fixture file, relative to ZYLOS_DIR. No writes.', inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } } },
+  { name: 'read_file', description: 'Read a UTF-8 fixture file, relative to ZYLOS_DIR. Optional byte range [startByte,endByteExclusive) must end at UTF-8 boundaries; each read is at most 2 MiB. No writes.', inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, startByte: { type: 'integer', minimum: 0 }, endByteExclusive: { type: 'integer', minimum: 0 } } } },
   { name: 'list_files', description: 'List a fixture directory, relative to ZYLOS_DIR.', inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' } } } },
   { name: 'run_script', description: 'Execute a real repository CLI with fixture-bound environment, argv and optional stdin. No shell. reference-index permits only rebuild, archive --path <page>, or unarchive --path <archived page>, without stdin or environment overrides.', inputSchema: { type: 'object', required: ['script', 'args'], properties: { script: { type: 'string', enum: Object.keys(scripts) }, args: { type: 'array', items: { type: 'string' } }, stdin: { type: 'string' } } } },
   EDIT_MEMORY_TOOL,
@@ -122,6 +122,15 @@ function fixturePath(f, input) {
   if (resolved !== root && !resolved.startsWith(root + path.sep)) throw new Error('Fixture symlink escaped isolated root');
   return target;
 }
+function fixtureOutputPath(f, input) {
+  if (typeof input !== 'string' || !input || input.includes('\0')) throw new Error('Invalid fixture output path');
+  const target = path.resolve(f.root, input);
+  fixturePath(f, path.dirname(target));
+  const relative = path.relative(f.root, target);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Fixture output path escaped isolated root');
+  if (fs.existsSync(target) || fs.lstatSync(path.dirname(target)).isSymbolicLink()) throw new Error('Fixture output must be a new file in a real fixture directory');
+  return target;
+}
 function cli(f, name, args, input = '') {
   const result = spawnSync(process.execPath, [scripts[name], ...args], { env: f.env, cwd: f.root, input, encoding: 'utf8', timeout: 20000, maxBuffer: 4 * 1024 * 1024 });
   return { status: result.status, signal: result.signal, stdout: result.stdout || '', stderr: result.stderr || '', ...(result.error ? { error: result.error.message } : {}) };
@@ -167,8 +176,14 @@ export async function createToolExecutor(f) {
       try {
         if (request.name === 'read_file') {
           const file = fixturePath(f, a.path), info = fs.statSync(file);
-          if (info.size > 2 * 1024 * 1024) throw new Error('File exceeds complete-read limit');
-          result = { ok: true, path: a.path, content: fs.readFileSync(file, 'utf8') };
+          const startByte = a.startByte ?? 0, endByteExclusive = a.endByteExclusive ?? info.size;
+          if (![startByte, endByteExclusive].every(Number.isSafeInteger) || startByte < 0 || endByteExclusive < startByte || endByteExclusive > info.size) throw new Error('Invalid byte range');
+          if (endByteExclusive - startByte > 2 * 1024 * 1024) throw new Error('File exceeds read limit; request byte ranges');
+          const bytes = Buffer.alloc(endByteExclusive - startByte), descriptor = fs.openSync(file, 'r');
+          try { assert.equal(fs.readSync(descriptor, bytes, 0, bytes.length, startByte), bytes.length); }
+          finally { fs.closeSync(descriptor); }
+          const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+          result = { ok: true, path: a.path, content, startByte, endByteExclusive, bytes: info.size };
         } else if (request.name === 'list_files') result = { ok: true, entries: fs.readdirSync(fixturePath(f, a.path)).sort() };
         else if (request.name === 'edit_memory') {
           if (!injected && /state\.md\..*\.tmp$/.test(a.path) && ['copy-block', 'temporary-bad-header', 'temporary-missing-section'].includes(f.fault)) {
@@ -193,9 +208,18 @@ export async function createToolExecutor(f) {
             }
           }
           if (!Object.hasOwn(scripts, a.script) || !Array.isArray(a.args) || a.args.some(value => typeof value !== 'string') || (a.stdin !== undefined && typeof a.stdin !== 'string')) throw new Error('Invalid script request');
-          // Read tools must not expose other command surfaces or --out writes.
+          if (Object.keys(a).some(key => !['script', 'args', 'stdin'].includes(key))) throw new Error('Unexpected script request fields');
+          // Exports use exclusive-create in the real CLI and stay inside the fixture.
           if (a.script === 'c4-db' && !['unsummarized', 'origin-sync'].includes(a.args[0])) throw new Error('c4-db command is outside Sync read surface');
-          if (a.script === 'c4-fetch' && (a.args.includes('--out') || !['--unsummarized', '--checkpoints', '--origin-sync', '--absorbed', '--begin'].includes(a.args[0]))) throw new Error('c4-fetch command is outside Sync read surface');
+          if (a.script === 'c4-fetch') {
+            if (!['--unsummarized', '--checkpoints', '--origin-sync', '--absorbed', '--begin'].includes(a.args[0])) throw new Error('c4-fetch command is outside Sync read surface');
+            const outputOptions = a.args.filter(value => value === '--out' || value.startsWith('--out='));
+            if (outputOptions.length) {
+              if (outputOptions.length !== 1 || outputOptions[0] !== '--out' || !['--unsummarized', '--absorbed'].includes(a.args[0])) throw new Error('Invalid fixture export option');
+              const index = a.args.indexOf('--out');
+              a.args[index + 1] = fixtureOutputPath(f, a.args[index + 1]);
+            }
+          }
           if (!injected && f.fault === 'read-failure' && a.script === 'c4-fetch' && a.args.includes('--unsummarized')) {
             result = { status: 1, stdout: '', stderr: 'Error [READ_FAILED]: injected required source read failure\n' }; event.injection = f.fault; injected = true;
           }
@@ -282,13 +306,36 @@ export function assertPreserved(before, after, followedUpIds) {
 const isScript = (event, script, command) => event.request.name === 'run_script' && event.effective.script === script && (command === undefined || event.effective.args[0] === command);
 const statusOkay = event => event.result.status === 0;
 const sorted = ids => [...new Set(ids)].sort((a, b) => a - b);
+function assertCompleteReads(f, events, descriptor, after, before) {
+  const reads = events.filter(event => event.request.name === 'read_file' && event.result.ok &&
+    path.resolve(f.root, event.effective.path) === descriptor.path && event.sequence > after && event.sequence < before);
+  const content = Buffer.alloc(descriptor.bytes);
+  const ranges = reads.map(event => {
+    const bytes = Buffer.from(event.result.content);
+    const start = event.result.startByte ?? 0, end = event.result.endByteExclusive ?? bytes.length;
+    assert.equal(bytes.length, end - start, 'Read range contains its exact UTF-8 bytes');
+    assert.ok(start >= 0 && end <= descriptor.bytes);
+    bytes.copy(content, start);
+    return [start, end];
+  }).sort((a, b) => a[0] - b[0]);
+  assert.ok(reads.length, `Required file was read: ${descriptor.path}`);
+  let covered = 0;
+  for (const [start, end] of ranges) {
+    assert.ok(start <= covered, `Unread byte gap in ${descriptor.path}`);
+    covered = Math.max(covered, end);
+  }
+  assert.equal(covered, descriptor.bytes, `Complete file read: ${descriptor.path}`);
+  assert.equal(digest(content), descriptor.sha256, 'Read content matches the declared input digest');
+  return reads;
+}
 
 export function assertSuccessfulSync(f, result, expectedIds, { copied = false } = {}) {
   const events = result.trace;
   const commits = events.filter(event => isScript(event, 'sync-files', 'commit'));
   assert.equal(commits.length, 1, 'Exactly one commit attempt');
   assert.ok(statusOkay(commits[0]), JSON.stringify(commits[0].result));
-  assert.deepEqual(sorted(JSON.parse(commits[0].effective.stdin).followedUpIds), sorted(expectedIds), 'Followed IDs require actual source confirmation, not an outbound audit');
+  const payload = JSON.parse(commits[0].effective.stdin);
+  assert.deepEqual(sorted(payload.followedUpIds), sorted(expectedIds), 'Followed IDs require actual source confirmation, not an outbound audit');
   assertPreserved(f.before.state, result.snapshot.state, expectedIds);
   assert.equal(result.snapshot.rowsHash, f.before.rowsHash, 'C4 source rows are immutable');
   assert.ok(validateStateDocument(result.snapshot.state, { scope: f.scope }));
@@ -303,9 +350,16 @@ export function assertSuccessfulSync(f, result, expectedIds, { copied = false } 
   const rotate = events.find(event => isScript(event, 'sync-files', 'rotate'));
   assert.ok(fetch && cleanup && rotate && fetch.sequence < cleanup.sequence && cleanup.sequence < rotate.sequence, 'Required input fetch precedes cleanup and rotate');
   assert.ok(statusOkay(fetch)); assert.ok(statusOkay(cleanup)); assert.ok(statusOkay(rotate));
-  const batchEnd = fetch.effective.args.includes('--json')
-    ? JSON.parse(fetch.result.stdout).data.upTo
-    : Number(/\bupTo=(\d+)\b/.exec(fetch.result.stdout)?.[1]);
+  assert.ok(fetch.effective.args.includes('--out'), 'Required source batch is exported completely');
+  const fetched = JSON.parse(fetch.result.stdout);
+  const exported = fetch.effective.args.includes('--json') ? fetched.data : fetched;
+  const batchEnd = exported.batch.end;
+  assert.equal(exported.batch.scope, f.scope);
+  assertCompleteReads(f, events, exported, fetch.sequence, checkpoints[0].sequence);
+  const batchOption = checkpoints[0].effective.args.indexOf('--batch');
+  assert.ok(batchOption >= 0, 'Checkpoint carries the fetched batch receipt');
+  assert.deepEqual(JSON.parse(checkpoints[0].effective.args[batchOption + 1]), exported.batch);
+  assert.deepEqual(payload.batch, exported.batch, 'Commit preserves the checkpoint batch receipt');
   assert.ok(Number.isSafeInteger(batchEnd), 'Fetch exposes an exact batch end');
   assert.equal(Number(checkpoints[0].effective.args[1]), batchEnd, 'Checkpoint uses the returned batch end');
   const header = parseStateHeader(result.snapshot.state, { scope: f.scope });
@@ -315,17 +369,20 @@ export function assertSuccessfulSync(f, result, expectedIds, { copied = false } 
   const stateRead = reads.find(event => readPath(event) === f.statePath && event.sequence < checkpoints[0].sequence);
   const listing = events.find(event => isScript(event, 'sync-files', 'list'));
   assert.ok(stateRead && listing && statusOkay(listing), 'State and uncommitted segment listing were read');
-  assert.ok(rotate.sequence < stateRead.sequence && stateRead.sequence < listing.sequence);
-  const segments = JSON.parse(listing.result.stdout);
-  assert.deepEqual([...header.inboxCommitted].sort(), [...segments].sort(), 'Every listed segment is committed');
-  const segmentReads = segments.map(id => reads.find(event => readPath(event) === path.join(f.memoryDir, `inbox.${id}.md`)));
-  assert.ok(segmentReads.every(event => event && event.sequence > listing.sequence && event.sequence < checkpoints[0].sequence), 'Every listed segment is read before checkpoint');
-  assert.deepEqual(segmentReads.map(event => event.sequence), segmentReads.map(event => event.sequence).sort((a, b) => a - b), 'Segments are read in listed order');
-  if (f.before.state.split('\n', 1)[0].includes('synced_at=2026-10-20')) {
-    assert.ok(reads.some(event => readPath(event) === path.join(f.memoryDir, 'sessions/2026-10-20.md') && event.sequence < checkpoints[0].sequence), 'Required dated log was read');
+  assert.ok(rotate.sequence < listing.sequence && listing.sequence < stateRead.sequence);
+  assertCompleteReads(f, events, { path: f.statePath, bytes: Buffer.byteLength(f.before.state), sha256: f.before.stateHash }, listing.sequence, checkpoints[0].sequence);
+  const inputs = JSON.parse(listing.result.stdout), { segments, sessions } = inputs;
+  assert.equal(inputs.scope, f.scope);
+  assert.equal(inputs.statePath, f.statePath);
+  assert.deepEqual(payload.inputs, inputs, 'Commit preserves the exact listed input manifest');
+  assert.deepEqual([...header.inboxCommitted].sort(), segments.map(item => item.id).sort(), 'Every listed segment is committed');
+  const segmentReads = segments.map(item => assertCompleteReads(f, events, item, listing.sequence, checkpoints[0].sequence));
+  for (let index = 1; index < segmentReads.length; index++) {
+    assert.ok(Math.max(...segmentReads[index - 1].map(event => event.sequence)) < Math.min(...segmentReads[index].map(event => event.sequence)), 'Segments are read completely in listed order');
   }
-  assert.ok(reads.some(event => readPath(event) === f.statePath && event.sequence > commits[0].sequence), 'Published state is checked');
-  assert.ok(segments.every(id => !result.snapshot.segments.includes(`inbox.${id}.md`)), 'Committed input segments are removed');
+  for (const session of sessions) assertCompleteReads(f, events, session, listing.sequence, checkpoints[0].sequence);
+  assertCompleteReads(f, events, { path: f.statePath, bytes: Buffer.byteLength(result.snapshot.state), sha256: result.snapshot.stateHash }, commits[0].sequence, Infinity);
+  assert.ok(segments.every(item => !result.snapshot.segments.includes(`inbox.${item.id}.md`)), 'Committed input segments are removed');
   const releases = events.filter(event => isScript(event, 'sync-lock', 'release'));
   assert.equal(releases.length, 1, 'Exactly one release');
   assert.equal(events.at(-1), releases[0], 'Release is the final tool');
@@ -382,7 +439,7 @@ export function assertRotationFlow(f, result) {
   if (f.kind === 'global') assertSuccessfulSync(f, result, []);
   else {
     assert.equal(result.snapshot.stateHash, f.before.stateHash, 'Origin job must not change its own group Pending');
-    assert.ok(!events.some(event => isScript(event, 'sync-files')));
+    assert.ok(events.filter(event => isScript(event, 'sync-files')).every(event => event.effective.args[0] === 'list' && event.effective.args.includes('--group')), 'Origin only lists candidate log paths');
     assert.ok(!events.some(event => event.request.name === 'read_file' && /session-groups\/[^/]+\/(?:state\.md|inbox)/.test(event.effective.path)));
     const advances = events.filter(event => isScript(event, 'origin-cursor', 'advance'));
     assert.equal(advances.length, 1); assert.ok(statusOkay(advances[0])); assert.ok(rotation.sequence < advances[0].sequence);

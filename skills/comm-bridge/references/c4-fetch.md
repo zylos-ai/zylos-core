@@ -17,6 +17,29 @@ A datetime without an offset is UTC, like the conversation timestamps in the out
 
 ## Text Projection
 
+`--unsummarized [--group G] [--after ID] [--up-to ID] [--limit N] --out FILE`
+creates a new private file (mode 0600), refusing to overwrite an existing path.
+The file contains exactly the ordinary direct output, including when `--json`
+is selected. Stdout contains only export metadata: `path`, `count`, `firstId`,
+`lastId`, `bytes`, `sha256`, and `batch` (inside the usual data envelope with
+`--json`). Read the entire file and verify its byte count and SHA-256 before
+summarizing it. `sha256` hashes the file bytes; `batch.sha256` instead hashes
+stable projected conversation fields and is the receipt used by checkpoint
+verification. The receipt's `after` honors actual coverage and `--after`;
+its `end` is the last returned row ID, or the query's upper bound for an empty
+batch. A limit cannot authorize checkpointing unread rows. No receipt is stored
+on the host. An export with a reversed receipt range is rejected.
+
+Create a unique private directory with `mktemp -d` (0700) and place exports
+inside it, never at reusable shared `/tmp` paths. Remove that run's directory
+and files on success or failure before releasing the Sync token (except the
+immediate-stop TOKEN_MISMATCH case). Do not redirect a second copy of the text.
+Read long single lines by bytes: `dd if="<absolute path>" bs=1 skip=0
+count=8192 status=none`, then skip=8188, 16376, and so on, with four-byte overlap
+for UTF-8. Read the actual text for every range and record `[start,end)` ranges
+through the reported file size in the Sync result. Truncation requires smaller
+ranges and rereading; hashes, grep or word counts do not establish a full read.
+
 All message content is projected before text/JSON formatting, absorbed preview
 budgets or `--out` file writes. Valid structured content becomes fallbackText
 plus a short C4 reference; invalid marked content becomes an error marker with

@@ -7,9 +7,11 @@ Opt-in env `MODEL_WORKFLOW_DRIVER` is an absolute executable path. Optional `MOD
 
 Driver emits:
 - `{type:"tool_call", id:"unique-string", name:"read_file"|"list_files"|"run_script"|"edit_memory", arguments:{...}}`.
-- `read_file`: `{path}` relative to isolated root (or allowed absolute fixture path); max complete input 2 MiB.
+- `read_file`: `{path,startByte?,endByteExclusive?}` relative to isolated root (or allowed absolute fixture path). Byte ranges are half-open and must lie on UTF-8 boundaries; each read is at most 2 MiB. Results include content, startByte, endByteExclusive and total bytes. Read every byte of required files, using consecutive ranges for large files.
 - `list_files`: `{path}` returns relative directory entries.
 - `run_script`: `{script:"sync-lock"|"sync-files"|"origin-cursor"|"request-rotation"|"c4-db"|"c4-fetch", args:["..."], stdin?:"..."}`. Names select repository's real CLI; no shell/eval or environment overrides. All process environment comes from fixture.
+- `c4-fetch --unsummarized --out FILE` exports a complete batch to a new file whose parent directory already exists within the isolated fixture. Absorbed-message `--out` exports have the same confinement. Existing files, escaped paths and symlink escapes are rejected. Read the export completely and preserve its returned `batch` receipt for `sync-files checkpoint END --batch JSON` and commit.
+- `sync-files list` returns `{scope,statePath,segments:[{id,path,bytes,sha256}],sessions:[{path,bytes,sha256}]}`. Read the returned state path, every listed segment in order and every selected session completely; commit stdin is `{followedUpIds,inputs,batch}`, with the listed manifest as `inputs` and the fetched receipt as `batch`. Commit verifies segment IDs/paths/hashes; concurrent session notes do not reject it. Origin uses read-only `list --group G --since <cursorUpdatedAt>` for log paths only.
 - `edit_memory`: the exact production `{op,path,expected?,replacement,token}` schema, relayed to real stdio MCP server.
 - `{type:"final", text:"human-readable report", usage?:{...}, model?:"actual model", modelCalls?:number}`. Driver must exit0 after final. Harness checks results independently. Real provenance recorded by external driver; a label alone is not proof.
 

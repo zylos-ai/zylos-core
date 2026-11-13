@@ -41,6 +41,17 @@ test('guidance places the global audit checklist before checkpoint and preserves
   assert.doesNotMatch(global, /Audit content, navigation and size as in Origin step 7/);
 });
 
+test('guidance keeps input drift terminal without replaying completed checkpoints', () => {
+  const common = normalize(between(sync, '## Common completion and failure rules', '## Group Sync'));
+  assert.match(common, /`INPUT_CHANGED` also receives no retry/);
+  assert.match(common, /before publishing that operation's target/);
+  assert.match(common, /already completed checkpoint summary/);
+  assert.match(common, /stop later writes, release once and report the mismatch/);
+  assert.match(common, /Do not replace the retained input manifest or replay a completed checkpoint/);
+  assert.match(common, /A later Sync must fully reread and reconcile the actual inputs/);
+  assert.match(normalize(sync), /Exact provenance fields such as `- \*\*Moved from:\*\* projects.md "Old title"`/);
+});
+
 test('guidance uses bounded read-only source reads available in each runtime', () => {
   for (const source of [sync, reorg]) {
     const text = normalize(source);
@@ -51,7 +62,12 @@ test('guidance uses bounded read-only source reads available in each runtime', (
   const lookup = between(sync, '## Moving from old files', '## Archive and restore');
   assert.doesNotMatch(lookup, /TOOL_UNAVAILABLE|Read\/Glob\/Grep/);
   assert.doesNotMatch(reorg, /TOOL_UNAVAILABLE|Read\/Glob\/Grep/);
-  assert.match(normalize(skill), /Read inputs with Read \(offset\/limit\), Glob, or read-only Bash commands `grep -n`, `rg -n`, and `sed -n '<a>,<b>p'`; use Grep when available/);
+  assert.match(normalize(skill), /Read inputs with Read \(offset\/limit\), Glob, or read-only Bash commands `grep -n`, `rg -n`, `sed -n '<a>,<b>p'`, and bounded `dd` byte reads; use Grep when available/);
+  assert.match(normalize(sync), /Use byte ranges even when a file contains one very long line/);
+  assert.match(normalize(sync), /`dd if="<returned absolute path>" bs=1 skip=0 count=8192 status=none`/);
+  assert.match(normalize(sync), /Continue at skip=8188, then 16376, increasing by 8188/);
+  assert.match(normalize(sync), /the ranges must cover every byte with/);
+  assert.match(normalize(sync), /Never claim a full read from a hash match/);
   assert.match(normalize(skill), /Memory writes still use only the documented tools and scripts/);
   assert.doesNotMatch(skill, /Use Read\/Glob\/Grep for inputs and Bash only/);
 });
