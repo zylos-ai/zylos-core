@@ -24,6 +24,20 @@ export function quotaRecordedTime(usage, now = Date.now()) {
   return formatZoned(usage.recordedAt, undefined, { ...(sameDay ? {} : { month: '2-digit', day: '2-digit' }),
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 }
+export function quotaReset(usage, t, now = Date.now()) {
+  const raw = usage?.resets_at ?? usage?.resetsAt;
+  // Both runtime readers retain numeric reset timestamps in Unix seconds.
+  const at = typeof raw === 'number' ? raw * 1000
+    : typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(raw) ? Date.parse(raw) : NaN;
+  if (!Number.isFinite(at) || !Number.isFinite(now) || at <= now || !Number.isFinite(new Date(at).getTime())) return null;
+  const time = formatZoned(at, undefined, { ...(zonedDay(at) === zonedDay(now) ? {} : { month: '2-digit', day: '2-digit' }),
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  const minutes = Math.ceil((at - now) / 60_000), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60);
+  const parts = [[days, 'Days'], [hours, 'Hours'], [minutes % 60, 'Minutes']]
+    .filter(([count]) => count > 0).map(([count, unit]) => t('wb.quotaReset' + unit, { count }));
+  const duration = parts.join(' ');
+  return { at, time, duration, text: t('wb.quotaReset', { time, duration }) };
+}
 export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);
 function meter(document, pct) {
   const bar = element(document, 'span', undefined, 'wb-meter');
@@ -162,6 +176,8 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
         box.title += ' · ' + t('wb.quotaRecordedHint');
       }
     }
+    const reset = quotaReset(usage, t, now);
+    if (reset) box.title += ' · ' + reset.text;
     root.append(box);
   }
   const pool = instance.pool ?? {}, multi = snapshot.mode === 'multi';

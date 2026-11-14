@@ -7,6 +7,7 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
+  'test/account-quota-browser.test.js',
   'test/skill-command-arguments.test.js',
   'test/pool-capacity-browser.test.js',
   'test/diagram-browser.integration.test.js',
