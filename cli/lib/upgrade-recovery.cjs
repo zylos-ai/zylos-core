@@ -343,6 +343,7 @@ function validateReady(dir, j) {
       phase: 'restored_verifying'
     });
     m.restoreOriginalPackage(dir, j);
+    const staging = m.removeInterruptedInstallStaging(dir, j);
     m.start(j);
     m.verifyServices(j);
     if (j.databaseMode !== 'unchanged') {
@@ -363,13 +364,14 @@ function validateReady(dir, j) {
       }
     });
     const cleanup = m.finishTerminal(dir, j);
+    const warnings = [...new Set([...(cleanup.warnings || []), ...(j.serviceWarnings || []), ...(staging.warning ? [staging.warning] : [])])];
     return {
       attempted: true,
       completed: true,
       stage: j.phase,
       recovery_required: false,
       ...cleanup,
-      ...(j.serviceWarnings?.length ? {warnings:[...new Set([...(cleanup.warnings || []), ...j.serviceWarnings])]} : {})
+      ...(warnings.length ? {warnings} : {})
     };
   } catch (e) {
     const saved = m.transaction(j.zylosDir, dir);
