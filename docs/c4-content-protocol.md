@@ -18,7 +18,38 @@ Here `\n` denotes LF bytes, not backslash characters. `health` and `reason` are 
 
 Marked content, including prefix/JSON/any suffix, has a maximum of **65,536 UTF-8 bytes**, inclusive. Count bytes, not UTF-16 units or characters. The parser returns unmarked ordinary text unchanged regardless of its length, preserving existing history from every channel. The Dashboard channel BeforeSend hook separately enforces a 65,536-byte sending cap on both ordinary and structured content before storage; this is a sending rule, not a general history-reading cap. No truncation of structured content. Images/large data use existing references, not inline binaries.
 
-`parseC4Content(content)` returns `{kind:'text',text}`, `{kind:'envelope',envelope,suffix,view,viewError?}` or `{kind:'invalid',reason,fallbackText?}`. Invalid tagged content never becomes ordinary text and never exposes blocks or actions. After valid object framing, JSON syntax, suffix and byte-limit checks, an `invalid_envelope` result carries only the object's own `fallbackText` when it is a string of 1–16,000 Unicode code points; no other raw payload is returned. Dashboard displays that string literally as plain text with a small “部分内容无法显示” notice; IM projection appends the existing invalid-content/C4 marker to it. Because the text is shown as written, Dashboard messages and conversation previews may show attachment IDs the agent wrote into it (for example `diagram.png (attachment att_…)`); attachment IDs are not credentials, and a browser cannot fetch an attachment from an ID alone. Missing or invalid fallback text, non-JSON content and framing errors retain the existing error/C4-reference behavior. Unsupported Content versions/types remain invalid and cannot be answered. BeforeSend still strictly rejects the whole invalid envelope; there is no per-block degradation or remote code loading.
+`parseC4Content(content)` returns `{kind:'text',text}`, `{kind:'envelope',envelope,suffix,view,viewError?,unsupportedBlocks?}` or `{kind:'invalid',reason,fallbackText?}`. Invalid tagged content never becomes ordinary text and never exposes blocks or actions. After valid object framing, JSON syntax, suffix and byte-limit checks, an `invalid_envelope` result carries only the object's own `fallbackText` when it is a string of 1–16,000 Unicode code points; no other raw payload is returned. Dashboard displays that string literally as plain text with a small “部分内容无法显示” notice; IM projection appends the existing invalid-content/C4 marker to it. Because the text is shown as written, Dashboard messages and conversation previews may show attachment IDs the agent wrote into it (for example `diagram.png (attachment att_…)`); attachment IDs are not credentials, and a browser cannot fetch an attachment from an ID alone. Missing or invalid fallback text, non-JSON content and framing errors retain the existing error/C4-reference behavior. Unsupported envelope versions/kinds and malformed known block types remain invalid and cannot be answered. BeforeSend still strictly rejects unknown block types and the whole invalid envelope; no remote code is loaded.
+
+### Unknown block types in stored ordinary messages
+
+Historical parsing alone accepts an unrecognized block `type` in an otherwise
+valid ordinary `kind: "message"` envelope. It keeps the original envelope and
+adds `unsupportedBlocks: [{index, id, reason: "unknown_type"}]` for those blocks;
+the marker is a parser result, not a wire field. Fully supported results have no
+such member. The unknown block must still have valid common fields: a block ID,
+nonempty string type, supported schemaVersion (1 or 2), a nonempty own
+fallbackText of at most 2,000 Unicode code points, and the existing closed
+member/status/metadata/data shape and resource limits. Complete blocks still
+require object data; reason is allowed only for error status. Duplicate IDs,
+invalid framing, byte limits, bad common fields and malformed known blocks
+continue to invalidate the whole message. A known type's unsupported
+schemaVersion does not become an unknown type.
+
+Dashboard renders each marked block's own fallbackText as literal plain text,
+without consulting its data, actions, citations or component callbacks. Known
+siblings retain their normal rendering and order, and a valid View keeps the
+unknown block's position. View validation/fallback rules are unchanged. Text
+projection treats the partial message as a valid envelope: it uses the required
+whole-message envelope.fallbackText and existing message/C4 references, with no
+invalid marker or second text assembled from blocks.
+
+This exception does not apply when any interruptId, questionSummary or interrupt
+member is present, nor to answer/control envelopes. The whole question stays
+strict even if the unknown block is merely a sibling of its interrupted block.
+validateAnswer, saved-question reconstruction and question registration retain
+their existing strict block rules. Submission parsing with `{submission:true}`,
+findC4ContentError, BeforeSend and component validation reject unknown types as
+before. The strict exported BLOCK_SCHEMA and sendable type list are unchanged.
 
 ## Parse result reason categories
 
@@ -30,7 +61,7 @@ These fixed functional values are part of the common parser contract. Classifica
 | `content_too_large` | Marked UTF-8 content exceeds 65,536 bytes. Unmarked text is never invalidated by this reading limit. |
 | `invalid_json` | Marked body is not one complete syntactically valid JSON object. |
 | `invalid_suffix` | The complete object has neither JSON whitespace nor the exact known suffix after it. |
-| `invalid_envelope` | Parsed object has unsupported version/type, missing/invalid fields or inconsistent question/answer references. A qualified whole-message `fallbackText` is retained for plain-text display only. |
+| `invalid_envelope` | Parsed object has an unsupported envelope version/kind, invalid common or known-block fields, an unknown block outside the historical ordinary-message exception, or inconsistent question/answer references. A qualified whole-message `fallbackText` is retained for plain-text display only. |
 
 Invalid fixtures state expected reason explicitly; replacing one category with another must fail a test. These are parse categories, not new hook machine reason codes.
 
@@ -162,7 +193,7 @@ freeText is nonempty, max 500 code points, only on an open interrupt whose other
 
 ### New submissions and historical display
 
-`parseC4Content(content)` preserves the previous Content acceptance rules for stored history, projections, fleet rendering and savedEnvelope reconstruction. BeforeSend explicitly uses `{submission:true}` to apply the new host consistency checks. New answer validation is strict by default, including answers to reconstructed saved questions. An unanswered old question that fails these checks is unavailable for new answers.
+`parseC4Content(content)` preserves the previous known-type Content acceptance rules for stored history, projections, fleet rendering and savedEnvelope reconstruction, with the ordinary-message unknown-type exception above. Saved questions and answers remain outside that exception. BeforeSend explicitly uses `{submission:true}` to apply the new host consistency checks. New answer validation is strict by default, including answers to reconstructed saved questions. An unanswered old question that fails these checks is unavailable for new answers.
 
 For already-answered question overlays, the browser uses the historical parser and `validateAnswer(action,envelope,{historical:true})`, preserving old duplicate-ID questions and empty-string answers without marking their saved actions unavailable. The historical option is for display only; submission/retry and server acceptance still use strict validation. Stored answer messages continue to display their original fallbackText. View validation still degrades an invalid layout to legal Content plus viewError, including references to pending/error blocks; complete or omitted block status is allowed. BeforeSend rejects viewError, while answer validation remains independent of layout.
 
@@ -224,8 +255,8 @@ The schema machine-data region is generated from `skills/comm-bridge/scripts/c4-
 
 Each implemented component has a `description` (what the block is) and a `useWhen` (when an agent should choose it; for example a chart only when enough data points exist, with one or two sentences explaining the takeaway and no invented values). Both reach agents through the generated model instructions, where each component lists `When to use`, and through the Dashboard `components.js list --json` output. `components.js validate [<file>|-] [--json]` checks one message, read from the file or stdin, with `findC4ContentError` and then the View rules of `parseC4Content(content,{submission:true})`, so it accepts exactly what BeforeSend's content checks accept, exits 0 when valid and 1 otherwise, and prints the formatted error (or with `--json`, `{ok:false,error:{code,path,message}}`); content without the C4 marker fails with code `marker`. It does not check attachment registration or reply routing, which only the send-time hook can see. Each inbound Dashboard message delivered live to the agent (not the session-start history) carries, after its content and before the reply-via line, a one-line reminder, `Charts/choices/forms when useful: node <components.js> list --json`. This guidance is advisory; the parser remains the only acceptance authority.
 
-Fleet pages use the local Dashboard's schema source, not the remote instance's code. Version mismatch degrades to existing readable fallback/error without actions. Do not fetch remote schema or execute remote components.
+Fleet pages use the local Dashboard's schema source, not the remote instance's code. Unsupported envelope versions degrade to the existing whole-message fallback/error without actions; unknown ordinary-message block types use only their own fallback text while known siblings remain available. Do not fetch remote schema or execute remote components.
 
-Consumers share parse results: hook rejects invalid tagged content; projection emits only fallback and safe references; registration/reconciliation use validated IDs and the authoritative row; rendering supplies fallback/error and no actions for invalid/unsupported content. Projection, persistence, access control, runtime hooks, migrations and UI rendering are separate tasks. This definition does not activate structured production.
+Consumers share parse results: hook rejects invalid tagged content; projection emits only fallback and safe references; registration/reconciliation use validated IDs and the authoritative row; rendering supplies whole-message fallback/error without actions for invalid content, or inert per-block fallback for the historical unknown-type exception. Projection, persistence, access control, runtime hooks, migrations and UI rendering are separate tasks. This definition does not activate structured production.
 
 Fixture contract: `test/fixtures/c4-content-protocol.json` contains literal valid/invalid content, action/payload checks, wire and delivery examples. Boundary-sized Unicode cases are generated in tests to keep the fixture reviewable. Tests directly import the module; no source evaluation, patching, or test-generated negative mutation.

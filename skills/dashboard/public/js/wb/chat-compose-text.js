@@ -1,4 +1,4 @@
-import { parseC4Content } from '../../chat-schema.js?v=104';
+import { parseC4Content } from '../../chat-schema.js?v=105';
 import { asDate } from './conversation-time.js?v=99';
 
 /** Limits of one message: one quote, 20 annotations, 4000 characters per excerpt or comment, 65536 UTF-8 bytes. */

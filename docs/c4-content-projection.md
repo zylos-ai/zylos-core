@@ -20,6 +20,12 @@ Recognition and validation use the shared `c4-content-schema.js` parser. Any
 unmarked text, including ordinary JSON and oversized ordinary history, is
 returned verbatim. Valid envelopes return their `fallbackText` followed by
 `[C4 messageId=... interruptId=...; c4_id=...]` (interruptId only when present).
+A historical ordinary message with valid common structure but unknown block
+kinds is also a valid envelope, carrying read-only unsupportedBlocks markers.
+It projects exactly like the equivalent supported envelope: the whole-message
+fallbackText and the same reference suffix, without an invalid marker. The
+projector does not assemble block fallbacks or expose unknown data. Question,
+answer and control validation retain their existing strict rules.
 Inbound answer fallback text already contains its saved question summary and
 readable answer. Blocks, host metadata, action payloads, answer IDs, and Core's
 suppression annotation are not added to model text. This applies to both

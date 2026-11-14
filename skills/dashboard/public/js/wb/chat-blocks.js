@@ -1,11 +1,11 @@
-import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=104';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=105';
 import { element } from './plain-text.js?v=106';
 import { attachmentDisplayText } from './chat-attachments.js?v=155';
 import { formatDuration } from './duration-format.js?v=1';
 import { answerDisplay } from './chat-answer.js?v=1';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=104';
+export { validateAnswer } from '../../chat-schema.js?v=105';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 
@@ -152,8 +152,17 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     return part;
   }
   const blockNodes = new Map();
+  const unsupported = new Set(parsed.unsupportedBlocks?.map(block => block.id));
   for (const block of envelope.blocks) {
     try {
+      if (unsupported.has(block.id)) {
+        const part = node('section', undefined, 'chat-block chat-block-unsupported');
+        part.dataset.blockId = block.id;
+        text(part, block.fallbackText);
+        root.append(part);
+        blockNodes.set(block.id, part);
+        continue;
+      }
       const part = node('section', undefined, 'chat-block chat-block-' + block.type);
       part.dataset.blockId = block.id; part.dataset.blockType = block.type;
       if (block.type === 'confirmation' && block.data) part.dataset.severity = block.data.severity;

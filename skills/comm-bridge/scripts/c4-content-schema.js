@@ -305,10 +305,11 @@ function submissionBlockFailure(block, at) {
   return null;
 }
 /** `submission` adds the send-time consistency checks; stored history omits them. */
-function blockFailure(block, at, submission = false) {
-  const failure = schemaFailure(BLOCK_SCHEMA, block, BLOCK_SCHEMA, at);
+function blockFailure(block, at, submission = false, allowUnknown = false) {
+  const unknown = object(block) && typeof block.type === 'string' && !blockTypes.includes(block.type);
+  const failure = schemaFailure(allowUnknown && unknown ? UNKNOWN_BLOCK_SCHEMA : BLOCK_SCHEMA, block, BLOCK_SCHEMA, at);
   if (failure) return failure;
-  if (!blockTypes.includes(block.type)) return failAt(at, ['type'], 'enum', `must be one of ${list(blockTypes)}`);
+  if (unknown && !allowUnknown) return failAt(at, ['type'], 'enum', `must be one of ${list(blockTypes)}`);
   if (!boundedBlockNodes(block)) return failAt(at, [], 'maxNodes', 'must contain at most 5000 JSON nodes');
   if (block.metadata?.provenance === 'adapter' && block.type !== 'markdown') {
     return failAt(at, ['metadata', 'provenance'], 'const', 'adapter provenance is allowed on markdown blocks only');
@@ -409,14 +410,14 @@ function questionFailure(envelope, at) {
   if (interrupt.reason !== reason) return failAt(at, ['interrupt', 'reason'], 'const', `must be "${reason}" for a ${block.type} block`);
   return envelope.questionSummary === makeQuestionSummary(envelope) ? null : failAt(at, ['questionSummary'], 'derivedSummary', SUMMARY_MESSAGE);
 }
-function messageFailure(envelope, at, submission) {
+function messageFailure(envelope, at, submission, allowUnknown) {
   let failure = membersFailure(envelope, ['version', 'kind', 'messageId', 'fallbackText', 'blocks'], ['metadata', ...QUESTION_KEYS], at);
   if (failure) return failure;
   const blocks = envelope.blocks;
   if (!Array.isArray(blocks)) return failAt(at, ['blocks'], 'type', 'must be of type array');
   if (blocks.length > 64) return failAt(at, ['blocks'], 'maxItems', 'must contain at most 64 items');
   for (let index = 0; index < blocks.length; index++) {
-    if ((failure = blockFailure(blocks[index], within(at, 'blocks', index), submission))) return failure;
+    if ((failure = blockFailure(blocks[index], within(at, 'blocks', index), submission, allowUnknown))) return failure;
   }
   const seen = new Set();
   for (let index = 0; index < blocks.length; index++) {
@@ -457,19 +458,19 @@ function controlFailure(envelope, at) {
 /** First envelope failure, or null. Pass `at = null` for a boolean check;
  * `submission` adds the send-time block checks.
  */
-function envelopeFailure(envelope, at, submission = false) {
+function envelopeFailure(envelope, at, submission = false, allowUnknown = false) {
   if (!object(envelope)) return failAt(at, [], 'type', 'must be of type object');
   if (!own(envelope, 'version')) return failAt(at, ['version'], 'required', 'is required');
   if (envelope.version !== 1) return failAt(at, ['version'], 'const', 'must be 1');
   const failure = first(() => idFailure(envelope, 'messageId', at), () => textFailure(envelope, 'fallbackText', 1, 16000, at));
   if (failure) return failure;
-  if (envelope.kind === 'message') return messageFailure(envelope, at, submission);
+  if (envelope.kind === 'message') return messageFailure(envelope, at, submission, allowUnknown);
   if (envelope.kind === 'answer') return answerFailure(envelope, at);
   if (envelope.kind === 'control') return controlFailure(envelope, at);
   return own(envelope, 'kind') ? failAt(at, ['kind'], 'enum', 'must be one of "message", "answer", "control"')
     : failAt(at, ['kind'], 'required', 'is required');
 }
-const validEnvelope = (envelope, submission = false) => envelopeFailure(envelope, null, submission) === null;
+const validEnvelope = (envelope, submission = false, allowUnknown = false) => envelopeFailure(envelope, null, submission, allowUnknown) === null;
 
 // View is presentation metadata. Validate the remaining envelope independently.
 function splitMessageView(envelope) {
@@ -570,10 +571,15 @@ export function parseC4Content(content, { submission = false } = {}) {
       ? { fallbackText: framed.envelope.fallbackText } : {}) });
   try {
     const split = splitMessageView(framed.envelope);
-    if (!validEnvelope(split.envelope, submission)) return invalid();
+    const allowUnknown = !submission && split.envelope?.kind === 'message'
+      && QUESTION_KEYS.every(key => !own(split.envelope, key));
+    if (!validEnvelope(split.envelope, submission, allowUnknown)) return invalid();
+    const unsupportedBlocks = allowUnknown ? split.envelope.blocks.flatMap((block, index) =>
+      blockTypes.includes(block.type) ? [] : [{ index, id: block.id, reason: 'unknown_type' }]) : [];
     const error = split.hasView ? viewError(split.view, split.metadata, split.envelope.blocks) : null;
     return { kind: 'envelope', envelope: split.envelope, suffix: framed.suffix,
-      view: split.hasView && !error ? split.view : null, ...(error ? { viewError: error } : {}) };
+      view: split.hasView && !error ? split.view : null, ...(error ? { viewError: error } : {}),
+      ...(unsupportedBlocks.length ? { unsupportedBlocks } : {}) };
   } catch { return invalid(); }
 }
 
@@ -775,3 +781,18 @@ export const MODEL_INSTRUCTIONS = "C4 version 1; ChatWeave protocol 0.1. Use onl
 const blockTypes = BLOCK_SCHEMA.properties.type.enum;
 const interactive = INTERACTIVE_COMPONENT_TYPES;
 // END GENERATED COMPONENT CATALOG
+
+// Read-only compatibility validates the shared block shape without applying
+// a known type's data schema. The strict wire schema above remains unchanged.
+const UNKNOWN_BLOCK_SCHEMA = {
+  ...BLOCK_SCHEMA,
+  required: [...BLOCK_SCHEMA.required, 'fallbackText'],
+  properties: {
+    ...BLOCK_SCHEMA.properties,
+    type: { type: 'string', minLength: 1 },
+    fallbackText: { ...BLOCK_SCHEMA.properties.fallbackText, minLength: 1 },
+  },
+  // These shared rules require data for complete blocks, fallback for unfinished
+  // blocks, and restrict reason to error status. Other rules are type-specific.
+  allOf: BLOCK_SCHEMA.allOf.filter(rule => rule.if?.properties?.status),
+};

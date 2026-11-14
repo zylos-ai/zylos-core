@@ -1,4 +1,4 @@
-import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=104';
+import { parseC4Content, CONTENT_PREFIX, validateAnswer, evaluateFormState, validateFormFields } from '../../chat-schema.js?v=105';
 import { element } from './plain-text.js?v=106';
 import { receiptState } from './chat-delivery-state.js?v=100';
 import { instantFromInput, zonedInputValue } from './instance-zone.js?v=100';
