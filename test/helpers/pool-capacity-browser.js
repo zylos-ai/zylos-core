@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { sendHtml, serveStatic } from '../../src/lib/http.js';
+import { sendHtml, serveStatic } from '../../skills/dashboard/src/lib/http.js';
 
 const GiB = 1024 ** 3;
 const fitted = {
@@ -29,7 +29,7 @@ export async function runPoolCapacityBrowser(sandbox) {
   console.log('Pool browser isolation:', JSON.stringify(sandbox.assertIsolation()));
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE, executablePath = process.env.ZYLOS_CHAT_BROWSER_BIN;
   assert.ok(modulePath && fs.existsSync(modulePath)); assert.ok(executablePath && fs.existsSync(executablePath));
-  const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
+  const publicDir = path.resolve(fileURLToPath(new URL('../../skills/dashboard/public/', import.meta.url)));
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="/css/style.css"><link rel="stylesheet" href="/themes/light.css"><link rel="stylesheet" href="/themes/dark.css">
     <link rel="stylesheet" href="/css/wb.css"><link rel="stylesheet" href="/css/wb-icons.css">
@@ -76,7 +76,7 @@ export async function runPoolCapacityBrowser(sandbox) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     for (const [name, record] of Object.entries(variants)) {
       await page.evaluate(record => window.renderPool(record), record);
-      const text = await page.locator('#host').innerText(), tooltip = await page.locator('.wb-pool').getAttribute('title');
+      const text = (await page.locator('#host').innerText()).replaceAll('\u00a0', ' '), tooltip = await page.locator('.wb-pool').getAttribute('title');
       const freshAuto = record.valid && record.fresh && record.source === 'auto';
       assert.equal(/上限 =|Limit =/.test(text), Boolean(freshAuto), name + ': algorithm visibility');
       assert.equal(/由近 7 天各档|由眼下剩余|由手动设定|由下限托|Determined by|minimum keeps the limit/.test(text), Boolean(record.valid && record.fresh && record.source !== 'fallback'), name + ': decision visibility');
@@ -89,15 +89,40 @@ export async function runPoolCapacityBrowser(sandbox) {
         assert.ok(tooltip.includes('由近 7 天各档的用量决定'), tooltip);
       }
       if (locale === 'en' && name === 'fitted') {
-        assert.ok(text.includes('Session count 1: typical peak 7.46 GiB (7 h, 2511 samples); Session count 2:'), text);
+        assert.ok(text.includes('Session count 1: typical peak 7.46 GiB (7 h, 2511 samples)\nSession count 2:'), text);
         assert.doesNotMatch(text, /；|1 sessions/);
+      }
+      // Measure actual text lines: DOM row counts alone cannot prove unit wrapping.
+      const bucketLines = await page.evaluate(() => [...document.querySelectorAll('#host .wb-host-pool-bucket')].map(node => {
+        const rect = node.getBoundingClientRect(), lines = [];
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const text = walker.currentNode;
+          for (let offset = 0; offset < text.length; offset++) {
+            const range = document.createRange(); range.setStart(text, offset); range.setEnd(text, offset + 1);
+            const box = range.getBoundingClientRect();
+            let line = lines.find(line => Math.abs(line.top - box.top) < 1);
+            if (!line) { line = { top: box.top, text: '' }; lines.push(line); }
+            line.text += text.textContent[offset];
+          }
+        }
+        return { top: rect.top, bottom: rect.bottom, lines: lines.map(line => line.text.trim()) };
+      }));
+      assert.equal(bucketLines.length, record.model?.buckets?.length ?? 0, `${name}: each bucket has its own row`);
+      for (const [index, bucket] of bucketLines.entries()) {
+        assert.ok(bucket.lines.length > 0);
+        if (index) assert.ok(bucket.top >= bucketLines[index - 1].bottom - 0.5, `${name}: bucket rows must not share a line`);
+        for (const line of bucket.lines) assert.doesNotMatch(line, /^(?:个|GiB)/, JSON.stringify({ name, width, locale, line }));
+        assert.doesNotMatch(bucket.lines.join(''), /；|; /, 'Bucket rows do not use separators');
       }
       assert.equal(pageError, undefined, pageError); assert.equal(serverError, undefined, serverError);
       const geometry = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth,
-        notes: [...document.querySelectorAll('#host li')].map(node => ({ width: node.clientWidth, scroll: node.scrollWidth })) }));
-      assert.ok(geometry.page <= geometry.viewport, JSON.stringify({ name, width, theme, geometry }));
-      for (const note of geometry.notes) assert.ok(note.scroll <= note.width + 1, JSON.stringify({ name, width, theme, note }));
+        notes: [...document.querySelectorAll('#host li')].map(node => ({ width: node.clientWidth, scroll: node.scrollWidth,
+          text: node.textContent, rows: [...node.children].map(row => ({ text: row.textContent,
+            wordBreak: getComputedStyle(row).wordBreak, width: row.clientWidth, scroll: row.scrollWidth })) })) }));
       if (evidence && name === 'fitted') await page.screenshot({ path: path.join(evidence, `pool-capacity-${locale}-${width}-${theme}.png`), fullPage: true });
+      assert.ok(geometry.page <= geometry.viewport, JSON.stringify({ name, width, theme, geometry }));
+      for (const note of geometry.notes) assert.ok(note.scroll <= note.width + 1, JSON.stringify({ name, width, theme, note, bucketLines }));
       count++;
     }
     await context.close();

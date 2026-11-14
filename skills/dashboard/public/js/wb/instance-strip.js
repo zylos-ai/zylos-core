@@ -59,13 +59,13 @@ export function poolDecision(record, t) {
   return '';
 }
 export function poolBuckets(record, t) {
-  if (!Array.isArray(record?.model?.buckets)) return '';
+  if (!Array.isArray(record?.model?.buckets)) return [];
   return record.model.buckets.filter(bucket => bucket != null && Number.isInteger(bucket.n) && bucket.n >= 0 &&
     finite(bucket.highBytes) && bucket.highBytes >= 0 && Number.isInteger(bucket.hours) && bucket.hours >= 0 &&
     Number.isInteger(bucket.samples) && bucket.samples >= 0)
     .slice().sort((a, b) => a.n - b.n).map(bucket => t('wb.inst.poolBucket', {
       count: bucket.n, amount: (bucket.highBytes / 1073741824).toFixed(2), hours: bucket.hours, samples: bucket.samples,
-    })).join(t('wb.inst.poolBucketSeparator'));
+    }).replace(/(\d) (?=个|GiB\b|h\b|samples\b)/g, '$1\u00a0'));
 }
 export function poolAlgorithm(record, t) {
   if (record?.valid !== true || record.fresh !== true || record.source !== 'auto') return '';

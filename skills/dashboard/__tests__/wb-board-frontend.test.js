@@ -560,21 +560,21 @@ test('host pool explains published buckets and distinct algorithms while the tec
     memory: { limitBytes: 16 * GiB, usedBytes: 8 * GiB, reserveBytes: GiB },
     model: { state: 'fitted', slopeBytes: 0.25 * GiB, interceptBytes: 5.72 * GiB, windowDays: 7, buckets } };
   const pool = { used: 2, capacity: 29, capacityRecord: record }, view = { mode: 'multi', pool };
-  const notes = () => allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent);
+  const notes = () => allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent.replaceAll('\u00a0', ' '));
   const rendered = renderHostPool(section, view, { document, t });
   assert.deepEqual(notes(), [
     '内存上限 16 GiB · 已用 8 GiB（不含文件缓存和交换区） · 保底 1 GiB',
     '每会话约 0.25 GiB · 固定开销约 5.72 GiB（各档的中间值） · 近 7 天',
-    Array.from({ length: 7 }, (_, i) => `${i + 1} 个会话时一般最高 7.46 GiB（7 个小时、2511 个样本）`).join('；'),
+    Array.from({ length: 7 }, (_, i) => `${i + 1} 个会话时一般最高 7.46 GiB（7 个小时、2511 个样本）`).join(''),
     '上限 = 内存能放下的会话数 − 1（给 Origin 留一位），至少 1；能放下的会话数取「按近 7 天的档」与「按眼下剩余内存」中较小的',
     '由近 7 天各档的用量决定',
   ]);
   assert.deepEqual(record.model.buckets.map(bucket => bucket.n), [7, 6, 5, 4, 3, 2, 1], 'sorting does not mutate publication');
   const englishSection = document.createElement('section');
   renderHostPool(englishSection, view, { document, t: poolTranslator('en') });
-  const englishBuckets = allNodes(englishSection).filter(node => node.tagName === 'LI')[2].textContent;
+  const englishBuckets = allNodes(englishSection).filter(node => node.tagName === 'LI')[2].textContent.replaceAll('\u00a0', ' ');
   assert.equal(englishBuckets, Array.from({ length: 7 }, (_, i) =>
-    `Session count ${i + 1}: typical peak 7.46 GiB (7 h, 2511 samples)`).join('; '));
+    `Session count ${i + 1}: typical peak 7.46 GiB (7 h, 2511 samples)`).join(''));
   assert.doesNotMatch(englishBuckets, /；|1 sessions/);
   for (const level of ['plain', 'technical']) {
     instanceStrip(root, { mode: 'multi', instance: { pool } }, { document, t, level });

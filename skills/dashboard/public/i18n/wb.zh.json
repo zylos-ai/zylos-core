@@ -1109,7 +1109,6 @@
   "wb.inst.poolModelSession": "每会话约 {amount} GiB",
   "wb.inst.poolModelFixed": "固定开销约 {amount} GiB（各档的中间值）",
   "wb.inst.poolBucket": "{count} 个会话时一般最高 {amount} GiB（{hours} 个小时、{samples} 个样本）",
-  "wb.inst.poolBucketSeparator": "；",
   "wb.inst.poolDecisionFixed": "由手动设定决定",
   "wb.inst.poolDecisionFloor": "按内存算不够 1 个，由下限托在 1",
   "wb.inst.poolDecisionModel": "由近 7 天各档的用量决定",

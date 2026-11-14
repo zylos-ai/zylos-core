@@ -1,6 +1,6 @@
 import { element, icon } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
-import { poolExplanation, poolSource, poolDecision, poolBuckets, poolAlgorithm } from './instance-strip.js?v=197';
+import { poolExplanation, poolSource, poolDecision, poolBuckets, poolAlgorithm } from './instance-strip.js?v=198';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
@@ -141,8 +141,20 @@ export function renderHostPool(section, view, { document = section.ownerDocument
     const entries = [['memory', poolExplanation({ memory: record.memory }, t)[0]],
       ['model', poolExplanation({ model: record.model }, t)[0]], ['buckets', poolBuckets(record, t)],
       ['algorithm', poolAlgorithm(record, t)], ['decision', poolDecision(record, t)],
-      ['floor', poolExplanation({ reason: record.reason }, t)[0]]].filter(([, text]) => text);
-    notes = keyedRows(parts.list, entries, notes, () => ({ node: element(document, 'li') }), (item, text) => setText(item.node, text));
+      ['floor', poolExplanation({ reason: record.reason }, t)[0]]].filter(([, text]) => text?.length);
+    notes = keyedRows(parts.list, entries, notes, () => ({ node: element(document, 'li'), rows: new Map() }), (item, text) => {
+      if (Array.isArray(text)) {
+        item.rows = keyedRows(item.node, text.map((line, index) => [index, line]), item.rows,
+          () => ({ node: element(document, 'div', undefined, 'wb-host-pool-bucket') }), (row, line) => {
+            if (row.text === line) return;
+            row.text = line;
+            row.node.textContent = '';
+            const pieces = line.split(/(\d+(?:\.\d+)?\u00a0(?:个(?:会话|小时|样本)|GiB|h\b|samples\b)[）)]?)/g);
+            pieces.forEach((piece, index) => row.node.append(element(document, 'span', piece,
+              index % 2 ? 'wb-host-pool-bucket-unit' : undefined)));
+          });
+      } else setText(item.node, text);
+    });
     if (entries.length && parts.list.parentNode !== section) section.append(parts.list);
     if (!entries.length && parts.list.parentNode === section) section.removeChild(parts.list);
   };

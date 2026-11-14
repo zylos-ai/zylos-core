@@ -1109,7 +1109,6 @@
   "wb.inst.poolModelSession": "about {amount} GiB per session",
   "wb.inst.poolModelFixed": "fixed overhead about {amount} GiB (median across buckets)",
   "wb.inst.poolBucket": "Session count {count}: typical peak {amount} GiB ({hours} h, {samples} samples)",
-  "wb.inst.poolBucketSeparator": "; ",
   "wb.inst.poolDecisionFixed": "Determined by the manual setting",
   "wb.inst.poolDecisionFloor": "Memory fits fewer than 1 session; the minimum keeps the limit at 1",
   "wb.inst.poolDecisionModel": "Determined by session bucket usage over the last 7 days",

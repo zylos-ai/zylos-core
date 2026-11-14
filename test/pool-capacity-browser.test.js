@@ -1,5 +1,5 @@
 import test from 'node:test';
-import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
+import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
 
 // Integration: actual Dashboard modules and translations in a static browser,
 // across pool records, sizes and themes. Run for pool explanation or responsive

@@ -518,6 +518,8 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-host-pool .wb-kvs > * { min-width: 0; }
 .wb-host-pool-notes { margin: 8px 0 0; padding-left: 16px; }
 .wb-host-pool-notes li + li { margin-top: 2px; }
+.wb-host-pool-bucket { word-break: normal; }
+.wb-host-pool-bucket-unit { display: inline-block; white-space: nowrap; }
 .wb-host-chart + .wb-host-chart { margin-top: 6px; }
 .wb-host-chart h5 { display: flex; align-items: baseline; gap: 8px; margin: 0; color: var(--text-dim); font-size: 12px; font-weight: 550; }
 .wb-host-chart h5 b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
