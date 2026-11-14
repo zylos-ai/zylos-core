@@ -19,7 +19,7 @@ test('Dashboard entry points import without the web console installed', t => {
   fs.copyFileSync(path.join(core, 'package.json'), path.join(installed, 'package.json'));
   const production = file => !['test', '__tests__', 'node_modules'].some(part => file.split(path.sep).includes(part));
   fs.cpSync(path.join(core, 'cli'), path.join(installed, 'cli'), { recursive: true, filter: production });
-  for (const name of ['dashboard', 'comm-bridge']) {
+  for (const name of ['dashboard', 'comm-bridge', 'activity-monitor']) {
     const source = path.join(core, 'skills', name);
     const target = path.join(installed, 'skills', name);
     fs.cpSync(source, target, { recursive: true, filter: production });
