@@ -144,7 +144,6 @@ test('new paste carries the pending pair without starting another watchdog and o
   assert.deepEqual(f.controls.map(control => control.content), ['[KEYSTROKE]Escape']);
   assert.equal(replacement.recovery, null, 'a superseded continue must release the latest delivery');
   assert.equal(replacement.retryAt, f.now() + NO_RESPONSE_RETRY_MS);
-  assert.equal(replacement.requiredStartAfter, replacement.pastedAt);
   f.advance(NO_RESPONSE_RETRY_MS - 1); await f.observe();
   assert.equal(f.controls.length, 1);
   f.advance(1); await f.observe();
@@ -153,7 +152,7 @@ test('new paste carries the pending pair without starting another watchdog and o
   assert.deepEqual(f.errors, []);
 });
 
-test('new paste after continue insertion retains its completion boundary and the original grace deadline', { timeout: 5000 }, async t => {
+test('new paste after continue insertion retains pending ownership and the original grace deadline', { timeout: 5000 }, async t => {
   const inserted = deferred(), release = deferred();
   const f = fixture(t, { onControl: control => {
     if (control.content !== 'continue') return control;
@@ -173,8 +172,6 @@ test('new paste after continue insertion retains its completion boundary and the
   assert.equal(replacement.recovery, episode);
   assert.equal(episode.pending, false);
   assert.equal(episode.nudgedAt, acceptedAt);
-  assert.equal(replacement.requiredStartAfter, replacement.pastedAt,
-    'late bookkeeping must not move the newest paste boundary back to the older continue');
   f.advance(NO_RESPONSE_GRACE_MS - 2); await f.observe();
   assert.equal(f.stops.length, 0);
   f.advance(1); await f.observe();
@@ -184,7 +181,7 @@ test('new paste after continue insertion retains its completion boundary and the
   assert.deepEqual(f.errors, []);
 });
 
-test('latest paste survives completion of the older continue turn after pending ownership transfers', { timeout: 5000 }, async t => {
+test('previous-turn assistant work after the latest paste disarms carried recovery without Stop', { timeout: 5000 }, async t => {
   const inserted = deferred(), release = deferred();
   const f = fixture(t, { onControl: control => {
     if (control.content !== 'continue') return control;
@@ -197,27 +194,14 @@ test('latest paste survives completion of the older continue turn after pending 
   f.writeTranscript({ type: 'user', sessionId: f.scene.sessionId, isSidechain: false,
     timestamp: new Date(f.now()).toISOString(), message: { role: 'user', content: 'continue' } });
   f.advance(1); f.delivered();
-  const latest = f.supervisor.observer.sceneState(f.scene).delivery;
   release.resolve(); await observation;
   f.advance(1);
   f.writeTranscript({ type: 'assistant', sessionId: f.scene.sessionId, isSidechain: false,
     timestamp: new Date(f.now()).toISOString(),
-    message: { role: 'assistant', model: 'claude-fixture', content: [{ type: 'text', text: 'The older task is complete.' }] } });
-  f.advance(1); f.appendActivity('stop');
+    message: { role: 'assistant', model: 'claude-fixture', content: [{ type: 'text', text: 'Still working on the older task.' }] } });
   await f.observe();
-  assert.equal(latest.recovery, null, 'assistant work ends the old recovery grace');
-  assert.equal(f.supervisor.observer.sceneState(f.scene).delivery, latest,
-    'completion of a turn started before the latest paste cannot retire that paste');
-  f.advance(1);
-  f.writeTranscript({ type: 'user', sessionId: f.scene.sessionId, isSidechain: false,
-    timestamp: new Date(f.now()).toISOString(), message: { role: 'user', content: 'The latest request.' } });
-  f.advance(1);
-  f.writeTranscript({ type: 'assistant', sessionId: f.scene.sessionId, isSidechain: false,
-    timestamp: new Date(f.now()).toISOString(),
-    message: { role: 'assistant', model: 'claude-fixture', content: [{ type: 'text', text: 'The latest request is complete.' }] } });
-  f.advance(1); f.appendActivity('stop');
-  await f.observe();
-  assert.equal(f.supervisor.observer.sceneState(f.scene).delivery, null);
+  assert.equal(f.supervisor.observer.sceneState(f.scene).delivery.noResponseEligible, false,
+    'any AI work after paste disarms delivery, even while the newest request is queued');
   f.advance(NO_RESPONSE_SILENCE_MS + NO_RESPONSE_GRACE_MS); await f.observe();
   assert.equal(f.controls.length, 2);
   assert.equal(f.stops.length, 0);
@@ -236,7 +220,7 @@ test('composed no-response nudge continues after Escape produces Stop and transc
   assert.deepEqual(f.controls.map(control => control.content), ['[KEYSTROKE]Escape', 'continue']);
   await f.observe();
   assert.ok(f.supervisor.observer.scenes.get(f.scene.sessionGroup).delivery,
-    'Escape Stop cannot complete the resumed conversation before it starts');
+    'Escape Stop is an input effect and must not disarm delivery');
   assert.equal(f.stops.length, 0);
   assert.deepEqual(f.errors, []);
 });
@@ -310,65 +294,73 @@ for(const response of ['tool','assistant','child-tool'])test(`composed ${respons
   if(response==='assistant')f.writeTranscript({type:'assistant',isSidechain:false,sessionId:f.scene.sessionId,
     timestamp:new Date(f.now()).toISOString(),message:{role:'assistant',model:'claude-fixture',content:[{type:'text',text:'Work resumed.'}]}});
   else f.appendActivity('pre_tool',{tool:'Read',tool_use_id:'resumed-work',...(response==='child-tool'?{agent_id:'worker'}:{})});
-  await f.observe();assert.equal(f.supervisor.observer.sceneState(f.scene).delivery?.recovery ?? null,null);
-  f.advance(NO_RESPONSE_GRACE_MS);await f.observe();assert.equal(f.stops.length,0);assert.equal(f.controls.length,2);
+  await f.observe();assert.equal(f.supervisor.observer.sceneState(f.scene).delivery.noResponseEligible,false);
+  f.advance(NO_RESPONSE_SILENCE_MS + NO_RESPONSE_GRACE_MS);await f.observe();assert.equal(f.stops.length,0);assert.equal(f.controls.length,2);
 });
-test('composed queued Claude prompt hook and old Stop cannot retire paste before dequeue',{timeout:5000},async t=>{
+test('composed Claude prompt, queue records and Stop cannot disarm a silent paste',{timeout:5000},async t=>{
   const f=fixture(t);f.advance(-899700);f.delivered();f.advance(1);f.appendActivity('prompt');
   f.writeTranscript({type:'queue-operation',operation:'enqueue',timestamp:new Date(f.now()).toISOString(),sessionId:f.scene.sessionId});
   f.advance(99);f.appendActivity('stop');await f.observe();
-  assert.ok(f.supervisor.observer.sceneState(f.scene).delivery,'enqueue hook is not a new turn start');
+  assert.ok(f.supervisor.observer.sceneState(f.scene).delivery,'queue and prompt records are input effects');
   f.advance(1);f.writeTranscript({type:'queue-operation',operation:'dequeue',timestamp:new Date(f.now()).toISOString(),sessionId:f.scene.sessionId});
   await f.observe();assert.ok(f.supervisor.observer.sceneState(f.scene).delivery);
   f.advance(NO_RESPONSE_SILENCE_MS);await f.observe();assert.equal(f.controls.length,2);assert.equal(f.stops.length,0);
 });
-test('composed web nudge advances completion boundary past its interruption Stop',{timeout:5000},async t=>{
+test('composed web nudge interruption Stop does not disarm delivery',{timeout:5000},async t=>{
   const f=fixture(t,{watchdog:true});f.delivered();f.advance(1);const observation=f.observe();await f.firstControl.promise;
   f.advance(1);f.appendActivity('post_tool',{tool:'WebFetch',tool_use_id:'web-tool'});f.appendActivity('stop');
   await observation;const delivery=f.supervisor.observer.sceneState(f.scene).delivery;
-  assert.ok(delivery);assert.equal(delivery.requiredStartAfter,f.now());
+  assert.ok(delivery);
   await f.observe();assert.ok(f.supervisor.observer.sceneState(f.scene).delivery);
   assert.equal(f.controls.length,2);
 });
-test('composed queued Claude remove uses absorption time and remains monitored until completion',{timeout:5000},async t=>{
+test('composed Claude queue remove and queued attachment cannot disarm delivery',{timeout:5000},async t=>{
   const f=fixture(t);f.advance(-899700);f.delivered();f.advance(1);f.appendActivity('prompt');const enqueuedAt=f.now();
   f.writeTranscript({type:'queue-operation',operation:'enqueue',timestamp:new Date(enqueuedAt).toISOString(),sessionId:f.scene.sessionId});
   f.advance(49);const removedAt=f.now();
   f.writeTranscript({type:'queue-operation',operation:'remove',reason:'absorbed_mid_turn',timestamp:new Date(removedAt).toISOString(),sessionId:f.scene.sessionId});
   f.writeTranscript({type:'attachment',timestamp:new Date(enqueuedAt).toISOString(),sessionId:f.scene.sessionId,isSidechain:false,
     attachment:{type:'queued_command',commandMode:'prompt',source_uuid:'queued-message',timestamp:new Date(enqueuedAt).toISOString(),humanTurn:true,origin:{kind:'human'}}});
-  await f.observe();assert.equal(f.supervisor.readActivity(f.scene).lastStartedAt,removedAt);
+  await f.observe();
   assert.ok(f.supervisor.observer.sceneState(f.scene).delivery);
   f.advance(NO_RESPONSE_SILENCE_MS);await f.observe();assert.equal(f.controls.length,2);
 });
 
-for(const runtime of ['claude','codex'])test(`composed ${runtime} idle human input completes without a queue record`,{timeout:5000},async t=>{
-  const f=fixture(t,{runtime});f.advance(-899999);
-  if(runtime==='codex')f.writeTranscript({type:'session_meta',timestamp:new Date(f.now()).toISOString(),payload:{id:f.scene.sessionId}});
-  const user=runtime==='claude'?{type:'user',sessionId:f.scene.sessionId,isSidechain:false,timestamp:new Date(f.now()).toISOString(),message:{role:'user',content:'Please continue the task.'}}:
-    {type:'response_item',timestamp:new Date(f.now()).toISOString(),payload:{type:'message',role:'user',content:[{type:'input_text',text:'Please continue the task.'}]}};
-  f.writeTranscript(user);f.advance(1);
-  f.writeTranscript(runtime==='claude'?{type:'assistant',sessionId:f.scene.sessionId,isSidechain:false,timestamp:new Date(f.now()).toISOString(),message:{role:'assistant',model:'claude-fixture',content:[{type:'text',text:'Done.'}]}}:
-    {type:'response_item',timestamp:new Date(f.now()).toISOString(),payload:{type:'message',role:'assistant',content:[{type:'output_text',text:'Done.'}]}});
-  f.advance(1);f.appendActivity('stop');await f.observe();assert.equal(f.supervisor.observer.sceneState(f.scene).delivery,null);
-  f.advance(1800000);await f.observe();assert.equal(f.controls.length,0);assert.equal(f.stops.length,0);
-});
-for(const runtime of ['claude','codex'])test(`composed ${runtime} normal continue response ends the nudge cycle`,{timeout:5000},async t=>{
-  const f=fixture(t,{runtime});await f.observe();f.advance(1);
-  if(runtime==='codex')f.writeTranscript({type:'session_meta',timestamp:new Date(f.now()).toISOString(),payload:{id:f.scene.sessionId}});
-  f.writeTranscript(runtime==='claude'?{type:'user',sessionId:f.scene.sessionId,isSidechain:false,timestamp:new Date(f.now()).toISOString(),message:{role:'user',content:'continue'}}:
-    {type:'response_item',timestamp:new Date(f.now()).toISOString(),payload:{type:'message',role:'user',content:[{type:'input_text',text:'continue'}]}});
-  f.advance(1);f.writeTranscript(runtime==='claude'?{type:'assistant',sessionId:f.scene.sessionId,isSidechain:false,timestamp:new Date(f.now()).toISOString(),message:{role:'assistant',model:'claude-fixture',content:[{type:'text',text:'Resumed and completed.'}]}}:
-    {type:'response_item',timestamp:new Date(f.now()).toISOString(),payload:{type:'message',role:'assistant',content:[{type:'output_text',text:'Resumed and completed.'}]}});
-  f.advance(1);f.appendActivity('stop');await f.observe();assert.equal(f.supervisor.observer.sceneState(f.scene).delivery,null);
-  f.advance(1800000);await f.observe();assert.equal(f.controls.length,2);assert.equal(f.stops.length,0);
-});
-test('composed busy Codex input is complete only after persisted processed user and its response',{timeout:5000},async t=>{
-  const f=fixture(t,{runtime:'codex'});f.advance(-899700);f.delivered();f.advance(1);f.appendActivity('prompt');
-  f.writeTranscript({type:'session_meta',timestamp:new Date(f.now()).toISOString(),payload:{id:f.scene.sessionId}});
-  await f.observe();assert.ok(f.supervisor.observer.sceneState(f.scene).delivery);
-  f.advance(99);f.writeTranscript({type:'response_item',timestamp:new Date(f.now()).toISOString(),payload:{type:'message',role:'user',content:[{type:'input_text',text:'The newly submitted request.'}]}});
-  f.advance(1);f.writeTranscript({type:'response_item',timestamp:new Date(f.now()).toISOString(),payload:{type:'message',role:'assistant',content:[{type:'output_text',text:'The request is complete.'}]}});
-  f.advance(1);f.appendActivity('stop');await f.observe();assert.equal(f.supervisor.observer.sceneState(f.scene).delivery,null);
-  f.advance(1800000);await f.observe();assert.equal(f.controls.length,0);
-});
+for (const runtime of ['claude', 'codex']) {
+  for (const nudged of [false, true]) {
+    for (const kind of runtime === 'claude' ? ['text', 'thinking', 'call'] : ['text', 'call']) {
+      test(`composed ${runtime} ${kind} work permanently disarms ${nudged ? 'nudged' : 'queued'} delivery without Stop`, { timeout: 5000 }, async t => {
+        const f = fixture(t, { runtime });
+        if (nudged) await f.observe();
+        else f.advance(-NO_RESPONSE_SILENCE_MS + 1);
+        if (runtime === 'codex') f.writeTranscript({ type: 'session_meta', timestamp: new Date(f.now()).toISOString(), payload: { id: f.scene.sessionId } });
+        // The new paste is still queued while AI works on the previous turn.
+        f.advance(1); f.delivered(); f.appendActivity('prompt');
+        if (runtime === 'claude') {
+          f.writeTranscript({ type: 'queue-operation', operation: 'enqueue', timestamp: new Date(f.now()).toISOString(), sessionId: f.scene.sessionId });
+        }
+        await f.observe();
+        assert.ok(f.supervisor.observer.sceneState(f.scene).delivery, 'input effects cannot disarm monitoring');
+        f.advance(1);
+        const timestamp = new Date(f.now()).toISOString();
+        const content = kind === 'text' ? { type: 'text', text: 'Working on the older request.' }
+          : kind === 'thinking' ? { type: 'thinking', thinking: 'Considering the next step.' }
+            : { type: 'tool_use', id: 'tool-call', name: 'Read', input: { file_path: '/tmp/example' } };
+        const payload = kind === 'text' ? { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Working on the older request.' }] }
+
+            : { type: 'function_call', name: 'exec_command', call_id: 'call-1', arguments: '{"cmd":"pwd"}' };
+        f.writeTranscript(runtime === 'claude'
+          ? { type: 'assistant', sessionId: f.scene.sessionId, isSidechain: false, timestamp, message: { role: 'assistant', model: 'claude-fixture', content: [content] } }
+          : { type: 'response_item', timestamp, payload });
+        await f.observe();
+        assert.equal(f.supervisor.observer.sceneState(f.scene).delivery.noResponseEligible, false);
+        assert.equal(f.supervisor.observer.sceneState(f.scene).delivery.recovery, null);
+        f.advance(NO_RESPONSE_SILENCE_MS + NO_RESPONSE_GRACE_MS); await f.observe();
+        f.advance(NO_RESPONSE_SILENCE_MS); await f.observe();
+        assert.equal(f.controls.length, nudged ? 2 : 0, 'AI work disarms permanently, without restarting the timer');
+        assert.equal(f.stops.length, 0);
+        assert.deepEqual(f.errors, []);
+      });
+    }
+  }
+}

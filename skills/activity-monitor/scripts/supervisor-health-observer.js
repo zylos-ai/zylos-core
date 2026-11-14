@@ -42,8 +42,8 @@ export class SupervisorHealthObserver {
     const state = this.sceneState({sessionGroup, runId, runtime});
     if (!state.delivery || pastedAt > state.delivery.pastedAt) {
       const previous=state.delivery;
-      state.delivery = {pastedAt, silenceSince:previous?.silenceSince ?? pastedAt, noResponseEligible:!Number.isFinite(currentSessionTs) || pastedAt>=currentSessionTs,
-        requiredStartAfter:pastedAt, screenChecked:false, recovery:previous?.recovery ?? null, retryAt:previous?.retryAt ?? 0};
+      state.delivery = {pastedAt, silenceSince:previous?.noResponseEligible ? previous.silenceSince : pastedAt, noResponseEligible:!Number.isFinite(currentSessionTs) || pastedAt>=currentSessionTs,
+        screenChecked:false, recovery:previous?.recovery ?? null, retryAt:previous?.retryAt ?? 0};
     }
     return true;
   }
@@ -276,7 +276,6 @@ export class SupervisorHealthObserver {
         if(tracked.watchdog!==watchdog)return;
         const acceptedAt=result?.ok ? result.enqueuedAt : result?.steps?.[0]?.enqueuedAt;
         const resumeAfter=Number.isFinite(acceptedAt) ? acceptedAt : this.now();
-        if(escapeEnqueued && watchdog.owner)watchdog.owner.requiredStartAfter=Math.max(watchdog.owner.requiredStartAfter,resumeAfter);
         if (escapeEnqueued) watchdog.graceUntil=resumeAfter+rule.watchdog.interruptGraceSec*1000;
         else watchdog.retryAt=this.now()+rule.watchdog.cooldownSec*1000;
       } catch(error) {
@@ -290,14 +289,7 @@ export class SupervisorHealthObserver {
     }
   }
   activityAt(scene,state,pastedAt) {
-    if(state?.sessionId!==scene.sessionId)return pastedAt;
-    const workAt=Number.isFinite(state?.lastWorkEventAt) && state.lastWorkEventAt<=this.now() ? state.lastWorkEventAt : 0;
-    return Math.max(pastedAt,this.responseAt(state),workAt);
-  }
-  deliveryCompleted(scene,delivery,state) {
-    return state?.sessionId===scene.sessionId && !state.transcriptPending && Number.isFinite(state.lastStartedAt) &&
-      state.lastStartedAt>=delivery.requiredStartAfter && state.lastCompletedAt>delivery.pastedAt &&
-      state.lastCompletedAt>state.lastStartedAt && state.lastCompletedAt>=(state.lastResponseAt ?? state.lastStartedAt);
+    return state?.sessionId===scene.sessionId ? Math.max(pastedAt,this.responseAt(state)) : pastedAt;
   }
   responseAt(state) {
     return Number.isFinite(state?.lastResponseAt) && state.lastResponseAt<=this.now() ? state.lastResponseAt : 0;
@@ -308,21 +300,18 @@ export class SupervisorHealthObserver {
     if(delivery.recovery?.pending)return true;
     if(delivery.recovery?.sessionId!==undefined && delivery.recovery.sessionId!==scene.sessionId)delivery.recovery=null;
     let recovery=delivery.recovery;
-    // Once nudged, only actual assistant work can end the recovery wait. Control
-    // prompt hooks and interruption records are input effects, not a response.
-    if(recovery && !state.transcriptPending && this.responseAt(state)>recovery.responseAt) {
+    // Any actual AI work after paste disarms this observation, regardless of
+    // which turn produced it. Retain only the independent one-shot screen check.
+    const responseAt=state.sessionId===scene.sessionId ? this.responseAt(state) : 0;
+    if(!state.transcriptPending && recovery && responseAt>recovery.responseAt) {
       delivery.recovery=null;recovery=null;
     }
-    if(!recovery && this.deliveryCompleted(scene,delivery,state)) {
-      if(tracked.delivery===delivery)tracked.delivery=null;
-      return false;
+    if(!recovery && !state.transcriptPending) {
+      if(responseAt>delivery.pastedAt)delivery.noResponseEligible=false;
+      else if(responseAt>delivery.silenceSince)delivery.silenceSince=delivery.pastedAt;
     }
     if(!delivery.noResponseEligible)return false;
-    if(!recovery && state.lastStartedAt>=delivery.silenceSince && state.lastCompletedAt>state.lastStartedAt &&
-      state.lastCompletedAt<delivery.pastedAt && state.lastCompletedAt>=(state.lastResponseAt ?? 0)) {
-      delivery.silenceSince=delivery.pastedAt;
-    }
-    const activityAt=this.activityAt(scene,state,delivery.silenceSince);
+    const activityAt=delivery.silenceSince;
     const silenceMs=Math.max(0,now-(recovery ? recovery.activityAt : activityAt));
     if(!recovery && (state.transcriptPending || silenceMs<NO_RESPONSE_SILENCE_MS))return false;
     if(!recovery && now<delivery.retryAt)return true;
@@ -335,8 +324,7 @@ export class SupervisorHealthObserver {
       const fresh=await this.readState(current);
       if(fresh?.sessionId!==current.sessionId || fresh.transcriptPending)return false;
       if(episode.nudgedAt!==null)return this.responseAt(fresh)<=episode.responseAt;
-      return !this.deliveryCompleted(current,delivery,fresh) &&
-        this.activityAt(current,fresh,delivery.silenceSince)<=episode.activityAt;
+      return this.responseAt(fresh)<=episode.activityAt;
     };
     if(!recovery) {
       if(!await this.canRecover(scene))return false;
@@ -353,7 +341,6 @@ export class SupervisorHealthObserver {
           superseded:tracked.delivery!==delivery || delivery.recovery!==episode});
         const owner=tracked.delivery;
         if(owner?.recovery!==episode)return true;
-        if(escapeEnqueued)owner.requiredStartAfter=Math.max(owner.requiredStartAfter,resumeAfter);
         if(result?.ok)episode.nudgedAt=resumeAfter;
         else {owner.recovery=null;owner.retryAt=this.now()+NO_RESPONSE_RETRY_MS;}
       } catch(error) {
@@ -363,7 +350,6 @@ export class SupervisorHealthObserver {
         const owner=tracked.delivery;
         if(owner?.recovery===episode) {
           owner.recovery=null;owner.retryAt=this.now()+NO_RESPONSE_RETRY_MS;
-          owner.requiredStartAfter=Math.max(owner.requiredStartAfter,this.now());
         }
         throw error;
       } finally {episode.pending=false;}
