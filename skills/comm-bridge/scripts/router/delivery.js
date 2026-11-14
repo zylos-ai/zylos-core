@@ -173,7 +173,7 @@ export function createDelivery(deps, configuration = {}) {
     const emit = (event, details = {}) => diagnostic(event, { ...fields, ...details });
     const periodic = groupPeriodic(group, fields);
     let connection, target, adapter, timer, draining = false, queue = Promise.resolve();
-    let result = 'blocked', gateCode, gateReason, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false;
+    let result = 'blocked', gateCode, gateReason, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false, pastedAt = null;
     // A control typed into the session as a message (not a key, a slash command or an auto-acknowledged heartbeat) is
     // input the agent works on, delivered like a conversation message.
     let typed = false;
@@ -335,7 +335,7 @@ export function createDelivery(deps, configuration = {}) {
             const message = type === 'conversation' ? deps.formatConversation(row) : content.startsWith('/') ? content : `Meanwhile, ${content}`;
             const sanitized = sanitizeMessage(message);
             await io(() => adapter.sendText({ ...bound(), text: sanitized, bracketedPaste: BRACKETED_PASTE_ENABLED }));
-            const pastedAt = now();
+            pastedAt = now();
             try { Promise.resolve(deps.notifyDelivered({
               ...(type === 'conversation' ? { conversationId: row.id, channel: row.channel } : { controlId: row.id }),
               sessionGroup: group, runId: target.runId, runtime: target.runtime, pastedAt })).catch(() => {}); } catch {}
@@ -404,9 +404,10 @@ export function createDelivery(deps, configuration = {}) {
       } catch {
         emit('delivery_identity_lost', { reason: 'read_failed' });
       }
-      if (type === 'control') emit('deliver', { sessionId });
+      // A message that waits for the session to be idle is recorded long after it was typed in: the record carries when.
+      if (type === 'control') emit('deliver', { sessionId, pasted_at: pastedAt });
       else if (!deps.db.markDelivered(row.id, { sessionId })) emit('mark_delivered_stale', { sessionId });
-      else emit('deliver', { sessionId });
+      else emit('deliver', { sessionId, pasted_at: pastedAt });
     } else if (result === 'ack') deps.db.ackControl(row.id);
     return { delivered: result !== 'blocked', blocked: result === 'blocked', state: state.state };
   }

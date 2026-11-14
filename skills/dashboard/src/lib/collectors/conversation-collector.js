@@ -180,13 +180,19 @@ export class ConversationCollector {
     if (lastNewline === -1) return 0;
     const consumed = Buffer.byteLength(chunk.slice(0, lastNewline + 1), 'utf8');
 
-    const lines = chunk.slice(0, lastNewline).split('\n').filter(l => l.trim());
+    // Each line with its byte offset in the file, which names a queued message's removal when nothing else does.
+    const lines = [];
+    let position = startOffset;
+    for (const text of chunk.slice(0, lastNewline).split('\n')) {
+      if (text.trim()) lines.push({ text, offset: position });
+      position += Buffer.byteLength(text, 'utf8') + 1;
+    }
 
     let written = 0;
     let usageWritten = 0;
     const now = new Date().toISOString();
 
-    for (const line of lines) {
+    for (const { text: line, offset } of lines) {
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
 
@@ -199,7 +205,10 @@ export class ConversationCollector {
       if (msg.type === 'queue-operation') {
         const type = { dequeue: 'input_dequeue', remove: 'input_remove' }[msg.operation];
         const report = msg.operation === 'remove' && typeof msg.content === 'string' && msg.content.startsWith('<task-notification>');
-        if (type && !report && !usageOnly) written += this._ingestQueue(type, msg.timestamp, msg.sessionId || sessionId, group, runId);
+        // Several messages taken into a turn at once leave the queue in the same millisecond: each removal is told
+        // apart by the queued command's id, or by its line when it has none.
+        const removal = msg.operation === 'remove' ? (typeof msg.commandUuid === 'string' && msg.commandUuid ? msg.commandUuid : `@${offset}`) : null;
+        if (type && !report && !usageOnly) written += this._ingestQueue(type, msg.timestamp, msg.sessionId || sessionId, group, runId, removal);
         continue;
       }
 
@@ -308,12 +317,12 @@ export class ConversationCollector {
     return written + usageWritten;
   }
 
-  _ingestQueue(type, timestamp, sessionId, group, runId) {
+  _ingestQueue(type, timestamp, sessionId, group, runId, removal = null) {
     if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))) return 0;
     try {
       const result = this.store.insertEvent({
         id: crypto.randomUUID(),
-        ingest_id: `queue-${type === 'input_dequeue' ? 'dequeue' : 'remove'}-${sessionId ?? ''}-${timestamp}`,
+        ingest_id: type === 'input_dequeue' ? `queue-dequeue-${sessionId ?? ''}-${timestamp}` : `queue-remove-${sessionId ?? ''}-${timestamp}-${removal}`,
         timestamp,
         runtime: 'claude',
         session_id: sessionId,

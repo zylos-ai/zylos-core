@@ -24,7 +24,7 @@ const DIAGNOSTIC_FIELDS = ['decision', 'reason', 'request_id', 'conversation_id'
   'phase', 'result', 'action', 'target_run_id', 'ready', 'starting', 'reclaiming', 'waiting',
   'capacity', 'busy', 'idle', 'queue_depth', 'from', 'to', 'error_code', 'error',
   'requestId', 'runId', 'sessionId', 'oldSessionId', 'sessionGroup',
-  'type', 'reason_code', 'channel', 'endpoint', 'detail'];
+  'type', 'reason_code', 'channel', 'endpoint', 'detail', 'pasted_at'];
 const IDENTITY_FIELDS = new Set(['sessionGroup', 'runId', 'sessionId', 'oldSessionId',
   'target_run_id', 'requestId', 'request_id', 'control_id', 'conversation_id']);
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]+$/.test(value)

@@ -27,7 +27,8 @@ const LAUNCH_LEAD_MS = 10_000;
 /**
  * The router records a message's delivery once it has typed it in and seen it land, which is after the runtime
  * reported the prompt for it: about half a second later on real hosts. A delivery this soon after an unmatched prompt
- * is that prompt's message.
+ * is that prompt's message. A message that waits for the session to be idle is recorded only after that wait, so its
+ * delivery carries when it was typed in, and the prompt is looked for from then.
  */
 const PROMPT_DELIVERY_LAG_MS = 2_000;
 // Memory Sync workers, named by what they do rather than by their worker type.
@@ -56,15 +57,17 @@ const positiveId = value => Number.isSafeInteger(Number(value)) && Number(value)
 export const subtaskKey = id => createHash('sha256').update(id).digest('base64url').slice(0, 22);
 const agentOf = event => typeof event.meta.agent_id === 'string' && event.meta.agent_id ? event.meta.agent_id : null;
 /**
- * The prompt time of each delivery among main-agent rows in time order: the earliest prompt not yet matched at most
- * PROMPT_DELIVERY_LAG_MS before it. A delivery recorded before its prompt, or without one, has none.
+ * The prompt time of each delivery among main-agent rows in time order: the earliest prompt not yet matched from at
+ * most PROMPT_DELIVERY_LAG_MS before the delivery on, or, when the delivery carries the time it was typed in, from at
+ * most that long before then on. A delivery recorded before its prompt, or without one, has none.
  */
 function promptTimes(rows) {
   const open = [], times = new Map();
   for (const row of rows) {
     if (row.type === 'user_prompt_submit') open.push(row.at);
     else if (row.type === 'deliver') {
-      while (open.length && row.at - open[0] > PROMPT_DELIVERY_LAG_MS) open.shift();
+      const typed = Number.isFinite(row.meta.pasted_at) ? row.meta.pasted_at : row.at;
+      while (open.length && typed - open[0] > PROMPT_DELIVERY_LAG_MS) open.shift();
       if (open.length) times.set(row, open.shift());
     }
   }

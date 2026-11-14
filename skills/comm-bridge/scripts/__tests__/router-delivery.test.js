@@ -227,6 +227,32 @@ test('a control typed in as a message records its delivery like a conversation m
   assert.equal(delivered().length, 2, 'only the two typed messages record a delivery');
 });
 
+// Real delivery with an injected clock: a message that waits for the session to be idle records its delivery only after
+// that wait, so the record carries when it was typed in.
+test('a delivery recorded after the idle wait carries the time the message was typed in', async t => {
+  const f = setup(t), d = f.create({ idleHoldMs: 9000 }); t.after(() => d.stop());
+  const recorded = [];
+  f.deps.diagnostic = (event, fields) => { if (event === 'deliver') recorded.push({ at: f.deps.now(), fields }); };
+  let pasted = [];
+  const sendText = f.adapter.sendText;
+  f.adapter.sendText = async args => { await sendText(args); pasted.push(f.deps.now()); };
+  const row = f.message(); row.require_idle = 1;
+  const task = f.control('Run the morning report', { require_idle: 1 });
+  await d.deliverConversation(row); await d.deliverControl(task);
+  assert.equal(f.row(row.id).status, 'delivered'); assert.equal(task.status, 'done');
+  assert.equal(recorded.length, 2);
+  recorded.forEach((entry, index) => {
+    assert.equal(entry.fields.pasted_at, pasted[index]);
+    assert.ok(entry.at - entry.fields.pasted_at >= 9000, 'recorded after the idle wait');
+  });
+  // Without the wait the record carries the same time.
+  pasted = [];
+  const plain = f.message();
+  await f.create().deliverConversation(plain);
+  assert.equal(recorded.length, 3);
+  assert.equal(recorded[2].fields.pasted_at, pasted[0]);
+});
+
 test('bypass skips health but cannot bypass idle or READY', async t => {
   const f = setup(t); f.state.health = 'unavailable'; f.deps.readRuntimeHealth = () => ({ health: 'down', publicHealth: 'unavailable' });
   const d = f.create(), row = f.control('repair', { bypass_state: 1 }); await d.deliverControl(row); assert.equal(row.status, 'done');

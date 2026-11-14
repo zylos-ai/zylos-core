@@ -885,6 +885,58 @@ test('a message the runtime took into the running turn before its delivery was r
   assert.deepEqual(shown(await read(f)), ['read:c.md:running']);
 });
 
+test('messages the runtime took into the running turn at once are neither marked where a later queued message is taken', async t => {
+  // A scheduled task queued at 1 and an instruction queued at 2 are both taken into the running turn at 2.6, in the
+  // same millisecond.
+  const f = fixture(t, { now: at(10) });
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  f.message(50, 0.5, 'in', { channel: 'scheduler', endpoint_id: 'task' }); f.typed(1, { conversation_id: 50 });
+  f.typed(2, { control_id: 7 });
+  f.event('input_remove', 2.6); f.event('input_remove', 2.6);
+  f.tool('a', 3, 4, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.message(2, 5, 'out');
+  f.event('stop', 6);
+  f.event('input_dequeue', 8);
+  f.tool('c', 9, null, { tool_name: 'Read', tool_detail: 'c.md' });
+  assert.deepEqual(shown(await read(f)), ['read:c.md:running']);
+});
+
+// A message that waits for the session to be idle is typed in, and its delivery recorded only after that wait: here
+// 11 s later. The record carries when it was typed in.
+const idleTask = (f, typedIn, recorded) => {
+  f.db.prepare(`INSERT INTO conversations (id,timestamp,direction,channel,endpoint_id,session_group,content,status)
+    VALUES (50,?,'in','scheduler','task',?,'task','delivered')`).run(c4(typedIn), GROUP);
+  f.event('user_prompt_submit', typedIn + 0.4);
+  f.event('deliver', recorded, { meta: { conversation_id: 50, pasted_at: at(typedIn) }, session: null });
+};
+
+test('a message whose delivery was recorded long after it was typed in and started the work is not marked again', async t => {
+  // The task starts the work at 0.4; a message sent at 14 is queued and taken at 20.1, after the stop at 20.
+  const f = fixture(t, { now: at(22) });
+  idleTask(f, 0, 12);
+  f.tool('a', 1, 18, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.message(2, 14); f.typed(14, { conversation_id: 2 });
+  f.event('stop', 20);
+  f.event('input_dequeue', 20.1);
+  f.tool('c', 21, null, { tool_name: 'Read', tool_detail: 'c.md' });
+  assert.deepEqual(shown(await read(f)), ['read:c.md:running']);
+});
+
+test('a message taken into the running turn before its late delivery record is not marked where a later queued message is taken', async t => {
+  // A message starts the work at 0.2; the task typed in at 1 is taken into that turn at 3, and its delivery recorded
+  // at 12. A message sent at 14 is queued and taken at 20.1, after the stop at 20.
+  const f = fixture(t, { now: at(22) });
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  idleTask(f, 1, 12);
+  f.event('input_remove', 3);
+  f.tool('a', 4, 18, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.message(2, 14); f.typed(14, { conversation_id: 2 });
+  f.event('stop', 20);
+  f.event('input_dequeue', 20.1);
+  f.tool('c', 21, null, { tool_name: 'Read', tool_detail: 'c.md' });
+  assert.deepEqual(shown(await read(f)), ['read:c.md:running']);
+});
+
 test('a recorded session replayed event by event: the input that started a turn is not marked again after its reply', async t => {
   // Each record and message is added at its time and the live area read right after it, as the page polls, from the
   // conversation's first message on. The only input from outside the conversation is the one that started the turn.
