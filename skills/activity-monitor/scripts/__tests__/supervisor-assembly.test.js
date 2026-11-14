@@ -119,6 +119,39 @@ for(const badRequests of [true,false])test(`restart request failure episodes not
  fs.writeFileSync(file,'[]');now+=1000;await supervisor.loop.tick();assert.equal(recoveries().length,2);
 });
 
+for(const badRequests of [true,false])test(`pending owner delivery does not block ${badRequests?'startup restore':'a locked round'}`,{timeout:5000},async t=>{
+ let rejectAlert,attempts=0;
+ const pending=new Promise((_,reject)=>{rejectAlert=reject;});
+ const {supervisor,calls,file}=fixture(t,{badRequests,alert:()=>{attempts++;return pending;}});
+ async function completes(operation) {
+  let timer;
+  try {
+   await Promise.race([operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('supervisor waited for owner delivery')),1000);})]);
+  } finally {clearTimeout(timer);}
+ }
+ let operation;
+ try {
+  operation=supervisor.loop.start();await completes(operation);
+  assert.equal(supervisor.admission.open,true);
+  if(!badRequests){fs.writeFileSync(file,'broken');operation=supervisor.loop.tick();await completes(operation);}
+  assert.equal(attempts,1);
+  const rejected=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'pending-alert',reason:'upgrade'});
+  assert.equal(rejected.code,'requests_unreadable');
+  let admitted=false;
+  operation=supervisor.admission.serialize(()=>{admitted=true;});await completes(operation);
+  assert.equal(admitted,true,'the alert cannot retain the lifecycle lock');
+  fs.writeFileSync(file,'[]');operation=supervisor.loop.tick();await completes(operation);
+  assert.equal(calls.filter(row=>row.event==='restart_requests_recovered').length,1);
+  assert.equal(calls.filter(row=>row.phase==='restart-requests-alert').length,0);
+ } finally {
+  rejectAlert(new Error('owner delivery failed after recovery'));
+  await operation;
+ }
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(calls.filter(row=>row.phase==='restart-requests-alert').length,1);
+ assert.equal(attempts,1);
+});
+
 test('failed restart request owner delivery remains bounded and preserves recovery',async t=>{
  let now=2_000_000,attempts=0;
  const {supervisor,calls,file}=fixture(t,{badRequests:true,now:()=>now,alert:async()=>{attempts++;throw new Error('owner channel unavailable');}});

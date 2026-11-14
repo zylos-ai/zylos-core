@@ -7,7 +7,10 @@ test('request pause is instance attention and disappears on recovery', () => {
   const snap = snapshot();
   for (const supervisorPaused of [true, false, null, undefined, 'true']) {
     snap.instance.supervisorPaused = supervisorPaused;
-    assert.deepEqual(buildAttention(snap).problems, supervisorPaused === true ? [{ kind: 'supervisor_paused' }] : []);
+    const result = buildAttention(snap);
+    assert.deepEqual(result.problems, [], 'pause does not classify running sessions as failed');
+    assert.deepEqual(result.reminders, supervisorPaused === true ? [{ kind: 'supervisor_paused' }] : []);
+    assert.equal(result.ok, supervisorPaused !== true);
   }
 });
 test('authentication attention distinguishes affected running groups from unknown targets or queues', () => {

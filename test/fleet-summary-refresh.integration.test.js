@@ -18,6 +18,9 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
   const data = path.join(root, 'components/dashboard');
   fs.mkdirSync(data, { recursive: true });
   fs.mkdirSync(path.join(root, '.zylos'));
+  fs.mkdirSync(path.join(root, 'activity-monitor'));
+  const requestsFile = path.join(root, 'activity-monitor/restart-requests.json');
+  fs.writeFileSync(requestsFile, '[]');
   const coreConfig = path.join(root, '.zylos/config.json');
   const writeMode = value => fs.writeFileSync(coreConfig, JSON.stringify(value));
   writeMode({});
@@ -97,11 +100,21 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
       writeMode({ session_mode: mode });
       for (const paused of [false, true, false]) {
         supervisorPaused = paused;
+        fs.writeFileSync(requestsFile, paused ? '{ broken' : '[]');
         now += 3000;
+        const readsBefore = statusReads;
         const value = await readState();
         assert.equal(value.supervisor_paused, paused);
         assert.equal(stateToFleetRecord({ name: 'remote' }, value).supervisor_paused, paused);
-        if (mode === 'single') assert.equal(value.group_summary, null);
+        if (mode === 'single') {
+          assert.equal(value.group_summary, null);
+          assert.equal(statusReads, readsBefore, 'single session publication never collects a full snapshot');
+          const fleetResponse = await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie } });
+          assert.equal(fleetResponse.status, 200);
+          const self = (await fleetResponse.json()).agents.find(agent => agent.self);
+          assert.equal(self.supervisor_paused, paused);
+          assert.equal(statusReads, readsBefore, 'single session Fleet polling also skips the snapshot');
+        }
       }
     }
   });

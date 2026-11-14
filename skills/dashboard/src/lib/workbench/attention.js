@@ -11,7 +11,7 @@ export function createChannelDownCounter() {
 
 export function buildAttention(snapshot, { channelDownCounter, pm2Data } = {}) {
   const problems = [], reminders = [], rows = snapshot.rows;
-  if (snapshot.instance.supervisorPaused === true) problems.push({ kind: 'supervisor_paused' });
+  if (snapshot.instance.supervisorPaused === true) reminders.push({ kind: 'supervisor_paused' });
   const health = snapshot.instance.runtimeHealth ?? {};
   for (const runtime of ['claude', 'codex']) {
     const record = health[runtime];

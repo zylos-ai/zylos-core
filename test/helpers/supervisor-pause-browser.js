@@ -3,11 +3,36 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { stateToFleetRecord } from '../../skills/dashboard/src/lib/fleet-poller.js';
+import { buildAttention } from '../../skills/dashboard/src/lib/workbench/attention.js';
 import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 import { startPage } from '../../skills/dashboard/__tests__/helpers/workbench-browser.js';
 import { openDashboardTab } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
 
 const pauseText = 'Supervisor has paused new actions';
+const warningColor = 'rgb(214, 155, 53)';
+
+async function assertWarningColor(page, selector, property, label) {
+  await page.waitForFunction(({ selector, property, color }) => {
+    const node = document.querySelector(selector);
+    return node && getComputedStyle(node)[property] === color;
+  }, { selector, property, color: warningColor });
+  assert.equal(await page.locator(selector).evaluateAll((nodes, property) => getComputedStyle(nodes[0])[property], property),
+    warningColor, label);
+}
+
+async function stopBrowser(server) {
+  const child = server.process();
+  let timer;
+  try {
+    await Promise.race([server.close(), new Promise((_, reject) => {
+      timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Browser cleanup timed out')); }, 8000);
+    })]);
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }
+  assert.ok(child.exitCode !== null || child.signalCode !== null, 'browser process reclaimed');
+}
 
 export async function runSupervisorPauseBrowser(sandbox) {
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE;
@@ -21,12 +46,10 @@ export async function runSupervisorPauseBrowser(sandbox) {
   const { base, actions } = await startPage(sandbox);
   const { chromium } = await import(pathToFileURL(modulePath));
   sandbox.assertIsolation();
-  const browser = await chromium.launch({ executablePath, headless: true, env: sandbox.env, timeout: 15_000,
+  const server = await chromium.launchServer({ executablePath, headless: true, env: sandbox.env, timeout: 15_000,
     args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
-  sandbox.addCleanup(async () => {
-    await browser.close();
-    assert.equal(browser.isConnected(), false, 'browser connection reclaimed');
-  });
+  sandbox.addCleanup(() => stopBrowser(server));
+  const browser = await chromium.connect(server.wsEndpoint(), { timeout: 15_000 });
 
   for (const width of [390, 1280]) for (const theme of ['light', 'dark']) {
     const now = Date.now();
@@ -59,7 +82,7 @@ export async function runSupervisorPauseBrowser(sandbox) {
         if (url.pathname === '/api/workbench/groups') {
           const snapshot = workbenchAnswer(url, now);
           snapshot.instance.supervisorPaused = paused;
-          snapshot.attention.problems = paused ? [{ kind: 'supervisor_paused' }] : [];
+          snapshot.attention = buildAttention(snapshot);
           return route.fulfill({ json: snapshot });
         }
         return route.fallback();
@@ -75,9 +98,14 @@ export async function runSupervisorPauseBrowser(sandbox) {
         const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/workbench/groups');
         await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
         await refreshed;
-        for (const card of [own, remote]) {
+        for (const [card, selector] of [[own, '.wb-f-card[data-self="true"]'], [remote, '.wb-f-card[data-agent="remote-case"]']]) {
           await card.locator('[data-supervisor-paused]').waitFor({ state: value ? 'visible' : 'detached' });
-          if (value) assert.equal(await card.locator('[data-supervisor-paused]').innerText(), pauseText);
+          if (value) {
+            const reason = card.locator('[data-supervisor-paused]');
+            assert.equal(await reason.innerText(), pauseText);
+            await assertWarningColor(page, `#agent-fleet-root ${selector} [data-supervisor-paused]`, 'color',
+              `${width}px ${theme} Fleet pause uses the warning color after the full stylesheet cascade`);
+          }
           assert.equal(await card.getAttribute('data-state'), 'idle', 'pause does not invent a runtime failure');
         }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width}px Fleet fits`);
@@ -97,7 +125,13 @@ export async function runSupervisorPauseBrowser(sandbox) {
         await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
         await refreshed;
         await attention.waitFor({ state: value ? 'visible' : 'detached' });
-        if (value) assert.equal(await attention.locator('b').innerText(), pauseText);
+        if (value) {
+          assert.equal(await attention.locator('b').innerText(), pauseText);
+          await assertWarningColor(page, '#wb-attention .wb-attention-item', 'borderLeftColor',
+            `${width}px ${theme} Dashboard pause border uses the warning color`);
+          await assertWarningColor(page, '#wb-attention .wb-attention-item > .wb-ico', 'color',
+            `${width}px ${theme} Dashboard pause icon uses the warning color`);
+        }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width}px Dashboard fits`);
         if (evidence) await page.screenshot({ path: path.join(evidence, `supervisor-dashboard-${width}-${theme}-${phase}.png`), fullPage: true });
       }

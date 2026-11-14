@@ -2,6 +2,7 @@
 import { readThresholdPolicy, sessionThreshold } from './lib/session-threshold.js';
 import { CoreState } from './lib/core-state.js';
 import { loadCoreModule } from './lib/core-modules.js';
+import { RestartRequestStore } from '../../activity-monitor/scripts/restart-request-store.js';
 import { createReadinessCheck } from './lib/readiness.js';
 import { bootId, publishHealthProcess } from './lib/health-process.js';
 import { createCoalescedBroadcast, createSessionCache, broadcastFleetSnapshot } from './lib/coalesced-broadcast.js';
@@ -501,7 +502,14 @@ function buildApiStatePayload() {
   const stateData = currentState();
   stateData.session_mode = readFleetSessionMode();
   const snapshot = workbench.getCachedSnapshot();
-  stateData.supervisor_paused = snapshot?.instance?.supervisorPaused ?? null;
+  if (stateData.session_mode === 'multi') {
+    stateData.supervisor_paused = snapshot?.instance?.supervisorPaused ?? null;
+  } else {
+    try {
+      new RestartRequestStore({ file: path.join(config.zylosDir, 'activity-monitor', 'restart-requests.json') }).read();
+      stateData.supervisor_paused = false;
+    } catch { stateData.supervisor_paused = true; }
+  }
   stateData.group_summary = stateData.session_mode === 'multi' ? fleetGroupSummary(snapshot) : null;
   // Include the agent's deterministic identity color/hue; machines that read this
   // instance's state (including older dashboards) still colour it by them.
@@ -530,6 +538,7 @@ function readFleetSessionMode() {
 }
 
 async function refreshFleetGroupSummary() {
+  if (readFleetSessionMode() !== 'multi') return;
   try { await workbench.getSnapshot(); } catch { /* Optional observations cannot break the existing state API. */ }
 }
 

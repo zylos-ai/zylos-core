@@ -39,9 +39,10 @@ export function createSupervisor(deps) {
       restartRequestsUnreadable=true;
       const file=restartRequestsPath(),cause=error.cause instanceof SyntaxError ? 'Invalid JSON' : error.cause?.code ?? error.message;
       log({error:error.code,...context,path:file,cause});
-      return Promise.resolve().then(()=>deps.alert?.({event:'restart_requests_unreadable',session_group:'*',reason:error.code,
+      void Promise.resolve().then(()=>deps.alert?.({event:'restart_requests_unreadable',session_group:'*',reason:error.code,
         message:`Supervisor has paused new actions because the restart request file is unreadable: ${file}. Cause: ${cause}`,
         path:file,cause})).catch(alertError=>log({error:alertError.code ?? alertError.message,phase:'restart-requests-alert'}));
+      return;
     }
     if(['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code)) {
       const dependency=error.dependency ?? error.message;
