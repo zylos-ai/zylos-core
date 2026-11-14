@@ -64,17 +64,20 @@ export function workingHistory(events, end, { ttlMs = 1800000, tools = 0, toolLi
   const ordered = sorted.map(event => counted(event) === eventTime(event) ? event : { ...event, timestamp: counted(event) })
     .sort(compareEvents);
   const turns = [], children = [], toolHistory = [], openChildren = new Map(), openTools = new Map();
-  let turn = null, main = null;
+  let turn = null, main = null, lastStop = -Infinity;
   for (const event of ordered) {
     const at = eventTime(event), meta = event.metadata ?? {}, child = meta.agent_id;
+    // A delivery of a message typed in before the last stop is not the main agent acting after it: a router that waits
+    // for the session to go idle records the delivery only then. Without the typing time it counts as before.
+    const typedBeforeStop = event.event_type === 'deliver' && Number.isFinite(meta.pasted_at) && meta.pasted_at < lastStop;
     // Recent main actions, however they reached the runtime: a message taken from the runtime's own queue starts
     // work without any prompt event.
-    if (!child && MAIN_ACTION_TYPES.includes(event.event_type)) {
+    if (!child && MAIN_ACTION_TYPES.includes(event.event_type) && !typedBeforeStop) {
       if (!main || main.stopped || at - main.last >= (main.input ? ttlMs : MAIN_RECENT_MS)) main = { since: at, last: at, stopped: false, input: false };
       else main.last = at;
       if (MAIN_INPUT_TYPES.includes(event.event_type)) main.input = true;
     }
-    if (!child && END_TYPES.includes(event.event_type) && main) main.stopped = true;
+    if (!child && END_TYPES.includes(event.event_type)) { lastStop = at; if (main) main.stopped = true; }
     if (!child && event.event_type === 'user_prompt_submit') {
       if (turn) turn.end = at;
       turn = { start: at, end: null, activity: [] }; turns.push(turn);

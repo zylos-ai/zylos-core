@@ -910,6 +910,28 @@ const idleTask = (f, typedIn, recorded) => {
   f.event('deliver', recorded, { meta: { conversation_id: 50, pasted_at: at(typedIn) }, session: null });
 };
 
+test('a delivery recorded after the stop for a message typed in before it does not make the main agent work again', async t => {
+  // The task is typed in at 0 and handled by the stop at 8; the router waited for the session to go idle and records
+  // the delivery at 12. That record is no new work: the header and the live area stay idle.
+  const f = fixture(t, { now: at(14) });
+  f.message(1, -5, 'out');
+  idleTask(f, 0, 12);
+  f.tool('a', 1, 5, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.event('stop', 8);
+  for (const seconds of [12, 14, 25]) {
+    f.clock.now = at(seconds);
+    const result = await read(f);
+    assert.equal(result.working.on, false, `${seconds} s: the late record does not mark the main agent as working`);
+    assert.equal(livePresentation([{ id: 1, direction: 'out', at: at(-5) }], result, { presence: 'running' }), null, `${seconds} s: no live area`);
+  }
+  // A message typed in after the stop, or one whose typing time is not on record, still counts as the main agent acting.
+  const events = [{ event_type: 'user_prompt_submit', timestamp: at(0.4) }, { event_type: 'stop', timestamp: at(8) }];
+  const later = meta => workingHistory([...events, { event_type: 'deliver', timestamp: at(12), metadata: meta }], at(14)).working;
+  assert.equal(later({ pasted_at: at(0) }).on, false);
+  assert.equal(later({ pasted_at: at(9) }).on, true, 'typed in after the stop');
+  assert.equal(later({}).on, true, 'no typing time on record');
+});
+
 test('a message whose delivery was recorded long after it was typed in and started the work is not marked again', async t => {
   // The task starts the work at 0.4; a message sent at 14 is queued and taken at 20.1, after the stop at 20.
   const f = fixture(t, { now: at(22) });
