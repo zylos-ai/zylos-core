@@ -236,6 +236,8 @@ test('Origin receipts include a non-delivered outbound row exactly as the read d
   assert.deepEqual(cursorRow(f, group), { synced_id: rows[1].id, checkpoint_id: 0 });
 });
 
+// Real guarded Origin advance + private SQLite and session log. Run when receipt
+// validation changes; unrelated changes may skip. No services are started.
 test('Origin advance rejects altered, stale or mismatched receipts and leaves both cursors', async t => {
   const f = await fixture(t), group = 'telegram:neg';
   const records = f.seedGroup(group, 8); f.seedGroup('telegram:other', 2);
@@ -255,12 +257,14 @@ test('Origin advance rejects altered, stale or mismatched receipts and leaves bo
     assert.deepEqual(cursorRow(f, group), before);
   };
   const p = partial.payload, with_ = (part, change) => ({ ...p, [part]: { ...p[part], ...change } });
-  await rejects(with_('raw', { sha256: 'f'.repeat(64) }), 'INVALID_INPUT');
-  await rejects(with_('raw', { end: records[7].id }), 'INVALID_INPUT');
-  await rejects(with_('raw', { count: 5 }), 'INVALID_INPUT');
-  await rejects(with_('summary', { sha256: 'f'.repeat(64) }), 'INVALID_INPUT');
-  await rejects(with_('summary', { end: p.summary.end + 1 }), 'INVALID_INPUT');
-  await rejects(with_('summary', { count: 0 }), 'INVALID_INPUT');
+  await rejects(with_('raw', { sha256: 'f'.repeat(64) }), 'INPUT_CHANGED');
+  await rejects(with_('raw', { end: records[7].id }), 'INPUT_CHANGED');
+  await rejects(with_('raw', { count: 5 }), 'INPUT_CHANGED');
+  await rejects(with_('raw', { count: -1 }), 'INVALID_INPUT');
+  await rejects(with_('raw', { sha256: 'bad' }), 'INVALID_INPUT');
+  await rejects(with_('summary', { sha256: 'f'.repeat(64) }), 'INPUT_CHANGED');
+  await rejects(with_('summary', { end: p.summary.end + 1 }), 'INPUT_CHANGED');
+  await rejects(with_('summary', { count: 0 }), 'INPUT_CHANGED');
   await rejects(with_('summary', { coverageEnd: records[3].id }), 'INPUT_CHANGED');
   // budget exhausted (no raw receipt): an enlarged coverage must not move the
   // raw cursor past rows that were never read
@@ -278,10 +282,10 @@ test('Origin advance rejects altered, stale or mismatched receipts and leaves bo
   // content changed after the read
   const original = f.db.prepare('SELECT content FROM conversations WHERE id=?').get(records[3].id).content;
   f.db.prepare('UPDATE conversations SET content=? WHERE id=?').run('edited', records[3].id);
-  await rejects(p, 'INVALID_INPUT');
+  await rejects(p, 'INPUT_CHANGED');
   f.db.prepare('UPDATE conversations SET content=? WHERE id=?').run(original, records[3].id);
   f.db.prepare('UPDATE checkpoints SET summary=? WHERE session_group=?').run('edited', group);
-  await rejects(p, 'INVALID_INPUT');
+  await rejects(p, 'INPUT_CHANGED');
   f.db.prepare('UPDATE checkpoints SET summary=? WHERE session_group=?').run('start', group);
   // an appended session log is not a changed input; the cursor stops at the read end
   fs.appendFileSync(log, '- later line\n');
@@ -292,4 +296,21 @@ test('Origin advance rejects altered, stale or mismatched receipts and leaves bo
   // a summary-only replay is rejected by the summary cursor alone
   await assert.rejects(advance({ ...settings, input: { ...p, raw: null } }, f.deps), { code: 'INPUT_CHANGED', message: /summary cursor/ });
   assert.deepEqual(cursorRow(f, group), moved);
+});
+
+// Real guarded checkpoint + private SQLite store; run for receipt validation
+// changes, skip for unrelated changes. No tmux or PM2 process is started.
+test('checkpoint rejects conversation edits after export without writing group or global progress', async t => {
+  for (const group of ['origin', null]) {
+    const f = await fixture(t, group);
+    f.seed(1);
+    const batch = f.batch(1);
+    const before = f.db.prepare('SELECT count(*) AS n FROM checkpoints').get().n;
+    f.db.prepare('UPDATE conversations SET content=? WHERE id=1').run('edited after export');
+    await assert.rejects(checkpoint({ ...f.settings, end: 1, summary: 'stale', batch }, f.deps), { code: 'INPUT_CHANGED' });
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM checkpoints').get().n, before);
+    assert.equal(group === null ? f.store.getGlobalCoverageEnd() : f.store.getCoverageEnd(group), 0);
+    await assert.rejects(checkpoint({ ...f.settings, end: 1, summary: 'invalid', batch: { ...batch, sha256: 'bad' } }, f.deps), { code: 'INVALID_INPUT' });
+    assert.equal(f.db.prepare('SELECT count(*) AS n FROM checkpoints').get().n, before);
+  }
 });
