@@ -96,7 +96,7 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
     fs.mkdirSync(evidence, { recursive: true });
     fs.writeFileSync(path.join(evidence, 'fleet-running-manifest.json'), JSON.stringify({
       source: 'Actual Dashboard assets with isolated API rendering fixtures',
-      boundary: 'No-response age and automatic-restart fixtures are supplied future contracts, not ZYLO-428 live integration evidence.',
+      boundary: 'No-response age and automatic-restart fixtures are supplied future contracts, not live supervisor no-response/restart event integration evidence.',
       widths: [390, 1280], themes: ['light', 'dark'],
       cases: CASES.map(({ name, future, remote, legacy }) => ({ name, futureContract: !!future, remote: !!remote, legacy: !!legacy })),
     }, null, 2) + '\n');

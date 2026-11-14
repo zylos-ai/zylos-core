@@ -391,7 +391,6 @@ export function mountWorkbench({ document = globalThis.document, window = global
         try { groups = await read('/api/workbench/groups'); } catch { return; }
         if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
         snapshot = groups;
-        redraw();
       }
       return groupDetail.open(key, snapshot);
     },

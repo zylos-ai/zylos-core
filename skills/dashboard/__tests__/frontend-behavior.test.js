@@ -2433,13 +2433,21 @@ test('workbench programmatic opening waits for its machine list and cancels afte
 
 test('workbench programmatic opening uses fresh names and ignores failed or abandoned list reads', async context => {
   for (const outcome of ['fresh', 'failed', 'page-left', 'new-selection']) await context.test(outcome, async testContext => {
-    const held = wbDeferred(), key = 'lark:private-address';
+    const background = wbDeferred(), held = wbDeferred(), replacementList = wbDeferred();
+    const key = 'lark:private-address', replacementKey = 'telegram:new-selection';
+    let listReads = 0;
     const h = workbenchHarness(testContext, (path, fallback) => {
-      if (path.endsWith('/api/workbench/groups')) return held.promise;
+      if (path.endsWith('/api/workbench/groups')) return [background, held, replacementList][listReads++].promise;
       if (path.includes('/runs')) return { runs: [], totalRuns: 0, totalEvents: 0, unattributed: 0 };
       if (path.includes('/backlog')) return { count: 0, firstAt: null, syncing: false };
       if (path.includes('/api/timeline')) return { events: [] };
       return fallback(path);
+    });
+    testContext.after(() => {
+      h.stop();
+      // Release the mount's separate poll only after assertions; it must not paint
+      // the rows that programmatic selection is responsible for displaying now.
+      for (const read of [background, held, replacementList]) read.resolve(workbenchSnapshot());
     });
     await wbTick();
     const opening = h.openGroup(key);
@@ -2447,20 +2455,29 @@ test('workbench programmatic opening uses fresh names and ignores failed or aban
     assert.equal(h.nodes.get('#wb-side').hidden, true, 'pending selection does not show a fallback title');
     let replacement;
     if (outcome === 'page-left') h.navigate(false);
-    if (outcome === 'new-selection') replacement = h.openGroup('telegram:new-selection');
+    if (outcome === 'new-selection') {
+      replacement = h.openGroup(replacementKey);
+      replacementList.resolve(workbenchSnapshot('idle', replacementKey));
+      await replacement;
+    }
     const groups = workbenchSnapshot('error', key);
     groups.rows[0].name.displayName = 'Saved operations name';
     if (outcome === 'failed') held.reject(Error('read_failed'));
     else held.resolve(groups);
-    await opening; await replacement; await wbTick();
+    await opening;
     const side = h.nodes.get('#wb-side');
     if (outcome === 'fresh') {
       assert.equal(side.hidden, false);
       assert.match(side.textContent, /Saved operations name/);
       assert.doesNotMatch(side.textContent, /private-address/);
+      const board = h.nodes.get('#wb-board');
+      assert.equal(board.children.length, 1, 'selection paints its obtained list before any background poll finishes');
+      assert.equal(board.children[0].dataset.group, key);
+      assert.match(board.textContent, /Saved operations name/);
     } else if (outcome === 'new-selection') {
-      assert.match(side.textContent, /new-selection/);
+      assert.match(side.textContent, /NEW-SELECTION/);
       assert.doesNotMatch(side.textContent, /Saved operations name|private-address/);
+      assert.equal(h.calls.some(path => path.includes(encodeURIComponent(key))), false, 'the abandoned selection never requests old group detail, even if its list arrives last');
     } else assert.equal(side.hidden, true, 'failed or abandoned selection cannot open a fallback');
   });
 });
