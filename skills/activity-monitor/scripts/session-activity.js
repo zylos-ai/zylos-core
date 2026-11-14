@@ -5,15 +5,6 @@ const { EventLogReader } = await loadCoreModule('event-log.js');
 export const TRANSCRIPT_READ_BUDGET_BYTES=256*1024;
 export const TRANSCRIPT_LINE_LIMIT_BYTES=1024*1024;
 export const RECENT_TOOL_RESULTS_LIMIT=256;
-const humanText=text=>typeof text==='string' && text.trim().length>0 &&
-  !/^(\[Request interrupted by user|<turn_aborted>)/i.test(text.trim());
-const codexHumanText=text=>humanText(text) && !(
-  text.trim().startsWith('<environment_context>') && text.trim().endsWith('</environment_context>') ||
-  text.trim().startsWith('# AGENTS.md instructions for ') && text.includes('\n\n<INSTRUCTIONS>') && text.trim().endsWith('</INSTRUCTIONS>'));
-const humanContent=(content,textType,imageType)=>typeof content==='string' ? humanText(content) :
-  Array.isArray(content) && !content.some(block=>block.type==='tool_result') &&
-  content.some(block=>(block.type===textType && humanText(block.text)) || block.type===imageType);
-
 /** One current run/session, with no global latest-transcript fallback. */
 export class SessionActivity {
   constructor({runDir, runId, sessionId, runtime, startedAt=0, warn=()=>{}}) {
@@ -23,10 +14,9 @@ export class SessionActivity {
     this.subagents=new Map();this.lastSubagentActivityAt=null;
     this.recovered=false;this.lastActivityAt=startedAt;this.closedThrough=-Infinity;this.transcriptPath=null;
     this.transcriptFd=null;this.transcriptOffset=0;this.transcriptIdentity=null;this.turn=false;this.idleSince=null;
-    this.busySince=null;this.lastIdleAt=null;this.lastCompletedAt=null;
-    this.lastStartedAt=null;this.lastResponseAt=null;this.lastWorkEventAt=null;
+    this.busySince=null;this.lastIdleAt=null;this.lastResponseAt=null;
     this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;this.transcriptPending=false;
-    this.pendingQueueRemoveAt=null;this.codexTranscriptMatches=false;
+    this.codexTranscriptMatches=false;
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
   matches(row) {
@@ -45,7 +35,6 @@ export class SessionActivity {
     this.subagents.set(row.agent_id,agent);
     this.lastSubagentActivityAt=Math.max(this.lastSubagentActivityAt ?? 0,row.ts);
     if(row.event==='pre_tool')this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);
-    if(['pre_tool','post_tool','post_tool_failure','subagent_start','subagent_stop'].includes(row.event))this.lastWorkEventAt=Math.max(this.lastWorkEventAt ?? -Infinity,row.ts);
   }
   recoverSubagents() {
     // Child lifetimes can cross main-agent turn boundaries. Recover compact
@@ -62,28 +51,18 @@ export class SessionActivity {
       this.transcriptPath=row.transcript_path;
     }
   }
-  isCompletion(row) {
-    return row.event==='stop' || (this.runtime==='claude' && row.event==='idle');
-  }
-  recordCompletion(row) {
-    this.lastCompletedAt=Math.max(this.lastCompletedAt ?? -Infinity,row.ts);
-  }
   recover() {
-    let boundary=false,completionBoundary=false;
+    let boundary=false,responseBoundary=false;
     return this.reader.recoverTail(row=>{
       if(!this.matches(row))return {};
       if(!this.transcriptPath)this.associateTranscript(row);
       if(Number.isFinite(row.ts) && row.ts>=this.startedAt && row.event==='pre_tool')this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);
-      if(Number.isFinite(row.ts) && row.ts>=this.startedAt && ['pre_tool','post_tool','post_tool_failure','permission_request'].includes(row.event))this.lastWorkEventAt=Math.max(this.lastWorkEventAt ?? -Infinity,row.ts);
-      // Retain completion metadata across a newer queued prompt without
-      // replaying an older turn's tool state.
-      if(Number.isFinite(row.ts) && row.ts>=this.startedAt && this.isCompletion(row)) {
-        this.recordCompletion(row);completionBoundary=true;
-      }
-      if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)completionBoundary=true;
+      // Recover response history across newer prompt/stop boundaries without
+      // replaying older turns into the current tool and busy/idle state.
+      if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)responseBoundary=true;
       const keep=!boundary && Number.isFinite(row.ts) && row.ts>=this.startedAt;
       if(Number.isFinite(row.ts) && (row.ts<=this.startedAt || ['prompt','stop'].includes(row.event)))boundary=true;
-      return {keep,done:boundary && completionBoundary && this.transcriptPath!==null};
+      return {keep,done:boundary && responseBoundary && this.transcriptPath!==null};
     });
   }
   consume(rows) {
@@ -94,7 +73,6 @@ export class SessionActivity {
       if(!Number.isFinite(row.ts) || row.ts<this.startedAt)continue;
       this.lastActivityAt=Math.max(this.lastActivityAt,row.ts);
       if(row.event==='pre_tool')this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);
-      if(['pre_tool','post_tool','post_tool_failure','permission_request'].includes(row.event))this.lastWorkEventAt=Math.max(this.lastWorkEventAt ?? -Infinity,row.ts);
       if(['prompt','pre_tool'].includes(row.event) && this.busySince===null) {
         // A recovered tool can be midway through a turn whose prompt is gone.
         this.busySince=row.event==='prompt' || this.lastIdleAt!==null ? row.ts : this.startedAt;
@@ -106,8 +84,7 @@ export class SessionActivity {
         this.tools.set(id,{id,name:row.tool,startedAt:row.ts,input:row.tool_input});
       }
       if(['post_tool','post_tool_failure'].includes(row.event) && typeof id==='string') {this.completed.add(id);this.tools.delete(id);}
-      if(this.isCompletion(row)) {
-        this.recordCompletion(row);
+      if(row.event==='stop' || (this.runtime==='claude' && row.event==='idle')) {
         this.turn=false;this.closedThrough=Math.max(this.closedThrough,row.ts);
         for(const [key,tool] of this.tools)if(tool.startedAt<=row.ts){this.completed.add(key);this.tools.delete(key);}
       }
@@ -119,11 +96,6 @@ export class SessionActivity {
       if(value.type==='session_meta')this.codexTranscriptMatches=value.payload?.id===this.sessionId;
       const payload=value.payload;
       if(!this.codexTranscriptMatches || !Number.isFinite(ts) || ts<this.startedAt || value.isMeta || payload?.isMeta)return;
-      if(value.type==='response_item' && payload?.type==='message' && payload.role==='user' &&
-         Array.isArray(payload.content) &&
-         payload.content.some(block=>block.type==='input_image' || block.type==='input_text' && codexHumanText(block.text))) {
-        this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,ts);
-      }
       const output=value.type==='response_item' && payload?.type==='message' && payload.role==='assistant' &&
         Array.isArray(payload.content) && payload.content.some(block=>block.type==='output_text' && typeof block.text==='string' && block.text.length>0);
       const call=value.type==='response_item' && ['function_call','custom_tool_call'].includes(payload?.type) && typeof payload.name==='string';
@@ -135,23 +107,7 @@ export class SessionActivity {
     const main=value.sessionId===this.sessionId && !value.isSidechain && !value.agent_id && !value.agentId &&
       Number.isFinite(ts) && ts>=this.startedAt;
     if(main) {
-      let started=false;
       const message=value.message;
-      if(value.type==='user' && !value.isMeta && !message?.isMeta && message?.role==='user' &&
-         humanContent(message.content,'text','image'))started=true;
-      if(value.type==='queue-operation') {
-        if(value.operation==='remove' && value.reason==='absorbed_mid_turn')this.pendingQueueRemoveAt=ts;
-        else this.pendingQueueRemoveAt=null;
-        started=value.operation==='dequeue';
-      }
-      if(value.type==='attachment' && value.attachment?.type==='queued_command' &&
-         value.attachment.commandMode==='prompt' && this.pendingQueueRemoveAt!==null) {
-        this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,this.pendingQueueRemoveAt);
-        this.pendingQueueRemoveAt=null;
-      }
-      if(started) {
-        this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,ts);
-      }
       const output=value.type==='assistant' && !value.isMeta && !message?.isMeta && !value.isApiErrorMessage && !value.error &&
         message?.role==='assistant' && typeof message.model==='string' && message.model.length>0 && message.model!=='<synthetic>' &&
         Array.isArray(message.content) && message.content.some(block=>
@@ -181,7 +137,7 @@ export class SessionActivity {
       if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);
       this.transcriptFd=fs.openSync(this.transcriptPath,'r');this.transcriptOffset=0;this.transcriptIdentity=identity;
       this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;
-      this.pendingQueueRemoveAt=null;this.codexTranscriptMatches=false;
+      this.codexTranscriptMatches=false;
     }
     let remaining=Math.min(TRANSCRIPT_READ_BUDGET_BYTES,stat.size-this.transcriptOffset);
     // Nonblocking hooks can arrive after a result was parsed while no tool was visible.
@@ -235,7 +191,7 @@ export class SessionActivity {
     }
     const activeSubagents=[...this.subagents].filter(([,agent])=>agent.active && now-agent.lastActivityAt<subagentTtlMs)
       .map(([agentId,agent])=>({agentId,lastActivityAt:agent.lastActivityAt}));
-    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,lastCompletedAt:this.lastCompletedAt,lastStartedAt:this.lastStartedAt,lastResponseAt:this.lastResponseAt,lastWorkEventAt:this.lastWorkEventAt,transcriptPending:this.transcriptPending,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
+    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,lastResponseAt:this.lastResponseAt,transcriptPending:this.transcriptPending,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
       activeSubagents,lastSubagentActivityAt:this.lastSubagentActivityAt};
   }
 }
