@@ -31,11 +31,15 @@ for (const locale of ['en', 'zh']) test(`account reset uses instance time and fu
     const reset = quotaReset({ resetsAt: '2026-11-14T16:30:00Z' }, t, now);
     assert.match(reset.time, /11.?15/); assert.match(reset.time, /00:30/);
     assert.match(quotaReset({ resetsAt: (now + 1) / 1000 }, t, now).duration, /1/);
+    for (const [minutes, expected] of [
+      [3 * 1440 + 4 * 60, locale === 'zh' ? '3 天\u00a04 小时' : '3d\u00a04h'],
+      [3 * 1440 + 4 * 60 + 8, locale === 'zh' ? '3 天\u00a04 小时\u00a08 分钟' : '3d\u00a04h\u00a08m'],
+    ]) assert.equal(quotaReset({ resetsAt: (now + minutes * 60_000) / 1000 }, t, now).duration, expected);
     for (const raw of [undefined, null, '', 'garbage', true, {}, now / 1000, (now - 1) / 1000, Infinity]) {
       assert.equal(quotaReset({ resetsAt: raw }, t, now), null);
     }
-    const accounts = { claude: { used_percentage: 21, resets_at: same / 1000 },
-      codex: { usedPercentage: 40, resetsAt: '2026-11-14T16:30:00Z', live: false, recordedAt: now - 60_000 },
+    const accounts = { codex: { usedPercentage: 40, resetsAt: '2026-11-14T16:30:00Z', live: false, recordedAt: now - 60_000 },
+      claude: { used_percentage: 21, resets_at: same / 1000 },
       absent: { usedPercentage: 10 }, expired: { resets_at: now / 1000 } };
     const f = fixture();
     const view = renderHost(f.root, null, { ...f, t, now, accounts });
@@ -45,8 +49,12 @@ for (const locale of ['en', 'zh']) test(`account reset uses instance time and fu
     assert.ok(section.textContent.includes(t('wb.quotaResetRecorded', { time: '23:29' })));
     assert.equal(section.textContent.includes('absent'), false); assert.equal(section.textContent.includes('expired'), false);
     const rows = section.children[1], retained = rows.children[0];
-    view.update(null, { accounts, now: now + 60_000 });
+    assert.deepEqual(rows.children.map(row => row.children[0].textContent), ['Claude', 'Codex']);
+    view.update(null, { accounts: { claude: accounts.claude, codex: accounts.codex }, now: now + 60_000 });
     assert.equal(rows.children[0], retained); assert.ok(section.textContent.includes(locale === 'zh' ? '14 分钟' : '14m'));
+    view.update(null, { accounts, accountOrder: ['codex', 'claude'], now });
+    assert.deepEqual(rows.children.map(row => row.children[0].textContent), ['Codex', 'Claude']);
+    assert.equal(rows.children[1], retained, 'runtime order changes move the existing row');
     view.update(null, { accounts, now: same + 3600_000 }); assert.equal(section.hidden, true);
     view.destroy();
     const strip = fixture();

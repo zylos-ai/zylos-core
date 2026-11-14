@@ -35,7 +35,7 @@ export function quotaReset(usage, t, now = Date.now()) {
   const minutes = Math.ceil((at - now) / 60_000), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60);
   const parts = [[days, 'Days'], [hours, 'Hours'], [minutes % 60, 'Minutes']]
     .filter(([count]) => count > 0).map(([count, unit]) => t('wb.quotaReset' + unit, { count }));
-  const duration = parts.join(' ');
+  const duration = parts.join('\u00a0');
   return { at, time, duration, text: t('wb.quotaReset', { time, duration }) };
 }
 export const money = value => value == null ? '—' : '$' + Number(value).toFixed(Math.abs(value) >= 1 ? 2 : 4);
