@@ -10,7 +10,7 @@ import { createGroupConfig, fetchJson, runningText, validConfigChange, renderGro
 import { saveGroupName, renderNameEditor } from '../public/js/wb/name-edit.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText, renderAutoName } from '../public/js/wb/auto-name.js';
 import { displayTime, endReasonLabel, eventLabel } from '../public/js/wb/event-labels.js';
-import { recentWindow } from '../public/js/wb/timeline-rows.js';
+import { eventChip, eventTypesFor, recentWindow } from '../public/js/wb/timeline-rows.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
 // Times are expected in the instance zone; INSTANCE_TEST_ZONE differs from the process zone (see the helper).
@@ -121,6 +121,79 @@ test('timeline pages current events, loads three older runs lazily, filters expa
   assert.equal(loader.state.totalRuns, 5);
   assert.equal(new URL(calls.find(path => path.includes('before=')), 'http://fixture').searchParams.get('before'), runs[2].startAt);
   loader.close();
+});
+
+test('automatic restarts and the reminder before them read as their own words, not as a crash', () => {
+  const packs = Object.fromEntries(['zh', 'en'].map(locale => [locale,
+    JSON.parse(readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'))]));
+  const expected = {
+    zh: { auto_restart_no_response: '自动重启 · 无响应', auto_restart_tool_timeout: '自动重启 · 工具超时',
+      no_response_nudge: '无响应，已提醒', no_response_restart: '无响应，已自动重启', tool_timeout_nudge: '工具超时，已提醒',
+      tool_timeout_restart: '工具超时，已自动重启' },
+    en: { auto_restart_no_response: 'Auto-restart · no response', auto_restart_tool_timeout: 'Auto-restart · tool timeout',
+      no_response_nudge: 'No response, reminded', no_response_restart: 'No response, restarted automatically',
+      tool_timeout_nudge: 'Tool timeout, nudged', tool_timeout_restart: 'Tool timed out, restarted automatically' },
+  };
+  for (const locale of ['zh', 'en']) {
+    const read = key => packs[locale][key] ?? key;
+    for (const reason of ['auto_restart_no_response', 'auto_restart_tool_timeout']) {
+      assert.equal(endReasonLabel(reason, 'plain', read), expected[locale][reason]);
+      assert.equal(endReasonLabel(reason, 'technical', read), reason);
+    }
+    assert.equal(endReasonLabel('crash', 'plain', read), packs[locale]['wb.endReason.crash']);
+    for (const type of ['no_response_nudge', 'no_response_restart', 'tool_timeout_nudge', 'tool_timeout_restart']) {
+      assert.equal(eventLabel({ event_type: type, category: 'diagnostic' }, 'plain', read), expected[locale][type]);
+    }
+  }
+});
+
+test('both reminders are plain events the timeline asks for and shows with the lifecycle events', () => {
+  for (const type of ['no_response_nudge', 'tool_timeout_nudge']) {
+    assert.ok(eventTypesFor('all').includes(type), type);
+    assert.ok(eventTypesFor('lifecycle').includes(type), type);
+    assert.equal(eventChip({ event_type: type }), 'lifecycle');
+  }
+});
+
+// A run the supervisor restarted: its events in recorded order, with the restart at 10:20:00.
+function restartedRun(type, crashes) {
+  const at = seconds => new Date(Date.parse('2026-11-14T10:20:00.000Z') + seconds * 1000).toISOString();
+  const nudge = type === 'no_response_restart' ? 'no_response_nudge' : 'tool_timeout_nudge';
+  const events = [{ timestamp: at(-600), event_type: 'session_start' }, { timestamp: at(-300), event_type: nudge },
+    { timestamp: at(0), event_type: type }, ...crashes.map(seconds => ({ timestamp: at(seconds), event_type: 'crash_detected' }))]
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).map((event, index) => ({ ...event, event_seq: index + 1 }));
+  return { runId: 'run-a', startAt: at(-600), endAt: at(Math.max(0, ...crashes)), endReason: 'auto_restart_no_response', n: events.length, events };
+}
+function timelineLabels(runs) {
+  const loader = { state: { runs: runs.map(({ events, ...run }) => run), expanded: new Set(runs.map(run => run.runId)),
+    events: new Map(runs.map(run => [run.runId, run.events])), messages: new Map(), between: [], filter: 'all', totalRuns: runs.length },
+  setFilter() {}, collapse() {} };
+  const document = createDocument(), root = document.createElement('div');
+  renderTimeline(root, loader, { document, t, level: 'plain' });
+  return allNodes(root).filter(node => node.classList.contains('wb-timeline-run')).map(section => allNodes(section)
+    .filter(node => node.classList.contains('wb-timeline-event')).map(node => node.textContent.replace(/^[^w]*/, '')));
+}
+
+test('the crash report an automatic restart causes is not shown as a crash under the restart', () => {
+  for (const type of ['no_response_restart', 'tool_timeout_restart']) {
+    const nudge = type === 'no_response_restart' ? 'no_response_nudge' : 'tool_timeout_nudge';
+    for (const seconds of [0, 1.1, 10]) {
+      assert.deepEqual(timelineLabels([restartedRun(type, [seconds])]),
+        [[`wb.event.${type}`, `wb.event.${nudge}`, 'wb.event.session_start']], `${type}: crash ${seconds} s after the restart`);
+    }
+  }
+});
+
+test('a crash in a restarted run that the restart did not cause is still shown', () => {
+  // Before the restart, or more than 10 s after it: a crash of its own.
+  assert.deepEqual(timelineLabels([restartedRun('no_response_restart', [-5, 1.1, 10.5])]),
+    [['wb.event.crash_detected', 'wb.event.no_response_restart', 'wb.event.crash_detected', 'wb.event.no_response_nudge', 'wb.event.session_start']]);
+  // A restart in another run does not hide a crash in this one.
+  const other = restartedRun('tool_timeout_restart', [1]);
+  const crashed = { runId: 'run-b', startAt: other.endAt, endAt: other.endAt, endReason: 'crash', n: 1,
+    events: [{ timestamp: new Date(Date.parse(other.events.at(-1).timestamp) + 500).toISOString(), event_type: 'crash_detected', event_seq: 9 }] };
+  assert.deepEqual(timelineLabels([crashed, other]), [['wb.event.crash_detected'],
+    ['wb.event.tool_timeout_restart', 'wb.event.tool_timeout_nudge', 'wb.event.session_start']]);
 });
 
 test('event, end reason and time labels are plain words in plain view and raw values in technical detail', () => {

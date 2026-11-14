@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { stateToFleetRecord } from '../../src/lib/fleet-poller.js';
+import { fleetGroupSummary } from '../../src/lib/workbench/fleet-summary.js';
 import { workbenchAnswer, GROUP } from '../fixtures/workbench-browser-api.js';
 import { startPage } from './workbench-browser.js';
 
@@ -10,27 +11,34 @@ const LONG_NAME = '多 session #56 — 需要完整显示名称的非常长的�
 const recordDiagnostic = (items, value) => {
   if (items.length < 10) items.push(String(value).slice(0, 1000));
 };
-function problem(sessionGroup, displayName, reason, durationSeconds) {
-  return { sessionGroup, displayName, name: { displayName }, createdAt: 1, c4: null, reason, durationSeconds };
+const READ_AT = Date.parse('2026-11-14T10:00:00Z');
+// A running group as the snapshot reports it; the card summary is computed by the product's own fleetGroupSummary.
+function running(sessionGroup, displayName, { error, silentSeconds } = {}) {
+  return { sessionGroup, presence: 'running', name: displayName ? { displayName } : null, createdAt: 1, c4: null,
+    state: { kind: error ? 'error' : 'busy' }, attention: error ? [{ kind: error }] : [],
+    noResponse: Number.isFinite(silentSeconds) ? { since: READ_AT - silentSeconds * 1000 } : null };
 }
-function summary(problems = [], extras = {}) {
-  const noResponse = problems.filter(p => p.reason === 'no_response').length;
-  return { running: 9, counts: { busy: 2, idle: 7 - problems.length, waiting: 0, unknown: 0,
-    error: problems.length - noResponse, no_response: noResponse || null },
-    problems: problems.slice(0, 2), problemCount: problems.length, pool: { used: 9, capacity: 12 },
-    noResponse: null, autoRestarts: null, listKnown: true, ...extras };
+// Nine running groups: two busy, the listed problem groups, and idle groups for the rest.
+function summary(problems = [], restarts = 0) {
+  const rows = [running('telegram:busy-1', null), running('telegram:busy-2', null), ...problems];
+  while (rows.length < 9) rows.push({ ...running(`telegram:idle-${rows.length}`, null), state: { kind: 'idle' } });
+  return fleetGroupSummary({ mode: 'multi', readAt: READ_AT, listKnown: true, rows,
+    instance: { pool: { used: 9, capacity: 12 }, autoRestarts: { count: restarts } } });
 }
-const TWO = [problem(GROUP, LONG_NAME, 'no_response', 1020), problem('lark:oc_product', 'Lark 运维群', 'auth_failed', null)];
-const THREE_ERRORS = [problem(GROUP, LONG_NAME, 'start_failed', null), TWO[1],
-  problem('telegram:dm-1002', 'Third startup failure', 'start_failed', null)];
+const SILENT = running(GROUP, LONG_NAME, { silentSeconds: 1020 });
+const AUTH = running('lark:oc_product', 'Lark 运维群', { error: 'auth_failed' });
+const TWO = [SILENT, AUTH];
+const THREE_ERRORS = [running(GROUP, LONG_NAME, { error: 'start_failed' }), AUTH,
+  running('telegram:dm-1002', 'Third startup failure', { error: 'start_failed' })];
 const CASES = [
   { name: 'normal', summary: summary(), rows: 0 },
-  // Supervisor integration is pending: these future no-response/restart fields exercise PRESENTATION ONLY. They do
-  // not claim production detection, elapsed-time correctness, or live restart history integration.
-  { name: 'two-problems', summary: summary(TWO), rows: 2, future: true },
+  // An error is listed before the no-response group, which shows how long it has been silent.
+  { name: 'two-problems', summary: summary(TWO), rows: 2 },
   { name: 'more-problems', summary: summary(THREE_ERRORS), rows: 2, more: true },
-  { name: 'restart', summary: summary(TWO, { autoRestarts: { count: 1, windowSeconds: 3600 } }), rows: 2, restart: true, future: true },
-  { name: 'remote-multi', summary: summary([TWO[1]]), rows: 1, remote: true },
+  { name: 'restart', summary: summary(TWO, 1), rows: 2, restart: 1 },
+  // Restarts are shown even when every running group is normal again.
+  { name: 'restart-only', summary: summary([], 3), rows: 0, restart: 3 },
+  { name: 'remote-multi', summary: summary([AUTH]), rows: 1, remote: true },
   { name: 'legacy-remote', rows: 0, remote: true, legacy: true },
 ];
 
@@ -59,7 +67,7 @@ async function assertProblemLayout(card, scenario) {
     const reason = await row.locator('.wb-f-problem-reason').innerText();
     const expectedReason = { no_response: '无响应', auth_failed: '认证失败', start_failed: '启动失败' }[issue.reason];
     assert.ok(reason.startsWith(expectedReason), 'named row includes the correct localized reason');
-    if (issue.reason === 'no_response') assert.match(await row.innerText(), /无响应\s*17\s*分钟/, 'supplied future duration renders as 17 minutes');
+    if (issue.reason === 'no_response') assert.match(await row.innerText(), /无响应\s*17\s*分钟/, 'silent for 1020 s renders as 17 minutes');
     if (issue.durationSeconds === null) assert.doesNotMatch(await row.innerText(), /\d+\s*分钟/, 'unknown problem age stays hidden');
     const layout = await row.evaluate(node => {
       const rect = node.getBoundingClientRect();
@@ -96,9 +104,9 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
     fs.mkdirSync(evidence, { recursive: true });
     fs.writeFileSync(path.join(evidence, 'fleet-running-manifest.json'), JSON.stringify({
       source: 'Actual Dashboard assets with isolated API rendering fixtures',
-      boundary: 'No-response age and automatic-restart fixtures are supplied future contracts, not live supervisor no-response/restart event integration evidence.',
+      boundary: 'Card summaries are computed by fleetGroupSummary from fixture snapshot rows; supervisor event reading is covered by the unit tests.',
       widths: [390, 1280], themes: ['light', 'dark'],
-      cases: CASES.map(({ name, future, remote, legacy }) => ({ name, futureContract: !!future, remote: !!remote, legacy: !!legacy })),
+      cases: CASES.map(({ name, remote, legacy }) => ({ name, remote: !!remote, legacy: !!legacy })),
     }, null, 2) + '\n');
   }
   console.log('Running groups browser isolation:', JSON.stringify(sandbox.assertIsolation()));
@@ -110,7 +118,7 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
 
   for (const width of [390, 1280]) for (const theme of ['light', 'dark']) for (const scenario of CASES) {
     let scenarioFailure;
-    await t.test(`${width}px ${theme}: ${scenario.name}${scenario.future ? ' (future-contract rendering fixture)' : ''}`, async () => {
+    await t.test(`${width}px ${theme}: ${scenario.name}`, async () => {
       const now = Date.now(), errors = [], external = [], remoteReads = [];
       const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, locale: 'zh-CN',
         ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
@@ -191,10 +199,18 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
             .map(kind => scenario.summary.counts[kind]).filter(value => value > 0);
           assert.deepEqual(displayedCounts, [9, ...expectedCounts], 'displayed categories use the supplied running partition');
           assert.equal(displayedCounts.slice(1).reduce((sum, value) => sum + value, 0), 9, 'visible categories sum to running total');
-          if (scenario.restart) assert.match(await card.innerText(), /近\s*1\s*小时.*重启\s*1|restart.*1/i);
-          if (!scenario.restart) assert.doesNotMatch(await card.innerText(), /近\s*1\s*小时.*重启|restarts?/i, 'absent restart data stays hidden');
+          const restartLine = card.locator('[data-fleet-problems]').filter({ hasText: /重启/ });
+          assert.equal(await restartLine.count(), scenario.restart ? 1 : 0, 'restart line only when the last hour had restarts');
+          if (scenario.restart) {
+            assert.equal(await restartLine.innerText(), `近 1 小时自动重启 ${scenario.restart} 次 →`);
+            const box = await restartLine.evaluate(node => { const rect = node.getBoundingClientRect(), card = node.closest('.wb-f-card').getBoundingClientRect();
+              return { height: rect.height, inside: rect.left >= card.left - 1 && rect.right <= card.right + 1 }; });
+            assert.ok(box.height >= 18 && box.height <= 20, 'restart line occupies one fixed compact line');
+            assert.equal(box.inside, true, 'restart line stays inside the card');
+          } else assert.doesNotMatch(await card.innerText(), /近\s*1\s*小时.*重启|restarts?/i, 'no restarts stay hidden');
           if (!scenario.rows) {
             assert.match(await card.innerText(), /全部正常|All normal/i);
+            assert.equal(scenario.summary.counts.no_response, 0, 'a normal summary counts nobody as silent');
             assert.equal(await card.locator('.wb-f-problem-name').count(), 0, 'normal summary has no empty problem rows');
             assert.equal(await card.locator('.wb-f-normal').evaluate(node => {
               const range = document.createRange(); range.selectNodeContents(node);

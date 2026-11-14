@@ -25,8 +25,15 @@ export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } =
       WHERE session_group IS ? AND run_id = ?
         AND event_type IN ('reclaim_done','crash_detected','rotate_done','manual_restart_done')
       ORDER BY event_seq DESC`);
+    // The supervisor's own restart of a run that stopped responding or whose tool ran too long: the exit it causes is
+    // also reported as a crash a moment later, so the restart decides the run's end.
+    const restart = store.db.prepare(`SELECT event_type FROM runtime_events
+      WHERE session_group IS ? AND run_id = ? AND event_type IN ('no_response_restart','tool_timeout_restart')
+      ORDER BY event_seq DESC LIMIT 1`);
     const endReason = run => {
       if (run.runId === currentRunId) return 'running';
+      const automatic = restart.get(group, run.runId)?.event_type;
+      if (automatic) return automatic === 'no_response_restart' ? 'auto_restart_no_response' : 'auto_restart_tool_timeout';
       for (const event of endings.iterate(group, run.runId)) {
         let metadata;
         try { metadata = JSON.parse(event.metadata ?? '{}'); } catch { metadata = {}; }

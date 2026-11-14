@@ -12,6 +12,7 @@ export const labelledEvents = new Set([
   'permission_request', 'stop', 'idle', 'turn_complete', 'assistant_message', 'subagent_start', 'subagent_stop',
   'reclaim_done', 'crash_detected', 'rotate_done', 'manual_restart_done', 'restart_done', 'wait_health',
   'activate_new', 'start_always', 'activate_failed', 'activate_timeout', 'runtime_health:stop',
+  'no_response_nudge', 'no_response_restart', 'tool_timeout_nudge', 'tool_timeout_restart',
 ]);
 const categories = new Set(['session', 'turn', 'tool', 'permission', 'subagent', 'diagnostic', 'runtime_health']);
 
@@ -23,8 +24,9 @@ export function eventLabel(event, level = 'plain', t = key => key) {
   return t(categories.has(category) ? 'wb.event.category.' + category : 'wb.event.other');
 }
 
-export const endReasons = new Set(['running', 'crash', 'rotate', 'manual_restart', 'reclaim', 'ttl', 'evict', 'release',
-  'upgrade', 'auth', 'mode_switch', 'model_config', 'unexpected', 'unknown']);
+export const endReasons = new Set(['running', 'crash', 'rotate', 'manual_restart', 'auto_restart_no_response',
+  'auto_restart_tool_timeout', 'reclaim', 'ttl', 'evict', 'release', 'upgrade', 'auth', 'mode_switch', 'model_config',
+  'unexpected', 'unknown']);
 
 export function endReasonLabel(reason, level = 'plain', t = key => key) {
   if (reason == null) return null;
