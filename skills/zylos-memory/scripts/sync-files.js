@@ -154,7 +154,10 @@ export async function commit({ input, ...settings }, deps = {}) {
     await verifyBatchReceipt(payload.batch, { scope, end: header.coverage, database });
     const latest = database.getLatestContentCheckpoint(scope);
     if (!latest || latest.end_conversation_id !== header.coverage) throw memoryError('INPUT_CHANGED', 'State coverage must match the completed checkpoint');
-    const published = combined.replace(/^(.*? \| inbox_committed=)[^|\r\n]*(?= \| | -->)/, (_, prefix) => prefix + ids.join(','));
+    const syncedAt = new Date((deps.now || Date.now)()).toISOString();
+    const published = combined
+      .replace(/^(.*? \| inbox_committed=)[^|\r\n]*(?= \| | -->)/, (_, prefix) => prefix + ids.join(','))
+      .replace(/^(.*? \| synced_at=)[^|\r\n]*(?= \| | -->)/, (_, prefix) => prefix + syncedAt);
     fs.writeFileSync(temporaryPath, published, 'utf8');
     fs.renameSync(temporaryPath, officialPath);
     // Publication is complete. A failed delete cannot roll back the state.

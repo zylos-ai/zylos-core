@@ -21,12 +21,12 @@ async function fixture(t, group = 'telegram:test') {
   const scope = await memoryScope(env), kind = group === null ? 'global' : 'group';
   fs.mkdirSync(scope.memoryDir, { recursive: true }); fs.mkdirSync(scope.runDir, { recursive: true });
   const token = await acquire({ env, kind }, { currentRunId: async () => env.ZYLOS_RUN_ID });
-  const settings = { token, env }, warnings = [], deps = { warning: value => warnings.push(value), database: {
+  const settings = { token, env }, warnings = [], deps = { now: () => Date.parse('2026-10-19T05:30:02.000Z'), warning: value => warnings.push(value), database: {
     getConversationsByRange: () => [],
     getLatestContentCheckpoint: () => ({ end_conversation_id: 0 }),
   } };
   const state = path.join(scope.memoryDir, 'state.md'), temporary = `${state}.${token}.tmp`;
-  const skeleton = (ids = [], extra = {}) => renderStateSkeleton({ scope: scope.scope, syncedAt: '2026-10-19T05:30:02Z', absorbed: ids.length ? { runId: 'run-1', followUp: 'group', rows: ids.map(id => ({ id, timestamp: '2026-10-19 05:30:02', channel: 'telegram', endpointId: 'x', content: id === 2 ? '汉'.repeat(400) + '\nend' : `text ${id}` })) } : null, ...extra }).replace('coverage= ', 'coverage=0 ');
+  const skeleton = (ids = [], extra = {}) => renderStateSkeleton({ scope: scope.scope, syncedAt: '2026-10-19T05:30:02.000Z', absorbed: ids.length ? { runId: 'run-1', followUp: 'group', rows: ids.map(id => ({ id, timestamp: '2026-10-19 05:30:02', channel: 'telegram', endpointId: 'x', content: id === 2 ? '汉'.repeat(400) + '\nend' : `text ${id}` })) } : null, ...extra }).replace('coverage= ', 'coverage=0 ');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return { ...scope, root, settings, deps, state, temporary, skeleton, warnings };
 }
@@ -46,6 +46,55 @@ async function commit(settings, deps) {
   }
   return guardedCommit(settings, deps);
 }
+
+// Real guarded publication and session selection in private fixture directories.
+// Run for commit timestamp/session boundary changes; unrelated changes may skip.
+// The runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixtures reclaim their roots.
+test('commit stamps its clock over worker local-as-UTC, rounded future and normal timestamps', async t => {
+  const instant = Date.parse('2026-11-14T10:05:56.123Z');
+  for (const group of ['telegram:test', null]) {
+    for (const supplied of ['2026-11-14T18:05:56Z', '2026-11-14T18:10:00Z', '2026-11-14T10:10:00Z', '2026-11-14T10:05:55Z']) {
+      const f = await fixture(t, group);
+      let temporary = f.skeleton([], { syncedAt: supplied });
+      if (supplied === '2026-11-14T10:05:55Z') temporary = temporary
+        .replace(` | synced_at=${supplied}`, '').replace(' -->', ` | synced_at=${supplied} -->`).replaceAll('\n', '\r\n');
+      fs.writeFileSync(f.temporary, temporary);
+      let clockCalls = 0;
+      await commit({ ...f.settings, input: { followedUpIds: [] } }, { ...f.deps, now: () => { clockCalls++; return instant; } });
+      assert.equal(clockCalls, 1);
+      assert.equal(fs.readFileSync(f.state, 'utf8'), temporary.replace(supplied, '2026-11-14T10:05:56.123Z'));
+      assert.equal(parseStateHeader(fs.readFileSync(f.state, 'utf8'), { scope: f.scope }).valid, true);
+    }
+  }
+});
+
+test('commit defaults to the actual publication clock', async t => {
+  const f = await fixture(t);
+  fs.writeFileSync(f.temporary, f.skeleton());
+  const { now, ...deps } = f.deps;
+  const before = Date.now();
+  await commit({ ...f.settings, input: { followedUpIds: [] } }, deps);
+  const after = Date.now();
+  const stamp = / \| synced_at=([^| ]+)/.exec(fs.readFileSync(f.state, 'utf8'))[1];
+  assert.match(stamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.ok(Date.parse(stamp) >= before && Date.parse(stamp) <= after);
+});
+
+test('commit prevents a worker future timestamp from skipping Singapore session logs', async t => {
+  const f = await fixture(t);
+  fs.writeFileSync(path.join(f.root, '.env'), 'TZ=Asia/Singapore\n');
+  const sessions = path.join(f.memoryDir, 'sessions');
+  fs.mkdirSync(sessions);
+  fs.writeFileSync(path.join(sessions, '2026-11-14.md'), 'session still needing sync\n');
+  const settings = { ...f.settings, now: () => Date.parse('2026-11-14T10:06:00Z') };
+  const temporary = f.skeleton([], { syncedAt: '2026-11-14T18:10:00Z' });
+  // Reproduce the reader consequence: 18:10Z converts to the next Singapore day.
+  fs.writeFileSync(f.state, temporary);
+  assert.deepEqual((await list(settings)).sessions, []);
+  fs.writeFileSync(f.temporary, temporary);
+  await commit({ ...settings, input: { followedUpIds: [] } }, { ...f.deps, now: () => Date.parse('2026-11-14T10:05:56.123Z') });
+  assert.deepEqual((await list(settings)).sessions.map(item => path.basename(item.path)), ['2026-11-14.md']);
+});
 
 test('commit preserves original bytes/title and removes only supplied IDs, including duplicates', async t => {
   const f = await fixture(t), original = write(f), block = extractAbsorbedBlock(original);
@@ -115,7 +164,10 @@ test('invalid follow-up input does not replace state or remove segments', async 
 test('missing/invalid temporary state rejects before publication and deletion', async t => {
   const f = await fixture(t), original = write(f);
   const corrected = fs.readFileSync(f.temporary, 'utf8');
-  for (const content of [null, 'broken', f.skeleton().replace('## Commitments', 'wrong'), f.skeleton().replace('scope=telegram:test', 'scope=origin'), f.skeleton().replace('inbox_committed= ', 'inbox_committed=invalid ')]) {
+  for (const content of [null, 'broken', f.skeleton().replace('## Commitments', 'wrong'), f.skeleton().replace('scope=telegram:test', 'scope=origin'), f.skeleton().replace('inbox_committed= ', 'inbox_committed=invalid '),
+    f.skeleton().replace('synced_at=2026-10-19T05:30:02.000Z', 'synced_at=not-a-time'),
+    f.skeleton().replace(' | synced_at=2026-10-19T05:30:02.000Z', ''),
+    f.skeleton().replace(' -->', ' | synced_at=2026-10-19T05:30:02.000Z -->')]) {
     if (content === null) fs.unlinkSync(f.temporary); else fs.writeFileSync(f.temporary, content);
     await assert.rejects(commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps), { code: 'STATE_DOCUMENT_INVALID' });
     assert.equal(fs.readFileSync(f.state, 'utf8'), original);
