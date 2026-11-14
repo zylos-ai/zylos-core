@@ -90,13 +90,14 @@ test('release request binds only inherited group and run, with no target overrid
   }
 });
 
-test('release refusal and uncertain delivery preserve the current run and handoff', async () => {
+test('release refusal and uncertain delivery preserve the current run', async () => {
   const env = { ZYLOS_SESSION_GROUP: 'origin', ZYLOS_RUN_ID: 'r' };
   for (const reason of ['not_multi', 'run_changed', 'requests_unreadable']) {
     const response = await requestRelease({ env,
       send: async () => ({ kind: 'rejected', sent: true, reply: { reason } }) });
     assert.equal(response.error.code, reason); assert.deepEqual(response.error.persisted, []);
-    assert.match(response.error.message, /handoff/); assert.match(response.error.message, /current run/);
+    assert.doesNotMatch(response.error.message, /handoff/); assert.match(response.error.message, /current run/);
+    assert.match(response.error.message, /do not exit/);
   }
   for (const kind of ['no_reply', 'invalid_reply', 'timeout', 'deadline_exceeded']) {
     let calls = 0;

@@ -106,13 +106,41 @@ test('onboarding contains task suggestions and records first-project results via
   assert.doesNotMatch(text, /reference\/(?:projects|decisions)\.md/);
 });
 
-test('both runtimes give the same voluntary release preparation and channel-neutral examples',()=>{
-  const blocks=systems.map(({text})=>between(text,'## Voluntary Session Release','\n## Security'));
-  assert.equal(blocks[0],blocks[1]);
-  assert.match(blocks[0],/examples, not fixed triggers/);
-  assert.match(blocks[0],/write the session handoff/);
-  assert.match(blocks[0],/scheduled tasks first/);
-  assert.match(blocks[0],/Waiting for a person's\s+reply, review or decision does not prevent release/);
-  assert.match(blocks[0],/supervisor-request\.js request-release --json/);
-  assert.match(blocks[0],/If you are uncertain[\s\S]*existing idle TTL/);
+test('both runtimes give identical voluntary release guidance and channel-neutral examples', () => {
+  const blocks = systems.map(({ text }) => between(text, '## Voluntary Session Release', '\n## Security'));
+  assert.equal(blocks[0], blocks[1]);
+  assert.match(blocks[0], /natural stopping point/);
+  assert.match(blocks[0], /examples, not fixed triggers/);
+  assert.match(blocks[0], /If you are uncertain[\s\S]*existing idle TTL/);
+  assert.match(blocks[0], /No minimum idle period is\s+required/);
 });
+
+const releaseGuidance = [
+  ...systems.map(({ runtime, text }) => ({
+    name: runtime,
+    text: between(text, '## Voluntary Session Release', '\n## Security'),
+  })),
+  {
+    name: 'activity monitor',
+    text: between(read('skills/activity-monitor/SKILL.md'), 'A multi-session agent may request release', '\nThe supervisor reads these settings'),
+  },
+];
+
+for (const { name, text } of releaseGuidance) {
+  test(`${name}: release requests register intent through the installed command and inherited identity`, () => {
+    assert.match(text, /`node ~\/zylos\/\.claude\/skills\/activity-monitor\/scripts\/supervisor-request\.js request-release --json`/);
+    assert.match(text, /installed absolute path/);
+    assert.match(text, /expand `~\/zylos` to the actual installation\s+directory/);
+    assert.match(text, /inheriting\s+`ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`/);
+    assert.match(text, /never supply\s+another group's identity/);
+    assert.match(text, /`ok:true` response registers[\s\S]*in-memory intent,[\s\S]*not a\s+completed release/);
+    assert.match(text, /Finish the current turn; the supervisor uses the existing\s+CHECK → optional Sync → reclaim flow/);
+    assert.match(text, /New delivered work before fencing cancels the intent/);
+    assert.match(text, /Supervisor restart (?:loses|drops)[\s\S]*intent[\s\S]*idle TTL[\s\S]*fallback/);
+    assert.match(text, /On rejection or an unknown\s+result, keep the current run; do not exit\s+or assume release succeeded/);
+  });
+
+  test(`${name}: release requests do not duplicate supervisor preparation`, () => {
+    assert.doesNotMatch(text, /pending work|current records|handoff|scheduled tasks|wake-up|external.wait|Waiting for a person|reply, review or decision|Finish work you\s+started/i);
+  });
+}

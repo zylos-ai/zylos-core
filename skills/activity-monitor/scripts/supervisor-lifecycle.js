@@ -443,7 +443,7 @@ export class SupervisorLifecycle {
     const group = request.sessionGroup;
     await this.refreshAuthorities(context);
     if (context.fences.some(fence => fence.sessionGroup === group || fence.sessionGroup === '*')) return reject('reclaim_started');
-    const preparation = this.ttlPreparation.get(group) ?? this.evictionPreparation.get(group);
+    const preparation = this.ttlPreparation.get(group) ?? this.evictionPreparation.get(group) ?? this.releasePreparation.get(group);
     if (!preparation) return reject('no_preparation');
     const scene = await this.d.observeGroup(group);
     if (preparation.runId !== request.expectedRunId || scene?.runId !== request.expectedRunId) return reject('run_changed');
@@ -457,6 +457,7 @@ export class SupervisorLifecycle {
     const now = this.now();
     this.ttlPreparation.delete(group);
     this.evictionPreparation.delete(group);
+    this.releasePreparation.delete(group);
     // lastActivity already includes ttlReset for both TTL and eviction ordering.
     this.ttlReset.set(group, { runId: scene.runId, at: now });
     const previous = this.reclaimDeferrals.get(group);
@@ -513,13 +514,14 @@ export class SupervisorLifecycle {
     const group = scene.sessionGroup;
     const range = await this.d.db.getUnsummarizedRange(group);
     if (!Number.isInteger(range.count) || range.count < 0) throw error('INVALID_OBSERVATION', 'Invalid unsummarized count');
-    const todo = range.count > 0 ? ['PRE_RECLAIM_SYNC_PROMPT'] : [];
+    const todo = ['PRE_RECLAIM_CHECK_PROMPT'];
+    if (range.count > 0) todo.push('PRE_RECLAIM_SYNC_PROMPT');
     if (group === 'origin') {
       const backlog = await this.d.db.getOriginSyncBacklog();
       if (backlog.total > 0 || backlog.groups.some(item => item.pendingCheckpoints > 0)) todo.push('PRE_RECLAIM_ORIGIN_SYNC_PROMPT');
     }
     intent.prepared = false;
-    // Sync must be delivered before the fence, which blocks pending controls.
+    // Reuse TTL check/Sync prompts and their bound-control wait before fencing.
     for (const prompt of todo) {
       if (!await this.beforeWrite(group, context, scene)) return;
       const targetBinding = await this.bindCurrentRun(scene);
@@ -550,7 +552,7 @@ export class SupervisorLifecycle {
         const control = await this.d.db.getControlById(id);
         if (!control || !TERMINAL_CONTROLS.has(control.status)) return;
       }
-      // An acknowledged Sync can still be finishing its turn or holding its
+      // An acknowledged check/Sync can still be finishing its turn or holding its
       // scoped marker; children and activity must drain through normal guards.
       if (scene.turnOpen === true || this.subagentReclaimBlocked(scene, 'release', context) || !await this.idle(scene, context)) return;
       if (!intent.prepared) await this.prepareRelease(scene, context, intent);

@@ -1945,15 +1945,15 @@ test('voluntary intent accepts busy, repeats by run and reclaims only after idle
   assert.equal((await f.lifecycle.requestRelease(f.scenes[0],f.context)).result,'already_accepted');
   await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
   Object.assign(f.scenes[0],{state:'idle',idleSince:f.now-3000,lastSubagentActivityAt:f.now-1});
-  await f.lifecycle.advanceReleases(f.context);const row=f.fences.get(group);assert.equal(row.reason,'release');
-  assert.equal(await f.lifecycle.advanceReclaim(row,f.context),'done');assert.equal(f.endings[0].reason,'release');assert.equal(f.controls.length,0);
+  await f.lifecycle.advanceReleases(f.context);assert.deepEqual(f.controls.map(c=>c.content),['check']);assert.equal(f.fences.size,0);f.settle();await f.lifecycle.advanceReleases(f.context);const row=f.fences.get(group);assert.equal(row.reason,'release');
+  assert.equal(await f.lifecycle.advanceReclaim(row,f.context),'done');assert.equal(f.endings[0].reason,'release');assert.equal(f.controls.length,1);
  }
 });
 test('voluntary release keeps intent while active children or the requesting turn remain busy',async()=>{
  const f=fixture();f.scenes[0].activeSubagents=[{lastActivityAt:f.now}];
  assert.equal((await f.lifecycle.requestRelease(f.scenes[0],f.context)).result,'accepted');
  for(let n=0;n<3;n++){await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);assert.equal(f.lifecycle.releasePreparation.size,1);}
- f.scenes[0].activeSubagents=[];await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get('a').reason,'release');
+ f.scenes[0].activeSubagents=[];await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);f.settle();await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get('a').reason,'release');
 });
 test('release intent suppresses expired TTL preparation controls', async () => {
  const f = fixture();
@@ -1974,9 +1974,9 @@ test('closed turn waiting for release Sync suppresses expired TTL preparation', 
  f.context.configuration.hotTtlSeconds = 1;
  await f.lifecycle.requestRelease(f.scenes[0], f.context);
  await f.lifecycle.advanceReleases(f.context);
- assert.deepEqual(f.controls.map(row => row.content), ['prepare']);
+ assert.deepEqual(f.controls.map(row => row.content), ['check', 'prepare']);
  await f.lifecycle.checkTtl(f.scenes[0], f.context);
- assert.deepEqual(f.controls.map(row => row.content), ['prepare']);
+ assert.deepEqual(f.controls.map(row => row.content), ['check', 'prepare']);
  assert.equal(f.lifecycle.ttlPreparation.size, 0);
  assert.equal(f.lifecycle.releasePreparation.size, 1);
  assert.equal(f.fences.size, 0);
@@ -2011,17 +2011,20 @@ test('active children prevent release Sync insertion for unsummarized work', asy
  assert.equal(f.lifecycle.releasePreparation.size, 1);
  f.scenes[0].activeSubagents = [];
  await f.lifecycle.advanceReleases(f.context);
- assert.deepEqual(f.controls.map(row => row.content), ['prepare']);
+ assert.deepEqual(f.controls.map(row => row.content), ['check', 'prepare']);
  assert.equal(f.fences.size, 0);
 });
-test('release waits bound Sync controls and their tail without another pre-reclaim check',async()=>{
+test('release waits bound check then Sync controls and their tail',async()=>{
  for(const group of ['a','origin']){
   const f=fixture();f.scenes=[scene(group)];f.unsummarized=1;if(group==='origin')f.backlog={total:0,groups:[{pendingCheckpoints:1}]};
   await f.lifecycle.requestRelease(f.scenes[0],f.context);await f.lifecycle.advanceReleases(f.context);
-  assert.deepEqual(f.controls.map(c=>c.content),group==='origin'?['prepare','prepare origin']:['prepare']);
+  assert.deepEqual(f.controls.map(c=>c.content),group==='origin'?['check','prepare','prepare origin']:['check','prepare']);
   assert.equal(f.fences.size,0);
   for(const c of f.controls){assert.equal(c.targetBinding.expectedRunId,`run-${group}`);await f.lifecycle.workDelivered({sessionGroup:group,runId:`run-${group}`,pastedAt:f.now+1,controlId:c.id});}
   assert.equal(f.lifecycle.releasePreparation.size,1);
+  for(const control of f.controls.slice(1))control.status='done';
+  await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0,'unfinished check blocks even after Sync completes');
+  f.controls[0].status='running';await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
   f.settle();f.scenes[0].state='busy';await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
   f.scenes[0].state='idle';f.marker={held:true,stale:false};await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
   f.marker={held:false,stale:false};await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get(group).reason,'release');
@@ -2039,7 +2042,7 @@ test('older delivery, another run and delivery after the fence cannot cancel a r
  const f=fixture();await f.lifecycle.requestRelease(f.scenes[0],f.context);
  await f.lifecycle.workDelivered({sessionGroup:'a',runId:'run-a',pastedAt:f.now-1,conversationId:1});
  await f.lifecycle.workDelivered({sessionGroup:'a',runId:'replacement',pastedAt:f.now+1,conversationId:2});
- assert.equal(f.lifecycle.releasePreparation.size,1);await f.lifecycle.advanceReleases(f.context);
+ assert.equal(f.lifecycle.releasePreparation.size,1);await f.lifecycle.advanceReleases(f.context);f.settle();await f.lifecycle.advanceReleases(f.context);
  await f.lifecycle.workDelivered({sessionGroup:'a',runId:'run-a',pastedAt:f.now+1,conversationId:3});
  assert.equal(f.fences.get('a').reason,'release');assert.equal(f.events.some(e=>e.event==='reclaim_cancelled'),false);
 });
@@ -2051,7 +2054,7 @@ test('supervisor reconstruction discards intent and ordinary TTL remains the fal
 });
 test('release fence cancels busy or child activity through shared reclaim guards',async()=>{
  for(const change of [{state:'busy'},{activeSubagents:[{lastActivityAt:2_000_000}]}]){
-  const f=fixture();await f.lifecycle.requestRelease(f.scenes[0],f.context);await f.lifecycle.advanceReleases(f.context);
+  const f=fixture();await f.lifecycle.requestRelease(f.scenes[0],f.context);await f.lifecycle.advanceReleases(f.context);f.settle();await f.lifecycle.advanceReleases(f.context);
   const row=f.fences.get('a');Object.assign(f.scenes[0],change);assert.equal(await f.lifecycle.advanceReclaim(row,f.context),'cancelled');assert.equal(f.stops.length,0);
  }
 });
@@ -2071,7 +2074,7 @@ test('a real tracked request tool registers intent and normal post-tool idle com
  await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
  activity.consume([row('post_tool',f.now+1),row('stop',f.now+2)]);f.now+=3002;Object.assign(f.scenes[0],activity.read(f.now));
  await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
- f.now+=3000;Object.assign(f.scenes[0],activity.read(f.now));await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get('a').reason,'release');
+ f.now+=3000;Object.assign(f.scenes[0],activity.read(f.now));await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);f.settle();await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get('a').reason,'release');
 });
 
 test('work pasted during the busy turn cancels release before or after intent registration',async()=>{
@@ -2096,7 +2099,7 @@ test('delivery from a previous busy turn stays ignored even if notified after in
   await f.lifecycle.requestRelease(f.scenes[0],f.context);
   if(!beforeIntent)await f.lifecycle.workDelivered(delivered);
   assert.equal(f.lifecycle.releasePreparation.size,1);
-  Object.assign(f.scenes[0],{state:'idle',idleSince:f.now-3000});await f.lifecycle.advanceReleases(f.context);
+  Object.assign(f.scenes[0],{state:'idle',idleSince:f.now-3000});await f.lifecycle.advanceReleases(f.context);f.settle();await f.lifecycle.advanceReleases(f.context);
   assert.equal(f.fences.get('a').reason,'release');
   assert.equal(f.events.some(e=>e.reason==='new_work'),false);
  }
@@ -2117,15 +2120,15 @@ test('delivered history retains only the latest timestamp and forgets ended or r
  assert.equal(f.lifecycle.deliveredWork.size,0);
  await f.lifecycle.workDelivered({sessionGroup:'a',runId:'replacement',pastedAt:40});
  f.scenes=[];await f.lifecycle.advanceReleases(f.context);assert.equal(f.lifecycle.deliveredWork.size,0);
- f.scenes=[scene()];await f.lifecycle.requestRelease(f.scenes[0],f.context);await f.lifecycle.advanceReleases(f.context);
+ f.scenes=[scene()];await f.lifecycle.requestRelease(f.scenes[0],f.context);await f.lifecycle.advanceReleases(f.context);f.settle();await f.lifecycle.advanceReleases(f.context);
  await f.lifecycle.workDelivered({sessionGroup:'a',runId:'run-a',pastedAt:f.now+1});
  await f.lifecycle.advanceReclaim(f.fences.get('a'),f.context);assert.equal(f.lifecycle.deliveredWork.size,0);
 });
 
-test('own release Sync delivery is excluded from history before a later release request',async()=>{
+test('own release check and Sync delivery is excluded from history before a later release request',async()=>{
  const f=fixture();f.unsummarized=1;
  await f.lifecycle.requestRelease(f.scenes[0],f.context);await f.lifecycle.advanceReleases(f.context);
- await f.lifecycle.workDelivered({sessionGroup:'a',runId:'run-a',pastedAt:f.now+1,controlId:f.controls[0].id});
+ for(const control of f.controls)await f.lifecycle.workDelivered({sessionGroup:'a',runId:'run-a',pastedAt:f.now+1,controlId:control.id});
  assert.equal(f.lifecycle.deliveredWork.size,0);
  await f.lifecycle.workDelivered({sessionGroup:'a',runId:'foreign',pastedAt:f.now+2});
  assert.equal(f.lifecycle.deliveredWork.size,0);assert.equal(f.lifecycle.releasePreparation.size,1);
@@ -2170,6 +2173,25 @@ for(const runtime of ['claude','codex'])test(`release waits through an idle-conf
  activity.consume([row('stop',19000)]);Object.assign(f.scenes[0],activity.read(19000));
  f.now=22001;Object.assign(f.scenes[0],activity.read(f.now));await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);
  f.now=25001;Object.assign(f.scenes[0],activity.read(f.now));assert.equal(f.scenes[0].turnOpen,false);
- await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get('a').reason,'release');
+ await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.size,0);f.settle();await f.lifecycle.advanceReleases(f.context);assert.equal(f.fences.get('a').reason,'release');
  assert.equal(await f.lifecycle.advanceReclaim(f.fences.get('a'),f.context),'done');assert.deepEqual(f.stops,['run-a']);
+});
+
+test('release check deferral cancels preparation and reuses TTL reset and consecutive history', async () => {
+ for (const group of ['a', 'origin']) for (const unsummarized of [0, 1]) {
+  const f = fixture(); f.scenes = [scene(group)]; f.unsummarized = unsummarized;
+  await f.lifecycle.requestRelease(f.scenes[0], f.context);
+  await f.lifecycle.advanceReleases(f.context);
+  assert.deepEqual(f.controls.map(row => row.content), unsummarized ? ['check', 'prepare'] : ['check']);
+  assert.equal(f.fences.size, 0);
+  assert.equal((await f.lifecycle.deferReclaim(deferRequest({sessionGroup: group, expectedRunId: 'old-run'}), f.context)).reason, 'run_changed');
+  const result = await f.lifecycle.deferReclaim(deferRequest({sessionGroup: group, expectedRunId: `run-${group}`}), f.context);
+  assert.deepEqual(result, {ok:true, result:'accepted'});
+  assert.equal(f.lifecycle.releasePreparation.has(group), false);
+  assert.equal(f.lifecycle.ttlReset.get(group).at, f.now);
+  assert.equal(f.lifecycle.reclaimDeferrals.get(group).count, 1);
+  f.settle(); await f.lifecycle.advanceReleases(f.context); await f.lifecycle.checkTtl(f.scenes[0], f.context);
+  assert.equal(f.fences.size, 0); assert.equal(f.stops.length, 0); assert.equal(f.controls.length, unsummarized ? 2 : 1);
+  assert.equal(f.events.filter(row => row.event === 'reclaim_deferred').length, 1);
+ }
 });
