@@ -23,7 +23,7 @@ export function eventLabel(event, level = 'plain', t = key => key) {
   return t(categories.has(category) ? 'wb.event.category.' + category : 'wb.event.other');
 }
 
-export const endReasons = new Set(['running', 'crash', 'rotate', 'manual_restart', 'reclaim', 'ttl', 'evict',
+export const endReasons = new Set(['running', 'crash', 'rotate', 'manual_restart', 'reclaim', 'ttl', 'evict', 'release',
   'upgrade', 'auth', 'mode_switch', 'model_config', 'unexpected', 'unknown']);
 
 export function endReasonLabel(reason, level = 'plain', t = key => key) {

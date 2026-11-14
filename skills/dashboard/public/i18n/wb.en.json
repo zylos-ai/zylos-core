@@ -510,6 +510,7 @@
   "wb.endReason.manual_restart": "Restarted by hand",
   "wb.endReason.reclaim": "Recycled",
   "wb.endReason.ttl": "Recycled · TTL",
+  "wb.endReason.release": "Recycled · released on request",
   "wb.endReason.evict": "Recycled · evicted",
   "wb.endReason.upgrade": "Recycled · upgrade",
   "wb.endReason.auth": "Recycled · login",
