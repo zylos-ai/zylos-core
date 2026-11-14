@@ -103,7 +103,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     searchInput.placeholder = t('wb.search');
     searchInput.setAttribute('aria-label', t('wb.search'));
     const attention = document.querySelector('#wb-attention');
-    renderAttention(attention, snapshot, { document, t, error, lastSuccess, level, onSelect: openFromAttention });
+    renderAttention(attention, snapshot, { document, t, error: snapshot && error, lastSuccess, level, onSelect: openFromAttention });
     if (transition) {
       const hint = element(document, 'div', undefined, 'wb-attention-item wb-attention-reminder wb-transition');
       hint.append(icon(document, 'clock'), element(document, 'span', t('wb.transition') + ' · ' + transition.phase));

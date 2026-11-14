@@ -16,6 +16,7 @@ const ROOT_NODE_TESTS = [
   'test/dashboard-stale-status.integration.test.js',
   'test/dashboard-startup-timeouts.integration.test.js',
   'test/dashboard-startup-parallel.integration.test.js',
+  'test/overview-read-state.integration.test.js',
   'test/router-stale-state.integration.test.js',
   'test/dashboard-readiness.integration.test.js',
   'test/supervisor-reclaim-deferral.integration.test.js',
