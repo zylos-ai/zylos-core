@@ -26,7 +26,7 @@ describe('Sync batch receipts', () => {
     const database = { getConversationsByRange(begin, end) { assert.equal(begin, 1); assert.equal(end, 4); return raw; } };
     assert.deepEqual(verifyBatchReceipt(batch, { scope: 'foo', end: 4, database }), batch);
     assert.equal(createBatchReceipt([raw[0], { ...raw[3], status: 'other', dynamic: 'ignored' }], batch).sha256, batch.sha256);
-    assert.throws(() => verifyBatchReceipt({ ...batch, sha256: '0'.repeat(64) }, { scope: 'foo', end: 4, database }), invalid);
+    assert.throws(() => verifyBatchReceipt({ ...batch, sha256: '0'.repeat(64) }, { scope: 'foo', end: 4, database }), { code: 'INPUT_CHANGED' });
     assert.throws(() => verifyBatchReceipt(batch, { scope: 'foo', end: 5, database }), invalid);
     assert.throws(() => verifyBatchReceipt(batch, { scope: 'bar', end: 4, database }), invalid);
     assert.throws(() => verifyBatchReceipt({ ...batch, extra: true }, { scope: 'foo', end: 4, database }), invalid);
