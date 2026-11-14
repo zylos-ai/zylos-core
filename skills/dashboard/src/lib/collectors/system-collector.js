@@ -12,9 +12,9 @@ export function parseVmStatFreeMem(vmStatOutput) {
   return get('Pages free') + get('Pages speculative') + get('Pages inactive') + get('Pages purgeable');
 }
 
-function macosFreeMem() {
+function macosFreeMem(execFile) {
   try {
-    const out = execFileSync('vm_stat', { encoding: 'utf8', timeout: 3000 });
+    const out = execFile('vm_stat', { encoding: 'utf8', timeout: 3000 });
     return parseVmStatFreeMem(out);
   } catch {
     return os.freemem();
@@ -34,11 +34,11 @@ export function parseMeminfo(text) {
 }
 
 /** Total and available memory: Linux reads /proc/meminfo, macOS counts reclaimable pages as available. */
-export function readMemory({ platform = process.platform, readFile = fs.readFileSync } = {}) {
+export function readMemory({ platform = process.platform, readFile = fs.readFileSync, execFile = execFileSync } = {}) {
   if (platform === 'linux') {
     try { return parseMeminfo(readFile('/proc/meminfo', 'utf8')); } catch { return null; }
   }
-  return { totalBytes: os.totalmem(), availableBytes: platform === 'darwin' ? macosFreeMem() : os.freemem() };
+  return { totalBytes: os.totalmem(), availableBytes: platform === 'darwin' ? macosFreeMem(execFile) : os.freemem() };
 }
 
 export class SystemCollector {

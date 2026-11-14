@@ -24,8 +24,8 @@ export function mountWorkbench({ document = globalThis.document, window = global
   let groupDetail = null, hostPanel = null, nameRequest = null;
   const nameButton = document.querySelector('#wb-auto-name');
   const nameDialog = document.querySelector('#wb-auto-name-dialog');
-  // State counts and the instance strip keep each label whole: compact first, then whole labels wrap.
-  const labels = watchRows([document.querySelector('#wb-dist'), document.querySelector('#wb-instance')], { document, window });
+  // State counts compact before wrapping; instance strip items wrap whole without measurement.
+  const labels = watchRows([document.querySelector('#wb-dist')], { document, window });
   let snapshot = null, searchRows = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
     range = '60m', activityGen = 0, cost = null, transition = null, owner = identity(), stopped = false;
   try {

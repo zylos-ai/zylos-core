@@ -289,6 +289,7 @@ test('the instance carries the host sample read for this snapshot and stays unkn
   const f = fixture(t, { readSystem: () => { reads++; return sample; } });
   const snapshot = await f.service.getSnapshot();
   assert.equal(reads, 1);
+  assert.equal(snapshot.readAt, f.now(), 'the host sample always travels with the snapshot read clock');
   assert.deepEqual(snapshot.instance.system, systemSample(sample));
   assert.deepEqual(snapshot.instance.system, { sampledAt: 1799999990000, cpuPct: 37.5, cpuCount: 8, memUsedBytes: 2048,
     memTotalBytes: 8192, diskUsedPct: 61, diskFreeBytes: 4096 });

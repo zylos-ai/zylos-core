@@ -1,7 +1,6 @@
-// Rows of short labels (the board head's state counts, the instance strip) never break inside a label. A row that
-// does not fit on one line first takes its compact form, which takes words off the screen but keeps them in the
-// accessible text and in a title (a count's own title; the cost item's title for the strip's scope); only if that
-// does not fit either do whole labels wrap to the next line.
+// The board head's state counts never break inside a label. A row that does not fit on one line first takes its
+// compact form, hiding state words visually but keeping them in accessible text and each count's title; only if
+// that does not fit either do whole labels wrap to the next line.
 // Labels differ per locale and per count, so this measures instead of guessing a breakpoint.
 export const COMPACT = 'wb-compact';
 
@@ -36,7 +35,7 @@ export function watchRows(rows, { document = globalThis.document, window = globa
     frame = window.requestAnimationFrame(() => { frame = null; fit(); });
   };
   const widths = new Map();
-  // Each row and its parent: the strip changes width with the drawer, the count row's cell with the grid column.
+  // Each count row and its parent cell: the available width changes with the grid column and drawer.
   const targets = [...new Set(list.flatMap(row => [row, row.parentElement].filter(Boolean)))];
   const observer = window?.ResizeObserver ? new window.ResizeObserver(entries => {
     let changed = false;

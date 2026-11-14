@@ -75,8 +75,9 @@ export function poolExplanation(record, t) {
 export const SYSTEM_STALE_MS = 90_000;
 const oneDecimal = bytes => (bytes / 1073741824).toFixed(1);
 /** CPU, memory (used = total minus available) and disk percentages: icon and number on screen, the name read out, details in the title. */
-export function systemItems(document, system, { t = key => key, readAt = null } = {}) {
-  const stale = system != null && !(Number.isFinite(readAt) && readAt - system.sampledAt <= SYSTEM_STALE_MS);
+export function systemItems(document, system, { t = key => key, readAt } = {}) {
+  // Group snapshots carry readAt; freshness uses the same snapshot clock as the sample.
+  const stale = system != null && !(readAt - system.sampledAt <= SYSTEM_STALE_MS);
   const memory = system && system.memTotalBytes > 0 && system.memUsedBytes != null ? system.memUsedBytes / system.memTotalBytes * 100 : null;
   const specs = [
     ['cpu', 'cpu', system?.cpuPct, system?.cpuCount > 0 ? t('wb.inst.cpuCores', { count: system.cpuCount }) : ''],

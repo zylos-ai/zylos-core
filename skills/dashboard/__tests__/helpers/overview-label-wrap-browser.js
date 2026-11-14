@@ -81,7 +81,7 @@ function measureLabels({ labels, nowrap }) {
     return text;
   };
   return {
-    broken, wrapping, splitWords, distForm: form(dist), stripForm: form(strip),
+    broken, wrapping, splitWords, distForm: form(dist),
     // A label that may not wrap must not stick out of its board head cell either, nor may the auto-name button.
     nameOverflow: name.scrollWidth > name.clientWidth + 1,
     autoNameInside: autoName.getBoundingClientRect().right <= name.getBoundingClientRect().right + 1,
@@ -228,15 +228,16 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
 
   const nextFrames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   // What holds in any font: no label breaks inside, the auto-name button wraps only between words and stays in its
-  // cell, a row is compact exactly when its full form does not fit on one line (so a row that wraps went compact
-  // first, and a row whose full form fits is never compact), and a compact row's words stay read out and in titles.
+  // cell, counts compact exactly when their full form does not fit, and compact count words stay read out and in
+  // titles. The instance strip wraps whole items without a compact form.
   function checkLabels(result, language, { technical = false, items = null } = {}) {
     assert.deepEqual(result.broken, []);
     assert.deepEqual(result.wrapping, []);
     assert.deepEqual(result.splitWords, [], 'the auto-name button wraps only between words');
     assert.equal(result.nameOverflow, false);
     assert.equal(result.autoNameInside, true, 'the auto-name button stays inside its cell');
-    for (const [row, form] of [['counts', result.distForm], ['instance strip', result.stripForm]]) {
+    assert.equal(result.stripCompact, false, 'the instance strip wraps without a compact class');
+    for (const [row, form] of [['counts', result.distForm]]) {
       assert.equal(form.compact, !form.fullFits, `${row}: compact exactly when the full form does not fit on one line`);
       if (!form.fits) assert.equal(form.compact, true, `${row}: wraps only after going compact`);
     }
@@ -282,7 +283,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     if (items) assert.deepEqual(result.items, items, 'every item shows its value and names itself first in its title');
   }
 
-  const seen = { counts: new Set(), strip: new Set() };
+  const seen = { counts: new Set() };
   for (const language of ['zh', 'en']) for (const width of [1280, 390]) for (const detail of [false, true]) {
     await t.test(`${width}px ${language}, detail ${detail ? 'open' : 'closed'}: no label breaks inside`, async () => {
       const { page, context } = await open(width, language);
@@ -290,14 +291,13 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
         if (detail) await openDetail(page);
         const result = await measureOn(page);
         checkLabels(result, language, { items: ITEMS[language].plain });
-        seen.counts.add(result.distCompact); seen.strip.add(result.stripCompact);
+        seen.counts.add(result.distCompact);
         if (evidence) await page.screenshot({ path: path.join(evidence, `overview-labels-${width}-${language}-${detail ? 'open' : 'closed'}.png`) });
       } finally { await context.close(); }
     });
   }
-  // The checks above hold either way; these widths have to reach both forms of each row for them to mean something.
+  // The checks above hold either way; these widths have to reach both forms of the count row for them to mean something.
   assert.deepEqual([...seen.counts].sort(), [false, true], 'the counts were seen in their full and their compact form');
-  assert.deepEqual([...seen.strip].sort(), [false, true], 'the instance strip was seen in its full and its compact form');
 
   // No test width makes the cell narrower than the Chinese label, but a larger font can. The button is given half
   // its own width, whatever the font: English then has to wrap, and "自动起名" is wider than the box.
@@ -335,7 +335,6 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
   // item there is. The strip shows its occupancy and queue; the source (and, technical, the explanations) is in its title.
   for (const language of ['zh', 'en']) for (const level of ['plain', 'technical']) {
     await t.test(`the pool item shows its occupancy and queue, its source on hover: ${language}, ${level}`, async () => {
-      const forms = new Set();
       for (const [width, detail] of [[3840, false], [1280, false], [1280, true], [390, true]]) {
         const { page, context } = await open(width, language, level, { pool: RICH_POOL });
         try {
@@ -349,10 +348,8 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
           const name = (level === 'technical' ? POOL_NAME : POOL_PLAIN)[language], inUse = language === 'zh' ? '在用' : 'in use';
           assert.ok(result.pool.title.startsWith(`${name} · ${inUse} 2 / 4 · ${SOURCE[language]} · ${QUEUE[language][level].slice(2)}`), result.pool.title);
           if (level === 'technical') for (const text of EXPLANATIONS[language]) assert.ok(result.pool.title.includes(text), `the pool title keeps: ${text}`);
-          forms.add(result.stripCompact ? 'compact' : 'full');
         } finally { await context.close(); }
       }
-      assert.deepEqual([...forms].sort(), ['compact', 'full'], 'the pool item is seen in the full and the compact strip');
     });
   }
 
@@ -505,22 +502,17 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       // With the 480px drawer open, 2000px leaves the list 1520px, room for the full form in any font, and 800px
       // leaves 320px, room for it in none.
       await page.setViewportSize({ width: 2000, height: 800 });
-      await page.waitForFunction(() => !document.querySelector('#wb-dist').classList.contains('wb-compact')
-        && !document.querySelector('#wb-instance').classList.contains('wb-compact'), null, { timeout: 2000 });
+      await page.waitForFunction(() => !document.querySelector('#wb-dist').classList.contains('wb-compact'), null, { timeout: 2000 });
       checkLabels(await measureOn(page), 'zh');
       await page.setViewportSize({ width: 800, height: 800 });
-      await page.waitForFunction(() => document.querySelector('#wb-dist').classList.contains('wb-compact')
-        && document.querySelector('#wb-instance').classList.contains('wb-compact'), null, { timeout: 2000 });
+      await page.waitForFunction(() => document.querySelector('#wb-dist').classList.contains('wb-compact'), null, { timeout: 2000 });
       checkLabels(await measureOn(page), 'zh');
     } finally { await context.close(); }
   });
 
-  // The strip's own content grows while nothing changes width: the next poll answers with a queue and services
-  // down, and only the strip is redrawn. The width is found in the page, not fixed: the narrowest at which the
-  // strip still has its full form, so the grown strip no longer fits in any font and only the refit after the
-  // strip redraw can give it its compact form.
-  await t.test('a strip that grows on a poll refits without a width change', async () => {
-    const { page, context } = await open(2000, 'zh');
+  // Polling changes strip content without a resize; items still wrap whole and no compact state is needed.
+  await t.test('a strip that grows on a poll keeps whole items without compacting', async () => {
+    const { page, context } = await open(800, 'zh');
     let longer = false;
     await context.route(url => url.pathname === '/api/workbench/groups', async route => {
       const response = await route.fetch();
@@ -529,28 +521,14 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       await route.fulfill({ response, json: body });
     });
     try {
-      await openDetail(page);
-      const compact = () => page.evaluate(() => document.querySelector('#wb-instance').classList.contains('wb-compact'));
-      let width = 2000;
-      assert.equal(await compact(), false, 'the full strip fits beside the drawer at 2000px');
-      while (width > 900) {
-        await page.setViewportSize({ width: width - 10, height: 800 });
-        await nextFrames(page);
-        if (await compact()) break;
-        width -= 10;
-      }
-      await page.setViewportSize({ width, height: 800 });
-      await nextFrames(page);
       const before = await measureOn(page);
-      assert.equal(before.stripCompact, false);
       checkLabels(before, 'zh');
       longer = true;
-      // The board polls every 5s.
       await page.waitForFunction(() => document.querySelector('#wb-instance .wb-txt-warn'), null, { timeout: 8000 });
       const after = await measureOn(page);
-      assert.equal(after.stripCompact, true, `the grown strip went compact at ${width}px`);
       checkLabels(after, 'zh');
-      assert.equal(after.distCompact, before.distCompact, 'the board head did not change, so nothing else refitted');
+      assert.equal(after.pool.shown, '2 / 4· 12 个在排队');
+      assert.equal(after.distCompact, before.distCompact, 'unchanged counts keep the same form');
     } finally { await context.close(); }
   });
 
@@ -559,7 +537,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
   // the ResizeObserver callback, which the browser reports as a window error event (not a page error, so it is
   // listened for in the page). The drawer sits beside the list from 901px; starting at 1280px, the width narrows
   // until a row is compact, which it is by 901px in any font.
-  const anyCompact = () => ['#wb-dist', '#wb-instance'].some(selector => document.querySelector(selector).classList.contains('wb-compact'));
+  const anyCompact = () => document.querySelector('#wb-dist').classList.contains('wb-compact');
   for (const language of ['zh', 'en']) {
     await t.test(`returning to the overview from another page refits without a window error (${language})`, async () => {
       const { page, context } = await open(1280, language, 'plain', { listenErrors: true });
@@ -575,8 +553,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
         assert.equal(await page.evaluate(anyCompact), true, `a row is compact at ${width}px`);
         await page.locator('.tab-bar .tab[data-tab="chat"]').click();
         await page.locator('#tab-overview').waitFor({ state: 'hidden' });
-        await page.waitForFunction(() => !document.querySelector('#wb-dist').classList.contains('wb-compact')
-          && !document.querySelector('#wb-instance').classList.contains('wb-compact'), null, { timeout: 2000 });
+        await page.waitForFunction(() => !document.querySelector('#wb-dist').classList.contains('wb-compact'), null, { timeout: 2000 });
         await page.locator('.tab-bar .tab[data-tab="overview"]').click();
         await page.locator('#tab-overview').waitFor({ state: 'visible' });
         await page.waitForFunction(anyCompact, null, { timeout: 2000 });

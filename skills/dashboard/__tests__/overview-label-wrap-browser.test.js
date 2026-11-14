@@ -10,7 +10,7 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 // views and in a box narrower than they are, a pool section in multi mode only (slots and source only for a missing
 // record file), none in single or unreadable mode, and the section following the board's polls; refits on a window
 // resize with the drawer open (to a width where the full form fits in any font and to one where it fits in none), on
-// a strip that grows on a poll at the narrowest width where it still has its full form, and on coming back to the
+// whole strip items after content grows on a poll without any compact measurement, and on coming back to the
 // overview from another page without a window error. It uses the workbench fixture API answers; no Core, runtime,
 // PM2, tmux or database is started. Run for changes to the overview's head, instance strip (pool item included),
 // legend, the host panel's pool section, their labels or label-fit.js; skip for other pages. Opt-in with the same

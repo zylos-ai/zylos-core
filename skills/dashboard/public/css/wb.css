@@ -288,10 +288,10 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-bh > div { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .wb-bh-name { flex-wrap: wrap; }
 .wb-dist { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-width: 0; max-width: 100%; font-variant-numeric: tabular-nums; }
-/* Short labels never break inside: a row that does not fit goes compact first (label-fit.js), then whole labels wrap. */
+/* Short labels stay whole. State counts compact first (label-fit.js); instance strip items wrap without measurement. */
 .wb-dist-total, .wb-dist-item, .wb-legend-item, .wb-account > *, .wb-inst-more, .wb-bh-right, .wb-bh > .wb-tech-col { white-space: nowrap; }
 .wb-dist-item { display: inline-flex; align-items: center; gap: 4px; }
-/* Compact: the state word and the scope chip leave the screen but stay in the accessible text; numbers stay. */
+/* Compact counts hide the state word visually but keep it in accessible text; numbers stay. */
 .wb-dist.wb-compact .wb-dist-word { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .wb-bh-now { justify-content: space-between; }
 .wb-bh-now > span, .wb-bh-state { white-space: nowrap; }
