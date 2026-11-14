@@ -16,6 +16,21 @@ const between = (text, start, end) => {
   return text.slice(from, to);
 };
 
+test('Sync parents consume Codex worker outcomes before ending their turn', () => {
+  const parent = normalize(between(skill, '## Parent result handling', '## Writing rules'));
+  assert.match(parent, /apply to group, Origin, and global Sync/);
+  assert.match(parent, /Claude: continue current work without waiting/);
+  assert.match(parent, /Codex: continue useful current work after launching/);
+  assert.match(parent, /before ending the parent turn.*native agent wait\/result tools.*this worker's terminal result/);
+  assert.match(parent, /A timeout or an empty wait is not a terminal result; wait again/);
+  assert.match(parent, /`Completed` describes worker execution, not successful Sync/);
+  assert.match(parent, /Report a failed Sync to the owner once through the existing channel route/);
+  assert.match(parent, /Include partial commits and cleanup\/release warnings/);
+  assert.match(parent, /If the result cannot be retrieved, report that failure/);
+  assert.match(parent, /Successful Sync and the documented `SYNC_BUSY` no-op need no extra owner message/);
+  assert.match(parent, /Do not restart Sync/);
+});
+
 test('state guidance assigns committed segment IDs to the commit script', () => {
   const group = normalize(between(sync, '## Group Sync', '## Origin Sync'));
   const global = normalize(between(sync, '## Single global Sync', '## Moving from old files'));
