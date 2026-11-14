@@ -172,6 +172,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     nameRequest?.abort();
     if (nameDialog) { nameDialog.hidden = true; nameDialog.replaceChildren(); }
     controller.invalidate();
+    costController.invalidate();
     search.input('');
     searchInput.value = '';
     snapshot = null;
@@ -233,22 +234,10 @@ export function mountWorkbench({ document = globalThis.document, window = global
   nameButton?.addEventListener('click', autoName);
   const controller = boardController({
     visible,
-    fetchSnapshot: async () => {
-      const [groups, expense] = await Promise.allSettled([
-        withRequestTimeout(signal => read('/api/workbench/groups', { signal }), REQUEST_TIMEOUT_MS),
-        withRequestTimeout(signal => read('/api/workbench/usage?summary=cost', { signal }), REQUEST_TIMEOUT_MS),
-      ]);
-      if (groups.status !== 'fulfilled') throw groups.reason;
-      // Cost is optional: a failed or timed-out read leaves it blank while group rows remain usable.
-      return {
-        snapshot: groups.value,
-        cost: expense.status === 'fulfilled' ? expense.value.costSummary : null,
-      };
-    },
+    fetchSnapshot: () => withRequestTimeout(signal => read('/api/workbench/groups', { signal }), REQUEST_TIMEOUT_MS),
     onSnapshot: value => {
-      snapshot = value.snapshot;
+      snapshot = value;
       groupDetail.updateSnapshot(snapshot);
-      cost = value.cost;
       error = null;
       lastSuccess = Date.now();
       redraw();
@@ -259,6 +248,13 @@ export function mountWorkbench({ document = globalThis.document, window = global
       lastSuccess = at;
       redraw();
     },
+  });
+  // Optional cost has its own pending request and generation, so neither read holds up the other.
+  const costController = boardController({
+    visible,
+    fetchSnapshot: () => withRequestTimeout(signal => read('/api/workbench/usage?summary=cost', { signal }), REQUEST_TIMEOUT_MS),
+    onSnapshot: value => { cost = value.costSummary ?? null; redraw(); },
+    onError: () => { cost = null; redraw(); },
   });
   async function refreshMode() {
     if (!visible()) return;
@@ -309,7 +305,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     event.preventDefault?.();
   };
   const visibility = () => {
-    if (document.visibilityState === 'visible') controller.refresh();
+    if (document.visibilityState === 'visible') { controller.refresh(); costController.refresh(); }
   };
   // An installed-but-unavailable observer still opens its page, which explains why and links to settings.
   const observerClick = event => {
@@ -331,7 +327,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     const changed = resetOwner();
     const active = visible();
     syncNav();
-    if (active && (changed || !previousVisible)) controller.refresh();
+    if (active && (changed || !previousVisible)) { controller.refresh(); costController.refresh(); }
     if (!pageActive()) hostPanel.close();
     previousVisible = active;
   }) : null;
@@ -343,11 +339,13 @@ export function mountWorkbench({ document = globalThis.document, window = global
   window.addEventListener('popstate', visibility);
   redraw();
   controller.start();
+  costController.start();
   refreshMode();
   const modeTimer = setInterval(refreshMode, 60000);
   function destroy() {
     stopped = true;
     controller.stop();
+    costController.stop();
     groupDetail.destroy();
     hostPanel.destroy();
     labels.destroy();

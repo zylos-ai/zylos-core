@@ -2190,7 +2190,7 @@ function workbenchHarness(context, read, options = {}) {
   const stop = () => mounted.destroy();
   context.after(stop);
   return { document, nodes, saved, calls, listeners, windowListeners, intervals, timeouts, stop, openGroup: key => mounted.openGroup(key), locateGroup: key => mounted.locateGroup(key), makeSnapshot,
-    poll: delay => { const timer = [...intervals.values()].find(timer => timer.delay === delay); assert.ok(timer, 'expected polling timer'); return timer.handler(); },
+    poll: delay => { const timers = [...intervals.values()].filter(timer => timer.delay === delay); assert.ok(timers.length, 'expected polling timer'); return Promise.all(timers.map(timer => timer.handler())); },
     debounce: async () => { const job = [...timeouts.entries()].find(([, timer]) => timer.delay === 300); assert.ok(job, 'search debounce exists'); timeouts.delete(job[0]); await job[1].handler(); },
     setOwner: value => { owner = value; },
     navigate: active => { navigationGeneration++; nodes.get('#tab-overview').className = active ? 'active' : ''; mutation?.(); },
@@ -2212,6 +2212,73 @@ test('workbench shell detail changes redraw without network and activity range p
   assert.equal(h.nodes.get('#wb-range').children.find(button => button.attributes['aria-pressed'] === 'true').dataset.range, '6h');
   assert.equal(h.saved.getItem('zylos-dashboard-activity-range'), '6h'); assert.equal(h.calls.at(-1), '/api/workbench/activity?range=6h');
   h.stop(); assert.equal(h.intervals.size, 0); assert.equal(h.timeouts.size, 0);
+});
+// Independent board reads: run for groups/cost refresh wiring changes; skip unrelated UI/server work.
+// Real mounted modules use the injected DOM/fetch/timers above, with no live I/O and lifecycle cleanup.
+test('workbench shell renders groups while cost is pending and fills cost independently', { timeout: 5000 }, async context => {
+  const cost = wbDeferred();
+  const h = workbenchHarness(context, (path, fallback) => path.includes('/usage?summary=cost') ? cost.promise : fallback(path));
+  context.after(async () => { h.stop(); cost.resolve({}); await wbTick(); });
+  await wbTick(); await wbTick();
+  const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
+  const costText = () => instance.children.find(node => node.classList.contains('wb-cost'))?.textContent;
+  assert.equal(wbName(board.children[0]), 'A', 'groups render before the cost response settles');
+  assert.match(costText(), /—/);
+  assert.doesNotMatch(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
+  await h.poll(5000); await wbTick();
+  assert.equal(h.calls.filter(path => path.includes('/usage?summary=cost')).length, 1, 'cost polling shares its pending request');
+  assert.equal(h.calls.filter(path => path.endsWith('/api/workbench/groups')).length, 2, 'groups keep polling while cost is pending');
+  const groupReads = h.calls.filter(path => path.endsWith('/api/workbench/groups')).length;
+  cost.resolve({ costSummary: { today: { total: 1.5 } } }); await wbTick(); await wbTick();
+  assert.match(costText(), /\$1\.50/, 'a late cost response redraws without waiting for another groups poll');
+  assert.equal(h.calls.filter(path => path.endsWith('/api/workbench/groups')).length, groupReads);
+  assert.equal(wbName(board.children[0]), 'A');
+});
+// Run for owner changes or stale-response guards; skip unrelated presentation work. Injected lifecycle only.
+test('workbench shell invalidates pending groups and cost when the viewed owner changes', { timeout: 5000 }, async context => {
+  const oldGroups = wbDeferred(), oldCost = wbDeferred(), newCost = wbDeferred();
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path === '/api/workbench/groups') return oldGroups.promise;
+    if (path === '/api/workbench/usage?summary=cost') return oldCost.promise;
+    if (path.includes('/usage?summary=cost')) return newCost.promise;
+    return fallback(path);
+  });
+  context.after(async () => { h.stop(); oldGroups.resolve(workbenchSnapshot()); oldCost.resolve({}); newCost.resolve({}); await wbTick(); });
+  await wbTick(); h.setOwner('Other'); h.mutate(); await wbTick(); await wbTick();
+  assert.ok(h.calls.includes('/fleet/Other/api/workbench/groups'), 'new owner starts groups without waiting for the old owner');
+  assert.ok(h.calls.includes('/fleet/Other/api/workbench/usage?summary=cost'), 'new owner starts cost without waiting for the old owner');
+  const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
+  assert.equal(wbName(board.children[0]), 'A');
+  newCost.resolve({ costSummary: { today: { total: 2.5 } } }); await wbTick(); await wbTick();
+  const costText = () => instance.children.find(node => node.classList.contains('wb-cost'))?.textContent;
+  assert.match(costText(), /\$2\.50/);
+  oldGroups.resolve(workbenchSnapshot('busy', 'previous-owner'));
+  oldCost.resolve({ costSummary: { today: { total: 99 } } }); await wbTick(); await wbTick();
+  assert.equal(wbName(board.children[0]), 'A', 'old groups cannot replace current rows');
+  assert.match(costText(), /\$2\.50/, 'old cost completion cannot clear or replace current cost');
+  assert.doesNotMatch(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
+});
+// Run for board-read disposal/timer changes; skip unrelated work. Pending fake reads are resolved during cleanup.
+test('workbench shell stops both pending board reads before disposal completions', { timeout: 5000 }, async context => {
+  const groups = wbDeferred(), cost = wbDeferred(); let pending = false;
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (pending && path.endsWith('/api/workbench/groups')) return groups.promise;
+    if (pending && path.includes('/usage?summary=cost')) return cost.promise;
+    return fallback(path);
+  });
+  context.after(async () => { h.stop(); groups.resolve(workbenchSnapshot()); cost.resolve({}); await wbTick(); });
+  await wbTick(); await wbTick(); pending = true;
+  const refresh = h.poll(5000); await wbTick();
+  assert.equal(h.calls.filter(path => path.endsWith('/api/workbench/groups')).length, 2);
+  assert.equal(h.calls.filter(path => path.includes('/usage?summary=cost')).length, 2);
+  const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
+  const row = board.children[0], expense = instance.children.find(node => node.classList.contains('wb-cost'));
+  h.stop(); assert.equal(h.intervals.size, 0);
+  groups.resolve(workbenchSnapshot('busy', 'disposed')); cost.resolve({ costSummary: { today: { total: 99 } } });
+  await refresh; await wbTick();
+  assert.equal(board.children[0], row, 'late groups do not redraw the disposed mount');
+  assert.equal(instance.children.find(node => node.classList.contains('wb-cost')), expense, 'late cost does not redraw the disposed mount');
+  assert.equal(h.timeouts.size, 0);
 });
 // Visibility resume and teardown boundary: run for shell lifecycle changes; skip server-only changes. Uses the isolated fake lifecycle above.
 test('workbench shell visibility resumes polling and removes lifecycle listeners', async context => {

@@ -56,7 +56,7 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
   sandbox.addCleanup(() => browser.close());
   const context = await browser.newContext({ viewport: { width: scenario.width, height: 960 }, locale: scenario.locale === 'zh' ? 'zh-CN' : 'en-US' });
   sandbox.addCleanup(() => context.close());
-  let mainCompletedAt = null, groupsCompleted = 0;
+  let mainCompletedAt = null, groupsCompleted = 0, lateCostDelayed = false;
   await context.route('**/*', async route => {
     try {
       const url = new URL(route.request().url());
@@ -73,6 +73,12 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
         // cleanup releases this handler; recovery must come from a later poll.
         await heldGate;
         return await route.abort();
+      }
+      if (scenario.kind === 'cost-late' && pathname === '/api/workbench/usage' && url.searchParams.get('summary') === 'cost' && !lateCostDelayed) {
+        lateCostDelayed = true;
+        await pause(2000);
+        if (closing) return await route.abort();
+        return await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(workbenchAnswer(url, Date.now())) });
       }
       if (scenario.kind === 'parallel' && pathname === mainPath) {
         await pause(8000);
@@ -103,8 +109,10 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
     // Observer and fleet startup legitimately read groups independently. Track
     // the board's own stack separately so those reads do not hide duplicate polls.
     const fetch = window.fetch.bind(window);
-    const observations = window.__startupGroups = { calls: [], active: {}, maxActive: {}, alerts: [] };
+    const observations = window.__startupGroups = { calls: [], active: {}, maxActive: {}, alerts: [], firstRowAt: null };
     const observer = new MutationObserver(() => {
+      const row = document.querySelector('#wb-board .wb-row[data-group]');
+      if (observations.firstRowAt === null && row?.getBoundingClientRect().height > 0) observations.firstRowAt = performance.now();
       const alert = document.querySelector('#wb-board > .wb-empty[role="alert"]');
       if (alert && observations.alerts.length < 5 && observations.alerts.at(-1)?.text !== alert.textContent) observations.alerts.push({ text: alert.textContent, at: performance.now() });
     });
@@ -131,11 +139,36 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
   const start = performance.now();
   await page.goto(base + '/', { waitUntil: 'commit' });
   const labels = pack(scenario.locale);
-  if (scenario.kind === 'timeout') {
+  if (scenario.kind === 'cost-late' || (scenario.kind === 'timeout' && scenario.held === 'cost')) {
+    await page.waitForFunction(() => window.__startupGroups.calls.some(call => call.source === 'board' && call.finished !== null), null, { timeout: 8500 });
+    // A recoupled Promise.allSettled snapshot fails here after one second;
+    // checking only after the cost deadline would miss the blank initial board.
+    await page.locator('#wb-board .wb-row[data-group]').first().waitFor({ state: 'visible', timeout: 1000 });
+    const early = await page.evaluate(() => window.__startupGroups);
+    const firstGroups = early.calls.find(call => call.source === 'board');
+    assert.ok(early.firstRowAt !== null && early.firstRowAt - firstGroups.finished <= 1000, 'groups render within one second of their first board response without waiting for optional cost');
+    assert.equal(early.calls.find(call => call.source === 'cost')?.finished, null, 'groups are visible while the first optional cost response is pending');
+    const expense = page.locator('#wb-instance .wb-cost');
+    assert.equal(await expense.locator('b').count(), 2);
+    for (const value of await expense.locator('b').allTextContents()) assert.equal(value, '—', 'pending optional cost starts blank');
+    assert.equal(early.alerts.length, 0);
+    console.info('Prompt groups observation:', JSON.stringify({ kind: scenario.kind, responseMs: firstGroups.finished, firstRowMs: early.firstRowAt, lagMs: early.firstRowAt - firstGroups.finished }));
+  }
+  if (scenario.kind === 'cost-late') {
+    await page.waitForFunction(() => [...document.querySelectorAll('#wb-instance .wb-cost b')].map(node => node.textContent).join('|') === '$1.50|$9.20', null, { timeout: 3500 });
+    const observations = await page.evaluate(() => window.__startupGroups);
+    const cost = observations.calls.find(call => call.source === 'cost');
+    assert.ok(lateCostDelayed && cost.finished - cost.started >= 2000, 'the successful optional expense response really arrived late');
+    assert.equal(observations.alerts.length, 0, 'late optional expense never produces a board error');
+    assert.equal(observations.maxActive.cost, 1);
+    await page.locator('#wb-board .wb-row[data-group]').first().waitFor({ state: 'visible' });
+  } else if (scenario.kind === 'timeout') {
     const loading = page.locator('#wb-board > .wb-empty[role="status"]');
-    await loading.waitFor({ state: 'visible', timeout: 8500 });
-    assert.equal(await loading.textContent(), labels['wb.board.loading']);
-    assert.equal(await page.locator('.wb-row[data-group]').count(), 0, 'held first board snapshot has not supplied rows');
+    if (scenario.held === 'groups') {
+      await loading.waitFor({ state: 'visible', timeout: 8500 });
+      assert.equal(await loading.textContent(), labels['wb.board.loading']);
+      assert.equal(await page.locator('.wb-row[data-group]').count(), 0, 'held first board snapshot has not supplied rows');
+    }
     assert.ok(heldRequest, 'the intended first board request is actually held');
     const initial = await page.evaluate(() => window.__startupGroups.calls);
     const board = initial.filter(call => call.source === 'board');
