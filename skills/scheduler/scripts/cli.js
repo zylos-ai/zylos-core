@@ -75,6 +75,14 @@ function escapeLike(str) {
   return str.replace(/[%_!]/g, '!$&');
 }
 
+/**
+ * Turn a --name pattern into a GLOB pattern: "*" stays a wildcard, while
+ * the other GLOB metacharacters ("?" and "[") match themselves literally.
+ */
+function nameToGlob(pattern) {
+  return pattern.replace(/[?[]/g, '[$&]');
+}
+
 const ALLOWED_UPDATE_COLUMNS = new Set([
   'name', 'prompt', 'priority', 'require_idle', 'reply_channel', 'reply_endpoint',
   'miss_threshold', 'type', 'cron_expression', 'interval_seconds', 'next_run_at', 'timezone', 'updated_at',
@@ -88,6 +96,7 @@ Usage: ~/zylos/.claude/skills/scheduler/scripts/cli.js <command> [options]
 
 Commands:
   list [options]          List all tasks
+  info <task-id> [--json] Show one task in full (untruncated id and prompt)
   add <prompt> [options]  Add a new task
   update <task-id> [options]  Update an existing task
   remove <task-id>        Remove a task
@@ -103,6 +112,12 @@ List Options:
                           (untruncated id, type, status, last_error, reply_channel,
                           reply_endpoint, next_run_at, ...)
   --reply-channel "<ch>"  Only tasks with this reply channel (works with or without --json)
+  --name "<pattern>"      Only tasks with this exact name; "*" matches any characters
+                          (e.g. "digest-*"). Case-sensitive.
+
+Info Options:
+  --json                  Machine-readable output: the full task row as a JSON object.
+                          Exits 1 when the task is not found or the ID prefix is ambiguous
 
 Add Options:
   --in "<duration>"       One-time: run in X time (e.g., "30 minutes")
@@ -141,6 +156,8 @@ Examples:
   ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --priority 1
   ~/zylos/.claude/skills/scheduler/scripts/cli.js update task-abc --block-queue-until-idle
   ~/zylos/.claude/skills/scheduler/scripts/cli.js done task-abc123
+  ~/zylos/.claude/skills/scheduler/scripts/cli.js list --json --name "digest-*"
+  ~/zylos/.claude/skills/scheduler/scripts/cli.js info task-abc123 --json
 `;
 
 function parseArgs(args) {
@@ -191,6 +208,12 @@ function parseArgs(args) {
 // ===== Commands =====
 
 function cmdList(options = {}) {
+  // An empty --name (e.g. an unset shell variable) must not widen the result to every task
+  if ('name' in options && !options.name) {
+    fail('INVALID_ARGS', '--name requires a non-empty pattern', {}, [], 1);
+    return;
+  }
+
   // Show all active tasks including failed ones (so user can see what timed out)
   let sql = `
     SELECT * FROM tasks
@@ -200,6 +223,10 @@ function cmdList(options = {}) {
   if (options['reply-channel']) {
     sql += ` AND reply_channel = ?`;
     params.push(options['reply-channel']);
+  }
+  if (options.name) {
+    sql += ` AND name GLOB ?`;
+    params.push(nameToGlob(options.name));
   }
   sql += ` ORDER BY priority ASC, next_run_at ASC`;
   const tasks = db.prepare(sql).all(...params);
@@ -232,6 +259,63 @@ function cmdList(options = {}) {
     // Show prompt (truncated to 80 chars)
     const promptPreview = task.prompt.substring(0, 80).replace(/\n/g, ' ');
     console.log(`                    └─ ${promptPreview}${task.prompt.length > 80 ? '...' : ''}`);
+  }
+  console.log();
+}
+
+function describeSchedule(task) {
+  if (task.type === 'recurring') {
+    const description = describeCron(task.cron_expression);
+    return description === task.cron_expression
+      ? `cron ${task.cron_expression}`
+      : `${description} (cron ${task.cron_expression})`;
+  }
+  if (task.type === 'interval') {
+    return `every ${task.interval_seconds}s`;
+  }
+  return 'one-time';
+}
+
+function cmdInfo(taskId, options = {}) {
+  // Partial ID match; completed tasks stay visible here, unlike list
+  const task = findTask(taskId);
+  if (!task) {
+    process.exitCode = 1;
+    return;
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify(task, null, 2));
+    return;
+  }
+
+  const timeWithRelative = (timestamp) =>
+    `${formatTime(timestamp)} (${getRelativeTime(timestamp)})`;
+  const nextRun = task.status === 'completed' ? 'done' : timeWithRelative(task.next_run_at);
+  const reply = task.reply_channel
+    ? [task.reply_channel, task.reply_endpoint].filter(Boolean).join(' ')
+    : 'none';
+
+  console.log(`\n  Task ${task.id} (TZ: ${getDefaultTimezone()}):\n`);
+  console.log(`  Name:           ${task.name}`);
+  console.log(`  Status:         ${task.status}`);
+  console.log(`  Type:           ${task.type}`);
+  console.log(`  Schedule:       ${describeSchedule(task)}`);
+  console.log(`  Priority:       ${task.priority}`);
+  console.log(`  Next run:       ${nextRun}`);
+  console.log(`  Last run:       ${task.last_run_at ? timeWithRelative(task.last_run_at) : 'never'}`);
+  console.log(`  Block queue:    ${task.require_idle ? 'until idle' : 'no'}`);
+  console.log(`  Miss threshold: ${task.miss_threshold}s`);
+  console.log(`  Reply:          ${reply}`);
+  if (task.last_error) {
+    const failedAt = task.failed_at ? ` (${formatTime(task.failed_at)})` : '';
+    console.log(`  Last error:     ${task.last_error}${failedAt}`);
+  }
+  console.log(`  Created:        ${formatTime(task.created_at)}`);
+  console.log(`  Updated:        ${formatTime(task.updated_at)}`);
+  console.log('\n  Prompt:');
+  for (const line of task.prompt.split('\n')) {
+    console.log(`    ${line}`);
   }
   console.log();
 }
@@ -703,6 +787,8 @@ function main() {
     db = getDb();
     switch (command) {
       case 'list': cmdList(options); break;
+      case 'info':
+      case 'get': cmdInfo(args[0], options); break;
       case 'add': cmdAdd(args, options); break;
       case 'update': cmdUpdate(args[0], options); break;
       case 'remove':
