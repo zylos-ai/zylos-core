@@ -109,6 +109,8 @@ test('the staging name holding files that are not in the saved original package 
   for (const change of [
     staging => fs.writeFileSync(path.join(staging, 'cli/lib/extra.js'), 'new\n'),
     staging => fs.writeFileSync(path.join(staging, 'cli/lib/index.js'), 'export const changed = 1;\n'),
+    // Same size, different bytes.
+    staging => fs.writeFileSync(path.join(staging, 'node_modules/dep/index.js'), 'module.exports = 2;\n'),
     staging => fs.writeFileSync(path.join(staging, 'package.json'), JSON.stringify({name:'zylos', version:'9.9.9'})),
     staging => { fs.rmSync(path.join(staging, 'node_modules/zylos-link')); fs.symlinkSync('../package.json', path.join(staging, 'node_modules/zylos-link')); },
     staging => { fs.rmSync(path.join(staging, 'cli/lib/index.js')); fs.mkdirSync(path.join(staging, 'cli/lib/index.js')); },
@@ -157,6 +159,8 @@ function recoveryFixture(t) {
   const recovery = require(path.join(f.dir, 'runner.cjs'));
   const events = [];
   f.m.restoreOriginalPackage = () => events.push('restore-package');
+  const removeStaging = f.m.removeInterruptedInstallStaging;
+  f.m.removeInterruptedInstallStaging = (...args) => { events.push('remove-staging'); return removeStaging(...args); };
   f.m.start = () => events.push('start');
   f.m.verifyServices = () => events.push('verify');
   f.m.stop = () => events.push('stop');
@@ -172,7 +176,37 @@ test('recovery removes the staging directory after restoring the original packag
   assert.equal(result.recovery_required, false);
   assert.equal(result.warnings, undefined);
   assert.equal(fs.existsSync(f.staging), false);
-  assert.deepEqual(f.events, ['restore-package', 'start', 'verify']);
+  assert.deepEqual(f.events, ['restore-package', 'remove-staging', 'start', 'verify']);
+});
+
+test('recovery leaves the staging directory untouched when restoring the original package fails', t => {
+  const f = recoveryFixture(t);
+  leaveMovedAsideCopy(f);
+  // restoreOriginalPackage first confirms the installer's process group has exited; until it has, npm may still be
+  // using the directory.
+  f.m.restoreOriginalPackage = () => { f.events.push('restore-package'); throw Error('installer exit cannot be confirmed'); };
+  const before = f.m.treeHash(f.staging, {excludeNodeModules:false, includeModes:true});
+  // This fixture's journal holds only what the cleanup reads; the failure path re-reads it without full validation.
+  f.m.transaction = () => f.m.read(path.join(f.dir, 'journal.json'));
+  const result = f.recovery.validateReady(f.dir, f.j);
+  assert.equal(result.completed, false);
+  assert.equal(result.recovery_required, true);
+  assert.match(result.error, /installer exit cannot be confirmed/);
+  assert.deepEqual(f.events.filter(event => event !== 'stop'), ['restore-package'], 'no cleanup and no start after the failed restore');
+  assert.equal(f.m.treeHash(f.staging, {excludeNodeModules:false, includeModes:true}), before);
+});
+
+test('recovery reports a staging directory it could not remove even when every service is online', t => {
+  const f = recoveryFixture(t);
+  leaveMovedAsideCopy(f);
+  fs.writeFileSync(path.join(f.staging, 'cli/lib/extra.js'), 'new\n');
+  const result = f.recovery.validateReady(f.dir, f.j);
+  assert.equal(result.completed, true);
+  assert.equal(f.j.serviceWarnings, undefined);
+  assert.equal(result.warnings.length, 1);
+  assert.ok(result.warnings[0].includes(f.staging), result.warnings[0]);
+  assert.match(result.warnings[0], /ENOTEMPTY/);
+  assert.equal(fs.existsSync(f.staging), true);
 });
 
 test('recovery still completes when the staging directory cannot be removed and reports why', t => {
