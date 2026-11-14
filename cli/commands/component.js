@@ -9,7 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
-import { loadComponents, saveComponents } from '../lib/components.js';
+import { loadComponents, recordedSource, saveComponents } from '../lib/components.js';
 import { checkForUpdates, getLocalSourceUpgradeError, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates,
@@ -829,6 +829,7 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
       if (components[component]) {
         components[component].version = result.to || components[component].version;
         components[component].upgradedAt = new Date().toISOString();
+        components[component].source = recordedSource({ type: 'github-release', repo }, dlResult.source);
 
         // Update bin symlinks (remove old, create new)
         const oldBin = components[component].bin;

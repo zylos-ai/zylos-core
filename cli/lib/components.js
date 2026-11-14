@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { COMPONENTS_FILE } from './config.js';
 import { loadRegistry, loadLocalRegistry } from './registry.js';
 import { fetchLatestTag } from './github.js';
-import { inspectLocalSource, resolveLocalPath } from './download.js';
+import { inspectLocalSource, releaseTag, resolveLocalPath } from './download.js';
 
 /**
  * Load installed components from components.json
@@ -22,6 +22,27 @@ export function loadComponents() {
     }
   }
   return {};
+}
+
+/**
+ * The `source` to record in components.json after an install or upgrade succeeded: where the code now on this
+ * machine came from, not where the component was first installed from.
+ *
+ * `source` is what was asked for; `acquired` is what the download reports it actually fetched (`ref`, `refType`,
+ * `commit`). A GitHub record names the tag or branch actually downloaded — the release tag with its `v`, or `main`
+ * when the tag download fell back to the main branch — and the full commit id of the installed code. `commit` is
+ * null whenever the download cannot say which commit it was: it is never guessed and never carried over.
+ *
+ * @param {object} source
+ * @param {{ ref?: string, refType?: 'tag'|'branch', commit?: string|null }} [acquired]
+ * @returns {object}
+ */
+export function recordedSource(source, acquired = {}) {
+  const commit = acquired.commit ?? null;
+  if (source?.type !== 'github-release') return { ...source, commit };
+  const refType = acquired.refType ?? source.refType;
+  const ref = acquired.ref ?? (source.refType === 'tag' ? releaseTag(source.ref) : source.ref);
+  return { type: source.type, repo: source.repo, ref, refType, commit };
 }
 
 /**

@@ -8,6 +8,7 @@ import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-t
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
+import zlib from 'node:zlib';
 import { getGitHubToken, sanitizeError, withRateLimitRetrySync } from './github.js';
 import { githubUrl, getUpstreamSnapshot } from './upstreams.js';
 import { githubRequestSync } from './github-http.js';
@@ -75,16 +76,71 @@ function curlDownloadOnce(repo, ref, refType, tarballPath, snapshot) {
   githubRequestSync(apiUrl, { token, output: tarballPath, timeout: 60000, snapshot });
 }
 
+/** The release tag a version is downloaded from: "1.0.0" and "v1.0.0" are both tag "v1.0.0". */
+export function releaseTag(version) {
+  return version.startsWith('v') ? version : `v${version}`;
+}
+
+// A GitHub archive, like any `git archive` tarball, starts with a pax global header whose `comment` record is the full
+// id of the commit it was made from. The header sits in the first few hundred bytes, so only the start is inflated.
+const ARCHIVE_HEAD_BYTES = 64 * 1024;
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * The commit a .tar.gz archive was made from, read from its pax global header; null when the archive does not say
+ * (made by plain `tar`, or unreadable). Never guessed from names or other files.
+ *
+ * @param {string} tarballPath
+ * @returns {string|null}
+ */
+export function archiveCommit(tarballPath) {
+  let fd;
+  try {
+    fd = fs.openSync(tarballPath, 'r');
+    const head = Buffer.alloc(ARCHIVE_HEAD_BYTES);
+    const read = fs.readSync(fd, head, 0, head.length, 0);
+    const tar = zlib.gunzipSync(head.subarray(0, read), { finishFlush: zlib.constants.Z_SYNC_FLUSH });
+    return paxCommit(tar);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function paxCommit(tar) {
+  // ustar header: type flag at 156 ('g' = pax global header), octal body size at 124..136; the body follows at 512.
+  if (tar.length < 512 || tar[156] !== 0x67) return null;
+  const size = Number.parseInt(tar.subarray(124, 136).toString('latin1').replace(/\0[\s\S]*$/, '').trim(), 8);
+  if (!Number.isSafeInteger(size) || size <= 0 || 512 + size > tar.length) return null;
+  const body = tar.subarray(512, 512 + size);
+  // Records are "<byte length> <key>=<value>\n".
+  for (let at = 0; at < body.length;) {
+    const space = body.indexOf(0x20, at);
+    const length = Number(body.subarray(at, space).toString('latin1'));
+    if (space < 0 || !Number.isSafeInteger(length) || length <= space - at + 1 || at + length > body.length) return null;
+    const record = body.subarray(space + 1, at + length - 1).toString('utf8');
+    const equals = record.indexOf('=');
+    if (equals > 0 && record.slice(0, equals) === 'comment') {
+      const commit = record.slice(equals + 1).trim().toLowerCase();
+      return COMMIT_ID.test(commit) ? commit : null;
+    }
+    at += length;
+  }
+  return null;
+}
+
 /**
  * Download a GitHub archive tarball and extract it.
  *
  * @param {string} repo - GitHub repo in "org/name" format
  * @param {string} version - Version tag (e.g. "1.0.0", will be prefixed with "v")
  * @param {string} destDir - Destination directory to extract into
- * @returns {{ success: boolean, extractedDir: string, error?: string }}
+ * @returns {{ success: boolean, extractedDir: string, ref?: string, refType?: 'tag', commit?: string|null, error?: string }}
+ *   On success, `ref` is the tag downloaded and `commit` the commit the archive says it was made from.
  */
 export function downloadArchive(repo, version, destDir) {
-  const tag = version.startsWith('v') ? version : `v${version}`;
+  const tag = releaseTag(version);
   let tmpDir;
   try {
     tmpDir = createDownloadTmpDir();
@@ -100,9 +156,10 @@ export function downloadArchive(repo, version, destDir) {
   try {
     fs.mkdirSync(destDir, { recursive: true });
     curlDownload(repo, tag, 'tag', tarballPath);
+    const commit = archiveCommit(tarballPath);
     const result = extractTarball(tarballPath, destDir);
     removeOwnedTree(path.dirname(tmpDir), tmpDir);
-    return result;
+    return result.success ? { ...result, ref: tag, refType: 'tag', commit } : result;
   } catch (err) {
     removeOwnedTree(path.dirname(tmpDir), tmpDir);
     return {
@@ -237,7 +294,8 @@ registerSourceResolver('local-tarball', {
  * @param {string} repo - GitHub repo in "org/name" format
  * @param {string} branch - Branch name (e.g. "main")
  * @param {string} destDir - Destination directory to extract into
- * @returns {{ success: boolean, extractedDir: string, error?: string }}
+ * @returns {{ success: boolean, extractedDir: string, ref?: string, refType?: 'branch', commit?: string|null, error?: string }}
+ *   On success, `commit` is the commit the branch archive was made from: the branch moves, the record must not.
  */
 export function downloadBranch(repo, branch, destDir) {
   let tmpDir;
@@ -255,9 +313,10 @@ export function downloadBranch(repo, branch, destDir) {
   try {
     fs.mkdirSync(destDir, { recursive: true });
     curlDownload(repo, branch, 'branch', tarballPath);
+    const commit = archiveCommit(tarballPath);
     const result = extractTarball(tarballPath, destDir);
     removeOwnedTree(path.dirname(tmpDir), tmpDir);
-    return result;
+    return result.success ? { ...result, ref: branch, refType: 'branch', commit } : result;
   } catch (err) {
     removeOwnedTree(path.dirname(tmpDir), tmpDir);
     return {
@@ -380,7 +439,7 @@ function extractLocalTarball(tarballPath, destDir) {
     const args = ['xzf', srcPath, '-C', destDir];
     if (hasSingleWrapper) args.push('--strip-components=1');
     execFileSync('tar', args, { timeout: 30000, stdio: 'pipe' });
-    return { success: true, extractedDir: destDir };
+    return { success: true, extractedDir: destDir, commit: archiveCommit(srcPath) };
   } catch (err) {
     return {
       success: false,

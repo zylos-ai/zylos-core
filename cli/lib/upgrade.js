@@ -204,7 +204,9 @@ export function getAllowedTmpRoots() {
  * @param {string} repo - GitHub repo (org/name)
  * @param {string} version - Version to download
  * @param {string} [branch] - Optional branch to download from (skips version tag)
- * @returns {{ success: boolean, tempDir?: string, error?: string }}
+ * @returns {{ success: boolean, tempDir?: string, source?: { ref: string, refType: 'tag'|'branch', commit: string|null }, error?: string }}
+ *   On success, `source` says what was actually downloaded: the branch, the release tag, or `main` when the tag
+ *   download failed and the main branch was fetched instead.
  */
 export function downloadToTemp(repo, version, branch) {
   let base = os.tmpdir();
@@ -226,7 +228,7 @@ export function downloadToTemp(repo, version, branch) {
       removeOwnedTree(base, tempDir);
       return { success: false, error: branchResult.error };
     }
-    return { success: true, tempDir };
+    return { success: true, tempDir, source: fetchedSource(branchResult) };
   }
 
   const result = downloadArchive(repo, version, tempDir);
@@ -237,9 +239,14 @@ export function downloadToTemp(repo, version, branch) {
       removeOwnedTree(base, tempDir);
       return { success: false, error: result.error };
     }
+    return { success: true, tempDir, source: fetchedSource(branchResult) };
   }
 
-  return { success: true, tempDir };
+  return { success: true, tempDir, source: fetchedSource(result) };
+}
+
+function fetchedSource({ ref, refType, commit }) {
+  return { ref, refType, commit: commit ?? null };
 }
 
 // ---------------------------------------------------------------------------
