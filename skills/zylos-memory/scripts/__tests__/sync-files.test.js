@@ -114,12 +114,18 @@ test('invalid follow-up input does not replace state or remove segments', async 
 
 test('missing/invalid temporary state rejects before publication and deletion', async t => {
   const f = await fixture(t), original = write(f);
+  const corrected = fs.readFileSync(f.temporary, 'utf8');
   for (const content of [null, 'broken', f.skeleton().replace('## Commitments', 'wrong'), f.skeleton().replace('scope=telegram:test', 'scope=origin')]) {
     if (content === null) fs.unlinkSync(f.temporary); else fs.writeFileSync(f.temporary, content);
     await assert.rejects(commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps), { code: 'STATE_DOCUMENT_INVALID' });
     assert.equal(fs.readFileSync(f.state, 'utf8'), original);
     assert.equal(fs.existsSync(path.join(f.memoryDir, `inbox.${segment}.md`)), true);
+    if (content !== null) assert.equal(fs.readFileSync(f.temporary, 'utf8'), content);
   }
+  fs.writeFileSync(f.temporary, corrected);
+  assert.equal((await commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps)).committed, true);
+  assert.match(fs.readFileSync(f.state, 'utf8'), /Updated/);
+  assert.equal(fs.existsSync(path.join(f.memoryDir, `inbox.${segment}.md`)), false);
 });
 
 test('absent official file accepts empty follow-ups, unknown ID remains invalid', async t => {

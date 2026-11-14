@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { guard, memoryError, requireSyncToken } from './sync-lock.js';
-import { inputError, isMain, options, parseJson, readInput, runCli } from './sync-cli.js';
+import { helpRequested, inputError, isMain, options, parseJson, readInput, runCli } from './sync-cli.js';
 import { list } from './sync-files.js';
 import { verifyOriginReceipts } from '../../comm-bridge/scripts/c4-sync-batch.js';
 
@@ -23,6 +23,10 @@ export async function advance({ group, input, ...settings }, deps = {}) {
   });
 }
 if (isMain(import.meta.url)) await runCli(async () => {
+  if (helpRequested(process.argv.slice(2), ['group', 'token'])) {
+    process.stdout.write('Usage: origin-cursor.js advance --group G --token TOKEN < JSON\n');
+    return;
+  }
   const [command, ...args] = process.argv.slice(2), parsed = options(args, ['group', 'token']);
   if (command !== 'advance' || parsed.positional.length || !Object.hasOwn(parsed, 'group')) throw inputError('Invalid command or arguments');
   requireSyncToken(parsed.token);

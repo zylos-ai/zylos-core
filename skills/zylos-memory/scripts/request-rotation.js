@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
 import { IDENTITY_ROTATION_PROMPT } from './sync-prompts.js';
-import { memoryError as failure, isMain, options, runCli } from './sync-cli.js';
+import { helpRequested, memoryError as failure, isMain, options, runCli } from './sync-cli.js';
 
 
 async function defaultDependencies() {
@@ -59,6 +59,10 @@ export function printRotationResult({ enqueued, skipped }, write = console.log) 
 }
 
 if (isMain(import.meta.url)) await runCli(async () => {
+  if (helpRequested(process.argv.slice(2), ['reason'])) {
+    process.stdout.write('Usage: request-rotation.js --reason identity\n');
+    return;
+  }
   const parsed = options(process.argv.slice(2), ['reason']);
   if (parsed.positional.length || parsed.reason !== 'identity') throw failure('INVALID_INPUT', 'Usage: request-rotation.js --reason identity');
   printRotationResult(await requestRotation({ reason: parsed.reason }));

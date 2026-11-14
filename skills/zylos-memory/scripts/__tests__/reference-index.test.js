@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createPage, rebuild, movePage, moveOld } from '../reference-index.js';
+import { createPage, rebuild, movePage, moveOld, checkNavigation } from '../reference-index.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reference-'));
@@ -16,6 +16,129 @@ function fixture(t) {
 }
 const page = (kind, title, status, date, extra = '') => `# ${title}\n<!-- zylos:entry kind=${kind} -->\n- **Status:** ${status}\n- **Updated:** ${date}\n${extra}\n\nBody remains unchanged.\n`;
 const code = expected => error => error.code === expected;
+
+test('navigation check reports old paths and heading pointers, then clears after correction', t => {
+  const f = fixture(t);
+  f.write('references.md', '# References\nRead ~/zylos/memory/reference/projects.md (read-only history).\nRead [decisions](/home/agent/zylos/memory/reference/decisions.md#choice).\n');
+  f.write('identity.md', 'See projects.md#current-work\n');
+  f.write('reference/projects/current.md', 'See reference/decisions.md#old-choice\n');
+  f.write('users/member/profile.md', 'See decisions.md:42\n');
+  for (const relative of ['reference/legacy/old.md',
+    'reference/projects/INDEX.md', 'session-groups/other/state.md', 'sessions/2026-01-01.md']) {
+    f.write(relative, 'reference/projects.md#historical\n');
+  }
+  f.write('reference/notes.md', 'See projects.md for Project Alpha\nSee reference/legacy/projects.md#old\n');
+  f.write('reference/projects/archive/old.md', 'See reference/projects.md#archived\n');
+  fs.mkdirSync(f.target('reference/projects.md'), { recursive: true });
+  fs.symlinkSync('/unreadable-old-file', f.target('reference/decisions.md'));
+  const before = f.read('references.md');
+  const result = checkNavigation(f.root);
+  assert.equal(result.navigation.count, 2);
+  assert.deepEqual(result.navigation.locations.map(row => [row.path, row.line]), [['references.md', 2], ['references.md', 3]]);
+  assert.equal(result.headings.count, 7);
+  assert.equal(result.headings.locations.some(row => row.path === 'reference/projects/archive/old.md'), true);
+  assert.equal(result.headings.locations.some(row => row.path.startsWith('session-groups/')), false);
+  assert.equal(f.read('references.md'), before);
+  assert.equal(fs.existsSync(path.join(f.root, '.zylos')), false);
+  f.write('references.md', 'Read reference/projects/INDEX.md and reference/decisions/INDEX.md\n');
+  f.write('identity.md', 'See reference/projects/current.md\n');
+  f.write('reference/projects/current.md', 'See reference/decisions/choice.md\n');
+  f.write('users/member/profile.md', 'See reference/legacy/decisions-before-split.md#preferences\n');
+  f.write('reference/projects/archive/old.md', 'See reference/projects/current.md\n');
+  f.write('reference/notes.md', 'See reference/projects/current.md for Project Alpha\nSee reference/legacy/projects.md#old\n');
+  assert.deepEqual(checkNavigation(f.root), { navigation: { count: 0, locations: [] }, headings: { count: 0, locations: [] } });
+  const cli = new URL('../reference-index.js', import.meta.url);
+  const run = () => spawnSync(process.execPath, [cli.pathname, 'check-navigation'], {
+    env: { ...process.env, ZYLOS_DIR: f.root }, encoding: 'utf8', timeout: 10000,
+  });
+  let output = run();
+  assert.equal(output.status, 0, output.stderr);
+  assert.equal(JSON.parse(output.stdout).navigation.count, 0);
+  f.write('references.md', 'Read reference/projects.md\n');
+  output = run();
+  assert.equal(output.status, 0, output.stderr);
+  assert.equal(JSON.parse(output.stdout).navigation.count, 1);
+});
+
+test('navigation check excludes only formatted migration provenance fields', t => {
+  const f = fixture(t);
+  const page = 'reference/projects/current.md';
+  const provenance = [
+    '- **Moved from:** projects.md "Old project"',
+    '- **Moved from:** decisions.md \u201cOld decision\u201d',
+    '- **Moved from:** projects.md \u201cA\u201d, projects.md \u201cB\u201d',
+    '- **Moved from:** decisions.md \u201cA\u201d(tag final TG7708); \u201cB\u201d; \u201cC\u201d',
+    '- **Moved from:** projects.md \u201cA\u201d\uff08S2b/S2c, lines 4232\u20134246\uff09',
+    '- **Moved from:** projects.md "A", decisions.md "B" (details)',
+  ].join('\n') + '\n';
+  f.write(page, provenance);
+  assert.deepEqual(checkNavigation(f.root), { navigation: { count: 0, locations: [] }, headings: { count: 0, locations: [] } });
+  f.write(page, provenance + 'See projects.md#old-project\n');
+  const result = checkNavigation(f.root);
+  assert.equal(result.headings.count, 1);
+  assert.deepEqual(result.headings.locations.map(row => [row.path, row.line]), [[page, 7]]);
+  for (const text of [
+    'Moved from projects.md "Old project"',
+    '- **Moved from:** projects.md#old-project',
+    '- **Moved from:** projects.md "Old project"; see decisions.md#real',
+    '- **Moved from:** projects.md "A", projects.md "B"; see decisions.md#real',
+    'See - **Moved from:** projects.md "Old project"',
+  ]) {
+    f.write(page, text + '\n');
+    assert.equal(checkNavigation(f.root).headings.count, 1, text);
+  }
+});
+
+test('navigation check skips missing inputs and refuses symlink traversal', t => {
+  const f = fixture(t);
+  assert.equal(checkNavigation(f.root).navigation.count, 0);
+  f.write('reference/notes.md', 'reference/projects.md#old\n');
+  fs.symlinkSync(f.target('reference/notes.md'), f.target('references.md'));
+  assert.throws(() => checkNavigation(f.root), code('PATH_NOT_ALLOWED'));
+});
+
+test('navigation check recognizes markup and prose punctuation without matching other filenames', t => {
+  const f = fixture(t);
+  f.write('references.md', [
+    'See **reference/projects.md**.',
+    'See reference/decisions.md\u3002',
+    'See `reference/projects.md`\uFF1A42',
+    'Keep reference/projects.md.backup and reference/decisions.md-old.',
+    'Keep reference/projects.md/child and reference/legacy/projects.md.',
+  ].join('\n'));
+  const result = checkNavigation(f.root);
+  assert.equal(result.navigation.count, 3);
+  assert.deepEqual(result.navigation.locations.map(row => row.line), [1, 2, 3]);
+  assert.equal(result.headings.count, 3);
+});
+
+test('navigation check excludes only actual legacy sources and generated indexes', t => {
+  const f = fixture(t);
+  for (const relative of ['users/legacy/profile.md', 'reference/notes/INDEX.md']) {
+    f.write(relative, 'See reference/projects.md\n');
+  }
+  for (const relative of ['reference/legacy/old.md', 'reference/projects/archive/INDEX.md']) {
+    f.write(relative, 'See reference/projects.md\n');
+  }
+  const result = checkNavigation(f.root);
+  assert.equal(result.navigation.count, 0);
+  assert.deepEqual(result.headings.locations.map(row => row.path),
+    ['reference/notes/INDEX.md', 'users/legacy/profile.md']);
+});
+
+test('navigation check counts old paths beneath archive or legacy parent directories', t => {
+  const f = fixture(t);
+  f.write('references.md', [
+    'See /srv/archive/zylos/memory/reference/projects.md#active',
+    'See /srv/legacy/zylos/memory/reference/decisions.md#active',
+    'Keep /srv/archive/zylos/memory/reference/legacy/projects.md#history',
+    'Keep /srv/legacy/zylos/memory/reference/projects/archive/decisions.md#history',
+  ].join('\n'));
+  const result = checkNavigation(f.root);
+  assert.equal(result.navigation.count, 2);
+  assert.equal(result.headings.count, 2);
+  assert.deepEqual(result.navigation.locations.map(row => row.line), [1, 2]);
+});
 
 test('rebuild creates four empty indexes without reading old files', t => {
   const f = fixture(t);
@@ -138,6 +261,24 @@ test('move-old collision preserves all old files and the existing archive', t =>
   assert.equal(f.read('reference/projects.md'), 'projects bytes'); assert.equal(f.read('reference/decisions.md'), 'decisions bytes');
   assert.equal(f.read(target), 'existing archive');
   assert.equal(fs.readdirSync(f.target('reference/legacy')).length, 1);
+});
+
+test('move-old reports a late collision after retaining an earlier completed move', t => {
+  const f = fixture(t), now = new Date(2026, 10, 11, 10, 15, 30);
+  f.write('reference/projects.md', 'project bytes');
+  f.write('reference/decisions.md', 'decision bytes');
+  const project = 'reference/legacy/projects-before-split-20261111-101530.md';
+  const decision = 'reference/legacy/decisions-before-split-20261111-101530.md';
+  const link = fs.linkSync;
+  t.mock.method(fs, 'linkSync', (source, destination) => {
+    if (destination === f.target(decision)) fs.writeFileSync(destination, 'concurrent archive', { flag: 'wx' });
+    return link(source, destination);
+  });
+  assert.throws(() => moveOld(f.root, now), code('EXISTS'));
+  assert.equal(f.read(project), 'project bytes');
+  assert.equal(fs.existsSync(f.target('reference/projects.md')), false);
+  assert.equal(f.read('reference/decisions.md'), 'decision bytes');
+  assert.equal(f.read(decision), 'concurrent archive');
 });
 
 test('reference operations reject symlinks escaping their permitted destinations', t => {

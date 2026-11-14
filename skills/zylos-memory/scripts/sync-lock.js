@@ -7,7 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { resolveCoreConfigModule } from '../../comm-bridge/scripts/core-config-loader.js';
 
 export const MARKER_TTL_MS = 1800000;
-import { memoryError, reportMemoryError, isMain, options, runCli } from './sync-cli.js';
+import { helpRequested, memoryError, reportMemoryError, isMain, options, runCli } from './sync-cli.js';
 export { memoryError, reportMemoryError } from './sync-cli.js';
 
 // The child only acquires a lock on an inherited descriptor. It exits before
@@ -205,6 +205,10 @@ export async function status({ group, env = process.env } = {}, { currentRunId =
 }
 
 if (isMain(import.meta.url)) await runCli(async () => {
+  if (helpRequested(process.argv.slice(2), ['kind', 'token', 'group'])) {
+    process.stdout.write('Usage: sync-lock.js status [--group G] [--json] | acquire --kind group|origin|global | release --kind group|origin|global --token TOKEN\n');
+    return;
+  }
   const [command, ...args] = process.argv.slice(2);
   const values = options(args, ['kind', 'token', 'group'], ['json']);
   if (values.positional.length) throw memoryError('INVALID_INPUT', 'Unexpected positional arguments');

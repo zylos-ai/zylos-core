@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadTimezoneFromEnv } from './shared.js';
-import { isMain, readInput, runCli } from './sync-cli.js';
+import { helpRequested, isMain, readInput, runCli } from './sync-cli.js';
 import { memoryScope, memoryError, withMemoryLock } from './sync-lock.js';
 
 function timeParts(root, env, now) {
@@ -81,6 +81,10 @@ export async function appendSession({ content, env = process.env, waitMs }, { no
 }
 
 if (isMain(import.meta.url)) await runCli(async () => {
+  if (helpRequested(process.argv.slice(2), ['kind'])) {
+    process.stdout.write('Usage: memory-append.js inbox --kind commitment|decision|fact | session\nContent is read from stdin.\n');
+    return;
+  }
   const [command, ...args] = process.argv.slice(2);
   const content = readInput();
   let result;

@@ -14,6 +14,57 @@ const rootPath = fileURLToPath(new URL('../../../../', import.meta.url));
 function run(script, args, env, input = '') {
   return spawnSync(process.execPath, [fileURLToPath(new URL(`../${script}.js`, import.meta.url)), ...args], { env, input, encoding: 'utf8', timeout: 15000 });
 }
+
+// Real CLI boundary: listing ignores supplied token values, while every write
+// command still requires one before reading stdin or touching a lock/database.
+// Run for sync-files argument changes; skip otherwise. No tmux server is needed;
+// all runtime paths are private and the fixture is removed with the test.
+test('list ignores optional tokens while write commands still require a token', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-cli-list-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: path.join(dir, 'home'), ZYLOS_DIR: path.join(dir, 'zylos'),
+    PM2_HOME: path.join(dir, 'pm2'), TMPDIR: path.join(dir, 'tmp'),
+    TMUX_TMPDIR: process.env.TMUX_TMPDIR, ZYLOS_PACKAGE_ROOT: rootPath,
+    ZYLOS_RUN_ID: 'list-only', ZYLOS_SESSION_GROUP: 'origin' };
+  for (const key of ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key], { recursive: true });
+  const memoryDir = path.join(env.ZYLOS_DIR, 'memory/session-groups/origin');
+  fs.mkdirSync(memoryDir, { recursive: true });
+  const segments = ['20261113T010203000Z', '20261113T010204000Z'];
+  for (const segment of segments) fs.writeFileSync(path.join(memoryDir, `inbox.${segment}.md`), segment);
+  fs.writeFileSync(path.join(memoryDir, 'inbox.md'), 'active inbox');
+  const baseline = run('sync-files', ['list'], env);
+  assert.equal(baseline.error, undefined);
+  assert.equal(baseline.status, 0, baseline.stderr);
+  assert.equal(baseline.stderr, '');
+  const listed = JSON.parse(baseline.stdout);
+  assert.equal(listed.scope, 'origin');
+  assert.equal(listed.statePath, path.join(memoryDir, 'state.md'));
+  assert.deepEqual(listed.segments.map(entry => entry.id), segments);
+  assert.deepEqual(listed.sessions, []);
+  for (const entry of listed.segments) {
+    assert.equal(entry.path, path.join(memoryDir, `inbox.${entry.id}.md`));
+    assert.equal(entry.bytes, Buffer.byteLength(entry.id));
+    assert.match(entry.sha256, /^[a-f0-9]{64}$/);
+  }
+  for (const token of ['not-a-token', 'b'.repeat(32), '', '-h']) {
+    const result = run('sync-files', ['list', '--token', token], env);
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    assert.equal(result.stdout, baseline.stdout);
+  }
+  for (const args of [['cleanup'], ['rotate'], ['checkpoint', '1', '--no-content'], ['commit']]) {
+    const result = run('sync-files', args, env, 'not valid JSON');
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.stderr, 'Error [INVALID_INPUT]: token is required: pass the T printed by sync-lock.js acquire\n');
+    assert.equal(result.stdout, '');
+  }
+  assert.deepEqual(fs.readdirSync(env.ZYLOS_DIR), ['memory']);
+  assert.deepEqual(fs.readdirSync(memoryDir).sort(), ['inbox.md', ...segments.map(id => `inbox.${id}.md`)].sort());
+  for (const segment of segments) assert.equal(fs.readFileSync(path.join(memoryDir, `inbox.${segment}.md`), 'utf8'), segment);
+  assert.equal(fs.readFileSync(path.join(memoryDir, 'inbox.md'), 'utf8'), 'active inbox');
+});
 // Integration boundary: real CLI + private tmux identity + temporary memory.
 // Run when sync CLI errors/lock handling change; skip for unrelated changes.
 // readyTmuxTarget owns and cleans its private socket, session and fixture root.

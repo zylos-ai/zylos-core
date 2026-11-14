@@ -7,6 +7,16 @@ export const memoryError = (code, message, extra = {}) => Object.assign(new Erro
 export const inputError = message => memoryError('INVALID_INPUT', message);
 export const isMain = isMainModule;
 export const readInput = () => fs.readFileSync(0, 'utf8');
+export function helpRequested(argv, values = []) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--') return false;
+    if (arg === '--help' || arg === '-h') return true;
+    if (values.includes(arg.slice(2)) && arg.startsWith('--') &&
+        argv[i + 1] !== undefined && !argv[i + 1].startsWith('--')) i++;
+  }
+  return false;
+}
 export function nonnegativeInteger(value, name) {
   if (typeof value !== 'string' || !/^[0-9]+$/.test(value) ||
       !Number.isSafeInteger(Number(value)) || Number(value) < 0) {

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { verifyBatchReceipt } from '../../comm-bridge/scripts/c4-sync-batch.js';
 import { guard, memoryScope, memoryError, requireSyncToken } from './sync-lock.js';
 import { parseStateHeader, validateStateDocument, absorbedTitle, absorbedEntry, inboxSegmentName as segment } from './state-format.js';
-import { inputError, isMain, options, parseJson, nonnegativeInteger, readInput, runCli } from './sync-cli.js';
+import { helpRequested, inputError, isMain, options, parseJson, nonnegativeInteger, readInput, runCli } from './sync-cli.js';
 import { loadTimezoneFromEnv, dateInTimeZone } from './shared.js';
 
 const warn = message => console.error(`Warning: ${message}`);
@@ -164,9 +164,13 @@ export async function commit({ input, ...settings }, deps = {}) {
 }
 
 if (isMain(import.meta.url)) await runCli(async () => {
+  if (helpRequested(process.argv.slice(2), ['token', 'group', 'batch'])) {
+    console.log('Usage: sync-files.js list [--token T] [--group G] | cleanup --token T | rotate --token T | checkpoint END --token T --batch JSON [--no-content] < summary | commit --token T < JSON');
+    return;
+  }
   const [command, ...args] = process.argv.slice(2);
   const parsed = options(args, command === 'checkpoint' ? ['token', 'batch'] : command === 'list' ? ['token', 'group'] : ['token'], command === 'checkpoint' ? ['no-content'] : []);
-  if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0) || (command === 'list' && parsed.token)) throw inputError('Invalid command or arguments');
+  if (!['cleanup', 'rotate', 'list', 'checkpoint', 'commit'].includes(command) || parsed.positional.length !== (command === 'checkpoint' ? 1 : 0)) throw inputError('Invalid command or arguments');
   if (command !== 'list') requireSyncToken(parsed.token);
   const settings = { token: parsed.token };
   let result;

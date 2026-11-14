@@ -37,6 +37,33 @@ function withTmpDir(fn) {
 }
 
 describe('c4-db recent', () => {
+  it('preserves literal help text after the insert positional boundary', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const result = spawnSync(process.execPath,
+        [DB_CLI_PATH, 'insert', '--', 'in', 'system', 'null', '-h'],
+        { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /^Inserted:/);
+      const database = new Database(path.join(tmpDir, 'comm-bridge', 'c4.db'), { readonly: true });
+      try {
+        assert.equal(database.prepare('SELECT content FROM conversations').get().content, '-h');
+      } finally { database.close(); }
+    });
+  });
+
+  it('validates help-like option values instead of treating them as flags', () => {
+    withTmpDir(({ tmpDir, env }) => {
+      const result = spawnSync(process.execPath,
+        [DB_CLI_PATH, 'groups', '--limit', '-h', '--json'],
+        { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 10000 });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 1);
+      assert.equal(JSON.parse(result.stdout).error.code, 'INVALID_ARGS');
+      assert.equal(fs.existsSync(path.join(tmpDir, 'comm-bridge', 'c4.db')), false);
+    });
+  });
+
   it('returns the latest N conversations in chronological order', () => {
     withTmpDir(({ env }) => {
       for (let i = 1; i <= 4; i++) {
