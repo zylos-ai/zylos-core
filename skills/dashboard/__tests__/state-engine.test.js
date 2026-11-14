@@ -1678,6 +1678,18 @@ for (const branch of ['tool', 'turn']) {
     });
   }
 
+  test(`${branch} cannot confirm STUCK when both session identities are missing`, () => {
+    const f = stuckFixture(branch);
+    delete f.engine._state.mainSessionId;
+    delete f.heartbeat.sessionId;
+    assert.equal(f.engine._state.mainSessionId, undefined);
+    assert.equal(f.heartbeat.sessionId, undefined);
+    f.advance(301_000);
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+    f.advance(600_000);
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+  });
+
   test(`${branch} cannot confirm STUCK without an AM heartbeat`, () => {
     const f = stuckFixture(branch);
     f.engine._state.amHeartbeat = null;

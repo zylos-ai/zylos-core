@@ -430,8 +430,6 @@ export class StateEngine {
         break;
     }
 
-    // Progress between state polls must also restart the confirmation window.
-    if (this._state.lastProgressAt?.getTime() === now.getTime()) this._clearPossiblyStuck();
     this._broadcastStateChange();
     this._maybeSnapshot();
   }

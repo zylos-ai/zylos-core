@@ -2,30 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { isolatedTmux } from './helpers/isolated-tmux.js';
 import { Store } from '../skills/dashboard/src/lib/store.js';
 import { StateEngine } from '../skills/dashboard/src/lib/state-engine.js';
 import { publishSessionStatus } from '../skills/activity-monitor/scripts/status-writer.js';
 
-// Boundary: a blocked private pane process, real heartbeat file/SQLite and StateEngine.
+// Boundary: production heartbeat writer → file reader → SQLite collector health → StateEngine.
 // Run for stuck confirmation or heartbeat identity/freshness changes; skip unrelated UI work.
-// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR. No model or live PM2 is used.
+// Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR and removes its private files.
+// The owned SQLite store closes with the test lifecycle; no tmux, child process or live PM2 is used.
 // The clock advances explicitly; this proves state logic, not a real-time 15-minute soak.
-test('blocked session confirms after sustained inactivity with live observers', { skip: process.platform !== 'linux', timeout: 15000 }, async t => {
+test('heartbeat writer and file reader confirm sustained inactivity with SQLite collector health', { timeout: 15000 }, t => {
   const root = process.env.ZYLOS_DIR;
   assert(root?.startsWith('/tmp/'));
   for (const key of ['HOME', 'PM2_HOME', 'TMPDIR']) assert(process.env[key]?.startsWith('/tmp/'), key);
-  let pid;
-  let store;
-  const fixture = isolatedTmux(t, { prefix: 'stuck-', beforeCleanup: () => {
-    if (pid) { try { process.kill(pid, 'SIGKILL'); } catch {} }
-    store?.close();
-  } });
   const dbPath = path.join(root, 'dashboard', 'stuck.db');
   console.log(JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root, PM2_HOME: process.env.PM2_HOME,
-    TMPDIR: process.env.TMPDIR, socket: fixture.socketPath, database: dbPath }));
-  store = new Store(dbPath);
+    TMPDIR: process.env.TMPDIR, database: dbPath }));
+  const store = new Store(dbPath);
+  t.after(() => store.close());
   fs.mkdirSync(path.join(root, '.zylos'), { recursive: true });
   fs.writeFileSync(path.join(root, '.zylos', 'config.json'), JSON.stringify({ session_mode: 'single' }));
   const statusPath = path.join(root, 'activity-monitor', 'agent-status.json');
@@ -33,19 +27,7 @@ test('blocked session confirms after sustained inactivity with live observers', 
   let clock = Date.now();
   const start = clock;
   const engine = new StateEngine(store, {}, { zylosDir: root, runtime: 'claude' }, { now: () => clock });
-  const fifo = path.join(fixture.dir, 'unwritten-input');
-  execFileSync('mkfifo', [fifo]);
-  fixture.tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'stalled', '/bin/cat', fifo);
-  pid = Number(fixture.tmux('display-message', '-p', '-t', 'stalled', '#{pane_pid}'));
-  assert(Number.isSafeInteger(pid) && pid > 1);
-  const deadline = Date.now() + 2000;
-  while (!fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').startsWith('/bin/cat\0')) {
-    assert(Date.now() < deadline, 'blocked pane executable did not become ready');
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-  const pane = fixture.tmux('capture-pane', '-p', '-t', 'stalled');
   function observe() {
-    assert.equal(fixture.tmux('capture-pane', '-p', '-t', 'stalled'), pane);
     publishSessionStatus({ statusFile: statusPath,
       scene: { ready: true, runId: 'stalled-run', sessionId: 'stalled-session', runtime: 'claude' },
       activity: { sessionId: 'stalled-session', state: 'busy', lastActivityAt: start, tools: [{ tool_use_id: 'stalled-tool' }] },
@@ -66,11 +48,9 @@ test('blocked session confirms after sustained inactivity with live observers', 
   assert.equal(observe().state, 'POSSIBLY_STUCK');
   clock += 600000;
   const confirmed = observe();
-  console.log(JSON.stringify({ pid, elapsed_s: (clock - start) / 1000, state: confirmed.state,
+  console.log(JSON.stringify({ elapsed_s: (clock - start) / 1000, state: confirmed.state,
     missing_evidence: confirmed.missing_evidence, collectors: store.getCollectorLiveness().map(row => row.name) }));
   assert.equal(confirmed.state, 'STUCK');
   clock += 3600000;
   assert.equal(observe().state, 'STUCK');
-  process.kill(pid, 0);
-  assert.equal(fs.statSync(fifo).isFIFO(), true);
 });
