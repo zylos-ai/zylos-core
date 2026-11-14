@@ -10,6 +10,7 @@ export default {
     '<rootDir>/test/dashboard-stale-status.integration.test.js',
     '<rootDir>/test/dashboard-startup-timeouts.integration.test.js',
     '<rootDir>/test/dashboard-startup-parallel.integration.test.js',
+    '<rootDir>/test/overview-read-state.integration.test.js',
     '<rootDir>/test/router-stale-state.integration.test.js',
     '<rootDir>/test/supervisor-reclaim-deferral.integration.test.js',
     '/node_modules/',
