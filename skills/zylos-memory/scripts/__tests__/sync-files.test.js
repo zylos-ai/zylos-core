@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { cleanup, rotate, list, commit as guardedCommit, checkpoint, extractAbsorbedBlock } from '../sync-files.js';
 import { createBatchReceipt } from '../../../comm-bridge/scripts/c4-sync-batch.js';
-import { renderStateSkeleton } from '../state-format.js';
+import { parseStateHeader, renderStateSkeleton } from '../state-format.js';
 import { acquire, memoryScope } from '../sync-lock.js';
 import { fixture as storeFixture } from '../../../comm-bridge/scripts/__tests__/c4-v2-test-helpers.js';
 
@@ -115,7 +115,7 @@ test('invalid follow-up input does not replace state or remove segments', async 
 test('missing/invalid temporary state rejects before publication and deletion', async t => {
   const f = await fixture(t), original = write(f);
   const corrected = fs.readFileSync(f.temporary, 'utf8');
-  for (const content of [null, 'broken', f.skeleton().replace('## Commitments', 'wrong'), f.skeleton().replace('scope=telegram:test', 'scope=origin')]) {
+  for (const content of [null, 'broken', f.skeleton().replace('## Commitments', 'wrong'), f.skeleton().replace('scope=telegram:test', 'scope=origin'), f.skeleton().replace('inbox_committed= ', 'inbox_committed=invalid ')]) {
     if (content === null) fs.unlinkSync(f.temporary); else fs.writeFileSync(f.temporary, content);
     await assert.rejects(commit({ ...f.settings, input: { followedUpIds: [] } }, f.deps), { code: 'STATE_DOCUMENT_INVALID' });
     assert.equal(fs.readFileSync(f.state, 'utf8'), original);
@@ -250,10 +250,10 @@ test('list describes exact segment and daily session bytes with absolute paths',
   assert.equal(fs.existsSync(session), true);
 });
 
-// Exercise the actual commit guard with stale file snapshots and changed headers;
+// Exercise the actual commit guard with stale file snapshots;
 // rejection must preserve official state, temporary output, and input bytes.
 test('commit rejects changed, omitted, or extra inputs before publishing or deleting', async t => {
-  for (const mutation of ['segment content', 'segment path', 'new segment', 'omitted segment', 'extra segment', 'state omitted segment', 'state extra segment']) {
+  for (const mutation of ['segment content', 'segment path', 'new segment', 'omitted segment', 'extra segment']) {
     await t.test(mutation, async t => {
       const f = await fixture(t), original = write(f);
       const piece = path.join(f.memoryDir, `inbox.${segment}.md`);
@@ -265,16 +265,72 @@ test('commit rejects changed, omitted, or extra inputs before publishing or dele
       if (mutation === 'new segment') fs.writeFileSync(path.join(f.memoryDir, `inbox.${segment}-1.md`), 'arrived later');
       if (mutation === 'omitted segment') inputs.segments = [];
       if (mutation === 'extra segment') inputs.segments.push({ ...inputs.segments[0], id: `${segment}-1` });
-      if (mutation === 'state omitted segment') fs.writeFileSync(f.temporary, f.skeleton());
-      if (mutation === 'state extra segment') fs.writeFileSync(f.temporary, fs.readFileSync(f.temporary, 'utf8').replace(`inbox_committed=${segment} `, `inbox_committed=${segment},${segment}-1 `));
       const temporary = fs.readFileSync(f.temporary, 'utf8');
       await assert.rejects(guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs, batch: createBatchReceipt([], { scope: f.scope, after: 0, end: 0 }) } }, f.deps), { code: 'INPUT_CHANGED' });
       assert.equal(fs.readFileSync(f.state, 'utf8'), original);
       assert.equal(fs.readFileSync(f.temporary, 'utf8'), temporary);
       assert.equal(fs.readFileSync(piece, 'utf8'), mutation === 'segment content' ? 'modified' : 'absorbed');
       assert.equal(fs.readFileSync(session, 'utf8'), 'session one');
+      if (mutation === 'new segment') assert.equal(fs.readFileSync(path.join(f.memoryDir, `inbox.${segment}-1.md`), 'utf8'), 'arrived later');
     });
   }
+});
+
+// Real list/guarded commit with private files, scoped lock and an injected
+// checkpoint DB. Run for segment publication changes; unrelated edits may skip.
+// The isolated runner supplies HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixtures clean up.
+test('commit publishes only listed segment IDs regardless of the temporary header', async t => {
+  const old = '20261019T053001123Z';
+  for (const group of ['telegram:test', null]) {
+    for (const notes of [false, true]) {
+      for (const modelIds of ['', old, `${old},${segment}`]) {
+        await t.test(`${group ?? 'global'} notes=${notes} header=${modelIds || 'empty'}`, async t => {
+          const f = await fixture(t, group);
+          const official = f.skeleton().replace('inbox_committed= ', `inbox_committed=${old} `);
+          fs.writeFileSync(f.state, official);
+          const oldPath = path.join(f.memoryDir, `inbox.${old}.md`);
+          fs.writeFileSync(oldPath, 'already committed');
+          const newPath = path.join(f.memoryDir, `inbox.${segment}.md`);
+          if (notes) fs.writeFileSync(newPath, 'new note');
+          const inboxPath = path.join(f.memoryDir, 'inbox.md');
+          fs.writeFileSync(inboxPath, 'not rotated');
+          const temporary = f.skeleton().replace('inbox_committed= ', `inbox_committed=${modelIds} `);
+          fs.writeFileSync(f.temporary, temporary);
+          const inputs = await list(f.settings);
+          const ids = notes ? [segment] : [];
+          assert.deepEqual(inputs.segments.map(item => item.id), ids);
+          const result = await guardedCommit({ ...f.settings, input: {
+            followedUpIds: [], inputs, batch: createBatchReceipt([], { scope: f.scope, after: 0, end: 0 }),
+          } }, f.deps);
+          assert.deepEqual(result, { committed: true, inboxCommitted: ids });
+          const published = fs.readFileSync(f.state, 'utf8');
+          assert.deepEqual(parseStateHeader(published, { scope: f.scope }).inboxCommitted, ids);
+          assert.equal(published, f.skeleton().replace('inbox_committed= ', `inbox_committed=${ids.join(',')} `));
+          assert.equal(fs.existsSync(f.temporary), false);
+          assert.equal(fs.existsSync(newPath), false);
+          assert.equal(fs.readFileSync(oldPath, 'utf8'), 'already committed');
+          assert.equal(fs.readFileSync(inboxPath, 'utf8'), 'not rotated');
+        });
+      }
+    }
+  }
+});
+
+// Same isolated real commit boundary: preserve legal header ordering and CRLF
+// while publishing multiple listed notes. Run when header publication changes.
+test('commit fills multiple IDs without changing other header fields or document bytes', async t => {
+  const f = await fixture(t);
+  const second = `${segment}-1`;
+  for (const id of [second, segment]) fs.writeFileSync(path.join(f.memoryDir, `inbox.${id}.md`), id);
+  const temporary = f.skeleton().replace(' | coverage=0 | inbox_committed=', ' | inbox_committed= | coverage=0').replaceAll('\n', '\r\n');
+  fs.writeFileSync(f.temporary, temporary);
+  const inputs = await list(f.settings);
+  const result = await guardedCommit({ ...f.settings, input: {
+    followedUpIds: [], inputs, batch: createBatchReceipt([], { scope: f.scope, after: 0, end: 0 }),
+  } }, f.deps);
+  assert.deepEqual(result.inboxCommitted, [segment, second]);
+  assert.equal(fs.readFileSync(f.state, 'utf8'), temporary.replace('inbox_committed= ', `inbox_committed=${segment},${second} `));
+  for (const id of [segment, second]) assert.equal(fs.existsSync(path.join(f.memoryDir, `inbox.${id}.md`)), false);
 });
 
 test('commit ignores session appends and metadata while matching segment identity', async t => {

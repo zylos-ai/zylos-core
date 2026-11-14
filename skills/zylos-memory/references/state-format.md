@@ -15,7 +15,22 @@ Use the current full group as scope, or `*` for single. Include all four header
 fields once. `synced_at` is an ISO8601 timestamp with zone; coverage is a
 conversation ID or empty; inbox_committed is a comma-separated set of legal
 segment IDs, or empty. It is a file recovery marker, not authoritative DB
-progress. The document then contains `# Working State` and all four headings:
+progress. The commit script fills `inbox_committed` from this round's listed,
+verified segments. Leave it empty in temporary state; do not copy it from old
+state. For example, with no notes this round, the published header is:
+
+```text
+<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed= -->
+```
+
+With one new note `20261019T053002123Z`, only that ID appears, even if the old
+state named `20261019T053001123Z`:
+
+```text
+<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed=20261019T053002123Z -->
+```
+
+The document then contains `# Working State` and all four headings:
 
 | Heading | Content |
 | --- | --- |

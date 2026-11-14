@@ -16,6 +16,20 @@ const between = (text, start, end) => {
   return text.slice(from, to);
 };
 
+test('state guidance assigns committed segment IDs to the commit script', () => {
+  const group = normalize(between(sync, '## Group Sync', '## Origin Sync'));
+  const global = normalize(between(sync, '## Single global Sync', '## Moving from old files'));
+  assert.match(group, /The commit script fills `inbox_committed` from this round's listed segments/);
+  assert.match(group, /leave it empty in the temporary state and do not copy it from old state/);
+  assert.match(group, /then writes those segment IDs into the published state header/);
+  assert.doesNotMatch(group, /List all read segment IDs in its `inbox_committed` header|and the state's segment IDs/);
+  assert.match(global, /Follow Group Sync's read-before-cleanup, recovery, summary, temporary state, commit, and failure sequence/);
+  const format = normalize(read('state-format'));
+  assert.match(format, /The commit script fills `inbox_committed` from this round's listed, verified segments/);
+  assert.match(format, /with no notes this round, the published header is:.*coverage=42 \| inbox_committed= -->/);
+  assert.match(format, /With one new note `20261019T053002123Z`, only that ID appears, even if the old state named `20261019T053001123Z`:.*coverage=42 \| inbox_committed=20261019T053002123Z -->/);
+});
+
 test('guidance requires all audit items and their results before Origin cursor advance', () => {
   const origin = between(sync, '## Origin Sync', '## Single global Sync');
   const audit = between(origin, '7. Before any cursor advance or checkpoint', '`node ~/zylos/.claude/skills/zylos-memory/scripts/origin-cursor.js advance');

@@ -150,16 +150,16 @@ export async function commit({ input, ...settings }, deps = {}) {
     const segmentIdentity = entries => Array.isArray(entries) ? entries.map(item => [item?.id, item?.path, item?.sha256]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))) : null;
     if (JSON.stringify(segmentIdentity(payload.inputs?.segments)) !== JSON.stringify(segmentIdentity(actual.segments))) throw memoryError('INPUT_CHANGED', 'Sync segments differ from list; read the current list and segments again');
     const ids = actual.segments.map(item => item.id);
-    if (JSON.stringify(header.inboxCommitted.slice().sort()) !== JSON.stringify(ids.slice().sort())) throw memoryError('INPUT_CHANGED', 'State segment set must match all listed uncommitted segments');
     const database = deps.database || await import('../../comm-bridge/scripts/c4-db.js');
     await verifyBatchReceipt(payload.batch, { scope, end: header.coverage, database });
     const latest = database.getLatestContentCheckpoint(scope);
     if (!latest || latest.end_conversation_id !== header.coverage) throw memoryError('INPUT_CHANGED', 'State coverage must match the completed checkpoint');
-    fs.writeFileSync(temporaryPath, combined, 'utf8');
+    const published = combined.replace(/^(.*? \| inbox_committed=)[^|\r\n]*(?= \| | -->)/, (_, prefix) => prefix + ids.join(','));
+    fs.writeFileSync(temporaryPath, published, 'utf8');
     fs.renameSync(temporaryPath, officialPath);
     // Publication is complete. A failed delete cannot roll back the state.
-    deleteSegments(memoryDir, header.inboxCommitted, deps.warning, true);
-    return { committed: true, inboxCommitted: header.inboxCommitted };
+    deleteSegments(memoryDir, ids, deps.warning, true);
+    return { committed: true, inboxCommitted: ids };
   });
 }
 
