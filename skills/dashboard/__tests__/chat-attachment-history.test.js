@@ -57,13 +57,13 @@ test('attachment list previews show names without managed paths and preserve tex
   assert.equal(chatAttachmentPreview('  ordinary text\n'), '  ordinary text\n');
 });
 
-test('known attachment previews show names while unknown types invalidate the whole message', () => {
+test('known attachment previews show names while unknown types use the static component label', () => {
   const raw = CONTENT_PREFIX + JSON.stringify({ version: 1, kind: 'message', messageId: 'message-1',
     fallbackText: 'SECRET_ID_REFERENCE', blocks: [{ id: 'file-1', type: 'x-zylos.file', schemaVersion: 1,
       data: { attachmentId: 'SECRET_ID_REFERENCE', nameSnapshot: 'report.pdf' }, fallbackText: 'file' }] });
   assert.equal(chatAttachmentPreview(raw), '[文件] report.pdf');
   assert.equal(chatAttachmentPreview(raw).includes('SECRET_ID_REFERENCE'), false);
-  assert.equal(chatAttachmentPreview(raw.replace('x-zylos.file', 'x-zylos.unknown')), 'SECRET_ID_REFERENCE');
+  assert.equal(chatAttachmentPreview(raw.replace('x-zylos.file', 'x-zylos.unknown')), '[组件]');
   assert.equal(chatAttachmentPreview(raw.replace('x-zylos.file', 'x-zylos.unknown').replace('"fallbackText":"SECRET_ID_REFERENCE",', '')), '无法显示的消息');
 });
 

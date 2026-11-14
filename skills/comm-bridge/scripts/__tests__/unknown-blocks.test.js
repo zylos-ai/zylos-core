@@ -27,6 +27,14 @@ test('historical unknown blocks retain envelope data and ordered compatibility m
   assert.deepEqual(parseC4Content(encode(known)), { kind: 'envelope', envelope: known, suffix: '', view: null });
 });
 
+test('historical unknown blocks accept schema version two with a compatibility marker', () => {
+  const envelope = message([{ ...unknown(), schemaVersion: 2 }]);
+  assert.deepEqual(parseC4Content(encode(envelope)), {
+    kind: 'envelope', envelope, suffix: '', view: null,
+    unsupportedBlocks: [{ index: 0, id: 'future', reason: 'unknown_type' }],
+  });
+});
+
 test('the same unknown content is readable in history and rejected by strict submission diagnostics', () => {
   const content = encode(message());
   assert.equal(parseC4Content(content).kind, 'envelope');
