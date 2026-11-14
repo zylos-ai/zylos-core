@@ -512,7 +512,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-kvs b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .wb-ip-card .wb-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .wb-host-svc { margin: 0 0 8px; }
-.wb-host-pool { margin-top: 10px; }
+.wb-host-pool, .wb-host-accounts { margin-top: 10px; }
 /* The pool's source and explanations are sentences: they wrap, but only between words. */
 .wb-host-pool .wb-kvs, .wb-host-pool-notes { word-break: keep-all; }
 .wb-host-pool .wb-kvs > * { min-width: 0; }
