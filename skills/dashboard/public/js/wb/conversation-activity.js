@@ -95,7 +95,9 @@ export function livePresentation(messages, activity, { presence = null } = {}) {
   return null;
 }
 
-const STATUS_ICON = { running: 'loader', done: 'tick', failed: 'alert', incomplete: 'alert', stopped: 'stop' };
+// A step an automatic restart cut off (`interrupted`) did not go wrong: it reads in the neutral style and says so after
+// its label, as the timeline does.
+const STATUS_ICON = { running: 'loader', done: 'tick', failed: 'alert', incomplete: 'alert', stopped: 'stop', interrupted: 'stop' };
 
 /**
  * The live area. `update(view, { now, open, details })` redraws it for a presentation from `livePresentation`;
@@ -127,7 +129,8 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
     }
     const row = node('div', undefined, 'conversation-activity-step');
     row.dataset.status = step.status;
-    const label = node('span', stepText(step, t), 'conversation-activity-label');
+    const text = step.status === 'interrupted' ? `${stepText(step, t)} · ${t('chat.activity.interrupted')}` : stepText(step, t);
+    const label = node('span', text, 'conversation-activity-label');
     label.title = label.textContent;
     const time = node('span', '', 'conversation-activity-time');
     row.append(icon(document, STATUS_ICON[step.status] ?? 'tick'), label, time);

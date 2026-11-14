@@ -1057,6 +1057,7 @@
   "chat.activity.failed": "Error",
   "chat.activity.incomplete": "Did not finish",
   "chat.activity.stopped": "Stopped",
+  "chat.activity.interrupted": "interrupted by automatic restart",
   "chat.activity.lessThanSecond": "<1 s",
   "chat.activity.seconds": "{s} s",
   "chat.activity.minutes": "{m} min {s} s",

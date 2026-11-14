@@ -1057,6 +1057,7 @@
   "chat.activity.failed": "出错",
   "chat.activity.incomplete": "没有完成",
   "chat.activity.stopped": "已停止",
+  "chat.activity.interrupted": "因自动重启中断",
   "chat.activity.lessThanSecond": "<1 秒",
   "chat.activity.seconds": "{s} 秒",
   "chat.activity.minutes": "{m} 分 {s} 秒",

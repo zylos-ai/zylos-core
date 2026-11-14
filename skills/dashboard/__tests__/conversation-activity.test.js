@@ -114,6 +114,24 @@ test('subtasks keep a row when the main AI is idle; done work leaves nothing or,
   assert.equal(livePresentation([], body()), null); assert.equal(livePresentation(messages, null), null);
 });
 
+test('a step an automatic restart cut off reads as interrupted in the neutral style, not as an error', () => {
+  const css = fs.readFileSync(new URL('../public/css/conversation.css', import.meta.url), 'utf8');
+  const warned = css.split('}').filter(rule => rule.includes('var(--wb-wait)') && rule.includes('.conversation-activity-step'));
+  assert.ok(warned.length > 0 && warned.every(rule => !rule.includes('interrupted')), 'no warning colour for it');
+  for (const [locale, words, duration] of [['zh-CN', zh, '2 秒'], ['en', en, '2 s']]) {
+    const document = createDocument();
+    const area = createLiveArea({ document, t: key => words[key] ?? key, locale, onToggle() {} });
+    area.update({ anchor: 2, under: 'in', head: 'working', since: s(0), steps: [tool(1, 3, 'interrupted', { key: 'runCommand' }),
+      tool(4, 5, 'failed', { key: 'runCommand' })], waiting: 'thinking', subtasks: [], truncated: false },
+    { now: s(10), open: new Set(), details: new Map() });
+    const rows = area.node.querySelectorAll('.conversation-activity-step');
+    assert.deepEqual(rows.map(row => [row.dataset.status, row.children[0].className]),
+      [['interrupted', 'wb-ico wb-ico-stop'], ['failed', 'wb-ico wb-ico-alert']], locale);
+    assert.equal(rows[0].children[1].textContent, `${words['chat.activity.label.runCommand']} · ${words['chat.activity.interrupted']}`, locale);
+    assert.equal(rows[0].children[2].textContent, duration, `${locale}: the time column keeps only the duration`);
+  }
+});
+
 test('the live area draws the head, steps, marks, thinking and subtask rows like the prototype', () => {
   const document = createDocument(), toggles = [];
   const area = createLiveArea({ document, t, locale: 'zh-CN', onToggle: id => toggles.push(id) });
