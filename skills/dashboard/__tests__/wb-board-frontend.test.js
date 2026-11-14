@@ -16,6 +16,8 @@ import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
 const ZONE = INSTANCE_TEST_ZONE;
 setInstanceZone(ZONE);
 const t = (key, values = {}) => key + Object.values(values).join(':');
+// What a strip item shows on screen: its text without the names that only screen readers get.
+const shown = node => node.classList?.contains('wb-vh') ? '' : node.children?.length ? node.children.map(shown).join('') : node.textContent ?? '';
 const nameOf = node => allNodes(node).find(item => item.classList.contains('wb-nm')).textContent;
 const row = (key, kind = 'idle') => ({ sessionGroup: key, name: { displayName: key }, fallbackName: key,
   state: { kind }, presence: 'running', duration: 32, tools: [], queue: { pending: { count: 2 }, running: { count: 1 } }, contextPct: 42,
@@ -139,9 +141,15 @@ test('instance strip renders pool unknown or occupancy, runtime union, quota and
       accounts: { claude: { used_percentage: 23 }, codex: null }, services: { online: 4, total: 5 } } }, { document, t, cost: 0.25, level: 'technical' });
   const chip = allNodes(root).find(node => node.classList.contains('wb-mode-chip'));
   assert.equal(chip.textContent, 'wb.unknown'); assert.equal(chip.title, 'wb.mode');
-  assert.match(root.textContent, /wb.inst.pool3wb.inst.inUse/, 'an unknown capacity shows only the used count'); assert.match(root.textContent, /77%/);
-  assert.match(root.textContent, /wb.inst.authFailedTech/); assert.match(root.textContent, /4 \/ 5/);
-  assert.match(root.textContent, /wb.inst.queuedTech1/);
+  const poolNode = root.children.find(node => node.classList.contains('wb-pool'));
+  assert.equal(shown(poolNode), '3· wb.inst.queuedTech1', 'an unknown capacity shows only the used count, and the queue');
+  assert.equal(poolNode.title, 'wb.inst.pool · wb.inst.inUse 3 · wb.inst.queuedTech1 · wb.inst.poolHint');
+  const [claude, codex] = root.children.filter(node => node.classList.contains('wb-account'));
+  assert.equal(shown(claude), 'Claude77%'); assert.equal(claude.title, 'Claude · wb.inst.ok · wb.quotaRemaining77');
+  assert.equal(shown(codex), 'Codexwb.inst.authFailedTech', 'a sign-in failure stays on screen'); assert.equal(codex.title, 'Codex · wb.inst.authFailedTech');
+  const servicesNode = root.children.find(node => node.classList.contains('wb-services'));
+  assert.equal(shown(servicesNode), '4 / 5'); assert.equal(servicesNode.title, 'wb.inst.servicesTech · wb.inst.servicesOnline4:5');
+  assert.equal(allNodes(servicesNode).find(node => node.tagName === 'B').classList.contains('wb-txt-warn'), true, 'a service down is a warning');
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-pool-meter')).length, 0);
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: 2, capacity: 4 } } }, { document, t, level: 'technical' });
   const poolMeter = allNodes(root).find(node => node.classList.contains('wb-pool-meter'));
@@ -150,7 +158,9 @@ test('instance strip renders pool unknown or occupancy, runtime union, quota and
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: null } } }, { document, t });
   assert.equal(allNodes(root).filter(node => node.classList.contains('wb-mode-chip')).length, 0, 'the raw mode chip is technical only');
   assert.match(root.textContent, /^wb.inst.modeMulti/, 'the plain view still names the run mode');
-  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-pool-meter')).length, 0); assert.match(root.textContent, /wb.poolwb.unknown/);
+  assert.equal(allNodes(root).filter(node => node.classList.contains('wb-pool-meter')).length, 0);
+  const unknownPool = root.children.find(node => node.classList.contains('wb-pool'));
+  assert.equal(shown(unknownPool), '—'); assert.equal(unknownPool.title, 'wb.pool · wb.unknown · wb.inst.poolHint', 'the title still names the item first');
   assert.equal(root.children.at(-1).id, 'wb-host-open', 'host status stays at the right end');
 });
 test('attention shows both problems and recovery reminders with text-safe technical reasons', () => {
@@ -367,15 +377,70 @@ test('pool source distinguishes fresh, expired, missing, invalid and fallback re
     const document = createDocument(), root = document.createElement('div');
     instanceStrip(root, { mode: 'multi', instance: { pool: { used: sample.capacity, capacity: sample.capacity,
       capacityRecord: sample.capacityRecord } } }, { document, t: poolTranslator(locale), level });
-    assert.ok(root.textContent.includes(sample[locale]), `${locale}/${level}: ${sample[locale]}`);
-    assert.ok(root.textContent.includes(`${sample.capacity} / ${sample.capacity}`));
-    assert.ok(root.textContent.includes(locale === 'zh' ? '在用' : 'in use'));
-    if (sample.capacity !== 1) assert.ok(!root.textContent.includes(poolTranslations[locale]['wb.inst.poolFallback']));
+    // On screen the occupancy only; the title names the pool, what is in use and where the limit comes from.
+    const pool = root.children.find(node => node.classList.contains('wb-pool'));
+    const name = poolTranslations[locale][level === 'technical' ? 'wb.inst.pool' : 'wb.pool'];
+    assert.equal(shown(pool), `${sample.capacity} / ${sample.capacity}`, `${locale}/${level}`);
+    assert.equal(pool.title, [name, `${locale === 'zh' ? '在用' : 'in use'} ${sample.capacity} / ${sample.capacity}`, sample[locale],
+      poolTranslations[locale]['wb.inst.poolHint']].join(' · '), `${locale}/${level}: ${sample[locale]}`);
+    if (sample.capacity !== 1) assert.ok(!pool.title.includes(poolTranslations[locale]['wb.inst.poolFallback']));
     if (sample.capacityRecord?.source === 'fixed' && sample.capacity === sample.capacityRecord.kMemory) {
-      assert.doesNotMatch(root.textContent, /按内存建议|memory recommendation/);
+      assert.doesNotMatch(pool.title, /按内存建议|memory recommendation/);
     }
-    assert.doesNotMatch(root.textContent, /wb\.inst\.pool(?:Auto|Fixed|Fallback|Expired|Unavailable)/);
+    assert.doesNotMatch(root.textContent + pool.title, /wb\.inst\.pool(?:Auto|Fixed|Fallback|Expired|Unavailable)/);
   }
+});
+
+test('instance strip shows icons and values; every title starts with the item, in both languages and views', () => {
+  const GiB = 1073741824;
+  const snapshot = { mode: 'multi', readAt: 130_000, baselineRuntime: 'claude', instance: {
+    runtimeHealth: { claude: { health: 'ok' } }, accounts: { claude: { used_percentage: 42 } },
+    pool: { used: 2, capacity: 4, capacityRecord: { valid: false, fresh: false, source: 'fallback' } },
+    system: { sampledAt: 100_000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2 * GiB, memTotalBytes: 16 * GiB, diskUsedPct: 61.6, diskFreeBytes: 40.25 * GiB },
+    services: { online: 6, total: 6 } } };
+  const expected = {
+    zh: {
+      technical: [['multi', '模式'], ['Claude58%', 'Claude · 正常 · 7 天额度剩余 58%'],
+        ['2 / 4', '池 · 在用 2 / 4 · 上限数据不可用，按 4 运行 · Origin 常驻，不占这里的名额'],
+        ['23%', 'CPU 23% · 8 核'], ['13%', '内存 13% · 已用 2.0 / 16.0 GiB'], ['62%', '磁盘 62% · 剩余 40.3 GiB'],
+        ['$1.50·$9.20', '费用 · 今日 $1.50 · 近 7 天 $9.20 · 全部组合计'], ['6 / 6', '服务 · 6 / 6 在线']],
+      plain: [['多组并行', '模式'], ['Claude58%', 'Claude · 正常 · 7 天额度剩余 58%'],
+        ['2 / 4', '同时运行 · 在用 2 / 4 · 上限数据不可用，按 4 运行 · Origin 常驻，不占这里的名额'],
+        ['23%', 'CPU 23% · 8 核'], ['13%', '内存 13% · 已用 2.0 / 16.0 GiB'], ['62%', '磁盘 62% · 剩余 40.3 GiB'],
+        ['$1.50', '今日费用 · $1.50 · 全部组合计'], ['6 / 6', '后台服务 · 6 / 6 在线']],
+    },
+    en: {
+      technical: [['multi', 'Mode'], ['Claude58%', 'Claude · OK · 7-day quota remaining 58%'],
+        ['2 / 4', 'Pool · in use 2 / 4 · Capacity data unavailable; running with a limit of 4 · Origin is resident and does not take a slot here'],
+        ['23%', 'CPU 23% · 8 cores'], ['13%', 'Memory 13% · 2.0 / 16.0 GiB used'], ['62%', 'Disk 62% · 40.3 GiB free'],
+        ['$1.50·$9.20', 'Cost · today $1.50 · 7 days $9.20 · All groups combined'], ['6 / 6', 'Services · 6 / 6 online']],
+      plain: [['Multiple groups', 'Mode'], ['Claude58%', 'Claude · OK · 7-day quota remaining 58%'],
+        ['2 / 4', 'Running together · in use 2 / 4 · Capacity data unavailable; running with a limit of 4 · Origin is resident and does not take a slot here'],
+        ['23%', 'CPU 23% · 8 cores'], ['13%', 'Memory 13% · 2.0 / 16.0 GiB used'], ['62%', 'Disk 62% · 40.3 GiB free'],
+        ['$1.50', 'Cost today · $1.50 · All groups combined'], ['6 / 6', 'Background services · 6 / 6 online']],
+    },
+  };
+  for (const locale of ['zh', 'en']) for (const level of ['technical', 'plain']) {
+    const document = createDocument(), root = document.createElement('div');
+    instanceStrip(root, snapshot, { document, t: poolTranslator(locale), level, costSummary: { today: { total: 1.5 }, sevenDay: { total: 9.2 } } });
+    const items = root.children.filter(node => node.classList.contains('wb-inst-item'));
+    // The run mode's title is on its label; every other item carries its own.
+    assert.deepEqual(items.map(node => [shown(node), node.title || node.children[0].title]), expected[locale][level], `${locale}/${level}`);
+    // The pool, cost and services icons are named for screen readers by the same word their titles start with.
+    for (const name of ['wb-pool', 'wb-cost', 'wb-services']) {
+      const node = items.find(item => item.classList.contains(name));
+      const word = node.children.find(child => child.classList.contains('wb-vh'));
+      assert.equal(node.children[0].className.startsWith('wb-ico '), true, `${name}: icon first`);
+      assert.equal(word?.textContent, node.title.split(' · ')[0], `${locale}/${level} ${name}: the icon has a spoken name`);
+    }
+  }
+  // Without readings the screen shows a dash and the title still starts with the item.
+  const document = createDocument(), root = document.createElement('div');
+  instanceStrip(root, { mode: 'multi', baselineRuntime: 'claude', instance: { runtimeHealth: {}, accounts: {}, pool: { used: null }, services: null } },
+    { document, t: poolTranslator('zh'), level: 'technical' });
+  const items = root.children.filter(node => node.classList.contains('wb-inst-item') && !node.classList.contains('wb-sys'));
+  assert.deepEqual(items.slice(1).map(node => [shown(node), node.title]), [['Claude—', 'Claude · 未知 · 暂无数据'],
+    ['—', '池 · 未知 · Origin 常驻，不占这里的名额'], ['—·—', '费用 · 今日 — · 近 7 天 — · 全部组合计'], ['—', '服务 · 未知']]);
 });
 
 test('single and unreadable instance strips retain sampled counts without capacity or occupancy data', () => {
@@ -385,15 +450,14 @@ test('single and unreadable instance strips retain sampled counts without capaci
       capacityRecord: { valid: false, fresh: false, source: 'fallback', reason: 'floor' } };
     const poolOf = () => root.children.find(node => node.classList.contains('wb-pool'));
     instanceStrip(root, { mode, instance: { pool } }, { document, t, level });
-    const empty = poolOf();
-    assert.equal(empty.textContent, t(level === 'technical' ? 'wb.inst.pool' : 'wb.pool') + t('wb.unknown'));
+    const empty = poolOf(), name = t(level === 'technical' ? 'wb.inst.pool' : 'wb.pool');
+    assert.equal(shown(empty), '—'); assert.equal(empty.title, `${name} · ${t('wb.unknown')} · ${t('wb.inst.poolHint')}`);
     assert.equal(allNodes(empty).some(node => node.classList.contains('wb-pool-meter')), false);
     instanceStrip(root, { mode, instance: { pool: { ...pool, ready: 2, starting: 1, waiting: 4 } } }, { document, t, level });
-    const sampled = poolOf();
-    assert.ok(sampled.textContent.includes('3'));
-    assert.ok(sampled.textContent.includes(t(level === 'technical' ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: 4 })));
-    assert.equal(sampled.textContent.includes(t('wb.inst.inUse')), level === 'technical');
-    assert.doesNotMatch(sampled.textContent, /119|\/|按 .*运行|running with|内存只够|Memory fits/);
+    const sampled = poolOf(), queued = t(level === 'technical' ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: 4 });
+    assert.equal(shown(sampled), '3· ' + queued);
+    assert.equal(sampled.title, [name, level === 'technical' ? `${t('wb.inst.inUse')} 3` : '3', queued, t('wb.inst.poolHint')].join(' · '));
+    assert.doesNotMatch(sampled.textContent + sampled.title, /119|\/|按 .*运行|running with|内存只够|Memory fits/);
     assert.equal(allNodes(sampled).filter(node => node.classList.contains('wb-pool-meter')).length, 0, 'unknown capacity has no made-up proportion');
   }
 });
@@ -402,18 +466,18 @@ test('pool renders actual occupancy above capacity and preserves sampled waiting
   const document = createDocument(), root = document.createElement('div');
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: 4, capacity: 3, waiting: 7,
     capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
-  assert.match(root.textContent, /4 \/ 3/); assert.match(root.textContent, /7 排队/);
+  assert.equal(shown(root.children.find(node => node.classList.contains('wb-pool'))), '4 / 3· 7 排队');
   const meter = allNodes(root).find(node => node.classList.contains('wb-pool-meter'));
   assert.equal(meter.children.length, 1); assert.equal(meter.children[0].style.width, '100%');
   assert.equal(meter.classList.contains('wb-warn'), true);
-  const pool = root.children.find(node => node.textContent.includes('4 / 3'));
-  // Whole parts wrap inside the item; the item itself is not made to break inside its labels.
-  assert.equal(pool.style.flexWrap, 'wrap'); assert.notEqual(pool.style.whiteSpace, 'normal');
-  assert.equal(pool.classList.contains('wb-pool'), true);
+  const pool = root.children.find(node => node.classList.contains('wb-pool'));
+  assert.equal(allNodes(pool).find(node => node.tagName === 'B').classList.contains('wb-txt-warn'), true, 'a full pool is a warning');
+  assert.equal(pool.title, '池 · 在用 4 / 3 · 按内存自动 · 7 排队 · Origin 常驻，不占这里的名额');
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: null, capacity: 3,
     capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
-  assert.match(root.textContent, /未知/);
-  assert.match(root.textContent, /按内存自动/);
+  const unknownPool = root.children.find(node => node.classList.contains('wb-pool'));
+  assert.equal(shown(unknownPool), '—');
+  assert.equal(unknownPool.title, '池 · 未知 · 按内存自动 · Origin 常驻，不占这里的名额');
   assert.equal(allNodes(root).some(node => node.classList.contains('wb-pool-meter')), false);
 });
 
@@ -432,7 +496,8 @@ for (const capacity of [2, 256]) for (const used of [0, 1, capacity]) {
     assert.equal(fill.style.width, used / capacity * 100 + '%');
     assert.equal(fill.style.minWidth, used > 0 ? '2px' : '0', 'any occupied pool stays visible while an empty one stays empty');
     assert.equal(bar.classList.contains('wb-warn'), used >= capacity);
-    assert.match(pool.textContent, new RegExp(`${used} / ${capacity}在用`));
+    assert.equal(shown(pool), `${used} / ${capacity}`);
+    assert.equal(pool.title.startsWith(`池 · 在用 ${used} / ${capacity}`), true, pool.title);
     assert.equal(allNodes(pool).some(node => node.classList.contains('wb-slot')), false);
     const account = allNodes(root).find(node => node.classList.contains('wb-account'));
     const quota = allNodes(account).find(node => node.classList.contains('wb-meter'));
@@ -452,17 +517,17 @@ test('pool explanations show only usable published values in the host panel, not
   const view = { mode: snapshot.mode, pool: snapshot.instance.pool };
   const phrases = ['未设内存上限，按整机内存', '内存上限 4 GiB', '已用 3.7 GiB', '保底 0.5 GiB',
     '每会话约 0.5 GiB', '固定开销约 1.3 GiB', '近 7 天', '内存只够 Origin'];
+  // The strip shows the occupancy only; the plain title names the source, the technical title every explanation too.
   instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'plain' });
-  assert.match(root.textContent, /手动设定 6（按内存建议 0）/);
-  assert.doesNotMatch(root.textContent, /内存上限|固定开销|内存只够/);
-  // The strip keeps the source note in both views; the explanations stay out of it and only the title carries them.
+  let poolNode = root.children.find(node => node.classList.contains('wb-pool'));
+  assert.equal(shown(poolNode), '2 / 6');
+  assert.equal(poolNode.title, '同时运行 · 在用 2 / 6 · 手动设定 6（按内存建议 0） · Origin 常驻，不占这里的名额');
   instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'technical' });
-  assert.match(root.textContent, /手动设定 6（按内存建议 0）/);
-  const poolNode = root.children.find(node => node.classList.contains('wb-pool'));
-  for (const phrase of phrases) assert.equal(poolNode.textContent.includes(phrase), false, phrase);
-  assert.doesNotMatch(root.textContent, /内存上限|固定开销|内存只够/);
-  assert.equal(allNodes(poolNode).filter(node => node.classList.contains('wb-pool-note')).length, 1);
-  assert.ok(poolNode.title.startsWith(poolTranslator('zh')('wb.inst.poolHint')));
+  poolNode = root.children.find(node => node.classList.contains('wb-pool'));
+  assert.equal(shown(poolNode), '2 / 6');
+  assert.doesNotMatch(root.textContent, /手动设定|内存上限|固定开销|内存只够/);
+  assert.ok(poolNode.title.startsWith('池 · 在用 2 / 6 · 手动设定 6（按内存建议 0） · '), poolNode.title);
+  assert.ok(poolNode.title.endsWith(' · Origin 常驻，不占这里的名额'), poolNode.title);
   for (const phrase of phrases) assert.ok(poolNode.title.includes(phrase), phrase);
   // The host panel's pool section shows slots, source and every explanation as a whole sentence.
   renderHostPool(section, view, { document, t: poolTranslator('zh') });

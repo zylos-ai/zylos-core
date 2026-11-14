@@ -34,6 +34,8 @@ function item(document, ...children) {
   const node = element(document, 'span', undefined, 'wb-inst-item');
   node.append(...children); return node;
 }
+/** An item's name for screen readers: on screen its icon stands for it, and its title starts with it. */
+const spoken = (document, text) => element(document, 'span', text, 'wb-inst-word wb-vh');
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const gib = bytes => Number((bytes / 1073741824).toFixed(2));
 export function poolSource(pool, t) {
@@ -105,25 +107,29 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   mode.title = t('wb.mode'); root.append(item(document, mode));
   const runtimes = accountRuntimes(snapshot);
   for (const runtime of runtimes) {
-    const health = instance.runtimeHealth?.[runtime], usage = instance.accounts?.[runtime];
-    const box = item(document, element(document, 'i', undefined, `wb-health wb-health-${health?.health ?? 'unknown'}`), element(document, 'b', runtimeName(runtime)));
+    const health = instance.runtimeHealth?.[runtime], usage = instance.accounts?.[runtime], name = runtimeName(runtime);
+    const box = item(document, element(document, 'i', undefined, `wb-health wb-health-${health?.health ?? 'unknown'}`), element(document, 'b', name));
     box.classList.add('wb-account');
-    if (health?.health === 'auth_failed') box.append(element(document, 'span', t(technical ? 'wb.inst.authFailedTech' : 'wb.authFailed'), 'wb-txt-err'));
+    // A sign-in failure or a rate limit stays on screen as words: it is a problem, not a reading.
+    let problem = null;
+    if (health?.health === 'auth_failed') problem = element(document, 'span', t(technical ? 'wb.inst.authFailedTech' : 'wb.authFailed'), 'wb-txt-err');
     else if (['rate_limited', 'recovering'].includes(health?.health)) {
       const at = recoveryTime(health.cooldownUntil, now);
-      box.append(element(document, 'span', technical
+      problem = element(document, 'span', technical
         ? (at === null ? t('wb.inst.coolingUnknown') : t('wb.inst.cooling', { time: clock(at) }))
-        : (at === null ? t('wb.recoveryUnknown') : t('wb.recovery', { time: clock(at) })), 'wb-txt-warn'));
+        : (at === null ? t('wb.recoveryUnknown') : t('wb.recovery', { time: clock(at) })), 'wb-txt-warn');
     }
-    else {
+    if (problem) {
+      box.append(problem);
+      box.title = name + ' · ' + problem.textContent;
+    } else {
       const pct = remainingQuotaPercent(accountUsedPercent(usage));
-      if (technical) box.append(element(document, 'span', health?.health === 'ok' ? t('wb.inst.ok') : t('wb.unknown')));
-      box.append(element(document, 'span', t('wb.week'), 'wb-inst-label'));
       if (pct != null) box.append(meter(document, pct));
-      const amount = element(document, 'span', pct == null ? t('wb.quotaUnknown') : Math.round(pct) + '%');
+      const amount = element(document, 'span', pct == null ? '—' : Math.round(pct) + '%');
       if (pct != null) amount.style.color = quotaColor(pct);
       box.append(amount);
-      box.title = pct == null ? t('wb.quotaUnknown') : t('wb.quotaRemaining', { pct: Math.round(pct) });
+      box.title = [name, t(health?.health === 'ok' ? 'wb.inst.ok' : 'wb.unknown'),
+        pct == null ? t('wb.quotaUnknown') : t('wb.quotaRemaining', { pct: Math.round(pct) })].join(' · ');
       const recordedTime = pct == null ? null : quotaRecordedTime(usage, now);
       if (recordedTime) {
         box.append(element(document, 'small', '· ' + t('wb.quotaRecorded', { time: recordedTime }), 'wb-quota-recorded'));
@@ -136,11 +142,10 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   const used = multi ? pool.used : pool.ready == null ? null : pool.ready + pool.starting;
   const capacity = multi ? pool.capacity ?? null : null;
   const full = used != null && capacity != null && used >= capacity;
-  const poolItem = item(document, icon(document, 'layers', 'xs'), element(document, 'span', technical ? t('wb.inst.pool') : t('wb.pool')));
-  // The capacity and queue stay whole and the source note wraps only between words. The longer capacity
-  // explanations live in the host panel's pool section; the title keeps them for hover.
+  // Pool, cost and services: icon and number on screen; the title starts with the item's name, then the details.
+  const poolName = t(technical ? 'wb.inst.pool' : 'wb.pool');
+  const poolItem = item(document, icon(document, 'layers', 'xs'), spoken(document, poolName));
   poolItem.classList.add('wb-pool');
-  poolItem.style.flexWrap = 'wrap'; poolItem.style.maxWidth = '100%';
   if (technical && used != null && capacity > 0) {
     const bar = element(document, 'span', undefined, 'wb-meter wb-pool-meter' + (full ? ' wb-warn' : ''));
     const fill = element(document, 'i');
@@ -148,27 +153,35 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
     fill.style.minWidth = used > 0 ? '2px' : '0';
     bar.append(fill); poolItem.append(bar);
   }
-  const amount = used == null ? t('wb.unknown') : capacity == null ? String(used) : `${used} / ${capacity}`;
-  poolItem.append(element(document, 'b', amount, full ? 'wb-txt-warn' : undefined));
-  if ((technical || multi) && used != null) poolItem.append(element(document, 'span', t('wb.inst.inUse')));
+  const occupancy = used == null ? null : capacity == null ? String(used) : `${used} / ${capacity}`;
+  poolItem.append(element(document, 'b', occupancy ?? '—', full ? 'wb-txt-warn' : undefined));
+  // A queue is a wait, so it stays on screen.
+  const queued = pool.waiting ? t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: pool.waiting }) : '';
+  if (queued) poolItem.append(element(document, 'span', '· ' + queued, 'wb-txt-warn'));
   const source = multi ? poolSource(pool, t) : '';
   const details = technical && multi ? poolExplanation(pool.capacityRecord, t) : [];
-  if (source) poolItem.append(element(document, 'span', ' · ' + source, 'wb-sub wb-pool-note'));
-  if (pool.waiting) poolItem.append(element(document, 'span', ' · ' + t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: pool.waiting }), 'wb-txt-warn'));
-  poolItem.title = [t('wb.inst.poolHint'), source, ...details].filter(Boolean).join(' · ');
+  poolItem.title = [poolName, occupancy == null ? t('wb.unknown') : technical || multi ? t('wb.inst.inUse') + ' ' + occupancy : occupancy,
+    source, queued, ...details, t('wb.inst.poolHint')].filter(Boolean).join(' · ');
   root.append(poolItem, ...systemItems(document, instance.system ?? null, { t, readAt: snapshot.readAt }));
   cost = costSummary?.today?.total ?? cost;
-  const costLabel = technical ? t('wb.inst.costTech') + ' ' + t('wb.inst.today') : t('wb.cost');
-  const expense = item(document, icon(document, 'dollar', 'xs'), element(document, 'span', costLabel), element(document, 'b', money(cost)));
+  const costName = t(technical ? 'wb.inst.costTech' : 'wb.cost'), today = money(cost);
+  const expense = item(document, icon(document, 'dollar', 'xs'), spoken(document, costName), element(document, 'b', today));
+  expense.classList.add('wb-cost');
   // The title names the scope, so the cost never reads as one group's.
-  expense.title = costLabel + ' · ' + t('wb.usage.allGroups');
-  if (technical) expense.append(element(document, 'span', '· ' + t('wb.usage.range.7d')), element(document, 'b', costSummary == null ? '—' : money(costSummary.sevenDay?.total)));
+  if (technical) {
+    const week = costSummary == null ? '—' : money(costSummary.sevenDay?.total);
+    expense.append(element(document, 'span', '·'), element(document, 'b', week));
+    expense.title = [costName, t('wb.inst.today') + ' ' + today, t('wb.usage.range.7d') + ' ' + week, t('wb.usage.allGroups')].join(' · ');
+  } else expense.title = [costName, today, t('wb.usage.allGroups')].join(' · ');
   root.append(expense);
   const services = instance.services;
   const down = services == null ? null : services.total - services.online;
-  root.append(item(document, icon(document, 'server', 'xs'), technical
-    ? element(document, 'span', `${t('wb.inst.servicesTech')} ${services == null ? t('wb.unknown') : services.online + ' / ' + services.total}`, down ? 'wb-txt-warn' : undefined)
-    : element(document, 'span', services == null ? t('wb.services') + ' · ' + t('wb.unknown') : down ? t('wb.inst.servicesDown', { count: down }) : t('wb.inst.servicesOk'), down ? 'wb-txt-warn' : undefined)));
+  const servicesName = t(technical ? 'wb.inst.servicesTech' : 'wb.services');
+  const service = item(document, icon(document, 'server', 'xs'), spoken(document, servicesName),
+    element(document, 'b', services == null ? '—' : `${services.online} / ${services.total}`, down ? 'wb-txt-warn' : undefined));
+  service.classList.add('wb-services');
+  service.title = servicesName + ' · ' + (services == null ? t('wb.unknown') : t('wb.inst.servicesOnline', { online: services.online, total: services.total }));
+  root.append(service);
   const host = element(document, 'button', t('wb.host.open'), 'wb-inst-more'); host.type = 'button'; host.id = 'wb-host-open'; host.setAttribute('aria-expanded', String(hostOpen)); host.addEventListener('click', onHost);
   root.append(host);
 }

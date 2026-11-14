@@ -121,7 +121,8 @@ export async function runQuotaBrowser(sandbox) {
       }
       assert.ok(measured.strip[0].text.includes(`${remaining ?? 50}%`));
       assert.ok(measured.strip[1].text.includes(`${remaining ?? 10}%`));
-      assert.equal(measured.strip[1].title, (locale === 'zh' ? '7 天额度剩余 ' : '7-day quota remaining ') + (remaining ?? 10) + '%');
+      // The title starts with the engine's name, then its health and the remaining quota.
+      assert.equal(measured.strip[1].title, (locale === 'zh' ? 'Codex · 正常 · 7 天额度剩余 ' : 'Codex · OK · 7-day quota remaining ') + (remaining ?? 10) + '%');
       const luminance = color => color.map(v => v / 255)
         .reduce((sum, v, i) => sum + [.2126, .7152, .0722][i] * (v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4), 0);
       const contrast = (a, b) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);

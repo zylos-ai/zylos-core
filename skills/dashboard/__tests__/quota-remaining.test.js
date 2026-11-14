@@ -37,7 +37,9 @@ test('strip and fleet include quota-only Codex and retain in-use engines without
   assert.deepEqual(accountRuntimes(snapshot), ['claude', 'codex']);
   const boxes = accounts(strip(snapshot));
   assert.equal(boxes.length, 2);
-  assert.match(boxes[0].textContent, /Claude.*No data/);
+  // An unknown quota shows a dash on screen; its words are in the title, after the engine's name.
+  assert.equal(boxes[0].textContent, 'Claude—');
+  assert.equal(boxes[0].title, 'Claude · Unknown · No data');
   assert.match(boxes[1].textContent, /Codex.*10%/);
   const self = fleetSelfFromSnapshot(snapshot);
   const html = renderAgentFleetHtml(fleet, { self });
@@ -62,7 +64,7 @@ test('strip meters and percentage text use the same remaining hue and localized 
       const amount = box.children.at(-1);
       assert.equal(amount.textContent, remaining + '%');
       assert.equal(amount.style.color, quotaColor(remaining));
-      assert.equal(box.title, t('wb.quotaRemaining', { pct: remaining }));
+      assert.equal(box.title, `Codex · ${t('wb.unknown')} · ${t('wb.quotaRemaining', { pct: remaining })}`);
     }
     const labels = Object.fromEntries(['rate7d','quotaRemaining','quotaUnknown'].map(key => [key, values['wb.fleet.' + key]]));
     const html = renderAgentFleetHtml({ agents: [{ name: 'remote', state: 'IDLE', rate_limit_7d_pct: 90 }] }, { labels });
@@ -78,7 +80,7 @@ test('strip authentication and cooldown states keep their existing text and omit
     const root = strip({ baselineRuntime: 'codex', instance: { accounts: { codex: { usedPercentage: 90 } }, runtimeHealth: { codex: { health, cooldownUntil: null } } } });
     const box = accounts(root)[0];
     assert.equal(allNodes(box).some(node => node.classList.contains('wb-meter')), false);
-    assert.doesNotMatch(box.textContent, /10%|7d left/);
+    assert.doesNotMatch(box.textContent, /10%/);
     assert.ok(allNodes(box).some(node => node.classList.contains(health === 'auth_failed' ? 'wb-txt-err' : 'wb-txt-warn')));
   }
 });
@@ -88,7 +90,8 @@ test('strip rounds fractional weekly quota in both percentage text and tooltip',
   for (const locale of ['en', 'zh']) for (const level of ['plain', 'technical']) {
     const box = accounts(strip({ baselineRuntime: 'codex', instance: { accounts: { codex: { usedPercentage: 33.3 } } } }, locale, { level }))[0];
     assert.equal(box.children.at(-1).textContent, '67%');
-    assert.equal(box.title, translator(pack(locale))('wb.quotaRemaining', { pct: 67 }));
+    const t = translator(pack(locale));
+    assert.equal(box.title, `Codex · ${t('wb.unknown')} · ${t('wb.quotaRemaining', { pct: 67 })}`);
   }
 });
 

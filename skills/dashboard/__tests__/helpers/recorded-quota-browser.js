@@ -99,10 +99,12 @@ export async function runRecordedQuotaBrowser(sandbox) {
         throw new Error(JSON.stringify({ pageError, responseError, serverError,
           body: (await page.locator('body').innerText()).slice(0, 2500) }), { cause: error });
       }
-      await page.waitForFunction(() => document.querySelector('#wb-instance .wb-account')?.textContent.includes('%') ||
-        /暂无数据|No data/.test(document.querySelector('#wb-instance .wb-account')?.textContent));
+      await page.waitForFunction(() => /%|—/.test(document.querySelector('#wb-instance .wb-account')?.textContent ?? ''));
       const text = await strip.textContent(), title = await strip.getAttribute('title');
-      assert.ok(text.includes(state === 'expired' ? (locale === 'zh' ? '暂无数据' : 'No data') : '96%'), text);
+      // An expired record shows a dash; its words are in the title, which starts with the engine's name.
+      assert.ok(text.includes(state === 'expired' ? '—' : '96%'), text);
+      assert.ok(title.startsWith('Claude · '), title);
+      if (state === 'expired') assert.ok(title.endsWith(locale === 'zh' ? '暂无数据' : 'No data'), title);
       assert.equal(/记录|Recorded/.test(text), state === 'recorded');
       if (state === 'recorded') {
         const year = new Intl.DateTimeFormat('en', { timeZone: 'Asia/Shanghai', year: 'numeric' }).format(recordedAt);
