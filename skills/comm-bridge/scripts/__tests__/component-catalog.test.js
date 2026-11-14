@@ -21,7 +21,8 @@ test('generated version-one members match the fixed protocol definitions', () =>
   const subset = versionOneSubset(BLOCK_SCHEMA, ACTION_SCHEMA, snapshot);
   assert.equal(digest(subset.BLOCK_SCHEMA), digest(snapshot.BLOCK_SCHEMA));
   assert.equal(digest(subset.ACTION_SCHEMA), digest(snapshot.ACTION_SCHEMA));
-  assert.deepEqual(CATALOG_SOURCE, snapshot.source);
+  assert.equal(CATALOG_SOURCE.coreCommit, snapshot.source.coreCommit);
+  assert.equal(CATALOG_SOURCE.chatweaveCommit, '5c4288338e2a6a50c236d06e51e346c080ae7141');
 });
 
 test('version-one comparison permits additional component and action members', () => {

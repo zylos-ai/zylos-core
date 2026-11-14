@@ -8,6 +8,11 @@ export { parseC4Content };
 export { validateAnswer } from '../../chat-schema.js?v=106';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
+const diagramIcons = new Map([
+  ...['user', 'users', 'bot', 'smartphone', 'monitor', 'glasses', 'server', 'database', 'cloud', 'globe',
+    'code', 'layers', 'tool', 'file', 'book', 'chart', 'key', 'lock', 'clock', 'alert', 'check', 'search', 'target'].map(name => [name, name]),
+  ['network', 'wifi'], ['terminal', 'term'], ['component', 'hex'], ['settings', 'gear'], ['message', 'msg'],
+]);
 
 /** Render the validated shared protocol as inert DOM; the host owns answers. */
 export function renderChatContent({ document, row, t = key => key, renderQuestion, supportsBlock, renderChart, renderAttachment, external = false, layout, showTechnicalDetails = true } = {}) {
@@ -96,6 +101,62 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     if (data.reference) text(figure, `${data.reference.label}: ${value(data.reference.value, data.unit, data.format)}`, 'chat-chart-baseline');
     if (data.asOf) text(figure, data.asOf, 'chat-block-asof');
     text(figure, data.summary);
+    return figure;
+  }
+  function diagram(data) {
+    const figure = node('figure', undefined, 'chat-diagram');
+    if (data.title) figure.append(node('figcaption', data.title, 'chat-block-title'));
+    const viewport = node('div', undefined, 'chat-diagram-viewport');
+    const flow = node('ol', undefined, 'chat-diagram-flow');
+    flow.dataset.direction = data.direction === 'horizontal' && data.steps.length <= 5 ? 'horizontal' : 'vertical';
+    flow.style.setProperty('--diagram-columns', data.steps.map(step => `minmax(0, ${Math.max(1.25, step.nodes.length)}fr)`).join(' 56px '));
+    for (const group of data.groups ?? []) {
+      const first = data.steps.findIndex(step => step.id === group.from);
+      const last = data.steps.findIndex(step => step.id === group.to);
+      const region = node('li', undefined, 'chat-diagram-group');
+      region.setAttribute('role', 'presentation');
+      region.style.setProperty('--group-start', String(first * 2 + 1));
+      region.style.setProperty('--group-end', String(last * 2 + 2));
+      region.style.setProperty('--group-start-row', String(first * 3 + 1));
+      region.style.setProperty('--group-end-row', String(last * 3 + 3));
+      region.append(node('span', group.label, 'chat-diagram-group-label'));
+      flow.append(region);
+    }
+    for (const [index, step] of data.steps.entries()) {
+      const item = node('li', undefined, 'chat-diagram-step');
+      const nodes = node('div', undefined, 'chat-diagram-nodes');
+      nodes.style.setProperty('--step-track', String(index * 2 + 1));
+      nodes.style.setProperty('--step-row', String(index * 3 + 2));
+      nodes.style.setProperty('--node-count', String(step.nodes.length));
+      for (const entry of step.nodes) {
+        const box = node('div', undefined, 'chat-diagram-node');
+        if (entry.highlight) box.classList.add('chat-diagram-highlight');
+        const iconName = diagramIcons.get(entry.icon);
+        if (iconName) {
+          const icon = node('span', undefined, 'wb-ico wb-ico-' + iconName);
+          icon.setAttribute('aria-hidden', 'true');
+          box.append(icon);
+        }
+        box.append(node('span', entry.label, 'chat-diagram-label'));
+        if (entry.detail) box.append(node('span', entry.detail, 'chat-diagram-detail'));
+        nodes.append(box);
+      }
+      item.append(nodes);
+      if (index < data.steps.length - 1) {
+        const link = node('div', undefined, 'chat-diagram-link');
+        link.dataset.arrow = step.link?.arrow ?? 'forward';
+        link.style.setProperty('--link-track', String(index * 2 + 2));
+        link.style.setProperty('--link-row', String(index * 3 + 3));
+        const line = node('span', undefined, 'chat-diagram-line');
+        line.setAttribute('aria-hidden', 'true');
+        link.append(line);
+        if (step.link?.label) link.append(node('span', step.link.label, 'chat-diagram-link-label'));
+        item.append(link);
+      }
+      flow.append(item);
+    }
+    viewport.append(flow); figure.append(viewport);
+    text(figure, data.summary, 'chat-diagram-summary');
     return figure;
   }
   function staticQuestion(block, { showChoiceOptions = true, showFormFields = true } = {}) {
@@ -189,6 +250,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
         const fallback = chart(block);
         part.append(renderChart?.({ block, fallback }) ?? fallback);
       }
+      else if (block.type === 'diagram') part.append(diagram(block.data));
       else if (interactive.has(block.type)) {
         let question;
         if (renderQuestion && envelope.interrupt?.blockId === block.id) {

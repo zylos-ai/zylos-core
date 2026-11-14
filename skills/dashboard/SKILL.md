@@ -186,6 +186,20 @@ send the complete block in a later message. Omit `action.expiresAt`; the host
 neither displays nor enforces it, and a late answer to an open question is
 still accepted.
 
+#### Diagrams
+
+Use `diagram@1` for two to eight ordered steps, each with one to three
+parallel nodes. Direction defaults to vertical; horizontal flows above five
+steps and flows in narrow containers render vertically. Links default to an
+unlabelled forward arrow; the final step's link is ignored. Unknown valid icon
+names are accepted and omitted from the drawing. Use `components.js describe
+diagram@1` for the supported icons and complete field constraints.
+
+```text
+[C4-JSON]
+{"version":1,"kind":"message","messageId":"request_flow","fallbackText":"A user sends a request to the server, which stores it in the database.","blocks":[{"id":"flow","type":"diagram","schemaVersion":1,"fallbackText":"User → server → database.","data":{"direction":"horizontal","steps":[{"nodes":[{"label":"User","icon":"user"}]},{"nodes":[{"label":"Server","icon":"server"}]},{"nodes":[{"label":"Database","icon":"database"}]}]}}]}
+```
+
 #### Arranging blocks with `metadata.view`
 
 A message may add `metadata.view` to arrange its own blocks, for example two
