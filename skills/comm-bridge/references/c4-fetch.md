@@ -22,8 +22,9 @@ creates a new private file (mode 0600), refusing to overwrite an existing path.
 The file contains exactly the ordinary direct output, including when `--json`
 is selected. Stdout contains only export metadata: the absolute `path` (the
 script resolves a relative `FILE`), `count`, `firstId`, `lastId`, `bytes`,
-`sha256`, and `batch` (inside the usual data envelope with `--json`). Read the entire file and verify its byte count and SHA-256 before
-summarizing it. `sha256` hashes the file bytes; `batch.sha256` instead hashes
+`sha256`, and `batch` (inside the usual data envelope with `--json`). Read the
+entire file in byte ranges before summarizing it. Use reported byte counts only
+as byte-range read endpoints. `sha256` hashes the file bytes; `batch.sha256` instead hashes
 stable projected conversation fields and is the receipt used by checkpoint
 verification. The receipt's `after` honors actual coverage and `--after`;
 its `end` is the last returned row ID, or the query's upper bound for an empty

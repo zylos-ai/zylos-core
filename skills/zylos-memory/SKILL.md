@@ -74,8 +74,8 @@ Origin and global Sync also run the documented `reference-index.js rebuild`,
 Read inputs with Read (offset/limit), Glob, or read-only Bash commands
 `grep -n`, `rg -n`, `sed -n '<a>,<b>p'`, and bounded `dd` byte reads; use Grep
 when available.
-For exported batches and listed inputs, read every byte in bounded ranges and
-verify the reported byte count and SHA-256 using read-only tools. Truncated
+For exported batches and listed inputs, read every byte in bounded ranges.
+Use reported byte counts only as byte-range read endpoints. Truncated
 output is unread: retry with a smaller limit/range until complete. Do not infer
 completion from the first/last lines or a successful hash check alone. Use
 returned absolute paths; never synthesize export, segment or session paths.
