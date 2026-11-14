@@ -65,7 +65,7 @@ export function poolBuckets(record, t) {
     Number.isInteger(bucket.samples) && bucket.samples >= 0)
     .slice().sort((a, b) => a.n - b.n).map(bucket => t('wb.inst.poolBucket', {
       count: bucket.n, amount: (bucket.highBytes / 1073741824).toFixed(2), hours: bucket.hours, samples: bucket.samples,
-    })).join('；');
+    })).join(t('wb.inst.poolBucketSeparator'));
 }
 export function poolAlgorithm(record, t) {
   if (record?.valid !== true || record.fresh !== true || record.source !== 'auto') return '';

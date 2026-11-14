@@ -584,6 +584,7 @@ test('adjacent counts require five UTC hours as well as enough stable samples', 
       await f.capacity.tick({ mode: 'multi', now, scenes });
       await f.capacity.tick({ mode: 'multi', now: now + 120000, scenes });
     }
+    if (hour === 3) assert.equal(f.capacity.lastPublished.model.state, 'default', 'four UTC hours still use the default model');
   }
   assert.equal(f.capacity.lastPublished.model.state, 'fitted');
   assert.equal(f.capacity.lastPublished.model.slopeBytes, 500 * MiB);

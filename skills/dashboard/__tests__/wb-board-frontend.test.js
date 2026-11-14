@@ -570,6 +570,12 @@ test('host pool explains published buckets and distinct algorithms while the tec
     '由近 7 天各档的用量决定',
   ]);
   assert.deepEqual(record.model.buckets.map(bucket => bucket.n), [7, 6, 5, 4, 3, 2, 1], 'sorting does not mutate publication');
+  const englishSection = document.createElement('section');
+  renderHostPool(englishSection, view, { document, t: poolTranslator('en') });
+  const englishBuckets = allNodes(englishSection).filter(node => node.tagName === 'LI')[2].textContent;
+  assert.equal(englishBuckets, Array.from({ length: 7 }, (_, i) =>
+    `Session count ${i + 1}: typical peak 7.46 GiB (7 h, 2511 samples)`).join('; '));
+  assert.doesNotMatch(englishBuckets, /；|1 sessions/);
   for (const level of ['plain', 'technical']) {
     instanceStrip(root, { mode: 'multi', instance: { pool } }, { document, t, level });
     const title = allNodes(root).find(node => node.classList.contains('wb-pool')).title;

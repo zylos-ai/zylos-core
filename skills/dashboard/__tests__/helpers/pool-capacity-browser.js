@@ -88,12 +88,16 @@ export async function runPoolCapacityBrowser(sandbox) {
         assert.ok(text.includes('1 个会话时一般最高 7.46 GiB（7 个小时、2511 个样本）'), text);
         assert.ok(tooltip.includes('由近 7 天各档的用量决定'), tooltip);
       }
+      if (locale === 'en' && name === 'fitted') {
+        assert.ok(text.includes('Session count 1: typical peak 7.46 GiB (7 h, 2511 samples); Session count 2:'), text);
+        assert.doesNotMatch(text, /；|1 sessions/);
+      }
       assert.equal(pageError, undefined, pageError); assert.equal(serverError, undefined, serverError);
       const geometry = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth,
         notes: [...document.querySelectorAll('#host li')].map(node => ({ width: node.clientWidth, scroll: node.scrollWidth })) }));
       assert.ok(geometry.page <= geometry.viewport, JSON.stringify({ name, width, theme, geometry }));
       for (const note of geometry.notes) assert.ok(note.scroll <= note.width + 1, JSON.stringify({ name, width, theme, note }));
-      if (evidence && locale === 'zh' && name === 'fitted') await page.screenshot({ path: path.join(evidence, `pool-capacity-${width}-${theme}.png`), fullPage: true });
+      if (evidence && name === 'fitted') await page.screenshot({ path: path.join(evidence, `pool-capacity-${locale}-${width}-${theme}.png`), fullPage: true });
       count++;
     }
     await context.close();
