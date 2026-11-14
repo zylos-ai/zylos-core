@@ -54,6 +54,30 @@ export async function runOverviewReadState(sandbox, scenario) {
   const board = page.locator('#wb-board'), attention = page.locator('#wb-attention');
   const errorText = labels['wb.readFailed'];
   await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, scenario.theme);
+  // Measure the real text and composited ancestor backgrounds, including alpha.
+  // Canvas resolves computed CSS colours to sRGB without assuming theme tokens.
+  const appearance = locator => locator.evaluate(node => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const rgba = css => {
+      ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = css; ctx.fillRect(0, 0, 1, 1);
+      const data = [...ctx.getImageData(0, 0, 1, 1).data];
+      return [data[0], data[1], data[2], data[3] / 255];
+    };
+    const over = (front, back) => front.slice(0, 3).map((v, i) => v * front[3] + back[i] * (1 - front[3]));
+    const ancestors = []; for (let at = node; at; at = at.parentElement) ancestors.unshift(at);
+    let background = [255, 255, 255];
+    for (const at of ancestors) {
+      const style = getComputedStyle(at);
+      if (style.backgroundImage !== 'none' || Number(style.opacity) !== 1) throw Error('Unsupported contrast surface');
+      background = over(rgba(style.backgroundColor), background);
+    }
+    const foreground = over(rgba(getComputedStyle(node).color), background);
+    const luminance = rgb => rgb.map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
+      .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+    const a = luminance(foreground), b = luminance(background);
+    return { color: getComputedStyle(node).color, background, contrast: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) };
+  });
   if (scenario.kind === 'refresh-error') {
     await board.locator('.wb-row').first().waitFor({ state: 'visible' });
     const rows = await board.locator('.wb-row').allTextContents();
@@ -69,7 +93,17 @@ export async function runOverviewReadState(sandbox, scenario) {
     assert.deepEqual(await board.locator('.wb-row').allTextContents(), rows);
     for (const text of otherIssues) assert.ok((await attention.textContent()).includes(text));
   } else if (scenario.kind === 'initial-error') {
-    await board.getByRole('alert').waitFor({ state: 'visible' });
+    const alert = board.getByRole('alert');
+    await alert.waitFor({ state: 'visible' });
+    assert.equal(await alert.evaluate(node => node.classList.contains('wb-attention-item') && !node.classList.contains('wb-empty')), true,
+      'Initial read failure must use the existing error card rather than the empty-state style');
+    const glyph = alert.locator('.wb-ico-alert');
+    assert.equal(await glyph.count(), 1);
+    assert.equal(await glyph.isVisible(), true);
+    assert.notEqual(await glyph.evaluate(node => getComputedStyle(node).maskImage), 'none');
+    const measured = await appearance(alert.getByText(errorText, { exact: true }));
+    console.info('Overview error appearance:', JSON.stringify({ ...scenario, ...measured }));
+    assert.ok(measured.contrast >= 4.5, `Error text contrast ${measured.contrast.toFixed(2)} must be at least 4.5:1`);
     assert.equal(await board.getByText(errorText, { exact: true }).count(), 1);
     assert.equal(await attention.getByText(errorText, { exact: true }).count(), 0);
     assert.equal(await board.locator('.wb-row').count(), 0);
@@ -77,6 +111,9 @@ export async function runOverviewReadState(sandbox, scenario) {
     const empty = page.locator('#wb-board > .wb-empty');
     await empty.waitFor({ state: 'visible' });
     assert.equal(await empty.textContent(), labels['wb.noGroups']);
+    assert.equal(await empty.evaluate(node => node.classList.contains('wb-attention-item')), false);
+    assert.equal(await empty.locator('.wb-ico').count(), 0);
+    console.info('Overview empty appearance:', JSON.stringify({ ...scenario, ...await appearance(empty) }));
     assert.equal(await board.getByRole('alert').count(), 0);
     assert.equal(await page.getByText(errorText, { exact: true }).count(), 0);
     assert.equal(await board.locator('.wb-row').count(), 0);

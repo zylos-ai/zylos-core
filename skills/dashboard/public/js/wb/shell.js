@@ -111,7 +111,10 @@ export function mountWorkbench({ document = globalThis.document, window = global
     }
     syncSide();
     if (!snapshot) {
-      const message = element(document, 'p', t(error ? 'wb.readFailed' : 'wb.board.loading'), 'wb-empty');
+      const message = error
+        ? element(document, 'div', undefined, 'wb-attention-item wb-attention-problem')
+        : element(document, 'p', t('wb.board.loading'), 'wb-empty');
+      if (error) message.append(icon(document, 'alert'), element(document, 'span', t('wb.readFailed')));
       message.setAttribute('role', error ? 'alert' : 'status');
       board.replaceChildren(message);
       return;
