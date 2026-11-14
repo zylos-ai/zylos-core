@@ -26,6 +26,7 @@ test('state guidance assigns committed segment IDs to the commit script', () => 
   assert.match(global, /Follow Group Sync's read-before-cleanup, recovery, summary, temporary state, commit, and failure sequence/);
   const format = normalize(read('state-format'));
   assert.match(format, /The commit script fills `inbox_committed` from this round's listed, verified segments/);
+  assert.ok(format.includes('Leave it empty in temporary state; do not copy it from old state.'));
   assert.match(format, /with no notes this round, the published header is:.*coverage=42 \| inbox_committed= -->/);
   assert.match(format, /With one new note `20261019T053002123Z`, only that ID appears, even if the old state named `20261019T053001123Z`:.*coverage=42 \| inbox_committed=20261019T053002123Z -->/);
 });
