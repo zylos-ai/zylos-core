@@ -12,7 +12,7 @@ export const labelledEvents = new Set([
   'permission_request', 'stop', 'idle', 'turn_complete', 'assistant_message', 'subagent_start', 'subagent_stop',
   'reclaim_done', 'crash_detected', 'rotate_done', 'manual_restart_done', 'restart_done', 'wait_health',
   'activate_new', 'start_always', 'activate_failed', 'activate_timeout', 'runtime_health:stop',
-  'no_response_nudge', 'no_response_restart', 'tool_timeout_restart',
+  'no_response_nudge', 'no_response_restart', 'tool_timeout_nudge', 'tool_timeout_restart',
 ]);
 const categories = new Set(['session', 'turn', 'tool', 'permission', 'subagent', 'diagnostic', 'runtime_health']);
 

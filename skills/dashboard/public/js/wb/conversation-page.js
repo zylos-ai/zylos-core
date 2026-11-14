@@ -9,7 +9,7 @@ import { createConversationState, isOriginConversation } from './conversation-st
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=158';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=164';
-import { createGroupSide } from './group-side.js?v=171';
+import { createGroupSide } from './group-side.js?v=172';
 import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=5';

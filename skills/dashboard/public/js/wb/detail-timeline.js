@@ -2,9 +2,9 @@ import { formatZoned } from './instance-zone.js?v=100';
 import { workingNowText } from './working-display.js?v=4';
 import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
-import { endReasonLabel, timeValue } from './event-labels.js?v=92';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=167';
-import { eventTypesFor, mergeRepeats, newestFirst, showsEvent } from './timeline-rows.js?v=109';
+import { endReasonLabel, timeValue } from './event-labels.js?v=93';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=168';
+import { eventTypesFor, mergeRepeats, newestFirst, restartExit, showsEvent } from './timeline-rows.js?v=110';
 
 export { timeValue };
 
@@ -285,7 +285,8 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
     section.append(toggle);
     if (open) {
       const rows = [];
-      if (state.filter !== 'messages') for (const event of state.events.get(run.runId) ?? []) if (showEvent(event)) rows.push({ at: timeValue(event.timestamp), event });
+      const events = state.filter === 'messages' ? [] : state.events.get(run.runId) ?? [], restarted = restartExit(events);
+      for (const event of events) if (showEvent(event) && !restarted(event)) rows.push({ at: timeValue(event.timestamp), event });
       if (showMessages && ['all', 'messages'].includes(state.filter)) for (const message of state.messages.get(run.runId) ?? []) {
         rows.push({ at: timeValue(message.timestamp), message });
       }

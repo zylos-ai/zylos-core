@@ -593,6 +593,53 @@ export async function runWorkbenchBrowser(t, sandbox) {
     }
   });
 
+  // The stopped group's two runs that the supervisor restarted (fixtures/workbench-browser-api.js), both opened: each
+  // ends as an automatic restart, lists its reminder and restart, and not the crash report the restart itself caused.
+  // A run header's event count stays on one line, also in English on a phone.
+  await step('runs ended by an automatic restart show the reminder and restart, not a crash, and keep their header on one line', async () => {
+    const words = {
+      zh: { tab: '时间线', ends: ['自动重启 · 无响应', '自动重启 · 工具超时'], crash: '会话意外退出',
+        runs: [['无响应，已自动重启', '无响应，已提醒'], ['工具超时，已自动重启', '工具超时，已提醒']] },
+      en: { tab: 'Timeline', ends: ['Auto-restart · no response', 'Auto-restart · tool timeout'], crash: 'Session exited unexpectedly',
+        runs: [['No response, restarted automatically', 'No response, reminded'], ['Tool timed out, restarted automatically', 'Tool timeout, nudged']] },
+    };
+    for (const language of ['zh', 'en']) for (const [width, height] of [[390, 844], [1280, 800]]) for (const theme of ['light', 'dark']) {
+      const name = `${language} ${width} ${theme}`, text = words[language];
+      const { page, context, errors, shot } = await open(width, height, '/', {}, language);
+      if (theme === 'dark') { await page.evaluate(() => localStorage.setItem('zylos-dashboard-theme', 'dark')); await page.reload(); }
+      await page.locator('#wb-board .wb-row', { hasText: 'Product weekly' }).click();
+      await page.locator('#wb-side [role="tab"]', { hasText: text.tab }).click();
+      const headers = page.locator('.wb-timeline-run .wb-run-h');
+      await headers.nth(1).waitFor();
+      for (const index of [0, 1]) await headers.nth(index).click();
+      await page.locator('.wb-timeline-run').nth(1).locator('.wb-timeline-event').first().waitFor();
+      const runs = await page.locator('.wb-timeline-run').evaluateAll(sections => sections.map(section => {
+        // The lines a node's text takes: one per distinct top of its rendered text boxes.
+        const lines = node => { const range = document.createRange(); range.selectNodeContents(node);
+          return new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size; };
+        const header = section.querySelector('.wb-run-h'), count = header.querySelector('.wb-sub');
+        return { end: header.querySelector('.wb-end').textContent, countLines: lines(count), countFits: count.getBoundingClientRect().right <= header.getBoundingClientRect().right + 0.5,
+          events: [...section.querySelectorAll('.wb-timeline-event .wb-ev-t')].map(node => node.firstChild?.textContent ?? node.textContent) };
+      }));
+      assert.deepEqual(runs.map(run => run.end), text.ends, `${name}: each run ends as its automatic restart`);
+      runs.forEach((run, index) => {
+        assert.deepEqual(run.events.slice(0, 2), text.runs[index], `${name}: run ${index} shows the restart over its reminder, newest first`);
+        assert.ok(!run.events.includes(text.crash), `${name}: run ${index} does not show the restart's own exit as a crash`);
+        assert.equal(run.countLines, 1, `${name}: run ${index}'s event count stays on one line`);
+        assert.ok(run.countFits, `${name}: run ${index}'s event count stays inside its header`);
+      });
+      const layout = await page.evaluate(measure);
+      assert.equal(layout.documentWidth, width, `${name}: no sideways scrolling`);
+      // One picture per run, its header in the middle of the detail: run A, then run D.
+      for (const [index, run] of [[0, 'a'], [1, 'd']]) {
+        await headers.nth(index).evaluate(node => node.scrollIntoView({ block: 'center' }));
+        await shot(`restarted-run-${run}-${language}-${theme}`);
+      }
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
   await step('the nav marks the current page for screen readers, and the usage page starts with its controls', async () => {
     for (const width of [390, 1280]) for (const theme of ['light', 'dark']) {
       const { page, context, errors, shot } = await open(width, width === 390 ? 844 : 900, '/');

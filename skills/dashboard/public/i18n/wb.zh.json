@@ -492,6 +492,7 @@
   "wb.event.manual_restart_done": "手工重启",
   "wb.event.no_response_nudge": "无响应，已提醒",
   "wb.event.no_response_restart": "无响应，已自动重启",
+  "wb.event.tool_timeout_nudge": "工具超时，已提醒",
   "wb.event.tool_timeout_restart": "工具超时，已自动重启",
   "wb.event.restart_done": "已重启",
   "wb.event.wait_health": "等待 AI 引擎恢复",

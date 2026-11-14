@@ -83,18 +83,46 @@ function runEvents(now) {
     event('post_tool_use', 17 * 60e3, 'tool'), ...Array.from({ length: 600 }, (_, i) => event('release', 16 * 60e3 - i * 1000, 'diagnostic')),
     event('stop', 5 * 60e3, 'turn')];
 }
+// The stopped group's two earlier runs, newest first, each ended by the supervisor's automatic restart: run A after a
+// reminder the main agent never answered, run D after a tool ran too long. Each restart is followed a second later by
+// the crash report the exit it caused leaves in the same run.
+export const STOPPED_GROUP = 'lark:oc_product';
+function restartedRuns(now) {
+  let seq = 1000;
+  const run = (runId, endReason, endAgo, steps) => {
+    const end = now - endAgo, events = steps.map(([type, before, category]) => ({ id: `e${++seq}`, event_seq: seq,
+      timestamp: iso(end - before), event_type: type, category, run_id: runId, session_group: STOPPED_GROUP, runtime: 'claude', metadata: {} }));
+    return { runId, endReason, startAt: events[0].timestamp, endAt: events.at(-1).timestamp, events };
+  };
+  const work = (from, count) => Array.from({ length: count }, (_, i) => [i % 2 ? 'post_tool_use' : 'pre_tool_use', from - i * 20e3, 'tool']);
+  return [
+    run('run-a', 'auto_restart_no_response', 2 * 3600e3, [['session_start', 3600e3, 'session'], ['user_prompt_submit', 3500e3, 'turn'],
+      ...work(3400e3, 12), ['stop', 1500e3, 'turn'], ['user_prompt_submit', 1400e3, 'turn'], ['no_response_nudge', 600e3, 'diagnostic'],
+      ['no_response_restart', 1100, 'diagnostic'], ['crash_detected', 0, 'session']]),
+    run('run-d', 'auto_restart_tool_timeout', 5 * 3600e3, [['session_start', 1800e3, 'session'], ['user_prompt_submit', 1700e3, 'turn'],
+      ['pre_tool_use', 1600e3, 'tool'], ['tool_timeout_nudge', 900e3, 'diagnostic'], ['tool_timeout_restart', 1000, 'diagnostic'],
+      ['crash_detected', 0, 'session']]),
+  ];
+}
 function timeline(url, now) {
   const params = url.searchParams, types = params.get('types')?.split(',').filter(Boolean);
   const after = Number(params.get('after_seq') ?? 0), limit = Math.min(1000, Number(params.get('limit') ?? 100));
-  if (params.get('run_id') ? params.get('run_id') !== 'run-tg' : params.get('session_group') !== GROUP) return { events: [] };
-  const events = runEvents(now).filter(event => (!types || types.includes(event.event_type)) && event.event_seq > after);
+  const restarted = restartedRuns(now).find(run => run.runId === params.get('run_id'));
+  if (!restarted && (params.get('run_id') ? params.get('run_id') !== 'run-tg' : params.get('session_group') !== GROUP)) return { events: [] };
+  const events = (restarted?.events ?? runEvents(now)).filter(event => (!types || types.includes(event.event_type)) && event.event_seq > after);
   if (params.get('order') === 'desc') events.reverse();
   return { events: events.slice(0, limit) };
 }
 function runs(url, now) {
-  if (decodeURIComponent(url.pathname.split('/')[4] ?? '') !== GROUP) return { runs: [], totalEvents: 0, totalRuns: 0, unattributed: 0 };
-  const all = runEvents(now), types = url.searchParams.get('types')?.split(',').filter(Boolean);
-  const n = all.filter(event => !types || types.includes(event.event_type)).length;
+  const group = decodeURIComponent(url.pathname.split('/')[4] ?? ''), types = url.searchParams.get('types')?.split(',').filter(Boolean);
+  const count = events => events.filter(event => !types || types.includes(event.event_type)).length;
+  if (group === STOPPED_GROUP) {
+    const list = restartedRuns(now).map(({ events, ...run }) => ({ ...run, n: count(events) }));
+    return { runs: list, totalEvents: list.reduce((sum, run) => sum + run.n, 0), totalRuns: list.length, unattributed: 0 };
+  }
+  if (group !== GROUP) return { runs: [], totalEvents: 0, totalRuns: 0, unattributed: 0 };
+  const all = runEvents(now);
+  const n = count(all);
   return { runs: [{ runId: 'run-tg', startAt: all[0].timestamp, endAt: all.at(-1).timestamp, n, endReason: 'running' }], totalEvents: n, totalRuns: 1, unattributed: 0 };
 }
 

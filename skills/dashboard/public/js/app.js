@@ -6,13 +6,13 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=199';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=170';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=171';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=194';
+import { mountConversationPage } from './wb/conversation-page.js?v=195';
 import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
-import { mountWorkbench } from './wb/shell.js?v=201';
+import { mountWorkbench } from './wb/shell.js?v=202';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=111';
 import { createRemoteAccess } from './wb/remote-access.js?v=1';
