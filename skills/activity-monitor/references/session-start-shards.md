@@ -12,9 +12,8 @@ Keep startup context fast and local:
    should only read a small local file and return immediately. If the cache is
    missing or stale, return an explicit instruction instead of waiting silently.
 
-This reference describes the current `multi-session/prerelease` branch
-(`1.0.0-beta.9`). Core 0.9.6 also supports `shards.d`, but its migration and
-hook synchronization behavior differs; consult its version of the documentation.
+This reference applies to Zylos Core 1.0.0 and later, including the 1.0 prerelease
+line.
 Both Claude and Codex generate the shard chain; context attachment order differs
 as described below.
 A shard is startup context, not a place to perform network setup, authentication,
@@ -73,8 +72,7 @@ register or remove a component's shard declaration for it.
 When switching from a legacy SessionStart hook to a shard, the component must
 remove its own legacy command in `post-upgrade` from **both** runtime files:
 `.claude/settings.json` and `.codex/hooks.json` beneath `ZYLOS_DIR`, regardless
-of which runtime is active. Back up those files through the component's upgrade
-backup before changing them. Match only the exact command the component installed;
+of which runtime is active. Match only the exact command the component installed;
 keep unrelated commands, matcher groups, group metadata, and other events.
 For example, this idempotent component-owned migration leaves missing files
 alone, writes only changed files, and fails on unreadable or invalid JSON:
