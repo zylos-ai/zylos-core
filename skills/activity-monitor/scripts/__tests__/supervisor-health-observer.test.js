@@ -404,6 +404,19 @@ test('failed no-response nudges retry only after cooldown and record one event p
   assert.equal(attempts,1);assert.equal(f.events.length,1);
   f.advance(1000);await f.observer.tick();assert.equal(attempts,2);assert.equal(f.events.length,2);
 });
+for(const failure of ['rejected','exception'])test(`new paste preserves failed nudge cooldown after ${failure}`,async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);let attempts=0;
+  f.observer.nudge=async()=>{
+    attempts++;
+    if(failure==='exception')throw Error('queue unavailable');
+    return {ok:false};
+  };
+  await f.observer.tick();assert.equal(attempts,1);
+  f.advance(10000);f.delivered();await f.observer.tick();assert.equal(attempts,1);
+  f.advance(48000);await f.observer.tick();assert.equal(attempts,1);
+  f.advance(1999);await f.observer.tick();assert.equal(attempts,1);
+  f.advance(1);await f.observer.tick();assert.equal(attempts,2);
+});
 test('recovery blocked by fences or transition does not emit attempted-nudge events',async t=>{
   for(const gate of ['fence','transition','manual']){
     const f=fixture(t);f.setScenes([{...f.scene(),sessionGroup:'origin'}]);f.delivered();f.advance(900000);
