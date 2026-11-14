@@ -248,18 +248,11 @@ export function createSupervisor(deps) {
     },
   },deps.loopOptions);
   const connectionHandler=createSupervisorConnectionHandler({admission,router,isOpen:()=>admission.open && !stopping,readRun:group=>scenes.readRun(group),readMode,
-    onDelivered:async notification=>{
+    onDelivered:async(notification,current)=>{
       const delivered={...notification,sessionGroup:notification.sessionGroup ?? 'origin'};
       if(notification.controlId===undefined){
+        observer.notifyDelivered(delivered,{currentSessionTs:current?.currentSessionTs});
         lifecycle.messageDelivered(delivered);
-        try {
-          // readRun includes the current session timestamp; readIdentity does not.
-          const current=await scenes.readRun(delivered.sessionGroup);
-          if(current?.runId===delivered.runId && current?.runtime===delivered.runtime &&
-            (!Number.isFinite(current.currentSessionTs) || delivered.pastedAt>=current.currentSessionTs)) {
-            observer.notifyDelivered({...delivered,sessionId:current.sessionId});
-          }
-        } catch(error) {log({event:'delivery_observation_failed',code:error.code ?? 'READ_FAILED'});}
       }
       await admission.serialize(()=>lifecycle.workDelivered(delivered));
     },onHealthEvents:()=>{void loop.tick();},log});

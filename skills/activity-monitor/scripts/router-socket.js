@@ -72,7 +72,7 @@ export function createSupervisorConnectionHandler({ admission, router, readRun, 
           if (live && (request.version === 1 || (live.runId === request.runId && live.runtime === request.runtime))) {
             if (request.version === 1 || Number.isSafeInteger(request.pastedAt)) {
               await onDelivered({ ...request, pastedAt: request.version === 1 ? request.deliveredAt : request.pastedAt,
-                sessionGroup: group, runId: live.runId, runtime: live.runtime });
+                sessionGroup: group, runId: live.runId, runtime: live.runtime }, live);
             }
           } else log('Ignoring stale delivery notification');
           reply({ version: 1, type: 'ack', requestId: request.requestId }); return;

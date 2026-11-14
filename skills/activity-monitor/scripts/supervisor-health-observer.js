@@ -37,11 +37,12 @@ export class SupervisorHealthObserver {
     }
     return state;
   }
-  notifyDelivered({ sessionGroup, runId, runtime, sessionId, pastedAt }) {
+  notifyDelivered({ sessionGroup, runId, runtime, pastedAt }, {currentSessionTs} = {}) {
     if (this.stopped || !sessionGroup || !runId || !runtime || !Number.isFinite(pastedAt)) return false;
-    const state = this.sceneState({sessionGroup, runId, runtime, sessionId});
+    const state = this.sceneState({sessionGroup, runId, runtime});
     if (!state.delivery || pastedAt > state.delivery.pastedAt) {
-      state.delivery = {pastedAt, sessionId, requiredStartAfter:pastedAt, screenChecked:false, recovery:null, retryAt:0};
+      state.delivery = {pastedAt, noResponseEligible:!Number.isFinite(currentSessionTs) || pastedAt>=currentSessionTs,
+        requiredStartAfter:pastedAt, screenChecked:false, recovery:null, retryAt:0};
     }
     return true;
   }
@@ -225,11 +226,7 @@ export class SupervisorHealthObserver {
     if (!state || (state.runId && state.runId !== scene.runId)) return;
     if(tracked.watchdog?.pending)return;
     const tools = state.tools ?? [];
-    let delivery = tracked.delivery;
-    if(delivery?.sessionId && delivery.sessionId!==scene.sessionId) {
-      if(tracked.delivery===delivery)tracked.delivery=null;
-      delivery=null;
-    }
+    const delivery = tracked.delivery;
     if (delivery) {
       if (await this.observeDelivery(scene, tracked, delivery, state, now)) return;
       if (!delivery.screenChecked && now - delivery.pastedAt >= USER_MESSAGE_CHECK_DELAY_MS && await this.checkDeliveredScreen(scene, tracked, delivery, state, now)) return;
@@ -246,16 +243,16 @@ export class SupervisorHealthObserver {
     if (!candidate) {tracked.watchdog=null;return;}
     const {tool,rule} = candidate, id = tool.id;
     if (!id) return;
-    if (tracked.watchdog?.id !== id || tracked.watchdog.sessionId!==scene.sessionId || tracked.watchdog.delivery!==tracked.delivery) tracked.watchdog={id,sessionId:scene.sessionId,delivery:tracked.delivery,retryAt:0,graceUntil:null};
+    if (tracked.watchdog?.id !== id || tracked.watchdog.sessionId!==scene.sessionId) tracked.watchdog={id,sessionId:scene.sessionId,retryAt:0,graceUntil:null};
     const watchdog=tracked.watchdog;
     const activityAt=this.activityAt(scene,state,tool.startedAt);
     const valid=async(current,{continuing=false}={})=>{
       if(current.sessionId!==watchdog.sessionId || this.scenes.get(scene.sessionGroup)!==tracked ||
-        tracked.delivery!==watchdog.delivery || tracked.watchdog!==watchdog ||
+        (watchdog.pending && tracked.delivery!==watchdog.owner) || tracked.watchdog!==watchdog ||
         !await this.canRecover(current))return false;
       if(continuing)return true;
       const fresh=await this.readState(current);
-      return fresh?.sessionId===current.sessionId &&
+      return fresh?.sessionId===current.sessionId && !fresh.transcriptPending &&
         fresh.tools?.some(value=>value.id===id) &&
         this.activityAt(current,fresh,tool.startedAt)<=watchdog.activityAt;
     };
@@ -266,22 +263,25 @@ export class SupervisorHealthObserver {
       if (now > watchdog.graceUntil) await this.stopScene(scene,'tool_timeout_restart',valid,
         {reason:'tool_timeout_restart',tool:tool.name,silence_ms:Math.max(0,now-activityAt)});
     } else if (!watchdog.pending && now >= watchdog.retryAt && await this.canRecover(scene)) {
-      watchdog.pending=true;watchdog.activityAt=activityAt;
+      watchdog.pending=true;watchdog.owner=tracked.delivery;watchdog.activityAt=activityAt;
       try {
         const result = await this.nudge(scene,valid);
         const escapeEnqueued=result?.ok || result?.steps?.[0]?.ok;
         await this.diagnostic({event:'tool_timeout_nudge',reason:'tool_timeout_nudge',sessionGroup:scene.sessionGroup,
           runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,tool:tool.name,silence_ms:Math.max(0,this.now()-activityAt),enqueued:result?.ok===true,escape_enqueued:escapeEnqueued===true,
-          superseded:tracked.watchdog!==watchdog || tracked.delivery!==watchdog.delivery});
-        if(tracked.watchdog!==watchdog || tracked.delivery!==watchdog.delivery)return;
-        if (escapeEnqueued) watchdog.graceUntil=this.now()+rule.watchdog.interruptGraceSec*1000;
+          superseded:tracked.watchdog!==watchdog || tracked.delivery!==watchdog.owner});
+        if(tracked.watchdog!==watchdog)return;
+        const acceptedAt=result?.ok ? result.enqueuedAt : result?.steps?.[0]?.enqueuedAt;
+        const resumeAfter=Number.isFinite(acceptedAt) ? acceptedAt : this.now();
+        if(escapeEnqueued && watchdog.owner)watchdog.owner.requiredStartAfter=Math.max(watchdog.owner.requiredStartAfter,resumeAfter);
+        if (escapeEnqueued) watchdog.graceUntil=resumeAfter+rule.watchdog.interruptGraceSec*1000;
         else watchdog.retryAt=this.now()+rule.watchdog.cooldownSec*1000;
       } catch(error) {
         watchdog.retryAt=this.now()+rule.watchdog.cooldownSec*1000;
         await this.diagnostic({event:'tool_timeout_nudge',reason:'tool_timeout_nudge',sessionGroup:scene.sessionGroup,
           runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,tool:tool.name,
           silence_ms:Math.max(0,this.now()-activityAt),enqueued:false,outcome:'unknown',
-          superseded:tracked.watchdog!==watchdog || tracked.delivery!==watchdog.delivery});
+          superseded:tracked.watchdog!==watchdog || tracked.delivery!==watchdog.owner});
         throw error;
       } finally {watchdog.pending=false;}
     }
@@ -292,54 +292,58 @@ export class SupervisorHealthObserver {
       .filter(value=>Number.isFinite(value) && value<=this.now()));
   }
   deliveryCompleted(scene,delivery,state) {
-    return state?.sessionId===scene.sessionId && Number.isFinite(state.lastStartedAt) &&
+    return state?.sessionId===scene.sessionId && !state.transcriptPending && Number.isFinite(state.lastStartedAt) &&
       state.lastStartedAt>=delivery.requiredStartAfter && state.lastCompletedAt>delivery.pastedAt &&
       state.lastCompletedAt>=state.lastStartedAt && state.lastCompletedAt>=(state.lastMainWorkAt ?? state.lastStartedAt);
   }
+  responseAt(state) {
+    return Number.isFinite(state?.lastResponseAt) && state.lastResponseAt<=this.now() ? state.lastResponseAt : 0;
+  }
   async observeDelivery(scene,tracked,delivery,state,now) {
-    // An in-flight Escape/continue pair owns its continuation even when Escape
-    // produces Stop/idle or transcript activity before continue is enqueued.
+    // A pair must finish even when Escape creates Stop/idle or transcript writes.
     if(delivery.recovery?.pending)return true;
-    if(this.deliveryCompleted(scene,delivery,state)) {
+    if(delivery.recovery?.sessionId!==undefined && delivery.recovery.sessionId!==scene.sessionId)delivery.recovery=null;
+    let recovery=delivery.recovery;
+    // Once nudged, only actual assistant work can end the recovery wait. Control
+    // prompt hooks and interruption records are input effects, not a response.
+    if(recovery && !state.transcriptPending && this.responseAt(state)>recovery.responseAt) {
+      delivery.recovery=null;recovery=null;
+    }
+    if(!recovery && this.deliveryCompleted(scene,delivery,state)) {
       if(tracked.delivery===delivery)tracked.delivery=null;
       return false;
     }
-    if(await this.readMode()!=='multi')return false;
+    if(await this.readMode()!=='multi' || !delivery.noResponseEligible)return false;
     const activityAt=this.activityAt(scene,state,delivery.pastedAt);
-    if(delivery.recovery && activityAt>delivery.recovery.activityAt)delivery.recovery=null;
-    const silenceMs=Math.max(0,now-activityAt);
-    if(silenceMs<NO_RESPONSE_SILENCE_MS)return false;
-    if(now<delivery.retryAt)return true;
-    const recovery=delivery.recovery;
-    const episode=recovery ?? {activityAt,pending:true,nudgedAt:null};
+    const silenceMs=Math.max(0,now-(recovery ? recovery.activityAt : activityAt));
+    if(!recovery && (state.transcriptPending || silenceMs<NO_RESPONSE_SILENCE_MS))return false;
+    if(!recovery && now<delivery.retryAt)return true;
+    const episode=recovery ?? {sessionId:scene.sessionId,activityAt,responseAt:now,pending:true,nudgedAt:null};
     const valid=async(current,{continuing=false}={})=>{
-      if((delivery.sessionId && current.sessionId!==delivery.sessionId) ||
-        this.scenes.get(scene.sessionGroup)!==tracked || tracked.delivery!==delivery ||
-        delivery.recovery!==episode || await this.readMode()!=='multi' ||
+      if(current.sessionId!==episode.sessionId || this.scenes.get(scene.sessionGroup)!==tracked ||
+        tracked.delivery!==delivery || delivery.recovery!==episode || await this.readMode()!=='multi' ||
         !await this.canRecover(current))return false;
       if(continuing)return true;
       const fresh=await this.readState(current);
-      return fresh?.sessionId===current.sessionId && !this.deliveryCompleted(current,delivery,fresh) &&
+      if(fresh?.sessionId!==current.sessionId || fresh.transcriptPending)return false;
+      if(episode.nudgedAt!==null)return this.responseAt(fresh)<=episode.responseAt;
+      return !this.deliveryCompleted(current,delivery,fresh) &&
         this.activityAt(current,fresh,delivery.pastedAt)<=episode.activityAt;
     };
     if(!recovery) {
       if(!await this.canRecover(scene))return false;
       if(tracked.delivery!==delivery || delivery.recovery)return true;
-      // Reserve before any awaited enqueue; a newer paste owns its own episode.
       delivery.recovery=episode;
-      let result;
       try {
-        result=await this.nudge(scene,valid);
+        const result=await this.nudge(scene,valid);
         const escapeEnqueued=result?.ok===true || result?.steps?.[0]?.ok===true;
-        const attemptEndedAt=this.now();
         const acceptedAt=result?.ok ? result.enqueuedAt : result?.steps?.[0]?.enqueuedAt;
-        const resumeAfter=Number.isFinite(acceptedAt) ? acceptedAt : attemptEndedAt;
+        const resumeAfter=Number.isFinite(acceptedAt) ? acceptedAt : this.now();
         await this.diagnostic({event:'no_response_nudge',reason:'no_response_nudge',sessionGroup:scene.sessionGroup,
           runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,silence_ms:Math.max(0,this.now()-activityAt),
           enqueued:result?.ok===true,escape_enqueued:escapeEnqueued,
           superseded:tracked.delivery!==delivery || delivery.recovery!==episode});
         if(tracked.delivery!==delivery || delivery.recovery!==episode)return true;
-        // A Stop caused by Escape cannot complete the resumed conversation.
         if(escapeEnqueued)delivery.requiredStartAfter=Math.max(delivery.requiredStartAfter,resumeAfter);
         if(result?.ok)episode.nudgedAt=resumeAfter;
         else {delivery.recovery=null;delivery.retryAt=this.now()+NO_RESPONSE_RETRY_MS;}

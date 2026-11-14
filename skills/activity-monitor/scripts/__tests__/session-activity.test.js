@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {SessionActivity} from '../session-activity.js';
+import {SessionActivity,TRANSCRIPT_READ_BUDGET_BYTES,TRANSCRIPT_LINE_LIMIT_BYTES,RECENT_TOOL_RESULTS_LIMIT} from '../session-activity.js';
 import {handleHookActivity} from '../hook-activity.js';
 import {publishContextSample} from '../context-monitor.js';
 function fixture(t,runtime='claude') {
@@ -17,7 +17,7 @@ test('current main-agent tools only; stop timestamp and late post preserve newer
 });
 test('Claude transcript results arriving before a hook stay remembered',t=>{
  const {root,activity,row}=fixture(t);const transcript=path.join(root,'s.jsonl');
- fs.writeFileSync(transcript,JSON.stringify({message:{content:[{type:'tool_result',tool_use_id:'a'},{type:'tool_result',tool_use_id:'late'}]}})+'\n');
+ fs.writeFileSync(transcript,['a','late'].map(id=>JSON.stringify({message:{content:[{type:'tool_result',tool_use_id:id}]}})).join('\n')+'\n');
  activity.consume([row('session_start',{transcript_path:transcript}),row('pre_tool',{tool_use_id:'a'})]);activity.read();
  assert.equal(activity.tools.size,0);activity.consume([row('pre_tool',{tool_use_id:'late'})]);assert.equal(activity.tools.size,0);
 });
@@ -300,13 +300,15 @@ for(const runtime of ['claude','codex'])test(`${runtime} recovers completion bef
  assert.equal(restarted.read(14000).lastCompletedAt,230);
 });
 
-test('queued Claude dequeue supersedes old turn completion without a prompt hook or active tools',async t=>{
+test('busy prompt enqueue does not start Claude work before old Stop and later dequeue',async t=>{
  const {appendEvent}=await import('../../../../cli/lib/event-log.js');
  const {root,activity,row}=fixture(t),log=path.join(root,'events.jsonl'),transcript=path.join(root,'s.jsonl');
- fs.writeFileSync(transcript,'');
+ fs.writeFileSync(transcript,JSON.stringify({type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(200).toISOString()})+'\n');
  appendEvent(log,row('session_start',{ts:100,transcript_path:transcript}));
  appendEvent(log,row('prompt',{ts:200}));
  // A second message pasted at 300 queues behind the old turn's final tool/stop.
+ appendEvent(log,row('prompt',{ts:301}));
+ fs.appendFileSync(transcript,JSON.stringify({type:'queue-operation',operation:'enqueue',timestamp:new Date(302).toISOString(),sessionId:'s'})+'\n');
  appendEvent(log,row('pre_tool',{ts:350,tool_use_id:'old'}));
  appendEvent(log,row('stop',{ts:400}));
  let value=activity.read(5000);
@@ -351,16 +353,16 @@ test('prompt and meaningful foreground hooks persist independently of closing ho
    row('prompt',{ts:NaN}),row('idle',{ts:600})]);
   for(const now of [10000,11000]) {
    const value=activity.read(now);
-   assert.equal(value.lastStartedAt,450);assert.equal(value.lastMainWorkAt,500);
+   assert.equal(value.lastStartedAt,200);assert.equal(value.lastMainWorkAt,500);
    assert.equal(value.lastCompletedAt,runtime==='claude'?600:300);
   }
  }
 });
 
-test('recovery finds factual prompt before latest completion across rotation',async t=>{
+test('recovery correlates transcript dequeue with hooks before latest completion across rotation',async t=>{
  const {appendEvent,rotateEventLog}=await import('../../../../cli/lib/event-log.js');
  const {root,activity,row}=fixture(t),log=path.join(root,'events.jsonl'),transcript=path.join(root,'s.jsonl');
- fs.writeFileSync(transcript,'');
+ fs.writeFileSync(transcript,JSON.stringify({type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(200).toISOString()})+'\n');
  appendEvent(log,row('session_start',{ts:50,transcript_path:transcript}));
  appendEvent(log,row('prompt',{ts:200}));appendEvent(log,row('pre_tool',{ts:250,tool_use_id:'old'}));
  rotateEventLog(log,{maxBytes:0,now:1000});appendEvent(log,row('stop',{ts:300}));
@@ -375,4 +377,207 @@ test('Codex transcript formats do not fabricate dequeue starts or meaningful wor
  activity.consume([row('session_start',{ts:100,transcript_path:transcript}),row('stop',{ts:300})]);
  const value=activity.read(5000);
  assert.equal(value.lastStartedAt,null);assert.equal(value.lastMainWorkAt,null);assert.equal(value.lastCompletedAt,300);
+});
+
+for(const runtime of ['claude','codex'])test(`${runtime} busy prompt hooks remain queued until factual work begins`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ activity.consume([row('prompt',{ts:200}),row('prompt',{ts:301}),row('stop',{ts:400})]);
+ for(const now of [5000,6000])assert.equal(activity.read(now).lastStartedAt,200);
+ activity.consume([row('prompt',{ts:7000})]);
+ assert.equal(activity.read(8000).lastStartedAt,7000);
+});
+
+test('Claude mid-turn remove requires a queued-command attachment and uses removal time',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,JSON.stringify({type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(200).toISOString()})+'\n');
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript}),row('prompt',{ts:200}),row('prompt',{ts:301})]);
+ const record=(type,ts,more={})=>({type,sessionId:'s',timestamp:new Date(ts).toISOString(),...more});
+ fs.appendFileSync(transcript,JSON.stringify(record('queue-operation',302,{operation:'enqueue'}))+'\n'+
+  JSON.stringify(record('queue-operation',350,{operation:'remove',reason:'absorbed_mid_turn'}))+'\n');
+ assert.equal(activity.read(5000).lastStartedAt,200);
+ // The native queued-command attachment carries ENQUEUE time, before removal.
+ fs.appendFileSync(transcript,JSON.stringify(record('attachment',301,{isSidechain:false,
+  attachment:{type:'queued_command',commandMode:'prompt',source_uuid:'queued-message',timestamp:new Date(301).toISOString(),humanTurn:true,origin:{kind:'human'}}}))+'\n');
+ const started=activity.read(6000);
+ assert.equal(started.lastStartedAt,350);assert.equal(started.lastMainWorkAt,350);
+ activity.consume([row('stop',{ts:400})]);
+ const done=activity.read(7000);
+ assert.equal(done.lastStartedAt,350);assert.equal(done.lastCompletedAt,400);
+ assert.equal(activity.read(8000).lastStartedAt,350);
+});
+
+test('only AI work advances response time; Escape and continue artifacts do not',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'');
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript}),row('prompt',{ts:200}),
+  row('pre_tool',{ts:250,tool_use_id:'main'}),row('pre_tool',{ts:300,agent_id:'child'}),
+  row('pre_tool',{ts:9000,agent_id:'child',session_id:'foreign'})]);
+ assert.equal(activity.read(5000).lastResponseAt,300);
+ activity.consume([row('stop',{ts:400}),row('idle',{ts:410}),row('prompt',{ts:420}),
+  row('post_tool',{ts:430,tool_use_id:'main'}),row('subagent_stop',{ts:440,agent_id:'child'})]);
+ const record=(type,ts,more={})=>({type,sessionId:'s',timestamp:new Date(ts).toISOString(),isSidechain:false,...more});
+ const rows=[record('user',450,{message:{role:'user',content:[{type:'text',text:'[Request interrupted by user]'}]}}),
+  record('user',460,{message:{role:'user',content:[{type:'text',text:'continue'}]}}),
+  record('assistant',470,{message:{role:'assistant',model:'<synthetic>',content:[{type:'text',text:'interrupted'}]}}),
+  record('assistant',480,{isApiErrorMessage:true,message:{role:'assistant',model:'claude',content:[{type:'text',text:'error'}]}})];
+ fs.appendFileSync(transcript,rows.map(value=>JSON.stringify(value)).join('\n')+'\n');
+ assert.equal(activity.read(6000).lastResponseAt,300);
+ fs.appendFileSync(transcript,JSON.stringify(record('assistant',500,{message:{role:'assistant',model:'claude',content:[{type:'text',text:'Resuming the task.'}]}}))+'\n');
+ assert.equal(activity.read(7000).lastResponseAt,500);
+ assert.equal(activity.read(8000).lastResponseAt,500);
+});
+
+test('Codex assistant output requires matching rollout identity and excludes input and interruption records',t=>{
+ const {root,activity,row}=fixture(t,'codex'),transcript=path.join(root,'s.jsonl');
+ const record=(type,ts,payload)=>({type,timestamp:new Date(ts).toISOString(),payload});
+ const output=ts=>record('response_item',ts,{type:'message',role:'assistant',content:[{type:'output_text',text:'Working on the task.'}]});
+ const rows=[record('session_meta',100,{id:'foreign'}),output(200),record('session_meta',250,{id:'s'}),
+  record('response_item',300,{type:'message',role:'user',content:[{type:'input_text',text:'continue'}]}),
+  record('event_msg',350,{type:'turn_aborted',reason:'interrupted'})];
+ fs.writeFileSync(transcript,rows.map(value=>JSON.stringify(value)).join('\n')+'\n');
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ assert.equal(activity.read(5000).lastResponseAt,null);
+ fs.appendFileSync(transcript,JSON.stringify(output(400))+'\n');
+ assert.equal(activity.read(6000).lastResponseAt,400);
+ fs.appendFileSync(transcript,JSON.stringify(record('response_item',450,{type:'function_call',name:'exec_command',arguments:'{}',call_id:'call'}))+'\n');
+ assert.equal(activity.read(7000).lastResponseAt,450);
+});
+
+test('large transcripts obey a per-read byte budget before exposing a late queued start',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const line=JSON.stringify({type:'progress'})+'\n';
+ fs.writeFileSync(transcript,line.repeat(Math.ceil(TRANSCRIPT_READ_BUDGET_BYTES*3/line.length))+
+  JSON.stringify({type:'queue-operation',operation:'dequeue',timestamp:new Date(400).toISOString(),sessionId:'s'})+'\n');
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ let value=activity.read(5000);
+ assert.equal(value.transcriptPending,true);assert.equal(value.lastStartedAt,null);
+ assert.ok(activity.transcriptOffset<=TRANSCRIPT_READ_BUDGET_BYTES);
+ for(let reads=0;reads<8 && value.transcriptPending;reads++) {
+  const before=activity.transcriptOffset;
+  value=activity.read(6000+reads);
+  assert.ok(activity.transcriptOffset-before<=TRANSCRIPT_READ_BUDGET_BYTES);
+ }
+ assert.equal(value.transcriptPending,false);assert.equal(value.lastStartedAt,400);
+ assert.equal(activity.results.size,0);
+});
+
+test('oversized transcript lines have bounded carry and parsing resumes after newline',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl'),warnings=[];
+ activity.warn=value=>warnings.push(value);
+ fs.writeFileSync(transcript,'x'.repeat(TRANSCRIPT_LINE_LIMIT_BYTES+1)+'\n'+
+  JSON.stringify({type:'queue-operation',operation:'dequeue',timestamp:new Date(400).toISOString(),sessionId:'s'})+'\n');
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ let value;
+ for(let reads=0;reads<8;reads++) {
+  value=activity.read(5000+reads);
+  assert.ok(activity.transcriptPartial.length<=TRANSCRIPT_LINE_LIMIT_BYTES);
+  if(!value.transcriptPending)break;
+ }
+ assert.equal(value.transcriptPending,false);assert.equal(value.lastStartedAt,400);
+ assert.equal(warnings.filter(value=>value==='transcript_line_too_large').length,1);
+});
+
+test('recent tool results remain capped across idle gaps before delayed hooks',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const result=id=>JSON.stringify({message:{content:[{type:'tool_result',tool_use_id:id}]}})+'\n';
+ fs.writeFileSync(transcript,Array.from({length:RECENT_TOOL_RESULTS_LIMIT+40},(_,i)=>result(`result-${i}`)).join(''));
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript}),row('pre_tool',{ts:200,tool_use_id:'active'})]);
+ activity.read(5000);
+ assert.equal(activity.results.size,RECENT_TOOL_RESULTS_LIMIT);
+ activity.consume([row('stop',{ts:6000})]);
+ fs.appendFileSync(transcript,result('not-paired'));
+ activity.read(7000);
+ assert.equal(activity.results.has('not-paired'),true);
+ assert.ok(activity.results.size<=RECENT_TOOL_RESULTS_LIMIT);
+});
+
+
+test('a transcript-started Claude turn keeps a later prompt queued until closure',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,JSON.stringify({type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(250).toISOString()})+'\n');
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ assert.equal(activity.read(5000).lastStartedAt,250);
+ activity.consume([row('prompt',{ts:301}),row('stop',{ts:400})]);
+ assert.equal(activity.read(6000).lastStartedAt,250);
+});
+
+test('unfinished EOF record does not fence recovery and completes on a later append',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const record=JSON.stringify({type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(400).toISOString()});
+ fs.writeFileSync(transcript,record.slice(0,-3));
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ const partial=activity.read(5000);
+ assert.equal(partial.transcriptPending,false);assert.equal(partial.lastStartedAt,null);
+ assert.ok(activity.transcriptPartial.length>0);
+ assert.equal(activity.read(6000).transcriptPending,false);
+ fs.appendFileSync(transcript,record.slice(-3)+'\n');
+ const complete=activity.read(7000);
+ assert.equal(complete.transcriptPending,false);assert.equal(complete.lastStartedAt,400);
+ assert.equal(activity.transcriptPartial.length,0);
+});
+
+test('oversized unfinished EOF record remains unknown without indefinitely fencing recovery',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'x'.repeat(TRANSCRIPT_LINE_LIMIT_BYTES+1));
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ let value;
+ for(let reads=0;reads<8;reads++) {
+  value=activity.read(5000+reads);
+  if(!value.transcriptPending)break;
+ }
+ assert.equal(value.transcriptPending,false);assert.equal(value.lastResponseAt,null);
+ assert.equal(activity.transcriptSkippingLine,true);assert.equal(activity.transcriptPartial.length,0);
+ assert.equal(activity.read(6000).transcriptPending,false);
+ fs.appendFileSync(transcript,'\n'+JSON.stringify({type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(400).toISOString()})+'\n');
+ const recovered=activity.read(7000);
+ assert.equal(recovered.transcriptPending,false);assert.equal(recovered.lastStartedAt,400);
+ assert.equal(activity.transcriptSkippingLine,false);
+});
+
+for(const recovering of [false,true])test(`Claude cross-source queued starts stay factual during ${recovering?'recovery':'incremental reads'}`,async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t),log=path.join(root,'events.jsonl'),transcript=path.join(root,'s.jsonl');
+ const queue=(operation,ts)=>JSON.stringify({type:'queue-operation',operation,sessionId:'s',timestamp:new Date(ts).toISOString()})+'\n';
+ fs.writeFileSync(transcript,queue('dequeue',200));
+ appendEvent(log,row('session_start',{ts:100,transcript_path:transcript}));
+ appendEvent(log,row('prompt',{ts:200}));
+ if(!recovering)assert.equal(activity.read(3000).lastStartedAt,200);
+ appendEvent(log,row('stop',{ts:400}));
+ fs.appendFileSync(transcript,queue('dequeue',450));
+ // Message B arrives while queued A is running; hooks are consumed first.
+ appendEvent(log,row('prompt',{ts:501}));
+ fs.appendFileSync(transcript,queue('enqueue',502));
+ appendEvent(log,row('stop',{ts:600}));
+ for(const now of [5000,6000]) {
+  const value=activity.read(now);
+  assert.equal(value.lastStartedAt,450);assert.equal(value.lastCompletedAt,600);
+  assert.ok(value.lastStartedAt<500); // B pasted at 500 has not started.
+ }
+ fs.appendFileSync(transcript,queue('dequeue',650));
+ assert.equal(activity.read(7000).lastStartedAt,650);
+});
+
+test('an older closing hook cannot make a newer known turn appear closed to prompt inference',t=>{
+ for(const runtime of ['claude','codex']) {
+  const {activity,row}=fixture(t,runtime);
+  activity.consume([row('prompt',{ts:700}),row('stop',{ts:600}),row('prompt',{ts:800})]);
+  assert.equal(activity.read(5000).lastStartedAt,700);
+ }
+});
+
+test('associated Claude transcript with no queue marker conservatively withholds prompt starts',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'');
+ activity.consume([row('prompt',{ts:200})]);
+ assert.equal(activity.read(3000).lastStartedAt,200);
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript}),row('stop',{ts:400}),row('prompt',{ts:500})]);
+ assert.equal(activity.read(6000).lastStartedAt,null);
+});
+
+test('a result parsed during an idle hook gap prevents a delayed pre-tool from becoming phantom work',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,JSON.stringify({message:{role:'user',content:[{type:'tool_result',tool_use_id:'delayed'}]}})+'\n');
+ activity.consume([row('session_start',{transcript_path:transcript})]);activity.read(5000);
+ assert.equal(activity.tools.size,0);activity.consume([row('pre_tool',{tool_use_id:'delayed',ts:300})]);
+ assert.equal(activity.tools.size,0);assert.ok(activity.results.size<=RECENT_TOOL_RESULTS_LIMIT);
 });

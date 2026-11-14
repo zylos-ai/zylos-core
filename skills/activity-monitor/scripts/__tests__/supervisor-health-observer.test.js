@@ -174,7 +174,7 @@ for(const evidence of ['lastActivityAt','transcriptMtimeMs','lastSubagentActivit
     const f=fixture(t);f.delivered();f.advance(899999);f.setState({[evidence]:f.now()});await f.observer.tick();
     f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
     f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
-    f.advance(1000);f.setState({[evidence]:f.now()});await f.observer.tick();
+    f.advance(1000);f.setState({[evidence]:f.now(),lastResponseAt:f.now()});await f.observer.tick();
     f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,0);
   });
 }
@@ -350,7 +350,7 @@ for(const gate of ['transition','manual','global-fence','group-fence','session',
 test('fresh activity at stop admission cancels restart',async t=>{
   const f=fixture(t);f.delivered();f.advance(900000);await f.observer.tick();
   f.observer.stop=async(scene,validate)=>{
-    f.setState({lastSubagentActivityAt:f.now()});
+    f.setState({lastSubagentActivityAt:f.now(),lastResponseAt:f.now()});
     if(await validate(scene))f.stops.push(scene);else return false;
   };
   f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,0);
@@ -464,19 +464,36 @@ test('web nudge exceptions retain cooldown and record uncertain enqueue once',as
   f.advance(1);await f.observer.tick();assert.equal(attempts,2);assert.equal(f.events.length,2);
   assert.equal(f.events[0].reason,'tool_timeout_nudge');assert.equal(f.events[0].outcome,'unknown');
 });
-test('new paste takes ownership without permanently exempting the same timed-out web tool',async t=>{
+test('new paste preserves the same web tool fallback deadline without another nudge',async t=>{
   const f=fixture(t),tools=[{id:'web',name:'WebFetch',startedAt:f.now()-11000}];f.setState({tools});
   await f.observer.tick();assert.equal(f.interrupts.length,1);
-  f.advance(1);f.delivered();await f.observer.tick();assert.equal(f.interrupts.length,2);
+  f.advance(1);f.delivered();await f.observer.tick();assert.equal(f.interrupts.length,1);
   f.advance(5001);await f.observer.tick();assert.equal(f.stops.length,1);
 });
 test('actual enqueue time accepts a fast resumed start despite delayed bookkeeping',async t=>{
   const f=fixture(t),paste=f.now();f.delivered();f.advance(900000);
   f.observer.nudge=async()=>{
     const enqueuedAt=f.now();f.advance(1);
-    f.setState({lastStartedAt:f.now(),lastMainWorkAt:f.now(),lastCompletedAt:f.now()+1,lastActivityAt:f.now()+1});
+    f.setState({lastStartedAt:f.now(),lastMainWorkAt:f.now(),lastCompletedAt:f.now()+1,lastActivityAt:f.now()+1,lastResponseAt:f.now()});
     f.advance(10);return {ok:true,enqueuedAt,steps:[{ok:true,enqueuedAt:enqueuedAt-500},{ok:true,enqueuedAt}]};
   };
   await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery.requiredStartAfter,paste+900000);
   await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery,null);
+});
+test('unread transcript backlog defers decisions until factual records are sampled',async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);f.setState({transcriptPending:true});
+  await f.observer.tick();assert.equal(f.interrupts.length,0);f.setState({transcriptPending:false});
+  await f.observer.tick();assert.equal(f.interrupts.length,1);f.advance(180000);
+  f.setState({transcriptPending:true});await f.observer.tick();assert.equal(f.stops.length,0);
+  f.setState({transcriptPending:false});await f.observer.tick();assert.equal(f.stops.length,1);
+});
+test('continuous pastes preserve web interrupt grace and failure cooldown',async t=>{
+  const f=fixture(t),tools=[{id:'web',name:'WebFetch',startedAt:f.now()-11000}];f.setState({tools});
+  await f.observer.tick();for(let i=0;i<5;i++){f.advance(1000);f.delivered();await f.observer.tick();}
+  assert.equal(f.interrupts.length,1);assert.equal(f.stops.length,0);
+  f.advance(1);f.delivered();await f.observer.tick();assert.equal(f.stops.length,1);
+  const failed=fixture(t);failed.setState({tools:[{id:'web',name:'WebFetch',startedAt:failed.now()-11000}]});let attempts=0;
+  failed.observer.nudge=async()=>{attempts++;return {ok:false};};await failed.observer.tick();
+  failed.advance(1000);failed.delivered();await failed.observer.tick();assert.equal(attempts,1);
+  failed.advance(1000);failed.delivered();await failed.observer.tick();assert.equal(attempts,2);
 });

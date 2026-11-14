@@ -131,7 +131,7 @@ test('composed no-response nudge continues after Escape produces Stop and transc
   await f.supervisor.admission.serialize(() => {
     f.advance(1);
     f.appendActivity('stop');
-    f.writeTranscript({ type: 'assistant', sessionId: f.scene.sessionId, timestamp: new Date(f.now()).toISOString() });
+    f.writeTranscript({ type: 'user', isSidechain:false, sessionId: f.scene.sessionId, timestamp: new Date(f.now()).toISOString(), message:{role:'user',content:[{type:'text',text:'[Request interrupted by user]'}]} });
   });
   await observation;
   assert.deepEqual(f.controls.map(control => control.content), ['[KEYSTROKE]Escape', 'continue']);
@@ -183,7 +183,7 @@ test('composed no-response guarded stop rechecks activity that arrived while wai
     f.supervisor.admission.serialize = operation => { stopQueued.resolve(); return serialize(operation); };
     const stopping = f.observe();
     await stopQueued.promise;
-    f.advance(1); f.appendActivity();
+    f.advance(1); f.appendActivity('pre_tool',{tool:'Read',tool_use_id:'resumed-work'});
     release.resolve();
     await Promise.all([blocker, stopping]);
   } finally {
@@ -192,4 +192,53 @@ test('composed no-response guarded stop rechecks activity that arrived while wai
   assert.equal(f.stops.length, 0, 'fresh activity must cancel the stale stop');
   assert.equal(f.controls.length, 2);
   assert.deepEqual(f.errors, []);
+});
+
+test('composed no-response recovery restarts despite Escape interruption and continue prompt side effects', {timeout:5000},async t=>{
+  const f=fixture(t),observation=f.observe();await f.firstControl.promise;
+  f.advance(1);f.appendActivity('stop');
+  f.writeTranscript({type:'user',isSidechain:false,sessionId:f.scene.sessionId,timestamp:new Date(f.now()).toISOString(),
+    message:{role:'user',content:[{type:'text',text:'[Request interrupted by user for tool use]'}]}});
+  await observation;const acceptedAt=f.now();f.advance(1);f.appendActivity('prompt');
+  f.writeTranscript({type:'user',isSidechain:false,sessionId:f.scene.sessionId,timestamp:new Date(f.now()).toISOString(),message:{role:'user',content:'continue'}});
+  await f.observe();assert.ok(f.supervisor.observer.sceneState(f.scene).delivery?.recovery);
+  f.advance(NO_RESPONSE_GRACE_MS-2);await f.observe();assert.equal(f.stops.length,0);
+  f.advance(1);await f.observe();assert.equal(f.now()-acceptedAt,NO_RESPONSE_GRACE_MS);assert.equal(f.stops.length,1);
+  assert.equal(f.controls.length,2);assert.deepEqual(f.errors,[]);
+});
+for(const response of ['tool','assistant','child-tool'])test(`composed ${response} work cancels no-response recovery`,{timeout:5000},async t=>{
+  const f=fixture(t);await f.observe();f.advance(1);
+  if(response==='assistant')f.writeTranscript({type:'assistant',isSidechain:false,sessionId:f.scene.sessionId,
+    timestamp:new Date(f.now()).toISOString(),message:{role:'assistant',model:'claude-fixture',content:[{type:'text',text:'Work resumed.'}]}});
+  else f.appendActivity('pre_tool',{tool:'Read',tool_use_id:'resumed-work',...(response==='child-tool'?{agent_id:'worker'}:{})});
+  await f.observe();assert.equal(f.supervisor.observer.sceneState(f.scene).delivery?.recovery ?? null,null);
+  f.advance(NO_RESPONSE_GRACE_MS);await f.observe();assert.equal(f.stops.length,0);assert.equal(f.controls.length,2);
+});
+test('composed queued Claude prompt hook and old Stop cannot retire paste before dequeue',{timeout:5000},async t=>{
+  const f=fixture(t);f.advance(-899700);f.delivered();f.advance(1);f.appendActivity('prompt');
+  f.writeTranscript({type:'queue-operation',operation:'enqueue',timestamp:new Date(f.now()).toISOString(),sessionId:f.scene.sessionId});
+  f.advance(99);f.appendActivity('stop');await f.observe();
+  assert.ok(f.supervisor.observer.sceneState(f.scene).delivery,'enqueue hook is not a new turn start');
+  f.advance(1);f.writeTranscript({type:'queue-operation',operation:'dequeue',timestamp:new Date(f.now()).toISOString(),sessionId:f.scene.sessionId});
+  await f.observe();assert.ok(f.supervisor.observer.sceneState(f.scene).delivery);
+  f.advance(NO_RESPONSE_SILENCE_MS);await f.observe();assert.equal(f.controls.length,2);assert.equal(f.stops.length,0);
+});
+test('composed web nudge advances completion boundary past its interruption Stop',{timeout:5000},async t=>{
+  const f=fixture(t,{watchdog:true});f.delivered();f.advance(1);const observation=f.observe();await f.firstControl.promise;
+  f.advance(1);f.appendActivity('post_tool',{tool:'WebFetch',tool_use_id:'web-tool'});f.appendActivity('stop');
+  await observation;const delivery=f.supervisor.observer.sceneState(f.scene).delivery;
+  assert.ok(delivery);assert.equal(delivery.requiredStartAfter,f.now());
+  await f.observe();assert.ok(f.supervisor.observer.sceneState(f.scene).delivery);
+  assert.equal(f.controls.length,2);
+});
+test('composed queued Claude remove uses absorption time and remains monitored until completion',{timeout:5000},async t=>{
+  const f=fixture(t);f.advance(-899700);f.delivered();f.advance(1);f.appendActivity('prompt');const enqueuedAt=f.now();
+  f.writeTranscript({type:'queue-operation',operation:'enqueue',timestamp:new Date(enqueuedAt).toISOString(),sessionId:f.scene.sessionId});
+  f.advance(49);const removedAt=f.now();
+  f.writeTranscript({type:'queue-operation',operation:'remove',reason:'absorbed_mid_turn',timestamp:new Date(removedAt).toISOString(),sessionId:f.scene.sessionId});
+  f.writeTranscript({type:'attachment',timestamp:new Date(enqueuedAt).toISOString(),sessionId:f.scene.sessionId,isSidechain:false,
+    attachment:{type:'queued_command',commandMode:'prompt',source_uuid:'queued-message',timestamp:new Date(enqueuedAt).toISOString(),humanTurn:true,origin:{kind:'human'}}});
+  await f.observe();assert.equal(f.supervisor.readActivity(f.scene).lastStartedAt,removedAt);
+  assert.ok(f.supervisor.observer.sceneState(f.scene).delivery);
+  f.advance(NO_RESPONSE_SILENCE_MS);await f.observe();assert.equal(f.controls.length,2);
 });
