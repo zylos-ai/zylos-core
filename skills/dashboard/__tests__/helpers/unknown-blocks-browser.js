@@ -72,5 +72,13 @@ export async function runUnknownBlocksBrowser(sandbox, width) {
       fs.mkdirSync(output, { recursive: true });
       await page.screenshot({ path: path.join(output, `unknown-block-${width}.png`), fullPage: true });
     }
+    for (const fallback of ['   ', '\n\r\n']) {
+      await page.evaluate(value => window.unknownFixture.setFallback(value), fallback);
+      assert.equal(await page.locator('[data-block-id]').count(), 0);
+      assert.equal(await page.locator('.chat-invalid-fallback').textContent(), await page.evaluate(() => window.unknownFixture.wholeFallback));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+    }
+    assert.equal(pageError, undefined);
+    if (output) await page.screenshot({ path: path.join(output, `unknown-block-blank-${width}.png`), fullPage: true });
   } finally { if (browser) await browser.close(); }
 }

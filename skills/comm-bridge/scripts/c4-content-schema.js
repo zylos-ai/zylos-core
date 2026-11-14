@@ -309,6 +309,7 @@ function blockFailure(block, at, submission = false, allowUnknown = false) {
   const unknown = object(block) && typeof block.type === 'string' && !blockTypes.includes(block.type);
   const failure = schemaFailure(allowUnknown && unknown ? UNKNOWN_BLOCK_SCHEMA : BLOCK_SCHEMA, block, BLOCK_SCHEMA, at);
   if (failure) return failure;
+  if (allowUnknown && unknown && !present(block.fallbackText)) return failAt(at, ['fallbackText'], 'required', 'must contain visible text');
   if (unknown && !allowUnknown) return failAt(at, ['type'], 'enum', `must be one of ${list(blockTypes)}`);
   if (!boundedBlockNodes(block)) return failAt(at, [], 'maxNodes', 'must contain at most 5000 JSON nodes');
   if (block.metadata?.provenance === 'adapter' && block.type !== 'markdown') {
@@ -574,8 +575,8 @@ export function parseC4Content(content, { submission = false } = {}) {
     const allowUnknown = !submission && split.envelope?.kind === 'message'
       && QUESTION_KEYS.every(key => !own(split.envelope, key));
     if (!validEnvelope(split.envelope, submission, allowUnknown)) return invalid();
-    const unsupportedBlocks = allowUnknown ? split.envelope.blocks.flatMap((block, index) =>
-      blockTypes.includes(block.type) ? [] : [{ index, id: block.id, reason: 'unknown_type' }]) : [];
+    const unsupportedBlocks = allowUnknown ? split.envelope.blocks.flatMap(block =>
+      blockTypes.includes(block.type) ? [] : [{ id: block.id }]) : [];
     const error = split.hasView ? viewError(split.view, split.metadata, split.envelope.blocks) : null;
     return { kind: 'envelope', envelope: split.envelope, suffix: framed.suffix,
       view: split.hasView && !error ? split.view : null, ...(error ? { viewError: error } : {}),

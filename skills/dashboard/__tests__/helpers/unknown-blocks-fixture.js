@@ -17,9 +17,18 @@ const envelope = {
   ] } },
 };
 const row = { id: 42, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(envelope) };
-const rendered = renderChatContent({ document, row, layout: (root, view, nodes) => applyChatView(document, root, view, nodes),
-  renderAttachment() { throw Error('Unknown content invoked attachment renderer'); },
-  renderQuestion() { throw Error('Unknown content invoked question renderer'); },
-});
-document.querySelector('.conversation-message-body').append(rendered);
-window.unknownFixture = { ready: true, fallback };
+function show(content) {
+  const rendered = renderChatContent({ document, row: { ...row, content }, layout: (root, view, nodes) => applyChatView(document, root, view, nodes),
+    renderAttachment() { throw Error('Unknown content invoked attachment renderer'); },
+    renderQuestion() { throw Error('Unknown content invoked question renderer'); },
+  });
+  document.querySelector('.conversation-message-body').replaceChildren(rendered);
+}
+show(row.content);
+window.unknownFixture = { ready: true, fallback, wholeFallback: envelope.fallbackText,
+  setFallback(value) {
+    const source = structuredClone(envelope);
+    source.blocks[1].fallbackText = value;
+    show(CONTENT_PREFIX + JSON.stringify(source));
+  },
+};

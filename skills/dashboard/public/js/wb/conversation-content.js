@@ -1,5 +1,5 @@
 import { element } from './plain-text.js?v=106';
-import { renderChatContent, parseC4Content } from './chat-blocks.js?v=158';
+import { renderChatContent, parseC4Content } from './chat-blocks.js?v=159';
 import { createChatAttachment } from './chat-attachments.js?v=155';
 import { applyChatView } from './chat-view.js?v=106';
 import { conversationChartResource } from './conversation-charts.js?v=158';
