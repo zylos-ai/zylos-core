@@ -1032,7 +1032,8 @@ function workingFixture(t, options = {}) {
 for (const kind of ['main', 'children', 'stale child']) test(`working API projects ${kind} events without changing Core board state`, async t => {
   const { f, add, read } = workingFixture(t), minute = 60000;
   const at = f.now();
-  add('user_prompt_submit', 5 * minute);
+  add('user_prompt_submit', kind === 'main' ? 15000 : 5 * minute);
+  if (kind === 'main') add('pre_tool_use', 8000, { tool_use_id: 'recent' });
   if (kind !== 'main') {
     add('stop', 4 * minute);
     add('subagent_start', kind === 'children' ? 3 * minute : 31 * minute, { agent_id: 'one' });
@@ -1040,11 +1041,16 @@ for (const kind of ['main', 'children', 'stale child']) test(`working API projec
   }
   const row = await read();
   assert.equal(row.state.kind, 'busy', 'Core state remains unchanged even when display work is idle');
-  if (kind === 'main') assert.deepEqual(row.working, { on: true, since: at - 5 * minute,
-    turn: { since: at - 5 * minute }, tools: 0, subagents: null });
-  else if (kind === 'children') assert.deepEqual(row.working, { on: true, since: at - 3 * minute,
-    turn: null, tools: 0, subagents: { count: 2, since: at - 3 * minute, lastActivityAt: at - 2 * minute } });
-  else assert.deepEqual(row.working, { on: false, since: null, turn: null, tools: 0, subagents: null });
+  if (kind === 'main') assert.deepEqual(row.working, { on: true, since: at - 15000,
+    main: { since: at - 15000, lastActivityAt: at - 8000 }, tools: 0, subagents: null });
+  else if (kind === 'children') {
+    assert.deepEqual(row.working, { on: true, since: at - 3 * minute,
+      main: null, tools: 0, subagents: { count: 2, since: at - 3 * minute, lastActivityAt: at - 2 * minute } });
+    // The server keeps the subtasks' agent ids for the conversation page; the response never carries them.
+    assert.deepEqual(row.working.subagents.ids, ['one', 'two']);
+    assert.deepEqual(JSON.parse(JSON.stringify(row.working)).subagents, { count: 2, since: at - 3 * minute, lastActivityAt: at - 2 * minute });
+  }
+  else assert.deepEqual(row.working, { on: false, since: null, main: null, tools: 0, subagents: null });
 });
 
 for (const endType of ['stop', 'turn_complete', 'dashboard_interrupt', 'runtime_health:stop_failure']) test(`working uses source-time ${endType} and insertion-order ties without child shadowing`, async t => {
@@ -1052,11 +1058,11 @@ for (const endType of ['stop', 'turn_complete', 'dashboard_interrupt', 'runtime_
   add('user_prompt_submit', 6000);
   add(endType, 9000); // Ingested later, but older than the prompt.
   add(endType, 1000, { agent_id: 'child' });
-  assert.equal((await read()).working.turn.since, f.now() - 6000);
+  assert.equal((await read()).working.main.since, f.now() - 6000);
   add(endType, 6000); f.advance(2100);
-  assert.equal((await read()).working.on, false, 'Same-time later insertion closes the main turn');
+  assert.equal((await read()).working.on, false, 'Same-time later insertion stops the main agent');
   add('user_prompt_submit', 8100); f.advance(2100);
-  assert.equal((await read()).working.on, true, 'Same-time later prompt opens the main turn');
+  assert.equal((await read()).working.on, true, 'Same-time later prompt is a new action');
 });
 
 for (const condition of ['not running', 'no run', 'status failed']) test(`working is null when ${condition}`, async t => {
@@ -1067,14 +1073,91 @@ for (const condition of ['not running', 'no run', 'status failed']) test(`workin
   assert.equal((await read()).working, null);
 });
 
-test('working main freshness includes any event while tools alone have no invented time anchor', async t => {
+test('without new input the main agent works only within seconds of its latest action, and a running command has no invented start', async t => {
   const { f, add, read } = workingFixture(t), minute = 60000;
   add('user_prompt_submit', 31 * minute);
-  assert.equal((await read()).working.on, false);
+  assert.equal((await read()).working.on, false, 'an old prompt without a stop is not work');
   add('assistant_message', 1000); f.advance(2100);
-  assert.equal((await read()).working.turn.since, f.now() - 2100 - 31 * minute);
+  assert.deepEqual((await read()).working.main, { since: f.now() - 3100, lastActivityAt: f.now() - 3100 },
+    'a fresh action after a long quiet gap starts a new stretch of work');
+  f.advance(14000);
+  assert.equal((await read()).working.on, true, 'still within twenty seconds of the action');
+  f.advance(2900);
+  assert.equal((await read()).working.on, false, 'twenty seconds without an action is idle');
   add('stop', 0); f.live.get('telegram:g0').status.value.active_tool_details = [{ id: 'live', name: 'Bash', input: {} }]; f.advance(2100);
-  assert.deepEqual((await read()).working, { on: true, since: null, turn: null, tools: 1, subagents: null });
+  assert.deepEqual((await read()).working, { on: true, since: null, main: null, tools: 1, subagents: null });
+});
+
+test('a message the runtime takes from its own queue after the startup stop counts as work without any prompt', async t => {
+  const { f, add, read } = workingFixture(t);
+  add('user_prompt_submit', 12000);
+  add('deliver', 9000, { conversation_id: 7 });
+  add('stop', 7000);
+  assert.equal((await read()).working.on, false, 'the startup turn stopped');
+  add('pre_tool_use', 4000, { tool_name: 'Bash', tool_use_id: 'dequeued' });
+  add('post_tool_use', 3000, { tool_name: 'Bash', tool_use_id: 'dequeued' });
+  f.advance(2100);
+  assert.deepEqual((await read()).working.main, { since: f.now() - 6100, lastActivityAt: f.now() - 5100 });
+});
+
+for (const input of ['user_prompt_submit', 'input_dequeue']) test(`after ${input} the main agent works until it stops, however long it thinks`, async t => {
+  const { f, add, read } = workingFixture(t), minute = 60000;
+  add('stop', 2 * minute);
+  add(input, 90000);
+  f.advance(2100);
+  assert.deepEqual((await read()).working.main, { since: f.now() - 92100, lastActivityAt: f.now() - 92100 },
+    'ninety seconds of thinking without any event still works');
+  add('stop', 0); f.advance(2100);
+  assert.equal((await read()).working.on, false, 'the stop ends it');
+});
+
+test('a queued message taken as the turn ended, timed before the late stop hook, works until the next stop', async t => {
+  const { f, add, read } = workingFixture(t), minute = 60000;
+  add('stop', 2 * minute);
+  add('user_prompt_submit', 90000);
+  // The transcript times the take 0.4 s before the stop, whose hook process ran late.
+  add('input_dequeue', 30400); add('stop', 30000);
+  f.advance(2100);
+  assert.deepEqual((await read()).working.main, { since: f.now() - 32100 + 1, lastActivityAt: f.now() - 32100 + 1 },
+    'the header counts the queued message as taken after that stop');
+  add('stop', 0); f.advance(2100);
+  assert.equal((await read()).working.on, false, 'the next stop ends it');
+});
+
+test('input followed by more main actions than one lookup returns still works through a long think after them', async t => {
+  const { f, store, add, read } = workingFixture(t), minute = 60000;
+  add('stop', 10 * minute);
+  add('user_prompt_submit', 8 * minute);
+  // Three hundred main actions after the input, more than the action lookup returns, the last two minutes ago.
+  store.db.transaction(() => {
+    for (let i = 0; i < 150; i++) {
+      add('pre_tool_use', 7 * minute - i * 2000, { tool_use_id: `T${i}` });
+      add('post_tool_use', 7 * minute - i * 2000 - 1000, { tool_use_id: `T${i}` });
+    }
+  })();
+  const working = (await read()).working;
+  assert.equal(working.on, true, 'two minutes of thinking after the actions still works on the input');
+  assert.deepEqual(working.main, { since: f.now() - 8 * minute, lastActivityAt: f.now() - 7 * minute + 149 * 2000 + 1000 },
+    'the work began at the input, not at the oldest action the lookup returned');
+});
+
+test('a delivery alone is no input: it keeps the main agent working only for seconds, like any action', async t => {
+  const { f, add, read } = workingFixture(t);
+  add('stop', 60000);
+  add('deliver', 1000, { conversation_id: 7 });
+  f.advance(2100);
+  assert.equal((await read()).working.on, true);
+  f.advance(18000);
+  assert.equal((await read()).working.on, false, 'twenty seconds after a delivery without input is idle');
+});
+
+test('taken input that never led to a stop stops counting after the quiet limit', async t => {
+  const { f, add, read } = workingFixture(t), minute = 60000;
+  add('input_dequeue', 29 * minute);
+  f.advance(2100);
+  assert.equal((await read()).working.on, true);
+  f.advance(minute);
+  assert.equal((await read()).working.on, false);
 });
 
 test('working child freshness uses its own tools and the Core configured TTL', async t => {
@@ -1103,7 +1186,9 @@ test('working uses environment TTL precedence and reads source-time facts with b
   const reads = queries.filter(query => query.runId === 'run-telegram:g0' && query.sourceTime);
   assert.equal(reads.length, 5);
   assert.equal(reads.filter(query => query.limit === 200 && query.agentScope === 'child').length, 2);
-  assert.equal(reads.find(query => query.types?.includes('pre_tool_use')).latestPerAgent, true);
+  const input = reads.find(query => query.limit === 1 && query.agentScope === 'main' && query.types?.includes('input_dequeue'));
+  assert.deepEqual(input.types, ['user_prompt_submit', 'input_dequeue'], 'the latest input the main agent took');
+  assert.equal(reads.find(query => query.agentScope === 'child' && query.types?.includes('pre_tool_use')).latestPerAgent, true);
   assert.ok(reads.every(query => query.order === 'desc' && [1, 200].includes(query.limit)));
 });
 
@@ -1154,7 +1239,7 @@ test('working activity includes offset timestamps inside its visible window', as
   const at = Date.parse('2027-01-01T10:05:00.000Z');
   f.setNow(at);
   f.live.get('telegram:g0').identity.createdAt = (at - 15 * 60000) / 1000;
-  store.insertEvent({ id: 'offset-prompt', ingest_id: 'offset-prompt', timestamp: '2027-01-01T11:00:00+01:00',
+  store.insertEvent({ id: 'offset-prompt', ingest_id: 'offset-prompt', timestamp: '2027-01-01T11:04:50+01:00',
     session_group: 'telegram:g0', run_id: 'run-telegram:g0', runtime: 'claude', event_type: 'user_prompt_submit', category: 'activity' });
   const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
   assert.equal(cells.at(-1), 'busy', 'The in-window prompt cannot fall between lexical window and source-time seed filters');
@@ -1178,8 +1263,9 @@ for (const position of ['current', 'before window']) test(`working preserves an 
   })();
   if (position === 'current') {
     const work = (await read()).working;
-    assert.deepEqual(work, { on: true, since: at - 20 * minute, turn: null, tools: 0,
+    assert.deepEqual(work, { on: true, since: at - 20 * minute, main: null, tools: 0,
       subagents: { count: 1, since: at - 20 * minute, lastActivityAt: at - 1.5 * minute + 500 } });
+    assert.deepEqual(work.subagents.ids, ['long-child']);
   }
   const cells = (await f.service.activity('60m')).groups['telegram:g0'].cells;
   if (position === 'current') assert.equal(cells.at(-1), 'busy');
@@ -1265,7 +1351,7 @@ test('working removes a child when its own stop is stored', async t => {
   const { add, read } = workingFixture(t);
   add('subagent_start', 3 * 60000, { agent_id: 'child' });
   add('subagent_stop', 60000, { agent_id: 'child' });
-  assert.deepEqual((await read()).working, { on: false, since: null, turn: null, tools: 0, subagents: null });
+  assert.deepEqual((await read()).working, { on: false, since: null, main: null, tools: 0, subagents: null });
 });
 
 test('working retains the remaining child and its own start after another child stops', async t => {
@@ -1273,21 +1359,22 @@ test('working retains the remaining child and its own start after another child 
   add('subagent_start', 20 * 60000, { agent_id: 'first' });
   add('subagent_start', 10 * 60000, { agent_id: 'remaining' });
   add('subagent_stop', 60000, { agent_id: 'first' });
-  assert.deepEqual((await read()).working, { on: true, since: at - 10 * 60000, turn: null, tools: 0,
+  assert.deepEqual((await read()).working, { on: true, since: at - 10 * 60000, main: null, tools: 0,
     subagents: { count: 1, since: at - 10 * 60000, lastActivityAt: at - 10 * 60000 } });
+  assert.deepEqual((await read()).working.subagents.ids, ['remaining']);
 });
 
-test('working keeps an old open turn and its elapsed anchor while a main tool runs', async t => {
-  const { f, add, read } = workingFixture(t), since = f.now() - 45 * 60000;
+test('a long main command keeps the group working while an old prompt is no start of current work', async t => {
+  const { f, add, read } = workingFixture(t);
   add('user_prompt_submit', 45 * 60000);
   f.live.get('telegram:g0').status.value.active_tool_details = [{ id: 'still-running', name: 'Bash', input: {} }];
-  assert.deepEqual((await read()).working, { on: true, since, turn: { since }, tools: 1, subagents: null });
+  assert.deepEqual((await read()).working, { on: true, since: null, main: null, tools: 1, subagents: null });
 });
 
 
 // Private Store/Core fixtures only: run for working terminal-event queries or
 // reduction changes; skip unrelated UI changes. No live runtime/channel starts.
-test('working ends a failed main turn even after a newer diagnostic event', async t => {
+test('working ends main work at a failed stop even after a newer diagnostic event', async t => {
   const { f, add, read } = workingFixture(t);
   add('user_prompt_submit', 9000);
   add('assistant_message', 6000);
@@ -1295,5 +1382,5 @@ test('working ends a failed main turn even after a newer diagnostic event', asyn
   add('runtime_health:recovered', 1000);
   assert.equal((await read()).working.on, false);
   add('user_prompt_submit', 0); f.advance(2100);
-  assert.equal((await read()).working.on, true, 'a new prompt opens a fresh turn');
+  assert.equal((await read()).working.on, true, 'a new prompt is a fresh action');
 });

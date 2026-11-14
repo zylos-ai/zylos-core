@@ -23,10 +23,10 @@ async function startPage(sandbox) {
   const activeId = () => isOrigin() ? ORIGIN_ID : ID;
   const group = () => isOrigin() ? 'origin' : GROUP;
   const working = () => {
-    const turn = ['main', 'main-long', 'scheduled-short', 'scheduled-long', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - (scene === 'main-long' ? 121 : scene === 'scheduled-long' ? 65 : 3) * 60000 } : null;
+    const main = ['main', 'main-long', 'scheduled-short', 'scheduled-long', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - (scene === 'main-long' ? 121 : scene === 'scheduled-long' ? 65 : 3) * 60000 } : null;
     const subagents = ['both', 'sub'].includes(scene) ? { count: 2, since: NOW - 13 * 60000, lastActivityAt: NOW - 30000 } : null;
     if (scene === 'unavailable') return null;
-    return { on: !!(turn || subagents), since: turn || subagents ? Math.min(...[turn?.since, subagents?.since].filter(Number.isFinite)) : null, turn, tools: 0, subagents };
+    return { on: !!(main || subagents), since: main || subagents ? Math.min(...[main?.since, subagents?.since].filter(Number.isFinite)) : null, main, tools: 0, subagents };
   };
   const snapshot = url => {
     const value = workbenchAnswer(url, NOW);
@@ -221,7 +221,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     if (await page.locator('html').getAttribute('data-theme') === 'light') assert.equal(m.color, 'rgb(82, 97, 112)');
     assert.equal(m.background, m.expectedBackground); assert.equal(m.weight, '450'); assert.equal(m.fontSize, '13px');
   };
-  const scenes = { main: '正在工作', both: '正在工作 · 后台子任务 2 个', sub: '后台子任务 2 个', idle: '空闲', rate: '服务受限，恢复后自动投递', auth: '需要认证', queue: '排队中', starting: '会话启动中', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
+  const scenes = { main: '正在工作', both: '正在工作 · 后台子任务 2 个', sub: '后台子任务 2 个', idle: '空闲', rate: '服务受限，恢复后自动投递', auth: '需要认证', queue: '排队中', starting: '正在唤醒', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
   let failed = false;
   for (const width of [1280, 390]) for (const theme of ['light', 'dark']) for (const [scene, expected] of Object.entries(scenes)) {
     await t.test(`${width} ${theme} ${scene}: mounted conversation shows the group working state`, async () => {
@@ -232,13 +232,15 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           await checkText(f.page, expected);
           if (width > 760) await checkDesktopCaption(f.page, expected);
           const spinning = await indicator(f.page).locator('.wi-spin').count();
-          assert.equal(spinning, ['main', 'both', 'sub'].includes(scene) ? 1 : 0);
-          await checkComet(f.page, ['main', 'both', 'sub'].includes(scene));
-          if (width <= 760 && ['main', 'both', 'sub'].includes(scene)) {
-            await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : '正在工作');
+          assert.equal(spinning, ['main', 'both', 'sub', 'starting'].includes(scene) ? 1 : 0);
+          await checkComet(f.page, ['main', 'both', 'sub', 'starting'].includes(scene));
+          if (width <= 760 && ['main', 'both', 'sub', 'starting'].includes(scene)) {
+            await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : scene === 'starting' ? '正在唤醒' : '正在工作');
           }
           if (width <= 760 && scene === 'idle') {
-            assert.equal(await indicator(f.page).isVisible(), false);
+            // As in the prototype, an idle phone header shows the dot and 空闲 beside the title, without a border.
+            assert.equal(await indicator(f.page).isVisible(), true);
+            assert.equal(await indicator(f.page).evaluate(node => getComputedStyle(node).borderTopWidth), '0px');
             assert.equal(await f.page.locator('.conversation-header').evaluate(node => { const css = getComputedStyle(node); return node.getBoundingClientRect().height - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth); }), 52);
           }
           if (width <= 760 && ['rate', 'auth', 'queue'].includes(scene)) await checkPhoneStatus(f.page, scene);
@@ -269,15 +271,18 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       assert.equal(await indicator(f.page).locator('.wi-ind-desktop').evaluate(node => node === window.beforePollingCaption), true,
         'the caption is not rebuilt by a per-second clock before the busy poll');
       await f.page.clock.fastForward(999); assert.equal(fixture.counts.groups, before);
+      // The clock is paused: the page schedules its next read when it handles an answer. Change the answer before the
+      // read, then wait until the page shows it, so no later clock jump can run ahead of the page's own timer.
+      fixture.setScene('idle');
       await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups === before + 1, 'busy reads at five seconds');
-      fixture.setScene('idle'); await f.page.clock.fastForward(5000); await checkText(f.page, '空闲');
+      await checkText(f.page, '空闲');
       assert.equal(await indicator(f.page).locator('.wi-spin').count(), 0);
       await checkComet(f.page, false);
       assert.equal(await indicator(f.page).evaluate(node => node.classList.contains('wi-settle')), true, 'busy to idle keeps settle effect');
       const idleReads = fixture.counts.groups;
       await f.page.clock.fastForward(29999); assert.equal(fixture.counts.groups, idleReads, 'idle avoids the former busy cadence');
+      fixture.fail(true);
       await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups > idleReads, 'idle reads at thirty seconds');
-      fixture.fail(true); await f.page.clock.fastForward(30000);
       await wait(async () => !await indicator(f.page).isVisible(), 'failure removes stale working');
     } finally { fixture.fail(false); await f.context.close(); }
   });
@@ -335,7 +340,9 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       assert.equal(await indicator(f.page).locator('.wi-comet').count(), 1, 'busy DOM still owns the reduced-motion comet');
       assert.equal(await indicator(f.page).locator('.wi-comet').isVisible(), false, 'reduced motion hides the entire light');
       assert.equal(await indicator(f.page).locator('.wi-spin').isVisible(), true, 'still glyph returns');
-      assert.equal(await indicator(f.page).locator('.wi-spin').evaluate(node => getComputedStyle(node).animationName), 'none');
+      // Each snapshot redraws the glyph. Find it and read its style in one page call: a locator resolves and evaluates in
+      // two steps, and a poll between them leaves a detached node whose computed style is empty.
+      assert.equal(await indicator(f.page).evaluate(node => getComputedStyle(node.querySelector('.wi-spin')).animationName), 'none');
       await shot(f.page, 'reduced-motion');
     } finally { await f.context.close(); }
   });
@@ -351,7 +358,12 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           await f.page.locator('#wb-chat .wb-group-side .wi-now').waitFor();
           await f.page.locator('.wb-group-side-back').click();
         } else {
-          assert.equal(await indicator(f.page).isVisible(), false);
+          // A long title yields to the idle status: 空闲 stays whole between the title and the menu.
+          assert.equal(await indicator(f.page).isVisible(), true);
+          const title = await f.page.locator('.conversation-title-line h2').boundingBox(), idle = await indicator(f.page).boundingBox();
+          const menu = await f.page.locator('.conversation-menu-toggle').boundingBox();
+          assert.ok(title.x + title.width <= idle.x + 1 && idle.x + idle.width <= menu.x + 1, 'idle status sits between the title and the menu');
+          assert.equal(await indicator(f.page).locator('.wi-ind-text:visible').first().evaluate(node => node.scrollWidth <= node.clientWidth), true, 'idle caption is complete');
           assert.equal(await f.page.locator('.conversation-header').evaluate(node => { const css = getComputedStyle(node); return node.getBoundingClientRect().height - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth); }), 52);
         }
         await shot(f.page, `${width}-${theme}-${scene}-long-title`);
@@ -362,7 +374,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
   }
   // Boundary: rendered compact wording, caption geometry and desktop/mobile breakpoint.
   // Run for phone wording/header changes; unrelated backend work may skip.
-  // Fixed snapshots vary turn age while preserving scheduled-origin selection and child counts.
+  // Fixed snapshots vary main-work age while preserving scheduled-origin selection and child counts.
   const compactCases = [
     { scene: 'main-long', zh: '正在工作', en: 'Working', fullZh: '正在工作', fullEn: 'Working' },
     { scene: 'scheduled-short', zh: '定时任务', en: 'Scheduled', fullZh: '正在执行定时任务', fullEn: 'Running a scheduled task' },

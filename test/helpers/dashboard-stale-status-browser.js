@@ -35,7 +35,7 @@ export async function runStaleStatusBrowser(t, sandbox) {
     row.state = classify(row, { now });
     data.instance.runtimeHealth.claude = { health: runtimeHealth };
     row.name = { displayName: '状态刷新已停止的会话' };
-    row.tools = []; row.working = { on: true, turn: { since: sampledAt - 1000 }, subagents: null };
+    row.tools = []; row.working = { on: true, since: sampledAt - 1000, main: { since: sampledAt - 1000, lastActivityAt: sampledAt - 1000 }, tools: 0, subagents: null };
     row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
     row.duration = null;
     data.rows = [row]; data.counts = countRows(data.rows);

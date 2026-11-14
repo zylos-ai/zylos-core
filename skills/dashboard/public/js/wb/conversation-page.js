@@ -1,16 +1,16 @@
-import { workingParts, workingText } from './working-display.js?v=4';
+import { workingParts, workingText } from './working-display.js?v=5';
 import { createUploadTray } from './chat-upload-tray.js?v=2';
 import { createChatAttachment } from './chat-attachments.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
 import { asDate } from './conversation-time.js?v=99';
 import { formatZoned } from './instance-zone.js?v=100';
 import { channelIcon, channelIcons } from './board.js?v=155';
-import { createConversationState, isOriginConversation } from './conversation-state.js?v=166';
+import { createConversationState, isOriginConversation } from './conversation-state.js?v=167';
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=158';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=164';
-import { createGroupSide } from './group-side.js?v=170';
-import { activityPlacement, createActivityArea } from './conversation-activity.js?v=157';
+import { createGroupSide } from './group-side.js?v=171';
+import { createLiveArea, livePresentation } from './conversation-activity.js?v=158';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=5';
 import { createRowSwipe } from './conversation-swipe.js?v=1';
@@ -80,11 +80,8 @@ export function mountConversationPage({
   let fitFrame = null,
     fitObserver = null,
     fittedHeight = null;
-  // Activity areas: manual open state per part (kept across redraws), the parts after a round's last message, and
-  // the clock tick that keeps running times current.
-  const activityOpen = new Map(),
-    trailingActivity = new Map(),
-    activityEntries = new Map();
+  // The live activity area (created on first use) and the clock tick that keeps its running times current.
+  let liveArea = null, liveItem = null;
   let settleTimer = null;
   let activityTimer = null,
     followAfterGesture = false,
@@ -582,44 +579,47 @@ export function mountConversationPage({
     const rateWait = s.groupWait?.kind === 'rate_wait';
     const healthLabel = { rate_limited: 'rateLimited', recovering: 'recovering', auth_failed: 'authFailed',
       unavailable: 'unavailable', down: 'down' }[s.groupHealth];
+    // A session being started is the group waking: it shows working, like the work it starts for.
+    const waking = !healthLabel && s.groupWait?.kind === 'starting';
     const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused', pool_wait: 'queueing',
-      starting: 'starting', start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
+      start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
     const waiting = s.groupHealth === 'ok' && ['unknown', 'pool_wait'].includes(s.groupWait?.kind);
-    const headerLabel = healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
+    const headerLabel = waking ? 'running' : healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
     const restricted = headerLabel !== 'running' && !waiting;
     const exceptional = headerLabel !== 'running';
     const origin = s.tab === 'mine' && isOriginConversation(s.selectedId);
     // Only in multi is an Origin that is not running asleep, woken by the next message; in single it would be down.
     const asleep = origin && s.mode === 'multi' && s.groupPresence === false && !healthLabel && !s.groupWait;
-    const working = !exceptional && s.groupPresence === true ? s.groupWorking : null;
-    running.hidden = asleep ? false : exceptional ? s.groupPresence !== true && !healthLabel && !s.groupWait : !working;
+    const working = !exceptional && !waking && s.groupPresence === true ? s.groupWorking : null;
+    const busy = waking || !!working?.on;
+    running.hidden = asleep || waking ? false : exceptional ? s.groupPresence !== true && !healthLabel && !s.groupWait : !working;
     running.classList.toggle('conversation-restricted', !asleep && exceptional && restricted);
     running.classList.toggle('conversation-waiting', asleep || exceptional && waiting);
     const wasBusy = running.dataset.state === 'busy';
-    running.dataset.state = asleep ? 'asleep' : exceptional ? restricted ? 'restricted' : 'waiting' : working?.on ? 'busy' : 'idle';
+    running.dataset.state = asleep ? 'asleep' : exceptional ? restricted ? 'restricted' : 'waiting' : busy ? 'busy' : 'idle';
     // Asleep shows one word; the explanation (a message wakes it, the first reply is slower) is in the tooltip.
-    const description = asleep ? t('chat.page.origin.asleepShort') : exceptional ? t('chat.page.' + headerLabel
+    const description = asleep ? t('chat.page.origin.asleepShort') : waking ? t('chat.page.waking') : exceptional ? t('chat.page.' + headerLabel
       + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : ''))
       : workingText(working, { t, scheduled: origin && s.groupProcessing === 'scheduled_task' });
-    const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
-    if (!exceptional && working?.on) mark.classList.add('wi-spin');
-    const captionParts = !asleep && !exceptional ? workingParts(working, { t,
+    const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : busy ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
+    if (busy) mark.classList.add('wi-spin');
+    const captionParts = !asleep && !exceptional && !waking ? workingParts(working, { t,
       scheduled: origin && s.groupProcessing === 'scheduled_task' }) : null;
     const caption = node('span', captionParts?.main ?? description, 'wi-ind-text wi-ind-desktop');
     if (captionParts?.children) caption.append(node('span', ' · ' + captionParts.children, 'wi-ind-sub'));
-    const mobileCaption = !exceptional && working?.on ? workingParts(working, { t,
+    const mobileCaption = waking ? { main: description } : working?.on ? workingParts(working, { t,
       scheduled: origin && s.groupProcessing === 'scheduled_task', compact: true }) : null;
     const compact = mobileCaption ? node('span', mobileCaption.main, 'wi-ind-text wi-ind-mobile') : null;
     const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev');
     const existingComet = [...running.children].find(child => child.classList.contains('wi-comet'));
-    if (!exceptional && working?.on && existingComet) {
+    if (busy && existingComet) {
       // Snapshot updates refresh the caption without restarting the border animation.
       for (const child of [...running.children]) if (child !== existingComet) child.remove();
       running.append(mark, caption, ...(compact ? [compact] : []), chevron);
     } else {
       running.replaceChildren(mark, caption, ...(compact ? [compact] : []), chevron);
     }
-    if (!exceptional && working?.on && !existingComet) {
+    if (busy && !existingComet) {
       const comet = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       comet.setAttribute('class', 'wi-comet');
       comet.setAttribute('aria-hidden', 'true');
@@ -872,18 +872,12 @@ export function mountConversationPage({
       if (!destroyed && !statusButton.disabled) void state.refreshStatus();
     });
     status.append(statusIcon, statusText, statusButton);
-    const activitySlot = node('div', undefined, 'conversation-activity-slot');
-    const afterActivitySlot = node('div', undefined, 'conversation-activity-slot conversation-activity-after-reply-slot');
-    body.append(meta, activitySlot, content, afterActivitySlot, status);
+    body.append(meta, content, status);
     article.append(avatar, body);
     const record = {
       node: article,
       avatar,
       avatarSymbol,
-      activitySlot,
-      activityAreas: new Map(),
-      afterActivitySlot,
-      afterActivityAreas: new Map(),
       status,
       statusIcon,
       statusText,
@@ -1264,82 +1258,41 @@ export function mountConversationPage({
     updateUnread();
   }
   const serverNow = s => Date.now() + (s?.activity?.offset ?? 0);
-  function renderArea(entry, area, s) {
-    activityEntries.set(entry.key, { entry, area });
-    area.update(entry, { open: activityOpen.get(entry.key) === true, now: serverNow(s) });
+  function liveOptions(s) {
+    return { now: serverNow(s), open: s.activity?.open, details: s.activity?.details };
   }
-  function activityArea() {
-    return createActivityArea({ document, t, onToggle: toggleActivity });
-  }
-  /** Reply work folds above it; follow-up work stays below the last loaded reply or after a later user message. */
+  /** What the AI is doing now sits right below the latest message, a user message or a reply. */
   function placeActivity(s, ordered) {
-    const placement = activityPlacement(s.messages.filter(row => row.channel !== 'internal'), s.tab === 'mine' ? s.activity : null);
-    activityEntries.clear();
-    for (const [id, record] of messages) {
-      if (!record.activitySlot) continue;
-      for (const [slot, areas, entries] of [
-        [record.activitySlot, record.activityAreas, placement.folded.get(Number(id)) ?? []],
-        [record.afterActivitySlot, record.afterActivityAreas, placement.afterReply.get(Number(id)) ?? []]
-      ]) {
-        const keys = new Set(entries.map(entry => entry.key));
-        for (const [key, area] of areas) if (!keys.has(key)) { area.node.remove(); areas.delete(key); }
-        entries.forEach((entry, index) => {
-          let area = areas.get(entry.key);
-          if (!area) { area = activityArea(); areas.set(entry.key, area); }
-          renderArea(entry, area, s);
-          if (slot.children[index] !== area.node) slot.insertBefore(area.node, slot.children[index] ?? null);
-        });
-        slot.hidden = !entries.length;
+    const shown = s.messages.filter(row => row.channel !== 'internal')
+      .map(row => ({ id: row.id, direction: row.direction, at: asDate(row.timestamp)?.getTime() ?? null }));
+    const presentation = s.tab === 'mine' && s.activity && !s.activity.unsupported
+      ? livePresentation(shown, s.activity.data, { presence: s.activity.data?.presence ?? null }) : null;
+    const anchor = presentation ? messages.get(String(presentation.anchor))?.node : null;
+    const at = anchor ? ordered.indexOf(anchor) : -1;
+    if (!presentation || at < 0) {
+      liveItem?.remove();
+      liveItem = null;
+    } else {
+      if (!liveArea) liveArea = createLiveArea({ document, t, locale: document.documentElement?.lang || undefined,
+        onToggle: key => { void state.toggleSubtask(key); }, onDetails: groupSide ? () => {
+          const current = currentSnapshot.conversation ?? currentSnapshot.items.find(item => item.id === currentSnapshot.selectedId);
+          if (!groupSide.open) showGroupSide(current?.sessionGroup ?? current?.session_group, currentSnapshot.selectedId);
+        } : null });
+      if (!liveItem) {
+        liveItem = node('div', undefined, 'conversation-activity-message');
+        liveItem.append(liveArea.node);
       }
+      liveItem.dataset.under = presentation.under;
+      liveArea.update(presentation, liveOptions(s));
+      ordered.splice(at + 1, 0, liveItem);
     }
-    const keys = new Set(placement.trailing.map(entry => entry.key));
-    for (const [key, item] of trailingActivity) if (!keys.has(key)) { item.node.remove(); trailingActivity.delete(key); }
-    for (const entry of placement.trailing) {
-      let item = trailingActivity.get(entry.key);
-      if (!item) {
-        const article = node('article', undefined, 'chat-message conversation-message chat-out conversation-activity-message');
-        const avatar = node('span', undefined, 'conversation-avatar');
-        avatar.append(icon(document, 'bot'));
-        const body = node('div', undefined, 'conversation-message-body');
-        const meta = node('div', undefined, 'conversation-message-meta');
-        const author = node('span', t('chat.page.ai'), 'chat-message-author');
-        meta.append(author);
-        const area = activityArea();
-        body.append(meta, area.node);
-        article.append(avatar, body);
-        item = { node: article, area, author };
-        trailingActivity.set(entry.key, item);
-      }
-      text(item.author, t('chat.page.ai'));
-      renderArea(entry, item.area, s);
-      const anchor = messages.get(String(entry.anchor))?.node;
-      const at = anchor ? ordered.indexOf(anchor) : -1;
-      if (at < 0) { item.node.remove(); continue; }
-      let position = at + 1;
-      while (ordered[position]?.classList?.contains('conversation-activity-message')) position++;
-      ordered.splice(position, 0, item.node);
-    }
-    const live = [...activityEntries.values()].some(({ entry }) => entry.live);
+    const live = !!presentation && !presentation.handled;
     if (live && activityTimer === null && view?.setInterval) activityTimer = view.setInterval(tickActivity, 1000);
     if (!live && activityTimer !== null) { view?.clearInterval(activityTimer); activityTimer = null; }
   }
   function tickActivity() {
-    if (destroyed) return;
-    for (const { entry, area } of activityEntries.values()) {
-      if (entry.live) area.update(entry, { open: true, now: serverNow(currentSnapshot) });
-    }
-  }
-  /** Opening or closing a part keeps it where it is on screen; nothing else moves under the user. */
-  function toggleActivity(key) {
-    const found = activityEntries.get(key);
-    if (!found || destroyed) return;
-    const head = found.area.node.firstElementChild;
-    const before = head?.getBoundingClientRect().top;
-    activityOpen.set(key, activityOpen.get(key) !== true);
-    found.area.update(found.entry, { open: activityOpen.get(key), now: serverNow(currentSnapshot) });
-    const shift = anchorShift(head, before);
-    if (shift && !holdScroll(false, 0, shift)) stream.scrollTop += shift;
-    scheduleFit();
+    if (destroyed || !liveArea?.view || !liveItem?.isConnected) return;
+    liveArea.update(liveArea.view, liveOptions(currentSnapshot));
   }
   function fitPage() {
     fitFrame = null;

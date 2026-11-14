@@ -1,15 +1,15 @@
 import { formatZoned } from './instance-zone.js?v=100';
 
 /** Shared caption parts; compact wording belongs only to the phone working pill.
- * `scheduled` is true only for an Origin turn handed off by the scheduler. */
+ * `scheduled` is true only while Origin works on what the scheduler last handed it. */
 export function workingParts(working, { t = key => key, scheduled = false, compact = false } = {}) {
   if (!working) return { main: '', children: null };
   if (!working.on) return { main: t('wb.state.idle'), children: null };
   const prefix = compact ? 'chat.working.mobile.' : 'chat.working.';
   const children = working.subagents?.count > 0
     ? t(prefix + (working.subagents.count === 1 ? 'child' : 'children'), { count: working.subagents.count }) : null;
-  const main = working.turn && scheduled ? t(prefix + 'scheduled') : working.turn || !children ? t(prefix + 'processing') : children;
-  return { main, children: !compact && working.turn ? children : null };
+  const main = working.main && scheduled ? t(prefix + 'scheduled') : working.main || !children ? t(prefix + 'processing') : children;
+  return { main, children: !compact && working.main ? children : null };
 }
 
 export function workingText(working, options = {}) {
@@ -22,8 +22,8 @@ export function workingNowText(working, { t = key => key, locale } = {}) {
   const clock = value => formatZoned(new Date(value), locale, { hour: '2-digit', minute: '2-digit' });
   const since = value => Number.isFinite(value) ? t('chat.working.since', { time: clock(value) }) : null;
   const parts = [];
-  if (working.turn || !working.subagents) parts.push([
-    t('chat.working.processing'), since(working.turn?.since),
+  if (working.main || !working.subagents) parts.push([
+    t('chat.working.processing'), since(working.main?.since),
   ].filter(Boolean).join(' · '));
   if (working.subagents) parts.push([
     t(working.subagents.count === 1 ? 'chat.working.child' : 'chat.working.children', { count: working.subagents.count }), since(working.subagents.since),

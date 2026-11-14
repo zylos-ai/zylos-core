@@ -17,7 +17,7 @@ const { mountConversationPage } = await import('../public/js/wb/conversation-pag
 
 function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', presence = 'running', pending = true,
   wait = null, source, healthRecord, workbench, onSend,
-  working = { on: false, since: null, turn: null, tools: 0, subagents: null } } = {}) {
+  working = { on: false, since: null, main: null, tools: 0, subagents: null } } = {}) {
   const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
   const document = conversationDocument(), root = document.createElement('div');
   const sessionGroup = 'dashboard:health', id = 'g:AA';
@@ -49,7 +49,7 @@ for (const locale of ['en', 'zh']) {
         groupReads++;
         return { listKnown: true,
           rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
-            working: { on: false, since: null, turn: null, tools: 0, subagents: null },
+            working: { on: false, since: null, main: null, tools: 0, subagents: null },
             live: { status: { valid: true, state: 'idle' } }, wait: stored ? { kind: 'unknown', reason: 'no_rule' } : null }],
           instance: { runtimeHealth: { claude: { health: 'ok' } } }, sources: { status: { ok: true, readAt: 1000 } } };
       } });
@@ -125,8 +125,7 @@ for (const locale of ['en', 'zh']) {
       if (presence === 'running') assert.equal(header.textContent, f.translations['wb.state.idle']);
     });
   }
-  for (const [kind, label] of [['auth_wait', 'authFailed'], ['fenced', 'paused'], ['starting', 'starting'],
-    ['start_failed', 'startFailed']]) {
+  for (const [kind, label] of [['auth_wait', 'authFailed'], ['fenced', 'paused'], ['start_failed', 'startFailed']]) {
     test(`server ${kind} wait cannot display a green running header in ${locale}`, async t => {
       const f = healthPage(t, { locale, health: 'ok', wait: { kind } });
       await f.page.openGroup(f.sessionGroup); await tick();
@@ -137,6 +136,18 @@ for (const locale of ['en', 'zh']) {
       assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
     });
   }
+  test(`a session being started shows the group waking, in the working style, in ${locale}`, async t => {
+    const f = healthPage(t, { locale, health: 'ok', presence: 'not_running', wait: { kind: 'starting' } });
+    await f.page.openGroup(f.sessionGroup); await tick();
+    const header = f.root.querySelector('.conversation-running');
+    assert.equal(header.hidden, false);
+    assert.equal(header.dataset.state, 'busy');
+    assert.equal(header.classList.contains('conversation-restricted'), false);
+    assert.equal(header.classList.contains('conversation-waiting'), false);
+    assert.equal(header.querySelector('.wi-ind-desktop').textContent, f.translations['chat.page.waking']);
+    assert.equal(header.querySelector('.wi-ind-mobile').textContent, f.translations['chat.page.waking']);
+    assert.ok(header.querySelector('.wi-spin'), 'it spins like work');
+  });
   for (const [presence, reason] of [['not_running', 'pool_occupancy_unreadable'], ['running', 'no_rule'],
     ['running', 'queue_summary_failed'], ['not_running', 'queue_summary_failed']]) {
     test(`healthy ${presence} group waiting for ${reason} has a neutral header in ${locale}`, { timeout: 2000 }, async t => {
@@ -543,7 +554,7 @@ for (const [sample, state] of [
   const f = healthPage(t, { workbench: () => ({ listKnown: true,
     rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
       state, live: { status: sample }, wait,
-      working: { on: true, since: 1000, turn: { since: 1000 }, tools: 0, subagents: null } }],
+      working: { on: true, since: 1000, main: { since: 1000 }, tools: 0, subagents: null } }],
     instance: { runtimeHealth: { claude: { health } } }, sources: { status: { ok: true, readAt: 1000 } },
   }) });
   await f.page.openGroup(f.sessionGroup); await tick();

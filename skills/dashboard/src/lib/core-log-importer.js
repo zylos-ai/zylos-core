@@ -24,7 +24,7 @@ const DIAGNOSTIC_FIELDS = ['decision', 'reason', 'request_id', 'conversation_id'
   'phase', 'result', 'action', 'target_run_id', 'ready', 'starting', 'reclaiming', 'waiting',
   'capacity', 'busy', 'idle', 'queue_depth', 'from', 'to', 'error_code', 'error',
   'requestId', 'runId', 'sessionId', 'oldSessionId', 'sessionGroup',
-  'type', 'reason_code', 'channel', 'endpoint', 'detail'];
+  'type', 'reason_code', 'channel', 'endpoint', 'detail', 'pasted_at'];
 const IDENTITY_FIELDS = new Set(['sessionGroup', 'runId', 'sessionId', 'oldSessionId',
   'target_run_id', 'requestId', 'request_id', 'control_id', 'conversation_id']);
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]+$/.test(value)
@@ -397,6 +397,7 @@ export class CoreLogImporter {
           status: rotated && (batch.offset === stat.size || batch.offset === offset) ? 'done' : 'active' };
         if (!reason && old && Object.entries(row).every(([key, value]) => old[key] === value)) break;
         let inserted = 0;
+        const types = new Set();
         const committed = this.store.db.transaction(() => {
           // Deletion removes the source while holding this same database writer lock.
           // A descriptor opened before that operation cannot restore its old rows.
@@ -405,7 +406,7 @@ export class CoreLogImporter {
           if (JSON.stringify(now) !== JSON.stringify(old)) return false;
           if (reason) this.mark.run('gap', stream, stat.dev, stat.ino, old.generation);
           for (const item of prepared) {
-            if (item.event && this.store.insertEvent(item.event).inserted) inserted++;
+            if (item.event && this.store.insertEvent(item.event).inserted) { inserted++; types.add(item.event.event_type); }
             if (item.warning) this.diagnostic(stream, item.warning, { file_dev: stat.dev, file_ino: stat.ino,
               generation, byte_offset: item.offset }, `${stat.dev}:${stat.ino}:g${generation}:${item.warning}`);
           }
@@ -418,7 +419,7 @@ export class CoreLogImporter {
         }).immediate();
         if (!committed) return;
         this.transactionObserver?.('afterCommit');
-        if (inserted) this.onImport({ stream, inserted });
+        if (inserted) this.onImport({ stream, inserted, types: [...types] });
         if (batch.offset === offset || batch.offset >= stat.size) break;
         await yieldLoop();
       }

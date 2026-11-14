@@ -49,8 +49,8 @@ export async function startPage(sandbox, publicDir = currentPublic) {
       const value = workbenchAnswer(url, NOW), row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
       row.sessionGroup = GROUP; row.name = { displayName: title }; row.state = { kind: 'idle' }; row.tools = [];
       row.queue = { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null };
-      row.working = { on: scene === 'running', since: scene === 'running' ? NOW - 3 * 60000 : null, turn: scene === 'running' ? { since: NOW - 3 * 60000 } : null, tools: 0, subagents: null };
-      value.rows = [row, { ...row, sessionGroup: 'origin', origin: true, name: null, working: { on: false, since: null, turn: null, tools: 0, subagents: null } }];
+      row.working = { on: scene === 'running', since: scene === 'running' ? NOW - 3 * 60000 : null, main: scene === 'running' ? { since: NOW - 3 * 60000 } : null, tools: 0, subagents: null };
+      value.rows = [row, { ...row, sessionGroup: 'origin', origin: true, name: null, working: { on: false, since: null, main: null, tools: 0, subagents: null } }];
       value.instance.runtimeHealth = { claude: { health: 'ok' } };
       value.counts = { busy: 0, idle: 2, waiting: 0, unknown: 0, error: 0, not_running: 0 };
       return value;
@@ -463,7 +463,9 @@ export async function runMobileConversationBrowser(t, sandbox) {
           await rename.evaluate(el => el.blur()); await page.locator('body').click({ position: { x: 2, y: 2 } });
         } else {
           assert.equal(await page.locator('#wb-mobile-nav').isVisible(), false);
-          assert.equal(await page.locator('.conversation-running').isVisible(), false);
+          // The phone header shows the idle dot and 空闲 in the title row, as in the prototype.
+          assert.equal(await page.locator('.conversation-running[data-state="idle"]').isVisible(), true, 'phone idle status shows in the title row');
+          assert.match(await page.locator('.conversation-running').innerText(), /空闲/);
           assert.equal(await page.locator('.conversation-push-status').isVisible(), false);
           assert.equal(await page.locator('.conversation-menu-toggle').isVisible(), true);
           await phoneHeaderFits(page);
@@ -612,7 +614,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.equal(await page.locator('#wb-mobile-nav').isVisible(), false);
       await page.locator('.conversation-connection-dot[data-stream-state="live"]').waitFor();
       assert.equal(await page.locator('.conversation-push-status').isVisible(), false);
-      assert.equal(await page.locator('.conversation-running').isVisible(), false, 'idle is hidden only on mobile');
+      assert.equal(await page.locator('.conversation-running[data-state="idle"]').isVisible(), true, 'idle shows 空闲 on mobile too');
+      assert.match(await page.locator('.conversation-running').innerText(), /空闲/);
       assert.equal(await page.locator('.conversation-compose-hint').isVisible(), false);
       const editor = page.locator('.conversation-input');
       const initial = await editor.evaluate(el => ({ font: getComputedStyle(el).fontSize, height: el.getBoundingClientRect().height }));

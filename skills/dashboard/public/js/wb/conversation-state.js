@@ -152,9 +152,10 @@ export function createConversationState({
     questionError: null,
     questionVersion: 0,
     questionForms: new Map(),
-    // Agent activity per inbound message id and per round key; `offset` turns browser time into server time.
-    // `unsupported` is set when the instance has no activity route (an older remote), so the page stops asking.
-    activity: { items: new Map(), rounds: new Map(), offset: 0, reading: false, unsupported: false }
+    // What the AI is doing now (the last read); `offset` turns browser time into server time. `open` holds the
+    // subtask rows the user expanded and `details` their steps: only those are read. `unsupported` is set when the
+    // instance has no activity route (an older remote), so the page stops asking.
+    activity: { data: null, offset: 0, reading: false, unsupported: false, open: new Set(), details: new Map() }
   });
   // The instance time zone (its .env TZ) comes with the list and each message page; an older instance without it
   // reads as unknown.
@@ -201,8 +202,9 @@ export function createConversationState({
     if (wait === undefined && updateError && retryAt > now()) wait = retryAt - now();
     const current = cell(),
       hasHistory = !!current && !!selectedId && !selectedId.startsWith('d:');
-    const interval = hasHistory && activityLive(current) ? 2000
-      : streamState === 'live' ? 30000 : hasHistory ? fastUntil > now() ? 2000 : 5000 : 30000;
+    // Live work, or a message just sent or arrived that the AI has neither started on nor answered: read often.
+    const interval = hasHistory && (activityLive(current) || fastUntil > now()) ? 2000
+      : streamState === 'live' ? 30000 : hasHistory ? 5000 : 30000;
     const listWait = Math.max(0, lastListAt + 30000 - now());
     const waitMs = wait ?? Math.min(interval, listWait);
     pollAt = now() + waitMs;
@@ -213,9 +215,10 @@ export function createConversationState({
     }, waitMs);
     timer?.unref?.();
   }
+  // Until a reply arrives (or two minutes pass), even reads that find no work yet keep the fast pace.
   const accelerate = () => {
     fastUntil = now() + 120000;
-    schedule(streamState === 'live' && !activityLive(cell()) ? 30000 : 2000);
+    schedule(2000);
   };
   const preview = content => {
     const parsed = parseC4Content(content);
@@ -764,7 +767,10 @@ export function createConversationState({
     const attachmentUpdates = new Map((data.attachmentUpdates || []).map(row => [row.id, row.attachments]));
     current.messages = current.messages.map(row => attachmentUpdates.has(row.id) ? { ...row, attachments: attachmentUpdates.get(row.id) } : row);
     const newer = added.filter(row => row.id > previousNewest);
+    // A new user message (sent from another tab too) reads fast like one sent here; a reply ends that.
+    const newest = previousNewest ? newer.findLast(row => row.channel !== 'internal') : null;
     if (newer.some(row => row.channel !== 'internal' && row.direction === 'out')) fastUntil = 0;
+    if (newest?.direction === 'in') fastUntil = now() + 120000;
     if (trackQuestions && newer.some(row => row.channel !== 'internal')) current.pendingQuestionRefresh = true;
     updateCurrentItem(current, id);
     return added.length;
@@ -872,14 +878,11 @@ export function createConversationState({
         const origin = sessionGroup === 'origin';
         const group = Array.isArray(data?.rows) ? data.rows.find(row => origin ? row.origin === true : row.sessionGroup === sessionGroup) : null;
         const trusted = data?.listKnown === true && data?.sources?.status?.ok === true;
-        current.groupPresence = trusted && group?.presence === 'running' ? true : trusted && group?.presence === 'not_running' ? false : null;
-        const health = trusted ? data.instance?.runtimeHealth?.[group?.target?.runtime] : null;
-        current.groupHealth = health?.health ?? null;
-        current.groupWait = trusted ? group?.wait ?? null : null;
-        current.groupWorking = trusted && group?.presence === 'running' && typeof group?.working?.on === 'boolean' ? group.working : null;
         // Only Origin's row carries what was last handed to it, and only when that is a scheduled task.
         current.groupProcessing = trusted && origin && group?.processing === 'scheduled_task' ? 'scheduled_task' : null;
-        current.groupPresenceReadAt = trusted && Number.isFinite(data.sources.status.readAt) ? data.sources.status.readAt : null;
+        applyGroupReading(current, trusted ? { readAt: data.sources.status.readAt, presence: group?.presence ?? null,
+          wait: group?.wait ?? null, health: data.instance?.runtimeHealth?.[group?.target?.runtime]?.health ?? null,
+          working: group?.working ?? null } : null);
       } catch {
         if (!stillCurrent()) return;
         // An unreadable optional source must not leave a stale running marker.
@@ -901,36 +904,39 @@ export function createConversationState({
       }
     })();
   }
-  /** A round that can still change: running, or just ended and still settling (its last events may be on the way). */
-  const roundOpen = round => round?.state === 'running' || round?.settling === true;
-  /** Inbound messages whose activity can still change: not read yet, waiting for a turn, or in an open round. */
-  function activityIds(current) {
-    const ids = [];
-    for (const row of current.messages) {
-      if (row.channel === 'internal' || row.direction !== 'in') continue;
-      const item = current.activity.items.get(row.id);
-      if (!item || item.state === 'pending' || item.state === 'round' && roundOpen(current.activity.rounds.get(item.round))) ids.push(row.id);
-    }
-    return ids.slice(-100);
+  /**
+   * The header's reading of the group (whether its session runs, why it waits, its runtime's health and whether it
+   * works), from the group list or from an activity read, which carries the same snapshot's reading for this group.
+   * An older reading than the one shown is ignored; an untrusted one (null) clears it.
+   */
+  function applyGroupReading(current, reading) {
+    if (reading && Number.isFinite(reading.readAt) && Number.isFinite(current.groupPresenceReadAt) && reading.readAt < current.groupPresenceReadAt) return;
+    current.groupPresence = reading?.presence === 'running' ? true : reading?.presence === 'not_running' ? false : null;
+    current.groupHealth = reading?.health ?? null;
+    current.groupWait = reading?.wait ?? null;
+    current.groupWorking = reading?.presence === 'running' && typeof reading.working?.on === 'boolean' ? reading.working : null;
+    current.groupPresenceReadAt = reading && Number.isFinite(reading.readAt) ? reading.readAt : null;
   }
+  /** The live area can change soon: the group works, a user message waits for it or its work settles, or a subtask runs. */
   function activityLive(current) {
-    if (!current?.activity || current.activity.unsupported) return false;
-    for (const round of current.activity.rounds.values()) if (roundOpen(round)) return true;
-    for (const item of current.activity.items.values()) if (item.state === 'pending') return true;
-    return false;
+    const data = current?.activity?.unsupported ? null : current?.activity?.data;
+    return !!data && (data.working?.on === true || ['queued', 'thinking', 'settling'].includes(data.awaiting?.state) || data.subtasks?.length > 0);
   }
   /** Activity is optional: a failed read keeps what is shown and never raises an update error. */
   async function readActivity(current, id, currentTab, e) {
     if (currentTab !== 'mine' || typeof id !== 'string' || !id.startsWith('g:') || current.activity.reading || current.activity.unsupported) return;
-    const ids = activityIds(current);
-    if (!ids.length) return;
     current.activity.reading = true;
     try {
-      const data = await request(`${pathFor(id)}/activity?${query({ tab: currentTab, ids: ids.join(',') })}`);
-      if (!valid(e) || !Array.isArray(data?.items) || !Array.isArray(data?.rounds)) return;
+      const data = await request(`${pathFor(id)}/activity?${query({ tab: currentTab })}`);
+      if (!valid(e) || !Array.isArray(data?.steps) || !Array.isArray(data?.subtasks)) return;
       if (Number.isFinite(data.now)) current.activity.offset = data.now - now();
-      for (const round of data.rounds) current.activity.rounds.set(round.key, round);
-      for (const item of data.items) current.activity.items.set(item.id, item);
+      current.activity.data = data;
+      // The header follows the same reading at the same pace as the area.
+      if (data.header && typeof data.header === 'object') applyGroupReading(current, { ...data.header, working: data.working ?? null });
+      const running = new Set(data.subtasks.map(subtask => subtask.id));
+      for (const key of [...current.activity.open]) if (!running.has(key)) current.activity.open.delete(key);
+      for (const key of [...current.activity.details.keys()]) if (!current.activity.open.has(key)) current.activity.details.delete(key);
+      await Promise.all([...current.activity.open].map(key => readSubtask(current, id, key, e)));
       emit();
       // An activity read can discover live work after the stream already chose its slow fallback.
       // Only shorten that outstanding wait; keep an earlier poll or an error's retry deadline.
@@ -942,6 +948,13 @@ export function createConversationState({
     } finally {
       current.activity.reading = false;
     }
+  }
+  /** One open subtask's steps; a failed read keeps the ones shown. */
+  async function readSubtask(current, id, key, e) {
+    try {
+      const data = await request(`${pathFor(id)}/activity?${query({ tab: 'mine', subtask: key })}`);
+      if (valid(e) && current.activity.open.has(key) && Array.isArray(data?.steps)) current.activity.details.set(key, data);
+    } catch { /* the next poll asks again */ }
   }
   async function syncCurrent(current, id, currentTab, e) {
     if (current.syncing) return current.syncing;
@@ -1291,6 +1304,16 @@ export function createConversationState({
   }
   return {
     snapshot,
+    /** Expands or folds a subtask row; only expanded rows have their steps read, from now on every poll. */
+    async toggleSubtask(key) {
+      const current = cell(), id = selectedId, e = epoch;
+      if (!current || typeof key !== 'string') return;
+      if (current.activity.open.delete(key)) { current.activity.details.delete(key); emit(); return; }
+      current.activity.open.add(key);
+      emit();
+      await readSubtask(current, id, key, e);
+      if (current === cell()) emit();
+    },
     streamSubscription,
     streamStatus,
     streamEvent,

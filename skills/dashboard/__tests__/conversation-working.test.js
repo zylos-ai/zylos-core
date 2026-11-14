@@ -15,7 +15,7 @@ const { createGroupSide } = await import('../public/js/wb/group-side.js');
 const flush = async () => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
 function fixture(t) {
   let time = 1000000, token = 0, fail = false;
-  let working = { on: true, since: time - 60000, turn: { since: time - 60000 }, tools: 0, subagents: null };
+  let working = { on: true, since: time - 60000, main: { since: time - 60000 }, tools: 0, subagents: null };
   const tasks = new Map(), reads = [], listeners = new Set();
   const document = { hidden: false, visibilityState: 'visible',
     addEventListener(name, fn) { if (name === 'visibilitychange') listeners.add(fn); },
@@ -60,7 +60,7 @@ test('working status has an independent busy and idle request cadence and fails 
   const f = fixture(t); await f.start();
   assert.equal(f.state.snapshot().groupWorking?.on, true);
   await f.advance(4999); assert.equal(f.groupReads().length, 1);
-  f.setWorking({ on: false, since: null, turn: null, tools: 0, subagents: null });
+  f.setWorking({ on: false, since: null, main: null, tools: 0, subagents: null });
   await f.advance(1); assert.equal(f.groupReads().length, 2);
   assert.equal(f.state.snapshot().groupWorking?.on, false);
   await f.advance(29999); assert.equal(f.groupReads().length, 2);
@@ -86,7 +86,7 @@ test('working is refreshed two seconds after a stored send even with healthy run
 
 test('working state opens detail on timeline before its first draw and leaves the board row unchanged', async t => {
   const document = createDocument(), root = document.createElement('div');
-  const working = { on: true, since: 1000, turn: null, tools: 0, subagents: { count: 2, since: 1000, lastActivityAt: 2000 } };
+  const working = { on: true, since: 1000, main: null, tools: 0, subagents: { count: 2, since: 1000, lastActivityAt: 2000 } };
   const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' }, working };
   const detail = createGroupDetail({ root, document, fetch: async path => ({ ok: true, json: async () => path.includes('/runs')
     ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
@@ -105,7 +105,7 @@ test('working timeline selection survives the side panel placeholder and reuses 
   document.addEventListener = () => {}; document.removeEventListener = () => {};
   let timers = 0;
   const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' },
-    working: { on: false, since: null, turn: null, tools: 0, subagents: null } };
+    working: { on: false, since: null, main: null, tools: 0, subagents: null } };
   const side = createGroupSide({ document, setTimer: () => ++timers, clearTimer: () => {}, fetch: async path => ({ ok: true,
     json: async () => path === '/api/workbench/groups' ? { rows: [row], listKnown: true }
       : path.includes('/runs') ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
@@ -125,7 +125,7 @@ test('working timeline summary retains each start time and disappears when work 
     'chat.working.now': '现在：{state}', 'chat.working.since': '{time} 起', 'chat.working.latest': '最近一步 {time}' };
   const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
   const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' },
-    working: { on: true, since: 600000, turn: { since: 1200000 }, tools: 0,
+    working: { on: true, since: 600000, main: { since: 1200000 }, tools: 0,
       subagents: { count: 2, since: 600000, lastActivityAt: 1800000 } } };
   const detail = createGroupDetail({ root, document, t: translate, fetch: async path => ({ ok: true,
     json: async () => path.includes('/runs') ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
@@ -135,7 +135,7 @@ test('working timeline summary retains each start time and disappears when work 
   assert.ok(line, 'busy timeline has a current-work summary');
   assert.equal(line.textContent, '现在：正在工作 · 00:20 起；后台子任务 2 个 · 00:10 起 · 最近一步 00:30');
   assert.equal(allNodes(line).some(node => node.classList.contains('wi-now-sub')), true);
-  await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, turn: null, tools: 0, subagents: null } }], listKnown: true });
+  await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, main: null, tools: 0, subagents: null } }], listKnown: true });
   assert.equal(allNodes(root).some(node => node.classList.contains('wi-now')), false, 'idle timeline has no green work summary');
 });
 
@@ -143,7 +143,7 @@ test('working detail duration starts at the earliest current work without changi
   const { createDocument: detailDocument } = await import('./fixtures/workbench-dom.js');
   const document = detailDocument(), root = document.createElement('div');
   const row = { sessionGroup: 'dashboard:a', presence: 'running', live: { runId: 'run' }, state: { kind: 'idle' }, duration: 777,
-    working: { on: true, since: 120000, turn: { since: 600000 }, tools: 0,
+    working: { on: true, since: 120000, main: { since: 600000 }, tools: 0,
       subagents: { count: 1, since: 120000, lastActivityAt: 800000 } } };
   const detail = createGroupDetail({ root, document, now: () => 900000, fetch: async path => ({ ok: true,
     json: async () => path.includes('/runs') ? { runs: [], totalRuns: 0, totalEvents: 0 } : path.includes('/messages') ? { messages: [] } : { events: [] } }) });
@@ -152,7 +152,7 @@ test('working detail duration starts at the earliest current work without changi
   assert.equal(allNodes(root).find(node => node.classList.contains('wb-dur'))?.textContent, '13m');
   assert.equal(row.duration, 777);
   assert.equal(row.state.kind, 'idle');
-  await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, turn: null, tools: 0, subagents: null } }], listKnown: true });
+  await detail.updateSnapshot({ rows: [{ ...row, working: { on: false, since: null, main: null, tools: 0, subagents: null } }], listKnown: true });
   const head = allNodes(root).find(node => node.classList.contains('wb-group-head'));
   assert.equal(allNodes(head).find(node => node.classList.contains('wb-dur'))?.textContent, '12m');
 });
@@ -163,23 +163,23 @@ test('working captions keep singular task labels without elapsed time', async ()
   const labels = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
   const now = 10 * 3600000;
-  const working = { on: true, since: now - 65 * 60000, turn: null, tools: 0,
+  const working = { on: true, since: now - 65 * 60000, main: null, tools: 0,
     subagents: { count: 1, since: now - 65 * 60000, lastActivityAt: now } };
   assert.equal(workingText(working, { t: translate }), '1 background task');
-  assert.equal(workingText({ ...working, turn: { since: now - 60000 }, subagents: null }, { t: translate }), 'Working');
+  assert.equal(workingText({ ...working, main: { since: now - 60000 }, subagents: null }, { t: translate }), 'Working');
 });
 
-test('the working line names a scheduled task only for a turn known to be one', async () => {
+test('the working line names a scheduled task only while Origin works on what the scheduler handed it', async () => {
   const fs = await import('node:fs');
   const { workingText } = await import('../public/js/wb/working-display.js');
   const labels = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
   const translate = (key, args = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => args[name]);
-  const now = 10 * 3600000, turn = { since: now - 60000 };
+  const now = 10 * 3600000, main = { since: now - 60000, lastActivityAt: now - 2000 };
   const children = { count: 2, since: now - 120000, lastActivityAt: now };
-  assert.equal(workingText({ on: true, turn, subagents: null }, { t: translate, scheduled: true }), 'Running a scheduled task');
-  assert.equal(workingText({ on: true, turn, subagents: children }, { t: translate, scheduled: true }), 'Running a scheduled task · 2 background tasks');
-  // Only background tasks left: the turn is over, so the scheduled wording does not apply.
-  assert.equal(workingText({ on: true, turn: null, subagents: children }, { t: translate, scheduled: true }), '2 background tasks');
+  assert.equal(workingText({ on: true, main, subagents: null }, { t: translate, scheduled: true }), 'Running a scheduled task');
+  assert.equal(workingText({ on: true, main, subagents: children }, { t: translate, scheduled: true }), 'Running a scheduled task · 2 background tasks');
+  // Only background tasks left: the main agent is idle, so the scheduled wording does not apply.
+  assert.equal(workingText({ on: true, main: null, subagents: children }, { t: translate, scheduled: true }), '2 background tasks');
   assert.equal(workingText({ on: false }, { t: translate, scheduled: true }), labels['wb.state.idle']);
 });
 
@@ -191,7 +191,7 @@ for (const locale of ['zh', 'en']) test(`working captions omit elapsed time in $
   const zh = locale === 'zh', now = 10 * 3600000;
   for (const minutes of [0, 3, 65, 121]) for (const scheduled of [false, true]) {
     const since = now - minutes * 60000;
-    const working = { on: true, turn: { since }, subagents: { count: 2, since } };
+    const working = { on: true, main: { since }, subagents: { count: 2, since } };
     const options = { t, scheduled };
     const main = scheduled ? (zh ? '正在执行定时任务' : 'Running a scheduled task') : (zh ? '正在工作' : 'Working');
     const children = zh ? '后台子任务 2 个' : '2 background tasks';
@@ -199,7 +199,7 @@ for (const locale of ['zh', 'en']) test(`working captions omit elapsed time in $
     assert.equal(workingText(working, options), `${main} · ${children}`);
     const compactMain = scheduled ? (zh ? '定时任务' : 'Scheduled') : (zh ? '正在工作' : 'Working');
     assert.deepEqual(workingParts(working, { ...options, compact: true }), { main: compactMain, children: null });
-    assert.deepEqual(workingParts({ ...working, turn: null }, { ...options, compact: true }), {
+    assert.deepEqual(workingParts({ ...working, main: null }, { ...options, compact: true }), {
       main: zh ? '后台子任务 2 个' : '2 subtasks', children: null });
   }
 });

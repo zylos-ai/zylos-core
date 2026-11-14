@@ -1,9 +1,12 @@
 import { element, icon } from './plain-text.js?v=106';
+import { formatZoned } from './instance-zone.js?v=100';
 
 /**
- * The agent's activity on the conversation page: tool steps, words said along the way and subtasks, folded into one
- * line above each reply, below it for follow-up work, and open while the agent works. Activity nodes live outside message content, so copying,
- * searching, notifications and naming never see them.
+ * What the AI is doing right now, shown on the conversation page right below the latest message (a user message or a
+ * reply). It never ties actions to the message that caused them: it shows the group's current steps, a mark where a
+ * new input arrived or a subtask began, and one folded row per subtask that has not ended. It disappears when all
+ * work is done; when the work ended without a reply, one line says so and leads to the group details. Activity nodes
+ * live outside message content, so copying, searching, notifications and naming never see them.
  */
 
 /** Elapsed time the way the activity area shows it: <1 s, N s, N min N s, N h N min. */
@@ -16,156 +19,224 @@ export function formatDuration(ms, t = key => key) {
   return t('chat.activity.hours').replace('{h}', String(Math.floor(seconds / 3600))).replace('{m}', String(Math.floor(seconds % 3600 / 60)));
 }
 
-/** Tool calls and subtasks count as steps; words said along the way and thinking do not. */
-export function stepCount(segment) {
-  return segment.steps.filter(step => step.kind !== 'say').length;
-}
-
 /** One line per step, in the page language; the label never carries a tool name or raw input. */
 export function stepText(step, t = key => key) {
   const label = step.label ?? { key: 'tool' };
   if (label.key === 'described') return label.arg ?? t('chat.activity.label.runCommand');
-  if (label.key === 'subagent' && !label.arg) return t('chat.activity.label.subagentPlain');
   const text = t(`chat.activity.label.${label.key}`);
   return text.includes('{arg}') ? text.replace('{arg}', label.arg ?? '') : text;
 }
 
-/**
- * Where each activity part goes. A part that ends with a reply folds above that reply when it has steps; the part
- * after the last reply is the live area while the round runs (shown before the first reply even with no steps, and
- * after a reply once something happens). Trailing work sits below its preceding loaded reply when that reply is the
- * round's last loaded message; otherwise it retains the separate area after the round's last loaded message.
- * The live area sits under the latest user message, including one sent moments ago that is still waiting to be routed.
- */
-export function activityPlacement(messages, activity) {
-  const loaded = new Set(messages.map(row => row.id));
-  const loadedReplies = new Set(messages.filter(row => row.direction === 'out').map(row => row.id));
-  const folded = new Map(), afterReply = new Map(), trailing = [];
-  if (!activity) return { folded, afterReply, trailing };
-  const seen = new Set();
-  for (const row of messages) {
-    if (row.direction !== 'in') continue;
-    const item = activity.items.get(row.id);
-    if (item?.state !== 'round' || seen.has(item.round)) continue;
-    seen.add(item.round);
-    const round = activity.rounds.get(item.round);
-    if (!round) continue;
-    const anchors = [...round.messageIds, ...round.segments.map(part => part.replyId).filter(id => id !== null)].filter(id => loaded.has(id));
-    if (!anchors.length) continue;
-    let anchor = Math.max(...anchors);
-    // While the agent works, a message just sent is not yet known to belong to this round (that takes one refresh after
-    // it reaches the session); the live area already moves under it so it always sits below the latest user message.
-    if (round.state === 'running') for (const later of messages) {
-      if (later.direction !== 'in' || later.id <= anchor) continue;
-      const state = activity.items.get(later.id)?.state;
-      if (state === undefined || state === 'pending') anchor = later.id;
-    }
-    let replies = 0, precedingReply = null;
-    for (const segment of round.segments) {
-      const key = `${round.key}:${segment.replyId ?? 'tail'}`;
-      if (segment.replyId !== null) {
-        replies++;
-        precedingReply = segment.replyId;
-        if (loaded.has(segment.replyId) && stepCount(segment)) {
-          if (!folded.has(segment.replyId)) folded.set(segment.replyId, []);
-          folded.get(segment.replyId).push({ key, round, segment, live: false });
-        }
-        continue;
-      }
-      const live = round.state === 'running';
-      if (live ? !replies || segment.steps.length : stepCount(segment)) {
-        if (precedingReply === anchor && loadedReplies.has(precedingReply)) {
-          if (!afterReply.has(precedingReply)) afterReply.set(precedingReply, []);
-          afterReply.get(precedingReply).push({ key, round, segment, live, afterReply: true, replyId: precedingReply });
-        } else trailing.push({ key, round, segment, live, anchor });
-      }
-    }
-  }
-  return { folded, afterReply, trailing };
+/** A subtask's name: Memory Sync by what it does, otherwise the description it was started with. */
+export function subtaskName(label, t = key => key) {
+  if (label?.key === 'named' && label.arg) return label.arg;
+  return t(label?.key === 'memorySync' ? 'chat.activity.subtask.memorySync' : 'chat.activity.subtask.plain');
 }
 
-const STATUS_ICON = { running: 'loader', done: 'check', failed: 'alert', incomplete: 'alert', stopped: 'stop' };
+const MARK_ICON = { message: 'msg', scheduled: 'clock', control: 'info', other: 'in', subtask: 'layers' };
 
-/** One activity area. `update` patches it for a placement entry at a given server time. */
-export function createActivityArea({ document, t = key => key, onToggle }) {
+/** A mark's text: what arrived, or which subtask began. */
+export function markText(mark, t = key => key) {
+  if (mark.mark === 'subtask') return t('chat.activity.mark.subtask').replace('{name}', subtaskName(mark.label, t));
+  return t(`chat.activity.mark.${MARK_ICON[mark.mark] ? mark.mark : 'other'}`);
+}
+
+/**
+ * What the live area shows for the loaded messages (internal relays left out) and the latest activity read, or null
+ * when nothing is shown. `presence` is the header's reading of whether the session runs, and the area works exactly
+ * when the header's reading says the main AI works (its `working`).
+ * - before the session takes the latest user message: waking the session (or delivering it, when the session runs);
+ * - once taken and until the AI does something: working, thinking;
+ * - while the AI works: its steps, under the latest message whatever it is; a reply clears the steps before it;
+ * - subtasks that have not ended: one row each, still shown when the main AI is idle (then nothing else is);
+ * - all done: nothing, or one line under the latest user message when the work ended without a reply, from the first
+ *   read after it settled (the page still reads often for a while, in case the runtime takes a queued message).
+ * Elapsed time counts from the first unanswered user message of the current work while the area sits under a user
+ * message, and is not shown under a reply.
+ */
+export function livePresentation(messages, activity, { presence = null } = {}) {
+  const last = messages.at(-1);
+  if (!activity || !last) return null;
+  const working = activity.working;
+  const main = !!working?.on && (!!working.main || working.tools > 0);
+  const subtasks = Array.isArray(activity.subtasks) ? activity.subtasks : [];
+  let awaiting = null;
+  if (last.direction === 'in') {
+    if (activity.awaiting?.id === last.id) awaiting = activity.awaiting;
+    // Sent after the last read looked at the conversation: it is still on its way to the session.
+    else if (last.id > (activity.seenId ?? 0)) awaiting = { id: last.id, state: 'queued', since: last.at ?? null };
+  }
+  const under = last.direction === 'in' ? 'in' : 'out';
+  let since = null;
+  if (under === 'in') {
+    // From the first unanswered message sent since the read's window began (the group was quiet before it, so an
+    // earlier one was already handled); when every unanswered message is older, from the window's start.
+    const replied = messages.findLastIndex(row => row.direction !== 'in');
+    const unanswered = messages.slice(replied + 1).filter(row => row.direction === 'in' && Number.isFinite(row.at));
+    const from = Number.isFinite(activity.from) ? activity.from : -Infinity;
+    // C4 times are whole seconds.
+    const first = unanswered.find(row => row.at >= from - 1000);
+    since = first ? first.at : unanswered.length ? Math.max(unanswered[0].at, from) : awaiting?.since ?? null;
+  }
+  // A reply the read has not seen yet clears the steps before it now, not only at the next read.
+  const steps = Array.isArray(activity.steps) && !(under === 'out' && last.id > (activity.seenId ?? 0)) ? activity.steps : [];
+  const base = { anchor: last.id, under, subtasks, truncated: activity.truncated === true };
+  if (!main && awaiting?.state === 'queued') {
+    const asleep = presence !== 'running';
+    return { ...base, head: asleep ? 'waking' : 'sending', since: since ?? awaiting.since ?? null, steps: [],
+      waiting: asleep ? 'starting' : 'queued' };
+  }
+  if (main) {
+    const running = steps.some(step => step.kind === 'tool' && step.status === 'running');
+    return { ...base, head: 'working', since, steps, waiting: running ? null : 'thinking' };
+  }
+  if (subtasks.length) return { ...base, head: null, since: null, steps: [], waiting: null };
+  if (['settling', 'handled'].includes(awaiting?.state) && under === 'in') return { ...base, head: null, since: null, steps: [], waiting: null, handled: true, subtasks: [] };
+  return null;
+}
+
+const STATUS_ICON = { running: 'loader', done: 'tick', failed: 'alert', incomplete: 'alert', stopped: 'stop' };
+
+/**
+ * The live area. `update(view, { now, open, details })` redraws it for a presentation from `livePresentation`;
+ * `open` holds the subtasks whose rows are expanded, and `details` their steps once read. `onToggle(id)` opens or
+ * closes a subtask row; `onDetails()` leads to the group details.
+ */
+export function createLiveArea({ document, t = key => key, locale, onToggle, onDetails }) {
   const node = (tag, text, cls) => element(document, tag, text, cls);
-  const root = node('div', undefined, 'conversation-activity');
-  let head, headText, chevron, list, structure = null, rows = [], current = null;
-  function build(live) {
-    head = node(live ? 'div' : 'button', undefined, 'conversation-activity-head');
-    headText = node('span');
-    head.append(headText);
-    if (!live) {
-      head.type = 'button';
-      head.dataset.action = 'toggleActivity';
-      chevron = icon(document, 'chev');
-      head.append(chevron);
-      head.addEventListener('click', () => current && onToggle?.(current.key));
-    } else chevron = null;
-    list = node('div', undefined, 'conversation-activity-steps');
-    root.replaceChildren(head, list);
-    root.classList.toggle('conversation-activity-live', live);
+  const root = node('div', undefined, 'conversation-activity conversation-activity-live');
+  root.setAttribute('aria-live', 'polite');
+  const head = node('div', undefined, 'conversation-activity-head');
+  const headText = node('span');
+  head.append(icon(document, 'loader'), headText);
+  const list = node('div', undefined, 'conversation-activity-steps');
+  const rows = node('div', undefined, 'conversation-activity-subtasks');
+  const note = node('div', undefined, 'conversation-activity-handled');
+  let structure = null, times = [], subtaskNodes = new Map(), current = null;
+  const clock = at => formatZoned(new Date(at), locale, { hour: '2-digit', minute: '2-digit' });
+
+  function stepRow(step, into) {
+    if (step.kind === 'mark') {
+      const mark = node('div', undefined, 'conversation-activity-mark');
+      mark.dataset.mark = step.mark;
+      const pill = node('span');
+      pill.append(icon(document, MARK_ICON[step.mark] ?? 'in'), node('span', `${markText(step, t)} · ${clock(step.at)}`));
+      mark.append(pill);
+      into.append(mark);
+      return null;
+    }
+    const row = node('div', undefined, 'conversation-activity-step');
+    row.dataset.status = step.status;
+    const label = node('span', stepText(step, t), 'conversation-activity-label');
+    label.title = label.textContent;
+    const time = node('span', '', 'conversation-activity-time');
+    row.append(icon(document, STATUS_ICON[step.status] ?? 'tick'), label, time);
+    into.append(row);
+    return { step, time };
   }
-  function update(entry, { open, now }) {
-    current = entry;
-    const live = entry.live;
-    if (!head || root.classList.contains('conversation-activity-live') !== live) { build(live); structure = null; }
-    const { segment, round } = entry;
-    const expanded = live || open;
-    root.classList.toggle('conversation-activity-after-reply', entry.afterReply === true);
-    if (expanded) root.dataset.open = ''; else delete root.dataset.open;
-    root.dataset.activityKey = entry.key;
-    const elapsed = (segment.end ?? now) - segment.start;
-    const count = stepCount(segment);
-    // A part that lost its oldest steps to the per-round limit counts as "N+" and says so at the top of its list.
-    const countText = segment.truncated ? `${count}+` : String(count);
-    const steps = t(count === 1 && !segment.truncated ? 'chat.activity.oneStep' : 'chat.activity.steps').replace('{count}', countText);
-    headText.textContent = entry.afterReply
-      ? t(live ? 'chat.activity.afterReplyWorking' : 'chat.activity.afterReply').replace('{duration}', formatDuration(elapsed, t)).replace('{steps}', steps)
-      : t(live ? 'chat.activity.working' : 'chat.activity.worked').replace('{time}', formatDuration(elapsed, t)).replace('{steps}', steps);
-    if (!live) {
-      head.setAttribute('aria-expanded', String(expanded));
-      head.setAttribute('aria-label', `${headText.textContent} · ${t(expanded ? 'chat.activity.hide' : 'chat.activity.show')}`);
-    }
-    list.hidden = !expanded;
-    const thinking = live && round.state === 'running' && !segment.steps.some(step => step.status === 'running');
-    const shape = JSON.stringify([expanded, thinking, segment.truncated === true, segment.steps.map(step => step.kind === 'say' ? ['say', step.text]
-      : [step.kind, step.status, step.label?.key, step.label?.arg])]);
-    if (shape !== structure) {
-      structure = shape;
-      rows = [];
-      const children = [];
-      if (expanded && segment.truncated) children.push(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));
-      if (expanded) for (const step of segment.steps) {
-        if (step.kind === 'say') { children.push(node('p', step.text, 'conversation-activity-say')); rows.push(null); continue; }
-        const row = node('div', undefined, 'conversation-activity-step');
-        row.dataset.status = step.status;
-        const symbol = step.kind === 'subagent' && step.status === 'done' ? 'layers' : STATUS_ICON[step.status] ?? 'check';
-        const label = node('span', stepText(step, t), 'conversation-activity-label');
-        label.title = label.textContent;
-        const time = node('span', '', 'conversation-activity-time');
-        row.append(icon(document, symbol), label, time);
-        children.push(row); rows.push(time);
+  function stepTime(step, now) {
+    if (step.status === 'running') return t('chat.activity.running');
+    const duration = formatDuration((step.end ?? now) - step.start, t);
+    return step.status === 'failed' || step.status === 'incomplete' || step.status === 'stopped'
+      ? `${t(`chat.activity.${step.status}`)} · ${duration}` : duration;
+  }
+  function waitingRow(key) {
+    const row = node('div', undefined, 'conversation-activity-thinking');
+    const dots = node('span', undefined, 'conversation-activity-dots');
+    dots.append(node('i'), node('i'), node('i'));
+    row.append(node('span', t(`chat.activity.${key}`)), dots);
+    return row;
+  }
+  function subtaskRow(subtask) {
+    const box = node('div', undefined, 'conversation-activity-subtask');
+    const button = node('button', undefined, 'conversation-activity-subtask-row');
+    button.type = 'button';
+    button.dataset.action = 'toggleSubtask';
+    const title = node('span', undefined, 'conversation-activity-subtask-title');
+    const prefix = node('span', t('chat.activity.subtask.prefix'));
+    const name = node('b');
+    const rest = node('span');
+    title.append(prefix, name, rest);
+    button.append(icon(document, 'loader'), title, icon(document, 'chev'));
+    button.addEventListener('click', () => onToggle?.(subtask.id));
+    const steps = node('div', undefined, 'conversation-activity-steps');
+    box.append(button, steps);
+    return { box, button, name, rest, steps, shape: null, times: [] };
+  }
+  function updateSubtasks(view, { now, open, details }) {
+    const ids = new Set(view.subtasks.map(subtask => subtask.id));
+    for (const [id, item] of subtaskNodes) if (!ids.has(id)) { item.box.remove(); subtaskNodes.delete(id); }
+    view.subtasks.forEach((subtask, index) => {
+      let item = subtaskNodes.get(subtask.id);
+      if (!item) { item = subtaskRow(subtask); subtaskNodes.set(subtask.id, item); }
+      if (rows.children[index] !== item.box) rows.insertBefore(item.box, rows.children[index] ?? null);
+      const expanded = open?.has(subtask.id) === true;
+      if (expanded) item.box.dataset.open = ''; else delete item.box.dataset.open;
+      item.button.setAttribute('aria-expanded', String(expanded));
+      const name = subtaskName(subtask.label, t);
+      if (item.name.textContent !== name) item.name.textContent = name;
+      const rest = t('chat.activity.subtask.progress').replace('{duration}', formatDuration(now - subtask.start, t))
+        .replace('{count}', String(subtask.steps ?? 0));
+      if (item.rest.textContent !== rest) item.rest.textContent = rest;
+      item.button.title = `${t('chat.activity.subtask.prefix')}${name}${rest}`;
+      const detail = expanded ? details?.get(subtask.id) : null;
+      const shape = JSON.stringify([expanded, detail ? detail.steps.map(step => [step.kind, step.status, step.label?.key, step.label?.arg]) : null]);
+      if (shape !== item.shape) {
+        item.shape = shape;
+        item.times = [];
+        item.steps.replaceChildren();
+        if (expanded && !detail) item.steps.append(node('p', t('chat.activity.subtask.loading'), 'conversation-activity-more'));
+        else if (expanded && !detail.steps.length) item.steps.append(node('p', t('chat.activity.subtask.empty'), 'conversation-activity-more'));
+        else if (expanded) {
+          if (detail.truncated) item.steps.append(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));
+          for (const step of detail.steps) { const row = stepRow(step, item.steps); if (row) item.times.push(row); }
+        }
       }
-      if (expanded && thinking) {
-        const row = node('div', undefined, 'conversation-activity-thinking');
-        const dots = node('span', undefined, 'conversation-activity-dots');
-        dots.append(node('i'), node('i'), node('i'));
-        row.append(dots, node('span', t('chat.activity.thinking')));
-        children.push(row);
-      }
-      list.replaceChildren(...children);
-    }
-    segment.steps.forEach((step, index) => {
-      const time = rows[index];
-      if (!time) return;
-      // A step still open in a part that already ended (the round is settling) counts no further than its part.
-      const until = step.end ?? (segment.end != null ? Math.min(now, segment.end) : now);
-      const duration = formatDuration(until - step.start, t);
-      const text = step.status === 'failed' || step.status === 'incomplete' ? `${t(`chat.activity.${step.status}`)} · ${duration}`
-        : step.status === 'stopped' ? `${t('chat.activity.stopped')} · ${duration}` : duration;
-      if (time.textContent !== text) time.textContent = text;
+      item.steps.hidden = !expanded;
+      for (const { step, time } of item.times) { const text = stepTime(step, now); if (time.textContent !== text) time.textContent = text; }
     });
+    rows.hidden = !view.subtasks.length;
   }
-  return { node: root, update };
+  function update(view, { now, open, details } = {}) {
+    current = view;
+    root.dataset.under = view.under;
+    if (view.handled) {
+      if (!note.children.length) {
+        note.append(icon(document, 'check'), node('span', t('chat.activity.handled')));
+        if (onDetails) {
+          const link = node('button', t('chat.activity.handledLink'), 'wb-link-btn conversation-activity-details');
+          link.type = 'button';
+          link.dataset.action = 'openGroupDetails';
+          link.append(icon(document, 'out'));
+          link.addEventListener('click', () => onDetails());
+          note.append(node('span', '·'), link);
+        }
+      }
+      root.replaceChildren(note);
+      root.dataset.state = 'handled';
+      structure = null;
+      return;
+    }
+    root.dataset.state = view.head ?? 'subtasks';
+    const parts = view.head ? [head, list, rows] : [rows];
+    if (root.children.length !== parts.length || parts.some((part, index) => root.children[index] !== part)) root.replaceChildren(...parts);
+    if (view.head) {
+      const state = t(`chat.activity.${view.head}`);
+      const text = Number.isFinite(view.since) ? t('chat.activity.elapsed').replace('{state}', state).replace('{time}', formatDuration(now - view.since, t)) : state;
+      if (headText.textContent !== text) headText.textContent = text;
+      const shape = JSON.stringify([view.waiting, view.truncated, view.steps.map(step => step.kind === 'mark' ? ['mark', step.mark, step.at, step.label?.arg]
+        : [step.kind, step.status, step.label?.key, step.label?.arg])]);
+      if (shape !== structure) {
+        structure = shape;
+        times = [];
+        list.replaceChildren();
+        if (view.truncated) list.append(node('p', t('chat.activity.truncated'), 'conversation-activity-more'));
+        for (const step of view.steps) { const row = stepRow(step, list); if (row) times.push(row); }
+        if (view.waiting) list.append(waitingRow(view.waiting));
+      }
+      for (const { step, time } of times) { const text = stepTime(step, now); if (time.textContent !== text) time.textContent = text; }
+    }
+    updateSubtasks(view, { now, open, details });
+  }
+  return { node: root, update, get view() { return current; } };
 }
