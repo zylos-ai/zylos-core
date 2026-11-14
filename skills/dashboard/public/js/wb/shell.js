@@ -2,11 +2,11 @@ import { withRequestTimeout } from '../request-timeout.js?v=2';
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=151';
 import { boardController, renderBoard, renderDistribution } from './board.js?v=155';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip } from './instance-strip.js?v=200';
+import { instanceStrip, accountRuntimes } from './instance-strip.js?v=201';
 import { renderAttention } from './attention-bar.js?v=193';
 import { createGroupDetail } from './detail.js?v=173';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
-import { createHostPanel } from './host-panel.js?v=200';
+import { createHostPanel } from './host-panel.js?v=201';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=2';
 
@@ -206,6 +206,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     meta: () => ({ ...instanceInfo(), mode: snapshot?.mode && snapshot.mode !== 'unreadable' ? t('wb.mode') + ' ' + snapshot.mode : null }),
     pool: () => snapshot && { mode: snapshot.mode, pool: snapshot.instance?.pool },
     accounts: () => snapshot?.instance?.accounts,
+    accountOrder: () => accountRuntimes(snapshot ?? {}),
     onUsage: () => document.querySelector('.tab[data-tab="trends"]')?.click?.() });
   const autoName = async () => {
     if (!writable() || !nameDialog) return;
