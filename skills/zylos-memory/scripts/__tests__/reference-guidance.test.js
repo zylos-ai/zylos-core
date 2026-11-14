@@ -144,7 +144,7 @@ test('Sync guidance centralizes corrected-call retries and preserves partial wri
   assert.match(rules, /Never replay a committed prefix or restart a sequence/);
   assert.match(rules, /`WRITE_FAILED`, `LOCK_UNAVAILABLE`, `LOCK_TIMEOUT`, and tool protocol errors receive no retry/);
   assert.match(rules, /After acquisition, `TOKEN_MISMATCH` \/ exit 3 means the lock is no longer yours: stop immediately/);
-  assert.match(rules, /After TOKEN_MISMATCH, also remove only this run's own private export directory, then release once and report/);
+  assert.match(rules, /After TOKEN_MISMATCH, use the same command\s+to remove only this run's own private export directory, then release once\s+and\s+report/);
   assert.match(rules, /Release removes the marker only while it still carries T/);
   assert.match(rules, /including a missing required CLI argument/);
   assert.match(rules, /If a token error is `TOKEN_MISMATCH`, use the immediate-stop rule above/);
