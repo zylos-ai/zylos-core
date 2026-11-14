@@ -285,7 +285,7 @@ async function healthGuardFixture(t, mode = 'multi') {
   }));
   const snapshot = () => [...scenes.values()].map(scene => ({ ...scene }));
   const supervisor = createSupervisor({ env, zylosDir: root, now: () => 1000000,
-    db: { ...store, insertControl: (content, options) => { controls.push({ content, ...options }); return controls.length; } },
+    db: { ...store, insertControl: (content, options) => { controls.push({ content, ...options }); return { id: controls.length }; } },
     scenes: { observe: async () => snapshot(),
       readIdentity: async group => ({ ...scenes.get(group) }), observeGroup: async group => ({ ...scenes.get(group) }),
       bindTarget: async scene => ({ sessionGroup: scene.sessionGroup, expectedRunId: scene.runId }),
@@ -307,7 +307,7 @@ async function healthGuardFixture(t, mode = 'multi') {
       runIds: ['run-0'], mode: 'multi', expectedRunId: 'run-0', sessionGroup: 'fixture:a' }]) };
 }
 
-for (const action of ['stop', 'interrupt']) {
+for (const action of ['stop', 'nudge']) {
   // Boundary: actual supervisor composition wires health actions through the
   // manual-request guard and fresh scene identity. Run for health/manual mutex
   // changes; skip unrelated lifecycle work. Runner-isolated HOME/ZYLOS_DIR/
@@ -317,14 +317,16 @@ for (const action of ['stop', 'interrupt']) {
   test(`health guard ${action} preserves ordinary actions with corrupt restart requests and blocks Origin`, { timeout: 2000 }, async t => {
     const f = await healthGuardFixture(t);
     fs.writeFileSync(f.requestStore.file, '{damaged');
-    const act = scene => action === 'stop' ? f.supervisor.observer.stop(scene) : f.supervisor.observer.interrupt(scene, 'Escape');
+    const act = scene => action === 'stop' ? f.supervisor.observer.stop(scene) : f.supervisor.observer.nudge(scene, async () => true);
     const result = await act(f.scenes.get('fixture:a'));
     assert.equal(action === 'stop' ? result : result.ok, true);
     assert.equal(f.stopped.length, action === 'stop' ? 1 : 0);
-    assert.equal(f.controls.length, action === 'interrupt' ? 1 : 0);
-    if (action === 'interrupt') {
-      assert.equal(f.controls[0].sessionGroup, 'fixture:a');
-      assert.equal(f.controls[0].content, '[KEYSTROKE]Escape');
+    assert.equal(f.controls.length, action === 'nudge' ? 2 : 0);
+    if (action === 'nudge') {
+      assert.deepEqual(f.controls.map(control => ({ group: control.sessionGroup, content: control.content })), [
+        { group: 'fixture:a', content: '[KEYSTROKE]Escape' },
+        { group: 'fixture:a', content: 'continue' },
+      ]);
     }
     await assert.rejects(act(f.scenes.get('origin')), { code: 'requests_unreadable' });
     assert.equal(f.scenes.get('origin').present, true);
@@ -333,14 +335,14 @@ for (const action of ['stop', 'interrupt']) {
     assert.equal(fs.readFileSync(f.requestStore.file, 'utf8'), '{damaged');
   });
 
-  // Boundary: actual health stop/interrupt guards match the pending manual row's
+  // Boundary: actual health stop/nudge guards match the pending manual row's
   // target before any side effect. Run for group-target mutex changes; skip
   // unrelated lifecycle work. Fresh runner HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR,
   // private F9/health files, in-memory SQLite and fixture terminal providers only;
   // no tmux, services, network or children. Stop supervisor/DB then clean fixture.
   test(`health guard ${action} blocks the pending manual target while other groups and Origin proceed`, { timeout: 2000 }, async t => {
     const f = await healthGuardFixture(t); f.pendingA();
-    const act = scene => action === 'stop' ? f.supervisor.observer.stop(scene) : f.supervisor.observer.interrupt(scene, 'Escape');
+    const act = scene => action === 'stop' ? f.supervisor.observer.stop(scene) : f.supervisor.observer.nudge(scene, async () => true);
     const blocked = await act(f.scenes.get('fixture:a'));
     assert.equal(action === 'stop' ? blocked : blocked.ok, false);
     assert.equal(f.stopped.length, 0); assert.equal(f.controls.length, 0);
@@ -349,7 +351,10 @@ for (const action of ['stop', 'interrupt']) {
       assert.equal(action === 'stop' ? result : result.ok, true);
     }
     if (action === 'stop') assert.deepEqual(f.stopped, ['fixture:b', 'origin']);
-    else assert.deepEqual(f.controls.map(control => control.sessionGroup), ['fixture:b', 'origin']);
+    else assert.deepEqual(f.controls.map(control => ({ group: control.sessionGroup, content: control.content })), [
+      { group: 'fixture:b', content: '[KEYSTROKE]Escape' }, { group: 'fixture:b', content: 'continue' },
+      { group: 'origin', content: '[KEYSTROKE]Escape' }, { group: 'origin', content: 'continue' },
+    ]);
     assert.equal(f.scenes.get('fixture:a').present, true);
     assert.equal(f.requestStore.read()[0].sessionGroup, 'fixture:a');
   });
@@ -395,7 +400,7 @@ for (const mode of ['multi', 'single']) {
     f.requestStore.write([request]);
     assert.equal(Object.hasOwn(f.requestStore.read()[0], 'sessionGroup'), false);
     assert.equal(await f.supervisor.observer.stop(origin), false);
-    assert.equal((await f.supervisor.observer.interrupt(origin, 'Escape')).ok, false);
+    assert.equal((await f.supervisor.observer.nudge(origin, async () => true)).ok, false);
     assert.equal(f.stopped.length, 0); assert.equal(f.controls.length, 0);
     assert.equal(f.scenes.get('origin').present, true);
     assert.deepEqual(f.requestStore.read(), [request]);
