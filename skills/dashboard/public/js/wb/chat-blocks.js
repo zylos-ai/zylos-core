@@ -109,7 +109,9 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     const viewport = node('div', undefined, 'chat-diagram-viewport');
     const flow = node('ol', undefined, 'chat-diagram-flow');
     flow.dataset.direction = data.direction === 'horizontal' && data.steps.length <= 5 ? 'horizontal' : 'vertical';
-    flow.style.setProperty('--diagram-columns', data.steps.map(() => 'minmax(0, 1fr)').join(' 56px '));
+    flow.style.setProperty('--diagram-columns', data.steps.map(() => 'minmax(min-content, 1fr)').join(' 56px '));
+    flow.style.setProperty('--diagram-step-count', String(data.steps.length));
+    flow.style.setProperty('--diagram-label-slots', String((data.groups ?? []).filter(group => group.from === group.to).length));
     for (const group of data.groups ?? []) {
       const first = data.steps.findIndex(step => step.id === group.from);
       const last = data.steps.findIndex(step => step.id === group.to);

@@ -4,7 +4,8 @@ import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/he
 const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_MODULE && !!process.env.ZYLOS_CHAT_BROWSER_BIN;
 // Boundary: shipped parser, diagram renderer and CSS, including container-width
 // direction at phone/medium/wide container widths, cross-axis parallel nodes,
-// compact links, group/highlight contrast, literal labels and icon masks. Run after
+// full-width frames, bounded long group labels, compact links, group/highlight
+// contrast, literal labels and icon masks. Run after
 // diagram or conversation-layout changes; unrelated backend work may skip.
 // Before HTTP/Chrome, prove private HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR,
 // socket and unused DB paths. No backend/DB/tmux/PM2 is opened; teardown owns

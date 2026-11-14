@@ -86,6 +86,22 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
     }
     assert.equal(await page.locator('#minimal .chat-block-title,#minimal .wb-ico,#minimal .chat-diagram-group,#minimal .chat-diagram-link-label').count(), 0);
     assert.equal(await page.locator('#minimal .chat-diagram-link[data-arrow="forward"]').count(), 1);
+    const verticalSteps = '#default .chat-diagram-nodes,#minimal .chat-diagram-nodes,#icons-0 .chat-diagram-nodes'
+      + (width === 390 ? ',#horizontal .chat-diagram-nodes' : '');
+    const verticalWidths = await page.locator(verticalSteps).evaluateAll(steps => steps.map(step => {
+      const style = getComputedStyle(step), track = step.getBoundingClientRect();
+      const boxes = [...step.querySelectorAll('.chat-diagram-node')].map(node => node.getBoundingClientRect());
+      const group = [...step.closest('.chat-diagram-flow').querySelectorAll('.chat-diagram-group')].find(region => {
+        const bounds = region.getBoundingClientRect(); return track.top >= bounds.top && track.bottom <= bounds.bottom;
+      });
+      const region = group || step.closest('.chat-diagram-viewport');
+      const available = region.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      return { available, total: boxes.reduce((sum, box) => sum + box.width, 0) + parseFloat(style.columnGap) * (boxes.length - 1),
+        equal: boxes.every(box => Math.abs(box.width - boxes[0].width) < 1), grouped: !!group };
+    }));
+    assert.ok(verticalWidths.some(step => step.grouped) && verticalWidths.some(step => !step.grouped));
+    assert.ok(verticalWidths.every(step => Math.abs(step.total - step.available) <= 3 && step.equal), 'grouped, ungrouped and parallel vertical nodes must fill the available row width equally');
+    console.info('diagram vertical widths', JSON.stringify(verticalWidths));
     const parallel = await page.locator('#horizontal .chat-diagram-nodes').evaluateAll(steps => steps.map(step => {
       const boxes = [...step.querySelectorAll('.chat-diagram-node')].map(node => node.getBoundingClientRect());
       return { count: boxes.length,
@@ -116,9 +132,10 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
       const horizontalConnector = await page.locator('#horizontal .chat-diagram-link[data-arrow="both"]').evaluate(link => {
         const line = link.querySelector('.chat-diagram-line').getBoundingClientRect();
         const label = link.querySelector('.chat-diagram-link-label').getBoundingClientRect();
-        return { above: label.bottom < line.top, width: line.width, height: line.height };
+        return { above: label.bottom < line.top, width: line.width, height: line.height, gap: link.getBoundingClientRect().width };
       });
-      assert.ok(horizontalConnector.above && horizontalConnector.width >= 24 && horizontalConnector.height <= 2, 'horizontal label must sit above a short arrow line');
+      assert.ok(horizontalConnector.above && horizontalConnector.width >= 12 && horizontalConnector.width <= 24
+        && horizontalConnector.width < horizontalConnector.gap / 2 && horizontalConnector.height <= 2, 'horizontal label must sit above a short arrow rather than a gap-filling line');
     }
     assert.equal(await page.locator('#default .chat-diagram-link').count(), 2);
     assert.equal(await page.locator('#default .chat-diagram-link[data-arrow="forward"]').count(), 1);
@@ -141,6 +158,22 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
       });
     }));
     assert.equal(groupLabelOverlaps, false, 'long single-step group label must not overlap a node');
+    assert.ok(await page.locator('#five .chat-diagram-label').evaluateAll(labels => labels.every(label => label.getBoundingClientRect().height <= 20)),
+      'short five-step node labels must remain on one line');
+    const groupLabelWidth = await page.locator('#five .chat-diagram-group-label').evaluate(label => {
+      const style = getComputedStyle(label), flow = label.closest('.chat-diagram-flow');
+      const context = document.createElement('canvas').getContext('2d'); context.font = style.font;
+      const intrinsic = context.measureText(label.textContent).width;
+      const frame = flow.querySelectorAll('.chat-diagram-node')[2].getBoundingClientRect().width;
+      const available = flow.getBoundingClientRect().width - 22;
+      const bounds = label.getBoundingClientRect(), group = label.closest('.chat-diagram-group').getBoundingClientRect();
+      return { intrinsic, frame, available, actual: bounds.width, contained: bounds.left >= group.left && bounds.right <= group.right };
+    });
+    console.info('diagram long group label width', JSON.stringify(groupLabelWidth));
+    assert.ok(groupLabelWidth.actual >= Math.min(groupLabelWidth.intrinsic, 2 * groupLabelWidth.frame, groupLabelWidth.available) - 2,
+      'long group label must receive one intrinsic line or two frame widths, bounded by the available diagram width');
+    assert.ok(groupLabelWidth.actual <= Math.min(2 * groupLabelWidth.frame, groupLabelWidth.available) + 2, 'long group label must wrap within two frames and the diagram');
+    assert.ok(groupLabelWidth.contained, 'group border must enclose the expanded label column');
     assert.equal(await page.locator('#literal .chat-diagram-label').first().textContent(), await page.evaluate(() => window.diagramFixture.literal));
     assert.equal(await page.locator('#literal img,#literal script,#literal a,#literal input,#literal svg').count(), 0);
     assert.equal(await page.locator('#literal .chat-diagram-node').first().locator('.wb-ico').count(), 0);
@@ -149,7 +182,7 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
       mask: getComputedStyle(node).maskImage, width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height,
     })));
     assert.equal(masks.length, 28); assert.ok(masks.every(icon => icon.mask !== 'none' && icon.width > 0 && icon.height > 0));
-    const overflow = await page.evaluate(() => [...document.querySelectorAll('.chat-diagram,.chat-diagram-node,.chat-diagram-group-label,.chat-diagram-link-label')]
+    const overflow = await page.evaluate(() => [...document.querySelectorAll('.chat-diagram,.chat-diagram-node,.chat-diagram-group,.chat-diagram-group-label,.chat-diagram-link-label')]
       .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.className).slice(0, 5));
     assert.deepEqual(overflow, []);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);

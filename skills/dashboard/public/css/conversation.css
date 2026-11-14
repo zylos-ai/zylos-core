@@ -1128,7 +1128,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-page .chat-diagram-viewport { container-type: inline-size; }
 .conversation-page .chat-diagram-flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; margin: 0; padding: 12px 0; list-style: none; isolation: isolate; }
 .conversation-page .chat-diagram-step { display: contents; }
-.conversation-page .chat-diagram-nodes { grid-column: 1; grid-row: var(--step-row); z-index: 1; display: grid; grid-template-columns: repeat(var(--node-count), minmax(0, 1fr)); gap: 8px; min-width: 0; width: min(100%, 480px); justify-self: center; padding: 12px; }
+.conversation-page .chat-diagram-nodes { grid-column: 1; grid-row: var(--step-row); z-index: 1; display: grid; grid-template-columns: repeat(var(--node-count), minmax(0, 1fr)); gap: 8px; min-width: 0; width: 100%; padding: 12px; }
 .conversation-page .chat-diagram-node { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 80px; padding: 12px 8px; border: 1px solid var(--c-line); border-radius: 8px; background: var(--c-sunken); color: var(--c-ink); text-align: center; overflow-wrap: anywhere; }
 .conversation-page .chat-diagram-node > .wb-ico { width: 22px; height: 22px; color: var(--c-ink-2); flex: none; }
 .conversation-page .chat-diagram-highlight { border-color: var(--c-accent-line); background: var(--c-accent-soft); }
@@ -1142,20 +1142,23 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
 .conversation-page .chat-diagram-link[data-arrow="none"] .chat-diagram-line::after { content: "\2502"; }
 .conversation-page .chat-diagram-link-label { max-width: calc(100% - 32px); color: var(--c-ink-2); font-size: 12px; line-height: 18px; text-align: center; overflow-wrap: anywhere; white-space: pre-wrap; }
 .conversation-page .chat-diagram-group { grid-column: 1; grid-row: var(--group-start-row) / var(--group-end-row); display: grid; grid-template-rows: subgrid; z-index: 0; min-width: 0; border: 1px solid var(--c-line); border-radius: 8px; background: var(--c-surface); }
-.conversation-page .chat-diagram-group-label { grid-row: 1; align-self: start; margin: 8px 10px 0; min-width: 0; color: var(--c-ink-2); font-size: 11px; line-height: 18px; overflow-wrap: anywhere; }
+.conversation-page .chat-diagram-group-label { grid-row: 1; align-self: start; width: max-content; max-width: calc(100cqw - 22px); margin: 8px 10px 0; min-width: 0; color: var(--c-ink-2); font-size: 11px; line-height: 18px; overflow-wrap: anywhere; }
 .conversation-page .chat-diagram-summary { margin: 16px 0 0; color: var(--c-ink-2); font-size: 13px; line-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; }
 @container (min-width: 520px) {
-  .conversation-page .chat-diagram-flow[data-direction="horizontal"] { grid-template-columns: var(--diagram-columns); }
-  .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-nodes { grid-column: var(--step-track); grid-row: 2; grid-template-columns: minmax(0, 1fr); width: 100%; padding: 12px 8px; align-self: center; }
+  /* Single-step groups reserve a second frame's width for their label. */
+  .conversation-page .chat-diagram-flow[data-direction="horizontal"] { --diagram-frame-width: calc((100cqw - (var(--diagram-step-count) - 1) * 56px - var(--diagram-step-count) * 16px - var(--diagram-label-slots) * 6px) / (var(--diagram-step-count) + var(--diagram-label-slots))); grid-template-columns: var(--diagram-columns); }
+  .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-nodes { grid-column: var(--step-track); grid-row: 2; grid-template-columns: var(--diagram-frame-width); width: auto; padding: 12px 8px; align-self: center; justify-self: center; }
   .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-node { padding-inline: 4px; }
+  .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-label { font-size: 12px; }
   .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-link { grid-column: var(--link-track); grid-row: 2; flex-direction: column; min-height: 0; padding: 8px 4px; }
-  .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-line { position: relative; width: 100%; height: 1px; background: var(--c-ink-meta); }
+  .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-line { position: relative; width: 18px; height: 1px; background: var(--c-ink-meta); }
   .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-line::after, .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-link[data-arrow="both"] .chat-diagram-line::before { content: ""; position: absolute; width: 6px; height: 6px; border-right: 1px solid var(--c-ink-meta); border-bottom: 1px solid var(--c-ink-meta); }
   .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-line::after { bottom: -3px; right: 0; transform: rotate(-45deg); }
   .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-link[data-arrow="both"] .chat-diagram-line::before { top: -3px; left: 0; transform: rotate(135deg); }
   .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-link[data-arrow="none"] .chat-diagram-line::after { content: none; }
   .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-link-label { order: -1; max-width: 100%; }
   .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-group { grid-column: var(--group-start) / var(--group-end); grid-row: 1 / 3; }
+  .conversation-page .chat-diagram-flow[data-direction="horizontal"] .chat-diagram-group-label { max-width: calc(2 * var(--diagram-frame-width)); }
 }
 
 /* Question cards: title and status share the header row. */
