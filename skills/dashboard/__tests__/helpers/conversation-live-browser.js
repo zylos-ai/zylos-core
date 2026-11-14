@@ -205,12 +205,15 @@ async function measure(page) {
     // The area itself and the bubble of the message it sits under.
     const live = area?.querySelector('.conversation-activity-live');
     const bubble = area?.previousElementSibling?.querySelector('.conversation-message-body');
+    // Where the AI's bubbles start, from the latest AI message on the page (none before the first reply).
+    const replies = document.querySelectorAll('#wb-chat article.conversation-message.chat-out .conversation-message-body');
     const stream = area?.closest('.conversation-stream') ?? document.querySelector('#wb-chat .conversation-stream');
     const box = area?.getBoundingClientRect(), outer = stream?.getBoundingClientRect();
     const clipped = area ? [...area.querySelectorAll('.conversation-activity-head, .conversation-activity-step, .conversation-activity-mark, .conversation-activity-subtask-row, .conversation-activity-handled')]
       .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.className) : [];
     return { overflow: document.documentElement.scrollWidth > innerWidth, inside: !area || !outer || (box.left >= outer.left - 1 && box.right <= outer.right + 1),
       clipped, width: box ? Math.round(box.width) : null, under: area?.dataset.under ?? null, live: rect(live), bubble: rect(bubble),
+      reply: rect(replies[replies.length - 1]),
       times: live ? [...live.querySelectorAll(':scope > .conversation-activity-steps > .conversation-activity-step > .conversation-activity-time')].map(rect) : [],
       labels: live ? [...live.querySelectorAll(':scope > .conversation-activity-steps > .conversation-activity-step > .conversation-activity-label')].map(rect) : [] };
   });
@@ -298,24 +301,29 @@ export async function runConversationLiveBrowser(t, sandbox) {
       assert.equal(layout.overflow, false, `${name}: no horizontal page scroll`);
       assert.equal(layout.inside, true, `${name}: the area stays inside the message column`);
       assert.deepEqual(layout.clipped, [], `${name}: no row is cut off sideways`);
-      // Under a user message the area is as wide as its content and ends where the bubble ends, as in the prototype.
-      if (layout.under === 'in' && layout.live) {
-        assert.ok(Math.abs(layout.live.right - layout.bubble.right) <= 2, `${name}: the area ends where the bubble ends (${layout.live.right} / ${layout.bubble.right})`);
-        if (['thinking', 'steps'].includes(scene.name)) {
-          assert.ok(layout.live.width < 480, `${name}: short content keeps the area narrow (${layout.live.width})`);
-          assert.ok(layout.live.left > layout.bubble.left + 1, `${name}: the area starts right of the bubble's start (${layout.live.left} / ${layout.bubble.left})`);
-        }
+      // The area is as wide as its content; where it starts is checked against the AI's bubbles once a reply shows.
+      if (layout.under === 'in' && layout.live && ['thinking', 'steps'].includes(scene.name)) {
+        assert.ok(layout.live.width < 480, `${name}: short content keeps the area narrow (${layout.live.width})`);
       }
       assert.deepEqual(errors, [], `${name}: no page errors`);
       if (evidence) {
         await page.locator('#wb-chat .conversation-activity-message, #wb-chat article.conversation-message:last-of-type').last().scrollIntoViewIfNeeded();
         await page.screenshot({ path: path.join(evidence, name + '.png'), animations: 'disabled' });
       }
-      results.push({ name, ...layout });
+      results.push({ name, page: `${width}-${theme}`, ...layout });
     }
   }
-  // A step whose text is longer than the area wraps within 560px: the area stays at most that wide, ends where the bubble
-  // ends, and keeps the time column at its right edge.
+  // Under a user message as under a reply, the area starts where the AI's bubbles start, at either width. The bubbles
+  // start at the same place in every scene of a page, so scenes before the first reply use the place a later one shows.
+  const replyLeft = new Map(results.filter(row => row.reply).map(row => [row.page, row.reply.left]));
+  for (const { width, theme } of pages) assert.ok(replyLeft.has(`${width}-${theme}`), `${width}-${theme}: a scene shows a reply`);
+  for (const row of results.filter(row => row.live)) {
+    const left = replyLeft.get(row.page);
+    assert.ok(Math.abs(row.live.left - left) <= 1, `${row.name}: the area under ${row.under === 'in' ? 'a user message' : 'a reply'} starts where the AI's bubbles start (${row.live.left} / ${left})`);
+  }
+  assert.ok(results.some(row => row.live && row.under === 'in') && results.some(row => row.live && row.under === 'out'), 'the area shows under both kinds of message');
+  // A step whose text is longer than the area wraps within 560px: the area stays at most that wide, starts where the AI's
+  // bubbles start, and keeps the time column at its right edge.
   const steps = SCENES.find(scene => scene.name === 'steps');
   api.set({ ...steps, activity: { ...steps.activity, steps: [step.a(), step.b(), tool(described(LONG_TEXT), at(22, 57, 17))] } });
   for (const { page } of pages) await page.clock.fastForward(31000);
@@ -327,7 +335,7 @@ export async function runConversationLiveBrowser(t, sandbox) {
     assert.equal(layout.overflow, false, `${name}: no horizontal page scroll`);
     assert.equal(layout.inside, true, `${name}: the area stays inside the message column`);
     assert.ok(layout.live.width <= 560, `${name}: the area is at most 560px wide (${layout.live.width})`);
-    assert.ok(Math.abs(layout.live.right - layout.bubble.right) <= 2, `${name}: the area still ends where the bubble ends`);
+    assert.ok(Math.abs(layout.live.left - replyLeft.get(`${width}-${theme}`)) <= 1, `${name}: the area still starts where the AI's bubbles start`);
     assert.ok(layout.labels[2].height > 30, `${name}: the long text wraps (${layout.labels[2].height})`);
     assert.ok(layout.labels[2].right <= layout.times[2].left, `${name}: the text never runs into the time column`);
     for (const time of layout.times) assert.ok(time.width > 0 && Math.abs(time.right - layout.live.right) <= 1, `${name}: every time sits at the area's right edge`);

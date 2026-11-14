@@ -945,11 +945,10 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   }
 }
 
-/* What the AI is doing now: right below the latest message, indented past the avatar column on the message's side,
-   as wide as its content up to 560px, so under a user message it ends where the bubble ends. The time column is a grid
-   column at the area's right edge, so the times line up; a step's text wraps within the width rather than pushing it. */
+/* What the AI is doing now: right below the latest message, on the AI's side whichever message it follows, starting
+   where the AI's bubbles start and as wide as its content up to 560px. The time column is a grid column at the area's
+   right edge, so the times line up; a step's text wraps within the width rather than pushing it. */
 .conversation-activity-message { display:flex; flex-direction:column; align-items:flex-start; margin-top:-8px; padding-left:37px; }
-.conversation-activity-message[data-under="in"] { align-items:flex-end; padding-left:0; padding-right:37px; }
 .conversation-activity { display:flex; flex-direction:column; gap:2px; width:fit-content; max-width:min(560px,100%); font-size:12.5px; line-height:1.5; color:var(--text-dim); }
 .conversation-activity-head { display:inline-flex; align-self:flex-start; align-items:center; gap:6px; max-width:100%; min-height:24px; margin:0; padding:2px 8px 2px 6px; font-size:12px; color:var(--text-muted); }
 .conversation-activity-head>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1000,7 +999,6 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 @keyframes conversation-activity-dot { 0%,60%,100% { transform:none; opacity:.35; } 30% { transform:translateY(-3px); opacity:.9; } }
 @media(max-width:760px) {
   .conversation-activity-message { margin-top:-6px; padding-left:34px; }
-  .conversation-activity-message[data-under="in"] { padding-left:0; padding-right:34px; }
   .conversation-activity-subtask-row { min-height:40px; }
 }
 @media (prefers-reduced-motion: reduce) {
