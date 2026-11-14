@@ -148,29 +148,34 @@ test('restored snapshot evidence takes precedence over original deployment evide
  assert.notDeepEqual(fs.readFileSync(source),before);
 });
 
-// Real worker/SQLite boundary: only fixture databases and a private schema
-// module are opened; fixture(t) closes/removes them. Run when changing mixed
-// snapshot/original-deployment recovery, skip for unrelated changes.
-test('original deployment evidence supplies only owners absent from a restored snapshot', {skip:!Database},async t=>{
+// Real worker/SQLite boundary: isolated fixture databases, no services/tmux.
+// Run for current preflight or legacy snapshot selection changes; skip otherwise.
+for(const installedSkill of [false,true]) test(`current original deployment checks ignore retired Web Console bytes with installed skill=${installedSkill}`, {skip:!Database},t=>{
  const dir=fixture(t);skills(dir);
- const {migrateDatabase}=await import('../../../skills/comm-bridge/scripts/sqlite-schema.js');
- const owner=await import('../../../skills/comm-bridge/scripts/c4-schema.js');
- const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'omitted-owner'});
- const schemaRoot=path.join(dir,'schemas');fs.mkdirSync(path.join(schemaRoot,'web-console/scripts'),{recursive:true});
- fs.writeFileSync(path.join(schemaRoot,'web-console/package.json'),'{"type":"module"}');
- fs.writeFileSync(path.join(schemaRoot,'web-console/scripts/schema.js'),`export * from ${JSON.stringify(new URL('../../../skills/comm-bridge/scripts/c4-schema.js',import.meta.url).href)};`);
- for(const name of ['comm-bridge','scheduler']) fs.symlinkSync(path.resolve('skills',name),path.join(schemaRoot,name));
  const source=path.join(dir,'web-console/web-console.db');fs.mkdirSync(path.dirname(source),{recursive:true});
- const writer=new Database(source);t.after(()=>writer.close());
- writer.pragma('journal_mode=WAL');migrateDatabase(writer,owner,{allowNew:true,strict:false});
- writer.exec('CREATE TABLE retained_archive(value TEXT)');
+ // Opaque archived bytes prove the worker does not even open the retired file.
+ const before=Buffer.from('retired Web Console archive\n');fs.writeFileSync(source,before);
+ const snapshot=createCoreDbSnapshot({zylosDir:dir,transactionId:'retired-owner'});
+ assert.equal(snapshot.manifest.formatVersion,3);
+ assert.equal(snapshot.manifest.databases.some(row=>row.source==='web-console/web-console.db'),false);
  const expectedDatabases=[...snapshot.manifest.databases.slice(0,2).map(row=>({source:row.source,status:'missing'})),
   {source:'web-console/web-console.db',status:'complete'},
   {source:'components/dashboard/dashboard.db',status:'missing'}];
- const request={action:'offline-preflight',zylosDir:dir,schemaRoot,formatVersion:2,expectedDatabases,manifest:snapshot.manifest};
- const row=runCoreDbWorker(request).databases.find(row=>row.source==='web-console/web-console.db');
- assert.equal(row.status,'present');assert.deepEqual(row.extensions.tables,['retained_archive']);
- assert.throws(()=>runCoreDbWorker({...request,expectedDatabases:expectedDatabases.map(row=>row.source==='web-console/web-console.db'?{...row,status:'missing'}:row)}),/Expected missing database exists/);
+ const request={action:'offline-preflight',zylosDir:dir,schemaRoot:path.resolve('skills'),formatVersion:2,expectedDatabases};
+ const schemaRoot=path.join(dir,'schemas');fs.mkdirSync(schemaRoot);
+ for(const name of ['comm-bridge','scheduler'])fs.symlinkSync(path.resolve('skills',name),path.join(schemaRoot,name));
+ if(installedSkill){
+  const owner=path.join(schemaRoot,'web-console');fs.mkdirSync(path.join(owner,'scripts'),{recursive:true});
+  fs.writeFileSync(path.join(owner,'package.json'),'{"type":"module"}');
+  fs.writeFileSync(path.join(owner,'scripts/schema.js'),"throw Error('retired owner must not load');\n");
+ }
+ request.schemaRoot=schemaRoot;
+ for(const manifest of [undefined,snapshot.manifest]) for(const status of ['complete','missing']) {
+  const result=runCoreDbWorker({...request,manifest,expectedDatabases:expectedDatabases.map(row=>row.source==='web-console/web-console.db'?{...row,status}:row)});
+  assert.equal(result.databases.length,3);
+  assert.equal(result.databases.some(row=>row.source==='web-console/web-console.db'),false);
+  assert.deepEqual(fs.readFileSync(source),before);
+ }
 });
 
 // Integration boundary: real SQLite/worker with temporary databases and copied
