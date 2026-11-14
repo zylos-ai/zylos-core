@@ -5,6 +5,14 @@ const { EventLogReader } = await loadCoreModule('event-log.js');
 export const TRANSCRIPT_READ_BUDGET_BYTES=256*1024;
 export const TRANSCRIPT_LINE_LIMIT_BYTES=1024*1024;
 export const RECENT_TOOL_RESULTS_LIMIT=256;
+const humanText=text=>typeof text==='string' && text.trim().length>0 &&
+  !/^(\[Request interrupted by user|<turn_aborted>)/i.test(text.trim());
+const codexHumanText=text=>humanText(text) && !(
+  text.trim().startsWith('<environment_context>') && text.trim().endsWith('</environment_context>') ||
+  text.trim().startsWith('# AGENTS.md instructions for ') && text.includes('\n\n<INSTRUCTIONS>') && text.trim().endsWith('</INSTRUCTIONS>'));
+const humanContent=(content,textType,imageType)=>typeof content==='string' ? humanText(content) :
+  Array.isArray(content) && !content.some(block=>block.type==='tool_result') &&
+  content.some(block=>(block.type===textType && humanText(block.text)) || block.type===imageType);
 
 /** One current run/session, with no global latest-transcript fallback. */
 export class SessionActivity {
@@ -16,7 +24,7 @@ export class SessionActivity {
     this.recovered=false;this.lastActivityAt=startedAt;this.closedThrough=-Infinity;this.transcriptPath=null;
     this.transcriptFd=null;this.transcriptOffset=0;this.transcriptIdentity=null;this.turn=false;this.idleSince=null;
     this.busySince=null;this.lastIdleAt=null;this.lastCompletedAt=null;
-    this.lastStartedAt=null;this.lastMainWorkAt=null;this.lastResponseAt=null;this.workOpen=false;
+    this.lastStartedAt=null;this.lastResponseAt=null;this.lastWorkEventAt=null;
     this.transcriptPartial=Buffer.alloc(0);this.transcriptSkippingLine=false;this.transcriptPending=false;
     this.pendingQueueRemoveAt=null;this.codexTranscriptMatches=false;
   }
@@ -37,6 +45,7 @@ export class SessionActivity {
     this.subagents.set(row.agent_id,agent);
     this.lastSubagentActivityAt=Math.max(this.lastSubagentActivityAt ?? 0,row.ts);
     if(row.event==='pre_tool')this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);
+    if(['pre_tool','post_tool','post_tool_failure','subagent_start','subagent_stop'].includes(row.event))this.lastWorkEventAt=Math.max(this.lastWorkEventAt ?? -Infinity,row.ts);
   }
   recoverSubagents() {
     // Child lifetimes can cross main-agent turn boundaries. Recover compact
@@ -50,7 +59,6 @@ export class SessionActivity {
   }
   associateTranscript(row) {
     if(row.event==='session_start' && typeof row.transcript_path==='string' && path.isAbsolute(row.transcript_path)) {
-      if(this.runtime==='claude' && !this.transcriptPath)this.lastStartedAt=null;
       this.transcriptPath=row.transcript_path;
     }
   }
@@ -60,55 +68,33 @@ export class SessionActivity {
   recordCompletion(row) {
     this.lastCompletedAt=Math.max(this.lastCompletedAt ?? -Infinity,row.ts);
   }
-  recordMainWork(row) {
-    if(!['prompt','pre_tool','post_tool','post_tool_failure','permission_request'].includes(row.event))return;
-    this.lastMainWorkAt=Math.max(this.lastMainWorkAt ?? -Infinity,row.ts);
-    if(row.event==='pre_tool')this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);
-  }
   recover() {
-    let boundary=false,completionBoundary=false,startBoundary=false,opening=null,hookStartedAt=null;
-    const rows=this.reader.recoverTail(row=>{
+    let boundary=false,completionBoundary=false;
+    return this.reader.recoverTail(row=>{
       if(!this.matches(row))return {};
       if(!this.transcriptPath)this.associateTranscript(row);
-      if(Number.isFinite(row.ts) && row.ts>=this.startedAt)this.recordMainWork(row);
-      if(Number.isFinite(row.ts) && row.ts>=this.startedAt) {
-        if(['prompt','pre_tool'].includes(row.event))opening=row;
-        if(this.isCompletion(row) || row.event==='session_start' || row.ts<=this.startedAt) {
-          if(opening?.event==='prompt')hookStartedAt=Math.max(hookStartedAt ?? -Infinity,opening.ts);
-          if(opening || row.event==='session_start' || row.ts<=this.startedAt)startBoundary=true;
-          opening=null;
-        }
-      }
-      if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<this.startedAt) {
-        if(opening?.event==='prompt')hookStartedAt=Math.max(hookStartedAt ?? -Infinity,opening.ts);
-        startBoundary=true;opening=null;
-      }
-      // The latest prompt bounds live tool recovery, but an earlier factual
-      // completion must survive that prompt and subsequent quiet samples.
+      if(Number.isFinite(row.ts) && row.ts>=this.startedAt && row.event==='pre_tool')this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);
+      if(Number.isFinite(row.ts) && row.ts>=this.startedAt && ['pre_tool','post_tool','post_tool_failure','permission_request'].includes(row.event))this.lastWorkEventAt=Math.max(this.lastWorkEventAt ?? -Infinity,row.ts);
+      // Retain completion metadata across a newer queued prompt without
+      // replaying an older turn's tool state.
       if(Number.isFinite(row.ts) && row.ts>=this.startedAt && this.isCompletion(row)) {
         this.recordCompletion(row);completionBoundary=true;
       }
       if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)completionBoundary=true;
       const keep=!boundary && Number.isFinite(row.ts) && row.ts>=this.startedAt;
       if(Number.isFinite(row.ts) && (row.ts<=this.startedAt || ['prompt','stop'].includes(row.event)))boundary=true;
-      return {keep,done:boundary && completionBoundary && startBoundary && this.transcriptPath!==null};
+      return {keep,done:boundary && completionBoundary && this.transcriptPath!==null};
     });
-    if(hookStartedAt!==null && !(this.runtime==='claude' && this.transcriptPath))this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,hookStartedAt);
-    return rows;
   }
-  consume(rows,{recovering=false}={}) {
+  consume(rows) {
     for(const row of rows) {
       this.consumeSubagent(row);
       if(!this.matches(row))continue;
       this.associateTranscript(row);
       if(!Number.isFinite(row.ts) || row.ts<this.startedAt)continue;
       this.lastActivityAt=Math.max(this.lastActivityAt,row.ts);
-      // Hook and transcript delivery order need not agree. With Claude's
-      // associated transcript, only its queue-consumption markers prove start.
-      if(!recovering && row.event==='prompt' && !this.workOpen && !this.tools.size &&
-         !(this.runtime==='claude' && this.transcriptPath))this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,row.ts);
-      this.recordMainWork(row);
-      if(['prompt','pre_tool'].includes(row.event))this.workOpen=true;
+      if(row.event==='pre_tool')this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,row.ts);
+      if(['pre_tool','post_tool','post_tool_failure','permission_request'].includes(row.event))this.lastWorkEventAt=Math.max(this.lastWorkEventAt ?? -Infinity,row.ts);
       if(['prompt','pre_tool'].includes(row.event) && this.busySince===null) {
         // A recovered tool can be midway through a turn whose prompt is gone.
         this.busySince=row.event==='prompt' || this.lastIdleAt!==null ? row.ts : this.startedAt;
@@ -122,7 +108,6 @@ export class SessionActivity {
       if(['post_tool','post_tool_failure'].includes(row.event) && typeof id==='string') {this.completed.add(id);this.tools.delete(id);}
       if(this.isCompletion(row)) {
         this.recordCompletion(row);
-        if(row.ts>=(this.lastStartedAt ?? -Infinity))this.workOpen=false;
         this.turn=false;this.closedThrough=Math.max(this.closedThrough,row.ts);
         for(const [key,tool] of this.tools)if(tool.startedAt<=row.ts){this.completed.add(key);this.tools.delete(key);}
       }
@@ -132,15 +117,18 @@ export class SessionActivity {
     const ts=typeof value.timestamp==='string' ? Date.parse(value.timestamp) : NaN;
     if(this.runtime==='codex') {
       if(value.type==='session_meta')this.codexTranscriptMatches=value.payload?.id===this.sessionId;
-      if(!this.codexTranscriptMatches || !Number.isFinite(ts) || ts<this.startedAt)return;
       const payload=value.payload;
+      if(!this.codexTranscriptMatches || !Number.isFinite(ts) || ts<this.startedAt || value.isMeta || payload?.isMeta)return;
+      if(value.type==='response_item' && payload?.type==='message' && payload.role==='user' &&
+         Array.isArray(payload.content) &&
+         payload.content.some(block=>block.type==='input_image' || block.type==='input_text' && codexHumanText(block.text))) {
+        this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,ts);
+      }
       const output=value.type==='response_item' && payload?.type==='message' && payload.role==='assistant' &&
         Array.isArray(payload.content) && payload.content.some(block=>block.type==='output_text' && typeof block.text==='string' && block.text.length>0);
       const call=value.type==='response_item' && ['function_call','custom_tool_call'].includes(payload?.type) && typeof payload.name==='string';
       if(output || call) {
         this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,ts);
-        this.lastMainWorkAt=Math.max(this.lastMainWorkAt ?? -Infinity,ts);
-        if(ts>(this.lastCompletedAt ?? -Infinity))this.workOpen=true;
       }
       return;
     }
@@ -148,6 +136,9 @@ export class SessionActivity {
       Number.isFinite(ts) && ts>=this.startedAt;
     if(main) {
       let started=false;
+      const message=value.message;
+      if(value.type==='user' && !value.isMeta && !message?.isMeta && message?.role==='user' &&
+         humanContent(message.content,'text','image'))started=true;
       if(value.type==='queue-operation') {
         if(value.operation==='remove' && value.reason==='absorbed_mid_turn')this.pendingQueueRemoveAt=ts;
         else this.pendingQueueRemoveAt=null;
@@ -156,24 +147,18 @@ export class SessionActivity {
       if(value.type==='attachment' && value.attachment?.type==='queued_command' &&
          value.attachment.commandMode==='prompt' && this.pendingQueueRemoveAt!==null) {
         this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,this.pendingQueueRemoveAt);
-        this.lastMainWorkAt=Math.max(this.lastMainWorkAt ?? -Infinity,this.pendingQueueRemoveAt);
-        if(this.pendingQueueRemoveAt>(this.lastCompletedAt ?? -Infinity))this.workOpen=true;
         this.pendingQueueRemoveAt=null;
       }
       if(started) {
         this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,ts);
-        if(ts>(this.lastCompletedAt ?? -Infinity))this.workOpen=true;
       }
-      if(started || ['user','assistant'].includes(value.type))this.lastMainWorkAt=Math.max(this.lastMainWorkAt ?? -Infinity,ts);
-      const message=value.message;
-      const output=value.type==='assistant' && !value.isApiErrorMessage && !value.error &&
-        message?.role==='assistant' && typeof message.model==='string' && message.model!=='<synthetic>' &&
+      const output=value.type==='assistant' && !value.isMeta && !message?.isMeta && !value.isApiErrorMessage && !value.error &&
+        message?.role==='assistant' && typeof message.model==='string' && message.model.length>0 && message.model!=='<synthetic>' &&
         Array.isArray(message.content) && message.content.some(block=>
           (block.type==='text' && typeof block.text==='string' && block.text.length>0) ||
           (block.type==='thinking' && typeof block.thinking==='string' && block.thinking.length>0) || block.type==='tool_use');
       if(output) {
         this.lastResponseAt=Math.max(this.lastResponseAt ?? -Infinity,ts);
-        if(ts>(this.lastCompletedAt ?? -Infinity))this.workOpen=true;
       }
     }
     // Remember only a bounded recent window, including gaps before tool hooks. This
@@ -233,7 +218,7 @@ export class SessionActivity {
     // Capture the incremental cursor first, so child events appended during
     // independent recovery are still seen by the next tail read.
     if(!this.recovered)this.recoverSubagents();
-    this.consume(events,{recovering:!this.recovered});this.recovered=true;
+    this.consume(events);this.recovered=true;
     const transcriptMtimeMs=this.readTranscript();
     if(Number.isFinite(transcriptMtimeMs))this.lastActivityAt=Math.max(this.lastActivityAt,transcriptMtimeMs);
     const busy=this.tools.size>0 || now-this.lastActivityAt<3000;
@@ -250,7 +235,7 @@ export class SessionActivity {
     }
     const activeSubagents=[...this.subagents].filter(([,agent])=>agent.active && now-agent.lastActivityAt<subagentTtlMs)
       .map(([agentId,agent])=>({agentId,lastActivityAt:agent.lastActivityAt}));
-    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,lastCompletedAt:this.lastCompletedAt,lastStartedAt:this.lastStartedAt,lastMainWorkAt:this.lastMainWorkAt,lastResponseAt:this.lastResponseAt,transcriptPending:this.transcriptPending,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
+    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,lastCompletedAt:this.lastCompletedAt,lastStartedAt:this.lastStartedAt,lastResponseAt:this.lastResponseAt,lastWorkEventAt:this.lastWorkEventAt,transcriptPending:this.transcriptPending,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
       activeSubagents,lastSubagentActivityAt:this.lastSubagentActivityAt};
   }
 }

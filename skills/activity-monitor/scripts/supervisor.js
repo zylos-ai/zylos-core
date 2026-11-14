@@ -59,12 +59,15 @@ export function createSupervisor(deps) {
     readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,log});
   const manualPending=(group='origin')=>admission.readRequests().some(row=>row.reason==='manual_restart' &&
     (row.mode==='single' ? group===null || group==='origin' : (row.sessionGroup ?? 'origin')===group));
-  const guardedAction=(scene,action,{requireOpen=false,validate=async()=>true}={})=>admission.serialize(async()=>{
-    if(stopping || await db.getModeTransition())return false;
-    try { if(manualPending(scene.sessionGroup))return false; }
+  const manualAllows=group=>{
+    try {return !manualPending(group);}
     catch(error) {
-      if(error.code!=='requests_unreadable' || scene.sessionGroup==='origin' || scene.sessionGroup===null)throw error;
+      if(error.code!=='requests_unreadable' || group==='origin' || group===null)throw error;
+      return true;
     }
+  };
+  const guardedAction=(scene,action,{requireOpen=false,validate=async()=>true}={})=>admission.serialize(async()=>{
+    if(stopping || await db.getModeTransition() || !manualAllows(scene.sessionGroup))return false;
     if(requireOpen && (await db.getDrainFence('*') || await db.getDrainFence(scene.sessionGroup)))return false;
     const current=await scenes.readIdentity(scene.sessionGroup);
     if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime)return false;
@@ -100,7 +103,7 @@ export function createSupervisor(deps) {
         const mode=(await readMode()).mode;
         const targetBinding=await scenes.bindTarget(current);
         // Binding may await I/O; sample identity, activity and fences again before the write.
-        if(!await observer.canAct(current,{requireReady:true,requireOpen:true}) || !await check(current))return false;
+        if(!manualAllows(current.sessionGroup) || !await observer.canAct(current,{requireReady:true,requireOpen:true}) || !await check(current))return false;
         const enqueuedAt=now();
         const control=await db.insertControl(content,{sessionGroup:mode==='single'?null:current.sessionGroup,
           targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
