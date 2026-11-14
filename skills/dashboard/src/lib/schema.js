@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS state_snapshots (
   running_tool TEXT,
   open_turn TEXT,
   pending_permission TEXT,
+  -- Retired state-engine field; retained to avoid a schema migration.
   possibly_stuck_since TEXT,
   last_progress_cursor INTEGER NOT NULL,
   last_message TEXT,

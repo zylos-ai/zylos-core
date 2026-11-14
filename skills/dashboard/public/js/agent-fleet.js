@@ -52,7 +52,7 @@ export function stateMood(agent) {
   const activity = String(agent?.activity || '').toLowerCase();
   if (state === 'OFFLINE' || reason === 'offline' || reason === 'unreachable' || reason === 'version_unsupported' || reason === 'auth_failed') return 'offline';
   if (state === 'AUTH_WAIT' || state === 'WAKE_OVERDUE') return 'stuck';
-  if (state === 'STUCK' || state === 'POSSIBLY_STUCK' || reason.includes('stuck')) return 'stuck';
+  if (reason.includes('stuck')) return 'stuck';
   if (state === 'IDLE') return 'idle';
   if (state === 'BUSY' && (activity.includes('thinking') || activity.includes('思考'))) return 'thinking';
   if (state === 'THINKING') return 'thinking';

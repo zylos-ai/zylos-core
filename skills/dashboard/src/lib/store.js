@@ -226,13 +226,15 @@ export class Store {
 
     this._saveSnapshot = this.db.prepare(`
       INSERT INTO state_snapshots
-        (runtime, session_id, running_tool, open_turn, pending_permission, possibly_stuck_since, last_progress_cursor, last_message, last_prompt, last_progress_at)
+        (runtime, session_id, running_tool, open_turn, pending_permission, last_progress_cursor, last_message, last_prompt, last_progress_at)
       VALUES
-        (@runtime, @session_id, @running_tool, @open_turn, @pending_permission, @possibly_stuck_since, @last_progress_cursor, @last_message, @last_prompt, @last_progress_at)
+        (@runtime, @session_id, @running_tool, @open_turn, @pending_permission, @last_progress_cursor, @last_message, @last_prompt, @last_progress_at)
     `);
 
     this._latestSnapshot = this.db.prepare(`
-      SELECT * FROM state_snapshots
+      SELECT id, runtime, session_id, running_tool, open_turn, pending_permission,
+        last_progress_cursor, snapshot_at, last_message, last_prompt, last_progress_at
+      FROM state_snapshots
       WHERE runtime = @runtime AND (session_id = @session_id OR (@session_id IS NULL AND session_id IS NULL))
       ORDER BY snapshot_at DESC LIMIT 1
     `);
@@ -728,7 +730,6 @@ export class Store {
       running_tool: snapshot.running_tool ? JSON.stringify(snapshot.running_tool) : null,
       open_turn: snapshot.open_turn ? JSON.stringify(snapshot.open_turn) : null,
       pending_permission: snapshot.pending_permission ? JSON.stringify(snapshot.pending_permission) : null,
-      possibly_stuck_since: snapshot.possibly_stuck_since || null,
       last_progress_cursor: snapshot.last_progress_cursor,
       last_message: snapshot.last_message || null,
       last_prompt: snapshot.last_prompt || null,

@@ -7,10 +7,6 @@ const { readJsonSample } = await loadCoreModule('session-usage-reader.js');
 const STALE_TOOL_THRESHOLD_MS = 300_000;
 const STALE_SUBAGENT_THRESHOLD_MS = 1_800_000;
 const STALE_PERMISSION_THRESHOLD_MS = 600_000;
-const POSSIBLY_STUCK_THRESHOLD_S = 300;
-const STUCK_CONFIRMATION_THRESHOLD_S = 600;
-const RECENT_PROGRESS_THRESHOLD_S = 60;
-const COLLECTOR_FRESHNESS_MS = 30_000;
 const SNAPSHOT_INTERVAL_MS = 30_000;
 const AM_HEARTBEAT_INTERVAL_MS = 15_000;
 const AM_HEARTBEAT_STALE_MS = 60_000;
@@ -59,37 +55,6 @@ export function deriveAgentState(signals) {
     const ageSec = Math.floor(signals.runningTool.age);
     evidence.push(`tool_running:${signals.runningTool.tool_name}:${ageSec}s`);
 
-    const recentProgress = signals.lastProgressAge < RECENT_PROGRESS_THRESHOLD_S;
-
-    if (ageSec > POSSIBLY_STUCK_THRESHOLD_S && !recentProgress) {
-      if (signals.possiblyStuckSince) {
-        const stuckDuration = (signals.now() - new Date(signals.possiblyStuckSince).getTime()) / 1000;
-        if (stuckDuration >= STUCK_CONFIRMATION_THRESHOLD_S && signals.collectorLivenessFresh) {
-          return {
-            state: 'STUCK',
-            confidence: 'HIGH',
-            evidence,
-            missing_evidence: missing,
-            reason: `${signals.runningTool.tool_name} tool running for ${ageSec}s with no progress`,
-            suggested_action: 'Consider interrupting the stuck operation'
-          };
-        }
-      }
-
-      if (!signals.collectorLivenessFresh) {
-        missing.push('collector_liveness_stale');
-      }
-
-      return {
-        state: 'POSSIBLY_STUCK',
-        confidence: 'MEDIUM',
-        evidence,
-        missing_evidence: missing,
-        reason: `${signals.runningTool.tool_name} tool running for ${ageSec}s`,
-        suggested_action: 'Monitor — may resolve on its own'
-      };
-    }
-
     return {
       state: 'BUSY',
       confidence: 'HIGH',
@@ -103,33 +68,6 @@ export function deriveAgentState(signals) {
   if (signals.openTurn) {
     const ageSec = Math.floor(signals.openTurn.age);
     evidence.push(`open_turn:${ageSec}s`);
-    const recentTurnProgress = signals.lastProgressAge < RECENT_PROGRESS_THRESHOLD_S;
-
-    if (ageSec > POSSIBLY_STUCK_THRESHOLD_S && !recentTurnProgress) {
-      if (signals.possiblyStuckSince) {
-        const stuckDuration = (signals.now() - new Date(signals.possiblyStuckSince).getTime()) / 1000;
-        if (stuckDuration >= STUCK_CONFIRMATION_THRESHOLD_S && signals.collectorLivenessFresh) {
-          return {
-            state: 'STUCK',
-            confidence: 'MEDIUM',
-            evidence,
-            missing_evidence: missing,
-            reason: `Turn open for ${ageSec}s with no progress`,
-            suggested_action: 'Consider sending a new message to the agent'
-          };
-        }
-      }
-
-      return {
-        state: 'POSSIBLY_STUCK',
-        confidence: 'MEDIUM',
-        evidence,
-        missing_evidence: missing,
-        reason: `Turn open for ${ageSec}s without recent activity`,
-        suggested_action: 'Monitor — may be thinking'
-      };
-    }
-
     return {
       state: 'BUSY',
       confidence: 'MEDIUM',
@@ -174,7 +112,6 @@ export class StateEngine {
       runningTools: new Map(),
       openTurn: null,
       pendingPermission: null,
-      possiblyStuckSince: null,
       lastProgressAt: null,
       pm2: null,
       amHeartbeat: null,
@@ -204,7 +141,6 @@ export class StateEngine {
         if (event.metadata?.tool_use_id && this._toolTombstones.has(event.metadata.tool_use_id)) {
           this._toolTombstones.delete(event.metadata.tool_use_id);
           this._state.lastProgressAt = now;
-          this._clearPossiblyStuck();
           break;
         }
         if (event.metadata?.tool_use_id) {
@@ -227,7 +163,6 @@ export class StateEngine {
           }
         }
         this._state.lastProgressAt = now;
-        this._clearPossiblyStuck();
         break;
 
       case 'post_tool_use':
@@ -236,7 +171,6 @@ export class StateEngine {
           if (!removed) this._addToolTombstone(event.metadata.tool_use_id);
         }
         this._state.lastProgressAt = now;
-        this._clearPossiblyStuck();
         if (this._state.pendingPermission &&
             this._state.pendingPermission.tool_name === event.metadata?.tool_name) {
           this._state.pendingPermission = null;
@@ -249,7 +183,6 @@ export class StateEngine {
             last_activity: event.summary || 'Subagent session started'
           });
           this._state.lastProgressAt = now;
-          this._clearPossiblyStuck();
           break;
         }
         if (this._isNewMainSessionBoundary(event.session_id)) {
@@ -257,7 +190,6 @@ export class StateEngine {
         }
         if (event.session_id) this._setMainSessionId(event.session_id);
         this._state.lastProgressAt = now;
-        this._clearPossiblyStuck();
         break;
 
       case 'user_prompt_submit':
@@ -266,7 +198,6 @@ export class StateEngine {
             last_activity: event.summary || 'Prompt received'
           });
           this._state.lastProgressAt = now;
-          this._clearPossiblyStuck();
           break;
         }
         this._state.openTurn = { started_at: event.timestamp, session_id: event.session_id };
@@ -278,7 +209,6 @@ export class StateEngine {
           summary: event.summary || 'Prompt received',
           timestamp: event.timestamp
         };
-        this._clearPossiblyStuck();
         break;
 
       case 'stop':
@@ -294,7 +224,6 @@ export class StateEngine {
           });
           this._cleanupStaleTools();
           this._state.lastProgressAt = now;
-          this._clearPossiblyStuck();
           break;
         }
         if (event.session_id) {
@@ -311,7 +240,6 @@ export class StateEngine {
         this._cleanupStaleTools();
         this._state.openTurn = null;
         this._state.lastProgressAt = now;
-        this._clearPossiblyStuck();
         this._state.pendingPermission = null;
         if (event.metadata?.assistant_summary) {
           this._state.lastAssistantMessage = {
@@ -553,9 +481,6 @@ export class StateEngine {
         this._state.pendingPermission = snapshot.pending_permission
           ? (typeof snapshot.pending_permission === 'string' ? JSON.parse(snapshot.pending_permission) : snapshot.pending_permission)
           : null;
-        this._state.possiblyStuckSince = snapshot.possibly_stuck_since
-          ? new Date(snapshot.possibly_stuck_since)
-          : null;
         this._state.lastProgressAt = snapshot.last_progress_at
           ? new Date(snapshot.last_progress_at)
           : null;
@@ -645,22 +570,13 @@ export class StateEngine {
         ? (now() - this._state.lastProgressAt.getTime()) / 1000
         : Infinity,
       lastProgressType: null,
-      collectorLivenessFresh: this._isCollectorLivenessFresh(),
       collectorLivenessAvailable: this._isCollectorLivenessAvailable(),
       activeOtelSpan: false,
-      possiblyStuckSince: this._state.possiblyStuckSince?.toISOString() ?? null,
       runtime: this._config.runtime || 'claude',
       now
     };
 
-    const derived = deriveAgentState(signals);
-
-    if ((derived.state === 'POSSIBLY_STUCK' || derived.state === 'STUCK') &&
-        !this._state.possiblyStuckSince) {
-      this._state.possiblyStuckSince = new Date(now());
-    }
-
-    return derived;
+    return deriveAgentState(signals);
   }
 
   _oldestRunningTool() {
@@ -672,10 +588,6 @@ export class StateEngine {
       }
     }
     return oldest;
-  }
-
-  _clearPossiblyStuck() {
-    this._state.possiblyStuckSince = null;
   }
 
   _agentIdForEvent(event) {
@@ -747,29 +659,9 @@ export class StateEngine {
     this._state.runningTools.clear();
     this._state.openTurn = null;
     this._state.pendingPermission = null;
-    this._state.possiblyStuckSince = null;
     this._state.mainSessionId = null;
     this._state.activeSubagents.clear();
     this._state.lastPrompt = null;
-  }
-
-  _isCollectorLivenessFresh() {
-    try {
-      const health = this.store.getCollectorLiveness();
-      const sources = ['pm2_reader', 'system_sampler', 'hook_handler', 'am_heartbeat'];
-      const now = this._now();
-      return sources.every(name => {
-        const h = health.find(s => s.name === name);
-        if (!h) return false;
-        if (h.status === 'stale' || h.status === 'error') return false;
-        const extra = h.extra;
-        const lastSuccess = extra?.last_success;
-        if (!lastSuccess) return false;
-        return (now - new Date(lastSuccess).getTime()) < COLLECTOR_FRESHNESS_MS;
-      });
-    } catch {
-      return false;
-    }
   }
 
   _isCollectorLivenessAvailable() {
@@ -889,7 +781,6 @@ export class StateEngine {
       }),
       open_turn: JSON.stringify(this._state.openTurn),
       pending_permission: JSON.stringify(this._state.pendingPermission),
-      possibly_stuck_since: this._state.possiblyStuckSince?.toISOString() || null,
       last_progress_cursor: this._getMaxEventSeq(),
       last_message: JSON.stringify(this._state.lastAssistantMessage),
       last_prompt: JSON.stringify(this._state.lastPrompt || null),

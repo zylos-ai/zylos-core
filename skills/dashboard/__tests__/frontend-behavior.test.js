@@ -315,7 +315,7 @@ function fleetFixture() {
         name: 'zylos0t',
         color: agentColor('zylos0t').color,
         hue: agentColor('zylos0t').hue,
-        state: 'POSSIBLY_STUCK',
+        state: 'AUTH_WAIT',
         activity: 'no progress',
         context_pct: 0.91,
         session_cost: 0.03,
@@ -693,10 +693,17 @@ test('a thinking feed entry counts the machine as working and labels it thinking
   assert.match(html, /1 Working/);
 });
 
+test('fleet preserves authentication and overdue wake warning moods', () => {
+  for (const state of ['AUTH_WAIT', 'WAKE_OVERDUE']) {
+    const view = buildAgentFleetView({ agents: [{ name: 'a', state }] });
+    assert.equal(view.tiles[0].mood, 'stuck');
+  }
+});
+
 test('fleet tile thinking feed never overrides stuck/offline moods', () => {
   const view = buildAgentFleetView({
     agents: [{
-      name: 'a', state: 'POSSIBLY_STUCK',
+      name: 'a', state: 'AUTH_WAIT',
       activity_feed: [{ kind: 'thinking', label: null, started_at: null }]
     }]
   });
