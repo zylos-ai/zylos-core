@@ -1145,6 +1145,18 @@ test('a reminder in an earlier run or answered with words does not mark the live
   assert.equal((await read()).noResponse, null);
 });
 
+test('a Codex tool call recorded only from its transcript counts as the main agent responding', async t => {
+  const { f, store, read } = workingFixture(t), minute = 60000, run = 'run-telegram:g0';
+  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.nudge(f.now() - 2 * minute, 'telegram:g0', run));
+  assert.deepEqual((await read()).noResponse, { since: f.now() - 2 * minute });
+  // Codex tools without a PreToolUse hook (for example apply_patch) reach the store only as a transcript tool call.
+  const id = crypto.randomUUID();
+  store.insertEvent({ id, ingest_id: id, timestamp: new Date(f.now() - minute).toISOString(), runtime: 'codex',
+    session_group: 'telegram:g0', run_id: run, event_type: 'tool_call', category: 'activity', metadata: { tool_name: 'apply_patch' } });
+  f.advance(31000);
+  assert.equal((await read()).noResponse, null, 'The transcript tool call is a response after the reminder');
+});
+
 test('automatic restarts in the last hour count each restart once and never the crash report that follows it', async t => {
   const { f, store } = workingFixture(t), minute = 60000, at = f.now();
   await importSupervisorRecords({ store, root: f.root }, [
