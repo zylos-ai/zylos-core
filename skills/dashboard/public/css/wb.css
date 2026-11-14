@@ -907,7 +907,7 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .wb-memory-search input { width: 100%; font-size: 12.5px; }
 .memory-head > p { order: 3; flex-basis: 100%; margin: 0; }
 /* Leave focus space at the pane edges; item padding below preserves the text alignment. */
-.memory-tree { flex: 1; min-height: 0; padding: 4px 4px 18px; overflow: auto; scroll-padding: 4px; }
+.memory-tree { flex: 1; min-height: 0; padding: 4px 4px 18px; overflow: auto; scroll-padding: 5px; }
 .wb-memory-section-h, .wb-memory-list-h { display: flex; align-items: center; gap: 5px; width: 100%; margin: 0; padding: 10px 10px 5px; border: 0; background: transparent; color: var(--text-muted); font-size: 11.5px; font-weight: 600; text-align: left; }
 .wb-memory-section-h { cursor: pointer; }
 .wb-memory-section-h .wb-ico, .wb-memory-group-h > .wb-ico:first-child { transition: transform .15s; }
@@ -942,11 +942,12 @@ main:has(> #tab-memory.active) { padding: 0 0 var(--space-xl); }
 .memory-toggle.wb-seg .memory-mode { min-width: 0; height: auto; }
 .memory-edit-actions { gap: 6px; }
 .memory-status { margin: 12px 20px 0; border-color: var(--wb-line-strong); border-radius: var(--wb-r); }
-/* Keyboard scrolling keeps the editor ring inside the existing pane without resizing the editor. */
-.memory-content { padding: 16px 20px 24px; scroll-padding: 4px; }
+.memory-content { padding: 16px 20px 24px; }
 .memory-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border: 1px solid var(--wb-accent-line); border-radius: var(--wb-r); background: var(--wb-accent-soft); color: var(--text); font-size: 12.5px; }
 .memory-notice.warning { border-color: color-mix(in srgb, var(--wb-wait) 40%, transparent); background: color-mix(in srgb, var(--wb-wait) 8%, transparent); }
-.memory-editor { scroll-margin: 4px; border-color: var(--wb-line-strong); border-radius: var(--wb-r); }
+.memory-editor { border-color: var(--wb-line-strong); border-radius: var(--wb-r); }
+/* The fixed-height editor can exceed its pane; keep its existing focus indicator inside its border. */
+.memory-editor:focus-visible { outline-offset: -4px; }
 .memory-conflict-bg { z-index: 90; }
 .memory-conflict.wb-modal { display: flex; flex-direction: column; gap: 12px; width: min(880px, 100%); max-height: min(80dvh, 720px); margin: 0; padding: 18px; }
 .memory-conflict.wb-modal .memory-diff { flex: 1; min-height: 120px; max-height: none; }
@@ -1271,13 +1272,14 @@ a.wb-btn { text-decoration: none; }
 .wb-warn-row > div { min-width: 0; display: flex; flex-wrap: wrap; gap: 0 8px; }
 .wb-warn-row small { flex-basis: 100%; color: var(--text-dim); font-size: 12px; }
 .wb-warn-row .wb-btn { margin-left: auto; }
-/* Offset the extra scroll padding so the controls keep their original layout footprint. */
-.wb-rt-tabs { display: flex; padding: 4px 4px 5px; margin: 0 -4px 9px; scroll-padding: 4px; border-bottom: 1px solid var(--wb-line); overflow-x: auto; }
+/* Extend the clip without moving the tabs; draw the separator at its original baseline. */
+.wb-rt-tabs { position: relative; display: flex; padding: 4px 4px 5px; margin: -4px -4px 9px; border-bottom: 1px solid transparent; overflow-x: auto; }
+.wb-rt-tabs::after { content: ""; position: absolute; z-index: 1; left: 4px; right: 4px; bottom: 4px; height: 1px; background: linear-gradient(var(--wb-line), var(--wb-line)), var(--bg); pointer-events: none; }
 .wb-rt-tab { display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px; padding: 9px 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-dim); font-size: 13px; white-space: nowrap; cursor: pointer; }
 .wb-rt-tab small { color: var(--text-muted); font-weight: 450; }
 .wb-rt-tab[aria-selected="true"] { border-bottom-color: var(--text); color: var(--text); font-weight: 600; }
 .settings-table-scroll, .wb-tscroll { overflow-x: auto; }
-.settings-table-scroll { padding: 4px; margin: -4px -4px 4px; scroll-padding: 4px; }
+.settings-table-scroll { padding: 4px; margin: -4px -4px -4px; scroll-padding: 4px; }
 .wb-ptable { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 12.5px; }
 .wb-ptable th { padding: 6px; border-bottom: 1px solid var(--wb-line); color: var(--text-muted); font-size: 11.5px; font-weight: 500; text-align: right; white-space: nowrap; }
 .wb-ptable td { padding: 3px 6px; border-bottom: 1px solid var(--wb-line); text-align: right; vertical-align: middle; }
