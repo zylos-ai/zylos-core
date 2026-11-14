@@ -2,10 +2,14 @@ import test from 'node:test';
 import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
 
 const cases = [
-  // Impact: a forever-pending board groups or optional cost read must abort after
-  // the real thirty-second budget, report failure and let the next poll recover.
-  // Run for board request deadlines/coalescing/error changes; other work may skip.
-  ...['groups', 'cost'].map(held => ({ name: `a hanging board ${held} request times out and recovers on the next poll at 390px`, kind: 'timeout', held, locale: 'zh', width: 390 })),
+  // Impact: a forever-pending groups read must abort after the real thirty-second
+  // budget, report failure and let the next poll recover. Run for board request
+  // deadlines/coalescing/error changes; unrelated work may skip.
+  { name: 'a hanging board groups request times out and recovers on the next poll at 390px', kind: 'timeout', held: 'groups', locale: 'zh', width: 390 },
+  // Impact: persistently unanswered optional cost reads must abort, reveal groups
+  // with blank costs and allow later polls without errors or overlapping reads.
+  // Run for cost deadlines/optional-data handling; unrelated work may skip.
+  { name: 'hanging optional cost requests leave groups visible with blank costs after timeout at 390px', kind: 'timeout', held: 'cost', locale: 'zh', width: 390 },
   // Impact: main-pack delay must not serialize the independent workbench pack or
   // observer startup. Run for i18n/startup coordination changes; other work may skip.
   ...[390, 1280].map(width => ({ name: `fresh Chinese starts independent requests before an eight-second main pack at ${width}px`, kind: 'parallel', locale: 'zh', width })),

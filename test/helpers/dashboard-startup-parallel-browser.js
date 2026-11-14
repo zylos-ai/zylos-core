@@ -66,9 +66,9 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
       if (!starts.has(pathname)) starts.set(pathname, performance.now());
       if (count > 50) { recordError(`request bound exceeded for ${pathname}`); return await route.abort(); }
       const isHeldGroups = scenario.kind === 'timeout' && scenario.held === 'groups' && pathname === groupsPath && count === 2;
-      const isHeldCost = scenario.kind === 'timeout' && scenario.held === 'cost' && pathname === '/api/workbench/usage' && url.searchParams.get('summary') === 'cost' && !heldRequest;
+      const isHeldCost = scenario.kind === 'timeout' && scenario.held === 'cost' && pathname === '/api/workbench/usage' && url.searchParams.get('summary') === 'cost';
       if (isHeldGroups || isHeldCost) {
-        heldRequest = { pathname, count };
+        heldRequest ??= { pathname, count };
         // Supply no response, not even after the product aborts. Only lifecycle
         // cleanup releases this handler; recovery must come from a later poll.
         await heldGate;
@@ -150,12 +150,12 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
       assert.equal(initial.find(call => call.source === 'cost').finished, null, 'the first summary=cost request is still held');
     }
     // This bound exceeds the real 30s timeout plus a 5s poll. With no request
-    // timeout, no response/error/second poll can occur and this wait fails.
+    // timeout, the first snapshot/second poll cannot complete and this wait fails.
     try {
       await page.waitForFunction(source => {
         const observations = window.__startupGroups;
         return observations.calls.filter(call => call.source === source).length >= 2 &&
-          observations.alerts.length > 0 && document.querySelector('#wb-board .wb-row[data-group]');
+          (source === 'cost' || observations.alerts.length > 0) && document.querySelector('#wb-board .wb-row[data-group]');
       }, scenario.held === 'groups' ? 'board' : 'cost', { timeout: 43000 });
     } catch (error) {
       console.info('Board timeout recovery failure:', JSON.stringify({ heldRequest, heldReleased, errors,
@@ -172,9 +172,21 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
     assert.ok(calls[1].started >= calls[0].finished, 'the next poll starts only after the old request settles');
     assert.ok(calls[1].started - calls[0].finished <= 6500, 'the normal five-second polling cadence resumes');
     assert.equal(observations.maxActive[source], 1, 'timeout recovery does not overlap same-purpose requests');
-    assert.equal(observations.alerts[0].text, labels['wb.readFailed'], 'the existing error path renders before recovery');
+    if (scenario.held === 'groups') {
+      assert.equal(observations.alerts[0].text, labels['wb.readFailed'], 'the existing error path renders before recovery');
+    } else {
+      assert.equal(observations.alerts.length, 0, 'optional cost timeout never shows a board error');
+      assert.equal(await page.locator('#wb-board > [role="alert"]').count(), 0);
+      assert.ok(!(await page.locator('#wb-attention').innerText()).includes(labels['wb.readFailed']), 'optional cost timeout does not report a data-read failure');
+      const expense = page.locator('#wb-instance .wb-cost');
+      await expense.waitFor({ state: 'visible' });
+      assert.equal(await expense.locator('b').count(), 2, 'technical cost strip renders both today and seven-day values');
+      for (const value of await expense.locator('b').allTextContents()) assert.equal(value, '—', 'unavailable cost is blank instead of an invented amount');
+      assert.equal(calls[1].finished, null, 'subsequent optional cost request remains unanswered while groups stay visible');
+      assert.equal(calls[1].aborted, false, 'the next poll is active within its own request budget');
+    }
     assert.equal(heldReleased, false, 'test never released or answered the hung original request');
-    assert.equal(await page.locator('#wb-board > .wb-empty').count(), 0, 'successful next poll replaces the initial error with rows');
+    assert.equal(await page.locator('#wb-board > .wb-empty').count(), 0, 'successful groups snapshot displays rows without a loading or error placeholder');
     console.info('Board timeout recovery observation:', JSON.stringify({ held: scenario.held, heldRequest, observations }));
   } else if (scenario.kind === 'parallel') {
     try {

@@ -239,8 +239,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
         withRequestTimeout(signal => read('/api/workbench/usage?summary=cost', { signal }), REQUEST_TIMEOUT_MS),
       ]);
       if (groups.status !== 'fulfilled') throw groups.reason;
-      // A timed-out optional read must report the stalled snapshot; other cost failures still allow group data.
-      if (expense.status === 'rejected' && expense.reason?.name === 'TimeoutError') throw expense.reason;
+      // Cost is optional: a failed or timed-out read leaves it blank while group rows remain usable.
       return {
         snapshot: groups.value,
         cost: expense.status === 'fulfilled' ? expense.value.costSummary : null,
