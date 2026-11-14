@@ -156,6 +156,8 @@
 
 ## 5. 布局：读得清楚，也找得到操作
 
+[Current] Conversation activity marks for new messages, system instructions, scheduled tasks, other messages, and subtask starts align their 13 px icons and text with the step grid's icon and text columns. They have no separator lines and retain the pale label background, 10 px radius, 11.5 px font, and existing colors. Long labels stay on one line with an ellipsis within the activity width, including at 390 px.
+
 【现状】工作台由顶栏、实例状态、注意事项、主内容和右侧详情组成；顶栏通常 48 px，空间不够时导航另起一行。定时任务抽屉宽 480 px，位置跟随实际顶栏高度；设置为导航与内容两区。
 
 【现状】记忆浏览器为文件树与内容两栏，文件树基础宽 220–300 px；对话侧栏宽 320 px、最低 260 px，富内容卡片最大宽 720 px。根样式的旧顶栏留白并不等于工作台最终布局，需结合后加载的样式看实际结果。

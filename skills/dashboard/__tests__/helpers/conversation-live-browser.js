@@ -325,6 +325,49 @@ export async function runConversationLiveBrowser(t, sandbox) {
   // A step whose text is longer than the area wraps within 560px: the area stays at most that wide, starts where the AI's
   // bubbles start, and keeps the time column at its right edge.
   const steps = SCENES.find(scene => scene.name === 'steps');
+  // All mark kinds share the step columns; a long subtask name must truncate inside the pill.
+  api.set({ ...steps, activity: { ...steps.activity, steps: [step.a(),
+    ...['message', 'control', 'scheduled', 'other', 'subtask'].map(mark => ({
+      kind: 'mark', mark, at: at(22, 57, 18), label: { key: 'named', arg: LONG_TEXT },
+    })), step.c(false)] } });
+  for (const { page } of pages) await page.clock.fastForward(31000);
+  api.push();
+  for (const { page, width, theme } of pages) {
+    const name = `marks-${width}-${theme}`;
+    await wait(async () => (await observe(page)).rows.filter(row => row[0] === 'mark').length === 5, `${name}: all marks show`);
+    const marks = await page.evaluate(() => {
+      const grid = document.querySelector('.conversation-activity-live > .conversation-activity-steps');
+      const iconLeft = grid.querySelector('.conversation-activity-step > .wb-ico').getBoundingClientRect().left;
+      const textLeft = grid.querySelector('.conversation-activity-label').getBoundingClientRect().left;
+      return [...grid.querySelectorAll('.conversation-activity-mark')].map(mark => {
+        const pill = mark.firstElementChild, text = pill.lastElementChild, style = getComputedStyle(pill);
+        return { kind: mark.dataset.mark, iconOffset: pill.firstElementChild.getBoundingClientRect().left - iconLeft,
+          textOffset: text.getBoundingClientRect().left - textLeft,
+          inside: pill.getBoundingClientRect().right <= grid.getBoundingClientRect().right + 1,
+          before: getComputedStyle(mark, '::before').content, after: getComputedStyle(mark, '::after').content,
+          background: style.backgroundColor, radius: style.borderRadius, font: style.fontSize,
+          nowrap: style.whiteSpace, ellipsis: getComputedStyle(text).textOverflow,
+          truncated: text.scrollWidth > text.clientWidth, height: text.getBoundingClientRect().height };
+      });
+    });
+    for (const mark of marks) {
+      assert.ok(Math.abs(mark.iconOffset) <= 1 && Math.abs(mark.textOffset) <= 1, `${name}/${mark.kind}: shares step columns`);
+      assert.equal(mark.inside, true, `${name}/${mark.kind}: pill stays inside grid`);
+      assert.equal(mark.before, 'none'); assert.equal(mark.after, 'none');
+      assert.notEqual(mark.background, 'rgba(0, 0, 0, 0)');
+      assert.equal(mark.radius, '10px'); assert.equal(mark.font, '11.5px');
+      assert.equal(mark.nowrap, 'nowrap'); assert.equal(mark.ellipsis, 'ellipsis');
+      assert.ok(mark.height < 24, `${name}/${mark.kind}: one line`);
+    }
+    assert.equal(marks.find(mark => mark.kind === 'subtask').truncated, true, `${name}: long name has an ellipsis`);
+    const layout = await measure(page);
+    assert.equal(layout.overflow, false); assert.equal(layout.inside, true); assert.deepEqual(layout.clipped, []);
+    console.info('Activity mark layout:', JSON.stringify({ name, marks }));
+    if (evidence) {
+      await page.locator('.conversation-activity-message').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, name + '.png'), animations: 'disabled' });
+    }
+  }
   api.set({ ...steps, activity: { ...steps.activity, steps: [step.a(), step.b(), tool(described(LONG_TEXT), at(22, 57, 17))] } });
   for (const { page } of pages) await page.clock.fastForward(31000);
   api.push();

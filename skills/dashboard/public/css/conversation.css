@@ -964,11 +964,10 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-activity-step[data-status=failed]>.wb-ico,.conversation-activity-step[data-status=failed]>.conversation-activity-time,
 .conversation-activity-step[data-status=incomplete]>.wb-ico,.conversation-activity-step[data-status=incomplete]>.conversation-activity-time { color:var(--wb-wait); }
 .conversation-activity-more { grid-column:1/-1; margin:0; padding:2px 0 4px; font-size:11.5px; line-height:1.6; color:var(--text-muted); }
-/* A new input or a subtask start: a centred pill across the step column. */
-.conversation-activity-mark { grid-column:1/-1; display:flex; align-items:center; gap:8px; min-width:0; margin:5px 0; font-size:11.5px; color:var(--text-dim); }
-.conversation-activity-mark::before,.conversation-activity-mark::after { content:""; height:1px; background:var(--wb-line); flex:1; }
-.conversation-activity-mark>span { display:inline-flex; align-items:center; gap:5px; min-width:0; padding:1px 8px; border-radius:10px; background:var(--wb-hover); white-space:nowrap; }
-.conversation-activity-mark>span>span { overflow:hidden; text-overflow:ellipsis; }
+/* A new input or a subtask start: a left-aligned pill sharing the step icon and text columns. */
+.conversation-activity-mark { grid-column:1/-1; display:flex; align-items:center; min-width:0; margin:5px 0; font-size:11.5px; color:var(--text-dim); }
+.conversation-activity-mark>span { display:inline-flex; align-items:center; gap:8px; min-width:0; max-width:calc(100% + 8px); margin-left:-8px; padding:1px 8px; border-radius:10px; background:var(--wb-hover); white-space:nowrap; }
+.conversation-activity-mark>span>span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 .conversation-activity-mark .wb-ico { width:13px; height:13px; flex:none; }
 .conversation-activity-thinking { grid-column:1/-1; display:flex; align-items:center; gap:6px; min-height:24px; font-size:11.5px; color:var(--text-muted); }
 .conversation-activity-dots { display:inline-flex; gap:3px; }
