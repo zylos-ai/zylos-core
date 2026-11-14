@@ -24,11 +24,11 @@ Marked content, including prefix/JSON/any suffix, has a maximum of **65,536 UTF-
 
 Historical parsing alone accepts an unrecognized block `type` in an otherwise
 valid ordinary `kind: "message"` envelope. It keeps the original envelope and
-adds `unsupportedBlocks: [{index, id, reason: "unknown_type"}]` for those blocks;
+adds `unsupportedBlocks: [{id}]` for those blocks;
 the marker is a parser result, not a wire field. Fully supported results have no
 such member. The unknown block must still have valid common fields: a block ID,
 nonempty string type, supported schemaVersion (1 or 2), a nonempty own
-fallbackText of at most 2,000 Unicode code points, and the existing closed
+fallbackText containing visible text and at most 2,000 Unicode code points, and the existing closed
 member/status/metadata/data shape and resource limits. Complete blocks still
 require object data; reason is allowed only for error status. Duplicate IDs,
 invalid framing, byte limits, bad common fields and malformed known blocks

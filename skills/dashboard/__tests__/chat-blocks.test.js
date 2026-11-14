@@ -220,7 +220,7 @@ test('interactive choice controls replace static options while read-only cards r
 
 for (const [name, invalid] of [
   ['broken JSON', CONTENT_PREFIX + '{broken'],
-  ['unsupported question block', CONTENT_PREFIX + JSON.stringify(envelope([block('future_block', { title: 'Unknown' })], true))],
+  ['unsupported question block', CONTENT_PREFIX + JSON.stringify(envelope([choices('single'), block('future_block', { title: 'Unknown' }, { id: 'future' })], true))],
   ['invalid chart data', CONTENT_PREFIX + JSON.stringify(envelope([block('time_series', { xType: 'number', series: [{ key: 'bad', label: 'Bad', points: [{ x: 1, y: 'execute me' }] }] })]))],
   ['missing interrupt reference', CONTENT_PREFIX + JSON.stringify({ ...envelope([choices('single')], true), interrupt: { blockId: 'missing-block', reason: 'input_required' } })],
 ]) test(`${name} remains visible as a referenced read-only error`, () => {

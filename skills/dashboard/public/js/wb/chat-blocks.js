@@ -1,11 +1,11 @@
-import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=105';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=106';
 import { element } from './plain-text.js?v=106';
 import { attachmentDisplayText } from './chat-attachments.js?v=155';
 import { formatDuration } from './duration-format.js?v=1';
 import { answerDisplay } from './chat-answer.js?v=1';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=105';
+export { validateAnswer } from '../../chat-schema.js?v=106';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 

@@ -1,9 +1,9 @@
-import { parseC4Content, evaluateFormState } from '../../chat-schema.js?v=105';
+import { parseC4Content, evaluateFormState } from '../../chat-schema.js?v=106';
 import { messageState } from './chat-delivery-state.js?v=100';
 import { asDate } from './conversation-time.js?v=99';
 import { normalizeChatSubscription, chatSubscriptionKey, matchesChatEvent } from './conversation-push.js?v=1';
 import { answerDisplay } from './chat-answer.js?v=1';
-import { composeContent, storedContent, contentBytes, MAX_ANNOTATIONS, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=2';
+import { composeContent, storedContent, contentBytes, MAX_ANNOTATIONS, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=3';
 const merge = (old, rows) => [...new Map([...old, ...rows].map(row => [row.id, row])).values()];
 const base = '/api/chat/conversations';
 const pathFor = id => `${base}/${encodeURIComponent(id)}`;

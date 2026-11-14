@@ -20,7 +20,7 @@ test('historical unknown blocks retain envelope data and ordered compatibility m
   const before = JSON.stringify(envelope);
   const parsed = parseC4Content(encode(envelope) + suffix);
   assert.deepEqual(parsed, { kind: 'envelope', envelope, suffix, view: null,
-    unsupportedBlocks: [{ index: 0, id: 'first', reason: 'unknown_type' }, { index: 2, id: 'last', reason: 'unknown_type' }] });
+    unsupportedBlocks: [{ id: 'first' }, { id: 'last' }] });
   assert.equal('fallbackText' in parsed, false);
   assert.equal(JSON.stringify(envelope), before);
   const known = message([markdown]);
@@ -31,7 +31,7 @@ test('historical unknown blocks accept schema version two with a compatibility m
   const envelope = message([{ ...unknown(), schemaVersion: 2 }]);
   assert.deepEqual(parseC4Content(encode(envelope)), {
     kind: 'envelope', envelope, suffix: '', view: null,
-    unsupportedBlocks: [{ index: 0, id: 'future', reason: 'unknown_type' }],
+    unsupportedBlocks: [{ id: 'future' }],
   });
 });
 
@@ -48,6 +48,8 @@ test('the same unknown content is readable in history and rejected by strict sub
 for (const [name, change] of [
   ['missing fallback', block => { delete block.fallbackText; }],
   ['empty fallback', block => { block.fallbackText = ''; }],
+  ['spaces-only fallback', block => { block.fallbackText = '   '; }],
+  ['line-break-only fallback', block => { block.fallbackText = '\n\r\n'; }],
   ['non-string fallback', block => { block.fallbackText = null; }],
   ['long fallback', block => { block.fallbackText = '😀'.repeat(2001); }],
   ['missing id', block => { delete block.id; }],

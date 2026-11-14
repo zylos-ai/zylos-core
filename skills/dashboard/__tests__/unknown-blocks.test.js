@@ -66,6 +66,20 @@ test('pending and error unknown blocks never render reason citations or pending 
   }
 });
 
+test('blank unknown fallback invalidates the whole message while visible fallback preserves siblings', () => {
+  for (const fallbackText of ['   ', '\n\r\n', 'Visible fallback']) {
+    const unknown = { ...future(), fallbackText };
+    const root = render(message([block('before', 'markdown', { text: 'Known before' }), unknown, chart()]));
+    if (fallbackText === 'Visible fallback') {
+      assert.deepEqual(root.children.map(node => node.dataset.blockId), ['before', 'future', 'chart']);
+      assert.equal(allNodes(root).find(node => node.dataset.blockId === 'future').textContent, fallbackText);
+    } else {
+      assert.equal(root.textContent, 'Whole-message words\nSecond linechat.partialContentchat.block.reference 42');
+      assert.equal(allNodes(root).some(node => node.dataset.blockId), false);
+    }
+  }
+});
+
 test('View references keep the unknown placeholder and preserve unreferenced known siblings', () => {
   const source = message([block('before', 'markdown', { text: 'Known before' }), future(), chart()]);
   source.metadata = { view: { schemaVersion: 1, root: 'layout', nodes: [

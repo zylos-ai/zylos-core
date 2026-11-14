@@ -162,7 +162,7 @@ test('shared schema is delivered at local base and fleet module URLs', { timeout
         schemaImports++;
         const schemaUrl = new URL(match[1], moduleUrl);
         assert.equal(schemaUrl.pathname, prefix + '/_assets/chat-schema.js');
-        assert.equal(schemaUrl.search, '?v=105', 'the shipped renderer advances every shared schema cache key together');
+        assert.equal(schemaUrl.search, '?v=106', 'the shipped renderer advances every shared schema cache key together');
         schemaVersions.add(schemaUrl.search);
         const response = await fetch(schemaUrl);
         assert.equal(response.status, 200);
