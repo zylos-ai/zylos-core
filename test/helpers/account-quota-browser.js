@@ -127,9 +127,18 @@ export async function runAccountQuotaBrowser(sandbox) {
         assert.doesNotMatch(await item.innerText(), resetWords, 'reset adds no visible strip copy');
         if (width === 1280) await item.hover();
       }
+      if (evidence) {
+        const titles = await strip.evaluateAll(items => items.map(item => ({ text: item.innerText, title: item.title })));
+        fs.writeFileSync(path.join(evidence, `quota-${width}-${theme}-${language}-titles.json`), JSON.stringify(titles, null, 2) + '\n');
+        await strip.filter({ hasText: 'Claude' }).hover();
+        // Capture the real hover state; Chromium's native title popup may be outside page screenshots.
+        await page.waitForTimeout(1200);
+        await page.screenshot({ path: path.join(evidence, `quota-${width}-${theme}-${language}-hover.png`), fullPage: true });
+      }
       await page.locator('#wb-host-open').click();
       await card.waitFor();
       assert.equal(await card.evaluate(node => node.previousElementSibling.classList.contains('wb-host-pool')), true, 'accounts follows pool');
+      assert.equal(await card.evaluate(node => Math.round(node.getBoundingClientRect().top - node.previousElementSibling.getBoundingClientRect().bottom)), 10, 'account section keeps the host section spacing');
       const liveText = await card.innerText();
       for (const text of ['Claude', 'Codex', '79%', '58%', await dateText(future)]) assert.ok(liveText.includes(text), `live card contains ${text}`);
       assert.match(liveText, resetWords);
