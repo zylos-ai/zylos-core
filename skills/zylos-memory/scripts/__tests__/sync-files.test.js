@@ -51,6 +51,9 @@ async function commit(settings, deps) {
 // Run for commit timestamp/session boundary changes; unrelated changes may skip.
 // The runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixtures reclaim their roots.
 test('commit stamps its clock over worker local-as-UTC, rounded future and normal timestamps', async t => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = 'Asia/Singapore';
+  t.after(() => { if (previousTimezone === undefined) delete process.env.TZ; else process.env.TZ = previousTimezone; });
   const instant = Date.parse('2026-11-14T10:05:56.123Z');
   for (const group of ['telegram:test', null]) {
     for (const supplied of ['2026-11-14T18:05:56Z', '2026-11-14T18:10:00Z', '2026-11-14T10:10:00Z', '2026-11-14T10:05:55Z']) {
@@ -69,6 +72,9 @@ test('commit stamps its clock over worker local-as-UTC, rounded future and norma
 });
 
 test('commit defaults to the actual publication clock', async t => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = 'Asia/Singapore';
+  t.after(() => { if (previousTimezone === undefined) delete process.env.TZ; else process.env.TZ = previousTimezone; });
   const f = await fixture(t);
   fs.writeFileSync(f.temporary, f.skeleton());
   const { now, ...deps } = f.deps;
@@ -482,7 +488,9 @@ test('commit rejects a changed batch, wrong end, or missing completed checkpoint
       if (mutation === 'hash') batch.sha256 = '0'.repeat(64);
       if (mutation === 'end') batch.end = 1;
       const database = { ...f.deps.database, getLatestContentCheckpoint: () => mutation === 'checkpoint' ? null : { end_conversation_id: 0 } };
-      await assert.rejects(guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs: await list(f.settings), batch } }, { ...f.deps, database }), { code: mutation === 'checkpoint' ? 'INPUT_CHANGED' : 'INVALID_INPUT' });
+      let clockCalls = 0;
+      await assert.rejects(guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs: await list(f.settings), batch } }, { ...f.deps, database, now: () => { clockCalls++; return f.deps.now(); } }), { code: mutation === 'checkpoint' ? 'INPUT_CHANGED' : 'INVALID_INPUT' });
+      assert.equal(clockCalls, 0, 'Rejected commit must not sample the publication clock');
       assert.equal(fs.readFileSync(f.state, 'utf8'), original);
       assert.equal(fs.readFileSync(path.join(f.memoryDir, `inbox.${segment}.md`), 'utf8'), 'absorbed');
       assert.equal(fs.existsSync(f.temporary), true);
