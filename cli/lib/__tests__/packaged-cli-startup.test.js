@@ -29,6 +29,11 @@ function copyDependency(name, fromPackage, targetModules) {
   fs.cpSync(source, destination, { recursive: true, filter: entry => path.basename(entry) !== 'node_modules' });
   const manifest = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'));
   for (const dependency of Object.keys(manifest.dependencies || {})) {
+    // better-sqlite3's install script uses this downloader to obtain the native
+    // addon. This fixture copies an already built addon and never runs install;
+    // pruned developer environments need not retain the downloader at runtime.
+    // Keep all other declared dependencies: missing runtime packages must fail.
+    if (manifest.name === 'better-sqlite3' && dependency === 'prebuild-install') continue;
     copyDependency(dependency, source, path.join(destination, 'node_modules'));
   }
 }

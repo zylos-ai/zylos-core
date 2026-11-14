@@ -22,8 +22,8 @@ function root(mode = 'single') {
   fs.writeFileSync(path.join(dir, 'memory/state.md'), 'prior source state\n');
   return dir;
 }
-function launch(dir, fault = '') {
-  const child = fork(fileURLToPath(new URL('./helpers/mode-switch-supervisor-worker.js', import.meta.url)), [fault], {
+function launch(dir, fault = '', initialScenes = []) {
+  const child = fork(fileURLToPath(new URL('./helpers/mode-switch-supervisor-worker.js', import.meta.url)), [fault, JSON.stringify(initialScenes)], {
     env: { ...process.env, HOME: dir, ZYLOS_DIR: dir, ZYLOS_PACKAGE_ROOT: repository }, silent: true });
   let stderr = ''; child.stderr.on('data', chunk => stderr += chunk);
   const messages = [], waits = [];
@@ -123,17 +123,23 @@ for(const intent of ['manual','corrupt'])test(`real supervisor automatic migrati
  else {const tick=await worker.command('tick'); expect(tick.row?.phase).toBe('gating');}
 },20000);
 
+// Run for missing-deadline/config-conflict gating or supervisor restart changes.
+// This required case uses an isolated worker/database and injected scenes, with
+// no real tmux session or PM2 service.
 test('real supervisor missing deadlines and mode conflict remain blocked across restart then recover',async()=>{
- const dir=root(); let worker=launch(dir); await worker.next(); await worker.command({controlGroup:null}); await request(dir);
+ // A present source executor keeps its controls blocked; absent legacy
+ // executors are intentionally cleaned up during single-to-multi migration.
+ const scenes=[{sessionGroup:'origin',runId:'source-control-owner',present:true,ready:false,processRunning:true}];
+ const dir=root(); let worker=launch(dir,'',scenes); await worker.next(); await worker.command({controlGroup:null}); await request(dir);
  let state=await worker.command('tick'); expect(state.row.reason).toBe('running_control_without_deadline:machine:1');
  await worker.command('tick'); expect(diagnostics(dir).filter(e=>e.event==='transition_blocked').length).toBe(1);
- await kill(worker); worker=launch(dir); state=await worker.next(); expect(state.row.reason).toBe('running_control_without_deadline:machine:1');
+ await kill(worker); worker=launch(dir,'',scenes); state=await worker.next(); expect(state.row.reason).toBe('running_control_without_deadline:machine:1');
  expect(diagnostics(dir).filter(e=>e.event==='transition_blocked').length).toBe(2);
  await worker.command('expire-controls'); await worker.command({controlGroup:'origin'}); state=await worker.command('tick'); expect(state.row.reason).toBe('running_control_without_deadline:allSessionGroups:2');
  fs.writeFileSync(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:'multi'}));
  state=await worker.command('tick'); expect(state.row.reason).toBe('mode_conflict:gating:multi'); expect(state.fences.map(f=>f.sessionGroup)).toEqual(['*']);
  fs.writeFileSync(path.join(dir,'.zylos/config.json'),JSON.stringify({runtime:'claude',session_mode:'single'}));
- await worker.command('expire-controls'); const done=await finish(worker); expect(done.last.reason).toBeNull(); expect(done.fences).toEqual([]);
+ await worker.command('expire-controls'); await worker.command({scenes:[]}); const done=await finish(worker); expect(done.last.reason).toBeNull(); expect(done.fences).toEqual([]);
 },20000);
 
 
