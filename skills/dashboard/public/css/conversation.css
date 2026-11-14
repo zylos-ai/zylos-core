@@ -69,7 +69,11 @@
   overflow:auto;
   min-height:0;
   flex:1;
-  scrollbar-width:thin
+  scrollbar-width:thin;
+  /* Keep row positions while extending the scroll clip around their outer focus rings. */
+  padding:4px;
+  margin:-4px;
+  scroll-padding:4px
 }
 .conversation-page .conversation-list-item {
   display:flex;
@@ -1726,7 +1730,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page :is(.conversation-back,.conversation-menu-toggle)>.wb-ico { width:20px; height:20px; }
   .conversation-page .conversation-push-status { grid-column:1/-1; grid-row:2; margin:0 -4px; padding:6px 16px; border-top:1px solid var(--wb-line); background:color-mix(in srgb,var(--state-busy) 10%,transparent); color:var(--state-busy); font-size:12px; }
   .conversation-page .conversation-push-status[data-stream-state=live] { display:none; }
-  .conversation-page .conversation-header .conversation-running { grid-column:1/-1; grid-row:3; display:flex; align-self:stretch; gap:8px; width:calc(100% + 8px); min-height:34px; margin:0 -4px; padding:7px 16px; border:0; border-top:1px solid var(--wb-line); border-radius:0; background:var(--bg-card); color:var(--text-dim); font-size:13px; font-weight:450; line-height:1.5; }
+  .conversation-page .conversation-header .conversation-running { grid-column:1/-1; grid-row:3; display:flex; align-self:stretch; gap:8px; width:100%; min-height:34px; margin:0; padding:7px 12px; border:0; border-top:1px solid var(--wb-line); border-radius:0; background:var(--bg-card); color:var(--text-dim); font-size:13px; font-weight:450; line-height:1.5; }
   .conversation-page .conversation-header .conversation-running[data-state=busy] { position:relative; grid-column:3; grid-row:1; display:inline-flex; align-self:center; gap:3px; width:auto; max-width:46vw; min-height:22px; height:22px; margin:0 2px 0 4px; padding:0 6px 0 9px; border:1px solid color-mix(in srgb,var(--wb-work) 24%,transparent); border-radius:11px; background:color-mix(in srgb,var(--wb-work) 11%,transparent); color:color-mix(in srgb,var(--wb-work) 68%,var(--text)); font-size:11px; font-weight:550; line-height:1; }
   .conversation-page .conversation-running:not([data-state=busy]) .wi-ind-text { white-space:normal; overflow-wrap:anywhere; }
   .conversation-page .conversation-running[data-state=busy] .wi-ind-desktop { display:none; }
