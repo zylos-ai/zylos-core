@@ -69,8 +69,10 @@ Run `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js 
 using the installed absolute path (expand `~/zylos` to the actual installation
 directory), inheriting `ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`; never supply
 another group's identity. An `ok:true` response registers an in-memory intent,
-not a completed release. Finish the current turn; the supervisor uses the existing
-CHECK → optional Sync → reclaim flow after normal idle and child/Sync protection.
+not a completed release. Finish the current turn. Once the session is idle and no subagent or memory
+sync is running, the supervisor follows the same steps as idle reclaim: it
+sends the pre-reclaim check prompt, runs a memory sync if there are
+unsummarized conversations, then reclaims the session.
 New delivered work before fencing cancels the intent; you may request again after
 that work finishes. Supervisor restart loses the intent, and normal idle TTL is
 the fallback. On rejection or an unknown result, keep the current run; do not exit

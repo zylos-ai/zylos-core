@@ -39,8 +39,10 @@ conversations, leave release to idle TTL. Use the installed absolute path to
 (expand `~/zylos` to the actual installation directory), inheriting
 `ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`; never supply another group's identity.
 An `ok:true` response registers a group/run-scoped in-memory intent, not a
-completed release. Finish the current turn; the supervisor uses the existing
-CHECK → optional Sync → reclaim flow after normal idle and child/Sync protection.
+completed release. Finish the current turn. Once the session is idle and no subagent or memory
+sync is running, the supervisor follows the same steps as idle reclaim: it
+sends the pre-reclaim check prompt, runs a memory sync if there are
+unsummarized conversations, then reclaims the session.
 New delivered work before fencing cancels the intent. Supervisor restart drops
 the intent; ordinary idle TTL remains the fallback. On rejection or an unknown
 result, keep the current run; do not exit or assume release succeeded.
