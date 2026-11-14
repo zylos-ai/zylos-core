@@ -1748,8 +1748,10 @@ test('i18n loader falls back to cache, heals both packs, and ignores stale recov
   for (const ms of [0, 400, 800]) await advance(ms);
   await secondFallback;
   const stale = deferred();
-  fetchPack = () => stale.promise;
+  let staleCalls = 0;
+  fetchPack = () => { staleCalls++; return stale.promise; };
   await advance(5000);
+  assert.equal(staleCalls, 1);
   fetchPack = url => Promise.resolve(response(url.includes('/wb.')
     ? { 'wb.nav.overview': 'Overview' } : { 'btn.actions': 'Actions' }));
   await initI18n('en');
