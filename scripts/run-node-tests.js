@@ -11,6 +11,7 @@ const ROOT_NODE_TESTS = [
   'test/diagram-browser.integration.test.js',
   'test/diagram-components.integration.test.js',
   'test/fleet-summary-refresh.integration.test.js',
+  'test/component-shard-hooks.integration.test.js',
   'test/dashboard-stale-status.integration.test.js',
   'test/router-stale-state.integration.test.js',
   'test/dashboard-readiness.integration.test.js',

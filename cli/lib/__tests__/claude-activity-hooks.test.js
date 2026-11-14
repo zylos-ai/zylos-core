@@ -48,7 +48,7 @@ test('sync backfills missing activity hooks, preserves custom hooks and converge
     hooks: [...group.hooks.filter(hook => !activity(hook)), { ...custom }],
   })), SubagentStart: [{ matcher: 'Explore', hooks: [{ ...custom }] }],
   SubagentStop: [{ hooks: [{ ...custom }] }] } };
-  const sync = supported => syncHooks(installed, {}, { zylosDir: process.env.ZYLOS_DIR, claimedKeys: new Set(),
+  const sync = supported => syncHooks(installed, {}, { zylosDir: process.env.ZYLOS_DIR,
     desiredHooks: desiredClaudeHooks({ zylosDir: process.env.ZYLOS_DIR, subagentHooksSupported: supported }), log: () => {} });
   assert.deepEqual(sync(true), { added: 5, updated: 0, removed: 0 });
   for (const group of installed.hooks.SessionStart) {

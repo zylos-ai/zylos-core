@@ -10,7 +10,7 @@ import { instructionPaths, readInstructionFormatVersion, CURRENT_INSTRUCTION_FOR
 import { migrateClaudeMdToZylosMd } from './migrate.js';
 import { loadInstructionCatalog, classifyInstructionBaseline, verifyInstructionConservation,
   createMigrationBackup, renderMigrationReport, migrationPromptPath, writeMigrationPrompt } from './instruction-migration.js';
-import { desiredClaudeHooks, syncHooks, claimedHookBaseKeys, detectStopFailureSupport, detectSubagentHooksSupport,
+import { desiredClaudeHooks, syncHooks, detectStopFailureSupport, detectSubagentHooksSupport,
   syncTemplateModelSetting, syncTemplateSetting } from './sync-runtime-hooks.js';
 import { removeLegacyDashboardHooks } from './upgrade-post-cutoff.js';
 import { readConfigStrict } from './config-store.js';
@@ -244,7 +244,7 @@ export function prepareUpgradeRuntime(ctx, {
     const healthSupported = stopFailureSupported ?? detectStopFailure();
     settings = removeLegacyDashboardHooks(settings, zylosDir);
     const existsWithStaged = file => replacements.some(item => path.join(zylosDir, item.path) === file) || fs.existsSync(file);
-    syncHooks(settings, {}, { zylosDir, log: () => {}, claimedKeys: claimedHookBaseKeys({ zylosDir }),
+    syncHooks(settings, {}, { zylosDir, log: () => {},
       desiredHooks: desiredClaudeHooks({ zylosDir, existsSync: existsWithStaged, stopFailureSupported: healthSupported,
         subagentHooksSupported: subagentHooksSupported ?? detectSubagentHooks() }) });
     const templateSettings = JSON.parse(readRegular(path.join(templatesDir, '.claude/settings.json')));

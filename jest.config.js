@@ -5,6 +5,7 @@ export default {
     '<rootDir>/test/diagram-browser.integration.test.js',
     '<rootDir>/test/diagram-components.integration.test.js',
     '<rootDir>/test/fleet-summary-refresh.integration.test.js',
+    '<rootDir>/test/component-shard-hooks.integration.test.js',
     '<rootDir>/test/dashboard-stale-status.integration.test.js',
     '<rootDir>/test/router-stale-state.integration.test.js',
     '<rootDir>/test/supervisor-reclaim-deferral.integration.test.js',

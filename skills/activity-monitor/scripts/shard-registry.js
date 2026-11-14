@@ -85,12 +85,6 @@ function normalizedClaudeRoot(zylosDir) {
   return `${path.resolve(zylosDir, '.claude').replaceAll('\\', '/').replace(/\/+$/, '')}/`;
 }
 
-function isRelativeClaimPath(claim) {
-  if (typeof claim !== 'string' || !claim.trim()) return false;
-  if (claim.startsWith('/') || claim.startsWith('~') || /^[A-Za-z]:/.test(claim)) return false;
-  return !claim.split('/').includes('..');
-}
-
 function validateBudget(budget) {
   if (budget == null) return { ...DEFAULT_SHARD_BUDGET };
   if (typeof budget !== 'object') return null;
@@ -139,16 +133,8 @@ function validateDeclaration(raw, { zylosDir, takenNames }) {
     return { error: `shard "${name}" has an invalid budget` };
   }
 
-  const claimHooks = [];
-  for (const claim of Array.isArray(raw.claimHooks) ? raw.claimHooks : []) {
-    if (!isRelativeClaimPath(claim)) {
-      return { error: `shard "${name}" claimHooks entries must be paths relative to ${claudeRoot} (got ${JSON.stringify(claim)})` };
-    }
-    claimHooks.push(claim.replace(/^\.\//, ''));
-  }
-
   return {
-    declaration: { name, order: raw.order, emitterPath, budget, claimHooks },
+    declaration: { name, order: raw.order, emitterPath, budget },
   };
 }
 
@@ -182,6 +168,9 @@ export function loadComponentShardDeclarations({ zylosDir = defaultZylosDir() } 
     if (result.error) {
       warnings.push(`${file}: ${result.error}`);
       continue;
+    }
+    if (Object.hasOwn(raw, 'claimHooks')) {
+      warnings.push(`${file}: claimHooks is ignored and no longer removes legacy hooks; the component must remove its old SessionStart hooks in post-upgrade`);
     }
     takenNames.add(result.declaration.name);
     declarations.push(result.declaration);
