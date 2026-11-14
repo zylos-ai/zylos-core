@@ -225,7 +225,7 @@ test('Origin cursor CLI advances only to what exported receipts prove was read',
   const cursor = () => f.db.prepare('SELECT synced_id,checkpoint_id FROM origin_sync_cursors WHERE session_group=?').get(group) ?? null;
   const input = JSON.stringify({ summary: summary.receipt, raw: raw.receipt, inputs: JSON.parse(listed.stdout) });
   const forged = run('origin-cursor', ['advance', '--group', group, '--token', token], env, JSON.stringify({ summary: summary.receipt, raw: { ...raw.receipt, end: ids[2] }, inputs: JSON.parse(listed.stdout) }));
-  assert.equal(forged.status, 1, forged.stderr); assert.match(forged.stderr, /^Error \[INVALID_INPUT\]:/);
+  assert.equal(forged.status, 1, forged.stderr); assert.match(forged.stderr, /^Error \[INPUT_CHANGED\]:/);
   assert.equal(cursor(), null);
   const result = run('origin-cursor', ['advance', '--group', group, '--token', token], env, input);
   assert.equal(result.status, 0, result.stderr);
