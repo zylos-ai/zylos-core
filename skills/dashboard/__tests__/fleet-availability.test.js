@@ -18,7 +18,11 @@ for (const mode of ['single', 'multi']) {
     assert.equal(view.tiles[0].stateLabel, view.tiles[1].stateLabel);
     assert.equal(view.tiles[0].stateLabel, 'Unknown');
     const html = renderAgentFleetHtml(fleet, { self });
-    assert.doesNotMatch(html, /wb-f-card bad|Cannot connect|agent-fleet-reason|Mode unknown/);
+    assert.doesNotMatch(html, /wb-f-card bad|Cannot connect|agent-fleet-reason/);
+    const localCard = html.slice(html.indexOf('wb-f-card self'), html.indexOf('data-agent="remote"'));
+    assert.doesNotMatch(localCard, /Mode unknown/);
+    assert.match(localCard, /data-mood="unknown"/);
+    assert.match(html, /Mode unknown/, 'legacy remote payload does not claim a session mode');
     assert.match(html, /0 Offline/);
     assert.match(html, /data-mood="unknown"/);
     assert.match(html, new RegExp(mode === 'multi' ? 'Multi-session' : 'Single session'));

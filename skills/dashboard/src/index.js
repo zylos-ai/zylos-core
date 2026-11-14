@@ -89,6 +89,7 @@ import { costRows, costSummary, usageBounds } from './lib/workbench/cost-query.j
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
 import { searchTerm } from './lib/workbench/group-search.js';
 import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-snapshot.js';
+import { fleetGroupSummary } from './lib/workbench/fleet-summary.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
@@ -496,6 +497,9 @@ function currentState() {
 
 function buildApiStatePayload() {
   const stateData = currentState();
+  stateData.session_mode = readFleetSessionMode();
+  const snapshot = workbench.getCachedSnapshot();
+  stateData.group_summary = stateData.session_mode === 'multi' ? fleetGroupSummary(snapshot) : null;
   // Include the agent's deterministic identity color/hue; machines that read this
   // instance's state (including older dashboards) still colour it by them.
   stateData.agent = { ...config.agent, ...agentColor(config.agent?.name) };
@@ -509,6 +513,22 @@ function buildApiStatePayload() {
   stateData.rate_limit_7d_live = coreState.accountUsageRecord?.live ?? null;
   Object.assign(stateData, getCostTiers());
   return stateData;
+}
+
+// Requests collect through the same cached snapshot service as Workbench; SSE
+// publishers stay synchronous and use only its most recently completed read.
+function readFleetSessionMode() {
+  const value = loadZylosConfig(config.zylosDir, null);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  // Core reports an unset mode as effective single; an explicit invalid value
+  // or an unreadable configuration must stay unknown.
+  if (!Object.hasOwn(value, 'session_mode')) return 'single';
+  return ['single', 'multi'].includes(value.session_mode) ? value.session_mode : null;
+}
+
+async function refreshFleetGroupSummary() {
+  if (readFleetSessionMode() !== 'multi') return;
+  try { await workbench.getSnapshot(); } catch { /* Optional summary cannot break the existing state API. */ }
 }
 
 function buildSelfFleetRecord(statePayload = buildApiStatePayload()) {
@@ -1010,11 +1030,11 @@ async function startupSequence({ initialCollectors = true } = {}) {
   await coreState.start();
 }
 
-function loadZylosConfig(zylosDir) {
+function loadZylosConfig(zylosDir, fallback = {}) {
   try {
     return JSON.parse(fs.readFileSync(path.join(zylosDir, '.zylos', 'config.json'), 'utf8'));
   } catch {
-    return {};
+    return fallback;
   }
 }
 
@@ -1158,14 +1178,17 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
   if (pathname === '/api/state') {
-    await coreState.refresh();
+    await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
     sendJson(res, 200, { ...buildApiStatePayload(), tz: (await scheduleTz()).tz });
     return true;
   }
 
   if (pathname === '/api/fleet') {
     try {
-      sendJson(res, 200, buildFullFleetPayload().payload);
+      // Healthy SSE carries cached group snapshots. A Fleet page read also
+      // collects each remote's request-built summary, without a new polling loop.
+      const [, remoteFleet] = await Promise.all([refreshFleetGroupSummary(), fleetPoller.pollOnce()]);
+      sendJson(res, 200, buildFullFleetPayload(remoteFleet).payload);
     } catch (err) {
       sendJson(res, 500, { error: err.code || err.message });
     }

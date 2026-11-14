@@ -1,5 +1,7 @@
 import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=194';
 
+import { fallbackName, platformOf } from './wb/plain-text.js?v=106';
+
 const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline', 'stuck']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
 
@@ -186,10 +188,17 @@ export function defaultAgentFleetLabels() {
     readOnly: 'Read-only',
     admin: 'Admin',
     groupCount: '{count} groups',
+    runningGroups: 'Running {count} groups',
+    allNormal: 'All normal',
+    summaryUnavailable: 'Group statistics unavailable',
+    moreProblems: '{count} more problems →',
+    autoRestarts: '{count} automatic restarts in the last hour →',
+    problemReasons: { auth_failed: 'Authentication failed', start_failed: 'Start failed', no_response: 'No response' },
+    groupDuration: '{count} min',
     allIdle: 'all idle',
     pool: 'running {used}',
     poolOf: 'running {used}/{capacity}',
-    groupStates: { busy: 'working', waiting: 'waiting', error: 'error', idle: 'idle', not_running: 'not running' },
+    groupStates: { busy: 'working', waiting: 'waiting', error: 'error', idle: 'idle', unknown: 'unknown', no_response: 'no response' },
     machines: '{count} machines',
     empty: 'No other machines yet'
   };
@@ -279,6 +288,8 @@ export function buildAgentFleetView(fleet, options = {}) {
       lastSeen: agent.last_seen || null,
       lastSeenText: agent.last_seen && Number.isFinite(Date.parse(agent.last_seen)) ? ageText(agent.last_seen) : null,
       self: isSelf ? self : null,
+      sessionMode: ['single', 'multi'].includes(agent.session_mode) ? agent.session_mode : isSelf ? self?.mode : null,
+      groupSummary: agent.group_summary ?? null,
       href: isSelf ? `${basePath}/` : `${basePath}/fleet/${encodeURIComponent(String(agent.name || ''))}/`
     };
   });
@@ -313,6 +324,7 @@ export function buildAgentFleetView(fleet, options = {}) {
 
   return {
     labels,
+    t: options.t || (key => ({ 'wb.term.origin': 'Origin', 'chat.unnamed': 'Untitled conversation' }[key] || key.replace('wb.platform.', ''))),
     tiles,
     counts,
     costTotals,
@@ -320,13 +332,10 @@ export function buildAgentFleetView(fleet, options = {}) {
   };
 }
 
-// This machine's card reads the workbench groups snapshot: group count by state, the running pool and both weekly quotas.
+// This machine keeps its account quota metadata from the Workbench snapshot; group totals come from the Fleet API.
 export function fleetSelfFromSnapshot(snapshot) {
   return {
-    mode: snapshot?.mode === 'multi' ? 'multi' : 'single',
-    counts: snapshot?.counts ?? {},
-    groups: snapshot?.rows?.length ?? null,
-    pool: snapshot?.instance?.pool ?? null,
+    mode: ['multi', 'single'].includes(snapshot?.mode) ? snapshot.mode : null,
     runtimes: accountRuntimes(snapshot ?? {}),
     accountRecords: snapshot?.instance?.accounts ?? {},
     accounts: Object.fromEntries(['claude', 'codex'].map((runtime) => [runtime, accountUsedPercent(snapshot?.instance?.accounts?.[runtime])]))
@@ -355,24 +364,44 @@ function quotaBars(tile, labels) {
   }
   return `<div class="wb-qbars">${quotaBar(labels.rate7d, tile.rate7dPct, labels, tile.rate7dRecord)}</div>`;
 }
-function selfStates(tile, labels) {
-  const self = tile.self, counts = self.counts || {};
-  const active = ['busy', 'waiting', 'error'].filter((kind) => counts[kind]).map((kind) => `${counts[kind]} ${labels.groupStates[kind]}`);
-  const pool = self.pool?.used == null ? '' : ' · ' + fill(self.pool.capacity == null ? labels.pool : labels.poolOf, self.pool);
-  const order = ['busy', 'waiting', 'error', 'idle', 'not_running'];
-  const total = order.reduce((sum, kind) => sum + (counts[kind] || 0), 0);
-  const bar = total ? `<div class="wb-gbar" title="${escapeHtml(order.filter((kind) => counts[kind]).map((kind) => `${labels.groupStates[kind]} ${counts[kind]}`).join(' · '))}">${order.filter((kind) => counts[kind]).map((kind) => `<i class="wb-gbar-${kind}" style="flex:${counts[kind]}"></i>`).join('')}</div>` : '';
+// Saved names follow Dashboard naming; unnamed channels expose their platform, never their address.
+function problemName(row, labels, t) {
+  const saved = row.displayName ?? row.name?.displayName;
+  if (saved) return saved;
+  const platform = platformOf(row);
+  if (row.sessionGroup === 'origin' || platform === 'dashboard') return fallbackName(row, t);
+  const known = ['telegram', 'lark', 'feishu', 'web-console', 'openmax', 'wechat'];
+  return known.includes(platform) ? t('wb.platform.' + platform) : labels.groups;
+}
+function groupStates(tile, labels, t) {
+  const summary = tile.groupSummary;
   const status = tile.mood === 'unknown' ? `<span class="wb-pill wb-unknown" data-mood="unknown"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span>` : '';
-  return `<div class="wb-f-act">${status}<span>${escapeHtml(fill(labels.groupCount, { count: self.groups ?? total }))} · ${escapeHtml(active.join(' · ') || labels.allIdle)}${escapeHtml(pool)}</span></div>${bar}`;
+  if (!summary || !summary.listKnown) return `<div class="wb-f-act">${status}<span>${escapeHtml(labels.summaryUnavailable)}</span></div>`;
+  const counts = summary.counts || {};
+  const order = ['busy', 'idle', 'waiting', 'unknown', 'no_response', 'error'];
+  const active = order.filter(kind => counts[kind] > 0);
+  const text = [fill(labels.runningGroups, { count: summary.running }), ...active.map(kind => `${counts[kind]} ${labels.groupStates[kind]}`)].join(' · ');
+  const bar = summary.running ? `<div class="wb-gbar" title="${escapeHtml(text)}">${active.map(kind => `<i class="wb-gbar-${kind}" style="flex:${counts[kind]}"></i>`).join('')}</div>` : '';
+  const problems = (summary.problems || []).slice(0, 2);
+  const rows = problems.map(row => {
+    const name = problemName(row, labels, t);
+    const duration = Number.isFinite(row.durationSeconds) ? ' ' + fill(labels.groupDuration, { count: Math.floor(row.durationSeconds / 60) }) : '';
+    const reason = (labels.problemReasons[row.reason] || labels.groupStates.error) + duration;
+    return `<button type="button" class="wb-f-problem" data-fleet-group="${escapeHtml(row.sessionGroup)}"><i class="wb-dot wb-f-dot-${escapeHtml(row.reason)}"></i><b class="wb-f-problem-name" title="${escapeHtml(name)}">${escapeHtml(name)}</b><span class="wb-f-problem-reason" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span></button>`;
+  }).join('');
+  const target = escapeHtml(problems[0]?.sessionGroup ?? '');
+  const more = summary.problemCount > 2 ? `<button type="button" class="wb-f-more" data-fleet-problems data-group="${target}">${escapeHtml(fill(labels.moreProblems, { count: summary.problemCount - 2 }))}</button>` : '';
+  const restart = summary.autoRestarts?.count > 0 ? `<button type="button" class="wb-f-more" data-fleet-problems data-group="${target}">${escapeHtml(fill(labels.autoRestarts, { count: summary.autoRestarts.count }))}</button>` : '';
+  return `${status ? `<div class="wb-f-act">${status}</div>` : ''}<div class="wb-f-act wb-f-running" title="${escapeHtml(text)}">${escapeHtml(text)}</div>${bar}<div class="wb-f-problems">${summary.problemCount ? rows + more : `<span class="wb-f-normal">${escapeHtml(counts.unknown ? labels.summaryUnavailable : labels.allNormal)}</span>`}${restart}</div>`;
 }
 
-function renderTile(tile, labels) {
+function renderTile(tile, labels, t) {
   const data = `data-agent="${escapeHtml(tile.name)}"${tile.isSelf ? ' data-self="true"' : ''}`;
   const linkChip = tile.linkChip
     ? `<span class="agent-link-chip link-${escapeHtml(tile.linkChip.quality)}" title="${escapeHtml(tile.linkChip.title)}">${escapeHtml(tile.linkChip.label)}</span>`
     : '';
-  const multi = tile.self?.mode === 'multi';
-  const mode = tile.self ? (multi ? labels.modeMulti : labels.modeSingle) : tile.offline ? labels.modeUnknown : labels.modeSingle;
+  const multi = tile.sessionMode === 'multi';
+  const mode = multi ? labels.modeMulti : tile.sessionMode === 'single' ? labels.modeSingle : labels.modeUnknown;
   const sub = tile.isSelf
     ? `<div class="wb-f-sub"><span class="wb-f-seg">${escapeHtml(labels.self)}</span><span class="wb-f-seg wb-tech">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span></div>`
     : `<div class="wb-f-sub wb-tech"><span class="wb-f-seg"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span></span>${tile.offline ? '' : `<span class="wb-f-seg">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span>${tile.latencyLabel ? `<span class="wb-f-seg">${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}</span>` : ''}`}${linkChip}</div>`;
@@ -389,10 +418,10 @@ function renderTile(tile, labels) {
   const subagent = tile.subagentCount > 0
     ? `<span class="fleet-subagent-badge" title="${escapeHtml(labels.subagent)}: ${tile.subagentCount}">⚡${tile.subagentCount}</span>`
     : '';
-  const act = multi ? selfStates(tile, labels)
+  const act = multi ? groupStates(tile, labels, t)
     : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span><span title="${escapeHtml(tile.activity)}">${escapeHtml(tile.activity)}</span>${subagent}</div>`;
   const second = multi
-    ? `<div>${escapeHtml(labels.groups)}<b>${escapeHtml(String(tile.self.groups ?? '--'))}</b></div>`
+    ? `<div>${escapeHtml(labels.groups)}<b>${escapeHtml(String(tile.groupSummary?.running ?? '--'))}</b></div>`
     : `<div title="${escapeHtml(labels.context)}${tile.threshold == null ? '' : ` / ${pctText(tile.threshold)}`}">${escapeHtml(labels.context)}<b class="${tile.overThreshold ? 'wb-txt-warn' : ''}">${pctText(tile.contextPct)}</b></div>`;
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
     <div class="wb-f-top"><span class="wb-hdot"></span><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
@@ -409,7 +438,7 @@ function renderTile(tile, labels) {
 }
 
 function renderAgentFleetViewHtml(view) {
-  const { labels } = view;
+  const { labels, t } = view;
   const working = view.counts.busy + view.counts.thinking;
   const seg = (count, label, dot) =>
     `<span class="sum-seg${count === 0 ? ' is-zero' : ''}"><i class="sum-dot ${dot}"></i>${count} ${escapeHtml(label)}</span>`;
@@ -431,7 +460,7 @@ function renderAgentFleetViewHtml(view) {
   return `<section class="agent-fleet" data-fleet-count="${view.tiles.length}">
     ${summary}
     <div class="wb-f-grid">
-      ${view.tiles.map((tile) => renderTile(tile, labels)).join('')}
+      ${view.tiles.map((tile) => renderTile(tile, labels, t)).join('')}
     </div>
     ${empty}
   </section>`;
@@ -450,7 +479,7 @@ export function fleetPageOptions({ t, fmtAge, basePath = '', labels, self = null
     const seconds = Math.max(0, Math.floor((now() - Date.parse(ts)) / 1000));
     return seconds >= 3600 ? t('time.hours_exact', { h: Math.floor(seconds / 3600) }) : fmtAge(ts);
   };
-  return { basePath, labels, ageText, self };
+  return { basePath, labels, ageText, self, t };
 }
 
 export function renderAgentFleet(container, fleet, options = {}) {
@@ -478,7 +507,15 @@ export function fleetIconAction({ remoteAgent = null, standaloneRemote = false, 
   return multiAgent ? 'fleet' : 'settings';
 }
 
-export function handleFleetClick(event, { onSettings = () => {}, onRefresh = () => {}, onSelf = () => {}, onRemote = () => {} } = {}) {
+export function handleFleetClick(event, { onSettings = () => {}, onRefresh = () => {}, onSelf = () => {}, onRemote = () => {}, onGroup = () => {}, onProblems = () => {} } = {}) {
+  const group = event.target?.closest?.('[data-fleet-group], [data-fleet-problems]');
+  if (group) {
+    event.preventDefault?.();
+    const card = group.closest('[data-agent]');
+    const target = { agent: card?.dataset.agent, self: card?.dataset.self === 'true', group: group.dataset.fleetGroup ?? group.dataset.group };
+    if (group.hasAttribute('data-fleet-problems')) onProblems(target); else onGroup(target);
+    return;
+  }
   const action = event.target?.closest?.('[data-fleet-action]');
   if (action?.dataset.fleetAction) {
     if (action.dataset.fleetAction === 'settings') onSettings(); else onRefresh();

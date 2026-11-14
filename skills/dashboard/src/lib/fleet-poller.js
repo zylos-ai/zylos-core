@@ -1,4 +1,5 @@
 import { agentColor } from './agent-color.js';
+import { sanitizeFleetGroupSummary } from './workbench/fleet-summary.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_TIMEOUT_MS = 2500;
@@ -272,6 +273,8 @@ function sanitizeLink(link) {
 function sanitizeRecord(record) {
   return {
     name: record.name,
+    session_mode: ['single', 'multi'].includes(record.session_mode) ? record.session_mode : null,
+    group_summary: record.session_mode === 'multi' ? sanitizeFleetGroupSummary(record.group_summary) : null,
     color: record.color,
     hue: record.hue,
     state: record.state,
@@ -334,6 +337,8 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     color: color?.color,
     hue: color?.hue,
     state: liveState,
+    session_mode: statePayload?.session_mode,
+    group_summary: statePayload?.group_summary,
     activity: deriveActivity(statePayload),
     activity_feed: deriveActivityFeed(statePayload),
     rate_limit_pct: statePayload?.rate_limit_pct ?? null,

@@ -214,8 +214,9 @@ function agentFleetLabels() {
   return {
     ...Object.fromEntries(['title', 'subtitle', 'manage', 'shortAuth', 'shortDown', 'shortVersion', 'fixAuth', 'fixDown', 'fixVersion', 'lastSeen',
       'todayWeek', 'groups', 'host', 'rate7d', 'quotaRemaining', 'quotaUnknown', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
-      'groupCount', 'allIdle', 'pool', 'poolOf', 'empty'].map(key => [key, fleet(key)])),
-    groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'not_running'].map(key => [key, t('wb.state.' + key)])),
+      'groupCount', 'allIdle', 'pool', 'poolOf', 'empty', 'runningGroups', 'allNormal', 'summaryUnavailable', 'moreProblems', 'autoRestarts', 'groupDuration'].map(key => [key, fleet(key)])),
+    groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'unknown', 'no_response'].map(key => [key, fleet('state.' + key)])),
+    problemReasons: Object.fromEntries(['auth_failed', 'start_failed', 'no_response'].map(key => [key, fleet('reason.' + key)])),
     busy: t('agent_fleet.busy'),
     thinking: t('agent_fleet.thinking'),
     idle: t('agent_fleet.idle'),
@@ -329,7 +330,7 @@ function renderFleet() {
   fleetSounds?.refreshLabels();
 }
 
-// This machine's card shows the multi-session view: groups by state, the running pool and both weekly quotas.
+// Account quota metadata for this machine; group statistics are supplied by the Fleet API.
 async function refreshFleetSelf() {
   try {
     state.fleetSelf = fleetSelfFromSnapshot(await fetchJson('/api/workbench/groups'));
@@ -1975,10 +1976,23 @@ function exitRemoteAgent({ push = true } = {}) {
   return Promise.allSettled([refreshAll(), refreshObserverStatus({ quiet: true })]);
 }
 
+async function openFleetGroup(target, { list = false } = {}) {
+  if (target.self) showAgentDetail();
+  else {
+    const entering = enterRemoteAgent(target.agent);
+    const generation = state.navigationGeneration;
+    await entering;
+    if (generation !== state.navigationGeneration || state.remoteAgent !== target.agent) return;
+  }
+  document.querySelector('.tab[data-tab="overview"]')?.click();
+  return list ? workbench.locateGroup(target.group) : workbench.openGroup(target.group);
+}
+
 function initFleetMode() {
   $('#agent-fleet-root')?.addEventListener('click', e => handleFleetClick(e, {
     onSettings: () => openSettingsModal('fleet'), onRefresh: () => refreshFleet().catch(() => {}),
     onSelf: showAgentDetail, onRemote: enterRemoteAgent,
+    onGroup: target => openFleetGroup(target), onProblems: target => openFleetGroup(target, { list: true }),
   }));
   $('#fleet-manage-open')?.addEventListener('click', () => openSettingsModal('fleet'));
 }

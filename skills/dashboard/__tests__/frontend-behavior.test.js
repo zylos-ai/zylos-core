@@ -382,18 +382,22 @@ test('Machines page renders one card per machine with state, quota, cost and hos
   for (const gone of [/mascot/, /fleet-mini-ring/, /rate_limit_pct|5h/, /pulse-sparkline/, /agent-upgrade-badge/]) assert.doesNotMatch(html, gone);
 });
 
-test('this machine shows the multi-session view: groups by state, running pool and both weekly quotas', () => {
-  const fleet = { agents: [{ name: 'local', self: true, state: 'BUSY', daily_cost: 1, weekly_cost: 2, cpu_pct: 1, mem_pct: 2, disk_pct: 3 }] };
+test('this machine shows running groups from the API summary and both weekly quotas', () => {
+  const group_summary = { running: 5, listKnown: true, counts: { busy: 2, idle: 2, error: 1 },
+    problemCount: 1, problems: [{ sessionGroup: 'failed', displayName: 'Failed conversation', reason: 'start_failed' }] };
+  const fleet = { agents: [{ name: 'local', self: true, state: 'BUSY', session_mode: 'multi', group_summary,
+    daily_cost: 1, weekly_cost: 2, cpu_pct: 1, mem_pct: 2, disk_pct: 3 }] };
   const self = { mode: 'multi', groups: 6, counts: { busy: 2, waiting: 0, error: 1, idle: 2, not_running: 1 }, pool: { used: 3, capacity: 4 }, accounts: { claude: 42, codex: 9 } };
   const html = renderAgentFleetHtml(fleet, { self });
   assert.match(html, /wb-f-card self"/);
   assert.match(html, /Multi-session/);
-  assert.match(html, /6 groups · 2 working · 1 error · running 3\/4/);
+  assert.match(html, /Running 5 groups · 2 working · 2 idle · 1 error/);
   assert.match(html, /<i class="wb-gbar-busy" style="flex:2"><\/i>/);
   assert.match(html, /Claude<\/span><span class="wb-qbar-tr"><i style="width:58%">/);
   assert.match(html, /Codex<\/span><span class="wb-qbar-tr"><i style="width:91%">/);
   const noCapacity = renderAgentFleetHtml(fleet, { self: { ...self, pool: { used: 3, capacity: null } } });
-  assert.match(noCapacity, /running 3</);
+  assert.match(noCapacity, /Running 5 groups/);
+  assert.doesNotMatch(noCapacity, /6 groups|running 3|3\/4/);
   assert.match(renderAgentFleetHtml({ agents: [{ name: 'local', self: true }] }), /No other machines yet/);
 });
 
@@ -1360,7 +1364,7 @@ test('Observer view transitions invalidate pending popstate across fleet entry p
       if (route === 'fleet') h.context.showFleetView();
       if (route === 'detail') h.context.showAgentDetail();
       if (route === 'self-tile') h.elements['#agent-fleet-root'].click({
-        target: { closest: () => ({ dataset: { self: 'true' } }) }, preventDefault() {}
+        target: { closest: selector => selector === '.agent-open' ? { dataset: { self: 'true' } } : null }, preventDefault() {}
       });
       if (route === 'back-local') h.context.openFleetFromIcon();
       const fleet = { agents: [{ name: 'self' }, { name: 'alpha' }] };
@@ -2125,7 +2129,7 @@ function workbenchHarness(context, read, options = {}) {
     } });
   const stop = () => mounted.destroy();
   context.after(stop);
-  return { document, nodes, saved, calls, listeners, windowListeners, intervals, timeouts, stop, openGroup: key => mounted.openGroup(key), makeSnapshot,
+  return { document, nodes, saved, calls, listeners, windowListeners, intervals, timeouts, stop, openGroup: key => mounted.openGroup(key), locateGroup: key => mounted.locateGroup(key), makeSnapshot,
     poll: delay => { const timer = [...intervals.values()].find(timer => timer.delay === delay); assert.ok(timer, 'expected polling timer'); return timer.handler(); },
     debounce: async () => { const job = [...timeouts.entries()].find(([, timer]) => timer.delay === 300); assert.ok(job, 'search debounce exists'); timeouts.delete(job[0]); await job[1].handler(); },
     setOwner: value => { owner = value; },
@@ -2382,6 +2386,34 @@ test('the workbench drawer offers observation for every group', async context =>
 // Programmatic group selection uses the real mounted shell/detail/olderRow;
 // run for cross-page selection wiring, skip backend-only changes. The harness
 // owns DOM, fetch, timers and observers; no live processes/DB/network are used.
+test('workbench group location focuses its row and ignores a refresh from an abandoned machine', async context => {
+  let held;
+  const h = workbenchHarness(context, (path, fallback) =>
+    path.endsWith('/api/workbench/groups') && held ? held.promise : fallback(path));
+  await wbTick(); await wbTick();
+  const board = h.nodes.get('#wb-board');
+  let focusReads = 0, scrolls = 0;
+  board.querySelectorAll = selector => {
+    assert.equal(selector, '.wb-row'); focusReads++;
+    return board.children.filter(row => row.classList.contains('wb-row')).map(row => {
+      row.scrollIntoView = () => scrolls++;
+      return row;
+    });
+  };
+  await h.locateGroup('a');
+  assert.equal(board.children[0].focused, true);
+  assert.equal(board.children[0].getAttribute('aria-current'), 'true');
+  assert.equal(focusReads, 1); assert.equal(scrolls, 1);
+  held = wbDeferred();
+  const locating = h.locateGroup('a');
+  await wbTick();
+  h.setOwner('Other');
+  held.resolve(workbenchSnapshot());
+  await locating;
+  assert.equal(board.children.length, 0, 'abandoned machine rows stay cleared');
+  assert.equal(scrolls, 1, 'stale locator must not scroll the abandoned row into view');
+});
+
 test('workbench shell opens a key outside the snapshot and requests only that group', async context => {
   const key = 'telegram:historic-room';
   const h = workbenchHarness(context, (path, fallback) => {

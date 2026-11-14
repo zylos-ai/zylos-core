@@ -1369,7 +1369,17 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 .wb-gbar-waiting { background: var(--wb-wait); }
 .wb-gbar-error { background: var(--wb-err); }
 .wb-gbar-idle { background: var(--wb-idle); }
-.wb-gbar-not_running { background: var(--wb-off); }
+.wb-gbar-unknown { background: var(--wb-off); }
+.wb-gbar-no_response { background: var(--wb-wait); }
+.wb-f-running { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-f-problems { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12.5px; }
+#fleet-view .wb-f-card .wb-f-problems > .wb-f-problem { min-height: 19px; height: 19px; display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font: inherit; line-height: 19px; text-align: left; cursor: pointer; }
+.wb-f-problem .wb-dot { flex: none; background: var(--wb-err); }
+.wb-f-problem .wb-f-dot-no_response { background: var(--wb-wait); }
+.wb-f-problem-name { flex: 0 1 auto; max-width: 38%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.wb-f-problem-reason { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#fleet-view .wb-f-card .wb-f-problems > .wb-f-more { min-height: 19px; align-self: flex-start; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text-dim); font: inherit; line-height: 19px; text-align: left; cursor: pointer; }
+.wb-f-normal { color: var(--text-dim); line-height: 19px; }
 .wb-qbars { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .wb-qbar { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(40px, max-content); align-items: center; gap: 6px; font-size: 11px; color: var(--text-dim); }
 .wb-qbar-tr { position: relative; height: 7px; border-radius: 4px; background: var(--wb-off); }

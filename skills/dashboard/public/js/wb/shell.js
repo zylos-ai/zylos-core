@@ -15,7 +15,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   writable = () => true, onMemory = () => {}, onConversation, conversationAvailable = () => true, instanceInfo = () => ({}),
   storage = globalThis.localStorage, fetch = globalThis.fetch } = {}) {
   const board = document.querySelector('#wb-board');
-  if (!board) return { openGroup: async () => {}, setViewDetail() {}, destroy() {} };
+  if (!board) return { openGroup: async () => {}, locateGroup: async () => {}, setViewDetail() {}, destroy() {} };
   const mode = createViewMode({ storage, document });
   const searchInput = document.querySelector('#wb-search');
   const rangeInput = document.querySelector('#wb-range');
@@ -26,7 +26,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
   const nameDialog = document.querySelector('#wb-auto-name-dialog');
   // State counts compact before wrapping; instance strip items wrap whole without measurement.
   const labels = watchRows([document.querySelector('#wb-dist')], { document, window });
-  let snapshot = null, searchRows = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
+  let locateGeneration = 0, locatedGroup, snapshot = null, searchRows = null, error = null, lastSuccess = null, activity = null, activityAt = 0,
     range = '60m', activityGen = 0, cost = null, transition = null, owner = identity(), stopped = false;
   try {
     if (storage.getItem('zylos-dashboard-activity-range') === '6h') range = '6h';
@@ -113,14 +113,18 @@ export function mountWorkbench({ document = globalThis.document, window = global
     labels.fit();
     const fresh = new Map(snapshot.rows.map(row => [row.sessionGroup, row]));
     const rows = searchRows?.map(row => fresh.get(row.sessionGroup) ?? row) ?? snapshot.rows;
+    const focusedGroup = board.contains(document.activeElement) ? document.activeElement.dataset.group : undefined;
     renderBoard(board, snapshot, {
       rows, query: search.query(), activity, document, t, level,
-      selected: groupDetail?.state.row ? groupDetail.state.row.sessionGroup : undefined,
+      selected: groupDetail?.state.row ? groupDetail.state.row.sessionGroup : locatedGroup,
       onSearch: () => searchInput.focus(),
       onSelect: selectRow,
     });
+    if (focusedGroup !== undefined) [...board.querySelectorAll('.wb-row')].find(node => node.dataset.group === focusedGroup)?.focus({ preventScroll: true });
   }
   function selectRow(row) {
+    locateGeneration++;
+    locatedGroup = undefined;
     hostPanel.close();
     const opening = groupDetail?.open(row, snapshot);
     redraw();
@@ -153,6 +157,8 @@ export function mountWorkbench({ document = globalThis.document, window = global
   function resetOwner() {
     if (owner === identity()) return false;
     owner = identity();
+    locateGeneration++;
+    locatedGroup = undefined;
     groupDetail?.close();
     hostPanel?.close();
     nameRequest?.abort();
@@ -353,7 +359,28 @@ export function mountWorkbench({ document = globalThis.document, window = global
   return {
     setViewDetail: redraw,
     selectedGroup: () => groupDetail?.state.row?.sessionGroup,
+    async locateGroup(key) {
+      if (stopped) return;
+      resetOwner();
+      groupDetail.close();
+      hostPanel.close();
+      search.input('');
+      searchInput.value = '';
+      searchRows = null;
+      const captured = identity(), generation = ++locateGeneration;
+      let groups;
+      try { groups = await read('/api/workbench/groups'); } catch { return; }
+      if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
+      snapshot = groups;
+      groupDetail.updateSnapshot(snapshot);
+      locatedGroup = key || snapshot?.rows.find(row => row.state?.kind === 'error' || row.attention?.some(item => ['auth_failed', 'start_failed'].includes(item.kind)))?.sessionGroup;
+      redraw();
+      const row = [...board.querySelectorAll('.wb-row')].find(node => node.dataset.group === locatedGroup);
+      row?.focus();
+      row?.scrollIntoView({ block: 'center' });
+    },
     openGroup(key) {
+      locateGeneration++;
       if (stopped) return Promise.resolve();
       resetOwner();
       hostPanel.close();

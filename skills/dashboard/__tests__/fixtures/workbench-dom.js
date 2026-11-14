@@ -27,6 +27,11 @@ export class Node {
     for (const child of this.childNodes) child.parentNode = this;
   }
   get firstChild() { return this.childNodes[0] ?? null; }
+  contains(node) { return node === this || this.childNodes.some(child => child.nodeType === 1 ? child.contains(node) : child === node); }
+  querySelectorAll(selector) {
+    if (!/^\.[\w-]+$/.test(selector)) throw Error('Unsupported fixture selector: ' + selector);
+    return this.children.flatMap(child => [...(child.classList.contains(selector.slice(1)) ? [child] : []), ...child.querySelectorAll(selector)]);
+  }
   get nextSibling() { const siblings = this.parentNode?.childNodes ?? []; return siblings[siblings.indexOf(this) + 1] ?? null; }
   // Legacy helpers read/write direct text separately from element children.
   get text() { return this.legacyText ?? this.childNodes.filter(node => node.nodeType === 3).map(node => node.nodeValue).join(''); }
@@ -79,7 +84,7 @@ export class Node {
   hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
   removeAttribute(name) { delete this.attributes[name]; }
   dispatch(name, event = {}) { this.listeners.get(name)?.forEach(fn => fn({ target: this, currentTarget: this, ...event })); }
-  focus() { this.focused = true; }
+  focus() { this.focused = true; this.ownerDocument.activeElement = this; }
 }
 export function createDocument() {
   const document = { createElement: tag => new Node(tag, document), createTextNode: value => new TextNode(value, document), documentElement: { dataset: {} } };
