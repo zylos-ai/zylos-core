@@ -8,6 +8,7 @@ import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { createRuns } from '../src/lib/workbench/runs.js';
 import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
+import { importSupervisorRecords, supervisorSequences } from './helpers/supervisor-records.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-runs-'));
@@ -51,6 +52,23 @@ test('run pages keep whole-group totals and unattributed events while using star
   assert.deepEqual(second.runs.map(row => [row.runId, row.endReason]), [['run-2', 'rotate'], ['run-1', 'ttl']]);
   assert.deepEqual([second.totalRuns, second.totalEvents, second.unattributed], [5, 10, 10]);
   assert.deepEqual((await runs('telegram:older')).runs, []);
+});
+
+// Integration boundary: supervisor records imported by the real importer into a private Store, then aggregated.
+// Run for run end-reason changes; skip rendering-only edits. No tmux/network/children.
+test('a run the supervisor restarted ends as an automatic restart even though its exit is also reported as a crash', async t => {
+  const f = fixture(t), at = Date.parse('2026-10-20T12:00:00.000Z'), hour = 3600000;
+  for (const [index, runId] of ['silent', 'tool', 'crashed', 'current'].entries()) f.event(runId, 1 + index, 'session_start');
+  await importSupervisorRecords(f, [
+    ...supervisorSequences.noResponseRestart(at, 'telegram:a', 'silent'),
+    ...supervisorSequences.toolTimeoutRestart(at + hour, 'telegram:a', 'tool'),
+    ...supervisorSequences.nudge(at + 2 * hour, 'telegram:a', 'crashed'),
+    ...supervisorSequences.crash(at + 2 * hour + 1000, 'telegram:a', 'crashed'),
+  ]);
+  const runs = createRuns({ store: f.store,
+    getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'current' } }] }) });
+  assert.deepEqual((await runs('telegram:a', { limit: 10 })).runs.map(row => [row.runId, row.endReason]),
+    [['current', 'running'], ['crashed', 'crash'], ['tool', 'auto_restart_tool_timeout'], ['silent', 'auto_restart_no_response']]);
 });
 
 test('session rotation never hides a preceding run-ending event and the latest actual ending wins', async t => {

@@ -96,9 +96,9 @@ test('unnamed problem rows expose the platform or generic name, never an address
   assert.doesNotMatch(html, /raw-secret-address|title="lark:private-address"|>private-unknown-address</);
 });
 
-test('future no-response duration and restart signals render only when explicitly supplied', () => {
+test('no-response duration and last-hour restarts render on the machine card', () => {
   const group_summary = summary({ counts: { no_response: 1, idle: 3 }, problemCount: 1,
-    problems: [{ sessionGroup: 'future', displayName: 'Future signal', reason: 'no_response', durationSeconds: 245 }],
+    problems: [{ sessionGroup: 'telegram:silent', displayName: 'Silent group', reason: 'no_response', durationSeconds: 245 }],
     autoRestarts: { count: 2 } });
   const html = render(machine({ group_summary }));
   assert.match(html, /1 no response/);

@@ -19,8 +19,8 @@ test('running summary counts only live and starting groups, with each in exactly
     row('reclaimed', 'error', { presence: 'not_running' }), row('unreadable', 'busy', { presence: 'unknown' }),
   ]));
   assert.equal(result.running, 6);
-  assert.deepEqual(result.counts, { busy: 1, idle: 1, waiting: 1, unknown: 2, error: 1, no_response: null });
-  assert.equal(Object.values(result.counts).reduce((sum, count) => sum + (count ?? 0), 0), result.running);
+  assert.deepEqual(result.counts, { busy: 1, idle: 1, waiting: 1, unknown: 2, error: 1, no_response: 0 });
+  assert.equal(Object.values(result.counts).reduce((sum, count) => sum + count, 0), result.running);
   assert.deepEqual(result.pool, { used: 7, capacity: 12 });
   assert.equal(result.problemCount, 1);
   assert.equal(result.problems[0].sessionGroup, 'error');
@@ -51,9 +51,10 @@ test('sample age, long durations, queue waits and read errors never create runti
     row('pool', 'waiting', { wait: { kind: 'pool_wait' }, attention: [{ kind: 'pool_full' }] }),
     row('stale', 'unknown', { attention: [{ kind: 'data_unreadable' }] }),
   ]));
-  assert.deepEqual(result.counts, { busy: 1, idle: 1, waiting: 1, unknown: 1, error: 0, no_response: null });
+  assert.deepEqual(result.counts, { busy: 1, idle: 1, waiting: 1, unknown: 1, error: 0, no_response: 0 });
   assert.deepEqual(result.problems, []);
-  assert.equal(result.noResponse, null);
+  assert.deepEqual(result.noResponse, { count: 0 });
+  // A snapshot that did not count restarts leaves the count unknown rather than zero.
   assert.equal(result.autoRestarts, null);
 });
 
@@ -67,24 +68,65 @@ test('missing snapshot, single mode and unreadable list preserve uncertainty', (
   assert.deepEqual(sanitizeFleetGroupSummary(incomplete), incomplete);
 });
 
-test('remote sanitizer enforces partition and bounded whitelisted problems; future signals stay null', () => {
+test('remote sanitizer enforces partition and bounded whitelisted problems', () => {
   const value = fleetGroupSummary(snapshot([row('failure', 'error')]));
   assert.deepEqual(sanitizeFleetGroupSummary(value), value);
   const polluted = structuredClone(value);
-  Object.assign(polluted, { noResponse: { count: 99 }, autoRestarts: { count: 5 }, secret: 'discard' });
-  polluted.counts.no_response = 99;
+  Object.assign(polluted, { secret: 'discard' });
   Object.assign(polluted.problems[0], { durationSeconds: 300, tool: 'discard' });
   assert.deepEqual(sanitizeFleetGroupSummary(polluted), value);
   for (const mutate of [
     item => { item.running = -1; }, item => { item.counts.idle = 1; },
     item => { item.counts.error = 0.5; }, item => { item.problemCount = 0; },
-    item => { item.problems = []; }, item => { item.problems[0].reason = 'no_response'; },
+    item => { item.problems = []; }, item => { item.problems[0].reason = 'future_reason'; },
     item => { item.problems[0].sessionGroup = null; },
+    item => { item.counts.no_response = 1; }, item => { item.counts.no_response = -1; },
   ]) {
     const invalid = structuredClone(value); mutate(invalid);
     assert.equal(sanitizeFleetGroupSummary(invalid), null);
   }
   for (const invalid of [null, {}, [], { running: 0 }]) assert.equal(sanitizeFleetGroupSummary(invalid), null);
+});
+
+test('a reminded group without a response since is counted as no response, after errors, with its silent time', () => {
+  const readAt = Date.parse('2026-11-14T10:00:00Z');
+  const result = fleetGroupSummary(snapshot([
+    row('silent', 'busy', { noResponse: { since: readAt - 125_000 }, name: { displayName: 'Ops' } }),
+    row('failed-and-silent', 'busy', { attention: [{ kind: 'auth_failed' }], noResponse: { since: readAt - 5000 } }),
+    row('busy', 'busy', { noResponse: null }),
+  ], { readAt, instance: { pool: { used: 3, capacity: 12 }, autoRestarts: { count: 2 } } }));
+  assert.deepEqual(result.counts, { busy: 1, idle: 0, waiting: 0, unknown: 0, error: 1, no_response: 1 });
+  assert.equal(result.problemCount, 2);
+  assert.deepEqual(result.problems.map(item => [item.sessionGroup, item.reason, item.durationSeconds]),
+    [['failed-and-silent', 'auth_failed', null], ['silent', 'no_response', 125]]);
+  assert.deepEqual(result.noResponse, { count: 1 });
+  assert.deepEqual(result.autoRestarts, { count: 2 });
+  assert.deepEqual(sanitizeFleetGroupSummary(result), result);
+  // Without a read time the silent duration is unknown, not zero.
+  assert.equal(fleetGroupSummary(snapshot([row('silent', 'busy', { noResponse: { since: readAt } })])).problems[0].durationSeconds, null);
+});
+
+test('remote sanitizer accepts no-response counts, keeps silent time only for no response, and reads older instances', () => {
+  const readAt = Date.parse('2026-11-14T10:00:00Z');
+  const value = fleetGroupSummary(snapshot([row('silent', 'busy', { noResponse: { since: readAt - 60_000 } })],
+    { readAt, instance: { autoRestarts: { count: 0 } } }));
+  assert.deepEqual(sanitizeFleetGroupSummary(value), value);
+  for (const [field, bad] of [['durationSeconds', -1], ['durationSeconds', 1.5], ['durationSeconds', '60']]) {
+    const invalid = structuredClone(value); invalid.problems[0][field] = bad;
+    assert.equal(sanitizeFleetGroupSummary(invalid).problems[0].durationSeconds, null);
+  }
+  for (const bad of [{ count: -1 }, { count: 0.5 }, { count: '2' }, null, undefined]) {
+    const invalid = structuredClone(value); invalid.autoRestarts = bad;
+    assert.equal(sanitizeFleetGroupSummary(invalid).autoRestarts, null);
+  }
+  // An instance from before no response was counted reports null counts and signals.
+  const older = { running: 1, counts: { busy: 0, idle: 0, waiting: 0, unknown: 0, error: 1, no_response: null },
+    problems: [{ sessionGroup: 'g', reason: 'start_failed', durationSeconds: null }], problemCount: 1, listKnown: true,
+    pool: { used: null, capacity: null }, noResponse: null, autoRestarts: null };
+  const read = sanitizeFleetGroupSummary(older);
+  assert.equal(read.counts.no_response, 0);
+  assert.deepEqual(read.noResponse, { count: 0 });
+  assert.equal(read.autoRestarts, null);
 });
 
 test('fleet remote mode is explicit and legacy/malformed summaries degrade to null', () => {
