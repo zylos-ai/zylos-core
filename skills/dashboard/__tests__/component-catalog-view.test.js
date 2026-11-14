@@ -31,6 +31,19 @@ test('every advertised component has a shipped renderer beyond fallback text', (
     const root = renderChatContent({ document, row: { id: 1, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(envelope) } });
     assert.equal(root.textContent.includes('catalog-render-fallback-sentinel'), false, item.key);
     assert.equal(allNodes(root).some(node => node.className?.includes('chat-block-error')), false, item.key);
+    if (item.type === 'diagram') {
+      const flow = root.querySelector('ol.chat-diagram-flow');
+      assert.ok(flow, item.key);
+      const steps = flow.querySelectorAll('li.chat-diagram-step');
+      assert.equal(steps.length, block.data.steps.length, item.key);
+      for (const [index, step] of block.data.steps.entries()) {
+        const boxes = steps[index].querySelectorAll('.chat-diagram-node');
+        assert.equal(boxes.length, step.nodes.length, item.key);
+        assert.deepEqual(boxes.map(box => box.querySelector('.chat-diagram-label').textContent),
+          step.nodes.map(node => node.label), item.key);
+      }
+      continue;
+    }
     const expectedTag = ['time_series', 'breakdown', 'category_series'].includes(item.type) ? 'TABLE'
       : item.type === 'choice' ? 'UL' : item.type === 'form_intent' ? 'DL' : 'P';
     assert.ok(allNodes(root).some(node => node.tagName === expectedTag), item.key);

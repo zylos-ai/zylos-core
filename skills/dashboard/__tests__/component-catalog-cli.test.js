@@ -26,8 +26,8 @@ test('component CLI lists the implemented keys, descriptions and selection guida
   const data = JSON.parse(result.output).data;
   assert.deepEqual(data.keys, REGISTERED_COMPONENT_KEYS);
   assert.deepEqual(data.components.map(item => item.key), REGISTERED_COMPONENT_KEYS);
-  assert.equal(data.components.length, 8);
-  assert.equal(new Set(data.components.map(item => item.key)).size, 8);
+  assert.equal(data.components.length, 9);
+  assert.equal(new Set(data.components.map(item => item.key)).size, 9);
   for (const item of data.components) {
     const definition = COMPONENT_DEFINITIONS.find(component => component.key === item.key);
     assert.equal(typeof item.useWhen, 'string');

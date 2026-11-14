@@ -1,11 +1,11 @@
-import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=106';
+import { parseC4Content, REGISTERED_COMPONENT_KEYS } from '../../chat-schema.js?v=107';
 import { element } from './plain-text.js?v=106';
 import { attachmentDisplayText } from './chat-attachments.js?v=155';
 import { formatDuration } from './duration-format.js?v=1';
 import { answerDisplay } from './chat-answer.js?v=1';
 
 export { parseC4Content };
-export { validateAnswer } from '../../chat-schema.js?v=106';
+export { validateAnswer } from '../../chat-schema.js?v=107';
 
 const interactive = new Set(['choice', 'confirmation', 'form_intent']);
 const diagramIcons = new Map([
@@ -109,7 +109,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     const viewport = node('div', undefined, 'chat-diagram-viewport');
     const flow = node('ol', undefined, 'chat-diagram-flow');
     flow.dataset.direction = data.direction === 'horizontal' && data.steps.length <= 5 ? 'horizontal' : 'vertical';
-    flow.style.setProperty('--diagram-columns', data.steps.map(step => `minmax(0, ${Math.max(1.25, step.nodes.length)}fr)`).join(' 56px '));
+    flow.style.setProperty('--diagram-columns', data.steps.map(() => 'minmax(0, 1fr)').join(' 56px '));
     for (const group of data.groups ?? []) {
       const first = data.steps.findIndex(step => step.id === group.from);
       const last = data.steps.findIndex(step => step.id === group.to);

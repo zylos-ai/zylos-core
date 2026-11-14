@@ -5,6 +5,10 @@ import { applyChatView } from '/js/wb/chat-view.js';
 const icons = ['bot', 'monitor', 'server', 'network', 'code', 'terminal', 'layers', 'component', 'tool', 'settings', 'book', 'chart', 'message', 'key', 'lock', 'clock', 'alert', 'check', 'search', 'target', 'user', 'users', 'smartphone', 'glasses', 'database', 'cloud', 'globe', 'file'];
 const literal = '<img src=x onerror=alert(1)>';
 const definitions = [
+  ['minimal', { steps: [{ nodes: [{ label: '输入' }] }, { nodes: [{ label: '输出' }] }] }],
+  ['medium', { title: '中等宽度容器', direction: 'horizontal', steps: [
+    { nodes: [{ label: '输入' }] }, { nodes: [{ label: '输出' }] },
+  ] }],
   ['default', { title: '眼镜架构', steps: [
     { id: 'glasses', nodes: [{ label: '智能眼镜', detail: '语音输入与播报', icon: 'glasses' }] },
     { id: 'phone', nodes: [{ label: '手机', detail: '连接眼镜与云端', icon: 'smartphone', highlight: true }], link: { arrow: 'both', label: '同步' } },
@@ -33,6 +37,7 @@ for (const [id, data] of definitions) {
     { id: 'flow', type: 'diagram', schemaVersion: 1, fallbackText: 'Flow in words', data },
   ] };
   const article = document.createElement('article'); article.id = id; article.className = 'conversation-message';
+  if (id === 'medium') article.style.maxWidth = '480px';
   const body = document.createElement('div'); body.className = 'conversation-message-body'; article.append(body);
   body.append(renderChatContent({ document, row: { id, direction: 'out', content: CONTENT_PREFIX + JSON.stringify(envelope) },
     layout: (target, view, nodes) => applyChatView(document, target, view, nodes) }));

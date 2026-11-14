@@ -68,22 +68,58 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
     catch (error) { throw Error(error.message + '; page error=' + pageError + '; missing=' + missing); }
     await page.evaluate(() => document.fonts.ready);
     assert.equal(pageError, undefined); assert.equal(missing, undefined); assert.equal(outside, undefined);
-    assert.equal(await page.locator('.chat-diagram').count(), 10);
+    assert.equal(await page.locator('.chat-diagram').count(), 12);
     const orientation = id => page.locator('#' + id + ' .chat-diagram-nodes').evaluateAll(nodes => {
       const [a, b] = nodes.map(node => node.getBoundingClientRect());
-      return Math.abs(a.top - b.top) < 1 && b.left > a.left ? 'horizontal' : b.top > a.top ? 'vertical' : 'invalid';
+      return Math.abs((a.top + a.bottom) - (b.top + b.bottom)) < 2 && b.left >= a.right ? 'horizontal' : b.top >= a.bottom ? 'vertical' : 'invalid';
     });
     assert.equal(await orientation('default'), 'vertical');
     assert.equal(await orientation('horizontal'), width === 1280 ? 'horizontal' : 'vertical');
     assert.equal(await orientation('five'), width === 1280 ? 'horizontal' : 'vertical');
     assert.equal(await orientation('long'), 'vertical');
+    assert.equal(await orientation('minimal'), 'vertical');
+    assert.equal(await orientation('medium'), 'vertical');
+    if (width === 1280) {
+      const containerWidth = await page.locator('#medium .chat-diagram-viewport').evaluate(node => node.getBoundingClientRect().width);
+      assert.ok(containerWidth > 300 && containerWidth < 520, 'medium fixture must exercise a container strictly between 300 and 520px');
+      console.info('diagram medium container width', containerWidth);
+    }
+    assert.equal(await page.locator('#minimal .chat-block-title,#minimal .wb-ico,#minimal .chat-diagram-group,#minimal .chat-diagram-link-label').count(), 0);
+    assert.equal(await page.locator('#minimal .chat-diagram-link[data-arrow="forward"]').count(), 1);
     const parallel = await page.locator('#horizontal .chat-diagram-nodes').evaluateAll(steps => steps.map(step => {
       const boxes = [...step.querySelectorAll('.chat-diagram-node')].map(node => node.getBoundingClientRect());
-      return { count: boxes.length, aligned: boxes.every(box => Math.abs(box.top - boxes[0].top) < 1),
-        separate: boxes.slice(1).every((box, i) => box.left >= boxes[i].right - 1) };
+      return { count: boxes.length,
+        horizontal: boxes.every(box => Math.abs(box.top - boxes[0].top) < 1) && boxes.slice(1).every((box, i) => box.left >= boxes[i].right - 1),
+        vertical: boxes.every(box => Math.abs(box.left - boxes[0].left) < 1) && boxes.slice(1).every((box, i) => box.top >= boxes[i].bottom - 1) };
     }));
     assert.deepEqual(parallel.map(step => step.count), [2, 3, 1]);
-    assert.ok(parallel.every(step => step.aligned && step.separate));
+    assert.ok(parallel.every(step => width === 1280 ? step.vertical : step.horizontal), 'parallel nodes must follow the cross-axis of the flow');
+    const highlights = await page.locator('#default,#horizontal').evaluateAll(diagrams => diagrams.map(diagram => {
+      const highlighted = diagram.querySelector('.chat-diagram-highlight');
+      const normal = diagram.querySelector('.chat-diagram-node:not(.chat-diagram-highlight)');
+      const group = diagram.querySelector('.chat-diagram-group');
+      if (!highlighted || !normal || !group) return null;
+      const accent = getComputedStyle(highlighted), plain = getComputedStyle(normal), region = getComputedStyle(group);
+      return { background: accent.backgroundColor !== plain.backgroundColor && accent.backgroundColor !== region.backgroundColor,
+        border: accent.borderTopColor !== plain.borderTopColor, group: region.borderTopStyle === 'solid' && region.backgroundColor !== plain.backgroundColor };
+    }));
+    assert.deepEqual(highlights, [{ background: true, border: true, group: true }, { background: true, border: true, group: true }]);
+    const verticalConnector = await page.locator('#default .chat-diagram-link[data-arrow="both"]').evaluate(link => {
+      const arrow = link.querySelector('.chat-diagram-line'), label = link.querySelector('.chat-diagram-link-label');
+      const a = arrow.getBoundingClientRect(), b = label.getBoundingClientRect();
+      return { height: link.getBoundingClientRect().height, sideBySide: a.right <= b.left && Math.abs((a.top + a.bottom) - (b.top + b.bottom)) < 2,
+        glyph: getComputedStyle(arrow, '::after').content };
+    });
+    assert.ok(verticalConnector.height <= 36 && verticalConnector.sideBySide, 'vertical link must be one compact row with arrow beside label');
+    assert.equal(verticalConnector.glyph, '"\u2195"');
+    if (width === 1280) {
+      const horizontalConnector = await page.locator('#horizontal .chat-diagram-link[data-arrow="both"]').evaluate(link => {
+        const line = link.querySelector('.chat-diagram-line').getBoundingClientRect();
+        const label = link.querySelector('.chat-diagram-link-label').getBoundingClientRect();
+        return { above: label.bottom < line.top, width: line.width, height: line.height };
+      });
+      assert.ok(horizontalConnector.above && horizontalConnector.width >= 24 && horizontalConnector.height <= 2, 'horizontal label must sit above a short arrow line');
+    }
     assert.equal(await page.locator('#default .chat-diagram-link').count(), 2);
     assert.equal(await page.locator('#default .chat-diagram-link[data-arrow="forward"]').count(), 1);
     assert.equal(await page.locator('#default .chat-diagram-link[data-arrow="both"]').count(), 1);
@@ -121,7 +157,7 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
     if (output) {
       fs.mkdirSync(output, { recursive: true });
       await page.screenshot({ path: path.join(output, `diagram-${width}-${theme}.png`), animations: 'disabled' });
-      for (const id of ['default', 'horizontal', 'five']) await page.locator('#' + id).screenshot({ path: path.join(output, `diagram-${id}-${width}-${theme}.png`), animations: 'disabled' });
+      for (const id of ['default', 'minimal', 'horizontal', 'five', 'medium', 'long']) await page.locator('#' + id).screenshot({ path: path.join(output, `diagram-${id}-${width}-${theme}.png`), animations: 'disabled' });
     }
     assert.equal(pageError, undefined); assert.equal(outside, undefined);
   } finally { if (browser) await browser.close(); }

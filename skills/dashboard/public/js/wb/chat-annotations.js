@@ -1,5 +1,5 @@
 import { element, icon } from './plain-text.js?v=106';
-import { chars, composeContent, storedContent, contentBytes, shortStamp, MAX_ANNOTATIONS, MAX_CHARS, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=3';
+import { chars, composeContent, storedContent, contentBytes, shortStamp, MAX_ANNOTATIONS, MAX_CHARS, MAX_CONTENT_BYTES } from './chat-compose-text.js?v=4';
 
 const BLOCK = /^(P|LI|OL|UL|H[1-6]|PRE|BLOCKQUOTE|TABLE|TR|DIV|HR)$/;
 const LISTISH = /^(OL|UL|DIV|BLOCKQUOTE|TABLE|TBODY|TR)$/;
