@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Owner channel rule**: the system instructions now name Dashboard as the owner channel (Web Console is no longer mentioned) and tell the agent to clear the alert target when the owner changes.
 
 ### Fixed
+- **An upgrade after an interrupted npm install no longer fails with `ENOTEMPTY`**: when the self-upgrade is killed while npm replaces the package, recovery now removes the copy npm moved aside (`.zylos-XXXXXXXX` next to the package directory) once it proves the copy is identical to the original package saved by the same upgrade; anything else stays in place with a warning naming the path. The upgrade recovery guide also shows how to recover with `node ~/zylos/.zylos/upgrade/bootstrap.cjs --root ~/zylos --once` when the `zylos` command is missing (#1304).
 - Scheduler deliveries finish automatically on confirmed receipt (including committed notification failures), without agent `done` calls or one-hour work timeouts. Unconfirmed receipts older than 180 seconds fail without resending and periodic tasks resume. Dashboard shows delivery rate and excludes historical timeouts from delivery failures.
 - Scheduler `update --at` and `--in` now postpone only the next run of recurring and interval tasks while preserving their cadence and timezone.
 - Dashboard memory editor explains why an empty file cannot be saved and keeps the draft.
