@@ -539,7 +539,7 @@ test('pool explanations show only usable published values in the host panel, not
   assert.ok(section.textContent.includes('来源手动设定 6（按内存建议 0）'));
   const items = allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent);
   assert.deepEqual(items, ['未设内存上限，按整机内存 · 内存上限 4 GiB · 已用 3.7 GiB（不含文件缓存和交换区） · 保底 0.5 GiB',
-    '每会话约 0.5 GiB · 固定开销约 1.3 GiB（各档的中间值） · 近 7 天', '由手动设定决定', '内存只够 Origin，同时运行上限按 1 运行']);
+    '每会话约 0.5 GiB · 固定开销约 1.3 GiB（各档的中间值） · 近 7 天', '内存只够 Origin，同时运行上限按 1 运行']);
   capacityRecord.kMemory = -2; capacityRecord.reason = null;
   capacityRecord.memory = { source: 'darwin', limitBytes: '4', usedBytes: null, reserveBytes: NaN };
   capacityRecord.model = { state: 'default', slopeBytes: 0.5 * GiB, interceptBytes: 'bad', windowDays: undefined };
@@ -607,8 +607,10 @@ test('pool decision priority and freshness gate new explanations while preservin
   const cases = [
     [{ source: 'auto', limitedBy: 'live' }, '由眼下剩余的内存决定', true],
     [{ source: 'auto', limitedBy: 'model' }, '由近 7 天各档的用量决定', true],
-    [{ source: 'auto', limitedBy: 'live', reason: 'floor' }, '按内存算不够 1 个，由下限托在 1', true],
-    [{ source: 'fixed', limitedBy: 'model', reason: 'floor' }, '由手动设定决定', false],
+    [{ source: 'auto', limitedBy: 'live', reason: 'floor' }, '', true],
+    [{ source: 'auto', limitedBy: 'model', reason: 'floor' }, '', true],
+    [{ source: 'fixed', limitedBy: 'model' }, '由手动设定决定', false],
+    [{ source: 'fixed', limitedBy: 'model', reason: 'floor' }, '', false],
     [{ source: 'fallback', limitedBy: 'model', reason: 'floor' }, '', false],
     [{ source: 'auto', limitedBy: 'model', fresh: false, reason: 'floor' }, '', false],
     [{ source: 'auto', limitedBy: 'live', valid: false, reason: 'floor' }, '', false],
@@ -630,7 +632,8 @@ test('pool decision priority and freshness gate new explanations while preservin
     for (const text of [section.textContent, title]) {
       assert.ok(text.includes('已用 1 GiB（不含文件缓存和交换区）'));
       assert.ok(text.includes('数据积累中'));
-      assert.equal(text.includes('内存只够 Origin，同时运行上限按 1 运行'), patch.reason === 'floor');
+      assert.equal(text.split('内存只够 Origin，同时运行上限按 1 运行').length - 1, patch.reason === 'floor' ? 1 : 0);
+      assert.doesNotMatch(text, /由下限托在 1|wb\.inst\.poolDecisionFloor/);
     }
   }
 });

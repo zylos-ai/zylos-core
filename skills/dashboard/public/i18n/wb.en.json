@@ -1110,7 +1110,6 @@
   "wb.inst.poolModelFixed": "fixed overhead about {amount} GiB (median across buckets)",
   "wb.inst.poolBucket": "Session count {count}: typical peak {amount} GiB ({hours} h, {samples} samples)",
   "wb.inst.poolDecisionFixed": "Determined by the manual setting",
-  "wb.inst.poolDecisionFloor": "Memory fits fewer than 1 session; the minimum keeps the limit at 1",
   "wb.inst.poolDecisionModel": "Determined by session bucket usage over the last 7 days",
   "wb.inst.poolDecisionLive": "Determined by the memory available now",
   "wb.inst.poolAlgorithmFitted": "Limit = sessions that fit in memory − 1 (one place reserved for Origin), at least 1; sessions that fit is the smaller of the last 7 days' buckets and memory available now",

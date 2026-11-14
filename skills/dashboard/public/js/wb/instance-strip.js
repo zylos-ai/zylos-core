@@ -51,9 +51,9 @@ export function poolSource(pool, t) {
 }
 export function poolDecision(record, t) {
   if (record?.valid !== true || record.fresh !== true) return '';
+  if (record.reason === 'floor') return '';
   if (record.source === 'fixed') return t('wb.inst.poolDecisionFixed');
   if (record.source === 'fallback') return '';
-  if (record.reason === 'floor') return t('wb.inst.poolDecisionFloor');
   if (record.limitedBy === 'model') return t('wb.inst.poolDecisionModel');
   if (record.limitedBy === 'live') return t('wb.inst.poolDecisionLive');
   return '';

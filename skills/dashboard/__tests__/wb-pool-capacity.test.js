@@ -229,6 +229,13 @@ test('capacity adapter preserves the published decision and bucket evidence with
   assert.deepEqual(pool.capacityRecord.model, model);
   assert.equal(Object.hasOwn(pool.capacityRecord, 'nModel'), false);
   assert.equal(Object.hasOwn(pool.capacityRecord, 'nLive'), false);
+  for (const limitedBy of ['model', 'live']) {
+    f.publish(freshRecord({ k: 1, reason: 'floor', limitedBy, model }));
+    const floor = await f.read();
+    assert.equal(floor.capacity, 1);
+    assert.equal(floor.capacityRecord.reason, 'floor');
+    assert.equal(floor.capacityRecord.limitedBy, limitedBy);
+  }
   f.publish(freshRecord({ limitedBy: 'live', computedAt: NOW - 90000 }));
   const stale = await f.read();
   assert.equal(stale.capacityRecord.limitedBy, 'live');

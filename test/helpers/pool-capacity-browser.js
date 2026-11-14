@@ -139,7 +139,12 @@ export async function runPoolCapacityBrowser(sandbox) {
       const text = (await page.locator('#host').innerText()).replaceAll('\u00a0', ' '), tooltip = await page.locator('.wb-pool').getAttribute('title');
       const freshAuto = record.valid && record.fresh && record.source === 'auto';
       assert.equal(/上限 =|Limit =/.test(text), Boolean(freshAuto), name + ': algorithm visibility');
-      assert.equal(/由近 7 天各档|由眼下剩余|由手动设定|由下限托|Determined by|minimum keeps the limit/.test(text), Boolean(record.valid && record.fresh && record.source !== 'fallback'), name + ': decision visibility');
+      assert.equal(/由近 7 天各档|由眼下剩余|由手动设定|Determined by/.test(text), Boolean(record.valid && record.fresh && record.source !== 'fallback' && record.reason !== 'floor'), name + ': decision visibility');
+      const floorNotice = locale === 'zh' ? '内存只够 Origin，同时运行上限按 1 运行' : 'Memory fits only Origin; running with a limit of 1';
+      for (const value of [text, tooltip]) {
+        assert.equal(value.split(floorNotice).length - 1, name === 'floor' ? 1 : 0, name + ': one floor notice');
+        assert.doesNotMatch(value, /由下限托在 1|minimum keeps the limit|wb\.inst\.poolDecisionFloor/);
+      }
       assert.equal(/2511/.test(text), Boolean(record.model?.buckets?.length), name + ': bucket visibility');
       assert.equal(/2511/.test(tooltip), false, 'Long bucket list stays out of tooltip');
       if (locale === 'zh' && name === 'fitted') {
