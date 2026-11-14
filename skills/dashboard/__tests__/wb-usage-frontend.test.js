@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick, Node } from './fixtures/workbench-dom.js';
 import { cachePath, renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
 import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
-import { instanceStrip } from '../public/js/wb/instance-strip.js';
+import { instanceStrip, quotaReset } from '../public/js/wb/instance-strip.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
 import { markCurrentTab } from '../public/js/wb/view-mode.js';
 
@@ -21,6 +21,54 @@ const fixture = () => {
     charts.push(chart); return chart;
   }, destroyed: () => destroyed };
 };
+for (const locale of ['en', 'zh']) test(`account reset uses instance time and future runtime samples in ${locale}`, () => {
+  const dictionary = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
+  const t = (key, vars = {}) => Object.entries(vars).reduce((text, [name, value]) => text.replaceAll('{' + name + '}', value), dictionary[key] ?? key);
+  setInstanceZone('Asia/Singapore');
+  try {
+    const now = Date.parse('2026-11-14T15:30:00Z'), same = Date.parse('2026-11-14T15:45:00Z');
+    assert.equal(quotaReset({ resets_at: same / 1000 }, t, now).time, '23:45');
+    const reset = quotaReset({ resetsAt: '2026-11-14T16:30:00Z' }, t, now);
+    assert.match(reset.time, /11.?15/); assert.match(reset.time, /00:30/);
+    assert.match(quotaReset({ resetsAt: (now + 1) / 1000 }, t, now).duration, /1/);
+    for (const raw of [undefined, null, '', 'garbage', true, {}, now / 1000, (now - 1) / 1000, Infinity]) {
+      assert.equal(quotaReset({ resetsAt: raw }, t, now), null);
+    }
+    const accounts = { claude: { used_percentage: 21, resets_at: same / 1000 },
+      codex: { usedPercentage: 40, resetsAt: '2026-11-14T16:30:00Z', live: false, recordedAt: now - 60_000 },
+      absent: { usedPercentage: 10 }, expired: { resets_at: now / 1000 } };
+    const f = fixture();
+    const view = renderHost(f.root, null, { ...f, t, now, accounts });
+    const section = allNodes(f.root).find(node => node.classList.contains('wb-host-accounts'));
+    assert.equal(section.hidden, false); assert.match(section.textContent, /Claude/); assert.match(section.textContent, /Codex/);
+    assert.ok(section.textContent.includes(t('wb.quotaRemaining', { pct: 79 })));
+    assert.ok(section.textContent.includes(t('wb.quotaResetRecorded', { time: '23:29' })));
+    assert.equal(section.textContent.includes('absent'), false); assert.equal(section.textContent.includes('expired'), false);
+    const rows = section.children[1], retained = rows.children[0];
+    view.update(null, { accounts, now: now + 60_000 });
+    assert.equal(rows.children[0], retained); assert.ok(section.textContent.includes(locale === 'zh' ? '14 分钟' : '14m'));
+    view.update(null, { accounts, now: same + 3600_000 }); assert.equal(section.hidden, true);
+    view.destroy();
+    const strip = fixture();
+    const snapshot = { mode: 'single', baselineRuntime: 'claude', rows: [], instance: { accounts, runtimeHealth: { claude: { health: 'auth_failed' } } } };
+    instanceStrip(strip.root, snapshot, { ...strip, t, now });
+    const box = allNodes(strip.root).find(node => node.classList.contains('wb-account'));
+    assert.ok(box.title.includes(quotaReset(accounts.claude, t, now).text));
+    assert.equal(box.textContent.includes('23:45'), false);
+  } finally { setInstanceZone('UTC'); }
+});
+test('host account redraw follows the observation clock without another metric request', async () => {
+  const f = fixture(); let now = Date.parse('2026-11-14T12:00:00Z'), reads = 0;
+  let accounts = { claude: { used_percentage: 50, resets_at: (now + 60_000) / 1000 } };
+  const panel = createHostPanel({ ...f, accounts: () => accounts, now: () => now, read: async () => { reads++; return null; } });
+  await panel.open();
+  const section = allNodes(f.root).find(node => node.classList.contains('wb-host-accounts'));
+  assert.equal(section.hidden, false);
+  now += 60_000; panel.setViewDetail(); assert.equal(section.hidden, true); assert.equal(reads, 1);
+  accounts = { codex: { usedPercentage: 10, resetsAt: (now + 60_000) / 1000 } };
+  panel.setViewDetail(); assert.equal(section.hidden, false); assert.match(section.textContent, /Codex/);
+  panel.destroy();
+});
 const value = {
   tz:'Asia/Singapore', buckets:['2026-11-01T16:00:00.000Z','2026-11-02T16:00:00.000Z'], bucket:'day',
   totals:{cost:5,costByRuntime:{claude:2,codex:3},messages:{in:4,out:2},tokens:999,rotations:1,tools:8},
