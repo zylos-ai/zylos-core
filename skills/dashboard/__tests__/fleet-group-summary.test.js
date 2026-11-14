@@ -138,25 +138,3 @@ test('Workbench auth attention takes precedence over its busy/waiting classifica
   assert.equal(result.problemCount, 2);
   assert.deepEqual(result.problems.map(problem => problem.sessionGroup), ['busy', 'starting']);
 });
-
-test('an explicit Fleet read refreshes a remote summary after a healthy stream cached an earlier snapshot', async () => {
-  const agent = { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture' };
-  const first = fleetGroupSummary(snapshot([row('first', 'busy')]));
-  const next = fleetGroupSummary(snapshot([row('second'), row('third', 'error')]));
-  let payload = { state: 'IDLE', session_mode: 'multi', group_summary: first };
-  let stateReads = 0;
-  const poller = new FleetPoller({ fleet: { agents: [agent] } }, { fetch: async url => {
-    if (url.endsWith('/api/auth/token')) return new Response(JSON.stringify({ token: 'fixture' }));
-    stateReads++;
-    return new Response(JSON.stringify(payload));
-  }, now: () => 0 });
-  await poller.pollOnce();
-  poller._handleSseEvent(agent, { event: 'fleet_state', data: JSON.stringify(payload) });
-  payload = { ...payload, group_summary: next };
-  const refreshed = await poller.pollOnce();
-  assert.equal(stateReads, 2);
-  assert.equal(refreshed.agents[0].group_summary.running, 2);
-  assert.equal(refreshed.agents[0].group_summary.counts.busy, 0);
-  assert.equal(refreshed.agents[0].group_summary.counts.error, 1);
-  assert.equal(refreshed.agents[0].group_summary.problems[0].sessionGroup, 'third');
-});

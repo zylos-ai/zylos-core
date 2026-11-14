@@ -7,8 +7,15 @@ export function createCoalescedBroadcast(broadcast, intervalMs = 1000) {
     if (timer) return;
     const delay = Math.max(0, intervalMs - (Date.now() - lastFinishedAt));
     timer = setTimeout(() => {
-      try { broadcast(); }
-      finally { lastFinishedAt = Date.now(); timer = null; }
+      const finished = () => { lastFinishedAt = Date.now(); timer = null; };
+      try {
+        const pending = broadcast();
+        if (pending && typeof pending.finally === 'function') {
+          pending.finally(finished);
+          return;
+        }
+      } catch (error) { finished(); throw error; }
+      finished();
     }, delay);
     timer.unref?.();
   };

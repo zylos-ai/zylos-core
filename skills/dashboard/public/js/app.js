@@ -23,7 +23,7 @@ import { createUsagePage } from './wb/usage.js?v=194';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=87';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=194';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=195';
 import { createFleetSounds } from './fleet-sounds.js?v=194';
 import { refreshDashboardState } from './state-refresh.js?v=99';
 import { formatActionResult } from './action-result.js';
@@ -214,7 +214,7 @@ function agentFleetLabels() {
   return {
     ...Object.fromEntries(['title', 'subtitle', 'manage', 'shortAuth', 'shortDown', 'shortVersion', 'fixAuth', 'fixDown', 'fixVersion', 'lastSeen',
       'todayWeek', 'groups', 'host', 'rate7d', 'quotaRemaining', 'quotaUnknown', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
-      'groupCount', 'allIdle', 'pool', 'poolOf', 'empty', 'runningGroups', 'allNormal', 'summaryUnavailable', 'moreProblems', 'autoRestarts', 'groupDuration'].map(key => [key, fleet(key)])),
+      'pool', 'empty', 'runningGroups', 'allNormal', 'summaryUnavailable', 'moreProblems', 'autoRestarts', 'groupDuration'].map(key => [key, fleet(key)])),
     groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'unknown', 'no_response'].map(key => [key, fleet('state.' + key)])),
     problemReasons: Object.fromEntries(['auth_failed', 'start_failed', 'no_response'].map(key => [key, fleet('reason.' + key)])),
     busy: t('agent_fleet.busy'),

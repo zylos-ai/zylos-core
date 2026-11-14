@@ -6,7 +6,7 @@ import { buildAgentFleetView, fleetSelfFromSnapshot, handleFleetClick, renderAge
 function summary(extra = {}) {
   return { running: 4, listKnown: true,
     counts: { busy: 1, idle: 2, waiting: 1, unknown: 0, error: 0, no_response: null },
-    problemCount: 0, problems: [], noResponse: null, autoRestarts: null, ...extra };
+    problemCount: 0, problems: [], pool: { used: 3, capacity: 12 }, noResponse: null, autoRestarts: null, ...extra };
 }
 function machine(extra = {}) {
   return { name: 'fixture', state: 'IDLE', session_mode: 'multi', group_summary: summary(), ...extra };
@@ -21,9 +21,18 @@ test('running totals come from Fleet API summary, never snapshot row count or po
     rows: Array(19).fill({}), instance: { pool: { used: 18, capacity: 90 } } });
   const html = render(machine({ self: true }), { self });
   assert.match(html, /Running 4 groups · 1 working · 2 idle · 1 waiting/);
-  assert.match(html, /Groups<b>4<\/b>/);
+  assert.match(html, /Pool<b>3\/12<\/b>/);
   assert.doesNotMatch(html, /19 groups|99 working|55 error|running 18|\/90/);
   assert.match(html, /All normal/);
+});
+
+test('pool occupancy is shown for local and remote cards, with unknown capacity omitted', () => {
+  for (const self of [false, true]) for (const pool of [{ used: 9, capacity: 12 }, { used: 9, capacity: null }, null]) {
+    const html = render(machine({ self, group_summary: summary({ pool }) }), { self: { mode: 'multi' } });
+    const value = pool?.capacity ? '9/12' : pool ? '9' : '--';
+    assert.ok(html.includes(`Pool<b>${value}</b>`));
+    assert.doesNotMatch(html, /Groups<b>/);
+  }
 });
 
 test('local and remote multi-session machines render the same running group section', () => {

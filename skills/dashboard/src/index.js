@@ -244,8 +244,10 @@ const sse = new SseHub(15_000);
 const scheduleHistoryBroadcast = createCoalescedBroadcast(() => sse.broadcast('history_changed', {}));
 let fleetPollerReady = false; // fleetPoller is declared later (TDZ guard)
 
-function broadcastFleetState() {
+async function broadcastFleetState() {
+  if (sse.clients.size === 0) return;
   try {
+    await refreshFleetGroupSummary();
     broadcastFleetSnapshot(sse, buildApiStatePayload, statePayload => {
       if (fleetPollerReady) broadcastFleet(fleetPoller.getFleet(), statePayload);
     });
@@ -515,8 +517,8 @@ function buildApiStatePayload() {
   return stateData;
 }
 
-// Requests collect through the same cached snapshot service as Workbench; SSE
-// publishers stay synchronous and use only its most recently completed read.
+// HTTP reads and existing coalesced SSE publications share Workbench
+// collection, including its 2 s cache and in-flight read. No extra timer is needed.
 function readFleetSessionMode() {
   const value = loadZylosConfig(config.zylosDir, null);
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -564,7 +566,7 @@ function broadcastFleet(remoteFleet, statePayload) {
   }
 }
 
-const fleetPoller = new FleetPoller(config, { onPoll: broadcastFleet });
+const fleetPoller = new FleetPoller(config, { onPoll: () => scheduleFleetStateBroadcast() });
 fleetPollerReady = true;
 const RESERVED_FLEET_AGENT_NAMES = new Set(['test']);
 
@@ -1185,10 +1187,10 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/fleet') {
     try {
-      // Healthy SSE carries cached group snapshots. A Fleet page read also
-      // collects each remote's request-built summary, without a new polling loop.
-      const [, remoteFleet] = await Promise.all([refreshFleetGroupSummary(), fleetPoller.pollOnce()]);
-      sendJson(res, 200, buildFullFleetPayload(remoteFleet).payload);
+      // Remote records arrive through the existing poller/SSE lifecycle. A slow
+      // or unreachable remote must not delay a local Fleet response.
+      await refreshFleetGroupSummary();
+      sendJson(res, 200, buildFullFleetPayload().payload);
     } catch (err) {
       sendJson(res, 500, { error: err.code || err.message });
     }
@@ -1494,6 +1496,7 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/stream') {
+    await refreshFleetGroupSummary();
     const apiToken = req._apiToken;
     const validator = apiToken ? () => !!validateApiSession(apiToken) : null;
     sse.addClient(res, validator);

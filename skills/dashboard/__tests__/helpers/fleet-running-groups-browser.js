@@ -64,9 +64,10 @@ async function assertProblemLayout(card, scenario) {
     const layout = await row.evaluate(node => {
       const rect = node.getBoundingClientRect();
       const children = [...node.querySelectorAll('.wb-f-problem-name, .wb-f-problem-reason')];
-      return { height: rect.height, children: children.map(child => {
+      return { height: rect.height, right: rect.right, children: children.map(child => {
         const box = child.getBoundingClientRect(), style = getComputedStyle(child);
-        return { top: box.top, bottom: box.bottom, height: box.height, lineHeight: parseFloat(style.lineHeight),
+        const text = document.createRange(); text.selectNodeContents(child);
+        return { textRight: Math.min(text.getBoundingClientRect().right, box.right), top: box.top, bottom: box.bottom, right: box.right, height: box.height, lineHeight: parseFloat(style.lineHeight),
           whiteSpace: style.whiteSpace, overflow: style.overflow, textOverflow: style.textOverflow,
           clipped: child.scrollWidth > child.clientWidth + 1 };
       }) };
@@ -80,6 +81,7 @@ async function assertProblemLayout(card, scenario) {
       assert.ok(child.height <= child.lineHeight + 1, 'content occupies one line');
     }
     assert.ok(Math.abs(layout.children[0].top - layout.children[1].top) <= 2, 'name and reason share a single line');
+    if (layout.children[0].clipped) assert.ok(Math.abs(layout.right - layout.children[1].textRight) <= 1, 'a clipped name uses all width left by the natural-width reason');
     if (issue.displayName === LONG_NAME) assert.equal(layout.children[0].clipped, true, 'long fixture name actually overflows and receives ellipsis');
   }
 }
@@ -166,6 +168,7 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
         } else {
           assert.match(await card.locator('.wb-mode-tag').innerText(), /多|Multi/, 'remote and self use actual multi mode');
           assert.match(await card.innerText(), /运行中\s*9|9\s*running/i, 'API summary wins over older workbench rows');
+          assert.match(await card.locator('.wb-f-kv').innerText(), /池\s*9\/12/, 'pool occupancy remains in the bottom statistics');
           await assertProblemLayout(card, scenario);
           const moreProblems = card.locator('[data-fleet-problems]').filter({ hasText: /另\s*\d+\s*个异常/ });
           assert.equal(await moreProblems.count(), scenario.more ? 1 : 0, 'more-problems line only beyond two');

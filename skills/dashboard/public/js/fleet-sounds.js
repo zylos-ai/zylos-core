@@ -1,4 +1,4 @@
-import { stateMood } from './agent-fleet.js?v=194';
+import { stateMood } from './agent-fleet.js?v=195';
 
 const STORAGE_KEY = 'fleet-sounds-muted';
 const WORKING_MOODS = new Set(['busy', 'thinking']);

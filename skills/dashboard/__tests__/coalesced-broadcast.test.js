@@ -47,3 +47,21 @@ test('no subscriber builds nothing; local and fleet events share one snapshot', 
   assert.equal(sent.length, 2);
   assert.equal(sent[0][1], sent[1][1]);
 });
+
+test('an asynchronous broadcast holds its coalescing window until collection finishes', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 10_000 });
+  let calls = 0, finish;
+  const schedule = createCoalescedBroadcast(() => {
+    calls++;
+    return new Promise(resolve => { finish = resolve; });
+  });
+  schedule(); t.mock.timers.tick(0);
+  schedule(); t.mock.timers.tick(5000);
+  assert.equal(calls, 1, 'a slow collection does not overlap a second publication');
+  finish(); await Promise.resolve();
+  schedule(); t.mock.timers.tick(999);
+  assert.equal(calls, 1);
+  t.mock.timers.tick(1);
+  assert.equal(calls, 2, 'the next full window starts after collection finishes');
+  finish(); await Promise.resolve();
+});

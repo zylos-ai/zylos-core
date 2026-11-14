@@ -187,7 +187,6 @@ export function defaultAgentFleetLabels() {
     refresh: 'Refresh status',
     readOnly: 'Read-only',
     admin: 'Admin',
-    groupCount: '{count} groups',
     runningGroups: 'Running {count} groups',
     allNormal: 'All normal',
     summaryUnavailable: 'Group statistics unavailable',
@@ -195,9 +194,7 @@ export function defaultAgentFleetLabels() {
     autoRestarts: '{count} automatic restarts in the last hour →',
     problemReasons: { auth_failed: 'Authentication failed', start_failed: 'Start failed', no_response: 'No response' },
     groupDuration: '{count} min',
-    allIdle: 'all idle',
-    pool: 'running {used}',
-    poolOf: 'running {used}/{capacity}',
+    pool: 'Pool',
     groupStates: { busy: 'working', waiting: 'waiting', error: 'error', idle: 'idle', unknown: 'unknown', no_response: 'no response' },
     machines: '{count} machines',
     empty: 'No other machines yet'
@@ -420,8 +417,10 @@ function renderTile(tile, labels, t) {
     : '';
   const act = multi ? groupStates(tile, labels, t)
     : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span><span title="${escapeHtml(tile.activity)}">${escapeHtml(tile.activity)}</span>${subagent}</div>`;
+  const pool = tile.groupSummary?.pool;
+  const poolValue = pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
   const second = multi
-    ? `<div>${escapeHtml(labels.groups)}<b>${escapeHtml(String(tile.groupSummary?.running ?? '--'))}</b></div>`
+    ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolValue)}</b></div>`
     : `<div title="${escapeHtml(labels.context)}${tile.threshold == null ? '' : ` / ${pctText(tile.threshold)}`}">${escapeHtml(labels.context)}<b class="${tile.overThreshold ? 'wb-txt-warn' : ''}">${pctText(tile.contextPct)}</b></div>`;
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
     <div class="wb-f-top"><span class="wb-hdot"></span><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
