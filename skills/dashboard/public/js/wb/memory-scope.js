@@ -212,14 +212,14 @@ export function createMemoryScope({ document = globalThis.document, root, charts
   toggleCollapsed = () => {}, fileTitle = () => '', sizeText = byteSize } = {}) {
   let selected = 'all', selectedGroup = '', backlog = null, loaded = false, owner = identity(), generation = 0, stopped = false,
     query = '', backlogQuery = '', restOpen = false;
-  const search = element(document, 'input', undefined, 'wb-input');
+  const search = element(document, 'input');
   search.type = 'search';
   search.addEventListener('input', () => {
     query = search.value;
     renderList();
   });
   // Kept across redraws so typing in the group filter keeps focus while only the rows refresh.
-  const backlogSearch = element(document, 'input', undefined, 'wb-input');
+  const backlogSearch = element(document, 'input');
   backlogSearch.type = 'search';
   backlogSearch.addEventListener('input', () => { backlogQuery = backlogSearch.value; renderBacklogRows(); });
   const backlogFilter = element(document, 'label', undefined, 'wb-search wb-memory-gfilter');

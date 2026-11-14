@@ -645,7 +645,6 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const searchWrap = element(document, 'label', undefined, 'wb-search');
     const search = document.createElement('input');
     search.type = 'search';
-    search.className = 'wb-input';
     search.value = filter.query;
     search.placeholder = t('wb.schedule.search');
     search.setAttribute('aria-label', t('wb.schedule.search'));

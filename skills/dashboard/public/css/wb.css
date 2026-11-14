@@ -1496,6 +1496,9 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   /* A short label ("Edit" in English) must not leave a labelled button narrower than a fingertip either. */
   :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh, .wb-btn) { min-width: 40px; }
   .wb-switch-l { min-height: 40px; }
+  /* A search box is the control a finger sees: it grows to hold its 40px input and its own 1px border rather than
+     letting the input stick out. */
+  .wb-search { min-height: 42px; }
   /* Segmented controls grow with their 40px buttons instead of clipping them. */
   :is(.wb-seg, .wb-seg2) { height: auto; }
   /* Switch-style buttons keep their 36×20 look inside a transparent 40px frame. */
