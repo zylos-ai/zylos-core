@@ -5,11 +5,7 @@ uncommitted segments. In multi mode it lives under `session-groups/<G>/`; in
 single mode it lives directly under memory. Do not fall back to another mode's
 old files. Sync owns state; ordinary threads record new facts in inbox.
 
-The first physical line is:
-
-```text
-<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed=20261019T053001123Z -->
-```
+The first physical line is a state header.
 
 Use the current full group as scope, or `*` for single. Include all four header
 fields once. `synced_at` is an ISO8601 timestamp with zone; coverage is a
@@ -22,6 +18,9 @@ state. For example, with no notes this round, the published header is:
 ```text
 <!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed= -->
 ```
+
+The same empty marker is used when writing temporary state, regardless of the
+notes in this round; the commit script fills it during publication.
 
 With one new note `20261019T053002123Z`, only that ID appears, even if the old
 state named `20261019T053001123Z`:
@@ -54,4 +53,6 @@ proof. Commit preserves all other lines and the original title exactly.
 Use the restricted tool for `state.md.<token>.tmp` after checkpoint succeeds,
 then `sync-files.js commit` for formal replacement. A damaged header is a reader
 fallback, not permission to discard the body or uncommitted segments. See
-[the example](../examples/state.md).
+[the published-state example](../examples/state.md). Its `inbox_committed`
+value is filled by the commit script; leave that field empty when writing
+temporary state.
