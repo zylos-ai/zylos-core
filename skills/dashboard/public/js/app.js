@@ -26,7 +26,7 @@ import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=90';
 import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=200';
 import { createFleetSounds } from './fleet-sounds.js?v=200';
-import { refreshDashboardState } from './state-refresh.js?v=99';
+import { refreshDashboardState } from './state-refresh.js?v=100';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
