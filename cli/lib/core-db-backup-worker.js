@@ -171,6 +171,11 @@ export async function execute(input) {
     databases=databasesForFormat(databaseFormatForRows(rows,input.formatVersion));
     if(rows.some(row=>!['complete','missing'].includes(row.status))) throw Error('Invalid original database presence evidence');
   } else databases=input.manifest ? validateSnapshotManifest(input.manifest) : databasesForFormat(input.formatVersion ?? 3);
+  // Retired Web Console data is outside current upgrade checks. Keep its
+  // owner only when verifying a released snapshot that actually protected it.
+  if(input.action==='offline-preflight' && (!input.manifest || databaseFormatForRows(input.manifest.databases,input.manifest.formatVersion)===3)) {
+    databases=databases.filter(item=>item.owner!=='web-console');
+  }
   const inspectDashboard=async (owner,db) => {
     const state=await owner.inspectSchema(db);
     if(!state||!Number.isInteger(state.targetVersion)||state.targetVersion<0||!Number.isInteger(state.currentVersion)||state.currentVersion<0||typeof state.needsMigration!=='boolean') throw Error('Invalid dashboard schema inspection');
@@ -371,9 +376,8 @@ export async function execute(input) {
     const absent=missing(source);
     if(absent) {
       if(expected&&expected.status!=='missing') throw new Error(`Expected database absent: ${source}`);
-      // Only current owners create a missing database. A retired owner (Web
-      // Console) is listed for original-deployment evidence alone; 1.0
-      // deployments no longer ship its code, so it is not loaded.
+      // Only current owners create a missing database. Legacy snapshots may
+      // list a missing Web Console database without shipping its owner code.
       if(input.action==='offline-preflight' && CORE_DATABASES.includes(item)) {
         const mod=await ownerSchema(input,item);
         if(!mod.supportsNewDatabase) throw new Error(`Owner cannot initialize missing database: ${item.owner}`);

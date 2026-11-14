@@ -154,22 +154,35 @@ test('protected preparation checks an original deployment without a Dashboard ow
  assert.equal(fs.existsSync(f.dashboardRoot),false);
 });
 
-// A 1.0 deployment has no Web Console skill or database (new installs never
-// create them; the removal moves them away). The original-deployment check of a
-// migrating upgrade still lists Web Console, and must not load its absent owner.
-test('protected preparation of a migrating upgrade checks a 1.0 deployment without Web Console',async t=>{
- const f=await fixture(t,{webConsole:false,olderDatabases:true});
+// Real protected preparation/recovery boundary; fixture owns every path and
+// service calls are local doubles. Run for preflight owner selection changes;
+// skip for unrelated work. The official runner isolates HOME/ZYLOS_DIR/PM2_HOME.
+for(const retainedDatabase of [false,true]) test(`migrating upgrade ignores retired Web Console with retained database=${retainedDatabase}`,async t=>{
+ const f=await fixture(t,{webConsole:false,olderDatabases:true,sourceVersion:'1.0.0-beta.9'});
+ const web=f.db('web-console/web-console.db');
+ const before=Buffer.from('retired Web Console archive\n');
+ if(retainedDatabase){fs.mkdirSync(path.dirname(web),{recursive:true});fs.writeFileSync(web,before);}
  assert.equal(fs.existsSync(path.join(f.j.skillsDir,'web-console')),false);
- assert.equal(fs.existsSync(f.db('web-console/web-console.db')),false);
+ f.j.initialIdentity.databases.find(row=>row.source==='web-console/web-console.db').exists=retainedDatabase;
  f.m.update(f.dir,f.j,{installationIntent:false,phase:'code_saved',databaseMode:'migrate'});
+ // Both recovery verification routes must accept the original deployment.
+ assert.doesNotThrow(()=>f.r.originalVerified(f.dir,f.load()));
+ const descriptor=path.join(f.dir,'descriptor.json');fs.renameSync(descriptor,descriptor+'.saved');
+ try {assert.doesNotThrow(()=>f.r.originalVerified(f.dir,f.load()));}
+ finally {fs.renameSync(descriptor+'.saved',descriptor);}
  fs.rmSync(f.snapshot.dbBackupDir,{recursive:true});
  fs.rmSync(path.join(f.dir,'sqlite-runtime'),{recursive:true});
  const ctx={maintenance:f.m,journal:f.load(),transactionDir:f.dir,transactionId:'tx',coreDir:path.resolve('.'),snapshotFormatVersion:3};
  assert.doesNotThrow(()=>prepareProtectedInstall(ctx));
  assert.equal(f.load().phase,'prepared');
  const original=f.m.preflight(f.dir,f.load(),null,{originalDeployment:true});
- assert.equal(original.databases.find(row=>row.source==='web-console/web-console.db').status,'missing');
+ assert.equal(original.databases.some(row=>row.source==='web-console/web-console.db'),false);
  assert.equal(fs.existsSync(path.join(f.j.skillsDir,'web-console')),false);
+ const result=f.r.resume(f.dir);
+ assert.equal(result.recovery_required,false,JSON.stringify(result));
+ assert.equal(f.load().phase,'aborted_before_install');
+ if(retainedDatabase)assert.deepEqual(fs.readFileSync(web),before);
+ else assert.equal(fs.existsSync(web),false);
 });
 
 test('post-install compensation and restored startup accept an original deployment without a Dashboard owner',async t=>{
