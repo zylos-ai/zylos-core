@@ -123,6 +123,29 @@ test('timeline pages current events, loads three older runs lazily, filters expa
   loader.close();
 });
 
+test('automatic restarts and the reminder before them read as their own words, not as a crash', () => {
+  const packs = Object.fromEntries(['zh', 'en'].map(locale => [locale,
+    JSON.parse(readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url), 'utf8'))]));
+  const expected = {
+    zh: { auto_restart_no_response: '自动重启 · 无响应', auto_restart_tool_timeout: '自动重启 · 工具超时',
+      no_response_nudge: '无响应，已提醒', no_response_restart: '无响应，已自动重启', tool_timeout_restart: '工具超时，已自动重启' },
+    en: { auto_restart_no_response: 'Restarted automatically · no response', auto_restart_tool_timeout: 'Restarted automatically · tool timeout',
+      no_response_nudge: 'No response, reminded', no_response_restart: 'No response, restarted automatically',
+      tool_timeout_restart: 'Tool timed out, restarted automatically' },
+  };
+  for (const locale of ['zh', 'en']) {
+    const read = key => packs[locale][key] ?? key;
+    for (const reason of ['auto_restart_no_response', 'auto_restart_tool_timeout']) {
+      assert.equal(endReasonLabel(reason, 'plain', read), expected[locale][reason]);
+      assert.equal(endReasonLabel(reason, 'technical', read), reason);
+    }
+    assert.equal(endReasonLabel('crash', 'plain', read), packs[locale]['wb.endReason.crash']);
+    for (const type of ['no_response_nudge', 'no_response_restart', 'tool_timeout_restart']) {
+      assert.equal(eventLabel({ event_type: type, category: 'diagnostic' }, 'plain', read), expected[locale][type]);
+    }
+  }
+});
+
 test('event, end reason and time labels are plain words in plain view and raw values in technical detail', () => {
   assert.equal(eventLabel({ event_type: 'reclaim_done' }, 'plain', t), 'wb.event.reclaim_done');
   assert.equal(eventLabel({ event_type: 'wait_health' }, 'plain', t), 'wb.event.wait_health');

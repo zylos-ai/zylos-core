@@ -17,6 +17,11 @@ import { readPool, poolPositions } from './pool-capacity.js';
 const emptyNames = { listAll: () => new Map(), search: () => [] };
 const activationTypes = ['activate_new', 'start_always', 'activate_failed', 'activate_timeout'];
 const activityLookbackLimit = 200;
+// The supervisor's own restarts of a run that stopped responding or whose tool ran too long.
+const AUTO_RESTART_TYPES = ['no_response_restart', 'tool_timeout_restart'];
+// What the supervisor takes as the main agent responding: a tool call or words it wrote.
+const RESPONSE_TYPES = ['pre_tool_use', 'tool_call', 'assistant_message'];
+const AUTO_RESTART_WINDOW_MS = 3600_000;
 
 
 function queryAllEvents(store, filter) {
@@ -159,6 +164,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         position: positions.get(row.sessionGroup), ownsSlot: owners.has(row.sessionGroup) });
       row.state = classify(row, { statusError, now: at });
       row.working = null;
+      row.noResponse = null;
       if (row.presence === 'running' && row.live?.runId && sources.status.ok === true) {
         const filter = { sessionGroup: row.sessionGroup, runId: row.live.runId,
           until: new Date(at).toISOString(), sourceTime: true, order: 'desc' };
@@ -171,6 +177,14 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         const latest = store.queryEvents({ ...filter, limit: 1 });
         const events = [...prompt, ...end, ...children, ...childTools, ...latest];
         row.working = workingHistory(events, at, { ttlMs: hotTtlMs, tools: row.tools.length }).working;
+        // No response: the supervisor reminded this run of a delivery it left unanswered, and the main agent has not
+        // responded since. The supervisor records no recovery; it judges one by the main agent's next response, and so
+        // does this. A restart ends the run, so a reminder never carries over to the next run.
+        const nudge = store.queryEvents({ ...filter, types: ['no_response_nudge'], limit: 1 })[0];
+        const nudgedAt = nudge ? Date.parse(nudge.timestamp) : NaN;
+        const since = Number.isFinite(nudgedAt) && !store.queryEvents({ ...filter, since: nudge.timestamp, order: 'asc', limit: 20,
+          types: RESPONSE_TYPES, agentScope: 'main' }).some(event => Date.parse(event.timestamp) > nudgedAt) ? nudgedAt : null;
+        row.noResponse = since === null ? null : { since };
       }
       const events = row.state.kind === 'busy' && row.live?.runId ? queryAllEvents(store, {
         sessionGroup: row.sessionGroup, runId: row.live.runId, types: ['user_prompt_submit', 'stop'], until: new Date(at).toISOString(),
@@ -186,9 +200,13 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       total: pm2Data.processes.length } : null;
     let system = null;
     try { system = systemSample(readSystem()); } catch { /* an unreadable host sample stays unknown */ }
+    // Each restart is one record; the exit it causes is reported as a crash too, which is not counted here.
+    const restarts = store.queryEvents({ types: AUTO_RESTART_TYPES, since: new Date(at - AUTO_RESTART_WINDOW_MS).toISOString(),
+      until: new Date(at).toISOString(), sourceTime: true, limit: 1000 }).length;
     const value = { readAt: at, mode, view: status?.view ?? null, rows, counts: countRows(rows), hasOlder,
       listKnown: status !== null && status.groupListError === null, baselineRuntime,
-      instance: { runtimeHealth: status?.runtimeHealth ?? null, accounts: accountsCache.accounts, pool, services, system },
+      instance: { runtimeHealth: status?.runtimeHealth ?? null, accounts: accountsCache.accounts, pool, services, system,
+        autoRestarts: { count: restarts } },
       overrides: ov.ok ? ov.data : null, sources };
     value.attention = buildAttention(value, { channelDownCounter, pm2Data });
     for (const row of rows) row.attention = value.attention.problems.filter(problem =>

@@ -12,6 +12,8 @@ import { C4Reader } from '../src/lib/c4-reader.js';
 import { AuthGate } from '../src/lib/auth.js';
 import { Store } from '../src/lib/store.js';
 import { chatHttpFixture } from './helpers/chat-http.js';
+import { fleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
+import { importSupervisorRecords, supervisorSequences } from './helpers/supervisor-records.js';
 
 function fixture(t, { count = 1, statusError = false, modeError = false, overrideError = false,
   c4Error = false, queueError = false, groupListError = false, noSample = false, readPm2 = () => null, readSystem = () => null, groupKeys, displayNames, hotTtlSeconds } = {}) {
@@ -1100,11 +1102,66 @@ test('working uses environment TTL precedence and reads source-time facts with b
   add('user_prompt_submit', 50000); add('subagent_start', 50000, { agent_id: 'child' });
   const row = await read();
   assert.equal(row.working.on, false);
-  const reads = queries.filter(query => query.runId === 'run-telegram:g0' && query.sourceTime);
+  const runReads = queries.filter(query => query.runId === 'run-telegram:g0' && query.sourceTime);
+  // The no-response check reads only the latest reminder, and nothing more when there is none.
+  const nudgeReads = runReads.filter(query => query.types?.includes('no_response_nudge'));
+  assert.deepEqual(nudgeReads.map(query => [query.types, query.limit, query.order]), [[['no_response_nudge'], 1, 'desc']]);
+  assert.equal(runReads.filter(query => query.order === 'asc').length, 0);
+  const reads = runReads.filter(query => !nudgeReads.includes(query));
   assert.equal(reads.length, 5);
   assert.equal(reads.filter(query => query.limit === 200 && query.agentScope === 'child').length, 2);
   assert.equal(reads.find(query => query.types?.includes('pre_tool_use')).latestPerAgent, true);
   assert.ok(reads.every(query => query.order === 'desc' && [1, 200].includes(query.limit)));
+});
+
+// Integration boundary: supervisor records imported by the real importer into a private Store, read by the real
+// snapshot. Run for no-response or automatic-restart changes; skip rendering-only edits. No tmux/network/children.
+test('a reminder the main agent has not answered marks the live run as no response until it responds', async t => {
+  const { f, store, add, read } = workingFixture(t), minute = 60000, run = 'run-telegram:g0';
+  add('user_prompt_submit', 10 * minute); add('pre_tool_use', 8 * minute);
+  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.nudge(f.now() - 2 * minute, 'telegram:g0', run));
+  const silent = await read();
+  assert.deepEqual(silent.noResponse, { since: f.now() - 2 * minute });
+  const summary = fleetGroupSummary(await f.service.getSnapshot());
+  assert.equal(summary.counts.no_response, 1);
+  assert.equal(summary.counts.busy, 0);
+  assert.deepEqual(summary.problems.map(row => [row.sessionGroup, row.reason, row.durationSeconds]), [['telegram:g0', 'no_response', 120]]);
+  assert.deepEqual(summary.noResponse, { count: 1 });
+  // A child agent's tool is not the main agent responding.
+  f.advance(31000); add('pre_tool_use', 1000, { agent_id: 'child', tool_use_id: 'child-tool' });
+  assert.deepEqual((await read()).noResponse, { since: f.now() - 2 * minute - 31000 });
+  f.advance(31000); add('pre_tool_use', 1000, { tool_use_id: 'main-tool' });
+  assert.equal((await read()).noResponse, null, 'The main agent responded after the reminder');
+  assert.equal(fleetGroupSummary(await f.service.getSnapshot()).counts.no_response, 0);
+});
+
+test('a reminder in an earlier run or answered with words does not mark the live run as no response', async t => {
+  const { f, store, add, read } = workingFixture(t), minute = 60000;
+  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.nudge(f.now() - 3 * minute, 'telegram:g0', 'run-earlier'));
+  assert.equal((await read()).noResponse, null);
+  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.nudge(f.now() - 2 * minute, 'telegram:g0', 'run-telegram:g0'));
+  add('assistant_message', minute);
+  f.advance(31000);
+  assert.equal((await read()).noResponse, null);
+});
+
+test('automatic restarts in the last hour count each restart once and never the crash report that follows it', async t => {
+  const { f, store } = workingFixture(t), minute = 60000, at = f.now();
+  await importSupervisorRecords({ store, root: f.root }, [
+    ...supervisorSequences.noResponseRestart(at - 20 * minute, 'telegram:g0', 'run-silent'),
+    ...supervisorSequences.crash(at - 10 * minute, 'telegram:g0', 'run-crashed'),
+    ...supervisorSequences.toolTimeoutRestart(at - 2 * 60 * minute, 'telegram:g0', 'run-hour-ago'),
+  ]);
+  const first = await f.service.getSnapshot();
+  assert.deepEqual(first.instance.autoRestarts, { count: 1 });
+  assert.deepEqual(fleetGroupSummary(first).autoRestarts, { count: 1 });
+  assert.equal(first.rows[0].noResponse, null, 'The reminder belonged to the restarted run');
+  await importSupervisorRecords({ store, root: f.root }, supervisorSequences.toolTimeoutRestart(at - 5 * minute, 'telegram:g1', 'run-tool'));
+  f.advance(31000);
+  assert.deepEqual((await f.service.getSnapshot()).instance.autoRestarts, { count: 2 });
+  // The no-response restart was at 18 minutes ago; 45 more minutes take it past the hour, the tool restart stays.
+  f.advance(45 * minute);
+  assert.deepEqual((await f.service.getSnapshot()).instance.autoRestarts, { count: 1 }, 'A restart older than one hour leaves the count');
 });
 
 test('source-time event ordering preserves default sequence order and handles offsets ties and child scopes', async t => {
