@@ -202,6 +202,10 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    this round, and a new state containing current work. The commit script fills
    `inbox_committed` from this round's listed segments; leave it empty in the
    temporary state and do not copy it from old state. Put the batch end in coverage.
+   Preserve a valid `synced_at` from the existing state/skeleton as a temporary
+   placeholder (or `1970-01-01T00:00:00Z` when neither exists); do not calculate
+   or round a new timestamp. Commit validates the
+   header format and overwrites this field with its actual UTC publication time.
 6. For any absorbed-message block in Pending, use actual progress and C4 source
    messages to identify followed-up IDs. An outbound audit row alone does not
    prove delivery; uncertain or failed sends are not completion evidence.
@@ -216,7 +220,9 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    on stdin to `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js commit --token T`, replacing the empty array only
    with proven followed-up IDs. Commit verifies the batch, checkpoint coverage,
    the exact current segment IDs, absolute paths and hashes, then writes those
-   segment IDs into the published state header. Session logs are read inputs,
+   segment IDs into the published state header and sets `synced_at` from the
+   script clock at publication, in UTC with milliseconds. The worker-supplied
+   timestamp is always overwritten. Session logs are read inputs,
    but are not immutable commit inputs: a main-session note appended during Sync
    must not reject commit.
    Handle mismatches under the common rules; never omit inputs or fabricate a receipt to retry.

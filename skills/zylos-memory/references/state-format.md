@@ -8,7 +8,14 @@ old files. Sync owns state; ordinary threads record new facts in inbox.
 The first physical line is a state header.
 
 Use the current full group as scope, or `*` for single. Include all four header
-fields once. `synced_at` is an ISO8601 timestamp with zone; coverage is a
+fields once. `synced_at` is an ISO8601 timestamp with zone; the commit script
+sets it from its actual publication clock in UTC, including milliseconds.
+The worker must preserve an existing valid timestamp from the state/skeleton
+in temporary state instead of calculating a new time. If neither exists, use
+the fixed placeholder `1970-01-01T00:00:00Z`. The temporary value is
+format-checked, then always overwritten at publication; it is never trusted as
+the commit time. This prevents local time mislabeled as UTC or a rounded future
+time from advancing the next session-log selection boundary. Coverage is a
 conversation ID or empty; inbox_committed is a comma-separated set of legal
 segment IDs, or empty. It is a file recovery marker, not authoritative DB
 progress. The commit script fills `inbox_committed` from this round's listed,
