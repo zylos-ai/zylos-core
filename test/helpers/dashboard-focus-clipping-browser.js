@@ -51,11 +51,11 @@ function focusGeometry(control) {
         top: rect.top - top, bottom: bottom - rect.bottom } });
   }
   return { focused: document.activeElement === control, visible: control.matches(':focus-visible'),
-    outline: style.outline, offset: style.outlineOffset, shadow: style.boxShadow, extent, clips,
+    outline: style.outline, outlineWidth: style.outlineWidth, outlineStyle: style.outlineStyle, offset: style.outlineOffset, shadow: style.boxShadow, extent, clips,
     width: rect.width, height: rect.height };
 }
 
-export async function runFocusClippingBrowser(sandbox, { width, theme }) {
+export async function runFocusClippingBrowser(sandbox, { width, theme, assetDirectory = publicDir, captureOnly = false, onLayout = () => {} }) {
   console.info('Focus browser isolation:', JSON.stringify(sandbox.assertIsolation()));
   const errors = [], streams = new Set(), observations = [];
   let closing = false, state = 'asleep';
@@ -85,15 +85,23 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
           origin.wait = state === 'pending' ? { kind: 'pool_wait', pendingCount: 1 } : null;
           origin.queue.pending.count = state === 'pending' ? 1 : 0;
         }
+        if (p === '/api/workbench/memory/backlog') {
+          const row = value.groups[0];
+          value.groups.push({ ...row, sessionGroup: 'lark:oc_product', displayName: 'Product weekly', count: 18 },
+            { ...row, sessionGroup: 'origin', displayName: 'Origin', count: 21 });
+          value.originSync = { ...row, count: 25, threshold: 30 };
+          value.hasOlder = true;
+          value.budgets = { limits: { 'identity.md': 8000, 'references.md': 8000 }, warnings: { 'identity.md': 7000, 'references.md': 7000 } };
+        }
         if (p === '/api/settings') {
           // Normal saved custom rows stay visible without a show-unused action.
           for (const runtime of ['claude', 'codex']) value.runtimes[runtime].builtInModels = [];
         }
         return sendJson(res, value === undefined ? 404 : 200, value ?? { error: 'not_found' });
       }
-      if (['/', '/chat'].includes(p)) return sendHtml(res, 200, fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8')
+      if (['/', '/chat'].includes(p)) return sendHtml(res, 200, fs.readFileSync(path.join(assetDirectory, 'index.html'), 'utf8')
         .replaceAll('__BASE_PATH__', '').replaceAll('__ASSET_ROOT__', '/_assets').replaceAll('__REMOTE_ACCESS__', 'admin'));
-      if (!serveStatic(req, res, publicDir)) sendJson(res, 404, { error: 'not_found' });
+      if (!serveStatic(req, res, assetDirectory)) sendJson(res, 404, { error: 'not_found' });
     } catch (error) { recordError(error); if (!res.headersSent) sendJson(res, 500, { error: 'fixture_failed' }); else res.end(); }
   });
   const base = await sandbox.startHttp(server);
@@ -101,7 +109,7 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
   const browser = await chromium.launch({ executablePath: process.env.ZYLOS_CHAT_BROWSER_BIN, headless: true, env: sandbox.env,
     args: ['--no-sandbox', '--disable-background-networking', '--disable-component-update', '--no-first-run'] });
   sandbox.addCleanup(() => browser.close());
-  const context = await browser.newContext({ viewport: { width, height: 960 }, locale: 'zh-CN', reducedMotion: 'reduce' });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN', reducedMotion: 'reduce' });
   sandbox.addCleanup(() => context.close());
   let requests = 0;
   await context.route('**/*', async route => {
@@ -124,40 +132,114 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
   await page.locator('.wb-row[data-group]').first().waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
 
-  async function check(control, name, requiredClips) {
-    await control.waitFor({ state: 'visible' });
-    // Enter the actual sequential keyboard focus order and return to this real
-    // control. Merely calling DOM focus does not establish :focus-visible.
-    await control.focus(); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
-    const geometry = await control.evaluate(focusGeometry);
+  async function screenshot(name) {
     const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
     if (evidence) {
       fs.mkdirSync(evidence, { recursive: true });
       await page.screenshot({ path: path.join(evidence, `focus-${width}-${theme}-${name}.png`), animations: 'disabled', timeout: 5000 });
     }
+  }
+  async function layout(name) {
+    const metrics = await page.evaluate(name => {
+      const box = selector => {
+        const r = document.querySelector(selector).getBoundingClientRect();
+        return [r.x + scrollX, r.y + scrollY, r.width, r.height];
+      };
+      if (name === 'conversation') return { row: box('.conversation-list-item'), text: box('.conversation-list-title') };
+      const tabs = document.querySelector('.wb-rt-tabs'), r = tabs.getBoundingClientRect();
+      const css = getComputedStyle(tabs), after = getComputedStyle(tabs, '::after');
+      const separator = after.content !== 'none' ? r.bottom + scrollY - parseFloat(css.borderBottomWidth) - parseFloat(after.bottom) - parseFloat(after.height)
+        : r.bottom + scrollY - parseFloat(css.borderBottomWidth);
+      return { tab: box('#settings-price-tab-claude'), separator, table: box('.wb-ptable'), more: box('#settings-price-more') };
+    }, name);
+    if (!captureOnly) {
+      // Immutable prerelease asset geometry, measured with this same API fixture.
+      // These constants deliberately do not derive from the stylesheet under test.
+      const baseline = width === 1280 ? {
+        conversation: { row: [32,165,303,61.59375], text: [82,176,243,19.5] },
+        pricing: { tab: [237,174.765625,288.65625,39.5], separator: 213.265625, table: [254,272.765625,886,64.25], more: [254,345.015625,886,32] },
+      } : {
+        conversation: { row: [20,116,350,72], text: [76,130,286,22.5] },
+        pricing: { tab: [12,208.375,183,56.75], separator: 264.125, table: [25,340.125,640.703125,76.25], more: [25,424.375,340,92] },
+      };
+      for (const [key, expected] of Object.entries(baseline[name])) {
+        const actual = Array.isArray(expected) ? metrics[key] : [metrics[key]];
+        for (const [index, value] of (Array.isArray(expected) ? expected : [expected]).entries()) {
+          assert.ok(Math.abs(actual[index] - value) < 0.1, `${name} ${key}[${index}] retains baseline ${value}, got ${actual[index]}`);
+        }
+      }
+    }
+    onLayout(name, metrics);
+    await screenshot(`${name}-layout`);
+    return metrics;
+  }
+  async function check(control, name, requiredClips, { alreadyFocused = false, inward = false } = {}) {
+    await control.waitFor({ state: 'visible' });
+    // Enter the actual sequential keyboard focus order and return to this real
+    // control. Merely calling DOM focus does not establish :focus-visible.
+    if (!alreadyFocused) { await control.focus(); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab'); }
+    const geometry = await control.evaluate(focusGeometry);
+    await screenshot(name);
+    if (captureOnly) { observations.push({ name, ...geometry }); return; }
     assert.ok(geometry.focused && geometry.visible, `${name}: keyboard focus and :focus-visible are active`);
-    assert.ok(Object.values(geometry.extent).some(value => value > 0), `${name}: real outer focus indicator exists`);
+    if (inward) {
+      assert.equal(parseFloat(geometry.outlineWidth), 1, `${name}: baseline browser outline width remains`);
+      assert.equal(geometry.outlineStyle, 'auto', `${name}: baseline browser outline style remains`);
+      assert.equal(parseFloat(geometry.offset), -4, `${name}: outline lies inside the editor`);
+      assert.equal(geometry.shadow, 'none', `${name}: no clipped outer shadow`);
+      assert.ok(geometry.clips.filter(clip => clip.x).every(clip => clip.gap.left >= -0.1 && clip.gap.right >= -0.1), 'inward editor side rails remain visible');
+      const visibleHeight = geometry.height + Math.min(0, ...geometry.clips.filter(clip => clip.y).map(clip => clip.gap.top))
+        + Math.min(0, ...geometry.clips.filter(clip => clip.y).map(clip => clip.gap.bottom));
+      assert.ok(visibleHeight >= 80, 'at least 80px of both inward side rails is visible in the pane');
+    } else assert.ok(Object.values(geometry.extent).some(value => value > 0), `${name}: real outer focus indicator exists`);
     for (const required of requiredClips) assert.ok(geometry.clips.some(item => item.name.split(' ').includes(required)),
       `${name}: ${required} retains its clipping/scrolling behavior`);
     if (name === 'memory-editor') assert.equal(geometry.height, 520, 'default editor height is preserved');
-    for (const ancestor of geometry.clips) for (const side of ['left', 'right', 'top', 'bottom']) {
+    if (!inward) for (const ancestor of geometry.clips) for (const side of ['left', 'right', 'top', 'bottom']) {
       if ((side === 'left' || side === 'right') ? !ancestor.x : !ancestor.y) continue;
       const required = Math.max(4, geometry.extent[side]);
       assert.ok(ancestor.gap[side] >= required - 0.1,
         `${name}: ${side} focus extent/reserve ${required}px exceeds ${ancestor.name} gap ${ancestor.gap[side]}px; ${JSON.stringify(geometry)}`);
     }
-    observations.push({ name, extent: geometry.extent, clips: geometry.clips });
+    observations.push({ name, outline: geometry.outline, offset: geometry.offset, shadow: geometry.shadow, extent: geometry.extent, clips: geometry.clips });
+  }
+
+  async function tabThrough(containerSelector, controlSelector, name) {
+    if (captureOnly) return;
+    const container = page.locator(containerSelector);
+    const controls = container.locator(controlSelector);
+    await controls.first().focus();
+    await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
+    let checked = 0, scrolled = 0;
+    for (let step = 0; step < 80; step++) {
+      const current = page.locator(`${containerSelector} ${controlSelector}:focus`);
+      if (await current.count()) {
+        const position = await current.evaluate(node => ({ index: [...node.closest('.conversation-items, .memory-tree').querySelectorAll('.conversation-list-item, .memory-file')].indexOf(node), scroll: node.closest('.conversation-items, .memory-tree').scrollTop }));
+        if (position.index > 0 && position.index < await controls.count() - 1 && position.scroll > 0) {
+          await check(current, `${name}-tab-${position.index}`, [containerSelector.slice(1)], { alreadyFocused: true });
+          scrolled++;
+        }
+        checked++;
+        if (await controls.last().evaluate(node => node === document.activeElement)) break;
+      }
+      await page.keyboard.press('Tab');
+    }
+    assert.ok(checked >= await controls.count(), `${name}: sequential keyboard visits every row`);
+    assert.ok(scrolled > 0, `${name}: intermediate rows cause native keyboard scrolling`);
   }
 
   await openDashboardTab(page, 'chat');
   const rows = page.locator('.conversation-list-item'); await rows.first().waitFor();
-  if (width === 1280) {
+  await layout('conversation');
+  await tabThrough('.conversation-items', '.conversation-list-item', 'conversation');
+  {
     for (const [position, row] of [['first', rows.first()], ['last', rows.last()]]) {
       await check(row, `conversation-${position}`, ['conversation-items', 'conversation-page']);
-      if (position === 'last') await check(row.locator('..').locator('.conversation-delete'), 'conversation-delete', ['conversation-items']);
+      if (position === 'last' && width === 1280) await check(row.locator('..').locator('.conversation-delete'), 'conversation-delete', ['conversation-items']);
     }
     assert.ok(await page.locator('.conversation-items').evaluate(node => node.scrollHeight > node.clientHeight), 'conversation fixture exercises a real scrolling list');
-  } else {
+  }
+  if (width === 390) {
     for (const value of ['asleep', 'pending']) {
       state = value;
       if (value === 'pending') { await page.goto(base + '/'); await page.locator('.wb-row[data-group]').first().waitFor(); await openDashboardTab(page, 'chat'); }
@@ -168,10 +250,12 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
     }
   }
 
-  if (width === 390) await page.locator('.conversation-back').click();
+  if (width === 390 && await page.locator('.conversation-back').isVisible()) await page.locator('.conversation-back').click();
   await openDashboardTab(page, 'settings');
   if (width === 390) await page.locator('.wb-set-drawer-btn').click();
   await page.locator('[data-settings-section="pricing"]').click();
+  await page.locator('#settings-price-rows tr').first().waitFor();
+  await layout('pricing');
   for (const runtime of ['claude', 'codex']) {
     const tab = page.locator(`#settings-price-tab-${runtime}`);
     await check(tab, `pricing-tab-${runtime}`, ['wb-rt-tabs']);
@@ -182,15 +266,47 @@ export async function runFocusClippingBrowser(sandbox, { width, theme }) {
   }
   await openDashboardTab(page, 'memory');
   const files = page.locator('.memory-file'); await files.first().waitFor();
+  // Desktop tree owns scrolling; the phone's stacked tree uses page scrolling.
+  if (width === 1280) await tabThrough('.memory-tree', '.memory-file', 'memory-tree');
   await check(files.first(), 'memory-tree-first', ['memory-tree', 'memory-tree-card']);
   await check(files.last(), 'memory-tree-last', ['memory-tree', 'memory-tree-card']);
   await files.filter({ hasText: 'state.md' }).first().click();
   await page.locator('#memory-edit-btn').click();
-  // A modestly shorter real viewport exposes the desktop caret-only focus bug:
-  // the 520px editor fits, but its bottom initially sits 8px under the pane.
-  // Keep that initial scroll position; keyboard entry must reveal the whole ring.
-  await page.setViewportSize({ width, height: 900 });
-  await check(page.locator('#memory-editor'), 'memory-editor', ['memory-content', 'memory-viewer']);
+  const editor = page.locator('#memory-editor');
+  await page.locator('.memory-notice.warning').waitFor();
+  assert.ok(await page.locator('.wb-memory-card').count() >= 2, 'real backlog and budget cards precede the editor');
+  if (!captureOnly) {
+    const paneHeight = await page.locator('.memory-content').evaluate(node => node.clientHeight);
+    if (width === 1280) assert.ok(paneHeight < 520, `real memory pane ${paneHeight}px is shorter than editor`);
+  }
+  await check(editor, 'memory-editor', ['memory-content', 'memory-viewer'], { inward: true });
+  async function mouseWithoutScroll(position, height = 520) {
+    await editor.evaluate((node, { position, height }) => {
+      node.style.height = `${height}px`; node.blur();
+      const pane = node.closest('.memory-content'); pane.scrollTop = position === 'bottom' ? pane.scrollHeight : 0;
+    }, { position, height });
+    const target = await editor.evaluate(node => {
+      const r = node.getBoundingClientRect(), pane = node.closest('.memory-content').getBoundingClientRect();
+      return { x: r.left + 30, y: Math.max(r.top + 20, pane.top + 20) };
+    });
+    const before = await page.evaluate(() => ({ page: scrollY, pane: document.querySelector('.memory-content').scrollTop }));
+    await page.mouse.click(target.x, target.y);
+    const after = await page.evaluate(() => ({ page: scrollY, pane: document.querySelector('.memory-content').scrollTop, focused: document.activeElement.id }));
+    assert.equal(after.focused, 'memory-editor', 'mouse reaches the actual editor');
+    assert.equal(after.page, before.page, 'mouse focus preserves page scroll');
+    assert.equal(after.pane, before.pane, 'mouse focus preserves pane scroll');
+    await screenshot(`memory-mouse-${position}-${height}`);
+  }
+  await screenshot('memory-editor');
+  {
+    await mouseWithoutScroll('top'); await mouseWithoutScroll('bottom');
+    if (width === 390) await mouseWithoutScroll('top', 900);
+    else {
+      await page.setViewportSize({ width, height: 720 });
+      await check(editor, 'memory-editor-short', ['memory-content', 'memory-viewer'], { inward: true });
+      await mouseWithoutScroll('top'); await mouseWithoutScroll('bottom');
+    }
+  }
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'document has no horizontal overflow');
   assert.equal(errors.length, 0, errors.join('\n'));
   console.info('Focus clipping observations:', JSON.stringify({ width, theme, controls: observations.length, observations }));

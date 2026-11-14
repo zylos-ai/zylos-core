@@ -703,8 +703,6 @@ function renderMemoryContent() {
       : '';
     content.innerHTML = `${upkeep}${notice}${live}${retry}${conflict}<textarea class="memory-editor" id="memory-editor" spellcheck="false">${esc(state.memory.draft)}</textarea>`;
     const editor = $('#memory-editor');
-    // Native textarea focus may reveal only the caret, leaving its outer ring under the pane clip.
-    editor?.addEventListener('focus', () => editor.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
     editor?.addEventListener('input', () => {
       state.memory.draft = editor.value;
       state.memory.dirty = state.memory.file ? state.memory.draft !== state.memory.file.text : true;

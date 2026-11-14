@@ -73,7 +73,7 @@
   /* Keep row positions while extending the scroll clip around their outer focus rings. */
   padding:4px;
   margin:-4px;
-  scroll-padding:4px
+  scroll-padding:5px
 }
 .conversation-page .conversation-list-item {
   display:flex;
@@ -1695,7 +1695,7 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-tabs [data-action=external]>span:not(.conversation-mobile-label) { display:none; }
   .conversation-page .conversation-mobile-label { display:inline; }
   .conversation-page :is(.conversation-reload,.conversation-create,.conversation-external-section) { display:none; }
-  .conversation-page .conversation-items { padding:0 0 8px; }
+  .conversation-page .conversation-items { padding:4px 4px 8px; margin:-4px -4px 0; }
   .conversation-page .conversation-list-item { margin:0; min-height:72px; padding:12px 8px; gap:12px; border:0; border-radius:10px; box-shadow:none; }
   .conversation-page .conversation-list-body { gap:2px; }
   .conversation-page .conversation-list-title { gap:6px; align-items:baseline; }
