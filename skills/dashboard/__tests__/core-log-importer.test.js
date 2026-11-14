@@ -172,6 +172,16 @@ test('Supervisor diagnostics preserve explicit producer IDs, never infer missing
   assert.equal(f.events()[1].run_id,null);assert.equal(f.events()[1].session_group,null);
 });
 
+test('a router delivery keeps the time its message was typed in', async t => {
+  const f = fixture(t);
+  f.write(JSON.stringify({ v: 1, ts: 1_700_000_015_000, event: 'deliver', session_group: 'origin', control_id: 7, decision: 'deliver',
+    reason: null, session_id: 's1', pasted_at: 1_700_000_004_000 }) + '\n');
+  await f.importer.importFile('router', f.file);
+  const [event] = f.events();
+  assert.equal(event.event_type, 'deliver'); assert.equal(event.timestamp, new Date(1_700_000_015_000).toISOString());
+  assert.equal(event.metadata.pasted_at, 1_700_000_004_000);
+});
+
 test('health observations retain their type and never inflate activity counts', async t => {
   const f = fixture(t);
   const events = ['stop', 'session_start', 'prompt_submit', 'stop_failure'];

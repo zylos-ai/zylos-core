@@ -269,6 +269,23 @@ test('a message the runtime takes from its own queue, after a turn or typed into
   fs.rmSync(tmpDir, { recursive: true });
 });
 
+test('messages typed into a running turn and taken from the queue in the same millisecond are each recorded', () => {
+  const tmpDir = makeTmpDir();
+  const store = makeMockStore();
+  const { collector, jsonlPath } = makeCollector(store, tmpDir);
+  const remove = commandUuid => JSON.stringify({ type: 'queue-operation', operation: 'remove', timestamp: '2026-05-17T10:00:04.035Z',
+    sessionId: 'test-session-123', content: 'typed message', reason: 'absorbed_mid_turn', ...(commandUuid ? { commandUuid } : {}) });
+  fs.writeFileSync(jsonlPath, [remove('command-a'), remove('command-b'), remove(null), remove(null)].join('\n') + '\n');
+  collector.collect();
+  const removed = () => store.events.filter(e => e.event_type === 'input_remove');
+  assert.equal(removed().length, 4, 'two with a command id and two told apart by their line');
+  assert.equal(new Set(removed().map(e => e.ingest_id)).size, 4);
+  // Read again from the start (a restart without offsets): none is recorded twice.
+  makeCollector(store, tmpDir).collector.collect();
+  assert.equal(removed().length, 4);
+  fs.rmSync(tmpDir, { recursive: true });
+});
+
 test('does not double-count on re-read of same data', () => {
   const tmpDir = makeTmpDir();
   const store = makeMockStore();
