@@ -1,9 +1,9 @@
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=151';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=154';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=155';
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip } from './instance-strip.js?v=199';
 import { renderAttention } from './attention-bar.js?v=193';
-import { createGroupDetail } from './detail.js?v=168';
+import { createGroupDetail } from './detail.js?v=169';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
 import { createHostPanel } from './host-panel.js?v=199';
 import { element, icon } from './plain-text.js?v=106';
@@ -107,7 +107,12 @@ export function mountWorkbench({ document = globalThis.document, window = global
       attention.append(hint);
     }
     syncSide();
-    if (!snapshot) return;
+    if (!snapshot) {
+      const message = element(document, 'p', t(error ? 'wb.readFailed' : 'wb.board.loading'), 'wb-empty');
+      message.setAttribute('role', error ? 'alert' : 'status');
+      board.replaceChildren(message);
+      return;
+    }
     instanceStrip(document.querySelector('#wb-instance'), snapshot, { document, t, costSummary: cost, level,
       hostOpen: Boolean(hostPanel?.active), onHost: () => { if (hostPanel.active) hostPanel.close(); else { void hostPanel.open(); redraw(); } } });
     labels.fit();

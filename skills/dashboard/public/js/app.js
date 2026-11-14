@@ -6,9 +6,9 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=199';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=168';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=169';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=192';
+import { mountConversationPage } from './wb/conversation-page.js?v=193';
 import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
@@ -23,7 +23,7 @@ import { mountSchedule } from './wb/schedule.js?v=147';
 import { createUsagePage } from './wb/usage.js?v=199';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
-import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=89';
+import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=90';
 import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=199';
 import { createFleetSounds } from './fleet-sounds.js?v=199';
 import { refreshDashboardState } from './state-refresh.js?v=99';
@@ -2986,8 +2986,10 @@ document.querySelector('#wb-settings-btn')?.addEventListener('click', () => open
 window.addEventListener('pagehide', () => stopTheme?.());
 // All startup requests share one budget, including language retry delays.
 const startupDeadline = Date.now() + 6000;
-await initI18n(undefined, { deadline: startupDeadline });
-await waitUntilDeadline(refreshObserverStatus({ quiet: true }), startupDeadline);
+await Promise.all([
+  initI18n(undefined, { deadline: startupDeadline }),
+  waitUntilDeadline(refreshObserverStatus({ quiet: true }), startupDeadline),
+]);
 initSettingsPage();
 initTabs();
 mobileNavigation = mountMobileNavigation({ document, t,

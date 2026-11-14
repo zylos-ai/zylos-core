@@ -163,13 +163,15 @@ export function renderDistribution(root, snapshot, { document = root.ownerDocume
 }
 export function boardController({ fetchSnapshot, onSnapshot, onError, visible = () => true, now = Date.now,
   setTimer = setInterval, clearTimer = clearInterval }) {
-  const guard = createFetchGuard(); let timer, lastSuccess = null;
+  const guard = createFetchGuard(); let timer, lastSuccess = null, inFlight = null;
   async function refresh() {
-    if (!visible()) return;
+    if (!visible() || inFlight) return;
     const gen = guard.next();
+    const request = inFlight = {};
     try { const value = await fetchSnapshot(); if (guard.current(gen)) { lastSuccess = now(); onSnapshot(value); } }
     catch (error) { if (guard.current(gen)) onError(error, lastSuccess); }
+    finally { if (inFlight === request) inFlight = null; }
   }
-  return { refresh, invalidate() { guard.invalidate(); lastSuccess = null; },
+  return { refresh, invalidate() { guard.invalidate(); lastSuccess = null; inFlight = null; },
     start() { refresh(); timer = setTimer(refresh, 5000); }, stop() { clearTimer(timer); guard.invalidate(); } };
 }

@@ -112,12 +112,25 @@ test('board wires activity to each matching group', () => {
   assert.equal(strip.children[0].classList.contains('wb-inbound'), false);
   assert.equal(strip.children[0].classList.contains('wb-busy'), true);
 });
-test('snapshot controller rejects old responses and retains rows after failure', async () => {
-  const first = deferred(), second = deferred(); let calls = 0, shown = null, failure = null;
-  const controller = boardController({ fetchSnapshot: () => (++calls === 1 ? first.promise : calls === 2 ? second.promise : Promise.reject(Error('offline'))),
+test('snapshot controller shares pending work across polls and retains rows after failure', async () => {
+  const pending = deferred(); let calls = 0, shown = null, failure = null;
+  const controller = boardController({ fetchSnapshot: () => (++calls === 1 ? pending.promise : Promise.reject(Error('offline'))),
     onSnapshot: value => { shown = value; }, onError: (_, at) => { failure = at; }, now: () => 100 });
-  const a = controller.refresh(), b = controller.refresh(); second.resolve('new'); await b; first.resolve('old'); await a;
-  assert.equal(shown, 'new'); await controller.refresh(); assert.equal(shown, 'new'); assert.equal(failure, 100); controller.stop();
+  const first = controller.refresh();
+  await controller.refresh(); await controller.refresh();
+  assert.equal(calls, 1, 'polls do not overlap a pending snapshot');
+  pending.resolve('slow'); await first;
+  assert.equal(shown, 'slow', 'later polls do not invalidate the slow response');
+  await controller.refresh(); assert.equal(calls, 2); assert.equal(shown, 'slow'); assert.equal(failure, 100); controller.stop();
+});
+test('snapshot invalidation rejects old owners without clearing the new pending request', async () => {
+  const old = deferred(), current = deferred(); let calls = 0, shown = null;
+  const controller = boardController({ fetchSnapshot: () => (++calls === 1 ? old.promise : current.promise),
+    onSnapshot: value => { shown = value; }, onError: assert.fail });
+  const first = controller.refresh(); controller.invalidate(); const second = controller.refresh();
+  old.resolve('old owner'); await first; assert.equal(shown, null);
+  await controller.refresh(); assert.equal(calls, 2, 'old completion cannot release the new request');
+  current.resolve('new owner'); await second; assert.equal(shown, 'new owner'); controller.stop();
 });
 test('snapshot lifecycle polls only while visible and cancels late responses on stop', async () => {
   let visible = false, calls = 0, timer, cleared; const pending = deferred();

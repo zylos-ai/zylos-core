@@ -137,8 +137,8 @@ export async function initI18n(locale, { deadline = Infinity } = {}) {
       if (seq === requestSeq) scheduleHeal(targetLocale, seq, applyPrimary, loadWb);
     }
   })();
-  await waitUntilDeadline(mainWork, deadline);
-  if (seq === requestSeq) await loadWb(deadline);
+  const wbWork = loadWb(deadline);
+  await Promise.all([waitUntilDeadline(mainWork, deadline), wbWork]);
 }
 
 export function t(key, params = {}) {

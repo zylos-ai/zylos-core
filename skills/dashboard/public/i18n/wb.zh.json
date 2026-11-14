@@ -30,6 +30,7 @@
   "wb.authFailed": "登录失效",
   "wb.pending": "待生效",
   "wb.noMatch": "没有匹配的组",
+  "wb.board.loading": "加载中…",
   "wb.noGroups": "暂无活跃组",
   "wb.older": "还有更早的组未显示 · 搜索",
   "wb.readFailed": "数据读取失败",

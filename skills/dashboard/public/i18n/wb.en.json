@@ -30,6 +30,7 @@
   "wb.authFailed": "Login expired",
   "wb.pending": "Pending",
   "wb.noMatch": "No matching groups",
+  "wb.board.loading": "Loading…",
   "wb.noGroups": "No active groups",
   "wb.older": "Older groups are not shown · Search",
   "wb.readFailed": "Unable to read data",
