@@ -67,8 +67,14 @@ test('partial queue failure reports committed IDs and never retries', async () =
   assert.equal(count, 2);
 });
 test('fixed prompts distinguish background work from reclaim wait and identity handoff', () => {
-  assert.match(GROUP_SYNC_PROMPT, /Do not wait/);
-  assert.match(ORIGIN_SYNC_PROMPT, /Do not wait/);
+  for (const prompt of [GROUP_SYNC_PROMPT, ORIGIN_SYNC_PROMPT]) {
+    assert.match(prompt, /Continue your current work while it runs/);
+    assert.match(prompt, /In Claude, do not wait for it/);
+    assert.match(prompt, /In Codex, before ending your turn, use the native agent tools to wait for this worker and read its terminal result/);
+    assert.match(prompt, /a timeout or a Completed label alone is not a Sync outcome/);
+    assert.match(prompt, /Report a failed Sync to the owner once through the existing channel route/);
+    assert.match(prompt, /Successful Sync needs no extra owner message/);
+  }
   assert.match(PRE_RECLAIM_SYNC_PROMPT, /Wait for it to finish before acknowledging/);
   assert.match(IDENTITY_ROTATION_PROMPT, /atomic replacement/);
   assert.match(IDENTITY_ROTATION_PROMPT, /\/clear.*\/exit/);
