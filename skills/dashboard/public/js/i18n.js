@@ -1,4 +1,5 @@
-import { initWbPack } from './wb/i18n-wb.js?v=84';
+import { withRequestTimeout } from './request-timeout.js?v=1';
+import { initWbPack } from './wb/i18n-wb.js?v=85';
 const SUPPORTED = ['en', 'zh'];
 const STORAGE_KEY = 'zylos-dashboard-locale';
 const PACK_CACHE_PREFIX = 'zylos-dashboard-i18n-';
@@ -33,22 +34,25 @@ export function isValidPack(pack) {
     typeof pack[SENTINEL_KEY] === 'string';
 }
 
-async function fetchPack(locale) {
-  const resp = await fetch(`${assetRoot}/i18n/${locale}.json`, { cache: 'no-store' });
-  if (!resp.ok) throw new Error(`i18n fetch ${resp.status}`);
-  const pack = await resp.json();
-  if (!isValidPack(pack)) throw new Error('i18n pack invalid');
-  return pack;
+async function fetchPack(locale, timeoutMs = 600, deadline = Infinity) {
+  return withRequestTimeout(async signal => {
+    const resp = await fetch(`${assetRoot}/i18n/${locale}.json`, { cache: 'no-store', signal });
+    if (!resp.ok) throw new Error(`i18n fetch ${resp.status}`);
+    const pack = await resp.json();
+    if (!isValidPack(pack)) throw new Error('i18n pack invalid');
+    return pack;
+  }, timeoutMs, undefined, deadline);
 }
 
-async function fetchPackWithRetry(locale) {
+async function fetchPackWithRetry(locale, timeoutMs, deadline) {
   let lastErr;
   for (let i = 0; i < FETCH_ATTEMPTS; i++) {
     try {
-      return await fetchPack(locale);
+      return await fetchPack(locale, timeoutMs, deadline);
     } catch (err) {
       lastErr = err;
-      if (i < FETCH_ATTEMPTS - 1) await new Promise(r => setTimeout(r, RETRY_BASE_MS * (i + 1)));
+      if (Date.now() >= deadline) break;
+      if (i < FETCH_ATTEMPTS - 1) await new Promise(r => setTimeout(r, Math.min(RETRY_BASE_MS * (i + 1), deadline - Date.now())));
     }
   }
   throw lastErr;
@@ -94,15 +98,17 @@ function scheduleHeal(locale, seq) {
   healTimer = setTimeout(tick, HEAL_INTERVAL_MS);
 }
 
-export async function initI18n(locale) {
+export async function initI18n(locale, { deadline = Infinity } = {}) {
   const targetLocale = resolveLocale(locale);
   const seq = ++requestSeq;
   currentLocale = targetLocale;
   try { localStorage.setItem(STORAGE_KEY, targetLocale); } catch {}
   document.documentElement.lang = targetLocale;
   clearTimeout(healTimer);
+  // Cached labels allow a shorter network deadline without changing retry order.
+  const cachedPack = readCachedPack(targetLocale);
   try {
-    const pack = await fetchPackWithRetry(targetLocale);
+    const pack = await fetchPackWithRetry(targetLocale, cachedPack ? 300 : 600, deadline);
     if (seq !== requestSeq) return; // superseded by a newer call while fetching
     translations = pack;
     writeCachedPack(targetLocale, pack);
@@ -110,10 +116,10 @@ export async function initI18n(locale) {
     // Never throw: a failed pack fetch must not kill app startup (top-level
     // await). Fall back to the last good pack — stale text beats raw keys.
     if (seq !== requestSeq) return;
-    translations = readCachedPack(targetLocale) || {};
+    translations = cachedPack || {};
     scheduleHeal(targetLocale, seq);
   }
-  if (seq === requestSeq) await initWbPack(targetLocale, {assetRoot, translations, onMerge:()=>{if(seq===requestSeq)renderI18n();}});
+  if (seq === requestSeq) await initWbPack(targetLocale, {assetRoot, translations, deadline, onMerge:()=>{if(seq===requestSeq)renderI18n();}});
 }
 
 export function t(key, params = {}) {

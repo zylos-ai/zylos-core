@@ -63,13 +63,12 @@ test('translation loader tolerates storage writes failing after a fresh pack', a
 // PM2_HOME, short TMPDIR and a private tmux namespace, read back actual paths before
 // running, then clean up isolated resources; teardown restores all mocked globals.
 test('main translation healing keeps its cache primary-only and restores workbench labels', async context => {
-  const saved = storage(); let mainCalls = 0, workbenchCalls = 0, heal;
-  context.mock.method(globalThis, 'setTimeout', (callback, delay) => {
-    if (delay === 5000) heal = callback;
-    else queueMicrotask(callback);
-    return 21;
-  });
-  context.mock.method(globalThis, 'clearTimeout', () => {});
+  const saved = storage(); let mainCalls = 0, workbenchCalls = 0;
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const advance = async ms => {
+    context.mock.timers.tick(ms);
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+  };
   context.mock.method(globalThis, 'fetch', async url => {
     if (url.endsWith('/i18n/en.json')) {
       mainCalls++; return mainCalls <= 3 ? { ok: false, status: 404 } : response({ 'btn.actions': 'Actions' });
@@ -84,9 +83,10 @@ test('main translation healing keeps its cache primary-only and restores workben
     context.after(() => { if (previous) Object.defineProperty(globalThis, key, previous); else Reflect.deleteProperty(globalThis, key); });
   }
   const main = await import('../public/js/i18n.js?workbench-heal');
-  main.setAssetRoot('/fixture'); await main.initI18n('en');
-  assert.equal(main.t('wb.sample'), 'cached-era'); assert.equal(typeof heal, 'function');
-  await heal();
+  main.setAssetRoot('/fixture'); const pending = main.initI18n('en');
+  await advance(0); await advance(400); await advance(800); await pending;
+  assert.equal(main.t('wb.sample'), 'cached-era');
+  await advance(5000);
   assert.equal(main.t('btn.actions'), 'Actions'); assert.equal(main.t('wb.sample'), 'fresh');
   const cachedPrimary = JSON.parse(saved.getItem('zylos-dashboard-i18n-en'));
   assert.equal(cachedPrimary['btn.actions'], 'Actions'); assert.equal('wb.sample' in cachedPrimary, false);
