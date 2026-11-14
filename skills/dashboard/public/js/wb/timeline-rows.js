@@ -1,4 +1,4 @@
-import { labelledEvents, timeValue } from './event-labels.js?v=92';
+import { labelledEvents, timeValue } from './event-labels.js?v=93';
 
 // Which recorded events a person sees on the timeline and in recent activity.
 // The plain view lists only events that have a plain-language label; router and
@@ -30,6 +30,20 @@ export function eventTypesFor(filter, level = 'plain') {
 export function showsEvent(event, { chips, chipCount, level = 'plain' }) {
   const chip = eventChip(event);
   return chip ? chips.has(chip) : level === 'technical' && chips.size === chipCount;
+}
+
+// The supervisor restarts a run that stopped responding or whose tool ran too long, and the exit that restart causes is
+// recorded a moment later in the same run as a crash. That record is the restart itself, already shown, not a crash.
+export const RESTART_EXIT_MS = 10_000;
+const automaticRestarts = new Set(['no_response_restart', 'tool_timeout_restart']);
+
+/** For one run's events: whether an event is the crash report of an automatic restart at most RESTART_EXIT_MS before it. */
+export function restartExit(events) {
+  const restarts = events.filter(event => automaticRestarts.has(event.event_type)).map(event => timeValue(event.timestamp));
+  return event => event.event_type === 'crash_detected' && restarts.some(at => {
+    const gap = timeValue(event.timestamp) - at;
+    return gap >= 0 && gap <= RESTART_EXIT_MS;
+  });
 }
 
 const sequence = row => row.event?.event_seq ?? -Infinity;

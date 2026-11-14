@@ -1,4 +1,4 @@
-import { createGroupDetail } from './detail.js?v=170';
+import { createGroupDetail } from './detail.js?v=171';
 import { boardController } from './board.js?v=155';
 import { element, icon } from './plain-text.js?v=106';
 
