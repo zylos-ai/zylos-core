@@ -14,7 +14,8 @@ Claude normally uses `mcp__zylos-memory__edit_memory`, Codex
 `mcp__zylos_memory__edit_memory`. If absent, discover an exposed tool ending in
 `edit_memory` before reporting `TOOL_UNAVAILABLE`; never use native editing or
 shell writes as a fallback. Truncated output is unread: reread with smaller
-limits/ranges. Read and verify all exported batch and listed input bytes/hashes;
+limits/ranges. Read all exported batches and listed inputs in full.
+Use reported byte counts only as byte-range read endpoints;
 retain the batch receipt and full `sync-files.js list` object for checkpoint and
 commit. Never synthesize input paths. Use the procedure's private export
 directory, cleanup and complete byte-range ledger for every file, including

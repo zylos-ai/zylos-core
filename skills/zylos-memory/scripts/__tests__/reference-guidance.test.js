@@ -109,6 +109,26 @@ test('export guidance shares bounded reading and visible-tail steps', () => {
   }
 });
 
+test('Sync workers read complete byte ranges without manually checking file size or hash', () => {
+  const fetch = fs.readFileSync(new URL('../../../comm-bridge/references/c4-fetch.md', import.meta.url), 'utf8');
+  const agents = ['group', 'origin', 'global'].map(kind => fs.readFileSync(new URL(`../../agents/zylos-${kind}-sync.md`, import.meta.url), 'utf8'));
+  for (const source of [sync, skill, fetch, ...agents]) {
+    const text = normalize(source);
+    assert.match(text, /Use reported byte counts only as byte-range read endpoints/);
+    assert.doesNotMatch(text, /verify (?:its|the reported|each) (?:reported )?(?:byte count|bytes\/hash)|Read and verify all exported|read\/verify every listed|wc -c|sha256sum|shasum/);
+    assert.match(text, /[Tt]runcated output is unread/);
+    assert.match(text, /Complete byte-range reads/);
+  }
+  const text = normalize(sync);
+  assert.match(text, /Record every completely read half-open range `\[start,end\)`.*the ranges must cover every byte with no gap/);
+  assert.match(text, /A hash check or first\/last markers do not replace reading the content/);
+  assert.match(text, /Never claim a full read from a hash match/);
+  assert.match(text, /Checkpoint recomputes and verifies the receipt against the database rows/);
+  assert.match(text, /Commit verifies the batch, checkpoint coverage, the exact current segment IDs, absolute paths and hashes/);
+  assert.match(normalize(skill), /Do not infer completion from the first\/last lines or a successful hash check alone/);
+  assert.match(normalize(fetch), /hashes, grep or word counts do not establish a full read/);
+});
+
 test('all Sync entry points preserve visible tails and remove only their own exports without force', () => {
   const fetch = fs.readFileSync(new URL('../../../comm-bridge/references/c4-fetch.md', import.meta.url), 'utf8');
   const agents = ['group', 'origin', 'global'].map(kind => fs.readFileSync(new URL(`../../agents/zylos-${kind}-sync.md`, import.meta.url), 'utf8'));

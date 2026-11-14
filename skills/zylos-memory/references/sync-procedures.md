@@ -132,7 +132,7 @@ values in subsequent fetch commands.
 Truncated tool output is unread. Retry a fetch with a smaller `--limit`, or a
 file read with smaller byte ranges; read all required records before progress
 advances. For an exported batch or listed input, read the entire file in bounded
-byte ranges and verify its reported byte count and SHA-256 with read-only tools.
+byte ranges. Use reported byte counts only as byte-range read endpoints.
 A hash check or first/last markers do not replace reading the content. Keep
 export file hashes separate from batch receipt hashes: receipt `sha256` hashes
 the canonical projected database rows, not the rendered export file bytes.
@@ -175,7 +175,7 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
 2. Fetch `node ~/zylos/.claude/skills/comm-bridge/scripts/c4-fetch.js --unsummarized --group G --up-to <safeEnd> --limit <batchLimit> --out <FILE>`.
    Stdout is metadata: count, first/last IDs, file bytes and SHA-256, and a batch
    receipt `{"scope":...,"after":...,"end":...,"sha256":...}`. Read the full
-   batch file and verify its bytes/hash. Save its rows, latest summary, and the
+   batch file in byte ranges. Save its rows, latest summary, and the
    receipt unchanged. This batch's returned end, rather than a later observed
    frontier, is the checkpoint target. A read
    failure ends the run before any cleanup/rotation.
@@ -189,7 +189,7 @@ G is the inherited `ZYLOS_SESSION_GROUP`.
    calendar days. The script returns the paths; never choose or glob them.
    Read each `sessions[].path` individually; do not glob the `sessions/` directory.
    Read every listed segment in segment-ID order and every listed session file,
-   in full; verify each byte count/hash. Use only the returned absolute paths,
+   in full. Use only the returned absolute paths,
    never constructed segment/session names. A missing state starts from an
    empty four-section state. A bad header means no committed segment set:
    include all uncommitted inputs.
@@ -382,7 +382,7 @@ state, commit, and failure sequence, with these differences:
   Multiple source groups still yield one global checkpoint.
 - As in Group Sync, run the read-only `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-files.js list`.
   No token is needed; a supplied `--token` is ignored.
-  Retain its full object, read/verify every listed file, and supply it as
+  Retain its full object, read every listed file in full, and supply it as
   `inputs` to commit. Pass the unchanged batch receipt to checkpoint and commit
   as above.
 - After reading global state, segments, and dated logs, read shared self files
