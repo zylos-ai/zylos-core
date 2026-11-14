@@ -1,31 +1,9 @@
 /**
- * Session-start shard registry.
+ * Session-start shard registry: chain membership, order, emitters and output budgets.
+ * Authoritative component contract, timing limits and lifecycle instructions:
+ * ../references/session-start-shards.md
  *
- * Single source of truth for the session-start injection chain: which shards
- * exist, their chain order, their emitters, and their per-shard output
- * budgets. Consumed by:
- * - session-start-orchestrator.js --shard <name> (runtime emission)
- * - cli/lib/sync-settings-hooks.js (Claude settings hook generation)
- * - cli/lib/codex-hooks.js (Codex hooks.json generation)
- *
- * Core shards occupy chain orders 1-6. Components join the chain via opt-in
- * declaration files in ~/zylos/.zylos/shards.d/<name>.json:
- *
- *   {
- *     "name": "role-inject",            // unique shard name, [a-z0-9_-]
- *     "order": 10,                      // chain slot, components use 10+
- *     "emitter": "skills/role-manager/emit-role.js",  // under ~/zylos/.claude
- *     "budget": { "maxChars": 10000, "maxTokens": 2200 },  // optional
- *     "claimHooks": ["skills/role-manager/role-inject-hook.sh"]  // optional
- *   }
- *
- * `claimHooks` lists the component's OWN legacy SessionStart hook paths
- * (relative to ~/zylos/.claude) that hook sync may remove once the shard
- * command replaces them. Sync only ever consumes these declarations — it
- * never guesses paths and never claims hooks that no declaration names, so
- * user hooks and undeclared component hooks are untouched. Undeclared
- * component hooks keep running outside the chain, unordered, exactly as
- * before the shard split.
+ * Consumed by session-start-orchestrator.js, sync-runtime-hooks.js and codex-hooks.js.
  */
 
 import fs from 'node:fs';

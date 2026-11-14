@@ -23,6 +23,13 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 7. **Daily Upgrade**: Enqueues a Claude Code upgrade via the C4 control queue at 5:00 AM local time daily (disabled by default; enable with `zylos config set daily_upgrade_enabled true`)
 8. **Context Monitoring**: Receives context usage data after every turn; triggers early memory sync and new-session handoff at thresholds read from `config.json` (`model_rotation_thresholds[engine][model]`) for the actual running model; defaults are 70% below 1M and 40% for 1M, with a shared 40% maximum for 1M
 
+## Component startup context
+
+For component authors adding session-start context, see
+[Session-start context for components](references/session-start-shards.md).
+Emitters have a fixed 5.5-second wait budget and affect startup ordering; refresh
+context in the background and emit from a local cache.
+
 ## Multi-session Reclaim Configuration
 
 The supervisor reads these settings from `.zylos/config.json` in
