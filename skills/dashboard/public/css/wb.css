@@ -235,6 +235,7 @@ main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 .wb-inst-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; white-space: nowrap; }
 .wb-inst-item + .wb-inst-item { border-left: 1px solid var(--wb-line); }
 .wb-inst-item b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.wb-inst-item b.wb-txt-warn { color: var(--wb-wait); }
 .wb-inst-item .wb-ico { color: var(--text-muted); }
 .wb-mode-chip { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 11px; padding: 1px 7px; border: 1px solid var(--wb-line-strong); border-radius: 6px; color: var(--text); }
 .wb-health { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
@@ -298,8 +299,6 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-search { height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text-muted); cursor: text; }
 .wb-search:focus-within { border-color: var(--accent); outline: 2px solid var(--wb-accent-line); }
 .wb-search input { width: 130px; min-width: 0; border: 0; outline: 0; padding: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; letter-spacing: 0; }
-/* The pool's source note is a sentence: it wraps, but only between words. */
-.wb-pool .wb-pool-note { white-space: normal; word-break: keep-all; }
 /* The auto-name button may wrap, but only between words: keep-all keeps "自动起名" whole, English breaks at spaces. */
 #wb-auto-name { font-size: 12px; letter-spacing: 0; word-break: keep-all; }
 .wb-row { position: relative; width: 100%; min-height: 58px; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--wb-line); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .14s; }

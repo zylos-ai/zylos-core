@@ -6,7 +6,7 @@ import { startPage } from './workbench-browser.js';
 
 // Short labels on the overview: each must stay on one line as a whole.
 const LABELS = ['.wb-dist-total', '.wb-dist-item', '.wb-bh-state', '.wb-bh-now > span', '.wb-bh-right', '.wb-bh > .wb-tech-col',
-  '#wb-range button', '.wb-inst-item > :not(.wb-meter):not(.wb-pool-note)', '.wb-inst-more', '.wb-legend-item', '.wb-row .wb-pill'];
+  '#wb-range button', '.wb-inst-item > :not(.wb-meter)', '.wb-inst-more', '.wb-legend-item', '.wb-row .wb-pill'];
 const NOWRAP = ['.wb-dist-total', '.wb-dist-item', '.wb-bh-right', '.wb-bh > .wb-tech-col', '.wb-legend-item', '.wb-account > *',
   '.wb-inst-item:not(.wb-account)', '.wb-inst-more'];
 
@@ -36,12 +36,12 @@ function measureLabels({ labels, nowrap }) {
   for (const selector of nowrap) for (const el of document.querySelectorAll(selector)) {
     if (el.getClientRects().length && getComputedStyle(el).whiteSpace !== 'nowrap') wrapping.push(`${selector} ${getComputedStyle(el).whiteSpace}`);
   }
-  // The auto-name button and the pool's notes may wrap between words: no word of them may have parts on two lines.
+  // The auto-name button may wrap between words: no word of it may have parts on two lines.
   // A word ends at a space or after Chinese punctuation (，。；：、）) and starts before （: line breaks there are
   // between words, so 「内存只够 Origin，」 and 「同时运行上限按」 are two words.
   const autoName = document.querySelector('#wb-auto-name');
   const splitWords = [];
-  const wrapsBetweenWords = [autoName, ...[...document.querySelectorAll('.wb-pool-note')].filter(note => note.getBoundingClientRect().width > 1)];
+  const wrapsBetweenWords = [autoName];
   for (const words of wrapsBetweenWords.map(el => document.createTreeWalker(el, NodeFilter.SHOW_TEXT)))
   for (let node = words.nextNode(); node; node = words.nextNode()) {
     for (const match of node.textContent.matchAll(/（?[^\s，。；：、（）]+[，。；：、）]?/g)) {
@@ -73,6 +73,13 @@ function measureLabels({ labels, nowrap }) {
   const attention = document.querySelector('#wb-attention');
   const pool = strip.querySelector('.wb-pool');
   const shownText = el => Boolean(el) && el.getBoundingClientRect().width > 1;
+  // The text an item shows: its text nodes outside the 1px boxes that only screen readers get.
+  const visible = el => {
+    let text = '';
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.parentElement.getBoundingClientRect().width > 1) text += node.textContent;
+    return text;
+  };
   return {
     broken, wrapping, splitWords, distForm: form(dist), stripForm: form(strip),
     // A label that may not wrap must not stick out of its board head cell either, nor may the auto-name button.
@@ -95,8 +102,14 @@ function measureLabels({ labels, nowrap }) {
     pool: pool && { amount: pool.querySelector('b')?.textContent, amountShown: shownText(pool.querySelector('b')), title: pool.title,
       inside: pool.getBoundingClientRect().right <= strip.getBoundingClientRect().right + 1,
       warnings: [...pool.querySelectorAll(':scope > .wb-txt-warn')].map(el => ({ text: el.textContent, shown: shownText(el) })),
-      text: pool.textContent,
-      notes: [...pool.querySelectorAll('.wb-pool-note')].map(note => ({ text: note.textContent, shown: shownText(note), read: read(note) })) },
+      shown: visible(pool) },
+    // Every item as [what it shows, its title]; the run mode's title is on its label. And each icon's spoken name (the
+    // CPU, memory and disk names are read under `system`).
+    items: items.map(item => [visible(item), item.title || item.firstElementChild?.title || '']),
+    spoken: items.filter(item => item.querySelector(':scope > .wb-ico') && !item.classList.contains('wb-sys')).map(item => {
+      const word = item.querySelector(':scope > .wb-vh');
+      return { word: word?.textContent ?? null, read: read(word), shown: shownText(word), first: item.title.split(' · ')[0] };
+    }),
   };
 }
 
@@ -105,6 +118,7 @@ const GiB = 1073741824;
 const RICH_POOL = { used: 2, capacity: 4, waiting: 2, capacityRecord: { valid: true, fresh: true, source: 'fixed', kMemory: 3, reason: 'floor',
   memory: { source: 'host', limitBytes: 16 * GiB, usedBytes: 9.5 * GiB, reserveBytes: 2 * GiB },
   model: { state: 'fitted', slopeBytes: 1.2 * GiB, interceptBytes: 0.8 * GiB, windowDays: 7 } } };
+const QUEUE = { zh: { plain: '· 2 个在排队', technical: '· 2 排队' }, en: { plain: '· 2 queued', technical: '· 2 queued' } };
 const SOURCE = { zh: '手动设定 4（按内存建议 3）', en: 'Manually set to 4 (memory recommendation: 3)' };
 const EXPLANATIONS = {
   zh: ['未设内存上限，按整机内存 · 内存上限 16 GiB · 已用 9.5 GiB · 保底 2 GiB', '每会话约 1.2 GiB · 固定开销约 0.8 GiB · 近 7 天',
@@ -113,10 +127,34 @@ const EXPLANATIONS = {
     'about 1.2 GiB per session · fixed overhead about 0.8 GiB · over the last 7 days', 'Memory fits only Origin; running with a limit of 1'],
 };
 const HOST_POOL = { zh: { title: '会话池', slots: '名额', source: '来源' }, en: { title: 'Session pool', slots: 'Slots', source: 'Source' } };
+const POOL_NAME = { zh: '池', en: 'Pool' }, POOL_PLAIN = { zh: '同时运行', en: 'Running together' };
 const POOL_HINT = { zh: 'Origin 常驻，不占这里的名额', en: 'Origin is resident and does not take a slot here' };
 const SYSTEM_TITLES = {
   zh: ['CPU 23% · 8 核', '内存 13% · 已用 2.0 / 16.0 GiB', '磁盘 62% · 剩余 40.3 GiB'],
   en: ['CPU 23% · 8 cores', 'Memory 13% · 2.0 / 16.0 GiB used', 'Disk 62% · 40.3 GiB free'],
+};
+// The default fixture's strip, item by item: what it shows and what its title says, in both views.
+const ITEMS = {
+  zh: {
+    technical: [['multi', '模式'], ['Claude58%', 'Claude · 正常 · 7 天额度剩余 58%'],
+      ['2 / 4', '池 · 在用 2 / 4 · 上限数据不可用，按 4 运行 · Origin 常驻，不占这里的名额'],
+      ['23%', 'CPU 23% · 8 核'], ['13%', '内存 13% · 已用 2.0 / 16.0 GiB'], ['62%', '磁盘 62% · 剩余 40.3 GiB'],
+      ['$1.50·$9.20', '费用 · 今日 $1.50 · 近 7 天 $9.20 · 全部组合计'], ['6 / 6', '服务 · 6 / 6 在线']],
+    plain: [['多组并行', '模式'], ['Claude58%', 'Claude · 正常 · 7 天额度剩余 58%'],
+      ['2 / 4', '同时运行 · 在用 2 / 4 · 上限数据不可用，按 4 运行 · Origin 常驻，不占这里的名额'],
+      ['23%', 'CPU 23% · 8 核'], ['13%', '内存 13% · 已用 2.0 / 16.0 GiB'], ['62%', '磁盘 62% · 剩余 40.3 GiB'],
+      ['$1.50', '今日费用 · $1.50 · 全部组合计'], ['6 / 6', '后台服务 · 6 / 6 在线']],
+  },
+  en: {
+    technical: [['multi', 'Mode'], ['Claude58%', 'Claude · OK · 7-day quota remaining 58%'],
+      ['2 / 4', 'Pool · in use 2 / 4 · Capacity data unavailable; running with a limit of 4 · Origin is resident and does not take a slot here'],
+      ['23%', 'CPU 23% · 8 cores'], ['13%', 'Memory 13% · 2.0 / 16.0 GiB used'], ['62%', 'Disk 62% · 40.3 GiB free'],
+      ['$1.50·$9.20', 'Cost · today $1.50 · 7 days $9.20 · All groups combined'], ['6 / 6', 'Services · 6 / 6 online']],
+    plain: [['Multiple groups', 'Mode'], ['Claude58%', 'Claude · OK · 7-day quota remaining 58%'],
+      ['2 / 4', 'Running together · in use 2 / 4 · Capacity data unavailable; running with a limit of 4 · Origin is resident and does not take a slot here'],
+      ['23%', 'CPU 23% · 8 cores'], ['13%', 'Memory 13% · 2.0 / 16.0 GiB used'], ['62%', 'Disk 62% · 40.3 GiB free'],
+      ['$1.50', 'Cost today · $1.50 · All groups combined'], ['6 / 6', 'Background services · 6 / 6 online']],
+  },
 };
 const WORDS = { zh: ['1 忙碌', '1 空闲', '1 未运行'], en: ['1 Busy', '1 Idle', '1 Not running'] };
 
@@ -192,7 +230,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
   // What holds in any font: no label breaks inside, the auto-name button wraps only between words and stays in its
   // cell, a row is compact exactly when its full form does not fit on one line (so a row that wraps went compact
   // first, and a row whose full form fits is never compact), and a compact row's words stay read out and in titles.
-  function checkLabels(result, language, { technical = false } = {}) {
+  function checkLabels(result, language, { technical = false, items = null } = {}) {
     assert.deepEqual(result.broken, []);
     assert.deepEqual(result.wrapping, []);
     assert.deepEqual(result.splitWords, [], 'the auto-name button wraps only between words');
@@ -229,21 +267,19 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       assert.equal(item.wordShown, false, 'icon and number only, like the card asks');
     }
     assert.deepEqual(result.system.map(item => item.title), SYSTEM_TITLES[language]);
-    // The pool keeps its capacity, its warnings and its one source note on screen; the capacity explanations are not
-    // in the strip at all (the host panel shows them). The note stays read out and is in the item's title.
+    // The strip shows icons and values: the pool's source and explanations are only in its title, which starts with
+    // the pool's name like every item's title, and each icon is named for screen readers by that same word.
     const pool = result.pool;
     assert.ok(pool, 'the strip has a pool item');
     assert.equal(pool.amountShown, true, `the pool capacity is shown: ${pool.amount}`);
     assert.equal(pool.inside, true, 'the pool item stays inside the strip');
     assert.equal(pool.warnings.every(warning => warning.shown), true, 'pool warnings stay on screen');
-    assert.ok(pool.title.startsWith(POOL_HINT[language]), `the pool title keeps its hint: ${pool.title}`);
-    assert.ok(pool.notes.length <= 1, 'the strip has at most the source note');
-    for (const text of Object.values(EXPLANATIONS).flat()) assert.equal(pool.text.includes(text), false, `the strip leaves out: ${text}`);
-    for (const note of pool.notes) {
-      assert.equal(note.read, true, `a pool note stays in the accessibility tree: ${note.text}`);
-      assert.equal(note.shown, true, `the pool's source note is shown: ${note.text}`);
-      assert.ok(pool.title.includes(note.text.replace(/^ · /, '')), `the pool title carries the note: ${note.text}`);
-    }
+    assert.ok(pool.title.startsWith((technical ? POOL_NAME : POOL_PLAIN)[language] + ' · '), `the pool title starts with its name: ${pool.title}`);
+    assert.ok(pool.title.endsWith(' · ' + POOL_HINT[language]), `the pool title keeps its hint: ${pool.title}`);
+    for (const text of [...Object.values(SOURCE), ...Object.values(EXPLANATIONS).flat()]) assert.equal(pool.shown.includes(text), false, `the strip leaves out: ${text}`);
+    assert.equal(result.spoken.length, 3, 'pool, cost and services have icons');
+    for (const item of result.spoken) assert.deepEqual(item, { word: item.first, read: true, shown: false, first: item.first }, `the icon is named for screen readers: ${item.first}`);
+    if (items) assert.deepEqual(result.items, items, 'every item shows its value and names itself first in its title');
   }
 
   const seen = { counts: new Set(), strip: new Set() };
@@ -253,7 +289,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       try {
         if (detail) await openDetail(page);
         const result = await measureOn(page);
-        checkLabels(result, language);
+        checkLabels(result, language, { items: ITEMS[language].plain });
         seen.counts.add(result.distCompact); seen.strip.add(result.stripCompact);
         if (evidence) await page.screenshot({ path: path.join(evidence, `overview-labels-${width}-${language}-${detail ? 'open' : 'closed'}.png`) });
       } finally { await context.close(); }
@@ -296,69 +332,27 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
   }
 
   // A pool set by hand above the memory recommendation, with every capacity explanation and a queue: the longest pool
-  // item there is. The strip shows the source note in both views; the explanations are in the host panel only.
+  // item there is. The strip shows its occupancy and queue; the source (and, technical, the explanations) is in its title.
   for (const language of ['zh', 'en']) for (const level of ['plain', 'technical']) {
-    await t.test(`the pool item keeps its capacity and source note whole: ${language}, ${level}`, async () => {
+    await t.test(`the pool item shows its occupancy and queue, its source on hover: ${language}, ${level}`, async () => {
       const forms = new Set();
       for (const [width, detail] of [[3840, false], [1280, false], [1280, true], [390, true]]) {
         const { page, context } = await open(width, language, level, { pool: RICH_POOL });
         try {
           if (detail) await openDetail(page);
-          await page.locator('#wb-instance .wb-pool .wb-pool-note').first().waitFor({ state: 'attached' });
+          await page.waitForFunction(() => document.querySelector('#wb-instance .wb-pool .wb-txt-warn'));
           const result = await measureOn(page);
           checkLabels(result, language, { technical: level === 'technical' });
           assert.equal(result.pool.amount, '2 / 4');
           assert.equal(result.pool.warnings.length, 1, 'the queue is shown');
-          assert.deepEqual(result.pool.notes.map(note => note.text), [' · ' + SOURCE[language]]);
+          assert.equal(result.pool.shown, '2 / 4' + QUEUE[language][level]);
+          const name = (level === 'technical' ? POOL_NAME : POOL_PLAIN)[language], inUse = language === 'zh' ? '在用' : 'in use';
+          assert.ok(result.pool.title.startsWith(`${name} · ${inUse} 2 / 4 · ${SOURCE[language]} · ${QUEUE[language][level].slice(2)}`), result.pool.title);
           if (level === 'technical') for (const text of EXPLANATIONS[language]) assert.ok(result.pool.title.includes(text), `the pool title keeps: ${text}`);
           forms.add(result.stripCompact ? 'compact' : 'full');
         } finally { await context.close(); }
       }
       assert.deepEqual([...forms].sort(), ['compact', 'full'], 'the pool item is seen in the full and the compact strip');
-    });
-  }
-
-  // No test width makes the note wider than its box, so the page narrows the pool item: to half the note's width,
-  // but never below the note's min-content width (its widest piece that may not break, as the browser lays it out)
-  // plus the item's own padding and border, so every piece fits and the check does not depend on glyph widths. The
-  // note must still be wider than that box, so it has to wrap.
-  for (const language of ['zh', 'en']) {
-    await t.test(`the pool source note wraps between words inside a box narrower than it is (${language})`, async () => {
-      const { page, context } = await open(3840, language, 'technical', { pool: RICH_POOL });
-      try {
-        await page.locator('#wb-instance .wb-pool .wb-pool-note').first().waitFor({ state: 'attached' });
-        const result = await page.evaluate(() => {
-          const pool = document.querySelector('#wb-instance .wb-pool');
-          const notes = [...pool.querySelectorAll('.wb-pool-note')];
-          const { content, set } = narrowTo(pool, notes);
-          set();
-          const box = pool.getBoundingClientRect();
-          const measured = notes.map(note => {
-            const all = document.createRange(); all.selectNodeContents(note);
-            const rects = [...all.getClientRects()].filter(rect => rect.width > 0);
-            const split = [];
-            const walker = document.createTreeWalker(note, NodeFilter.SHOW_TEXT);
-            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-              for (const match of node.textContent.matchAll(/（?[^\s，。；：、（）]+[，。；：、）]?/g)) {
-                const range = document.createRange(); range.setStart(node, match.index); range.setEnd(node, match.index + match[0].length);
-                if (new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size > 1) split.push(match[0]);
-              }
-            }
-            return { text: note.textContent, lines: new Set(rects.map(rect => Math.round(rect.top))).size,
-              overflow: Math.max(...rects.map(rect => rect.right)) - box.right, split, oneLine: content.find(item => item.el === note).max };
-          });
-          const room = box.width - content.edges;
-          pool.style.width = '';
-          return { room, notes: measured };
-        });
-        assert.equal(result.notes.length, 1, 'the source note only');
-        for (const note of result.notes) {
-          assert.ok(note.oneLine > result.room + 1, `the box is narrower than the note: ${note.oneLine} > ${result.room}`);
-          assert.ok(note.overflow <= 1, `the note stays inside the pool item: ${note.text} (${note.overflow}px out)`);
-          assert.deepEqual(note.split, [], `no word of the note has parts on two lines: ${note.text}`);
-          assert.ok(note.lines > 1, `the note wraps in the narrow box: ${note.text}`);
-        }
-      } finally { await context.close(); }
     });
   }
 
@@ -593,12 +587,12 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     });
   }
 
-  for (const language of ['zh', 'en']) for (const detail of [false, true]) {
-    await t.test(`technical view ${language}, detail ${detail ? 'open' : 'closed'}: numbers shown, state words still read out`, async () => {
-      const { page, context } = await open(1280, language, 'technical');
+  for (const language of ['zh', 'en']) for (const [width, detail] of [[1280, false], [1280, true], [390, false]]) {
+    await t.test(`technical view ${width}px ${language}, detail ${detail ? 'open' : 'closed'}: numbers shown, state words still read out`, async () => {
+      const { page, context } = await open(width, language, 'technical');
       try {
         if (detail) await openDetail(page);
-        checkLabels(await measureOn(page), language, { technical: true });
+        checkLabels(await measureOn(page), language, { technical: true, items: ITEMS[language].technical });
       } finally { await context.close(); }
     });
   }
