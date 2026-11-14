@@ -33,10 +33,10 @@ function fixture(t, { unattributed = false } = {}) {
   const store = new Store(path.join(root, 'dashboard.db'));
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   let seq = 0;
-  const put = (type, seconds, category = 'lifecycle', runId = RUN) => {
+  const put = (type, seconds, category = 'lifecycle', runId = RUN, metadata = {}) => {
     const id = `event-${++seq}`;
     store.insertEvent({ id, ingest_id: id, timestamp: at(seconds), runtime: 'claude', run_id: runId, session_group: GROUP,
-      event_type: type, category, metadata: {}, source: 'core-log' });
+      event_type: type, category, metadata, source: 'core-log' });
   };
   store.db.transaction(() => {
     if (unattributed) { put('release', -20, 'diagnostic', null); put('stop', -19, 'turn', null); }
@@ -244,4 +244,33 @@ test('a run count read for a level switched away from is dropped when it arrives
   assert.equal(loader.state.totalEvents, 5, 'the plain count stays');
   assert.equal(loader.state.runs[0].n, 5);
   loader.close();
+});
+
+// Boundary: real Store ending event -> createRuns -> timeline loader -> rendered
+// run label, with both shipped language packs. Run when release labels or ending
+// projection changes; unrelated UI edits may skip. The official runner isolates
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; this case uses a private DB and injected
+// DOM only, no network/tmux/children. fixture closes/removes its DB on teardown.
+test('requested release renders a translated end reason in plain view and its code in technical view', async t => {
+  const f = fixture(t);
+  f.put('reclaim_done', 80, 'lifecycle', RUN, { reason: 'release' });
+  const runs = createRuns({ store: f.store });
+  const result = await runs(GROUP);
+  assert.equal(result.runs[0].endReason, 'release');
+  const read = pathname => new URL(pathname, 'http://fixture').pathname.endsWith('/runs')
+    ? runs(GROUP) : f.read(pathname);
+  for (const [language, expected] of [['zh', '回收 · 主动释放'], ['en', 'Recycled · released on request']]) {
+    const pack = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${language}.json`, import.meta.url), 'utf8'));
+    const translate = key => pack[key] ?? key;
+    for (const level of ['plain', 'technical']) {
+      const loader = createTimelineLoader({ request: read, detail: () => level, now: () => Date.parse(at(90)) });
+      t.after(() => loader.close());
+      await loader.open(GROUP, null);
+      const document = createDocument(), root = document.createElement('div');
+      renderTimeline(root, loader, { document, t: translate, level });
+      const endings = allNodes(root).filter(node => node.classList.contains('wb-end'));
+      assert.equal(endings.length, 1);
+      assert.equal(endings[0].textContent, level === 'plain' ? expected : 'release');
+    }
+  }
 });

@@ -509,6 +509,7 @@
   "wb.endReason.manual_restart": "手工重启",
   "wb.endReason.reclaim": "回收",
   "wb.endReason.ttl": "回收 · TTL",
+  "wb.endReason.release": "回收 · 主动释放",
   "wb.endReason.evict": "回收 · 驱逐",
   "wb.endReason.upgrade": "回收 · 升级",
   "wb.endReason.auth": "回收 · 登录",
