@@ -572,8 +572,7 @@ export class StateEngine {
       lastProgressType: null,
       collectorLivenessAvailable: this._isCollectorLivenessAvailable(),
       activeOtelSpan: false,
-      runtime: this._config.runtime || 'claude',
-      now
+      runtime: this._config.runtime || 'claude'
     };
 
     return deriveAgentState(signals);
