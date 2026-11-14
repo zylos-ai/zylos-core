@@ -478,7 +478,8 @@
   padding:8px;
   box-shadow:0 1px 2px color-mix(in srgb,var(--text) 3%,transparent)
 }
-.conversation-compose-box:focus-within {
+/* Only the text field lights the box: a focused attach or send button draws its own ring alone. */
+.conversation-compose-box:has(.conversation-input:focus) {
   border-color:var(--accent);
   outline:2px solid var(--wb-accent-line)
 }
