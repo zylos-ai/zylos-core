@@ -257,7 +257,7 @@ main:has(> #tab-overview.active) { padding: 0 0 var(--space-xl); }
 .wb-inst-more:hover, .wb-inst-more[aria-expanded="true"] { background: var(--wb-hover); color: var(--text); }
 
 /* Attention: one line per item; group items open that group. */
-#wb-attention { display: flex; flex-direction: column; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--wb-line); }
+#wb-attention, #wb-board:has(> [role="alert"]) { display: flex; flex-direction: column; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--wb-line); }
 #wb-attention:empty { display: none; }
 .wb-attention-item { display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 7px 10px; border: 1px solid var(--wb-line-strong); border-left: 3px solid var(--wb-err); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font-size: 13px; text-align: left; }
 .wb-attention-item b { font-weight: 550; }
@@ -584,7 +584,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-inst-item + .wb-inst-item { border-left: 0; }
   .wb-inst-item .wb-meter { display: none; }
   .wb-inst-item .wb-pool-meter { display: inline-block; }
-  #wb-attention { padding: 8px 12px; }
+  #wb-attention, #wb-board:has(> [role="alert"]) { padding: 8px 12px; }
   .wb-attention-item { align-items: flex-start; }
   .wb-attention-text { white-space: normal; }
   .wb-go { display: none; }

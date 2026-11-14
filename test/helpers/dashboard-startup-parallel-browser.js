@@ -113,7 +113,7 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
     const observer = new MutationObserver(() => {
       const row = document.querySelector('#wb-board .wb-row[data-group]');
       if (observations.firstRowAt === null && row?.getBoundingClientRect().height > 0) observations.firstRowAt = performance.now();
-      const alert = document.querySelector('#wb-board > .wb-empty[role="alert"]');
+      const alert = document.querySelector('#wb-board > [role="alert"]');
       if (alert && observations.alerts.length < 5 && observations.alerts.at(-1)?.text !== alert.textContent) observations.alerts.push({ text: alert.textContent, at: performance.now() });
     });
     observer.observe(document, { childList: true, subtree: true });
@@ -260,7 +260,7 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
     assert.ok(calls.calls.some(call => call.source === 'board' && call.finished !== null), 'the actual board fetch completed');
     assert.equal(calls.maxActive.board, 1, 'periodic board polls never overlap their previous groups request');
   } else {
-    const error = page.locator('#wb-board > .wb-empty[role="alert"]');
+    const error = page.locator('#wb-board > [role="alert"]');
     await error.waitFor({ state: 'visible', timeout: 8500 });
     assert.equal(await error.textContent(), labels['wb.readFailed']);
     assert.equal(await page.locator('#wb-board > .wb-empty[role="status"]').count(), 0, 'error replaces initial loading');
