@@ -2344,6 +2344,17 @@ test('workbench shell discards an agent response whose JSON finishes after the v
   assert.equal(wbName(h.nodes.get('#wb-board').children[0]), 'A');
   assert.ok(h.calls.includes('/fleet/Other/api/workbench/groups'));
 });
+// Initial read-failure boundary: run for shell/attention changes; skip server-only
+// changes. Uses real mounted product code and the isolated fake lifecycle above.
+test('workbench shell shows an initial snapshot read failure only in the board', async context => {
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path.endsWith('/api/workbench/groups')) throw Error('offline');
+    return fallback(path);
+  });
+  await wbTick(); await wbTick();
+  assert.match(h.nodes.get('#wb-board').textContent, /wb.readFailed/);
+  assert.doesNotMatch(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
+});
 // Mounted read-failure boundary: run for shell/controller changes; skip server-only changes. Uses the isolated fake lifecycle above.
 test('workbench shell retains and redraws old rows after a snapshot read failure', async context => {
   let failed = false;
