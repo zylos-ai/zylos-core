@@ -1,6 +1,7 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/component-shard-hooks.integration.test.js',
     '<rootDir>/test/dashboard-stale-status.integration.test.js',
     '<rootDir>/test/router-stale-state.integration.test.js',
     '<rootDir>/test/supervisor-reclaim-deferral.integration.test.js',

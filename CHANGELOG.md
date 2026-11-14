@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Component shard declarations no longer claim or remove legacy SessionStart hooks. The retired `claimHooks` field is ignored with a warning without disabling the shard. Components migrating to shards must remove their own old hooks from both Claude and Codex settings in `post-upgrade`, then synchronize hooks.
+
 ### Internal
 - Allow the real-model memory test harness to run reference index rebuild, archive, and unarchive commands with fixture-bound arguments and environment.
 - Move Dashboard tests and fixtures to `skills/dashboard/__tests__/`, update test paths, and check repository test locations and exclusions.

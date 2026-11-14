@@ -12,9 +12,11 @@ Keep startup context fast and local:
    should only read a small local file and return immediately. If the cache is
    missing or stale, return an explicit instruction instead of waiting silently.
 
-This reference applies to Zylos Core 1.0.0 and later, including the 1.0 prerelease
-line. Both Claude and Codex generate the shard chain; legacy-hook replacement
-and context attachment order differ as described below.
+This reference describes the current `multi-session/prerelease` branch
+(`1.0.0-beta.9`). Core 0.9.6 also supports `shards.d`, but its migration and
+hook synchronization behavior differs; consult its version of the documentation.
+Both Claude and Codex generate the shard chain; context attachment order differs
+as described below.
 A shard is startup context, not a place to perform network setup, authentication,
 package installation, or a large remote rules fetch.
 
@@ -29,12 +31,9 @@ Install the emitter with your component under
   "name": "example-rules",
   "order": 10,
   "emitter": "skills/example/emit-start-context.mjs",
-  "budget": { "maxChars": 10000, "maxTokens": 2200 },
-  "claimHooks": ["skills/example/legacy-start-hook.sh"]
+  "budget": { "maxChars": 10000, "maxTokens": 2200 }
 }
 ```
-
-Omit `claimHooks` when there is no legacy hook to replace.
 
 | Field | Meaning |
 | --- | --- |
@@ -42,7 +41,6 @@ Omit `claimHooks` when there is no legacy hook to replace.
 | `order` | Integer at least 10. Component shards sort by this number, then by name. It is an ordering key, not a wait in seconds or a chain position. |
 | `emitter` | Module path beneath the installation's `.claude` directory. Relative paths start there; absolute paths must also resolve there. `~` is not expanded in JSON paths. |
 | `budget` | Optional output limits; defaults are 10,000 characters and 2,200 estimated tokens. Choose positive integer values at or below both defaults. Larger values are clamped, not a way to increase the caps. This field controls output size, not time. |
-| `claimHooks` | Optional relative paths to **your component's own** legacy SessionStart hooks. Do not claim user hooks or another component's hooks. Entries cannot be absolute, start with `~`, or contain `..` segments. |
 
 The emitter module must export `emit(payload)` or a default function. It receives
 that runtime hook's JSON payload and returns text (or a promise of text); null or
@@ -51,8 +49,7 @@ Core adds the numbered header, applies the output budget, and writes stdout.
 Use stderr for diagnostics.
 
 Path validation checks resolved path strings, not symlink targets; do not use
-symlinks to place emitter code outside `.claude`. `claimHooks` ownership is the
-component author's responsibility, not something the registry can infer.
+symlinks to place emitter code outside `.claude`.
 Invalid or duplicate declarations are skipped. After successful synchronization,
 check that the generated runtime hooks (`.claude/settings.json` for Claude,
 `.codex/hooks.json` for Codex, beneath `ZYLOS_DIR`) contain `--shard <name>`;
@@ -73,6 +70,47 @@ while the component code is still available. After each change, run the installe
 Core's hook synchronizer. `zylos add` and component uninstall do not automatically
 register or remove a component's shard declaration for it.
 
+When switching from a legacy SessionStart hook to a shard, the component must
+remove its own legacy command in `post-upgrade` from **both** runtime files:
+`.claude/settings.json` and `.codex/hooks.json` beneath `ZYLOS_DIR`, regardless
+of which runtime is active. Back up those files through the component's upgrade
+backup before changing them. Match only the exact command the component installed;
+keep unrelated commands, matcher groups, group metadata, and other events.
+For example, this idempotent component-owned migration leaves missing files
+alone, writes only changed files, and fails on unreadable or invalid JSON:
+
+```js
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const root = process.env.ZYLOS_DIR || path.join(os.homedir(), 'zylos');
+// Use the exact command this component previously installed, including quoting.
+const legacyCommand = `node "${path.join(root, '.claude/skills/example/legacy-start-hook.js')}"`;
+
+for (const relative of ['.claude/settings.json', '.codex/hooks.json']) {
+  const file = path.join(root, relative);
+  if (!fs.existsSync(file)) continue;
+  const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!Array.isArray(config.hooks?.SessionStart)) continue;
+  let changed = false;
+  config.hooks.SessionStart = config.hooks.SessionStart.map(group => {
+    if (!Array.isArray(group?.hooks)) return group;
+    const hooks = group.hooks.filter(hook =>
+      !(hook?.type === 'command' && hook.command === legacyCommand));
+    if (hooks.length === group.hooks.length) return group;
+    changed = true;
+    return { ...group, hooks };
+  });
+  if (changed) fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+}
+```
+
+Replace the example command with the component's actual historical command.
+If the runtimes used different commands, match each file's exact old command
+separately; do not broaden the match to a path substring or an entire group.
+Run hook synchronization **after** this cleanup and the declaration update.
+
 Use the **actual installed Core package path**, not a guessed copy beneath
 `.claude/skills`. For example, replace both absolute paths here with the intended
 installation:
@@ -91,15 +129,16 @@ After changed settings and outside `--dry-run`, the CLI also calls
 c4-control. **Both modes can restart the agent**, including when a component
 lifecycle hook invokes this CLI. Calling the exported file-writing API directly
 does not perform that restart step. Codex loads changed hooks on a new launch.
-Integrate synchronization with your component lifecycle
-rather than editing runtime hook files by hand.
+Integrate synchronization with your component lifecycle; limit direct runtime
+hook edits to the component-owned legacy-command migration above.
 
-Synchronization generates the named shard commands. **`claimHooks` removes
-declared legacy commands only from Claude settings.** Codex synchronization
-preserves non-Core hooks and does not apply `claimHooks`; the component must
-remove its own old Codex hook to avoid duplicate injection. Undeclared component
-and user hooks are preserved outside the ordered chain. Removing a declaration
-does not recreate its old legacy hook; restore one explicitly only if that is
+Synchronization generates the named shard commands and preserves component
+and user hooks outside the ordered chain on both runtimes. Core does not remove
+a component's legacy hook. Old declarations containing `claimHooks` remain valid
+if otherwise well formed: Core ignores that obsolete field and records a warning
+that it no longer has any effect and the component must remove its own old hook.
+The warning appears on session-start hook stderr, as described above. Removing
+a declaration does not recreate its old legacy hook; restore one explicitly only if that is
 the intended component behavior.
 
 Check lifecycle output and the generated runtime hooks for `--shard <name>`;

@@ -63,7 +63,6 @@ function makeComponentZylosDir() {
     name: 'role-inject',
     order: 10,
     emitter: 'skills/role-manager/emit-role.js',
-    claimHooks: ['skills/role-manager/role-inject-hook.sh'],
   });
   return zylosDir;
 }
@@ -115,17 +114,35 @@ describe('shard-registry chain', () => {
     writeDeclaration(zylosDir, 'reserved.json', { name: 'identity', order: 10, emitter: 'skills/x/e.js' });
     writeDeclaration(zylosDir, 'low-order.json', { name: 'too-early', order: 2, emitter: 'skills/x/e.js' });
     writeDeclaration(zylosDir, 'escape.json', { name: 'escape', order: 11, emitter: '/etc/evil.js' });
-    writeDeclaration(zylosDir, 'bad-claim.json', {
-      name: 'bad-claim', order: 12, emitter: 'skills/x/e.js', claimHooks: ['/custom/user-hook.js'],
-    });
     fs.writeFileSync(path.join(zylosDir, '.zylos', 'shards.d', 'garbage.json'), '{nope');
 
     const { declarations, warnings } = loadComponentShardDeclarations({ zylosDir });
 
     assert.deepEqual(declarations, []);
-    assert.equal(warnings.length, 5);
+    assert.equal(warnings.length, 4);
     const { chain } = buildChain({ zylosDir });
     assert.equal(chain.length, CORE_SHARDS.length);
+  });
+
+  it('ignores the retired legacy-hook field while retaining the emitter and warning', async () => {
+    const zylosDir = makeComponentZylosDir();
+    for (const claimHooks of [
+      ['skills/role-manager/role-inject-hook.sh'],
+      ['/custom/user-hook.js', '../outside.sh'],
+      'invalid-old-value', null, { unexpected: true },
+    ]) {
+      writeDeclaration(zylosDir, 'role-inject.json', {
+        name: 'role-inject', order: 10,
+        emitter: 'skills/role-manager/emit-role.js', claimHooks,
+      });
+      const { declarations, warnings } = loadComponentShardDeclarations({ zylosDir });
+      assert.equal(declarations.length, 1);
+      assert.equal(Object.hasOwn(declarations[0], 'claimHooks'), false);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /claimHooks is ignored.*component must remove.*SessionStart.*post-upgrade/);
+      const { chain } = buildChain({ zylosDir });
+      assert.equal(await chain.at(-1).emit({}), 'ROLE CONTEXT');
+    }
   });
 
   it('rejects duplicate component shard names (first declaration wins)', () => {

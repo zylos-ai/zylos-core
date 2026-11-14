@@ -31,7 +31,6 @@ import { installCoreCodexHook } from './codex-hooks.js';
 import {
   SIDE_EFFECT_NAMES,
   buildChain,
-  loadComponentShardDeclarations,
 } from '../../skills/activity-monitor/scripts/shard-registry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -453,20 +452,6 @@ export function syncCodexConfig({
 }
 
 /**
- * Legacy SessionStart hook paths that component shard declarations claim for
- * removal (see skills/activity-monitor/references/session-start-shards.md
- * for the declaration contract). This is the
- * ONLY channel through which sync removes hooks it does not own: a component
- * may claim its own old hook paths (relative to ~/zylos/.claude, enforced at
- * declaration validation), and everything unclaimed — user hooks, undeclared
- * component hooks, anything outside the zylos .claude root — is preserved.
- */
-export function claimedHookBaseKeys({ zylosDir = ZYLOS_DIR } = {}) {
-  const { declarations } = loadComponentShardDeclarations({ zylosDir });
-  return new Set(declarations.flatMap(declaration => declaration.claimHooks));
-}
-
-/**
  * Sync hooks between template and installed settings (in-memory).
  * Exported for unit testing. Called by main() after loading files.
  *
@@ -476,7 +461,6 @@ export function syncHooks(installedSettings, _templateSettings, {
   dryRun = false,
   log = console.log,
   desiredHooks = desiredClaudeHooks(),
-  claimedKeys = claimedHookBaseKeys(),
   zylosDir = ZYLOS_DIR,
 } = {}) {
   const desiredHookGroups = desiredHooks || {};
@@ -572,13 +556,7 @@ export function syncHooks(installedSettings, _templateSettings, {
         const h = group.hooks[hi];
         if (h.type !== 'command') continue;
 
-        // Claims only ever apply to SessionStart (the shard chain's event)
-        // and only via relative-to-.claude keys, so hooks outside the zylos
-        // root can never match a claim.
-        const claimed = event === 'SessionStart'
-          && claimedKeys.size > 0
-          && claimedKeys.has(hookScriptBaseKey(h.command));
-        if (!isCoreManaged(h, { zylosDir }) && !claimed) continue;
+        if (!isCoreManaged(h, { zylosDir })) continue;
 
         const installedKey = hookScriptKey(h.command);
         // Check only the corresponding template group, not all groups
@@ -591,7 +569,7 @@ export function syncHooks(installedSettings, _templateSettings, {
             group.hooks.splice(hi, 1);
           }
           removed++;
-          log(`  - ${event}[${groupMatcher}]: ${h.command}${claimed && !isCoreManaged(h, { zylosDir }) ? ' (claimed by component shard declaration)' : ''}`);
+          log(`  - ${event}[${groupMatcher}]: ${h.command}`);
         }
       }
 
@@ -719,7 +697,7 @@ export function syncRuntimeHooks({
 
   const { added, updated, removed } = syncHooks(installedSettings, templateSettings, {
     dryRun, desiredHooks: desiredClaudeHooks({ zylosDir, stopFailureSupported, subagentHooksSupported }),
-    claimedKeys: claimedHookBaseKeys({ zylosDir }), zylosDir, log,
+    zylosDir, log,
   });
   if (!stopFailureSupported) console.log('Health hooks: StopFailure unavailable or unverified; retaining screen-based fallback.');
 
