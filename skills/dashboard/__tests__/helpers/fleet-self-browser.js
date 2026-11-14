@@ -3,13 +3,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { stateToFleetRecord } from '../../src/lib/fleet-poller.js';
+import { fleetGroupSummary } from '../../src/lib/workbench/fleet-summary.js';
 import { workbenchAnswer } from '../fixtures/workbench-browser-api.js';
 import { startPage } from './workbench-browser.js';
 
 // Fixtures use the production conversion so a self-only offline regression cannot be hidden by a hand-built
 // healthy record. Remote transport failure is explicit: it is distinct from the remote's runtime state UNKNOWN.
-function records(state, unreachable, now) {
-  const make = (name, self) => stateToFleetRecord({ name }, { state }, { self, access: 'admin', nowMs: now });
+function records(state, unreachable, now, snapshot = null) {
+  const make = (name, self) => stateToFleetRecord({ name }, {
+    state,
+    ...(self && snapshot ? { session_mode: snapshot.mode, group_summary: fleetGroupSummary(snapshot) } : {}),
+  }, { self, access: 'admin', nowMs: now });
   const own = make('browser-case', true);
   assert.equal(own.pulse_rate, 1, `${state}: responding local HTTP is reachable`);
   assert.equal(own.health_reason, state === 'IDLE' ? 'idle' : 'ok');
@@ -60,9 +64,19 @@ export async function runFleetSelfBrowser(t, sandbox) {
   });
 
   for (const width of [390, 1280]) for (const mode of ['single', 'multi']) {
+    // Reachable self state stays independent of its API group_summary and remote transport failure.
     for (const [state, unreachable] of [['UNKNOWN', false], ['IDLE', false], ['UNKNOWN', true]]) {
       await t.test(`${width}px ${mode}: ${state} self, ${unreachable ? 'unreachable' : state} remote`, async () => {
-        const now = Date.now(), fleet = records(state, unreachable, now);
+        const now = Date.now();
+        const snapshot = workbenchAnswer(new URL('/api/workbench/groups', base), now);
+        // This case has three running/starting groups. The shared Workbench fixture includes a
+        // reclaimed row, which must be starting here: Fleet totals now exclude not_running groups.
+        snapshot.mode = snapshot.view = mode;
+        snapshot.rows = snapshot.rows.map(row => row.presence === 'not_running'
+          ? { ...row, presence: 'starting', state: { kind: 'waiting' } } : row);
+        snapshot.counts = { ...snapshot.counts, waiting: 1, not_running: 0 };
+        snapshot.instance.pool = { ...snapshot.instance.pool, used: 3, starting: 1, ready: 2 };
+        const fleet = records(state, unreachable, now, snapshot);
         const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 800 },
           locale: 'en-US', ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
         sandbox.addCleanup(() => context.close());
@@ -85,11 +99,9 @@ export async function runFleetSelfBrowser(t, sandbox) {
           await page.route('**/api/**', async route => {
             const url = new URL(route.request().url());
             if (url.pathname === '/api/fleet') return route.fulfill({ json: fleet });
-            if (url.pathname === '/api/state') return route.fulfill({ json: { ...workbenchAnswer(url, now), state } });
-            if (url.pathname === '/api/workbench/groups') {
-              const snapshot = workbenchAnswer(url, now);
-              return route.fulfill({ json: { ...snapshot, mode, view: mode } });
-            }
+            if (url.pathname === '/api/state') return route.fulfill({ json: { ...workbenchAnswer(url, now), state,
+              session_mode: mode, group_summary: fleet.agents[0].group_summary } });
+            if (url.pathname === '/api/workbench/groups') return route.fulfill({ json: snapshot });
             return route.fallback();
           });
           await page.goto(base + '/');

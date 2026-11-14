@@ -4,7 +4,8 @@ import test from 'node:test';
 import { chatEnabled, chatResourceCounts, createChatSandbox } from './helpers/chat-integration-harness.js';
 
 // Boundary: actual Dashboard HTML, modules and styles with fixture API responses, including server-generated
-// fleet records. Run for fleet reachability/state labels or self session-mode changes; skip unrelated pages.
+// fleet records and running-group summaries. Run for fleet reachability/state labels, self session-mode or
+// Fleet summary contract changes; skip unrelated pages. This fixture proves rendering, not live collection.
 // The opt-in gate precedes imports that allocate resources. No Core, PM2, tmux or database is started; the chat
 // sandbox proves private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/test DB paths and owns all cleanup.
 test('reachable self UNKNOWN keeps its configured mode on the real fleet page',

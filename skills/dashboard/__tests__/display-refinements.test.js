@@ -1,8 +1,9 @@
 import test from 'node:test';
 import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harness.js';
 
-// Boundary: actual composed renderer, confirmation styles and Chart.js duration
-// display. Run for changes to these paths; skip unrelated backend/runtime work.
+// Boundary: actual composed renderer's whole-invalid and unknown-block literal
+// fallbacks, confirmation styles and Chart.js duration display. Run for changes
+// to these paths; skip unrelated backend/runtime work.
 // Private HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR/socket/DB paths are proven before
 // local HTTP and browser startup. No database or runtime is opened. The sandbox
 // owns HTTP/browser cleanup on success, failure and timeout.

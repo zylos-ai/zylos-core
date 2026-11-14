@@ -16,7 +16,7 @@ const fixture = `<!doctype html><html lang="en" data-theme="light"><head>
 <style>html,body{overflow:auto;height:auto}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui}main{max-width:920px;margin:auto;padding:24px 16px;box-sizing:border-box}h1{font-size:20px;margin:0 0 18px}article{margin-bottom:16px;min-width:0}.confirmation-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}@media(max-width:600px){.confirmation-pair{grid-template-columns:minmax(0,1fr)}}.conversation-page{display:block}.chat-message-content{width:100%;box-sizing:border-box}</style>
 <script src="/vendor/chart.umd.js"></script><script src="/js/markdown-it.min.js"></script>
 </head><body><main class="conversation-page"><h1>Conversation</h1>
-<article id="invalid"></article><div class="confirmation-pair"><article id="normal"></article><article id="destructive"></article></div><article id="duration"></article></main>
+<article id="invalid"></article><article id="unsupported"></article><div class="confirmation-pair"><article id="normal"></article><article id="destructive"></article></div><article id="duration"></article></main>
 <script type="module">
 import {renderConversationContent} from '/js/wb/conversation-content.js';
 import {renderQuestion} from '/js/wb/chat-questions.js';
@@ -24,7 +24,13 @@ import {makeQuestionSummary} from '/chat-schema.js';
 const translations=await fetch('/i18n/wb.en.json').then(response=>response.json());
 const t=key=>translations[key]??key;
 const literal='**Release notes** <script>alert("unsafe")<'+ '/script> [details](https://example.test)';
-const invalid={version:1,kind:'message',messageId:'invalid-message',fallbackText:literal,blocks:[{id:'unknown',type:'future_block',schemaVersion:1,data:{},fallbackText:'Must not render'}]};
+// Unsupported envelope versions remain wholly invalid; unknown historical block
+// types alone instead use their own inert fallback (C4 content protocol).
+const invalid={version:999,kind:'message',messageId:'invalid-message',fallbackText:literal,blocks:[{id:'unknown',type:'future_block',schemaVersion:1,data:{},fallbackText:'Must not render'}]};
+const unsupported={version:1,kind:'message',messageId:'unsupported-message',fallbackText:'Whole-message summary must not replace known blocks',blocks:[
+ {id:'known',type:'markdown',schemaVersion:1,data:{text:'Known sibling remains visible'}},
+ {id:'unknown',type:'future_block',schemaVersion:1,data:{title:'Must not render'},fallbackText:literal}
+]};
 const resources=[];
 function mount(id,envelope,index){
  const row={id:index,direction:'out',content:'[C4-JSON]\\n'+JSON.stringify(envelope)};
@@ -33,6 +39,7 @@ function mount(id,envelope,index){
  document.getElementById(id).append(content);content.mount();resources.push(content);
 }
 mount('invalid',invalid,1);
+mount('unsupported',unsupported,5);
 for(const [index,severity] of ['normal','destructive'].entries()){
  const block={id:'confirmation',type:'confirmation',schemaVersion:1,fallbackText:severity==='destructive'?'Remove draft?':'Save draft?',data:{title:severity==='destructive'?'Remove draft?':'Save draft?',body:severity==='destructive'?'This draft will be removed.':'Save the current draft.',severity,confirmLabel:severity==='destructive'?'Remove draft':'Save draft',cancelLabel:'Cancel',action:{type:'confirmation.respond',target:'draft.confirm',...(severity==='destructive'?{requiresConfirmation:true}:{})}}};
  const envelope={version:1,kind:'message',messageId:severity+'-message',fallbackText:block.fallbackText,blocks:[block],interruptId:severity+'-interrupt',interrupt:{blockId:block.id,reason:'confirmation',otherInput:false}};
@@ -94,6 +101,8 @@ export async function runDisplayRefinements(sandbox) {
     await page.waitForFunction(() => window.Chart.getChart(document.querySelector('canvas'))?.width > 100);
     const result = await page.evaluate(() => {
       const invalid = document.querySelector('#invalid');
+      const unsupported = document.querySelector('#unsupported');
+      const unknown = unsupported.querySelector('.chat-block-unsupported');
       const danger = document.querySelector('#destructive [data-action="confirmAnswer"]');
       const normal = document.querySelector('#normal [data-action="confirmAnswer"]');
       const consequence = document.querySelector('#destructive .chat-question-description > .chat-block-title + .chat-block-text');
@@ -108,6 +117,11 @@ export async function runDisplayRefinements(sandbox) {
       return { literal: invalid.querySelector('.chat-invalid-fallback')?.textContent, expectedLiteral: window.displayFixture.literal,
         invalidElements: invalid.querySelectorAll('a,script,button,input,select,textarea,.chat-block').length,
         notice: invalid.querySelector('.chat-notice')?.textContent,
+        unsupported: { literal: unknown?.textContent,
+          invalidElements: unsupported.querySelectorAll('a,script,button,input,select,textarea').length,
+          wholeFallback: unsupported.querySelector('.chat-invalid-fallback')?.textContent,
+          known: unsupported.querySelector('[data-block-id="known"]')?.textContent.trim(),
+          blockIds: [...unsupported.querySelectorAll('[data-block-id]')].map(block => block.dataset.blockId) },
         danger: danger && { background: getComputedStyle(danger).backgroundColor, color: getComputedStyle(danger).color, severity: danger.closest('.chat-question').dataset.severity },
         normal: normal && { background: getComputedStyle(normal).backgroundColor, severity: normal.closest('.chat-question').dataset.severity },
         consequence: { background: getComputedStyle(consequence).backgroundColor, shadow: getComputedStyle(consequence).boxShadow,
@@ -123,6 +137,11 @@ export async function runDisplayRefinements(sandbox) {
     });
     assert.equal(result.literal, result.expectedLiteral); assert.equal(result.invalidElements, 0);
     assert.equal(result.notice, 'Some content could not be displayed.');
+    assert.equal(result.unsupported.literal, result.expectedLiteral);
+    assert.equal(result.unsupported.invalidElements, 0);
+    assert.equal(result.unsupported.wholeFallback, undefined);
+    assert.equal(result.unsupported.known, 'Known sibling remains visible');
+    assert.deepEqual(result.unsupported.blockIds, ['known', 'unknown']);
     assert.equal(result.danger?.severity, 'destructive'); assert.equal(result.normal?.severity, 'normal');
     assert.notEqual(result.danger.background, result.normal.background);
     assert.equal(result.cardBorderWidth, '0px', 'destructive cards use the consequence callout without a left border');
