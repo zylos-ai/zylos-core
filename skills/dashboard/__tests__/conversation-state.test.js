@@ -1749,6 +1749,39 @@ test('conversation list and incremental reads request previews in the current pa
   assert.equal(f.calls.filter(call => call.path.includes('/messages?')).at(-1).options.headers['X-Zylos-Locale'], 'zh');
   f.state.destroy(); assert.equal(f.timer.count(), 0);
 });
+test('a group-list reading older than the one the header shows leaves the header as it is when it arrives late', async t => {
+  const late = deferred();
+  const f = groupFixture(() => late.promise, u => u.pathname.endsWith('/activity') ? { now: 1000,
+    working: { on: true, main: { since: 0, lastActivityAt: 900 }, tools: 0, subagents: null },
+    header: { readAt: 2000, presence: 'running', wait: null, health: 'ok' }, steps: [], subtasks: [], awaiting: null, seenId: 0 } : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A'); await flush();
+  assert.equal(f.state.snapshot().groupPresenceReadAt, 2000, 'the activity read brought the newer reading first');
+  late.resolve(groupSnapshot('not_running', { rows: [{ sessionGroup: 'dashboard:a', presence: 'not_running' }] })); await flush();
+  const shown = f.state.snapshot();
+  assert.equal(shown.groupPresence, true);
+  assert.equal(shown.groupWorking.on, true);
+  assert.equal(shown.groupHealth, 'ok');
+  assert.equal(shown.groupPresenceReadAt, 2000);
+});
+test('an activity answer without the header reading leaves the header as the group list read it', async t => {
+  const f = groupFixture(() => groupSnapshot('running', {
+    rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait: null }],
+    instance: { runtimeHealth: { claude: { health: 'ok' } } }
+  }), u => u.pathname.endsWith('/activity') ? { now: 1000, working: { on: false, main: null, tools: 0, subagents: null },
+    steps: [], subtasks: [], awaiting: null, seenId: 0 } : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open(); await f.state.select('g:A');
+  const activityReads = () => f.calls.filter(call => call.path.includes('/activity?')).length;
+  const before = activityReads();
+  await f.timer.advance(5000);
+  assert.ok(activityReads() > before, 'the activity was read again after the group list');
+  const shown = f.state.snapshot();
+  assert.equal(shown.groupPresence, true);
+  assert.equal(shown.groupHealth, 'ok');
+  assert.equal(shown.groupPresenceReadAt, 1000);
+});
+
 test('while the group works the page refreshes every two seconds; once all work ends it is five seconds again', async () => {
   let working = true;
   const f = await selected(u => {

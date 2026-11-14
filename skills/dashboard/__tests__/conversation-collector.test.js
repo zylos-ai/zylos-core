@@ -231,6 +231,44 @@ test('assistant summaries redact before truncation', () => {
   fs.rmSync(tmpDir, { recursive: true });
 });
 
+test('a message the runtime takes from its own queue, after a turn or typed into the running one, is recorded once', () => {
+  const tmpDir = makeTmpDir();
+  const store = makeMockStore();
+  const { collector, jsonlPath, projectDir } = makeCollector(store, tmpDir);
+  const queue = (operation, timestamp) => JSON.stringify({ type: 'queue-operation', operation, timestamp,
+    sessionId: 'test-session-123', ...(operation === 'dequeue' ? {} : { content: 'private message text' }) });
+  const report = JSON.stringify({ type: 'queue-operation', operation: 'remove', timestamp: '2026-05-17T10:00:03.500Z',
+    sessionId: 'test-session-123', content: '<task-notification>\n<task-id>t1</task-id>\n</task-notification>' });
+  fs.writeFileSync(jsonlPath, [queue('enqueue', '2026-05-17T10:00:01.000Z'), queue('dequeue', '2026-05-17T10:00:02.000Z'),
+    queue('remove', '2026-05-17T10:00:03.000Z'), report, JSON.stringify({ type: 'queue-operation', operation: 'dequeue' })].join('\n') + '\n');
+  collector.collect();
+  const taken = () => store.events.filter(e => e.event_type === 'input_dequeue');
+  const removed = () => store.events.filter(e => e.event_type === 'input_remove');
+  assert.equal(taken().length, 1, 'only the dequeue with a time; enqueue is not the agent taking input');
+  assert.deepEqual([taken()[0].timestamp, taken()[0].session_id, taken()[0].category, taken()[0].metadata],
+    ['2026-05-17T10:00:02.000Z', 'test-session-123', 'turn', {}]);
+  assert.deepEqual(removed().map(e => [e.timestamp, e.session_id, e.metadata]), [['2026-05-17T10:00:03.000Z', 'test-session-123', {}]],
+    'a typed message taken into the running turn leaves the queue as a remove line, recorded once; a subtask\'s report taken so is not');
+  assert.equal(store.events.filter(e => /enqueue/.test(e.event_type)).length, 0);
+  assert.ok(!JSON.stringify(store.events).includes('private message text'), 'the queued text is never stored');
+  // Read again from the start (a restart without offsets): the same line is not recorded twice.
+  const again = makeCollector(store, tmpDir).collector;
+  again.collect();
+  assert.equal(taken().length, 1);
+  assert.equal(removed().length, 1);
+  // A subtask's own transcript or a usage-only read records no input of the main agent.
+  const subDir = path.join(projectDir, 'test-session-123', 'subagents');
+  fs.mkdirSync(subDir, { recursive: true });
+  fs.writeFileSync(path.join(subDir, 'agent-a1.jsonl'), [queue('dequeue', '2026-05-17T10:00:04.000Z'), queue('remove', '2026-05-17T10:00:04.500Z')].join('\n') + '\n');
+  collector.collect();
+  const usageOnly = path.join(projectDir, 'other.jsonl');
+  fs.writeFileSync(usageOnly, queue('dequeue', '2026-05-17T10:00:05.000Z') + '\n');
+  collector._collectFile(usageOnly, { sessionId: 'other', usageOnly: true });
+  assert.equal(taken().length, 1);
+  assert.equal(removed().length, 1);
+  fs.rmSync(tmpDir, { recursive: true });
+});
+
 test('does not double-count on re-read of same data', () => {
   const tmpDir = makeTmpDir();
   const store = makeMockStore();
@@ -1032,3 +1070,25 @@ for (const scenario of [
     });
   }
 }
+
+test('a stop that just arrived reads the transcripts shortly after, once, sharing a pass already running', async () => {
+  const collector = new ConversationCollector(makeMockStore(), { zylosDir: makeTmpDir() }, { transcripts: { collect: () => 0 } });
+  let passes = 0, finish;
+  collector.collect = () => { passes++; return new Promise(resolve => { finish = resolve; }); };
+  const timers = [];
+  const setTimer = (fn, ms) => { timers.push({ fn, ms }); return { unref() {} }; };
+  collector.afterImport({ types: ['pre_tool_use', 'post_tool_use'] }, { setTimer });
+  collector.afterImport({}, { setTimer });
+  assert.equal(timers.length, 0, 'no stop: the timed pass is enough');
+  collector.afterImport({ types: ['pre_tool_use', 'stop'] }, { setTimer });
+  collector.afterImport({ types: ['stop'] }, { setTimer });
+  assert.deepEqual(timers.map(timer => timer.ms), [300], 'one read 300 ms after a stop, however many arrive meanwhile');
+  const running = collector.collectShared();
+  timers[0].fn();
+  assert.equal(passes, 1, 'the read after the stop joins the pass already running');
+  finish(0); await running;
+  collector.afterImport({ types: ['stop'] }, { setTimer });
+  assert.equal(timers.length, 2, 'a later stop reads again');
+  timers[1].fn(); assert.equal(passes, 2);
+  finish(0);
+});

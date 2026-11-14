@@ -71,8 +71,11 @@ test('before the session takes a message the area wakes the session or delivers 
 
 test('once taken the area works and thinks until a step runs; under a reply it shows no elapsed time', () => {
   const messages = [msg(1, 'in', s(0))];
-  const thinking = livePresentation(messages, body({ working: IDLE, awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(1) } }));
+  const taken = { id: 1, state: 'thinking', since: s(0), delivered: s(1) };
+  const thinking = livePresentation(messages, body({ awaiting: taken }));
   assert.deepEqual([thinking.head, thinking.waiting, thinking.since, thinking.steps], ['working', 'thinking', s(0), []]);
+  assert.equal(livePresentation(messages, body({ working: IDLE, awaiting: taken })), null,
+    'the area works exactly when the header says the main AI works');
   const steps = [tool(2, 3), tool(4, null, 'running')];
   const busy = livePresentation(messages, body({ steps }));
   assert.deepEqual([busy.head, busy.waiting, busy.steps], ['working', null, steps]);
@@ -83,7 +86,18 @@ test('once taken the area works and thinks until a step runs; under a reply it s
   assert.deepEqual([afterReply.anchor, afterReply.under, afterReply.head, afterReply.since], [2, 'out', 'working', null]);
 });
 
-test('subtasks keep a row when the main AI is idle; done work leaves nothing or a handled line under a user message', () => {
+test('a reply the read has not seen yet clears the steps before it at once', () => {
+  const messages = [msg(1, 'in', s(0)), msg(2, 'out', s(20))];
+  const steps = [tool(2, 3), tool(4, null, 'running')];
+  const unseen = livePresentation(messages, body({ steps, seenId: 1 }));
+  assert.deepEqual([unseen.anchor, unseen.under, unseen.head, unseen.steps], [2, 'out', 'working', []]);
+  const seen = livePresentation(messages, body({ steps: [tool(21, null, 'running')], seenId: 2 }));
+  assert.equal(seen.steps.length, 1, 'once the read saw the reply, its steps are the work after it');
+  const user = livePresentation([...messages, msg(3, 'in', s(30))], body({ steps, seenId: 2 }));
+  assert.equal(user.steps.length, 2, 'a newer user message keeps the steps so far');
+});
+
+test('subtasks keep a row when the main AI is idle; done work leaves nothing or, at once, a handled line under a user message', () => {
   const messages = [msg(1, 'in', s(0))];
   const working = { ...IDLE, on: true, subagents: { count: 1, since: s(40), lastActivityAt: s(45) } };
   assert.deepEqual(livePresentation(messages, body({ working, subtasks: [SUBTASK] })),
@@ -95,13 +109,15 @@ test('subtasks keep a row when the main AI is idle; done work leaves nothing or 
     { anchor: 1, under: 'in', subtasks: [], truncated: false, head: null, since: null, steps: [], waiting: null, handled: true });
   assert.equal(livePresentation([...messages, msg(2, 'out')], body({ working: IDLE, seenId: 2 })), null, 'replied and done: nothing');
   assert.equal(livePresentation(messages, body({ working: IDLE })), null, 'done without a pending message: nothing');
+  assert.deepEqual(livePresentation(messages, body({ working: IDLE, awaiting: { ...handled, state: 'settling' } })),
+    livePresentation(messages, body({ working: IDLE, awaiting: handled })), 'stopped moments ago: the handled line already, no blank');
   assert.equal(livePresentation([], body()), null); assert.equal(livePresentation(messages, null), null);
 });
 
 test('the live area draws the head, steps, marks, thinking and subtask rows like the prototype', () => {
   const document = createDocument(), toggles = [];
   const area = createLiveArea({ document, t, locale: 'zh-CN', onToggle: id => toggles.push(id) });
-  const steps = [tool(1, 2), tool(3, 4, 'failed', { key: 'runCommand' }), mark('message', 5, { messageId: 2 }), { kind: 'say', text: '找到了。', at: s(6) },
+  const steps = [tool(1, 2), tool(3, 4, 'failed', { key: 'runCommand' }), mark('message', 5, { messageId: 2 }),
     mark('subtask', 7, { label: { key: 'memorySync' } }), tool(8, null, 'running', { key: 'described', arg: '查群名' })];
   area.update({ anchor: 2, under: 'in', head: 'working', since: s(0), steps, waiting: null, subtasks: [SUBTASK], truncated: false },
     { now: s(46), open: new Set(), details: new Map() });
@@ -110,11 +126,12 @@ test('the live area draws the head, steps, marks, thinking and subtask rows like
   assert.equal(root.querySelector('.conversation-activity-head').textContent, '正在工作 · 46 秒');
   assert.deepEqual(root.querySelectorAll('.conversation-activity-step').map(row => [row.dataset.status, visibleText(row)]),
     [['done', '查看 memory/state.md1 秒'], ['failed', '运行命令出错 · 1 秒'], ['running', '查群名进行中']]);
+  assert.deepEqual(root.querySelectorAll('.conversation-activity-step').map(row => row.children[0].className),
+    ['wb-ico wb-ico-tick', 'wb-ico wb-ico-alert', 'wb-ico wb-ico-loader'], 'a done step is a plain tick, as in the prototype');
   const marks = root.querySelectorAll('.conversation-activity-mark');
   assert.deepEqual(marks.map(node => node.dataset.mark), ['message', 'subtask']);
   assert.match(visibleText(marks[0]), /^收到你的新消息 · \d\d:\d\d$/);
   assert.match(visibleText(marks[1]), /^开始记忆整理（后台） · \d\d:\d\d$/);
-  assert.equal(root.querySelector('.conversation-activity-say').textContent, '找到了。');
   assert.equal(root.querySelectorAll('.conversation-activity-thinking').length, 0, 'a step runs: no thinking row');
   const row = root.querySelector('.conversation-activity-subtask-row');
   assert.equal(visibleText(row), '后台：记忆整理 · 进行中 6 秒 · 已 2 步');
@@ -210,7 +227,7 @@ test('a first message: waking the session, thinking, its steps, a reply that cle
   const live = liveOf(f)[0];
   assert.equal(live.dataset.messageId, undefined, 'the live area is not a message');
   assert.match(visibleText(live), /^正在唤醒会话 · \d+ 秒会话启动中$/);
-  answer = body({ now: s(8), working: IDLE, awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(6) } });
+  answer = body({ now: s(8), awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(6) } });
   await refresh(f);
   assert.match(visibleText(liveOf(f)[0]), /^正在工作 · \d+ 秒正在思考$/);
   answer = body({ now: s(12), steps: [tool(9, 10), tool(11, null, 'running')], awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(6) } });

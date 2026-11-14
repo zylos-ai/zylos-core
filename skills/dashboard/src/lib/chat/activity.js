@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { END_TYPES, MAIN_ACTION_TYPES } from '../workbench/working.js';
+import { END_TYPES, MAIN_ACTION_TYPES, STOP_HOOK_LAG_MS, inputAfterStop } from '../workbench/working.js';
 
 /**
  * What the agent is doing right now, for a Dashboard conversation page.
@@ -8,23 +8,28 @@ import { END_TYPES, MAIN_ACTION_TYPES } from '../workbench/working.js';
  * event of its own, so actions are never tied to the message that caused them. The page shows the group's current
  * work instead: the main agent's steps since the last reply in this conversation or since the group was last quiet
  * (whichever is later), a mark where a new input reached the session or a subtask began, and one row per subtask
- * that has not ended. Whether the group works at all comes from the same reading as the conversation header.
- * Steps carry only the one-line summaries the event store already holds: no tool output, no command text and no
- * thinking.
+ * that has not ended. Whether the group works at all comes from the same reading as the conversation header, and the
+ * page's header takes its reading from this read too.
+ * Steps carry only the one-line summaries the event store already holds: no tool output, no command text, no
+ * thinking and none of the words the agent writes between steps.
  */
 
 const fail = (code, statusCode = 400) => Object.assign(new Error(code), { code, statusCode });
 const STEP_TYPES = ['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result',
-  'subagent_start', 'subagent_stop', 'assistant_message', 'deliver'];
-// After the main agent stops, a message it took may still start work moments later (the runtime takes queued
-// messages after the current turn without any event), and collectors read transcripts every 5 s. For this long after
-// a stop, steps without an end keep running and a delivered message still counts as being thought about.
+  'subagent_start', 'subagent_stop', 'assistant_message', 'deliver', 'input_dequeue', 'user_prompt_submit'];
+// Collectors read transcripts every 5 s, so a step's end or a queued message the runtime took after the stop may be
+// recorded a little later. For this long after a stop, steps without an end keep running, and work that ended without
+// a reply is still settling: the page already says it was handled, but keeps reading often.
 export const SETTLE_MS = 20_000;
-// A delivered message that never led to a stop stops counting as being thought about after this long.
-const PENDING_LIMIT_MS = 30 * 60_000;
-const STEP_LIMIT = 1500, STEPS_SHOWN = 500, QUIET_LOOKBACK = 50, UNANSWERED_LIMIT = 50;
+const STEP_LIMIT = 1500, STEPS_SHOWN = 500, QUIET_LOOKBACK = 50, UNANSWERED_LIMIT = 50, SUBTASK_START_LIMIT = 200;
 // How long before a subtask's start the call that launched it may be.
 const LAUNCH_LEAD_MS = 10_000;
+/**
+ * The router records a message's delivery once it has typed it in and seen it land, which is after the runtime
+ * reported the prompt for it: about half a second later on real hosts. A delivery this soon after an unmatched prompt
+ * is that prompt's message.
+ */
+const PROMPT_DELIVERY_LAG_MS = 2_000;
 // Memory Sync workers, named by what they do rather than by their worker type.
 const MEMORY_SYNC_AGENTS = /^zylos-(group|origin|global)-sync$/;
 // Calls that manage subagents rather than do work (both multi-agent tool generations, including an `exec` that
@@ -50,6 +55,21 @@ const positiveId = value => Number.isSafeInteger(Number(value)) && Number(value)
  */
 export const subtaskKey = id => createHash('sha256').update(id).digest('base64url').slice(0, 22);
 const agentOf = event => typeof event.meta.agent_id === 'string' && event.meta.agent_id ? event.meta.agent_id : null;
+/**
+ * The prompt time of each delivery among main-agent rows in time order: the earliest prompt not yet matched at most
+ * PROMPT_DELIVERY_LAG_MS before it. A delivery recorded before its prompt, or without one, has none.
+ */
+function promptTimes(rows) {
+  const open = [], times = new Map();
+  for (const row of rows) {
+    if (row.type === 'user_prompt_submit') open.push(row.at);
+    else if (row.type === 'deliver') {
+      while (open.length && row.at - open[0] > PROMPT_DELIVERY_LAG_MS) open.shift();
+      if (open.length) times.set(row, open.shift());
+    }
+  }
+  return times;
+}
 
 /** One display label per step: a translation key and an optional plain argument; never a tool name or raw input. */
 export function stepLabel(event) {
@@ -110,6 +130,20 @@ export function recordGroupInterrupt(store, { sessionGroup, runId = null, sessio
 }
 
 /**
+ * Whether a tool call opens a step in an agent's list: the same rule decides what a subtask row counts and what it
+ * shows when opened. Calls that launch or manage subagents, and a code-mode `wait` that reads more of an earlier
+ * `exec`, are not steps.
+ */
+export function opensStep(event) {
+  if (event.runtime === 'codex' ? event.type !== 'tool_call' : event.type !== 'pre_tool_use') return false;
+  const meta = event.meta, tool = toolName(meta);
+  if (event.runtime !== 'codex') return !CLAUDE_AGENT_TOOLS.has(tool) && !!meta.tool_use_id;
+  if (typeof meta.resumes_cell === 'string' || CODEX_AGENT_CONTROLS.has(tool)) return false;
+  if (Array.isArray(meta.wraps_agent_tools) && meta.wraps_agent_tools.length) return false;
+  return !!(meta.tool_use_id ?? meta.call_id);
+}
+
+/**
  * One agent's steps from its events (time order), keyed so a start and its end become one step: the main agent's
  * when `agent` is null, otherwise that subtask's. `ends` are the times that agent stopped ({ at, stopped }, stopped
  * when it was interrupted); a step still open at a stop that is at least SETTLE_MS old was left unfinished there, or
@@ -122,17 +156,9 @@ export function buildSteps(events, { agent = null, ends = [], now }) {
   for (const event of events) {
     if (agentOf(event) !== agent) continue;
     const meta = event.meta;
-    if (event.type === 'assistant_message') {
-      const text = plain(event.summary);
-      if (text) steps.push({ kind: 'say', text, at: event.at });
-      continue;
-    }
     if (!['pre_tool_use', 'post_tool_use', 'post_tool_failure', 'tool_call', 'tool_result'].includes(event.type)) continue;
     if (event.runtime === 'codex' && ['pre_tool_use', 'post_tool_use', 'post_tool_failure'].includes(event.type)) continue;
     if (event.runtime !== 'codex' && ['tool_call', 'tool_result'].includes(event.type)) continue;
-    const tool = toolName(meta);
-    // A Claude subtask is shown as its own row, not as the call that launched it.
-    if (event.runtime !== 'codex' && CLAUDE_AGENT_TOOLS.has(tool)) continue;
     // A `wait` on a code-mode cell reads more of the `exec` that yielded it; the exec's step ends when one reports the
     // script finished.
     if (event.runtime === 'codex' && typeof meta.resumes_cell === 'string') {
@@ -144,11 +170,11 @@ export function buildSteps(events, { agent = null, ends = [], now }) {
       }
       continue;
     }
-    if (event.runtime === 'codex' && (CODEX_AGENT_CONTROLS.has(tool) || Array.isArray(meta.wraps_agent_tools) && meta.wraps_agent_tools.length)) continue;
     const key = meta.tool_use_id ?? meta.call_id ?? '';
     if (!key) continue;
     if (['pre_tool_use', 'tool_call'].includes(event.type)) {
-      if (open.has(key)) continue;
+      // A subtask is shown as its own row, not as the calls that launch or manage it.
+      if (!opensStep(event) || open.has(key)) continue;
       const step = { kind: 'tool', label: stepLabel(event), status: 'running', start: event.at, end: null };
       steps.push(step); open.set(key, step);
     } else {
@@ -163,7 +189,7 @@ export function buildSteps(events, { agent = null, ends = [], now }) {
   if (steps.length > STEPS_SHOWN) { steps = steps.slice(-STEPS_SHOWN); truncated = true; }
   const unread = new Set(cells.values());
   for (const step of steps) {
-    if (step.kind === 'say' || step.end !== null) continue;
+    if (step.end !== null) continue;
     const stop = ends.find(entry => entry.at >= step.start);
     if (stop !== undefined && now - stop.at >= SETTLE_MS) {
       step.status = stop.stopped ? 'stopped' : unread.has(step) ? 'done' : 'incomplete';
@@ -174,24 +200,31 @@ export function buildSteps(events, { agent = null, ends = [], now }) {
 }
 
 /**
- * Steps and marks in time order. A mark before the first step is dropped: the new input it stands for is already the
- * message the area sits under, or the reason the area appears at all.
+ * Steps and marks in time order. A mark for a message of this conversation or for a subtask before anything else is
+ * dropped: that message is the one the area sits under, and the subtask has its own row. A scheduled task, a system
+ * instruction or another message says why the work began, so its mark stays, even before any step.
  */
 export function interleave(steps, marks) {
   const items = [...steps, ...marks].sort((a, b) => (a.start ?? a.at) - (b.start ?? b.at));
-  const first = items.findIndex(item => item.kind !== 'mark');
+  const first = items.findIndex(item => item.kind !== 'mark' || !['message', 'subtask'].includes(item.mark));
   return first < 0 ? [] : items.slice(first);
 }
 
 /**
  * The `working(group)` reader for ChatActivity from the workbench snapshot (`getSnapshot`, `hotTtlMs`): the group's row,
- * the Origin row for the Origin group, so the conversation page and its header read the same thing.
+ * the Origin row for the Origin group, so the conversation page and its header read the same thing. The header's
+ * fields (`presence`, `wait`, `health`, the session's runtime health) are known only when the snapshot read the group
+ * list and the session status; `readAt` is when it read the status, to tell a newer reading from an older one.
  */
 export function snapshotWorking(workbench, { origin }) {
   return async group => {
     const snapshot = await workbench.getSnapshot();
     const row = snapshot?.rows?.find(item => group === origin ? item.origin === true : item.sessionGroup === group);
-    return row ? { working: row.working ?? null, presence: row.presence ?? null, ttlMs: workbench.hotTtlMs() } : null;
+    if (!row) return null;
+    const trusted = snapshot.listKnown === true && snapshot.sources?.status?.ok === true;
+    return { working: row.working ?? null, presence: row.presence ?? null, ttlMs: workbench.hotTtlMs(),
+      header: trusted ? { readAt: snapshot.sources.status.readAt, presence: row.presence ?? null, wait: row.wait ?? null,
+        health: snapshot.instance?.runtimeHealth?.[row.target?.runtime]?.health ?? null } : null };
   };
 }
 
@@ -259,25 +292,34 @@ export class ChatActivity {
   }
 
   /**
-   * The latest stop of the main agent at which no subtask was running: the moment the group was last quiet. A subtask
-   * that never reported its end counts as running only while its start is within `ttlMs`, the header's rule.
+   * The latest stop of the main agent at which no subtask was running (`quiet`, the moment the group was last quiet),
+   * and when the work around the latest stop settled (`settled`): that stop, or the end of the last subtask still
+   * running at it; null while one of those still runs. A subtask open at a stop was running there if it reported its
+   * end later or the header still counts it (`live`, its open subtasks); one that never reported its end and the
+   * header no longer counts was not. Without the header's reading, one counts while its start is within `ttlMs`.
    */
-  _quietSince(group, now, ttlMs) {
+  _quietSince(group, now, ttlMs, live = null) {
     const stops = this._stops(group, now);
-    if (!stops.length) return { quiet: null, stops };
+    if (!stops.length) return { quiet: null, settled: null, stops };
     const children = this._children(group, stops.at(-1).at - ttlMs, now);
+    const counted = (id, start) => live ? live.has(id) : now - start < ttlMs;
+    let quiet = null, settled;
     for (const stop of stops) {
-      const open = new Map();
+      const open = new Map(), ended = new Map();
       for (const child of children) {
-        if (child.at > stop.at) break;
         const id = agentOf(child);
         if (!id) continue;
-        if (child.type === 'subagent_start') open.set(id, child.at); else open.delete(id);
+        if (child.at <= stop.at) {
+          if (child.type === 'subagent_start') open.set(id, child.at); else open.delete(id);
+        } else if (child.type === 'subagent_stop' && open.has(id) && !ended.has(id)) ended.set(id, child.at);
       }
-      if (![...open.values()].some(at => stop.at - at < ttlMs)) return { quiet: stop.at, stops };
+      const running = [...open].filter(([id, start]) => ended.has(id) || counted(id, start)).map(([id]) => id);
+      if (settled === undefined) settled = running.some(id => !ended.has(id)) ? null : Math.max(stop.at, ...running.map(id => ended.get(id)));
+      if (!running.length) { quiet = stop.at; break; }
     }
     // Every stop read had a subtask running: the oldest bounds the window only when older stops were left unread.
-    return { quiet: stops.length >= QUIET_LOOKBACK ? stops.at(-1).at : null, stops };
+    if (quiet === null && stops.length >= QUIET_LOOKBACK) quiet = stops.at(-1).at;
+    return { quiet, settled, stops };
   }
 
   /** Where deliveries came from: this conversation, a scheduled task, a system instruction or anything else. */
@@ -306,11 +348,12 @@ export class ChatActivity {
 
   /**
    * The latest unanswered user message and how far it got: `queued` until the session takes it, `thinking` once
-   * delivered, and `handled` once the main agent stopped after it with no subtask running and did nothing more for
-   * SETTLE_MS (`acted` is the main agent's latest action). Null when it is answered, or has waited or been thought
-   * about past the pending limit.
+   * delivered while the header's reading says the main agent works (`busy`), `settling` (the page already says it
+   * was handled, but keeps reading often) from when the work around the stop after it settled until SETTLE_MS later,
+   * since the runtime may still take a queued message, and `handled` once that passed with nothing more done (`acted`
+   * is the main agent's latest action). Null otherwise: answered, waiting in C4 too long, or delivered and left idle.
    */
-  _awaiting(group, unanswered, { stops, quiet, acted }, now) {
+  _awaiting(group, unanswered, { stops, settled, acted, busy }, now) {
     const latest = unanswered.at(-1);
     if (!latest) return null;
     const sent = c4Time(latest.timestamp) ?? now;
@@ -322,10 +365,9 @@ export class ChatActivity {
       return null;
     }
     const at = ms(delivered.timestamp);
-    const stop = stops.find(entry => entry.at >= at);
-    if (stop && quiet !== null && quiet >= at && !(acted > quiet) && now - quiet >= SETTLE_MS) return { id: latest.id, state: 'handled', since: sent, delivered: at };
-    if (!stop && now - at > PENDING_LIMIT_MS) return null;
-    return { id: latest.id, state: 'thinking', since: sent, delivered: at };
+    if (busy) return { id: latest.id, state: 'thinking', since: sent, delivered: at };
+    if (!(stops[0]?.at >= at) || settled === null || acted > settled) return null;
+    return { id: latest.id, state: now - settled >= SETTLE_MS ? 'handled' : 'settling', since: sent, delivered: at };
   }
 
   /** The open subtasks the header counts, with their names, starts and how many steps each has taken so far. */
@@ -333,7 +375,8 @@ export class ChatActivity {
     if (!ids.length) return [];
     const starts = this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata FROM runtime_events
       WHERE session_group=@group AND event_type='subagent_start' AND json_extract(metadata, '$.agent_id') IN (SELECT value FROM json_each(@ids))
-      AND timestamp <= @now ORDER BY timestamp, event_seq`, { group, ids: JSON.stringify(ids), now: iso(now) }).map(row => this._row(row));
+      AND timestamp <= @now ORDER BY timestamp DESC, event_seq DESC LIMIT ${SUBTASK_START_LIMIT}`, { group, ids: JSON.stringify(ids), now: iso(now) })
+      .reverse().map(row => this._row(row));
     const latest = new Map();
     for (const start of starts) latest.set(agentOf(start), start);
     const first = Math.min(...[...latest.values()].map(start => start.at));
@@ -342,10 +385,20 @@ export class ChatActivity {
       AND timestamp >= @from AND timestamp <= @now ORDER BY timestamp, event_seq LIMIT ${STEP_LIMIT}`,
     { group, from: iso(first - LAUNCH_LEAD_MS), now: iso(now) }).map(row => this._row(row)) : [];
     const launches = subtaskLaunches([...launchers, ...starts].sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0)));
-    const counts = new Map(this._events(`SELECT json_extract(metadata, '$.agent_id') AS agent, COUNT(*) AS steps FROM runtime_events
-      WHERE session_group=@group AND event_type IN ('pre_tool_use','tool_call') AND json_extract(metadata, '$.agent_id') IN (SELECT value FROM json_each(@ids))
-      AND timestamp >= @from AND timestamp <= @now GROUP BY agent`,
-    { group, ids: JSON.stringify(ids), from: iso(Number.isFinite(first) ? first : now), now: iso(now) }).map(row => [row.agent, row.steps]));
+    // Each row counts the steps its open list shows: one per call that opens a step since that subtask's start.
+    const calls = Number.isFinite(first) ? this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata
+      FROM runtime_events WHERE session_group=@group AND event_type IN ('pre_tool_use','tool_call')
+      AND json_extract(metadata, '$.agent_id') IN (SELECT value FROM json_each(@ids)) AND timestamp >= @from AND timestamp <= @now
+      ORDER BY timestamp DESC, event_seq DESC LIMIT ${STEP_LIMIT * ids.length}`, { group, ids: JSON.stringify(ids), from: iso(first), now: iso(now) })
+      .map(row => this._row(row)) : [];
+    const keys = new Map();
+    for (const call of calls) {
+      const id = agentOf(call);
+      if (!latest.has(id) || call.at < latest.get(id).at || !opensStep(call)) continue;
+      if (!keys.has(id)) keys.set(id, new Set());
+      keys.get(id).add(call.meta.tool_use_id ?? call.meta.call_id);
+    }
+    const counts = new Map([...keys].map(([id, set]) => [id, set.size]));
     return ids.filter(id => latest.has(id)).map(id => {
       const start = latest.get(id);
       return { id: subtaskKey(id), label: subtaskLabel(start, launches.get(id)), start: start.at, steps: counts.get(id) ?? 0 };
@@ -356,7 +409,61 @@ export class ChatActivity {
     const group = range.parameters.group;
     let row = null;
     try { row = await this.working(group); } catch { row = null; }
-    return { working: row?.working ?? null, presence: row?.presence ?? null, ttlMs: row?.ttlMs ?? 30 * 60_000 };
+    return { working: row?.working ?? null, presence: row?.presence ?? null, header: row?.header ?? null, ttlMs: row?.ttlMs ?? 30 * 60_000 };
+  }
+
+  /**
+   * Messages the runtime held in its own queue while the main agent worked, and took as `taken` (a queued message
+   * taken, recorded at `recorded` when it counts after a stop): the deliveries after the input that started the work
+   * before it and before the window's start `from` (later ones are in the window already). The main agent's inputs
+   * are replayed with its `stops`: a queued message taken starts work, and a prompt starts work only while the main
+   * agent is not working, since the runtime also reports a prompt when a message is queued mid-turn.
+   */
+  _held(group, taken, from, stops) {
+    const until = taken.recorded ?? taken.at;
+    const main = '(CASE WHEN json_valid(metadata) THEN json_extract(metadata, \'$.agent_id\') END) IS NULL';
+    const rows = this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata FROM runtime_events
+      WHERE session_group=@group AND event_type IN ('deliver','user_prompt_submit','input_dequeue','input_remove') AND ${main}
+      AND timestamp >= @from AND timestamp <= @until ORDER BY timestamp DESC, event_seq DESC LIMIT ${QUIET_LOOKBACK}`,
+    { group, from: iso(until - 24 * 3600_000), until: iso(until) }).reverse().map(row => this._row(row));
+    if (!rows.length) return [];
+    // A queued message taken shortly before a stop counts after it unless the main agent acted in between, so the
+    // replay also reads the main agent's other actions just before each stop.
+    const near = stops.filter(stop => stop.at >= rows[0].at && stop.at <= taken.at);
+    const acts = near.length ? this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata FROM runtime_events
+      WHERE session_group=@group AND event_type IN (${MAIN_ACTION_TYPES.map(type => `'${type}'`).join(',')}) AND ${main}
+      AND EXISTS (SELECT 1 FROM json_each(@ranges) WHERE timestamp >= json_extract(value, '$[0]') AND timestamp <= json_extract(value, '$[1]'))
+      ORDER BY timestamp, event_seq LIMIT ${STEP_LIMIT}`,
+    { group, ranges: JSON.stringify(near.map(stop => [iso(stop.at - STOP_HOOK_LAG_MS), iso(stop.at)])) }).map(row => this._row(row)) : [];
+    const seen = new Set(rows.map(row => row.seq));
+    const ordered = [...rows, ...acts.filter(act => !seen.has(act.seq)), ...near]
+      .sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
+    const counted = inputAfterStop(ordered, { type: event => event.type, at: event => event.at, child: agentOf });
+    const replay = ordered.map(event => ({ event, at: counted(event) })).sort((a, b) => a.at - b.at || (a.event.seq ?? 0) - (b.event.seq ?? 0));
+    // When the input that started the work is no longer on record, every delivery read before `taken` was held. A
+    // session that changed without a stop on record (recycled, or its process killed) left no work running; the
+    // runtime's own records tell the session, the router's deliveries do not.
+    let running = false, start = -Infinity, session = null;
+    for (const { event } of replay) {
+      if (event.seq === taken.seq) break;
+      if (event.type !== 'deliver' && event.session && event.session !== session) {
+        if (session !== null) running = false;
+        session = event.session;
+      }
+      if (END_TYPES.includes(event.type)) running = false;
+      else if (event.type === 'input_dequeue' || (event.type === 'user_prompt_submit' && !running)) { running = true; start = event.at; }
+    }
+    // A delivery counts from its prompt when it has one, so the message that started the work is never held by it.
+    // Each typed message the runtime took into a running turn left the queue first in, first out, possibly before
+    // the router recorded its delivery; one taken with no delivery on record leaves the delivery queued after it.
+    const prompted = promptTimes(rows);
+    const queued = rows.filter(row => row.type === 'deliver' && (prompted.get(row) ?? row.at) > start)
+      .map(row => ({ row, at: prompted.get(row) ?? row.at }));
+    for (const removed of rows.filter(row => row.type === 'input_remove')) {
+      const index = queued.findIndex(item => item.at <= removed.at);
+      if (index >= 0) queued.splice(index, 1);
+    }
+    return queued.map(item => item.row).filter(row => row.at < from);
   }
 
   /**
@@ -368,27 +475,42 @@ export class ChatActivity {
     if (tab !== 'mine' || typeof id !== 'string' || !id.startsWith('g:')) throw fail('chat_activity_unsupported');
     const range = this.history._conversation(tab, id);
     const group = range.parameters.group;
-    const { working, presence, ttlMs } = await this._group(range);
+    const { working, presence, header, ttlMs } = await this._group(range);
     const now = this.now();
     if (subtask !== undefined) {
       if (typeof subtask !== 'string' || !/^[A-Za-z0-9_-]{22}$/.test(subtask)) throw fail('invalid_chat_subtask');
       const agent = (working?.subagents?.ids ?? []).find(id => subtaskKey(id) === subtask);
       return { now, ...(agent ? this._subtask(group, agent, subtask, now) : { subtask: null, steps: [] }) };
     }
-    const { quiet, stops } = this._quietSince(group, now, ttlMs);
+    // The header's reading: which subtasks it counts and whether the main agent works.
+    const live = working ? new Set(working.subagents?.ids ?? []) : null;
+    const busy = !!working?.on && (!!working.main || working.tools > 0);
+    const { quiet, settled, stops } = this._quietSince(group, now, ttlMs, live);
     const { reply, messages } = this._unanswered(range);
-    // A reply's time is whole seconds; work started within its second counts before it.
-    const from = Math.max(reply?.at != null ? reply.at + 1000 : -Infinity, quiet ?? -Infinity, now - 24 * 3600_000);
-    const events = this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata
+    // A reply's time is whole seconds; work started within its second counts before it. Once the main agent stopped
+    // after that reply, the reply's turn is over: work it takes up again (on a subtask's report, say) starts after it.
+    // Only while it works: otherwise no steps are shown, and a message still waiting in C4 since before that stop counts
+    // its wait on the page from the window's start, which stays at the reply.
+    const resumed = busy && reply?.at != null && stops[0]?.at > reply.at + 1000 ? stops[0].at : -Infinity;
+    const from = Math.max(reply?.at != null ? reply.at + 1000 : -Infinity, quiet ?? -Infinity, resumed, now - 24 * 3600_000);
+    const read = this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata
       FROM runtime_events WHERE session_group=@group AND event_type IN (${STEP_TYPES.map(type => `'${type}'`).join(',')})
       AND timestamp >= @from AND timestamp <= @now
       AND NOT (event_type IN ('pre_tool_use','post_tool_use','post_tool_failure') AND (CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.agent_id') END) IS NOT NULL)
-      ORDER BY timestamp DESC, event_seq DESC LIMIT ${STEP_LIMIT}`, { group, from: iso(from), now: iso(now + 60_000) })
+      ORDER BY timestamp DESC, event_seq DESC LIMIT ${STEP_LIMIT}`, { group, from: iso(from - STOP_HOOK_LAG_MS), now: iso(now + 60_000) })
       .reverse().map(row => this._row(row));
+    // A queued message taken as a turn ended can be timed before that stop: it counts just after it.
+    const ordered = [...read, ...stops].sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
+    const counted = inputAfterStop(ordered, { type: event => event.type, at: event => event.at, child: agentOf });
+    const events = read.map(event => counted(event) === event.at ? event : { ...event, at: counted(event), recorded: event.at })
+      .filter(event => event.at >= from).sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
     const ends = stops.filter(stop => stop.at >= from).map(stop => ({ at: stop.at, stopped: stop.type === 'dashboard_interrupt' }))
       .sort((a, b) => a.at - b.at);
     const built = buildSteps(events, { ends, now });
-    const deliveries = events.filter(event => event.type === 'deliver');
+    // A message the runtime held while it worked is marked where it took it: at the first queued message taken.
+    const taken = events.find(event => event.type === 'input_dequeue' && !agentOf(event));
+    const held = taken ? this._held(group, taken, from, stops).map(event => ({ ...event, at: taken.at })) : [];
+    const deliveries = [...held, ...events.filter(event => event.type === 'deliver')];
     const kind = this._markKinds(range, deliveries);
     const launches = subtaskLaunches(events);
     const marks = [
@@ -398,10 +520,10 @@ export class ChatActivity {
     ];
     const steps = interleave(built.steps, marks);
     // The header's reading; the subtasks' agent ids on it are not enumerable and stay out of the response.
-    return { now, from, working, presence, steps,
-      ...(built.truncated || events.length >= STEP_LIMIT ? { truncated: true } : {}),
+    return { now, from, working, presence, ...(header ? { header } : {}), steps,
+      ...(built.truncated || read.length >= STEP_LIMIT ? { truncated: true } : {}),
       subtasks: this._subtasks(group, working?.subagents?.ids ?? [], now),
-      awaiting: this._awaiting(group, messages, { stops, quiet, acted: Math.max(-Infinity, ...events
+      awaiting: this._awaiting(group, messages, { stops, settled, busy, acted: Math.max(-Infinity, ...events
         .filter(event => !agentOf(event) && MAIN_ACTION_TYPES.includes(event.type) && event.type !== 'deliver').map(event => event.at)) }, now),
       seenId: Math.max(reply?.id ?? 0, messages.at(-1)?.id ?? 0) };
   }

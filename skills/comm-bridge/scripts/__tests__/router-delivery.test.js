@@ -211,6 +211,22 @@ test('normal active heartbeat autoacks, recovery and post_restart reach runtime'
   });
 });
 
+test('a control typed in as a message records its delivery like a conversation message; keys, slash commands and auto-acknowledged heartbeats do not', async t => {
+  const f = setup(t), d = f.create();
+  const delivered = () => f.calls.filter(c => c[0] === 'diagnostic' && c[1] === 'deliver').map(c => c[2]);
+  const plain = f.control('Name the new conversation'), submitted = f.control('Run Memory Sync ---- ack via: safe');
+  await d.deliverControl(plain); await d.deliverControl(submitted);
+  assert.equal(plain.status, 'done'); assert.equal(submitted.status, 'running');
+  assert.deepEqual(delivered().map(fields => [fields.control_id, fields.sessionId, fields.conversation_id]),
+    [[plain.id, 's2', undefined], [submitted.id, 's2', undefined]]);
+  f.state.active_tools = 1;
+  for (const row of [f.control('[KEYSTROKE]Enter'), f.control('/compact'), f.control('Heartbeat check [phase=normal] ---- ack via: safe', { bypass_state: 1 })]) {
+    await d.deliverControl(row);
+    assert.equal(row.status, 'done', row.content);
+  }
+  assert.equal(delivered().length, 2, 'only the two typed messages record a delivery');
+});
+
 test('bypass skips health but cannot bypass idle or READY', async t => {
   const f = setup(t); f.state.health = 'unavailable'; f.deps.readRuntimeHealth = () => ({ health: 'down', publicHealth: 'unavailable' });
   const d = f.create(), row = f.control('repair', { bypass_state: 1 }); await d.deliverControl(row); assert.equal(row.status, 'done');

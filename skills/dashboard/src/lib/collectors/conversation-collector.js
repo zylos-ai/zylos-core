@@ -190,6 +190,19 @@ export class ConversationCollector {
       let msg;
       try { msg = JSON.parse(line); } catch { continue; }
 
+      // A message the runtime takes from its own queue after a turn starts work without any hook event; this line is
+      // the only record of it, so the Dashboard sees the main agent taking new input after it stopped. A message
+      // typed into the session and taken into the turn still running leaves the queue as a `remove` line instead,
+      // which is recorded so the message is not taken for one still waiting there; a subtask's report taken that way
+      // is not a typed message and is left out. The queued text is only checked for that, never stored. A subtask's
+      // own transcript is always read usage-only, so only the main agent's transcript records them.
+      if (msg.type === 'queue-operation') {
+        const type = { dequeue: 'input_dequeue', remove: 'input_remove' }[msg.operation];
+        const report = msg.operation === 'remove' && typeof msg.content === 'string' && msg.content.startsWith('<task-notification>');
+        if (type && !report && !usageOnly) written += this._ingestQueue(type, msg.timestamp, msg.sessionId || sessionId, group, runId);
+        continue;
+      }
+
       const uuid = msg.uuid;
       if (!uuid || this._seenUuids.has(uuid)) continue;
       this._seenUuids.add(uuid);
@@ -293,6 +306,30 @@ export class ConversationCollector {
 
     this._offsets.set(jsonlPath, startOffset + consumed);
     return written + usageWritten;
+  }
+
+  _ingestQueue(type, timestamp, sessionId, group, runId) {
+    if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))) return 0;
+    try {
+      const result = this.store.insertEvent({
+        id: crypto.randomUUID(),
+        ingest_id: `queue-${type === 'input_dequeue' ? 'dequeue' : 'remove'}-${sessionId ?? ''}-${timestamp}`,
+        timestamp,
+        runtime: 'claude',
+        session_id: sessionId,
+        session_group: group,
+        run_id: runId,
+        event_type: type,
+        category: 'turn',
+        metadata: {},
+        source: 'conversation',
+        confidence: 'actual'
+      });
+      return result?.inserted ? 1 : 0;
+    } catch (err) {
+      if (!err.message?.includes('UNIQUE constraint')) process.stderr.write(`[conversation-collector] ${err.message}\n`);
+      return 0;
+    }
   }
 
   _ingestUsage(usage, model, sessionId, timestamp, uuid, speed, projects = [], requestKey = null, agentId = null, group = null, runId = null) {
@@ -467,9 +504,29 @@ export class ConversationCollector {
     return m ? m[1] : null;
   }
 
+  /** A pass for the timer or for a stop that just arrived: one asked for while another runs joins it. */
+  collectShared() {
+    this._collecting ??= this.collect().finally(() => { this._collecting = null; });
+    return this._collecting;
+  }
+
+  /**
+   * After new events were imported (`types`, their event types): when a turn ended, the runtime may take a queued
+   * message at once, which only its transcript records, so read the transcripts shortly after a stop instead of
+   * waiting up to the next timed pass.
+   */
+  afterImport({ types } = {}, { delayMs = 300, setTimer = setTimeout } = {}) {
+    if (!types?.includes('stop') || this._stopTimer) return;
+    this._stopTimer = setTimer(() => {
+      this._stopTimer = null;
+      this.collectShared().catch(error => process.stderr.write(`[conversation-collector] ${error.message}\n`));
+    }, delayMs);
+    this._stopTimer?.unref?.();
+  }
+
   start(intervalMs = 5_000) {
     this.stop();
-    const collect = () => this.collect().catch(error => {
+    const collect = () => this.collectShared().catch(error => {
       process.stderr.write(`[conversation-collector] ${error.message}\n`);
     });
     collect();
@@ -479,5 +536,6 @@ export class ConversationCollector {
 
   stop() {
     if (this._timer) { clearInterval(this._timer); this._timer = null; }
+    if (this._stopTimer) { clearTimeout(this._stopTimer); this._stopTimer = null; }
   }
 }

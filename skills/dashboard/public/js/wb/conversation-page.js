@@ -579,44 +579,47 @@ export function mountConversationPage({
     const rateWait = s.groupWait?.kind === 'rate_wait';
     const healthLabel = { rate_limited: 'rateLimited', recovering: 'recovering', auth_failed: 'authFailed',
       unavailable: 'unavailable', down: 'down' }[s.groupHealth];
+    // A session being started is the group waking: it shows working, like the work it starts for.
+    const waking = !healthLabel && s.groupWait?.kind === 'starting';
     const waitLabel = { rate_wait: 'rateLimited', auth_wait: 'authFailed', fenced: 'paused', pool_wait: 'queueing',
-      starting: 'starting', start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
+      start_failed: 'startFailed', unknown: 'healthUnknown' }[s.groupWait?.kind];
     const waiting = s.groupHealth === 'ok' && ['unknown', 'pool_wait'].includes(s.groupWait?.kind);
-    const headerLabel = healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
+    const headerLabel = waking ? 'running' : healthLabel ?? (waiting && s.groupWait?.kind === 'unknown' ? 'waiting' : waitLabel) ?? (s.groupHealth === 'ok' ? 'running' : 'healthUnknown');
     const restricted = headerLabel !== 'running' && !waiting;
     const exceptional = headerLabel !== 'running';
     const origin = s.tab === 'mine' && isOriginConversation(s.selectedId);
     // Only in multi is an Origin that is not running asleep, woken by the next message; in single it would be down.
     const asleep = origin && s.mode === 'multi' && s.groupPresence === false && !healthLabel && !s.groupWait;
-    const working = !exceptional && s.groupPresence === true ? s.groupWorking : null;
-    running.hidden = asleep ? false : exceptional ? s.groupPresence !== true && !healthLabel && !s.groupWait : !working;
+    const working = !exceptional && !waking && s.groupPresence === true ? s.groupWorking : null;
+    const busy = waking || !!working?.on;
+    running.hidden = asleep || waking ? false : exceptional ? s.groupPresence !== true && !healthLabel && !s.groupWait : !working;
     running.classList.toggle('conversation-restricted', !asleep && exceptional && restricted);
     running.classList.toggle('conversation-waiting', asleep || exceptional && waiting);
     const wasBusy = running.dataset.state === 'busy';
-    running.dataset.state = asleep ? 'asleep' : exceptional ? restricted ? 'restricted' : 'waiting' : working?.on ? 'busy' : 'idle';
+    running.dataset.state = asleep ? 'asleep' : exceptional ? restricted ? 'restricted' : 'waiting' : busy ? 'busy' : 'idle';
     // Asleep shows one word; the explanation (a message wakes it, the first reply is slower) is in the tooltip.
-    const description = asleep ? t('chat.page.origin.asleepShort') : exceptional ? t('chat.page.' + headerLabel
+    const description = asleep ? t('chat.page.origin.asleepShort') : waking ? t('chat.page.waking') : exceptional ? t('chat.page.' + headerLabel
       + (rateWait && ['rateLimited', 'recovering'].includes(headerLabel) ? 'Pending' : ''))
       : workingText(working, { t, scheduled: origin && s.groupProcessing === 'scheduled_task' });
-    const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : working?.on ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
-    if (!exceptional && working?.on) mark.classList.add('wi-spin');
-    const captionParts = !asleep && !exceptional ? workingParts(working, { t,
+    const mark = asleep ? node('span', undefined, 'wi-dot') : exceptional ? icon(document, 'activity') : busy ? icon(document, 'loader') : node('span', undefined, 'wi-dot');
+    if (busy) mark.classList.add('wi-spin');
+    const captionParts = !asleep && !exceptional && !waking ? workingParts(working, { t,
       scheduled: origin && s.groupProcessing === 'scheduled_task' }) : null;
     const caption = node('span', captionParts?.main ?? description, 'wi-ind-text wi-ind-desktop');
     if (captionParts?.children) caption.append(node('span', ' · ' + captionParts.children, 'wi-ind-sub'));
-    const mobileCaption = !exceptional && working?.on ? workingParts(working, { t,
+    const mobileCaption = waking ? { main: description } : working?.on ? workingParts(working, { t,
       scheduled: origin && s.groupProcessing === 'scheduled_task', compact: true }) : null;
     const compact = mobileCaption ? node('span', mobileCaption.main, 'wi-ind-text wi-ind-mobile') : null;
     const chevron = icon(document, 'chev'); chevron.classList.add('wi-ind-chev');
     const existingComet = [...running.children].find(child => child.classList.contains('wi-comet'));
-    if (!exceptional && working?.on && existingComet) {
+    if (busy && existingComet) {
       // Snapshot updates refresh the caption without restarting the border animation.
       for (const child of [...running.children]) if (child !== existingComet) child.remove();
       running.append(mark, caption, ...(compact ? [compact] : []), chevron);
     } else {
       running.replaceChildren(mark, caption, ...(compact ? [compact] : []), chevron);
     }
-    if (!exceptional && working?.on && !existingComet) {
+    if (busy && !existingComet) {
       const comet = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       comet.setAttribute('class', 'wi-comet');
       comet.setAttribute('aria-hidden', 'true');

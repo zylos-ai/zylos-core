@@ -945,11 +945,12 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
   }
 }
 
-/* What the AI is doing now: right below the latest message, indented past the avatar column on the message's side.
-   The time column is a grid column at the area's right edge, so it never moves with the length of a step's text. */
+/* What the AI is doing now: right below the latest message, indented past the avatar column on the message's side,
+   as wide as its content up to 560px, so under a user message it ends where the bubble ends. The time column is a grid
+   column at the area's right edge, so the times line up; a step's text wraps within the width rather than pushing it. */
 .conversation-activity-message { display:flex; flex-direction:column; align-items:flex-start; margin-top:-8px; padding-left:37px; }
 .conversation-activity-message[data-under="in"] { align-items:flex-end; padding-left:0; padding-right:37px; }
-.conversation-activity { display:flex; flex-direction:column; gap:2px; width:min(560px,100%); font-size:12.5px; line-height:1.5; color:var(--text-dim); }
+.conversation-activity { display:flex; flex-direction:column; gap:2px; width:fit-content; max-width:min(560px,100%); font-size:12.5px; line-height:1.5; color:var(--text-dim); }
 .conversation-activity-head { display:inline-flex; align-self:flex-start; align-items:center; gap:6px; max-width:100%; min-height:24px; margin:0; padding:2px 8px 2px 6px; font-size:12px; color:var(--text-muted); }
 .conversation-activity-head>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .conversation-activity-head>.wb-ico { width:13px; height:13px; flex:none; color:var(--wb-work); animation:conversation-activity-spin 1s linear infinite; }
@@ -957,13 +958,12 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 .conversation-activity-steps:empty,.conversation-activity-steps[hidden] { display:none; }
 .conversation-activity-step { display:contents; }
 .conversation-activity-step>.wb-ico { width:13px; height:13px; color:var(--text-muted); }
-.conversation-activity-label { min-width:0; min-height:24px; line-height:24px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-dim); }
+.conversation-activity-label { min-width:0; min-height:24px; padding:3px 0; line-height:18px; overflow-wrap:anywhere; color:var(--text-dim); }
 .conversation-activity-time { justify-self:end; font-size:11px; color:var(--text-muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
 .conversation-activity-step[data-status=running]>.wb-ico { color:var(--accent); animation:conversation-activity-spin 1s linear infinite; }
 .conversation-activity-step[data-status=running]>.conversation-activity-label { color:var(--text); }
 .conversation-activity-step[data-status=failed]>.wb-ico,.conversation-activity-step[data-status=failed]>.conversation-activity-time,
 .conversation-activity-step[data-status=incomplete]>.wb-ico,.conversation-activity-step[data-status=incomplete]>.conversation-activity-time { color:var(--wb-wait); }
-.conversation-activity-say { grid-column:1/-1; margin:0; padding:3px 0 4px; font-size:12px; line-height:1.6; color:var(--text-muted); overflow-wrap:anywhere; }
 .conversation-activity-more { grid-column:1/-1; margin:0; padding:2px 0 4px; font-size:11.5px; line-height:1.6; color:var(--text-muted); }
 /* A new input or a subtask start: a centred pill across the step column. */
 .conversation-activity-mark { grid-column:1/-1; display:flex; align-items:center; gap:8px; min-width:0; margin:5px 0; font-size:11.5px; color:var(--text-dim); }
@@ -994,7 +994,6 @@ main:has(#tab-chat:not([hidden]) .conversation-page) {
 /* Work that ended without a reply: one quiet line under the user message. */
 .conversation-activity-handled { display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:12px; color:var(--text-muted); }
 .conversation-activity-handled>.wb-ico { width:13px; height:13px; flex:none; }
-.conversation-activity[data-state="handled"] { width:auto; }
 .conversation-activity-details { display:inline-flex; align-items:center; gap:4px; font-size:12px; }
 .conversation-activity-details .wb-ico { width:12px; height:12px; }
 @keyframes conversation-activity-spin { to { transform:rotate(360deg); } }
@@ -1755,7 +1754,9 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-page .conversation-running[data-state=busy] .wi-ind-mobile { display:block; }
   .conversation-page .conversation-running[data-state=busy]::after { content:""; position:absolute; left:-4px; right:-2px; top:-11px; bottom:-11px; }
   .conversation-header .wi-comet { --wi-rx:10.25px; --wi-t:2.2s; }
-  .conversation-page .conversation-header .conversation-running[data-state=idle] { display:none; }
+  .conversation-page .conversation-header .conversation-running[data-state=idle] { grid-column:3; grid-row:1; display:inline-flex; align-self:center; gap:6px; width:auto; max-width:46vw; min-height:22px; margin:0 2px 0 4px; padding:0 4px; border:0; border-top:0; background:transparent; color:var(--text-dim); font-size:12px; line-height:1; }
+  .conversation-page .conversation-running[data-state=idle] .wi-ind-text { white-space:nowrap; }
+  .conversation-page .conversation-running[data-state=idle] .wi-ind-chev { display:none; }
   .conversation-page .conversation-running .wi-ind-chev { margin-left:auto; }
   .conversation-page .conversation-running[data-state=busy] .wi-ind-chev { width:11px; height:11px; margin-left:0; }
   .conversation-page .conversation-rename { gap:6px; padding:8px 8px 8px 12px; background:var(--bg-card); }

@@ -10,15 +10,16 @@ import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { AuthGate } from '../src/lib/auth.js';
 import { ChatHistory } from '../src/lib/chat/history.js';
-import { ChatActivity, SETTLE_MS, stepLabel, subtaskKey } from '../src/lib/chat/activity.js';
+import { ChatActivity, SETTLE_MS, snapshotWorking, stepLabel, subtaskKey } from '../src/lib/chat/activity.js';
 import { handleChatHistory } from '../src/lib/chat/history-routes.js';
 import { workingHistory } from '../src/lib/workbench/working.js';
+import { livePresentation } from '../public/js/wb/conversation-activity.js';
 import { sendJson } from '../src/lib/http.js';
 import { migrateDatabase, TARGET_SCHEMA_VERSION } from '../src/lib/schema.js';
 import { migrateSchema } from '../../comm-bridge/scripts/c4-migrations.js';
 import { migrateToV2 } from '../../comm-bridge/scripts/c4-migrations-v2.js';
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
-import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, CELL_D_LINES, V1_CHILD, cellEndingAs, cellPolledInNewExec, rebase,
+import { CELL_A_LINES, CELL_B_LINES, CELL_C_LINES, CELL_D_LINES, V1_CHILD, V2_TASK, cellEndingAs, cellPolledInNewExec, rebase,
   v1ChildRollout, v1ParentTurn, v2CompletedTurn, v2InterruptedTurn } from './fixtures/codex-multi-agent-rollout.js';
 
 const GROUP = 'dash-owned:a';
@@ -59,6 +60,11 @@ function fixture(t, { now = at(600), presence = 'running', tools = 0 } = {}) {
     session_group: fields.group ?? GROUP, run_id: 'r1', event_type: type, category: 'test', summary: fields.summary ?? null,
     metadata: fields.meta ?? {}, source: 'test' });
   const deliver = (id, seconds, meta = {}) => event('deliver', seconds, { meta: { conversation_id: id, ...meta }, session: null });
+  // A message typed into the session as real hosts record it: the runtime reports its prompt, and the router records
+  // the delivery about half a second later.
+  const typed = (seconds, meta, session = 's1') => {
+    event('user_prompt_submit', seconds, { session }); event('deliver', seconds + 0.48, { meta, session: null });
+  };
   const tool = (useId, start, end, meta = {}, outcome = 'post_tool_use') => {
     event('pre_tool_use', start, { meta: { tool_use_id: useId, ...meta } });
     if (end !== null) event(outcome, end, { meta: { tool_use_id: useId, ...meta } });
@@ -68,11 +74,10 @@ function fixture(t, { now = at(600), presence = 'running', tools = 0 } = {}) {
     VALUES (?,?,?,?,?,?)`).run(id, '[KEYSTROKE]Escape', '[KEYSTROKE]Escape', status, Math.floor(at(seconds) / 1000), Math.floor(at(seconds) / 1000));
   const bulk = work => store.db.transaction(work)();
   t.after(() => { reader.close(); store.close(); db.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, db, store, history, activity, message, event, deliver, tool, clock, control, bulk };
+  return { root, db, store, history, activity, message, event, deliver, typed, tool, clock, control, bulk };
 }
 const read = (f, options = {}) => f.activity.activity(ID, { tab: 'mine', ...options });
-const shown = result => result.steps.map(step => step.kind === 'say' ? `say:${step.text}`
-  : step.kind === 'mark' ? `mark:${step.mark}${step.label ? `:${step.label.key}${step.label.arg ? `:${step.label.arg}` : ''}` : ''}`
+const shown = result => result.steps.map(step => step.kind === 'mark' ? `mark:${step.mark}${step.label ? `:${step.label.key}${step.label.arg ? `:${step.label.arg}` : ''}` : ''}`
     : `${step.label.key}:${step.label.arg ?? ''}:${step.status}`);
 
 test('a first message in a new session: from sending, through the start-up turn, to the work taken from the queue', async t => {
@@ -88,25 +93,38 @@ test('a first message in a new session: from sending, through the start-up turn,
   f.db.prepare("UPDATE conversations SET status='delivered' WHERE id=1").run();
   f.deliver(1, 4);
   f.event('stop', 6);
-  f.clock.now = at(7);
+  f.clock.now = at(6.5);
   result = await read(f);
-  assert.equal(result.awaiting.state, 'thinking', 'delivered: being thought about');
-  assert.equal(result.awaiting.delivered, at(4));
   assert.deepEqual(result.steps, [], 'the start-up turn ended with the group quiet; its steps are not this work');
   assert.equal(result.from, at(6));
   assert.equal(result.working.on, false, 'the start-up turn stopped');
-  // The runtime takes the message from its queue with no event of its own; only its tools show.
-  f.tool('one', 8, 9, { tool_name: 'Read', tool_detail: 'a.md' });
-  f.tool('two', 10, null, { tool_name: 'Bash', tool_detail: 'Check disk space', detail_source: 'description' });
-  f.clock.now = at(11);
+  assert.deepEqual(result.awaiting, { id: 1, state: 'settling', since: at(0), delivered: at(4) },
+    'stopped moments ago and nothing taken yet: nothing to show, but the runtime may still take the message');
+  // The runtime takes the message from its queue: no hook reports it, the transcript's dequeue line does.
+  f.event('input_dequeue', 7);
+  f.clock.now = at(7.5);
   result = await read(f);
-  assert.equal(result.working.on, true, 'the header works as soon as the main agent acts');
-  assert.equal(result.working.main.since, at(8));
+  assert.equal(result.working.on, true, 'the header works once the main agent takes the message');
+  assert.equal(result.working.main.since, at(7));
+  assert.equal(result.awaiting.state, 'thinking', 'taken: being thought about');
+  assert.equal(result.awaiting.delivered, at(4));
+  assert.deepEqual(result.steps, [], 'taking a message is no step');
+  // Thinking long before the first action: still working and thinking, never handled.
+  f.clock.now = at(7 + SETTLE_MS / 1000 + 30);
+  result = await read(f);
+  assert.equal(result.working.on, true, 'thinking past the settle time still works');
+  assert.equal(result.awaiting.state, 'thinking', 'no first action yet is not "handled"');
+  const first = 7 + SETTLE_MS / 1000 + 31;
+  f.tool('one', first, first + 1, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.tool('two', first + 2, null, { tool_name: 'Bash', tool_detail: 'Check disk space', detail_source: 'description' });
+  f.clock.now = at(first + 3);
+  result = await read(f);
+  assert.equal(result.working.main.since, at(7));
   assert.deepEqual(shown(result), ['read:a.md:done', 'described:Check disk space:running']);
   assert.equal(result.awaiting.state, 'thinking');
 });
 
-test('steps carry plain labels only and never a summarized command line', async t => {
+test('steps carry plain labels only: never a summarized command line or the words written between steps', async t => {
   const f = fixture(t, { now: at(20) });
   f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
   f.tool('read', 1, 2, { tool_name: 'Read', tool_detail: 'memory/state.md' });
@@ -115,8 +133,9 @@ test('steps carry plain labels only and never a summarized command line', async 
   f.event('assistant_message', 7, { summary: 'Found  it.' });
   f.tool('mcp', 8, null, { tool_name: 'mcp__secret__tool', tool_detail: 'raw input' });
   const result = await read(f);
-  assert.deepEqual(shown(result), ['read:memory/state.md:done', 'runCommand::done', 'read:b:failed', 'say:Found it.', 'tool::running']);
+  assert.deepEqual(shown(result), ['read:memory/state.md:done', 'runCommand::done', 'read:b:failed', 'tool::running']);
   const text = JSON.stringify(result);
+  assert.doesNotMatch(text, /Found/);
   for (const secret of ['df -h', 'mcp__secret', 'raw input']) assert.ok(!text.includes(secret), secret);
   assert.equal(result.steps[0].end - result.steps[0].start, 1000);
 });
@@ -246,6 +265,75 @@ test('a subtask that never reported its end stops counting after the header\'s q
   assert.deepEqual(result.subtasks, []); assert.equal(result.working.on, false);
 });
 
+test('work whose subtask never reported its end is handled once the header stops counting that subtask', async t => {
+  const f = fixture(t, { now: at(60) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  f.event('subagent_start', 1, { meta: { agent_id: 'lost', agent_type: 'general-purpose' } });
+  f.event('stop', 2);
+  let result = await read(f);
+  assert.equal(result.working.on, true, 'the header counts the subtask');
+  assert.equal(result.awaiting, null, 'the main agent stopped and the subtask runs: neither thinking nor handled');
+  f.clock.now = at(2 + 20 * 60);
+  assert.equal((await read(f)).awaiting, null, 'still within the header\'s quiet limit');
+  f.clock.now = at(1) + TTL;
+  result = await read(f);
+  assert.equal(result.working.on, false);
+  assert.deepEqual(result.awaiting, { id: 1, state: 'handled', since: at(0), delivered: at(0.2) },
+    'the header no longer counts the subtask: the work settled at the stop');
+});
+
+test('work with a subtask that began longer ago than the quiet limit but still acts is not handled while the header counts it', async t => {
+  const f = fixture(t, { now: at(60) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  f.event('subagent_start', 1, { meta: { agent_id: 'long', agent_type: 'general-purpose' } });
+  f.event('stop', 2);
+  // The subtask keeps acting, so the header counts it although it began longer ago than the quiet limit.
+  for (const s of [600, 1200, 1800]) f.tool(`long-${s}`, s, s + 1, { tool_name: 'Read', tool_detail: `part ${s}`, agent_id: 'long' });
+  f.clock.now = at(1 + TTL / 1000 + 120);
+  let result = await read(f);
+  assert.equal(result.working.on, true, 'the header counts the subtask by its latest action');
+  assert.equal(result.subtasks.length, 1);
+  assert.equal(result.awaiting, null, 'the subtask still runs: the work is not handled');
+  f.event('subagent_stop', 1 + TTL / 1000 + 130, { meta: { agent_id: 'long' } });
+  f.clock.now = at(1 + TTL / 1000 + 130) + SETTLE_MS;
+  result = await read(f);
+  assert.equal(result.working.on, false);
+  assert.deepEqual(result.awaiting, { id: 1, state: 'handled', since: at(0), delivered: at(0.2) }, 'handled once the subtask ended and settled');
+});
+
+test('work with a subtask that outlived the stop is handled once that subtask ended and settled', async t => {
+  const f = fixture(t, { now: at(30) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  f.event('subagent_start', 1, { meta: { agent_id: 'sub', agent_type: 'general-purpose' } });
+  f.event('stop', 2);
+  f.event('subagent_stop', 40, { meta: { agent_id: 'sub' } });
+  assert.equal((await read(f)).awaiting, null, 'the subtask runs');
+  f.clock.now = at(40) + SETTLE_MS - 1;
+  assert.equal((await read(f)).awaiting.state, 'settling', 'the subtask ended moments ago');
+  f.clock.now = at(40) + SETTLE_MS;
+  assert.equal((await read(f)).awaiting.state, 'handled');
+});
+
+test('a subtask started again under the same id counts only the steps since its latest start, as many as its open row shows', async t => {
+  const f = fixture(t, { now: at(12) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  // Another subtask began first and still runs, so the step lookup reaches back past the restart.
+  f.event('subagent_start', 1, { meta: { agent_id: 'other', agent_type: 'general-purpose' } });
+  f.tool('o1', 2, 3, { tool_name: 'Read', tool_detail: 'other', agent_id: 'other' });
+  f.event('subagent_start', 4, { meta: { agent_id: 'again', agent_type: 'general-purpose' } });
+  f.tool('g1', 5, 6, { tool_name: 'Read', tool_detail: 'first run one', agent_id: 'again' });
+  f.tool('g2', 7, 8, { tool_name: 'Read', tool_detail: 'first run two', agent_id: 'again' });
+  f.event('subagent_stop', 9, { meta: { agent_id: 'again' } });
+  f.event('subagent_start', 10, { meta: { agent_id: 'again', agent_type: 'general-purpose' } });
+  f.tool('g3', 11, null, { tool_name: 'Read', tool_detail: 'second run', agent_id: 'again' });
+  const result = await read(f);
+  assert.deepEqual(result.subtasks.map(item => [item.id, item.start, item.steps]),
+    [[subtaskKey('other'), at(1), 1], [subtaskKey('again'), at(10), 1]], 'the restarted row counts only its latest run');
+  const open = await read(f, { subtask: subtaskKey('again') });
+  assert.deepEqual(shown(open), ['read:second run:running']);
+  assert.equal(open.steps.length, result.subtasks[1].steps, 'the row\'s count is the number of steps it opens to');
+});
+
 test('opening a subtask that is not running reads nothing, and a malformed or raw id is refused', async t => {
   const f = fixture(t);
   f.message(1, 0);
@@ -263,7 +351,10 @@ test('work that ended without a reply is handled once it settled; until then it 
   f.tool('a', 1, 2, { tool_name: 'Read', tool_detail: 'a' });
   f.event('stop', 5);
   let result = await read(f);
-  assert.equal(result.awaiting.state, 'thinking', 'a queued message may still start work just after the stop');
+  assert.equal(result.working.on, false);
+  assert.equal(result.awaiting.state, 'settling', 'a stop moments ago: no longer thinking, not yet handled');
+  f.clock.now = at(5) + SETTLE_MS - 1;
+  assert.equal((await read(f)).awaiting.state, 'settling');
   f.clock.now = at(5) + SETTLE_MS;
   result = await read(f);
   assert.deepEqual(result.awaiting, { id: 1, state: 'handled', since: at(0), delivered: at(0.2) });
@@ -276,12 +367,35 @@ test('work that ended without a reply is handled once it settled; until then it 
   assert.deepEqual(shown(result), ['read:b:running']);
 });
 
-test('a delivered message that never led to a stop gives up after the pending limit; a queued one waits in C4', async t => {
-  const f = fixture(t, { now: at(100) });
+test('the main agent acting again after its stop without new input on record is not handled once that action is old', async t => {
+  const f = fixture(t, { now: at(15) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  f.tool('a', 1, 2, { tool_name: 'Read', tool_detail: 'a' });
+  f.event('stop', 5);
+  // It acts again with no input recorded since the stop, as when the line that took the message was not collected.
+  f.tool('b', 8, 9, { tool_name: 'Read', tool_detail: 'b' });
+  f.clock.now = at(9 + 30);
+  const result = await read(f);
+  assert.equal(result.working.on, false, 'the header no longer counts an action from half a minute ago');
+  assert.ok(result.now - at(5) >= SETTLE_MS, 'the stop is past the settle time');
+  assert.equal(result.awaiting, null, 'it acted after the stop: the stop did not settle the work, so it is not handled');
+});
+
+test('a taken message that never led to a stop is thought about until the header\'s quiet limit; a queued one waits in C4', async t => {
+  const f = fixture(t, { now: at(10) });
   f.message(1, 0); f.deliver(1, 1);
-  assert.equal((await read(f)).awaiting.state, 'thinking');
-  f.clock.now = at(1 + 31 * 60);
-  assert.equal((await read(f)).awaiting, null);
+  assert.equal((await read(f)).awaiting.state, 'thinking', 'a delivery is an action of the main agent');
+  f.clock.now = at(30);
+  assert.equal((await read(f)).awaiting, null, 'a delivery alone is no input: it counts only as a recent action');
+  f.event('user_prompt_submit', 31);
+  f.clock.now = at(31 + 25 * 60);
+  let result = await read(f);
+  assert.equal(result.working.on, true, 'taken and not stopped: thinking long without any event still works');
+  assert.equal(result.awaiting.state, 'thinking');
+  f.clock.now = at(31) + TTL;
+  result = await read(f);
+  assert.equal(result.working.on, false, 'quiet past the header\'s limit');
+  assert.equal(result.awaiting, null);
   f.message(2, 1900, 'in', { status: 'pending' });
   f.clock.now = at(1900 + 600);
   assert.equal((await read(f)).awaiting.state, 'queued', 'still in the C4 queue');
@@ -366,7 +480,7 @@ test('Codex: commands and edits from the rollout, hook duplicates and subagent c
   f.event('tool_call', 8, { ...codex, meta: { call_id: 'c5', tool_name: 'exec', wraps_agent_tools: ['spawn_agent'] } });
   f.event('assistant_message', 21, { ...codex, summary: 'Done looking.' });
   const result = await read(f);
-  assert.deepEqual(shown(result), ['runCommand::failed', 'edit:b/c/d.md:done', 'mark:subtask:plain', 'say:Done looking.']);
+  assert.deepEqual(shown(result), ['runCommand::failed', 'edit:b/c/d.md:done', 'mark:subtask:plain']);
   assert.deepEqual(result.subtasks.map(item => [item.id, item.label]), [[subtaskKey('x'), { key: 'plain' }]]);
   // The response as the route sends it: the subtask's count, never its agent id.
   assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(result)).working.subagents), ['count', 'since', 'lastActivityAt']);
@@ -408,14 +522,20 @@ test('a recorded Codex v2 subtask is a mark and, while it runs, a row; its spawn
     assertNothingPrivate(result, name);
     assert.deepEqual(result.subtasks, [], `${name}: ended`);
   }
-  const lines = v2CompletedTurn(at(1));
+  // The recorded wait names no subtask; here it names the running one, so the parent's call is tagged with its id.
+  const lines = v2CompletedTurn(at(1)).map(line => line.payload.name === 'wait_agent'
+    ? { ...line, payload: { ...line.payload, arguments: JSON.stringify({ targets: [V2_TASK], timeout_ms: 10000 }) } } : line);
   const f = await codexWork(t, lines.filter(line => !(line.payload.item?.type === 'SubAgentActivity' && line.payload.item.kind === 'completed')));
+  const tagged = f.store.db.prepare("SELECT COUNT(*) AS n FROM runtime_events WHERE event_type='tool_call' AND json_extract(metadata, '$.agent_id')=?").get(V2_TASK).n;
+  assert.ok(tagged >= 1, 'the parent\'s wait carries the subtask\'s id');
   const running = await read(f);
   assert.equal(running.subtasks.length, 1, 'a subtask whose wait timed out still runs');
   assert.equal(running.working.on, true);
   assertNothingPrivate(running, 'running');
   const steps = await read(f, { subtask: running.subtasks[0].id });
   assert.equal(steps.subtask.id, running.subtasks[0].id);
+  assert.equal(running.subtasks[0].steps, steps.steps.length, 'the row counts the steps it shows when opened');
+  assert.deepEqual(steps.steps, [], 'its parent\'s spawn, input and wait calls are not its steps');
   assertNothingPrivate(steps, 'running subtask');
 });
 
@@ -473,6 +593,28 @@ test('a code-mode command no wait saw finish runs on, and ends where the main ag
 // Integration: real auth gate, history routes, SQLite and a private loopback server only.
 // Run for activity route or chat access changes; skip for styles or text changes.
 // Uses the runner-isolated HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; no process or tmux launch.
+test('the header reading comes with the activity only when the snapshot read the group list and the session status', async t => {
+  const f = fixture(t, { now: at(5) });
+  f.message(1, 0);
+  const working = { on: false, since: null, main: null, tools: 0, subagents: null };
+  const snapshot = (extra = {}) => ({ listKnown: true, sources: { status: { ok: true, readAt: at(4) } },
+    rows: [{ sessionGroup: GROUP, presence: 'running', wait: null, working, target: { runtime: 'claude' } }],
+    instance: { runtimeHealth: { claude: { health: 'ok' } } }, ...extra });
+  const readWith = value => new ChatActivity({ history: f.history, store: f.store, now: () => f.clock.now,
+    working: snapshotWorking({ getSnapshot: async () => value, hotTtlMs: () => TTL }, { origin: 'origin' }) }).activity(ID, { tab: 'mine' });
+  assert.deepEqual((await readWith(snapshot())).header, { readAt: at(4), presence: 'running', wait: null, health: 'ok' });
+  for (const [name, value] of [
+    ['status unreadable', snapshot({ sources: { status: { ok: false, readAt: at(4) } } })],
+    ['no status source', snapshot({ sources: {} })],
+    ['group list unknown', snapshot({ listKnown: false })],
+    ['group list not marked known', snapshot({ listKnown: undefined })],
+  ]) {
+    const result = await readWith(value);
+    assert.equal(Object.hasOwn(result, 'header'), false, name);
+    assert.equal(result.presence, 'running', `${name}: the area still has its own reading`);
+  }
+});
+
 test('the activity route uses the chat access rules and accepts only tab and subtask', async t => {
   const f = fixture(t, { now: at(10) });
   f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
@@ -527,4 +669,325 @@ test('a Dashboard database one version older gains the group, type and time inde
     const plan = prepare(`EXPLAIN QUERY PLAN ${sql}`).all(parameters).map(row => row.detail).join(' | ');
     assert.match(plan, /USING INDEX idx_events_group_type_ts/, sql.slice(0, 80));
   }
+});
+
+test('a queued message the runtime took as the turn ended, timed before the late stop hook, keeps the main agent working', async t => {
+  const f = fixture(t, { now: at(10.5) });
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  f.tool('a', 1, 2, { tool_name: 'Bash', tool_detail: 'Check the group', detail_source: 'description' });
+  // A system instruction typed in mid-turn waits in the runtime's queue; the stop hook's process runs 0.4 s late.
+  f.event('deliver', 3, { meta: { control_id: 7 }, session: null });
+  f.event('input_dequeue', 9.6); f.event('stop', 10);
+  let result = await read(f);
+  assert.equal(result.working.on, true, 'from the queued message taken until the next stop, the main agent works');
+  assert.equal(result.working.main.since, at(10) + 1, 'its work counts from just after the stop');
+  assert.equal(result.awaiting.state, 'thinking');
+  f.tool('b', 13.5, null, { tool_name: 'Bash', tool_detail: 'Name the group', detail_source: 'description' });
+  f.clock.now = at(14);
+  result = await read(f);
+  assert.deepEqual(shown(result), ['mark:control', 'described:Name the group:running'],
+    'the held instruction is marked where the runtime took it, and the finished turn is gone');
+  f.event('stop', 20); f.clock.now = at(20.5);
+  assert.equal((await read(f)).working.on, false, 'its own stop ends it');
+});
+
+test('a message queued just before the turn ended and recorded as delivered after it was taken still counts after the late stop', async t => {
+  const f = fixture(t, { now: at(10.5) });
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  f.tool('a', 1, 2, { tool_name: 'Bash', tool_detail: 'Check the group', detail_source: 'description' });
+  // Queued at 9.4; the runtime takes it at 9.6 as the turn ends; the router records its delivery at 9.88; the stop
+  // hook's process runs late at 10.
+  f.typed(9.4, { control_id: 7 });
+  f.event('input_dequeue', 9.6); f.event('stop', 10);
+  const result = await read(f);
+  assert.equal(result.working.on, true, 'a delivery between the take and the stop is not the main agent acting');
+  assert.equal(result.working.main.since, at(10) + 1);
+});
+
+test('a held instruction is marked where it was taken, though the runtime reported a prompt when it was queued', async t => {
+  const f = fixture(t, { now: at(14) });
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  f.tool('a', 1, 2, { tool_name: 'Bash', tool_detail: 'Check the group', detail_source: 'description' });
+  // The runtime reports a prompt as it queues an instruction typed in mid-turn, not when it takes it.
+  f.typed(3, { control_id: 7 });
+  f.event('input_dequeue', 9.6); f.event('stop', 10);
+  f.tool('b', 13.5, null, { tool_name: 'Bash', tool_detail: 'Name the group', detail_source: 'description' });
+  assert.deepEqual(shown(await read(f)), ['mark:control', 'described:Name the group:running']);
+});
+
+test('only messages held since the work before the taken one began are marked where it was taken', async t => {
+  {
+    // A scheduled task's work ended at 10. A message that arrived as it ended was taken as a new prompt and started the
+    // window's work; Memory Sync keeps the window open across that work's stop, after which an instruction queued
+    // during it is taken. The message was not held: it is not marked where the queue was taken.
+    const f = fixture(t, { now: at(30) });
+    f.db.prepare(`INSERT INTO conversations (id,timestamp,direction,channel,endpoint_id,session_group,content,status)
+      VALUES (50,?,'in','scheduler','task',?,'task','delivered')`).run(c4(1), GROUP);
+    f.typed(1, { conversation_id: 50 });
+    f.tool('a', 2, 3, { tool_name: 'Read', tool_detail: 'a.md' });
+    f.event('stop', 10);
+    // Recorded in the less common order, the delivery before the prompt.
+    f.deliver(2, 9.8, {}); f.message(2, 9.8);
+    f.event('user_prompt_submit', 10.2);
+    f.event('subagent_start', 11, { meta: { agent_id: 'sync', agent_type: 'zylos-group-sync' } });
+    f.typed(12, { control_id: 8 });
+    f.event('stop', 15); f.event('input_dequeue', 15.2);
+    f.tool('c', 16, null, { tool_name: 'Read', tool_detail: 'c.md' });
+    const result = await read(f);
+    assert.equal(result.from, at(10));
+    assert.deepEqual(shown(result), ['mark:control', 'read:c.md:running']);
+    assert.equal(result.steps[0].at, at(12.48), 'the instruction queued in the window is marked where it was delivered');
+  }
+  {
+    // The window starts at a reply written mid-turn. An instruction queued before it and a message queued after it
+    // are taken together later in that turn: the prompt reported when the second was queued starts no work.
+    const f = fixture(t, { now: at(10) });
+    f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+    f.tool('a', 1, 2, { tool_name: 'Read', tool_detail: 'a.md' });
+    f.typed(3, { control_id: 9 });
+    f.message(2, 5, 'out');
+    f.typed(7, { control_id: 10 });
+    f.event('input_dequeue', 8);
+    f.tool('c', 9, null, { tool_name: 'Read', tool_detail: 'c.md' });
+    const result = await read(f);
+    assert.equal(result.from, at(6));
+    assert.deepEqual(shown(result), ['mark:control', 'mark:control', 'read:c.md:running']);
+    assert.deepEqual(result.steps.filter(step => step.kind === 'mark').map(step => step.at), [at(7.48), at(8)],
+      'the instruction queued in the window is marked where it arrived; the one queued before it where it was taken');
+  }
+});
+
+test('a message held while work ran whose start is no longer on record is still marked where it was taken', async t => {
+  const f = fixture(t, { now: at(6) });
+  // The events before 3 are gone, and the runtime reported no prompt when it queued the instruction.
+  f.message(1, 0, 'out');
+  f.event('deliver', 3, { meta: { control_id: 7 }, session: null });
+  f.event('stop', 4); f.event('input_dequeue', 4.5);
+  f.tool('a', 5, null, { tool_name: 'Read', tool_detail: 'a.md' });
+  const result = await read(f);
+  assert.equal(result.from, at(4));
+  assert.deepEqual(shown(result), ['mark:control', 'read:a.md:running']);
+  assert.equal(result.steps[0].at, at(4.5));
+});
+
+test('where the work before a taken message began, a queued message taken shortly before a stop counts as the turn ended', async t => {
+  {
+    // Taken as the turn ended, timed before the late stop hook: the work after the stop is that queued message's, so
+    // an instruction queued during it is held, though its prompt came after the stop.
+    const f = fixture(t, { now: at(12) });
+    f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+    f.typed(2, { control_id: 7 });
+    f.event('input_dequeue', 4.6); f.event('stop', 5);
+    f.tool('a', 6, 7, { tool_name: 'Read', tool_detail: 'a.md' });
+    f.typed(8, { control_id: 8 });
+    f.event('stop', 10); f.event('input_dequeue', 10.2);
+    f.tool('b', 11, null, { tool_name: 'Read', tool_detail: 'b.md' });
+    const result = await read(f);
+    assert.equal(result.from, at(10));
+    assert.deepEqual(shown(result), ['mark:control', 'read:b.md:running']);
+    assert.equal(result.steps[0].at, at(10.2));
+  }
+  {
+    // Taken mid-turn, with an action before that turn's stop: the stop ends that work, and the scheduled task that
+    // arrived later started new work, so it is not held.
+    const f = fixture(t, { now: at(27) });
+    f.db.prepare(`INSERT INTO conversations (id,timestamp,direction,channel,endpoint_id,session_group,content,status)
+      VALUES (50,?,'in','scheduler','task',?,'task','delivered')`).run(c4(20), GROUP);
+    f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+    f.typed(1, { control_id: 7 });
+    f.event('input_dequeue', 3); f.tool('a', 3.5, 4, { tool_name: 'Read', tool_detail: 'a.md' }); f.event('stop', 5);
+    f.typed(20, { conversation_id: 50 });
+    f.tool('b', 21, 22, { tool_name: 'Read', tool_detail: 'b.md' });
+    f.typed(22.5, { control_id: 8 });
+    f.event('stop', 25); f.event('input_dequeue', 25.2);
+    f.tool('c', 26, null, { tool_name: 'Read', tool_detail: 'c.md' });
+    const result = await read(f);
+    assert.equal(result.from, at(25));
+    assert.deepEqual(shown(result), ['mark:control', 'read:c.md:running']);
+  }
+});
+
+test('the message that started the work is not marked again where a later queued message is taken', async t => {
+  for (const order of ['prompt first', 'delivery first']) {
+    // A scheduled task starts a turn and is answered at 3; a background notice queued later is taken at 10.
+    const f = fixture(t, { now: at(12) });
+    f.db.prepare(`INSERT INTO conversations (id,timestamp,direction,channel,endpoint_id,session_group,content,status)
+      VALUES (50,?,'in','scheduler','task',?,'task','delivered')`).run(c4(0), GROUP);
+    if (order === 'prompt first') f.typed(0.4, { conversation_id: 50 });
+    else { f.event('deliver', 0.2, { meta: { conversation_id: 50 }, session: null }); f.event('user_prompt_submit', 0.4); }
+    f.tool('a', 1, 2, { tool_name: 'Read', tool_detail: 'a.md' });
+    f.message(2, 3, 'out'); f.event('stop', 3.5);
+    f.event('input_dequeue', 10);
+    f.tool('b', 11, null, { tool_name: 'Read', tool_detail: 'b.md' });
+    assert.deepEqual(shown(await read(f)), ['read:b.md:running'], order);
+  }
+});
+
+test('deliveries close together are matched to their prompts in order, and only a recent prompt is matched', async t => {
+  {
+    // A scheduled task starts a turn at 0.4 and an instruction is queued at 0.7, before the task's delivery is recorded.
+    const f = fixture(t, { now: at(12) });
+    f.db.prepare(`INSERT INTO conversations (id,timestamp,direction,channel,endpoint_id,session_group,content,status)
+      VALUES (50,?,'in','scheduler','task',?,'task','delivered')`).run(c4(0), GROUP);
+    f.event('user_prompt_submit', 0.4); f.event('user_prompt_submit', 0.7);
+    f.event('deliver', 0.88, { meta: { conversation_id: 50 }, session: null });
+    f.event('deliver', 1.18, { meta: { control_id: 7 }, session: null });
+    f.tool('a', 2, 2.5, { tool_name: 'Read', tool_detail: 'a.md' });
+    f.message(2, 3, 'out');
+    f.event('input_dequeue', 10);
+    f.tool('b', 11, null, { tool_name: 'Read', tool_detail: 'b.md' });
+    assert.deepEqual(shown(await read(f)), ['mark:control', 'read:b.md:running']);
+  }
+  {
+    // The turn starts on a prompt with no delivery on record; an instruction delivered seconds later, with no prompt
+    // reported for it, is held all the same.
+    const f = fixture(t, { now: at(12) });
+    f.event('user_prompt_submit', 0.4);
+    f.tool('a', 1, 2, { tool_name: 'Read', tool_detail: 'a.md' });
+    f.event('deliver', 5, { meta: { control_id: 7 }, session: null });
+    f.message(2, 6, 'out');
+    f.event('input_dequeue', 10);
+    f.tool('b', 11, null, { tool_name: 'Read', tool_detail: 'b.md' });
+    assert.deepEqual(shown(await read(f)), ['mark:control', 'read:b.md:running']);
+  }
+});
+
+test('messages the runtime took into the running turn are not marked where a later queued message is taken', async t => {
+  // At 0.9 the runtime takes something typed with no delivery on record. A scheduled task queued at 1 and an instruction
+  // queued at 2 wait in that order; the runtime takes the first into the running turn at 2.6, so only the instruction
+  // is still held when the next queued message is taken at 8, after the reply.
+  const f = fixture(t, { now: at(10) });
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  f.event('input_remove', 0.9);
+  f.message(50, 0.5, 'in', { channel: 'scheduler', endpoint_id: 'task' }); f.typed(1, { conversation_id: 50 });
+  f.typed(2, { control_id: 7 });
+  f.event('input_remove', 2.6);
+  f.tool('a', 3, 4, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.message(2, 5, 'out');
+  f.event('input_dequeue', 8);
+  f.tool('c', 9, null, { tool_name: 'Read', tool_detail: 'c.md' });
+  const result = await read(f);
+  assert.deepEqual(shown(result), ['mark:control', 'read:c.md:running']);
+  assert.equal(result.steps[0].at, at(8));
+});
+
+test('a message the runtime took into the running turn before its delivery was recorded is not held', async t => {
+  // A scheduled task typed at 1 is taken into the running turn at 1.3; the router records its delivery at 1.48.
+  const f = fixture(t, { now: at(10) });
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  f.message(50, 0.5, 'in', { channel: 'scheduler', endpoint_id: 'task' }); f.typed(1, { conversation_id: 50 });
+  f.event('input_remove', 1.3);
+  f.tool('a', 3, 4, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.message(2, 5, 'out');
+  f.event('stop', 6);
+  f.event('input_dequeue', 8);
+  f.tool('c', 9, null, { tool_name: 'Read', tool_detail: 'c.md' });
+  assert.deepEqual(shown(await read(f)), ['read:c.md:running']);
+});
+
+test('a recorded session replayed event by event: the input that started a turn is not marked again after its reply', async t => {
+  // Each record and message is added at its time and the live area read right after it, as the page polls, from the
+  // conversation's first message on. The only input from outside the conversation is the one that started the turn.
+  const record = JSON.parse(fs.readFileSync(new URL('./fixtures/live-queue-replay.json', import.meta.url), 'utf8'));
+  const f = fixture(t, { now: at(record.events[0].at) });
+  const items = [...record.conversations.map(row => ({ at: row.at,
+    add: () => f.message(row.id, row.at, row.direction, row.channel ? { channel: row.channel, endpoint_id: 'peer' } : {}) })),
+  ...record.events.map(event => ({ at: event.at, add: () => f.event(event.type, event.at, { session: event.session, meta: event.meta }) }))]
+    .sort((a, b) => a.at - b.at);
+  const opened = record.conversations.find(row => !row.channel).at;
+  let reads = 0;
+  for (const item of items) {
+    item.add();
+    if (item.at < opened) continue;
+    f.clock.now = at(item.at);
+    const result = await read(f);
+    reads++;
+    if (process.env.REPLAY_DEBUG) console.log(item.at, result.from - T0, shown(result).join(' '), JSON.stringify(result.awaiting));
+    assert.ok(!result.steps.some(step => step.kind === 'mark' && step.mark === 'other'), `marked again at ${item.at}`);
+  }
+  assert.equal(reads, items.filter(item => item.at >= opened).length);
+});
+
+test('a message taken by an earlier queued take in the same turn is not marked again at the next one', async t => {
+  // An instruction queued at 1 is taken at 3; another queued at 4.5 is taken at 8, after a reply written mid-turn.
+  const f = fixture(t, { now: at(10) });
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  f.typed(1, { control_id: 7 });
+  f.event('input_dequeue', 3); f.tool('a', 3.5, 4, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.typed(4.5, { control_id: 9 });
+  f.message(2, 5, 'out');
+  f.event('input_dequeue', 8);
+  f.tool('c', 9, null, { tool_name: 'Read', tool_detail: 'c.md' });
+  const result = await read(f);
+  assert.equal(result.from, at(6));
+  assert.deepEqual(shown(result), ['mark:control', 'read:c.md:running']);
+  assert.equal(result.steps[0].at, at(8));
+});
+
+test('a session replaced without a stop on record leaves no work running for the new session\'s first prompt', async t => {
+  // The first session was recycled mid-turn; the new one starts on a scheduled task, then takes an instruction queued
+  // during that work after its reply.
+  const f = fixture(t, { now: at(18) });
+  f.db.prepare(`INSERT INTO conversations (id,timestamp,direction,channel,endpoint_id,session_group,content,status)
+    VALUES (50,?,'in','scheduler','task',?,'task','delivered')`).run(c4(10), GROUP);
+  f.message(1, 0); f.typed(0.2, { conversation_id: 1 });
+  f.tool('a', 1, 2, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.typed(10, { conversation_id: 50 }, 's2');
+  f.tool('b', 11, 12, { tool_name: 'Read', tool_detail: 'b.md' }, 'post_tool_use');
+  f.typed(13, { control_id: 7 }, 's2');
+  f.message(2, 14, 'out');
+  f.event('input_dequeue', 16, { session: 's2' });
+  f.tool('c', 17, null, { tool_name: 'Read', tool_detail: 'c.md' });
+  assert.deepEqual(shown(await read(f)), ['mark:control', 'read:c.md:running']);
+});
+
+test('while only a subtask works after a reply\'s turn ended, a message waiting in C4 counts its wait from when it was sent', async t => {
+  const f = fixture(t, { now: at(8) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  f.event('subagent_start', 2, { meta: { agent_id: 'sub-1', agent_type: 'general-purpose' } });
+  f.message(2, 3, 'out');
+  f.message(3, 4, 'in', { status: 'pending' });
+  f.event('stop', 6);
+  const result = await read(f);
+  assert.equal(result.from, at(4), 'the main agent is not working: the window still starts at the reply');
+  assert.equal(result.awaiting.state, 'queued');
+  const view = livePresentation([{ id: 1, direction: 'in', at: at(0) }, { id: 2, direction: 'out', at: at(3) },
+    { id: 3, direction: 'in', at: at(4) }], result, { presence: 'running' });
+  assert.equal(view.head, 'sending');
+  assert.equal(view.since, at(4));
+});
+
+test('a queued message taken before the stop, or more than the hook delay before it, does not outlast that stop', async t => {
+  for (const [name, events] of [['answered before the stop', [['input_dequeue', 8], ['assistant_message', 9], ['stop', 10]]],
+    ['taken long before the stop', [['input_dequeue', 4], ['stop', 10]]]]) {
+    const f = fixture(t, { now: at(10.5) });
+    f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+    for (const [type, seconds] of events) f.event(type, seconds, type === 'assistant_message' ? { summary: 'Done.' } : {});
+    assert.equal((await read(f)).working.on, false, name);
+  }
+});
+
+test('a system instruction or scheduled task that starts the work keeps its mark before the first step', async t => {
+  const f = fixture(t, { now: at(5) });
+  f.message(1, 0, 'out');
+  f.event('deliver', 1, { meta: { control_id: 9 }, session: null }); f.event('user_prompt_submit', 1.2);
+  f.tool('a', 2, null, { tool_name: 'Bash', tool_detail: 'Sync memory', detail_source: 'description' });
+  assert.deepEqual(shown(await read(f)), ['mark:control', 'described:Sync memory:running']);
+});
+
+test('after a reply, work taken up again once the main agent stopped (on a subtask report) starts after that stop', async t => {
+  const f = fixture(t, { now: at(23) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  f.tool('a', 1, 2, { tool_name: 'Read', tool_detail: 'a.md' });
+  f.message(2, 3, 'out');
+  f.tool('b', 4, 5, { tool_name: 'Read', tool_detail: 'b.md' });
+  f.event('subagent_start', 4.5, { meta: { agent_id: 'sync', agent_type: 'zylos-group-sync' } });
+  f.event('assistant_message', 5.5, { summary: 'Replied and started Memory Sync.' });
+  f.event('stop', 6);
+  f.event('subagent_stop', 20, { meta: { agent_id: 'sync' } });
+  f.event('user_prompt_submit', 21);
+  f.tool('c', 22, null, { tool_name: 'Read', tool_detail: 'c.md' });
+  const result = await read(f);
+  assert.equal(result.from, at(6));
+  assert.deepEqual(shown(result), ['read:c.md:running'], 'the steps the reply cleared do not come back');
 });

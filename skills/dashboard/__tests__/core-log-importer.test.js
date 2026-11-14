@@ -249,7 +249,7 @@ test('history notification follows commit and is absent on rollback or stale pre
   f.write(line('a')); f.importer.transactionObserver = point => { if (point === 'beforeCommit') throw new Error('rollback'); };
   await assert.rejects(f.read(), /rollback/); assert.equal(notifications.length, 0); assert.equal(f.events().length, 0); assert.equal(f.rows().length, 0);
   f.importer.transactionObserver = point => { if (point === 'afterCommit') assert.equal(f.events().length, 1); };
-  await f.read(); assert.deepEqual(notifications, [{ stream: 'events:origin', inserted: 1 }]); await f.read(); assert.equal(notifications.length, 1);
+  await f.read(); assert.deepEqual(notifications, [{ stream: 'events:origin', inserted: 1, types: ['a'] }]); await f.read(); assert.equal(notifications.length, 1);
   f.append(line('b')); const normalize = f.importer.normalize.bind(f.importer); let advanced = false;
   f.importer.transactionObserver = undefined;
   f.importer.normalize = async (...args) => { const result = await normalize(...args); if (!advanced) { advanced = true; const other = new CoreLogImporter({ store: f.store, zylosDir: f.root }); await other.importFile('events:origin', f.file); await other.stop(); } return result; };

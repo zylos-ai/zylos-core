@@ -38,6 +38,8 @@ const detail = [tool({ key: 'read', arg: 'zylos-memory/SKILL.md' }, at(22, 58, 1
   tool(described('读取同步步骤说明'), at(22, 58, 12), at(22, 58, 12) + 500), tool(described('获取记忆整理锁'), at(22, 58, 13), at(22, 58, 14)),
   tool(described('导出本组新对话'), at(22, 58, 15))];
 const main = since => ({ on: true, since, main: { since, lastActivityAt: since }, tools: 0, subagents: null });
+const LONG_TEXT = '查 Telegram 群名并核对每个群最近 3 天的消息、成员和置顶说明，确认它不是测试群也不是已归档的群，再按对方习惯的叫法起一个不超过十个字的名字：'
+  + '-1004376886243-1003921047710-1002210984321';
 const withSubtask = working => ({ ...working, subagents: { count: 1, since: at(22, 58, 10), lastActivityAt: at(22, 58, 15) } });
 const idle = { on: false, since: null, main: null, tools: 0, subagents: null };
 
@@ -48,10 +50,10 @@ const idle = { on: false, since: null, main: null, tools: 0, subagents: null };
 export const SCENES = [
   { name: 'waking', now: at(22, 57, 12), messages: [{ ...ask, status: 'pending' }], presence: 'not_running', wait: { kind: 'starting' }, working: null,
     activity: { steps: [], subtasks: [], awaiting: { id: 1, state: 'queued', since: at(22, 57) } },
-    expect: { anchor: 1, header: '会话启动中', head: '正在唤醒会话 · 12 秒', rows: [['wait', '会话启动中']] } },
+    expect: { anchor: 1, header: '正在唤醒', headerState: 'busy', head: '正在唤醒会话 · 12 秒', rows: [['wait', '会话启动中']] } },
   { name: 'thinking', now: at(22, 57, 20), messages: [ask], working: main(at(22, 57, 13)),
     activity: { steps: [], subtasks: [], awaiting: { id: 1, state: 'thinking', since: at(22, 57) } },
-    expect: { anchor: 1, header: '正在工作', head: '正在工作 · 20 秒', rows: [['wait', '正在思考']] } },
+    expect: { anchor: 1, header: '正在工作', headerState: 'busy', head: '正在工作 · 20 秒', rows: [['wait', '正在思考']] } },
   { name: 'steps', now: at(22, 57, 30), messages: [ask], working: main(at(22, 57, 13)),
     activity: { steps: [step.a(), step.b(), step.c(false)], subtasks: [], awaiting: { id: 1, state: 'thinking', since: at(22, 57) } },
     expect: { anchor: 1, header: '正在工作', head: '正在工作 · 30 秒', rows: [['done', '查看 dashboard/SKILL.md', '<1 秒'],
@@ -95,7 +97,8 @@ export const SCENES = [
 async function startApi(sandbox) {
   let index = 0;
   const counts = { activity: 0, subtask: 0 }, missing = new Set(), streams = new Set();
-  const scene = () => SCENES[index];
+  // A scene of the prototype by its index, or one more scene given as is (the long step).
+  const scene = () => typeof index === 'number' ? SCENES[index] : index;
   const snapshot = url => {
     const value = workbenchAnswer(url, scene().now);
     const row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
@@ -181,7 +184,8 @@ async function observe(page) {
     const handled = live?.querySelector('.conversation-activity-handled');
     return {
       anchor: area ? Number(area.previousElementSibling?.dataset.messageId) : null,
-      header, children: indicator?.querySelector('.wi-ind-sub')?.textContent ?? null,
+      header, headerState: indicator && !indicator.hidden ? indicator.dataset.state : null,
+      children: indicator?.querySelector('.wi-ind-sub')?.textContent ?? null,
       head: head ? head.textContent : null,
       rows: rowsOf(live?.querySelector(':scope > .conversation-activity-steps')),
       subtask: subtask && visible(subtask) ? subtask.querySelector('.conversation-activity-subtask-title').textContent : null,
@@ -197,12 +201,18 @@ async function observe(page) {
 async function measure(page) {
   return page.evaluate(() => {
     const area = document.querySelector('#wb-chat .conversation-activity-message');
+    const rect = node => { if (!node) return null; const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width, height: r.height }; };
+    // The area itself and the bubble of the message it sits under.
+    const live = area?.querySelector('.conversation-activity-live');
+    const bubble = area?.previousElementSibling?.querySelector('.conversation-message-body');
     const stream = area?.closest('.conversation-stream') ?? document.querySelector('#wb-chat .conversation-stream');
     const box = area?.getBoundingClientRect(), outer = stream?.getBoundingClientRect();
     const clipped = area ? [...area.querySelectorAll('.conversation-activity-head, .conversation-activity-step, .conversation-activity-mark, .conversation-activity-subtask-row, .conversation-activity-handled')]
       .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.className) : [];
     return { overflow: document.documentElement.scrollWidth > innerWidth, inside: !area || !outer || (box.left >= outer.left - 1 && box.right <= outer.right + 1),
-      clipped, width: box ? Math.round(box.width) : null };
+      clipped, width: box ? Math.round(box.width) : null, under: area?.dataset.under ?? null, live: rect(live), bubble: rect(bubble),
+      times: live ? [...live.querySelectorAll(':scope > .conversation-activity-steps > .conversation-activity-step > .conversation-activity-time')].map(rect) : [],
+      labels: live ? [...live.querySelectorAll(':scope > .conversation-activity-steps > .conversation-activity-step > .conversation-activity-label')].map(rect) : [] };
   });
 }
 
@@ -269,9 +279,9 @@ export async function runConversationLiveBrowser(t, sandbox) {
       let last = null;
       const seen = await wait(async () => {
         const value = await observe(page);
-        // On a phone an idle header is only the dot beside the title.
-        const header = width === 390 && want.header === '空闲' ? value.header === '' : value.header?.startsWith(want.header);
-        const match = value.anchor === want.anchor && header
+        // On a phone too an idle header says so beside the title, as in the prototype.
+        const header = value.header?.startsWith(want.header);
+        const match = value.anchor === want.anchor && header && (!want.headerState || value.headerState === want.headerState)
           && (want.anchor === null || (want.head ?? null) === value.head)
           && (!want.rows || JSON.stringify(value.rows) === JSON.stringify(want.rows))
           && (want.subtask ?? null) === value.subtask && (want.handled ?? null) === value.handled
@@ -288,6 +298,14 @@ export async function runConversationLiveBrowser(t, sandbox) {
       assert.equal(layout.overflow, false, `${name}: no horizontal page scroll`);
       assert.equal(layout.inside, true, `${name}: the area stays inside the message column`);
       assert.deepEqual(layout.clipped, [], `${name}: no row is cut off sideways`);
+      // Under a user message the area is as wide as its content and ends where the bubble ends, as in the prototype.
+      if (layout.under === 'in' && layout.live) {
+        assert.ok(Math.abs(layout.live.right - layout.bubble.right) <= 2, `${name}: the area ends where the bubble ends (${layout.live.right} / ${layout.bubble.right})`);
+        if (['thinking', 'steps'].includes(scene.name)) {
+          assert.ok(layout.live.width < 480, `${name}: short content keeps the area narrow (${layout.live.width})`);
+          assert.ok(layout.live.left > layout.bubble.left + 1, `${name}: the area starts right of the bubble's start (${layout.live.left} / ${layout.bubble.left})`);
+        }
+      }
       assert.deepEqual(errors, [], `${name}: no page errors`);
       if (evidence) {
         await page.locator('#wb-chat .conversation-activity-message, #wb-chat article.conversation-message:last-of-type').last().scrollIntoViewIfNeeded();
@@ -295,6 +313,25 @@ export async function runConversationLiveBrowser(t, sandbox) {
       }
       results.push({ name, ...layout });
     }
+  }
+  // A step whose text is longer than the area wraps within 560px: the area stays at most that wide, ends where the bubble
+  // ends, and keeps the time column at its right edge.
+  const steps = SCENES.find(scene => scene.name === 'steps');
+  api.set({ ...steps, activity: { ...steps.activity, steps: [step.a(), step.b(), tool(described(LONG_TEXT), at(22, 57, 17))] } });
+  for (const { page } of pages) await page.clock.fastForward(31000);
+  api.push();
+  for (const { page, width, theme } of pages) {
+    const name = `long-step-${width}-${theme}`;
+    await wait(async () => (await observe(page)).rows?.[2]?.[1] === LONG_TEXT, `${name}: the long step shows`);
+    const layout = await measure(page);
+    assert.equal(layout.overflow, false, `${name}: no horizontal page scroll`);
+    assert.equal(layout.inside, true, `${name}: the area stays inside the message column`);
+    assert.ok(layout.live.width <= 560, `${name}: the area is at most 560px wide (${layout.live.width})`);
+    assert.ok(Math.abs(layout.live.right - layout.bubble.right) <= 2, `${name}: the area still ends where the bubble ends`);
+    assert.ok(layout.labels[2].height > 30, `${name}: the long text wraps (${layout.labels[2].height})`);
+    assert.ok(layout.labels[2].right <= layout.times[2].left, `${name}: the text never runs into the time column`);
+    for (const time of layout.times) assert.ok(time.width > 0 && Math.abs(time.right - layout.live.right) <= 1, `${name}: every time sits at the area's right edge`);
+    if (evidence) await page.screenshot({ path: path.join(evidence, name + '.png'), animations: 'disabled' });
   }
   // A closed subtask row is no longer read.
   const reads = api.counts.subtask;
