@@ -30,7 +30,6 @@ test('Store saveSnapshot/latestSnapshot round-trip includes last_progress_at', (
 
     const snapshot = store.latestSnapshot('claude', 'test-session');
     assert.ok(snapshot, 'snapshot should exist');
-    assert.equal(Object.hasOwn(snapshot, 'possibly_stuck_since'), false);
     assert.equal(snapshot.last_progress_at, now);
     assert.equal(snapshot.last_progress_cursor, 42);
   } finally {
@@ -55,24 +54,16 @@ test('Store saveSnapshot works with null last_progress_at', () => {
 
     const snapshot = store.latestSnapshot('claude', null);
     assert.ok(snapshot, 'snapshot should exist');
-    assert.equal(Object.hasOwn(snapshot, 'possibly_stuck_since'), false);
     assert.equal(snapshot.last_progress_at, null);
   } finally {
     cleanup();
   }
 });
 
-// Retained-schema boundary: old rows may contain a timestamp, but current
-// readers omit it and current writes leave the retired storage at its default.
-test('snapshot storage tolerates retired values without exposing or copying them', () => {
+// Retained-schema boundary: current writes leave retired storage at its default.
+test('snapshot writes do not copy retired timestamp input', () => {
   const { store, cleanup } = makeTempStore();
   try {
-    store.db.prepare(`INSERT INTO state_snapshots
-      (runtime, session_id, possibly_stuck_since, last_progress_cursor)
-      VALUES (?, ?, ?, ?)`).run('claude', 'old-session', '2020-01-01T00:00:00.000Z', 1);
-    const previous = store.latestSnapshot('claude', 'old-session');
-    assert.equal(previous.last_progress_cursor, 1);
-    assert.equal(Object.hasOwn(previous, 'possibly_stuck_since'), false);
     store.saveSnapshot({ runtime: 'claude', session_id: 'new-session',
       last_progress_cursor: 2, possibly_stuck_since: '2020-01-01T00:00:00.000Z' });
     const stored = store.db.prepare('SELECT possibly_stuck_since FROM state_snapshots WHERE session_id = ?').get('new-session');

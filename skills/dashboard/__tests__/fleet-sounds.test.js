@@ -44,7 +44,7 @@ test('busy <-> thinking is not a transition', () => {
   assert.deepEqual(finished, []);
 });
 
-test('working -> stuck/offline does not fire finish', () => {
+test('working to Core warning or offline does not fire finish', () => {
   const prev = new Map([['a', 'busy'], ['b', 'thinking']]);
   const { started, finished } = computeFleetTransitions(prev, [
     agent('a', 'WAKE_OVERDUE'),

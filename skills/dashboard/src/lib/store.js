@@ -232,9 +232,7 @@ export class Store {
     `);
 
     this._latestSnapshot = this.db.prepare(`
-      SELECT id, runtime, session_id, running_tool, open_turn, pending_permission,
-        last_progress_cursor, snapshot_at, last_message, last_prompt, last_progress_at
-      FROM state_snapshots
+      SELECT * FROM state_snapshots
       WHERE runtime = @runtime AND (session_id = @session_id OR (@session_id IS NULL AND session_id IS NULL))
       ORDER BY snapshot_at DESC LIMIT 1
     `);

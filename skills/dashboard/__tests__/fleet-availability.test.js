@@ -74,9 +74,3 @@ test('explicit offline runtime states retain the shared self and remote judgment
   assert.equal(view.tiles[0].offline, view.tiles[1].offline);
   assert.equal(view.tiles[0].mood, view.tiles[1].mood);
 });
-
-test('an explicit remote stuck reason still takes precedence over unknown runtime state', () => {
-  const view = buildAgentFleetView({ agents: [{ name: 'remote', state: 'UNKNOWN', health_reason: 'stuck', pulse_rate: 1 }] });
-  assert.equal(view.tiles[0].mood, 'stuck');
-  assert.equal(view.tiles[0].offline, false);
-});

@@ -2,7 +2,7 @@ import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor,
 
 import { fallbackName, platformOf } from './wb/plain-text.js?v=106';
 
-const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline', 'stuck']);
+const REASON_BADGE_REASONS = new Set(['unreachable', 'auth_failed', 'version_unsupported', 'timeout', 'conn_refused', 'bad_payload', 'offline']);
 const LINK_CHIP_QUALITIES = new Set(['slow', 'degraded', 'stale']);
 
 export function escapeHtml(value) {
@@ -52,7 +52,6 @@ export function stateMood(agent) {
   const activity = String(agent?.activity || '').toLowerCase();
   if (state === 'OFFLINE' || reason === 'offline' || reason === 'unreachable' || reason === 'version_unsupported' || reason === 'auth_failed') return 'offline';
   if (state === 'AUTH_WAIT' || state === 'WAKE_OVERDUE') return 'stuck';
-  if (reason.includes('stuck')) return 'stuck';
   if (state === 'IDLE') return 'idle';
   if (state === 'BUSY' && (activity.includes('thinking') || activity.includes('思考'))) return 'thinking';
   if (state === 'THINKING') return 'thinking';

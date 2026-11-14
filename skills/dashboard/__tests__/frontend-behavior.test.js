@@ -332,7 +332,7 @@ function fleetFixture() {
         cost: 0.03,
         last_seen: '2026-06-07T15:18:00.000Z',
         pulse_rate: 1.5,
-        health_reason: 'stuck'
+        health_reason: 'auth_wait'
       },
       {
         name: 'zz-lab',
@@ -693,7 +693,7 @@ test('a thinking feed entry counts the machine as working and labels it thinking
   assert.match(html, /1 Working/);
 });
 
-test('fleet preserves authentication and overdue wake warning moods', () => {
+test('fleet preserves Core authentication and wake warning moods', () => {
   for (const state of ['AUTH_WAIT', 'WAKE_OVERDUE']) {
     const view = buildAgentFleetView({ agents: [{ name: 'a', state }] });
     assert.equal(view.tiles[0].mood, 'stuck');
