@@ -132,41 +132,63 @@ completion message back.
 
 In multi-session mode, an actually pasted conversation starts no-response
 observation until a factual start for that paste is followed by foreground Stop
-(or Claude idle), with no newer main work. A Stop from the preceding turn cannot
-complete a queued paste. Starts come from main prompt hooks or matching Claude
-`queue-operation: dequeue` records; neither generic mtime nor Stop proves a start.
-The latest main event, child event, associated main transcript write, or paste resets
-its whole-session silence clock. A quiet open turn remains eligible even with
-an active tool. After 15 minutes of observable silence, the supervisor uses the
-same Escape → successful enqueue → 500 ms → exact `continue` helper as Dashboard.
-The two controls recheck identity, fences, shutdown and paste ownership. Escape
-may itself produce Stop/idle, transcript writes or tool completion; these do not
-suppress its continuation. Initial nudge admission and restart still recheck
-activity. Failed no-response nudges retry after 60 seconds, while blocked initial
-admission emits no attempted-nudge event. A superseded or uncertain attempt is
-logged without changing a newer paste. Completion caused by Escape cannot retire
-the resumed conversation before its next factual start.
-It waits 180 seconds after successful continue enqueue before stopping the same
-still-silent session. Any new activity cancels that recovery episode. Background
-tasks alone never start it; a new unanswered paste during background waiting does.
+(or Claude idle), with no newer main work. An older turn's Stop cannot complete
+a queued paste. A busy prompt hook is input admission, not a work start. Claude
+starts use matching `queue-operation: dequeue`, or `remove` with
+`absorbed_mid_turn` followed by its `queued_command` attachment. The attachment's
+timestamp is the original enqueue time; the remove timestamp is the work start.
+With an associated Claude transcript, prompt hooks alone do not establish idle
+across the two sources. Without one, only a known closed-turn prompt qualifies.
+Codex busy input stays conservatively observed without a verified new start.
+
+Before recovery, the latest main event, child event, associated main transcript
+write, or paste resets the 15-minute whole-session silence clock. Active tools
+are not exempt. At the threshold, supervisor uses the same Escape → successful
+enqueue → 500 ms → exact `continue` helper as Dashboard. Each enqueue rechecks
+identity, fences, transitions, shutdown, manual actions and paste ownership;
+the interval holds no admission lock. Escape's Stop/idle, interruption write,
+tool completion and the continue prompt do not suppress continuation.
+
+After successful continue enqueue, the 180-second recovery wait ends only on
+actual AI work: validated main/child pre-tool events or real assistant output.
+Input hooks, user records, Stop/idle and file mtime alone do not prove recovery.
+With no actual work, the same scene is stopped after 180 seconds even when our
+controls produced those side effects. Failed nudges retry after 60 seconds;
+blocked admission emits no attempted-nudge event. Superseded and uncertain
+attempts are logged without modifying a newer paste. Escape completion cannot
+retire a resumed conversation before its next factual start.
+
+Health notification remains immediate, before lifecycle delivery, with the
+original payload. The already-accepted run metadata supplies the optional
+current-session timestamp: an older paste remains tracked for the five-second
+screen check but does not arm no-response recovery. Session changes do not
+silently discard delivery or its screen check. Background tasks alone never
+arm detection; a new unanswered paste during background waiting does.
 Single-session no-response behavior is unchanged.
 
-The rule deliberately includes legitimate foreground calls silent for 15 minutes;
-existing hooks/transcripts cannot distinguish all healthy long calls from hangs.
-Codex busy Enter accepts steering, but tools may finish before the model reads it.
-Native exec yield/poll windows do not impose a 600-second process lifetime, and
-streaming stdout is not universally persisted as transcript activity.
+Transcript parsing reads at most 256 KiB per sample in 64 KiB chunks, carries
+at most 1 MiB of a line and retains at most 256 recent tool-result IDs,
+including idle gaps before delayed native hooks. Queue/assistant metadata is parsed even without an active
+tool. Unread bytes defer decisions until sampled; a truncated EOF line does
+not prevent recovery forever. Oversized/malformed records do not establish
+work. Main busy/idle fields and child reclaim semantics remain separate.
 
-Web tool timeout recovery also uses the shared nudge helper, retaining its
-configured interrupt grace (15 seconds by default), cooldown and stop fallback.
-No-response recovery takes precedence when both detectors are due. Each nudge
-and successful restart logs its reason (`no_response_nudge`,
-`no_response_restart`, `tool_timeout_nudge`, `tool_timeout_restart`), session group,
-run ID and observed silence duration in the supervisor event log. Enqueue success
-is not proof of runtime delivery or recovery. Controls and stop recheck current
-identity, delivery, manual requests, transitions, shutdown and drain fences
-through serialized admission, with activity checked before nudge/restart; neither the 500 ms delay nor recovery grace
-holds that queue.
+The rule includes legitimate foreground calls silent for 15 minutes; existing
+hooks/transcripts cannot distinguish every healthy long call from a hang.
+Codex busy Enter accepts steering before pending input is processed. Native
+exec yield/poll windows do not impose a 600-second process lifetime, and stdout
+streaming does not universally persist transcript activity.
+
+Web timeout also uses the shared nudge helper, preserving configured grace
+(default 15 seconds), cooldown and stop fallback while the same tool remains.
+New pastes can invalidate an in-flight pair but do not reset that tool's grace
+or cooldown. Web Escape advances the conversation completion boundary too.
+No-response recovery takes precedence when both detectors are due. Four event
+reasons (`no_response_nudge`, `no_response_restart`, `tool_timeout_nudge`,
+`tool_timeout_restart`) include session group, run ID and observed silence.
+Enqueue success does not prove runtime delivery; failure does not prove that
+no partial write occurred. Existing health-probe and non-timeout stop policies
+retain their prior scope.
 
 Subagent events with `agent_id` are tracked separately for the current run and
 session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended

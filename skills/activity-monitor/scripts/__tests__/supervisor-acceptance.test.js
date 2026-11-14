@@ -99,7 +99,6 @@ async function deliveryScenario(t, create) {
   assert.equal((await send(message)).type, 'ack');
   await f.supervisor.observer.observeScene(scene);
   const before = structuredClone(f.supervisor.observer.scenes.get(scene.sessionGroup));
-  assert.equal(before.delivery.sessionId, scene.sessionId);
   assert.equal(before.delivery.recovery, null);
   assert.equal(before.delivery.pastedAt, message.pastedAt);
   // A stale-run paste must not replace the accepted session or its silence boundary.
@@ -113,7 +112,6 @@ async function deliveryScenario(t, create) {
   const legacy = await send({ version: 1, type: 'notify_delivered', requestId: 'legacy', deliveredAt: f.now() - 50 });
   assert.equal(legacy.type, 'ack');
   await f.supervisor.observer.observeScene(origin);
-  assert.equal(f.supervisor.observer.scenes.get('origin').delivery.sessionId, origin.sessionId);
   assert.equal(f.supervisor.observer.scenes.get('origin').delivery.pastedAt, f.now() - 50);
   assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.pastedAt, message.pastedAt);
 }
@@ -140,9 +138,12 @@ test('composed delivery resets lifecycle directly and rejects stale-run notifica
 // isolated HOME/ZYLOS_DIR/short TMPDIR. Scene reads and lifecycle effects are
 // injected; no live tmux, database, PM2 or network endpoint is opened. Run when
 // delivery observation or lifecycle forwarding changes; unrelated UI can skip.
-test('composed no-response observation rejects paste before readRun current session timestamp', { timeout: 5000 }, async t => {
+test('composed old paste keeps screen observation while excluding no-response recovery', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
   const delivered = [], worked = [];
+  let captures = 0, nudges = 0;
+  f.scenes.readScreen = async () => { captures++; return ''; };
+  f.supervisor.observer.nudge = async () => { nudges++; return { ok: true }; };
   f.supervisor.lifecycle.messageDelivered = notification => delivered.push(notification);
   f.supervisor.lifecycle.workDelivered = notification => worked.push(notification);
   assert.equal((await f.scenes.readIdentity(scene.sessionGroup)).currentSessionTs, undefined,
@@ -152,16 +153,23 @@ test('composed no-response observation rejects paste before readRun current sess
     sessionGroup: scene.sessionGroup, runtime: scene.runtime, runId: scene.runId,
     pastedAt: scene.currentSessionTs - 1 };
   assert.equal((await send(message)).type, 'ack');
-  assert.equal(f.supervisor.observer.scenes.has(scene.sessionGroup), false);
+  assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.pastedAt, message.pastedAt);
+  await f.supervisor.observer.observeScene(scene);
+  assert.equal(captures, 1, 'an old paste still receives its baseline screen check');
+  f.advance(15 * 60 * 1000);
+  await f.supervisor.observer.observeScene(scene);
+  assert.equal(nudges, 0, 'paste predating the current session must not arm no-response');
   assert.equal(delivered.length, 1); assert.equal(worked.length, 1);
   assert.equal((await send({ ...message, requestId: 'current-paste', pastedAt: scene.currentSessionTs })).type, 'ack');
   const delivery = f.supervisor.observer.scenes.get(scene.sessionGroup).delivery;
   assert.equal(delivery.pastedAt, scene.currentSessionTs);
-  assert.equal(delivery.sessionId, scene.sessionId);
+  await f.supervisor.observer.observeScene(scene);
+  assert.equal(nudges, 1, 'a paste at the current-session boundary remains eligible');
+  assert.equal(Object.hasOwn(delivered[0], 'sessionId'), false, 'original notification shape is retained');
   assert.equal(delivered.length, 2); assert.equal(worked.length, 2);
 });
 
-test('composed delivery observation readRun failure preserves conversation lifecycle effects', { timeout: 5000 }, async t => {
+test('composed conversation delivery reuses accepted run without another fallible read', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
   const delivered = [], worked = [], readRun = f.scenes.readRun;
   f.supervisor.lifecycle.messageDelivered = notification => delivered.push(notification);
@@ -175,11 +183,26 @@ test('composed delivery observation readRun failure preserves conversation lifec
   const message = { version: 2, type: 'notify_delivered', requestId: 'read-failure',
     sessionGroup: scene.sessionGroup, runtime: scene.runtime, runId: scene.runId, pastedAt: f.now() };
   assert.equal((await send(message)).type, 'ack');
-  assert.equal(reads, 2);
+  assert.equal(reads, 1);
   assert.equal(delivered.length, 1); assert.equal(worked.length, 1);
   assert.equal(delivered[0].requestId, message.requestId);
   assert.equal(worked[0].requestId, message.requestId);
-  assert.equal(f.supervisor.observer.scenes.has(scene.sessionGroup), false);
+  assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.pastedAt, message.pastedAt);
+});
+
+test('composed session clear preserves pending delivery screen observation', { timeout: 5000 }, async t => {
+  const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
+  let captures = 0;
+  f.scenes.readScreen = async () => { captures++; return ''; };
+  const send = await socketClient(t, f);
+  const message = { version: 2, type: 'notify_delivered', requestId: 'clear-delivery',
+    sessionGroup: scene.sessionGroup, runtime: scene.runtime, runId: scene.runId, pastedAt: f.now() };
+  assert.equal((await send(message)).type, 'ack');
+  scene.sessionId = 'cleared-session';
+  f.advance(5000);
+  await f.supervisor.observer.observeScene(scene);
+  assert.equal(captures, 1);
+  assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.pastedAt, message.pastedAt);
 });
 
 test('composed control delivery keeps baseline lifecycle forwarding without extra scene reads', { timeout: 5000 }, async t => {
