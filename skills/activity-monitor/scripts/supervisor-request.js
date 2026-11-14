@@ -38,10 +38,10 @@ export async function requestRelease({ env = process.env, send = submit } = {}) 
   const code = response.reply?.reason ?? response.reply?.code ?? response.kind;
   return { ok: false, error: { code,
     message: response.sent && !response.reply
-      ? 'Submission result is unknown; keep the handoff and do not exit or assume release was accepted'
+      ? 'Submission result is unknown; keep the current run and do not exit or assume release was accepted'
       : code === 'requests_unreadable'
-        ? 'Keep the completed handoff and current run; repair the supervisor restart-request state, retry this request, and do not exit'
-        : 'Session release was not accepted; keep the handoff and current run',
+        ? 'Keep the current run; repair the supervisor restart-request state, retry this request, and do not exit'
+        : 'Session release was not accepted; keep the current run and do not exit',
     persisted: response.sent && !response.reply ? null : [] } };
 }
 

@@ -25,17 +25,18 @@ This is a **PM2 service** (not directly invoked by Claude). It runs continuously
 
 ## Multi-session Reclaim Configuration
 
-A multi-session agent may request release of its own run after verifying pending
-work, writing its handoff and arranging external-wait wake-ups under the existing
-reclaim rules. Use the installed absolute path to
-`node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`;
-the command inherits its group and run identity and accepts no target override.
-Acceptance records a group/run-scoped in-memory intent even during the current
-turn; the supervisor waits for existing idle and active-subagent protection,
-then normal Sync/reclaim, without hot TTL or capacity-eviction minimum idle.
-New delivered conversations or controls before fencing cancel the intent.
-Supervisor restart drops the intent; ordinary idle TTL remains the fallback. Keep the handoff and current run on rejection
-or an unknown result. In uncertain conversations, leave release to idle TTL.
+A multi-session agent may request release of its own run when its conversation
+reaches a natural stopping point, without a minimum idle period. In uncertain
+conversations, leave release to idle TTL. Use the installed absolute path to
+`node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`
+(expand `~/zylos` to the actual installation directory), inheriting
+`ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`; never supply another group's identity.
+An `ok:true` response registers a group/run-scoped in-memory intent, not a
+completed release. Finish the current turn; the supervisor uses the existing
+CHECK → optional Sync → reclaim flow after normal idle and child/Sync protection.
+New delivered work before fencing cancels the intent. Supervisor restart drops
+the intent; ordinary idle TTL remains the fallback. On rejection or an unknown
+result, keep the current run; do not exit or assume release succeeded.
 
 The supervisor reads these settings from `.zylos/config.json` in
 the Zylos data directory, with valid environment values taking precedence:

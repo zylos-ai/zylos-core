@@ -9,7 +9,7 @@ import { readyTmuxTarget } from './helpers/ready-tmux-target.js';
 
 // Boundary: real requestRelease client/socket -> startSupervisor admission and
 // lifecycle -> real C4 SQLite ending/slot transaction and run-guarded tmux stop.
-// Sync execution is represented by the real claim/ack APIs; no model, channel
+// CHECK and Sync execution use the real claim/ack APIs; no model, channel
 // send, PM2 service or authenticated runtime is started. Cold incoming demand is
 // checked through actual C4 group routing and slot admission, not model launch.
 // Busy state represents the requester's current tool turn; the accepted intent
@@ -27,7 +27,7 @@ for (const [group, scenario] of [
   ['telegram:release', 'conversation'], ['telegram:release', 'control'],
   ['telegram:release', 'conversation-before-intent'], ['telegram:release', 'control-before-intent'],
   ['telegram:release', 'open-turn'],
-  ['telegram:release', 'ttl-fallback'],
+  ['telegram:release', 'ttl-fallback'], ['telegram:release', 'defer'],
 ]) {
   test(`voluntary ${group} release (${scenario}) respects its pending intent and exact run`, { timeout: 30000 }, async t => {
     const realHome = fs.realpathSync(os.userInfo().homedir);

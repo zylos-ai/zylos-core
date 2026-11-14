@@ -7,7 +7,7 @@ import { startSupervisor } from '../../skills/activity-monitor/scripts/superviso
 import { SupervisorScenes } from '../../skills/activity-monitor/scripts/supervisor-scenes.js';
 import * as coreDb from '../../skills/comm-bridge/scripts/c4-db.js';
 import { createStore } from '../../skills/comm-bridge/scripts/c4-v2-store.js';
-import { requestRelease } from '../../skills/activity-monitor/scripts/supervisor-request.js';
+import { requestRelease, deferReclaim } from '../../skills/activity-monitor/scripts/supervisor-request.js';
 import { tmuxNameForGroup, supervisorDiagnosticPath } from '../../cli/lib/session-group-paths.js';
 import { PRE_RECLAIM_SYNC_PROMPT } from '../../skills/zylos-memory/scripts/sync-prompts.js';
 import { PRE_RECLAIM_CHECK_PROMPT } from '../../skills/activity-monitor/scripts/reclaim-prompts.js';
@@ -39,7 +39,8 @@ try {
   assert.equal(initial.ready, true); assert.equal(initial.processRunning, true);
   const logs = [];
   const start = () => startSupervisor({ env: process.env, db: { ...coreDb, ...db, getDb: () => database }, scenes, now: () => now,
-    readMode: () => ({ mode: 'multi' }), readConfiguration: () => ({ mode: 'multi', runtime: 'claude', capacity: 2 }),
+    readMode: () => ({ mode: 'multi' }), readConfiguration: () => ({ mode: 'multi', runtime: 'claude', capacity: 2,
+      ...(scenario === 'defer' ? { hotTtlSeconds: 1 } : {}) }),
     resolveTargetRuntime: () => 'claude', readSyncMarker: () => ({ held: false, stale: false }),
     machineTasks: { tick() {}, stop() {} }, legacyStatus: { tick() {}, close() {} },
     sendAlert: () => assert.fail('External sends forbidden'), log: event => { if (logs.length < 64) logs.push(event); },
@@ -154,34 +155,66 @@ try {
       assert.equal(controls().length, 0, 'active child postpones the accepted request');
       children = [];
     }
+    await tick();
+    await stillRunning();
+    const pending = controls();
+    assert.deepEqual(pending.map(row => row.raw_content), scenario === 'sync'
+      ? [PRE_RECLAIM_CHECK_PROMPT, PRE_RECLAIM_SYNC_PROMPT] : [PRE_RECLAIM_CHECK_PROMPT]);
+    for (const row of pending) {
+      assert.equal(row.session_group, group); assert.equal(row.require_idle, 1);
+      assert.ok(JSON.stringify(JSON.parse(row.target_binding)).includes('run-1'));
+    }
+    const check = pending[0];
+    // Even completed Sync cannot bypass a CHECK that has not been acknowledged.
     if (scenario === 'sync') {
-      await tick();
+      const sync = pending[1];
+      assert.equal(db.claimControl(sync.id), true);
+      assert.equal((await notify({ controlId: sync.id })).type, 'ack');
+      assert.equal(coreDb.ackControl(sync.id).status, 'done');
+    }
+    await tick(); await stillRunning();
+    assert.equal(db.claimControl(check.id), true);
+    assert.equal((await notify({ controlId: check.id })).type, 'ack');
+    await tick(); await stillRunning();
+    if (scenario === 'defer') {
+      // The old idle history already exceeds this fixture's TTL. Only an
+      // accepted deferral's existing reset keeps ordinary TTL from preparing.
+      now += 2000;
+      const deferred = await deferReclaim({ reason: 'fixture background result still pending',
+        env: { ...process.env, ZYLOS_SESSION_GROUP: group, ZYLOS_RUN_ID: 'run-1' } });
+      assert.equal(deferred.ok, true, JSON.stringify(deferred));
+      assert.equal(deferred.data.result, 'accepted');
+      assert.equal(service.supervisor.lifecycle.releasePreparation.size, 0);
+      assert.deepEqual(service.supervisor.lifecycle.ttlReset.get(group), { runId: 'run-1', at: now });
+      assert.equal(coreDb.ackControl(check.id).status, 'done');
+      for (let n = 0; n < 3; n++) await tick();
       await stillRunning();
-      const pending = controls();
-      assert.equal(pending.length, 1); assert.equal(pending[0].raw_content, PRE_RECLAIM_SYNC_PROMPT);
-      assert.equal(pending[0].session_group, group); assert.equal(pending[0].require_idle, 1);
-      assert.ok(JSON.stringify(JSON.parse(pending[0].target_binding)).includes('run-1'));
-      assert.equal(db.claimControl(pending[0].id), true);
-      assert.equal((await notify({ controlId: pending[0].id })).type, 'ack');
-      assert.equal(coreDb.ackControl(pending[0].id).status, 'done');
+      now += 999;
+      await tick(); await stillRunning();
+      assert.equal((await scenes.observeGroup(group)).runId, 'run-1');
+      assert.equal(controls().length, 1, 'TTL stays reset instead of preparing another CHECK');
+      assert.equal(service.supervisor.lifecycle.ttlPreparation.size, 0);
+      assert.deepEqual(db.listSlotOccupancy().map(row => row.runId), ['run-1']);
+      process.send({ ok: true, group, scenario });
+    } else {
+      assert.equal(coreDb.ackControl(check.id).status, 'done');
       state = 'busy'; await tick(); await stillRunning();
       state = 'idle';
+      for (let n = 0; n < 5 && !db.listRunEndings([group]).length; n++) await tick();
+      assert.equal((await scenes.observeGroup(group)).present, false, JSON.stringify(logs));
+      const ending = db.listRunEndings([group]);
+      assert.equal(ending.length, 1); assert.equal(ending[0].reason, 'release');
+      assert.equal(ending[0].runId, 'run-1'); assert.equal(ending[0].continuationPending, 0);
+      assert.deepEqual(db.listPendingContinuations(), []); assert.deepEqual(db.listSlotOccupancy(), []);
+      assert.equal(db.getDrainFence(group), null);
+      assert.equal(controls().length, scenario === 'sync' ? 2 : 1);
+      // Cold demand reaches actual C4 routing/slot admission; model launch is out of scope.
+      const row = inbound('new inbound');
+      assert.equal(row.session_group, group);
+      assert.ok(db.listPendingSessionGroups().some(item => item.sessionGroup === group));
+      if (group !== 'origin') assert.equal(db.takeSlot(group, { runId: 'run-2', k: 1 }).taken, true);
+      process.send({ ok: true, group, scenario, ending: ending[0] });
     }
-    for (let n = 0; n < 5 && !db.listRunEndings([group]).length; n++) await tick();
-    assert.equal((await scenes.observeGroup(group)).present, false, JSON.stringify(logs));
-    const ending = db.listRunEndings([group]);
-    assert.equal(ending.length, 1); assert.equal(ending[0].reason, 'release');
-    assert.equal(ending[0].runId, 'run-1'); assert.equal(ending[0].continuationPending, 0);
-    assert.deepEqual(db.listPendingContinuations(), []); assert.deepEqual(db.listSlotOccupancy(), []);
-    assert.equal(db.getDrainFence(group), null);
-    assert.equal(controls().some(row => row.raw_content === PRE_RECLAIM_CHECK_PROMPT), false);
-    assert.equal(controls().length, scenario === 'sync' ? 1 : 0);
-    // Cold demand reaches actual C4 routing/slot admission; model launch is out of scope.
-    const row = inbound('new inbound');
-    assert.equal(row.session_group, group);
-    assert.ok(db.listPendingSessionGroups().some(item => item.sessionGroup === group));
-    if (group !== 'origin') assert.equal(db.takeSlot(group, { runId: 'run-2', k: 1 }).taken, true);
-    process.send({ ok: true, group, scenario, ending: ending[0] });
   }
   }
 } finally {

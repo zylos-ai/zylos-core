@@ -65,22 +65,15 @@ If you are uncertain whether the conversation is finished, leave the session
 available and let the existing idle TTL handle it. No minimum idle period is
 required to make this request.
 
-Before requesting release, check real pending work against its current records,
-write the session handoff with only genuinely open items, and follow the existing
-reclaim rules for external waits: list this group's scheduled tasks first and
-create a wake-up only for your own ongoing task whose external result will not
-arrive as a message, confirming success and avoiding duplicates. Finish work you
-started that is still running before requesting release. Waiting for a person's
-reply, review or decision does not prevent release: the reply wakes this group.
-Then run `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`
+Run `node ~/zylos/.claude/skills/activity-monitor/scripts/supervisor-request.js request-release --json`
 using the installed absolute path (expand `~/zylos` to the actual installation
 directory), inheriting `ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`; never supply
-another group's identity. An `ok:true` response registers an in-memory intent, not a completed release.
-Finish the current turn; the supervisor waits for normal idle and child/Sync
-protection. New delivered work before fencing cancels the intent; you may request
-again after that work finishes. Supervisor restart loses the intent, and normal
-idle TTL is the fallback. On
-rejection or an unknown result, retain the handoff and current run; do not exit
+another group's identity. An `ok:true` response registers an in-memory intent,
+not a completed release. Finish the current turn; the supervisor uses the existing
+CHECK → optional Sync → reclaim flow after normal idle and child/Sync protection.
+New delivered work before fencing cancels the intent; you may request again after
+that work finishes. Supervisor restart loses the intent, and normal idle TTL is
+the fallback. On rejection or an unknown result, keep the current run; do not exit
 or assume release succeeded. The supervisor controls the actual stop safely.
 
 ## Security
