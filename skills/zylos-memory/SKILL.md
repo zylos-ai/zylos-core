@@ -14,8 +14,9 @@ Memory Sync is maintenance. Do not perform business tasks, send user replies,
 change project code, install components, or restart services during Sync.
 The supervisor decides when to request Sync; do not add startup or periodic
 triggers here. Start a background subagent when requested and continue the
-current work. For a pre-reclaim request, wait for its result before acknowledging
-that control as instructed.
+current work, following the runtime-specific result handling below. For a
+pre-reclaim request, wait for its result before acknowledging that control as
+instructed.
 
 ## Start the correct background worker
 
@@ -64,6 +65,28 @@ Select by the requested job and inherited environment: a nonempty
 Sync. No group with a `ZYLOS_RUN_ID` means single global Sync. Never invent or
 replace these bindings. Read [the complete Sync procedures](references/sync-procedures.md)
 before taking a token; run only the selected procedure.
+
+## Parent result handling
+
+These rules apply to group, Origin, and global Sync. The worker reports its
+result to the requesting parent; the parent owns any owner notification.
+
+- Claude: continue current work without waiting for an ordinary background
+  Sync. Handle its completion notification and report failure to the owner.
+- Codex: continue useful current work after launching the worker, but **before
+  ending the parent turn**, use the exposed native agent wait/result tools to
+  read this worker's terminal result. Idle completion notifications can display
+  `Completed` without starting another parent turn. Do not rely on a later
+  notification to finish this obligation. A timeout or an empty wait is not a
+  terminal result; wait again while keeping the input channel responsive.
+  `Completed` describes worker execution, not successful Sync: inspect the
+  returned outcome, including checkpoint, state-commit and release failures.
+- Report a failed Sync to the owner once through the existing channel route,
+  before finishing the parent turn in Codex. Include partial commits and
+  cleanup/release warnings; do not repeat a report already sent for this run.
+  If the result cannot be retrieved, report that failure without claiming Sync
+  succeeded. Successful Sync and the documented `SYNC_BUSY` no-op need no extra
+  owner message. Do not restart Sync to obtain a successful result.
 
 ## Writing rules
 
