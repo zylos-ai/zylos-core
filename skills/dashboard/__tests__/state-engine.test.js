@@ -1586,6 +1586,244 @@ function healthRow(name, signal_type, timestamp = 1000000, status = 'healthy', e
   return { name, signal_type, status, extra: { last_success: new Date(timestamp).toISOString(), ...extra } };
 }
 
+// Keep producer freshness independent from task progress: healthy collectors can
+// continue reporting while the foreground task and AM activity clock stay quiet.
+function stuckFixture(branch = 'turn', runtime = 'claude') {
+  let clock = 1_800_000_000_000;
+  let changeRows = rows => rows;
+  let collectorError = false;
+  const store = {
+    ...makeMockStore(),
+    getCollectorLiveness() {
+      if (collectorError) throw new Error('collector unavailable');
+      return changeRows(['pm2_reader', 'system_sampler', 'am_heartbeat'].map(name =>
+        healthRow(name, 'collector_liveness', clock)));
+    }
+  };
+  const config = { zylosDir: '/tmp/zylos-test', runtime };
+  const engine = new StateEngine(store, {}, config, { now: () => clock });
+  const heartbeat = { runtime, sessionId: 'main-sess', state: 'busy', health: 'ok', lastActivity: clock };
+  engine._state.amHeartbeat = heartbeat;
+  const emit = (event_type, metadata = {}, session_id = 'main-sess') => engine.onEvent({
+    runtime, event_type, timestamp: new Date(clock).toISOString(), session_id, metadata,
+    summary: 'Work continues'
+  });
+  emit('user_prompt_submit');
+  if (branch === 'tool') emit('pre_tool_use', { tool_use_id: 'long-tool', tool_name: 'Bash' });
+  return {
+    engine, heartbeat, store, config, emit,
+    now: () => clock,
+    advance: ms => { clock += ms; },
+    setRows: fn => { changeRows = fn; },
+    setCollectorError: value => { collectorError = value; },
+    state: () => engine.getState().state
+  };
+}
+
+for (const branch of ['tool', 'turn']) {
+  test(`${branch} confirms STUCK only after ten minutes of corroborated suspicion`, () => {
+    const f = stuckFixture(branch);
+    f.advance(300_000);
+    assert.equal(f.state(), 'BUSY', 'five minutes alone does not start suspicion');
+    f.advance(1_000);
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+    f.advance(599_000);
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+    f.advance(1_000);
+    assert.equal(f.state(), 'STUCK');
+    assert.equal(f.engine.getState().confidence, branch === 'tool' ? 'HIGH' : 'MEDIUM');
+  });
+
+  test(`${branch} remains BUSY with recent AM activity and becomes IDLE after completion`, () => {
+    const f = stuckFixture(branch);
+    f.advance(2_000_000);
+    f.heartbeat.lastActivity = f.now() - 10_000;
+    assert.equal(f.state(), 'BUSY');
+    f.emit('stop');
+    f.advance(2_000_000);
+    assert.equal(f.state(), 'IDLE');
+  });
+
+  test(`Codex ${branch} remains POSSIBLY_STUCK after prolonged silence`, () => {
+    const f = stuckFixture(branch, 'codex');
+    f.advance(301_000);
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+    f.advance(3_600_000);
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+  });
+
+  for (const [label, patch] of [
+    ['rate limited', { health: 'rate_limited' }],
+    ['authentication failed', { health: 'auth_failed' }],
+    ['unavailable health', { health: 'unavailable' }],
+    ['idle AM', { state: 'idle' }],
+    ['unknown AM', { state: 'unknown' }],
+    ['different runtime', { runtime: 'codex' }],
+    ['missing runtime', { runtime: undefined }],
+    ['different session', { sessionId: 'other-session' }],
+    ['missing session', { sessionId: undefined }],
+    ['missing activity', { lastActivity: undefined }],
+    ['invalid activity', { lastActivity: 'invalid' }],
+    ['nonfinite activity', { lastActivity: Infinity }],
+    ['zero activity', { lastActivity: 0 }],
+    ['future activity', { lastActivity: 1_900_000_000_000 }]
+  ]) {
+    test(`${branch} cannot confirm STUCK with ${label}`, () => {
+      const f = stuckFixture(branch);
+      Object.assign(f.heartbeat, patch);
+      f.advance(301_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK');
+      f.advance(1_200_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK');
+    });
+  }
+
+  test(`${branch} cannot confirm STUCK without an AM heartbeat`, () => {
+    const f = stuckFixture(branch);
+    f.engine._state.amHeartbeat = null;
+    f.advance(301_000);
+    assert.equal(f.state(), 'UNKNOWN');
+    f.advance(1_200_000);
+    assert.equal(f.state(), 'UNKNOWN');
+  });
+}
+
+for (const source of ['pm2_reader', 'system_sampler', 'am_heartbeat']) {
+  for (const [label, change] of [
+    ['missing', rows => rows.filter(row => row.name !== source)],
+    ['degraded', rows => rows.map(row => row.name === source ? { ...row, status: 'degraded' } : row)],
+    ['error', rows => rows.map(row => row.name === source ? { ...row, status: 'error' } : row)],
+    ['stale', rows => rows.map(row => row.name === source ? { ...row, extra: { last_success: new Date(1).toISOString() } } : row)],
+    ['missing timestamp', rows => rows.map(row => row.name === source ? { ...row, extra: {} } : row)],
+    ['invalid timestamp', rows => rows.map(row => row.name === source ? { ...row, extra: { last_success: 'invalid' } } : row)],
+    ['future timestamp', rows => rows.map(row => row.name === source ? { ...row, extra: { last_success: new Date(1_900_000_000_000).toISOString() } } : row)]
+  ]) {
+    test(`a ${label} ${source} prevents STUCK confirmation`, () => {
+      const f = stuckFixture('tool');
+      f.setRows(change);
+      f.advance(301_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK');
+      f.advance(1_200_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK');
+    });
+  }
+}
+
+for (const [source, budget] of [['pm2_reader', 180_000], ['system_sampler', 90_000], ['am_heartbeat', 60_000]]) {
+  test(`${source} allows confirmation just inside its freshness budget and resets at the boundary`, () => {
+    const f = stuckFixture();
+    let age = budget - 1;
+    f.setRows(rows => rows.map(row => row.name === source
+      ? { ...row, extra: { last_success: new Date(f.now() - age).toISOString() } } : row));
+    f.advance(301_000);
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+    f.advance(600_000);
+    assert.equal(f.state(), 'STUCK', 'healthy samples older than thirty seconds remain valid within their own budget');
+    age = budget;
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+    age = budget - 1;
+    assert.equal(f.state(), 'POSSIBLY_STUCK', 'restoring freshness starts a new confirmation window');
+    f.advance(599_000);
+    assert.equal(f.state(), 'POSSIBLY_STUCK');
+    f.advance(1_000);
+    assert.equal(f.state(), 'STUCK');
+  });
+}
+
+for (const branch of ['tool', 'turn']) {
+  for (const event of ['assistant_message', 'subagent_update']) {
+    test(`${branch} ${event} progress resets suspicion without an intervening state read`, () => {
+      const f = stuckFixture(branch);
+      f.advance(301_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK');
+      f.advance(500_000);
+      f.emit(event, event === 'subagent_update' ? { agent_id: 'worker', status: 'running' } : {});
+      f.advance(61_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK');
+      f.advance(599_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK', 'old suspicion must not survive progress');
+      f.advance(1_000);
+      assert.equal(f.state(), 'STUCK');
+    });
+  }
+
+  for (const blocker of ['collector outage', 'rate limit', 'permission wait']) {
+    test(`${branch} restarts the confirmation window after ${blocker} recovery`, () => {
+      const f = stuckFixture(branch);
+      f.advance(301_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK');
+      f.advance(500_000);
+      if (blocker === 'collector outage') f.setCollectorError(true);
+      if (blocker === 'rate limit') f.heartbeat.health = 'rate_limited';
+      if (blocker === 'permission wait') f.emit('permission_request', { tool_name: 'Read' });
+      assert.notEqual(f.state(), 'STUCK');
+      f.advance(700_000);
+      assert.notEqual(f.state(), 'STUCK');
+      if (blocker === 'collector outage') f.setCollectorError(false);
+      if (blocker === 'rate limit') f.heartbeat.health = 'ok';
+      if (blocker === 'permission wait') {
+        f.emit('post_tool_use', { tool_use_id: 'approved-read', tool_name: 'Read' });
+        f.advance(61_000);
+      }
+      assert.equal(f.state(), 'POSSIBLY_STUCK');
+      f.advance(599_000);
+      assert.equal(f.state(), 'POSSIBLY_STUCK', 'blocked time must not count toward confirmation');
+      f.advance(1_000);
+      assert.equal(f.state(), 'STUCK');
+    });
+  }
+}
+
+test('AM producer activity resets suspicion even when its next observation is no longer recent', t => {
+  const f = stuckFixture();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'am-progress-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'activity-monitor'), { recursive: true });
+  f.config.zylosDir = root;
+  f.advance(301_000);
+  assert.equal(f.state(), 'POSSIBLY_STUCK');
+  f.advance(500_000);
+  const activity = f.now();
+  f.advance(61_000);
+  fs.writeFileSync(path.join(root, 'activity-monitor', 'agent-status.json'), JSON.stringify({
+    runtime: 'claude', sessionId: 'main-sess', state: 'busy', health: 'ok',
+    last_check: f.now() / 1000, last_activity: activity
+  }));
+  f.engine._readAMHeartbeat();
+  assert.equal(f.state(), 'POSSIBLY_STUCK');
+  f.advance(599_000);
+  assert.equal(f.state(), 'POSSIBLY_STUCK');
+  f.advance(1_000);
+  assert.equal(f.state(), 'STUCK');
+});
+
+test('snapshot restore retains a permission wait older than ten minutes', async () => {
+  const f = stuckFixture();
+  const requestedAt = new Date(f.now()).toISOString();
+  let saved;
+  f.advance(1_200_000);
+  const store = {
+    ...f.store,
+    latestSnapshot: () => ({
+      open_turn: { started_at: requestedAt, session_id: 'main-sess' },
+      pending_permission: { tool_name: 'Bash', requested_at: requestedAt, session_id: 'main-sess' },
+      last_progress_at: requestedAt,
+      running_tool: JSON.stringify({ mainSessionId: 'main-sess', tools: {} })
+    }),
+    saveSnapshot: data => { saved = data; }
+  };
+  const restored = new StateEngine(store, {}, f.config, { now: f.now });
+  await restored.initialize();
+  restored._state.amHeartbeat = f.heartbeat;
+  assert.equal(restored.getState().state, 'POSSIBLY_STUCK');
+  f.advance(1_200_000);
+  assert.equal(restored.getState().state, 'POSSIBLY_STUCK');
+  // A non-progress event triggers normal persistence without resolving approval.
+  restored.onEvent({ event_type: 'collector_status', timestamp: new Date(f.now()).toISOString() });
+  assert.equal(JSON.parse(saved.pending_permission).tool_name, 'Bash');
+  assert.equal(JSON.parse(saved.pending_permission).requested_at, requestedAt);
+});
+
 for (const scenario of [
   { mode: 'multi', rootAge: 120_000, originAge: 10_000, expected: 'healthy', state: 'idle' },
   { mode: 'multi', rootAge: 120_000, originAge: 90_000, expected: 'stale', state: 'idle' },

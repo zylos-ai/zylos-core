@@ -6,15 +6,21 @@ const { readJsonSample } = await loadCoreModule('session-usage-reader.js');
 
 const STALE_TOOL_THRESHOLD_MS = 300_000;
 const STALE_SUBAGENT_THRESHOLD_MS = 1_800_000;
-const STALE_PERMISSION_THRESHOLD_MS = 600_000;
 const POSSIBLY_STUCK_THRESHOLD_S = 300;
 const STUCK_CONFIRMATION_THRESHOLD_S = 600;
 const RECENT_PROGRESS_THRESHOLD_S = 60;
-const COLLECTOR_FRESHNESS_MS = 30_000;
+const COLLECTOR_FRESHNESS_MS = { pm2_reader: 180_000, system_sampler: 90_000, am_heartbeat: 60_000 };
 const SNAPSHOT_INTERVAL_MS = 30_000;
 const AM_HEARTBEAT_INTERVAL_MS = 15_000;
 const AM_HEARTBEAT_STALE_MS = 60_000;
 const TOOL_TOMBSTONE_LIMIT = 64;
+
+function canConfirmStuck(signals) {
+  // AM corroborates the same Claude session; Codex's quiet turns remain ambiguous.
+  return signals.runtime === 'claude' && signals.amState === 'busy' && signals.amHealth === 'ok' &&
+    signals.amSessionMatches === true && !signals.pendingPermission && signals.collectorLivenessFresh &&
+    Number.isFinite(signals.amLastProgressAge) && signals.amLastProgressAge >= RECENT_PROGRESS_THRESHOLD_S;
+}
 
 export function deriveAgentState(signals) {
   const evidence = [];
@@ -64,7 +70,7 @@ export function deriveAgentState(signals) {
     if (ageSec > POSSIBLY_STUCK_THRESHOLD_S && !recentProgress) {
       if (signals.possiblyStuckSince) {
         const stuckDuration = (signals.now() - new Date(signals.possiblyStuckSince).getTime()) / 1000;
-        if (stuckDuration >= STUCK_CONFIRMATION_THRESHOLD_S && signals.collectorLivenessFresh) {
+        if (stuckDuration >= STUCK_CONFIRMATION_THRESHOLD_S && canConfirmStuck(signals)) {
           return {
             state: 'STUCK',
             confidence: 'HIGH',
@@ -108,7 +114,7 @@ export function deriveAgentState(signals) {
     if (ageSec > POSSIBLY_STUCK_THRESHOLD_S && !recentTurnProgress) {
       if (signals.possiblyStuckSince) {
         const stuckDuration = (signals.now() - new Date(signals.possiblyStuckSince).getTime()) / 1000;
-        if (stuckDuration >= STUCK_CONFIRMATION_THRESHOLD_S && signals.collectorLivenessFresh) {
+        if (stuckDuration >= STUCK_CONFIRMATION_THRESHOLD_S && canConfirmStuck(signals)) {
           return {
             state: 'STUCK',
             confidence: 'MEDIUM',
@@ -424,6 +430,8 @@ export class StateEngine {
         break;
     }
 
+    // Progress between state polls must also restart the confirmation window.
+    if (this._state.lastProgressAt?.getTime() === now.getTime()) this._clearPossiblyStuck();
     this._broadcastStateChange();
     this._maybeSnapshot();
   }
@@ -593,12 +601,7 @@ export class StateEngine {
         this._state.activeSubagents.delete(id);
       }
     }
-    if (this._state.pendingPermission) {
-      const age = now - new Date(this._state.pendingPermission.requested_at).getTime();
-      if (age > STALE_PERMISSION_THRESHOLD_MS) {
-        this._state.pendingPermission = null;
-      }
-    }
+    // A permission wait does not become an unblocked operation merely by aging.
 
     this._readAMHeartbeat();
   }
@@ -625,6 +628,10 @@ export class StateEngine {
   _deriveState() {
     const now = this._now;
     const oldestTool = this._oldestRunningTool();
+    const heartbeat = this._state.amHeartbeat;
+    const amActivity = heartbeat?.lastActivity;
+    const amLastProgressAge = Number.isFinite(amActivity) && amActivity > 0 && amActivity <= now()
+      ? (now() - amActivity) / 1000 : null;
 
     const signals = {
       amAvailable: this._state.amHeartbeat !== null,
@@ -641,9 +648,14 @@ export class StateEngine {
         tool_name: this._state.pendingPermission.tool_name,
         age: (now() - new Date(this._state.pendingPermission.requested_at).getTime()) / 1000
       } : null,
-      lastProgressAge: this._state.lastProgressAt
-        ? (now() - this._state.lastProgressAt.getTime()) / 1000
-        : Infinity,
+      lastProgressAge: Math.min(
+        this._state.lastProgressAt ? (now() - this._state.lastProgressAt.getTime()) / 1000 : Infinity,
+        amLastProgressAge ?? Infinity
+      ),
+      amLastProgressAge,
+      amSessionMatches: heartbeat?.runtime === (this._config.runtime || 'claude') &&
+        typeof this._state.mainSessionId === 'string' && this._state.mainSessionId.length > 0 &&
+        heartbeat?.sessionId === this._state.mainSessionId,
       lastProgressType: null,
       collectorLivenessFresh: this._isCollectorLivenessFresh(),
       collectorLivenessAvailable: this._isCollectorLivenessAvailable(),
@@ -655,9 +667,10 @@ export class StateEngine {
 
     const derived = deriveAgentState(signals);
 
-    if ((derived.state === 'POSSIBLY_STUCK' || derived.state === 'STUCK') &&
-        !this._state.possiblyStuckSince) {
-      this._state.possiblyStuckSince = new Date(now());
+    if ((derived.state === 'POSSIBLY_STUCK' || derived.state === 'STUCK') && canConfirmStuck(signals)) {
+      if (!this._state.possiblyStuckSince) this._state.possiblyStuckSince = new Date(now());
+    } else {
+      this._clearPossiblyStuck();
     }
 
     return derived;
@@ -756,16 +769,17 @@ export class StateEngine {
   _isCollectorLivenessFresh() {
     try {
       const health = this.store.getCollectorLiveness();
-      const sources = ['pm2_reader', 'system_sampler', 'hook_handler', 'am_heartbeat'];
+      const sources = Object.keys(COLLECTOR_FRESHNESS_MS);
       const now = this._now();
       return sources.every(name => {
         const h = health.find(s => s.name === name);
         if (!h) return false;
-        if (h.status === 'stale' || h.status === 'error') return false;
+        if (h.status !== 'healthy') return false;
         const extra = h.extra;
         const lastSuccess = extra?.last_success;
         if (!lastSuccess) return false;
-        return (now - new Date(lastSuccess).getTime()) < COLLECTOR_FRESHNESS_MS;
+        const age = now - new Date(lastSuccess).getTime();
+        return Number.isFinite(age) && age >= 0 && age < COLLECTOR_FRESHNESS_MS[name];
       });
     } catch {
       return false;
@@ -775,7 +789,7 @@ export class StateEngine {
   _isCollectorLivenessAvailable() {
     try {
       const health = this.store.getCollectorLiveness();
-      const sources = ['pm2_reader', 'system_sampler', 'hook_handler', 'am_heartbeat'];
+      const sources = Object.keys(COLLECTOR_FRESHNESS_MS);
       return sources.some(name => health.find(s => s.name === name));
     } catch {
       return false;
@@ -814,7 +828,10 @@ export class StateEngine {
       const sample = readJsonSample(amStatusPath, 'status');
       if (sample.error) throw new Error(sample.error);
       const data = sample.value;
+      if (data.last_activity !== this._state.amHeartbeat?.lastActivity) this._clearPossiblyStuck();
       this._state.amHeartbeat = {
+        runtime: data.runtime,
+        sessionId: data.sessionId,
         state: data.state,
         health: data.health,
         lastCheck: data.last_check,
@@ -988,10 +1005,10 @@ export class StateEngine {
             : formatEntry('statusline', { capability: 'unsupported' })
         },
         collector_liveness: {
-          pm2_reader: formatEntry('pm2_reader', { signalType: 'collector_liveness', maxAgeS: 180 }),
-          system_sampler: formatEntry('system_sampler', { signalType: 'collector_liveness', maxAgeS: 90 }),
+          pm2_reader: formatEntry('pm2_reader', { signalType: 'collector_liveness', maxAgeS: COLLECTOR_FRESHNESS_MS.pm2_reader / 1000 }),
+          system_sampler: formatEntry('system_sampler', { signalType: 'collector_liveness', maxAgeS: COLLECTOR_FRESHNESS_MS.system_sampler / 1000 }),
           conversation_reader: formatEntry('conversation_reader', { signalType: 'collector_liveness', eventDriven: true, maxAgeS: 60 }),
-          am_heartbeat: formatEntry('am_heartbeat', { signalType: 'collector_liveness', maxAgeS: 60 })
+          am_heartbeat: formatEntry('am_heartbeat', { signalType: 'collector_liveness', maxAgeS: COLLECTOR_FRESHNESS_MS.am_heartbeat / 1000 })
         },
         platform: {
           statusline: formatEntry('statusline', { signalType: 'collector_liveness' })
