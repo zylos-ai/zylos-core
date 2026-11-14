@@ -196,6 +196,24 @@ test('a crash in a restarted run that the restart did not cause is still shown',
     ['wb.event.tool_timeout_restart', 'wb.event.tool_timeout_nudge', 'wb.event.session_start']]);
 });
 
+test('recent activity leaves out the crash an automatic restart causes and keeps every other crash', () => {
+  const at = seconds => new Date(Date.parse('2026-11-14T10:20:00.000Z') + seconds * 1000).toISOString();
+  for (const type of ['no_response_restart', 'tool_timeout_restart']) {
+    // Run A restarts at 0. Its crash 1.1 s later is the restart; its crash 5 s before and 10.5 s after are its own,
+    // and so is run B's crash 1.5 s after A's restart. The server sends the newest recorded first.
+    const recent = [[-5, 'crash_detected', 'run-a'], [0, type, 'run-a'], [1.1, 'crash_detected', 'run-a'], [1.5, 'crash_detected', 'run-b'],
+      [5, 'stop', 'run-a'], [10.5, 'crash_detected', 'run-a']]
+      .map(([seconds, event_type, run_id], index) => ({ timestamp: at(seconds), event_type, run_id, event_seq: index + 1 })).reverse();
+    const document = createDocument(), root = document.createElement('div');
+    renderOverview(root, row('a', { state: { kind: 'idle' } }), { recent, totalEvents: 6, totalRuns: 2, unattributed: 0 },
+      { document, t, level: 'plain', currentTime: Date.parse(at(60)) });
+    const rows = allNodes(root.children[1]).filter(node => node.classList.contains('wb-ev'));
+    assert.deepEqual(rows.map(node => [node.textContent.match(/wb\.event\.\w+/)[0], allNodes(node).find(child => child.tagName === 'TIME').title]),
+      [[10.5, 'crash_detected'], [5, 'stop'], [1.5, 'crash_detected'], [0, type], [-5, 'crash_detected']]
+        .map(([seconds, event]) => [`wb.event.${event}`, new Date(at(seconds)).toLocaleString(undefined, { timeZone: ZONE })]), type);
+  }
+});
+
 test('event, end reason and time labels are plain words in plain view and raw values in technical detail', () => {
   assert.equal(eventLabel({ event_type: 'reclaim_done' }, 'plain', t), 'wb.event.reclaim_done');
   assert.equal(eventLabel({ event_type: 'wait_health' }, 'plain', t), 'wb.event.wait_health');

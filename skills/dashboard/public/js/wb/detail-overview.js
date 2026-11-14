@@ -3,7 +3,7 @@ import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106'
 import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=155';
 import { toolLabel, waitText } from './view-mode.js?v=151';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=93';
-import { recentRows } from './timeline-rows.js?v=110';
+import { recentRows } from './timeline-rows.js?v=111';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 
 export function activeSubagents(events, runId) {

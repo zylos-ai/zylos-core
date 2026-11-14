@@ -46,6 +46,18 @@ export function restartExit(events) {
   });
 }
 
+/** Events from several runs, without the crash reports of automatic restarts, judged run by run as on the timeline. */
+export function withoutRestartExits(events) {
+  const runs = new Map();
+  for (const event of events) {
+    if (event.run_id == null) continue;
+    if (!runs.has(event.run_id)) runs.set(event.run_id, []);
+    runs.get(event.run_id).push(event);
+  }
+  const hidden = new Map([...runs].map(([run, list]) => [run, restartExit(list)]));
+  return events.filter(event => !hidden.get(event.run_id)?.(event));
+}
+
 const sequence = row => row.event?.event_seq ?? -Infinity;
 /** Newest first; events recorded at the same moment keep their recorded order, latest first. */
 export function newestFirst(rows) {
@@ -78,10 +90,10 @@ export const recentLimit = 5;
  * filled its window, the group holding the window's earliest recorded event may continue before it:
  * that group is marked `open`, so its count is a lower bound and its first time is unknown. The server
  * cuts the window by recorded order, which can differ from timestamp order, so the open group is found
- * by recorded order, not by position.
+ * by recorded order, not by position. The crash an automatic restart causes is left out, as on the timeline.
  */
 export function recentRows(events, { window = recentWindow, limit = recentLimit } = {}) {
-  const rows = newestFirst(events.map(event => ({ at: timeValue(event.timestamp), event })));
+  const rows = newestFirst(withoutRestartExits(events).map(event => ({ at: timeValue(event.timestamp), event })));
   const groups = mergeRepeats(rows);
   if (events.length >= window && groups.length) {
     let edge = rows.length - 1;

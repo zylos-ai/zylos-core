@@ -3,8 +3,8 @@ import { workingNowText } from './working-display.js?v=4';
 import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { endReasonLabel, timeValue } from './event-labels.js?v=93';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=168';
-import { eventTypesFor, mergeRepeats, newestFirst, restartExit, showsEvent } from './timeline-rows.js?v=110';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=169';
+import { eventTypesFor, mergeRepeats, newestFirst, restartExit, showsEvent } from './timeline-rows.js?v=111';
 
 export { timeValue };
 
