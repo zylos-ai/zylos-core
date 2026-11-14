@@ -43,6 +43,35 @@ async function assertFits(page, card, width) {
   assert.equal(issues.length, 0, `${width}px account text fits: ${issues.join('; ')}`);
 }
 
+async function assertAccountOrder(page, card, expected) {
+  const stripOrder = await page.locator('.wb-account').evaluateAll(items => items.map(item =>
+    item.textContent.includes('Claude') ? 'Claude' : 'Codex'));
+  const hostOrder = await card.locator('.wb-kvs > div > span:first-child').allTextContents();
+  assert.deepEqual(stripOrder, expected, 'info-bar follows the snapshot runtime order');
+  assert.deepEqual(hostOrder, stripOrder, 'host account rows follow the info-bar, regardless of API insertion order');
+}
+
+async function assertDuration(card, duration, { width, language }) {
+  const rows = card.locator('.wb-kvs > div > span:last-child');
+  for (const row of await rows.all()) {
+    assert.ok((await row.textContent()).includes(duration), `exact localized duration: ${duration}`);
+    if (width !== 390 || language !== 'en') continue;
+    const lines = await row.evaluate((node, text) => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const start = walker.currentNode.textContent.indexOf(text);
+        if (start < 0) continue;
+        const range = document.createRange();
+        range.setStart(walker.currentNode, start);
+        range.setEnd(walker.currentNode, start + text.length);
+        return [...new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top)))];
+      }
+      return [];
+    }, duration);
+    assert.equal(lines.length, 1, 'the complete English duration occupies one real text line at 390px');
+  }
+}
+
 export async function runAccountQuotaBrowser(sandbox) {
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE;
   const executablePath = process.env.ZYLOS_CHAT_BROWSER_BIN;
@@ -62,7 +91,10 @@ export async function runAccountQuotaBrowser(sandbox) {
   const browser = await chromium.connect(server.wsEndpoint(), { timeout: 15000 });
 
   for (const width of [390, 1280]) for (const theme of ['light', 'dark']) for (const language of ['zh', 'en']) {
-    const now = Date.now(), future = now + (3 * 24 + 4) * 3600000, later = now + (4 * 24 + 5) * 3600000;
+    const now = Math.floor(Date.now() / 1000) * 1000;
+    const future = now + (3 * 24 + 4) * 3600000, later = now + (4 * 24 + 5) * 3600000 + 8 * 60000;
+    const duration = language === 'en' ? '3d\u00a04h' : '3 天\u00a04 小时';
+    const laterDuration = language === 'en' ? '4d\u00a05h\u00a08m' : '4 天\u00a05 小时\u00a08 分钟';
     const recordedAt = now - 3600000;
     let phase = 'live';
     const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
@@ -80,6 +112,7 @@ export async function runAccountQuotaBrowser(sandbox) {
         } catch {}
       }, { theme, language });
       const page = await context.newPage(), errors = [];
+      await page.clock.setFixedTime(now);
       page.setDefaultTimeout(10000);
       page.on('pageerror', error => { if (errors.length < 3) errors.push(error.message); });
       await page.route('**/api/**', route => {
@@ -88,10 +121,13 @@ export async function runAccountQuotaBrowser(sandbox) {
         if (url.pathname !== '/api/workbench/groups') return route.fallback();
         const answer = workbenchAnswer(url, now);
         const stale = phase === 'stale';
-        answer.instance.accounts = {
+        const accounts = {
           claude: { used_percentage: 21, resets_at: stale ? Math.floor(later / 1000) : new Date(future).toISOString(), live: !stale, recordedAt },
           codex: { usedPercentage: 42, resetsAt: stale ? new Date(later).toISOString() : Math.floor(future / 1000), live: !stale, recordedAt },
         };
+        // Deliberately oppose the runtime order, then change both orders on refresh.
+        answer.instance.accounts = stale ? accounts : { codex: accounts.codex, claude: accounts.claude };
+        if (stale || phase === 'omitted-reverse') answer.baselineRuntime = 'codex';
         if (phase === 'omitted') {
           answer.instance.accounts.claude.resets_at = Math.floor((now - 1000) / 1000);
           delete answer.instance.accounts.codex.resetsAt;
@@ -109,21 +145,49 @@ export async function runAccountQuotaBrowser(sandbox) {
       assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
       const strip = page.locator('.wb-account');
       await strip.filter({ hasText: 'Codex' }).waitFor();
-      // State and overview load independently; verify quota after the instance zone has arrived.
-      const firstRefresh = page.waitForResponse(response => new URL(response.url()).pathname === '/api/workbench/groups');
-      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-      await firstRefresh;
       const original = new Map();
       const card = page.locator('#wb-side .wb-host-accounts');
       const dateText = at => page.evaluate(({ at, zone }) => new Intl.DateTimeFormat(undefined, {
         month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: zone,
       }).format(at), { at, zone });
+      async function refresh(next) {
+        phase = next;
+        const omitted = next.startsWith('omitted');
+        const time = await dateText(next === 'stale' ? later : future);
+        const expectedDuration = next === 'stale' ? laterDuration : duration;
+        const deadline = Date.now() + 10000;
+        // A visibility event may be skipped while a previous read is in flight.
+        // Retry inside the existing timeout until the desired snapshot has rendered.
+        while (Date.now() < deadline) {
+          const ready = await page.evaluate(({ omitted, time, expectedDuration, stale, firstAccount }) => {
+            document.dispatchEvent(new Event('visibilitychange'));
+            const items = [...document.querySelectorAll('.wb-account')];
+            const titlesReady = items.length === 2 && items[0].textContent.includes(firstAccount) && items.every(item => omitted
+              ? !/reset|重置/i.test(item.title)
+              : item.title.includes(time) && item.title.includes(expectedDuration));
+            const side = document.querySelector('#wb-side');
+            const card = document.querySelector('.wb-host-accounts');
+            if (!titlesReady) return false;
+            if (!side || side.hidden) return true;
+            if (omitted) return card?.hidden === true;
+            return card && !card.hidden && card.textContent.includes(time)
+              && card.textContent.includes(expectedDuration) && (!stale || /record|记录/i.test(card.textContent));
+          }, { omitted, time, expectedDuration, stale: next === 'stale',
+            firstAccount: next === 'stale' || next === 'omitted-reverse' ? 'Codex' : 'Claude' });
+          if (ready) return;
+          await page.waitForTimeout(100);
+        }
+        assert.fail(`desired ${next} quota snapshot did not render within 10000ms`);
+      }
+      // State and overview load independently; verify quota after the instance zone has arrived.
+      await refresh('live');
       for (const name of ['Claude', 'Codex']) {
         const item = strip.filter({ hasText: name });
         original.set(name, await item.innerText());
         assert.match(await item.getAttribute('title'), resetWords);
         const title = await item.getAttribute('title'), expectedTime = await dateText(future);
         assert.ok(title.includes(expectedTime), `tooltip uses instance zone rather than browser zone: ${title}; expected ${expectedTime}`);
+        assert.ok(title.includes(duration), 'tooltip preserves the exact multi-day duration');
         assert.doesNotMatch(await item.innerText(), resetWords, 'reset adds no visible strip copy');
         if (width === 1280) await item.hover();
       }
@@ -142,17 +206,13 @@ export async function runAccountQuotaBrowser(sandbox) {
       const liveText = await card.innerText();
       for (const text of ['Claude', 'Codex', '79%', '58%', await dateText(future)]) assert.ok(liveText.includes(text), `live card contains ${text}`);
       assert.match(liveText, resetWords);
+      await assertAccountOrder(page, card, ['Claude', 'Codex']);
+      await assertDuration(card, duration, { width, language });
       await assertFits(page, card, width);
       await page.evaluate(() => { document.activeElement?.blur(); return document.fonts.ready; });
       await page.mouse.move(0, 0);
       if (evidence) await page.screenshot({ path: path.join(evidence, `quota-${width}-${theme}-${language}-live.png`), fullPage: true });
 
-      async function refresh(next) {
-        phase = next;
-        const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/workbench/groups');
-        await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-        await response;
-      }
       await refresh('stale');
       await card.filter({ hasText: /record|记录/i }).waitFor();
       await page.waitForFunction(({ time }) => document.querySelector('.wb-host-accounts')?.textContent.includes(time), { time: await dateText(later) });
@@ -161,6 +221,8 @@ export async function runAccountQuotaBrowser(sandbox) {
         assert.ok((await strip.filter({ hasText: name }).getAttribute('title')).includes(await dateText(later)), 'both runtimes accept swapped ISO/seconds representations');
         assert.match(await card.locator('.wb-kvs > div').filter({ hasText: name }).innerText(), /record|记录/i, 'each stale account names its recorded basis');
       }
+      await assertAccountOrder(page, card, ['Codex', 'Claude']);
+      await assertDuration(card, laterDuration, { width, language });
       await assertFits(page, card, width);
       await page.evaluate(() => document.activeElement?.blur());
       await page.mouse.move(0, 0);
@@ -177,6 +239,8 @@ export async function runAccountQuotaBrowser(sandbox) {
       }
       await refresh('live');
       await card.waitFor();
+      await assertAccountOrder(page, card, ['Claude', 'Codex']);
+      await assertDuration(card, duration, { width, language });
       await assertFits(page, card, width);
       await page.locator('#wb-host-close').click();
       await page.locator('#wb-side').waitFor({ state: 'hidden' });
