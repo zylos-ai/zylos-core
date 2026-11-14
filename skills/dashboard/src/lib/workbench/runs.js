@@ -1,7 +1,10 @@
+import { restartEffect } from '../../../public/js/wb/timeline-rows.js';
+
 /** Read run segments from imported events without changing their attribution. */
 export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } = {}) {
   // `types` narrows what is counted (n, totalEvents, unattributed), not which runs exist or when they
-  // start and end: a run whose events are all of other types is still listed, with n 0.
+  // start and end: a run whose events are all of other types is still listed, with n 0. Counts cover the events the
+  // timeline shows: an automatic restart's crash report is not one.
   return async function runs(key, { before, limit = 3, types } = {}) {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
       throw Object.assign(new Error('Invalid run page size'), { code: 'INVALID_ARGUMENT', statusCode: 400 });
@@ -49,6 +52,25 @@ export function createRuns({ store, getSnapshot = async () => ({ rows: [] }) } =
       WHERE session_group IS @key AND run_id IS NOT NULL`).get({ key: group, ...typeParams });
     const { unattributed } = store.db.prepare(`SELECT COALESCE(${counts}, 0) AS unattributed FROM runtime_events
       WHERE session_group IS @key AND run_id IS NULL`).get({ key: group, ...typeParams });
-    return { runs: rows.map(run => ({ ...run, endReason: endReason(run) })), ...totals, unattributed };
+    // The crash report of an exit an automatic restart caused is not shown on the timeline (restartEffect), so the
+    // counts leave it out too, run by run, in runs that had such a restart.
+    const hidden = new Map();
+    if (!counted || counted.includes('crash_detected')) {
+      const runsWithRestart = new Map();
+      for (const event of store.db.prepare(`SELECT run_id, event_type, timestamp FROM runtime_events
+        WHERE session_group IS @key AND event_type IN ('no_response_restart','tool_timeout_restart','crash_detected')
+          AND run_id IN (SELECT run_id FROM runtime_events WHERE session_group IS @key
+            AND event_type IN ('no_response_restart','tool_timeout_restart'))`).iterate({ key: group })) {
+        if (!runsWithRestart.has(event.run_id)) runsWithRestart.set(event.run_id, []);
+        runsWithRestart.get(event.run_id).push(event);
+      }
+      for (const [runId, events] of runsWithRestart) {
+        const effect = restartEffect(events), exits = events.filter(event => effect(event) === 'exit').length;
+        if (exits) hidden.set(runId, exits);
+      }
+    }
+    const hiddenTotal = [...hidden.values()].reduce((sum, count) => sum + count, 0);
+    return { runs: rows.map(run => ({ ...run, n: run.n - (hidden.get(run.runId) ?? 0), endReason: endReason(run) })),
+      ...totals, totalEvents: totals.totalEvents - hiddenTotal, unattributed };
   };
 }

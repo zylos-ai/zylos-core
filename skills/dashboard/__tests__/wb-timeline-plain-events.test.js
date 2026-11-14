@@ -123,7 +123,7 @@ test('recent activity is not taken over by diagnostics and follows the technical
   await detail.open(row, { rows: [row], listKnown: true });
   const recent = () => allNodes(root).find(node => node.classList.contains('wb-detail-recent'));
   assert.deepEqual(labels(recent()), ['wb.event.stop', 'wb.event.post_tool_use', 'wb.event.pre_tool_use', 'wb.event.user_prompt_submit', 'wb.event.session_start']);
-  assert.match(root.textContent, /wb\.detail\.fullTimeline \{"events":5,"runs":1\}/);
+  assert.ok(root.textContent.includes(tr('wb.detail.fullTimeline', { events: tr('wb.detail.timelineEvents', { count: 5 }), runs: tr('wb.detail.timelineRun', { count: 1 }) })));
 
   level = 'technical';
   f.reads.length = 0;
@@ -138,7 +138,7 @@ test('recent activity is not taken over by diagnostics and follows the technical
   assert.deepEqual(labels(recent()), ['wb.event.stop', 'wb.event.category.diagnostic'], 'the releases in the window are one row');
   assert.deepEqual(codes(recent()), ['stop', 'release']);
   assert.deepEqual(repeats(recent()), [tr('wb.timeline.repeatedUntil', { count: recentWindow - 1, to: short(at(4 + 599 * 0.1)) })]);
-  assert.match(root.textContent, /wb\.detail\.fullTimeline \{"events":605,"runs":1\}/);
+  assert.ok(root.textContent.includes(tr('wb.detail.fullTimeline', { events: tr('wb.detail.timelineEvents', { count: 605 }), runs: tr('wb.detail.timelineRun', { count: 1 }) })));
 });
 
 const short = value => new Date(value).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE });

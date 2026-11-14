@@ -3,8 +3,8 @@ import { workingNowText } from './working-display.js?v=5';
 import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { endReasonLabel, timeValue } from './event-labels.js?v=93';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=169';
-import { eventTypesFor, mergeRepeats, newestFirst, restartExit, showsEvent } from './timeline-rows.js?v=111';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=170';
+import { eventTypesFor, mergeRepeats, newestFirst, restartEffect, restartRows, showsEvent } from './timeline-rows.js?v=112';
 
 export { timeValue };
 
@@ -280,13 +280,13 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
     const span = element(document, 'span', [start.text, end ? end.text : t('wb.timeline.now')].filter(Boolean).join(' – '));
     span.title = [start.title, end?.title].filter(Boolean).join(' – ');
     toggle.append(span, element(document, 'span', live ? t('wb.timeline.currentRun') : endReasonLabel(run.endReason, level, t) ?? '', 'wb-end'));
-    if (run.n != null) toggle.append(element(document, 'span', t('wb.timeline.count', { count: run.n }), 'wb-sub'));
+    if (run.n != null) toggle.append(element(document, 'span', t(run.n === 1 ? 'wb.timeline.countOne' : 'wb.timeline.count', { count: run.n }), 'wb-sub'));
     listen(toggle, 'click', () => open ? loader.collapse(run.runId) : loader.expand(run.runId));
     section.append(toggle);
     if (open) {
       const rows = [];
-      const events = state.filter === 'messages' ? [] : state.events.get(run.runId) ?? [], restarted = restartExit(events);
-      for (const event of events) if (showEvent(event) && !restarted(event)) rows.push({ at: timeValue(event.timestamp), event });
+      const events = state.filter === 'messages' ? [] : state.events.get(run.runId) ?? [];
+      rows.push(...restartRows(events.filter(showEvent), restartEffect(events)));
       if (showMessages && ['all', 'messages'].includes(state.filter)) for (const message of state.messages.get(run.runId) ?? []) {
         rows.push({ at: timeValue(message.timestamp), message });
       }
@@ -307,7 +307,7 @@ export function renderTimeline(root, loader, { document = root.ownerDocument, t 
     for (const message of state.between) between.append(eventRow(document, message, { level, t, label: messageLabel(message) }));
     root.append(between);
   }
-  if (state.unattributed) root.append(element(document, 'p', t('wb.timeline.unattributed', { count: state.unattributed }), 'wb-note'));
+  if (state.unattributed) root.append(element(document, 'p', t(state.unattributed === 1 ? 'wb.timeline.unattributedOne' : 'wb.timeline.unattributed', { count: state.unattributed }), 'wb-note'));
   if (state.runs.length < state.totalRuns) {
     const more = element(document, 'button', t('wb.timeline.earlier'), 'wb-link-btn wb-more'); more.type = 'button'; more.disabled = state.loading;
     listen(more, 'click', () => loader.loadEarlier()); root.append(more);

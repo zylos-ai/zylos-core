@@ -187,10 +187,13 @@ export function defaultAgentFleetLabels() {
     readOnly: 'Read-only',
     admin: 'Admin',
     runningGroups: 'Running {count} groups',
+    runningGroupsOne: 'Running {count} group',
     allNormal: 'All normal',
     summaryUnavailable: 'Group statistics unavailable',
     moreProblems: '{count} more problems →',
+    moreProblemsOne: '{count} more problem →',
     autoRestarts: '{count} automatic restarts in the last hour →',
+    autoRestartsOne: '{count} automatic restart in the last hour →',
     problemReasons: { auth_failed: 'Authentication failed', start_failed: 'Start failed', no_response: 'No response' },
     groupDuration: '{count} min',
     pool: 'Pool',
@@ -201,6 +204,8 @@ export function defaultAgentFleetLabels() {
 }
 
 const fill = (text, values = {}) => String(text ?? '').replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '');
+// A count label reads in the singular for one (`<key>One`), when the language has that form; otherwise the plural.
+const counted = (labels, key, count) => count === 1 && labels[key + 'One'] ? labels[key + 'One'] : labels[key];
 // A sentence that already ends with a full stop is followed directly by the next one, not by a separator.
 export function afterSentence(text, next) {
   if (!next) return text;
@@ -378,7 +383,7 @@ function groupStates(tile, labels, t) {
   const counts = summary.counts || {};
   const order = ['busy', 'idle', 'waiting', 'unknown', 'no_response', 'error'];
   const active = order.filter(kind => counts[kind] > 0);
-  const text = [fill(labels.runningGroups, { count: summary.running }), ...active.map(kind => `${counts[kind]} ${labels.groupStates[kind]}`)].join(' · ');
+  const text = [fill(counted(labels, 'runningGroups', summary.running), { count: summary.running }), ...active.map(kind => `${counts[kind]} ${labels.groupStates[kind]}`)].join(' · ');
   const bar = summary.running ? `<div class="wb-gbar" title="${escapeHtml(text)}">${active.map(kind => `<i class="wb-gbar-${kind}" style="flex:${counts[kind]}"></i>`).join('')}</div>` : '';
   const problems = (summary.problems || []).slice(0, 2);
   const rows = problems.map(row => {
@@ -388,8 +393,8 @@ function groupStates(tile, labels, t) {
     return `<button type="button" class="wb-f-problem" data-fleet-group="${escapeHtml(row.sessionGroup)}"><i class="wb-dot wb-f-dot-${escapeHtml(row.reason)}"></i><b class="wb-f-problem-name" title="${escapeHtml(name)}">${escapeHtml(name)}</b><span class="wb-f-problem-reason" title="${escapeHtml(reason)}">${escapeHtml(reason)}</span></button>`;
   }).join('');
   const target = escapeHtml(problems[0]?.sessionGroup ?? '');
-  const more = summary.problemCount > 2 ? `<button type="button" class="wb-f-more" data-fleet-problems data-group="${target}">${escapeHtml(fill(labels.moreProblems, { count: summary.problemCount - 2 }))}</button>` : '';
-  const restart = summary.autoRestarts?.count > 0 ? `<button type="button" class="wb-f-more" data-fleet-problems data-group="${target}">${escapeHtml(fill(labels.autoRestarts, { count: summary.autoRestarts.count }))}</button>` : '';
+  const more = summary.problemCount > 2 ? `<button type="button" class="wb-f-more" data-fleet-problems data-group="${target}">${escapeHtml(fill(counted(labels, 'moreProblems', summary.problemCount - 2), { count: summary.problemCount - 2 }))}</button>` : '';
+  const restart = summary.autoRestarts?.count > 0 ? `<button type="button" class="wb-f-more" data-fleet-problems data-group="${target}">${escapeHtml(fill(counted(labels, 'autoRestarts', summary.autoRestarts.count), { count: summary.autoRestarts.count }))}</button>` : '';
   return `${status ? `<div class="wb-f-act">${status}</div>` : ''}<div class="wb-f-act wb-f-running" title="${escapeHtml(text)}">${escapeHtml(text)}</div>${bar}<div class="wb-f-problems">${summary.problemCount ? rows + more : `<span class="wb-f-normal">${escapeHtml(counts.unknown ? labels.summaryUnavailable : labels.allNormal)}</span>`}${restart}</div>`;
 }
 

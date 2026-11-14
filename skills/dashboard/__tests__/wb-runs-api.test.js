@@ -8,7 +8,8 @@ import { Store } from '../src/lib/store.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
 import { createRuns } from '../src/lib/workbench/runs.js';
 import { createGroupBacklog } from '../src/lib/workbench/group-backlog.js';
-import { importSupervisorRecords, supervisorSequences } from './helpers/supervisor-records.js';
+import { importSupervisorRecords, supervisorRecord, supervisorSequences } from './helpers/supervisor-records.js';
+import { eventTypesFor, restartEffect, restartRows } from '../public/js/wb/timeline-rows.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-runs-'));
@@ -69,6 +70,47 @@ test('a run the supervisor restarted ends as an automatic restart even though it
     getSnapshot: async () => ({ rows: [{ sessionGroup: 'telegram:a', live: { runId: 'current' } }] }) });
   assert.deepEqual((await runs('telegram:a', { limit: 10 })).runs.map(row => [row.runId, row.endReason]),
     [['current', 'running'], ['crashed', 'crash'], ['tool', 'auto_restart_tool_timeout'], ['silent', 'auto_restart_no_response']]);
+});
+
+// Integration boundary: supervisor records imported by the real importer into a private Store, then counted.
+// Run for count changes; skip rendering-only edits. No tmux/network/children.
+test('run and group counts leave out the crash report an automatic restart causes, as the timeline does', async t => {
+  const f = fixture(t), at = Date.parse('2026-10-20T12:00:00.000Z'), hour = 3600000, group = 'telegram:a';
+  for (const [index, runId] of ['silent', 'tool', 'crashed', 'edge', 'late', 'current'].entries()) f.event(runId, 1 + index, 'session_start');
+  f.event(null, 9, 'stop');
+  const restart = (when, runId) => supervisorRecord(when, 'no_response_restart', group, runId, { reason: 'no_response_restart', silence_ms: 420_000 });
+  const crash = (when, runId) => supervisorRecord(when, 'crash_detected', group, runId, { sessionId: 'session-' + runId });
+  await importSupervisorRecords(f, [
+    ...supervisorSequences.noResponseRestart(at, group, 'silent'), // crash 1.1 s after the restart
+    ...supervisorSequences.toolTimeoutRestart(at + hour, group, 'tool'), // the same
+    ...supervisorSequences.crash(at + 2 * hour, group, 'crashed'), // no restart: a crash of its own
+    crash(at + 3 * hour - 5000, 'edge'), restart(at + 3 * hour, 'edge'), crash(at + 3 * hour + 10_000, 'edge'), // before: own; exactly 10 s: the restart
+    restart(at + 4 * hour, 'late'), crash(at + 4 * hour + 10_500, 'late'), // 10.5 s after: a crash of its own
+  ]);
+  // The tool call the restart cut off is still shown (as interrupted), so it is still counted.
+  f.store.insertEvent({ id: 'cut', ingest_id: 'cut', timestamp: new Date(at + 120_189).toISOString(), runtime: 'claude', run_id: 'silent',
+    session_group: group, event_type: 'post_tool_failure', category: 'tool', metadata: { tool_name: 'WebFetch' } });
+  const runs = createRuns({ store: f.store, getSnapshot: async () => ({ rows: [{ sessionGroup: group, live: { runId: 'current' } }] }) });
+  const stored = types => Object.fromEntries(f.store.db.prepare(`SELECT run_id, COUNT(*) AS n FROM runtime_events WHERE session_group = ? AND run_id IS NOT NULL
+    ${types ? `AND event_type IN (${types.map(() => '?').join(',')})` : ''} GROUP BY run_id`).all(group, ...(types ?? [])).map(row => [row.run_id, row.n]));
+  for (const types of [eventTypesFor('all', 'plain'), undefined]) {
+    const label = types ? 'plain' : 'technical', raw = stored(types);
+    const page = await runs(group, { limit: 10, types });
+    const n = Object.fromEntries(page.runs.map(run => [run.runId, run.n]));
+    // One crash report hidden in each of silent, tool and edge; none in crashed or late.
+    assert.deepEqual(n, { ...raw, silent: raw.silent - 1, tool: raw.tool - 1, edge: raw.edge - 1 }, `${label}: run counts`);
+    assert.equal(page.totalEvents, Object.values(raw).reduce((sum, count) => sum + count, 0) - 3, `${label}: group count`);
+    assert.equal(page.unattributed, 1, `${label}: events in no run are counted as before`);
+    // Each run's count is the number of rows its timeline shows.
+    for (const run of page.runs) {
+      const events = f.store.queryEvents({ sessionGroup: group, runId: run.runId, types, limit: 1000 });
+      assert.equal(run.n, restartRows(events, restartEffect(events)).length, `${label}: ${run.runId} count equals its rows`);
+    }
+  }
+  // Counting types without crash reports subtracts nothing.
+  const types = ['session_start', 'no_response_restart', 'post_tool_failure'], raw = stored(types), page = await runs(group, { limit: 10, types });
+  assert.deepEqual(Object.fromEntries(page.runs.map(run => [run.runId, run.n])), { ...Object.fromEntries(Object.keys(stored()).map(run => [run, 0])), ...raw });
+  assert.equal(page.totalEvents, Object.values(raw).reduce((sum, count) => sum + count, 0));
 });
 
 test('session rotation never hides a preceding run-ending event and the latest actual ending wins', async t => {
