@@ -96,7 +96,7 @@ test('working memory excludes file cache and swap and respects host pressure', a
   assert.equal(readMemoryLimit(fixture).limitBytes, 122 * GiB);
 });
 
-test('active file cache is excluded using the exact yanjun reading', async () => {
+test('active file cache is excluded using the exact 8 GiB container reading', async () => {
   const fixture = v2({ limit: 8 * GiB, usage: 3766181888, active: 922324992, inactive: 220119040 });
   fixture.fs.files.set(fixture.directory + '/memory.stat', 'active_file 922324992\ninactive_file 220119040\nshmem 0\n');
   const memory = await readMemoryInputs(fixture);
@@ -137,7 +137,7 @@ test('swap inputs are never read even when missing, malformed or denied', async 
   }
 });
 
-test('Stephanie host reading uses physical available memory without requiring swap fields', async () => {
+test('16 GB host reading uses physical available memory without requiring swap fields', async () => {
   // The summary's used bytes are 128 bytes off the integer-kB meminfo granularity.
   const total = 16764178432, used = Math.round(6820690816 / 1024) * 1024;
   for (const swap of ['', `SwapTotal: ${4290000000 / 1024} kB\nSwapFree: 0 kB\n`, 'SwapTotal: invalid\nSwapFree: invalid\n']) {

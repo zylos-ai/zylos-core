@@ -127,7 +127,7 @@ test('window is strict at seven days and ignores future, old-version and other-s
   assert.equal(model.buckets[0].hours, 6);
 });
 
-test('Stephanie summary rejects a brief busy bucket until three ordinary hours accumulate', () => {
+test('16 GB host summary rejects a brief busy bucket until three ordinary hours accumulate', () => {
   const now = 10 * DAY;
   const rows = [6488509312, 7312927616, 7588768640].flatMap((w, n) =>
     bucket(n, w, [570, 629, 323][n], now, 'host', 6));
@@ -151,7 +151,7 @@ test('Stephanie summary rejects a brief busy bucket until three ordinary hours a
   assert.equal(calculate(model).kMemory, 17);
 });
 
-test('yanjun synthetic seven-bucket fixture uses median overhead and rises after twelve calculations', async t => {
+test('8 GiB container synthetic seven-bucket fixture uses median overhead and rises after twelve calculations', async t => {
   const now = 10 * DAY;
   const values = [8011563008, 8007245824, 6684057600, 7211917312, 7517503488, 7675977728, 6677467136];
   const rows = values.flatMap((w, i) => bucket(i + 1, w, [2511, 2424, 322, 152, 97, 65, 81][i], now, 'cgroup2', 7));
@@ -170,9 +170,9 @@ test('yanjun synthetic seven-bucket fixture uses median overhead and rises after
   assert.equal(record.k, 4);
 });
 
-test('yanjun real sample replay qualifies only four buckets and yields seven ordinary-group slots', () => {
-  const now = 1794569462245;
-  const rows = fs.readFileSync(new URL('./fixtures/yanjun-memory-samples.jsonl', import.meta.url), 'utf8')
+test('8 GiB container real sample replay qualifies only four buckets and yields seven ordinary-group slots', () => {
+  const now = 1767760262245;
+  const rows = fs.readFileSync(new URL('./fixtures/8gib-container-memory-samples.jsonl', import.meta.url), 'utf8')
     .trim().split('\n').map(line => JSON.parse(line));
   assert.equal(rows.length, 5652);
   const model = fitMemoryModel(rows, { now, source: 'cgroup2' });
