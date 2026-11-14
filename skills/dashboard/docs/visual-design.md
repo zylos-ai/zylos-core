@@ -1,228 +1,228 @@
-# Dashboard 视觉设计规范
+# Dashboard Visual Design Specification
 
-适用范围：Dashboard 的页面、详情抽屉、对话富内容、浅色与深色主题，以及桌面和手机界面。
+Scope: Dashboard pages, detail drawers, rich conversation content, light and dark themes, and desktop and mobile interfaces.
 
-【已批准】Howard 已批准下列 22 项设计决定，作为后续实施与评审依据；本轮仅修订规范，不代表产品已完成迁移。后续高度改动只调整高度与对齐，保持已批准的分段配色及现有交互。
+[Approved] Howard has approved the following 22 design decisions as the basis for subsequent implementation and review. This revision updates the specification only; it does not mean the product migration is complete. Subsequent height changes adjust only height and alignment, preserving the approved segmented-control colors and existing interactions.
 
-【现状】样式依据 `8c08d822`。下文记录可维护的令牌与控件家族；完整取值快照见 PR #1254 描述，作为基准证据，不随每次视觉改动复制进规范。
+[Current] Styles are based on `8c08d822`. The sections below record maintainable tokens and control families. The complete value snapshot in the PR #1254 description is baseline evidence and is not copied into this specification for every visual change.
 
-【已批准】规则状态含义：**【现状】**描述取值基准时的界面；**【已批准】**是实施与评审要求，引用决策号时以决策清单为准。历史现状不代表批准后的目标值。源码相对链接均从本文件所在目录出发；变量名用于开发定位，界面上使用白话说明。
+[Approved] Rule status meanings: **[Current]** describes the interface at the value baseline; **[Approved]** identifies implementation and review requirements. Decision-number references follow the decision list. Historical values do not represent approved targets. All relative source links start from this file's directory; variable names help developers locate code, while the interface uses plain language.
 
-## 决策清单
+## Decision List
 
-【已批准】22 项均依据 Howard 在 TG 话题 16 msg 659 的答复；决策 4 的适用范围另依据 msg 677 的 B 方案及 msg 736 确认的 composer 例外。下表记录批准要求及迁移影响；原建议中决策 3、4 的手机尺寸已按答复改为 36 px，决策 13 已补回手机触控扩展负边距。
+[Approved] All 22 items follow Howard's reply in TG topic 16 msg 659. The scope of decision 4 also follows option B in msg 677 and the composer exception confirmed in msg 736. The table records approved requirements and migration effects. The originally proposed mobile sizes in decisions 3,4 have been changed to 36 px per the reply, and decision 13 again includes negative margins that extend mobile touch targets.
 
-| 决策 | 决定事项 | 历史现状与页面例子 | 批准要求 | 影响与取舍 | 状态 / 依据 |
+| Decision | Subject | Historical values and page examples | Approved requirement | Effects and tradeoffs | Status / evidence |
 |---|---|---|---|---|---|
-| 1 | 桌面常规工具行高度 | 用量切换与日期 32 px、应用 30 px；设置输入与按钮 32 px | 统一为 30 px；分段切换按外轨道整体算 30 px | 用量、设置、定时任务筛选、聊天顶部会更紧凑；普通工具行中的 32/34 px 原值需迁移；大表单按已批准决策 3 执行 | 已批准（TG 话题 16 msg 659） |
-| 2 | 桌面紧凑工具行高度 | 总览搜索 26 px、短分段外轨 22 px；小按钮和筛选 chip 26 px | 统一为 26 px，桌面总览采用此档 | 总览分段长高 4 px；小图标微操作随所在工具行匹配，非所有小图形都扩高 | 已批准（TG 话题 16 msg 659） |
-| 3 | 大表单高度 | 定时任务字段 34 px；对话问答字段与提交按钮桌面 36 px、手机 40 px | 大字段与同行按钮桌面、手机均为 36 px | 定时任务表单变高；手机问答字段和提交按钮从 40 px 降到 36 px，textarea 继续按内容增高 | 已批准（TG 话题 16 msg 659） |
-| 4 | 手机普通交互目标下限 | 大多数工作台控件最低 40 px，设置导航及顶栏图标 44 px；总览搜索外框仍 26 px | 普通单行交互外框最低 36 px，手机普通单行控件统一收到 36 px；设置导航、顶栏图标等导航元素保持 44 px | 手机普通单行控件（包括搜索、筛选、按钮）统一到 36 px；手机 composer 输入框、附件按钮和发送按钮作为例外保持现状（msg 736）；导航保留自身尺寸，多行选项不压缩 | 已批准（TG 话题 16 msg 659；msg 677 B 方案；msg 736 composer 例外） |
-| 5 | 被动状态小药丸高度 | 运行 pill 最低 24 px、连接 pill 28 px、问答状态 24 px | 被动 pill 统一 24 px | 顶栏连接状态略紧凑；可点 pill 仍服从所在行和手机触控档 | 已批准（TG 话题 16 msg 659） |
-| 6 | 控件圆角 | 按钮与字段常用 8 px；定价输入 6 px、对话列表 9 px、局部控件 7/10/11 px | 单行按钮、字段与可选列表行统一 8 px | 设置、对话列表及局部输入轮廓更一致；图形、徽标不套此档 | 已批准（TG 话题 16 msg 659） |
-| 7 | 底部弹层顶角 | 手机更多菜单 16 px、局部对话弹层 14 px | 底部弹层顶角统一 16 px | 对话局部弹层略圆；非底部弹层仍随自身家族 | 已批准（TG 话题 16 msg 659） |
-| 8 | 全圆类组件圆角 | chip 13 px、pill 20 px、连接 pill 999 px、圆点 50% | 胶囊统一 999 px，圆形继续 50% | 高度改变后仍全圆；避免固定 13/20 px 随高度失配 | 已批准（TG 话题 16 msg 659） |
-| 9 | 消息输入容器圆角 | 桌面 composer 11 px；手机输入 22 px，发送按钮全圆 | 桌面容器改 12 px；手机输入保持 22 px | 只微调桌面轮廓，保留手机输入的胶囊外观 | 已批准（TG 话题 16 msg 659） |
-| 10 | 普通表面阴影 | 基础卡片浅色模糊 42 px、深色 26 px；富内容卡片使用短投影和细描边，按钮另有专用阴影 | 卡片阴影改成和对话富内容卡片一样的短投影加细描边；按钮与选中块沿用各自的轻投影 | 记忆及基础卡片会更轻；按钮和选中块仍有区别，不全用同一阴影 | 已批准（TG 话题 16 msg 659） |
-| 11 | 浮层阴影 | 抽屉继承主题大阴影；局部弹窗有模糊 16/32 px 等硬编码 | 抽屉与弹窗使用相同的柔和大投影，浅色与深色分别沿用当前主题效果 | 局部弹窗投影会变；不把焦点光圈或选中侧线归入浮层阴影 | 已批准（TG 话题 16 msg 659） |
-| 12 | 主要间距档 | 根间距 4/8/16/24/32 px；富内容卡片内边距桌面 20 px、手机 16 px；表单行距 14 px | 主档采用 4/8/12/16/20/24/32 px | 表单等 14/18/22/28 px 的通用间距归入最近用途档；安全区与图表不机械取整 | 已批准（TG 话题 16 msg 659） |
-| 13 | 微间距与补偿值 | 分段内边距 2 px、图标文字常见 3/5/6/7 px；手机触控扩展和图形居中有负边距 | 图标与文字间距收成 2 px、6 px 两档；为对齐图形而做的 1 px 微调保留；保留手机触控扩大点击范围用的负边距 | 微操作更整齐；装饰图形的 1 px 等精确值、手机触控扩展负边距及安全区公式保持 | 已批准（TG 话题 16 msg 659） |
-| 14 | 字号档 | 标题 15/17/19/20 px；正文 13/14 px；说明 11.5/12 px；细小徽标 9–10.5 px | 标题 16/18/20 px、正文 13/14 px、控件 12/12.5 px、说明 11/12 px；手机输入保留 16 px | 标题与说明归档；图表刻度和微徽标保留现有专用字号，不一并放大 | 已批准（TG 话题 16 msg 659） |
-| 15 | 行高档 | 根为字号 1.5 倍；对话正文 24 px、字段说明 18 px、标签 20 px；局部有 1–1.8 倍 | 保留根 1.5；正文 14/24 px、说明 12/18 px、标签 13/20 px；单行控件垂直居中 | 多行内容按三种组合归档；图形、图表刻度与专用徽标保留自身行高 | 已批准（TG 话题 16 msg 659） |
-| 16 | 面板层级配色 | 基础卡片有透明白；工作台面板为实色；对话有凹槽和浮起的选中面 | 普通面板改用与对话富内容相同的层次：面板平整、输入凹下、选中块浮起 | 统一普通面板层次；保留导航透明背景、代码背景和内部转发消息专色 | 已批准（TG 话题 16 msg 659） |
-| 17 | 次要说明文字颜色 | 基础说明常用灰色 `--text-muted`；富表单说明使用更深的 `--c-ink-meta` | 正文说明改成更深一档的灰，浅色主题下更易读；装饰性刻度保持原色 | 浅色说明更易读；不同时重配正文和强调文字 | 已批准（TG 话题 16 msg 659） |
-| 18 | 主操作与危险操作配色 | 工作台与问答已使用同一主色、危险色及悬停/按下色；旧局部规则仍有固定色 | 主操作统一为浅色深青、深色亮青，危险操作统一红色；悬停和按下保留对应明暗变化 | 清理局部重复值；保持浅色深青、深色亮青和危险红的现有风格 | 已批准（TG 话题 16 msg 659） |
-| 19 | 禁用外观 | 普通按钮透明度 0.5、图标 0.38、问答按钮 0.45、选项 0.55；字段有不透明虚线特例 | 按钮及选项统一 0.5；输入文字保持不透明，使用凹底和弱文字 | 图标禁用更清晰；保留可读字段值，禁止只靠降低透明度表达所有禁用态 | 已批准（TG 话题 16 msg 659） |
-| 20 | 外部按钮焦点 | 工作台为 2 px 外框、偏移 2 px；问答按钮使用双层光圈 | 外部按钮使用两层焦点光圈：内层隔开按钮与外圈，外层显示强调色 | 两套按钮的键盘焦点接近；深色和危险按钮仍按语义着色 | 已批准（TG 话题 16 msg 659） |
-| 21 | 输入焦点 | 工作台为 2 px 外框；富表单及手机 composer 为 3 px 光圈 | 输入框获得焦点时外圈 3 px，平时用强调色，出错时用红色 | 搜索、日期和普通输入焦点改变；保留错误字段的危险色光圈 | 已批准（TG 话题 16 msg 659） |
-| 22 | 加载文案标点 | 已有“…”与“...”两种省略号，错误说明长短不一 | 中文加载统一“…”；英文保留“...”，错误先说明结果再给动作 | 只在有文案改动授权的 PR 中迁移，保留插值和操作条件 | 已批准（TG 话题 16 msg 659） |
+| 1 | Regular desktop toolbar height | Usage switches and dates 32 px, Apply 30 px; settings inputs and buttons 32 px | Standardize on 30 px; measure segmented controls as the entire outer track at 30 px | Usage, settings, scheduled-task filters, and chat headers become more compact; existing 32/34 px values in regular toolbars require migration; large forms follow approved decision 3 | Approved (TG topic 16 msg 659) |
+| 2 | Compact desktop toolbar height | Overview search 26 px, short segmented outer track 22 px; small buttons and filter chips 26 px | Standardize on 26 px, including desktop Overview | Overview segmented controls grow by 4 px; small icon actions match their toolbar, without enlarging every small graphic | Approved (TG topic 16 msg 659) |
+| 3 | Large form height | Scheduled-task fields 34 px; conversation question fields and submit buttons 36 px on desktop, 40 px on mobile | Large fields and same-row buttons are 36 px on both desktop and mobile | Scheduled-task forms become taller; mobile question fields and submit buttons shrink from 40 px to 36 px, while textareas continue growing with content | Approved (TG topic 16 msg 659) |
+| 4 | Minimum ordinary mobile interaction target | Most workbench controls have a 40 px minimum, settings navigation and top-bar icons 44 px; Overview search outer frame remains 26 px | Ordinary single-line interaction frames have a 36 px minimum; standardize ordinary mobile single-line controls on 36 px; navigation elements such as settings navigation and top-bar icons remain 44 px | Ordinary mobile single-line controls (including search, filters, and buttons) become 36 px; mobile composer input, attachment, and send buttons retain current sizes as an exception (msg 736); navigation retains its own dimensions and multiline options are not compressed | Approved (TG topic 16 msg 659; msg 677 option B; msg 736 composer exception) |
+| 5 | Passive status pill height | Runtime pill minimum 24 px, connection pill 28 px, question status 24 px | Standardize passive pills on 24 px | Top-bar connection status becomes slightly more compact; clickable pills still follow their row and mobile touch-target tier | Approved (TG topic 16 msg 659) |
+| 6 | Control corner radius | Buttons and fields commonly 8 px; pricing inputs 6 px, conversation lists 9 px, local controls 7/10/11 px | Standardize single-line buttons, fields, and selectable list rows on 8 px | Settings, conversation lists, and local inputs gain consistent outlines; graphics and badges do not use this tier | Approved (TG topic 16 msg 659) |
+| 7 | Bottom-sheet top corners | Mobile More menu 16 px, local conversation sheets 14 px | Standardize bottom-sheet top corners on 16 px | Local conversation sheets become slightly rounder; other overlays retain their own family rules | Approved (TG topic 16 msg 659) |
+| 8 | Fully rounded component radius | Chip 13 px, pill 20 px, connection pill 999 px, dots 50% | Standardize capsules on 999 px; circles remain 50% | Remain fully rounded after height changes; avoid fixed 13/20 px radii becoming mismatched with height | Approved (TG topic 16 msg 659) |
+| 9 | Message composer container radius | Desktop composer 11 px; mobile input 22 px, send button fully rounded | Change desktop container to 12 px; mobile input remains 22 px | Slightly refine the desktop outline, preserving the mobile input's capsule appearance | Approved (TG topic 16 msg 659) |
+| 10 | Ordinary surface shadows | Base-card blur 42 px in light theme, 26 px in dark; rich-content cards use short shadows and fine outlines, with separate button shadows | Give cards the same short shadow and fine outline as rich conversation content; buttons and selected blocks retain their own light shadows | Memory and base cards become lighter; buttons and selected blocks remain distinct rather than sharing one shadow | Approved (TG topic 16 msg 659) |
+| 11 | Overlay shadows | Drawers inherit the theme's large shadow; local popups hard-code blur values such as 16/32 px | Drawers and popups share the same soft large shadow, retaining the current effect for each light and dark theme | Local popup shadows change; focus rings and selection side lines are not overlay shadows | Approved (TG topic 16 msg 659) |
+| 12 | Main spacing tiers | Root spacing 4/8/16/24/32 px; rich-content card padding 20 px desktop, 16 px mobile; form row spacing 14 px | Use main tiers 4/8/12/16/20/24/32 px | Move general spacing such as 14/18/22/28 px in forms to the nearest suitable tier; do not mechanically round safe-area or chart values | Approved (TG topic 16 msg 659) |
+| 13 | Micro spacing and compensation | Segmented padding 2 px, icon/text gaps commonly 3/5/6/7 px; negative margins extend mobile touch targets and center graphics | Consolidate icon/text gaps into 2 px and 6 px tiers; retain 1 px adjustments for graphic alignment; retain negative margins that enlarge mobile hit areas | Small actions become more consistent; retain precise values such as 1 px for decorative graphics, negative mobile touch-extension margins, and safe-area formulas | Approved (TG topic 16 msg 659) |
+| 14 | Font-size tiers | Headings 15/17/19/20 px; body 13/14 px; descriptions 11.5/12 px; tiny badges 9–10.5 px | Headings 16/18/20 px, body 13/14 px, controls 12/12.5 px, descriptions 11/12 px; mobile inputs retain 16 px | Consolidate heading and description sizes; chart ticks and tiny badges retain their dedicated sizes without enlargement | Approved (TG topic 16 msg 659) |
+| 15 | Line-height tiers | Root is 1.5 times font size; conversation body 24 px, field descriptions 18 px, labels 20 px; local values range 1–1.8 times | Retain root 1.5; body 14/24 px, descriptions 12/18 px, labels 13/20 px; vertically center single-line controls | Consolidate multiline content into the three combinations; graphics, chart ticks, and dedicated badges retain their own line heights | Approved (TG topic 16 msg 659) |
+| 16 | Panel-layer colors | Base cards use translucent white; workbench panels are solid; conversations have sunken and raised selected surfaces | Ordinary panels adopt the same hierarchy as rich conversation content: flat panels, sunken inputs, raised selected blocks | Unify ordinary panel layers; retain transparent navigation backgrounds, code backgrounds, and dedicated internal-forwarded-message colors | Approved (TG topic 16 msg 659) |
+| 17 | Secondary description text color | Base descriptions commonly use gray `--text-muted`; rich-form descriptions use darker `--c-ink-meta` | Make body descriptions one gray tier darker for readability in light theme; decorative ticks retain their colors | Improve light-theme descriptions without simultaneously recoloring body or emphasized text | Approved (TG topic 16 msg 659) |
+| 18 | Primary and destructive action colors | Workbench and questions already share primary, danger, and hover/pressed colors; old local rules still contain fixed colors | Standardize primary actions on deep teal in light theme and bright teal in dark theme, destructive actions on red; retain corresponding hover and pressed brightness changes | Remove duplicate local values while preserving existing light-theme deep teal, dark-theme bright teal, and danger red | Approved (TG topic 16 msg 659) |
+| 19 | Disabled appearance | Ordinary button opacity 0.5, icons 0.38, question buttons 0.45, options 0.55; fields include an opaque dashed exception | Standardize buttons and options on 0.5; input text remains opaque, with sunken backgrounds and muted text | Disabled icons become clearer; preserve readable field values, and do not express every disabled state solely through reduced opacity | Approved (TG topic 16 msg 659) |
+| 20 | External button focus | Workbench uses a 2 px outline with 2 px offset; question buttons use a double ring | External buttons use two focus rings: the inner ring separates button and outer ring, and the outer ring uses the accent color | Bring keyboard focus treatments closer across both button families; dark and destructive buttons retain semantic colors | Approved (TG topic 16 msg 659) |
+| 21 | Input focus | Workbench uses a 2 px outline; rich forms and mobile composer use a 3 px ring | Focused inputs use a 3 px outer ring, normally accent-colored and red on error | Change search, date, and ordinary input focus; retain danger-colored rings for invalid fields | Approved (TG topic 16 msg 659) |
+| 22 | Loading-copy punctuation | Both “…” and “...” ellipses exist; error descriptions vary in length | Standardize Chinese loading text on “…”; retain “...” in English; errors state the outcome before the action | Migrate only in PRs authorized to change copy, preserving interpolation and action conditions | Approved (TG topic 16 msg 659) |
 
-## 1. 设计令牌：让相同用途保持相同外观
+## 1. Design Tokens: Consistent Appearance for Shared Purposes
 
-【现状】页面底色、面板、凹槽、选中面承担不同层级。浅色主要靠浅底和边线分层；深色主要靠表面明暗分层，不能简单把浅色白底替换成黑底。
+[Current] Page backgrounds, panels, sunken surfaces, and selected surfaces serve different layers. Light theme primarily distinguishes layers through pale backgrounds and borders; dark theme uses surface brightness. Simply replacing light-theme white backgrounds with black is insufficient.
 
-【已批准→决策 16、17、18】表面、说明文字及操作色按决策 16、17、18 迁移；运行状态与图表系列维持各自业务映射，其余现有主题值保持。完整局部颜色与公式可回查取值快照及源码，不把所有同色声明都当成同一种用途。
+[Approved → decisions 16,17,18] Migrate surfaces, description text, and action colors according to decisions 16,17,18. Runtime states and chart series retain their respective business mappings; other current theme values remain unchanged. Consult the value snapshot and source for complete local colors and formulas; identical color declarations do not necessarily serve the same purpose.
 
-### 1.1 主题表
+### 1.1 Theme Table
 
-【现状】下表每行是一种用途，左右两列分别为浅色与深色的当前值；不是本轮新配色。
+[Current] Each row below represents a purpose; the two value columns show current light and dark theme values, not new colors introduced by this revision.
 
-| 用途 / 变量 | 浅色 | 深色 |
+| Purpose / variable | Light | Dark |
 |---|---|---|
-| 页面 `--bg` | `#f7faf9` | `#11171d` |
-| 次级层 `--bg-secondary` | `rgba(255,255,255,.76)` | `#19222b` |
-| 基础卡片 `--bg-card` | `rgba(255,255,255,.88)` | `#19222b` |
-| 抬高面板 `--bg-elevated` | `#ffffff` | `#202c37` |
-| 代码底 `--bg-code` | `rgba(241,245,249,.9)` | `#15202b` |
-| 正文 `--text` | `#101827` | `#e6edf3` |
-| 次正文 `--text-dim` | `#526170` | `#b1bfcc` |
-| 弱文字 `--text-muted` | `#7a8794` | `#93a4b5` |
-| 强调 `--accent` | `#0d9488` | `#43c7b5` |
-| 强调悬停 `--accent-hover` | `#0f766e` | `#6cddcd` |
-| 强调浅底 `--accent-dim` | `#ccfbf1` | `#173e3b` |
-| 紫 / 绿 `--purple/green` | `#6366f1` / `#059669` | `#b0a5ff` / `#50c996` |
-| 边线 `--border` | `rgba(15,118,110,.16)` | `#334656` |
-| 焦点 `--border-focus` | `rgba(14,165,163,.45)` | `#43c7b5` |
-| 导航底 `--nav-bg` | `rgba(255,255,255,.82)` | `#19222b` |
-| 离线 / 空闲 | `#64748b` / `#16a34a` | `#8b99a8` / `#50c996` |
-| 忙碌 / 等待 | `#a16207` / `#2563eb` | `#e9ba62` / `#70a9ff` |
-| 可能卡住 / 卡住 / 未知 | `#ea580c` / `#dc2626` / `#6b7280` | `#f8a369` / `#f77c87` / `#9ba7b4` |
+| Page `--bg` | `#f7faf9` | `#11171d` |
+| Secondary layer `--bg-secondary` | `rgba(255,255,255,.76)` | `#19222b` |
+| Base card `--bg-card` | `rgba(255,255,255,.88)` | `#19222b` |
+| Elevated panel `--bg-elevated` | `#ffffff` | `#202c37` |
+| Code background `--bg-code` | `rgba(241,245,249,.9)` | `#15202b` |
+| Body text `--text` | `#101827` | `#e6edf3` |
+| Secondary text `--text-dim` | `#526170` | `#b1bfcc` |
+| Muted text `--text-muted` | `#7a8794` | `#93a4b5` |
+| Accent `--accent` | `#0d9488` | `#43c7b5` |
+| Accent hover `--accent-hover` | `#0f766e` | `#6cddcd` |
+| Pale accent background `--accent-dim` | `#ccfbf1` | `#173e3b` |
+| Purple / green `--purple/green` | `#6366f1` / `#059669` | `#b0a5ff` / `#50c996` |
+| Border `--border` | `rgba(15,118,110,.16)` | `#334656` |
+| Focus `--border-focus` | `rgba(14,165,163,.45)` | `#43c7b5` |
+| Navigation background `--nav-bg` | `rgba(255,255,255,.82)` | `#19222b` |
+| Offline / idle | `#64748b` / `#16a34a` | `#8b99a8` / `#50c996` |
+| Busy / waiting | `#a16207` / `#2563eb` | `#e9ba62` / `#70a9ff` |
+| Possibly stuck / stuck / unknown | `#ea580c` / `#dc2626` / `#6b7280` | `#f8a369` / `#f77c87` / `#9ba7b4` |
 
-【现状】工作台运行色另为工作 `#1b9d75`、空闲 `#82b9ac`、等待 `#d69b35`、异常 `#db5252`。用量图系列为 `#0d9488/#6366f1/#d97706`；对话图系列为 `#35a998/#e1a33d/#4f8cf7/#e06b83/#aa79e8/#73859f`。额度条按剩余比例连续变色，不能替换成固定成功/失败两色。
+[Current] Workbench runtime colors are separately working `#1b9d75`, idle `#82b9ac`, waiting `#d69b35`, and error `#db5252`. Usage chart series use `#0d9488/#6366f1/#d97706`; conversation chart series use `#35a998/#e1a33d/#4f8cf7/#e06b83/#aa79e8/#73859f`. Quota bars change color continuously with the remaining proportion and must not become fixed success/failure colors.
 
-### 1.2 维护用令牌与公式入口
+### 1.2 Token and Formula Maintenance References
 
-【现状】开发改动相应家族时只同步下表及批准决定；精确混色、主题覆盖和专用值以链接处为准，避免在文档重复维护每条 CSS 声明。
+[Current] When modifying a family, update only the table below and the approved decisions. Linked sources govern exact color mixing, theme overrides, and dedicated values, avoiding duplicate documentation of every CSS declaration.
 
-| 用途 | 当前令牌 / 核心值 | 精确来源 |
+| Purpose | Current token / core value | Exact source |
 |---|---|---|
-| 面板、弱边线、悬停底 | `--wb-panel/line/line-strong/hover` | [wb.css 第 4–11 行](../public/css/wb.css) |
-| 凹槽、选中面、输入底 | `--c-surface/sunken/raised/input-bg` | [wb.css 第 44–57、102–113 行](../public/css/wb.css) |
-| 主/危险操作、状态软底与说明文字 | `--c-primary/danger/on-fill/ink-meta` 等 | [wb.css 第 59–80、96–124 行](../public/css/wb.css) |
-| 卡片、按钮、实心按钮、选中块阴影 | `--c-shadow-card/btn/fill/thumb/xs` | [wb.css 第 80–88、124–130 行](../public/css/wb.css) |
-| 基础与浮层阴影 | `--shadow-card`、`--shadow-card-hover`；浅色模糊 42/52 px，深色 26/32 px | [浅色主题](../public/themes/light.css)、[深色主题](../public/themes/dark.css) |
-| 主圆角和间距 | 圆角 12/8/4 px；间距 4/8/16/24/32 px | [style.css 第 10–18 行](../public/css/style.css) |
-| 富内容圆角与内边距 | 圆角 6/8/12 px；内边距桌面 20 px、手机 16 px | [wb.css 第 35–42 行](../public/css/wb.css)、[conversation.css 第 1448 行](../public/css/conversation.css) |
-| 图表与额度条 | 系列、坐标、提示层及连续色公式 | [用量](../public/js/wb/usage.js)、[对话图](../public/js/wb/conversation-charts.js)、[额度](../public/js/wb/instance-strip.js) |
+| Panels, subtle borders, hover backgrounds | `--wb-panel/line/line-strong/hover` | [wb.css lines 4–11](../public/css/wb.css) |
+| Sunken, selected, and input surfaces | `--c-surface/sunken/raised/input-bg` | [wb.css lines 44–57,102–113](../public/css/wb.css) |
+| Primary/destructive actions, soft status backgrounds, description text | `--c-primary/danger/on-fill/ink-meta` and related tokens | [wb.css lines 59–80,96–124](../public/css/wb.css) |
+| Card, button, filled-button, selected-block shadows | `--c-shadow-card/btn/fill/thumb/xs` | [wb.css lines 80–88,124–130](../public/css/wb.css) |
+| Base and overlay shadows | `--shadow-card`, `--shadow-card-hover`; light blur 42/52 px, dark 26/32 px | [Light theme](../public/themes/light.css), [dark theme](../public/themes/dark.css) |
+| Main radii and spacing | Radii 12/8/4 px; spacing 4/8/16/24/32 px | [style.css lines 10–18](../public/css/style.css) |
+| Rich-content radii and padding | Radii 6/8/12 px; padding 20 px desktop, 16 px mobile | [wb.css lines 35–42](../public/css/wb.css), [conversation.css line 1448](../public/css/conversation.css) |
+| Charts and quota bars | Series, axes, tooltips, and continuous-color formulas | [Usage](../public/js/wb/usage.js), [conversation charts](../public/js/wb/conversation-charts.js), [quota](../public/js/wb/instance-strip.js) |
 
-【已批准→决策 6、7、8、9、10、11、12、13】需要改变的控件圆角、底部弹层、胶囊与输入容器圆角，以及阴影、间距各按已批准决定迁移；保留图形对齐的 1 px 微调及手机触控扩大点击范围用的负边距；卡片 12 px、分段内块为轨道减 2 px 是现状，继续保留；选中侧线和焦点光圈保留各自语义，不能作为普通阴影批量替换。
+[Approved → decisions 6,7,8,9,10,11,12,13] Migrate affected control, bottom-sheet, capsule, and input-container radii, shadows, and spacing according to the approved decisions. Retain 1 px graphic-alignment adjustments and negative margins enlarging mobile hit areas. Card radius 12 px and segmented inner blocks at track radius minus 2 px are current values and remain. Selection side lines and focus rings retain their semantics and must not be bulk-replaced as ordinary shadows.
 
-### 1.3 字体与排版
+### 1.3 Fonts and Typography
 
-【现状】正文使用本地 Inter 可变字体，中文依次回退到系统中文字体；等宽内容使用 JetBrains Mono，缺失时回退到系统等宽字体。[字体声明](../public/css/style.css)、[字体引用](../public/index.html)是字体来源的维护入口。
+[Current] Body text uses the local Inter variable font, with Chinese falling back through system Chinese fonts. Monospaced content uses JetBrains Mono, falling back to system monospace when absent. [Font declarations](../public/css/style.css) and [font references](../public/index.html) are the maintenance entry points.
 
-| 项目 | 当前值与完整变体 | 状态 / 决定 |
+| Item | Current values and complete variants | Status / decision |
 |---|---|---|
-| 字号 | 9/9.5/10/10.5/11/11.5/12/12.5/13/13.5/14/14.5/15/16/17/18/19/20 px；另有 0.92 em、继承及隐藏用途的 0 | 【已批准→决策 14】 |
-| 字重 | 正文 400，现用 450/500/550/600/650/700；字体文件支持 100–900 | 【现状】 |
-| 行高 | 1/1.2/1.3/1.35/1.4/1.45/1.5/1.55/1.6/1.65/1.7/1.8 倍；固定 15/16/18/20/22/24 px | 【已批准→决策 15】 |
+| Font size | 9/9.5/10/10.5/11/11.5/12/12.5/13/13.5/14/14.5/15/16/17/18/19/20 px; also 0.92 em, inherited sizes, and 0 for hiding | [Approved → decision 14] |
+| Font weight | Body 400, currently 450/500/550/600/650/700; font files support 100–900 | [Current] |
+| Line height | 1/1.2/1.3/1.35/1.4/1.45/1.5/1.55/1.6/1.65/1.7/1.8 times; fixed 15/16/18/20/22/24 px | [Approved → decision 15] |
 
-【现状】圆角、阴影、边线、所有间距及图标覆盖的长尾值见完整取值快照；几何图形、分栏宽度、安全区与图表专用值不属于字号或间距档的批量迁移对象。
+[Current] See the complete value snapshot for long-tail radii, shadows, borders, spacing, and icon overrides. Geometry, column widths, safe areas, and chart-specific values are outside bulk font-size or spacing-tier migrations.
 
-## 2. 控件尺寸与同行对齐
+## 2. Control Dimensions and Same-Row Alignment
 
-【已批准】同一行的按钮、输入、搜索、下拉、日期和分段切换使用同一高度档，并垂直居中；比较分段的**外轨道**与其他控件外框，内部选中块按内边距缩进。每行高度相等，垂直中线偏差不超过 1 px。
+[Approved] Buttons, inputs, search, dropdowns, dates, and segmented controls on the same row use the same height tier and are vertically centered. Compare the segmented control's **outer track** with other controls' outer frames; the inner selected block is inset by the padding. Heights within each row must be equal, with vertical centerline deviation no greater than 1 px.
 
-【现状】总览桌面搜索高 26 px、分段外轨高 22 px，二者中线同为 146.5 px：同中线仍然不等高。用量行的范围和日期为 32 px、应用为 30 px；聊天侧栏轨道为 34 px、刷新为 28 px，也需要分别检查高度和中线。
+[Current] Desktop Overview search is 26 px high and the segmented outer track is 22 px, both centered at 146.5 px: sharing a centerline does not make their heights equal. The Usage row has 32 px range and date controls and a 30 px Apply button; the chat sidebar has a 34 px track and 28 px Refresh button. Check heights and centerlines separately in these cases too.
 
-【现状】下表的现状列记录基准版本最终生效的尺寸；早期声明可能被后续样式覆盖，不能从某个变量推断全站已统一。收敛要求列为已批准目标，不能把历史现状当作例外。
+[Current] The historical columns below record the final effective dimensions in the baseline version. Later styles may override earlier declarations; one variable does not prove site-wide consistency. The convergence column contains approved targets; historical values are not exceptions.
 
-| 家族 | 桌面历史现状 | 手机历史现状 | 收敛要求 |
+| Family | Historical desktop values | Historical mobile values | Convergence requirements |
 |---|---|---|---|
-| 普通、主、危险按钮 | 常规 30 px、小型 26 px、设置 32 px | 工作台多处最低 40 px | 【已批准→决策 1、2、4】桌面常规 30 px、紧凑 26 px；手机普通单行交互外框统一 36 px |
-| 输入、搜索、下拉、日期 | 输入 28 px；总览搜索 26 px；下拉及日期常用 32 px | 部分最低 40 px；总览搜索外框仍 26 px | 【已批准→决策 1、2、4】桌面常规 30 px、紧凑 26 px；手机普通单行交互外框统一 36 px |
-| 分段切换 | 常规轨道 32 px、紧凑轨道 22 px、聊天列表轨道 34 px | 常见轨道 44 px；引擎双行选择可自动增高 | 【已批准→决策 1、2、4】桌面常规 30 px、紧凑 26 px；手机普通单行交互外框统一 36 px |
-| 大字段、问答提交按钮 | 定时任务字段 34 px；问答家族 `--c-h` 为 36 px | **问答家族 `--c-h` 为 40 px**；字段字号 16 px | 【已批准→决策 3】大字段及同行按钮桌面、手机均为 36 px；手机问答字段和提交按钮由 40 px 降至 36 px |
-| 多行输入 | 任务说明最低 120 px；问答 textarea 最低 88 px | 按内容与专用规则增长 | 【现状】不套单行高度 |
-| 消息输入 composer 及发送 | **最终控制高度 40 px**，早期 30 px 被覆盖 | **最终控制高度 44 px**；附件宽 40 px，发送为 44 × 44 px | 【现状】独立于问答 `--c-h` 家族；决策 04 例外（msg 736），手机消息输入框、附件按钮与发送按钮保持现状 |
-| 图标按钮、链接 | 图标 30 × 30 px、小型 24 × 24 px、顶栏 32 × 32 px；刷新 26 × 28 px；链接随内容 | 现有手机目标 40/44 px | 【已批准→决策 1、2、4】桌面操作随所在行 30/26 px；手机普通单行交互外框 36 px，顶栏导航图标保持 44 px |
-| chip、tag、pill | chip 26 px；tag 外框 20 px（现状保持）；pill 最低 24 px，连接 pill 28 px | 交互 chip 随手机触控档；被动状态不当按钮 | 【已批准→决策 2、4、5】桌面交互 chip 26 px、手机普通单行交互外框 36 px；被动 pill 24 px，tag 保持现状 |
-| 开关、勾选框 | 开关 36 × 20 px，微开关 22 × 12 px，勾选框 16 × 16 px | 更多菜单开关 40 × 24 px；问答选项最低 48 px | 【现状】 |
-| 导航、多行列表 | 顶栏 48 px、标签 30 px、设置导航 34 px、对话列表最低 58 px | 顶栏 52 px、底导航 56 px、设置导航最低 44 px、菜单项最低 52 px | 【已批准→决策 4】设置导航、顶栏图标等手机导航元素保持 44 px，多行选项不压缩；其他导航仅同行不齐时调整 |
+| Ordinary, primary, destructive buttons | Regular 30 px, small 26 px, settings 32 px | Many workbench controls have a 40 px minimum | [Approved → decisions 1,2,4] Desktop regular 30 px, compact 26 px; standardize ordinary mobile single-line interaction frames on 36 px |
+| Inputs, search, dropdowns, dates | Inputs 28 px; Overview search 26 px; dropdowns and dates commonly 32 px | Some have a 40 px minimum; Overview search outer frame remains 26 px | [Approved → decisions 1,2,4] Desktop regular 30 px, compact 26 px; standardize ordinary mobile single-line interaction frames on 36 px |
+| Segmented controls | Regular track 32 px, compact track 22 px, chat-list track 34 px | Tracks commonly 44 px; two-line engine selection can grow automatically | [Approved → decisions 1,2,4] Desktop regular 30 px, compact 26 px; standardize ordinary mobile single-line interaction frames on 36 px |
+| Large fields, question submit buttons | Scheduled-task fields 34 px; question family `--c-h` is 36 px | **Question family `--c-h` is 40 px**; field font size 16 px | [Approved → decision 3] Large fields and same-row buttons are 36 px on desktop and mobile; mobile question fields and submit buttons shrink from 40 px to 36 px |
+| Multiline inputs | Task description minimum 120 px; question textarea minimum 88 px | Grow with content and dedicated rules | [Current] Single-line heights do not apply |
+| Message composer and send | **Final effective height 40 px**, overriding the earlier 30 px | **Final effective height 44 px**; attachment width 40 px, send 44 × 44 px | [Current] Separate from the question `--c-h` family; decision 04 exception (msg 736): mobile message input, attachment button, and send button retain current sizes |
+| Icon buttons, links | Icons 30 × 30 px, small 24 × 24 px, top bar 32 × 32 px; Refresh 26 × 28 px; links follow content | Existing mobile targets 40/44 px | [Approved → decisions 1,2,4] Desktop actions follow their row at 30/26 px; ordinary mobile single-line interaction frames 36 px, top-bar navigation icons remain 44 px |
+| Chip, tag, pill | Chip 26 px; tag outer frame 20 px (retained); pill minimum 24 px, connection pill 28 px | Interactive chips follow mobile touch-target tiers; passive status is not treated as a button | [Approved → decisions 2,4,5] Desktop interactive chips 26 px, ordinary mobile single-line interaction frames 36 px; passive pills 24 px, tags retain current sizes |
+| Switches, check controls | Switches 36 × 20 px, micro switches 22 × 12 px, check controls 16 × 16 px | More-menu switches 40 × 24 px; question options minimum 48 px | [Current] |
+| Navigation, multiline lists | Top bar 48 px, tabs 30 px, settings navigation 34 px, conversation list minimum 58 px | Top bar 52 px, bottom navigation 56 px, settings navigation minimum 44 px, menu items minimum 52 px | [Approved → decision 4] Mobile navigation elements such as settings navigation and top-bar icons remain 44 px; multiline options are not compressed; adjust other navigation only for same-row misalignment |
 
-【现状】尺寸定位：[工作台控件与搜索](../public/css/wb.css)第 141–179、303 行；[问答字段](../public/css/conversation.css)第 1288–1310、1448 行；[composer 最终覆盖](../public/css/conversation.css)第 824、1704–1709 行。
+[Current] Dimension references: [workbench controls and search](../public/css/wb.css) lines 141–179,303; [question fields](../public/css/conversation.css) lines 1288–1310,1448; [final composer overrides](../public/css/conversation.css) lines 824,1704–1709.
 
-【已批准】顶部导航与详情标签本来独立成行时，仅在和同行其他控件不齐时调整。换行后对每个实际行分别检查，不用单个控件的偏移量补齐某一种语言。
+[Approved] When top navigation and detail tabs already occupy separate rows, adjust them only if they are misaligned with other controls on their row. After wrapping, check each actual row separately; do not offset individual controls to compensate for a particular language.
 
-## 3. 控件家族与交互状态
+## 3. Control Families and Interaction States
 
-【现状】普通、主操作和危险按钮有各自的默认、悬停与按下外观。选中、键盘焦点、禁用和加载是不同状态；没有实现的状态不能写成组件已有能力。
+[Current] Ordinary, primary, and destructive buttons each have default, hover, and pressed appearances. Selected, keyboard focus, disabled, and loading are distinct states; do not describe unimplemented states as existing component capabilities.
 
-| 家族 | 默认、悬停、按下与选中现状 | 焦点、禁用与加载现状 |
+| Family | Current default, hover, pressed, and selected states | Current focus, disabled, and loading states |
 |---|---|---|
-| 次要 / 图标 / 链接按钮 | 普通按钮有面板底和边线；悬停浅底，图标变深，链接加下划线 | 通用外框焦点；禁用透明度分别为 0.5/0.38，链接变弱；没有统一转圈组件 |
-| 主 / 危险按钮 | 使用各自语义色；悬停和按下有更深/更亮的对应色 | 工作台与问答存在两种焦点；问答禁用 0.45；提交中由现有流程禁用 |
-| 输入 / 下拉 / 日期 / 搜索 | 浅色为面板底，深色富表单为凹底；富表单悬停边框加深，错误边框为危险色 | 工作台外框与富表单光圈并存；禁用字段保留可读值；读取提示通常在旁边 |
-| 分段切换 | 凹轨道，未选项透明；悬停项浅底；选中项抬高、有轻投影并加粗 | 2 px 内焦点；禁用 0.5；没有通用加载态 |
-| chip / 问答选项 | 筛选 chip 选中为强调浅底；问答选项有悬停、按下、选中边线和背景 | 问答焦点跟随原生勾选框；选项禁用 0.55、勾选框 0.5；加载由所属提交流程处理 |
-| tag / pill | tag 是紧凑元信息；运行 pill 用点、空心或虚线配合文字；连接 pill 区分实时、降级、轮询、重连 | 被动标签没有交互焦点或加载态；可点的 pill 按实际按钮处理；重连点有脉冲 |
-| 开关 | 灰轨表示关、强调色表示开；滑块移动；声音开关悬停不改变开关含义 | 已有键盘焦点；没有完整统一的禁用和加载外观，不能宣称已全部覆盖 |
+| Secondary / icon / link buttons | Ordinary buttons have panel backgrounds and borders; hover uses a pale background, darkens icons, and underlines links | Shared outline focus; disabled opacities respectively 0.5/0.38, links become muted; no unified spinner component |
+| Primary / destructive buttons | Use their respective semantic colors, with corresponding darker/brighter hover and pressed colors | Workbench and questions have two focus treatments; question disabled opacity 0.45; existing submission flows disable controls while submitting |
+| Inputs / dropdowns / dates / search | Panel backgrounds in light theme, recessed rich-form backgrounds in dark; rich-form borders darken on hover and use danger color on error | Workbench outlines and rich-form rings coexist; disabled fields retain readable values; loading hints are usually adjacent |
+| Segmented controls | Recessed track, transparent unselected options; pale hover background; raised selected option with a light shadow and heavier text | 2 px inner focus; disabled opacity 0.5; no shared loading state |
+| Chip / question options | Selected filter chips use a pale accent background; question options have hover, pressed, and selected borders and backgrounds | Question focus follows native check controls; disabled options 0.55, check controls 0.5; loading is handled by the owning submission flow |
+| Tag / pill | Tags are compact metadata; runtime pills combine dots, hollow or dashed styles with text; connection pills distinguish live, degraded, polling, and reconnecting | Passive labels have no interaction focus or loading state; clickable pills behave as actual buttons; reconnecting dots pulse |
+| Switches | Gray track means off, accent means on; thumb moves; hovering the sound switch does not change its on/off meaning | Keyboard focus exists; disabled and loading appearances are not fully unified and must not be claimed as fully covered |
 
-【已批准】分段切换保持已确定配色：凹下轨道、浮起选中面、轻投影、普通/选中字重 500/600；不得恢复为整块强调色选中底。[共享规则](../public/css/wb.css)第 1597–1633 行是配色入口，几何尺寸随第 2 节决定。
+[Approved] Segmented controls retain the established colors: recessed track, raised selected surface, light shadow, and normal/selected font weights 500/600. Do not restore a solid accent-colored selected background. [Shared rules](../public/css/wb.css) lines 1597–1633 define the colors; geometry follows section 2.
 
-【现状】勾选框为 16 × 16 px，复选框圆角 4 px、单选框全圆；选中标记使用图标遮罩。对话活动有 13 px 旋转标记、三个 4 px 思考点，工作中状态点有呼吸动画；减少动态效果时已有对应关闭规则。
+[Current] Check controls are 16 × 16 px, with 4 px checkbox corners and fully round radio buttons; selected marks use icon masks. Conversation activity uses a 13 px spinner and three 4 px thinking dots; working-status dots have a breathing animation. Corresponding rules already disable these effects for reduced motion.
 
-【已批准→决策 19、20、21】禁用透明度、按钮焦点和输入焦点按决策 19、20、21 迁移；分段焦点、加载形式维持现状。交互状态源码入口为[工作台](../public/css/wb.css)、[问答控件](../public/css/conversation.css)、[问答提交](../public/js/wb/chat-questions.js)。
+[Approved → decisions 19,20,21] Migrate disabled opacity, button focus, and input focus according to decisions 19,20,21; retain current segmented focus and loading treatments. Interaction-state source references: [workbench](../public/css/wb.css), [question controls](../public/css/conversation.css), [question submission](../public/js/wb/chat-questions.js).
 
-## 4. 图标：单一集合与清楚的点击目标
+## 4. Icons: One Set and Clear Click Targets
 
-【已批准】导航、操作和状态使用同一套图标，不用 emoji 当 UI 图标。消息正文中的 emoji 不属于 UI 图标替换范围。
+[Approved] Navigation, actions, and states use the same icon set; do not use emoji as UI icons. Emoji in message bodies are outside the scope of UI icon replacement.
 
-【现状】[本地图标集合](../public/css/wb-icons.css)使用 Lucide 几何的 SVG 遮罩，24 × 24 的绘制坐标、圆端点和圆连接，以所在文字颜色着色；不在运行时加载新的图标包。[图标辅助函数](../public/js/wb/plain-text.js)沿用此集合。
+[Current] The [local icon set](../public/css/wb-icons.css) uses SVG masks with Lucide geometry, a 24 × 24 drawing coordinate system, round caps and joins, and the surrounding text color. No new icon package is loaded at runtime. [Icon helpers](../public/js/wb/plain-text.js) use this same set.
 
-【现状】常规线宽 1.75，小型勾选标记为 2.5；声音开关里线宽 2 的旧 SVG 当前被隐藏。可见图标和透明点击区域分别量测，不能用图标本身尺寸判断手机是否好点。
+[Current] Regular stroke width is 1.75; small checkmarks use 2.5. The old SVG with stroke width 2 in the sound switch is currently hidden. Measure visible icons and transparent hit areas separately; icon size alone does not determine mobile touch usability.
 
-【现状】图标可见尺寸维持现状：常规 16 px、小型 13 px、箭头 12 px、输入操作 18 px、菜单 20 px、手机导航 22 px；勾选线宽例外同样保留。纯图标操作保留可访问名称，装饰图标隐藏于辅助阅读；选中状态不只依靠颜色表达。
+[Current] Retain current visible icon sizes: regular 16 px, small 13 px, arrows 12 px, input actions 18 px, menus 20 px, mobile navigation 22 px. Retain the checkmark stroke-width exception as well. Icon-only actions retain accessible names; decorative icons are hidden from assistive reading. Selected states must use more than color alone.
 
-## 5. 布局：读得清楚，也找得到操作
+## 5. Layout: Readable Content and Discoverable Actions
 
-【现状】工作台由顶栏、实例状态、注意事项、主内容和右侧详情组成；顶栏通常 48 px，空间不够时导航另起一行。定时任务抽屉宽 480 px，位置跟随实际顶栏高度；设置为导航与内容两区。
+[Current] The workbench consists of a top bar, instance status, notices, main content, and right-hand details. The top bar is usually 48 px; navigation moves to a new row when space is insufficient. The scheduled-task drawer is 480 px wide and positioned according to the actual top-bar height. Settings has separate navigation and content areas.
 
-【现状】记忆浏览器为文件树与内容两栏，文件树基础宽 220–300 px；对话侧栏宽 320 px、最低 260 px，富内容卡片最大宽 720 px。根样式的旧顶栏留白并不等于工作台最终布局，需结合后加载的样式看实际结果。
+[Current] The memory browser has file-tree and content columns, with a base file-tree width of 220–300 px. The conversation sidebar is 320 px wide with a 260 px minimum; rich-content cards have a 720 px maximum width. Old top-bar spacing in root styles does not represent the final workbench layout; include later-loaded styles when checking the actual result.
 
-【现状】卡片和表格通过标题行、边线与留白区分层级；空状态、错误和读取提示放在所属页面的内容区域，具体文案见第 7 节，加载外观见第 3 节。
+[Current] Cards and tables distinguish hierarchy through heading rows, borders, and whitespace. Empty states, errors, and loading hints belong in their page's content area; see section 7 for copy and section 3 for loading appearance.
 
-## 6. 响应式：390 px 手机仍能完成任务
+## 6. Responsive Layout: Tasks Remain Usable on 390 px Mobile Screens
 
-【已批准】390 px 手机界面不得非预期溢出、裁断文字或遮住操作。触控目标与可见图形分别检查；工具栏换行后仍满足同行等高与中线要求。
+[Approved] The 390 px mobile interface must not have unintended overflow, clipped text, or obscured actions. Check touch targets separately from visible graphics; wrapped toolbars must still satisfy same-row height and centerline requirements.
 
-【现状】手机使用底导航、更多菜单及设置抽屉收纳次要入口；设置抽屉宽度为不超过 300 px 且不超过屏宽 84%。对话专注模式会隐藏工作台顶栏及底导航，消息输入区另行处理安全区和键盘空间。
+[Current] Mobile uses bottom navigation, a More menu, and a settings drawer for secondary entry points. The settings drawer is no wider than 300 px or 84% of the screen width. Conversation focus mode hides the workbench top bar and bottom navigation; the message input area handles safe areas and keyboard space separately.
 
-【已批准→决策 3、4、13】手机普通单行控件（按钮、输入、搜索、下拉、日期、分段外轨道、交互 chip、图标操作）交互外框最低 36 px，统一收到 36 px；大字段及同行提交按钮同为 36 px。设置导航、顶栏图标等导航元素保持 44 px；手机 composer 为决策 04 例外（msg 736）：消息输入框高 44 px、附件按钮 40 × 44 px、发送按钮 44 × 44 px 圆形，保持现状；多行选项不压缩，textarea 继续按内容增高。保留手机触控扩大点击范围用的负边距；具体换行与入口收纳保留现有页面行为。
+[Approved → decisions 3,4,13] Ordinary mobile single-line controls (buttons, inputs, search, dropdowns, dates, segmented outer tracks, interactive chips, and icon actions) have a minimum interaction frame of 36 px and are standardized on 36 px; large fields and same-row submit buttons are also 36 px. Navigation elements such as settings navigation and top-bar icons remain 44 px. Mobile composer is the decision 04 exception (msg 736): retain the 44 px-high message input, 40 × 44 px attachment button, and circular 44 × 44 px send button. Do not compress multiline options; textareas continue growing with content. Retain negative margins that enlarge mobile hit areas; preserve existing page behavior for wrapping and grouping entry points.
 
-【现状】专用布局入口为[手机导航](../public/js/wb/mobile-navigation.js)、[工作台媒体查询](../public/css/wb.css)、[对话媒体查询](../public/css/conversation.css)。涉及固定输入区时还要核对安全区、可见高度、返回动作和键盘弹起；图表或表格的有意内部滚动须限定在容器内。
+[Current] Dedicated layout references: [mobile navigation](../public/js/wb/mobile-navigation.js), [workbench media queries](../public/css/wb.css), [conversation media queries](../public/css/conversation.css). For fixed input areas, also check safe areas, visible height, back actions, and keyboard opening. Intentional internal scrolling in charts or tables must stay within their containers.
 
-## 7. 文案：区分事实，不暴露开发过程
+## 7. Copy: Preserve Factual Distinctions Without Exposing Development Processes
 
-【已批准】面向用户的界面不出现开发计划编号或内部黑话，使用能理解的状态词。视觉统一不能改写投递与执行事实；不把错误码当成唯一说明。
+[Approved] User-facing interfaces use understandable status words and do not show development-plan numbers or internal jargon. Visual consistency must not alter delivery or execution facts; error codes must not be the only explanation.
 
-【现状】文案来自[通用中文](../public/i18n/zh.json)、[工作台中文](../public/i18n/wb.zh.json)及对应[通用英文](../public/i18n/en.json)、[工作台英文](../public/i18n/wb.en.json)。下表保留业务区别，插值、数量与真实可用操作不能因排版而删掉。
+[Current] Copy comes from [general Chinese](../public/i18n/zh.json), [workbench Chinese](../public/i18n/wb.zh.json), and the corresponding [general English](../public/i18n/en.json) and [workbench English](../public/i18n/wb.en.json). Preserve the business distinctions below; layout must not remove interpolation, counts, or actually available actions.
 
-| 类别 | 当前实际文案与必须保留的区别 |
+| Category | Current actual copy and distinctions to preserve |
 |---|---|
-| 连接 | “实时 / 降级 / 轮询 / 重连中”；对话另为“实时更新已连接 / 实时更新未连接 · 轮询中”，不能据此推断正在工作 |
-| 运行 | “忙碌 / 空闲 / 等待 / 启动中 / 未运行 / 运行中 / 未知 / 异常”；图例为“空闲（运行中）” |
-| 登录 | “未登录 / 状态未知 / 已登录”，不能把未登录一律写成离线 |
-| 工作展示 | “正在工作”；定时任务桌面为“正在执行定时任务”、手机为“定时任务”；后台子任务保留数量 |
-| 投递阶段 | “已入库 · 待投递 / 已入库 · 投递中 / 已投递到运行会话 / 已入库”；已入库不等于已投递，已投递不等于任务完成 |
-| 失败与核对 | “已入库 · 投递失败，不会自动重发”“已入库 · 认证拒收，不能重发”“状态待核对 · 请先核对再决定重试”“未入库 · 已保留输入”；短版与完整版不能机械互换 |
-| 定时任务 | 任务状态“已失效”与投递结果“送达失败”分开，不统称同一种失败 |
-| 空与未知 | “选择一个记忆文件查看内容。”“本机还没有定时任务”“没有符合筛选的事件”“暂无对话”属于不同空状态；用量未知不能显示为 0 |
-| 操作 | “刷新”“核对投递状态”“刷新状态”“刷新记忆目录”“应用”反映不同动作，不为同宽而改成同一个词 |
+| Connection | “实时 / 降级 / 轮询 / 重连中”; conversations separately use “实时更新已连接 / 实时更新未连接 · 轮询中”; these do not imply that work is in progress |
+| Runtime | “忙碌 / 空闲 / 等待 / 启动中 / 未运行 / 运行中 / 未知 / 异常”; the legend uses “空闲（运行中）” |
+| Login | “未登录 / 状态未知 / 已登录”; do not label every logged-out state as offline |
+| Work display | “正在工作”; scheduled tasks use “正在执行定时任务” on desktop and “定时任务” on mobile; preserve background subtask counts |
+| Delivery stage | “已入库 · 待投递 / 已入库 · 投递中 / 已投递到运行会话 / 已入库”; stored does not mean delivered, and delivered does not mean task complete |
+| Failure and verification | “已入库 · 投递失败，不会自动重发”“已入库 · 认证拒收，不能重发”“状态待核对 · 请先核对再决定重试”“未入库 · 已保留输入”; short and full versions are not mechanically interchangeable |
+| Scheduled tasks | Distinguish task status “已失效” from delivery result “送达失败”; do not group them as the same failure |
+| Empty and unknown | “选择一个记忆文件查看内容。”“本机还没有定时任务”“没有符合筛选的事件”“暂无对话” are distinct empty states; unknown usage must not display as 0 |
+| Actions | “刷新”“核对投递状态”“刷新状态”“刷新记忆目录”“应用” describe different actions; do not replace them with one word to achieve equal widths |
 
-【现状】运行、连接、登录和投递使用不同业务文案，维持上述区别。
+[Current] Runtime, connection, login, and delivery use distinct business copy; preserve the distinctions above.
 
-【已批准→决策 22】中文加载统一“…”；英文保留“...”，错误先说明结果再给动作。只在有文案改动授权的 PR 中迁移，保留插值和操作条件。
+[Approved → decision 22] Standardize Chinese loading copy on “…”; retain “...” in English. Errors state the outcome before the action. Migrate only in PRs authorized to change copy, preserving interpolation and action conditions.
 
-## 8. 评审检查清单与浏览器门禁
+## 8. Review Checklist and Browser Gates
 
-【已批准】每次视觉改动先读本文，交付按八节核对，并同步受影响规则。22 项决定以决策清单的批准要求为准，历史现状用于定位迁移；仅文档改动不新增产品机制或全站测试。
+[Approved] Read this document before every visual change, check delivery against all eight sections, and update affected rules. The approved requirements in the decision list govern the 22 decisions; historical values help locate migrations. Documentation-only changes do not introduce product mechanisms or site-wide tests.
 
-### 8.1 所有受影响视觉区域的自查
+### 8.1 Self-Review of All Affected Visual Areas
 
-- [ ] 【已批准】对颜色、圆角、阴影、间距、字体、尺寸、状态、图标、布局、响应式和文案逐项指出规则；变更与已批准值一致，例外有明确用途。
-- [ ] 【已批准】记录每条实际混合控件行的页面、行、控件、外框高度和中线；每行外框高度相等、中线偏差 ≤ 1 px，分段比较外轨道，不只比较内按钮。
-- [ ] 【已批准】每个改动页面提供 1280/390 px × 浅色/深色静止截图，不带悬停或焦点；覆盖实际改动的页面、标签、菜单与抽屉，图片和数表放 PR 描述。
-- [ ] 【已批准】逐家族核对悬停、键盘焦点、选中、禁用、加载及错误的真实状态；无相应能力的家族标明不适用，不能用静态样式存在证明交互已通过。
-- [ ] 【已批准】390 px 核对无非预期横向滚动、文字截断或按钮遮挡，菜单能开关、键盘焦点可见；图形尺寸与点击区域分开记录。手机普通单行交互外框为 36 px，大字段及同行按钮桌面、手机均为 36 px；设置导航、顶栏图标等手机导航元素保持 44 px；手机 composer 按决策 04 例外（msg 736）保持输入框高 44 px、附件按钮 40 × 44 px、发送按钮 44 × 44 px 圆形；多行选项不压缩，textarea 按内容增高，并保留手机触控扩展负边距。
-- [ ] 【已批准】UI 使用单一图标集且无 emoji 图标；纯图标操作有名称；界面无开发计划编号或内部黑话；投递与执行状态未混写。
-- [ ] 【现状】涉及图表时同时检查文字、格线、系列及提示层的双主题效果；涉及现有动画时检查减少动态效果仍能读出状态。
+- [ ] [Approved] Identify the rules for colors, radii, shadows, spacing, fonts, dimensions, states, icons, layout, responsiveness, and copy individually; changes match approved values, with a clear purpose for each exception.
+- [ ] [Approved] Record the page, row, controls, outer-frame heights, and centerlines for every actual row of mixed controls; outer-frame heights within each row are equal, centerline deviation ≤ 1 px, and segmented comparisons use the outer track rather than only the inner buttons.
+- [ ] [Approved] Provide static screenshots for each changed page at 1280/390 px × light/dark, without hover or focus; cover the pages, tabs, menus, and drawers actually changed, and put images and measurement tables in the PR description.
+- [ ] [Approved] Check actual hover, keyboard focus, selected, disabled, loading, and error states by family; mark families without the relevant capability as not applicable. Static styles alone do not prove interactions pass.
+- [ ] [Approved] At 390 px, verify no unintended horizontal scrolling, text clipping, or obscured buttons; menus open and close, and keyboard focus is visible. Record graphic dimensions and hit areas separately. Ordinary mobile single-line interaction frames are 36 px; large fields and same-row buttons are 36 px on desktop and mobile. Mobile navigation elements such as settings navigation and top-bar icons remain 44 px. Under the decision 04 exception (msg 736), mobile composer retains a 44 px-high input, 40 × 44 px attachment button, and circular 44 × 44 px send button. Do not compress multiline options; textareas grow with content, and negative margins for mobile touch-target expansion remain.
+- [ ] [Approved] UI uses a single icon set without emoji icons; icon-only actions have names; the interface has no development-plan numbers or internal jargon; delivery and execution states remain distinct.
+- [ ] [Current] For charts, check text, gridlines, series, and tooltips in both themes; for existing animations, check that states remain readable with reduced motion.
 
-### 8.2 高度实现必须具备的浏览器断言
+### 8.2 Required Browser Assertions for Height Implementation
 
-【已批准】在隔离环境使用真实产品代码与实际浏览器，至少断言以下代表行的外框高度相等、中线偏差 ≤ 1 px：
+[Approved] In an isolated environment, use actual product code and a real browser to assert, at minimum, equal outer-frame heights and centerline deviation ≤ 1 px for these representative rows:
 
-| 页面 | 必须比较的同行控件 |
+| Page | Same-row controls that must be compared |
 |---|---|
-| 总览 | 搜索框与时间范围分段外轨道 |
-| 用量与费用 | 范围分段外轨道、开始/结束日期、应用按钮 |
-| 定时任务 | 筛选行内的分段外轨道、下拉或搜索等控件 |
-| 对话 | 顶部切换外轨道与同行操作 |
+| Overview | Search field and time-range segmented outer track |
+| Usage and costs | Range segmented outer track, start/end dates, Apply button |
+| Scheduled tasks | Segmented outer track, dropdowns, search, or other controls in the filter row |
+| Conversations | Top switch outer track and same-row actions |
 
-【已批准】同一组断言放到旧 CSS 上必须失败。负对照由评审变异测试提供，不在运行时重写产品源码造错；测试调用实际产品入口，不重新求值源码。
+[Approved] The same assertions must fail against the old CSS. Review mutation tests provide the negative control; do not rewrite product source at runtime to introduce errors. Tests call actual product entry points rather than re-evaluating source code.
 
-【已批准】改手机或响应式布局时，必须运行受影响的 gated 浏览器测试（`ZYLOS_CHAT_INTEGRATION=1`），至少覆盖 390 px；不能运行时说明具体原因及待执行项，不能用静态检查替代通过结论。
+[Approved] When changing mobile or responsive layouts, run the affected gated browser tests (`ZYLOS_CHAT_INTEGRATION=1`), covering at least 390 px. If they cannot run, state the specific reason and remaining checks; static checks cannot substitute for a passing result.
 
-【已批准】CSS 改动同步更新 [index.html](../public/index.html) 对应资源的 `?v=`。交付写实际测试文件、命令、通过/失败数字及退出码，普查表、复测表、截图和测试日志留在 PR 中，不提交证据产物到仓库。
+[Approved] CSS changes also update the corresponding resource's `?v=` in [index.html](../public/index.html). Delivery records actual test files, commands, pass/fail counts, and exit codes. Keep inventory tables, retest tables, screenshots, and test logs in the PR; do not commit evidence artifacts to the repository.
 
-【已批准】只运行与本轮影响范围有关且已证明隔离的检查；测试按仓库 AGENTS.md 的文件位置、命名及生命周期规则组织，不触碰线上资源。纯文档修订说明没有产品与响应式改动，并核对链接、规则状态和完整 PR 差异。
+[Approved] Run only checks relevant to this revision's scope and proven to be isolated. Organize tests according to the repository AGENTS.md rules for locations, naming, and lifecycle; do not touch live resources. For documentation-only revisions, state that there are no product or responsive changes, and check links, rule statuses, and the complete PR diff.
