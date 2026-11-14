@@ -2234,6 +2234,26 @@ test('workbench shell renders groups while cost is pending and fills cost indepe
   assert.equal(h.calls.filter(path => path.endsWith('/api/workbench/groups')).length, groupReads);
   assert.equal(wbName(board.children[0]), 'A');
 });
+// Run for optional cost error handling; skip unrelated UI/server work. Injected lifecycle only.
+test('workbench shell clears a previously shown cost when a later cost read fails', { timeout: 5000 }, async context => {
+  let costReads = 0;
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (!path.includes('/usage?summary=cost')) return fallback(path);
+    costReads++;
+    if (costReads === 1) return { costSummary: { today: { total: 1.5 } } };
+    throw new Error('cost read failed');
+  });
+  await wbTick(); await wbTick();
+  const board = h.nodes.get('#wb-board'), instance = h.nodes.get('#wb-instance');
+  const costText = () => instance.children.find(node => node.classList.contains('wb-cost'))?.textContent;
+  assert.match(costText(), /\$1\.50/);
+  await h.poll(5000); await wbTick(); await wbTick();
+  assert.equal(costReads, 2);
+  assert.doesNotMatch(costText(), /\$1\.50/, 'a failed cost read does not keep the earlier value');
+  assert.match(costText(), /—/);
+  assert.equal(wbName(board.children[0]), 'A', 'groups stay on screen when only cost fails');
+  assert.doesNotMatch(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
+});
 // Run for owner changes or stale-response guards; skip unrelated presentation work. Injected lifecycle only.
 test('workbench shell invalidates pending groups and cost when the viewed owner changes', { timeout: 5000 }, async context => {
   const oldGroups = wbDeferred(), oldCost = wbDeferred(), newCost = wbDeferred();
