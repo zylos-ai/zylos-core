@@ -5,10 +5,11 @@ uncommitted segments. In multi mode it lives under `session-groups/<G>/`; in
 single mode it lives directly under memory. Do not fall back to another mode's
 old files. Sync owns state; ordinary threads record new facts in inbox.
 
-The first physical line is:
+When writing temporary state for Sync, use this first physical line with an
+empty `inbox_committed` field:
 
 ```text
-<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed=20261019T053001123Z -->
+<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed= -->
 ```
 
 Use the current full group as scope, or `*` for single. Include all four header

@@ -3,7 +3,8 @@
  * Authoritative component contract, timing limits and lifecycle instructions:
  * ../references/session-start-shards.md
  *
- * Consumed by session-start-orchestrator.js, sync-runtime-hooks.js and codex-hooks.js.
+ * Consumed by session-start-orchestrator.js, c4-session-init.js,
+ * sync-runtime-hooks.js and codex-hooks.js.
  */
 
 import fs from 'node:fs';

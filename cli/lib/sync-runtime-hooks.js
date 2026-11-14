@@ -454,7 +454,8 @@ export function syncCodexConfig({
 
 /**
  * Legacy SessionStart hook paths that component shard declarations claim for
- * removal (shard-registry.js documents the declaration contract). This is the
+ * removal (see skills/activity-monitor/references/session-start-shards.md
+ * for the declaration contract). This is the
  * ONLY channel through which sync removes hooks it does not own: a component
  * may claim its own old hook paths (relative to ~/zylos/.claude, enforced at
  * declaration validation), and everything unclaimed — user hooks, undeclared
