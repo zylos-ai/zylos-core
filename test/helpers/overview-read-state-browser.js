@@ -97,6 +97,18 @@ export async function runOverviewReadState(sandbox, scenario) {
     await alert.waitFor({ state: 'visible' });
     assert.equal(await alert.evaluate(node => node.classList.contains('wb-attention-item') && !node.classList.contains('wb-empty')), true,
       'Initial read failure must use the existing error card rather than the empty-state style');
+    // Align with the search toolbar's content edges (desktop/mobile insets).
+    const alignment = await alert.evaluate(node => {
+      const head = document.querySelector('#wb-board-head');
+      const bounds = head.getBoundingClientRect(), style = getComputedStyle(head);
+      const card = node.getBoundingClientRect();
+      return { cardLeft: card.left, cardRight: card.right,
+        toolbarLeft: bounds.left + parseFloat(style.paddingLeft),
+        toolbarRight: bounds.right - parseFloat(style.paddingRight) };
+    });
+    assert.ok(Math.abs(alignment.cardLeft - alignment.toolbarLeft) <= 1, 'Error card left edge aligns with search toolbar content');
+    assert.ok(Math.abs(alignment.cardRight - alignment.toolbarRight) <= 1, 'Error card right edge aligns with search toolbar content');
+    console.info('Overview error alignment:', JSON.stringify({ ...scenario, ...alignment }));
     const glyph = alert.locator('.wb-ico-alert');
     assert.equal(await glyph.count(), 1);
     assert.equal(await glyph.isVisible(), true);
@@ -108,7 +120,7 @@ export async function runOverviewReadState(sandbox, scenario) {
     assert.equal(await attention.getByText(errorText, { exact: true }).count(), 0);
     assert.equal(await board.locator('.wb-row').count(), 0);
   } else {
-    const empty = page.locator('#wb-board > .wb-empty');
+    const empty = page.locator('#wb-board > .wb-empty:not([role="status"])');
     await empty.waitFor({ state: 'visible' });
     assert.equal(await empty.textContent(), labels['wb.noGroups']);
     assert.equal(await empty.evaluate(node => node.classList.contains('wb-attention-item')), false);
@@ -119,6 +131,7 @@ export async function runOverviewReadState(sandbox, scenario) {
     assert.equal(await board.locator('.wb-row').count(), 0);
   }
   assert.equal(await page.getByText(errorText, { exact: true }).count(), scenario.kind === 'empty' ? 0 : 1);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'Overview has no horizontal overflow');
   assert.equal(errors.length, 0, errors[0]);
   if (process.env.ZYLOS_OVERVIEW_SHOTS) {
     fs.mkdirSync(process.env.ZYLOS_OVERVIEW_SHOTS, { recursive: true });
