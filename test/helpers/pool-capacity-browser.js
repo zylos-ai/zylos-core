@@ -25,6 +25,65 @@ const variants = {
   missing: { valid: false, fresh: false },
 };
 
+async function readBucketLayout(page) {
+  return page.evaluate(() => {
+    // Character ranges measure wrapping through nested unit spans as well.
+    const readLines = node => {
+      const lines = [], walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const text = walker.currentNode;
+        for (let offset = 0; offset < text.length; offset++) {
+          const range = document.createRange(); range.setStart(text, offset); range.setEnd(text, offset + 1);
+          const box = range.getBoundingClientRect();
+          let line = lines.find(line => Math.abs(line.top - box.top) < 1);
+          if (!line) { line = { top: box.top, left: box.left, right: box.left, overlap: false, text: '' }; lines.push(line); }
+          if (box.width > 0 && box.left < line.right - 1) line.overlap = true;
+          line.left = Math.min(line.left, box.left);
+          line.right = Math.max(line.right, box.right);
+          line.text += text.textContent[offset];
+        }
+      }
+      return lines.map(line => ({ ...line, text: line.text.trim() }));
+    };
+    return [...document.querySelectorAll('#host .wb-host-pool-bucket')].map(node => {
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, lines: readLines(node),
+        units: [...node.querySelectorAll('.wb-host-pool-bucket-unit')].map(unit => ({
+          text: unit.textContent, rects: unit.getClientRects().length, lines: readLines(unit),
+        })) };
+    });
+  });
+}
+
+function assertBucketLayout(buckets, expectedCount, details) {
+  const context = JSON.stringify(details);
+  assert.equal(buckets.length, expectedCount, `${context}: each bucket has its own row`);
+  let wrapped = 0;
+  for (const [index, bucket] of buckets.entries()) {
+    assert.ok(bucket.lines.length > 0, context);
+    if (index) {
+      assert.ok(bucket.top >= buckets[index - 1].bottom - 0.5, `${context}: bucket rows must not share a line`);
+      assert.ok(Math.abs(bucket.lines[0].left - buckets[0].lines[0].left) < 1, `${context}: bucket first lines align`);
+    }
+    assert.equal(bucket.units.length, details.locale === 'zh' ? 4 : 3, `${context}: complete unit protection`);
+    for (const unit of bucket.units) {
+      const message = JSON.stringify({ ...details, index, unit });
+      assert.equal(unit.rects, 1, `${message}: unit occupies one rectangle`);
+      assert.equal(unit.lines.length, 1, `${message}: unit characters occupy one line`);
+    }
+    for (const [lineIndex, line] of bucket.lines.entries()) {
+      assert.equal(line.overlap, false, JSON.stringify({ ...details, index, line }));
+      assert.doesNotMatch(line.text, /^(?:个|GiB|会话|小时|样本|[)）])/, JSON.stringify({ ...details, line }));
+      if (lineIndex) {
+        assert.ok(line.left - bucket.lines[0].left >= 8, JSON.stringify({ ...details, index, line, first: bucket.lines[0] }));
+        wrapped++;
+      }
+    }
+    assert.doesNotMatch(bucket.lines.map(line => line.text).join(''), /；|; /, 'Bucket rows do not use separators');
+  }
+  return wrapped;
+}
+
 export async function runPoolCapacityBrowser(sandbox) {
   console.log('Pool browser isolation:', JSON.stringify(sandbox.assertIsolation()));
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE, executablePath = process.env.ZYLOS_CHAT_BROWSER_BIN;
@@ -60,7 +119,8 @@ export async function runPoolCapacityBrowser(sandbox) {
   sandbox.addCleanup(() => browser.close());
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
   if (evidence) fs.mkdirSync(evidence, { recursive: true });
-  let count = 0;
+  let count = 0, sweepCount = 0, wrappedSweepLines = 0;
+  const sweepWidths = [...Array.from({ length: 37 }, (_, index) => 320 + index * 3), 430];
   for (const locale of ['zh', 'en']) for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
     sandbox.addCleanup(() => context.close());
@@ -92,29 +152,8 @@ export async function runPoolCapacityBrowser(sandbox) {
         assert.ok(text.includes('Session count 1: typical peak 7.46 GiB (7 h, 2511 samples)\nSession count 2:'), text);
         assert.doesNotMatch(text, /；|1 sessions/);
       }
-      // Measure actual text lines: DOM row counts alone cannot prove unit wrapping.
-      const bucketLines = await page.evaluate(() => [...document.querySelectorAll('#host .wb-host-pool-bucket')].map(node => {
-        const rect = node.getBoundingClientRect(), lines = [];
-        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
-        while (walker.nextNode()) {
-          const text = walker.currentNode;
-          for (let offset = 0; offset < text.length; offset++) {
-            const range = document.createRange(); range.setStart(text, offset); range.setEnd(text, offset + 1);
-            const box = range.getBoundingClientRect();
-            let line = lines.find(line => Math.abs(line.top - box.top) < 1);
-            if (!line) { line = { top: box.top, text: '' }; lines.push(line); }
-            line.text += text.textContent[offset];
-          }
-        }
-        return { top: rect.top, bottom: rect.bottom, lines: lines.map(line => line.text.trim()) };
-      }));
-      assert.equal(bucketLines.length, record.model?.buckets?.length ?? 0, `${name}: each bucket has its own row`);
-      for (const [index, bucket] of bucketLines.entries()) {
-        assert.ok(bucket.lines.length > 0);
-        if (index) assert.ok(bucket.top >= bucketLines[index - 1].bottom - 0.5, `${name}: bucket rows must not share a line`);
-        for (const line of bucket.lines) assert.doesNotMatch(line, /^(?:个|GiB)/, JSON.stringify({ name, width, locale, line }));
-        assert.doesNotMatch(bucket.lines.join(''), /；|; /, 'Bucket rows do not use separators');
-      }
+      const bucketLines = await readBucketLayout(page);
+      assertBucketLayout(bucketLines, record.model?.buckets?.length ?? 0, { name, width, locale, theme });
       assert.equal(pageError, undefined, pageError); assert.equal(serverError, undefined, serverError);
       const geometry = await page.evaluate(() => ({ viewport: innerWidth, page: document.documentElement.scrollWidth,
         notes: [...document.querySelectorAll('#host li')].map(node => ({ width: node.clientWidth, scroll: node.scrollWidth,
@@ -125,7 +164,20 @@ export async function runPoolCapacityBrowser(sandbox) {
       for (const note of geometry.notes) assert.ok(note.scroll <= note.width + 1, JSON.stringify({ name, width, theme, note, bucketLines }));
       count++;
     }
+    if (locale === 'zh' && width === 390) {
+      await page.evaluate(record => window.renderPool(record), fitted);
+      let wrapped = 0;
+      for (const sweepWidth of sweepWidths) {
+        await page.setViewportSize({ width: sweepWidth, height: 900 });
+        wrapped += assertBucketLayout(await readBucketLayout(page), fitted.model.buckets.length,
+          { name: 'fitted', width: sweepWidth, locale, theme });
+        sweepCount++;
+      }
+      assert.ok(wrapped > 0, `${theme}: sweep exercises hanging continuation lines`);
+      wrappedSweepLines += wrapped;
+    }
     await context.close();
   }
   console.log(`Pool browser: ${count} real-module states verified`);
+  console.log(`Pool browser: ${sweepCount} fitted zh width measurements (${sweepWidths.join(',')}) across light/dark; ${wrappedSweepLines} continuation lines verified`);
 }

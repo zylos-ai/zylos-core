@@ -2,7 +2,8 @@ import test from 'node:test';
 import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
 
 // Integration: actual Dashboard modules and translations in a static browser,
-// across pool records, sizes and themes. Run for pool explanation or responsive
+// across pool records, sizes and themes, including narrow unit wrapping and
+// hanging continuation lines. Run for pool explanation or responsive
 // layout changes; skip unrelated work. Private HOME/ZYLOS_DIR/PM2_HOME, short
 // TMPDIR, socket and DB paths are proven before loopback startup. No DB, PM2 or
 // tmux is opened. Browser network is loopback-only; teardown bounds every case.
