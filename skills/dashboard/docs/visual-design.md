@@ -156,6 +156,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 ## 5. Layout: Readable Content and Discoverable Actions
 
+[Current] Conversation activity marks for new messages, system instructions, scheduled tasks, other messages, and subtask starts align their 13 px icons and text with the step grid's icon and text columns. They have no separator lines and retain the pale label background, 10 px radius, 11.5 px font, and existing colors. Long labels stay on one line with an ellipsis within the activity width, including at 390 px.
+
 [Current] The workbench consists of a top bar, instance status, notices, main content, and right-hand details. The top bar is usually 48 px; navigation moves to a new row when space is insufficient. The scheduled-task drawer is 480 px wide and positioned according to the actual top-bar height. Settings has separate navigation and content areas.
 
 [Current] The memory browser has file-tree and content columns, with a base file-tree width of 220–300 px. The conversation sidebar is 320 px wide with a 260 px minimum; rich-content cards have a 720 px maximum width. Old top-bar spacing in root styles does not represent the final workbench layout; include later-loaded styles when checking the actual result.
