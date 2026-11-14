@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { registerHooks } from 'node:module';
 import { createDocument, allNodes, tick, visibleText } from './helpers/conversation-dom.js';
-import { activityPlacement, createActivityArea, formatDuration, stepCount, stepText } from '../public/js/wb/conversation-activity.js';
+import { createLiveArea, formatDuration, livePresentation, markText, stepText, subtaskName } from '../public/js/wb/conversation-activity.js';
 import { createScrollGesture } from '../public/js/wb/scroll-gesture.js';
 
 const schemaPath = new URL('../public/chat-schema.js', import.meta.url).pathname;
@@ -17,260 +17,150 @@ registerHooks({
 });
 const { mountConversationPage } = await import('../public/js/wb/conversation-page.js');
 
-// Injected DOM and fetch only: no browser, sockets, databases, storage or subprocesses.
 const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url), 'utf8'));
 const en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url), 'utf8'));
 const t = key => zh[key] ?? key;
 const T = 1_800_000_000_000;
 const s = seconds => T + seconds * 1000;
 const tool = (start, end, status = 'done', label = { key: 'read', arg: 'memory/state.md' }) => ({ kind: 'tool', label, status, start: s(start), end: end === null ? null : s(end) });
-const round = (key, { messageIds = [Number(key)], state = 'done', start = 0, end = 60, segments }) =>
-  ({ key, messageIds, start: s(start), end: end === null ? null : s(end), state, segments });
-const activity = (items, rounds) => ({ items: new Map(items.map(item => [item.id, item])), rounds: new Map(rounds.map(r => [r.key, r])), offset: 0 });
-const msg = (id, direction) => ({ id, direction });
+const mark = (kind, at, extra = {}) => ({ kind: 'mark', mark: kind, at: s(at), ...extra });
+const MAIN = { on: true, since: s(0), main: { since: s(0), lastActivityAt: s(1) }, tools: 0, subagents: null };
+const IDLE = { on: false, since: null, main: null, tools: 0, subagents: null };
+const SUBTASK = { id: 'k'.repeat(22), label: { key: 'memorySync' }, start: s(40), steps: 2 };
+// An activity read as the server answers it.
+const body = ({ now = s(10), working = MAIN, steps = [], subtasks = [], awaiting = null, seenId = 1, presence = 'running', truncated } = {}) =>
+  ({ now, from: s(0), working, presence, steps, subtasks, awaiting, seenId, ...(truncated ? { truncated } : {}) });
+const idleBody = () => body({ working: IDLE });
+const msg = (id, direction, at = null) => ({ id, direction, at });
 
 test('durations read <1 s, seconds, minutes and hours in both languages', () => {
   assert.deepEqual([400, 59_999, 125_000, 3_725_000].map(ms => formatDuration(ms, t)), ['<1 秒', '59 秒', '2 分 5 秒', '1 小时 2 分']);
   assert.deepEqual([0, 5_000, 61_000].map(ms => formatDuration(ms, key => en[key])), ['<1 s', '5 s', '1 min 1 s']);
 });
 
-test('step text uses plain words and the agent description, never a tool name', () => {
+test('steps, marks and subtasks read as plain words, never a tool or agent name', () => {
   assert.equal(stepText(tool(0, 1), t), '查看 memory/state.md');
   assert.equal(stepText({ label: { key: 'described', arg: '检查磁盘' } }, t), '检查磁盘');
   assert.equal(stepText({ label: { key: 'runCommand' } }, t), '运行命令');
-  assert.equal(stepText({ label: { key: 'subagent', arg: '查锁文件' } }, t), '子任务：查锁文件');
-  assert.equal(stepText({ label: { key: 'subagent' } }, t), '子任务');
   assert.equal(stepText({ label: { key: 'tool' } }, key => en[key]), 'Use a tool');
-  assert.equal(stepCount({ steps: [tool(0, 1), { kind: 'say', text: 'x' }, { kind: 'subagent', label: { key: 'subagent' } }] }), 2);
+  assert.deepEqual(['message', 'scheduled', 'control', 'other', 'unknown'].map(kind => markText({ mark: kind }, t)),
+    ['收到你的新消息', '收到定时任务', '收到系统指令', '收到其他消息', '收到其他消息']);
+  assert.equal(markText({ mark: 'subtask', label: { key: 'memorySync' } }, t), '开始记忆整理（后台）');
+  assert.equal(subtaskName({ key: 'named', arg: '查锁文件' }, t), '查锁文件');
+  assert.equal(subtaskName({ key: 'plain' }, t), '子任务');
+  assert.equal(subtaskName({ key: 'memorySync' }, key => en[key]), en['chat.activity.subtask.memorySync']);
 });
 
-test('while a round runs its activity stays open under the latest message; the final reply folds it above itself', () => {
-  const running = activity([{ id: 1, state: 'round', round: '1' }],
-    [round('1', { state: 'running', end: null, segments: [{ replyId: null, start: s(0), end: null, steps: [tool(1, 2)] }] })]);
-  let placed = activityPlacement([msg(1, 'in')], running);
-  assert.equal(placed.trailing.length, 1); assert.equal(placed.trailing[0].live, true); assert.equal(placed.trailing[0].anchor, 1);
-  assert.equal(placed.folded.size, 0);
-  const done = activity([{ id: 1, state: 'round', round: '1' }],
-    [round('1', { segments: [{ replyId: 2, start: s(0), end: s(59), steps: [tool(1, 2)] }, { replyId: null, start: s(59), end: s(60), steps: [] }] })]);
-  placed = activityPlacement([msg(1, 'in'), msg(2, 'out')], done);
-  assert.equal(placed.trailing.length, 0);
-  assert.deepEqual([...placed.folded.keys()], [2]);
-  assert.equal(placed.folded.get(2)[0].live, false);
+test('before the session takes a message the area wakes the session or delivers it, timed from the message', () => {
+  const messages = [msg(1, 'in', s(0))];
+  const queued = { id: 1, state: 'queued', since: s(0) };
+  assert.deepEqual(livePresentation(messages, body({ working: null, presence: 'stopped', awaiting: queued }), { presence: 'stopped' }),
+    { anchor: 1, under: 'in', subtasks: [], truncated: false, head: 'waking', since: s(0), steps: [], waiting: 'starting' });
+  const sending = livePresentation(messages, body({ working: IDLE, awaiting: queued }), { presence: 'running' });
+  assert.deepEqual([sending.head, sending.waiting], ['sending', 'queued']);
+  // A message sent after the last read looked: still on its way, whatever that read said.
+  const sent = livePresentation([...messages, msg(2, 'in', s(5))], body({ working: IDLE, seenId: 1 }), { presence: 'stopped' });
+  assert.deepEqual([sent.anchor, sent.head, sent.since], [2, 'waking', s(0)], 'timed from the first unanswered message');
+  // A message the group already handled before it was last quiet does not count.
+  const later = livePresentation([msg(1, 'in', s(0)), msg(2, 'in', s(500))], { ...body({ working: IDLE, seenId: 1 }), from: s(100) });
+  assert.equal(later.since, s(500));
+  // Taken during a start-up turn that ended before the work began: from the window's start.
+  const cold = livePresentation(messages, { ...body({ steps: [tool(7, null, 'running')] }), from: s(6) });
+  assert.equal(cold.since, s(6));
 });
 
-test('a reply without steps gets no activity area', () => {
-  const quiet = activity([{ id: 1, state: 'round', round: '1' }],
-    [round('1', { segments: [{ replyId: 2, start: s(0), end: s(3), steps: [{ kind: 'say', text: 'ok', at: s(1) }] }, { replyId: null, start: s(3), end: s(4), steps: [] }] })]);
-  const placed = activityPlacement([msg(1, 'in'), msg(2, 'out')], quiet);
-  assert.equal(placed.folded.size, 0); assert.equal(placed.trailing.length, 0);
-  assert.equal(activityPlacement([msg(5, 'in')], activity([{ id: 5, state: 'none' }], [])).trailing.length, 0);
-  assert.equal(activityPlacement([msg(5, 'in')], activity([{ id: 5, state: 'pending' }], [])).trailing.length, 0);
+test('once taken the area works and thinks until a step runs; under a reply it shows no elapsed time', () => {
+  const messages = [msg(1, 'in', s(0))];
+  const thinking = livePresentation(messages, body({ working: IDLE, awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(1) } }));
+  assert.deepEqual([thinking.head, thinking.waiting, thinking.since, thinking.steps], ['working', 'thinking', s(0), []]);
+  const steps = [tool(2, 3), tool(4, null, 'running')];
+  const busy = livePresentation(messages, body({ steps }));
+  assert.deepEqual([busy.head, busy.waiting, busy.steps], ['working', null, steps]);
+  assert.equal(livePresentation(messages, body({ steps: [tool(2, 3)] })).waiting, 'thinking', 'between steps it thinks');
+  const commands = livePresentation(messages, body({ working: { ...IDLE, on: true, tools: 1 } }));
+  assert.equal(commands.head, 'working', 'a command still running is work');
+  const afterReply = livePresentation([...messages, msg(2, 'out', s(20))], body({ steps: [tool(21, null, 'running')], seenId: 2 }));
+  assert.deepEqual([afterReply.anchor, afterReply.under, afterReply.head, afterReply.since], [2, 'out', 'working', null]);
 });
 
-test('the live area moves under a message just sent before the server ties it to the running round', () => {
-  const live = round('1', { state: 'running', end: null, segments: [{ replyId: null, start: 0, end: null, steps: [tool(1, null, 'running')] }] });
-  for (const later of [undefined, { id: 3, state: 'pending' }]) {
-    const items = [{ id: 1, state: 'round', round: '1' }, ...(later ? [later] : [])];
-    const placed = activityPlacement([msg(1, 'in'), msg(3, 'in')], activity(items, [live]));
-    assert.equal(placed.trailing.length, 1);
-    assert.equal(placed.trailing[0].anchor, 3, 'it sits under the latest user message right away');
-  }
-  const ended = round('1', { state: 'done', end: 9, segments: [{ replyId: null, start: 0, end: 9, steps: [tool(1, 9, 'done')] }] });
-  const placed = activityPlacement([msg(1, 'in'), msg(3, 'in')], activity([{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'pending' }], [ended]));
-  assert.equal(placed.trailing[0].anchor, 1, 'a finished round stays with its own messages');
-  const other = activityPlacement([msg(1, 'in'), msg(3, 'in')], activity([{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'none' }], [live]));
-  assert.equal(other.trailing[0].anchor, 1, 'a message known to start no round does not take the live area');
+test('subtasks keep a row when the main AI is idle; done work leaves nothing or a handled line under a user message', () => {
+  const messages = [msg(1, 'in', s(0))];
+  const working = { ...IDLE, on: true, subagents: { count: 1, since: s(40), lastActivityAt: s(45) } };
+  assert.deepEqual(livePresentation(messages, body({ working, subtasks: [SUBTASK] })),
+    { anchor: 1, under: 'in', subtasks: [SUBTASK], truncated: false, head: null, since: null, steps: [], waiting: null });
+  const withMain = livePresentation(messages, body({ working: { ...MAIN, subagents: working.subagents }, subtasks: [SUBTASK], steps: [tool(1, null, 'running')] }));
+  assert.deepEqual([withMain.head, withMain.subtasks], ['working', [SUBTASK]]);
+  const handled = { id: 1, state: 'handled', since: s(0), delivered: s(1) };
+  assert.deepEqual(livePresentation(messages, body({ working: IDLE, awaiting: handled })),
+    { anchor: 1, under: 'in', subtasks: [], truncated: false, head: null, since: null, steps: [], waiting: null, handled: true });
+  assert.equal(livePresentation([...messages, msg(2, 'out')], body({ working: IDLE, seenId: 2 })), null, 'replied and done: nothing');
+  assert.equal(livePresentation(messages, body({ working: IDLE })), null, 'done without a pending message: nothing');
+  assert.equal(livePresentation([], body()), null); assert.equal(livePresentation(messages, null), null);
 });
 
-test('a message sent while the agent works moves the one activity under it with the steps so far', () => {
-  const steps = [tool(1, 2), tool(3, null, 'running')];
-  const shared = round('1', { messageIds: [1, 3], state: 'running', end: null, segments: [{ replyId: null, start: s(0), end: null, steps }] });
-  const placed = activityPlacement([msg(1, 'in'), msg(3, 'in')], activity([{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'round', round: '1' }], [shared]));
-  assert.equal(placed.trailing.length, 1, 'only one activity area on the page');
-  assert.equal(placed.trailing[0].anchor, 3, 'it sits under the latest user message');
-  assert.equal(placed.trailing[0].segment.steps, steps, 'earlier steps come along');
+test('the live area draws the head, steps, marks, thinking and subtask rows like the prototype', () => {
+  const document = createDocument(), toggles = [];
+  const area = createLiveArea({ document, t, locale: 'zh-CN', onToggle: id => toggles.push(id) });
+  const steps = [tool(1, 2), tool(3, 4, 'failed', { key: 'runCommand' }), mark('message', 5, { messageId: 2 }), { kind: 'say', text: '找到了。', at: s(6) },
+    mark('subtask', 7, { label: { key: 'memorySync' } }), tool(8, null, 'running', { key: 'described', arg: '查群名' })];
+  area.update({ anchor: 2, under: 'in', head: 'working', since: s(0), steps, waiting: null, subtasks: [SUBTASK], truncated: false },
+    { now: s(46), open: new Set(), details: new Map() });
+  const root = area.node;
+  assert.equal(root.dataset.state, 'working'); assert.equal(root.dataset.under, 'in');
+  assert.equal(root.querySelector('.conversation-activity-head').textContent, '正在工作 · 46 秒');
+  assert.deepEqual(root.querySelectorAll('.conversation-activity-step').map(row => [row.dataset.status, visibleText(row)]),
+    [['done', '查看 memory/state.md1 秒'], ['failed', '运行命令出错 · 1 秒'], ['running', '查群名进行中']]);
+  const marks = root.querySelectorAll('.conversation-activity-mark');
+  assert.deepEqual(marks.map(node => node.dataset.mark), ['message', 'subtask']);
+  assert.match(visibleText(marks[0]), /^收到你的新消息 · \d\d:\d\d$/);
+  assert.match(visibleText(marks[1]), /^开始记忆整理（后台） · \d\d:\d\d$/);
+  assert.equal(root.querySelector('.conversation-activity-say').textContent, '找到了。');
+  assert.equal(root.querySelectorAll('.conversation-activity-thinking').length, 0, 'a step runs: no thinking row');
+  const row = root.querySelector('.conversation-activity-subtask-row');
+  assert.equal(visibleText(row), '后台：记忆整理 · 进行中 6 秒 · 已 2 步');
+  assert.equal(row.getAttribute('aria-expanded'), 'false');
+  assert.equal(root.querySelector('.conversation-activity-subtask .conversation-activity-steps').hidden, true, 'folded: no steps');
+  row.dispatch('click');
+  assert.deepEqual(toggles, [SUBTASK.id]);
+  // Open: loading until its steps are read, then its steps; folded again they are hidden.
+  area.update(area.view, { now: s(47), open: new Set([SUBTASK.id]), details: new Map() });
+  const box = root.querySelector('.conversation-activity-subtask');
+  assert.equal(row.getAttribute('aria-expanded'), 'true'); assert.equal(box.dataset.open, '');
+  assert.equal(visibleText(box.querySelector('.conversation-activity-steps')), '正在读取步骤');
+  area.update(area.view, { now: s(48), open: new Set([SUBTASK.id]), details: new Map([[SUBTASK.id, { steps: [tool(41, 42), tool(43, null, 'running')] }]]) });
+  assert.deepEqual(box.querySelectorAll('.conversation-activity-step').map(node => node.dataset.status), ['done', 'running']);
+  assert.equal(visibleText(row), '后台：记忆整理 · 进行中 8 秒 · 已 2 步', 'the row keeps ticking');
+  area.update(area.view, { now: s(49), open: new Set(), details: new Map() });
+  assert.equal(box.querySelector('.conversation-activity-steps').hidden, true);
+  // Waiting rows: the session starting, then thinking.
+  area.update({ anchor: 1, under: 'in', head: 'waking', since: s(0), steps: [], waiting: 'starting', subtasks: [], truncated: false }, { now: s(12) });
+  assert.equal(root.querySelector('.conversation-activity-head').textContent, '正在唤醒会话 · 12 秒');
+  assert.equal(visibleText(root.querySelector('.conversation-activity-thinking')), '会话启动中');
+  assert.equal(root.querySelectorAll('.conversation-activity-subtask').length, 0, 'the ended subtask row is gone');
+  area.update({ anchor: 1, under: 'out', head: 'working', since: null, steps: [], waiting: 'thinking', subtasks: [], truncated: true }, { now: s(13) });
+  assert.equal(root.querySelector('.conversation-activity-head').textContent, '正在工作', 'under a reply: no elapsed time');
+  assert.equal(visibleText(root.querySelector('.conversation-activity-thinking')), '正在思考');
+  assert.equal(root.querySelector('.conversation-activity-more').textContent, '更早的步骤未显示');
 });
 
-test('a split reply folds the part up to it and the later steps start a new live part after it', () => {
-  const parts = [{ replyId: 2, start: s(0), end: s(25), steps: [tool(1, 2), tool(3, 4)] }, { replyId: null, start: s(25), end: null, steps: [] }];
-  const items = [{ id: 1, state: 'round', round: '1' }];
-  let placed = activityPlacement([msg(1, 'in'), msg(2, 'out')], activity(items, [round('1', { state: 'running', end: null, segments: parts })]));
-  assert.equal(placed.folded.get(2).length, 1);
-  assert.equal(placed.trailing.length, 0, 'right after a reply nothing new is shown until the agent does something');
-  parts[1].steps = [tool(30, null, 'running')];
-  placed = activityPlacement([msg(1, 'in'), msg(2, 'out')], activity(items, [round('1', { state: 'running', end: null, segments: parts })]));
-  assert.equal(placed.trailing.length, 0); assert.equal(placed.afterReply.get(2)[0].replyId, 2); assert.equal(placed.afterReply.get(2)[0].live, true);
+test('subtasks alone are just their rows; work done without a reply is one line leading to the group details', () => {
+  const document = createDocument(), opened = [];
+  const area = createLiveArea({ document, t, onDetails: () => opened.push(true) });
+  area.update({ anchor: 1, under: 'in', head: null, since: null, steps: [], waiting: null, subtasks: [SUBTASK], truncated: false }, { now: s(60) });
+  assert.equal(area.node.dataset.state, 'subtasks');
+  assert.deepEqual(area.node.children.map(node => node.className), ['conversation-activity-subtasks']);
+  area.update({ anchor: 1, under: 'in', head: null, since: null, steps: [], waiting: null, subtasks: [], truncated: false, handled: true }, { now: s(61) });
+  assert.equal(area.node.dataset.state, 'handled');
+  assert.equal(visibleText(area.node), '已处理，没有回复·在组详情查看过程');
+  area.node.querySelector('[data-action="openGroupDetails"]').dispatch('click');
+  assert.equal(opened.length, 1);
+  const plain = createLiveArea({ document, t: key => en[key] ?? key });
+  plain.update({ anchor: 1, under: 'in', handled: true, subtasks: [], steps: [] }, { now: s(1) });
+  assert.equal(visibleText(plain.node), en['chat.activity.handled'], 'without group details there is no link');
 });
 
-test('finished trailing steps attach to their immediately preceding loaded reply by id', () => {
-  const tail = { replyId: null, start: s(20), end: s(26), steps: [tool(21, 25)] };
-  const done = activity([{ id: 1, state: 'round', round: '1' }], [round('1', {
-    segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] }, { replyId: 4, start: s(10), end: s(20), steps: [] }, tail]
-  })]);
-  const placed = activityPlacement([msg(1, 'in'), msg(2, 'out'), msg(4, 'out')], done);
-  assert.equal(placed.trailing.length, 0);
-  assert.deepEqual([...placed.afterReply.keys()], [4]);
-  const entry = placed.afterReply.get(4)[0];
-  assert.equal(entry.replyId, 4); assert.equal(entry.afterReply, true); assert.equal(entry.live, false);
-  assert.equal(entry.key, '1:tail'); assert.equal(entry.segment, tail);
-});
-
-test('a running trailing segment attaches its live area below the last loaded reply', () => {
-  const running = activity([{ id: 1, state: 'round', round: '1' }], [round('1', { state: 'running', end: null,
-    segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] }, { replyId: null, start: s(10), end: null, steps: [tool(11, null, 'running')] }]
-  })]);
-  const placed = activityPlacement([msg(1, 'in'), msg(2, 'out')], running);
-  assert.equal(placed.afterReply.size, 1); assert.equal(placed.trailing.length, 0);
-  assert.equal(placed.afterReply.get(2)[0].live, true); assert.equal(placed.afterReply.get(2)[0].replyId, 2);
-});
-
-test('finished zero-step follow-up work stays absent even when it contains words', () => {
-  const quiet = activity([{ id: 1, state: 'round', round: '1' }], [round('1', {
-    segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] }, { replyId: null, start: s(10), end: s(11), steps: [{ kind: 'say', text: 'terminal summary only' }] }]
-  })]);
-  const placed = activityPlacement([msg(1, 'in'), msg(2, 'out')], quiet);
-  assert.equal(placed.afterReply.size, 0); assert.equal(placed.trailing.length, 0);
-});
-
-test('a missing preceding reply keeps the existing trailing area and never attaches to an earlier reply', () => {
-  const done = activity([{ id: 1, state: 'round', round: '1' }], [round('1', {
-    segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] }, { replyId: 4, start: s(10), end: s(20), steps: [] },
-      { replyId: null, start: s(20), end: s(26), steps: [tool(21, 25, 'failed')] }]
-  })]);
-  for (const messages of [[msg(1, 'in')], [msg(1, 'in'), msg(2, 'out')]]) {
-    const placed = activityPlacement(messages, done);
-    assert.equal(placed.afterReply.size, 0); assert.equal(placed.trailing.length, 1);
-    assert.equal(placed.trailing[0].live, false); assert.equal(placed.trailing[0].anchor, messages.at(-1).id);
-    assert.equal(placed.trailing[0].segment.steps[0].status, 'failed');
-  }
-});
-
-test('a user interjection keeps running and finished trailing work after that user message', () => {
-  for (const state of ['running', 'done']) {
-    const shared = round('1', { messageIds: [1, 3], state, end: state === 'running' ? null : 26,
-      segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] },
-        { replyId: null, start: s(10), end: state === 'running' ? null : s(26), steps: [tool(21, 25, 'failed')] }]
-    });
-    const items = [{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'round', round: '1' }];
-    const placed = activityPlacement([msg(1, 'in'), msg(2, 'out'), msg(3, 'in')], activity(items, [shared]));
-    assert.equal(placed.afterReply.size, 0);
-    assert.equal(placed.trailing.length, 1);
-    assert.equal(placed.trailing[0].anchor, 3);
-    assert.equal(placed.trailing[0].live, state === 'running');
-    assert.equal(placed.trailing[0].segment.steps[0].status, 'failed');
-  }
-});
-
-test('a finished round without a reply never borrows the preceding round reply', () => {
-  const parts = [round('1', { segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] },
-    { replyId: null, start: s(10), end: s(15), steps: [tool(11, 14)] }] }),
-    round('3', { start: 20, end: 30, segments: [{ replyId: null, start: s(20), end: s(30), steps: [tool(21, 29, 'failed')] }] })];
-  const placed = activityPlacement([msg(1, 'in'), msg(2, 'out'), msg(3, 'in')],
-    activity([{ id: 1, state: 'round', round: '1' }, { id: 3, state: 'round', round: '3' }], parts));
-  assert.equal(placed.afterReply.get(2).length, 1);
-  assert.equal(placed.afterReply.get(2)[0].round.key, '1');
-  assert.equal(placed.trailing.length, 1);
-  assert.equal(placed.trailing[0].round.key, '3');
-  assert.equal(placed.trailing[0].anchor, 3);
-});
-
-test('the live head shows elapsed round time and steps; thinking shows only when no tool runs', () => {
-  const document = createDocument();
-  const area = createActivityArea({ document, t });
-  const segment = { replyId: null, start: s(0), end: null, steps: [tool(0, 5), tool(4, 8), { kind: 'say', text: '找到了', at: s(9) }] };
-  const entry = { key: '1:tail', live: true, round: { state: 'running' }, segment };
-  area.update(entry, { open: false, now: s(72) });
-  assert.equal(area.node.querySelector('.conversation-activity-head').textContent, '已用时 1 分 12 秒 · 2 步', 'round clock, not the sum of overlapping steps');
-  assert.ok(area.node.querySelector('.conversation-activity-thinking'), 'thinking while no tool runs');
-  assert.equal(area.node.querySelector('button'), null, 'the live head is not a toggle');
-  segment.steps.push(tool(70, null, 'running'));
-  area.update(entry, { open: false, now: s(72) });
-  assert.equal(area.node.querySelector('.conversation-activity-thinking'), null, 'no thinking while a tool runs');
-  assert.equal(area.node.querySelectorAll('.conversation-activity-step').at(-1).dataset.status, 'running');
-  assert.equal(area.node.querySelectorAll('.conversation-activity-time').at(-1).textContent, '2 秒');
-});
-
-test('a folded part is a toggle with its own time; failed and stopped steps say so', () => {
-  const document = createDocument();
-  const toggled = [];
-  const area = createActivityArea({ document, t, onToggle: key => toggled.push(key) });
-  const segment = { replyId: 2, start: s(10), end: s(135), steps: [tool(11, 41, 'failed'), tool(50, 60, 'stopped'), tool(61, 62, 'incomplete')] };
-  const entry = { key: '1:2', live: false, round: { state: 'done' }, segment };
-  area.update(entry, { open: false, now: s(500) });
-  const head = area.node.querySelector('button');
-  assert.equal(head.textContent, '已处理 2 分 5 秒 · 3 步');
-  assert.equal(head.getAttribute('aria-expanded'), 'false');
-  assert.equal(area.node.querySelector('.conversation-activity-steps').hidden, true);
-  head.dispatch('click');
-  assert.deepEqual(toggled, ['1:2']);
-  area.update(entry, { open: true, now: s(500) });
-  assert.equal(area.node.dataset.open, '');
-  assert.deepEqual(area.node.querySelectorAll('.conversation-activity-time').map(node => node.textContent),
-    ['出错 · 30 秒', '已停止 · 10 秒', '没有完成 · 1 秒']);
-});
-
-test('failed and incomplete steps keep distinct labels in both languages', () => {
-  for (const [words, expected] of [[zh, ['出错 · 1 秒', '没有完成 · 1 秒']], [en, ['Error · 1 s', 'Did not finish · 1 s']]]) {
-    const area = createActivityArea({ document: createDocument(), t: key => words[key] });
-    area.update({ key: '1:tail', live: false, round: { state: 'done' },
-      segment: { start: s(0), end: s(3), steps: [tool(0, 1, 'failed'), tool(1, 2, 'incomplete')] } }, { open: true, now: s(3) });
-    const rows = area.node.querySelectorAll('.conversation-activity-step');
-    assert.deepEqual(rows.map(row => row.dataset.status), ['failed', 'incomplete']);
-    assert.deepEqual(area.node.querySelectorAll('.conversation-activity-time').map(node => node.textContent), expected);
-  }
-});
-
-test('after-reply work uses the localized follow-up summary and retains failed step expansion', () => {
-  const entry = { key: '1:tail', replyId: 2, afterReply: true, live: false, round: { state: 'done' },
-    segment: { replyId: null, start: s(59), end: s(65), steps: [tool(60, 64, 'failed')] } };
-  for (const [words, summary, failure] of [[zh, '回复后又处理 6 秒 · 1 步', '出错 · 4 秒'],
-    [en, 'Worked 6 s more after replying · 1 step', 'Error · 4 s']]) {
-    const document = createDocument(), toggled = [];
-    const area = createActivityArea({ document, t: key => words[key], onToggle: key => toggled.push(key) });
-    area.update(entry, { open: false, now: s(500) });
-    assert.equal(area.node.classList.contains('conversation-activity-after-reply'), true);
-    assert.equal(area.node.querySelector('button').textContent, summary);
-    assert.equal(area.node.querySelector('.conversation-activity-steps').hidden, true);
-    area.node.querySelector('button').dispatch('click'); assert.deepEqual(toggled, ['1:tail']);
-    area.update(entry, { open: true, now: s(500) });
-    assert.equal(area.node.querySelector('button').getAttribute('aria-expanded'), 'true');
-    assert.equal(area.node.querySelector('.conversation-activity-step').dataset.status, 'failed');
-    assert.equal(area.node.querySelector('.conversation-activity-time').textContent, failure);
-  }
-});
-
-test('running follow-up work counts live time in both languages and becomes a folded completed summary', () => {
-  const segment = { replyId: null, start: s(10), end: null, steps: [tool(11, null, 'running')] };
-  const entry = { key: '1:tail', replyId: 2, afterReply: true, live: true, round: { state: 'running' }, segment };
-  for (const [words, liveSummary, doneSummary] of [[zh, '回复后正在处理 6 秒 · 1 步', '回复后又处理 8 秒 · 1 步'],
-    [en, 'Working after replying: 6 s · 1 step', 'Worked 8 s more after replying · 1 step']]) {
-    const area = createActivityArea({ document: createDocument(), t: key => words[key] });
-    area.update(entry, { open: false, now: s(16) });
-    assert.equal(area.node.querySelector('.conversation-activity-head').textContent, liveSummary);
-    assert.equal(area.node.querySelector('.conversation-activity-steps').hidden, false);
-    assert.equal(area.node.querySelector('.conversation-activity-time').textContent, words === zh ? '5 秒' : '5 s');
-    area.update(entry, { open: false, now: s(17) });
-    assert.match(area.node.querySelector('.conversation-activity-head').textContent, /7/);
-    area.update({ ...entry, live: false, round: { state: 'done' }, segment: { ...segment, end: s(18) } }, { open: false, now: s(30) });
-    assert.equal(area.node.querySelector('button').textContent, doneSummary);
-    assert.equal(area.node.querySelector('.conversation-activity-steps').hidden, true);
-  }
-});
-
-test('a step still running in a folded part never shows more time than the part itself', () => {
-  const document = createDocument();
-  const area = createActivityArea({ document, t, onToggle() {} });
-  // The round ended at 27 s and is settling: the collectors have not reported this step's end yet.
-  const segment = { replyId: 2, start: s(0), end: s(27), steps: [tool(5, null, 'running')] };
-  const entry = { key: '1:2', live: false, round: { state: 'done', settling: true }, segment };
-  area.update(entry, { open: true, now: s(45) });
-  assert.match(area.node.querySelector('button').textContent, /已处理 27 秒/);
-  assert.equal(area.node.querySelector('.conversation-activity-time').textContent, '22 秒', 'counted to the end of its part, not to now');
-  area.update({ ...entry, live: true, segment: { ...segment, end: null } }, { open: true, now: s(45) });
-  assert.equal(area.node.querySelector('.conversation-activity-time').textContent, '40 秒', 'a live part keeps counting');
-});
-
-function pageFixture(context, { rows, activityBody, activityStatus = () => 200 }) {
+// Injected DOM and fetch only: no browser, sockets, databases, storage or subprocesses.
+function pageFixture(context, { rows, activityBody, activityStatus = () => 200, subtaskBody = () => ({ subtask: null, steps: [] }) }) {
   const document = createDocument(), root = document.createElement('div');
   const timers = [], intervals = [];
   document.defaultView = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {},
@@ -279,14 +169,15 @@ function pageFixture(context, { rows, activityBody, activityStatus = () => 200 }
     clearInterval: id => { if (intervals[id - 1]) intervals[id - 1].fn = null; }, innerWidth: 1280 };
   const reads = [];
   const page = mountConversationPage({ root, document, t, fetch: async path => {
-    if (path.includes('/activity?')) reads.push(new URLSearchParams(path.split('?')[1]).get('ids'));
+    const activity = path.includes('/activity?') ? new URLSearchParams(path.split('?')[1]) : null;
+    if (activity) reads.push(activity.get('subtask') ?? 'live');
     const body = path === '/api/session-mode' ? { data: { sessionMode: 'multi' } }
       : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:a', displayName: 'A' }], nextCursor: null }
       : path.includes('/messages?') ? { items: rows(), nextCursor: null, afterCursor: 'after' }
-      : path.includes('/activity?') ? (activityStatus() === 200 ? activityBody() : { error: 'not_found' })
+      : activity ? (activityStatus() !== 200 ? { error: 'not_found' } : activity.has('subtask') ? subtaskBody(activity.get('subtask')) : activityBody())
       : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', sessionGroup: 'dashboard:a', state: 'active' } }
       : { items: [], nextCursor: null };
-    const status = path.includes('/activity?') ? activityStatus() : 200;
+    const status = activity ? activityStatus() : 200;
     return { ok: status === 200, status, json: async () => body };
   } });
   context.after(() => page.destroy());
@@ -296,163 +187,142 @@ function pageFixture(context, { rows, activityBody, activityStatus = () => 200 }
     for (let i = 0; i < 6; i++) await tick();
   } };
 }
-const doneBody = (now = s(600)) => ({ now, items: [{ id: 1, state: 'round', round: '1' }], rounds: [round('1', {
-  segments: [{ replyId: 2, start: s(0), end: s(59), steps: [tool(1, 2), tool(3, 4)] }, { replyId: null, start: s(59), end: s(60), steps: [] }] })] });
-
-test('history activity is folded above its reply, outside the reply content, and a manual open survives redraws', async t => {
-  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => doneBody() });
-  await f.open();
-  const reply = f.root.querySelector('[data-message-id="2"]');
-  const area = reply.querySelector('.conversation-activity');
-  assert.ok(area, 'folded activity on the reply');
-  assert.equal(area.closest('.chat-message-content'), null, 'activity is never part of the reply content');
-  assert.equal(reply.querySelector('.chat-message-content').textContent.includes('已处理'), false);
-  assert.equal(area.querySelector('.conversation-activity-steps').hidden, true, 'history is folded by default');
-  area.querySelector('button').dispatch('click');
-  assert.equal(area.querySelector('.conversation-activity-steps').hidden, false);
-  f.page.redraw();
-  const again = f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity');
-  assert.equal(again.querySelector('.conversation-activity-steps').hidden, false, 'manual open is kept across redraws');
-  await catchUpConversation(f.page);
-  for (let i = 0; i < 6; i++) await tick();
-  assert.equal(f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity-steps').hidden, false,
-    'a later update does not fold it back');
-  assert.deepEqual(f.reads, ['1'], 'a finished round is not read again');
-});
-
-test('messages without follow-up work hide their after-reply slot', async t => {
-  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => doneBody() });
-  await f.open();
-  const slots = f.root.querySelectorAll('.conversation-activity-after-reply-slot');
-  assert.equal(slots.length, 2);
-  for (const slot of slots) {
-    assert.equal(slot.hidden, true, 'an empty slot must not add message spacing');
-    assert.equal(slot.children.length, 0);
-  }
-});
-
-test('live follow-up work stays inside its reply, ticks there and folds when the round ends', async t => {
-  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
-  let body = { now: s(16), items: [{ id: 1, state: 'round', round: '1' }], rounds: [round('1', { state: 'running', end: null,
-    segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] },
-      { replyId: null, start: s(10), end: null, steps: [tool(11, null, 'running')] }] })] };
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
-  await f.open();
-  const reply = f.root.querySelector('[data-message-id="2"]');
-  const area = reply.querySelector('.conversation-activity-after-reply');
-  assert.ok(area);
-  assert.equal(f.root.querySelectorAll('.conversation-activity-message').length, 0);
-  assert.match(area.querySelector('.conversation-activity-head').textContent, /回复后正在处理 6 秒 · 1 步/);
-  assert.equal(area.querySelector('.conversation-activity-steps').hidden, false);
-  const clock = f.intervals.find(timer => timer.fn && timer.ms === 1000);
-  assert.ok(clock, 'the attached live area must own a clock even without a separate trailing area');
-  clock.fn();
-  body = { now: s(18), items: body.items, rounds: [round('1', { end: 18,
-    segments: [{ replyId: 2, start: s(0), end: s(10), steps: [] },
-      { replyId: null, start: s(10), end: s(18), steps: [tool(11, 18, 'failed')] }] })] };
-  await refresh(f);
-  assert.equal(reply.querySelector('.conversation-activity-after-reply'), area, 'the area stays under the reply as it finishes');
-  assert.equal(area.querySelector('button').textContent, '回复后又处理 8 秒 · 1 步');
-  assert.equal(area.querySelector('.conversation-activity-steps').hidden, true);
-  assert.equal(clock.fn, null, 'finished follow-up work releases its clock');
-});
-
-test('finished follow-up work stays below the reply body with no extra AI article and keeps its expanded failure on redraw', async t => {
-  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'actual reply', status: 'delivered' }];
-  const body = doneBody();
-  body.rounds[0].segments[1] = { replyId: null, start: s(59), end: s(65), steps: [tool(60, 64, 'failed')] };
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
-  await f.open();
-  const reply = f.root.querySelector('[data-message-id="2"]');
-  const content = reply.querySelector('.chat-message-content');
-  const slot = reply.querySelector('.conversation-activity-after-reply-slot');
-  const area = slot.querySelector('.conversation-activity');
-  assert.equal(f.root.querySelectorAll('.conversation-activity-message').length, 0, 'no separate empty AI article');
-  assert.equal(area.closest('[data-message-id="2"]'), reply);
-  assert.equal(slot.parentNode.children.indexOf(slot), slot.parentNode.children.indexOf(content) + 1, 'the follow-up line is immediately after the reply content');
-  assert.equal(content.textContent, 'actual reply', 'activity is outside copyable reply content');
-  assert.equal(area.querySelector('button').textContent, '回复后又处理 6 秒 · 1 步');
-  area.querySelector('button').dispatch('click');
-  assert.equal(area.querySelector('.conversation-activity-steps').hidden, false);
-  assert.equal(area.querySelector('.conversation-activity-step').dataset.status, 'failed');
-  assert.equal(area.querySelector('.conversation-activity-time').textContent, '出错 · 4 秒');
-  f.page.redraw();
-  assert.equal(reply.querySelector('.conversation-activity-after-reply-slot .conversation-activity'), area, 'the mounted activity node is retained');
-  assert.equal(area.querySelector('button').getAttribute('aria-expanded'), 'true');
-  assert.equal(content.textContent, 'actual reply');
-});
-
-test('loading a missing reply moves its existing follow-up activity out of the fallback article without losing the toggle state', async t => {
-  let rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }];
-  const body = doneBody();
-  body.rounds[0].segments[1] = { replyId: null, start: s(59), end: s(65), steps: [tool(60, 64, 'failed')] };
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
-  await f.open();
-  const fallback = f.root.querySelector('.conversation-activity-message');
-  assert.ok(fallback); fallback.querySelector('button').dispatch('click');
-  rows = [...rows, { id: 2, direction: 'out', content: 'loaded reply', status: 'delivered' }];
-  await catchUpConversation(f.page);
-  for (let i = 0; i < 6; i++) await tick();
-  assert.equal(f.root.querySelectorAll('.conversation-activity-message').length, 0);
-  const area = f.root.querySelector('[data-message-id="2"] .conversation-activity-after-reply-slot .conversation-activity');
-  assert.ok(area); assert.equal(area.querySelector('button').getAttribute('aria-expanded'), 'true');
-  assert.equal(area.querySelector('.conversation-activity-step').dataset.status, 'failed');
-});
-
-test('settling follow-up work moves to a later reply and removes the old reply area', async t => {
-  let rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'first reply', status: 'delivered' }];
-  let body = { now: s(65), items: [{ id: 1, state: 'round', round: '1' }], rounds: [{ ...round('1', { end: 65,
-    segments: [{ replyId: 2, start: s(0), end: s(59), steps: [] },
-      { replyId: null, start: s(59), end: s(65), steps: [tool(60, 64, 'failed')] }] }), settling: true }] };
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
-  await f.open();
-  const first = f.root.querySelector('[data-message-id="2"] .conversation-activity-after-reply-slot');
-  first.querySelector('button').dispatch('click');
-  assert.equal(first.querySelector('button').getAttribute('aria-expanded'), 'true');
-  const readsBeforeUpdate = f.reads.length;
-  rows = [...rows, { id: 4, direction: 'out', content: 'later reply', status: 'delivered' }];
-  body = { ...body, now: s(75), rounds: [round('1', { end: 75,
-    segments: [{ replyId: 2, start: s(0), end: s(59), steps: [] },
-      { replyId: 4, start: s(59), end: s(70), steps: [tool(60, 64, 'failed')] },
-      { replyId: null, start: s(70), end: s(75), steps: [tool(71, 74, 'failed')] }] })] };
-  await refresh(f);
-  assert.equal(first.hidden, true);
-  assert.equal(first.children.length, 0, 'no stale follow-up activity remains on the old reply');
-  assert.equal(f.root.querySelectorAll('.conversation-activity-after-reply').length, 1);
-  const moved = f.root.querySelector('[data-message-id="4"] .conversation-activity-after-reply');
-  assert.ok(moved);
-  assert.equal(moved.querySelector('button').getAttribute('aria-expanded'), 'true', 'the tail keeps its existing open key');
-  assert.equal(moved.querySelector('.conversation-activity-step').dataset.status, 'failed');
-  assert.equal(f.reads.length, readsBeforeUpdate + 1, 'the update reads the settling round again');
-  assert.equal(f.reads.at(-1), '1', 'the refreshed activity belongs to the same original user message');
-});
-
-test('the live activity follows the latest message and folds onto the final reply when it arrives', async t => {
-  let rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }];
-  let body = { now: s(30), items: [{ id: 1, state: 'round', round: '1' }], rounds: [round('1', { state: 'running', end: null,
-    segments: [{ replyId: null, start: s(0), end: null, steps: [tool(1, 2), tool(3, null, 'running')] }] })] };
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
-  await f.open();
-  const list = f.root.querySelector('.conversation-message-list');
-  const live = list.querySelectorAll('.conversation-activity-message');
-  assert.equal(live.length, 1);
-  assert.equal(list.children.indexOf(live[0]), list.children.indexOf(f.root.querySelector('[data-message-id="1"]')) + 1);
-  assert.match(visibleText(live[0]), /已用时 30 秒 · 2 步/);
-  assert.equal(live[0].dataset.messageId, undefined, 'the live area is not a message');
-  rows = [...rows, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
-  body = doneBody(s(61));
+const refresh = async f => {
   await catchUpConversation(f.page);
   for (let i = 0; i < 8; i++) await tick();
-  assert.equal(list.querySelectorAll('.conversation-activity-message').length, 0, 'no live area once the round is done');
-  const folded = f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity');
-  assert.equal(folded.querySelector('.conversation-activity-steps').hidden, true, 'the final reply folds the activity');
+};
+const userRow = (id, seconds) => ({ id, direction: 'in', channel: 'dashboard', content: `message ${id}`, status: 'delivered',
+  timestamp: new Date(s(seconds)).toISOString() });
+const replyRow = (id, seconds) => ({ id, direction: 'out', channel: 'dashboard', content: `reply ${id}`, status: 'delivered',
+  timestamp: new Date(s(seconds)).toISOString() });
+const liveOf = f => f.root.querySelector('.conversation-message-list').querySelectorAll('.conversation-activity-message');
+const placedAfter = (f, id) => {
+  const list = f.root.querySelector('.conversation-message-list'), [live] = liveOf(f);
+  return list.children.indexOf(live) === list.children.indexOf(list.querySelector(`[data-message-id="${id}"]`)) + 1;
+};
+
+test('a first message: waking the session, thinking, its steps, a reply that clears them, then nothing once all is done', async t => {
+  let rows = [userRow(1, 0)];
+  let answer = body({ now: s(3), working: null, presence: 'stopped', awaiting: { id: 1, state: 'queued', since: s(0) } });
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => answer });
+  await f.open();
+  assert.equal(liveOf(f).length, 1); assert.ok(placedAfter(f, 1), 'right below the message');
+  const live = liveOf(f)[0];
+  assert.equal(live.dataset.messageId, undefined, 'the live area is not a message');
+  assert.match(visibleText(live), /^正在唤醒会话 · \d+ 秒会话启动中$/);
+  answer = body({ now: s(8), working: IDLE, awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(6) } });
+  await refresh(f);
+  assert.match(visibleText(liveOf(f)[0]), /^正在工作 · \d+ 秒正在思考$/);
+  answer = body({ now: s(12), steps: [tool(9, 10), tool(11, null, 'running')], awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(6) } });
+  await refresh(f);
+  assert.equal(liveOf(f)[0], live, 'one area all along');
+  assert.deepEqual(live.querySelectorAll('.conversation-activity-step').map(row => row.dataset.status), ['done', 'running']);
+  assert.equal(live.querySelectorAll('.conversation-activity-thinking').length, 0);
+  // A reply arrives and the AI goes on: the area moves under the reply with only the steps after it.
+  rows = [...rows, replyRow(2, 20)];
+  answer = body({ now: s(25), steps: [tool(22, null, 'running', { key: 'runCommand' })], seenId: 2 });
+  await refresh(f);
+  assert.ok(placedAfter(f, 2), 'under the reply');
+  assert.equal(live.querySelector('.conversation-activity-head').textContent, '正在工作');
+  assert.deepEqual(live.querySelectorAll('.conversation-activity-step').map(row => visibleText(row)), ['运行命令进行中']);
+  assert.equal(f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity'), null, 'never inside the reply');
+  answer = body({ now: s(60), working: IDLE, seenId: 2 });
+  await refresh(f);
+  assert.equal(liveOf(f).length, 0, 'all done: only the reply stays');
+});
+
+test('a message sent mid-work moves the same area under it with the steps so far and a mark', async t => {
+  let rows = [userRow(1, 0)];
+  let answer = body({ now: s(20), steps: [tool(1, 2), tool(3, null, 'running')], awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(1) } });
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => answer });
+  await f.open();
+  const before = liveOf(f)[0];
+  rows = [...rows, userRow(2, 21)];
+  await refresh(f);
+  assert.ok(placedAfter(f, 2), 'moves under the new message at once');
+  answer = body({ now: s(30), seenId: 2, steps: [tool(1, 2), tool(3, 22), mark('message', 22, { messageId: 2 }), tool(23, null, 'running')],
+    awaiting: { id: 2, state: 'thinking', since: s(21), delivered: s(22) } });
+  await refresh(f);
+  const live = liveOf(f)[0];
+  assert.equal(live, before, 'the area keeps its node');
+  assert.ok(placedAfter(f, 2));
+  assert.equal(live.querySelectorAll('.conversation-activity-step').length, 3, 'earlier steps stay');
+  assert.equal(live.querySelectorAll('.conversation-activity-mark').length, 1);
+  assert.match(live.querySelector('.conversation-activity-head').textContent, /^正在工作 · 30 秒$/, 'timed from the first unanswered message');
+});
+
+test('a subtask row reads its steps only while open and stops when folded', async t => {
+  const rows = [userRow(1, 0), replyRow(2, 10)];
+  const working = { ...IDLE, on: true, subagents: { count: 1, since: s(40), lastActivityAt: s(45) } };
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => body({ now: s(46), working, subtasks: [SUBTASK], seenId: 2 }),
+    subtaskBody: key => ({ now: s(46), subtask: { id: key, start: s(40), end: null }, steps: [tool(41, 42), tool(43, null, 'running')] }) });
+  await f.open();
+  assert.ok(placedAfter(f, 2), 'the subtask row sits under the reply while the main AI is idle');
+  const live = liveOf(f)[0];
+  assert.equal(live.querySelectorAll('.conversation-activity-head').length, 0, 'only the subtask row');
+  assert.deepEqual(f.reads.filter(read => read !== 'live'), [], 'folded: its steps are not read');
+  live.querySelector('.conversation-activity-subtask-row').dispatch('click');
+  for (let i = 0; i < 6; i++) await tick();
+  assert.deepEqual(f.reads.filter(read => read !== 'live'), [SUBTASK.id]);
+  assert.deepEqual(live.querySelectorAll('.conversation-activity-subtask .conversation-activity-step').map(row => row.dataset.status), ['done', 'running']);
+  await refresh(f);
+  assert.deepEqual(f.reads.filter(read => read !== 'live'), [SUBTASK.id, SUBTASK.id], 'read again with every poll while open');
+  live.querySelector('.conversation-activity-subtask-row').dispatch('click');
+  for (let i = 0; i < 4; i++) await tick();
+  await refresh(f);
+  assert.deepEqual(f.reads.filter(read => read !== 'live'), [SUBTASK.id, SUBTASK.id], 'folded: no more reads');
+  assert.equal(live.querySelector('.conversation-activity-subtask .conversation-activity-steps').hidden, true);
+});
+
+test('work done without a reply leaves one line under the message and stops ticking', async t => {
+  const rows = [userRow(1, 0)];
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => body({ now: s(60), working: IDLE,
+    awaiting: { id: 1, state: 'handled', since: s(0), delivered: s(1) } }) });
+  await f.open();
+  assert.ok(placedAfter(f, 1));
+  assert.equal(visibleText(liveOf(f)[0]), '已处理，没有回复');
+  assert.equal(f.intervals.filter(timer => timer.fn).length, 0, 'nothing ticks under the handled line');
+});
+
+test('the area is read on every refresh, and an instance without the activity route is asked once', async t => {
+  const rows = [userRow(1, 0)];
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => body({ steps: [tool(1, null, 'running')] }) });
+  await f.open();
+  const opened = f.reads.length;
+  await refresh(f); await refresh(f);
+  assert.equal(f.reads.length, opened + 2);
+  const missing = pageFixture(t, { rows: () => rows, activityBody: () => assert.fail('no body for a missing route'), activityStatus: () => 404 });
+  await missing.open();
+  await refresh(missing); await refresh(missing);
+  assert.deepEqual(missing.reads, ['live'], 'one request, no repeats after the route is missing');
+  assert.equal(missing.root.querySelectorAll('.conversation-activity').length, 0);
+});
+
+test('a running activity stays under the external message when a newer internal relay arrives', async t => {
+  const rows = [{ id: 1, channel: 'dashboard', direction: 'in', content: 'work on this', status: 'delivered' }];
+  const f = pageFixture(t, { rows: () => rows, activityBody: () => body({ steps: [tool(2.5, null, 'running')] }) });
+  await f.open();
+  const list = f.root.querySelector('.conversation-message-list');
+  const external = list.querySelector('[data-message-id="1"]');
+  const before = list.querySelector('.conversation-activity-message');
+  assert.ok(before?.querySelector('.conversation-activity-step'), 'the real mounted page has a running tool');
+  assert.equal(list.children.indexOf(before), list.children.indexOf(external) + 1);
+  rows.push({ id: 2, channel: 'internal', direction: 'in', content: 'relay body', status: 'delivered',
+    internal: { peerSessionGroup: 'telegram:peer', peerDisplayName: 'Peer room', peerExists: true, peerChannel: 'telegram', content: 'relay body' } });
+  await refresh(f);
+  const relay = list.querySelector('[data-message-id="2"]');
+  assert.ok(relay?.classList.contains('conversation-internal'), 'the newer relay is rendered');
+  const live = list.querySelectorAll('.conversation-activity-message');
+  assert.equal(live.length, 1, 'there is still one running activity');
+  assert.equal(live[0], before, 'the activity retains its mounted instance');
+  assert.equal(list.children.indexOf(live[0]), list.children.indexOf(external) + 1, 'activity remains immediately below the external row');
+  assert.equal(list.children.indexOf(relay), list.children.indexOf(live[0]) + 1, 'the relay follows the activity instead of taking its anchor');
+  assert.equal(relay.querySelector('.conversation-activity'), null);
 });
 
 test('scroll position is never written while the user drags; afterwards it follows only a user who stayed at the bottom', async t => {
   const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }];
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => doneBody() });
+  const f = pageFixture(t, { rows: () => rows, activityBody: idleBody });
   await f.open();
   const stream = f.root.querySelector('.conversation-stream');
   let writes = 0, top = 0, heights = [1000];
@@ -596,7 +466,7 @@ function layoutFixture(context, { rows, older, rowHeight = () => 100 }) {
       : path.startsWith('/api/chat/conversations?') ? { items: [{ id: 'g:AA', sessionGroup: 'dashboard:a', displayName: 'A' }], nextCursor: null }
       : path.includes('/messages?') && path.includes('cursor=older') ? { items: older, nextCursor: null }
       : path.includes('/messages?') ? { items: rows, nextCursor: 'older', afterCursor: 'after' }
-      : path.includes('/activity?') ? { now: s(0), items: [], rounds: [] }
+      : path.includes('/activity?') ? idleBody()
       : /\/conversations\/[^/?]+$/.test(path) ? { conversation: { id: 'g:AA', sessionGroup: 'dashboard:a', state: 'active' } }
       : { items: [], nextCursor: null };
     return { ok: true, status: 200, json: async () => body };
@@ -690,129 +560,3 @@ test('fitting the page while the list is still scrolling keeps the message being
   assert.equal(reading.getBoundingClientRect().top, 0, 'once the list is still, the row being read is back where it was');
 });
 
-test('opening a folded part with the mouse or the keyboard keeps its head where it was on screen', async t => {
-  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => doneBody() });
-  const docListeners = new Map();
-  f.document.addEventListener = (type, fn) => docListeners.set(type, fn);
-  await f.open();
-  const stream = f.root.querySelector('.conversation-stream');
-  let top = 400;
-  Object.defineProperty(stream, 'scrollTop', { get: () => top, set: value => { top = value; }, configurable: true });
-  const area = f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity');
-  const head = area.firstElementChild;
-  assert.equal(head.tagName, 'BUTTON');
-  head.isConnected = true;
-  // Opening the part grows the content above the head by 60 px in this layout.
-  head.getBoundingClientRect = () => ({ top: area.querySelector('.conversation-activity-steps').hidden ? 200 : 260, bottom: 0 });
-  stream.dispatch('pointerdown', { pointerType: 'mouse', button: 0, target: head });
-  head.dispatch('click');
-  assert.equal(top, 460, 'a mouse click keeps the head in place');
-  head.focus();
-  head.dispatch('click');
-  assert.equal(top, 400, 'so does Enter or Space on the focused head (a click without a pointer press)');
-  stream.dispatch('touchstart', {});
-  head.dispatch('click');
-  assert.equal(top, 400, 'during a touch gesture the position is not written');
-  stream.dispatch('touchend', {});
-  f.timers.filter(timer => timer.fn && timer.ms === 180).at(-1).fn();
-  assert.equal(top, 460, 'it is caught up once the list is still');
-});
-
-const refresh = async f => {
-  await catchUpConversation(f.page);
-  for (let i = 0; i < 8; i++) await tick();
-};
-const running = (steps, { start = 2, now = 3 } = {}) => ({ now: s(now), items: [{ id: 1, state: 'round', round: '1' }],
-  rounds: [round('1', { state: 'running', start, end: null, segments: [{ replyId: null, start: s(start), end: null, steps }] })] });
-
-test('a message waiting for its turn has no activity; when the turn starts the live area appears under it and thinks until a tool runs', async t => {
-  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }];
-  let body = { now: s(1), items: [{ id: 1, state: 'pending' }], rounds: [] };
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
-  await f.open();
-  const list = f.root.querySelector('.conversation-message-list');
-  const opened = f.reads.length;
-  assert.equal(list.querySelectorAll('.conversation-activity').length, 0, 'no activity before the turn starts');
-  assert.equal(list.querySelectorAll('.conversation-activity-thinking').length, 0, 'and nothing is thinking yet');
-  body = running([]);
-  await refresh(f);
-  const live = list.querySelectorAll('.conversation-activity-message');
-  assert.equal(live.length, 1);
-  assert.equal(list.children.indexOf(live[0]), list.children.indexOf(f.root.querySelector('[data-message-id="1"]')) + 1);
-  assert.equal(live[0].querySelectorAll('.conversation-activity-thinking').length, 1, 'thinking once the turn runs without a tool');
-  body = running([tool(2.5, null, 'running')], { now: 4 });
-  await refresh(f);
-  const area = list.querySelectorAll('.conversation-activity-message')[0];
-  assert.equal(area.querySelectorAll('.conversation-activity-thinking').length, 0, 'no thinking while a tool runs');
-  assert.deepEqual(area.querySelectorAll('.conversation-activity-step').map(row => row.dataset.status), ['running']);
-  assert.equal(f.reads.length, opened + 2, 'a pending message and a running round are read on every refresh');
-});
-
-test('a just-ended round is read again while it settles, picks up its late events, then is not read again', async t => {
-  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }, { id: 2, direction: 'out', content: 'done', status: 'delivered' }];
-  const settlingBody = { ...doneBody(s(65)), rounds: [{ ...doneBody().rounds[0], settling: true, segments: [
-    { replyId: 2, start: s(0), end: s(59), steps: [tool(1, 2), tool(3, null, 'running')] }, { replyId: null, start: s(59), end: s(60), steps: [] }] }] };
-  let body = settlingBody;
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => body });
-  await f.open();
-  const steps = () => f.root.querySelector('[data-message-id="2"]').querySelector('.conversation-activity');
-  steps().querySelector('button').dispatch('click');
-  assert.deepEqual(steps().querySelectorAll('.conversation-activity-step').map(row => row.dataset.status), ['done', 'running']);
-  const reads = f.reads.length;
-  body = doneBody(s(90));
-  await refresh(f);
-  assert.deepEqual(steps().querySelectorAll('.conversation-activity-step').map(row => row.dataset.status), ['done', 'done']);
-  assert.equal(f.reads.length, reads + 1, 'read again while settling');
-  await refresh(f);
-  assert.equal(f.reads.length, reads + 1, 'and not after it settled');
-});
-
-test('an instance without the activity route is asked once, then the page stops asking', async t => {
-  const rows = [{ id: 1, direction: 'in', content: 'hi', status: 'delivered' }];
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => assert.fail('no body for a missing route'), activityStatus: () => 404 });
-  await f.open();
-  await refresh(f); await refresh(f);
-  assert.deepEqual(f.reads, ['1'], 'one request, no repeats after the route is missing');
-  assert.equal(f.root.querySelectorAll('.conversation-activity').length, 0);
-});
-
-test('a part that lost its oldest steps counts them as N+ and says older steps are not shown', () => {
-  const document = createDocument();
-  const area = createActivityArea({ document, t });
-  const segment = { replyId: 2, start: s(0), end: s(70), truncated: true, steps: [tool(1, 2), tool(3, 4)] };
-  area.update({ key: '1:2', live: false, round: { state: 'done' }, segment }, { open: false, now: s(100) });
-  assert.equal(area.node.querySelector('button').textContent, '已处理 1 分 10 秒 · 2+ 步');
-  assert.equal(area.node.querySelectorAll('.conversation-activity-more').length, 0, 'folded: no list');
-  area.update({ key: '1:2', live: false, round: { state: 'done' }, segment }, { open: true, now: s(100) });
-  const list = area.node.querySelector('.conversation-activity-steps');
-  assert.equal(list.children[0].className, 'conversation-activity-more');
-  assert.equal(list.children[0].textContent, '更早的步骤未显示');
-  const english = createActivityArea({ document, t: key => en[key] ?? key });
-  english.update({ key: '1:2', live: false, round: { state: 'done' }, segment: { ...segment, steps: [tool(1, 2)] } }, { open: true, now: s(100) });
-  assert.match(english.node.querySelector('button').textContent, /1\+ steps/);
-  assert.equal(english.node.querySelector('.conversation-activity-more').textContent, 'Earlier steps are not shown');
-});
-
-test('a running activity stays under the external message when a newer internal relay arrives', async t => {
-  const rows = [{ id: 1, channel: 'dashboard', direction: 'in', content: 'work on this', status: 'delivered' }];
-  const f = pageFixture(t, { rows: () => rows, activityBody: () => running([tool(2.5, null, 'running')]) });
-  await f.open();
-  const list = f.root.querySelector('.conversation-message-list');
-  const external = list.querySelector('[data-message-id="1"]');
-  const before = list.querySelector('.conversation-activity-message');
-  assert.ok(before?.querySelector('.conversation-activity-step'), 'the real mounted page has a running tool');
-  assert.equal(list.children.indexOf(before), list.children.indexOf(external) + 1);
-
-  rows.push({ id: 2, channel: 'internal', direction: 'in', content: 'relay body', status: 'delivered',
-    internal: { peerSessionGroup: 'telegram:peer', peerDisplayName: 'Peer room', peerExists: true, peerChannel: 'telegram', content: 'relay body' } });
-  await refresh(f);
-  const relay = list.querySelector('[data-message-id="2"]');
-  assert.ok(relay?.classList.contains('conversation-internal'), 'the newer relay is rendered');
-  const live = list.querySelectorAll('.conversation-activity-message');
-  assert.equal(live.length, 1, 'there is still one running activity');
-  assert.equal(live[0], before, 'the activity retains its mounted instance');
-  assert.equal(list.children.indexOf(live[0]), list.children.indexOf(external) + 1, 'activity remains immediately below the external row');
-  assert.equal(list.children.indexOf(relay), list.children.indexOf(live[0]) + 1, 'the relay follows the activity instead of taking its anchor');
-  assert.equal(relay.querySelector('.conversation-activity'), null);
-});

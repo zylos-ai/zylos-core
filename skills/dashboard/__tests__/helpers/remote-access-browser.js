@@ -57,7 +57,7 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       if (apiPath === '/api/observer/status') return route.fulfill({ json: OBSERVER_STATUS });
       let value = workbenchAnswer(new URL(apiPath + url.search, 'http://fixture'), Date.now());
       if (apiPath === '/api/workbench/groups' && value) value = { ...value, rows: value.rows.map(row => row.sessionGroup === GROUP
-        ? { ...row, tools: [], working: { on: false, since: null, turn: null, tools: 0, subagents: null } } : row) };
+        ? { ...row, tools: [], working: { on: false, since: null, main: null, tools: 0, subagents: null } } : row) };
       if (apiPath === '/api/state' && value) value = { ...value, agent: { name: REMOTE }, chat_allow_remote: refuse.allow !== false };
       return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });
     });

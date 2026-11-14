@@ -152,9 +152,10 @@ export function createConversationState({
     questionError: null,
     questionVersion: 0,
     questionForms: new Map(),
-    // Agent activity per inbound message id and per round key; `offset` turns browser time into server time.
-    // `unsupported` is set when the instance has no activity route (an older remote), so the page stops asking.
-    activity: { items: new Map(), rounds: new Map(), offset: 0, reading: false, unsupported: false }
+    // What the AI is doing now (the last read); `offset` turns browser time into server time. `open` holds the
+    // subtask rows the user expanded and `details` their steps: only those are read. `unsupported` is set when the
+    // instance has no activity route (an older remote), so the page stops asking.
+    activity: { data: null, offset: 0, reading: false, unsupported: false, open: new Set(), details: new Map() }
   });
   // The instance time zone (its .env TZ) comes with the list and each message page; an older instance without it
   // reads as unknown.
@@ -901,36 +902,24 @@ export function createConversationState({
       }
     })();
   }
-  /** A round that can still change: running, or just ended and still settling (its last events may be on the way). */
-  const roundOpen = round => round?.state === 'running' || round?.settling === true;
-  /** Inbound messages whose activity can still change: not read yet, waiting for a turn, or in an open round. */
-  function activityIds(current) {
-    const ids = [];
-    for (const row of current.messages) {
-      if (row.channel === 'internal' || row.direction !== 'in') continue;
-      const item = current.activity.items.get(row.id);
-      if (!item || item.state === 'pending' || item.state === 'round' && roundOpen(current.activity.rounds.get(item.round))) ids.push(row.id);
-    }
-    return ids.slice(-100);
-  }
+  /** The live area can change soon: the group works, a user message waits for it, or a subtask runs. */
   function activityLive(current) {
-    if (!current?.activity || current.activity.unsupported) return false;
-    for (const round of current.activity.rounds.values()) if (roundOpen(round)) return true;
-    for (const item of current.activity.items.values()) if (item.state === 'pending') return true;
-    return false;
+    const data = current?.activity?.unsupported ? null : current?.activity?.data;
+    return !!data && (data.working?.on === true || ['queued', 'thinking'].includes(data.awaiting?.state) || data.subtasks?.length > 0);
   }
   /** Activity is optional: a failed read keeps what is shown and never raises an update error. */
   async function readActivity(current, id, currentTab, e) {
     if (currentTab !== 'mine' || typeof id !== 'string' || !id.startsWith('g:') || current.activity.reading || current.activity.unsupported) return;
-    const ids = activityIds(current);
-    if (!ids.length) return;
     current.activity.reading = true;
     try {
-      const data = await request(`${pathFor(id)}/activity?${query({ tab: currentTab, ids: ids.join(',') })}`);
-      if (!valid(e) || !Array.isArray(data?.items) || !Array.isArray(data?.rounds)) return;
+      const data = await request(`${pathFor(id)}/activity?${query({ tab: currentTab })}`);
+      if (!valid(e) || !Array.isArray(data?.steps) || !Array.isArray(data?.subtasks)) return;
       if (Number.isFinite(data.now)) current.activity.offset = data.now - now();
-      for (const round of data.rounds) current.activity.rounds.set(round.key, round);
-      for (const item of data.items) current.activity.items.set(item.id, item);
+      current.activity.data = data;
+      const running = new Set(data.subtasks.map(subtask => subtask.id));
+      for (const key of [...current.activity.open]) if (!running.has(key)) current.activity.open.delete(key);
+      for (const key of [...current.activity.details.keys()]) if (!current.activity.open.has(key)) current.activity.details.delete(key);
+      await Promise.all([...current.activity.open].map(key => readSubtask(current, id, key, e)));
       emit();
       // An activity read can discover live work after the stream already chose its slow fallback.
       // Only shorten that outstanding wait; keep an earlier poll or an error's retry deadline.
@@ -942,6 +931,13 @@ export function createConversationState({
     } finally {
       current.activity.reading = false;
     }
+  }
+  /** One open subtask's steps; a failed read keeps the ones shown. */
+  async function readSubtask(current, id, key, e) {
+    try {
+      const data = await request(`${pathFor(id)}/activity?${query({ tab: 'mine', subtask: key })}`);
+      if (valid(e) && current.activity.open.has(key) && Array.isArray(data?.steps)) current.activity.details.set(key, data);
+    } catch { /* the next poll asks again */ }
   }
   async function syncCurrent(current, id, currentTab, e) {
     if (current.syncing) return current.syncing;
@@ -1291,6 +1287,16 @@ export function createConversationState({
   }
   return {
     snapshot,
+    /** Expands or folds a subtask row; only expanded rows have their steps read, from now on every poll. */
+    async toggleSubtask(key) {
+      const current = cell(), id = selectedId, e = epoch;
+      if (!current || typeof key !== 'string') return;
+      if (current.activity.open.delete(key)) { current.activity.details.delete(key); emit(); return; }
+      current.activity.open.add(key);
+      emit();
+      await readSubtask(current, id, key, e);
+      if (current === cell()) emit();
+    },
     streamSubscription,
     streamStatus,
     streamEvent,

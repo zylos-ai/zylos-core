@@ -29,13 +29,14 @@ mock.method(SseHub.prototype, 'addClient', function (...args) { hub = this; retu
 mock.method(VersionChecker.prototype, 'start', () => {});
 const { createServer } = await import('../../src/index.js');
 const store = new Store(path.join(process.env.ZYLOS_DIR, 'components/dashboard/dashboard.db'));
-let reportedStop = false;
+let reportedStops = 0;
 const importer = new CoreLogImporter({ store, zylosDir: process.env.ZYLOS_DIR,
   onImport() {
     hub?.broadcast('history_changed', {});
-    if (!reportedStop && store.db.prepare("SELECT 1 FROM runtime_events WHERE event_type='stop' AND source='core-log' LIMIT 1").get()) {
-      reportedStop = true;
-      console.info('activity-poll-stop-imported', JSON.stringify({ at: Date.now() }));
+    const stops = store.db.prepare("SELECT COUNT(*) AS n FROM runtime_events WHERE event_type='stop' AND source='core-log'").get().n;
+    if (stops > reportedStops) {
+      reportedStops = stops;
+      console.info('activity-poll-stop-imported', JSON.stringify({ at: Date.now(), stops }));
     }
   } });
 await importer.poll();
