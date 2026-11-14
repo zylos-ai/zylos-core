@@ -1482,3 +1482,9 @@ test('all failed latency samples cap at twenty and retain last-success meaning',
   assert.equal(allFailed.link.latency_p95_ms, null);
   assert.equal(allFailed.link.sampled_at, null);
 });
+test('fleet keeps only boolean supervisor pause observations and clears on recovery', () => {
+  for (const mode of ['single', 'multi']) for (const value of [true, false, null, undefined, 'true', {}]) {
+    const record = stateToFleetRecord({ name: 'fixture' }, { state: 'IDLE', session_mode: mode, supervisor_paused: value });
+    assert.equal(record.supervisor_paused, typeof value === 'boolean' ? value : null);
+  }
+});

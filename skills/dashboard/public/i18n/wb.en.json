@@ -1,4 +1,5 @@
 {
+  "wb.attention.supervisor_paused": "Supervisor has paused new actions",
   "chat.chart.category": "Category",
   "chat.chart.time": "Time",
   "chat.chart.value": "Value",

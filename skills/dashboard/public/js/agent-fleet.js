@@ -286,6 +286,7 @@ export function buildAgentFleetView(fleet, options = {}) {
       self: isSelf ? self : null,
       sessionMode: ['single', 'multi'].includes(agent.session_mode) ? agent.session_mode : isSelf ? self?.mode : null,
       groupSummary: agent.group_summary ?? null,
+      supervisorPaused: isSelf ? self?.supervisorPaused ?? agent.supervisor_paused : agent.supervisor_paused,
       href: isSelf ? `${basePath}/` : `${basePath}/fleet/${encodeURIComponent(String(agent.name || ''))}/`
     };
   });
@@ -332,6 +333,7 @@ export function buildAgentFleetView(fleet, options = {}) {
 export function fleetSelfFromSnapshot(snapshot) {
   return {
     mode: ['multi', 'single'].includes(snapshot?.mode) ? snapshot.mode : null,
+    supervisorPaused: snapshot?.instance?.supervisorPaused ?? null,
     runtimes: accountRuntimes(snapshot ?? {}),
     accountRecords: snapshot?.instance?.accounts ?? {},
     accounts: Object.fromEntries(['claude', 'codex'].map((runtime) => [runtime, accountUsedPercent(snapshot?.instance?.accounts?.[runtime])]))
@@ -424,6 +426,7 @@ function renderTile(tile, labels, t) {
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
     <div class="wb-f-top"><span class="wb-hdot"></span><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}
+    ${tile.supervisorPaused === true ? `<div class="wb-f-reason wb-txt-warn" data-supervisor-paused>${escapeHtml(t('wb.attention.supervisor_paused'))}</div>` : ''}
     ${act}
     ${quotaBars(tile, labels)}
     <div class="wb-f-kv">

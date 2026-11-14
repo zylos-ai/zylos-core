@@ -30,7 +30,20 @@ export function createSupervisor(deps) {
   const authChecks=new Set(),authFlights=new Map(),authRetryAt=new Map();
   const originAuthAlerted=new Set();
   const missingDependencies=deps.missingDependencies ?? new Set();
+  let restartRequestsUnreadable=false;
+  const restartRequestsPath=()=>admission?.store.file ?? path.join(deps.zylosDir,'activity-monitor','restart-requests.json');
   const reportError=(error,context={})=>{
+    if(error.code==='requests_unreadable') {
+      if(restartRequestsUnreadable)return;
+      // Restore and round reads belong to one episode until a read succeeds.
+      restartRequestsUnreadable=true;
+      const file=restartRequestsPath(),cause=error.cause instanceof SyntaxError ? 'Invalid JSON' : error.cause?.code ?? error.message;
+      log({error:error.code,...context,path:file,cause});
+      void Promise.resolve().then(()=>deps.alert?.({event:'restart_requests_unreadable',session_group:'*',reason:error.code,
+        message:`Supervisor has paused new actions because the restart request file is unreadable: ${file}. Cause: ${cause}`,
+        path:file,cause})).catch(alertError=>log({error:alertError.code ?? alertError.message,phase:'restart-requests-alert'}));
+      return;
+    }
     if(['ERR_MODULE_NOT_FOUND','DEPENDENCY_UNAVAILABLE'].includes(error.code)) {
       const dependency=error.dependency ?? error.message;
       if(missingDependencies.has(dependency))return;
@@ -38,6 +51,11 @@ export function createSupervisor(deps) {
       log({error:error.code,dependency,...context});return;
     }
     log({error:error.code || error.message,...context});
+  };
+  const restartRequestsReadable=()=>{
+    if(!restartRequestsUnreadable)return;
+    restartRequestsUnreadable=false;
+    log({event:'restart_requests_recovered',phase:'restart-requests',path:restartRequestsPath()});
   };
   const diagnostic=event=>{try{appendEvent(supervisorDiagnosticPath(deps.env),{v:1,ts:now(),session_group:event.sessionGroup ?? null,conversation_id:null,decision:event.decision ?? event.event,reason:event.reason ?? '',...event});}catch(error){reportError(error,{phase:'diagnostic'});}};
   const readActivity=scene=>{
@@ -143,10 +161,10 @@ export function createSupervisor(deps) {
     },
     startupAlert:deps.alert,
     restore:async()=>{
-      try{admission.restore();}catch(error){if(error.code!=='requests_unreadable')throw error;reportError(error,{phase:'requests'});}
+      try{admission.restore();restartRequestsReadable();}catch(error){if(error.code!=='requests_unreadable')throw error;await reportError(error,{phase:'restart-requests'});}
       for(const runtime of ['claude','codex'])await health.restore(runtime);
       router.clearLegacyCache(path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache.json'));await deps.restoreTransition?.();
-    },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),
+    },openAdmission:()=>admission.openEntry(),reportError,getModeTransition:db.getModeTransition,listDrainFences:db.listDrainFences,readRestartRequests:()=>admission.readRequests(),restartRequestsReadable,
     advanceAutomaticMigration:()=>modeSwitch.automatic(),
     advanceTransition:()=>modeSwitch.advance(),
     lifecycleSerial:operation=>admission.serialize(operation),checkManualFences:context=>lifecycle.checkManualFences(context),...lifecycleMethods,observe:context=>{roundContext=context;return listScenes();},
