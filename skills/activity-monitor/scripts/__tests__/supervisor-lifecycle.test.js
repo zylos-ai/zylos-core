@@ -27,6 +27,8 @@ function fixture(Class = SupervisorLifecycle) {
   f.db = {
     listSlotOccupancy: () => f.slots ?? f.scenes.filter(s => s.sessionGroup !== 'origin' && s.present).map(s => ({ sessionGroup: s.sessionGroup, runId: s.runId, state: 'running', heldUntil: null, createdAt: 0 })),
     getModeTransition: () => f.transition,
+    listRunEndings: () => [],
+    getLastCompletedModeTransition: () => null,
     getDrainFence: g => f.fences.get(g) ?? null,
     listDrainFences: () => [...f.fences].map(([sessionGroup, value]) => ({ sessionGroup, ...value })),
     setDrainFence: (g, value) => { if (!f.fences.has(g)) f.fences.set(g, { sessionGroup: g, ...value }); },
@@ -719,6 +721,7 @@ test('configuration compares full input and never fabricates missing snapshot', 
 // trigger conditions: count>0, per-scope marker, minimum interval, Origin checkpoint age.
 test('regular Sync new-run request obeys held marker and minimum interval', async () => {
   const f = fixture(); f.unsummarized = 1; f.marker = { held: true, stale: false };
+  f.db.listRunEndings = () => [{ sessionGroup: 'a', endedAt: 1000 }];
   await f.lifecycle.checkSync(f.scenes, f.context); assert.equal(f.controls.length, 0);
   f.marker.stale = true; f.now += 60000; await f.lifecycle.checkSync(f.scenes, f.context);
   assert.equal(f.controls.length, 1); assert.equal(f.controls[0].priority, 2); assert.equal(f.controls[0].appendAckSuffix, false);

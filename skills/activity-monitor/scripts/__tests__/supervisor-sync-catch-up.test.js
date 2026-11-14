@@ -6,7 +6,7 @@ import { SupervisorLifecycle } from '../supervisor-lifecycle.js';
 // No processes, timers, files, live database, PM2 or tmux are started.
 function fixture(mode = 'multi', configuration = {}) {
   const f = {
-    now: 2_000_000, count: 500, first: 1, lastActivity: 0,
+    now: 2_000_000, firstAt: 2_000_000, endedAt: 2000, count: 500, first: 1, lastActivity: 0,
     scene: { sessionGroup: mode === 'single' ? null : 'a', present: true, ready: true,
       runtime: 'claude', runId: 'run-a', sessionId: 'session-a', runDir: '/isolated/run',
       createdAt: 0, state: 'idle', idleSince: 0, processRunning: true, usagePercent: 0 },
@@ -15,10 +15,12 @@ function fixture(mode = 'multi', configuration = {}) {
     backlog: { total: 0, groups: [] }, rangeReads: [], transition: null,
   };
   const range = () => ({ count: f.count, firstConversationId: f.count ? f.first : null,
-    firstAt: f.count ? f.now : null });
+    firstAt: f.count ? f.firstAt : null });
   const deps = {
     db: {
       getModeTransition: () => f.transition,
+      listRunEndings: groups => groups.map(sessionGroup => ({ sessionGroup, endedAt: f.endedAt })),
+      getLastCompletedModeTransition: () => null,
       listDrainFences: () => [],
       getUnsummarizedRange: group => { f.rangeReads.push(group); return range(); },
       getGlobalUnsummarizedRange: () => { f.rangeReads.push('*'); return range(); },

@@ -14,6 +14,8 @@ function fixture(mode = 'multi', kind = 'origin') {
     transition: null, marker: { held: false, stale: false } };
   const deps = {
     db: {
+      listRunEndings: () => [],
+      getLastCompletedModeTransition: () => null,
       getModeTransition: () => f.transition,
       listDrainFences: () => [],
       getLastActivity: () => 0,
