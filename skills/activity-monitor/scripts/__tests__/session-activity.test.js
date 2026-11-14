@@ -235,3 +235,112 @@ for(const runtime of ['claude','codex'])test(`quiet samples preserve an open ${r
  const closed=activity.read(23000);
  assert.equal(closed.turnOpen,false);assert.equal(closed.busySince,null);
 });
+
+for(const runtime of ['claude','codex'])test(`${runtime} completion persists through reads and newer unanswered prompts`,t=>{
+ const {activity,row}=fixture(t,runtime);
+ assert.equal(activity.read(5000).lastCompletedAt,null);
+ activity.consume([row('prompt',{ts:6000}),row('stop',{ts:7000})]);
+ assert.equal(activity.read(8000).lastCompletedAt,7000);
+ const quiet=activity.read(12000);
+ assert.equal(quiet.lastCompletedAt,7000);assert.equal(quiet.turnOpen,false);
+ activity.consume([row('prompt',{ts:13000})]);
+ const unanswered=activity.read(18000);
+ assert.equal(unanswered.lastCompletedAt,7000);assert.equal(unanswered.turnOpen,true);
+ assert.equal(unanswered.busySince,13000);
+ activity.consume([row('stop',{ts:6500}),row('idle',{ts:19000})]);
+ assert.equal(activity.read(23000).lastCompletedAt,runtime==='claude'?19000:7000);
+});
+
+test('prompt immediately following completion preserves factual completion',t=>{
+ const {activity,row}=fixture(t);
+ activity.consume([row('prompt',{ts:6000}),row('stop',{ts:7000})]);
+ assert.equal(activity.read(7500).busySince,6000);
+ activity.consume([row('prompt',{ts:7600})]);
+ const value=activity.read(12000);
+ assert.equal(value.lastCompletedAt,7000);assert.equal(value.turnOpen,true);
+});
+
+test('completion requires a matching foreground factual hook with a valid timestamp',t=>{
+ const {activity,row}=fixture(t);
+ activity.consume([row('stop',{ts:300}),
+  row('stop',{agent_id:'worker',ts:9000}),row('idle',{agent_id:'worker',ts:9000}),
+  row('stop',{run_id:'foreign',ts:9000}),row('stop',{session_id:'foreign',ts:9000}),
+  row('stop',{runtime:'codex',ts:9000}),row('stop',{type:'runtime_health',ts:9000}),
+  row('post_tool',{ts:9000}),row('subagent_stop',{ts:9000}),
+  ...[NaN,Infinity,'9000',99].map(ts=>row('stop',{ts}))]);
+ assert.equal(activity.read(15000).lastCompletedAt,300);
+});
+
+// Real event-log imports exercise recovery ordering and cursor retention. The
+// official runner supplies isolated process paths; fixtures use private files.
+for(const runtime of ['claude','codex'])test(`${runtime} recovers completion before latest prompt across rotated logs`,async t=>{
+ const {appendEvent,rotateEventLog}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t,runtime),log=path.join(root,'events.jsonl');
+ const transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'{}\n');fs.utimesSync(transcript,0.05,0.05);
+ appendEvent(log,row('session_start',{ts:50,transcript_path:transcript}));
+ appendEvent(log,row('prompt',{ts:110}));
+ appendEvent(log,row(runtime==='claude'?'idle':'stop',{ts:120}));
+ rotateEventLog(log,{maxBytes:0,now:1000});
+ appendEvent(log,row('prompt',{ts:200}));
+ appendEvent(log,row('pre_tool',{ts:210,tool_use_id:'main'}));
+ appendEvent(log,row('stop',{ts:220,agent_id:'worker'}));
+ let value=activity.read(10000);
+ assert.equal(value.lastCompletedAt,120);assert.equal(value.turnOpen,true);
+ assert.equal(value.busySince,200);assert.deepEqual(value.tools.map(tool=>tool.id),['main']);
+ assert.deepEqual(value.events.map(event=>event.event),['prompt','pre_tool']);
+ assert.equal(activity.read(11000).lastCompletedAt,120);
+ rotateEventLog(log,{maxBytes:0,now:1001});
+ appendEvent(log,row('stop',{ts:230}));
+ value=activity.read(12000);
+ assert.equal(value.lastCompletedAt,230);assert.equal(value.turnOpen,false);
+ assert.deepEqual(value.tools,[]);assert.equal(activity.read(13000).lastCompletedAt,230);
+ const restarted=new SessionActivity({runDir:root,runId:'r',sessionId:'s',runtime,startedAt:100});
+ t.after(()=>restarted.close());
+ assert.equal(restarted.read(14000).lastCompletedAt,230);
+});
+
+test('associated child transcript writes advance only child activity, ignoring foreign paths',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'child.jsonl'),foreign=path.join(root,'foreign.jsonl');
+ fs.writeFileSync(transcript,'{}\n');fs.utimesSync(transcript,0.1,0.1);
+ fs.writeFileSync(foreign,'{}\n');fs.utimesSync(foreign,100,100);
+ activity.consume([row('prompt',{ts:200}),row('stop',{ts:300}),
+  row('subagent_start',{agent_id:'child',ts:400,transcript_path:transcript}),
+  row('pre_tool',{agent_id:'child',ts:500,run_id:'foreign',transcript_path:foreign}),
+  row('pre_tool',{agent_id:'child',ts:500,session_id:'foreign',transcript_path:foreign}),
+  row('pre_tool',{agent_id:'child',ts:500,runtime:'codex',transcript_path:foreign}),
+  row('pre_tool',{agent_id:'child',ts:500,type:'runtime_health',transcript_path:foreign}),
+  row('pre_tool',{agent_id:'child',ts:NaN,transcript_path:foreign}),
+  row('pre_tool',{agent_id:'child',ts:99,transcript_path:foreign}),
+  row('pre_tool',{agent_id:'relative',ts:500,transcript_path:'relative.jsonl'})]);
+ const initial=activity.read(6000);
+ assert.equal(initial.lastSubagentActivityAt,500);
+ fs.appendFileSync(transcript,'{"progress":true}\n');fs.utimesSync(transcript,8,8);
+ const written=activity.read(9000);
+ assert.equal(written.lastSubagentActivityAt,8000);
+ assert.deepEqual(written.activeSubagents,[{agentId:'child',lastActivityAt:8000}]);
+ for(const field of ['state','idleSince','busySince','turnOpen','lastCompletedAt','lastActivityAt'])assert.equal(written[field],initial[field]);
+ assert.deepEqual(written.tools,initial.tools);
+ assert.equal(activity.read(10000).lastSubagentActivityAt,8000);
+});
+
+test('recovery retains newest child transcript association across main turns and rotation',async t=>{
+ const {appendEvent,rotateEventLog}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t),log=path.join(root,'events.jsonl');
+ const older=path.join(root,'older-child.jsonl'),current=path.join(root,'current-child.jsonl');
+ fs.writeFileSync(older,'{}\n');fs.utimesSync(older,100,100);
+ fs.writeFileSync(current,'{}\n');fs.utimesSync(current,0.15,0.15);
+ appendEvent(log,row('session_start',{ts:50}));
+ appendEvent(log,row('subagent_start',{agent_id:'child',ts:110,transcript_path:older}));
+ appendEvent(log,row('pre_tool',{agent_id:'child',ts:120,transcript_path:current}));
+ appendEvent(log,row('prompt',{ts:130}));appendEvent(log,row('stop',{ts:140}));
+ rotateEventLog(log,{maxBytes:0,now:1000});
+ appendEvent(log,row('prompt',{ts:200}));
+ const recovered=activity.read(6000);
+ assert.equal(recovered.lastSubagentActivityAt,150);
+ assert.equal(recovered.lastActivityAt,200);assert.equal(recovered.lastCompletedAt,140);
+ fs.appendFileSync(current,'{}\n');fs.utimesSync(current,8,8);
+ const written=activity.read(9000);
+ assert.equal(written.lastSubagentActivityAt,8000);assert.equal(written.lastActivityAt,200);
+ assert.equal(written.turnOpen,true);assert.equal(written.lastCompletedAt,140);
+});

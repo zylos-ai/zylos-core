@@ -8,21 +8,21 @@ import { RuntimeHealthCoordinator } from '../runtime-health.js';
 import { SupervisorHealthObserver } from '../supervisor-health-observer.js';
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'supervisor-health-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  let clock=1792000000000,mode='multi',transition=null,manual=false,matches={},state={state:'idle',tools:[]},auth={status:'failure'};
+  let clock=1792000000000,mode='multi',transition=null,manual=false,matches={},state={state:'idle',tools:[],sessionId:'session-a'},auth={status:'failure'};
   let scenes=[{sessionGroup:'telegram:a',runtime:'claude',runId:randomUUID(),ready:true,present:true,sessionId:'session-a'}];
   const controls=[],stops=[],events=[],interrupts=[],fences=new Map(),errors=[];
   const coordinator=new RuntimeHealthCoordinator({zylosDir:root,now:()=>clock,readMode:()=>mode,resolveTargetRuntime:()=> 'claude',listScenes:()=>scenes});
   const observer=new SupervisorHealthObserver({coordinator,now:()=>clock,listScenes:()=>scenes,readMode:()=>mode,
     readIdentity:g=>scenes.find(s=>s.sessionGroup===g),readState:()=>state,readScreen:()=>'',matchScreen:()=>matches,
     insertControl:(content,opts)=>{controls.push({id:controls.length+1,content,...opts,status:'pending'});return controls.at(-1);},
-    getControlById:id=>controls[id-1],buildTargetBinding:s=>({runId:s.runId}),stop:s=>stops.push(s),
+    getControlById:id=>controls[id-1],buildTargetBinding:s=>({runId:s.runId}),stop:async(s,validate)=>{if(await validate(s))stops.push(s);else return false;},
     getModeTransition:()=>transition,getDrainFence:g=>fences.get(g),manualPending:()=>manual,
     resolveToolRule:()=>({watchdog:{enabled:true,maxRuntimeSec:10,interruptKey:'Escape',interruptGraceSec:5,cooldownSec:2}}),
-    interrupt:(s,key)=>{interrupts.push({s,key});return {ok:true};},checkAuth:()=>auth,diagnostic:e=>events.push(e),log:e=>errors.push(e)});
+    nudge:async(s,validate)=>{if(!await validate(s))return {ok:false};interrupts.push({s});return {ok:true};},checkAuth:()=>auth,diagnostic:e=>events.push(e),log:e=>errors.push(e)});
   coordinator.probeInFlight=r=>observer.probeInFlight(r);
   return {coordinator,observer,controls,stops,events,interrupts,fences,errors,now:()=>clock,advance:ms=>clock+=ms,
     scene:()=>scenes[0],scenes:()=>scenes,setScenes:v=>scenes=v,setMode:v=>mode=v,setTransition:v=>transition=v,setManual:v=>manual=v,
-    setState:v=>state={tools:[],state:v.tools?.length?'busy':'idle',...v},setMatches:v=>matches=v,setAuth:v=>auth=v,
+    setState:v=>state={tools:[],sessionId:scenes[0]?.sessionId,state:v.tools?.length?'busy':'idle',...v},setMatches:v=>matches=v,setAuth:v=>auth=v,
     health:()=>coordinator.store('claude').read(),setHealth:health=>{const s=coordinator.store('claude').read();s.health=health;s.reason='';coordinator.store('claude').write(s);},
     delivered:(extra={})=>observer.notifyDelivered({...scenes[0],pastedAt:clock,...extra}),
     prepared:async()=>{for(let i=0;i<30 && [...observer.probes.values()].some(p=>p.preparing);i++)await new Promise(resolve=>setImmediate(resolve));}};
@@ -162,14 +162,37 @@ test('failure classifies rate before auth; other stops only bound scene',async t
 test('elapsed local deadline cannot manufacture a terminal acknowledgement',async t=>{
   const f=fixture(t);f.setHealth('unavailable');const p=f.observer.requestProbe('claude');await f.prepared();f.advance(130000);await f.observer.tick();assert.equal(f.observer.probeInFlight('claude'),true);assert.equal(f.stops.length,0);f.controls[0].status='done';await f.observer.tick();assert.equal((await p).recovered,true);
 });
-test('duplicate and older delivery notifications do not replace the current timer',async t=>{
-  const f=fixture(t);f.delivered({pastedAt:f.now()-599000});await f.observer.tick();assert.equal(f.stops.length,0);f.delivered({pastedAt:f.now()-599000});f.delivered({pastedAt:f.now()-600000});f.advance(1000);await f.observer.tick();assert.equal(f.events[0].event,'no_response_detected');
+test('duplicate and older paste notifications preserve the silence boundary',async t=>{
+  const f=fixture(t);f.delivered({pastedAt:f.now()-899999});await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.delivered({pastedAt:f.now()-899999});f.delivered({pastedAt:f.now()-900000});f.advance(1);
+  await f.observer.tick();assert.equal(f.events[0].event,'no_response_nudge');assert.equal(f.stops.length,0);
+  f.advance(179999);await f.observer.tick();assert.equal(f.stops.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.events.at(-1).event,'no_response_restart');assert.equal(f.stops.length,1);
 });
-test('prior own-session event or transcript response wins; single has no no-response timeout',async t=>{
-  for(const evidence of ['event','transcript','single']) {const f=fixture(t);if(evidence==='single')f.setMode('single');f.delivered({pastedAt:f.now()-601000});f.setState(evidence==='event'?{sessionId:f.scene().sessionId,lastActivityAt:f.now()-600000}:{transcriptMtimeMs:evidence==='transcript'?f.now()-600000:0});await f.observer.tick();assert.equal(f.stops.length,0);}
+for(const evidence of ['lastActivityAt','transcriptMtimeMs','lastSubagentActivityAt']) {
+  test(`${evidence} resets whole-session silence without permanently disarming`,async t=>{
+    const f=fixture(t);f.delivered();f.advance(899999);f.setState({[evidence]:f.now()});await f.observer.tick();
+    f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+    f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
+    f.advance(1000);f.setState({[evidence]:f.now()});await f.observer.tick();
+    f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,0);
+  });
+}
+test('silent active tools receive the same nudge and restart as an open quiet turn',async t=>{
+  const f=fixture(t);f.observer.resolveToolRule=()=>null;f.setState({tools:[{id:'tool',startedAt:f.now(),name:'Bash'}]});
+  f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
+  f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,1);
 });
-test('tools pause no-response; real completion resumes accumulated time',async t=>{
-  const f=fixture(t);f.observer.resolveToolRule=()=>null;f.delivered();f.advance(590000);await f.observer.tick();f.setState({tools:[{id:'tool',startedAt:f.now(),name:'Bash'}]});await f.observer.tick();f.advance(500000);await f.observer.tick();f.setState({tools:[]});await f.observer.tick();assert.equal(f.stops.length,0);f.advance(10000);await f.observer.tick();assert.equal(f.events.at(-1).event,'no_response_detected');
+test('single mode and completed background waits do not arm no-response recovery',async t=>{
+  for(const kind of ['single','completed','no-paste']) {
+    const f=fixture(t);if(kind==='single')f.setMode('single');
+    if(kind!=='no-paste')f.delivered();
+    f.advance(1);if(kind==='completed')f.setState({lastCompletedAt:f.now()});
+    f.advance(1200000);await f.observer.tick();assert.equal(f.interrupts.length,0);assert.equal(f.stops.length,0);
+    if(kind==='completed'){
+      f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
+    }
+  }
 });
 test('sticky needs distinct delivered checks over 30 seconds and a delivered miss resets',async t=>{
   const f=fixture(t);f.delivered();f.setMatches({apiError:{detected:true}});f.advance(5000);await f.observer.tick();
@@ -179,10 +202,10 @@ test('sticky needs distinct delivered checks over 30 seconds and a delivered mis
   f.advance(25000);f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.events[0].event,'sticky_context_restart');assert.equal(f.health().health,'ok');
 });
 test('transition and accepted Origin manual request suppress pending health kills',async t=>{
-  const f=fixture(t);f.setScenes([{...f.scene(),sessionGroup:'origin'}]);f.delivered({pastedAt:f.now()-601000});f.setTransition({phase:'gating'});await f.observer.tick();assert.equal(f.stops.length,0);f.setTransition(null);f.setManual(true);await f.observer.tick();assert.equal(f.stops.length,0);f.setManual(false);await f.observer.tick();assert.equal(f.stops.length,1);
+  const f=fixture(t);f.setScenes([{...f.scene(),sessionGroup:'origin'}]);f.delivered({pastedAt:f.now()-900000});f.setTransition({phase:'gating'});await f.observer.tick();assert.equal(f.stops.length,0);f.setTransition(null);f.setManual(true);await f.observer.tick();assert.equal(f.stops.length,0);f.setManual(false);await f.observer.tick();assert.equal(f.interrupts.length,1);f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,1);
 });
 test('watchdog waits interrupt grace without synthesizing tool completion',async t=>{
-  const f=fixture(t);f.setState({tools:[{id:'one',name:'Bash',startedAt:f.now()-11000}]});await f.observer.tick();assert.equal(f.interrupts.length,1);f.advance(5000);await f.observer.tick();assert.equal(f.stops.length,0);f.advance(1);await f.observer.tick();assert.equal(f.events[0].event,'tool_timeout_Bash');assert.equal(f.health().health,'ok');
+  const f=fixture(t);f.setState({tools:[{id:'one',name:'Bash',startedAt:f.now()-11000}]});await f.observer.tick();assert.equal(f.interrupts.length,1);f.advance(5000);await f.observer.tick();assert.equal(f.stops.length,0);f.advance(1);await f.observer.tick();assert.equal(f.events.at(-1).event,'tool_timeout_restart');assert.equal(f.health().health,'ok');
 });
 test('active tool remains running past the former process-sample interval',async t=>{
   const f=fixture(t);f.observer.resolveToolRule=()=>null;f.setState({tools:[{id:'one'}]});await f.observer.tick();f.advance(150000);await f.observer.tick();assert.deepEqual(f.stops,[]);assert.deepEqual(f.events,[]);assert.equal(f.health().health,'ok');
@@ -237,8 +260,8 @@ test('shutdown: committed probe resolves waiters without waiting for C4 acknowle
  f.controls[0].status='done';await f.observer.tick();assert.equal(f.health().health,'unavailable');
 });
 
-// I2 R10/F1 regressions: delivered notifications, not observation ticks, are the boundary.
-test('R10 one delivery with persistent API text never becomes a sticky restart on idle ticks',async t=>{
+// Delivery boundary: delivered notifications, not observation ticks, are the boundary.
+test('one delivery with persistent API text never becomes a sticky restart on idle ticks',async t=>{
   const f=fixture(t);let captures=0,matches=0;
   f.observer.readScreen=()=>{captures++;return 'invalid_request_error';};
   f.observer.matchScreen=()=>{matches++;return {apiError:{detected:true}};};
@@ -247,7 +270,7 @@ test('R10 one delivery with persistent API text never becomes a sticky restart o
   assert.equal(f.stops.length,0);assert.equal(captures,1);assert.equal(matches,1);
 });
 
-test('R10 no new delivery means no repeated capture or authentication check',async t=>{
+test('no new delivery means no repeated capture or authentication check',async t=>{
   const f=fixture(t);let captures=0,authChecks=0;
   f.observer.readScreen=()=>{captures++;return 'authentication required';};
   f.setMatches({authFailure:{detected:true}});
@@ -258,15 +281,15 @@ test('R10 no new delivery means no repeated capture or authentication check',asy
   assert.equal(captures,1);assert.equal(authChecks,1);
 });
 
-test('F1 a second delivery after a response starts its own no-response timer',async t=>{
+test('a second delivery after foreground completion starts its own silence timer',async t=>{
   const f=fixture(t);f.delivered();f.advance(1000);
-  f.setState({sessionId:f.scene().sessionId,lastActivityAt:f.now()});await f.observer.tick();
+  f.setState({lastCompletedAt:f.now(),lastActivityAt:f.now()});await f.observer.tick();
   f.advance(1000);f.delivered();await f.observer.tick();
-  f.advance(599999);await f.observer.tick();assert.equal(f.stops.length,0);
-  f.advance(1);await f.observer.tick();assert.equal(f.events.at(-1)?.event,'no_response_detected');
+  f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.events.at(-1)?.event,'no_response_nudge');
 });
 
-test('R10 a new delivery during capture remains pending for its own screen check',async t=>{
+test('a new delivery during capture remains pending for its own screen check',async t=>{
   const f=fixture(t);let captures=0,release,started;
   const entered=new Promise(resolve=>{started=resolve;});
   const screen=new Promise(resolve=>{release=resolve;});
@@ -278,7 +301,7 @@ test('R10 a new delivery during capture remains pending for its own screen check
 });
 
 
-test('R10 screen check waits five seconds after paste and is consumed only once',async t=>{
+test('screen check waits five seconds after paste and is consumed only once',async t=>{
   const f=fixture(t);let captures=0;
   f.observer.readScreen=()=>{captures++;return '';};
   f.delivered();await f.observer.tick();assert.equal(captures,0);
@@ -302,4 +325,70 @@ test('an inserted row without a positive integer id ends preparation with an err
       await f.observer.shutdown();
     });
   }
+});
+
+for(const gate of ['transition','manual','global-fence','group-fence','session','run','shutdown','new-paste','activity','completion']) {
+  test(`a ${gate} change before nudge admission suppresses stale control`,async t=>{
+    const f=fixture(t);f.observer.resolveToolRule=()=>null;f.delivered();f.advance(900000);
+    f.observer.nudge=async(scene,validate)=>{
+      if(gate==='transition')f.setTransition({});
+      if(gate==='manual')f.setManual(true);
+      if(gate==='global-fence')f.fences.set('*',{});
+      if(gate==='group-fence')f.fences.set(scene.sessionGroup,{});
+      if(gate==='session')f.setScenes([{...scene,sessionId:'replacement'}]);
+      if(gate==='run')f.setScenes([{...scene,runId:'replacement'}]);
+      if(gate==='shutdown')await f.observer.shutdown();
+      if(gate==='new-paste'){f.advance(1);f.delivered();}
+      if(gate==='activity')f.setState({lastSubagentActivityAt:f.now()});
+      if(gate==='completion')f.setState({lastCompletedAt:f.now()});
+      if(await validate(scene))f.interrupts.push({scene});
+      return {ok:f.interrupts.length>0};
+    };
+    await f.observer.tick();assert.equal(f.interrupts.length,0);assert.equal(f.stops.length,0);
+  });
+}
+test('fresh activity at stop admission cancels restart',async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);await f.observer.tick();
+  f.observer.stop=async(scene,validate)=>{
+    f.setState({lastSubagentActivityAt:f.now()});
+    if(await validate(scene))f.stops.push(scene);else return false;
+  };
+  f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,0);
+});
+test('a newer paste during nudge completion keeps its own pending episode',async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);
+  f.observer.nudge=async()=>{f.advance(1);f.delivered();return {ok:true};};
+  await f.observer.tick();const delivery=f.observer.sceneState(f.scene()).delivery;
+  assert.equal(delivery.pastedAt,f.now());assert.equal(delivery.recovery,null);
+});
+
+test('no-response recovery takes precedence when the tool watchdog is also due',async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);
+  f.setState({tools:[{id:'web',name:'WebFetch',startedAt:f.now()-11000}]});
+  await f.observer.tick();assert.equal(f.interrupts.length,1);
+  assert.equal(f.events[0].event,'no_response_nudge');
+  assert.equal(f.observer.sceneState(f.scene()).watchdog,null);
+});
+test('concurrent observations reserve only one pending nudge',async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);let release,entered;
+  const ready=new Promise(resolve=>entered=resolve),wait=new Promise(resolve=>release=resolve);
+  f.observer.nudge=async()=>{f.interrupts.push({});entered();await wait;return {ok:true};};
+  const first=f.observer.tick();await ready;await f.observer.tick();release();await first;
+  assert.equal(f.interrupts.length,1);assert.equal(f.errors.length,0);
+});
+test('web watchdog preserves the configured default grace and records recovery context',async t=>{
+  const {findMatchingToolRule}=await import('../tool-rules.js');
+  const f=fixture(t);f.observer.resolveToolRule=(runtime,tool)=>findMatchingToolRule({runtimeId:runtime,toolName:tool.name});
+  f.setState({tools:[{id:'web',name:'WebFetch',startedAt:f.now()-3600000}]});
+  await f.observer.tick();assert.equal(f.interrupts.length,1);f.advance(15000);
+  await f.observer.tick();assert.equal(f.stops.length,0);f.advance(1);await f.observer.tick();
+  assert.equal(f.stops.length,1);
+  for(const event of f.events){assert.equal(event.run_id,f.scene().runId);assert.equal(event.sessionGroup,f.scene().sessionGroup);assert.ok(Number.isFinite(event.silence_ms));}
+  assert.deepEqual(f.events.map(event=>event.reason),['tool_timeout_nudge','tool_timeout_restart']);
+});
+test('unrelated activity does not exempt a web tool that remains past its fallback deadline',async t=>{
+  const f=fixture(t);const tools=[{id:'web',name:'WebFetch',startedAt:f.now()-11000}];
+  f.setState({tools});await f.observer.tick();f.advance(5001);
+  f.setState({tools,lastSubagentActivityAt:f.now()});await f.observer.tick();
+  assert.equal(f.stops.length,1);assert.equal(f.interrupts.length,1);
 });

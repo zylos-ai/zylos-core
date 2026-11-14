@@ -1,6 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { setTimeout as delay } from 'node:timers/promises';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { loadCoreModule } from './core-modules.js';
@@ -57,13 +56,16 @@ export async function handleCoreAction(action, body, config) {
   const target = Object.freeze({ sessionGroup, runId: body?.runId, sessionId: body?.sessionId || null });
   if (['interrupt', 'chop-chop'].includes(action)) {
     if (typeof target.runId !== 'string' || !target.runId) return { ok: false, error: 'TARGET_REQUIRED', messageKey: 'result.target_required', message: 'Refresh and confirm the current Origin run.' };
-    const first = await control('[KEYSTROKE]Escape', target, config.zylosDir);
-    first.control = 'escape';
-    if (action === 'interrupt' || !first.ok) return { ...first, steps: [first], messageKey: first.ok ? 'result.interrupt_submitted' : first.unknown ? 'result.control_unknown' : 'result.control_rejected', messageParams: { code: first.rejectionCode || 'unknown' } };
-    await delay(500);
-    const second = await control('continue', target, config.zylosDir);
-    second.control = 'continue';
-    return { ...second, steps: [first, second], messageKey: second.ok ? 'result.controls_submitted' : second.targetChanged ? 'result.control_target_changed' : second.unknown ? 'result.control_unknown' : 'result.control_rejected', messageParams: { code: second.rejectionCode || 'unknown', runId: second.currentRunId || 'unknown' }, refreshState: second.targetChanged };
+    let result;
+    if (action === 'chop-chop') {
+      const { nudgeSession } = await loadCoreModule('session-nudge.js');
+      result = await nudgeSession({ enqueue: content => control(content, target, config.zylosDir) });
+    } else {
+      const first = { ...await control('[KEYSTROKE]Escape', target, config.zylosDir), control: 'escape' };
+      result = { ...first, steps: [first] };
+    }
+    if (result.steps.length === 1) return { ...result, messageKey: result.ok ? 'result.interrupt_submitted' : result.unknown ? 'result.control_unknown' : 'result.control_rejected', messageParams: { code: result.rejectionCode || 'unknown' } };
+    return { ...result, messageKey: result.ok ? 'result.controls_submitted' : result.targetChanged ? 'result.control_target_changed' : result.unknown ? 'result.control_unknown' : 'result.control_rejected', messageParams: { code: result.rejectionCode || 'unknown', runId: result.currentRunId || 'unknown' }, refreshState: result.targetChanged };
   }
   if (action === 'restart-session') {
     const { submit, lookupRestartRequest } = await loadCoreModule('am-sock-client.js');

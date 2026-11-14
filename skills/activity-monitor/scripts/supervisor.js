@@ -15,6 +15,7 @@ import { SessionActivity } from './session-activity.js';
 import { publishSessionStatus } from './status-writer.js';
 import { createSupervisorConnectionHandler } from './router-socket.js';
 import { PENDING_MAX_AGE_SECONDS } from '../../comm-bridge/scripts/c4-config.js';
+const { nudgeSession } = await loadCoreModule('session-nudge.js');
 const { appendEvent, rotateEventLog } = await loadCoreModule('event-log.js');
 const { writeSessionModeAtCutover } = await loadCoreModule('config.js');
 const { assertSessionGroup, groupRunDir, sessionGroupRunRoot, supervisorDiagnosticPath, poolMetricsPath } = await loadCoreModule('session-group-paths.js');
@@ -58,15 +59,17 @@ export function createSupervisor(deps) {
     readNegativeCache:(runtime,state)=>router.readNegativeCache(runtime,state.health,state.reason),clearNegativeCache:runtime=>router.clearCache(runtime),freezeNotice:deps.freezeNotice,log});
   const manualPending=(group='origin')=>admission.readRequests().some(row=>row.reason==='manual_restart' &&
     (row.mode==='single' ? group===null || group==='origin' : (row.sessionGroup ?? 'origin')===group));
-  const guardedAction=(scene,action)=>admission.serialize(async()=>{
+  const guardedAction=(scene,action,{requireOpen=false,validate=async()=>true}={})=>admission.serialize(async()=>{
     if(stopping || await db.getModeTransition())return false;
     try { if(manualPending(scene.sessionGroup))return false; }
     catch(error) {
       if(error.code!=='requests_unreadable' || scene.sessionGroup==='origin' || scene.sessionGroup===null)throw error;
     }
+    if(requireOpen && (await db.getDrainFence('*') || await db.getDrainFence(scene.sessionGroup)))return false;
     const current=await scenes.readIdentity(scene.sessionGroup);
-    if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime)return false;
-    await action(current);return true;
+    if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime || (scene.sessionId && current.sessionId!==scene.sessionId))return false;
+    if(!await validate(current))return false;
+    return await action(current) !== false;
   });
   const checkAuth=(runtime,{background=false}={})=>{
     if(stopping)return Promise.resolve({status:'uncertain',reason:'supervisor_stopping'});
@@ -88,12 +91,21 @@ export function createSupervisor(deps) {
   };
   observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.readIdentity(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
-    buildTargetBinding:scene=>scenes.bindTarget(scene),stop:scene=>guardedAction(scene,current=>stopScene(current)),
+    buildTargetBinding:scene=>scenes.bindTarget(scene),stop:(scene,validate)=>guardedAction(scene,current=>stopScene(current),{requireOpen:true,validate}),
     readMode:async()=>(await readMode()).mode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,
-    resolveToolRule:deps.resolveToolRule,interrupt:async(scene,key)=>({ok:await guardedAction(scene,async current=>{
-      const mode=(await readMode()).mode;db.insertControl(`[KEYSTROKE]${key}`,{sessionGroup:mode==='single'?null:current.sessionGroup,
-        targetBinding:await scenes.bindTarget(current),priority:0,bypassState:true,appendAckSuffix:false});
-    })}),checkAuth,diagnostic,now,log});
+    resolveToolRule:deps.resolveToolRule,nudge:(scene,validate)=>nudgeSession({enqueue:async content=>{
+      let result={ok:false};
+      await guardedAction(scene,async current=>{
+        const mode=(await readMode()).mode;
+        const targetBinding=await scenes.bindTarget(current);
+        // Binding may await I/O; sample identity, activity and fences again before the write.
+        if(!await observer.canAct(current,{requireReady:true,requireOpen:true}) || !await validate(current))return false;
+        const control=await db.insertControl(content,{sessionGroup:mode==='single'?null:current.sessionGroup,
+          targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
+        result={ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null};
+      },{requireOpen:true,validate});
+      return result;
+    }}),checkAuth,diagnostic,now,log});
   router=new MessageRouter({healthCoordinator:health,resolveTargetRuntime:deps.resolveTargetRuntime,getModeTransition:db.getModeTransition,
     cacheDirectory:path.join(deps.zylosDir,'activity-monitor','message-router-probe-cache'),
     checkAuth,requestProbe:runtime=>observer.requestProbe(runtime),log,now});
@@ -236,6 +248,10 @@ export function createSupervisor(deps) {
   const connectionHandler=createSupervisorConnectionHandler({admission,router,isOpen:()=>admission.open && !stopping,readRun:group=>scenes.readRun(group),readMode,
     onDelivered:async notification=>{
       const delivered={...notification,sessionGroup:notification.sessionGroup ?? 'origin'};
+      const identity=await scenes.readIdentity(delivered.sessionGroup);
+      if(identity?.runId!==delivered.runId || identity?.runtime!==delivered.runtime ||
+        (Number.isFinite(identity.currentSessionTs) && delivered.pastedAt<identity.currentSessionTs))return;
+      delivered.sessionId=identity.sessionId;
       if(notification.controlId===undefined){
         observer.notifyDelivered(delivered);
         lifecycle.messageDelivered(delivered);
