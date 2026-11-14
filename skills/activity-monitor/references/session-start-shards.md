@@ -12,7 +12,9 @@ Keep startup context fast and local:
    should only read a small local file and return immediately. If the cache is
    missing or stale, return an explicit instruction instead of waiting silently.
 
-These are the current Core rules, shared by the Claude and Codex hook generators.
+This reference applies to Zylos Core 1.0.0 and later, including the 1.0 prerelease
+line. Both Claude and Codex generate the shard chain; legacy-hook replacement
+and context attachment order differ as described below.
 A shard is startup context, not a place to perform network setup, authentication,
 package installation, or a large remote rules fetch.
 
@@ -51,8 +53,12 @@ Use stderr for diagnostics.
 Path validation checks resolved path strings, not symlink targets; do not use
 symlinks to place emitter code outside `.claude`. `claimHooks` ownership is the
 component author's responsibility, not something the registry can infer.
-Invalid or duplicate declarations are skipped with warnings, so verify the
-result rather than assuming a file's presence means it was accepted.
+Invalid or duplicate declarations are skipped. After successful synchronization,
+check that the generated runtime hooks (`.claude/settings.json` for Claude,
+`.codex/hooks.json` for Codex, beneath `ZYLOS_DIR`) contain `--shard <name>`;
+if absent, the declaration was not accepted. The synchronizer (including
+`--dry-run`) does not print declaration warnings. For rejection reasons, inspect
+the session-start hook's stderr rather than the sync command's output.
 
 Output limits include the section header and any notices. Oversize output is
 trimmed to fit both limits, with a path to the full spilled section. Token counts
@@ -79,28 +85,36 @@ ZYLOS_DIR=/absolute/path/to/zylos node /absolute/path/to/installed-core/cli/lib/
 `sync-settings-hooks.js` delegates to `sync-runtime-hooks.js`. The exported
 `syncRuntimeHooks({ zylosDir })` is the file-writing API for Claude settings and
 Codex hooks/config; `syncHooks` alone only reconciles an in-memory Claude object.
-The CLI also calls `enqueueRestartIfNeeded` after changed settings, which can
-submit a Supervisor `restart_all` in multi-session mode. Calling the exported
-file-writing API directly does not perform that restart step. Codex loads changed
-hooks on a new launch. Integrate synchronization with your component lifecycle
+After changed settings and outside `--dry-run`, the CLI also calls
+`enqueueRestartIfNeeded`: in multi-session mode it can submit a Supervisor
+`restart_all`; in single-session mode it queues an idle-time `/exit` through
+c4-control. **Both modes can restart the agent**, including when a component
+lifecycle hook invokes this CLI. Calling the exported file-writing API directly
+does not perform that restart step. Codex loads changed hooks on a new launch.
+Integrate synchronization with your component lifecycle
 rather than editing runtime hook files by hand.
 
-Synchronization generates the named shard commands and removes declared legacy
-hook commands to avoid duplicate injection. Undeclared component and user hooks
-are preserved and remain outside the ordered chain. Removing a declaration does
-not recreate its old legacy hook; restore one explicitly only if that is the
-intended component behavior.
+Synchronization generates the named shard commands. **`claimHooks` removes
+declared legacy commands only from Claude settings.** Codex synchronization
+preserves non-Core hooks and does not apply `claimHooks`; the component must
+remove its own old Codex hook to avoid duplicate injection. Undeclared component
+and user hooks are preserved outside the ordered chain. Removing a declaration
+does not recreate its old legacy hook; restore one explicitly only if that is
+the intended component behavior.
 
-Check lifecycle output, declaration warnings, and the generated runtime hooks.
-Core treats post-install/pre-uninstall hook failures as nonfatal to the component
-operation, so an apparently successful add/remove is not proof that the shard
-change or synchronization succeeded.
+Check lifecycle output and the generated runtime hooks for `--shard <name>`;
+inspect session-start hook stderr for declaration rejection reasons. Core treats
+post-install/post-upgrade/pre-uninstall hook failures as nonfatal to the component
+operation, so an apparently successful add/upgrade/remove is not proof that the
+shard change or synchronization succeeded.
 
 ## Understand the startup clock
 
-Runtime hooks can run in parallel and attach their context in completion order.
-Core uses per-session completion flags to keep shards in chain order. A flag is
-written when that shard's hook process exits, after its stdout has been written.
+Claude runtime hooks can run in parallel and attach context in completion order.
+Codex attaches hook output in configuration order, with generated shard commands
+kept in chain order. Core also uses per-session completion flags on both runtimes
+to coordinate the shard chain. A flag is written when that shard's hook process
+exits, after its stdout has been written.
 
 For content shard **k** (1-based position), the predecessor wait lasts at most
 `(k - 1) × T_LINK`, then the emitter is given its separate 5,500 ms wait budget.
@@ -140,7 +154,9 @@ session-start shard "role-experiment" timed out: role-experiment timed out after
 The timeout races a promise; it does not abort a request, cancel a timer, or kill
 a subprocess. Referenced work left behind can keep the hook process alive, with
 its completion flag still absent. Synchronous blocking JavaScript can also
-delay the timeout callback: this is a fixed await budget, not CPU preemption.
+delay the timeout callback. A synchronously blocking emitter is not interrupted
+by this timeout; its returned value can win the race after the nominal budget.
+This is a fixed await budget, not CPU preemption.
 
 For example, after a missing-predecessor wait of about 4 seconds, an emitter
 that starts an 8-second timer can produce the timeout section around 9.5 seconds
