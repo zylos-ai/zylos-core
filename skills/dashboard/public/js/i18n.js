@@ -1,5 +1,5 @@
-import { withRequestTimeout } from './request-timeout.js?v=1';
-import { initWbPack } from './wb/i18n-wb.js?v=85';
+import { withRequestTimeout, waitUntilDeadline } from './request-timeout.js?v=2';
+import { initWbPack } from './wb/i18n-wb.js?v=86';
 const SUPPORTED = ['en', 'zh'];
 const STORAGE_KEY = 'zylos-dashboard-locale';
 const PACK_CACHE_PREFIX = 'zylos-dashboard-i18n-';
@@ -8,6 +8,7 @@ const PACK_CACHE_PREFIX = 'zylos-dashboard-i18n-';
 const SENTINEL_KEY = 'btn.actions';
 const FETCH_ATTEMPTS = 3;
 const RETRY_BASE_MS = 400;
+const REQUEST_TIMEOUT_MS = 30000;
 const HEAL_INTERVAL_MS = 5000;
 const HEAL_MAX_ATTEMPTS = 6;
 
@@ -34,25 +35,25 @@ export function isValidPack(pack) {
     typeof pack[SENTINEL_KEY] === 'string';
 }
 
-async function fetchPack(locale, timeoutMs = 600, deadline = Infinity) {
+async function fetchPack(locale) {
   return withRequestTimeout(async signal => {
     const resp = await fetch(`${assetRoot}/i18n/${locale}.json`, { cache: 'no-store', signal });
     if (!resp.ok) throw new Error(`i18n fetch ${resp.status}`);
     const pack = await resp.json();
     if (!isValidPack(pack)) throw new Error('i18n pack invalid');
     return pack;
-  }, timeoutMs, undefined, deadline);
+  }, REQUEST_TIMEOUT_MS);
 }
 
-async function fetchPackWithRetry(locale, timeoutMs, deadline) {
+async function fetchPackWithRetry(locale, seq) {
   let lastErr;
   for (let i = 0; i < FETCH_ATTEMPTS; i++) {
     try {
-      return await fetchPack(locale, timeoutMs, deadline);
+      return await fetchPack(locale);
     } catch (err) {
       lastErr = err;
-      if (Date.now() >= deadline) break;
-      if (i < FETCH_ATTEMPTS - 1) await new Promise(r => setTimeout(r, Math.min(RETRY_BASE_MS * (i + 1), deadline - Date.now())));
+      if (seq !== requestSeq) throw err;
+      if (i < FETCH_ATTEMPTS - 1) await new Promise(r => setTimeout(r, RETRY_BASE_MS * (i + 1)));
     }
   }
   throw lastErr;
@@ -78,7 +79,7 @@ function writeCachedPack(locale, pack) {
 // Late recovery: keep retrying in the background and re-render static labels
 // once a fresh pack lands, so a transient failure heals without a manual
 // refresh. Dynamic regions already re-render on their own timers.
-function scheduleHeal(locale, seq) {
+function scheduleHeal(locale, seq, applyPrimary, refreshWb) {
   let attempts = 0;
   const tick = async () => {
     if (seq !== requestSeq) return;
@@ -86,13 +87,10 @@ function scheduleHeal(locale, seq) {
     try {
       const pack = await fetchPack(locale);
       if (seq !== requestSeq) return;
-      translations = pack;
-      writeCachedPack(locale, pack);
-      await initWbPack(locale, {assetRoot, translations, onMerge:()=>{if(seq===requestSeq)renderI18n();}});
-      if(seq!==requestSeq)return;
-      renderI18n();
+      applyPrimary(pack);
+      await refreshWb();
     } catch {
-      if (attempts < HEAL_MAX_ATTEMPTS) healTimer = setTimeout(tick, HEAL_INTERVAL_MS);
+      if (seq === requestSeq && attempts < HEAL_MAX_ATTEMPTS) healTimer = setTimeout(tick, HEAL_INTERVAL_MS);
     }
   };
   healTimer = setTimeout(tick, HEAL_INTERVAL_MS);
@@ -105,21 +103,42 @@ export async function initI18n(locale, { deadline = Infinity } = {}) {
   try { localStorage.setItem(STORAGE_KEY, targetLocale); } catch {}
   document.documentElement.lang = targetLocale;
   clearTimeout(healTimer);
-  // Cached labels allow a shorter network deadline without changing retry order.
-  const cachedPack = readCachedPack(targetLocale);
-  try {
-    const pack = await fetchPackWithRetry(targetLocale, cachedPack ? 300 : 600, deadline);
-    if (seq !== requestSeq) return; // superseded by a newer call while fetching
-    translations = pack;
-    writeCachedPack(targetLocale, pack);
-  } catch {
-    // Never throw: a failed pack fetch must not kill app startup (top-level
-    // await). Fall back to the last good pack — stale text beats raw keys.
+  initWbPack.cancel();
+  // Keep the rendered object stable while either pack can still arrive late.
+  let primaryPack = readCachedPack(targetLocale) || {}, wbPack = {};
+  const targetTranslations = translations = {};
+  const projectPacks = () => {
+    for (const key of Object.keys(targetTranslations)) delete targetTranslations[key];
+    Object.assign(targetTranslations, wbPack, primaryPack);
+  };
+  projectPacks();
+  const applyPrimary = pack => {
     if (seq !== requestSeq) return;
-    translations = cachedPack || {};
-    scheduleHeal(targetLocale, seq);
-  }
-  if (seq === requestSeq) await initWbPack(targetLocale, {assetRoot, translations, deadline, onMerge:()=>{if(seq===requestSeq)renderI18n();}});
+    primaryPack = pack;
+    projectPacks();
+    writeCachedPack(targetLocale, pack);
+    renderI18n();
+  };
+  const loadWb = (waitDeadline = Infinity) => initWbPack(targetLocale, {
+    assetRoot, translations: targetTranslations, deadline: waitDeadline,
+    onMerge: pack => {
+      if (seq !== requestSeq) return;
+      wbPack = pack;
+      projectPacks();
+      renderI18n();
+    }
+  });
+  const mainWork = (async () => {
+    try {
+      const pack = await fetchPackWithRetry(targetLocale, seq);
+      applyPrimary(pack);
+    } catch {
+      // Actual request failures retain the existing cache and healing policy.
+      if (seq === requestSeq) scheduleHeal(targetLocale, seq, applyPrimary, loadWb);
+    }
+  })();
+  await waitUntilDeadline(mainWork, deadline);
+  if (seq === requestSeq) await loadWb(deadline);
 }
 
 export function t(key, params = {}) {

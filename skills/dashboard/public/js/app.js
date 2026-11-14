@@ -1,4 +1,4 @@
-import { withRequestTimeout } from './request-timeout.js?v=1';
+import { waitUntilDeadline } from './request-timeout.js?v=2';
 import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=103';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
@@ -23,7 +23,7 @@ import { mountSchedule } from './wb/schedule.js?v=146';
 import { createUsagePage } from './wb/usage.js?v=194';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
-import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=88';
+import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=89';
 import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=196';
 import { createFleetSounds } from './fleet-sounds.js?v=196';
 import { refreshDashboardState } from './state-refresh.js?v=99';
@@ -2523,7 +2523,7 @@ function renderObserverStatus(status = state.observer.status) {
   }
 }
 
-async function refreshObserverStatus({ quiet = false, signal, deadline = Infinity } = {}) {
+async function refreshObserverStatus({ quiet = false, signal } = {}) {
   const targetKey = observerTargetKey();
   const requestGeneration = state.observer.statusGeneration =
     (Number.isInteger(state.observer.statusGeneration) ? state.observer.statusGeneration : 0) + 1;
@@ -2533,16 +2533,11 @@ async function refreshObserverStatus({ quiet = false, signal, deadline = Infinit
   state.observer.statusRequest = request;
   request.promise = (async () => {
     try {
-      const [{ resp, data }, groups] = await Promise.all([
-        withRequestTimeout(async requestSignal => {
-          const resp = await fetch(endpoint, { cache: 'no-store', signal: requestSignal });
-          return { resp, data: await resp.json().catch(() => ({})) };
-        }, 1000, signal, deadline),
-        withRequestTimeout(async requestSignal => {
-          const response = await fetch(observerEndpoint('/api/workbench/groups'), { cache: 'no-store', signal: requestSignal });
-          return response.ok ? response.json() : null;
-        }, 1000, signal, deadline).catch(() => null)
+      const [resp, groups] = await Promise.all([
+        fetch(endpoint, { cache: 'no-store', signal }),
+        fetch(observerEndpoint('/api/workbench/groups'), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null)
       ]);
+      const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw observerRequestError(data, resp.status);
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
       state.observer.status = data;
@@ -2992,7 +2987,7 @@ window.addEventListener('pagehide', () => stopTheme?.());
 // All startup requests share one budget, including language retry delays.
 const startupDeadline = Date.now() + 6000;
 await initI18n(undefined, { deadline: startupDeadline });
-await refreshObserverStatus({ quiet: true, deadline: startupDeadline });
+await waitUntilDeadline(refreshObserverStatus({ quiet: true }), startupDeadline);
 initSettingsPage();
 initTabs();
 mobileNavigation = mountMobileNavigation({ document, t,

@@ -1,4 +1,5 @@
-import { withRequestTimeout } from '../request-timeout.js?v=1';
+import { withRequestTimeout, waitUntilDeadline } from '../request-timeout.js?v=2';
+const REQUEST_TIMEOUT_MS = 30000;
 export const WB_SENTINEL = 'wb.nav.overview';
 export const validWbPack = pack => pack !== null && typeof pack === 'object' &&
   [Object.prototype, null].includes(Object.getPrototypeOf(pack)) && typeof pack[WB_SENTINEL] === 'string';
@@ -12,32 +13,34 @@ export function createWbPackLoader({ fetch = globalThis.fetch, storage = globalT
     const primary = primaryKeys.get(translations);
     const merge = pack => {
       for (const [key, value] of Object.entries(pack)) if (!primary.has(key)) translations[key] = value;
-      onMerge();
+      onMerge(pack);
     };
     let cached;
     try { cached = JSON.parse(storage.getItem(cacheKey)); } catch {}
     const hasCache = validWbPack(cached);
     if (hasCache) merge(cached);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const pack = await withRequestTimeout(async signal => {
-          const response = await fetch(`${assetRoot}/i18n/wb.${locale}.json`, { cache: 'no-store', signal });
-          if (!response.ok) throw Error('pack');
-          const pack = await response.json();
-          if (!validWbPack(pack)) throw Error('pack');
-          return pack;
-        }, hasCache ? 300 : 600, undefined, deadline);
-        if (current !== seq) return;
-        merge(pack);
-        try { storage.setItem(cacheKey, JSON.stringify(pack)); } catch {}
-        return;
-      } catch {
-        if (current !== seq) return;
-        if (Date.now() >= deadline) break;
-        if (attempt < 2) await sleep(Math.min(400 * (attempt + 1), deadline - Date.now()));
+    const work = (async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const pack = await withRequestTimeout(async signal => {
+            const response = await fetch(`${assetRoot}/i18n/wb.${locale}.json`, { cache: 'no-store', signal });
+            if (!response.ok) throw Error('pack');
+            const pack = await response.json();
+            if (!validWbPack(pack)) throw Error('pack');
+            return pack;
+          }, REQUEST_TIMEOUT_MS);
+          if (current !== seq) return;
+          merge(pack);
+          try { storage.setItem(cacheKey, JSON.stringify(pack)); } catch {}
+          return;
+        } catch {
+          if (current !== seq) return;
+          if (attempt < 2) await sleep(400 * (attempt + 1));
+        }
       }
-    }
-    if (!hasCache) warn('Workbench translations unavailable');
+      if (!hasCache) warn('Workbench translations unavailable');
+    })();
+    await waitUntilDeadline(work, deadline);
   };
   load.cancel = () => { seq++; };
   return load;
