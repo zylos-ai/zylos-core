@@ -28,7 +28,7 @@ export async function runSupervisorPauseBrowser(sandbox) {
     assert.equal(browser.isConnected(), false, 'browser connection reclaimed');
   });
 
-  for (const width of [390, 1280]) {
+  for (const width of [390, 1280]) for (const theme of ['light', 'dark']) {
     const now = Date.now();
     let paused = false;
     const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
@@ -38,9 +38,12 @@ export async function runSupervisorPauseBrowser(sandbox) {
       await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
       await context.route('**/_assets/vendor/chart.umd.js', route => route.fulfill({ path: chartAsset, contentType: 'text/javascript' }));
       await context.route('**/favicon.ico', route => route.fulfill({ status: 204 }));
-      await context.addInitScript(() => {
-        try { localStorage.setItem('zylos-dashboard-locale', 'en'); } catch {}
-      });
+      await context.addInitScript(theme => {
+        try {
+          localStorage.setItem('zylos-dashboard-locale', 'en');
+          localStorage.setItem('zylos-dashboard-theme', theme);
+        } catch {}
+      }, theme);
       const page = await context.newPage(), errors = [];
       page.setDefaultTimeout(10_000);
       page.on('pageerror', error => { if (errors.length < 5) errors.push(error.message); });
@@ -62,6 +65,7 @@ export async function runSupervisorPauseBrowser(sandbox) {
         return route.fallback();
       });
       await page.goto(base + '/');
+      assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
       const own = page.locator('#agent-fleet-root .wb-f-card[data-self="true"]');
       const remote = page.locator('#agent-fleet-root .wb-f-card[data-agent="remote-case"]');
       await own.waitFor();
@@ -77,12 +81,14 @@ export async function runSupervisorPauseBrowser(sandbox) {
           assert.equal(await card.getAttribute('data-state'), 'idle', 'pause does not invent a runtime failure');
         }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width}px Fleet fits`);
-        if (evidence) await page.screenshot({ path: path.join(evidence, `supervisor-fleet-${width}-${phase}.png`), fullPage: true });
+        if (evidence) await page.screenshot({ path: path.join(evidence, `supervisor-fleet-${width}-${theme}-${phase}.png`), fullPage: true });
       }
 
       await own.locator('.agent-open').click();
       await openDashboardTab(page, 'overview');
       await page.locator('#fleet-view').waitFor({ state: 'hidden' });
+      await page.evaluate(() => document.activeElement?.blur());
+      await page.mouse.move(0, 0);
       const attention = page.locator('#wb-attention .wb-attention-item').filter({ hasText: pauseText });
       for (const [phase, value] of [['healthy', false], ['paused', true], ['recovered', false]]) {
         paused = value;
@@ -93,10 +99,10 @@ export async function runSupervisorPauseBrowser(sandbox) {
         await attention.waitFor({ state: value ? 'visible' : 'detached' });
         if (value) assert.equal(await attention.locator('b').innerText(), pauseText);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${width}px Dashboard fits`);
-        if (evidence) await page.screenshot({ path: path.join(evidence, `supervisor-dashboard-${width}-${phase}.png`), fullPage: true });
+        if (evidence) await page.screenshot({ path: path.join(evidence, `supervisor-dashboard-${width}-${theme}-${phase}.png`), fullPage: true });
       }
       assert.deepEqual(errors, [], `${width}px has no page errors`);
-      console.log(`Supervisor pause browser: ${width}px Fleet local/remote and Dashboard healthy -> paused -> recovered`);
+      console.log(`Supervisor pause browser: ${width}px ${theme} Fleet local/remote and Dashboard healthy -> paused -> recovered`);
     } finally { await context.close(); }
   }
   assert.deepEqual(actions, [], 'observation and recovery never submit a Dashboard action');
