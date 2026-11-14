@@ -7,7 +7,7 @@ import {
   isStateRequestCurrent,
 } from '../public/js/response-order.js';
 import { refreshDashboardState } from '../public/js/state-refresh.js';
-import { instanceZone, setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
+import { instanceZone, setInstanceZone, formatZoned } from '../public/js/wb/instance-zone.js?v=100';
 
 test('an unrelated same-run SSE observation does not discard a newer full response', () => {
   const state = { navigationGeneration: 0, dashboardState: { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:00Z' } };
@@ -85,8 +85,7 @@ test('a state refresh sets the instance time zone the server reports for every p
   await refreshDashboardState(state, reply({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:03Z', tz: null }));
   assert.equal(instanceZone(), 'UTC', 'a server that cannot read its zone reads UTC, never the browser zone');
 
-  // A response that arrives after a newer state was applied (e.g. from the previous Fleet target) is discarded and
-  // must not set its zone on the page either.
+  // Instance metadata is independent of same-target state freshness.
   await refreshDashboardState(state, reply({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:04Z', tz: 'Asia/Tokyo' }));
   assert.equal(instanceZone(), 'Asia/Tokyo');
   let resolveLate;
@@ -94,6 +93,58 @@ test('a state refresh sets the instance time zone the server reports for every p
   state.dashboardState = { runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:06Z' };
   resolveLate({ runId: 'R1', sessionId: 'S1', updated_at: '2026-01-01T00:00:05Z', tz: 'Europe/London' });
   assert.equal(await late, null, 'the late response is discarded');
-  assert.equal(instanceZone(), 'Asia/Tokyo', 'a discarded response leaves the zone unchanged');
+  assert.equal(instanceZone(), 'Europe/London', 'same-target metadata survives a discarded state snapshot');
   setInstanceZone(null);
+});
+
+for (const order of ['overlapping requests', 'newer SSE observation', 'SSE identity replacement']) {
+  test(`initial timezone survives ${order}`, async t => {
+    setInstanceZone(null);
+    t.after(() => setInstanceZone(null));
+    const state = { navigationGeneration: 0 };
+    const pending = [];
+    const fetchState = () => new Promise(resolve => pending.push(resolve));
+    const first = refreshDashboardState(state, fetchState);
+    const second = order === 'overlapping requests' ? refreshDashboardState(state, fetchState) : null;
+    if (order !== 'overlapping requests') state.dashboardState = {
+      runId: order === 'SSE identity replacement' ? 'new-run' : 'run',
+      sessionId: 'session', updated_at: '2026-11-15T02:00:00Z', state: 'IDLE',
+    };
+    pending[0]({ runId: 'run', sessionId: 'session', updated_at: '2026-11-15T01:00:00Z', tz: 'Asia/Singapore' });
+    assert.equal(await first, null, 'stale snapshot remains rejected');
+    assert.equal(formatZoned(Date.parse('2026-11-14T15:59:00Z'), 'en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }), '23:59',
+      'the first returned stale reply supplies instance time even while a newer request is pending');
+    if (second) {
+      state.dashboardState = { runId: 'run', sessionId: 'session', updated_at: '2026-11-15T02:00:00Z' };
+      pending[1]({ runId: 'run', sessionId: 'session', updated_at: '2026-11-15T01:00:00Z', tz: 'Asia/Singapore' });
+      assert.equal(await second, null);
+    }
+    assert.equal(instanceZone(), 'Asia/Singapore', 'timezone is available without waiting for the next poll');
+    assert.equal(state.dashboardState.updated_at, '2026-11-15T02:00:00Z');
+  });
+}
+
+test('a late previous-target response cannot change the instance timezone', async t => {
+  setInstanceZone('Asia/Singapore');
+  t.after(() => setInstanceZone(null));
+  const state = { navigationGeneration: 0, remoteAgent: 'previous-instance' };
+  let resolve;
+  const pending = refreshDashboardState(state, () => new Promise(done => { resolve = done; }));
+  state.navigationGeneration++;
+  state.remoteAgent = 'another-instance';
+  resolve({ tz: 'America/Los_Angeles' });
+  assert.equal(await pending, null);
+  assert.equal(instanceZone(), 'Asia/Singapore');
+});
+
+test('same-instance tab navigation still records timezone metadata from the pending startup response', async t => {
+  setInstanceZone(null);
+  t.after(() => setInstanceZone(null));
+  const state = { navigationGeneration: 0, remoteAgent: 'viewed-instance' };
+  let resolve;
+  const pending = refreshDashboardState(state, () => new Promise(done => { resolve = done; }));
+  state.navigationGeneration++;
+  resolve({ tz: 'Asia/Singapore' });
+  assert.equal(await pending, null, 'navigation still rejects the state snapshot');
+  assert.equal(instanceZone(), 'Asia/Singapore', 'tab navigation keeps the same instance metadata');
 });
