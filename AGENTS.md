@@ -4,6 +4,10 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Standards
 
+### Documentation Language
+
+- Write repository documentation in English, except `README.zh-CN.md`.
+
 ### Programming Language
 
 - **Language**: Node.js (JavaScript)
