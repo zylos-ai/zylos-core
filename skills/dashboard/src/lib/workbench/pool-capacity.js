@@ -10,7 +10,7 @@ export async function readPool({ mode, now = Date.now(), sample, c4Reader, loadC
   catch { /* Core unavailable: leave the limit unknown rather than invent one. */ }
   const record = cap.record;
   const capacityRecord = { valid: cap.valid, fresh: cap.fresh,
-    ...Object.fromEntries(['source', 'reason', 'memory', 'model', 'kMemory']
+    ...Object.fromEntries(['source', 'reason', 'limitedBy', 'memory', 'model', 'kMemory']
       .filter(key => record != null && Object.hasOwn(record, key)).map(key => [key, record[key]])) };
   let occupancy = null;
   try { occupancy = c4Reader.listSlotOccupancy(now); }

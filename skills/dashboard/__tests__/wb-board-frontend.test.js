@@ -382,7 +382,9 @@ test('pool source distinguishes fresh, expired, missing, invalid and fallback re
     const name = poolTranslations[locale][level === 'technical' ? 'wb.inst.pool' : 'wb.pool'];
     assert.equal(shown(pool), `${sample.capacity} / ${sample.capacity}`, `${locale}/${level}`);
     assert.equal(pool.title, [name, `${locale === 'zh' ? '在用' : 'in use'} ${sample.capacity} / ${sample.capacity}`, sample[locale],
-      poolTranslations[locale]['wb.inst.poolHint']].join(' · '), `${locale}/${level}: ${sample[locale]}`);
+      level === 'technical' && sample.capacityRecord?.fresh === true && sample.capacityRecord?.source === 'fixed'
+        ? poolTranslations[locale]['wb.inst.poolDecisionFixed'] : '',
+      poolTranslations[locale]['wb.inst.poolHint']].filter(Boolean).join(' · '), `${locale}/${level}: ${sample[locale]}`);
     if (sample.capacity !== 1) assert.ok(!pool.title.includes(poolTranslations[locale]['wb.inst.poolFallback']));
     if (sample.capacityRecord?.source === 'fixed' && sample.capacity === sample.capacityRecord.kMemory) {
       assert.doesNotMatch(pool.title, /按内存建议|memory recommendation/);
@@ -536,8 +538,8 @@ test('pool explanations show only usable published values in the host panel, not
   assert.ok(section.textContent.includes('名额2 / 6'));
   assert.ok(section.textContent.includes('来源手动设定 6（按内存建议 0）'));
   const items = allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent);
-  assert.deepEqual(items, ['未设内存上限，按整机内存 · 内存上限 4 GiB · 已用 3.7 GiB · 保底 0.5 GiB',
-    '每会话约 0.5 GiB · 固定开销约 1.3 GiB · 近 7 天', '内存只够 Origin，同时运行上限按 1 运行']);
+  assert.deepEqual(items, ['未设内存上限，按整机内存 · 内存上限 4 GiB · 已用 3.7 GiB（不含文件缓存和交换区） · 保底 0.5 GiB',
+    '每会话约 0.5 GiB · 固定开销约 1.3 GiB（各档的中间值） · 近 7 天', '由手动设定决定', '内存只够 Origin，同时运行上限按 1 运行']);
   capacityRecord.kMemory = -2; capacityRecord.reason = null;
   capacityRecord.memory = { source: 'darwin', limitBytes: '4', usedBytes: null, reserveBytes: NaN };
   capacityRecord.model = { state: 'default', slopeBytes: 0.5 * GiB, interceptBytes: 'bad', windowDays: undefined };
@@ -547,6 +549,84 @@ test('pool explanations show only usable published values in the host panel, not
   assert.match(section.textContent, /Still gathering data/);
   assert.match(section.textContent, /about 0.5 GiB per session/);
   assert.doesNotMatch(section.textContent, /Memory limit|fixed overhead|NaN|undefined|last .* days|Memory fits/);
+});
+
+// Real product renderers and translation packs; no source rewriting or evaluation.
+test('host pool explains published buckets and distinct algorithms while the technical tooltip stays concise', () => {
+  const document = createDocument(), section = document.createElement('section'), root = document.createElement('div');
+  const GiB = 1073741824, t = poolTranslator('zh');
+  const buckets = Array.from({ length: 7 }, (_, i) => ({ n: 7 - i, highBytes: 7.46 * GiB, hours: 7, samples: 2511 }));
+  const record = { valid: true, fresh: true, source: 'auto', limitedBy: 'model',
+    memory: { limitBytes: 16 * GiB, usedBytes: 8 * GiB, reserveBytes: GiB },
+    model: { state: 'fitted', slopeBytes: 0.25 * GiB, interceptBytes: 5.72 * GiB, windowDays: 7, buckets } };
+  const pool = { used: 2, capacity: 29, capacityRecord: record }, view = { mode: 'multi', pool };
+  const notes = () => allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent);
+  const rendered = renderHostPool(section, view, { document, t });
+  assert.deepEqual(notes(), [
+    '内存上限 16 GiB · 已用 8 GiB（不含文件缓存和交换区） · 保底 1 GiB',
+    '每会话约 0.25 GiB · 固定开销约 5.72 GiB（各档的中间值） · 近 7 天',
+    Array.from({ length: 7 }, (_, i) => `${i + 1} 个会话时一般最高 7.46 GiB（7 个小时、2511 个样本）`).join('；'),
+    '上限 = 内存能放下的会话数 − 1（给 Origin 留一位），至少 1；能放下的会话数取「按近 7 天的档」与「按眼下剩余内存」中较小的',
+    '由近 7 天各档的用量决定',
+  ]);
+  assert.deepEqual(record.model.buckets.map(bucket => bucket.n), [7, 6, 5, 4, 3, 2, 1], 'sorting does not mutate publication');
+  for (const level of ['plain', 'technical']) {
+    instanceStrip(root, { mode: 'multi', instance: { pool } }, { document, t, level });
+    const title = allNodes(root).find(node => node.classList.contains('wb-pool')).title;
+    assert.equal(title.includes('由近 7 天各档的用量决定'), level === 'technical');
+    assert.doesNotMatch(title, /个样本|一般最高|上限 =/);
+  }
+  record.model = { state: 'default', slopeBytes: 0.5 * GiB, windowDays: 7,
+    buckets: [{ n: 1, highBytes: 8 * GiB, hours: 5, samples: 300 }] };
+  record.limitedBy = 'live'; rendered.update(view);
+  assert.deepEqual(notes().slice(1), [
+    '数据积累中 · 每会话约 0.5 GiB · 近 7 天',
+    '1 个会话时一般最高 8.00 GiB（5 个小时、300 个样本）',
+    '上限 = 按眼下剩余内存能放下的会话数 − 1（给 Origin 留一位），至少 1；数据积累中，每会话先按 0.5 GiB 算',
+    '由眼下剩余的内存决定',
+  ]);
+  assert.doesNotMatch(section.textContent, /较小的|固定开销/);
+  for (const empty of [[], null, 0, [{ n: 1, highBytes: NaN, hours: 5, samples: 300 }],
+    [{ n: '1', highBytes: GiB, hours: 5, samples: 300 }], [{ n: 1, highBytes: GiB, samples: 300 }]]) {
+    record.model.buckets = empty; rendered.update(view);
+    assert.equal(notes().length, 4);
+    assert.ok(notes().every(Boolean));
+    assert.doesNotMatch(section.textContent, /个样本|NaN|undefined/);
+  }
+});
+
+test('pool decision priority and freshness gate new explanations while preserving stale evidence and floor notice', () => {
+  const document = createDocument(), section = document.createElement('section'), root = document.createElement('div');
+  const t = poolTranslator('zh'), GiB = 1073741824;
+  const cases = [
+    [{ source: 'auto', limitedBy: 'live' }, '由眼下剩余的内存决定', true],
+    [{ source: 'auto', limitedBy: 'model' }, '由近 7 天各档的用量决定', true],
+    [{ source: 'auto', limitedBy: 'live', reason: 'floor' }, '按内存算不够 1 个，由下限托在 1', true],
+    [{ source: 'fixed', limitedBy: 'model', reason: 'floor' }, '由手动设定决定', false],
+    [{ source: 'fallback', limitedBy: 'model', reason: 'floor' }, '', false],
+    [{ source: 'auto', limitedBy: 'model', fresh: false, reason: 'floor' }, '', false],
+    [{ source: 'auto', limitedBy: 'live', valid: false, reason: 'floor' }, '', false],
+    [{ source: 'auto', limitedBy: 'unknown' }, '', true],
+  ];
+  for (const [patch, decision, algorithm] of cases) {
+    const record = { valid: true, fresh: true, memory: { usedBytes: GiB },
+      model: { state: 'default', slopeBytes: 0.5 * GiB, windowDays: 7, buckets: [] }, ...patch };
+    const pool = { used: 1, capacity: 3, capacityRecord: record };
+    renderHostPool(section, { mode: 'multi', pool }, { document, t });
+    instanceStrip(root, { mode: 'multi', instance: { pool } }, { document, t, level: 'technical' });
+    const title = allNodes(root).find(node => node.classList.contains('wb-pool')).title;
+    const decisions = ['由眼下剩余的内存决定', '由近 7 天各档的用量决定', '按内存算不够 1 个，由下限托在 1', '由手动设定决定'];
+    for (const text of decisions) {
+      assert.equal(section.textContent.includes(text), text === decision, JSON.stringify(patch));
+      assert.equal(title.includes(text), text === decision, JSON.stringify(patch));
+    }
+    assert.equal(section.textContent.includes('上限 ='), algorithm);
+    for (const text of [section.textContent, title]) {
+      assert.ok(text.includes('已用 1 GiB（不含文件缓存和交换区）'));
+      assert.ok(text.includes('数据积累中'));
+      assert.equal(text.includes('内存只够 Origin，同时运行上限按 1 运行'), patch.reason === 'floor');
+    }
+  }
 });
 
 test('the host panel pool section shows slots and source only for the record a missing record file gives', () => {

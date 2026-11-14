@@ -13,20 +13,33 @@ const NOTICE_INTERVAL = 1800000;
 const SAMPLE_NAME = 'pool-memory-samples.jsonl';
 const SOURCES = new Set(['cgroup2', 'cgroup1', 'host', 'darwin']);
 
-/** Fit only the current source and seven-day window, with high-rank buckets. */
+function median(values) {
+  values.sort((a, b) => a - b);
+  const middle = Math.floor(values.length / 2);
+  return values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
+}
+
+/** Keep real-valued estimates until capacity's final floor operations. */
 export function fitMemoryModel(samples, { now = Date.now(), source } = {}) {
   const groups = new Map();
   for (const row of samples) {
-    if (row.src !== source || row.ts < now - SAMPLE_WINDOW || row.ts > now) continue;
-    const values = groups.get(row.n) ?? [];
+    if (!validSample(row) || row.src !== source || row.ts <= now - SAMPLE_WINDOW || row.ts > now) continue;
+    const hours = groups.get(row.n) ?? new Map();
+    const hour = Math.floor(row.ts / 3600000);
+    const values = hours.get(hour) ?? [];
     values.push(row.w);
-    groups.set(row.n, values);
+    hours.set(hour, values);
+    groups.set(row.n, hours);
   }
-  const buckets = [...groups].filter(([, values]) => values.length >= 60)
-    .sort(([a], [b]) => a - b).map(([n, values]) => {
+  const buckets = [...groups].sort(([a], [b]) => a - b).flatMap(([n, hours]) => {
+    const samples = [...hours.values()].reduce((sum, values) => sum + values.length, 0);
+    if (samples < 60 || hours.size < 5) return [];
+    const highs = [...hours.values()].map(values => {
       values.sort((a, b) => a - b);
-      return { n, highBytes: values[Math.ceil(0.95 * values.length) - 1], samples: values.length };
+      return values[Math.ceil(0.95 * values.length) - 1];
     });
+    return [{ n, highBytes: median(highs), samples, hours: hours.size }];
+  });
   if (buckets.length < 2) return { state: 'default', slopeBytes: 512 * MiB, windowDays: 7, buckets };
   const slopes = [];
   for (let i = 0; i < buckets.length; i++) {
@@ -36,18 +49,19 @@ export function fitMemoryModel(samples, { now = Date.now(), source } = {}) {
   }
   slopes.sort((a, b) => a - b);
   const slopeBytes = Math.max(256 * MiB, slopes[Math.floor(slopes.length / 2)]);
-  const interceptBytes = Math.max(...buckets.map(row => row.highBytes - slopeBytes * row.n));
+  const interceptBytes = median(buckets.map(row => row.highBytes - slopeBytes * row.n));
   return { state: 'fitted', slopeBytes, interceptBytes, windowDays: 7, buckets };
 }
 
 export function calculateMemoryCapacity(memory, n, model) {
   const reserveBytes = Math.max(512 * MiB, Math.floor(memory.limitBytes * 0.1));
   const current = n + Math.floor((memory.limitBytes - reserveBytes - memory.usedBytes) / model.slopeBytes);
-  const total = model.state === 'fitted'
-    ? Math.min(current, Math.floor((memory.limitBytes - reserveBytes - model.interceptBytes) / model.slopeBytes))
-    : current;
+  const modeled = model.state === 'fitted'
+    ? Math.floor((memory.limitBytes - reserveBytes - model.interceptBytes) / model.slopeBytes) : Infinity;
+  const total = Math.min(current, modeled);
   const kMemory = total - 1;
-  return { kMemory, kRaw: Math.max(kMemory, 1), reserveBytes, reason: kMemory < 1 ? 'floor' : 'memory' };
+  return { kMemory, kRaw: Math.max(kMemory, 1), reserveBytes, reason: kMemory < 1 ? 'floor' : 'memory',
+    limitedBy: modeled < current ? 'model' : 'live' };
 }
 
 /** Rename is the only publication point: readers see either complete record. */
@@ -68,7 +82,7 @@ export function writeCapacityAtomic(file, record, { fs: io = fs } = {}) {
 }
 
 function validSample(row) {
-  return row && row.v === 1 && Number.isSafeInteger(row.ts) && Number.isSafeInteger(row.n) && row.n >= 0
+  return row && row.v === 2 && Number.isSafeInteger(row.ts) && Number.isSafeInteger(row.n) && row.n >= 0
     && Number.isSafeInteger(row.pool) && row.pool >= 0 && typeof row.origin === 'boolean'
     && row.n === row.pool + Number(row.origin) && Number.isFinite(row.w) && row.w >= 0
     && Number.isFinite(row.limit) && row.limit > 0 && SOURCES.has(row.src);
@@ -137,8 +151,9 @@ export class PoolCapacity {
         if (!line.trim()) continue;
         let row;
         try { row = JSON.parse(line); } catch { skipped++; continue; }
+        if (row?.v === 1) continue;
         if (!validSample(row)) { skipped++; continue; }
-        if (row.ts >= now - SAMPLE_WINDOW && row.ts <= now) this.samples.push(row);
+        if (row.ts > now - SAMPLE_WINDOW && row.ts <= now) this.samples.push(row);
       }
     }
     if (skipped) this.diagnostic('capacity_samples_skipped', { count: skipped });
@@ -208,14 +223,14 @@ export class PoolCapacity {
       try { memory = await this.readMemory(); } catch { memory = null; }
       if (epoch !== this.epoch || this.mode !== 'multi') return null;
       const readable = validMemory(memory);
-      this.samples = this.samples.filter(row => row.ts >= now - SAMPLE_WINDOW && row.ts <= now);
+      this.samples = this.samples.filter(row => row.ts > now - SAMPLE_WINDOW && row.ts <= now);
       let model;
       if (readable) {
         if (!this.samplingBlocked
           && now - this.stableSince >= STABLE_INTERVAL
           && (this.lastSampleAt === null || now - this.lastSampleAt >= SAMPLE_INTERVAL)) {
           this.lastSampleAt = now;
-          this.appendSample({ v: 1, ts: now, ...sessions, w: memory.usedBytes, limit: memory.limitBytes, src: memory.source });
+          this.appendSample({ v: 2, ts: now, ...sessions, w: memory.usedBytes, limit: memory.limitBytes, src: memory.source });
         }
         model = fitMemoryModel(this.samples, { now, source: memory.source });
       }
@@ -231,9 +246,12 @@ export class PoolCapacity {
       const record = { v: 1, k, source, reason, computedAt: now, kRaw, sessions };
       if (calculation) {
         record.kMemory = calculation.kMemory;
+        record.limitedBy = calculation.limitedBy;
         record.memory = { source: memory.source, limitBytes: memory.limitBytes, usedBytes: memory.usedBytes, reserveBytes: calculation.reserveBytes };
         if (memory.source === 'cgroup2' && memory.oomKills !== undefined) record.memory.oomKills = memory.oomKills;
-        record.model = model;
+        record.model = { ...model, slopeBytes: Math.floor(model.slopeBytes),
+          buckets: model.buckets.map(row => ({ ...row, highBytes: Math.floor(row.highBytes) })) };
+        if (model.state === 'fitted') record.model.interceptBytes = Math.floor(model.interceptBytes);
       }
       try {
         await this.publish(this.file, record);

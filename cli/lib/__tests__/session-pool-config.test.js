@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readMemoryInputs, readMemoryLimit, resolveSessionPoolBaseline, readPoolCapacity } from '../session-pool-config.js';
+import { calculateMemoryCapacity } from '../../../skills/activity-monitor/scripts/pool-capacity.js';
 
 const MiB = 1024 ** 2, GiB = 1024 ** 3;
 const error = code => Object.assign(new Error(code), { code });
@@ -23,12 +24,12 @@ function filesystem(entries = {}, directories = []) {
 function info(total = 122 * GiB, available = 100 * GiB, swapTotal = 0, swapFree = 0) {
   return `MemTotal: ${total / 1024} kB\nMemAvailable: ${available / 1024} kB\nSwapTotal: ${swapTotal / 1024} kB\nSwapFree: ${swapFree / 1024} kB\n`;
 }
-function v2({ self = '/user.slice/work', limit = 4 * GiB, usage = 2047 * MiB, inactive = 1989 * MiB, swap, meminfo = info() } = {}) {
+function v2({ self = '/user.slice/work', limit = 4 * GiB, usage = 2047 * MiB, active = 0, inactive = 1989 * MiB, swap, meminfo = info() } = {}) {
   const directory = path.posix.join('/sys/fs/cgroup', self).replace(/\/$/, ''), entries = {
     '/proc/self/cgroup': `0::${self}\n`, '/proc/meminfo': meminfo,
     '/sys/fs/cgroup/cgroup.controllers': 'memory cpu',
     [directory + '/memory.max']: String(limit), [directory + '/memory.current']: String(usage),
-    [directory + '/memory.stat']: `inactive_file ${inactive}\nactive_file 0\n`, [directory + '/memory.events']: 'oom_kill 4\n',
+    [directory + '/memory.stat']: `inactive_file ${inactive}\nactive_file ${active}\n`, [directory + '/memory.events']: 'oom_kill 4\n',
   };
   for (let dir = path.posix.dirname(directory); dir !== '/sys/fs' && dir !== '/'; dir = path.posix.dirname(dir)) {
     entries[dir + '/memory.max'] ??= 'max';
@@ -43,16 +44,16 @@ function v1() {
     '/sys/fs/cgroup/memory/docker/memory.limit_in_bytes': '9223372036854771712',
     '/sys/fs/cgroup/memory/memory.limit_in_bytes': '9223372036854771712',
     '/sys/fs/cgroup/memory/docker/x/memory.usage_in_bytes': String(1500 * MiB),
-    '/sys/fs/cgroup/memory/docker/x/memory.stat': `total_inactive_file ${500 * MiB}\n`,
+    '/sys/fs/cgroup/memory/docker/x/memory.stat': `total_inactive_file ${500 * MiB}\ntotal_active_file 0\n`,
   }), env: {}, platform: 'linux' };
 }
-function mac({ page = 16384, swap = '1024.00M', vm, sysctl, failure } = {}) {
+function mac({ page = 16384, vm, sysctl, failure } = {}) {
   const calls = [];
   const text = vm ?? `Mach Virtual Memory Statistics: (page size of ${page} bytes)\nAnonymous pages: 400000.\nPages purgeable: 20000.\nPages wired down: 150000.\nPages occupied by compressor: 50000.\n`;
   return { platform: 'darwin', env: {}, totalMemoryBytes: 16 * GiB, calls,
     fs: filesystem(), execFile(name, args, options, done) {
       calls.push({ name, args, options });
-      queueMicrotask(() => done(failure, name === 'vm_stat' ? text : (sysctl ?? `17179869184\ntotal = 2048.00M used = ${swap} free = 1024.00M (encrypted)\n`)));
+      queueMicrotask(() => done(failure, name === 'vm_stat' ? text : (sysctl ?? '17179869184\n')));
       return { kill() {} };
     },
   };
@@ -68,7 +69,7 @@ test('cgroup limits follow namespace paths and the smallest ancestor', async t =
   const fixture = v2({ limit: 'max' });
   fixture.fs.files.set('/sys/fs/cgroup/user.slice/memory.max', String(2 * GiB));
   fixture.fs.files.set('/sys/fs/cgroup/user.slice/memory.current', String(GiB));
-  fixture.fs.files.set('/sys/fs/cgroup/user.slice/memory.stat', 'inactive_file 0\n');
+  fixture.fs.files.set('/sys/fs/cgroup/user.slice/memory.stat', 'inactive_file 0\nactive_file 0\n');
   assert.equal((await readMemoryInputs(fixture)).limitBytes, 2 * GiB);
   assert.equal((await readMemoryInputs(fixture)).usedBytes, GiB);
   fixture.fs.reads.length = 0;
@@ -76,39 +77,106 @@ test('cgroup limits follow namespace paths and the smallest ancestor', async t =
   assert.ok(fixture.fs.reads.every(file => !/memory\.(current|stat|swap|events)/.test(file)));
 });
 
-test('unlimited cgroups use whole-machine available memory and swap', async () => {
+test('unlimited cgroups use whole-machine available memory regardless of swap', async () => {
   for (const self of ['/', '/user.slice/work']) {
     const fixture = v2({ self, limit: 'max', meminfo: info(122 * GiB, 100 * GiB, 2 * GiB, GiB) });
-    assert.deepEqual(await readMemoryInputs(fixture), { source: 'host', limitBytes: 122 * GiB, usedBytes: 23 * GiB });
+    assert.deepEqual(await readMemoryInputs(fixture), { source: 'host', limitBytes: 122 * GiB, usedBytes: 22 * GiB });
     assert.deepEqual(resolveSessionPoolBaseline(fixture), { k: 120, fixed: false });
   }
 });
 
-test('working memory excludes inactive file cache, includes swap and respects host pressure', async () => {
+test('working memory excludes file cache and swap and respects host pressure', async () => {
   const fixture = v2({ usage: 4095 * MiB, inactive: 3900 * MiB });
   assert.equal((await readMemoryInputs(fixture)).usedBytes, 195 * MiB);
   fixture.fs.files.set(fixture.directory + '/memory.swap.current', String(512 * MiB));
-  assert.equal((await readMemoryInputs(fixture)).usedBytes, 707 * MiB);
+  assert.equal((await readMemoryInputs(fixture)).usedBytes, 195 * MiB);
   fixture.fs.files.set('/proc/meminfo', info(122 * GiB, 512 * MiB));
   assert.equal((await readMemoryInputs(fixture)).usedBytes, 4 * GiB - 512 * MiB);
   fixture.fs.files.set(fixture.directory + '/memory.max', String(130 * GiB));
   assert.equal(readMemoryLimit(fixture).limitBytes, 122 * GiB);
 });
 
+test('active file cache is excluded using the exact yanjun reading', async () => {
+  const fixture = v2({ limit: 8 * GiB, usage: 3766181888, active: 922324992, inactive: 220119040 });
+  fixture.fs.files.set(fixture.directory + '/memory.stat', 'active_file 922324992\ninactive_file 220119040\nshmem 0\n');
+  const memory = await readMemoryInputs(fixture);
+  assert.equal(memory.usedBytes, 2623737856);
+  assert.notEqual(memory.usedBytes, 3546062848, 'Subtracting only inactive cache retains active cache');
+});
+
+test('both cgroup versions retain shared memory instead of subtracting all file memory', async () => {
+  for (const legacy of [false, true]) {
+    const fixture = legacy ? v1() : v2({ limit: 4 * GiB, usage: 3 * GiB });
+    const directory = legacy ? '/sys/fs/cgroup/memory/docker/x' : fixture.directory;
+    const prefix = legacy ? 'total_' : '';
+    fixture.fs.files.set(directory + (legacy ? '/memory.limit_in_bytes' : '/memory.max'), String(4 * GiB));
+    fixture.fs.files.set(directory + (legacy ? '/memory.usage_in_bytes' : '/memory.current'), String(3 * GiB));
+    // Counters are integer bytes; keep the exact 1 GiB cache sum for this fixture.
+    fixture.fs.files.set(directory + '/memory.stat', `${prefix}active_file ${Math.floor(0.6 * GiB)}\n${prefix}inactive_file ${GiB - Math.floor(0.6 * GiB)}\n${prefix}shmem ${0.5 * GiB}\n${legacy ? 'total_cache' : 'file'} ${1.5 * GiB}\n`);
+    assert.equal((await readMemoryInputs(fixture)).usedBytes, 2 * GiB);
+  }
+});
+
+test('cache-only pressure changes the real capacity calculation from the floor to five', async () => {
+  const fixture = v2({ usage: 4095 * MiB, inactive: 3900 * MiB });
+  const memory = await readMemoryInputs(fixture);
+  const model = { state: 'default', slopeBytes: 512 * MiB };
+  assert.equal(memory.usedBytes, 195 * MiB);
+  assert.equal(calculateMemoryCapacity(memory, 0, model).kRaw, 5);
+  assert.equal(calculateMemoryCapacity({ ...memory, usedBytes: 4095 * MiB }, 0, model).kRaw, 1);
+});
+
+test('swap inputs are never read even when missing, malformed or denied', async () => {
+  for (const legacy of [false, true]) for (const value of [undefined, 'present', 'invalid', error('EACCES')]) {
+    const fixture = legacy ? v1() : v2();
+    const file = legacy ? '/sys/fs/cgroup/memory/docker/x/memory.memsw.usage_in_bytes'
+      : fixture.directory + '/memory.swap.current';
+    if (value !== undefined) fixture.fs.files.set(file, value === 'present' ? String((legacy ? 1500 + 512 : 512) * MiB) : value);
+    assert.equal((await readMemoryInputs(fixture)).usedBytes, (legacy ? 1000 : 58) * MiB);
+    assert.ok(!fixture.fs.reads.includes(file));
+  }
+});
+
+test('Stephanie host reading uses physical available memory without requiring swap fields', async () => {
+  // The summary's used bytes are 128 bytes off the integer-kB meminfo granularity.
+  const total = 16764178432, used = Math.round(6820690816 / 1024) * 1024;
+  for (const swap of ['', `SwapTotal: ${4290000000 / 1024} kB\nSwapFree: 0 kB\n`, 'SwapTotal: invalid\nSwapFree: invalid\n']) {
+    const fixture = v2({ limit: 'max', meminfo: `MemTotal: ${total / 1024} kB\nMemAvailable: ${(total - used) / 1024} kB\n${swap}` });
+    assert.deepEqual(await readMemoryInputs(fixture), { source: 'host', limitBytes: total, usedBytes: used });
+    assert.equal(used - 6820690816, 128);
+  }
+});
+
+test('missing or malformed required cache counters follow the existing container fallback rules', async () => {
+  for (const legacy of [false, true]) for (const name of ['active_file', 'inactive_file']) {
+    for (const marker of [false, true]) for (const value of ['', 'invalid']) {
+      const fixture = legacy ? v1() : v2();
+      const directory = legacy ? '/sys/fs/cgroup/memory/docker/x' : fixture.directory;
+      const prefix = legacy ? 'total_' : '';
+      const other = name === 'active_file' ? 'inactive_file' : 'active_file';
+      fixture.fs.files.set(directory + '/memory.stat', `${prefix}${other} 0\n${value ? `${prefix}${name} ${value}\n` : ''}`);
+      if (marker) fixture.fs.files.set('/.dockerenv', '');
+      const memory = await readMemoryInputs(fixture);
+      if (marker) assert.equal(memory, null);
+      else assert.equal(memory.source, 'host');
+    }
+  }
+});
+
 test('legacy cgroups prefer the full path, select ancestors and read namespace root only for missing directories', async () => {
   const fixture = v1();
   assert.deepEqual(await readMemoryInputs(fixture), { source: 'cgroup1', limitBytes: 2 * GiB, usedBytes: 1000 * MiB });
   fixture.fs.files.set('/sys/fs/cgroup/memory/docker/x/memory.memsw.usage_in_bytes', String(1800 * MiB));
-  assert.equal((await readMemoryInputs(fixture)).usedBytes, 1300 * MiB);
+  assert.equal((await readMemoryInputs(fixture)).usedBytes, 1000 * MiB);
   fixture.fs.files.set('/sys/fs/cgroup/memory/docker/memory.limit_in_bytes', String(GiB));
   fixture.fs.files.set('/sys/fs/cgroup/memory/docker/memory.usage_in_bytes', String(500 * MiB));
-  fixture.fs.files.set('/sys/fs/cgroup/memory/docker/memory.stat', 'total_inactive_file 0\n');
+  fixture.fs.files.set('/sys/fs/cgroup/memory/docker/memory.stat', 'total_inactive_file 0\ntotal_active_file 0\n');
   assert.equal((await readMemoryInputs(fixture)).limitBytes, GiB);
   assert.equal((await readMemoryInputs(fixture)).usedBytes, 500 * MiB);
   fixture.fs.dirs.delete('/sys/fs/cgroup/memory/docker/x');
   fixture.fs.files.set('/sys/fs/cgroup/memory/memory.limit_in_bytes', String(3 * GiB));
   fixture.fs.files.set('/sys/fs/cgroup/memory/memory.usage_in_bytes', String(800 * MiB));
-  fixture.fs.files.set('/sys/fs/cgroup/memory/memory.stat', 'total_inactive_file 0\n');
+  fixture.fs.files.set('/sys/fs/cgroup/memory/memory.stat', 'total_inactive_file 0\ntotal_active_file 0\n');
   assert.equal((await readMemoryInputs(fixture)).limitBytes, 3 * GiB);
   const broken = v1();
   broken.fs.files.delete('/sys/fs/cgroup/memory/docker/x/memory.limit_in_bytes');
@@ -152,7 +220,7 @@ test('unreasonable readings fail directly rather than selecting a different sour
     await t.test(`${kind} ${bad}`, async () => {
       const fixture = v2({ self: '/user.slice/work', limit: kind === 'host' ? 'max' : 4 * GiB });
       if (kind === 'host') fixture.fs.files.set('/proc/meminfo', bad === 'zero limit' ? info(0, 0)
-        : bad === 'negative usage' ? info(4 * GiB, 5 * GiB) : info(4 * GiB, 0, 9 * GiB));
+        : bad === 'negative usage' ? info(4 * GiB, 5 * GiB) : info(4 * GiB, -9 * GiB));
       else {
         if (bad === 'zero limit') fixture.fs.files.set(fixture.directory + '/memory.max', '0');
         if (bad === 'negative usage') fixture.fs.files.set(fixture.directory + '/memory.current', '0');
@@ -185,15 +253,15 @@ test('baseline capacity honors fixed values and otherwise only the memory limit'
   assert.equal(readMemoryLimit({ platform: 'darwin', totalMemoryBytes: 0 }), null);
 });
 
-test('macOS usage parses both page sizes and swap units without Linux inputs', async () => {
+test('macOS usage parses both page sizes without requesting swap or Linux inputs', async () => {
   const fixture = mac();
-  assert.deepEqual(await readMemoryInputs(fixture), { source: 'darwin', limitBytes: 16 * GiB, usedBytes: 580000 * 16384 + 1024 * MiB });
+  assert.deepEqual(await readMemoryInputs(fixture), { source: 'darwin', limitBytes: 16 * GiB, usedBytes: 580000 * 16384 });
   assert.deepEqual(fixture.calls.map(call => [call.name, call.args, call.options.timeout]), [
-    ['vm_stat', [], 2000], ['sysctl', ['-n', 'hw.memsize', 'vm.swapusage'], 2000],
+    ['vm_stat', [], 2000], ['sysctl', ['-n', 'hw.memsize'], 2000],
   ]);
   assert.deepEqual(fixture.fs.reads, []);
-  for (const page of [4096, 16384]) for (const [swap, bytes] of [['0.00M', 0], ['1.50G', 1.5 * GiB], ['512.00K', 512 * 1024]]) {
-    assert.equal((await readMemoryInputs(mac({ page, swap }))).usedBytes, 580000 * page + bytes);
+  for (const page of [4096, 16384]) {
+    assert.equal((await readMemoryInputs(mac({ page }))).usedBytes, 580000 * page);
   }
 });
 
@@ -202,8 +270,8 @@ test('macOS missing fields, bad values and command failures make the reading una
     // All page counters remain valid; only the header's page size is missing.
     { vm: 'Mach Virtual Memory Statistics:\nAnonymous pages: 400000.\nPages purgeable: 20000.\nPages wired down: 150000.\nPages occupied by compressor: 50000.\n' },
     { vm: 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nAnonymous pages: 1.\nPages purgeable: 0.\nPages occupied by compressor: 1.\n' },
-    { sysctl: '17179869184\n' }, { sysctl: '0\nused = 0.00M\n' }, { failure: error('EXIT_1') },
-    { vm: 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nAnonymous pages: 0.\nPages purgeable: 1.\nPages wired down: 0.\nPages occupied by compressor: 0.\n', swap: '0.00M' },
+    { sysctl: '' }, { sysctl: '0\n' }, { sysctl: 'not a number\n' }, { failure: error('EXIT_1') },
+    { vm: 'Mach Virtual Memory Statistics: (page size of 16384 bytes)\nAnonymous pages: 0.\nPages purgeable: 1.\nPages wired down: 0.\nPages occupied by compressor: 0.\n' },
   ]) assert.equal(await readMemoryInputs(mac(options)), null);
   assert.equal(await readMemoryInputs({ platform: 'freebsd' }), null);
 });

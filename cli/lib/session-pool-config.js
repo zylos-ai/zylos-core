@@ -23,9 +23,6 @@ function numeric(text) {
   return n;
 }
 function read(io, file) { return io.readFileSync(file, 'utf8'); }
-function optionalNumber(io, file) {
-  try { return numeric(read(io, file)); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
-}
 function field(text, name) {
   const line = text.split('\n').find(value => value.trim().startsWith(name + ' '));
   if (!line) throw unreadable();
@@ -39,7 +36,7 @@ function meminfo(io, onlyLimit) {
     return numeric(match[1]) * 1024;
   };
   const result = { total: get('MemTotal') };
-  if (!onlyLimit) Object.assign(result, { available: get('MemAvailable'), swap: get('SwapTotal') - get('SwapFree') });
+  if (!onlyLimit) result.available = get('MemAvailable');
   return result;
 }
 function checked(memory, onlyLimit) {
@@ -50,7 +47,7 @@ function checked(memory, onlyLimit) {
 function hostMemory(io, onlyLimit) {
   const info = meminfo(io, onlyLimit);
   return checked({ source: 'host', limitBytes: info.total,
-    ...(!onlyLimit && { usedBytes: info.total - info.available + info.swap }) }, onlyLimit);
+    ...(!onlyLimit && { usedBytes: info.total - info.available }) }, onlyLimit);
 }
 function containerEvidence(io, env, self) {
   return io.existsSync('/.dockerenv') || io.existsSync('/run/.containerenv')
@@ -96,13 +93,10 @@ function cgroupMemory(io, self, onlyLimit) {
   const memory = { source: v2 ? 'cgroup2' : 'cgroup1', limitBytes: Math.min(minimum, info.total) };
   if (onlyLimit) return checked(memory, true);
   const usage = numeric(read(io, path.posix.join(group, v2 ? 'memory.current' : 'memory.usage_in_bytes')));
-  const inactive = field(read(io, path.posix.join(group, 'memory.stat')), v2 ? 'inactive_file' : 'total_inactive_file');
-  const swap = v2 ? optionalNumber(io, path.posix.join(group, 'memory.swap.current'))
-    : (() => {
-      const file = path.posix.join(group, 'memory.memsw.usage_in_bytes');
-      try { return numeric(read(io, file)) - usage; } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
-    })();
-  memory.usedBytes = usage - inactive + swap;
+  const stat = read(io, path.posix.join(group, 'memory.stat'));
+  const active = field(stat, v2 ? 'active_file' : 'total_active_file');
+  const inactive = field(stat, v2 ? 'inactive_file' : 'total_inactive_file');
+  memory.usedBytes = usage - active - inactive;
   checked(memory, false);
   memory.usedBytes = Math.max(memory.usedBytes, memory.limitBytes - info.available);
   if (v2) {
@@ -154,13 +148,9 @@ function darwinMemory(vm, sysctl) {
     if (!line) throw unreadable();
     return numeric(line.slice(name.length + 1).trim().replace(/\.$/, ''));
   };
-  const lines = sysctl.trim().split('\n');
-  const limitBytes = numeric(lines[0]);
-  const swap = lines.slice(1).join('\n').match(/\bused\s*=\s*(\d+(?:\.\d+)?)([KMG])\b/);
-  if (!swap) throw unreadable();
-  const swapBytes = Number(swap[1]) * ({ K: 1024, M: 1024 ** 2, G: GiB })[swap[2]];
+  const limitBytes = numeric(sysctl);
   return checked({ source: 'darwin', limitBytes,
-    usedBytes: (pages('Anonymous pages') - pages('Pages purgeable') + pages('Pages wired down') + pages('Pages occupied by compressor')) * pageSize + swapBytes }, false);
+    usedBytes: (pages('Anonymous pages') - pages('Pages purgeable') + pages('Pages wired down') + pages('Pages occupied by compressor')) * pageSize }, false);
 }
 /** Live usage is read asynchronously only by the capacity publisher. */
 export async function readMemoryInputs(options = {}) {
@@ -169,7 +159,7 @@ export async function readMemoryInputs(options = {}) {
   if (platform !== 'darwin') return null;
   try {
     const run = options.execFile ?? execFile;
-    const [vm, sysctl] = await Promise.all([command('vm_stat', [], run), command('sysctl', ['-n', 'hw.memsize', 'vm.swapusage'], run)]);
+    const [vm, sysctl] = await Promise.all([command('vm_stat', [], run), command('sysctl', ['-n', 'hw.memsize'], run)]);
     return darwinMemory(vm, sysctl);
   } catch { return null; }
 }

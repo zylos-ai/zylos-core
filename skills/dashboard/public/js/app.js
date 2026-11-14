@@ -3,7 +3,7 @@ import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=103';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
 import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=116';
-import { createPricingPanel } from './wb/settings-pricing.js?v=194';
+import { createPricingPanel } from './wb/settings-pricing.js?v=196';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
 import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=168';
@@ -20,7 +20,7 @@ import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, obse
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js?v=120';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=147';
-import { createUsagePage } from './wb/usage.js?v=194';
+import { createUsagePage } from './wb/usage.js?v=196';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=89';

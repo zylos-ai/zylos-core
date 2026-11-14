@@ -219,6 +219,22 @@ test('fresh fixed and fallback explanations are carried only from the publicatio
   assert.equal(fallback.capacityRecord.memory, null);
 });
 
+test('capacity adapter preserves the published decision and bucket evidence without calculating limits', async t => {
+  const model = { state: 'fitted', slopeBytes: 268435456, interceptBytes: 6141803233, windowDays: 7,
+    buckets: [{ n: 1, highBytes: 8010114007, hours: 7, samples: 2511 }] };
+  const f = fixture(t, { record: freshRecord({ k: 29, limitedBy: 'model', model }) });
+  const pool = await f.read();
+  assert.equal(pool.capacity, 29);
+  assert.equal(pool.capacityRecord.limitedBy, 'model');
+  assert.deepEqual(pool.capacityRecord.model, model);
+  assert.equal(Object.hasOwn(pool.capacityRecord, 'nModel'), false);
+  assert.equal(Object.hasOwn(pool.capacityRecord, 'nLive'), false);
+  f.publish(freshRecord({ limitedBy: 'live', computedAt: NOW - 90000 }));
+  const stale = await f.read();
+  assert.equal(stale.capacityRecord.limitedBy, 'live');
+  assert.equal(stale.capacityRecord.fresh, false);
+});
+
 // Integration: repeated reads cross Core freshness without publication changes.
 // Run for adapter caching changes; skip UI-only work. Private files/DB only.
 test('capacity is reevaluated for freshness without a Dashboard cache', async t => {

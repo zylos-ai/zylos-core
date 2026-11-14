@@ -1,6 +1,6 @@
 import { element, icon } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
-import { poolExplanation, poolSource } from './instance-strip.js?v=194';
+import { poolExplanation, poolSource, poolDecision, poolBuckets, poolAlgorithm } from './instance-strip.js?v=196';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
@@ -138,8 +138,10 @@ export function renderHostPool(section, view, { document = section.ownerDocument
     } else if (parts.source.parentNode === parts.grid) {
       parts.grid.removeChild(parts.sourceLabel); parts.grid.removeChild(parts.source);
     }
-    const entries = [['memory', { memory: record.memory }], ['model', { model: record.model }], ['floor', { reason: record.reason }]]
-      .map(([key, item]) => [key, poolExplanation(item, t)[0]]).filter(([, text]) => text != null);
+    const entries = [['memory', poolExplanation({ memory: record.memory }, t)[0]],
+      ['model', poolExplanation({ model: record.model }, t)[0]], ['buckets', poolBuckets(record, t)],
+      ['algorithm', poolAlgorithm(record, t)], ['decision', poolDecision(record, t)],
+      ['floor', poolExplanation({ reason: record.reason }, t)[0]]].filter(([, text]) => text);
     notes = keyedRows(parts.list, entries, notes, () => ({ node: element(document, 'li') }), (item, text) => setText(item.node, text));
     if (entries.length && parts.list.parentNode !== section) section.append(parts.list);
     if (!entries.length && parts.list.parentNode === section) section.removeChild(parts.list);

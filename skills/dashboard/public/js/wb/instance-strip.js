@@ -49,6 +49,29 @@ export function poolSource(pool, t) {
   if (record.source === 'fallback') return t('wb.inst.poolFallback');
   return '';
 }
+export function poolDecision(record, t) {
+  if (record?.valid !== true || record.fresh !== true) return '';
+  if (record.source === 'fixed') return t('wb.inst.poolDecisionFixed');
+  if (record.source === 'fallback') return '';
+  if (record.reason === 'floor') return t('wb.inst.poolDecisionFloor');
+  if (record.limitedBy === 'model') return t('wb.inst.poolDecisionModel');
+  if (record.limitedBy === 'live') return t('wb.inst.poolDecisionLive');
+  return '';
+}
+export function poolBuckets(record, t) {
+  if (!Array.isArray(record?.model?.buckets)) return '';
+  return record.model.buckets.filter(bucket => bucket != null && Number.isInteger(bucket.n) && bucket.n >= 0 &&
+    finite(bucket.highBytes) && bucket.highBytes >= 0 && Number.isInteger(bucket.hours) && bucket.hours >= 0 &&
+    Number.isInteger(bucket.samples) && bucket.samples >= 0)
+    .slice().sort((a, b) => a.n - b.n).map(bucket => t('wb.inst.poolBucket', {
+      count: bucket.n, amount: (bucket.highBytes / 1073741824).toFixed(2), hours: bucket.hours, samples: bucket.samples,
+    })).join('；');
+}
+export function poolAlgorithm(record, t) {
+  if (record?.valid !== true || record.fresh !== true || record.source !== 'auto') return '';
+  return ['fitted', 'default'].includes(record.model?.state) ? t('wb.inst.poolAlgorithm' +
+    (record.model.state === 'fitted' ? 'Fitted' : 'Default')) : '';
+}
 export function poolExplanation(record, t) {
   const parts = [], memory = record?.memory, model = record?.model;
   if (memory && typeof memory === 'object') {
@@ -68,6 +91,8 @@ export function poolExplanation(record, t) {
     if (finite(model.windowDays) && model.windowDays > 0) fields.push(t('wb.inst.poolModelWindow', { days: model.windowDays }));
     if (fields.length) parts.push(fields.join(' · '));
   }
+  const decision = poolDecision(record, t);
+  if (decision) parts.push(decision);
   if (record?.reason === 'floor') parts.push(t('wb.inst.poolFloor'));
   return parts;
 }
