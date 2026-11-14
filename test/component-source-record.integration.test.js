@@ -68,13 +68,16 @@ function buildUpstream() {
   commit('2.1.0-beta.1');
   git('tag', 'v2.1.0-beta.1');
   commit('2.2.0');
+  git('checkout', '-q', '-b', 'release-2.3', 'v2.0.0');
+  commit('2.3.0');
+  git('tag', 'v2.3.0');
   // A release that cannot install: npm (stubbed) fails, so the upgrade rolls back.
   git('checkout', '-q', '-b', 'release-3', 'v2.0.0');
   commit('3.0.0', { 'package.json': `${JSON.stringify({ name: NAME, version: '3.0.0' })}\n` });
   git('tag', 'v3.0.0');
   git('checkout', '-q', 'main');
 
-  const refs = { tags: ['v1.0.0', 'v2.0.0', 'v2.1.0-beta.1', 'v3.0.0'], heads: ['main', 'feat/x'] };
+  const refs = { tags: ['v1.0.0', 'v2.0.0', 'v2.1.0-beta.1', 'v2.3.0', 'v3.0.0'], heads: ['main', 'feat/x'] };
   const commits = {};
   for (const [kind, names] of Object.entries(refs)) {
     for (const name of names) {
@@ -207,10 +210,18 @@ describe('components.json records where the installed code came from', () => {
     const host = makeHost();
     host.ok(['add', REPO, '--branch', 'main', '--json'], { tags: ['v1.0.0'] });
     assert.deepEqual(host.record().source, githubSource('main', 'branch', upstream.commits.main));
+    assert.equal(host.record().branch, 'main');
 
     host.ok(['upgrade', NAME, '--branch', 'feat/x', '--yes', '--json'], { tags: ['v1.0.0'] });
     assert.equal(host.installed('payload.txt'), 'payload 2.0.1\n');
     assert.deepEqual(host.record().source, githubSource('feat/x', 'branch', upstream.commits['feat/x']));
+    assert.equal(host.record().branch, 'feat/x', 'the branch field follows the branch now installed');
+
+    // A plain upgrade of a branch install still goes to the latest release, and the record stops naming a branch.
+    host.ok(['upgrade', NAME, '--yes', '--json'], { tags: ['v2.3.0', 'v2.0.0', 'v1.0.0'] });
+    assert.equal(host.installed('payload.txt'), 'payload 2.3.0\n');
+    assert.deepEqual(host.record().source, githubSource('v2.3.0', 'tag', upstream.commits['v2.3.0']));
+    assert.equal('branch' in host.record(), false, 'a release install has no branch');
   });
 
   it('an upgrade whose release archive cannot be downloaded records the main branch it installed instead', () => {
@@ -221,6 +232,7 @@ describe('components.json records where the installed code came from', () => {
     assert.match(host.fetched(), /\/archive\/refs\/heads\/main\.tar\.gz/, 'the upgrade fell back to the main branch');
     assert.equal(host.installed('payload.txt'), 'payload 2.2.0\n');
     assert.deepEqual(host.record().source, githubSource('main', 'branch', upstream.commits.main));
+    assert.equal(host.record().branch, 'main');
   });
 
   it('a failed upgrade that rolls back leaves the record of the code still installed', () => {

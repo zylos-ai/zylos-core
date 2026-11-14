@@ -830,6 +830,13 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         components[component].version = result.to || components[component].version;
         components[component].upgradedAt = new Date().toISOString();
         components[component].source = recordedSource({ type: 'github-release', repo }, dlResult.source);
+        // `branch` names the branch the installed code came from, so it follows the recorded source: kept in step
+        // after a branch upgrade (including the main-branch fallback), removed once a release is installed.
+        if (components[component].source.refType === 'branch') {
+          components[component].branch = components[component].source.ref;
+        } else {
+          delete components[component].branch;
+        }
 
         // Update bin symlinks (remove old, create new)
         const oldBin = components[component].bin;
