@@ -146,11 +146,9 @@
 .wb-btn-primary { background: var(--c-primary); border-color: var(--c-primary); color: var(--c-on-fill); }
 .wb-btn-primary:hover:not(:disabled) { background: var(--c-primary-hover); border-color: var(--c-primary-hover); }
 .wb-btn-primary:active:not(:disabled) { background: var(--c-primary-press); border-color: var(--c-primary-press); }
-.wb-btn-primary:focus-visible { outline: none; box-shadow: var(--c-focus); }
 .wb-btn-danger { background: var(--c-danger); border-color: var(--c-danger); color: var(--c-on-fill); }
 .wb-btn-danger:hover:not(:disabled) { background: var(--c-danger-hover); border-color: var(--c-danger-hover); }
 .wb-btn-danger:active:not(:disabled) { background: var(--c-danger-press); border-color: var(--c-danger-press); }
-.wb-btn-danger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--c-surface), 0 0 0 4px var(--c-danger); }
 .wb-icon-btn { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); cursor: pointer; transition: background .14s, color .14s; }
 .wb-icon-btn:hover:not(:disabled) { background: var(--wb-hover); color: var(--text); }
 .wb-icon-btn:disabled { opacity: .38; cursor: not-allowed; }
@@ -208,6 +206,9 @@ html[data-detail=technical] .wb-tech-btn { color: var(--text); }
 html[data-detail=technical] .wb-tech-btn i { background: var(--accent); }
 html[data-detail=technical] .wb-tech-btn i::after { left: 12px; }
 .wb-tech-btn:focus-visible, .wb-icon-btn:focus-visible, .wb-btn:focus-visible, .wb-link-btn:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+/* Filled buttons draw their focus ring with the box shadow instead; they follow the rule above so the outline does not come back as a second ring. */
+.wb-btn-primary:focus-visible { outline: none; box-shadow: var(--c-focus); }
+.wb-btn-danger:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--c-surface), 0 0 0 4px var(--c-danger); }
 
 /* Navigation on its own scrollable row: phones always, wider screens when the one row does not fit. */
 html.wb-nav-row .app-header { flex-wrap: wrap; height: auto; min-height: 48px; column-gap: 6px; row-gap: 0; }
