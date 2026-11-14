@@ -2,6 +2,10 @@ import test from 'node:test';
 import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
 
 const cases = [
+  // Impact: a forever-pending board groups or optional cost read must abort after
+  // the real thirty-second budget, report failure and let the next poll recover.
+  // Run for board request deadlines/coalescing/error changes; other work may skip.
+  ...['groups', 'cost'].map(held => ({ name: `a hanging board ${held} request times out and recovers on the next poll at 390px`, kind: 'timeout', held, locale: 'zh', width: 390 })),
   // Impact: main-pack delay must not serialize the independent workbench pack or
   // observer startup. Run for i18n/startup coordination changes; other work may skip.
   ...[390, 1280].map(width => ({ name: `fresh Chinese starts independent requests before an eight-second main pack at ${width}px`, kind: 'parallel', locale: 'zh', width })),
@@ -19,14 +23,14 @@ for (const scenario of cases) {
   // proves HOME, ZYLOS_DIR, PM2_HOME, short TMPDIR, private socket and both DB
   // paths before browser/HTTP startup. No tmux, PM2 or database is opened.
   // Each case owns browser contexts, pending routes, timers, streams and server.
-  test(scenario.name, { skip: !chatEnabled(), timeout: 45000 }, async t => {
+  test(scenario.name, { skip: !chatEnabled(), timeout: scenario.kind === 'timeout' ? 65000 : 45000 }, async t => {
     if (failed) { t.skip('a prior startup case already provided a counterexample'); return; }
     const sandbox = createChatSandbox(t);
     try {
       await sandbox.runCase(async () => {
         const { runStartupParallelBrowser } = await import('./helpers/dashboard-startup-parallel-browser.js');
         await runStartupParallelBrowser(sandbox, scenario);
-      }, { timeoutMs: 35000 });
+      }, { timeoutMs: scenario.kind === 'timeout' ? 55000 : 35000 });
     } catch (error) { failed = true; throw error; }
   });
 }

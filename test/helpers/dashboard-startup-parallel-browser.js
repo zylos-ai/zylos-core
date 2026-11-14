@@ -22,9 +22,12 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
     const timer = setTimeout(() => { timers.delete(timer); resolve(); }, ms);
     timers.set(timer, resolve);
   });
+  let releaseHeld, heldReleased = false, heldRequest = null;
+  const heldGate = new Promise(resolve => { releaseHeld = resolve; });
   // Register last as well as early enough that any setup failure owns its timers.
   const stop = () => {
     closing = true;
+    heldReleased = true; releaseHeld();
     for (const [timer, resolve] of timers) { clearTimeout(timer); resolve(); }
     timers.clear();
     for (const stream of streams) stream.end();
@@ -62,6 +65,15 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
       requests.set(pathname, count);
       if (!starts.has(pathname)) starts.set(pathname, performance.now());
       if (count > 50) { recordError(`request bound exceeded for ${pathname}`); return await route.abort(); }
+      const isHeldGroups = scenario.kind === 'timeout' && scenario.held === 'groups' && pathname === groupsPath && count === 2;
+      const isHeldCost = scenario.kind === 'timeout' && scenario.held === 'cost' && pathname === '/api/workbench/usage' && url.searchParams.get('summary') === 'cost' && !heldRequest;
+      if (isHeldGroups || isHeldCost) {
+        heldRequest = { pathname, count };
+        // Supply no response, not even after the product aborts. Only lifecycle
+        // cleanup releases this handler; recovery must come from a later poll.
+        await heldGate;
+        return await route.abort();
+      }
       if (scenario.kind === 'parallel' && pathname === mainPath) {
         await pause(8000);
         if (closing) return await route.abort();
@@ -91,15 +103,24 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
     // Observer and fleet startup legitimately read groups independently. Track
     // the board's own stack separately so those reads do not hide duplicate polls.
     const fetch = window.fetch.bind(window);
-    const observations = window.__startupGroups = { calls: [], active: {}, maxActive: {} };
+    const observations = window.__startupGroups = { calls: [], active: {}, maxActive: {}, alerts: [] };
+    const observer = new MutationObserver(() => {
+      const alert = document.querySelector('#wb-board > .wb-empty[role="alert"]');
+      if (alert && observations.alerts.length < 5 && observations.alerts.at(-1)?.text !== alert.textContent) observations.alerts.push({ text: alert.textContent, at: performance.now() });
+    });
+    observer.observe(document, { childList: true, subtree: true });
+    window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
     window.fetch = function (...args) {
-      if (new URL(typeof args[0] === 'string' ? args[0] : args[0].url, location.href).pathname !== groupsPath) return fetch(...args);
-      const source = new Error().stack.includes('/wb/shell.js') ? 'board' : 'startup';
-      const call = { source, started: performance.now(), finished: null };
+      const url = new URL(typeof args[0] === 'string' ? args[0] : args[0].url, location.href);
+      const cost = url.pathname === '/api/workbench/usage' && url.searchParams.get('summary') === 'cost';
+      if (url.pathname !== groupsPath && !cost) return fetch(...args);
+      const source = cost ? 'cost' : new Error().stack.includes('/wb/shell.js') ? 'board' : 'startup';
+      const signal = args[1]?.signal ?? args[0]?.signal;
+      const call = { source, started: performance.now(), finished: null, aborted: false };
       observations.calls.push(call);
       observations.active[source] = (observations.active[source] || 0) + 1;
       observations.maxActive[source] = Math.max(observations.maxActive[source] || 0, observations.active[source]);
-      return fetch(...args).finally(() => { call.finished = performance.now(); observations.active[source]--; });
+      return fetch(...args).finally(() => { call.finished = performance.now(); call.aborted = signal?.aborted === true; observations.active[source]--; });
     };
   }, { locale: scenario.locale, groupsPath });
   const page = await context.newPage();
@@ -110,7 +131,52 @@ export async function runStartupParallelBrowser(sandbox, scenario) {
   const start = performance.now();
   await page.goto(base + '/', { waitUntil: 'commit' });
   const labels = pack(scenario.locale);
-  if (scenario.kind === 'parallel') {
+  if (scenario.kind === 'timeout') {
+    const loading = page.locator('#wb-board > .wb-empty[role="status"]');
+    await loading.waitFor({ state: 'visible', timeout: 8500 });
+    assert.equal(await loading.textContent(), labels['wb.board.loading']);
+    assert.equal(await page.locator('.wb-row[data-group]').count(), 0, 'held first board snapshot has not supplied rows');
+    assert.ok(heldRequest, 'the intended first board request is actually held');
+    const initial = await page.evaluate(() => window.__startupGroups.calls);
+    const board = initial.filter(call => call.source === 'board');
+    assert.equal(board.length, 1, 'one actual board snapshot request started');
+    if (scenario.held === 'groups') {
+      assert.equal(heldRequest.count, 2, 'startup observer groups response is not the held board response');
+      assert.equal(initial.filter(call => call.source === 'startup').length, 1);
+      assert.ok(initial.find(call => call.source === 'startup').finished !== null, 'independent observer startup groups already completed');
+      assert.equal(board[0].finished, null, 'the held second groups HTTP request belongs to the board');
+    } else {
+      assert.equal(initial.filter(call => call.source === 'cost').length, 1);
+      assert.equal(initial.find(call => call.source === 'cost').finished, null, 'the first summary=cost request is still held');
+    }
+    // This bound exceeds the real 30s timeout plus a 5s poll. With no request
+    // timeout, no response/error/second poll can occur and this wait fails.
+    try {
+      await page.waitForFunction(source => {
+        const observations = window.__startupGroups;
+        return observations.calls.filter(call => call.source === source).length >= 2 &&
+          observations.alerts.length > 0 && document.querySelector('#wb-board .wb-row[data-group]');
+      }, scenario.held === 'groups' ? 'board' : 'cost', { timeout: 43000 });
+    } catch (error) {
+      console.info('Board timeout recovery failure:', JSON.stringify({ heldRequest, heldReleased, errors,
+        observations: await page.evaluate(() => window.__startupGroups).catch(() => null) }));
+      throw error;
+    }
+    await page.locator('.wb-row[data-group]').first().waitFor({ state: 'visible' });
+    const observations = await page.evaluate(() => window.__startupGroups);
+    const source = scenario.held === 'groups' ? 'board' : 'cost';
+    const calls = observations.calls.filter(call => call.source === source);
+    assert.equal(calls[0].aborted, true, 'the product aborts the unanswered request signal');
+    assert.ok(calls[0].finished - calls[0].started >= 29500, 'the real thirty-second budget elapsed without a shortened clock');
+    assert.ok(calls[0].finished - calls[0].started <= 35000, 'the unanswered read has a bounded deadline');
+    assert.ok(calls[1].started >= calls[0].finished, 'the next poll starts only after the old request settles');
+    assert.ok(calls[1].started - calls[0].finished <= 6500, 'the normal five-second polling cadence resumes');
+    assert.equal(observations.maxActive[source], 1, 'timeout recovery does not overlap same-purpose requests');
+    assert.equal(observations.alerts[0].text, labels['wb.readFailed'], 'the existing error path renders before recovery');
+    assert.equal(heldReleased, false, 'test never released or answered the hung original request');
+    assert.equal(await page.locator('#wb-board > .wb-empty').count(), 0, 'successful next poll replaces the initial error with rows');
+    console.info('Board timeout recovery observation:', JSON.stringify({ held: scenario.held, heldRequest, observations }));
+  } else if (scenario.kind === 'parallel') {
     try {
       await page.waitForFunction(() => document.querySelector('[data-i18n="wb.col.state"]')?.textContent === '状态', null, { timeout: 7500 });
     } catch (error) {

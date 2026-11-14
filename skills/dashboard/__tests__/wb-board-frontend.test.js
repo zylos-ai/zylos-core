@@ -112,30 +112,39 @@ test('board wires activity to each matching group', () => {
   assert.equal(strip.children[0].classList.contains('wb-inbound'), false);
   assert.equal(strip.children[0].classList.contains('wb-busy'), true);
 });
-test('snapshot controller shares pending work across polls and retains rows after failure', async () => {
+test('snapshot controller shares pending work across polls and retains rows after failure', { timeout: 5000 }, async t => {
   const pending = deferred(); let calls = 0, shown = null, failure = null;
   const controller = boardController({ fetchSnapshot: () => (++calls === 1 ? pending.promise : Promise.reject(Error('offline'))),
     onSnapshot: value => { shown = value; }, onError: (_, at) => { failure = at; }, now: () => 100 });
+  t.after(() => { controller.stop(); pending.resolve('cleanup'); });
   const first = controller.refresh();
-  await controller.refresh(); await controller.refresh();
+  const second = controller.refresh();
   assert.equal(calls, 1, 'polls do not overlap a pending snapshot');
+  const third = controller.refresh();
+  assert.equal(calls, 1, 'later polls still share the pending snapshot');
+  await second; await third;
   pending.resolve('slow'); await first;
   assert.equal(shown, 'slow', 'later polls do not invalidate the slow response');
-  await controller.refresh(); assert.equal(calls, 2); assert.equal(shown, 'slow'); assert.equal(failure, 100); controller.stop();
+  await controller.refresh(); assert.equal(calls, 2); assert.equal(shown, 'slow'); assert.equal(failure, 100);
 });
-test('snapshot invalidation rejects old owners without clearing the new pending request', async () => {
+test('snapshot invalidation rejects old owners without clearing the new pending request', { timeout: 5000 }, async t => {
   const old = deferred(), current = deferred(); let calls = 0, shown = null;
   const controller = boardController({ fetchSnapshot: () => (++calls === 1 ? old.promise : current.promise),
     onSnapshot: value => { shown = value; }, onError: assert.fail });
+  t.after(() => { controller.stop(); old.resolve('cleanup'); current.resolve('cleanup'); });
   const first = controller.refresh(); controller.invalidate(); const second = controller.refresh();
+  assert.equal(calls, 2, 'invalidation allows a new request before the old owner finishes');
   old.resolve('old owner'); await first; assert.equal(shown, null);
-  await controller.refresh(); assert.equal(calls, 2, 'old completion cannot release the new request');
-  current.resolve('new owner'); await second; assert.equal(shown, 'new owner'); controller.stop();
+  const third = controller.refresh();
+  assert.equal(calls, 2, 'old completion cannot release the new request');
+  await third;
+  current.resolve('new owner'); await second; assert.equal(shown, 'new owner');
 });
-test('snapshot lifecycle polls only while visible and cancels late responses on stop', async () => {
+test('snapshot lifecycle polls only while visible and cancels late responses on stop', { timeout: 5000 }, async t => {
   let visible = false, calls = 0, timer, cleared; const pending = deferred();
   const controller = boardController({ visible: () => visible, fetchSnapshot: () => { calls++; return pending.promise; },
     onSnapshot: () => assert.fail('stopped result'), onError: () => {}, setTimer: (fn, ms) => { timer = fn; assert.equal(ms, 5000); return 7; }, clearTimer: id => { cleared = id; } });
+  t.after(() => { controller.stop(); pending.resolve({}); });
   controller.start(); assert.equal(calls, 0); visible = true; const work = timer(); assert.equal(calls, 1); controller.stop(); pending.resolve({}); await work; assert.equal(cleared, 7);
 });
 test('search debounces, clears and rejects stale results independently from snapshots', async () => {

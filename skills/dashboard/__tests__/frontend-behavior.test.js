@@ -1764,7 +1764,7 @@ test('i18n loader falls back to cache, heals both packs, and ignores stale recov
   assert.deepEqual(JSON.parse(values.get(primaryKey)), { 'btn.actions': '恢复操作' });
 
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /from '\.\/i18n\.js\?v=89'/);
+  assert.match(app, /from '\.\/i18n\.js\?v=90'/);
 });
 
 test('overlapping initI18n calls: stale slow request cannot overwrite the newer locale (#211 review)', async () => {

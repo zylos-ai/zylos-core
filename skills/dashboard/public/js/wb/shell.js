@@ -1,3 +1,4 @@
+import { withRequestTimeout } from '../request-timeout.js?v=2';
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=151';
 import { boardController, renderBoard, renderDistribution } from './board.js?v=155';
 import { createBoardSearch } from './board-search.js?v=87';
@@ -8,6 +9,8 @@ import { loadNamePrompt, renderAutoName } from './auto-name.js?v=106';
 import { createHostPanel } from './host-panel.js?v=199';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=2';
+
+const REQUEST_TIMEOUT_MS = 30000;
 
 export function mountWorkbench({ document = globalThis.document, window = globalThis.window, t = key => key,
   endpoint = path => path, identity = () => endpoint('/api/workbench/groups'),
@@ -31,9 +34,9 @@ export function mountWorkbench({ document = globalThis.document, window = global
   try {
     if (storage.getItem('zylos-dashboard-activity-range') === '6h') range = '6h';
   } catch {}
-  const read = async path => {
+  const read = async (path, { signal } = {}) => {
     const captured = identity();
-    const response = await fetch(endpoint(path));
+    const response = await fetch(endpoint(path), { signal });
     if (captured !== identity() || stopped) {
       if (!stopped) resetOwner();
       throw Error('view_changed');
@@ -232,9 +235,12 @@ export function mountWorkbench({ document = globalThis.document, window = global
     visible,
     fetchSnapshot: async () => {
       const [groups, expense] = await Promise.allSettled([
-        read('/api/workbench/groups'), read('/api/workbench/usage?summary=cost'),
+        withRequestTimeout(signal => read('/api/workbench/groups', { signal }), REQUEST_TIMEOUT_MS),
+        withRequestTimeout(signal => read('/api/workbench/usage?summary=cost', { signal }), REQUEST_TIMEOUT_MS),
       ]);
       if (groups.status !== 'fulfilled') throw groups.reason;
+      // A timed-out optional read must report the stalled snapshot; other cost failures still allow group data.
+      if (expense.status === 'rejected' && expense.reason?.name === 'TimeoutError') throw expense.reason;
       return {
         snapshot: groups.value,
         cost: expense.status === 'fulfilled' ? expense.value.costSummary : null,
