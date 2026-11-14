@@ -1,5 +1,5 @@
 import { element, icon } from './plain-text.js?v=106';
-import { money } from './instance-strip.js?v=199';
+import { money } from './instance-strip.js?v=200';
 import { dateField } from './date-field.js?v=106';
 import { instantFromInput } from './instance-zone.js?v=100';
 

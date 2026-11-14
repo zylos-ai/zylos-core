@@ -1,6 +1,6 @@
-import { element, icon } from './plain-text.js?v=106';
+import { element, icon, runtimeName } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
-import { poolExplanation, poolSource, poolDecision, poolBuckets, poolAlgorithm } from './instance-strip.js?v=199';
+import { poolExplanation, poolSource, poolDecision, poolBuckets, poolAlgorithm, accountUsedPercent, remainingQuotaPercent, quotaReset, quotaRecordedTime } from './instance-strip.js?v=200';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
@@ -162,9 +162,39 @@ export function renderHostPool(section, view, { document = section.ownerDocument
   return { update };
 }
 
+export function renderHostAccounts(section, accounts, { document = section.ownerDocument, t = key => key, now = Date.now() } = {}) {
+  section.replaceChildren();
+  const title = element(document, 'h4'); title.append(icon(document, 'chart', 'xs'), element(document, 'span', t('wb.host.accounts')));
+  const grid = element(document, 'div', undefined, 'wb-kvs'); section.append(title, grid);
+  let rows = new Map();
+  // Each keyed entry is a display:contents row, preserving the existing two-column grid.
+  const refresh = (value, at = Date.now()) => {
+    const entries = Object.entries(value ?? {}).map(([runtime, usage]) => [runtime, { runtime, usage, reset: quotaReset(usage, t, at) }])
+      .filter(([, item]) => item.reset);
+    section.hidden = entries.length === 0;
+    rows = keyedRows(grid, entries, rows, () => {
+      const node = element(document, 'div'); node.style.display = 'contents';
+      const label = element(document, 'span'), detail = element(document, 'span');
+      detail.style.minWidth = '0'; detail.style.overflowWrap = 'anywhere'; node.append(label, detail);
+      return { node, label, detail };
+    }, (item, { runtime, usage, reset }) => {
+      setText(item.label, runtimeName(runtime));
+      const pct = remainingQuotaPercent(accountUsedPercent(usage));
+      const text = [pct == null ? t('wb.quotaUnknown') : t('wb.quotaRemaining', { pct: Math.round(pct) }), reset.text];
+      if (usage.live === false) {
+        const time = quotaRecordedTime(usage, at);
+        text.push(t(time ? 'wb.quotaResetRecorded' : 'wb.quotaResetRecordedUnknown', { time }));
+      }
+      setText(item.detail, text.join(' · '));
+    });
+  };
+  refresh(accounts, now);
+  return { update: refresh };
+}
+
 // Structure is mounted once per view; background observations update its retained nodes.
 export function renderHost(root, value, { document = root.ownerDocument, t = key => key,
-  level = 'plain', range = '6h', meta = null, pool = null, onRange = () => {}, onClose = () => {}, onUsage = () => {}, chartFactory = defaultChart } = {}) {
+  level = 'plain', range = '6h', meta = null, pool = null, accounts = null, now = Date.now(), onRange = () => {}, onClose = () => {}, onUsage = () => {}, chartFactory = defaultChart } = {}) {
   root.replaceChildren();
   const charts = [], header = element(document, 'header', undefined, 'wb-detail-header');
   const top = element(document, 'div', undefined, 'wb-d-top');
@@ -182,7 +212,9 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   card.append(title);
   const poolSection = element(document, 'section', undefined, 'wb-ip-card wb-host-pool');
   const poolView = renderHostPool(poolSection, pool, { document, t });
-  body.append(card, poolSection);
+  const accountsSection = element(document, 'section', undefined, 'wb-ip-card wb-host-accounts');
+  const accountsView = renderHostAccounts(accountsSection, accounts, { document, t, now });
+  body.append(card, poolSection, accountsSection);
   const fields = [['cpu', 'cpu', 'cpu_pct'], ['mem', 'memory', 'mem_used_pct'], ['disk', 'disk', 'disk_used_pct']];
   const lang = document.documentElement?.lang || undefined;
   const short = range === '7d' ? { month: 'numeric', day: 'numeric' } : { hour: '2-digit', minute: '2-digit' };
@@ -215,13 +247,14 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
     scroll.append(table); details.append(scroll); card.append(details);
   }
   let errorNode = null;
-  const update = (next, { meta: nextMeta = meta, pool: nextPool = pool, failure = null } = {}) => {
+  const update = (next, { meta: nextMeta = meta, pool: nextPool = pool, accounts: nextAccounts = accounts, now: nextNow = now, failure = null } = {}) => {
     const metaItems = [nextMeta?.name, ...(level === 'technical' ? [nextMeta?.mode, nextMeta?.core] : [])].filter(Boolean);
     if (metaItems.length) {
       setText(metaNode, metaItems.join(' · '));
       if (metaNode.parentNode !== header) header.append(metaNode);
     } else if (metaNode.parentNode === header) header.removeChild(metaNode);
     poolView.update(nextPool);
+    accountsView.update(nextAccounts, nextNow);
     const pm2 = next?.pm2, down = pm2 == null ? null : pm2.total - pm2.online;
     setText(service, level === 'technical'
       ? `${t('wb.host.pm2')} ${pm2 == null ? t('wb.unknown') : pm2.online + ' / ' + pm2.total} ${t('wb.host.online')}`
@@ -253,17 +286,17 @@ export function renderHost(root, value, { document = root.ownerDocument, t = key
   return { update, destroy() { charts.forEach(chart => chart.destroy()); } };
 }
 
-export function createHostPanel({ root, read, identity = () => '', detail = () => 'plain', meta = () => null, pool = () => null,
+export function createHostPanel({ root, read, identity = () => '', detail = () => 'plain', meta = () => null, pool = () => null, accounts = () => null, now = Date.now,
   document = root.ownerDocument, t = key => key, onOpen = () => {}, onClose = () => {}, onUsage = () => {}, chartFactory } = {}) {
   let active = false, generation = 0, owner = null, data = null, rendered = null, range = '6h', failure = null, level = null, language = null;
   const draw = ({ reset = false } = {}) => {
     const nextLevel = detail(), nextLanguage = document.documentElement?.lang;
     if (reset || !rendered || level !== nextLevel || language !== nextLanguage) {
       rendered?.destroy(); level = nextLevel; language = nextLanguage;
-      rendered = renderHost(root, data, { document, t, level, range, meta: meta(), pool: pool(), onClose: close,
+      rendered = renderHost(root, data, { document, t, level, range, meta: meta(), pool: pool(), accounts: accounts(), now: now(), onClose: close,
         onUsage: () => { close(); onUsage(); }, onRange: next => { range = next; void refresh({ reset: true }); }, chartFactory });
     }
-    rendered.update(data, { meta: meta(), pool: pool(), failure });
+    rendered.update(data, { meta: meta(), pool: pool(), accounts: accounts(), now: now(), failure });
     root.hidden = false;
   };
   async function refresh({ reset = false } = {}) {
