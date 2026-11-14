@@ -539,7 +539,7 @@ test('pool explanations show only usable published values in the host panel, not
   assert.ok(section.textContent.includes('来源手动设定 6（按内存建议 0）'));
   const items = allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent);
   assert.deepEqual(items, ['未设内存上限，按整机内存 · 内存上限 4 GiB · 已用 3.7 GiB（不含文件缓存和交换区） · 保底 0.5 GiB',
-    '每会话约 0.5 GiB · 固定开销约 1.3 GiB（各档的中间值） · 近 7 天', '内存只够 Origin，同时运行上限按 1 运行']);
+    '每会话约 0.5 GiB · 固定开销约 1.3 GiB（各档的中间值） · 近 7 天', '内存只够 Origin，同时运行上限为 1']);
   capacityRecord.kMemory = -2; capacityRecord.reason = null;
   capacityRecord.memory = { source: 'darwin', limitBytes: '4', usedBytes: null, reserveBytes: NaN };
   capacityRecord.model = { state: 'default', slopeBytes: 0.5 * GiB, interceptBytes: 'bad', windowDays: undefined };
@@ -632,7 +632,7 @@ test('pool decision priority and freshness gate new explanations while preservin
     for (const text of [section.textContent, title]) {
       assert.ok(text.includes('已用 1 GiB（不含文件缓存和交换区）'));
       assert.ok(text.includes('数据积累中'));
-      assert.equal(text.split('内存只够 Origin，同时运行上限按 1 运行').length - 1, patch.reason === 'floor' ? 1 : 0);
+      assert.equal(text.split('内存只够 Origin，同时运行上限为 1').length - 1, patch.reason === 'floor' ? 1 : 0);
       assert.doesNotMatch(text, /由下限托在 1|wb\.inst\.poolDecisionFloor/);
     }
   }

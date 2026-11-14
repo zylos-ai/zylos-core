@@ -1115,7 +1115,7 @@
   "wb.inst.poolAlgorithmFitted": "上限 = 内存能放下的会话数 − 1（给 Origin 留一位），至少 1；能放下的会话数取「按近 7 天的档」与「按眼下剩余内存」中较小的",
   "wb.inst.poolAlgorithmDefault": "上限 = 按眼下剩余内存能放下的会话数 − 1（给 Origin 留一位），至少 1；数据积累中，每会话先按 0.5 GiB 算",
   "wb.inst.poolModelWindow": "近 {days} 天",
-  "wb.inst.poolFloor": "内存只够 Origin，同时运行上限按 1 运行",
+  "wb.inst.poolFloor": "内存只够 Origin，同时运行上限为 1",
   "wb.inst.cpuCores": "{count} 核",
   "wb.inst.memoryUsed": "已用 {used} / {total} GiB",
   "wb.inst.diskFree": "剩余 {free} GiB",

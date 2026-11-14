@@ -122,7 +122,7 @@ const QUEUE = { zh: { plain: '· 2 个在排队', technical: '· 2 排队' }, en
 const SOURCE = { zh: '手动设定 4（按内存建议 3）', en: 'Manually set to 4 (memory recommendation: 3)' };
 const EXPLANATIONS = {
   zh: ['未设内存上限，按整机内存 · 内存上限 16 GiB · 已用 9.5 GiB · 保底 2 GiB', '每会话约 1.2 GiB · 固定开销约 0.8 GiB · 近 7 天',
-    '内存只够 Origin，同时运行上限按 1 运行'],
+    '内存只够 Origin，同时运行上限为 1'],
   en: ['No memory limit set; using host memory · Memory limit 16 GiB · used 9.5 GiB · reserve 2 GiB',
     'about 1.2 GiB per session · fixed overhead about 0.8 GiB · over the last 7 days', 'Memory fits only Origin; running with a limit of 1'],
 };
