@@ -50,6 +50,7 @@ for (const [name, change] of [
   ['empty fallback', block => { block.fallbackText = ''; }],
   ['spaces-only fallback', block => { block.fallbackText = '   '; }],
   ['line-break-only fallback', block => { block.fallbackText = '\n\r\n'; }],
+  ['zero-width-only fallback', block => { block.fallbackText = '\u200b'; }],
   ['non-string fallback', block => { block.fallbackText = null; }],
   ['long fallback', block => { block.fallbackText = '😀'.repeat(2001); }],
   ['missing id', block => { delete block.id; }],
