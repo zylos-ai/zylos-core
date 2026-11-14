@@ -6,7 +6,7 @@ import { createModeSwitchConverter } from '../../skills/activity-monitor/scripts
 import { readSessionMode, writeSessionModeAtCutover } from '../../cli/lib/config.js';
 const fault = process.argv[2] ?? '';
 const logs = [], events = [];
-let restartCalls = 0, confirmationCalls = 0, service, runtimeScenes = [];
+let restartCalls = 0, confirmationCalls = 0, service, runtimeScenes = JSON.parse(process.argv[3] ?? '[]');
 const stoppedRuns = [];
 let injectedFailure = '';
 const convert = createModeSwitchConverter({db,zylosDir:process.env.ZYLOS_DIR});

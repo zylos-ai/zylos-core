@@ -7,6 +7,8 @@ import {test, expect} from '@jest/globals';
 
 const pm2 = process.env.ZYLOS_SERVICE_INTEGRATION_PM2;
 const runTest = pm2 ? test : test.skip;
+const title = 'restores a real custom PM2 application absent from the ecosystem'
+  + (pm2 ? '' : ' (requires ZYLOS_SERVICE_INTEGRATION_PM2: absolute PM2 executable path)');
 
 // Covers actual PM2 saved-record stop/start/verification through step11 and
 // maintenance.start, with an app absent from the ecosystem. Run when these
@@ -16,7 +18,7 @@ const runTest = pm2 ? test : test.skip;
 // PM2_HOME and a short TMPDIR; use a private tmux socket and test databases.
 // Read back actual arguments, environment and targets before launching, then
 // clean only the owned PM2 daemon, socket and fixture resources.
-runTest('restores a real custom PM2 application absent from the ecosystem', () => {
+runTest(title, () => {
   expect(path.isAbsolute(pm2)).toBe(true);
   expect(fs.statSync(fs.realpathSync(pm2)).isFile()).toBe(true);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usr-')));

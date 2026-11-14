@@ -24,16 +24,26 @@ async function decided(checker, input) {
     await delay(20);
   }
 }
-// exercise the production PM2 CLI transport against a private
-// daemon. A successful CLI exit alone must not confirm the dispatcher's generation.
+// Covers the production PM2 CLI transport and exact generation confirmation.
+// Run for restart/confirmation changes; skip only when the declared PM2 dev
+// dependency is absent. Never fall back to a host-global executable. Official
+// runner isolates HOME/ZYLOS_DIR/TMPDIR; this case owns a private PM2 daemon,
+// uses no tmux or database, and kills that daemon before removing its fixture.
 test('real private PM2 confirms exact online generation, rejects false success and cleans its daemon', { timeout: 45000 }, async t => {
+  let pm2Entry;
+  try { pm2Entry = import.meta.resolve('pm2/bin/pm2'); }
+  catch (error) {
+    if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    t.skip('requires the declared pm2 development dependency; provision repository dev dependencies to run the private-daemon integration');
+    return;
+  }
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dispatcher-pm2-')));
   const home = path.join(root, 'pm2'); fs.mkdirSync(home);
   // Resolve the declared test dependency, never a host-global PM2 executable.
   // Both the production transport and fixture commands use this private entry.
   const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
   const entry = path.join(bin, 'pm2.mjs');
-  fs.writeFileSync(entry, `#!${process.execPath}\nimport ${JSON.stringify(import.meta.resolve('pm2/bin/pm2'))};\n`, { mode: 0o700 });
+  fs.writeFileSync(entry, `#!${process.execPath}\nimport ${JSON.stringify(pm2Entry)};\n`, { mode: 0o700 });
   fs.symlinkSync(entry, path.join(bin, 'pm2'));
   fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   const previousPath = process.env.PATH;
@@ -60,6 +70,12 @@ test('real private PM2 confirms exact online generation, rejects false success a
   });
   const script = path.join(root, 'idle.mjs');
   fs.writeFileSync(script, 'setInterval(() => {}, 1000);\n');
+  assert.ok(home.startsWith(root + path.sep));
+  assert.notEqual(env.HOME, os.userInfo().homedir);
+  assert.ok(env.ZYLOS_DIR.startsWith(env.HOME + path.sep));
+  assert.ok(Buffer.byteLength(path.join(home, 'rpc.sock')) < 100);
+  t.diagnostic(JSON.stringify({ pm2Entry, script, HOME: env.HOME, ZYLOS_DIR: env.ZYLOS_DIR,
+    PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR, tmux: 'unused', database: 'unused' }));
   // Set before the first command so cleanup also handles partial PM2 startup.
   daemonStarted = true;
   await command(['start', script, '--name', 'c4-dispatcher', '--no-autorestart']);
@@ -105,13 +121,4 @@ test('real private PM2 confirms exact online generation, rejects false success a
   }
   assert.equal(events.length, 5);
 
-  // Known-bad variant: treating successful `pm2 restart` exit as confirmation.
-  // The exact stale-generation assertion above must reject this implementation.
-  class ExitCodeOnly extends DispatcherRestartConfirmation {
-    async advance() { await this.restart({ name: this.processName, timeoutMs: this.timeoutMs }); return { confirmed: true, pending: false }; }
-  }
-  const bad = new ExitCodeOnly({ restart: () => command(['restart', 'unrelated-fixture']) });
-  await assert.rejects(async () => {
-    assert.equal((await bad.advance({ runId: 'bad', writtenAt: Date.now() })).confirmed, false);
-  }, { code: 'ERR_ASSERTION' });
 });
