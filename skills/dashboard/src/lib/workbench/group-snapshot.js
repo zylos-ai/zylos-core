@@ -170,11 +170,11 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
           until: new Date(at).toISOString(), sourceTime: true, order: 'desc' };
         const end = store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 });
         // From shortly before its last stop: a queued message taken as that turn ended can be timed before the stop.
-        const since = end[0] ? { since: new Date(Date.parse(end[0].timestamp) - STOP_HOOK_LAG_MS).toISOString() } : {};
+        const afterStop = end[0] ? { since: new Date(Date.parse(end[0].timestamp) - STOP_HOOK_LAG_MS).toISOString() } : {};
         // The main agent's latest actions after its last stop, enough to tell when its current stretch of work began.
-        const actions = store.queryEvents({ ...filter, ...since, types: MAIN_ACTION_TYPES, agentScope: 'main', limit: activityLookbackLimit });
+        const actions = store.queryEvents({ ...filter, ...afterStop, types: MAIN_ACTION_TYPES, agentScope: 'main', limit: activityLookbackLimit });
         // The input it took since that stop, which keeps it working until its next stop however long ago it began.
-        const input = store.queryEvents({ ...filter, ...since, types: MAIN_INPUT_TYPES, agentScope: 'main', limit: 1 });
+        const input = store.queryEvents({ ...filter, ...afterStop, types: MAIN_INPUT_TYPES, agentScope: 'main', limit: 1 });
         const children = store.queryEvents({ ...filter, types: CHILD_TYPES, agentScope: 'child', limit: activityLookbackLimit });
         // Keep each child's own latest tool time, so a noisy sibling cannot hide another child's freshness.
         const childTools = store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'child', latestPerAgent: true, limit: activityLookbackLimit });
