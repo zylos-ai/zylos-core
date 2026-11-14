@@ -139,12 +139,17 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
         if (scenario.legacy) { delete target.session_mode; delete target.group_summary; }
         else target.group_summary = scenario.summary;
         const fleet = { agents: [own, remote], updated_at: new Date(now).toISOString() };
-        await page.route('**/api/**', route => {
+        await page.route('**/api/**', async route => {
           const url = new URL(route.request().url());
           assert.equal(route.request().method(), 'GET', 'render/navigation never mutates a runtime');
           if (url.pathname.startsWith('/fleet/remote-case/api/')) {
             remoteReads.push(url.pathname);
             url.pathname = url.pathname.slice('/fleet/remote-case'.length);
+            if (url.pathname === '/api/workbench/groups' && scenario.remote && !scenario.legacy) {
+              // Delayed transport stresses the actual remote-click route. The shell's
+              // deferred-promise tests provide deterministic ordering/cancellation proof.
+              await new Promise(resolve => setTimeout(resolve, 500));
+            }
           }
           if (url.pathname === '/api/stream') return route.fulfill({ contentType: 'text/event-stream', body: '' });
           const answer = fixtureAnswer(url, now, scenario, fleet);

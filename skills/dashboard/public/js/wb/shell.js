@@ -379,12 +379,21 @@ export function mountWorkbench({ document = globalThis.document, window = global
       row?.focus();
       row?.scrollIntoView({ block: 'center' });
     },
-    openGroup(key) {
-      locateGeneration++;
-      if (stopped) return Promise.resolve();
+    async openGroup(key) {
+      if (stopped) return;
       resetOwner();
+      const captured = identity(), generation = ++locateGeneration;
       hostPanel.close();
-      return groupDetail.open(key, snapshot ?? { rows: [], listKnown: false });
+      // A newly selected machine has no snapshot yet. Resolve its live names before
+      // opening detail, rather than permanently treating this selection as historical.
+      if (!snapshot) {
+        let groups;
+        try { groups = await read('/api/workbench/groups'); } catch { return; }
+        if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
+        snapshot = groups;
+        redraw();
+      }
+      return groupDetail.open(key, snapshot);
     },
     destroy,
   };

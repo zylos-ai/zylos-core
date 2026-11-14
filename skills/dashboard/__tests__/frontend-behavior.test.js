@@ -2097,6 +2097,7 @@ function workbenchHarness(context, read, options = {}) {
   const document = wbDocument(), listeners = new Map(), windowListeners = new Map();
   const selectors = ['#wb-board', '#wb-search', '#wb-range', '#wb-detail-toggle', '#observer-tab', '#wb-instance', '#wb-attention', '#wb-side', '#wb-auto-name', '#wb-auto-name-dialog', '#tab-overview', '#agent-detail'];
   const nodes = new Map(selectors.map(selector => [selector, document.createElement('div')]));
+  nodes.get('#wb-side').hidden = true;
   nodes.get('#tab-overview').className = 'active'; document.visibilityState = options.hidden ? 'hidden' : 'visible';
   document.querySelector = selector => nodes.get(selector);
   document.addEventListener = (event, handler) => listeners.set(event, handler);
@@ -2412,6 +2413,56 @@ test('workbench group location focuses its row and ignores a refresh from an aba
   await locating;
   assert.equal(board.children.length, 0, 'abandoned machine rows stay cleared');
   assert.equal(scrolls, 1, 'stale locator must not scroll the abandoned row into view');
+});
+
+test('workbench programmatic opening waits for its machine list and cancels after a machine switch', async context => {
+  const held = wbDeferred(), key = 'lark:private-address';
+  const h = workbenchHarness(context, (path, fallback) =>
+    path.endsWith('/api/workbench/groups') ? held.promise : fallback(path));
+  await wbTick();
+  const opening = h.openGroup(key);
+  await wbTick();
+  assert.equal(h.nodes.get('#wb-side').hidden, true, 'an unavailable snapshot must not expose an address as a historical title');
+  assert.equal(h.calls.some(path => path.includes(encodeURIComponent(key))), false, 'detail reads wait for the group list');
+  h.setOwner('Other');
+  held.resolve(workbenchSnapshot('error', key));
+  await opening;
+  assert.equal(h.nodes.get('#wb-side').hidden, true, 'abandoned machine cannot open its detail');
+  assert.equal(h.calls.some(path => path.includes(encodeURIComponent(key))), false, 'abandoned machine cannot request group detail');
+});
+
+test('workbench programmatic opening uses fresh names and ignores failed or abandoned list reads', async context => {
+  for (const outcome of ['fresh', 'failed', 'page-left', 'new-selection']) await context.test(outcome, async testContext => {
+    const held = wbDeferred(), key = 'lark:private-address';
+    const h = workbenchHarness(testContext, (path, fallback) => {
+      if (path.endsWith('/api/workbench/groups')) return held.promise;
+      if (path.includes('/runs')) return { runs: [], totalRuns: 0, totalEvents: 0, unattributed: 0 };
+      if (path.includes('/backlog')) return { count: 0, firstAt: null, syncing: false };
+      if (path.includes('/api/timeline')) return { events: [] };
+      return fallback(path);
+    });
+    await wbTick();
+    const opening = h.openGroup(key);
+    await wbTick();
+    assert.equal(h.nodes.get('#wb-side').hidden, true, 'pending selection does not show a fallback title');
+    let replacement;
+    if (outcome === 'page-left') h.navigate(false);
+    if (outcome === 'new-selection') replacement = h.openGroup('telegram:new-selection');
+    const groups = workbenchSnapshot('error', key);
+    groups.rows[0].name.displayName = 'Saved operations name';
+    if (outcome === 'failed') held.reject(Error('read_failed'));
+    else held.resolve(groups);
+    await opening; await replacement; await wbTick();
+    const side = h.nodes.get('#wb-side');
+    if (outcome === 'fresh') {
+      assert.equal(side.hidden, false);
+      assert.match(side.textContent, /Saved operations name/);
+      assert.doesNotMatch(side.textContent, /private-address/);
+    } else if (outcome === 'new-selection') {
+      assert.match(side.textContent, /new-selection/);
+      assert.doesNotMatch(side.textContent, /Saved operations name|private-address/);
+    } else assert.equal(side.hidden, true, 'failed or abandoned selection cannot open a fallback');
+  });
 });
 
 test('workbench shell opens a key outside the snapshot and requests only that group', async context => {

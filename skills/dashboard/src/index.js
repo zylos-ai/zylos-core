@@ -566,7 +566,7 @@ function broadcastFleet(remoteFleet, statePayload) {
   }
 }
 
-const fleetPoller = new FleetPoller(config, { onPoll: () => scheduleFleetStateBroadcast() });
+const fleetPoller = new FleetPoller(config, { onPoll: broadcastFleet });
 fleetPollerReady = true;
 const RESERVED_FLEET_AGENT_NAMES = new Set(['test']);
 
@@ -1496,7 +1496,6 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/stream') {
-    await refreshFleetGroupSummary();
     const apiToken = req._apiToken;
     const validator = apiToken ? () => !!validateApiSession(apiToken) : null;
     sse.addClient(res, validator);
