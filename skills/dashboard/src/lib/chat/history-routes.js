@@ -15,7 +15,7 @@ export async function handleChatHistory(req, res, url, { auth, config, history, 
   if (req.method !== 'GET') { sendJson(res, 405, { error: 'method_not_allowed' }); return true; }
   try {
     const options = Object.fromEntries(url.searchParams);
-    const permitted = match[2] === 'status' || match[2] === 'activity' ? ['tab', 'ids'] : match[2] === 'messages' ? ['tab', 'limit', 'cursor', 'direction', 'recheckIds'] : ['tab', 'limit', 'cursor'];
+    const permitted = match[2] === 'status' ? ['tab', 'ids'] : match[2] === 'activity' ? ['tab', 'subtask'] : match[2] === 'messages' ? ['tab', 'limit', 'cursor', 'direction', 'recheckIds'] : ['tab', 'limit', 'cursor'];
     if ([...url.searchParams.keys()].some(key => !permitted.includes(key) || url.searchParams.getAll(key).length !== 1)) {
       sendJson(res, 400, { error: 'invalid_chat_parameters' }); return true;
     }
@@ -24,7 +24,7 @@ export async function handleChatHistory(req, res, url, { auth, config, history, 
     try { id = match[1] && decodeURIComponent(match[1]); }
     catch { sendJson(res, 400, { error: 'invalid_chat_conversation' }); return true; }
     if (match[2] === 'activity' && !activity) { sendJson(res, 404, { error: 'not_found' }); return true; }
-    const result = match[2] === 'activity' ? activity.activity(id, options) : match[2] ? history[match[2]](id, options) : history.list(options);
+    const result = match[2] === 'activity' ? await activity.activity(id, options) : match[2] ? history[match[2]](id, options) : history.list(options);
     if (!match[2] || match[2] === 'messages') result.tz = await readInstanceTz(instanceTz);
     if (!match[2]) result.deletionAllowed = canDeleteConversations(req, auth, config);
     sendJson(res, 200, result);

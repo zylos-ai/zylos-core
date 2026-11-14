@@ -8,7 +8,7 @@ import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
 import { buildAttention, createChannelDownCounter } from './attention.js';
 import { activityBuckets } from './activity-buckets.js';
-import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES } from './working.js';
+import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES, MAIN_ACTION_TYPES } from './working.js';
 const { resolveSessionHotTtl } = await defaultLoadCoreModule('session-hot-ttl.js');
 import { searchGroups } from './group-search.js';
 import { validKey } from './display-names.js';
@@ -162,14 +162,14 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       if (row.presence === 'running' && row.live?.runId && sources.status.ok === true) {
         const filter = { sessionGroup: row.sessionGroup, runId: row.live.runId,
           until: new Date(at).toISOString(), sourceTime: true, order: 'desc' };
-        const prompt = store.queryEvents({ ...filter, types: ['user_prompt_submit'], agentScope: 'main', limit: 1 });
         const end = store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 });
+        // The main agent's latest actions after its last stop, enough to tell when its current stretch of work began.
+        const actions = store.queryEvents({ ...filter, ...(end[0] ? { since: end[0].timestamp } : {}),
+          types: MAIN_ACTION_TYPES, agentScope: 'main', limit: activityLookbackLimit });
         const children = store.queryEvents({ ...filter, types: CHILD_TYPES, agentScope: 'child', limit: activityLookbackLimit });
+        // Keep each child's own latest tool time, so a noisy sibling cannot hide another child's freshness.
         const childTools = store.queryEvents({ ...filter, types: TOOL_TYPES, agentScope: 'child', latestPerAgent: true, limit: activityLookbackLimit });
-        // The main-turn TTL also needs ANY event, including assistant/permission events.
-        // Keep transitions separate and retain each child's own latest tool time.
-        const latest = store.queryEvents({ ...filter, limit: 1 });
-        const events = [...prompt, ...end, ...children, ...childTools, ...latest];
+        const events = [...end, ...actions, ...children, ...childTools];
         row.working = workingHistory(events, at, { ttlMs: hotTtlMs, tools: row.tools.length }).working;
       }
       const events = row.state.kind === 'busy' && row.live?.runId ? queryAllEvents(store, {
@@ -235,7 +235,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (!result.ok) throw Object.assign(new Error('Group read failed'), { statusCode: 502, code: 'group_raw_failed', reason: 'c4_groups_failed' });
     return { raw: safeRaw(result.data.find(item => item.sessionGroup === key)?.preview?.messageRaw, sanitizer) };
   }
-  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, activity, channelDownCounter, raw,
+  return { getSnapshot, getCachedSnapshot: () => cache?.value ?? null, hotTtlMs: () => hotTtlMs, activity, channelDownCounter, raw,
     search: (q, at = now()) => searchGroups(q, { now: at, runC4Db: cli.runC4Db, getSnapshot, displayNames, sanitizer, namesOfTasks }) };
 }
 

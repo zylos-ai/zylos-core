@@ -16,7 +16,7 @@ import { createDisplayNames } from '../../src/lib/workbench/display-names.js';
 import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
 import { ChatConversations, isChatLocalIdUsed } from '../../src/lib/chat/conversations.js';
 import { ChatSender } from '../../src/lib/chat/send.js';
-import { ensureOriginConversation } from '../../src/lib/chat/origin.js';
+import { ensureOriginConversation, ORIGIN } from '../../src/lib/chat/origin.js';
 import { ChatAttachments } from '../../src/lib/chat/attachments.js';
 import { handleChatAttachments } from '../../src/lib/chat/attachment-routes.js';
 import { ChatHistory } from '../../src/lib/chat/history.js';
@@ -24,7 +24,7 @@ import { ChatAnswers } from '../../src/lib/chat/answers.js';
 import { ChatAnswerDelivery } from '../../src/lib/chat/delivery.js';
 import { handleChatConversations } from '../../src/lib/chat/write-routes.js';
 import { handleChatHistory } from '../../src/lib/chat/history-routes.js';
-import { ChatActivity } from '../../src/lib/chat/activity.js';
+import { ChatActivity, snapshotWorking } from '../../src/lib/chat/activity.js';
 import { handleChatAnswers } from '../../src/lib/chat/answer-routes.js';
 import { handleChatSettings } from '../../src/lib/chat/settings.js';
 import { acceptDelivery } from '../../src/lib/chat/channel.js';
@@ -115,8 +115,9 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   const sender = new ChatSender({ conversations, c4Reader: reader, attachments, loadCore: async () => core, zylosDir: zylos });
   let answers = new ChatAnswers({ store }), delivery = new ChatAnswerDelivery({ answers, sender, c4Reader: reader });
   const history = new ChatHistory({ c4Reader: reader, conversations, attachments });
-  // The real activity reader on the same C4 history and Dashboard event store, as the server wires it.
-  const activity = new ChatActivity({ history, store });
+  // The real activity reader on the same C4 history, Dashboard event store and workbench snapshot, as the server wires it.
+  let workbench = null;
+  const activity = new ChatActivity({ history, store, working: group => snapshotWorking(workbench, { origin: ORIGIN })(group) });
   const query = createQueryHandlers(c4);
   const runC4Db = async args => {
     const argument = key => args.includes(key) ? args[args.indexOf(key) + 1] : undefined;
@@ -127,7 +128,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
   };
   // Runtime observation is deliberately unavailable in this HTTP-only fixture;
   // actual C4 queue/history, dashboard event store and sanitizer remain real.
-  const workbench = createGroupSnapshot({ zylosDir: zylos, store, c4Reader: reader,
+  workbench = createGroupSnapshot({ zylosDir: zylos, store, c4Reader: reader,
     cli: { runC4Db, readOverrides: async () => ({ ok: false, reason: 'fixture_no_runtime' }) },
     displayNames: createDisplayNames({ store, zylosDir: zylos, runC4Db }),
     loadCoreModule: async name => {

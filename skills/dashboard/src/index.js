@@ -18,9 +18,9 @@ import { ChatHistory } from './lib/chat/history.js';
 import { ChatChangeObserver } from './lib/chat/change-observer.js';
 import { handleChatStream } from './lib/chat/stream.js';
 import { handleChatHistory } from './lib/chat/history-routes.js';
-import { ChatActivity, recordGroupInterrupt } from './lib/chat/activity.js';
+import { ChatActivity, recordGroupInterrupt, snapshotWorking } from './lib/chat/activity.js';
 import { ChatConversations, isChatLocalIdUsed } from './lib/chat/conversations.js';
-import { ensureOriginConversation } from './lib/chat/origin.js';
+import { ensureOriginConversation, ORIGIN } from './lib/chat/origin.js';
 import { reconcileConversationNames } from './lib/chat/auto-name.js';
 import { ChatSender } from './lib/chat/send.js';
 import { ChatAnswers } from './lib/chat/answers.js';
@@ -1737,7 +1737,8 @@ export function createServer() {
     console.error('[chat] Answer delivery recovery remains pending.');
   });
   const history = new ChatHistory({ c4Reader, conversations, attachments });
-  const chatActivity = new ChatActivity({ history, store });
+  // The conversation page's live area reads the same group row as its header, so both agree on whether it works.
+  const chatActivity = new ChatActivity({ history, store, working: snapshotWorking(workbench, { origin: ORIGIN }) });
   const chatObserver = new ChatChangeObserver({ c4Reader, history });
   const rootDir = publicDir();
   const fleetProxy = new FleetProxy({ config, rootDir, poller: fleetPoller, authGate: auth });

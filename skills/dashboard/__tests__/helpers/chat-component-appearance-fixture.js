@@ -3,7 +3,7 @@ import { createChatAttachment } from '/js/wb/chat-attachments.js';
 import { icon } from '/js/wb/plain-text.js';
 import { renderQuestion } from '/js/wb/chat-questions.js';
 import { CONTENT_PREFIX, makeQuestionSummary, parseC4Content } from '/chat-schema.js';
-import { createActivityArea } from '/js/wb/conversation-activity.js';
+import { createLiveArea } from '/js/wb/conversation-activity.js';
 import { instanceStrip } from '/js/wb/instance-strip.js';
 
 const words = await (await fetch('/i18n/wb.zh.json')).json();
@@ -190,12 +190,11 @@ for (const status of ['ready', 'failed', 'expired']) {
 const failedImage = createChatAttachment({ document, t, mode: 'tray', attachment: { name: 'failed-image.png', kind: 'image', status: 'failed' }, onRetry: () => {}, onRemove: () => {} });
 failedImage.node.id = 'tray-failed-image'; errorsTray.append(failedImage.node); resources.push(failedImage); failedImage.mount();
 // Real presentation modules with fixed data; no backend, runtime or task runs.
-const activity = createActivityArea({ document, t });
-activity.update({ key: 'handoff-status', live: false, round: { state: 'done' }, segment: {
-  start: 0, end: 2000, steps: [
-    { kind: 'tool', status: 'failed', start: 0, end: 1000, label: { key: 'read', arg: 'handoff.md' } },
-    { kind: 'tool', status: 'incomplete', start: 1000, end: 2000, label: { key: 'described', arg: '等待后续工作' } },
-  ] } }, { open: true, now: 2000 });
+const activity = createLiveArea({ document, t, locale: 'zh-CN' });
+activity.update({ anchor: 'handoff-status', under: 'in', head: 'working', since: 0, waiting: 'thinking', subtasks: [], truncated: false, steps: [
+  { kind: 'tool', status: 'failed', start: 0, end: 1000, label: { key: 'read', arg: 'handoff.md' } },
+  { kind: 'tool', status: 'incomplete', start: 1000, end: 2000, label: { key: 'described', arg: '等待后续工作' } },
+] }, { now: 2000 });
 message('handoff-status').body.append(activity.node);
 for (const capacity of [2, 256]) {
   const { body } = message('pool-' + capacity);

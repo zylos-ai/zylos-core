@@ -1749,30 +1749,62 @@ test('conversation list and incremental reads request previews in the current pa
   assert.equal(f.calls.filter(call => call.path.includes('/messages?')).at(-1).options.headers['X-Zylos-Locale'], 'zh');
   f.state.destroy(); assert.equal(f.timer.count(), 0);
 });
-test('a settling round keeps the two-second refresh and is read again; once settled the refresh is five seconds again', async () => {
-  let settling = true;
+test('while the group works the page refreshes every two seconds; once all work ends it is five seconds again', async () => {
+  let working = true;
   const f = await selected(u => {
     if (u.pathname.endsWith('/messages')) return { items: u.searchParams.get('direction') === 'before'
       ? [{ id: 1, direction: 'in', status: 'delivered', content: 'hi' }, { id: 2, direction: 'out', status: 'delivered', content: 'done' }] : [],
     nextCursor: null, afterCursor: 'after2' };
-    if (u.pathname.endsWith('/activity')) return { now: 1000, items: [{ id: 1, state: 'round', round: '1' }],
-      rounds: [{ key: '1', messageIds: [1], start: 0, end: 500, state: 'done', ...(settling ? { settling: true } : {}), segments: [] }] };
+    if (u.pathname.endsWith('/activity')) return { now: 1000, working: { on: working, main: working ? { since: 0, lastActivityAt: 900 } : null,
+      tools: 0, subagents: null }, steps: [], subtasks: [], awaiting: null, seenId: 2 };
   });
   const activityReads = () => f.calls.filter(c => c.path.includes('/activity?')).length;
   const first = activityReads();
   assert.ok(first >= 1);
   await f.timer.advance(2000);
-  assert.equal(f.reads().length, 1, 'quick refresh while the round settles');
-  assert.equal(activityReads(), first + 1, 'and the settling round is read again');
-  settling = false;
+  assert.equal(f.reads().length, 1, 'quick refresh while the group works');
+  assert.equal(activityReads(), first + 1, 'and what it does is read again');
+  working = false;
   await f.timer.advance(2000);
   assert.equal(f.reads().length, 2);
-  const settled = activityReads();
+  const idle = activityReads();
   await f.timer.advance(4999);
-  assert.equal(f.reads().length, 2, 'settled: back to the five-second refresh');
+  assert.equal(f.reads().length, 2, 'idle: back to the five-second refresh');
   await f.timer.advance(1);
   assert.equal(f.reads().length, 3);
-  assert.equal(activityReads(), settled, 'a settled round is not read again');
+  assert.equal(activityReads(), idle + 1, 'an idle group is still asked once per refresh, so new work shows up');
+  f.state.destroy();
+});
+
+test('only an expanded subtask has its steps read, on every refresh until it is folded or ends', async () => {
+  let subtasks = [{ id: 'sync', label: { key: 'memorySync' }, start: 0, steps: 3 }];
+  const f = await selected(u => {
+    if (u.pathname.endsWith('/messages')) return { items: u.searchParams.get('direction') === 'before'
+      ? [{ id: 1, direction: 'out', status: 'delivered', content: 'done' }] : [], nextCursor: null, afterCursor: 'after1' };
+    if (u.pathname.endsWith('/activity')) return u.searchParams.has('subtask')
+      ? { now: 1000, subtask: { id: u.searchParams.get('subtask'), start: 0, end: null }, steps: [{ kind: 'tool', label: { key: 'tool' }, status: 'running', start: 10, end: null }] }
+      : { now: 1000, working: { on: subtasks.length > 0, main: null, tools: 0, subagents: subtasks.length ? { count: 1, since: 0, lastActivityAt: 900 } : null },
+        steps: [], subtasks, awaiting: null, seenId: 1 };
+  });
+  const subtaskReads = () => f.calls.filter(c => c.path.includes('/activity?') && new URL(c.path, 'http://fixture').searchParams.get('subtask') === 'sync').length;
+  await f.timer.advance(2000);
+  assert.equal(subtaskReads(), 0, 'a folded row loads nothing');
+  await f.state.toggleSubtask('sync');
+  assert.equal(subtaskReads(), 1, 'opening it reads its steps at once');
+  assert.equal(f.state.snapshot().activity.details.get('sync').steps.length, 1);
+  await f.timer.advance(2000);
+  assert.equal(subtaskReads(), 2, 'and again with each refresh while it stays open');
+  await f.state.toggleSubtask('sync');
+  assert.equal(f.state.snapshot().activity.details.has('sync'), false);
+  await f.timer.advance(2000);
+  assert.equal(subtaskReads(), 2, 'folding it stops the reads');
+  await f.state.toggleSubtask('sync');
+  subtasks = [];
+  await f.timer.advance(2000);
+  assert.equal(f.state.snapshot().activity.open.has('sync'), false, 'a subtask that ended is no longer open');
+  const after = subtaskReads();
+  await f.timer.advance(5000);
+  assert.equal(subtaskReads(), after);
   f.state.destroy();
 });
 
@@ -1997,12 +2029,12 @@ test('a continuing send retains the accelerated deadline installed when sending 
   assert.equal(f.reads().at(-1).time, started + 4000);
 });
 
-test('internal rows stay out of delivery activity and list previews', async t => {
+test('internal rows stay out of delivery status and list previews', async t => {
   const external = { id: 1, channel: 'dashboard', direction: 'in', status: 'pending', content: 'External preview', timestamp: '2026-01-01T00:00:00Z' };
   const internal = { id: 2, channel: 'internal', direction: 'in', status: 'pending', content: 'Internal secret', timestamp: '2026-01-02T00:00:00Z' };
   const f = await selected(u => u.pathname.endsWith('/messages') && u.searchParams.get('direction') === 'before'
     ? { items: [external, internal], afterCursor: 'after2' }
-    : u.pathname.endsWith('/activity') ? { items: [], rounds: [] } : undefined);
+    : u.pathname.endsWith('/activity') ? { now: 0, working: null, steps: [], subtasks: [], awaiting: null, seenId: 2 } : undefined);
   t.after(() => f.state.destroy());
   await flush();
   const listed = f.state.snapshot().items.find(row => row.id === 'g:A');
@@ -2011,11 +2043,13 @@ test('internal rows stay out of delivery activity and list previews', async t =>
   assert.equal(listed.stamp, new Date(external.timestamp).getTime() / 86400000 + 2440587.5);
   assert.equal(f.state.snapshot().messages.length, 2, 'the internal row remains visible in selected history');
   await f.timer.advance(5000);
-  for (const suffix of ['/status', '/activity']) {
-    const reads = f.calls.filter(call => new URL(call.path, 'http://fixture').pathname.endsWith(suffix));
-    assert.ok(reads.length > 0, `${suffix} has the external positive control`);
-    for (const read of reads) assert.equal(new URL(read.path, 'http://fixture').searchParams.get('ids'), '1');
-  }
+  const reads = f.calls.filter(call => new URL(call.path, 'http://fixture').pathname.endsWith('/status'));
+  assert.ok(reads.length > 0, 'status has the external positive control');
+  for (const read of reads) assert.equal(new URL(read.path, 'http://fixture').searchParams.get('ids'), '1');
+  // The live activity is about the group, not about messages: it names none.
+  const activity = f.calls.filter(call => new URL(call.path, 'http://fixture').pathname.endsWith('/activity'));
+  assert.ok(activity.length > 0);
+  for (const read of activity) assert.deepEqual([...new URL(read.path, 'http://fixture').searchParams.keys()], ['tab']);
 });
 
 test('an internal outbound relay preserves accelerated waiting and avoids question refresh', async t => {

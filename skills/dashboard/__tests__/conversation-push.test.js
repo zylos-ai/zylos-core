@@ -83,12 +83,8 @@ test('a live message stream still refreshes running activity every two seconds a
   const f = fixture(t, (url, _options, now) => {
     if (!url.pathname.endsWith('/activity')) return;
     activityReads++;
-    assert.equal(url.searchParams.get('ids'), '1');
-    return { now, items: [{ id: 1, state: 'round', round: '1' }], rounds: [{
-      key: '1', messageIds: [1], state: running ? 'running' : 'done', start: 1000, end: running ? null : now,
-      segments: [{ replyId: null, start: 1000, end: running ? null : now,
-        steps: [{ kind: 'say', text: `Activity read ${activityReads}`, at: now }] }]
-    }] };
+    assert.deepEqual([...url.searchParams.keys()], ['tab'], 'the live activity is about the group: it names no message');
+    return liveActivity(now, running, [{ kind: 'say', text: `Activity read ${activityReads}`, at: now }]);
   });
   await f.open(); await f.event('chat_ready');
   assert.equal(f.state.snapshot().streamState, 'live');
@@ -96,11 +92,11 @@ test('a live message stream still refreshes running activity every two seconds a
   assert.ok(readyReads > 0, 'the real controller reads the activity endpoint');
   await f.timer.advance(1999); assert.equal(activityReads, readyReads);
   await f.timer.advance(1); assert.equal(activityReads, readyReads + 1);
-  assert.equal(f.state.snapshot().activity.rounds.get('1').segments[0].steps[0].text, `Activity read ${readyReads + 1}`);
+  assert.equal(f.state.snapshot().activity.data.steps[0].text, `Activity read ${readyReads + 1}`);
   running = false;
   await f.timer.advance(1999); assert.equal(activityReads, readyReads + 1);
   await f.timer.advance(1); assert.equal(activityReads, readyReads + 2);
-  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'done');
+  assert.equal(f.state.snapshot().activity.data.working.on, false);
   assert.equal(f.state.snapshot().streamState, 'live', 'activity polling retains the existing live message stream');
   const messageReads = f.reads().length;
   const listAt = f.calls.filter(call => call.u.pathname === '/api/chat/conversations').at(-1).at;
@@ -108,16 +104,18 @@ test('a live message stream still refreshes running activity every two seconds a
   assert.equal(f.reads().length, messageReads, 'finished activity no longer schedules two-second reads');
   await f.timer.advance(1);
   assert.equal(f.reads().length, messageReads + 1, 'the existing thirty-second live fallback/list deadline resumes');
-  assert.equal(activityReads, readyReads + 2, 'finished activity is no longer sampled');
+  // Work can start in the group at any time without a message from this page, so the slow poll reads it once.
+  assert.equal(activityReads, readyReads + 3, 'finished activity is read only with the slow poll');
 });
 
+/** A live activity read as the server answers it: the group works (`running`) or is done, with these steps. */
+function liveActivity(now, running, steps) {
+  return { now, from: 0, presence: 'running', steps, subtasks: [], awaiting: null, seenId: 2,
+    working: running ? { on: true, since: 0, main: { since: 0, lastActivityAt: now }, tools: 0, subagents: null }
+      : { on: false, since: null, main: null, tools: 0, subagents: null } };
+}
 function followUpActivity(now, running = true) {
-  return { now, items: [{ id: 1, state: 'round', round: '1' }], rounds: [{
-    key: '1', messageIds: [1], state: running ? 'running' : 'done', start: 0, end: running ? null : now,
-    segments: [{ replyId: 2, start: 0, end: 500, steps: [] },
-      { replyId: null, start: 500, end: running ? null : now,
-        steps: [{ kind: 'tool', label: { key: 'runCommand' }, status: running ? 'running' : 'done', start: 600, end: running ? null : now }] }]
-  }] };
+  return liveActivity(now, running, [{ kind: 'tool', label: { key: 'runCommand' }, status: running ? 'running' : 'done', start: 600, end: running ? null : now }]);
 }
 function followUpMessages(url) {
   return { items: url.searchParams.get('direction') === 'before' ? [
@@ -142,13 +140,13 @@ test('a delayed first activity read shortens the live fallback and settles follo
   await f.timer.advance(1000);
   const messages = f.reads().length;
   resolveFirst(followUpActivity(f.timer.now())); await flush();
-  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'running');
+  assert.equal(f.state.snapshot().activity.data.working.on, true);
   await f.timer.advance(1999); assert.equal(f.reads().length, messages);
   running = false;
   await f.timer.advance(1);
   assert.equal(f.reads().length, messages + 1, 'the first slow live fallback is replaced by a two-second wait');
   assert.equal(activityReads, 2);
-  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'done', 'completion is read without a click or push hint');
+  assert.equal(f.state.snapshot().activity.data.working.on, false, 'completion is read without a click or push hint');
 });
 
 test('a delayed first activity result that is already finished keeps the thirty-second fallback', async t => {
@@ -167,12 +165,12 @@ test('a delayed first activity result that is already finished keeps the thirty-
   const messages = f.reads().length;
   await f.timer.advance(1000);
   resolveFirst(followUpActivity(f.timer.now(), false)); await flush();
-  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'done');
+  assert.equal(f.state.snapshot().activity.data.working.on, false);
   await f.timer.advance(deadline - f.timer.now() - 1);
   assert.equal(f.reads().length, messages, 'finished activity does not shorten the existing slow wait');
   await f.timer.advance(1);
   assert.equal(f.reads().length, messages + 1);
-  assert.equal(activityReads, 1, 'the already finished round is not sampled again');
+  assert.equal(activityReads, 2, 'finished work is read again only with the slow poll');
 });
 
 test('a delayed activity result keeps an already sooner poll deadline', async t => {
@@ -199,7 +197,7 @@ test('an old selection activity result cannot shorten the newly selected convers
     if (url.pathname === '/api/chat/conversations/g%3ABB') return { conversation: { id: 'g:BB', state: 'active' }, conversationId: 'g:BB', stored: true };
     if (!url.pathname.endsWith('/activity')) return;
     if (url.pathname.includes('g%3AAA')) return new Promise(resolve => { resolveFirst = resolve; });
-    return { now, items: [{ id: 1, state: 'none' }], rounds: [] };
+    return liveActivity(now, false, []);
   });
   await f.open(); await f.event('chat_ready');
   await f.state.select('g:BB'); await f.event('chat_ready');
@@ -209,7 +207,7 @@ test('an old selection activity result cannot shorten the newly selected convers
   await f.timer.advance(2000);
   assert.equal(f.reads().length, messages);
   assert.equal(f.state.snapshot().selectedId, 'g:BB');
-  assert.equal(f.state.snapshot().activity.rounds.size, 0);
+  assert.equal(f.state.snapshot().activity.data.working.on, false, 'the old selection\'s running work is not shown');
 });
 
 test('a first activity result arriving while hidden does not restart polling', async t => {
@@ -262,7 +260,7 @@ test('a delayed activity result preserves failed post-send synchronization backo
   assert.equal(f.state.snapshot().updateError, 'temporary_post_send_read_failure');
   const messages = f.reads().length;
   resolveFirst(followUpActivity(f.timer.now())); await flush();
-  assert.equal(f.state.snapshot().activity.rounds.get('1').state, 'running');
+  assert.equal(f.state.snapshot().activity.data.working.on, true);
   await f.timer.advance(4999);
   assert.equal(f.reads().length, messages, 'the post-send five-second retry is not shortened by late activity');
   await f.timer.advance(1);

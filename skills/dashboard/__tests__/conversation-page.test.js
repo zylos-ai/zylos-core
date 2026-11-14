@@ -17,7 +17,7 @@ const { mountConversationPage } = await import('../public/js/wb/conversation-pag
 
 function healthPage(t, { locale = 'en', health = 'ok', runtime = 'claude', presence = 'running', pending = true,
   wait = null, source, healthRecord, workbench, onSend,
-  working = { on: false, since: null, turn: null, tools: 0, subagents: null } } = {}) {
+  working = { on: false, since: null, main: null, tools: 0, subagents: null } } = {}) {
   const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));
   const document = conversationDocument(), root = document.createElement('div');
   const sessionGroup = 'dashboard:health', id = 'g:AA';
@@ -49,7 +49,7 @@ for (const locale of ['en', 'zh']) {
         groupReads++;
         return { listKnown: true,
           rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
-            working: { on: false, since: null, turn: null, tools: 0, subagents: null },
+            working: { on: false, since: null, main: null, tools: 0, subagents: null },
             live: { status: { valid: true, state: 'idle' } }, wait: stored ? { kind: 'unknown', reason: 'no_rule' } : null }],
           instance: { runtimeHealth: { claude: { health: 'ok' } } }, sources: { status: { ok: true, readAt: 1000 } } };
       } });
@@ -543,7 +543,7 @@ for (const [sample, state] of [
   const f = healthPage(t, { workbench: () => ({ listKnown: true,
     rows: [{ sessionGroup: 'dashboard:health', presence: 'running', target: { runtime: 'claude' },
       state, live: { status: sample }, wait,
-      working: { on: true, since: 1000, turn: { since: 1000 }, tools: 0, subagents: null } }],
+      working: { on: true, since: 1000, main: { since: 1000 }, tools: 0, subagents: null } }],
     instance: { runtimeHealth: { claude: { health } } }, sources: { status: { ok: true, readAt: 1000 } },
   }) });
   await f.page.openGroup(f.sessionGroup); await tick();

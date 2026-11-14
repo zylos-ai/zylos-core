@@ -26,7 +26,7 @@ function originRow(mode, { presence = 'running', working = { on: false }, proces
   return { sessionGroup: mode === 'single' ? null : 'origin', origin: true, presence, target: { runtime: 'claude' },
     working: presence === 'running' ? working : undefined, processing, wait, preview: { text: 'hello' } };
 }
-const busy = () => ({ on: true, turn: { since: Date.now() } });
+const busy = () => ({ on: true, main: { since: Date.now() } });
 
 function originPage(t, { locale = 'en', mode = 'multi', row = originRow(mode), health = 'ok', messages = [], sends = [] } = {}) {
   const translations = JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${locale}.json`, import.meta.url)));

@@ -23,10 +23,10 @@ async function startPage(sandbox) {
   const activeId = () => isOrigin() ? ORIGIN_ID : ID;
   const group = () => isOrigin() ? 'origin' : GROUP;
   const working = () => {
-    const turn = ['main', 'main-long', 'scheduled-short', 'scheduled-long', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - (scene === 'main-long' ? 121 : scene === 'scheduled-long' ? 65 : 3) * 60000 } : null;
+    const main = ['main', 'main-long', 'scheduled-short', 'scheduled-long', 'both', 'rate', 'auth', 'queue', 'starting', 'unknown-busy'].includes(scene) ? { since: NOW - (scene === 'main-long' ? 121 : scene === 'scheduled-long' ? 65 : 3) * 60000 } : null;
     const subagents = ['both', 'sub'].includes(scene) ? { count: 2, since: NOW - 13 * 60000, lastActivityAt: NOW - 30000 } : null;
     if (scene === 'unavailable') return null;
-    return { on: !!(turn || subagents), since: turn || subagents ? Math.min(...[turn?.since, subagents?.since].filter(Number.isFinite)) : null, turn, tools: 0, subagents };
+    return { on: !!(main || subagents), since: main || subagents ? Math.min(...[main?.since, subagents?.since].filter(Number.isFinite)) : null, main, tools: 0, subagents };
   };
   const snapshot = url => {
     const value = workbenchAnswer(url, NOW);
@@ -269,15 +269,18 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       assert.equal(await indicator(f.page).locator('.wi-ind-desktop').evaluate(node => node === window.beforePollingCaption), true,
         'the caption is not rebuilt by a per-second clock before the busy poll');
       await f.page.clock.fastForward(999); assert.equal(fixture.counts.groups, before);
+      // The clock is paused: the page schedules its next read when it handles an answer. Change the answer before the
+      // read, then wait until the page shows it, so no later clock jump can run ahead of the page's own timer.
+      fixture.setScene('idle');
       await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups === before + 1, 'busy reads at five seconds');
-      fixture.setScene('idle'); await f.page.clock.fastForward(5000); await checkText(f.page, '空闲');
+      await checkText(f.page, '空闲');
       assert.equal(await indicator(f.page).locator('.wi-spin').count(), 0);
       await checkComet(f.page, false);
       assert.equal(await indicator(f.page).evaluate(node => node.classList.contains('wi-settle')), true, 'busy to idle keeps settle effect');
       const idleReads = fixture.counts.groups;
       await f.page.clock.fastForward(29999); assert.equal(fixture.counts.groups, idleReads, 'idle avoids the former busy cadence');
+      fixture.fail(true);
       await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups > idleReads, 'idle reads at thirty seconds');
-      fixture.fail(true); await f.page.clock.fastForward(30000);
       await wait(async () => !await indicator(f.page).isVisible(), 'failure removes stale working');
     } finally { fixture.fail(false); await f.context.close(); }
   });
@@ -335,7 +338,9 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       assert.equal(await indicator(f.page).locator('.wi-comet').count(), 1, 'busy DOM still owns the reduced-motion comet');
       assert.equal(await indicator(f.page).locator('.wi-comet').isVisible(), false, 'reduced motion hides the entire light');
       assert.equal(await indicator(f.page).locator('.wi-spin').isVisible(), true, 'still glyph returns');
-      assert.equal(await indicator(f.page).locator('.wi-spin').evaluate(node => getComputedStyle(node).animationName), 'none');
+      // Each snapshot redraws the glyph. Find it and read its style in one page call: a locator resolves and evaluates in
+      // two steps, and a poll between them leaves a detached node whose computed style is empty.
+      assert.equal(await indicator(f.page).evaluate(node => getComputedStyle(node.querySelector('.wi-spin')).animationName), 'none');
       await shot(f.page, 'reduced-motion');
     } finally { await f.context.close(); }
   });
@@ -362,7 +367,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
   }
   // Boundary: rendered compact wording, caption geometry and desktop/mobile breakpoint.
   // Run for phone wording/header changes; unrelated backend work may skip.
-  // Fixed snapshots vary turn age while preserving scheduled-origin selection and child counts.
+  // Fixed snapshots vary main-work age while preserving scheduled-origin selection and child counts.
   const compactCases = [
     { scene: 'main-long', zh: '正在工作', en: 'Working', fullZh: '正在工作', fullEn: 'Working' },
     { scene: 'scheduled-short', zh: '定时任务', en: 'Scheduled', fullZh: '正在执行定时任务', fullEn: 'Running a scheduled task' },
