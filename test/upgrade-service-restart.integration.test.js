@@ -9,6 +9,7 @@ const pm2 = process.env.ZYLOS_SERVICE_INTEGRATION_PM2;
 const runTest = pm2 ? test : test.skip;
 const title = 'restores a real custom PM2 application absent from the ecosystem'
   + (pm2 ? '' : ' (requires ZYLOS_SERVICE_INTEGRATION_PM2: absolute PM2 executable path)');
+if (!pm2) console.info('Skipping private PM2 service restart: set ZYLOS_SERVICE_INTEGRATION_PM2 to an absolute PM2 executable path.');
 
 // Covers actual PM2 saved-record stop/start/verification through step11 and
 // maintenance.start, with an app absent from the ecosystem. Run when these
