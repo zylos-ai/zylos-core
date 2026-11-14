@@ -84,7 +84,7 @@ test('a live message stream still refreshes running activity every two seconds a
     if (!url.pathname.endsWith('/activity')) return;
     activityReads++;
     assert.deepEqual([...url.searchParams.keys()], ['tab'], 'the live activity is about the group: it names no message');
-    return liveActivity(now, running, [{ kind: 'say', text: `Activity read ${activityReads}`, at: now }]);
+    return liveActivity(now, running, [{ kind: 'tool', label: { key: 'described', arg: `Activity read ${activityReads}` }, status: 'running', start: now, end: null }]);
   });
   await f.open(); await f.event('chat_ready');
   assert.equal(f.state.snapshot().streamState, 'live');
@@ -92,7 +92,7 @@ test('a live message stream still refreshes running activity every two seconds a
   assert.ok(readyReads > 0, 'the real controller reads the activity endpoint');
   await f.timer.advance(1999); assert.equal(activityReads, readyReads);
   await f.timer.advance(1); assert.equal(activityReads, readyReads + 1);
-  assert.equal(f.state.snapshot().activity.data.steps[0].text, `Activity read ${readyReads + 1}`);
+  assert.equal(f.state.snapshot().activity.data.steps[0].label.arg, `Activity read ${readyReads + 1}`);
   running = false;
   await f.timer.advance(1999); assert.equal(activityReads, readyReads + 1);
   await f.timer.advance(1); assert.equal(activityReads, readyReads + 2);
@@ -106,6 +106,23 @@ test('a live message stream still refreshes running activity every two seconds a
   assert.equal(f.reads().length, messageReads + 1, 'the existing thirty-second live fallback/list deadline resumes');
   // Work can start in the group at any time without a message from this page, so the slow poll reads it once.
   assert.equal(activityReads, readyReads + 3, 'finished activity is read only with the slow poll');
+});
+
+test('while the work after a stop settles the page keeps reading every two seconds, then the handled line ends it', async t => {
+  let state = 'settling', activityReads = 0;
+  const f = fixture(t, (url, _options, now) => {
+    if (!url.pathname.endsWith('/activity')) return;
+    activityReads++;
+    return { ...liveActivity(now, false, []), awaiting: { id: 1, state, since: 0, delivered: 0 } };
+  });
+  await f.open(); await f.event('chat_ready');
+  assert.equal(f.state.snapshot().streamState, 'live');
+  const readyReads = activityReads;
+  await f.timer.advance(1999); assert.equal(activityReads, readyReads);
+  await f.timer.advance(1); assert.equal(activityReads, readyReads + 1, 'settling: the runtime may still take a queued message');
+  state = 'handled';
+  await f.timer.advance(2000); assert.equal(activityReads, readyReads + 2);
+  await f.timer.advance(2000); assert.equal(activityReads, readyReads + 2, 'handled: nothing more can change soon');
 });
 
 /** A live activity read as the server answers it: the group works (`running`) or is done, with these steps. */

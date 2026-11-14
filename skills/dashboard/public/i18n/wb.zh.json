@@ -783,7 +783,7 @@
   "chat.page.healthUnknown": "服务状态未知",
   "chat.page.waiting": "等待处理",
   "chat.page.paused": "投递已暂停",
-  "chat.page.starting": "会话启动中",
+  "chat.page.waking": "正在唤醒",
   "chat.page.originPinned": "置顶对话",
   "chat.page.originEmpty": "在这里直接和 Origin 说话；告警没有另设去处时，也会出现在这里。",
   "chat.page.origin.asleep": "休眠 · 发消息会唤醒它，第一条回复会慢一些",

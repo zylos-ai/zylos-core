@@ -463,7 +463,9 @@ export async function runMobileConversationBrowser(t, sandbox) {
           await rename.evaluate(el => el.blur()); await page.locator('body').click({ position: { x: 2, y: 2 } });
         } else {
           assert.equal(await page.locator('#wb-mobile-nav').isVisible(), false);
-          assert.equal(await page.locator('.conversation-running').isVisible(), false);
+          // The phone header shows the idle dot and 空闲 in the title row, as in the prototype.
+          assert.equal(await page.locator('.conversation-running[data-state="idle"]').isVisible(), true, 'phone idle status shows in the title row');
+          assert.match(await page.locator('.conversation-running').innerText(), /空闲/);
           assert.equal(await page.locator('.conversation-push-status').isVisible(), false);
           assert.equal(await page.locator('.conversation-menu-toggle').isVisible(), true);
           await phoneHeaderFits(page);
@@ -612,7 +614,8 @@ export async function runMobileConversationBrowser(t, sandbox) {
       assert.equal(await page.locator('#wb-mobile-nav').isVisible(), false);
       await page.locator('.conversation-connection-dot[data-stream-state="live"]').waitFor();
       assert.equal(await page.locator('.conversation-push-status').isVisible(), false);
-      assert.equal(await page.locator('.conversation-running').isVisible(), false, 'idle is hidden only on mobile');
+      assert.equal(await page.locator('.conversation-running[data-state="idle"]').isVisible(), true, 'idle shows 空闲 on mobile too');
+      assert.match(await page.locator('.conversation-running').innerText(), /空闲/);
       assert.equal(await page.locator('.conversation-compose-hint').isVisible(), false);
       const editor = page.locator('.conversation-input');
       const initial = await editor.evaluate(el => ({ font: getComputedStyle(el).fontSize, height: el.getBoundingClientRect().height }));

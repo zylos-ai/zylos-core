@@ -132,7 +132,8 @@ for (const locale of ['en', 'zh']) {
   test(`a wait reason still overrides Origin's own status line (${locale})`, { timeout: 2000 }, async t => {
     const f = originPage(t, { locale, row: originRow('multi', { presence: 'not_running', wait: { kind: 'starting' } }) });
     await f.page.openGroup('origin'); await tick();
-    assert.equal(header(f.root).querySelector('.wi-ind-text').textContent, f.translations['chat.page.starting']);
+    assert.equal(header(f.root).querySelector('.wi-ind-text').textContent, f.translations['chat.page.waking']);
+    assert.equal(header(f.root).dataset.state, 'busy', 'waking, not asleep');
   });
 }
 

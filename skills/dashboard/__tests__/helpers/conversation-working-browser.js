@@ -221,7 +221,7 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     if (await page.locator('html').getAttribute('data-theme') === 'light') assert.equal(m.color, 'rgb(82, 97, 112)');
     assert.equal(m.background, m.expectedBackground); assert.equal(m.weight, '450'); assert.equal(m.fontSize, '13px');
   };
-  const scenes = { main: '正在工作', both: '正在工作 · 后台子任务 2 个', sub: '后台子任务 2 个', idle: '空闲', rate: '服务受限，恢复后自动投递', auth: '需要认证', queue: '排队中', starting: '会话启动中', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
+  const scenes = { main: '正在工作', both: '正在工作 · 后台子任务 2 个', sub: '后台子任务 2 个', idle: '空闲', rate: '服务受限，恢复后自动投递', auth: '需要认证', queue: '排队中', starting: '正在唤醒', 'unknown-busy': '服务状态未知', 'unknown-idle': '服务状态未知', unavailable: null };
   let failed = false;
   for (const width of [1280, 390]) for (const theme of ['light', 'dark']) for (const [scene, expected] of Object.entries(scenes)) {
     await t.test(`${width} ${theme} ${scene}: mounted conversation shows the group working state`, async () => {
@@ -232,13 +232,15 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           await checkText(f.page, expected);
           if (width > 760) await checkDesktopCaption(f.page, expected);
           const spinning = await indicator(f.page).locator('.wi-spin').count();
-          assert.equal(spinning, ['main', 'both', 'sub'].includes(scene) ? 1 : 0);
-          await checkComet(f.page, ['main', 'both', 'sub'].includes(scene));
-          if (width <= 760 && ['main', 'both', 'sub'].includes(scene)) {
-            await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : '正在工作');
+          assert.equal(spinning, ['main', 'both', 'sub', 'starting'].includes(scene) ? 1 : 0);
+          await checkComet(f.page, ['main', 'both', 'sub', 'starting'].includes(scene));
+          if (width <= 760 && ['main', 'both', 'sub', 'starting'].includes(scene)) {
+            await checkPhonePill(f.page, scene === 'sub' ? '后台子任务 2 个' : scene === 'starting' ? '正在唤醒' : '正在工作');
           }
           if (width <= 760 && scene === 'idle') {
-            assert.equal(await indicator(f.page).isVisible(), false);
+            // As in the prototype, an idle phone header shows the dot and 空闲 beside the title, without a border.
+            assert.equal(await indicator(f.page).isVisible(), true);
+            assert.equal(await indicator(f.page).evaluate(node => getComputedStyle(node).borderTopWidth), '0px');
             assert.equal(await f.page.locator('.conversation-header').evaluate(node => { const css = getComputedStyle(node); return node.getBoundingClientRect().height - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth); }), 52);
           }
           if (width <= 760 && ['rate', 'auth', 'queue'].includes(scene)) await checkPhoneStatus(f.page, scene);
@@ -356,7 +358,12 @@ export async function runConversationWorkingBrowser(t, sandbox) {
           await f.page.locator('#wb-chat .wb-group-side .wi-now').waitFor();
           await f.page.locator('.wb-group-side-back').click();
         } else {
-          assert.equal(await indicator(f.page).isVisible(), false);
+          // A long title yields to the idle status: 空闲 stays whole between the title and the menu.
+          assert.equal(await indicator(f.page).isVisible(), true);
+          const title = await f.page.locator('.conversation-title-line h2').boundingBox(), idle = await indicator(f.page).boundingBox();
+          const menu = await f.page.locator('.conversation-menu-toggle').boundingBox();
+          assert.ok(title.x + title.width <= idle.x + 1 && idle.x + idle.width <= menu.x + 1, 'idle status sits between the title and the menu');
+          assert.equal(await indicator(f.page).locator('.wi-ind-text:visible').first().evaluate(node => node.scrollWidth <= node.clientWidth), true, 'idle caption is complete');
           assert.equal(await f.page.locator('.conversation-header').evaluate(node => { const css = getComputedStyle(node); return node.getBoundingClientRect().height - parseFloat(css.borderTopWidth) - parseFloat(css.borderBottomWidth); }), 52);
         }
         await shot(f.page, `${width}-${theme}-${scene}-long-title`);

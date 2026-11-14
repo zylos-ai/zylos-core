@@ -15,6 +15,8 @@ import { createChatSandbox, chatEnabled } from './helpers/chat-integration-harne
 import { startChatBrowser, until } from './helpers/chat-push-browser-driver.js';
 
 const enabled = chatEnabled() && !!process.env.ZYLOS_CHAT_BROWSER_BIN;
+// The conversation page's read interval on a live message stream when nothing in the group can change soon.
+const SLOW_READ_MS = 30000;
 const helper = fileURLToPath(new URL('./helpers/activity-poll-server.js', import.meta.url));
 const group = 'dashboard-activity-poll:private';
 const conversation = 'g:' + Buffer.from(group).toString('hex').toUpperCase();
@@ -30,7 +32,7 @@ const live = '.conversation-activity-message .conversation-activity-live';
 // DB, substituted activity API or source rewrite. Every service/Chrome process
 // group, DB, importer loop and root belongs to the sandbox lifecycle on
 // success/failure/timeout; observations/output are bounded.
-test('the first message after a cold start shows the work it started, settles after the stop and leaves after the reply', { skip: !enabled, timeout: 75000 }, async t => {
+test('the first message after a cold start claims no work without the header\'s reading, settles after the stop and leaves after the reply', { skip: !enabled, timeout: 95000 }, async t => {
   const sandbox = createChatSandbox(t);
   console.info('activity-poll browser targets', JSON.stringify(sandbox.assertIsolation()));
   const db = sandbox.openDatabase(sandbox.paths.c4Db, filename => new Database(filename));
@@ -63,7 +65,7 @@ test('the first message after a cold start shows the work it started, settles af
   const bin = path.join(sandbox.root, 'bin'); fs.mkdirSync(bin);
   for (const command of ['zylos', 'claude', 'codex']) fs.writeFileSync(path.join(bin, command), '#!/bin/sh\ncase "$1" in\n--version) printf "1.0.0\\n";;\nsession-mode) printf \'{"ok":true,"data":{"sessionMode":"multi"}}\\n\';;\nstatus) printf \'{"runtime":"claude","status":"stopped"}\\n\';;\n*) exit 1;;\nesac\n', { mode: 0o700 });
   for (const command of ['tmux', 'pm2']) fs.writeFileSync(path.join(bin, command), '#!/bin/sh\nprintf "forbidden runtime access\\n" >&2\nexit 1\n', { mode: 0o700 });
-  const child = sandbox.startChild(process.execPath, [helper], { timeoutMs: 73000,
+  const child = sandbox.startChild(process.execPath, [helper], { timeoutMs: 93000,
     env: { PATH: bin + ':/usr/bin:/bin', ZYLOS_CHAT_CASE_ROOT: sandbox.root, TMUX: sandbox.paths.socket + ',0,0' } });
   let output = '', origin, importedAt = null, protocolError;
   child.stdout.on('data', data => {
@@ -92,31 +94,34 @@ test('the first message after a cold start shows the work it started, settles af
   await page.evaluate("localStorage.setItem('zylos-dashboard-locale','zh');document.querySelector('input[name=password]').value='private-poll-password';document.querySelector('form').submit()");
   await until(() => page.evaluate('document.querySelector("#wb-chat")?.children.length>0'), 'full app mounts', 10000);
   await page.evaluate('document.querySelector(".tab[data-tab=chat]").click()');
-  await until(() => page.evaluate(`!!document.querySelector('[data-message-id="1"] + ${live}')`),
-    'first selection shows the work under the message that started it', 5000);
-  const runningText = await page.evaluate(`document.querySelector('${live} .conversation-activity-head').textContent`);
-  assert.match(runningText, /^正在工作/);
-  const runningSteps = await page.evaluate(`[...document.querySelectorAll('${live} .conversation-activity-step')].map(row => [row.dataset.status, row.querySelector('.conversation-activity-label').textContent, row.querySelector('.conversation-activity-time').textContent])`);
-  assert.deepEqual(runningSteps, [['running', '保存会话日志', '进行中']]);
-  assert.equal(await page.evaluate('document.querySelectorAll(".conversation-activity-message").length'), 1);
+  await until(() => page.evaluate('!!document.querySelector(\'[data-message-id="1"]\')'), 'first selection shows the message', 5000);
+  // This sandbox runs no session, so the header has no reading of its own (the fixture-API browser case covers the
+  // working area under a running header): the area works exactly when the header says the main AI works, so it
+  // claims no work here even though steps were recorded.
+  await until(() => page.evaluate("performance.getEntriesByType('resource').some(entry => entry.name.includes('/activity?'))"),
+    'the page read the activity', 5000);
+  for (let i = 0; i < 4; i++) await page.evaluate('new Promise(resolve => requestAnimationFrame(() => resolve()))');
+  const beforeStop = await page.evaluate('document.querySelector(".conversation-activity-message")?.textContent ?? null');
+  assert.equal(beforeStop, null, 'no working area without the header\'s reading');
   assert.equal(await page.evaluate('!!document.querySelector(".chat-error:not([hidden])")'), false);
   const evidence = process.env.ZYLOS_CHAT_EVIDENCE_DIR;
-  if (evidence) { fs.mkdirSync(evidence, { recursive: true }); await page.screenshot(path.join(evidence, 'cold-start-running-zh-1280.png')); }
+  if (evidence) { fs.mkdirSync(evidence, { recursive: true }); await page.screenshot(path.join(evidence, 'cold-start-before-stop-zh-1280.png')); }
   // The log records the step's end and the stop; the real importer discovers them on its ordinary interval. There
-  // are no button clicks or manual requests afterwards. This sandbox runs no session, so the header has no reading
-  // of its own (the fixture-API browser case covers that) and the area follows the message's delivery: it keeps
-  // thinking for the settle time after the stop, then says the message was handled without a reply.
+  // are no button clicks or manual requests afterwards. Once the work around the stop settled for the settle time,
+  // the area says the message was handled without a reply. Nothing was live before the stop here, so the page sees
+  // the stop at its next slow read (live stream: every 30 s); a read within the settle time keeps it reading every 2 s.
   const stoppedAt = Date.now();
   fs.appendFileSync(log, [event('post_tool', stoppedAt, { tool_name: 'Bash', tool_use_id: 'taken' }), event('stop', stoppedAt)]
     .map(row => JSON.stringify(row) + '\n').join(''));
   await until(() => page.evaluate(`!!document.querySelector('[data-message-id="1"] + .conversation-activity-message .conversation-activity-handled')`),
-    'the area settles after the stop without any user action', SETTLE_MS + 6000);
+    'the area settles after the stop without any user action', SLOW_READ_MS + 6000);
   const elapsedMs = Date.now() - stoppedAt;
   assert.ok(importedAt !== null, 'the real importer observed the appended stop');
   assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM runtime_events WHERE source='core-log'").get().n, 6);
   assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM runtime_events WHERE event_type='stop' AND source='core-log'").get().n, 2);
   assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM core_log_cursors WHERE stream=? AND byte_offset=?').get('events:' + group, fs.statSync(log).size).n, 1);
-  assert.ok(elapsedMs >= SETTLE_MS - 1000 && elapsedMs <= SETTLE_MS + 5000, `settles a few seconds after the settle time (${elapsedMs} ms)`);
+  assert.ok(elapsedMs >= SETTLE_MS - 1000 && elapsedMs <= Math.max(SETTLE_MS, SLOW_READ_MS) + 5000,
+    `handled no earlier than the settle time and within one slow read of it (${elapsedMs} ms)`);
   const handledText = await page.evaluate(`document.querySelector('${live}').textContent`);
   assert.equal(handledText, '已处理，没有回复·在组详情查看过程');
   if (evidence) await page.screenshot(path.join(evidence, 'cold-start-handled-zh-1280.png'));
@@ -127,7 +132,7 @@ test('the first message after a cold start shows the work it started, settles af
   assert.equal(browser.errors.length, 0, JSON.stringify(browser.errors));
   assert.equal(browser.external.length, 0, JSON.stringify(browser.external));
   const result = { scenario: 'cold-start', stoppedAt, importedAt,
-    elapsedMs, importToSettlementMs: stoppedAt + elapsedMs - importedAt, runningText, runningSteps, handledText,
+    elapsedMs, importToSettlementMs: stoppedAt + elapsedMs - importedAt, beforeStop, handledText,
     runtimeEventsSource: 'core-log', nativeLog: true, noActionAfterStop: true };
   console.info('activity-poll browser timing', JSON.stringify(result));
   if (evidence) fs.writeFileSync(path.join(evidence, 'cold-start-timing.json'), JSON.stringify(result, null, 2));

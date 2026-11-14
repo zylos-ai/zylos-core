@@ -212,7 +212,7 @@ observerService.ensureCoordinatorOwnership = async () => {
 // 3. Sanitizer
 const sanitizer = new Sanitizer(config.zylosDir);
 const coreLogImporter = new CoreLogImporter({ store, zylosDir: config.zylosDir, sanitizer,
-  onImport: () => scheduleHistoryBroadcast(),
+  onImport: event => { scheduleHistoryBroadcast(); conversationCollector?.afterImport(event); },
 });
 
 // Event-loop delay observability (#260)

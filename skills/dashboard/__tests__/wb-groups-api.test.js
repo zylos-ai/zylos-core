@@ -1073,7 +1073,7 @@ for (const condition of ['not running', 'no run', 'status failed']) test(`workin
   assert.equal((await read()).working, null);
 });
 
-test('the main agent works only within seconds of its latest action, and a running command has no invented start', async t => {
+test('without new input the main agent works only within seconds of its latest action, and a running command has no invented start', async t => {
   const { f, add, read } = workingFixture(t), minute = 60000;
   add('user_prompt_submit', 31 * minute);
   assert.equal((await read()).working.on, false, 'an old prompt without a stop is not work');
@@ -1100,6 +1100,66 @@ test('a message the runtime takes from its own queue after the startup stop coun
   assert.deepEqual((await read()).working.main, { since: f.now() - 6100, lastActivityAt: f.now() - 5100 });
 });
 
+for (const input of ['user_prompt_submit', 'input_dequeue']) test(`after ${input} the main agent works until it stops, however long it thinks`, async t => {
+  const { f, add, read } = workingFixture(t), minute = 60000;
+  add('stop', 2 * minute);
+  add(input, 90000);
+  f.advance(2100);
+  assert.deepEqual((await read()).working.main, { since: f.now() - 92100, lastActivityAt: f.now() - 92100 },
+    'ninety seconds of thinking without any event still works');
+  add('stop', 0); f.advance(2100);
+  assert.equal((await read()).working.on, false, 'the stop ends it');
+});
+
+test('a queued message taken as the turn ended, timed before the late stop hook, works until the next stop', async t => {
+  const { f, add, read } = workingFixture(t), minute = 60000;
+  add('stop', 2 * minute);
+  add('user_prompt_submit', 90000);
+  // The transcript times the take 0.4 s before the stop, whose hook process ran late.
+  add('input_dequeue', 30400); add('stop', 30000);
+  f.advance(2100);
+  assert.deepEqual((await read()).working.main, { since: f.now() - 32100 + 1, lastActivityAt: f.now() - 32100 + 1 },
+    'the header counts the queued message as taken after that stop');
+  add('stop', 0); f.advance(2100);
+  assert.equal((await read()).working.on, false, 'the next stop ends it');
+});
+
+test('input followed by more main actions than one lookup returns still works through a long think after them', async t => {
+  const { f, store, add, read } = workingFixture(t), minute = 60000;
+  add('stop', 10 * minute);
+  add('user_prompt_submit', 8 * minute);
+  // Three hundred main actions after the input, more than the action lookup returns, the last two minutes ago.
+  store.db.transaction(() => {
+    for (let i = 0; i < 150; i++) {
+      add('pre_tool_use', 7 * minute - i * 2000, { tool_use_id: `T${i}` });
+      add('post_tool_use', 7 * minute - i * 2000 - 1000, { tool_use_id: `T${i}` });
+    }
+  })();
+  const working = (await read()).working;
+  assert.equal(working.on, true, 'two minutes of thinking after the actions still works on the input');
+  assert.deepEqual(working.main, { since: f.now() - 8 * minute, lastActivityAt: f.now() - 7 * minute + 149 * 2000 + 1000 },
+    'the work began at the input, not at the oldest action the lookup returned');
+});
+
+test('a delivery alone is no input: it keeps the main agent working only for seconds, like any action', async t => {
+  const { f, add, read } = workingFixture(t);
+  add('stop', 60000);
+  add('deliver', 1000, { conversation_id: 7 });
+  f.advance(2100);
+  assert.equal((await read()).working.on, true);
+  f.advance(18000);
+  assert.equal((await read()).working.on, false, 'twenty seconds after a delivery without input is idle');
+});
+
+test('taken input that never led to a stop stops counting after the quiet limit', async t => {
+  const { f, add, read } = workingFixture(t), minute = 60000;
+  add('input_dequeue', 29 * minute);
+  f.advance(2100);
+  assert.equal((await read()).working.on, true);
+  f.advance(minute);
+  assert.equal((await read()).working.on, false);
+});
+
 test('working child freshness uses its own tools and the Core configured TTL', async t => {
   const { f, add, read } = workingFixture(t), minute = 60000;
   fs.mkdirSync(path.join(f.root, '.zylos'), { recursive: true });
@@ -1124,8 +1184,10 @@ test('working uses environment TTL precedence and reads source-time facts with b
   const row = await read();
   assert.equal(row.working.on, false);
   const reads = queries.filter(query => query.runId === 'run-telegram:g0' && query.sourceTime);
-  assert.equal(reads.length, 4);
+  assert.equal(reads.length, 5);
   assert.equal(reads.filter(query => query.limit === 200 && query.agentScope === 'child').length, 2);
+  const input = reads.find(query => query.limit === 1 && query.agentScope === 'main' && query.types?.includes('input_dequeue'));
+  assert.deepEqual(input.types, ['user_prompt_submit', 'input_dequeue'], 'the latest input the main agent took');
   assert.equal(reads.find(query => query.agentScope === 'child' && query.types?.includes('pre_tool_use')).latestPerAgent, true);
   assert.ok(reads.every(query => query.order === 'desc' && [1, 200].includes(query.limit)));
 });

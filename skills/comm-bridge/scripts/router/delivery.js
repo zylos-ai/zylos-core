@@ -174,6 +174,9 @@ export function createDelivery(deps, configuration = {}) {
     const periodic = groupPeriodic(group, fields);
     let connection, target, adapter, timer, draining = false, queue = Promise.resolve();
     let result = 'blocked', gateCode, gateReason, error, state = { state: 'offline' }, initial = true, sessionId = null, entered = false;
+    // A control typed into the session as a message (not a key, a slash command or an auto-acknowledged heartbeat) is
+    // input the agent works on, delivered like a conversation message.
+    let typed = false;
     const bound = () => ({ target, connection });
     function io(action) {
       const work = queue.then(action);
@@ -357,6 +360,7 @@ export function createDelivery(deps, configuration = {}) {
             }
             schedulePeriodic();
             result = type === 'conversation' ? 'delivered' : content.includes('---- ack via:') ? 'submitted' : 'ack';
+            typed = type === 'control' && !content.startsWith('/');
             if (row.require_idle === 1) await idleSettlement();
           }
         }
@@ -390,7 +394,8 @@ export function createDelivery(deps, configuration = {}) {
       if (type === 'control') deps.db.requeueControl(row.id);
       else deps.db.requeueConversation(row.id);
       defer(row, type, gateCode, gateReason ?? gateCode, { ...fields });
-    } else if (result === 'delivered') {
+    } else if (result === 'delivered' || typed) {
+      if (result === 'ack') deps.db.ackControl(row.id);
       // The body is already verified. Missing final identity only affects attribution.
       try {
         const current = await deps.readCurrentSession(group);
@@ -399,7 +404,8 @@ export function createDelivery(deps, configuration = {}) {
       } catch {
         emit('delivery_identity_lost', { reason: 'read_failed' });
       }
-      if (!deps.db.markDelivered(row.id, { sessionId })) emit('mark_delivered_stale', { sessionId });
+      if (type === 'control') emit('deliver', { sessionId });
+      else if (!deps.db.markDelivered(row.id, { sessionId })) emit('mark_delivered_stale', { sessionId });
       else emit('deliver', { sessionId });
     } else if (result === 'ack') deps.db.ackControl(row.id);
     return { delivered: result !== 'blocked', blocked: result === 'blocked', state: state.state };

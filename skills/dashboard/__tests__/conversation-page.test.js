@@ -125,8 +125,7 @@ for (const locale of ['en', 'zh']) {
       if (presence === 'running') assert.equal(header.textContent, f.translations['wb.state.idle']);
     });
   }
-  for (const [kind, label] of [['auth_wait', 'authFailed'], ['fenced', 'paused'], ['starting', 'starting'],
-    ['start_failed', 'startFailed']]) {
+  for (const [kind, label] of [['auth_wait', 'authFailed'], ['fenced', 'paused'], ['start_failed', 'startFailed']]) {
     test(`server ${kind} wait cannot display a green running header in ${locale}`, async t => {
       const f = healthPage(t, { locale, health: 'ok', wait: { kind } });
       await f.page.openGroup(f.sessionGroup); await tick();
@@ -137,6 +136,18 @@ for (const locale of ['en', 'zh']) {
       assert.ok(f.root.querySelector('[data-message-id="1"] .conversation-message-status').textContent.includes(f.translations['chat.page.delivery.pending']));
     });
   }
+  test(`a session being started shows the group waking, in the working style, in ${locale}`, async t => {
+    const f = healthPage(t, { locale, health: 'ok', presence: 'not_running', wait: { kind: 'starting' } });
+    await f.page.openGroup(f.sessionGroup); await tick();
+    const header = f.root.querySelector('.conversation-running');
+    assert.equal(header.hidden, false);
+    assert.equal(header.dataset.state, 'busy');
+    assert.equal(header.classList.contains('conversation-restricted'), false);
+    assert.equal(header.classList.contains('conversation-waiting'), false);
+    assert.equal(header.querySelector('.wi-ind-desktop').textContent, f.translations['chat.page.waking']);
+    assert.equal(header.querySelector('.wi-ind-mobile').textContent, f.translations['chat.page.waking']);
+    assert.ok(header.querySelector('.wi-spin'), 'it spins like work');
+  });
   for (const [presence, reason] of [['not_running', 'pool_occupancy_unreadable'], ['running', 'no_rule'],
     ['running', 'queue_summary_failed'], ['not_running', 'queue_summary_failed']]) {
     test(`healthy ${presence} group waiting for ${reason} has a neutral header in ${locale}`, { timeout: 2000 }, async t => {

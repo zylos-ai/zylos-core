@@ -43,12 +43,14 @@ export function markText(mark, t = key => key) {
 
 /**
  * What the live area shows for the loaded messages (internal relays left out) and the latest activity read, or null
- * when nothing is shown. `presence` is the header's reading of whether the session runs.
+ * when nothing is shown. `presence` is the header's reading of whether the session runs, and the area works exactly
+ * when the header's reading says the main AI works (its `working`).
  * - before the session takes the latest user message: waking the session (or delivering it, when the session runs);
  * - once taken and until the AI does something: working, thinking;
  * - while the AI works: its steps, under the latest message whatever it is; a reply clears the steps before it;
  * - subtasks that have not ended: one row each, still shown when the main AI is idle (then nothing else is);
- * - all done: nothing, or one line under the latest user message when the work ended without a reply.
+ * - all done: nothing, or one line under the latest user message when the work ended without a reply, from the first
+ *   read after it settled (the page still reads often for a while, in case the runtime takes a queued message).
  * Elapsed time counts from the first unanswered user message of the current work while the area sits under a user
  * message, and is not shown under a reply.
  */
@@ -76,23 +78,24 @@ export function livePresentation(messages, activity, { presence = null } = {}) {
     const first = unanswered.find(row => row.at >= from - 1000);
     since = first ? first.at : unanswered.length ? Math.max(unanswered[0].at, from) : awaiting?.since ?? null;
   }
-  const steps = Array.isArray(activity.steps) ? activity.steps : [];
+  // A reply the read has not seen yet clears the steps before it now, not only at the next read.
+  const steps = Array.isArray(activity.steps) && !(under === 'out' && last.id > (activity.seenId ?? 0)) ? activity.steps : [];
   const base = { anchor: last.id, under, subtasks, truncated: activity.truncated === true };
   if (!main && awaiting?.state === 'queued') {
     const asleep = presence !== 'running';
     return { ...base, head: asleep ? 'waking' : 'sending', since: since ?? awaiting.since ?? null, steps: [],
       waiting: asleep ? 'starting' : 'queued' };
   }
-  if (main || awaiting?.state === 'thinking') {
+  if (main) {
     const running = steps.some(step => step.kind === 'tool' && step.status === 'running');
     return { ...base, head: 'working', since, steps, waiting: running ? null : 'thinking' };
   }
   if (subtasks.length) return { ...base, head: null, since: null, steps: [], waiting: null };
-  if (awaiting?.state === 'handled' && under === 'in') return { ...base, head: null, since: null, steps: [], waiting: null, handled: true, subtasks: [] };
+  if (['settling', 'handled'].includes(awaiting?.state) && under === 'in') return { ...base, head: null, since: null, steps: [], waiting: null, handled: true, subtasks: [] };
   return null;
 }
 
-const STATUS_ICON = { running: 'loader', done: 'check', failed: 'alert', incomplete: 'alert', stopped: 'stop' };
+const STATUS_ICON = { running: 'loader', done: 'tick', failed: 'alert', incomplete: 'alert', stopped: 'stop' };
 
 /**
  * The live area. `update(view, { now, open, details })` redraws it for a presentation from `livePresentation`;
@@ -113,7 +116,6 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
   const clock = at => formatZoned(new Date(at), locale, { hour: '2-digit', minute: '2-digit' });
 
   function stepRow(step, into) {
-    if (step.kind === 'say') { into.append(node('p', step.text, 'conversation-activity-say')); return null; }
     if (step.kind === 'mark') {
       const mark = node('div', undefined, 'conversation-activity-mark');
       mark.dataset.mark = step.mark;
@@ -128,7 +130,7 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
     const label = node('span', stepText(step, t), 'conversation-activity-label');
     label.title = label.textContent;
     const time = node('span', '', 'conversation-activity-time');
-    row.append(icon(document, STATUS_ICON[step.status] ?? 'check'), label, time);
+    row.append(icon(document, STATUS_ICON[step.status] ?? 'tick'), label, time);
     into.append(row);
     return { step, time };
   }
@@ -178,7 +180,7 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
       if (item.rest.textContent !== rest) item.rest.textContent = rest;
       item.button.title = `${t('chat.activity.subtask.prefix')}${name}${rest}`;
       const detail = expanded ? details?.get(subtask.id) : null;
-      const shape = JSON.stringify([expanded, detail ? detail.steps.map(step => [step.kind, step.status, step.label?.key, step.label?.arg, step.text]) : null]);
+      const shape = JSON.stringify([expanded, detail ? detail.steps.map(step => [step.kind, step.status, step.label?.key, step.label?.arg]) : null]);
       if (shape !== item.shape) {
         item.shape = shape;
         item.times = [];
@@ -223,7 +225,7 @@ export function createLiveArea({ document, t = key => key, locale, onToggle, onD
       const text = Number.isFinite(view.since) ? t('chat.activity.elapsed').replace('{state}', state).replace('{time}', formatDuration(now - view.since, t)) : state;
       if (headText.textContent !== text) headText.textContent = text;
       const shape = JSON.stringify([view.waiting, view.truncated, view.steps.map(step => step.kind === 'mark' ? ['mark', step.mark, step.at, step.label?.arg]
-        : step.kind === 'say' ? ['say', step.text] : [step.kind, step.status, step.label?.key, step.label?.arg])]);
+        : [step.kind, step.status, step.label?.key, step.label?.arg])]);
       if (shape !== structure) {
         structure = shape;
         times = [];

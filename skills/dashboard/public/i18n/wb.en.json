@@ -783,7 +783,7 @@
   "chat.page.healthUnknown": "Service status unknown",
   "chat.page.waiting": "Waiting",
   "chat.page.paused": "Delivery paused",
-  "chat.page.starting": "Session starting",
+  "chat.page.waking": "Waking",
   "chat.page.originPinned": "Pinned conversation",
   "chat.page.originEmpty": "Talk to Origin directly here. Alerts also appear here when no other destination is set.",
   "chat.page.origin.asleep": "Asleep · a message wakes it; the first reply takes a little longer",
