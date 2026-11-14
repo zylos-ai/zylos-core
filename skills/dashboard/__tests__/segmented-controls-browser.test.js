@@ -51,7 +51,11 @@ test('segmented controls share raised selection in both themes and screen sizes'
             const chosen = control.locator('button:is([aria-selected="true"], [aria-pressed="true"], .active, .wb-on)').first();
             const other = control.locator('button:not([aria-selected="true"], [aria-pressed="true"], .active, .wb-on):not(:disabled)').first();
             await chosen.waitFor(); await other.waitFor();
-            await page.waitForTimeout(180); // Finish the existing button background transition before sampling.
+            const settled = async node => {
+              await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              await Promise.all(node.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
+            };
+            await control.evaluate(settled);
             const measure = node => {
               const style = getComputedStyle(node), box = node.getBoundingClientRect();
               const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
@@ -74,9 +78,9 @@ test('segmented controls share raised selection in both themes and screen sizes'
             assert.notEqual(selected.color, idle.color); assert.equal(track.padding, '2px');
             assert.equal(idle.border, '0px'); assert.equal(selected.border, '0px');
             assert.notEqual(selected.radius, '0px');
-            await chosen.hover(); await page.waitForTimeout(180); assert.equal((await chosen.evaluate(measure)).bg, selected.bg, 'selected hover stays raised');
+            await chosen.hover(); await chosen.evaluate(settled); assert.equal((await chosen.evaluate(measure)).bg, selected.bg, 'selected hover stays raised');
             await other.hover();
-            await page.waitForTimeout(180);
+            await other.evaluate(settled);
             assert.notEqual((await other.evaluate(measure)).bg, idle.bg, 'idle hover is visible');
             await page.keyboard.press('Tab'); await other.focus();
             const focus = await other.evaluate(measure);
@@ -89,8 +93,7 @@ test('segmented controls share raised selection in both themes and screen sizes'
             assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'page does not overflow');
             if (evidence) await page.screenshot({ path: path.join(evidence, `segments-${name}-${width}-${theme}.png`) });
             // Native disabled state is a styling-only fixture; no product behavior is changed.
-            const disabled = await other.elementHandle();
-            assert.equal(await disabled.evaluate(node => { node.disabled = true; return Number(getComputedStyle(node).opacity); }), .5);
+            assert.equal(await other.evaluate(node => { node.disabled = true; return Number(getComputedStyle(node).opacity); }), .5);
             if (name === 'usage' && width === 390) {
               const custom = control.locator('.wb-usage-custom-btn'); await custom.click();
               assert.equal((await custom.evaluate(measure)).bg, selected.bg, 'expanded custom range uses same raised surface');

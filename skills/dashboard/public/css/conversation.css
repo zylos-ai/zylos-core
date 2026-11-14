@@ -1753,3 +1753,26 @@ button.conversation-internal-peer:focus-visible { outline:2px solid var(--accent
   .conversation-header .wi-ind[data-state="busy"]:has(.wi-comet) .wi-spin{display:inline-block;animation:none}
   .conversation-header .wi-ind[data-state="busy"]:has(.wi-comet){padding-left:6px}
 }
+
+/* Conversation rows use the same height tiers as the workbench. */
+.conversation-list-toolbar { align-items: center; }
+.conversation-tabs { height: var(--wb-h); }
+.conversation-tabs .wb-btn { height: 100%; min-height: 0; }
+.conversation-reload { height: var(--wb-h); }
+.conversation-rename { align-items: center; }
+.conversation-rename :is(input, button) { height: var(--wb-h); }
+@media (min-width: 761px) {
+  .conversation-page .conversation-header { align-items: flex-start; }
+  .conversation-page :is(.conversation-title-row, .conversation-title-line) { height: var(--wb-control-compact); }
+  .conversation-page .conversation-header :is(.conversation-title-line .wb-icon-btn, .conversation-list-toggle, .conversation-running, .conversation-header-actions > .wb-btn) { height: var(--wb-control-compact); min-height: var(--wb-control-compact); }
+}
+@media (max-width: 760px) {
+  .conversation-page .conversation-tabs { height: var(--wb-control-touch); }
+  .conversation-page .conversation-tabs .wb-btn { height: 100%; min-height: 0; }
+  .conversation-page .conversation-rename :is(input, button) { height: var(--wb-control-touch); min-height: var(--wb-control-touch); }
+}
+
+@media (max-width: 760px) {
+  .conversation-page .conversation-header .conversation-running[data-state=busy] { height: var(--wb-control-touch); min-height: var(--wb-control-touch); }
+  .conversation-page .conversation-running[data-state=busy]::after { top: 0; bottom: 0; }
+}
