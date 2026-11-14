@@ -837,6 +837,8 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
         } else {
           delete components[component].branch;
         }
+        // The code now comes from GitHub, so a file delivery no longer describes it.
+        delete components[component].deliveredVia;
 
         // Update bin symlinks (remove old, create new)
         const oldBin = components[component].bin;

@@ -5,8 +5,8 @@
 // commit ids the record must name are real ones. Run it when the download, install or upgrade code changes, or the
 // record written to components.json does; it can be skipped for changes that touch none of cli/commands/add.js,
 // cli/commands/component.js (upgrade), cli/lib/download.js, cli/lib/upgrade.js or cli/lib/components.js.
-// It does not cover AI-mode installs (no SKILL.md), which hand setup to a live agent; those write the record through
-// the same recordedSource call. It reaches no network and no live install: every run gets its own HOME,
+// AI-mode installs (no SKILL.md) are covered too: they only write the record and print the setup task, so no agent
+// starts. It reaches no network and no live install: every run gets its own HOME,
 // ZYLOS_DIR, PM2_HOME and TMPDIR under a fresh temporary directory, PATH starts with stubs for curl, gh, pm2, npm
 // and tmux, and the whole directory is removed after each test.
 import assert from 'node:assert/strict';
@@ -75,9 +75,17 @@ function buildUpstream() {
   git('checkout', '-q', '-b', 'release-3', 'v2.0.0');
   commit('3.0.0', { 'package.json': `${JSON.stringify({ name: NAME, version: '3.0.0' })}\n` });
   git('tag', 'v3.0.0');
+  // An AI-mode component: no SKILL.md, so `zylos add` writes the record and hands setup to the agent.
+  git('checkout', '-q', '-b', 'ai-mode', 'v2.0.0');
+  fs.rmSync(path.join(repo, 'SKILL.md'));
+  fs.writeFileSync(path.join(repo, 'README.md'), '# AI-mode fixture\n');
+  fs.writeFileSync(path.join(repo, 'package.json'), `${JSON.stringify({ name: NAME, version: '4.0.0' })}\n`);
+  git('add', '-A');
+  git('commit', '-q', '-m', '4.0.0');
+  git('tag', 'v4.0.0');
   git('checkout', '-q', 'main');
 
-  const refs = { tags: ['v1.0.0', 'v2.0.0', 'v2.1.0-beta.1', 'v2.3.0', 'v3.0.0'], heads: ['main', 'feat/x'] };
+  const refs = { tags: ['v1.0.0', 'v2.0.0', 'v2.1.0-beta.1', 'v2.3.0', 'v3.0.0', 'v4.0.0'], heads: ['main', 'feat/x', 'ai-mode'] };
   const commits = {};
   for (const [kind, names] of Object.entries(refs)) {
     for (const name of names) {
@@ -143,7 +151,7 @@ process.exit(22);
     PM2_HOME: pm2Home,
     TMPDIR: tmp,
     TMUX_TMPDIR: tmp,
-    TZ: 'UTC',
+    TZ: 'Asia/Singapore',
     GITHUB_TOKEN: '',
     GH_TOKEN: '',
     FAKE_REPO: REPO,
@@ -186,6 +194,11 @@ process.exit(22);
 }
 
 const githubSource = (ref, refType, commit) => ({ type: 'github-release', repo: REPO, ref, refType, commit });
+// File deliveries name the component, so the host's registry maps it to the fixture repository.
+const useRegistry = (host) => fs.writeFileSync(
+  path.join(host.zylosDir, '.zylos', 'registry.json'),
+  JSON.stringify({ components: { [NAME]: { repo: REPO, type: 'service' } } }),
+);
 
 describe('components.json records where the installed code came from', () => {
   it('a release install and each later upgrade record the tag and commit actually installed', () => {
@@ -261,12 +274,39 @@ describe('components.json records where the installed code came from', () => {
     assert.deepEqual(host.record().source, githubSource('v2.0.0', 'tag', upstream.commits['v2.0.0']));
   });
 
+  it('an AI-mode install records the tag or branch and the commit actually installed', () => {
+    const fromTag = makeHost();
+    fromTag.ok(['add', `${REPO}@4.0.0`, '--json'], { tags: ['v4.0.0'] });
+    const tagged = fromTag.record();
+    assert.equal(tagged.type, 'ai');
+    assert.equal(tagged.setupComplete, false);
+    assert.deepEqual(tagged.source, githubSource('v4.0.0', 'tag', upstream.commits['v4.0.0']));
+
+    const fromBranch = makeHost();
+    fromBranch.ok(['add', REPO, '--branch', 'ai-mode', '--json'], { tags: ['v1.0.0'] });
+    const branched = fromBranch.record();
+    assert.equal(branched.type, 'ai');
+    assert.deepEqual(branched.source, githubSource('ai-mode', 'branch', upstream.commits['ai-mode']));
+    assert.equal(branched.branch, 'ai-mode');
+  });
+
+  it('upgrading a component delivered from an unverified file drops the file delivery from its record', () => {
+    const host = makeHost();
+    useRegistry(host);
+    host.ok(['add', `${NAME}@2.0.0`, '--file', path.join(upstream.archives, 'tags', 'v2.0.0.tar.gz'), '--trust-file', '--json']);
+    assert.equal(host.record().deliveredVia?.type, 'file');
+    assert.equal(host.record().deliveredVia.verified, false);
+    assert.match(host.ok(['list']).stdout, /Delivered via file — checksum NOT verified/);
+
+    host.ok(['upgrade', NAME, '--yes', '--json'], { tags: ['v2.3.0', 'v2.0.0'] });
+    assert.deepEqual(host.record().source, githubSource('v2.3.0', 'tag', upstream.commits['v2.3.0']));
+    assert.equal('deliveredVia' in host.record(), false, 'the installed code now comes from GitHub, not the file');
+    assert.doesNotMatch(host.ok(['list']).stdout, /Delivered via file/);
+  });
+
   it('a file delivery records the commit its archive names, and null when the archive names none', () => {
     const delivered = (host, tarball) => {
-      fs.writeFileSync(
-        path.join(host.zylosDir, '.zylos', 'registry.json'),
-        JSON.stringify({ components: { [NAME]: { repo: REPO, type: 'service' } } }),
-      );
+      useRegistry(host);
       const sha256 = createHash('sha256').update(fs.readFileSync(tarball)).digest('hex');
       host.ok(['add', `${NAME}@2.0.0`, '--file', tarball, '--sha256', sha256, '--json']);
       assert.equal(host.fetched(), '', 'a file delivery downloads nothing');
