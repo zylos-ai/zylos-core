@@ -5,10 +5,11 @@ const USER_MESSAGE_CHECK_DELAY_MS = 5000;
 export const NO_RESPONSE_SILENCE_MS = 15 * 60 * 1000;
 // Use the allowed three-minute upper bound to leave interrupted work time to resume.
 export const NO_RESPONSE_GRACE_MS = 3 * 60 * 1000;
+export const NO_RESPONSE_RETRY_MS = 60000;
 const RECOVERY_IDLE_WAIT_MS = 30 * 60 * 1000;
 const TERMINAL = new Set(['done', 'failed', 'timeout', 'cancelled', 'superseded']);
 const fingerprint = text => createHash('sha256').update(String(text ?? '')).digest('hex');
-const sameRun = (a, b) => Boolean(a && b && a.runtime === b.runtime && a.runId && a.runId === b.runId && (!a.sessionId || a.sessionId === b.sessionId));
+const sameRun = (a, b) => Boolean(a && b && a.runtime === b.runtime && a.runId && a.runId === b.runId);
 
 /** Observation owns no process launcher and never waits for an acknowledgement in tick. */
 export class SupervisorHealthObserver {
@@ -31,7 +32,7 @@ export class SupervisorHealthObserver {
   sceneState(scene) {
     let state = this.scenes.get(scene.sessionGroup);
     if (!state || !sameRun(state, scene)) {
-      state = { runtime: scene.runtime, runId: scene.runId, sessionId:scene.sessionId, delivery: null, rateHits:0, sticky: null, watchdog: null };
+      state = { runtime: scene.runtime, runId: scene.runId, delivery: null, rateHits:0, sticky: null, watchdog: null };
       this.scenes.set(scene.sessionGroup, state);
     }
     return state;
@@ -40,20 +41,25 @@ export class SupervisorHealthObserver {
     if (this.stopped || !sessionGroup || !runId || !runtime || !Number.isFinite(pastedAt)) return false;
     const state = this.sceneState({sessionGroup, runId, runtime, sessionId});
     if (!state.delivery || pastedAt > state.delivery.pastedAt) {
-      state.delivery = {pastedAt, screenChecked:false, recovery:null};
+      state.delivery = {pastedAt, sessionId, requiredStartAfter:pastedAt, screenChecked:false, recovery:null, retryAt:0};
     }
     return true;
   }
   async canAct(scene, { requireReady = false, requireOpen = false } = {}) {
     if (this.stopped || await this.getModeTransition()) return false;
-    if (await this.manualPending(scene.sessionGroup)) return false;
+    if (scene.sessionGroup === 'origin' && await this.manualPending()) return false;
     if (requireOpen && (await this.getDrainFence('*') || await this.getDrainFence(scene.sessionGroup))) return false;
     const current = await this.readIdentity(scene.sessionGroup);
     return !this.stopped && sameRun(scene, current) && current.present !== false && (!requireReady || current.ready === true);
   }
-  async stopScene(scene, event, validate = async () => true, details = {}) {
+  async canRecover(scene) {
+    if(!await this.canAct(scene,{requireReady:true,requireOpen:true}))return false;
+    const current=await this.readIdentity(scene.sessionGroup);
+    return current?.sessionId===scene.sessionId;
+  }
+  async stopScene(scene, event, validate = null, details = {}) {
     if (!await this.canAct(scene, {requireReady:true})) return false;
-    if (!await validate(scene) || await this.stop(scene, validate) === false)return false;
+    if ((validate && !await validate(scene)) || await this.stop(scene, validate) === false)return false;
     await this.diagnostic({event, sessionGroup:scene.sessionGroup, runId:scene.runId, run_id:scene.runId, runtime:scene.runtime,...details});
     return true;
   }
@@ -217,8 +223,13 @@ export class SupervisorHealthObserver {
       return;
     }
     if (!state || (state.runId && state.runId !== scene.runId)) return;
+    if(tracked.watchdog?.pending)return;
     const tools = state.tools ?? [];
-    const delivery = tracked.delivery;
+    let delivery = tracked.delivery;
+    if(delivery?.sessionId && delivery.sessionId!==scene.sessionId) {
+      if(tracked.delivery===delivery)tracked.delivery=null;
+      delivery=null;
+    }
     if (delivery) {
       if (await this.observeDelivery(scene, tracked, delivery, state, now)) return;
       if (!delivery.screenChecked && now - delivery.pastedAt >= USER_MESSAGE_CHECK_DELAY_MS && await this.checkDeliveredScreen(scene, tracked, delivery, state, now)) return;
@@ -235,12 +246,14 @@ export class SupervisorHealthObserver {
     if (!candidate) {tracked.watchdog=null;return;}
     const {tool,rule} = candidate, id = tool.id;
     if (!id) return;
-    if (tracked.watchdog?.id !== id) tracked.watchdog={id,retryAt:0,graceUntil:null};
+    if (tracked.watchdog?.id !== id || tracked.watchdog.sessionId!==scene.sessionId || tracked.watchdog.delivery!==tracked.delivery) tracked.watchdog={id,sessionId:scene.sessionId,delivery:tracked.delivery,retryAt:0,graceUntil:null};
     const watchdog=tracked.watchdog;
     const activityAt=this.activityAt(scene,state,tool.startedAt);
-    const valid=async current=>{
-      if(this.scenes.get(scene.sessionGroup)!==tracked || tracked.watchdog!==watchdog ||
-        !await this.canAct(current,{requireReady:true,requireOpen:true}))return false;
+    const valid=async(current,{continuing=false}={})=>{
+      if(current.sessionId!==watchdog.sessionId || this.scenes.get(scene.sessionGroup)!==tracked ||
+        tracked.delivery!==watchdog.delivery || tracked.watchdog!==watchdog ||
+        !await this.canRecover(current))return false;
+      if(continuing)return true;
       const fresh=await this.readState(current);
       return fresh?.sessionId===current.sessionId &&
         fresh.tools?.some(value=>value.id===id) &&
@@ -252,16 +265,24 @@ export class SupervisorHealthObserver {
       watchdog.activityAt=activityAt;
       if (now > watchdog.graceUntil) await this.stopScene(scene,'tool_timeout_restart',valid,
         {reason:'tool_timeout_restart',tool:tool.name,silence_ms:Math.max(0,now-activityAt)});
-    } else if (!watchdog.pending && now >= watchdog.retryAt && await this.canAct(scene,{requireReady:true,requireOpen:true})) {
+    } else if (!watchdog.pending && now >= watchdog.retryAt && await this.canRecover(scene)) {
       watchdog.pending=true;watchdog.activityAt=activityAt;
       try {
         const result = await this.nudge(scene,valid);
-        if(tracked.watchdog!==watchdog)return;
         const escapeEnqueued=result?.ok || result?.steps?.[0]?.ok;
         await this.diagnostic({event:'tool_timeout_nudge',reason:'tool_timeout_nudge',sessionGroup:scene.sessionGroup,
-          runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,tool:tool.name,silence_ms:Math.max(0,this.now()-activityAt),enqueued:result?.ok===true});
+          runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,tool:tool.name,silence_ms:Math.max(0,this.now()-activityAt),enqueued:result?.ok===true,escape_enqueued:escapeEnqueued===true,
+          superseded:tracked.watchdog!==watchdog || tracked.delivery!==watchdog.delivery});
+        if(tracked.watchdog!==watchdog || tracked.delivery!==watchdog.delivery)return;
         if (escapeEnqueued) watchdog.graceUntil=this.now()+rule.watchdog.interruptGraceSec*1000;
         else watchdog.retryAt=this.now()+rule.watchdog.cooldownSec*1000;
+      } catch(error) {
+        watchdog.retryAt=this.now()+rule.watchdog.cooldownSec*1000;
+        await this.diagnostic({event:'tool_timeout_nudge',reason:'tool_timeout_nudge',sessionGroup:scene.sessionGroup,
+          runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,tool:tool.name,
+          silence_ms:Math.max(0,this.now()-activityAt),enqueued:false,outcome:'unknown',
+          superseded:tracked.watchdog!==watchdog || tracked.delivery!==watchdog.delivery});
+        throw error;
       } finally {watchdog.pending=false;}
     }
   }
@@ -270,8 +291,16 @@ export class SupervisorHealthObserver {
     return Math.max(pastedAt,...[state.lastActivityAt,state.lastSubagentActivityAt,state.transcriptMtimeMs]
       .filter(value=>Number.isFinite(value) && value<=this.now()));
   }
+  deliveryCompleted(scene,delivery,state) {
+    return state?.sessionId===scene.sessionId && Number.isFinite(state.lastStartedAt) &&
+      state.lastStartedAt>=delivery.requiredStartAfter && state.lastCompletedAt>delivery.pastedAt &&
+      state.lastCompletedAt>=state.lastStartedAt && state.lastCompletedAt>=(state.lastMainWorkAt ?? state.lastStartedAt);
+  }
   async observeDelivery(scene,tracked,delivery,state,now) {
-    if(state.sessionId===scene.sessionId && state.lastCompletedAt>delivery.pastedAt) {
+    // An in-flight Escape/continue pair owns its continuation even when Escape
+    // produces Stop/idle or transcript activity before continue is enqueued.
+    if(delivery.recovery?.pending)return true;
+    if(this.deliveryCompleted(scene,delivery,state)) {
       if(tracked.delivery===delivery)tracked.delivery=null;
       return false;
     }
@@ -280,37 +309,57 @@ export class SupervisorHealthObserver {
     if(delivery.recovery && activityAt>delivery.recovery.activityAt)delivery.recovery=null;
     const silenceMs=Math.max(0,now-activityAt);
     if(silenceMs<NO_RESPONSE_SILENCE_MS)return false;
+    if(now<delivery.retryAt)return true;
     const recovery=delivery.recovery;
-    const valid=async current=>{
-      if(this.scenes.get(scene.sessionGroup)!==tracked || tracked.delivery!==delivery ||
+    const episode=recovery ?? {activityAt,pending:true,nudgedAt:null};
+    const valid=async(current,{continuing=false}={})=>{
+      if((delivery.sessionId && current.sessionId!==delivery.sessionId) ||
+        this.scenes.get(scene.sessionGroup)!==tracked || tracked.delivery!==delivery ||
         delivery.recovery!==episode || await this.readMode()!=='multi' ||
-        !await this.canAct(current,{requireReady:true,requireOpen:true}))return false;
+        !await this.canRecover(current))return false;
+      if(continuing)return true;
       const fresh=await this.readState(current);
-      return fresh?.sessionId===current.sessionId && !(fresh.lastCompletedAt>delivery.pastedAt) &&
+      return fresh?.sessionId===current.sessionId && !this.deliveryCompleted(current,delivery,fresh) &&
         this.activityAt(current,fresh,delivery.pastedAt)<=episode.activityAt;
     };
-    const episode=recovery ?? {activityAt,pending:true,nudgedAt:null};
     if(!recovery) {
+      if(!await this.canRecover(scene))return false;
+      if(tracked.delivery!==delivery || delivery.recovery)return true;
       // Reserve before any awaited enqueue; a newer paste owns its own episode.
       delivery.recovery=episode;
+      let result;
       try {
-        const result=await this.nudge(scene,valid);
-        if(tracked.delivery!==delivery || delivery.recovery!==episode)return false;
-        if(result?.ok)episode.nudgedAt=this.now();
-        else delivery.recovery=null;
+        result=await this.nudge(scene,valid);
+        const escapeEnqueued=result?.ok===true || result?.steps?.[0]?.ok===true;
+        const attemptEndedAt=this.now();
+        const acceptedAt=result?.ok ? result.enqueuedAt : result?.steps?.[0]?.enqueuedAt;
+        const resumeAfter=Number.isFinite(acceptedAt) ? acceptedAt : attemptEndedAt;
         await this.diagnostic({event:'no_response_nudge',reason:'no_response_nudge',sessionGroup:scene.sessionGroup,
-          runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,silence_ms:Math.max(0,this.now()-activityAt),enqueued:result?.ok===true});
+          runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,silence_ms:Math.max(0,this.now()-activityAt),
+          enqueued:result?.ok===true,escape_enqueued:escapeEnqueued,
+          superseded:tracked.delivery!==delivery || delivery.recovery!==episode});
+        if(tracked.delivery!==delivery || delivery.recovery!==episode)return true;
+        // A Stop caused by Escape cannot complete the resumed conversation.
+        if(escapeEnqueued)delivery.requiredStartAfter=Math.max(delivery.requiredStartAfter,resumeAfter);
+        if(result?.ok)episode.nudgedAt=resumeAfter;
+        else {delivery.recovery=null;delivery.retryAt=this.now()+NO_RESPONSE_RETRY_MS;}
       } catch(error) {
-        if(tracked.delivery===delivery && delivery.recovery===episode)delivery.recovery=null;
+        await this.diagnostic({event:'no_response_nudge',reason:'no_response_nudge',sessionGroup:scene.sessionGroup,
+          runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,silence_ms:Math.max(0,this.now()-activityAt),
+          enqueued:false,outcome:'unknown',superseded:tracked.delivery!==delivery});
+        if(tracked.delivery===delivery && delivery.recovery===episode) {
+          delivery.recovery=null;delivery.retryAt=this.now()+NO_RESPONSE_RETRY_MS;
+          delivery.requiredStartAfter=Math.max(delivery.requiredStartAfter,this.now());
+        }
         throw error;
       } finally {episode.pending=false;}
-    } else if(!episode.pending && episode.nudgedAt!==null && now-episode.nudgedAt>=NO_RESPONSE_GRACE_MS) {
+    } else if(episode.nudgedAt!==null && now-episode.nudgedAt>=NO_RESPONSE_GRACE_MS) {
       if(await this.stopScene(scene,'no_response_restart',valid,{reason:'no_response_restart',silence_ms:silenceMs})) {
         if(tracked.delivery===delivery)tracked.delivery=null;
         return true;
       }
     }
-    return delivery.recovery!==null;
+    return delivery.recovery!==null || now<delivery.retryAt;
   }
 
   async tick(scenes) {
