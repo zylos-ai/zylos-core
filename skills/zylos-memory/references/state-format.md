@@ -23,7 +23,7 @@ verified segments. Leave it empty in temporary state; do not copy it from old
 state. For example, with no notes this round, the published header is:
 
 ```text
-<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed= -->
+<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02.123Z | coverage=42 | inbox_committed= -->
 ```
 
 The same empty marker is used when writing temporary state, regardless of the
@@ -33,7 +33,7 @@ With one new note `20261019T053002123Z`, only that ID appears, even if the old
 state named `20261019T053001123Z`:
 
 ```text
-<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02Z | coverage=42 | inbox_committed=20261019T053002123Z -->
+<!-- zylos-state v1 | scope=telegram:example | synced_at=2026-10-19T05:30:02.123Z | coverage=42 | inbox_committed=20261019T053002123Z -->
 ```
 
 The document then contains `# Working State` and all four headings:

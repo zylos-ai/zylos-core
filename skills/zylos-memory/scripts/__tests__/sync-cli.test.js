@@ -66,11 +66,17 @@ test('list ignores optional tokens while write commands still require a token', 
   assert.equal(fs.readFileSync(path.join(memoryDir, 'inbox.md'), 'utf8'), 'active inbox');
 });
 // Integration boundary: real CLI + private tmux identity + temporary memory.
-// Run when sync CLI errors/lock handling change; skip for unrelated changes.
+// Run when sync CLI errors, lock handling or published header fields change;
+// skip for unrelated changes.
 // readyTmuxTarget owns and cleans its private socket, session and fixture root.
 test('CLI exits distinguish malformed input, ownership loss, lock timeout and successful commit', async t => {
   const f = readyTmuxTarget(t, { prefix: 'model-workflow-cli-', mode: 'single', packageRoot: rootPath });
-  const env = { ...f.env, ZYLOS_RUN_ID: f.ready.runId };
+  const env = { ...f.env, ZYLOS_RUN_ID: f.ready.runId, TZ: 'Asia/Singapore',
+    PM2_HOME: path.join(f.root, 'pm2'), TMPDIR: path.join(f.root, 'tmp') };
+  for (const key of ['PM2_HOME', 'TMPDIR']) fs.mkdirSync(env[key]);
+  console.log(JSON.stringify({ boundary: 'Sync commit CLI', HOME: env.HOME,
+    ZYLOS_DIR: env.ZYLOS_DIR, PM2_HOME: env.PM2_HOME, TMPDIR: env.TMPDIR,
+    TZ: env.TZ, socket: f.socketPath, database: path.join(f.root, 'comm-bridge/c4.db') }));
   const runDir = path.join(f.root, 'activity-monitor/session-groups/origin');
   const memoryDir = path.join(f.root, 'memory'); fs.mkdirSync(memoryDir);
   const token = await acquire({ env, kind: 'global' }, { currentRunId: async () => env.ZYLOS_RUN_ID });
@@ -92,15 +98,22 @@ test('CLI exits distinguish malformed input, ownership loss, lock timeout and su
   assert.equal(invalid.status, 1); assert.match(invalid.stderr, /^Error \[INVALID_INPUT\]:/);
   const stale = run('sync-files', ['commit', '--token', 'b'.repeat(32)], env, payload);
   assert.equal(stale.status, 3); assert.match(stale.stderr, /^Error \[TOKEN_MISMATCH\]:/);
+  const before = Date.now();
   const okay = run('sync-files', ['commit', '--token', token], env, payload);
-  assert.equal(okay.status, 0, okay.stderr); assert.equal(fs.readFileSync(path.join(memoryDir, 'state.md'), 'utf8'), text);
+  const after = Date.now();
+  assert.equal(okay.status, 0, okay.stderr);
+  const published = fs.readFileSync(path.join(memoryDir, 'state.md'), 'utf8');
+  const stamp = / \| synced_at=([^| ]+)/.exec(published)?.[1];
+  assert.match(stamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.ok(Date.parse(stamp) >= before && Date.parse(stamp) <= after);
+  assert.equal(published, text.replace(/synced_at=[^| ]+/, `synced_at=${stamp}`));
   await withMemoryLock(runDir, () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [fileURLToPath(new URL('../sync-files.js', import.meta.url)), 'commit', '--token', token], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdin.end(payload);
     let stderr = ''; child.stderr.on('data', data => { stderr += data; });
     child.on('error', reject);
     child.on('close', code => {
-      try { assert.equal(code, 2, stderr); assert.match(stderr, /LOCK_TIMEOUT/); assert.equal(fs.readFileSync(path.join(memoryDir, 'state.md'), 'utf8'), text); resolve(); }
+      try { assert.equal(code, 2, stderr); assert.match(stderr, /LOCK_TIMEOUT/); assert.equal(fs.readFileSync(path.join(memoryDir, 'state.md'), 'utf8'), published); resolve(); }
       catch (error) { reject(error); }
     });
   }));
