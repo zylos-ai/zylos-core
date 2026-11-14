@@ -142,5 +142,5 @@ pending ──► superseded  (replaced by a newer equivalent pending control)
     --block-queue-until-idle --available-in 60
 
 # Enqueue clean slash command (no ack suffix)
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group "$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run "$ZYLOS_RUN_ID"}
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group} ${ZYLOS_SESSION_GROUP:+"$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run} ${ZYLOS_RUN_ID:+"$ZYLOS_RUN_ID"}
 ```

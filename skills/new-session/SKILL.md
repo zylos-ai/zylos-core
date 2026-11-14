@@ -78,14 +78,16 @@ without cross-channel task inventory.
 
 For ordinary rotation use the actual running runtime, not the F1 default. Multi
 must add `--group "$ZYLOS_SESSION_GROUP"`; single omits it. When `ZYLOS_RUN_ID`
-is present, bind the command to that run with `--target-run`. For Codex:
+is present, bind the command to that run with `--target-run`. Keep each optional
+flag and its quoted value in separate expansions so Bash and zsh pass the same
+arguments. For Codex:
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group "$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run "$ZYLOS_RUN_ID"}
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/exit" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group} ${ZYLOS_SESSION_GROUP:+"$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run} ${ZYLOS_RUN_ID:+"$ZYLOS_RUN_ID"}
 ```
 
 For Claude:
 ```bash
-node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group "$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run "$ZYLOS_RUN_ID"}
+node ~/zylos/.claude/skills/comm-bridge/scripts/c4-control.js enqueue --content "/clear" --priority 1 --block-queue-until-idle --no-ack-suffix ${ZYLOS_SESSION_GROUP:+--group} ${ZYLOS_SESSION_GROUP:+"$ZYLOS_SESSION_GROUP"} ${ZYLOS_RUN_ID:+--target-run} ${ZYLOS_RUN_ID:+"$ZYLOS_RUN_ID"}
 ```
 
 If enqueue is rejected, report failure and retain W4; do not loop or assume the

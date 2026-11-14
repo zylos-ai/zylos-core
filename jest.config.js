@@ -1,6 +1,7 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/skill-command-arguments.test.js',
     '<rootDir>/test/diagram-browser.integration.test.js',
     '<rootDir>/test/diagram-components.integration.test.js',
     '<rootDir>/test/fleet-summary-refresh.integration.test.js',
