@@ -85,7 +85,8 @@ test('request file pause crosses the status snapshot and clears after repair', a
     const value = await f.service.getSnapshot(f.now(), { fresh: true });
     const paused = content !== '[]';
     assert.equal(value.instance.supervisorPaused, paused);
-    assert.equal(value.attention.problems.some(item => item.kind === 'supervisor_paused'), paused);
+    assert.equal(value.attention.reminders.some(item => item.kind === 'supervisor_paused'), paused);
+    assert.equal(value.attention.problems.some(item => item.kind === 'supervisor_paused'), false);
   }
 });
 
