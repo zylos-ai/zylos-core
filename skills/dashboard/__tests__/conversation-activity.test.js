@@ -576,4 +576,3 @@ test('fitting the page while the list is still scrolling keeps the message being
   f.timers.filter(timer => timer.fn && timer.ms === 180).at(-1).fn();
   assert.equal(reading.getBoundingClientRect().top, 0, 'once the list is still, the row being read is back where it was');
 });
-
