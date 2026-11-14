@@ -23,6 +23,12 @@ const definitions = [
   ['five', { title: '五步横排与长分组名称', direction: 'horizontal',
     steps: Array.from({ length: 5 }, (_, i) => ({ id: 'step-' + i, nodes: [{ label: '步骤 ' + (i + 1), icon: 'check' }] })),
     groups: [{ label: '这是二十四字长度的单步分组名称用于验证布局无重叠', from: 'step-2', to: 'step-2' }] }],
+  ['five-long-titles', { title: '五步横排与长节点标题', direction: 'horizontal',
+    steps: ['收集用户提交的需求', '检查输入内容和权限', '执行后台处理任务', '汇总任务处理结果', '发送结果并记录状态'].map(label => ({ nodes: [{ label, icon: 'check' }] })),
+  }],
+  ['long-links', { title: '长连线文字', direction: 'horizontal',
+    steps: Array.from({ length: 5 }, () => ({ nodes: [{ label: '处理' }], link: { label: '这是用于验证横排连线文本折行边界的四十字这是用于验证横排连线文本折行边界的四十字' } })),
+  }],
   ['literal', { title: literal, steps: [
     { id: 'first', nodes: [{ label: literal, detail: '<script>window.bad=true</script>', icon: 'future-icon' }], link: { label: '<b>literal link</b>' } },
     { id: 'last', nodes: [{ label: '<a href=x>text</a>', icon: 'server' }] },

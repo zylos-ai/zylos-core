@@ -68,7 +68,7 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
     catch (error) { throw Error(error.message + '; page error=' + pageError + '; missing=' + missing); }
     await page.evaluate(() => document.fonts.ready);
     assert.equal(pageError, undefined); assert.equal(missing, undefined); assert.equal(outside, undefined);
-    assert.equal(await page.locator('.chat-diagram').count(), 12);
+    assert.equal(await page.locator('.chat-diagram').count(), 14);
     const orientation = id => page.locator('#' + id + ' .chat-diagram-nodes').evaluateAll(nodes => {
       const [a, b] = nodes.map(node => node.getBoundingClientRect());
       return Math.abs((a.top + a.bottom) - (b.top + b.bottom)) < 2 && b.left >= a.right ? 'horizontal' : b.top >= a.bottom ? 'vertical' : 'invalid';
@@ -76,6 +76,8 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
     assert.equal(await orientation('default'), 'vertical');
     assert.equal(await orientation('horizontal'), width === 1280 ? 'horizontal' : 'vertical');
     assert.equal(await orientation('five'), width === 1280 ? 'horizontal' : 'vertical');
+    assert.equal(await orientation('five-long-titles'), width === 1280 ? 'horizontal' : 'vertical');
+    assert.equal(await orientation('long-links'), width === 1280 ? 'horizontal' : 'vertical');
     assert.equal(await orientation('long'), 'vertical');
     assert.equal(await orientation('minimal'), 'vertical');
     assert.equal(await orientation('medium'), 'vertical');
@@ -132,10 +134,29 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
       const horizontalConnector = await page.locator('#horizontal .chat-diagram-link[data-arrow="both"]').evaluate(link => {
         const line = link.querySelector('.chat-diagram-line').getBoundingClientRect();
         const label = link.querySelector('.chat-diagram-link-label').getBoundingClientRect();
-        return { above: label.bottom < line.top, width: line.width, height: line.height, gap: link.getBoundingClientRect().width };
+        return { above: label.bottom < line.top, width: line.width, height: line.height, gap: link.getBoundingClientRect().width,
+          labelWidth: label.width, glyph: getComputedStyle(link.querySelector('.chat-diagram-line'), '::after').content };
       });
       assert.ok(horizontalConnector.above && horizontalConnector.width >= 12 && horizontalConnector.width <= 24
-        && horizontalConnector.width < horizontalConnector.gap / 2 && horizontalConnector.height <= 2, 'horizontal label must sit above a short arrow rather than a gap-filling line');
+        && horizontalConnector.width < horizontalConnector.gap / 2 && horizontalConnector.height <= 24, 'horizontal label must sit above a short arrow');
+      assert.equal(horizontalConnector.glyph, '"\u2194"');
+      assert.ok(Math.abs(horizontalConnector.gap - horizontalConnector.labelWidth) <= 2, 'labeled connector slot must follow its label width');
+      const horizontalWidths = await page.locator('#five,#five-long-titles').evaluateAll(diagrams => diagrams.map(diagram => {
+        const flow = diagram.querySelector('.chat-diagram-flow').getBoundingClientRect();
+        const frames = [...diagram.querySelectorAll('.chat-diagram-node')].map(node => node.getBoundingClientRect().width);
+        const links = [...diagram.querySelectorAll('.chat-diagram-link')].map(link => ({ width: link.getBoundingClientRect().width,
+          glyph: getComputedStyle(link.querySelector('.chat-diagram-line'), '::after').content }));
+        return { width: flow.width, frames, links, ratio: frames.reduce((sum, width) => sum + width, 0) / flow.width };
+      }));
+      console.info('diagram horizontal widths', JSON.stringify(horizontalWidths));
+      assert.ok(horizontalWidths.every(flow => flow.ratio >= 0.60 && flow.frames.every(frame => frame >= 72)), 'five-step frames must occupy at least 60% of the row and each be at least 72px wide');
+      assert.ok(horizontalWidths.every(flow => Math.max(...flow.frames) - Math.min(...flow.frames) <= 1), 'horizontal nodes must share remaining width equally');
+      assert.ok(horizontalWidths.every(flow => flow.links.every(link => link.width <= 24 && link.glyph === '"\u2192"')), 'unlabeled horizontal connectors must use short arrows in slots no wider than 24px');
+      const longLinks = await page.locator('#long-links .chat-diagram-link').evaluateAll(links => links.map(link => ({
+        width: link.getBoundingClientRect().width, row: link.closest('.chat-diagram-flow').getBoundingClientRect().width,
+        labelHeight: link.querySelector('.chat-diagram-link-label').getBoundingClientRect().height,
+      })));
+      assert.ok(longLinks.every(link => link.width <= link.row * 0.15 + 1 && link.labelHeight > 18), 'maximum-length link labels must wrap within a bounded share of the horizontal row');
     }
     assert.equal(await page.locator('#default .chat-diagram-link').count(), 2);
     assert.equal(await page.locator('#default .chat-diagram-link[data-arrow="forward"]').count(), 1);
@@ -190,7 +211,7 @@ export async function runDiagramBrowser(sandbox, { width, theme }) {
     if (output) {
       fs.mkdirSync(output, { recursive: true });
       await page.screenshot({ path: path.join(output, `diagram-${width}-${theme}.png`), animations: 'disabled' });
-      for (const id of ['default', 'minimal', 'horizontal', 'five', 'medium', 'long']) await page.locator('#' + id).screenshot({ path: path.join(output, `diagram-${id}-${width}-${theme}.png`), animations: 'disabled' });
+      for (const id of ['default', 'minimal', 'horizontal', 'five', 'five-long-titles', 'medium', 'long']) await page.locator('#' + id).screenshot({ path: path.join(output, `diagram-${id}-${width}-${theme}.png`), animations: 'disabled' });
     }
     assert.equal(pageError, undefined); assert.equal(outside, undefined);
   } finally { if (browser) await browser.close(); }

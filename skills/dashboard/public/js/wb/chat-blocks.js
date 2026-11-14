@@ -109,16 +109,24 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     const viewport = node('div', undefined, 'chat-diagram-viewport');
     const flow = node('ol', undefined, 'chat-diagram-flow');
     flow.dataset.direction = data.direction === 'horizontal' && data.steps.length <= 5 ? 'horizontal' : 'vertical';
-    flow.style.setProperty('--diagram-columns', data.steps.map(() => 'minmax(min-content, 1fr)').join(' 56px '));
-    flow.style.setProperty('--diagram-step-count', String(data.steps.length));
-    flow.style.setProperty('--diagram-label-slots', String((data.groups ?? []).filter(group => group.from === group.to).length));
+    // Single-step groups reserve a second equal track for a title up to two frames wide.
+    const tracks = [], stepTracks = [], groupEnds = [];
+    for (const [index, step] of data.steps.entries()) {
+      stepTracks.push(tracks.length + 1);
+      tracks.push('minmax(0, 1fr)');
+      if ((data.groups ?? []).some(group => group.from === step.id && group.to === step.id)) tracks.push('minmax(0, 1fr)');
+      groupEnds.push(tracks.length + 1);
+      if (index < data.steps.length - 1) tracks.push(step.link?.label ? 'fit-content(15%)' : '24px');
+    }
+    flow.style.setProperty('--diagram-columns', tracks.join(' '));
     for (const group of data.groups ?? []) {
       const first = data.steps.findIndex(step => step.id === group.from);
       const last = data.steps.findIndex(step => step.id === group.to);
       const region = node('li', undefined, 'chat-diagram-group');
       region.setAttribute('role', 'presentation');
-      region.style.setProperty('--group-start', String(first * 2 + 1));
-      region.style.setProperty('--group-end', String(last * 2 + 2));
+      region.style.setProperty('--group-start', String(stepTracks[first]));
+      region.style.setProperty('--group-end', String(groupEnds[last]));
+      if (first === last) region.classList.add('chat-diagram-group-single');
       region.style.setProperty('--group-start-row', String(first * 3 + 1));
       region.style.setProperty('--group-end-row', String(last * 3 + 3));
       region.append(node('span', group.label, 'chat-diagram-group-label'));
@@ -127,7 +135,11 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
     for (const [index, step] of data.steps.entries()) {
       const item = node('li', undefined, 'chat-diagram-step');
       const nodes = node('div', undefined, 'chat-diagram-nodes');
-      nodes.style.setProperty('--step-track', String(index * 2 + 1));
+      nodes.style.setProperty('--step-track', String(stepTracks[index]));
+      if (groupEnds[index] > stepTracks[index] + 1) {
+        nodes.classList.add('chat-diagram-nodes-group-single');
+        nodes.style.setProperty('--step-end-track', String(groupEnds[index]));
+      }
       nodes.style.setProperty('--step-row', String(index * 3 + 2));
       nodes.style.setProperty('--node-count', String(step.nodes.length));
       for (const entry of step.nodes) {
@@ -147,7 +159,7 @@ export function renderChatContent({ document, row, t = key => key, renderQuestio
       if (index < data.steps.length - 1) {
         const link = node('div', undefined, 'chat-diagram-link');
         link.dataset.arrow = step.link?.arrow ?? 'forward';
-        link.style.setProperty('--link-track', String(index * 2 + 2));
+        link.style.setProperty('--link-track', String(groupEnds[index]));
         link.style.setProperty('--link-row', String(index * 3 + 3));
         const line = node('span', undefined, 'chat-diagram-line');
         line.setAttribute('aria-hidden', 'true');
