@@ -2354,6 +2354,10 @@ test('workbench shell shows an initial snapshot read failure only in the board',
   await wbTick(); await wbTick();
   assert.match(h.nodes.get('#wb-board').textContent, /wb.readFailed/);
   assert.doesNotMatch(h.nodes.get('#wb-attention').textContent, /wb.readFailed/);
+  const alert = h.nodes.get('#wb-board').children[0];
+  assert.equal(alert.classList.contains('wb-attention-item'), true);
+  assert.equal(alert.classList.contains('wb-empty'), false);
+  assert.equal(alert.children[0].classList.contains('wb-ico-alert'), true);
 });
 // Mounted read-failure boundary: run for shell/controller changes; skip server-only changes. Uses the isolated fake lifecycle above.
 test('workbench shell retains and redraws old rows after a snapshot read failure', async context => {
