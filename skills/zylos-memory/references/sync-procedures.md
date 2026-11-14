@@ -70,6 +70,12 @@ already completed checkpoint summary. Preserve that checkpoint, temporary state
 and segments, stop later writes, release once and report the mismatch. Do not
 replace the retained input manifest or replay a completed checkpoint to force a
 commit. A later Sync must fully reread and reconcile the actual inputs.
+A batch or receipt that no longer matches the current conversation or checkpoint
+rows is `INPUT_CHANGED`, not a correctable argument error. Stop this Sync run;
+do not re-export, replace its saved receipts, or read only a diff to repair it
+in the same run. Remove this run's private export directory, release the lock
+once, and report failure to the parent session. Start again only in a later
+Sync run, reading the complete new exports.
 `WRITE_FAILED`, `LOCK_UNAVAILABLE`, `LOCK_TIMEOUT`, and tool protocol errors
 receive no retry. For any other required-step failure, stop later writes, release once with
 `node ~/zylos/.claude/skills/zylos-memory/scripts/sync-lock.js release --kind <kind> --token T`, and report failure to the

@@ -34,7 +34,7 @@ export function verifyBatchReceipt(batch, { scope, end, database }) {
     .filter(row => row.status === 'delivered' && (scope === '*' || row.session_group === scope))
     .map(projectConversation);
   const actual = createBatchReceipt(rows, batch);
-  if (actual.sha256 !== batch.sha256) invalid('Batch sha256 does not match the current projected conversation rows');
+  if (actual.sha256 !== batch.sha256) throw changed('Batch sha256 does not match the current projected conversation rows');
   return actual;
 }
 
@@ -85,10 +85,10 @@ export function verifyOriginReceipts({ summary, raw }, { group, database }) {
   const rawLower = Math.max(current.cursorFrom, summary.coverageEnd);
   if (raw && raw.after !== rawLower) throw changed('Raw receipt must start at max(current raw cursor, summary coverage)');
   const summaryActual = createOriginSummaryReceipt(current.summaries, summary);
-  if (summaryActual.count !== summary.count || summaryActual.sha256 !== summary.sha256 || (current.summaries.at(-1)?.id ?? summary.after) !== summary.end) invalid('Summary receipt does not match the current checkpoint rows');
+  if (summaryActual.count !== summary.count || summaryActual.sha256 !== summary.sha256 || (current.summaries.at(-1)?.id ?? summary.after) !== summary.end) throw changed('Summary receipt does not match the current checkpoint rows');
   if (raw) {
     const actual = createOriginRawReceipt(current.rows.map(projectConversation), raw);
-    if (actual.count !== raw.count || actual.sha256 !== raw.sha256) invalid('Raw receipt does not match the current projected conversation rows');
+    if (actual.count !== raw.count || actual.sha256 !== raw.sha256) throw changed('Raw receipt does not match the current projected conversation rows');
     return { syncedId: raw.end, checkpointId: summary.end };
   }
   if (summary.count === 0) return null;
