@@ -91,7 +91,10 @@ export class SupervisorLoop {
       this.configuration = await d.readConfiguration(transition);
       context = { configuration: this.configuration, transition,
         fences: await authority(() => d.listDrainFences()), restartRequests: [] };
-      try { context.restartRequests = await d.readRestartRequests(); }
+      try {
+        context.restartRequests = await d.readRestartRequests();
+        await d.restartRequestsReadable?.();
+      }
       catch (error) {
         // Unreadable intent blocks new work, but cannot strand existing D8 reclaim.
         context.restartRequestsError = error;

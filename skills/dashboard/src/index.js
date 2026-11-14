@@ -501,6 +501,7 @@ function buildApiStatePayload() {
   const stateData = currentState();
   stateData.session_mode = readFleetSessionMode();
   const snapshot = workbench.getCachedSnapshot();
+  stateData.supervisor_paused = snapshot?.instance?.supervisorPaused ?? null;
   stateData.group_summary = stateData.session_mode === 'multi' ? fleetGroupSummary(snapshot) : null;
   // Include the agent's deterministic identity color/hue; machines that read this
   // instance's state (including older dashboards) still colour it by them.
@@ -529,8 +530,7 @@ function readFleetSessionMode() {
 }
 
 async function refreshFleetGroupSummary() {
-  if (readFleetSessionMode() !== 'multi') return;
-  try { await workbench.getSnapshot(); } catch { /* Optional summary cannot break the existing state API. */ }
+  try { await workbench.getSnapshot(); } catch { /* Optional observations cannot break the existing state API. */ }
 }
 
 function buildSelfFleetRecord(statePayload = buildApiStatePayload()) {

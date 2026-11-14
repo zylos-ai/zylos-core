@@ -188,7 +188,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     try { system = systemSample(readSystem()); } catch { /* an unreadable host sample stays unknown */ }
     const value = { readAt: at, mode, view: status?.view ?? null, rows, counts: countRows(rows), hasOlder,
       listKnown: status !== null && status.groupListError === null, baselineRuntime,
-      instance: { runtimeHealth: status?.runtimeHealth ?? null, accounts: accountsCache.accounts, pool, services, system },
+      instance: { runtimeHealth: status?.runtimeHealth ?? null, supervisorPaused: status?.supervisorPaused ?? null, accounts: accountsCache.accounts, pool, services, system },
       overrides: ov.ok ? ov.data : null, sources };
     value.attention = buildAttention(value, { channelDownCounter, pm2Data });
     for (const row of rows) row.attention = value.attention.problems.filter(problem =>

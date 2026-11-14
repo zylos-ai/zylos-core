@@ -273,6 +273,7 @@ function sanitizeLink(link) {
 function sanitizeRecord(record) {
   return {
     name: record.name,
+    supervisor_paused: typeof record.supervisor_paused === 'boolean' ? record.supervisor_paused : null,
     session_mode: ['single', 'multi'].includes(record.session_mode) ? record.session_mode : null,
     group_summary: record.session_mode === 'multi' ? sanitizeFleetGroupSummary(record.group_summary) : null,
     color: record.color,
@@ -337,6 +338,7 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     color: color?.color,
     hue: color?.hue,
     state: liveState,
+    supervisor_paused: statePayload?.supervisor_paused,
     session_mode: statePayload?.session_mode,
     group_summary: statePayload?.group_summary,
     activity: deriveActivity(statePayload),

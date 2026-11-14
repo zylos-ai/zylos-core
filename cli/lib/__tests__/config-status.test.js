@@ -86,7 +86,7 @@ test('healthy status projection retains the baseline shape', async () => {
   assert.deepEqual(await collectStatus(fixture()), {
     sessionMode: 'single', view: 'single', origin: { sessionGroup: null, presence: 'not_running', runId: null,
       sessionId: null, runtime: null, status: { valid: false, reason: 'not_running', state: null, idleSeconds: null, lastState: null, lastIdleSeconds: null, sampledAt: null }, error: null },
-    originNeed: null, groups: [], groupListError: null, runtimeHealth: {}, readAt: 1234,
+    originNeed: null, groups: [], groupListError: null, runtimeHealth: {}, supervisorPaused: false, readAt: 1234,
   });
 });
 

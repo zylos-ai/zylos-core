@@ -6,7 +6,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { createGroupSnapshot, workbenchResponse, systemSample } from '../skills/dashboard/src/lib/workbench/group-snapshot.js';
-import { FleetPoller } from '../skills/dashboard/src/lib/fleet-poller.js';
+import { FleetPoller, stateToFleetRecord } from '../skills/dashboard/src/lib/fleet-poller.js';
 
 // Actual Dashboard HTTP + SSE entry and actual Workbench snapshot/cache, with deterministic
 // Core/C4 observations. Run when Fleet publication, mode reporting or snapshot refresh changes;
@@ -31,14 +31,14 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     setImmediate(() => request.emit('error', new Error('offline fixture')));
     return request;
   };
-  let now = Date.now(), count = 1, statusReads = 0;
+  let now = Date.now(), count = 1, statusReads = 0, supervisorPaused = false;
   const coreModules = async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
     if (name === 'status-view.js') return { collectStatus: async () => {
       statusReads++;
       return { view: 'multi', origin: { presence: 'not_running' }, groupListError: null,
         groups: Array.from({ length: count }, (_, i) => ({ sessionGroup: `fixture-${i}`, presence: 'running',
-          runtime: 'claude', status: { valid: true, state: i ? 'idle' : 'busy' } })), runtimeHealth: {} };
+          runtime: 'claude', status: { valid: true, state: i ? 'idle' : 'busy' } })), runtimeHealth: {}, supervisorPaused };
     } };
     if (name === 'session-state-reader.js') return { readAccountUsage: async () => null };
     if (name === 'session-pool-config.js') return { readPoolCapacity: () => ({ k: 12, record: null, valid: true, fresh: true }) };
@@ -89,6 +89,22 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     fs.writeFileSync(coreConfig, '{ unreadable JSON');
     assert.equal((await readState()).session_mode, null);
   });
+  // API -> real snapshot/cache -> remote Fleet projection in both modes. Run
+  // when pause publication or snapshot refresh changes; isolated resources and
+  // cleanup are owned by this case's parent, with no real runtime or remote poll.
+  await t.test('state endpoint publishes pause and recovery for single and multi session modes', async () => {
+    for (const mode of ['single', 'multi']) {
+      writeMode({ session_mode: mode });
+      for (const paused of [false, true, false]) {
+        supervisorPaused = paused;
+        now += 3000;
+        const value = await readState();
+        assert.equal(value.supervisor_paused, paused);
+        assert.equal(stateToFleetRecord({ name: 'remote' }, value).supervisor_paused, paused);
+        if (mode === 'single') assert.equal(value.group_summary, null);
+      }
+    }
+  });
   writeMode({ session_mode: 'multi' });
   await t.test('Fleet response does not await a held remote poll', async () => {
     const request = new AbortController();
@@ -105,6 +121,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     // Begin with one cached group. After this state read, no /api/state or /api/fleet
     // reads occur: only a settings change schedules each existing publication cycle.
     assert.equal((await readState()).group_summary.running, 1);
+    const initialReads = statusReads;
     abort = new AbortController();
     const stream = await fetch(`${origin}/api/stream`, { headers: { Cookie: cookie }, signal: abort.signal });
     const reader = stream.body.getReader(), decoder = new TextDecoder();
@@ -146,7 +163,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
       assert.equal(changed.status, 200);
       await waitForSummary(expected);
     }
-    assert.equal(statusReads, 3, 'one initial snapshot and one rebuild in each expired SSE cycle');
+    assert.equal(statusReads, initialReads + 2, 'one rebuild in each expired SSE cycle');
     abort.abort();
   });
 });

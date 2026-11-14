@@ -5,15 +5,19 @@ import { listGroupTmuxSessions } from './session-group-paths.js';
 import { readSessionState, readRuntimeHealth } from './session-state-reader.js';
 import { SUPPORTED_RUNTIMES } from './runtime/index.js';
 import fs from 'node:fs';
+import { RestartRequestStore } from '../../skills/activity-monitor/scripts/restart-request-store.js';
 
 const readError = error => ({ code: 'READ_FAILED', message: error.message });
 
 export async function collectStatus({ mode = readSessionMode, list = listGroupTmuxSessions,
   session = readSessionState, health = readRuntimeHealth, runtimes = SUPPORTED_RUNTIMES,
-  now = Date.now, facts = readOriginFacts, configIssue = readInstanceConfigurationIssue, resolveRoot = () => fs.realpathSync(ZYLOS_DIR) } = {}) {
+  now = Date.now, facts = readOriginFacts, configIssue = readInstanceConfigurationIssue, resolveRoot = () => fs.realpathSync(ZYLOS_DIR),
+  requests = () => new RestartRequestStore().read() } = {}) {
   const configurationIssue = configIssue();
   resolveRoot();
   const readAt = now();
+  let supervisorPaused = false;
+  try { await requests(); } catch { supervisorPaused = true; }
   let sessionMode;
   try { sessionMode = mode().mode; if (![null, 'single', 'multi'].includes(sessionMode)) sessionMode = 'unreadable'; }
   catch { sessionMode = 'unreadable'; }
@@ -51,6 +55,6 @@ export async function collectStatus({ mode = readSessionMode, list = listGroupTm
       updatedAt: source === 'record' ? record.updatedAt : null };
   }
   const originNeed = view === 'multi' ? (await facts({ nowSec: Math.floor(readAt / 1000) })).originNeed : null;
-  return { sessionMode, view, origin, originNeed, groups, groupListError, runtimeHealth, readAt,
+  return { sessionMode, view, origin, originNeed, groups, groupListError, runtimeHealth, supervisorPaused, readAt,
     ...(configurationIssue ? { configurationIssue } : {}) };
 }

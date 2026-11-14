@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 import { collectStatus } from '../../../cli/lib/status-view.js';
+import { RestartRequestStore } from '../../activity-monitor/scripts/restart-request-store.js';
 import { createGroupSnapshot, systemSample, workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
 import { createCoreCli } from '../src/lib/workbench/core-cli.js';
 import { C4Reader } from '../src/lib/c4-reader.js';
@@ -62,6 +63,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
       return { collectStatus: options => {
         if (statusError) throw new Error('status');
         return collectStatus({ ...options, mode: () => ({ mode }), now: () => clock, resolveRoot: () => root,
+          requests: () => new RestartRequestStore({ file: path.join(root, 'restart-requests.json') }).read(),
           list: () => { if (groupListError) throw new Error('list'); return keys.map(sessionGroup => ({ sessionGroup })); },
           health: () => healthRecord });
       } };
@@ -72,6 +74,20 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     setNow: value => { clock = value; }, advance: value => { clock += value; }, setMode: value => { mode = value; },
     failUnexpected: value => { unexpected = value; }, now: () => clock };
 }
+
+// Real Core status -> Workbench projection/attention, isolated store and fake
+// clock/CLI/scenes. Run for request-pause wiring; skip unrelated UI work. No
+// daemon, runtime, database or network; fixture removes its own files.
+test('request file pause crosses the status snapshot and clears after repair', async t => {
+  const f = fixture(t), file = path.join(f.root, 'restart-requests.json');
+  for (const content of ['broken', '[]', '{}', '[]']) {
+    fs.writeFileSync(file, content);
+    const value = await f.service.getSnapshot(f.now(), { fresh: true });
+    const paused = content !== '[]';
+    assert.equal(value.instance.supervisorPaused, paused);
+    assert.equal(value.attention.problems.some(item => item.kind === 'supervisor_paused'), paused);
+  }
+});
 
 // Integration: real snapshot/search plus two private HTTP auth/proxy instances.
 // Run for chat access/proxy changes; skip CSS-only changes. Owned temporary root,

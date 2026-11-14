@@ -77,6 +77,65 @@ test('assembly: damaged retained while existing lifecycle loop stays scheduled',
  const reply=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'bad',reason:'upgrade'});assert.equal(reply.code,'requests_unreadable');assert.equal(fs.readFileSync(file,'utf8'),'broken');
 });
 
+// Boundary: actual store -> restore/round -> owner alert and admission rejection.
+// Run for restart-request observation changes. Official runner supplies isolated
+// HOME/ZYLOS_DIR/PM2_HOME/short TMPDIR; fixture uses private files, fake scheduling
+// and injected clock/alerts/database/scenes, with no runtime, daemon or network.
+for(const badRequests of [true,false])test(`restart request failure episodes notify once after ${badRequests?'restore':'a healthy round'}`,async t=>{
+ let now=2_000_000;const alerts=[];
+ const {supervisor,calls,file}=fixture(t,{badRequests,now:()=>now,alert:event=>alerts.push(event)});
+ for(const key of ['HOME','ZYLOS_DIR','PM2_HOME','TMPDIR']) {
+  assert.ok(process.env[key]);
+  assert.equal(path.resolve(process.env[key]).startsWith(path.resolve(os.userInfo().homedir)+path.sep),false);
+ }
+ t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:process.env.ZYLOS_DIR,PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,requestFile:file,tmux:'unused',database:'injected'}));
+ const errors=()=>calls.filter(row=>row.error==='requests_unreadable');
+ const recoveries=()=>calls.filter(row=>row.event==='restart_requests_recovered');
+ await supervisor.loop.start();
+ if(!badRequests) {
+  assert.equal(errors().length,0);assert.equal(alerts.length,0);assert.equal(recoveries().length,0);
+  fs.writeFileSync(file,'broken');now+=1000;await supervisor.loop.tick();
+ }
+ assert.equal(errors().length,1);assert.equal(alerts.length,1);
+ assert.equal(alerts[0].event,'restart_requests_unreadable');assert.equal(alerts[0].path,file);
+ assert.equal(errors()[0].path,file);assert.equal(errors()[0].cause,alerts[0].cause);
+ assert.equal(alerts[0].cause,'Invalid JSON','parser payload stays out of owner alerts');
+ assert.ok(alerts[0].cause.length>0);assert.match(alerts[0].message,/paused new actions/);
+ assert.ok(alerts[0].message.includes(file));assert.ok(alerts[0].message.includes(alerts[0].cause));
+ const initialRows=calls.length;
+ for(let round=0;round<100;round++){now+=1000;await supervisor.loop.tick();}
+ assert.equal(calls.length,initialRows);assert.equal(errors().length,1);assert.equal(alerts.length,1);
+ const rejected=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'blocked-upgrade',reason:'upgrade'});
+ assert.equal(rejected.code,'requests_unreadable');assert.equal(fs.readFileSync(file,'utf8'),'broken');
+ fs.writeFileSync(file,'[]');now+=1000;await supervisor.loop.tick();
+ assert.equal(recoveries().length,1);assert.equal(recoveries()[0].path,file);
+ for(let round=0;round<3;round++){now+=1000;await supervisor.loop.tick();}
+ assert.equal(recoveries().length,1);assert.equal(alerts.length,1);
+ const healthy=await supervisor.admission.handle({version:1,type:'restart_all',requestId:'healthy-upgrade',reason:'upgrade'});
+ assert.equal(healthy.result,'done_empty');
+ fs.writeFileSync(file,'{}');now+=1000;await supervisor.loop.tick();
+ assert.equal(errors().length,2);assert.equal(alerts.length,2);assert.equal(recoveries().length,1);
+ now+=1000;await supervisor.loop.tick();assert.equal(errors().length,2);assert.equal(alerts.length,2);
+ fs.writeFileSync(file,'[]');now+=1000;await supervisor.loop.tick();assert.equal(recoveries().length,2);
+});
+
+test('failed restart request owner delivery remains bounded and preserves recovery',async t=>{
+ let now=2_000_000,attempts=0;
+ const {supervisor,calls,file}=fixture(t,{badRequests:true,now:()=>now,alert:async()=>{attempts++;throw new Error('owner channel unavailable');}});
+ await supervisor.loop.start();
+ assert.equal(attempts,1);assert.equal(calls.filter(row=>row.phase==='restart-requests-alert').length,1);
+ const initialRows=calls.length;
+ for(let round=0;round<20;round++){now+=1000;await supervisor.loop.tick();}
+ assert.equal(calls.length,initialRows);assert.equal(attempts,1);
+ const rejected=await supervisor.admission.handle({version:1,type:'manual_restart',requestId:'blocked-manual'});
+ assert.equal(rejected.reason,'requests_unreadable');
+ fs.writeFileSync(file,'[]');now+=1000;await supervisor.loop.tick();
+ assert.equal(calls.filter(row=>row.event==='restart_requests_recovered').length,1);
+ fs.writeFileSync(file,'broken');now+=1000;await supervisor.loop.tick();
+ assert.equal(attempts,2);assert.equal(calls.filter(row=>row.error==='requests_unreadable').length,2);
+ assert.equal(calls.filter(row=>row.phase==='restart-requests-alert').length,2);
+});
+
 // Boundary: actual Supervisor -> SessionActivity with a private event log and
 // configured hot TTL; injected scene/DB/clock avoid tmux, PM2 and network. Run
 // for child-activity/config wiring; unrelated UI changes may skip. Official

@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import { buildAttention, createChannelDownCounter } from '../src/lib/workbench/attention.js';
 const row = (sessionGroup, runtime, presence, queue = { pending: { count: 0 } }) => ({ sessionGroup, target: { runtime }, presence, queue });
 const snapshot = (rows = [], runtimeHealth = {}) => ({ readAt: 10, rows, instance: { runtimeHealth }, sources: {} });
+test('request pause is instance attention and disappears on recovery', () => {
+  const snap = snapshot();
+  for (const supervisorPaused of [true, false, null, undefined, 'true']) {
+    snap.instance.supervisorPaused = supervisorPaused;
+    assert.deepEqual(buildAttention(snap).problems, supervisorPaused === true ? [{ kind: 'supervisor_paused' }] : []);
+  }
+});
 test('authentication attention distinguishes affected running groups from unknown targets or queues', () => {
   const result = buildAttention(snapshot([row('running', 'codex', 'running'), row('unknown-target', null, 'not_running', { pending: { count: 1 } }), row('unknown-queue', 'codex', 'not_running', { known: false })], { codex: { health: 'auth_failed' } }));
   assert.equal(result.problems.length, 1);assert.deepEqual(result.problems[0].groups, ['running']);assert.equal(result.problems[0].extraUnknown, 2);
