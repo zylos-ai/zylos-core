@@ -134,7 +134,7 @@ for (const { name, text } of releaseGuidance) {
     assert.match(text, /inheriting\s+`ZYLOS_SESSION_GROUP` and `ZYLOS_RUN_ID`/);
     assert.match(text, /never supply\s+another group's identity/);
     assert.match(text, /`ok:true` response registers[\s\S]*in-memory intent,[\s\S]*not a\s+completed release/);
-    assert.match(text, /Finish the current turn; the supervisor uses the existing\s+CHECK → optional Sync → reclaim flow/);
+    assert.ok(text.replace(/\s+/g, ' ').includes('Finish the current turn. Once the session is idle and no subagent or memory sync is running, the supervisor follows the same steps as idle reclaim: it sends the pre-reclaim check prompt, runs a memory sync if there are unsummarized conversations, then reclaims the session.'));
     assert.match(text, /New delivered work before fencing cancels the intent/);
     assert.match(text, /Supervisor restart (?:loses|drops)[\s\S]*intent[\s\S]*idle TTL[\s\S]*fallback/);
     assert.match(text, /On rejection or an unknown\s+result, keep the current run; do not exit\s+or assume release succeeded/);
