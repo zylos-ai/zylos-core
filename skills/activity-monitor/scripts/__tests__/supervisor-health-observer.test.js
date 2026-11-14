@@ -169,15 +169,17 @@ test('duplicate and older paste notifications preserve the silence boundary',asy
   f.advance(179999);await f.observer.tick();assert.equal(f.stops.length,0);
   f.advance(1);await f.observer.tick();assert.equal(f.events.at(-1).event,'no_response_restart');assert.equal(f.stops.length,1);
 });
-for(const evidence of ['lastActivityAt','transcriptMtimeMs','lastSubagentActivityAt']) {
-  test(`${evidence} resets whole-session silence without permanently disarming`,async t=>{
-    const f=fixture(t);f.delivered();f.advance(899999);f.setState({[evidence]:f.now()});await f.observer.tick();
-    f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
-    f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
-    f.advance(1000);f.setState({[evidence]:f.now(),lastResponseAt:f.now()});await f.observer.tick();
-    f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,0);
-  });
-}
+test('AI work resets silence without permanently disarming recovery',async t=>{
+  const f=fixture(t);f.delivered();f.advance(899999);f.setState({lastResponseAt:f.now()});await f.observer.tick();
+  f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
+  f.advance(1000);f.setState({lastResponseAt:f.now()});await f.observer.tick();
+  f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,0);
+});
+for(const evidence of ['lastActivityAt','transcriptMtimeMs','lastSubagentActivityAt'])test(`${evidence} alone cannot postpone an unanswered paste`,async t=>{
+  const f=fixture(t);f.delivered();f.advance(899999);f.setState({[evidence]:f.now()});await f.observer.tick();
+  f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
+});
 test('silent active tools receive the same nudge and restart as an open quiet turn',async t=>{
   const f=fixture(t);f.observer.resolveToolRule=()=>null;f.setState({tools:[{id:'tool',startedAt:f.now(),name:'Bash'}]});
   f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
@@ -187,7 +189,7 @@ test('single mode and completed background waits do not arm no-response recovery
   for(const kind of ['single','completed','no-paste']) {
     const f=fixture(t);if(kind==='single')f.setMode('single');
     if(kind!=='no-paste')f.delivered();
-    f.advance(1);if(kind==='completed')f.setState({lastStartedAt:f.now()-1,lastMainWorkAt:f.now()-1,lastCompletedAt:f.now()});
+    f.advance(1);if(kind==='completed')f.setState({lastStartedAt:f.now()-1,lastCompletedAt:f.now()});
     f.advance(1200000);await f.observer.tick();assert.equal(f.interrupts.length,0);assert.equal(f.stops.length,0);
     if(kind==='completed'){
       f.delivered();f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
@@ -283,7 +285,7 @@ test('no new delivery means no repeated capture or authentication check',async t
 
 test('a second delivery after foreground completion starts its own silence timer',async t=>{
   const f=fixture(t);f.delivered();f.advance(1000);
-  f.setState({lastStartedAt:f.now()-1,lastMainWorkAt:f.now()-1,lastCompletedAt:f.now(),lastActivityAt:f.now()});await f.observer.tick();
+  f.setState({lastStartedAt:f.now()-1,lastCompletedAt:f.now(),lastActivityAt:f.now()});await f.observer.tick();
   f.advance(1000);f.delivered();await f.observer.tick();
   f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
   f.advance(1);await f.observer.tick();assert.equal(f.events.at(-1)?.event,'no_response_nudge');
@@ -339,8 +341,8 @@ for(const gate of ['transition','manual','global-fence','group-fence','session',
       if(gate==='run')f.setScenes([{...scene,runId:'replacement'}]);
       if(gate==='shutdown')await f.observer.shutdown();
       if(gate==='new-paste'){f.advance(1);f.delivered();}
-      if(gate==='activity')f.setState({lastSubagentActivityAt:f.now()});
-      if(gate==='completion')f.setState({lastStartedAt:f.now()-900000,lastMainWorkAt:f.now()-900000,lastCompletedAt:f.now()});
+      if(gate==='activity')f.setState({lastResponseAt:f.now()});
+      if(gate==='completion')f.setState({lastStartedAt:f.now()-900000,lastCompletedAt:f.now()});
       if(await validate(scene))f.interrupts.push({scene});
       return {ok:f.interrupts.length>0};
     };
@@ -355,11 +357,11 @@ test('fresh activity at stop admission cancels restart',async t=>{
   };
   f.advance(180000);await f.observer.tick();assert.equal(f.stops.length,0);
 });
-test('a newer paste during nudge completion keeps its own pending episode',async t=>{
+test('a newer paste during successful nudge completion retains the recovery episode',async t=>{
   const f=fixture(t);f.delivered();f.advance(900000);
   f.observer.nudge=async()=>{f.advance(1);f.delivered();return {ok:true};};
   await f.observer.tick();const delivery=f.observer.sceneState(f.scene()).delivery;
-  assert.equal(delivery.pastedAt,f.now());assert.equal(delivery.recovery,null);
+  assert.equal(delivery.pastedAt,f.now());assert.equal(delivery.recovery.nudgedAt,f.now());
 });
 
 test('no-response recovery takes precedence when the tool watchdog is also due',async t=>{
@@ -420,23 +422,23 @@ test('ambiguous nudge exception is logged once and cooled down',async t=>{
 });
 test('old-turn Stop cannot complete a later pasted message before its factual start',async t=>{
   const f=fixture(t),paste=f.now();f.delivered();f.advance(1000);
-  f.setState({lastStartedAt:paste-1000,lastMainWorkAt:paste+500,lastCompletedAt:f.now(),lastActivityAt:f.now()});
+  f.setState({lastStartedAt:paste-1000,lastCompletedAt:f.now(),lastActivityAt:f.now()});
   await f.observer.tick();assert.ok(f.observer.sceneState(f.scene()).delivery);
-  f.advance(1000);f.setState({lastStartedAt:f.now(),lastMainWorkAt:f.now(),lastCompletedAt:paste+1000,lastActivityAt:f.now()});
+  f.advance(1000);f.setState({lastStartedAt:f.now(),lastCompletedAt:paste+1000,lastActivityAt:f.now()});
   await f.observer.tick();await f.observer.tick();assert.ok(f.observer.sceneState(f.scene()).delivery);
   f.advance(900000);await f.observer.tick();assert.equal(f.interrupts.length,1);
 });
 test('a factual start followed by completion retires background waiting but later work keeps it observed',async t=>{
   const f=fixture(t),paste=f.now();f.delivered();f.advance(1000);
-  f.setState({lastStartedAt:paste,lastMainWorkAt:f.now(),lastCompletedAt:paste+500});
+  f.setState({lastStartedAt:paste,lastResponseAt:f.now(),lastCompletedAt:paste+500});
   await f.observer.tick();assert.ok(f.observer.sceneState(f.scene()).delivery);
-  f.advance(1);f.setState({lastStartedAt:paste,lastMainWorkAt:paste+1000,lastCompletedAt:f.now()});
+  f.advance(1);f.setState({lastStartedAt:paste,lastResponseAt:paste+1000,lastCompletedAt:f.now()});
   await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery,null);
 });
 test('completion caused by Escape does not retire the resumed conversation before a new start',async t=>{
   const f=fixture(t),paste=f.now();f.delivered();f.advance(900000);
   f.observer.nudge=async()=>{
-    f.advance(500);f.setState({lastStartedAt:paste+1,lastCompletedAt:f.now(),lastMainWorkAt:paste+1,lastActivityAt:f.now()});
+    f.advance(500);f.setState({lastStartedAt:paste+1,lastCompletedAt:f.now(),lastActivityAt:f.now()});
     return {ok:true,steps:[{ok:true},{ok:true}]};
   };
   await f.observer.tick();await f.observer.tick();assert.ok(f.observer.sceneState(f.scene()).delivery);
@@ -474,7 +476,7 @@ test('actual enqueue time accepts a fast resumed start despite delayed bookkeepi
   const f=fixture(t),paste=f.now();f.delivered();f.advance(900000);
   f.observer.nudge=async()=>{
     const enqueuedAt=f.now();f.advance(1);
-    f.setState({lastStartedAt:f.now(),lastMainWorkAt:f.now(),lastCompletedAt:f.now()+1,lastActivityAt:f.now()+1,lastResponseAt:f.now()});
+    f.setState({lastStartedAt:f.now(),lastCompletedAt:f.now()+1,lastActivityAt:f.now()+1,lastResponseAt:f.now()});
     f.advance(10);return {ok:true,enqueuedAt,steps:[{ok:true,enqueuedAt:enqueuedAt-500},{ok:true,enqueuedAt}]};
   };
   await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery.requiredStartAfter,paste+900000);
@@ -496,4 +498,70 @@ test('continuous pastes preserve web interrupt grace and failure cooldown',async
   failed.observer.nudge=async()=>{attempts++;return {ok:false};};await failed.observer.tick();
   failed.advance(1000);failed.delivered();await failed.observer.tick();assert.equal(attempts,1);
   failed.advance(1000);failed.delivered();await failed.observer.tick();assert.equal(attempts,2);
+});
+
+test('new pastes preserve the original no-response restart deadline',async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);await f.observer.tick();
+  const episode=f.observer.sceneState(f.scene()).delivery.recovery;
+  for(let i=0;i<5;i++){f.advance(30000);f.delivered();await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery.recovery,episode);}
+  assert.equal(f.stops.length,0);f.advance(29999);f.delivered();await f.observer.tick();assert.equal(f.stops.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.stops.length,1);assert.equal(f.interrupts.length,1);
+});
+test('repeated input-side activity does not postpone the first silence deadline',async t=>{
+  const f=fixture(t);f.delivered();
+  for(let i=0;i<14;i++){f.advance(60000);f.delivered();f.setState({lastActivityAt:f.now(),transcriptMtimeMs:f.now(),lastStartedAt:f.now()});await f.observer.tick();}
+  assert.equal(f.interrupts.length,0);f.advance(60000);f.delivered();await f.observer.tick();assert.equal(f.interrupts.length,1);
+});
+test('completion of the prior paste gives the next unanswered request its own silence interval',async t=>{
+  const f=fixture(t),initial=f.now();f.delivered();f.advance(10000);
+  f.setState({lastStartedAt:initial+1,lastResponseAt:initial+500,lastCompletedAt:initial+1000});f.delivered();await f.observer.tick();
+  f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+  f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
+});
+test('leaving multi clears recovery so re-entry cannot immediately execute the old stop',async t=>{
+  const f=fixture(t);f.delivered();f.advance(900000);await f.observer.tick();f.setMode('single');f.advance(180000);
+  await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery.recovery,null);
+  f.setMode('multi');await f.observer.tick();assert.equal(f.stops.length,0);assert.equal(f.interrupts.length,2);
+});
+test('equal start and completion timestamps cannot retire a newly processed input',async t=>{
+  const f=fixture(t),at=f.now();f.delivered();f.setState({lastStartedAt:at,lastCompletedAt:at,lastResponseAt:at});
+  await f.observer.tick();assert.ok(f.observer.sceneState(f.scene()).delivery);
+  f.advance(1);f.setState({lastStartedAt:at,lastCompletedAt:f.now(),lastResponseAt:at});await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery,null);
+});
+test('completion and real-response cancellation both wait for transcript catch-up',async t=>{
+  const f=fixture(t),at=f.now();f.delivered();f.advance(1);
+  f.setState({lastStartedAt:at,lastCompletedAt:f.now(),lastResponseAt:at,transcriptPending:true});await f.observer.tick();
+  assert.ok(f.observer.sceneState(f.scene()).delivery);f.setState({lastStartedAt:at,lastCompletedAt:f.now(),lastResponseAt:at});await f.observer.tick();assert.equal(f.observer.sceneState(f.scene()).delivery,null);
+  const g=fixture(t);g.delivered();g.advance(900000);await g.observer.tick();g.advance(1);g.setState({lastResponseAt:g.now(),transcriptPending:true});await g.observer.tick();
+  assert.ok(g.observer.sceneState(g.scene()).delivery.recovery);g.setState({lastResponseAt:g.now()});await g.observer.tick();assert.equal(g.observer.sceneState(g.scene()).delivery.recovery,null);
+});
+test('web watchdog cannot nudge or restart while transcript records remain unread',async t=>{
+  const f=fixture(t),tools=[{id:'web',name:'WebFetch',startedAt:f.now()-11000}];f.setState({tools,transcriptPending:true});
+  await f.observer.tick();assert.equal(f.interrupts.length,0);f.setState({tools});f.advance(2000);await f.observer.tick();assert.equal(f.interrupts.length,1);
+  f.advance(5001);f.setState({tools,transcriptPending:true});await f.observer.tick();assert.equal(f.stops.length,0);
+  f.setState({tools});await f.observer.tick();assert.equal(f.stops.length,1);
+});
+
+test('validated work events postpone initial silence but cannot cancel recovery grace', async t => {
+    const f=fixture(t);f.delivered();f.advance(899999);
+    f.setState({lastWorkEventAt:f.now()});await f.observer.tick();
+    f.advance(899999);await f.observer.tick();assert.equal(f.interrupts.length,0);
+    f.advance(1);await f.observer.tick();assert.equal(f.interrupts.length,1);
+    const episode=f.observer.sceneState(f.scene()).delivery.recovery;
+    f.advance(179999);f.setState({lastWorkEventAt:f.now(),lastCompletedAt:f.now()});
+    await f.observer.tick();assert.equal(f.stops.length,0);
+    assert.equal(f.observer.sceneState(f.scene()).delivery.recovery,episode);
+    f.advance(1);await f.observer.tick();assert.equal(f.stops.length,1);
+});
+test('future work events cannot postpone silence and foreign sessions cannot authorize recovery',async t=>{
+  for(const evidence of [{lastWorkEventAt:1792001000000},{sessionId:'old-session',lastWorkEventAt:1792000899999}]) {
+    const f=fixture(t);f.delivered();f.advance(899999);f.setState(evidence);
+    await f.observer.tick();f.advance(1);await f.observer.tick();
+    if(evidence.sessionId){
+      assert.equal(f.interrupts.length,0);
+      assert.equal(f.observer.activityAt(f.scene(),evidence,1792000000000),1792000000000);
+      f.setState({});f.advance(60000);await f.observer.tick();
+    }
+    assert.equal(f.interrupts.length,1);
+  }
 });

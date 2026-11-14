@@ -41,8 +41,9 @@ export class SupervisorHealthObserver {
     if (this.stopped || !sessionGroup || !runId || !runtime || !Number.isFinite(pastedAt)) return false;
     const state = this.sceneState({sessionGroup, runId, runtime});
     if (!state.delivery || pastedAt > state.delivery.pastedAt) {
-      state.delivery = {pastedAt, noResponseEligible:!Number.isFinite(currentSessionTs) || pastedAt>=currentSessionTs,
-        requiredStartAfter:pastedAt, screenChecked:false, recovery:null, retryAt:0};
+      const previous=state.delivery;
+      state.delivery = {pastedAt, silenceSince:previous?.silenceSince ?? pastedAt, noResponseEligible:!Number.isFinite(currentSessionTs) || pastedAt>=currentSessionTs,
+        requiredStartAfter:pastedAt, screenChecked:false, recovery:previous?.recovery ?? null, retryAt:previous?.retryAt ?? 0};
     }
     return true;
   }
@@ -228,6 +229,8 @@ export class SupervisorHealthObserver {
     const tools = state.tools ?? [];
     const delivery = tracked.delivery;
     if (delivery) {
+      // A pending pair/grace owns recovery for this scene. Do not run a second
+      // screen-triggered recovery or tool watchdog in parallel with it.
       if (await this.observeDelivery(scene, tracked, delivery, state, now)) return;
       if (!delivery.screenChecked && now - delivery.pastedAt >= USER_MESSAGE_CHECK_DELAY_MS && await this.checkDeliveredScreen(scene, tracked, delivery, state, now)) return;
     }
@@ -288,18 +291,19 @@ export class SupervisorHealthObserver {
   }
   activityAt(scene,state,pastedAt) {
     if(state?.sessionId!==scene.sessionId)return pastedAt;
-    return Math.max(pastedAt,...[state.lastActivityAt,state.lastSubagentActivityAt,state.transcriptMtimeMs]
-      .filter(value=>Number.isFinite(value) && value<=this.now()));
+    const workAt=Number.isFinite(state?.lastWorkEventAt) && state.lastWorkEventAt<=this.now() ? state.lastWorkEventAt : 0;
+    return Math.max(pastedAt,this.responseAt(state),workAt);
   }
   deliveryCompleted(scene,delivery,state) {
     return state?.sessionId===scene.sessionId && !state.transcriptPending && Number.isFinite(state.lastStartedAt) &&
       state.lastStartedAt>=delivery.requiredStartAfter && state.lastCompletedAt>delivery.pastedAt &&
-      state.lastCompletedAt>=state.lastStartedAt && state.lastCompletedAt>=(state.lastMainWorkAt ?? state.lastStartedAt);
+      state.lastCompletedAt>state.lastStartedAt && state.lastCompletedAt>=(state.lastResponseAt ?? state.lastStartedAt);
   }
   responseAt(state) {
     return Number.isFinite(state?.lastResponseAt) && state.lastResponseAt<=this.now() ? state.lastResponseAt : 0;
   }
   async observeDelivery(scene,tracked,delivery,state,now) {
+    if(await this.readMode()!=='multi') {delivery.recovery=null;return false;}
     // A pair must finish even when Escape creates Stop/idle or transcript writes.
     if(delivery.recovery?.pending)return true;
     if(delivery.recovery?.sessionId!==undefined && delivery.recovery.sessionId!==scene.sessionId)delivery.recovery=null;
@@ -313,8 +317,12 @@ export class SupervisorHealthObserver {
       if(tracked.delivery===delivery)tracked.delivery=null;
       return false;
     }
-    if(await this.readMode()!=='multi' || !delivery.noResponseEligible)return false;
-    const activityAt=this.activityAt(scene,state,delivery.pastedAt);
+    if(!delivery.noResponseEligible)return false;
+    if(!recovery && state.lastStartedAt>=delivery.silenceSince && state.lastCompletedAt>state.lastStartedAt &&
+      state.lastCompletedAt<delivery.pastedAt && state.lastCompletedAt>=(state.lastResponseAt ?? 0)) {
+      delivery.silenceSince=delivery.pastedAt;
+    }
+    const activityAt=this.activityAt(scene,state,delivery.silenceSince);
     const silenceMs=Math.max(0,now-(recovery ? recovery.activityAt : activityAt));
     if(!recovery && (state.transcriptPending || silenceMs<NO_RESPONSE_SILENCE_MS))return false;
     if(!recovery && now<delivery.retryAt)return true;
@@ -328,7 +336,7 @@ export class SupervisorHealthObserver {
       if(fresh?.sessionId!==current.sessionId || fresh.transcriptPending)return false;
       if(episode.nudgedAt!==null)return this.responseAt(fresh)<=episode.responseAt;
       return !this.deliveryCompleted(current,delivery,fresh) &&
-        this.activityAt(current,fresh,delivery.pastedAt)<=episode.activityAt;
+        this.activityAt(current,fresh,delivery.silenceSince)<=episode.activityAt;
     };
     if(!recovery) {
       if(!await this.canRecover(scene))return false;
@@ -343,23 +351,25 @@ export class SupervisorHealthObserver {
           runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,silence_ms:Math.max(0,this.now()-activityAt),
           enqueued:result?.ok===true,escape_enqueued:escapeEnqueued,
           superseded:tracked.delivery!==delivery || delivery.recovery!==episode});
-        if(tracked.delivery!==delivery || delivery.recovery!==episode)return true;
-        if(escapeEnqueued)delivery.requiredStartAfter=Math.max(delivery.requiredStartAfter,resumeAfter);
+        const owner=tracked.delivery;
+        if(owner?.recovery!==episode)return true;
+        if(escapeEnqueued)owner.requiredStartAfter=Math.max(owner.requiredStartAfter,resumeAfter);
         if(result?.ok)episode.nudgedAt=resumeAfter;
-        else {delivery.recovery=null;delivery.retryAt=this.now()+NO_RESPONSE_RETRY_MS;}
+        else {owner.recovery=null;owner.retryAt=this.now()+NO_RESPONSE_RETRY_MS;}
       } catch(error) {
         await this.diagnostic({event:'no_response_nudge',reason:'no_response_nudge',sessionGroup:scene.sessionGroup,
           runId:scene.runId,run_id:scene.runId,runtime:scene.runtime,silence_ms:Math.max(0,this.now()-activityAt),
           enqueued:false,outcome:'unknown',superseded:tracked.delivery!==delivery});
-        if(tracked.delivery===delivery && delivery.recovery===episode) {
-          delivery.recovery=null;delivery.retryAt=this.now()+NO_RESPONSE_RETRY_MS;
-          delivery.requiredStartAfter=Math.max(delivery.requiredStartAfter,this.now());
+        const owner=tracked.delivery;
+        if(owner?.recovery===episode) {
+          owner.recovery=null;owner.retryAt=this.now()+NO_RESPONSE_RETRY_MS;
+          owner.requiredStartAfter=Math.max(owner.requiredStartAfter,this.now());
         }
         throw error;
       } finally {episode.pending=false;}
     } else if(episode.nudgedAt!==null && now-episode.nudgedAt>=NO_RESPONSE_GRACE_MS) {
       if(await this.stopScene(scene,'no_response_restart',valid,{reason:'no_response_restart',silence_ms:silenceMs})) {
-        if(tracked.delivery===delivery)tracked.delivery=null;
+        if(tracked.delivery?.recovery===episode)tracked.delivery=null;
         return true;
       }
     }
