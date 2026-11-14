@@ -130,6 +130,34 @@ After deferral resets the idle clock, the session returns at the next idle check
 result, record it in the handoff or arrange for the task itself to send a
 completion message back.
 
+In multi-session mode, an actually pasted conversation starts no-response
+observation until factual foreground Stop (or Claude idle) completes its turn.
+The latest main event, child event, associated transcript write, or paste resets
+its whole-session silence clock. A quiet open turn remains eligible even with
+an active tool. After 15 minutes of observable silence, the supervisor uses the
+same Escape → successful enqueue → 500 ms → exact `continue` helper as Dashboard.
+It waits 180 seconds after successful continue enqueue before stopping the same
+still-silent session. Any new activity cancels that recovery episode. Background
+tasks alone never start it; a new unanswered paste during background waiting does.
+Single-session no-response behavior is unchanged.
+
+The rule deliberately includes legitimate foreground calls silent for 15 minutes;
+existing hooks/transcripts cannot distinguish all healthy long calls from hangs.
+Codex busy Enter accepts steering, but tools may finish before the model reads it.
+Native exec yield/poll windows do not impose a 600-second process lifetime, and
+streaming stdout is not universally persisted as transcript activity.
+
+Web tool timeout recovery also uses the shared nudge helper, retaining its
+configured interrupt grace (15 seconds by default), cooldown and stop fallback.
+No-response recovery takes precedence when both detectors are due. Each nudge
+and successful restart logs its reason (`no_response_nudge`,
+`no_response_restart`, `tool_timeout_nudge`, `tool_timeout_restart`), session group,
+run ID and observed silence duration in the supervisor event log. Enqueue success
+is not proof of runtime delivery or recovery. Controls and stop recheck current
+identity, activity, delivery, manual requests, transitions, shutdown and drain
+fences through serialized admission; neither the 500 ms delay nor recovery grace
+holds that queue.
+
 Subagent events with `agent_id` are tracked separately for the current run and
 session as `activeSubagents` and `lastSubagentActivityAt`. A started, unended
 child blocks TTL and capacity eviction while its last event is less than one

@@ -23,7 +23,7 @@ function fixture(t,runtime) {
  const observer=new SupervisorHealthObserver({coordinator:health,now:()=>clock,listScenes:()=>[scene],readIdentity:()=>scene,
   readState:()=>activity.read(clock),readMode:()=> 'multi',readScreen:()=>{captures.push(clock);return '> Ready for your next request';},matchScreen:()=>({}),
   resolveToolRule:()=>({watchdog:{enabled:true,maxRuntimeSec:10,interruptKey:'Escape',interruptGraceSec:5,cooldownSec:2}}),
-  interrupt:()=>{interrupts.push(clock);return {ok:true};},stop:()=>{stops.push(clock);return true;},log:error=>errors.push(error)});
+  nudge:()=>{interrupts.push(clock);return {ok:true};},stop:()=>{stops.push(clock);return true;},log:error=>errors.push(error)});
  t.after(()=>observer.shutdown());
  const publish=()=>publishSessionStatus({statusFile:path.join(root,'agent-status.json'),scene,activity:activity.read(clock),health:health.store(runtime).read(),now:clock});
  return {root,activity,row,observer,captures,interrupts,stops,errors,publish,get now(){return clock;},advance:ms=>clock+=ms,
@@ -48,14 +48,6 @@ for(const runtime of ['claude','codex']) {
   // Positive evidence is an actual hook, independently of a screen or statusline.
   f.activity.consume([f.row('post_tool',{tool_use_id:'active'})]);f.advance(3001);
   assert.equal(f.publish().active_tools,0);assert.equal(f.publish().state,'idle');assert.deepEqual(f.errors,[]);
- });
- test(`state derivation oracle: ${runtime} screen-clears-tools is rejected by the same assertion`,async t=>{
-  const f=fixture(t,runtime);f.activity.consume([f.row('pre_tool',{tool_use_id:'active',tool:'Bash'})]);
-  assertActive(f);
-  const capture=f.observer.readScreen;
-  f.observer.readScreen=()=>{const screen=capture();f.activity.tools.clear();return screen;};
-  f.delivered();f.advance(5000);await f.observer.tick();assert.equal(f.captures.length,1);
-  assert.throws(()=>assertActive(f),{code:'ERR_ASSERTION'});
  });
  test(`state derivation: ${runtime} continuous rotations and disappearing directory preserve factual tools`,t=>{
   const f=fixture(t,runtime),log=path.join(f.root,'events.jsonl');

@@ -12,7 +12,7 @@ export class SessionActivity {
     this.subagents=new Map();this.lastSubagentActivityAt=null;
     this.recovered=false;this.lastActivityAt=startedAt;this.closedThrough=-Infinity;this.transcriptPath=null;
     this.transcriptFd=null;this.transcriptOffset=0;this.transcriptIdentity=null;this.turn=false;this.idleSince=null;
-    this.busySince=null;this.lastIdleAt=null;
+    this.busySince=null;this.lastIdleAt=null;this.lastCompletedAt=null;
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
   matches(row) {
@@ -27,6 +27,10 @@ export class SessionActivity {
     if(['subagent_start','subagent_stop'].includes(row.event) &&
        (row.ts>agent.transitionAt || (!reverse && row.ts===agent.transitionAt))) {
       agent.active=row.event==='subagent_start';agent.transitionAt=row.ts;
+    }
+    if(typeof row.transcript_path==='string' && path.isAbsolute(row.transcript_path) &&
+       (agent.transcriptAt===undefined || row.ts>agent.transcriptAt || (!reverse && row.ts===agent.transcriptAt))) {
+      agent.transcriptPath=row.transcript_path;agent.transcriptAt=row.ts;
     }
     this.subagents.set(row.agent_id,agent);
     this.lastSubagentActivityAt=Math.max(this.lastSubagentActivityAt ?? 0,row.ts);
@@ -44,14 +48,26 @@ export class SessionActivity {
   associateTranscript(row) {
     if(row.event==='session_start' && typeof row.transcript_path==='string' && path.isAbsolute(row.transcript_path))this.transcriptPath=row.transcript_path;
   }
+  isCompletion(row) {
+    return row.event==='stop' || (this.runtime==='claude' && row.event==='idle');
+  }
+  recordCompletion(row) {
+    this.lastCompletedAt=Math.max(this.lastCompletedAt ?? -Infinity,row.ts);
+  }
   recover() {
-    let boundary=false;
+    let boundary=false,completionBoundary=false;
     return this.reader.recoverTail(row=>{
       if(!this.matches(row))return {};
       if(!this.transcriptPath)this.associateTranscript(row);
+      // The latest prompt bounds live tool recovery, but an earlier factual
+      // completion must survive that prompt and subsequent quiet samples.
+      if(Number.isFinite(row.ts) && row.ts>=this.startedAt && this.isCompletion(row)) {
+        this.recordCompletion(row);completionBoundary=true;
+      }
+      if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)completionBoundary=true;
       const keep=!boundary && Number.isFinite(row.ts) && row.ts>=this.startedAt;
       if(Number.isFinite(row.ts) && (row.ts<=this.startedAt || ['prompt','stop'].includes(row.event)))boundary=true;
-      return {keep,done:boundary && this.transcriptPath!==null};
+      return {keep,done:boundary && completionBoundary && this.transcriptPath!==null};
     });
   }
   consume(rows) {
@@ -72,7 +88,8 @@ export class SessionActivity {
         this.tools.set(id,{id,name:row.tool,startedAt:row.ts,input:row.tool_input});
       }
       if(['post_tool','post_tool_failure'].includes(row.event) && typeof id==='string') {this.completed.add(id);this.tools.delete(id);}
-      if(row.event==='stop' || (this.runtime==='claude' && row.event==='idle')) {
+      if(this.isCompletion(row)) {
+        this.recordCompletion(row);
         this.turn=false;this.closedThrough=Math.max(this.closedThrough,row.ts);
         for(const [key,tool] of this.tools)if(tool.startedAt<=row.ts){this.completed.add(key);this.tools.delete(key);}
       }
@@ -100,6 +117,17 @@ export class SessionActivity {
     for(const id of this.results)this.tools.delete(id);
     return stat.mtimeMs;
   }
+  readSubagentTranscripts() {
+    for(const agent of this.subagents.values()) {
+      if(!agent.transcriptPath)continue;
+      let stat;
+      try {stat=fs.statSync(agent.transcriptPath);}
+      catch(error){if(error.code!=='ENOENT')this.warn('subagent_transcript_unreadable');continue;}
+      if(!Number.isFinite(stat.mtimeMs) || stat.mtimeMs<this.startedAt)continue;
+      agent.lastActivityAt=Math.max(agent.lastActivityAt,stat.mtimeMs);
+      this.lastSubagentActivityAt=Math.max(this.lastSubagentActivityAt ?? 0,stat.mtimeMs);
+    }
+  }
   read(now=Date.now(), {subagentTtlMs=1800000}={}) {
     const events=this.recovered?this.reader.read():this.recover();
     // Capture the incremental cursor first, so child events appended during
@@ -107,6 +135,7 @@ export class SessionActivity {
     if(!this.recovered)this.recoverSubagents();
     this.recovered=true;this.consume(events);
     const transcriptMtimeMs=this.readTranscript();
+    this.readSubagentTranscripts();
     if(Number.isFinite(transcriptMtimeMs))this.lastActivityAt=Math.max(this.lastActivityAt,transcriptMtimeMs);
     const busy=this.tools.size>0 || now-this.lastActivityAt<3000;
     if(busy){
@@ -122,7 +151,7 @@ export class SessionActivity {
     }
     const activeSubagents=[...this.subagents].filter(([,agent])=>agent.active && now-agent.lastActivityAt<subagentTtlMs)
       .map(([agentId,agent])=>({agentId,lastActivityAt:agent.lastActivityAt}));
-    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
+    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,lastCompletedAt:this.lastCompletedAt,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
       activeSubagents,lastSubagentActivityAt:this.lastSubagentActivityAt};
   }
 }

@@ -54,16 +54,17 @@ export function createGroupActions({ zylosDir, config = { zylosDir },
     if (typeof body.runId !== 'string' || !body.runId) throw invalid('TARGET_REQUIRED', 'Refresh and confirm the current group run');
     const target = { sessionGroup: key, runId: body.runId, sessionId: body.sessionId ?? null };
     if (action !== 'restart') {
+      if (action === 'chop-chop') {
+        const { nudgeSession } = await loadCoreModule('session-nudge.js');
+        return nudgeSession({ enqueue: content => control(content, target), delay: sleep });
+      }
       const first = { ...await control('[KEYSTROKE]Escape', target), control: 'escape' };
       if (action === 'interrupt' && first.ok) {
         // The runtime leaves no trace of an interrupt; the record (with its control id) lets the conversation page show
         // the round as stopped once C4 has delivered the Escape. An Escape that never arrives leaves the round running.
         try { onInterrupt({ ...target, controlId: first.controlId, at: now() }); } catch { /* Recording never changes the result. */ }
       }
-      if (action === 'interrupt' || !first.ok) return { ...first, steps: [first] };
-      await sleep(500);
-      const second = { ...await control('continue', target), control: 'continue' };
-      return { ...second, steps: [first, second] };
+      return { ...first, steps: [first] };
     }
     if (coreConfig.ZYLOS_DIR && path.resolve(coreConfig.ZYLOS_DIR) !== path.resolve(zylosDir)) {
       return { ok: false, submission: 'not_submitted',

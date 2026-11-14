@@ -94,23 +94,23 @@ async function deliveryScenario(t, create) {
   assert.equal((await send(message)).type, 'ack');
   await f.supervisor.observer.observeScene(scene);
   const before = structuredClone(f.supervisor.observer.scenes.get(scene.sessionGroup));
-  assert.equal(before.delivery.elapsed, 1000);
+  assert.equal(before.sessionId, scene.sessionId);
+  assert.equal(before.delivery.recovery, null);
   assert.equal(before.delivery.pastedAt, message.pastedAt);
-  // A stale message with an older paste time would reset elapsed and replace the
-  // earliest time if the socket accepted it using only the matching runtime.
+  // A stale-run paste must not replace the accepted session or its silence boundary.
   const reply = await send({ ...message, requestId: 'stale', runId: 'old-run', pastedAt: f.now() - 500000 });
   assert.equal(reply.type, 'ack');
   assert.deepEqual(f.supervisor.observer.scenes.get(scene.sessionGroup), before, 'stale run changed observer counters');
   f.advance(1000); await f.supervisor.observer.observeScene(scene);
-  assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.elapsed, 2000);
+  assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.pastedAt, message.pastedAt);
   assert.equal(f.stops.length, 0);
   const origin = f.addScene('claude', 'origin');
   const legacy = await send({ version: 1, type: 'notify_delivered', requestId: 'legacy', deliveredAt: f.now() - 50 });
   assert.equal(legacy.type, 'ack');
   await f.supervisor.observer.observeScene(origin);
-  assert.equal(f.supervisor.observer.scenes.get('origin').delivery.elapsed, 50);
+  assert.equal(f.supervisor.observer.scenes.get('origin').sessionId, origin.sessionId);
   assert.equal(f.supervisor.observer.scenes.get('origin').delivery.pastedAt, f.now() - 50);
-  assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.elapsed, 2000);
+  assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.pastedAt, message.pastedAt);
 }
 
 test('composed socket rejects stale-run delivery without resetting observer counters', async t => {
@@ -145,7 +145,7 @@ async function aggregationScenario(t, create) {
   assert.deepEqual(f.controls.map(c => c.targetBinding.runtime).sort(), ['claude', 'codex']);
   assert.equal(f.supervisor.observer.probes.size, 2);
 }
-test('#16a composed maintenance drives once per runtime before probe coalescing', async t => {
+test('composed maintenance drives once per runtime before probe coalescing', async t => {
   await aggregationScenario(t, createSupervisor);
 });
 
@@ -184,7 +184,7 @@ async function serialScenario(t, create) {
   let enter, release;
   const entered = new Promise(resolve => { enter = resolve; });
   const barrier = new Promise(resolve => { release = resolve; });
-  // Both requests have read F10 before this awaited read. With the serial queue
+  // Both requests have read attempt state before this awaited read. With the serial queue
   // removed, both can hold the old budget and publish competing registrations.
   f.supervisor.health.readNegativeCache = async () => { enter(); await barrier; return null; };
   const request = group => ({ version: 1, type: 'start_attempt',
@@ -205,6 +205,6 @@ async function serialScenario(t, create) {
   assert.deepEqual(f.pending.map(g => g.sessionGroup), ['telegram:a', 'telegram:b']);
   assert.equal(f.controls.length, 0);
 }
-test('#16a concurrent socket requests serialize one F10 registration and retain pending demand', async t => {
+test('concurrent socket requests serialize one start-attempt registration and retain pending demand', async t => {
   await serialScenario(t, createSupervisor);
 });

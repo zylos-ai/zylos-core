@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGroupActions } from '../src/lib/workbench/group-actions.js';
+import * as sessionNudge from '../../../cli/lib/session-nudge.js';
 
 function fixture({ results = [{ ok: true, data: { id: 1 } }], mode = 'multi', reply = { kind: 'accepted', reply: { result: 'accepted' } }, completion = 'accepted', coreRoot } = {}) {
   let clock = 1000;
@@ -13,6 +14,7 @@ function fixture({ results = [{ ok: true, data: { id: 1 } }], mode = 'multi', re
     handleCoreAction: async (...args) => { origin.push(args); return { ok: true, messageKey: 'existing_core_reply' }; },
     loadCoreModule: async name => {
       if (name === 'config.js') return { readSessionMode: () => ({ mode }), ZYLOS_DIR: coreRoot };
+      if (name === 'session-nudge.js') return sessionNudge;
       assert.equal(name, 'am-sock-client.js');
       return { submit: async (...args) => { submissions.push(args); return reply; },
         lookupRestartRequest: async (...args) => { lookups.push(args); return completion; } };
