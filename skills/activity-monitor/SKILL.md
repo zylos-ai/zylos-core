@@ -131,11 +131,21 @@ result, record it in the handoff or arrange for the task itself to send a
 completion message back.
 
 In multi-session mode, an actually pasted conversation starts no-response
-observation until factual foreground Stop (or Claude idle) completes its turn.
-The latest main event, child event, associated transcript write, or paste resets
+observation until a factual start for that paste is followed by foreground Stop
+(or Claude idle), with no newer main work. A Stop from the preceding turn cannot
+complete a queued paste. Starts come from main prompt hooks or matching Claude
+`queue-operation: dequeue` records; neither generic mtime nor Stop proves a start.
+The latest main event, child event, associated main transcript write, or paste resets
 its whole-session silence clock. A quiet open turn remains eligible even with
 an active tool. After 15 minutes of observable silence, the supervisor uses the
 same Escape → successful enqueue → 500 ms → exact `continue` helper as Dashboard.
+The two controls recheck identity, fences, shutdown and paste ownership. Escape
+may itself produce Stop/idle, transcript writes or tool completion; these do not
+suppress its continuation. Initial nudge admission and restart still recheck
+activity. Failed no-response nudges retry after 60 seconds, while blocked initial
+admission emits no attempted-nudge event. A superseded or uncertain attempt is
+logged without changing a newer paste. Completion caused by Escape cannot retire
+the resumed conversation before its next factual start.
 It waits 180 seconds after successful continue enqueue before stopping the same
 still-silent session. Any new activity cancels that recovery episode. Background
 tasks alone never start it; a new unanswered paste during background waiting does.
@@ -154,8 +164,8 @@ and successful restart logs its reason (`no_response_nudge`,
 `no_response_restart`, `tool_timeout_nudge`, `tool_timeout_restart`), session group,
 run ID and observed silence duration in the supervisor event log. Enqueue success
 is not proof of runtime delivery or recovery. Controls and stop recheck current
-identity, activity, delivery, manual requests, transitions, shutdown and drain
-fences through serialized admission; neither the 500 ms delay nor recovery grace
+identity, delivery, manual requests, transitions, shutdown and drain fences
+through serialized admission, with activity checked before nudge/restart; neither the 500 ms delay nor recovery grace
 holds that queue.
 
 Subagent events with `agent_id` are tracked separately for the current run and
@@ -165,6 +175,8 @@ hot TTL old; at the TTL boundary it stops blocking. Child events also advance
 the reclaim activity clock, including the eviction minimum idle interval.
 They never change the main agent's `state`, `idleSince`, `tools`, or
 `lastActivityAt`, so require-idle delivery still uses only main-agent state.
+Child hook `transcript_path` is not treated as proof of an independent child
+transcript; no additional child transcript scanner changes reclaim activity.
 During TTL preparation, child activity is masked just like the preparing
 session's own activity: completed preparation is retained until children stop
 being active and the main agent is idle, without further preparation controls.

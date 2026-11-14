@@ -12,7 +12,7 @@ import { RestartRequestStore } from '../restart-request-store.js';
 function fixture(t, create = createSupervisor) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-acceptance-'));
   let clock = 1792000000000;
-  const current = [], pending = [], controls = [], stops = [];
+  const current = [], pending = [], controls = [], stops = [], cleanup = [];
   const runtimeFor = group => group.startsWith('codex:') ? 'codex' : 'claude';
   const db = {
     getOriginNeed: () => ({ controls: { count: 0 }, inbound: { oldestAt: null } }),
@@ -28,7 +28,8 @@ function fixture(t, create = createSupervisor) {
   };
   const scenes = {
     observe: async () => current,
-    readIdentity(group) { return this.observeGroup(group); }, observeGroup: async group => current.find(s => s.sessionGroup === group) ?? { present: false },
+    async readIdentity(group) { const { currentSessionTs, ...identity } = await this.observeGroup(group); return identity; },
+    observeGroup: async group => current.find(s => s.sessionGroup === group) ?? { present: false },
     readRun: async group => current.find(s => s.sessionGroup === group) ?? null,
     listRuns: async () => current,
     readScreen: async () => '',
@@ -42,12 +43,15 @@ function fixture(t, create = createSupervisor) {
     checkAuth: async () => ({ status: 'uncertain' }), matchScreen: async () => ({}),
     loopOptions: { schedule: () => 1, cancel: () => {} },
   });
-  t.after(async () => { await supervisor.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(async () => {
+    for (const release of cleanup) await release();
+    await supervisor.stop(); fs.rmSync(root, { recursive: true, force: true });
+  });
   const addScene = (runtime, group = `${runtime}:a`) => {
     const runDir = path.join(root, runtime, group.replace(':', '-'));
     fs.mkdirSync(runDir, { recursive: true });
     const scene = { runtime, sessionGroup: group, runId: `${runtime}-run`, sessionId: `${runtime}-session`,
-      runDir, createdAt: clock - 10000, present: true, ready: true, processRunning: true };
+      runDir, createdAt: clock - 10000, currentSessionTs: clock - 10000, present: true, ready: true, processRunning: true };
     current.push(scene); return scene;
   };
   const setHealth = (runtime, health) => {
@@ -58,7 +62,8 @@ function fixture(t, create = createSupervisor) {
     // Await every actual preparation promise, including ones added by callbacks.
     while (supervisor.observer.preparations.size) await Promise.all([...supervisor.observer.preparations]);
   };
-  return { root, supervisor, current, pending, controls, stops, addScene, setHealth, prepared,
+  return { root, supervisor, scenes, current, pending, controls, stops, addScene, setHealth, prepared,
+    onCleanup: release => cleanup.push(release),
     now: () => clock, advance: ms => { clock += ms; } };
 }
 async function socketClient(t, f) {
@@ -69,7 +74,7 @@ async function socketClient(t, f) {
     f.supervisor.connectionHandler(socket);
     socket.once('data', () => f.onIngest?.());
   });
-  t.after(async () => {
+  f.onCleanup(async () => {
     for (const peer of peers) peer.destroy();
     if (server.listening) await new Promise(resolve => server.close(resolve));
   });
@@ -94,7 +99,7 @@ async function deliveryScenario(t, create) {
   assert.equal((await send(message)).type, 'ack');
   await f.supervisor.observer.observeScene(scene);
   const before = structuredClone(f.supervisor.observer.scenes.get(scene.sessionGroup));
-  assert.equal(before.sessionId, scene.sessionId);
+  assert.equal(before.delivery.sessionId, scene.sessionId);
   assert.equal(before.delivery.recovery, null);
   assert.equal(before.delivery.pastedAt, message.pastedAt);
   // A stale-run paste must not replace the accepted session or its silence boundary.
@@ -108,16 +113,16 @@ async function deliveryScenario(t, create) {
   const legacy = await send({ version: 1, type: 'notify_delivered', requestId: 'legacy', deliveredAt: f.now() - 50 });
   assert.equal(legacy.type, 'ack');
   await f.supervisor.observer.observeScene(origin);
-  assert.equal(f.supervisor.observer.scenes.get('origin').sessionId, origin.sessionId);
+  assert.equal(f.supervisor.observer.scenes.get('origin').delivery.sessionId, origin.sessionId);
   assert.equal(f.supervisor.observer.scenes.get('origin').delivery.pastedAt, f.now() - 50);
   assert.equal(f.supervisor.observer.scenes.get(scene.sessionGroup).delivery.pastedAt, message.pastedAt);
 }
 
-test('composed socket rejects stale-run delivery without resetting observer counters', async t => {
+test('composed socket rejects stale-run delivery without resetting observer counters', { timeout: 5000 }, async t => {
   await deliveryScenario(t, createSupervisor);
 });
 
-test('composed delivery resets lifecycle directly and rejects stale-run notifications', async t => {
+test('composed delivery resets lifecycle directly and rejects stale-run notifications', { timeout: 5000 }, async t => {
   const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
   const send = await socketClient(t, f), delivered = [];
   f.supervisor.lifecycle.messageDelivered = notification => delivered.push(notification);
@@ -129,6 +134,72 @@ test('composed delivery resets lifecycle directly and rejects stale-run notifica
   assert.equal(delivered[0].runId, scene.runId);
   assert.equal((await send({ ...message, runId: 'stale-run' })).type, 'ack');
   assert.equal(delivered.length, 1);
+});
+
+// Delivery boundary: real composed router on a private socket below the runner's
+// isolated HOME/ZYLOS_DIR/short TMPDIR. Scene reads and lifecycle effects are
+// injected; no live tmux, database, PM2 or network endpoint is opened. Run when
+// delivery observation or lifecycle forwarding changes; unrelated UI can skip.
+test('composed no-response observation rejects paste before readRun current session timestamp', { timeout: 5000 }, async t => {
+  const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
+  const delivered = [], worked = [];
+  f.supervisor.lifecycle.messageDelivered = notification => delivered.push(notification);
+  f.supervisor.lifecycle.workDelivered = notification => worked.push(notification);
+  assert.equal((await f.scenes.readIdentity(scene.sessionGroup)).currentSessionTs, undefined,
+    'fixture must model readIdentity without the timestamp');
+  const send = await socketClient(t, f);
+  const message = { version: 2, type: 'notify_delivered', requestId: 'old-paste',
+    sessionGroup: scene.sessionGroup, runtime: scene.runtime, runId: scene.runId,
+    pastedAt: scene.currentSessionTs - 1 };
+  assert.equal((await send(message)).type, 'ack');
+  assert.equal(f.supervisor.observer.scenes.has(scene.sessionGroup), false);
+  assert.equal(delivered.length, 1); assert.equal(worked.length, 1);
+  assert.equal((await send({ ...message, requestId: 'current-paste', pastedAt: scene.currentSessionTs })).type, 'ack');
+  const delivery = f.supervisor.observer.scenes.get(scene.sessionGroup).delivery;
+  assert.equal(delivery.pastedAt, scene.currentSessionTs);
+  assert.equal(delivery.sessionId, scene.sessionId);
+  assert.equal(delivered.length, 2); assert.equal(worked.length, 2);
+});
+
+test('composed delivery observation readRun failure preserves conversation lifecycle effects', { timeout: 5000 }, async t => {
+  const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
+  const delivered = [], worked = [], readRun = f.scenes.readRun;
+  f.supervisor.lifecycle.messageDelivered = notification => delivered.push(notification);
+  f.supervisor.lifecycle.workDelivered = notification => worked.push(notification);
+  let reads = 0;
+  f.scenes.readRun = async group => {
+    if (++reads === 1) return readRun(group); // Existing outer router stale-run validation.
+    throw Object.assign(new Error('isolated observation unavailable'), { code: 'SCENE_READ_FAILED' });
+  };
+  const send = await socketClient(t, f);
+  const message = { version: 2, type: 'notify_delivered', requestId: 'read-failure',
+    sessionGroup: scene.sessionGroup, runtime: scene.runtime, runId: scene.runId, pastedAt: f.now() };
+  assert.equal((await send(message)).type, 'ack');
+  assert.equal(reads, 2);
+  assert.equal(delivered.length, 1); assert.equal(worked.length, 1);
+  assert.equal(delivered[0].requestId, message.requestId);
+  assert.equal(worked[0].requestId, message.requestId);
+  assert.equal(f.supervisor.observer.scenes.has(scene.sessionGroup), false);
+});
+
+test('composed control delivery keeps baseline lifecycle forwarding without extra scene reads', { timeout: 5000 }, async t => {
+  const f = fixture(t), scene = f.addScene('claude', 'telegram:a');
+  const delivered = [], worked = [], readRun = f.scenes.readRun;
+  f.supervisor.lifecycle.messageDelivered = notification => delivered.push(notification);
+  f.supervisor.lifecycle.workDelivered = notification => worked.push(notification);
+  f.scenes.readIdentity = async () => assert.fail('control delivery must not introduce identity reads');
+  let reads = 0;
+  f.scenes.readRun = async group => {
+    assert.equal(++reads, 1, 'only baseline router validation reads the run');
+    return readRun(group);
+  };
+  const send = await socketClient(t, f);
+  const message = { version: 2, type: 'notify_delivered', requestId: 'control-delivery', controlId: 7,
+    sessionGroup: scene.sessionGroup, runtime: scene.runtime, runId: scene.runId, pastedAt: f.now() };
+  assert.equal((await send(message)).type, 'ack');
+  assert.equal(reads, 1); assert.equal(delivered.length, 0); assert.equal(worked.length, 1);
+  assert.equal(worked[0].controlId, 7);
+  assert.equal(f.supervisor.observer.scenes.has(scene.sessionGroup), false);
 });
 
 async function aggregationScenario(t, create) {
@@ -145,7 +216,7 @@ async function aggregationScenario(t, create) {
   assert.deepEqual(f.controls.map(c => c.targetBinding.runtime).sort(), ['claude', 'codex']);
   assert.equal(f.supervisor.observer.probes.size, 2);
 }
-test('composed maintenance drives once per runtime before probe coalescing', async t => {
+test('composed maintenance drives once per runtime before probe coalescing', { timeout: 5000 }, async t => {
   await aggregationScenario(t, createSupervisor);
 });
 
@@ -172,7 +243,7 @@ async function runtimeScenario(t, create) {
   assert.equal(fs.readFileSync(f.supervisor.health.store('codex').file, 'utf8'), codexBefore);
   assert.equal(f.current[0], codex); assert.equal(f.stops.length, 0);
 }
-test('composed mixed-runtime demand waits for its own runtime and only recovers its', async t => {
+test('composed mixed-runtime demand waits for its own runtime and only recovers its', { timeout: 5000 }, async t => {
   await runtimeScenario(t, createSupervisor);
 });
 
@@ -184,6 +255,8 @@ async function serialScenario(t, create) {
   let enter, release;
   const entered = new Promise(resolve => { enter = resolve; });
   const barrier = new Promise(resolve => { release = resolve; });
+  f.onCleanup(() => release());
+  t.signal.addEventListener('abort', () => release(), { once: true });
   // Both requests have read attempt state before this awaited read. With the serial queue
   // removed, both can hold the old budget and publish competing registrations.
   f.supervisor.health.readNegativeCache = async () => { enter(); await barrier; return null; };
@@ -205,6 +278,6 @@ async function serialScenario(t, create) {
   assert.deepEqual(f.pending.map(g => g.sessionGroup), ['telegram:a', 'telegram:b']);
   assert.equal(f.controls.length, 0);
 }
-test('concurrent socket requests serialize one start-attempt registration and retain pending demand', async t => {
+test('concurrent socket requests serialize one start-attempt registration and retain pending demand', { timeout: 5000 }, async t => {
   await serialScenario(t, createSupervisor);
 });

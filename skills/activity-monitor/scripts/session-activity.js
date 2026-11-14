@@ -13,6 +13,7 @@ export class SessionActivity {
     this.recovered=false;this.lastActivityAt=startedAt;this.closedThrough=-Infinity;this.transcriptPath=null;
     this.transcriptFd=null;this.transcriptOffset=0;this.transcriptIdentity=null;this.turn=false;this.idleSince=null;
     this.busySince=null;this.lastIdleAt=null;this.lastCompletedAt=null;
+    this.lastStartedAt=null;this.lastMainWorkAt=null;
   }
   close(){this.reader.close();if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);this.transcriptFd=null;}
   matches(row) {
@@ -27,10 +28,6 @@ export class SessionActivity {
     if(['subagent_start','subagent_stop'].includes(row.event) &&
        (row.ts>agent.transitionAt || (!reverse && row.ts===agent.transitionAt))) {
       agent.active=row.event==='subagent_start';agent.transitionAt=row.ts;
-    }
-    if(typeof row.transcript_path==='string' && path.isAbsolute(row.transcript_path) &&
-       (agent.transcriptAt===undefined || row.ts>agent.transcriptAt || (!reverse && row.ts===agent.transcriptAt))) {
-      agent.transcriptPath=row.transcript_path;agent.transcriptAt=row.ts;
     }
     this.subagents.set(row.agent_id,agent);
     this.lastSubagentActivityAt=Math.max(this.lastSubagentActivityAt ?? 0,row.ts);
@@ -54,11 +51,18 @@ export class SessionActivity {
   recordCompletion(row) {
     this.lastCompletedAt=Math.max(this.lastCompletedAt ?? -Infinity,row.ts);
   }
+  recordMainWork(row) {
+    if(!['prompt','pre_tool','post_tool','post_tool_failure','permission_request'].includes(row.event))return;
+    this.lastMainWorkAt=Math.max(this.lastMainWorkAt ?? -Infinity,row.ts);
+    if(row.event==='prompt')this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,row.ts);
+  }
   recover() {
-    let boundary=false,completionBoundary=false;
+    let boundary=false,completionBoundary=false,startBoundary=false;
     return this.reader.recoverTail(row=>{
       if(!this.matches(row))return {};
       if(!this.transcriptPath)this.associateTranscript(row);
+      if(Number.isFinite(row.ts) && row.ts>=this.startedAt)this.recordMainWork(row);
+      if(row.event==='prompt' || row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)startBoundary=true;
       // The latest prompt bounds live tool recovery, but an earlier factual
       // completion must survive that prompt and subsequent quiet samples.
       if(Number.isFinite(row.ts) && row.ts>=this.startedAt && this.isCompletion(row)) {
@@ -67,7 +71,7 @@ export class SessionActivity {
       if(row.event==='session_start' || Number.isFinite(row.ts) && row.ts<=this.startedAt)completionBoundary=true;
       const keep=!boundary && Number.isFinite(row.ts) && row.ts>=this.startedAt;
       if(Number.isFinite(row.ts) && (row.ts<=this.startedAt || ['prompt','stop'].includes(row.event)))boundary=true;
-      return {keep,done:boundary && completionBoundary && this.transcriptPath!==null};
+      return {keep,done:boundary && completionBoundary && startBoundary && this.transcriptPath!==null};
     });
   }
   consume(rows) {
@@ -77,6 +81,7 @@ export class SessionActivity {
       this.associateTranscript(row);
       if(!Number.isFinite(row.ts) || row.ts<this.startedAt)continue;
       this.lastActivityAt=Math.max(this.lastActivityAt,row.ts);
+      this.recordMainWork(row);
       if(['prompt','pre_tool'].includes(row.event) && this.busySince===null) {
         // A recovered tool can be midway through a turn whose prompt is gone.
         this.busySince=row.event==='prompt' || this.lastIdleAt!==null ? row.ts : this.startedAt;
@@ -99,7 +104,10 @@ export class SessionActivity {
     if(!this.transcriptPath)return null;
     let stat;try{stat=fs.statSync(this.transcriptPath);}catch(error){if(error.code==='ENOENT')return null;throw error;}
     const identity=`${stat.dev}:${stat.ino}`;
-    if(this.runtime!=='claude' || !this.tools.size)return stat.mtimeMs;
+    // Claude's queued prompts can begin without another prompt hook. Parse the
+    // associated transcript even with no tools; Codex has no verified dequeue
+    // record contract, so its starts come only from native prompt hooks.
+    if(this.runtime!=='claude')return stat.mtimeMs;
     if(this.transcriptFd===null || identity!==this.transcriptIdentity || stat.size<this.transcriptOffset) {
       if(this.transcriptFd!==null)fs.closeSync(this.transcriptFd);
       this.transcriptFd=fs.openSync(this.transcriptPath,'r');this.transcriptOffset=0;this.transcriptIdentity=identity;
@@ -110,23 +118,19 @@ export class SessionActivity {
       if(end>=0){this.transcriptOffset+=end+1;
         for(const line of buffer.subarray(0,end).toString('utf8').split('\n'))try{
           const value=JSON.parse(line);const content=value.message?.content ?? value.content;
+          const ts=typeof value.timestamp==='string' ? Date.parse(value.timestamp) : NaN;
+          if(value.sessionId===this.sessionId && !value.isSidechain && !value.agent_id &&
+             Number.isFinite(ts) && ts>=this.startedAt) {
+            const dequeued=value.type==='queue-operation' && value.operation==='dequeue';
+            if(dequeued)this.lastStartedAt=Math.max(this.lastStartedAt ?? -Infinity,ts);
+            if(dequeued || ['user','assistant'].includes(value.type))this.lastMainWorkAt=Math.max(this.lastMainWorkAt ?? -Infinity,ts);
+          }
           if(Array.isArray(content))for(const block of content)if(block.type==='tool_result' && typeof block.tool_use_id==='string')this.results.add(block.tool_use_id);
         }catch{this.warn('transcript_invalid_line');}
       }
     }
     for(const id of this.results)this.tools.delete(id);
     return stat.mtimeMs;
-  }
-  readSubagentTranscripts() {
-    for(const agent of this.subagents.values()) {
-      if(!agent.transcriptPath)continue;
-      let stat;
-      try {stat=fs.statSync(agent.transcriptPath);}
-      catch(error){if(error.code!=='ENOENT')this.warn('subagent_transcript_unreadable');continue;}
-      if(!Number.isFinite(stat.mtimeMs) || stat.mtimeMs<this.startedAt)continue;
-      agent.lastActivityAt=Math.max(agent.lastActivityAt,stat.mtimeMs);
-      this.lastSubagentActivityAt=Math.max(this.lastSubagentActivityAt ?? 0,stat.mtimeMs);
-    }
   }
   read(now=Date.now(), {subagentTtlMs=1800000}={}) {
     const events=this.recovered?this.reader.read():this.recover();
@@ -135,7 +139,6 @@ export class SessionActivity {
     if(!this.recovered)this.recoverSubagents();
     this.recovered=true;this.consume(events);
     const transcriptMtimeMs=this.readTranscript();
-    this.readSubagentTranscripts();
     if(Number.isFinite(transcriptMtimeMs))this.lastActivityAt=Math.max(this.lastActivityAt,transcriptMtimeMs);
     const busy=this.tools.size>0 || now-this.lastActivityAt<3000;
     if(busy){
@@ -151,7 +154,7 @@ export class SessionActivity {
     }
     const activeSubagents=[...this.subagents].filter(([,agent])=>agent.active && now-agent.lastActivityAt<subagentTtlMs)
       .map(([agentId,agent])=>({agentId,lastActivityAt:agent.lastActivityAt}));
-    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,lastCompletedAt:this.lastCompletedAt,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
+    return {sessionId:this.sessionId,state:busy?'busy':'idle',busySince:this.busySince,turnOpen:this.turn,lastCompletedAt:this.lastCompletedAt,lastStartedAt:this.lastStartedAt,lastMainWorkAt:this.lastMainWorkAt,tools:[...this.tools.values()],lastActivityAt:this.lastActivityAt,transcriptMtimeMs,idleSince:this.idleSince,events,
       activeSubagents,lastSubagentActivityAt:this.lastSubagentActivityAt};
   }
 }

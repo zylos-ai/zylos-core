@@ -300,47 +300,79 @@ for(const runtime of ['claude','codex'])test(`${runtime} recovers completion bef
  assert.equal(restarted.read(14000).lastCompletedAt,230);
 });
 
-test('associated child transcript writes advance only child activity, ignoring foreign paths',t=>{
- const {root,activity,row}=fixture(t),transcript=path.join(root,'child.jsonl'),foreign=path.join(root,'foreign.jsonl');
- fs.writeFileSync(transcript,'{}\n');fs.utimesSync(transcript,0.1,0.1);
- fs.writeFileSync(foreign,'{}\n');fs.utimesSync(foreign,100,100);
- activity.consume([row('prompt',{ts:200}),row('stop',{ts:300}),
-  row('subagent_start',{agent_id:'child',ts:400,transcript_path:transcript}),
-  row('pre_tool',{agent_id:'child',ts:500,run_id:'foreign',transcript_path:foreign}),
-  row('pre_tool',{agent_id:'child',ts:500,session_id:'foreign',transcript_path:foreign}),
-  row('pre_tool',{agent_id:'child',ts:500,runtime:'codex',transcript_path:foreign}),
-  row('pre_tool',{agent_id:'child',ts:500,type:'runtime_health',transcript_path:foreign}),
-  row('pre_tool',{agent_id:'child',ts:NaN,transcript_path:foreign}),
-  row('pre_tool',{agent_id:'child',ts:99,transcript_path:foreign}),
-  row('pre_tool',{agent_id:'relative',ts:500,transcript_path:'relative.jsonl'})]);
- const initial=activity.read(6000);
- assert.equal(initial.lastSubagentActivityAt,500);
- fs.appendFileSync(transcript,'{"progress":true}\n');fs.utimesSync(transcript,8,8);
- const written=activity.read(9000);
- assert.equal(written.lastSubagentActivityAt,8000);
- assert.deepEqual(written.activeSubagents,[{agentId:'child',lastActivityAt:8000}]);
- for(const field of ['state','idleSince','busySince','turnOpen','lastCompletedAt','lastActivityAt'])assert.equal(written[field],initial[field]);
- assert.deepEqual(written.tools,initial.tools);
- assert.equal(activity.read(10000).lastSubagentActivityAt,8000);
+test('queued Claude dequeue supersedes old turn completion without a prompt hook or active tools',async t=>{
+ const {appendEvent}=await import('../../../../cli/lib/event-log.js');
+ const {root,activity,row}=fixture(t),log=path.join(root,'events.jsonl'),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'');
+ appendEvent(log,row('session_start',{ts:100,transcript_path:transcript}));
+ appendEvent(log,row('prompt',{ts:200}));
+ // A second message pasted at 300 queues behind the old turn's final tool/stop.
+ appendEvent(log,row('pre_tool',{ts:350,tool_use_id:'old'}));
+ appendEvent(log,row('stop',{ts:400}));
+ let value=activity.read(5000);
+ assert.equal(value.lastStartedAt,200);assert.equal(value.lastMainWorkAt,350);
+ assert.equal(value.lastCompletedAt,400);assert.deepEqual(value.tools,[]);
+ const record=(type,timestamp,more={})=>({type,timestamp:new Date(timestamp).toISOString(),sessionId:'s',...more});
+ fs.appendFileSync(transcript,JSON.stringify(record('queue-operation',450,{operation:'dequeue'}))+'\n');
+ value=activity.read(6000);
+ assert.equal(value.lastStartedAt,450);assert.equal(value.lastMainWorkAt,450);
+ assert.equal(value.lastCompletedAt,400);
+ value=activity.read(7000);
+ assert.equal(value.lastStartedAt,450);assert.equal(value.lastMainWorkAt,450);
+ appendEvent(log,row('stop',{ts:500}));
+ value=activity.read(8000);
+ assert.equal(value.lastStartedAt,450);assert.equal(value.lastCompletedAt,500);
+ fs.appendFileSync(transcript,JSON.stringify(record('assistant',550,{isSidechain:false,message:{content:[]}}))+'\n');
+ for(const now of [9000,10000]) {
+  value=activity.read(now);
+  assert.equal(value.lastMainWorkAt,550);assert.equal(value.lastCompletedAt,500);
+ }
 });
 
-test('recovery retains newest child transcript association across main turns and rotation',async t=>{
+test('Claude work-start transcript facts require current session, foreground, valid time and dequeue operation',t=>{
+ const {root,activity,row}=fixture(t),transcript=path.join(root,'s.jsonl');
+ const record=(more={})=>({type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(400).toISOString(),...more});
+ const rows=[record({timestamp:new Date(99).toISOString()}),record({sessionId:'foreign'}),
+  record({agent_id:'child'}),record({isSidechain:true}),record({timestamp:'invalid'}),
+  record({timestamp:400}),record({operation:'enqueue'}),record({type:'progress'}),
+  record({type:'assistant',sessionId:'foreign'}),record({type:'user',isSidechain:true})];
+ fs.writeFileSync(transcript,rows.map(value=>JSON.stringify(value)).join('\n')+'\n');
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript})]);
+ const value=activity.read(5000);
+ assert.equal(value.lastStartedAt,null);assert.equal(value.lastMainWorkAt,null);
+});
+
+test('prompt and meaningful foreground hooks persist independently of closing hooks',t=>{
+ for(const runtime of ['claude','codex']) {
+  const {activity,row}=fixture(t,runtime);
+  activity.consume([row('prompt',{ts:200}),row('stop',{ts:300}),row('pre_tool',{ts:400,tool_use_id:'new'}),
+   row('prompt',{ts:450}),row('post_tool',{ts:500,tool_use_id:'new'}),
+   row('prompt',{ts:9000,agent_id:'child'}),row('pre_tool',{ts:9000,session_id:'foreign'}),
+   row('prompt',{ts:NaN}),row('idle',{ts:600})]);
+  for(const now of [10000,11000]) {
+   const value=activity.read(now);
+   assert.equal(value.lastStartedAt,450);assert.equal(value.lastMainWorkAt,500);
+   assert.equal(value.lastCompletedAt,runtime==='claude'?600:300);
+  }
+ }
+});
+
+test('recovery finds factual prompt before latest completion across rotation',async t=>{
  const {appendEvent,rotateEventLog}=await import('../../../../cli/lib/event-log.js');
- const {root,activity,row}=fixture(t),log=path.join(root,'events.jsonl');
- const older=path.join(root,'older-child.jsonl'),current=path.join(root,'current-child.jsonl');
- fs.writeFileSync(older,'{}\n');fs.utimesSync(older,100,100);
- fs.writeFileSync(current,'{}\n');fs.utimesSync(current,0.15,0.15);
- appendEvent(log,row('session_start',{ts:50}));
- appendEvent(log,row('subagent_start',{agent_id:'child',ts:110,transcript_path:older}));
- appendEvent(log,row('pre_tool',{agent_id:'child',ts:120,transcript_path:current}));
- appendEvent(log,row('prompt',{ts:130}));appendEvent(log,row('stop',{ts:140}));
- rotateEventLog(log,{maxBytes:0,now:1000});
- appendEvent(log,row('prompt',{ts:200}));
- const recovered=activity.read(6000);
- assert.equal(recovered.lastSubagentActivityAt,150);
- assert.equal(recovered.lastActivityAt,200);assert.equal(recovered.lastCompletedAt,140);
- fs.appendFileSync(current,'{}\n');fs.utimesSync(current,8,8);
- const written=activity.read(9000);
- assert.equal(written.lastSubagentActivityAt,8000);assert.equal(written.lastActivityAt,200);
- assert.equal(written.turnOpen,true);assert.equal(written.lastCompletedAt,140);
+ const {root,activity,row}=fixture(t),log=path.join(root,'events.jsonl'),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,'');
+ appendEvent(log,row('session_start',{ts:50,transcript_path:transcript}));
+ appendEvent(log,row('prompt',{ts:200}));appendEvent(log,row('pre_tool',{ts:250,tool_use_id:'old'}));
+ rotateEventLog(log,{maxBytes:0,now:1000});appendEvent(log,row('stop',{ts:300}));
+ const value=activity.read(5000);
+ assert.equal(value.lastStartedAt,200);assert.equal(value.lastMainWorkAt,250);
+ assert.equal(value.lastCompletedAt,300);assert.deepEqual(value.events.map(event=>event.event),['stop']);
+});
+
+test('Codex transcript formats do not fabricate dequeue starts or meaningful work',t=>{
+ const {root,activity,row}=fixture(t,'codex'),transcript=path.join(root,'s.jsonl');
+ fs.writeFileSync(transcript,JSON.stringify({type:'queue-operation',operation:'dequeue',sessionId:'s',timestamp:new Date(400).toISOString()})+'\n');
+ activity.consume([row('session_start',{ts:100,transcript_path:transcript}),row('stop',{ts:300})]);
+ const value=activity.read(5000);
+ assert.equal(value.lastStartedAt,null);assert.equal(value.lastMainWorkAt,null);assert.equal(value.lastCompletedAt,300);
 });

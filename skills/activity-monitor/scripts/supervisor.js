@@ -67,7 +67,7 @@ export function createSupervisor(deps) {
     }
     if(requireOpen && (await db.getDrainFence('*') || await db.getDrainFence(scene.sessionGroup)))return false;
     const current=await scenes.readIdentity(scene.sessionGroup);
-    if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime || (scene.sessionId && current.sessionId!==scene.sessionId))return false;
+    if(!current.present || !current.ready || current.runId!==scene.runId || current.runtime!==scene.runtime)return false;
     if(!await validate(current))return false;
     return await action(current) !== false;
   });
@@ -91,19 +91,21 @@ export function createSupervisor(deps) {
   };
   observer=new SupervisorHealthObserver({coordinator:health,listScenes,readIdentity:group=>scenes.readIdentity(group),readState:scene=>({...readActivity(scene),healthIdentity:scene.healthIdentity}),
     readScreen:scene=>scenes.readScreen(scene),matchScreen:deps.matchScreen,insertControl:db.insertControl,getControlById:db.getControlById,
-    buildTargetBinding:scene=>scenes.bindTarget(scene),stop:(scene,validate)=>guardedAction(scene,current=>stopScene(current),{requireOpen:true,validate}),
+    buildTargetBinding:scene=>scenes.bindTarget(scene),stop:(scene,validate)=>guardedAction(scene,current=>stopScene(current),validate?{requireOpen:true,validate}:{}),
     readMode:async()=>(await readMode()).mode,getModeTransition:db.getModeTransition,getDrainFence:db.getDrainFence,manualPending,
     resolveToolRule:deps.resolveToolRule,nudge:(scene,validate)=>nudgeSession({enqueue:async content=>{
       let result={ok:false};
+      const check=current=>validate(current,{continuing:content==='continue'});
       await guardedAction(scene,async current=>{
         const mode=(await readMode()).mode;
         const targetBinding=await scenes.bindTarget(current);
         // Binding may await I/O; sample identity, activity and fences again before the write.
-        if(!await observer.canAct(current,{requireReady:true,requireOpen:true}) || !await validate(current))return false;
+        if(!await observer.canAct(current,{requireReady:true,requireOpen:true}) || !await check(current))return false;
+        const enqueuedAt=now();
         const control=await db.insertControl(content,{sessionGroup:mode==='single'?null:current.sessionGroup,
           targetBinding,priority:0,bypassState:true,appendAckSuffix:false});
-        result={ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null};
-      },{requireOpen:true,validate});
+        result={ok:Number.isSafeInteger(control?.id) && control.id>0,controlId:control?.id ?? null,enqueuedAt};
+      },{requireOpen:true,validate:check});
       return result;
     }}),checkAuth,diagnostic,now,log});
   router=new MessageRouter({healthCoordinator:health,resolveTargetRuntime:deps.resolveTargetRuntime,getModeTransition:db.getModeTransition,
@@ -248,13 +250,16 @@ export function createSupervisor(deps) {
   const connectionHandler=createSupervisorConnectionHandler({admission,router,isOpen:()=>admission.open && !stopping,readRun:group=>scenes.readRun(group),readMode,
     onDelivered:async notification=>{
       const delivered={...notification,sessionGroup:notification.sessionGroup ?? 'origin'};
-      const identity=await scenes.readIdentity(delivered.sessionGroup);
-      if(identity?.runId!==delivered.runId || identity?.runtime!==delivered.runtime ||
-        (Number.isFinite(identity.currentSessionTs) && delivered.pastedAt<identity.currentSessionTs))return;
-      delivered.sessionId=identity.sessionId;
       if(notification.controlId===undefined){
-        observer.notifyDelivered(delivered);
         lifecycle.messageDelivered(delivered);
+        try {
+          // readRun includes the current session timestamp; readIdentity does not.
+          const current=await scenes.readRun(delivered.sessionGroup);
+          if(current?.runId===delivered.runId && current?.runtime===delivered.runtime &&
+            (!Number.isFinite(current.currentSessionTs) || delivered.pastedAt>=current.currentSessionTs)) {
+            observer.notifyDelivered({...delivered,sessionId:current.sessionId});
+          }
+        } catch(error) {log({event:'delivery_observation_failed',code:error.code ?? 'READ_FAILED'});}
       }
       await admission.serialize(()=>lifecycle.workDelivered(delivered));
     },onHealthEvents:()=>{void loop.tick();},log});

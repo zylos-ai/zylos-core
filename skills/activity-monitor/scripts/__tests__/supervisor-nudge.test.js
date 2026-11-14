@@ -15,7 +15,7 @@ const deferred = () => {
 
 // Real composition, SessionActivity event reader, HealthStore and request store;
 // only scene operations and the C4 database boundary are in-memory fixtures.
-function fixture(t) {
+function fixture(t, { watchdog = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-nudge-'));
   const runDir = path.join(root, 'run');
   fs.mkdirSync(runDir);
@@ -48,16 +48,21 @@ function fixture(t) {
     requestStore, readConfiguration: async () => ({ mode: 'multi', runtime: 'claude', capacity: 3 }),
     readMode: () => ({ mode: 'multi' }), resolveTargetRuntime: async () => 'claude',
     checkAuth: async () => ({ status: 'uncertain' }), matchScreen: async () => ({}),
-    resolveToolRule: () => null, log: error => errors.push(error),
+    resolveToolRule: () => watchdog ? { watchdog: { enabled: true, maxRuntimeSec: 10, interruptGraceSec: 15, cooldownSec: 2 } } : null,
+    log: error => errors.push(error),
     loopOptions: { schedule: () => 1, cancel: () => {} },
   });
   const health = supervisor.health.store('claude'), state = health.read();
   state.health = 'ok'; health.write(state);
-  const appendActivity = (event = 'prompt') => fs.appendFileSync(path.join(runDir, 'events.jsonl'),
-    `${JSON.stringify({ v: 1, ts: clock, run_id: scene.runId, session_id: scene.sessionId, runtime: scene.runtime, event })}\n`);
+  const appendActivity = (event = 'prompt', fields = {}) => fs.appendFileSync(path.join(runDir, 'events.jsonl'),
+    `${JSON.stringify({ v: 1, ts: clock, run_id: scene.runId, session_id: scene.sessionId, runtime: scene.runtime, event, ...fields })}\n`);
+  const transcript = path.join(runDir, 'transcript.jsonl');
+  fs.writeFileSync(transcript, ''); fs.utimesSync(transcript, clock / 1000, clock / 1000);
+  appendActivity('session_start', { transcript_path: transcript });
   appendActivity();
+  if (watchdog) appendActivity('pre_tool', { tool: 'WebFetch', tool_use_id: 'web-tool' });
   const delivered = () => supervisor.observer.notifyDelivered({ ...scene, pastedAt: clock });
-  delivered();
+  if (!watchdog) delivered();
   clock += NO_RESPONSE_SILENCE_MS;
   // Release fixture barriers before awaiting shutdown, including timeout teardown.
   t.after(async () => {
@@ -65,6 +70,10 @@ function fixture(t) {
     await supervisor.stop(); fs.rmSync(root, { recursive: true, force: true });
   });
   return { supervisor, scene, controls, stops, errors, firstControl, delivered, appendActivity,
+    writeTranscript: row => {
+      fs.appendFileSync(transcript, `${JSON.stringify(row)}\n`);
+      fs.utimesSync(transcript, clock / 1000, clock / 1000);
+    },
     onCleanup: release => cleanup.push(release),
     now: () => clock, advance: milliseconds => { clock += milliseconds; },
     fence: () => { fence = { reason: 'test' }; }, transition: () => { transition = { phase: 'draining' }; },
@@ -95,14 +104,13 @@ test('composed no-response nudge enqueues bound Escape then exact continue and r
   assert.deepEqual(f.errors, []);
 });
 
-for (const gate of ['paste', 'activity', 'fence', 'transition', 'run', 'session', 'manual', 'shutdown']) {
+for (const gate of ['paste', 'fence', 'transition', 'run', 'session', 'manual', 'shutdown']) {
   test(`composed no-response nudge ${gate} change between controls suppresses continue`, { timeout: 5000 }, async t => {
     const f = fixture(t), observation = f.observe();
     await f.firstControl.promise;
     await f.supervisor.admission.serialize(() => {
       f.advance(1);
       if (gate === 'paste') f.delivered();
-      if (gate === 'activity') f.appendActivity();
       if (gate === 'fence') f.fence();
       if (gate === 'transition') f.transition();
       if (gate === 'run') f.replaceRun();
@@ -116,6 +124,38 @@ for (const gate of ['paste', 'activity', 'fence', 'transition', 'run', 'session'
     assert.deepEqual(f.errors, []);
   });
 }
+
+test('composed no-response nudge continues after Escape produces Stop and transcript activity', { timeout: 5000 }, async t => {
+  const f = fixture(t), observation = f.observe();
+  await f.firstControl.promise;
+  await f.supervisor.admission.serialize(() => {
+    f.advance(1);
+    f.appendActivity('stop');
+    f.writeTranscript({ type: 'assistant', sessionId: f.scene.sessionId, timestamp: new Date(f.now()).toISOString() });
+  });
+  await observation;
+  assert.deepEqual(f.controls.map(control => control.content), ['[KEYSTROKE]Escape', 'continue']);
+  await f.observe();
+  assert.ok(f.supervisor.observer.scenes.get(f.scene.sessionGroup).delivery,
+    'Escape Stop cannot complete the resumed conversation before it starts');
+  assert.equal(f.stops.length, 0);
+  assert.deepEqual(f.errors, []);
+});
+
+test('composed web watchdog nudge continues after Escape removes the timed-out tool', { timeout: 5000 }, async t => {
+  const f = fixture(t, { watchdog: true }), observation = f.observe();
+  await f.firstControl.promise;
+  await f.supervisor.admission.serialize(() => {
+    f.advance(1);
+    f.appendActivity('post_tool', { tool: 'WebFetch', tool_use_id: 'web-tool' });
+    f.appendActivity('stop');
+  });
+  await observation;
+  assert.equal(f.supervisor.readActivity(f.scene).tools.length, 0);
+  assert.deepEqual(f.controls.map(control => control.content), ['[KEYSTROKE]Escape', 'continue']);
+  assert.equal(f.stops.length, 0);
+  assert.deepEqual(f.errors, []);
+});
 
 test('composed no-response recovery stops the same silent run after nudge grace expires', { timeout: 5000 }, async t => {
   const f = fixture(t);
