@@ -1687,8 +1687,35 @@ test('fleet management entry stays local and its controls are retained in settin
   assert.doesNotMatch(fleetClose, /\.hidden\s*=|\.remove\(/);
 });
 
-test('i18n loader survives flaky pack fetches (#208)', async () => {
-  const { isValidPack } = await import('../public/js/i18n.js');
+test('i18n loader falls back to cache, heals both packs, and ignores stale recovery', { timeout: 5000 }, async context => {
+  context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+  const values = new Map();
+  const label = { dataset: { i18n: 'btn.actions' }, textContent: '' };
+  const document = { documentElement: {}, dispatchEvent() {},
+    querySelectorAll: selector => selector === '[data-i18n]' ? [label] : [] };
+  for (const [key, value] of Object.entries({ document, localStorage: {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key)
+  } })) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+    context.after(() => { if (previous) Object.defineProperty(globalThis, key, previous); else Reflect.deleteProperty(globalThis, key); });
+  }
+  const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+  const advance = async ms => { context.mock.timers.tick(ms); await flush(); };
+  const response = pack => ({ ok: true, json: async () => pack });
+  let healthy = false, primaryCalls = 0, wbCalls = 0;
+  let fetchPack = url => {
+    if (url.includes('/wb.')) {
+      wbCalls++;
+      return Promise.resolve(response({ 'wb.nav.overview': healthy ? '恢复概览' : '初始概览' }));
+    }
+    primaryCalls++;
+    return Promise.resolve(healthy ? response({ 'btn.actions': '恢复操作' }) : { ok: false, status: 503 });
+  };
+  context.mock.method(globalThis, 'fetch', (...args) => fetchPack(...args));
+  const { isValidPack, initI18n, t } = await import('../public/js/i18n.js?flaky-cache-recovery');
 
   // Sentinel-key validation rejects proxy/captive-portal JSON and non-packs.
   assert.equal(isValidPack({ 'btn.actions': 'Actions' }), true);
@@ -1697,22 +1724,45 @@ test('i18n loader survives flaky pack fetches (#208)', async () => {
   assert.equal(isValidPack(null), false);
   assert.equal(isValidPack('btn.actions'), false);
 
-  const i18n = fs.readFileSync(new URL('../public/js/i18n.js', import.meta.url).pathname, 'utf8');
-  // HTTP failures are detected, retried with backoff, and never thrown out of
-  // initI18n (a top-level await rejection would kill the whole app).
-  assert.match(i18n, /if \(!resp\.ok\) throw/);
-  assert.match(i18n, /for \(let i = 0; i < FETCH_ATTEMPTS; i\+\+\)/);
-  assert.match(i18n, /translations = readCachedPack\(targetLocale\) \|\| \{\};/);
-  // Last good pack is cached per locale and used as the offline fallback.
-  assert.match(i18n, /localStorage\.setItem\(PACK_CACHE_PREFIX \+ locale, JSON\.stringify\(pack\)\)/);
-  // Background self-heal re-renders static labels once a late fetch succeeds,
-  // and a stale heal loop stops after a locale switch.
-  assert.match(i18n, /scheduleHeal\(targetLocale, seq\);/);
-  assert.match(i18n, /if \(seq !== requestSeq\) return;/);
-  assert.match(i18n, /renderI18n\(\);[\s\S]*?\} catch \{/);
+  const primaryKey = 'zylos-dashboard-i18n-zh';
+  values.set(primaryKey, JSON.stringify({ 'btn.actions': '缓存操作' }));
+  const fallback = initI18n('zh');
+  for (const ms of [0, 400, 800]) await advance(ms);
+  await fallback;
+  assert.equal(primaryCalls, 3);
+  assert.equal(t('btn.actions'), '缓存操作');
+  assert.equal(label.textContent, '缓存操作');
+  assert.equal(t('wb.nav.overview'), '初始概览');
+
+  healthy = true;
+  await advance(5000);
+  assert.equal(t('btn.actions'), '恢复操作');
+  assert.equal(label.textContent, '恢复操作');
+  assert.equal(t('wb.nav.overview'), '恢复概览');
+  assert.equal(wbCalls, 2);
+  assert.deepEqual(JSON.parse(values.get(primaryKey)), { 'btn.actions': '恢复操作' });
+
+  // A recovery already in flight cannot replace the newly selected locale.
+  healthy = false;
+  const secondFallback = initI18n('zh');
+  for (const ms of [0, 400, 800]) await advance(ms);
+  await secondFallback;
+  const stale = deferred();
+  fetchPack = () => stale.promise;
+  await advance(5000);
+  fetchPack = url => Promise.resolve(response(url.includes('/wb.')
+    ? { 'wb.nav.overview': 'Overview' } : { 'btn.actions': 'Actions' }));
+  await initI18n('en');
+  stale.resolve(response({ 'btn.actions': '过期恢复' }));
+  await flush();
+  assert.equal(t('btn.actions'), 'Actions');
+  assert.equal(label.textContent, 'Actions');
+  assert.equal(t('wb.nav.overview'), 'Overview');
+  assert.equal(document.documentElement.lang, 'en');
+  assert.deepEqual(JSON.parse(values.get(primaryKey)), { 'btn.actions': '恢复操作' });
 
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url).pathname, 'utf8');
-  assert.match(app, /from '\.\/i18n\.js\?v=87'/);
+  assert.match(app, /from '\.\/i18n\.js\?v=89'/);
 });
 
 test('overlapping initI18n calls: stale slow request cannot overwrite the newer locale (#211 review)', async () => {

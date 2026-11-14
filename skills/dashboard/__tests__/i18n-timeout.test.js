@@ -12,7 +12,7 @@ const wbPack = value => ({ 'wb.nav.overview': value, 'wb.shared': value });
 
 for (const cached of [false, true]) {
   for (const body of [false, true]) {
-    test(`workbench ${body ? 'body' : 'fetch'} continues beyond UI deadline ${cached ? 'with cache' : 'without cache'}`, async context => {
+    test(`workbench ${body ? 'body' : 'fetch'} continues beyond UI deadline ${cached ? 'with cache' : 'without cache'}`, { timeout: 5000 }, async context => {
       context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
       const saved = storage(cached ? { 'zylos-dashboard-i18n-wb-zh': JSON.stringify(wbPack('缓存')) } : {});
       const network = deferred(), translations = {}; let signal, calls = 0, merges = 0;
@@ -35,7 +35,7 @@ for (const cached of [false, true]) {
 }
 
 for (const cached of [false, true]) {
-  test(`workbench permanent hangs retry at thirty seconds ${cached ? 'with cache' : 'without cache'}`, async context => {
+  test(`workbench permanent hangs retry at thirty seconds ${cached ? 'with cache' : 'without cache'}`, { timeout: 5000 }, async context => {
     context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
     const saved = storage(cached ? { 'zylos-dashboard-i18n-wb-zh': JSON.stringify(wbPack('缓存')) } : {});
     const signals = [], translations = {}; let done = false, warnings = 0;
@@ -50,7 +50,7 @@ for (const cached of [false, true]) {
   });
 }
 
-test('main and workbench accept slow and late packs, reject stale locales, and heal actual failures', async context => {
+test('main and workbench accept slow and late packs, reject stale locales, and heal actual failures', { timeout: 5000 }, async context => {
   context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const saved = storage(); let handler, renders = 0;
   context.mock.method(globalThis, 'fetch', (...args) => handler(...args));
@@ -152,7 +152,7 @@ test('main and workbench accept slow and late packs, reject stale locales, and h
   assert.equal(main.t('btn.actions'), '自愈'); assert.equal(main.t('wb.nav.overview'), '概览');
 });
 
-test('UI deadline leaves work running and completed requests clear their timers', async context => {
+test('UI deadline leaves work running and completed requests clear their timers', { timeout: 5000 }, async context => {
   context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
   const network = deferred(); let updated = false;
   const work = network.promise.then(() => { updated = true; });
