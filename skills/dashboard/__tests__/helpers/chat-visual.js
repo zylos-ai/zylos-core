@@ -28,7 +28,7 @@ export async function runVisualCase(t, sandbox) {
     if (!url.pathname.startsWith('/api/') || url.pathname.startsWith('/api/chat/')) return false;
     const values = {
 
-      '/api/instance': { state: 'idle', runtime: 'claude', session_mode: f.readMode(), agent: { id: 'test', name: 'Isolated browser' }, runtime_info: {} },
+      '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Isolated browser' } },
       '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
 
     };

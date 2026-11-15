@@ -1,13 +1,13 @@
-import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js?v=2';
+import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js?v=4';
 import { withRequestTimeout } from '../request-timeout.js?v=2';
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=153';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=157';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=158';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip, accountRuntimes } from './instance-strip.js?v=203';
-import { renderAttention } from './attention-bar.js?v=194';
-import { createGroupDetail } from './detail.js?v=178';
+import { instanceStrip, accountRuntimes } from './instance-strip.js?v=205';
+import { renderAttention } from './attention-bar.js?v=196';
+import { createGroupDetail } from './detail.js?v=180';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=107';
-import { createHostPanel } from './host-panel.js?v=203';
+import { createHostPanel } from './host-panel.js?v=205';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=2';
 

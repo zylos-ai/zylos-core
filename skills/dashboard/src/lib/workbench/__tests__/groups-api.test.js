@@ -18,11 +18,15 @@ const snapshot = rows => ({ rows, readAt: now, mode: 'multi', listKnown: true,
 test('main work, queued messages and throttling remain independent facts', () => {
   const row = base(); row.live.status.state = 'busy'; row.working = { on: true, since: now - 3000 };
   row.queue.pending = { count: 3, oldestAt: now - 2000 };
-  const value = snapshot([row]); value.instance.runtimeHealth.claude = { health: 'rate_limited', cooldownUntil: now + 60000 };
+  const value = snapshot([row]); value.instance.runtimeHealth.claude = { health: 'rate_limited', cooldownUntil: now / 1000 + 60 };
   const actual = projectGroup(row, value);
   assert.equal(actual.state.kind, 'working'); assert.equal(actual.mainAgent, 'busy');
   assert.equal(actual.flags.queued.count, 3); assert.equal(actual.flags.queued.waitSeconds, 2);
   assert.equal(actual.flags.blocked.reason, 'rate_limited'); assert.equal(actual.flags.blocked.recoveryAt, new Date(now + 60000).toISOString());
+  for (const cooldownUntil of [0, -1, NaN, Infinity, 1e15, 'invalid']) {
+    value.instance.runtimeHealth.claude.cooldownUntil = cooldownUntil;
+    assert.equal(projectGroup(row, value).flags.blocked.recoveryAt, null);
+  }
 });
 
 test('a subagent or command keeps the group working while its main agent is idle', () => {
@@ -188,7 +192,7 @@ test('stream and self-fleet counts can retain known rows when only the catalog i
   assert.equal(counts.listKnown, false); assert.equal(counts.running.total, 1); assert.deepEqual(counts.pool, { used: 1, capacity: 1 });
 });
 
-const RUNNING_FIELDS = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt'].sort();
+const RUNNING_FIELDS = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt', 'currentAction'].sort();
 const OFFLINE_FIELDS = ['id', 'displayName', 'channel', 'lastActivityAt', 'flags'].sort();
 
 test('list resources expose only their approved fields while detail retains source observations', async () => {
@@ -227,4 +231,33 @@ test('offline flag filtering combines with text search before stable pagination'
   assert.equal((await api.offline(new URLSearchParams({ flag: 'queued' }))).rows.length, 0);
   for (const flag of ['', 'start_failed', 'startFailed,queued']) await assert.rejects(api.offline(new URLSearchParams({ flag })), { code: 'INVALID_FLAG', statusCode: 400 });
   assert.equal((await api.offline(new URLSearchParams({ flag: 'startFailed' }))).rows.length, 5);
+});
+
+
+test('compact current action bounds and redacts names and message excerpts without exposing raw observations', async () => {
+  const row = { ...base(), tools: [{ name: 'Bash', input: 'private-command', detail: 'private-detail' }],
+    preview: { text: 'https://example.test/?token=private-secret ' + 'x'.repeat(200), timestamp: now - 1000, messageRaw: 'private-raw' } };
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot([row]) } });
+  const active = (await api.running()).rows[0];
+  assert.deepEqual(Object.keys(active.currentAction).sort(), ['message', 'receivedAt', 'tool']);
+  assert.equal(active.currentAction.tool, 'Bash');
+  assert.equal(active.currentAction.receivedAt, new Date(now - 1000).toISOString());
+  assert.equal(active.currentAction.message.length, 120);
+  assert.ok(active.currentAction.message.includes('[REDACTED]'));
+  assert.doesNotMatch(JSON.stringify(active), /private-secret|private-command|private-detail|private-raw/);
+  const empty = (await createGroupsApi({ workbench: { getSnapshot: async () => snapshot([base()]) } }).running()).rows[0];
+  assert.deepEqual(empty.currentAction, { tool: null, message: null, receivedAt: null });
+});
+
+test('existing no-response observation is an independent ISO flag counted on the running side', async () => {
+  const active = { ...base(), noResponse: { since: now - 125000 } };
+  const offline = { ...base('not_running'), sessionGroup: 'telegram:offline', noResponse: { since: now - 1000 } };
+  const value = snapshot([active, offline]);
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => value } });
+  assert.deepEqual((await api.running()).rows[0].flags.noResponse, { since: new Date(now - 125000).toISOString() });
+  assert.equal((await api.counts()).running.flags.noResponse, 1);
+  assert.equal((await api.offline(new URLSearchParams({ flag: 'noResponse' }))).rows[0].id, offline.sessionGroup);
+  active.noResponse = null;
+  assert.equal((await api.counts()).running.flags.noResponse, 0);
+  assert.equal((await api.running()).rows[0].flags.noResponse, undefined);
 });

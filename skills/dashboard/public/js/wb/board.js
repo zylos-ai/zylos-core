@@ -1,6 +1,6 @@
 import { countLabel } from '../count-label.js?v=1';
 import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js?v=106';
-import { toolLabel, waitText } from './view-mode.js?v=153';
+import { toolLabel } from './view-mode.js?v=153';
 import { activityStrip } from './activity-strip.js?v=106';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
@@ -59,7 +59,7 @@ export function statePill(document, row, { t = key => key, level = 'plain', now 
     if (!value) continue;
     const label = t('wb.flags.' + flag, { count: value.count ?? '', position: value.position ?? '' });
     const mark = element(document, 'small', label, 'wb-tag');
-    mark.title = [value.reason, ...(value.reasons ?? []), value.recoveryAt].filter(Boolean).join(' · ');
+    mark.title = [value.reason, ...(value.reasons ?? []), value.recoveryAt, flag === 'noResponse' ? value.since : null].filter(Boolean).join(' · ');
     flags.append(mark);
   }
   annotateStatus(document, pill, row, { t, now });
@@ -101,24 +101,24 @@ export function platformLabel(row, t, { describe = true } = {}) {
   return fallbackName({ ...row, sessionGroup: platform, name: null }, t) + (kind ? ' · ' + t('wb.chat.' + kind) : '');
 }
 function nowCell(document, row, { level, t }) {
-  const tool = row.tools?.[0];
+  const action = row.currentAction;
   const current = element(document, 'span', undefined, 'wb-current');
-  if (tool) {
+  if (action?.tool) {
     current.append(icon(document, 'tool', 'xs'));
-    const label = element(document, 'span', toolLabel(tool.name, level, t), level === 'technical' ? 'wb-tool wb-tool-label' : 'wb-tool-label');
+    const label = element(document, 'span', toolLabel(action.tool, level, t), level === 'technical' ? 'wb-tool wb-tool-label' : 'wb-tool-label');
     current.append(label);
-    if (level === 'technical' && tool.detail) current.append(element(document, 'span', ' · ' + tool.detail, 'wb-sub'));
-    else if (level !== 'technical' && row.preview?.text) current.append(element(document, 'span', ' · ' + t('wb.board.lastIn', { text: row.preview.text }), 'wb-sub'));
-    current.title = tool.name;
+    if (level !== 'technical' && action.message) current.append(element(document, 'span', ' · ' + t('wb.board.lastIn', { text: action.message }), 'wb-sub'));
+    current.title = action.tool;
     return current;
   }
-  const text = row.wait ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, level, t)
-    : row.preview ? lastReceived(row, t)
-      : row.state?.kind === 'offline' && level !== 'technical' ? t('wb.board.standby') : '';
+  const text = action && (action.message || action.receivedAt) ? lastReceived({ ...row,
+    preview: { text: action.message, timestamp: action.receivedAt, channel: row.channel } }, t)
+    : row.state?.kind === 'offline' && level !== 'technical' ? t('wb.board.standby') : '';
   current.append(element(document, 'span', text));
   current.title = text;
   return current;
 }
+
 export function renderRow(row, { document, level = 'plain', activity, single = false, selected = false, t = key => key, onSelect = () => {} }) {
   const root = element(document, 'button', undefined, 'wb-row'); root.type = 'button';
   if (row.sessionGroup == null || row.sessionGroup === 'origin') root.classList.add('wb-row-origin');

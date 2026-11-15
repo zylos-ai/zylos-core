@@ -63,7 +63,7 @@ function fixture(t, { width = 1440, mode = 'multi' } = {}) {
         assert.ok(lists.length < 8, 'list request log is bounded');
         const held = deferred(); lists.push(held); return held.promise.then(response);
       }
-      if (url === '/api/instance') return response({ session_mode: mode });
+      if (url === '/api/instance') return response({ session_mode: { sessionMode: mode } });
       if (url.endsWith('/deletion-preview')) return response({ operationId: 'delete-first', cutoffId: 1, messages: 1 });
       if (options?.method === 'DELETE') return response({ ok: true });
       if (url.includes('/messages?')) return response({ items: [{ id: 1, direction: 'out', content: 'hello' }], afterCursor: 'after', nextCursor: null });

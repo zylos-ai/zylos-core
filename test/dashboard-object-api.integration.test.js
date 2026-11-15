@@ -12,6 +12,7 @@ import { Store } from '../skills/dashboard/src/lib/store.js';
 import { generateApiKey, hashApiKey, hashPassword } from '../skills/dashboard/src/lib/auth.js';
 import { createGroupSnapshot, systemSample } from '../skills/dashboard/src/lib/workbench/group-snapshot.js';
 import { loadCoreModule as originalLoadCoreModule } from '../skills/dashboard/src/lib/core-modules.js';
+import { readSessionModeStatus } from '../cli/lib/session-mode-status.js';
 import { SseHub } from '../skills/dashboard/src/lib/sse.js';
 
 // Real HTTP, auth, SQLite, group projection and usage boundary. Run when these
@@ -29,6 +30,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   fs.writeFileSync(path.join(root, 'activity-monitor/restart-requests.json'), '[]');
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: hashPassword('fixture-password') }, fleet: { agents: [{ name: 'remote-fixture', base_url: 'http://127.0.0.1:1', read_api_key: 'fixture' }] }, chat: { allowRemote: true } }));
   const configFile = path.join(root, '.zylos/config.json');
+  let usageVersion = '1.0.0', usageModel = 'fixture-model', usageEffort = 'high', modeStatusReadable = true, originRun = 'fixture-run';
   let mode = 'single', clock = Date.now(), server, seedStore, catalogReadable = true;
   const actionCalls = [], cliCalls = [], records = [];
   const savedRoot = process.env.ZYLOS_DIR;
@@ -82,7 +84,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   });
   t.mock.module('node:child_process', { namedExports: { ...childProcess, execFile: fakeExecute,
     execFileSync: () => { throw new Error('Synchronous child processes are forbidden in HTTP fixture'); } } });
-  t.mock.module('../skills/dashboard/src/lib/installed-versions.js', { namedExports: { createInstalledVersionReader: () => async () => ({ zylos: 'fixture', claude: 'fixture', codex: 'fixture' }) } });
+  t.mock.module('../skills/dashboard/src/lib/installed-versions.js', { namedExports: { createInstalledVersionReader: () => async () => ({ zylos: 'fixture', claude: '1.0.0', codex: '1.0.0' }) } });
   const actions = await import('../skills/dashboard/src/lib/actions.js');
   t.mock.module('../skills/dashboard/src/lib/actions.js', { namedExports: { ...actions,
     handleAction: async (action, body) => { actionCalls.push({ action, body }); return { ok: true, action }; } } });
@@ -101,9 +103,9 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     } }),
   } });
   const reader = { readSessionState: async key => ({ identity: { present: key === null || ['origin', 'telegram:working', 'telegram:child'].includes(key), ready: true,
-    runtime: 'claude', runId: 'fixture-run', sessionId: 'fixture-session', createdAt: clock / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
+    runtime: 'claude', runId: key === null || key === 'origin' ? originRun : 'fixture-run', sessionId: 'fixture-session', createdAt: clock / 1000 - 10, launchConfig: { runtime: 'claude', mode: 'default' } },
     status: { valid: true, sampledAt: clock, value: { state: key === 'telegram:working' ? 'busy' : 'idle' } },
-    usage: { valid: true, value: { model: { id: 'fixture-model' }, context_window: { used_percentage: 25 } } } }),
+    usage: { valid: true, value: { version: usageVersion, effort: { level: usageEffort }, model: { id: usageModel }, context_window: { used_percentage: 25 } } } }),
     readLiveIdentity: async () => ({ present: true, ready: true }), readRuntimeHealth: async () => ({ missing: true }), readAccountUsage: async () => null };
   const core = async name => {
     if (name === 'am-sock-client.js') return { submit: async () => ({ kind: 'rejected', reply: { code: 'invalid_request' } }),
@@ -112,6 +114,11 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
         assert.equal(requestId, '11111111-1111-4111-8111-111111111111');
         return 'done';
       } };
+    if (name === 'session-mode-status.js') return { readSessionModeStatus: options => { if (!modeStatusReadable) throw Object.assign(new Error('fixture status failure'), { code: 'FIXTURE_UNREADABLE' }); return readSessionModeStatus({ ...options,
+      db: { getModeTransition: async () => ({ run_id: 'fixture-transition', source_mode: 'single', target_mode: 'multi', phase: 'draining', reason: 'fixture-block', created_at: clock - 1000, updated_at: clock }),
+        getDrainFence: async () => null, getLastCompletedModeTransition: async () => null },
+      readEvents: () => [{ run_id: 'fixture-transition', event: 'transition_blocked', reason: 'fixture-block', ts: clock - 1000 }],
+      probeSupervisor: async () => false }); } };
     if (name === 'session-state-reader.js') return reader;
     return originalLoadCoreModule(name);
   };
@@ -123,14 +130,14 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   t.mock.method(CoreState.prototype, 'getUsageObservation', () => ({ valid: true, value: { model: { id: 'fixture-model' }, context_window: { used_percentage: 25 } } }));
   t.mock.module('../skills/dashboard/src/lib/cgroup-resources.js', { namedExports: { createCgroupCollector: () => ({ sample() {}, read: () => ({}) }) } });
   const { SystemCollector } = await import('../skills/dashboard/src/lib/collectors/system-collector.js');
-  t.mock.method(SystemCollector.prototype, 'getLatestSystemData', () => ({ collectedAt: clock, resource_scope: 'container', cpu_pct: 20, cpu_count: 2, mem_pct: 25, mem_used_bytes: 256, mem_total_bytes: 1024, disk_used_pct: 40, disk_free_bytes: 2048 }));
+  t.mock.method(SystemCollector.prototype, 'getLatestSystemData', () => ({ collectedAt: clock, resource_scope: 'container', cpu_source: 'container', mem_source: 'container', disk_total_bytes: 4096, cpu_pct: 20, cpu_count: 2, mem_pct: 25, mem_used_bytes: 256, mem_total_bytes: 1024, disk_used_pct: 40, disk_free_bytes: 2048 }));
   const { collectStatus } = await import('../cli/lib/status-view.js');
   t.mock.module('../skills/dashboard/src/lib/workbench/group-snapshot.js', { namedExports: { systemSample,
     createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock, cli,
       loadCoreModule: async name => name === 'status-view.js' ? { collectStatus: options => collectStatus({ ...options,
         mode: () => ({ mode }), resolveRoot: () => root, configIssue: () => null, requests: () => [], now: () => clock,
         list: () => [{ sessionGroup: 'telegram:working' }, { sessionGroup: 'telegram:child' }],
-        facts: () => ({ originNeed: null }), health: () => ({ health: 'rate_limited', cooldownUntil: clock + 60000 }),
+        facts: () => ({ originNeed: null }), health: () => ({ health: 'rate_limited', cooldownUntil: clock / 1000 + 60 }),
       }) } : name === 'config.js' ? { readSessionMode: () => ({ mode }) }
         : name === 'session-pool-config.js' ? { readPoolCapacity: () => ({ k: 3, valid: true, fresh: true }) } : core(name),
     }),
@@ -142,6 +149,9 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
   seedStore = new Store(path.join(data, 'dashboard.db'));
   seedStore.insertEvent({ id: 'fixture-child', ingest_id: 'fixture-child', timestamp: new Date(clock - 1000).toISOString(), session_group: 'telegram:child', run_id: 'fixture-run',
     event_type: 'subagent_start', category: 'agent', metadata: { agent_id: 'fixture-child' } });
+  for (const [group, child] of [['origin', 'hook-child'], [null, 'legacy-child']]) seedStore.insertEvent({
+    id: 'fixture-origin-' + child, ingest_id: 'fixture-origin-' + child, timestamp: new Date(clock - 1500).toISOString(),
+    session_group: group, run_id: 'fixture-run', event_type: 'subagent_start', category: 'agent', metadata: { agent_id: child } });
   seedStore.insertEvent({ id: 'fixture-failed-offline', ingest_id: 'fixture-failed-offline', timestamp: new Date(clock - 1000).toISOString(), session_group: 'telegram:offline-0',
     event_type: 'activate_failed', category: 'session', metadata: { reason: 'fixture launch failure' } });
   for (const [group, value] of [[null, 11], ['telegram:working', 17], ['telegram:child', 23]]) seedStore.insertMetric({ metric_name: 'usage_event', metric_value: value, timestamp: new Date().toISOString(), runtime: 'claude',
@@ -199,19 +209,38 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     writeMode(next);
     const key = 'origin', encoded = encodeURIComponent(key);
     for (const route of ['/api/health', '/api/health/ready']) await request(route, { identity: 'none' });
-    const instance = await request('/api/instance'); assert.equal(instance.session_mode, next); assert.equal(instance.resources.scope, 'container');
+    const instance = await request('/api/instance'); assert.equal(instance.session_mode.sessionMode, next); assert.equal(instance.resources.scope, 'container');
+    assert.equal(Object.hasOwn(instance, 'system'), false); assert.equal(Object.hasOwn(instance, 'runtime_info'), false);
+    assert.equal(instance.resources.cpu_source, 'container'); assert.equal(instance.resources.mem_source, 'container');
+    assert.equal(instance.versions.claude.installed, '1.0.0');
+    assert.equal(instance.session_mode.transition.phase, 'draining'); assert.equal(instance.session_mode.blocked.reason, 'fixture-block');
+    assert.equal(instance.session_mode.blocked.since, clock - 1000); assert.equal(instance.session_mode.supervisor, 'unreachable');
     assert.equal(Object.hasOwn(instance, 'context_pct'), false); assert.equal(Object.hasOwn(instance, 'cost'), false);
     await request('/api/instance/resources?range=6h'); await request('/api/instance/runtime-options?runtime=claude');
     const counts = await request('/api/groups/counts'), running = await request('/api/groups/running');
     assert.equal(running.rows.some(row => row.state.kind === 'offline'), false);
     assert.equal(JSON.stringify(counts).includes('offline-'), false);
     assert.equal(Object.hasOwn(counts, 'mode'), false);
-    const runningKeys = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt'].sort();
+    const runningKeys = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt', 'currentAction'].sort();
     for (const row of running.rows) assert.deepEqual(Object.keys(row).sort(), runningKeys);
+    if (next === 'single') {
+      const originRow = running.rows.find(row => row.id === 'origin');
+      assert.equal(originRow.state.kind, 'working'); assert.equal(originRow.mainAgent, 'idle');
+      const detail = await request('/api/groups/origin?include=');
+      assert.equal(detail.working.main, null, 'only child agents work while the main status remains idle');
+      assert.equal(detail.working.subagents.count, 2, 'current hook origin and historical null records both contribute');
+      assert.ok(detail.duration > 0);
+      const timeline = await request('/api/groups/origin/events?run_id=fixture-run');
+      assert.equal(timeline.events.filter(event => event.event_type === 'subagent_start').length, 2);
+      assert.ok(timeline.events.every(event => event.session_group === null || event.session_group === 'origin'));
+      const first = await request('/api/groups/origin/events?run_id=fixture-run&limit=1');
+      const second = await request('/api/groups/origin/events?run_id=fixture-run&limit=1&offset=1');
+      assert.equal(first.events.length, 1); assert.equal(second.events.length, 1); assert.notEqual(first.events[0].event_seq, second.events[0].event_seq);
+    }
     if (next === 'multi') {
       assert.equal(counts.offline.total, 57);
       const child = running.rows.find(row => row.id === 'telegram:child'); assert.equal(child.state.kind, 'working'); assert.equal(child.mainAgent, 'idle');
-      const work = running.rows.find(row => row.id === 'telegram:working'); assert.equal(work.state.kind, 'working'); assert.equal(work.flags.queued.count, 3); assert.equal(work.flags.blocked.reason, 'rate_limited');
+      const work = running.rows.find(row => row.id === 'telegram:working'); assert.equal(work.state.kind, 'working'); assert.equal(work.flags.queued.count, 3); assert.equal(work.flags.blocked.reason, 'rate_limited'); assert.equal(work.flags.blocked.recoveryAt, new Date(clock + 60000).toISOString());
       const offline = await request('/api/groups/offline?flag=startFailed&limit=1');
       assert.equal(offline.rows.length, 1); assert.equal(offline.rows[0].id, 'telegram:offline-0');
       assert.deepEqual(Object.keys(offline.rows[0]).sort(), ['id', 'displayName', 'channel', 'lastActivityAt', 'flags'].sort());
@@ -220,6 +249,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       await request('/api/groups/offline?flag=invalid', { expected: 400 });
       const lean = await request('/api/groups/origin?include=');
       assert.equal(Object.hasOwn(lean, 'raw'), false); assert.equal(Object.hasOwn(lean, 'config'), false);
+      assert.equal(lean.runtimeInfo.runningVersion, '1.0.0'); assert.equal(lean.runtimeInfo.model, 'fixture-model'); assert.equal(lean.runtimeInfo.effort, 'high');
       await request('/api/groups/origin?include=invalid', { expected: 400 });
     }
     for (const route of ['/api/groups/offline?limit=10', '/api/groups/search?q=telegram', '/api/groups/activity?range=60m', `/api/groups/${encoded}`, `/api/groups/${encoded}/usage`,
@@ -236,7 +266,9 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     assert.equal(groups.reduce((sum, group) => sum + group.today.tokens, 0), summary.today.tokens);
     assert.ok(summary.today.tokens > 0);
   });
-  await t.test('ordinary stream publishes instance and counts payloads matching GET', async () => {
+  await t.test('ordinary stream publishes instance and counts payloads matching GET in both modes', async () => {
+    for (const next of ['single', 'multi']) {
+    writeMode(next);
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 3000);
     const response = await fetch(`${origin}/api/stream`, { headers: { Authorization: `Bearer ${tokens.read}` }, signal: controller.signal });
     const reader = response.body.getReader(); let text = '';
@@ -255,6 +287,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
       assert.equal(events.some(event => ['state_change', 'fleet_state', 'system_update', 'health_update'].includes(event.type)), false);
       records.push({ mode, method: 'GET', route: '/api/stream', status: response.status, events });
     } finally { clearTimeout(timeout); await reader.cancel(); controller.abort(); }
+    }
   });
   await t.test('a catalog failure leaves Fleet and the ordinary stream available but keeps list reads explicit', async () => {
     catalogReadable = false; clock += 3000;
@@ -291,6 +324,53 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     finally { mock.mock.restore(); }
   });
   assert.ok(actionCalls.some(call => call.action === 'upgrade-zylos'));
+  await t.test('detail restart hints use observed CLI and current configuration without leaking into instance', async () => {
+    writeMode('multi');
+    const settingsDir = path.join(root, '.claude'); fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(path.join(settingsDir, 'settings.json'), JSON.stringify({ model: 'fixture-model', effortLevel: 'high' }));
+    let value = await request('/api/groups/origin?include=');
+    assert.equal(value.runtimeInfo.pendingRestart, false);
+    usageVersion = '0.9.0'; clock += 3000;
+    value = await request('/api/groups/origin?include='); assert.equal(value.runtimeInfo.pendingRestart, true);
+    usageVersion = '1.0.0'; usageModel = 'old-model'; clock += 3000;
+    value = await request('/api/groups/origin?include='); assert.equal(value.runtimeInfo.pendingRestart, true);
+    usageModel = 'fixture-model'; usageEffort = 'low'; clock += 3000;
+    value = await request('/api/groups/origin?include='); assert.equal(value.runtimeInfo.pendingRestart, true);
+    value = await request('/api/groups/telegram%3Aoffline-0?include='); assert.equal(value.runtimeInfo.pendingRestart, false);
+    usageVersion = null; usageModel = null; usageEffort = null; clock += 3000;
+    value = await request('/api/groups/origin?include='); assert.equal(value.runtimeInfo.runningVersion, null); assert.equal(value.runtimeInfo.pendingRestart, false);
+    const instance = await request('/api/instance'); assert.equal(Object.hasOwn(instance, 'runtime_info'), false);
+  });
+  await t.test('no-response uses the existing reminder and main-response history and ends with the run', async () => {
+    writeMode('multi');
+    let seq = 0;
+    const insert = (event_type, metadata = {}) => seedStore.insertEvent({ id: 'response-proof-' + (++seq), ingest_id: 'response-proof-' + seq,
+      timestamp: new Date(clock - 500).toISOString(), session_group: 'origin', run_id: originRun, event_type, category: 'agent', metadata });
+    insert('no_response_nudge'); clock += 3000;
+    let running = await request('/api/groups/running'), counts = await request('/api/groups/counts');
+    let row = running.rows.find(row => row.id === 'origin');
+    assert.ok(row.flags.noResponse.since); assert.equal(counts.running.flags.noResponse, 1);
+    const fleet = await request('/api/fleet');
+    const summary = fleet.agents.find(agent => agent.self).group_summary;
+    assert.equal(summary.noResponse.count, counts.running.flags.noResponse);
+    assert.ok(summary.problems.find(row => row.reason === 'no_response').durationSeconds >= 3);
+    insert('assistant_message', { agent_id: 'child' }); clock += 3000;
+    counts = await request('/api/groups/counts'); assert.equal(counts.running.flags.noResponse, 1, 'a child response is not the main agent responding');
+    insert('assistant_message'); clock += 3000;
+    counts = await request('/api/groups/counts'); assert.equal(counts.running.flags.noResponse, 0, 'main response clears the reminder');
+    insert('no_response_nudge'); clock += 3000;
+    assert.equal((await request('/api/groups/counts')).running.flags.noResponse, 1);
+    originRun = 'replacement-run'; clock += 3000;
+    running = await request('/api/groups/running'); row = running.rows.find(row => row.id === 'origin');
+    assert.equal(Object.hasOwn(row.flags, 'noResponse'), false, 'a prior run reminder cannot enter its replacement');
+    assert.equal((await request('/api/groups/counts')).running.flags.noResponse, 0);
+  });
+  await t.test('mode status read failure retains mode but reports transition uncertainty', async () => {
+    modeStatusReadable = false; clock += 3000;
+    const value = (await request('/api/instance')).session_mode;
+    assert.equal(value.sessionMode, 'multi'); assert.equal(value.supervisor, 'unknown'); assert.equal(value.globalGate, null);
+    assert.equal(value.error.code, 'FIXTURE_UNREADABLE');
+  });
   const evidence = process.env.ZYLOS_API_EVIDENCE;
   if (evidence) {
     const destination = path.resolve(evidence);

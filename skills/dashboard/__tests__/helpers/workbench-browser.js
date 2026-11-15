@@ -551,7 +551,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
   });
 
   await step('a desktop screen keeps the name and state on one row, with the actions under them', async () => {
-    const { page, context, errors } = await open(1280, 800, '/');
+    const { page, context, errors, shot } = await open(1280, 800, '/');
+    await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).waitFor();
+    await shot('overview');
     await page.locator('#wb-board .wb-row', { hasText: 'Telegram direct chat' }).click();
     await page.locator('.wb-d-top .wb-d-sub').waitFor({ state: 'attached' });
     const detail = await page.evaluate(measure);
@@ -560,6 +562,14 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.equal(detail.actionButtons[0]?.action, 'viewConversation');
     assert.ok(detail.actionButtons.every(button => Math.round(button.top) === Math.round(detail.actionButtons[0].top)), 'one row of actions');
     assert.equal(detail.documentWidth, 1280);
+    await shot('detail');
+    await page.keyboard.press('Escape');
+    await section(page, 'memory');
+    await page.locator('#memory-tree .memory-file').first().waitFor();
+    await shot('memory-list');
+    await section(page, 'schedule');
+    await page.locator('.wb-sched-row').first().waitFor();
+    await shot('schedule');
     assert.deepEqual(errors, []);
     await context.close();
   });
@@ -751,6 +761,54 @@ export async function runWorkbenchBrowser(t, sandbox) {
   // animations (a busy group's pulse) never finish and are not part of the switch.
   const settled = (page, machinesPage) => page.waitForFunction(machinesPage => document.querySelector('#agent-detail').hidden === machinesPage
     && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity), machinesPage);
+
+  for (const changedMachine of [false, true]) await step(changedMachine
+    ? 'restart fallback cannot submit to another machine after its Origin read settles'
+    : 'restart fallback with no current run shows the target error without submitting', async () => {
+    const { page, context } = await open(1280, 800, '/settings');
+    await answerFleet(page, { spark: '1.0.0-beta.7' });
+    const restartPosts = [];
+    page.on('request', request => {
+      if (request.method() === 'POST' && /\/actions\/restart$/.test(new URL(request.url()).pathname)) restartPosts.push(request.url());
+    });
+    let hold = false, release;
+    const delayed = new Promise(resolve => { release = resolve; });
+    let started;
+    const waiting = new Promise(resolve => { started = resolve; });
+    await page.route(url => url.pathname === '/api/groups/origin', async route => {
+      if (hold) { started(); if (changedMachine) await delayed; }
+      const row = workbenchAnswer(new URL('http://fixture/api/groups/origin'), Date.now());
+      await route.fulfill({ json: { ...row, live: hold && changedMachine ? { runId: 'resolved-old-machine-run', sessionId: 'old-session' } : null } });
+    });
+    await page.route('**/api/instance/actions/upgrade-runtime', route => route.fulfill({ json: { ok: true, requires_restart: true } }));
+    try {
+      await page.reload();
+      const upgrade = page.locator('#tab-settings [data-action="upgrade-cc"]');
+      await upgrade.waitFor({ state: 'attached' });
+      const section = await upgrade.evaluate(node => node.closest('section.wb-set-sec').id.replace('settings-section-', ''));
+      await page.locator(`[data-settings-section="${section}"]`).click();
+      await upgrade.click();
+      const dialog = page.locator('.wb-modal[role="alertdialog"]');
+      await dialog.locator('.wb-modal-acts button').last().click();
+      await dialog.waitFor({ state: 'detached' });
+      // The upgrade response opens the normal restart question after1.5s.
+      await dialog.waitFor({ state: 'visible' });
+      hold = true;
+      await dialog.locator('.wb-modal-acts button').last().click();
+      await Promise.race([waiting, page.waitForTimeout(5000).then(() => { throw new Error('restart fallback did not read canonical Origin'); })]);
+      if (changedMachine) {
+        await page.locator('#fleet-manage-btn').click();
+        await page.locator('#agent-fleet-root .agent-open[data-agent="spark"]').click();
+        await page.waitForFunction(() => document.querySelector('#tab-bar-agent-name').textContent === 'spark');
+        release();
+        await page.waitForTimeout(300);
+      } else {
+        const copy = JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n/wb.zh.json'), 'utf8'));
+        await page.locator('#action-status').filter({ hasText: copy['wb.actions.targetRequired'] }).waitFor({ state: 'visible' });
+      }
+      assert.deepEqual(restartPosts, [], 'a restart is never submitted without a current run on the original machine');
+    } finally { release(); await context.close(); }
+  });
 
   // Viewing other machines: the header version and the machine panel's meta line show the viewed machine's own
   // Core version, and nothing when that machine reports none or "unknown"; never this machine's 0.9.4. This step's

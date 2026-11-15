@@ -64,10 +64,10 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
     }
     assert.equal(options.headers.Authorization, 'Bearer zylos_st_secret');
     return objectResponse(url, { working: 1, todayCost: 4.56, sevenDayCost: 7.89,
-      rows: [{ id: 'origin', contextPct: 42, tools: [{ name: 'Bash', detail: 'npm test' }],
-        rotationThreshold: 75, working: { subagents: { count: 1 } } }],
+      rows: [{ id: 'origin', displayName: 'Origin', channel: 'dashboard', runtime: 'claude', model: 'GPT-5',
+        contextPct: 42, state: { kind: 'working' }, duration: null, mainAgent: 'busy', lastActivityAt: null, flags: {} }],
       instance: { default_runtime: 'claude', accounts: { claude: { used_percentage: 4, live: false, recordedAt: 1000 } },
-        runtime_info: { model: 'GPT-5', effort: 'high', zylos_update: '1.2.3' },
+        defaults: { claude: { model: 'configured', effort: 'high', threshold: 75 } }, versions: { zylos: { installed: '1.0.0', latest: '1.2.3', update: '1.2.3' } },
         resources: { cpu_pct: 12, mem_pct: 34, disk_pct: 56 } } });
   };
 
@@ -85,20 +85,20 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
   assert.equal(fleet.agents[0].rate_limit_7d_pct, 4);
   assert.equal(fleet.agents[0].rate_limit_7d_live, false);
   assert.equal(fleet.agents[0].rate_limit_7d_recorded_at, 1000);
-  assert.equal(fleet.agents[0].activity, 'npm test');
-  assert.equal(fleet.agents[0].context_pct, 42);
-  assert.equal(fleet.agents[0].cost, 4.56);
+  assert.equal(fleet.agents[0].activity, null, 'compact rows do not expose tool details');
+  assert.equal(Object.hasOwn(fleet.agents[0], 'context_pct'), false);
+  assert.equal(fleet.agents[0].cost, null, 'object APIs do not provide a session cost');
   assert.equal(fleet.agents[0].session_cost, null);
   assert.equal(fleet.agents[0].daily_cost, 4.56);
   assert.equal(fleet.agents[0].weekly_cost, 7.89);
-  assert.equal(fleet.agents[0].model, 'GPT-5');
-  assert.equal(fleet.agents[0].effort, 'high');
-  assert.equal(fleet.agents[0].new_session_threshold, 75);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'model'), false);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'effort'), false);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'new_session_threshold'), false);
   assert.equal(fleet.agents[0].cpu_pct, 12);
   assert.equal(fleet.agents[0].mem_pct, 34);
   assert.equal(fleet.agents[0].disk_pct, 56);
   assert.equal(fleet.agents[0].has_upgrade, true);
-  assert.equal(fleet.agents[0].has_subagent, true);
+  assert.equal(fleet.agents[0].has_subagent, false, 'compact rows do not expose subagents');
   assert.equal(fleet.agents[0].health_reason, 'ok');
   assert.equal(JSON.stringify(fleet).includes('zylos_ak_secret'), false);
   assert.equal(JSON.stringify(fleet).includes('zylos_st_secret'), false);
@@ -630,8 +630,8 @@ test('Fleet does not substitute service tier or configured identity for runtime 
   const record = stateToFleetRecord({ name: 'codex' }, {
     runtime_info: { runtime: 'codex', model: null, effort: null, service_tier: 'priority', configured_model: 'gpt-5.6-sol', configured_effort: 'high' },
   });
-  assert.equal(record.model, null);
-  assert.equal(record.effort, null);
+  assert.equal(Object.hasOwn(record, 'model'), false);
+  assert.equal(Object.hasOwn(record, 'effort'), false);
 });
 
 test('stateToFleetRecord produces a secret-free self record from local API state', () => {
@@ -661,20 +661,20 @@ test('stateToFleetRecord produces a secret-free self record from local API state
   assert.equal(record.color, agentColor(name).color);
   assert.equal(record.hue, agentColor(name).hue);
   assert.equal(record.state, 'BUSY');
-  assert.equal(record.activity, 'npm test');
-  assert.equal(record.context_pct, 42);
+  assert.equal(record.activity, null, 'Fleet ignores Origin tool details');
+  assert.equal(Object.hasOwn(record, 'context_pct'), false);
   assert.equal(record.cost, 1.23);
   assert.equal(record.session_cost, 1.23);
   assert.equal(record.daily_cost, 4.56);
   assert.equal(record.weekly_cost, 7.89);
-  assert.equal(record.model, 'Opus 4.6');
-  assert.equal(record.effort, 'high');
-  assert.equal(record.new_session_threshold, 75);
+  assert.equal(Object.hasOwn(record, 'model'), false);
+  assert.equal(Object.hasOwn(record, 'effort'), false);
+  assert.equal(Object.hasOwn(record, 'new_session_threshold'), false);
   assert.equal(record.cpu_pct, 12);
   assert.equal(record.mem_pct, 34);
   assert.equal(record.disk_pct, 56);
   assert.equal(record.has_upgrade, true);
-  assert.equal(record.has_subagent, true);
+  assert.equal(record.has_subagent, false, 'Fleet ignores Origin child observations');
   assert.equal(record.base_url, null);
   assert.equal(record.pulse_rate, 1);
   assert.equal(record.health_reason, 'ok');
@@ -870,7 +870,7 @@ test('fleet poller SSE uses Bearer auth and groups updates records', async () =>
   await flushObjectReads();
   const record = poller.getFleet().agents[0];
   assert.equal(record.state, 'BUSY');
-  assert.equal(record.context_pct, null);
+  assert.equal(Object.hasOwn(record, 'context_pct'), false);
   assert.equal(record.session_cost, null);
   assert.ok(calls.some(c => c.url.endsWith('/api/stream') && c.authorization === 'Bearer zylos_st_stream'));
 });
@@ -1328,7 +1328,7 @@ test('fleet poller rejects a legacy state response instead of using its session 
 
   await poller.pollOnce();
   const record = poller.getFleet().agents[0];
-  assert.equal(record.context_pct, null);
+  assert.equal(Object.hasOwn(record, 'context_pct'), false);
   assert.equal(record.health_reason, 'bad_payload');
 });
 
@@ -1361,22 +1361,18 @@ test('stateToFleetRecord still honours explicit per-agent color overrides from f
   assert.equal(record.hue, 42);
 });
 
-test('stateToFleetRecord derives activity_feed from running tools', () => {
-  const record = stateToFleetRecord({ name: 'a' }, {
-    state: 'BUSY',
-    running_tools: [
-      { tool_name: 'Bash', tool_detail: 'npm test', started_at: '2026-06-10T00:00:00Z' },
-      { tool_name: 'Read', tool_detail: 'foo.js', started_at: '2026-06-10T00:00:05Z' }
-    ]
-  }, { self: false, nowMs: 0 });
-
-  assert.equal(record.activity_feed.length, 2);
-  assert.deepEqual(record.activity_feed[0], {
-    kind: 'tool', label: 'Bash: npm test', started_at: '2026-06-10T00:00:00Z'
-  });
-  assert.deepEqual(record.activity_feed[1], {
-    kind: 'tool', label: 'Read: foo.js', started_at: '2026-06-10T00:00:05Z'
-  });
+test('Fleet does not read raw Origin activity or subagent observations', () => {
+  for (const state of ['BUSY', 'IDLE']) {
+    const input = { state };
+    for (const field of ['running_tools', 'active_subagents', 'subagent_count', 'last_message', 'last_prompt', 'reason']) {
+      Object.defineProperty(input, field, { get() { assert.fail(`raw Origin observation read: ${field}`); } });
+    }
+    const record = stateToFleetRecord({ name: 'a' }, input);
+    assert.equal(record.activity, null);
+    assert.equal(record.has_subagent, false);
+    assert.equal(record.subagent_count, 0);
+    assert.deepEqual(record.activity_feed, state === 'BUSY' ? [{ kind: 'thinking', label: null, started_at: null }] : []);
+  }
 });
 
 test('stateToFleetRecord activity_feed shows thinking when busy without tools, empty when idle', () => {
@@ -1402,35 +1398,6 @@ test('stateToFleetRecord passes rate limit percentages through, defaulting to nu
   assert.equal(without.rate_limit_7d_pct, null);
   assert.equal(without.rate_limit_7d_live, null);
   assert.equal(without.rate_limit_7d_recorded_at, null);
-});
-
-test('stateToFleetRecord idle activity prefers last assistant message over stale prompt', () => {
-  const record = stateToFleetRecord({ name: 'a' }, {
-    state: 'IDLE',
-    last_prompt: { source: 'hxa-connect (zylos01)', summary: 'Prompt from hxa-connect (zylos01)', timestamp: '2026-06-10T09:00:00.000Z' },
-    last_message: { text: 'Reviewed PR #186, conclusion CLEAN.', timestamp: '2026-06-10T09:01:00.000Z' }
-  }, { self: false, nowMs: 0 });
-  assert.equal(record.activity, 'Reviewed PR #186, conclusion CLEAN.');
-});
-
-test('stateToFleetRecord falls back to prompt summary while the turn is still open', () => {
-  // The producer clears last_message on user_prompt_submit, so an open turn
-  // has only the prompt summary — mirroring the single-agent transient line.
-  const record = stateToFleetRecord({ name: 'a' }, {
-    state: 'BUSY',
-    last_prompt: { summary: 'Prompt from lark', timestamp: '2026-06-10T09:00:00.000Z' },
-    last_message: null
-  }, { self: false, nowMs: 0 });
-  assert.equal(record.activity, 'Prompt from lark');
-});
-
-test('stateToFleetRecord accepts legacy string-form last_message', () => {
-  const record = stateToFleetRecord({ name: 'a' }, {
-    state: 'IDLE',
-    last_prompt: { summary: 'Prompt from lark' },
-    last_message: 'plain text reply'
-  }, { self: false, nowMs: 0 });
-  assert.equal(record.activity, 'plain text reply');
 });
 
 test('sleeping Origin remains online in Fleet', () => {
@@ -1578,4 +1545,51 @@ test('object events received during a Fleet read schedule one later read without
   assert.equal(reads, 3, 'a later event during the second read is not lost either');
   releases.shift()(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(reads, 3); assert.equal(stream.objectReadPending, false); assert.equal(stream.objectReadDirty, false);
+});
+
+// The adapter consumes the public compact list, even if a caller accidentally
+// retains a raw observation alongside it. Accessors make regressions observable.
+test('object adapter uses mode, versions and resources while omitting all Origin session metadata', async () => {
+  const { fleetStateFromObjects } = await import('../src/lib/fleet-poller.js');
+  const row = { id: 'origin', model: null, contextPct: 12, state: { kind: 'unknown' }, flags: {} };
+  for (const key of ['tools', 'working', 'rotationThreshold', 'presence', 'sessionGroup', 'noResponse', 'attention']) {
+    Object.defineProperty(row, key, { get() { assert.fail(`raw group field read: ${key}`); } });
+  }
+  const instance = { session_mode: { sessionMode: 'multi' }, default_runtime: 'codex',
+    defaults: { codex: { model: 'configured', effort: 'high', threshold: 80 } },
+    versions: { codex: { installed: '1', latest: '2', update: '2' } },
+    resources: { cpu_pct: 10, mem_pct: 20, disk_pct: 30, scope: 'mixed', cpu_source: 'container', mem_source: 'host' } };
+  const counts = { listKnown: true, running: { total: 1, states: { working: 0, idle: 0, starting: 0, stopping: 0, unknown: 1 } } };
+  const usage = { today: { cost: 1 }, sevenDay: { cost: 2 } };
+  const projected = fleetStateFromObjects(instance, counts, usage, { rows: [row] });
+  const record = stateToFleetRecord({}, projected);
+  assert.equal(record.session_mode, 'multi');
+  assert.equal(record.state, 'UNKNOWN');
+  assert.equal(record.group_summary.running, counts.running.total);
+  assert.equal(record.group_summary.counts.unknown, 1);
+  assert.equal(Object.hasOwn(record, 'context_pct'), false);
+  assert.equal(Object.hasOwn(record, 'model'), false);
+  assert.equal(Object.hasOwn(record, 'effort'), false);
+  assert.equal(Object.hasOwn(record, 'new_session_threshold'), false);
+  row.model = 'observed-model';
+  assert.equal(Object.hasOwn(stateToFleetRecord({}, fleetStateFromObjects(instance, counts, usage, { rows: [row] })), 'model'), false, 'Fleet omits even an observed Origin model');
+  assert.equal(record.has_upgrade, true);
+  assert.deepEqual([record.cpu_pct, record.mem_pct, record.disk_pct], [10, 20, 30]);
+  for (const session_mode of ['multi', null, {}, { sessionMode: 'invalid' }]) {
+    assert.throws(() => fleetStateFromObjects({ ...instance, session_mode }, counts, usage, { rows: [row] }), /bad_payload/);
+  }
+});
+
+
+test('Fleet object projection never reads Origin session information or fetches its detail', async () => {
+  const { fleetStateFromObjects } = await import('../src/lib/fleet-poller.js');
+  const row = { id: 'origin', displayName: 'Origin', state: { kind: 'working' }, flags: {} };
+  for (const key of ['model', 'effort', 'contextPct', 'rotationThreshold', 'currentAction']) {
+    Object.defineProperty(row, key, { get() { assert.fail(`Origin session field read: ${key}`); } });
+  }
+  const instance = { session_mode: { sessionMode: 'single' } };
+  const counts = { listKnown: true, running: { total: 1, states: { working: 1, idle: 0, starting: 0, stopping: 0, unknown: 0 } } };
+  const record = stateToFleetRecord({}, fleetStateFromObjects(instance, counts, { today: { cost: 0 }, sevenDay: { cost: 0 } }, { rows: [row] }));
+  for (const key of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(record, key), false);
+  assert.equal(record.activity, null);
 });

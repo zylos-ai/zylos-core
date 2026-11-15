@@ -127,6 +127,43 @@ test('every Core action return path has a bilingual message key', async t => {
 
   for (const currentMode of ['single', 'multi']) {
     mode = currentMode;
+    await t.test(`${mode} Origin group adapter preserves the Core target and refuses a mismatched scope before I/O`, async () => {
+      const { createGroupActions } = await import('../src/lib/workbench/group-actions.js');
+      const groupAction = createGroupActions({ zylosDir: config.zylosDir, config, handleCoreAction });
+      const target = Object.freeze({ sessionGroup: mode === 'multi' ? 'origin' : null,
+        runId: `private-${mode}-run`, sessionId: `private-${mode}-session` });
+      for (const action of ['interrupt', 'chop-chop', 'restart']) {
+        const beforeCommands = commandCalls.length, beforeSubmits = submits.length;
+        commands = Array.from({ length: action === 'chop-chop' ? 2 : 1 }, () => ({ ok: true, data: { id: 11 } }));
+        reply = { kind: 'accepted', reply: { ok: true, result: 'accepted' } };
+        const result = await groupAction('origin', action, target);
+        assert.equal(result.ok, true);
+        if (action === 'restart') {
+          assert.equal(commandCalls.length, beforeCommands);
+          assert.equal(submits.length, beforeSubmits + 1);
+          assert.equal(submits.at(-1).expectedRunId, target.runId);
+          assert.equal(submits.at(-1).expectedSessionId, target.sessionId);
+        } else {
+          assert.equal(submits.length, beforeSubmits);
+          assert.equal(commandCalls.length - beforeCommands, action === 'chop-chop' ? 2 : 1);
+          for (const { args } of commandCalls.slice(beforeCommands)) {
+            assert.equal(args[args.indexOf('--target-run') + 1], target.runId);
+            assert.equal(args[args.indexOf('--expected-session') + 1], target.sessionId);
+            assert.equal(args.includes('--group'), mode === 'multi');
+            if (mode === 'multi') assert.equal(args[args.indexOf('--group') + 1], 'origin');
+          }
+        }
+        const commandsAfter = commandCalls.length, submitsAfter = submits.length;
+        const mismatch = await groupAction('origin', action, { ...target, sessionGroup: mode === 'multi' ? null : 'origin' });
+        assert.equal(mismatch.ok, false);
+        assert.equal(mismatch.error, 'TARGET_SCOPE_MISMATCH');
+        assert.equal(commandCalls.length, commandsAfter, 'a scope mismatch never enqueues a control');
+        assert.equal(submits.length, submitsAfter, 'a scope mismatch never submits a restart');
+      }
+      assert.deepEqual(target, { sessionGroup: mode === 'multi' ? 'origin' : null,
+        runId: `private-${mode}-run`, sessionId: `private-${mode}-session` });
+      commands = [];
+    });
     await t.test(`${mode} restart acceptance, rejection and transport results`, async () => {
       for (const result of ['accepted', 'already_accepted', 'already_stopped']) {
         reply = { kind: 'accepted', reply: { ok: true, result } };

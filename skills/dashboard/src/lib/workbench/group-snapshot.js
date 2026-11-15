@@ -89,6 +89,17 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       statusError = 'status_unreadable';
       sources.status = { ok: false, reason: statusError, readAt: now() };
     }
+    let sessionModeStatus;
+    try {
+      const { readSessionModeStatus } = await loadCoreModule('session-mode-status.js');
+      sessionModeStatus = await readSessionModeStatus({ zylosDir, readMode: () => ({ mode }),
+        readPm2: () => readPm2()?.processes?.find(process => process.name === 'activity-monitor')?.pm2_env?.status ?? 'unobservable' });
+      sessionModeStatus.sessionMode = ['single', 'multi'].includes(mode) ? mode : null;
+    } catch (error) {
+      sessionModeStatus = { sessionMode: ['single', 'multi'].includes(mode) ? mode : null,
+        transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [],
+        error: { code: error.code ?? 'READ_FAILED', message: 'Session mode status could not be read' } };
+    }
     const [c4, q] = await Promise.all([
       cli.runC4Db(['groups', '--json']),
       cli.runC4Db(['group-queues', '--json']),
@@ -135,6 +146,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         id: tool.id, name: tool.name, detail: sanitizer.sanitizeToolDetail(tool.name, tool.input), startedAt: tool.startedAt,
       })) : [];
       const usage = observation?.usage;
+      row.runningVersion = usage?.valid ? usage.value.version ?? usage.value.cliVersion ?? null : null;
       row.contextPct = usage?.valid ? usage.value.context_window?.used_percentage ??
         (usage.value.contextUsage?.ceiling > 0 ? usage.value.contextUsage.used / usage.value.contextUsage.ceiling * 100 : null) : null;
       if (observation && !usage?.valid) row.contextReason = 'usage_unreadable';
@@ -170,7 +182,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       row.working = null;
       row.noResponse = null;
       if (row.presence === 'running' && row.live?.runId && sources.status.ok === true) {
-        const filter = { sessionGroup: row.sessionGroup, runId: row.live.runId,
+        const filter = { sessionGroup: row.sessionGroup, includeLegacyOrigin: mode === 'single' && row.sessionGroup === null, runId: row.live.runId,
           until: new Date(at).toISOString(), sourceTime: true, order: 'desc' };
         const end = store.queryEvents({ ...filter, types: END_TYPES, agentScope: 'main', limit: 1 });
         // From shortly before its last stop: a queued message taken as that turn ended can be timed before the stop.
@@ -194,7 +206,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         row.noResponse = since === null ? null : { since };
       }
       const events = row.state.kind === 'busy' && row.live?.runId ? queryAllEvents(store, {
-        sessionGroup: row.sessionGroup, runId: row.live.runId, types: ['user_prompt_submit', 'stop'], until: new Date(at).toISOString(),
+        sessionGroup: row.sessionGroup, includeLegacyOrigin: mode === 'single' && row.sessionGroup === null, runId: row.live.runId, types: ['user_prompt_submit', 'stop'], until: new Date(at).toISOString(),
       }) : [];
       row.duration = durationOf(row, { now: at, events });
     }
@@ -213,11 +225,17 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     const value = { readAt: at, mode, view: status?.view ?? null, rows, counts: countRows(rows), hasOlder,
       listKnown: status !== null && status.groupListError === null, baselineRuntime,
       instance: { runtimeHealth: status?.runtimeHealth ?? null, supervisorPaused: status?.supervisorPaused ?? null, accounts: accountsCache.accounts,
-        pool, services, system, autoRestarts: { count: restarts } },
+        pool, services, system, sessionModeStatus, autoRestarts: { count: restarts } },
       overrides: ov.ok ? ov.data : null, sources };
     // Projection evidence is shared with the object APIs, but is not an extra
     // public copy of the event catalog or slot owners.
     Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners } });
+    const channels = new Set(rows.flatMap(row => row.c4?.componentName ? [row.c4.componentName] : []));
+    if (services) services.channels = [...channels].map(channel => {
+      const service = 'zylos-' + channel;
+      return { channel, service, status: pm2Data.processes.find(process => process.name === service)?.pm2_env?.status ?? null,
+        down: channelDownCounter.get(service) >= 2 };
+    });
     value.attention = buildAttention(value, { channelDownCounter, pm2Data });
     for (const row of rows) row.attention = value.attention.problems.filter(problem =>
       problem.group === row.sessionGroup || problem.groups?.includes(row.sessionGroup));

@@ -1,4 +1,4 @@
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=203';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=205';
 import { counted } from './count-label.js?v=1';
 
 import { fallbackName, platformOf } from './wb/plain-text.js?v=106';
@@ -14,7 +14,7 @@ export function escapeHtml(value) {
     .replaceAll('"', '&quot;');
 }
 
-// Input is always a 0-100 percentage (context_pct, rate_limit_pct, cpu/mem/
+// Input is always a 0-100 percentage (rate_limit_pct, cpu/mem/
 // disk). Never infer fractions: a remote agent's genuine 1% weekly usage must
 // render as 1%, not a full red bar (#251).
 function pctValue(value) {
@@ -94,15 +94,6 @@ function sortAgents(agents) {
   return [...self, ...others.filter(isOffline), ...others.filter((agent) => !isOffline(agent))];
 }
 
-// Mirrors the single-agent metric bars (barColor in app.js), used for the
-// context ring and the 5h/7d rate rows: <50 ok, 50–75 warning, >75 danger.
-function barLevel(pct) {
-  if (pct == null) return 'ok';
-  if (pct > 75) return 'danger';
-  if (pct >= 50) return 'warning';
-  return 'ok';
-}
-
 function latencyLabel(value) {
   if (value == null || value === '') return null;
   const n = Number(value);
@@ -164,8 +155,6 @@ export function defaultAgentFleetLabels() {
     fixVersion: 'The other Dashboard needs an upgrade.',
     lastSeen: 'last reachable {time}',
     noActivity: 'Standing by',
-    context: 'Context',
-    model: 'Model',
     dailyCost: 'Today',
     weeklyCost: '7 days',
     todayWeek: 'Today / 7 days',
@@ -244,8 +233,6 @@ export function buildAgentFleetView(fleet, options = {}) {
       : baseMood;
     const offline = isOffline(agent);
     const isSelf = agent.self === true;
-    const contextPct = pctValue(agent.context_pct);
-    const threshold = pctValue(agent.new_session_threshold);
     const running = activityFeed.find((entry) => entry?.kind !== 'thinking' && entry?.label)?.label;
     const activity = compactText(running || agent.activity, labels.noActivity);
     const link = agent.link && typeof agent.link === 'object' ? agent.link : null;
@@ -260,15 +247,9 @@ export function buildAgentFleetView(fleet, options = {}) {
       stateLabel: stateLabel(agent, labels, mood),
       problem: offline ? problemOf(agent, labels) : null,
       activity,
-      contextPct,
-      contextLevel: barLevel(contextPct),
-      threshold,
-      overThreshold: contextPct != null && threshold != null && contextPct >= threshold,
       linkQuality: String(link?.quality || 'ok').toLowerCase(),
       linkChip,
       latencyLabel: latencyLabel(link?.latency_ms),
-      model: labelText(agent.model),
-      effort: labelText(agent.effort),
       activityFeed,
       rate7dPct: pctValue(agent.rate_limit_7d_pct),
       rate7dRecord: { recordedAt: agent.rate_limit_7d_recorded_at, live: agent.rate_limit_7d_live },
@@ -402,8 +383,8 @@ function renderTile(tile, labels, t) {
   const multi = tile.sessionMode === 'multi';
   const mode = multi ? labels.modeMulti : tile.sessionMode === 'single' ? labels.modeSingle : labels.modeUnknown;
   const sub = tile.isSelf
-    ? `<div class="wb-f-sub"><span class="wb-f-seg">${escapeHtml(labels.self)}</span><span class="wb-f-seg wb-tech">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span></div>`
-    : `<div class="wb-f-sub wb-tech"><span class="wb-f-seg"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span></span>${tile.offline ? '' : `<span class="wb-f-seg">${escapeHtml(tile.model)} / ${escapeHtml(tile.effort)}</span>${tile.latencyLabel ? `<span class="wb-f-seg">${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}</span>` : ''}`}${linkChip}</div>`;
+    ? `<div class="wb-f-sub"><span class="wb-f-seg">${escapeHtml(labels.self)}</span></div>`
+    : `<div class="wb-f-sub wb-tech"><span class="wb-f-seg"><span class="wb-mono">${escapeHtml(tile.baseUrl)}</span></span>${tile.offline ? '' : `${tile.latencyLabel ? `<span class="wb-f-seg">${escapeHtml(labels.linkLatency)} ${escapeHtml(tile.latencyLabel)}</span>` : ''}`}${linkChip}</div>`;
   if (tile.offline) {
     const seen = tile.lastSeenText;
     return `<div class="wb-f-card bad" ${data} data-state="${escapeHtml(tile.mood)}">
@@ -421,9 +402,7 @@ function renderTile(tile, labels, t) {
     : `<div class="wb-f-act"><span class="wb-pill wb-${escapeHtml(pillKind[tile.mood] ?? 'unknown')}" data-mood="${escapeHtml(tile.mood)}"><span class="wb-dot"></span>${escapeHtml(tile.stateLabel)}</span><span title="${escapeHtml(tile.activity)}">${escapeHtml(tile.activity)}</span>${subagent}</div>`;
   const pool = tile.groupSummary?.pool;
   const poolValue = pool?.used == null ? '--' : String(pool.used) + (pool.capacity == null ? '' : '/' + pool.capacity);
-  const second = multi
-    ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolValue)}</b></div>`
-    : `<div title="${escapeHtml(labels.context)}${tile.threshold == null ? '' : ` / ${pctText(tile.threshold)}`}">${escapeHtml(labels.context)}<b class="${tile.overThreshold ? 'wb-txt-warn' : ''}">${pctText(tile.contextPct)}</b></div>`;
+  const second = multi ? `<div>${escapeHtml(labels.pool)}<b>${escapeHtml(poolValue)}</b></div>` : '';
   return `<div class="wb-f-card${tile.isSelf ? ' self' : ''}" ${data} data-state="${escapeHtml(tile.mood)}"${tile.linkQuality !== 'ok' ? ` data-link-quality="${escapeHtml(tile.linkQuality)}"` : ''}>
     <div class="wb-f-top"><span class="wb-hdot"></span><b title="${escapeHtml(tile.name)}">${escapeHtml(tile.name)}</b>${tile.isSelf ? `<span class="wb-tag">${escapeHtml(labels.self)}</span>` : ''}<span class="wb-grow"></span><span class="wb-mode-tag">${escapeHtml(mode)}</span></div>
     ${sub}

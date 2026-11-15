@@ -93,18 +93,23 @@ export class SystemCollector {
       process.stderr.write(`[system-collector] Memory error: ${err.message}\n`);
     }
 
-    // Finite limits use cgroup gauges. With both limits explicitly unlimited,
-    // retain the host capacity and usage gauges; unreadable limits stay unknown.
+    // Each controller chooses its own source. An unreadable limit is unknown,
+    // never evidence that a container controller is unlimited.
     this._cgroup.sample();
     const cgroup = this._cgroup.read();
     data.cgroup_version = cgroup.cgroup_version;
-    const unlimited = cgroup.cpu_limit_cores === null && cgroup.mem_total_bytes === null &&
-      !cgroup.errors?.some(code => ['cpu_limit_unreadable', 'memory_limit_unreadable'].includes(code));
-    data.resource_scope = cgroup.cgroup_version === 'none' || unlimited ? 'host' : 'container';
-    if (data.resource_scope === 'container') {
+    const host = cgroup.cgroup_version === 'none';
+    const cpuHost = host || cgroup.cpu_limit_cores === null && !cgroup.errors?.includes('cpu_limit_unreadable');
+    const memHost = host || cgroup.mem_total_bytes === null && !cgroup.errors?.includes('memory_limit_unreadable');
+    data.cpu_source = cpuHost ? 'host' : 'container';
+    data.mem_source = memHost ? 'host' : 'container';
+    data.resource_scope = cpuHost === memHost ? data.cpu_source : 'mixed';
+    if (!cpuHost) {
       data.cpu_pct = cgroup.cpu_pct;
       data.cpu_count = cgroup.cpu_limit_cores;
       data.cpu_usage_cores = cgroup.cpu_usage_cores;
+    }
+    if (!memHost) {
       data.mem_used_bytes = cgroup.mem_used_bytes;
       data.mem_total_bytes = cgroup.mem_total_bytes;
       data.mem_pct = cgroup.mem_pct;
@@ -116,6 +121,7 @@ export class SystemCollector {
       const stats = fs.statfsSync(this.config.zylosDir);
       const totalBytes = stats.blocks * stats.bsize;
       const availBytes = stats.bavail * stats.bsize;
+      data.disk_total_bytes = totalBytes;
       data.disk_free_bytes = availBytes;
       data.disk_used_pct = totalBytes > 0 ? (1 - availBytes / totalBytes) * 100 : 0;
 
@@ -126,8 +132,9 @@ export class SystemCollector {
     const dims = {
       resource_scope: data.resource_scope,
       cgroup_version: data.cgroup_version,
-      cpu_pct: data.resource_scope === 'container' ? data.cpu_pct : (data.cpu_pct ?? 0),
-      cpu_count: data.resource_scope === 'container' ? data.cpu_count : (data.cpu_count ?? (os.cpus().length || 1)),
+      cpu_source: data.cpu_source, mem_source: data.mem_source,
+      cpu_pct: data.cpu_source === 'container' ? data.cpu_pct : (data.cpu_pct ?? 0),
+      cpu_count: data.cpu_source === 'container' ? data.cpu_count : (data.cpu_count ?? (os.cpus().length || 1)),
       cpu_usage_cores: data.cpu_usage_cores ?? null,
       mem_used_bytes: data.mem_used_bytes ?? null,
       mem_total_bytes: data.mem_total_bytes ?? null,

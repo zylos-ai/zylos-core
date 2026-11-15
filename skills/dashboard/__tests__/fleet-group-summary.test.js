@@ -13,14 +13,14 @@ function snapshot(rows = [], extra = {}) {
   return { mode: 'multi', rows, listKnown: true, instance: { pool: { used: 7, capacity: 12 } }, ...extra };
 }
 
-test('running summary counts only live and starting groups, with each in exactly one category', () => {
+test('running summary includes unknown-presence groups, with each in exactly one category', () => {
   const result = fleetGroupSummary(snapshot([
     row('busy', 'busy'), row('idle'), row('starting', 'waiting', { presence: 'starting' }),
     row('unknown', 'unknown'), row('error', 'error'), row('unexpected', 'future_state'),
     row('reclaimed', 'error', { presence: 'not_running' }), row('unreadable', 'busy', { presence: 'unknown' }),
   ]));
-  assert.equal(result.running, 6);
-  assert.deepEqual(result.counts, { busy: 1, idle: 1, waiting: 1, unknown: 2, error: 1, no_response: 0 });
+  assert.equal(result.running, 7);
+  assert.deepEqual(result.counts, { busy: 2, idle: 1, waiting: 1, unknown: 2, error: 1, no_response: 0 });
   assert.equal(Object.values(result.counts).reduce((sum, count) => sum + count, 0), result.running);
   assert.deepEqual(result.pool, { used: 7, capacity: 12 });
   assert.equal(result.problemCount, 1);
@@ -146,7 +146,7 @@ test('HTTP and SSE object reads carry the same running summary and clear it afte
   let working = 1;
   const poller = new FleetPoller({ fleet: { agents: [agent] } }, { fetch: async url =>
     url.endsWith('/api/auth/token') ? new Response(JSON.stringify({ token: 'fixture' }))
-      : objectResponse(url, { working, idle: 1, unknown: 1, instance: { session_mode: 'multi' } }), now: () => 0 });
+      : objectResponse(url, { working, idle: 1, unknown: 1, instance: { session_mode: { sessionMode: 'multi' } } }), now: () => 0 });
   const expected = busy => ({ running: busy + 2, counts: { busy, idle: 1, waiting: 0, unknown: 1, error: 0, no_response: 0 },
     problems: [], problemCount: 0, listKnown: true, pool: { used: busy + 1, capacity: 12 },
     noResponse: { count: 0 }, autoRestarts: { count: 0 } });
@@ -188,23 +188,50 @@ test('Workbench auth attention takes precedence over its busy/waiting classifica
 });
 
 
-test('object fleet projection preserves the existing auth and unanswered-work summary', () => {
-  const rows = [row('busy', 'busy'), row('auth', 'busy', { attention: [{ kind: 'auth_failed' }] }),
-    row('silent', 'idle', { noResponse: { since: 1000 } })];
-  const old = snapshot(rows, { readAt: 10000 });
-  const expected = fleetGroupSummary(old);
-  const mapped = fleetStateFromObjects({ session_mode: 'multi' },
-    { readAt: 10000, listKnown: true, running: {total: 3, states: {working: 2, idle: 1, starting: 0, stopping: 0, unknown: 0}}, pool: old.instance.pool },
-    { today: {cost: 0}, sevenDay: {cost: 0} },
-    {rows: rows.map(item => ({...item,state:{kind:item.state.kind === 'busy' ? 'working' : item.state.kind}}))});
-  assert.deepEqual(mapped.group_summary, expected);
+test('object fleet projection maps compact auth and start flags and retains unknown groups', () => {
+  const rows = [
+    { id: 'busy', displayName: 'Busy', state: { kind: 'working' }, flags: {} },
+    { id: 'auth', displayName: 'Auth', state: { kind: 'working' }, flags: { blocked: { reason: 'auth_failed' } } },
+    { id: 'failed', displayName: 'Failed', state: { kind: 'starting' }, flags: { startFailed: { count: 1 } } },
+    { id: 'unknown', displayName: null, state: { kind: 'unknown' }, flags: { unreadable: { reasons: ['status'] } } },
+    { id: 'waiting', displayName: null, state: { kind: 'stopping' }, flags: { queued: { count: 1 } } },
+  ];
+  const mapped = fleetStateFromObjects({ session_mode: { sessionMode: 'multi' } },
+    { readAt: 10000, listKnown: true, running: { total: 5, states: { working: 2, idle: 0, starting: 1, stopping: 1, unknown: 1 } }, pool: { used: 3, capacity: 12 } },
+    { today: { cost: 0 }, sevenDay: { cost: 0 } }, { rows });
+  assert.equal(mapped.session_mode, 'multi');
+  assert.equal(mapped.group_summary.running, 5);
+  assert.deepEqual(mapped.group_summary.counts, { busy: 1, idle: 0, waiting: 1, unknown: 1, error: 2, no_response: 0 });
+  assert.deepEqual(mapped.group_summary.problems.map(item => [item.sessionGroup, item.displayName, item.reason]),
+    [['auth', 'Auth', 'auth_failed'], ['failed', 'Failed', 'start_failed']]);
+  assert.equal(mapped.group_summary.problemCount, 2);
+  assert.deepEqual(stateToFleetRecord({}, mapped).group_summary, mapped.group_summary);
 });
 
-
 test('an explicitly unreadable instance mode remains unknown instead of an offline transport failure', () => {
-  const value = fleetStateFromObjects({session_mode:null},
+  const value = fleetStateFromObjects({session_mode:{sessionMode:null}},
     {listKnown:false,running:{total:0,states:{working:0,idle:0,starting:0,stopping:0,unknown:0}}},
     {today:{cost:null},sevenDay:{cost:null}}, {rows:[]});
   assert.equal(value.state,'UNKNOWN');
   assert.equal(stateToFleetRecord({},value).session_mode,null);
+});
+
+
+test('compact no-response flags restore silent durations while the independent count comes from counts', () => {
+  const readAt = Date.parse('2026-11-15T17:00:00Z');
+  const rows = [
+    { id: 'auth', displayName: 'Auth', state: { kind: 'working' }, flags: { blocked: { reason: 'auth_failed' }, noResponse: { since: new Date(readAt - 5000).toISOString() } } },
+    { id: 'silent', displayName: 'Ops', state: { kind: 'idle' }, flags: { noResponse: { since: new Date(readAt - 125000).toISOString() } } },
+  ];
+  const counts = { readAt, listKnown: true, running: { total: 2, states: { working: 1, idle: 1, starting: 0, stopping: 0, unknown: 0 }, flags: { noResponse: 2 } } };
+  const value = fleetStateFromObjects({ session_mode: { sessionMode: 'multi' } }, counts,
+    { today: { cost: 0 }, sevenDay: { cost: 0 } }, { rows });
+  assert.deepEqual(value.group_summary.counts, { busy: 0, idle: 0, waiting: 0, unknown: 0, error: 1, no_response: 1 });
+  assert.equal(value.group_summary.noResponse.count, counts.running.flags.noResponse);
+  assert.deepEqual(value.group_summary.problems.map(row => [row.sessionGroup, row.reason, row.durationSeconds]),
+    [['auth', 'auth_failed', null], ['silent', 'no_response', 125]]);
+  assert.deepEqual(stateToFleetRecord({}, value).group_summary, value.group_summary);
+  counts.running.flags.noResponse = 3;
+  assert.equal(stateToFleetRecord({}, fleetStateFromObjects({ session_mode: { sessionMode: 'multi' } }, counts,
+    { today: { cost: 0 }, sevenDay: { cost: 0 } }, { rows })).group_summary, null, 'an impossible independent count is not published');
 });

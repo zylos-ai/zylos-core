@@ -111,10 +111,10 @@ test('workbench HTTP routes retain read authentication, method guards and source
   assert.equal(engine._state.pm2, collector.getLatestPM2Data());
   clock += 2100;
   await request('/api/groups/running');
-  assert.equal(service.getCachedSnapshot().attention.problems.some(p => p.kind === 'channel_down'), false);
+  assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').down, false);
   await collector.collect(); clock += 2100;
   await request('/api/groups/running');
-  assert.equal(service.getCachedSnapshot().attention.problems.some(p => p.kind === 'channel_down'), true);
+  assert.equal((await (await request('/api/instance')).json()).services.channels.find(row => row.channel === 'telegram').down, true);
   // Counter failure must not suppress the existing PM2 state callback.
   const realUpdate = service.channelDownCounter.update;
   service.channelDownCounter.update = () => { throw new Error('fixture counter failure'); };

@@ -61,7 +61,8 @@ export function createGroupConfig({ key, request, onChange = () => {}, t = key =
     const value = detail.config;
     if (active()) {
       state.value = value;
-      state.error = value.runtime?.ok === false ? responseError(value.runtime) : value.model?.ok === false ? responseError(value.model) : null;
+      state.error = detail.configError ? responseError({ error: detail.configError }) : value == null ? t('wb.readFailed')
+        : value.runtime?.ok === false ? responseError(value.runtime) : value.model?.ok === false ? responseError(value.model) : null;
       publish();
     }
     return value;

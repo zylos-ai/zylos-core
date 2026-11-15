@@ -10,6 +10,7 @@ import { createGroupSnapshot, systemSample } from '../skills/dashboard/src/lib/w
 import { Store } from '../skills/dashboard/src/lib/store.js';
 import { EventLoopMonitor } from '../skills/dashboard/src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../skills/dashboard/src/lib/version-checker.js';
+import { SystemCollector } from '../skills/dashboard/src/lib/collectors/system-collector.js';
 import { FleetPoller } from '../skills/dashboard/src/lib/fleet-poller.js';
 
 // Actual Dashboard HTTP + SSE entry and actual Workbench snapshot/cache, with deterministic
@@ -45,11 +46,13 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     setImmediate(() => request.emit('error', new Error('offline fixture')));
     return request;
   };
+  let systemCollector;
+  t.mock.module('../skills/dashboard/src/lib/collectors/system-collector.js', { namedExports: { SystemCollector: class extends SystemCollector { constructor(...args) { super(...args); systemCollector = this; } } } });
   let importer;
   t.mock.module('../skills/dashboard/src/lib/core-log-importer.js', {namedExports:{CoreLogImporter: class extends CoreLogImporter { constructor(options) {super(options);importer=this;} }}});
   let now = Date.now(), count = 1, statusReads = 0, supervisorPaused = false;
   const coreModules = async name => {
-    if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
+    if (name === 'config.js') return { readSessionMode: () => ({ mode: (() => { try { return JSON.parse(fs.readFileSync(coreConfig)).session_mode ?? 'single'; } catch { return 'unreadable'; } })() }) };
     if (name === 'status-view.js') return { collectStatus: async () => {
       statusReads++;
       return { view: 'multi', origin: { presence: 'not_running' }, groupListError: null,
@@ -90,6 +93,14 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: process.env.TMUX_TMPDIR, tmux: 'private namespace; observations injected', network: 'loopback HTTP only; HTTPS blocked; remote polling held' }));
   const { createServer } = await import('../skills/dashboard/src/index.js');
   server = createServer();
+  let metricReads = 0;
+  for (const store of stores) {
+    const prepare = store.db.prepare;
+    t.mock.method(store.db, 'prepare', function (sql, ...args) {
+      if (/FROM metric_points/i.test(sql)) metricReads++;
+      return prepare.call(this, sql, ...args);
+    });
+  }
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const login = await fetch(`${origin}/login`, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(3000),
@@ -102,11 +113,15 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     return response.json();
   };
   await t.test('instance endpoint reports effective default and preserves invalid or unreadable mode uncertainty', async () => {
-    assert.equal((await readInstance()).session_mode, 'single');
-    writeMode({ session_mode: 'invalid' });
-    assert.equal((await readInstance()).session_mode, null);
-    fs.writeFileSync(coreConfig, '{ unreadable JSON');
-    assert.equal((await readInstance()).session_mode, null);
+    const cold = await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+    assert.equal(cold.status, 200); assert.equal((await cold.json()).agents.find(agent => agent.self).state, 'BUSY', 'cold single Fleet collects its object snapshot before projection');
+    assert.equal(statusReads, 1);
+    assert.equal((await readInstance()).session_mode.sessionMode, 'single');
+    assert.equal(statusReads, 1, 'instance reuses the cold Fleet snapshot');
+    writeMode({ session_mode: 'invalid' }); now += 3000;
+    assert.equal((await readInstance()).session_mode.sessionMode, null);
+    fs.writeFileSync(coreConfig, '{ unreadable JSON'); now += 3000;
+    assert.equal((await readInstance()).session_mode.sessionMode, null);
   });
   // API -> real snapshot/cache -> remote Fleet projection in both modes. Run
   // when pause publication or snapshot refresh changes; isolated resources and
@@ -131,6 +146,13 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
       }
     }
   });
+  await t.test('publication without subscribers builds no Workbench snapshot', async () => {
+    const before = statusReads;
+    now += 30000;
+    systemCollector._onUpdate({});
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    assert.equal(statusReads, before, 'actual index publication exits before Core/group reads');
+  });
   writeMode({ session_mode: 'multi' });
   await t.test('Fleet response does not await a held remote poll', async () => {
     const request = new AbortController();
@@ -144,7 +166,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
   });
   releasePoll();
   await t.test('two later snapshots reach group and fleet events and refresh a remote consumer', async () => {
-    // Settings changes drive publication. The remote consumer follows each group
+    // Existing collector and settings changes drive publication. The remote consumer follows each group
     // invalidation with the new object reads; they reuse the just-published snapshot.
     await readInstance();
     const counts = await (await fetch(`${origin}/api/groups/counts`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) })).json();
@@ -200,13 +222,19 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
           headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ allowRemote: true }) });
         assert.equal(changed.status, 200);
       } else {
-        // A non-Origin imported activity change must publish while the regular
-        // two-second page snapshot is still reusable, without an HTTP page read.
-        importer.onImport({ types: ['subagent_start'], stream: 'hook', inserted: 1 });
+        // Imports no longer build Fleet snapshots. Non-Origin changes are
+        // published at the existing system collector cadence, without a page read.
+        const beforeImport = statusReads, beforeMetricReads = metricReads;
+        for (let i = 0; i < 10; i++) importer.onImport({ types: ['subagent_start'], stream: 'hook', inserted: 1 });
+        await new Promise(resolve => setTimeout(resolve, 1100));
+        assert.equal(statusReads, beforeImport, 'unchanged imports do not collect groups');
+        assert.equal(metricReads, beforeMetricReads, 'unchanged imports do not repeat usage SQL or remote invalidation reads');
+        now += 30000;
+        systemCollector._onUpdate({});
       }
       await waitForSummary(expected);
     }
-    assert.equal(statusReads, initialReads + 2, 'one fresh rebuild in each SSE cycle, including a cached non-Origin activity change');
+    assert.equal(statusReads, initialReads + 2, 'one rebuild at each actual publication trigger, including non-Origin collector cadence');
     abort.abort();
   });
 });

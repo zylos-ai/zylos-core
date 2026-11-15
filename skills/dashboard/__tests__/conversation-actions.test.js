@@ -42,7 +42,7 @@ function fixture(extra = () => undefined, { identity } = {}) {
   const calls = [];
   const state = createConversationState({ ...timers, identity, request: async (path, options) => {
     calls.push({path,options}); const result = extra(path,options); if (result !== undefined) return result;
-    if (path === '/api/instance') return { session_mode: 'multi' };
+    if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' } };
     if (path.includes('/messages?')) return {items:[],nextCursor:null,afterCursor:'after'};
     if (path.includes('?')) return {items:[],nextCursor:null};
     const id = decodeURIComponent(path.split('/').at(-1)); return {conversation:{id,state:'active'},conversationId:id,stored:false};
@@ -87,7 +87,7 @@ test('unknown send preserves edited input and needs deliberate retry', async () 
   await state.send({retry:true}); assert.equal(calls.filter(x=>x.options?.method==='POST').at(-1).options.body.retry,true); state.destroy();
 });
 test('single and external selection have no write eligibility', async () => {
-  const {state}=fixture(path=>path==='/api/instance'?{ session_mode: 'single' }:undefined);
+  const {state}=fixture(path=>path==='/api/instance'?{ session_mode: { sessionMode: 'single' } }:undefined);
   await state.open(); await state.select('g:A'); assert.equal(state.snapshot().canWrite,false); assert.equal(state.snapshot().canCreate,false);
   await state.setTab('external'); await state.select('g:A'); assert.equal(state.snapshot().canWrite,false); state.destroy();
 });
@@ -99,7 +99,7 @@ test('changing instance clears saved inputs synchronously and rejects old respon
   let identity = 'local', delayed = false;
   const wait = pending();
   const state = createConversationState({ ...timers, identity:()=>identity,request:async path=>{
-    if(path==='/api/instance')return { session_mode: 'multi' };
+    if(path==='/api/instance')return { session_mode: { sessionMode: 'multi' } };
     if(path.includes('conversations?'))return delayed?wait.promise:{items:[{id:'g:A'}],nextCursor:null};
     if(path.includes('/messages?'))return {items:[],afterCursor:'after'};
     return {conversation:{id:'g:A'},conversationId:'g:A',stored:false};
@@ -200,7 +200,7 @@ test('send postprocessing cannot request old conversation on another instance', 
   const wait=pending(); let identity='local', sent=false; const calls=[];
   const state=createConversationState({ ...timers, identity:()=>identity,request:async(path,options)=>{
     calls.push({path,identity});
-    if(path==='/api/instance')return { session_mode: 'multi' };
+    if(path==='/api/instance')return { session_mode: { sessionMode: 'multi' } };
     if(path.includes('conversations?'))return {items:[],nextCursor:null};
     if(options?.method==='POST'){sent=true;return {stored:true,conversationId:'g:A'};}
     if(path.includes('/messages?'))return {items:[],afterCursor:'after'};
@@ -280,7 +280,7 @@ for (const stored of [false,null]) test(`reopening ${stored === false ? 'not sto
   assert.equal(state.snapshot().retryRequired,stored===null); state.destroy();
 });
 test('unset session mode uses effective single with no write entry',async()=>{
-  const {state}=fixture(path=>path==='/api/instance'?{ session_mode: 'single' }:undefined);
+  const {state}=fixture(path=>path==='/api/instance'?{ session_mode: { sessionMode: 'single' } }:undefined);
   await state.open(); await state.select('g:A'); assert.equal(state.snapshot().mode,'single'); assert.equal(state.snapshot().canWrite,false); assert.equal(state.snapshot().canCreate,false); state.destroy();
 });
 test('remote disable discards saved cells even after access is restored',async()=>{

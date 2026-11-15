@@ -1230,5 +1230,12 @@
   "wb.groupUsage.title": "Usage",
   "wb.groupUsage.summary": "{tokens} tokens · {cost} · Cache {cache}",
   "wb.usage.cacheRate": "Cache hit rate",
-  "wb.groups.more": "Load more offline groups"
+  "wb.groups.more": "Load more offline groups",
+  "wb.inst.resourceSource.host": "Host measurement",
+  "wb.inst.resourceSource.container": "Container measurement",
+  "wb.detail.runningCli": "Running CLI {version}",
+  "wb.detail.installedCli": "Installed CLI {version}",
+  "wb.detail.cliUpdate": "Update available: {version}",
+  "wb.detail.pendingRestart": "Restart needed to apply changes",
+  "wb.flags.noResponse": "No response"
 }

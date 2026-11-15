@@ -17,7 +17,7 @@ const NOW = Date.UTC(2026, 10, 11, 10, 30);
 const iso = value => new Date(value).toISOString();
 
 async function startPage(sandbox) {
-  let scene = 'main', failGroups = false, title = '工作状态示例';
+  let scene = 'main', storedScene = null, failGroups = false, title = '工作状态示例';
   const counts = { groups: 0, sends: 0 }, missing = new Set(), streams = new Set();
   const isOrigin = () => scene.startsWith('scheduled-') || scene === 'asleep';
   const activeId = () => isOrigin() ? ORIGIN_ID : ID;
@@ -71,7 +71,7 @@ async function startPage(sandbox) {
       if (url.pathname.startsWith('/api/')) {
         if (url.pathname === '/api/groups/' + encodeURIComponent(group()) && failGroups) { counts.groups++; sendJson(res, 503, { error: 'fixture_unavailable' }); return; }
         if (req.method === 'POST' && url.pathname.endsWith('/send')) {
-          counts.sends++; sendJson(res, 200, { stored: true, conversationId: ID, deliveryState: 'pending', error: null }); return;
+          counts.sends++; if (storedScene !== null) { scene = storedScene; storedScene = null; } sendJson(res, 200, { stored: true, conversationId: ID, deliveryState: 'pending', error: null }); return;
         }
         const value = req.method === 'GET' ? answer(url) : undefined;
         if (value === undefined && missing.size < 10) missing.add(`${req.method} ${url.pathname}`);
@@ -88,7 +88,7 @@ async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   sandbox.addCleanup(() => { for (const stream of streams) stream.end(); });
-  return { base: await sandbox.startHttp(server), counts, missing, activeId, setScene(value) { scene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; } };
+  return { base: await sandbox.startHttp(server), counts, missing, activeId, setScene(value) { scene = value; }, setStoredScene(value) { storedScene = value; }, setTitle(value) { title = value; }, fail(value) { failGroups = value; } };
 }
 
 export async function runConversationWorkingBrowser(t, sandbox) {
@@ -124,8 +124,8 @@ export async function runConversationWorkingBrowser(t, sandbox) {
     return { page, context, errors };
   };
   const indicator = page => page.locator('#wb-chat .conversation-running');
-  const wait = async (predicate, description) => {
-    const end = Date.now() + 7000;
+  const wait = async (predicate, description, timeoutMs = 7000) => {
+    const end = Date.now() + timeoutMs;
     while (!await predicate()) { assert.ok(Date.now() < end, description); await new Promise(resolve => setTimeout(resolve, 10)); }
   };
   const checkText = async (page, expected, locale = 'zh') => {
@@ -454,18 +454,23 @@ export async function runConversationWorkingBrowser(t, sandbox) {
       if (evidence) fs.writeFileSync(path.join(evidence, 'motion.json'), JSON.stringify({ before, after, intervalMs: 500 }, null, 2));
     } finally { await f.context.close(); }
   });
-  await t.test('a stored send refreshes healthy group state after two seconds', async () => {
+  await t.test('a stored send immediately refreshes healthy group state before the next poll', async () => {
     const f = await open({ clock: true, scene: 'idle' });
     try {
       await checkText(f.page, '空闲');
+      const before = fixture.counts.groups;
+      // The fixture becomes busy only when storage succeeds. The paused browser
+      // clock cannot reach a delayed refresh or the normal thirty-second poll.
+      fixture.setStoredScene('main');
       await f.page.locator('#wb-chat .conversation-input').fill('请继续核对');
       await f.page.locator('#wb-chat .conversation-composer').evaluate(form => form.requestSubmit());
       await wait(() => fixture.counts.sends > 0, 'message reaches the stored receipt');
+      await wait(() => fixture.counts.groups > before, 'post-store refresh runs immediately even with a healthy account', 1500);
       await wait(async () => await f.page.locator('#wb-chat .conversation-input').inputValue() === '', 'stored send clears input');
-      const before = fixture.counts.groups; fixture.setScene('main');
-      await f.page.clock.fastForward(1999); assert.equal(fixture.counts.groups, before);
-      await f.page.clock.fastForward(1); await wait(() => fixture.counts.groups > before, 'post-store refresh runs even healthy account');
       await checkText(f.page, '正在工作');
+      assert.equal(fixture.counts.groups, before + 1, 'storage causes exactly one fresh group read');
+      await f.page.clock.fastForward(2000);
+      assert.equal(fixture.counts.groups, before + 1, 'no duplicate delayed refresh before the busy poll');
     } finally { await f.context.close(); }
   });
   await t.test('leaving the selected local conversation cancels its working timer', async () => {

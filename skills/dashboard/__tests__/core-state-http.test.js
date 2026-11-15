@@ -30,7 +30,10 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   const dashboardDir = path.join(install.zylosDir, 'components/dashboard');
   fs.mkdirSync(dashboardDir, { recursive: true });
   fs.writeFileSync(path.join(dashboardDir, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'secret' } }));
-  let sample = 0, nextRead, releaseRead, releaseActive;
+  let sample = 0, nextRead, releaseRead, releaseActive, snapshotClock = Date.now();
+  const observation = value => ({ identity: { present: true, ready: true, runtime: 'codex', runId: `run-${value}`, sessionId: `session-${value}` },
+    status: { valid: true, reason: null, value: { state: 'idle' } },
+    usage: { valid: true, value: { model: `model-${value}`, contextUsage: { used: value, ceiling: 100 } } } });
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
     if (name === 'session-state-reader.js') return {
@@ -38,9 +41,7 @@ test('state APIs await a fresh observation before answering idle requests', { ti
         const value = ++sample;
         nextRead?.();
         if (releaseRead) await releaseRead;
-        return new Map([[null, { identity: { present: true, ready: true, runtime: 'codex', runId: `run-${value}`, sessionId: `session-${value}` },
-          status: { valid: true, reason: null, value: { state: 'idle' } },
-          usage: { valid: true, value: { model: `model-${value}`, contextUsage: { used: value, ceiling: 100 } } } }]]);
+        return new Map([[null, observation(value)]]);
       },
       readAccountUsageSnapshot: async () => ({ live: null, recorded: null }),
     };
@@ -48,14 +49,16 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   } } });
   t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     systemSample,
-    createGroupSnapshot: options => createGroupSnapshot({ ...options,
+    createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => snapshotClock,
       cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'codex' }, runtime: [], model: [] } }) },
       loadCoreModule: async name => {
         if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
-        if (name === 'session-state-reader.js') return { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
-        if (name === 'status-view.js') return { collectStatus: async () => ({ view: 'single',
-          origin: { presence: 'running', runtime: 'codex', status: { valid: true, state: 'idle' } }, groupListError: null, runtimeHealth: {} }) };
+        if (name === 'session-state-reader.js') return { readSessionState: async () => observation(sample), readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
+        if (name === 'status-view.js') return { collectStatus: async ({ session }) => {
+          await session(null, {});
+          return { view: 'single', origin: { presence: 'running', runtime: 'codex', runId: `run-${sample}`, sessionId: `session-${sample}`, status: { valid: true, state: 'idle' } }, groupListError: null, runtimeHealth: {} };
+        } };
         return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
       } }),
   } });
@@ -85,7 +88,7 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   assert.equal(login.status, 302);
   const cookie = login.headers.getSetCookie().find(value => value.startsWith('__Secure-zylos_dashboard_session=')).split(';')[0];
   for (const route of ['/api/fleet', '/api/instance', '/api/instance/runtime-options', '/api/stream']) {
-    const before = sample;
+    const before = sample; snapshotClock += 2100;
     let entered, release;
     const began = new Promise(resolve => { entered = resolve; });
     nextRead = entered;
@@ -112,14 +115,28 @@ test('state APIs await a fresh observation before answering idle requests', { ti
           assert.ok(frames.length < 65536);
         }
         assert.match(frames, /event: instance/);
-        assert.match(frames, new RegExp(`"model_id":"model-${expected}"`));
+        const instanceFrame = frames.split('event: instance\ndata: ')[1]?.split('\n\n')[0];
+        const instance = JSON.parse(instanceFrame);
+        assert.equal(instance.session_mode.sessionMode, 'single');
+        assert.equal(Object.hasOwn(instance, 'runtime_info'), false, 'observed model belongs to group detail');
+        assert.deepEqual(Object.keys(instance.versions).sort(), ['claude', 'codex', 'zylos']);
         await reader.cancel();
       } else {
         const body = await response.json();
-        if (route === '/api/fleet') assert.equal(body.agents[0].model, `model-${expected}`);
+        if (route === '/api/fleet') for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(body.agents[0], field), false, 'Fleet omits Origin session metadata');
         else if (route === '/api/instance/runtime-options') assert.equal(body.running_model, `model-${expected}`);
-        else assert.equal(body.runtime_info.model_id, `model-${expected}`);
+        else {
+          assert.equal(body.session_mode.sessionMode, 'single');
+          assert.equal(Object.hasOwn(body, 'runtime_info'), false);
+          assert.deepEqual(Object.keys(body.versions).sort(), ['claude', 'codex', 'zylos']);
+        }
       }
+      const detailResponse = await fetch(origin + '/api/groups/origin?include=', { headers: { cookie }, signal: t.signal });
+      assert.equal(detailResponse.status, 200);
+      const detail = await detailResponse.json();
+      assert.equal(detail.runtimeInfo.model, `model-${expected}`, 'the fresh observed model remains available on its group');
+      assert.equal(detail.run.runId, `run-${expected}`);
+      assert.equal(sample, expected, 'the detail read shares the captured observation without another Core refresh');
     } finally { release(); controller.abort(); streams.delete(controller); nextRead = null; releaseRead = null; releaseActive = null; }
   }
 });

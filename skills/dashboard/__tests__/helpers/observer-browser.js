@@ -77,7 +77,7 @@ export async function runObserverBrowser(t, sandbox, signal) {
   const server = http.createServer((req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
-      if (req.method === 'GET' && url.pathname.startsWith('/api/')) record(reads, { path: url.pathname, scenario });
+      if (req.method === 'GET' && url.pathname.startsWith('/api/')) record(reads, { path: url.pathname, search: url.search, scenario });
       if (req.method !== 'GET') {
         let body = '';
         req.on('data', chunk => { body += chunk; if (body.length > 4096) req.destroy(); });
@@ -177,10 +177,27 @@ export async function runObserverBrowser(t, sandbox, signal) {
     const button = page.locator(`button[data-observer-group="${GROUP}"]`); await button.waitFor({ state: 'visible' });
     await page.evaluate(() => { document.querySelector('#observer-tab').click = () => { throw new Error('Observer entry must activate the page directly'); }; });
     const before = writes.length, groupReads = reads.filter(row => row.path === '/api/groups/running').length;
+    const detailReads = reads.filter(row => row.path === '/api/groups/' + encodeURIComponent(GROUP)).length;
     await button.click(); await page.waitForFunction(() => window.__observerSockets.length > 0);
     assert.equal(leaseWrites(before)[0].body.sessionGroup, GROUP);
     assert.ok(reads.filter(row => row.path === '/api/groups/running').length > groupReads);
+    assert.equal(reads.filter(row => row.path === '/api/groups/' + encodeURIComponent(GROUP)).length, detailReads,
+      'a selected running group is recognized by compact id without a redundant detail request');
     assert.equal(await page.locator('#observer-group-picker').isVisible(), false);
+  });
+  await step('selected offline observation hydrates canonical detail and retains its history target', async page => {
+    await page.locator('.wb-group-sides > button').nth(1).click();
+    await page.locator('#wb-board [data-group="origin"]').click();
+    const observe = page.locator('button[data-observer-group="origin"]');
+    await observe.waitFor({ state: 'visible' });
+    const start = reads.length;
+    await observe.click();
+    await until(() => reads.slice(start).some(row => row.path === '/api/groups/origin' && row.search === '?include='),
+      'a selected offline group absent from the running catalog hydrates canonical detail');
+    assert.equal(await page.locator('#observer-group-select').inputValue(), 'origin');
+    await page.locator('[data-observer-view="history"]').click();
+    await page.locator('#observer-history').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#observer-group-select').inputValue(), 'origin', 'history preserves the offline target');
   });
   await step('top observer entry clears a previously observed group after its detail closes', async page => {
     await page.locator(`[data-group="${GROUP}"]`).click();

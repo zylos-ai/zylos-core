@@ -81,7 +81,7 @@ import { createMemoryBacklog } from './lib/workbench/memory-backlog.js';
 import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
-import { createGroupsApi, groupCounts, projectGroup } from './lib/workbench/groups-api.js';
+import { createGroupsApi, groupCounts, projectGroup, projectListRow } from './lib/workbench/groups-api.js';
 import { usageSummary, usagePricing } from './lib/workbench/usage-api.js';
 import { isSameOriginRequest } from './lib/request-origin.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
@@ -190,7 +190,7 @@ observerService.ensureCoordinatorOwnership = async () => {
 // 3. Sanitizer
 const sanitizer = new Sanitizer(config.zylosDir);
 const coreLogImporter = new CoreLogImporter({ store, zylosDir: config.zylosDir, sanitizer,
-  onImport: event => { scheduleHistoryBroadcast(); scheduleFleetStateBroadcast(); conversationCollector?.afterImport(event); },
+  onImport: event => { scheduleHistoryBroadcast(); conversationCollector?.afterImport(event); },
 });
 
 // Event-loop delay observability (#260)
@@ -246,7 +246,7 @@ async function broadcastFleetState() {
     const [, snapshot] = await Promise.all([coreState.refresh(), workbench.getSnapshot()]);
     const instance = buildInstancePayload();
     const counts = groupCounts(snapshot, { allowUnreadable: true });
-    const running = snapshot.rows.map(row => projectGroup(row, snapshot)).filter(row => row.side === 'running');
+    const running = snapshot.rows.map(row => projectGroup(row, snapshot)).filter(row => row.side === 'running').map(projectListRow);
     const instanceKey = publicationKey(instance), groupsKey = publicationKey({ counts, running });
     const instanceChanged = instanceKey !== lastInstancePublication, groupsChanged = groupsKey !== lastGroupsPublication;
     if (instanceChanged) { sse.broadcast('instance', instance); lastInstancePublication = instanceKey; }
@@ -342,11 +342,16 @@ function getSystemMetrics() {
   return {
     scope: data?.resource_scope ?? 'host',
     cpu_pct: Number.isFinite(data?.cpu_pct) ? data.cpu_pct : null,
-    mem_pct: data?.resource_scope === 'container' ? data.mem_pct ?? null : Number.isFinite(memUsed) && Number.isFinite(memTotal) && memTotal > 0 ? (memUsed / memTotal) * 100 : null,
+    cpu_count: Number.isFinite(data?.cpu_count) ? data.cpu_count : null,
+    cpu_source: data?.cpu_source ?? 'host',
+    mem_source: data?.mem_source ?? 'host',
+    mem_pct: Number.isFinite(data?.mem_pct) ? data.mem_pct : null,
     mem_used_bytes: Number.isFinite(memUsed) ? memUsed : null,
     mem_total_bytes: Number.isFinite(memTotal) ? memTotal : null,
-    disk_pct: Number.isFinite(Number(data?.disk_used_pct)) ? Number(data.disk_used_pct) : null,
-    disk_free_bytes: Number.isFinite(Number(data?.disk_free_bytes)) ? Number(data.disk_free_bytes) : null
+    disk_pct: Number.isFinite(data?.disk_used_pct) ? data.disk_used_pct : null,
+    disk_free_bytes: Number.isFinite(data?.disk_free_bytes) ? data.disk_free_bytes : null,
+    disk_total_bytes: Number.isFinite(data?.disk_total_bytes) ? data.disk_total_bytes : null,
+    sampledAt: data?.collectedAt ?? null
   };
 }
 
@@ -471,7 +476,26 @@ function workbenchFailure(res, error) {
   sendJson(res, status, { ok: false, error: { code: status === 500 ? 'internal_error' : error.code,
     message: status === 500 ? 'Request failed' : error.message } });
 }
-const groupsApi = createGroupsApi({ workbench, groupConfig });
+function runtimeVersionRecord(runtime) {
+  const installed = ({ zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion })[runtime] ?? null;
+  const latest = versionChecker.getLatest()[runtime === 'claude' ? 'cc' : runtime] ?? null;
+  return { installed, latest, update: installed && latest && isNewerVersion(latest, installed) ? latest : null };
+}
+function groupRuntimeInfo(row) {
+  const runtime = row.runtime ?? row.target?.runtime ?? null;
+  const versions = runtimeVersionRecord(runtime);
+  const runningVersion = row.runningVersion ?? null;
+  const desired = row.desired ? row.desired.mode === 'override' ? row.desired : 'default' : row.target?.model;
+  const defaultModel = runtime === 'claude' ? readClaudeSettings().model : runtime === 'codex' ? readCodexRootString('model', config.zylosDir) : null;
+  const defaultEffort = runtime === 'claude' ? readClaudeSettings().effortLevel : runtime === 'codex' ? readCodexRootString('model_reasoning_effort', config.zylosDir) : null;
+  const model = row.model ?? null, effort = row.effort ?? null;
+  const desiredModel = typeof desired === 'object' && desired ? desired.model : defaultModel;
+  const desiredEffort = typeof desired === 'object' && desired ? desired.effort : defaultEffort;
+  return { runtime, model, effort, runningVersion, installedVersion: versions.installed, update: versions.update,
+    pendingRestart: row.side === 'running' && !!((runningVersion && versions.installed && isNewerVersion(versions.installed, runningVersion)) ||
+      (row.desired?.runtime && runtime !== row.desired.runtime) || (model && desiredModel && model !== desiredModel) || (effort && desiredEffort && effort !== desiredEffort)) };
+}
+const groupsApi = createGroupsApi({ workbench, groupConfig, getRuntimeInfo: groupRuntimeInfo });
 const scheduleReader = createScheduleRead({ zylosDir: config.zylosDir, scheduleTz, displayNames,
   getSnapshot: () => workbench.getSnapshot() });
 const scheduleWriter = createScheduleWrite({ zylosDir: config.zylosDir, scheduleTz });
@@ -488,11 +512,11 @@ function buildInstancePayload() {
   }));
   const resources = getSystemMetrics();
   return { agent: { ...config.agent, ...agentColor(config.agent?.name) }, tz: instanceTz(),
-    session_mode: readFleetSessionMode(), default_runtime: zylosConfig.runtime ?? activeRuntime, defaults,
-    runtime_info: buildRuntimeInfo(), versions: { zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion },
+    session_mode: observed.sessionModeStatus ?? { sessionMode: readFleetSessionMode(), transition: null, globalGate: null, blocked: null, supervisor: 'unknown', lastCompleted: null, lastEvents: [] }, default_runtime: zylosConfig.runtime ?? activeRuntime, defaults,
+    versions: Object.fromEntries(['zylos', 'claude', 'codex'].map(runtime => [runtime, runtimeVersionRecord(runtime)])),
     runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
     supervisorPaused: observed.supervisorPaused ?? null, autoRestarts: observed.autoRestarts ?? null,
-    resources, system: observed.system ?? null, services: observed.services ?? null,
+    resources, services: observed.services ?? null,
     poolCapacityRecord: observed.pool?.capacityRecord ?? null,
     chat_allow_remote: config.chat?.allowRemote === true };
 }
@@ -508,11 +532,10 @@ function readFleetSessionMode() {
 }
 
 async function refreshFleetGroupSummary() {
-  if (readFleetSessionMode() !== 'multi') return;
   try { await workbench.getSnapshot(); } catch { /* Optional observations cannot break the existing state API. */ }
 }
 
-function buildSelfFleetRecord(statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false }, { allowUnreadable: true }), usageSummary(store, { tz: instanceTz() }), { rows: (workbench.getCachedSnapshot()?.rows ?? []).map(row => projectGroup(row, workbench.getCachedSnapshot())) })) {
+function buildSelfFleetRecord(statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false }, { allowUnreadable: true }), usageSummary(store, { tz: instanceTz() }), { rows: (workbench.getCachedSnapshot()?.rows ?? []).map(row => projectGroup(row, workbench.getCachedSnapshot())).filter(row => row.side === 'running').map(projectListRow) })) {
   return stateToFleetRecord({
     name: config.agent?.name,
     color: agentColor(config.agent?.name)
@@ -696,7 +719,7 @@ async function probeFleetAgent(baseUrl, readApiKey) {
     return {
       reachable: true,
       scope,
-      version: stateBody?.runtime_info?.zylos_version || stateBody?.runtime_info?.version || null
+      version: stateBody?.versions?.zylos?.installed ?? null
     };
   } catch {
     return { reachable: false, error: 'unreachable' };
@@ -1112,7 +1135,7 @@ async function handleApi(req, res, pathname, url) {
     const runtime = url.searchParams.get('runtime') || undefined;
     const afterSeq = Number(url.searchParams.get('after_seq'));
     const events = await coreLogImporter.sanitizeEvents(store.queryEvents({ since, until, types, sessionId,
-      sessionGroup, runId, runtime, afterSeq, limit: Math.min(1000, limit), offset, order }));
+      sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', runId, runtime, afterSeq, limit: Math.min(1000, limit), offset, order }));
     const stream = url.searchParams.get('stream') || undefined;
     const gapLimit = parseInt(url.searchParams.get('gap_limit') || '100', 10);
     const gapOffset = parseInt(url.searchParams.get('gap_offset') || '0', 10);

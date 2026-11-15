@@ -852,3 +852,31 @@ test('pricing tabs render English for one and two running groups', () => {
     panel.destroy();
   }
 });
+
+
+test('settings hydrates only the bounded running rows to recover explicit detail override provenance', async () => {
+  for (const failure of [false, true]) {
+    const paths = [], loads = [];
+    const loader = createSettingsLoader({ read: async path => {
+      paths.push(path);
+      if (path === '/api/instance') return { default_runtime: 'claude', session_mode: { sessionMode: 'multi' } };
+      if (path === '/api/groups/counts') return { running: { total: 2 }, offline: { total: 10000 }, pool: { used: 2, capacity: 4 } };
+      if (path === '/api/groups/running') return { rows: ['a', 'b'].map(id => ({ id, displayName: id, channel: 'telegram', runtime: 'codex', model: 'actual', state: { kind: 'working' }, flags: {}, duration: 1, mainAgent: 'busy', contextPct: 20, lastActivityAt: 1 })) };
+      if (path.startsWith('/api/groups/a?')) return { sessionGroup: 'a', runtimeOverridden: true, modelOverridden: false };
+      if (path.startsWith('/api/groups/b?')) {
+        if (failure) throw Error('detail_unreadable');
+        return { sessionGroup: 'b', runtimeOverridden: false, modelOverridden: true };
+      }
+      return {};
+    }, onLoad: value => loads.push(value) });
+    await loader.open();
+    assert.deepEqual(paths.filter(path => /^\/api\/groups\/[^/?]+\?include=$/.test(path)).sort(), ['/api/groups/a?include=', '/api/groups/b?include=']);
+    assert.equal(paths.some(path => path.startsWith('/api/groups/offline')), false);
+    assert.equal(loads.length, 1);
+    if (failure) assert.equal(loads[0].snapshot.overrides, null, 'failed detail reads keep provenance unknown');
+    else {
+      assert.deepEqual(loads[0].snapshot.overrides.runtime.map(row => row.sessionGroup), ['a']);
+      assert.deepEqual(loads[0].snapshot.overrides.model.map(row => row.sessionGroup), ['b']);
+    }
+  }
+});

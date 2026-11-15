@@ -20,15 +20,3 @@ export function effortOptionState(meta, modelId, currentEffort = meta.current_ef
     ],
   };
 }
-
-export function mergeRuntimeInfo(previousState, nextState) {
-  const previous = previousState?.runtime_info;
-  if (nextState.runtime_info || !previous) return nextState.runtime_info || null;
-  const previousSession = previousState?.sessionId ?? previousState?.session?.session_id;
-  const previousRun = previousState?.runId ?? previousState?.run_id;
-  const nextSession = nextState?.sessionId ?? nextState?.session?.session_id;
-  const nextRun = nextState?.runId ?? nextState?.run_id;
-  return nextSession !== previousSession || nextRun !== previousRun
-    ? { ...previous, runtime: nextState.runtime || 'unknown', model: null, model_id: null, effort: null, service_tier: null }
-    : previous;
-}

@@ -114,7 +114,7 @@ test('page script text: dashboard actions are sent only through the page actions
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   assert.deepEqual(app.match(/\bsendAction\b/g), ['sendAction', 'sendAction'], 'the sender is defined once and handed only to the page actions');
   assert.match(app, /createPageActions\(\{\s*t, send: sendAction,/);
-  assert.match(app, /shownSession: \(\) => \(\{ sessionGroup: 'origin', runId: state\.originGroup\?\.live\?\.runId, sessionId: state\.originGroup\?\.live\?\.sessionId \}\),/, 'a manual restart names the session the page shows');
+  assert.match(app, /shownSession: \(\) => \(\{ sessionGroup: state\.originGroup\?\.sessionGroup, runId: state\.originGroup\?\.live\?\.runId, sessionId: state\.originGroup\?\.live\?\.sessionId \}\),/, 'a manual restart names the session the page shows');
   assert.match(app, /function execAction\(action, body\) \{\s*return pageActions\(\)\.exec\(action, body\);\s*\}/, 'every page action asks through exec');
   assert.doesNotMatch(app, /runConfirmed/, 'only the default-settings card, after confirming, uses the no-ask path');
   assert.doesNotMatch(app, /createActionRunner/, 'the page has one action runner');
@@ -138,4 +138,28 @@ test('Origin restart identity is cleared on machine changes and accepted only af
   const accept = mode.indexOf('state.originGroup = origin;', read);
   const guard = mode.indexOf('if (observerTargetKey() !== targetKey) return;', read);
   assert.ok(read >= 0 && guard > read && accept > guard, 'a late Origin read cannot become the next machine’s restart target');
+});
+
+
+test('manual restarts preserve canonical single and multi Origin scope with run binding', async () => {
+  for (const sessionGroup of [null, 'origin']) {
+    const a = actions({ shown: { sessionGroup, runId: 'run-exact', sessionId: 'session-exact' } });
+    await a.run.exec('restart-session');
+    assert.deepEqual(a.sent, [{ action: 'restart-session', body: { sessionGroup, runId: 'run-exact', sessionId: 'session-exact' } }]);
+  }
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const send = app.slice(app.indexOf('async function sendAction('), app.indexOf('async function sendAction(') + 1400);
+  assert.match(send, /sessionGroup: origin\.sessionGroup, runId: origin\.live\.runId/, 'the missing-run fallback preserves the canonical null or origin scope');
+});
+
+
+test('restart fallback binds only a readable run on the same viewed machine', () => {
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const send = app.slice(app.indexOf('async function sendAction('), app.indexOf('// zylos-core upgrades'));
+  const read = send.indexOf("const origin = await fetchJson('/api/groups/origin');");
+  const target = send.indexOf('if (observerTargetKey() !== targetKey) return false;', read);
+  const run = send.indexOf("if (!origin.live?.runId) throw new Error(t('wb.actions.targetRequired'));", read);
+  const submit = send.indexOf('const r = await fetch(api(actionPath)');
+  assert.ok(read > 0 && target > read && run > target && submit > run);
+  assert.ok(send.indexOf('try {') < read, 'failed fallback reads use the existing action error display');
 });

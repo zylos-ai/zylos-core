@@ -20,7 +20,7 @@ export function groupAttention(instance, counts, rows, failedRows = [], failures
   for (const row of failed.values()) problems.push({ kind: 'start_failed', group: row.sessionGroup, count30m: row.flags.startFailed.count, lastAt: row.flags.startFailed.lastAt });
   const unreadable = new Set(failures);
   if (counts.listKnown === false) unreadable.add('groups');
-  for (const row of rows) for (const reason of row.flags?.unreadable?.reasons ?? []) unreadable.add(reason);
+  for (const row of [...rows, ...failedRows]) for (const reason of row.flags?.unreadable?.reasons ?? []) unreadable.add(reason);
   for (const source of unreadable) problems.push({ kind: 'data_unreadable', source });
   return { problems, reminders };
 }
@@ -38,7 +38,7 @@ export function groupSnapshot(instance, counts, page) {
     instance: { ...instance, pool: instance.poolCapacityRecord == null ? counts.pool : { ...counts.pool, capacityRecord: instance.poolCapacityRecord } },
     failedRows, attentionFailures: page.attentionFailures ?? [],
     sources: { status: { ok: counts.listKnown !== false && page.listKnown !== false, readAt: page.readAt ?? counts.readAt } },
-    attention: groupAttention(instance, counts, rows, failedRows, page.attentionFailures) };
+    attention: groupAttention(instance, counts, rows, failedRows, [...(page.attentionFailures ?? []), ...(page.listKnown === false ? ['groups'] : [])]) };
 }
 
 export async function readGroupSnapshot(read, { signal, side = 'running', cursor = null, pages = 1, instance, counts } = {}) {

@@ -26,7 +26,7 @@ export function fleetGroupSummary(snapshot) {
   return { running: rows.length, counts, problems: problems.slice(0, 2), problemCount: problems.length,
     listKnown: snapshot.listKnown === true,
     pool: { used: snapshot.instance?.pool?.used ?? null, capacity: snapshot.instance?.pool?.capacity ?? null },
-    noResponse: { count: counts.no_response },
+    noResponse: { count: Number.isSafeInteger(snapshot.groupCounts?.running?.flags?.noResponse) ? snapshot.groupCounts.running.flags.noResponse : counts.no_response },
     autoRestarts: Number.isSafeInteger(restarts) && restarts >= 0 ? { count: restarts } : null };
 }
 
@@ -42,6 +42,8 @@ export function sanitizeFleetGroupSummary(value) {
   if (keys.some(key => !count(value.counts[key])) || !count(silent) ||
       keys.reduce((total, key) => total + value.counts[key], silent) !== value.running ||
       value.problemCount !== value.counts.error + silent) return null;
+  const noResponseCount = value.noResponse?.count ?? silent;
+  if (!count(noResponseCount) || noResponseCount < silent || noResponseCount > value.running) return null;
   const problems = value.problems.slice(0, 2).filter(row => row && typeof row.sessionGroup === 'string' &&
     ['auth_failed', 'start_failed', 'no_response'].includes(row.reason)).map(row => ({
     sessionGroup: row.sessionGroup, displayName: text(row.displayName),
@@ -54,6 +56,6 @@ export function sanitizeFleetGroupSummary(value) {
   return { running: value.running, counts: { ...Object.fromEntries(keys.map(key => [key, value.counts[key]])), no_response: silent },
     problems, problemCount: value.problemCount, listKnown: value.listKnown === true,
     pool: { used: count(value.pool?.used) ? value.pool.used : null, capacity: count(value.pool?.capacity) ? value.pool.capacity : null },
-    noResponse: { count: silent },
+    noResponse: { count: noResponseCount },
     autoRestarts: count(value.autoRestarts?.count) ? { count: value.autoRestarts.count } : null };
 }

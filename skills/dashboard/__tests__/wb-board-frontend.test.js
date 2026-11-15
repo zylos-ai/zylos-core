@@ -39,11 +39,11 @@ test('board renders snapshot order, text-safe names and technical columns', () =
 });
 test('unknown reason and free failure reason remain text, tool title preserves raw name', () => {
   const document = createDocument(); const value = row('group'); value.state = { kind: 'unknown', reason: '<script>bad</script>', sampledAt: 123 };
-  value.wait = { kind: 'start_failed', reasonCode: '<img onerror=bad>' };
+  value.flags = { startFailed: { count: 1, reason: '<img onerror=bad>' } };
   const root = renderRow(value, { document, t, level: 'technical' });
   assert.equal(root.children[1].classList.contains('wb-unknown'), true); assert.match(root.children[1].title, /<script>/);
-  assert.match(root.textContent, /<img onerror=bad>/); assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
-  value.tools = [{ name: 'unrecognized', detail: 'raw' }];
+  assert.ok(allNodes(root).some(node => node.title.includes('<img onerror=bad>')), 'free failure reason remains literal tooltip text'); assert.equal(allNodes(root).some(node => node.tagName === 'IMG'), false);
+  value.currentAction = { tool: 'unrecognized', message: null, receivedAt: null };
   const plain = renderRow(value, { document, t }); assert.equal(plain.children[2].title, 'unrecognized'); assert.equal(plain.children[2].textContent, 'wb.tool.unknown');
 });
 test('single view uses only-session name and historical groups have unknown live fields', () => {
@@ -158,8 +158,8 @@ test('search debounces, clears and rejects stale results independently from snap
 });
 test('instance strip renders pool unknown or occupancy, runtime union, quota and same-sample services', () => {
   const document = createDocument(), root = document.createElement('div');
-  instanceStrip(root, { mode: 'unreadable', baselineRuntime: 'claude', rows: [{ launchConfig: { runtime: 'codex' } }],
-    instance: { pool: { ready: 3, starting: 0, used: 3, waiting: 1 }, runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'auth_failed' } },
+  instanceStrip(root, { mode: 'unreadable', groupCounts: { running: { total: 3 }, offline: { waitingSlot: 1 } }, baselineRuntime: 'claude', rows: [{ launchConfig: { runtime: 'codex' } }],
+    instance: { pool: { used: 3 }, runtimeHealth: { claude: { health: 'ok' }, codex: { health: 'auth_failed' } },
       accounts: { claude: { used_percentage: 23 }, codex: null }, services: { online: 4, total: 5 } } }, { document, t, cost: 0.25, level: 'technical' });
   const chip = allNodes(root).find(node => node.classList.contains('wb-mode-chip'));
   assert.equal(chip.textContent, 'wb.unknown'); assert.equal(chip.title, 'wb.mode');
@@ -247,8 +247,8 @@ test('attention with nothing to report stays empty in both views', () => {
 });
 test('instance strip shows CPU, memory and disk between the pool and the cost, with details on hover', () => {
   const document = createDocument(), root = document.createElement('div'), GiB = 1073741824;
-  const system = { sampledAt: 100_000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2 * GiB, memTotalBytes: 16 * GiB, diskUsedPct: 61.6, diskFreeBytes: 40.25 * GiB };
-  const snapshot = { mode: 'multi', readAt: 130_000, instance: { pool: { used: 1, capacity: 4 }, system } };
+  const system = { sampledAt: 100_000, cpu_pct: 23.4, cpu_count: 8, mem_used_bytes: 2 * GiB, mem_total_bytes: 16 * GiB, disk_pct: 61.6, disk_free_bytes: 40.25 * GiB };
+  const snapshot = { mode: 'multi', readAt: 130_000, instance: { pool: { used: 1, capacity: 4 }, resources: system } };
   for (const level of ['plain', 'technical']) {
     instanceStrip(root, snapshot, { document, t, level, costSummary: { today: { cost: 1.5 }, sevenDay: { cost: 9 } } });
     const items = root.children.filter(node => node.classList.contains('wb-inst-item'));
@@ -276,25 +276,25 @@ test('instance strip shows CPU, memory and disk between the pool and the cost, w
 });
 test('instance strip shows a dash, not old numbers, when the host sample is stale or missing', () => {
   const document = createDocument(), root = document.createElement('div');
-  const system = { sampledAt: Date.UTC(2026, 10, 13, 7, 5), cpuPct: 50, cpuCount: 4, memUsedBytes: 1, memTotalBytes: 4, diskUsedPct: 30, diskFreeBytes: 1 };
+  const system = { sampledAt: Date.UTC(2026, 10, 13, 7, 5), cpu_pct: 50, cpu_count: 4, mem_used_bytes: 1, mem_total_bytes: 4, disk_pct: 30, disk_free_bytes: 1 };
   const sys = () => root.children.filter(node => node.classList.contains('wb-sys'));
   // Within 90 seconds of the snapshot's read time the sample counts as current.
-  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt + SYSTEM_STALE_MS, instance: { pool: {}, system } }, { document, t });
+  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt + SYSTEM_STALE_MS, instance: { pool: {}, resources: system } }, { document, t });
   assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['50%', '25%', '30%']);
-  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt + SYSTEM_STALE_MS + 1, instance: { pool: {}, system } }, { document, t });
+  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt + SYSTEM_STALE_MS + 1, instance: { pool: {}, resources: system } }, { document, t });
   assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['—', '—', '—']);
   assert.equal(sys().every(node => node.classList.contains('wb-stale')), true);
   const time = new Intl.DateTimeFormat(undefined, { timeZone: ZONE, hour: '2-digit', minute: '2-digit' }).format(system.sampledAt);
   for (const node of sys()) assert.ok(node.title.endsWith(' · wb.inst.systemStale' + time), `the title names the last sample: ${node.title}`);
   assert.equal(sys().some(node => /wb\.inst\.(cpuCores|memoryUsed|diskFree)/.test(node.title)), false, 'no stale details either');
-  instanceStrip(root, { mode: 'multi', readAt: 1, instance: { pool: {}, system: null } }, { document, t });
+  instanceStrip(root, { mode: 'multi', readAt: 1, instance: { pool: {}, resources: null } }, { document, t });
   assert.deepEqual(sys().map(node => [node.children.at(-1).textContent, node.title.endsWith('wb.inst.systemUnknown')]), [['—', true], ['—', true], ['—', true]]);
   assert.equal(sys().some(node => node.classList.contains('wb-stale')), false, 'no sample is unknown, not stale');
-  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt, instance: { pool: {}, system: { ...system, memTotalBytes: null, diskUsedPct: null } } }, { document, t });
+  instanceStrip(root, { mode: 'multi', readAt: system.sampledAt, instance: { pool: {}, resources: { ...system, mem_total_bytes: null, disk_pct: null } } }, { document, t });
   assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['50%', '—', '—'], 'a missing field alone shows a dash');
   // A sample outside 0–100 (CPU accounting overshoot, a negative disk figure, used above total) shows the nearest bound.
   instanceStrip(root, { mode: 'multi', readAt: system.sampledAt, instance: { pool: {},
-    system: { ...system, cpuPct: 104.6, memUsedBytes: 5, memTotalBytes: 4, diskUsedPct: -1 } } }, { document, t });
+    resources: { ...system, cpu_pct: 104.6, mem_used_bytes: 5, mem_total_bytes: 4, disk_pct: -1 } } }, { document, t });
   assert.deepEqual(sys().map(node => node.children.at(-1).textContent), ['100%', '100%', '0%']);
   assert.deepEqual(sys().map(node => node.title.split(' · ')[0]), ['wb.host.cpu 100%', 'wb.host.memory 100%', 'wb.host.disk 0%']);
 });
@@ -420,7 +420,7 @@ test('instance strip shows icons and values; every title starts with the item, i
   const snapshot = { mode: 'multi', readAt: 130_000, baselineRuntime: 'claude', instance: {
     runtimeHealth: { claude: { health: 'ok' } }, accounts: { claude: { used_percentage: 42 } },
     pool: { used: 2, capacity: 4, capacityRecord: { valid: false, fresh: false, source: 'fallback' } },
-    system: { sampledAt: 100_000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2 * GiB, memTotalBytes: 16 * GiB, diskUsedPct: 61.6, diskFreeBytes: 40.25 * GiB },
+    resources: { sampledAt: 100_000, cpu_pct: 23.4, cpu_count: 8, mem_used_bytes: 2 * GiB, mem_total_bytes: 16 * GiB, disk_pct: 61.6, disk_free_bytes: 40.25 * GiB },
     services: { online: 6, total: 6 } } };
   const expected = {
     zh: {
@@ -477,7 +477,7 @@ test('single and unreadable instance strips retain sampled counts without capaci
     const empty = poolOf(), name = t(level === 'technical' ? 'wb.inst.pool' : 'wb.pool');
     assert.equal(shown(empty), '—'); assert.equal(empty.title, `${name} · ${t('wb.unknown')} · ${t('wb.inst.poolHint')}`);
     assert.equal(allNodes(empty).some(node => node.classList.contains('wb-pool-meter')), false);
-    instanceStrip(root, { mode, instance: { pool: { ...pool, ready: 2, starting: 1, waiting: 4 } } }, { document, t, level });
+    instanceStrip(root, { mode, groupCounts: { running: { total: 3 }, offline: { waitingSlot: 4 } }, instance: { pool: { ...pool, used: 3 } } }, { document, t, level });
     const sampled = poolOf(), queued = t(level === 'technical' ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: 4 });
     assert.equal(shown(sampled), '3· ' + queued);
     assert.equal(sampled.title, [name, level === 'technical' ? `${t('wb.inst.inUse')} 3` : '3', queued, t('wb.inst.poolHint')].join(' · '));
@@ -488,7 +488,7 @@ test('single and unreadable instance strips retain sampled counts without capaci
 
 test('pool renders actual occupancy above capacity and preserves sampled waiting separately', () => {
   const document = createDocument(), root = document.createElement('div');
-  instanceStrip(root, { mode: 'multi', instance: { pool: { used: 4, capacity: 3, waiting: 7,
+  instanceStrip(root, { mode: 'multi', groupCounts: { offline: { waitingSlot: 7 } }, instance: { pool: { used: 4, capacity: 3,
     capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
   assert.equal(shown(root.children.find(node => node.classList.contains('wb-pool'))), '4 / 3· 7 排队');
   const meter = allNodes(root).find(node => node.classList.contains('wb-pool-meter'));
@@ -700,13 +700,13 @@ test('board and detail share snapshot queue positions while the pool reminder us
   for (const locale of ['zh', 'en']) {
     const t = poolTranslator(locale);
     for (const level of ['plain', 'technical']) {
-      const value = { ...row('b', 'waiting'), presence: 'not_running', tools: [], wait: { kind: 'pool_wait', position: 2 } };
+      const value = { ...row('b', 'offline'), presence: 'not_running', tools: [], flags: { queued: { count: 1 }, waitingSlot: { position: 2 } }, wait: { kind: 'pool_wait', position: 2 } };
       const expected = locale === 'zh' ? `${level === 'technical' ? '等池位' : '排队中'} · 第 2 个`
         : `${level === 'technical' ? 'Waiting for a slot' : 'Queueing'} · position 2`;
       renderBoard(root, { rows: [value] }, { document, t, level });
-      assert.ok(root.textContent.includes(expected));
+      assert.ok(root.textContent.includes(t('wb.flags.waitingSlot', { position: 2 })), 'compact flag retains the snapshot queue position');
       const technical = locale === 'zh' ? '按当前快照估计' : 'estimated from the current snapshot';
-      assert.equal(root.textContent.includes(technical), level === 'technical');
+      assert.equal(root.textContent.includes(technical), false, 'the compact badge carries position; evidence explanation stays in detail');
       renderOverview(root, value, {}, { document, t, level, snapshot: { rows: [value] } });
       assert.ok(root.textContent.includes(expected));
       assert.equal(root.textContent.includes(technical), level === 'technical');

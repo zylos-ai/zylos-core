@@ -654,7 +654,7 @@ test('every group has bound action buttons and Origin translated wake replies pr
   assert.match(groupActionText({ result: 'stale_target', currentRunId: '<new>' }, t), /<new>/);
   const actions = [], f = detailFixture(async (path, options) => {
     if (options?.method === 'POST') { actions.push([path, JSON.parse(options.body)]); return response({ ok: true, result: 'accepted' }); }
-    return response(defaultRead(path));
+    return response(isGroupDetail(path) ? row('a') : defaultRead(path));
   }, { confirm: () => true });
   await f.controller.open(row('a'), { rows: [row('a')], listKnown: true });
   await f.controller.act('interrupt'); await f.controller.act('chop-chop'); await f.controller.act('restart');
@@ -664,7 +664,7 @@ test('every group has bound action buttons and Origin translated wake replies pr
 });
 
 test('single detail filters NULL events but sends actions through the Origin route', async () => {
-  const calls = [], f = detailFixture(async (path, options) => { calls.push([path, options]); return response(defaultRead(path)); });
+  const calls = [], f = detailFixture(async (path, options) => { calls.push([path, options]); return response(isGroupDetail(path) ? row(null) : defaultRead(path)); });
   const single = row(null);
   await f.controller.open(single, { rows: [single], view: 'single', listKnown: true });
   const recent = new URL(calls.find(([path]) => path.includes('/events') && !path.includes('run_id'))[0], 'http://fixture');
@@ -791,7 +791,7 @@ test('restart confirmation retains Origin wording and uses the approved immediat
   const prompts = [];
   for (const key of ['origin', null, 'a']) {
     const current = row(key);
-    const f = detailFixture(async path => response(defaultRead(path)), {
+    const f = detailFixture(async path => response(isGroupDetail(path) ? current : defaultRead(path)), {
       confirm: text => { prompts.push(text); return false; },
     });
     await f.controller.open(current, { rows: [current], listKnown: true });
@@ -844,7 +844,7 @@ test('stopped Origin and single keep restart available with bound scope while or
     assert.equal(groupActionButtons(current, false).every(button => button.disabled), true);
     const f = detailFixture(async (path, options) => {
       if (options?.method === 'POST') { sent.push(JSON.parse(options.body)); return response({ result: 'accepted' }); }
-      return response(defaultRead(path));
+      return response(isGroupDetail(path) ? current : defaultRead(path));
     }, { confirm: () => true });
     await f.controller.open(current, { rows: [current], listKnown: true });
     await f.controller.act('restart'); f.controller.destroy();
@@ -981,11 +981,11 @@ test('filter reload excludes refresh append until the new filtered array is auth
   loader.close();
 });
 
-test('an active timeline discards the previous run and reads the replacement run after a board snapshot changes', async () => {
+test('an active timeline discards the previous run and reads the replacement run when canonical detail replaces a run behind an unchanged compact list', async () => {
   let current = row('a');
   const calls = [], signals = [];
   const f = detailFixture(async (path, options) => {
-    calls.push(path); const url = new URL(path, 'http://fixture');
+    calls.push(path); if (isGroupDetail(path)) return response(current); const url = new URL(path, 'http://fixture');
     if (url.pathname.endsWith('/runs')) return response({ runs: [run(current.live.runId)], totalRuns: 1, totalEvents: 1 });
     if (url.pathname.endsWith('/events') && url.searchParams.has('run_id')) {
       signals.push(options.signal);
@@ -1000,14 +1000,14 @@ test('an active timeline discards the previous run and reads the replacement run
   assert.match(f.root.textContent, /old_run_event/);
   const oldSignals = [...signals]; calls.length = 0;
   current = row('a', { live: { runId: 'run-b', sessionId: 'session-b' } });
-  await f.controller.updateSnapshot({ rows: [current], listKnown: true });
+  await f.controller.updateSnapshot({ rows: [{ id: 'a', sessionGroup: 'a', displayName: 'A', channel: 'telegram', runtime: 'claude', model: 'actual', state: { kind: 'working' }, duration: 1, flags: {}, mainAgent: 'busy', contextPct: 42, lastActivityAt: null }], listKnown: true });
   assert.equal(oldSignals.every(signal => signal.aborted), true);
   assert.equal(f.controller.timeline.state.currentRunId, 'run-b');
   assert.equal(f.controller.timeline.state.events.has('run-a'), false);
   assert.equal(f.controller.timeline.state.events.get('run-b').length, 1);
   assert.match(f.root.textContent, /new_run_event/);
   assert.doesNotMatch(f.root.textContent, /old_run_event/);
-  assert.equal(calls.filter(path => path.includes('run_id=')).every(path => path.includes('run_id=run-b')), true);
+  assert.equal(calls.filter(path => path.includes('run_id=') && !path.includes('types=')).every(path => path.includes('run_id=run-b')), true, 'timeline appends only the replacement run after canonical reconciliation');
   f.controller.destroy();
 });
 
@@ -2058,4 +2058,64 @@ test('periodic detail refresh skips stored-message and configuration extras with
   assert.deepEqual(paths.filter(isGroupDetail), ['/api/groups/telegram%3Aextras', '/api/groups/telegram%3Aextras?include=']);
   assert.equal(fold().open, true);
   assert.match(fold().textContent, /stored original/);
+});
+
+
+test('canonical group detail displays CLI runtime evidence in both views without list hydration', async () => {
+  for (const level of ['plain', 'technical']) {
+    const detail = row('telegram:a', { runtimeInfo: { runtime: 'codex', model: 'actual-model', effort: 'high', runningVersion: '1.0', installedVersion: '1.1', update: '1.2', pendingRestart: true } });
+    const paths = [], f = detailFixture(async path => { paths.push(path); return response(isGroupDetail(path) ? detail : defaultRead(path)); }, { detail: () => level });
+    await f.controller.open({ sessionGroup: 'telegram:a' }, { rows: [], listKnown: true });
+    const meta = allNodes(f.root).find(node => node.className === 'wb-detail-meta');
+    assert.match(meta.textContent, /actual-model.*high.*runningCli.*1.0.*pendingRestart/);
+    assert.equal(meta.textContent.includes('installedCli'), level === 'technical');
+    assert.equal(meta.textContent.includes('cliUpdate'), level === 'technical');
+    assert.equal(paths.some(path => path.includes('/groups/running')), false);
+    f.controller.destroy();
+  }
+});
+
+
+test('canonical optional read failures keep detail available and expose their own source errors', async () => {
+  const config = productGroupConfig({ key: 'a', t, request: async () => ({ config: null, configError: { code: 'CORE_UNAVAILABLE', message: 'Config could not be read' } }) });
+  assert.equal(await config.load(), null);
+  assert.equal(config.state.value, null);
+  assert.match(config.state.error, /CORE_UNAVAILABLE.*Config could not be read/);
+  const current = row('a', { preview: { text: 'Summary', timestamp: 1, source: { kind: 'channel' } } });
+  let fail = true;
+  const f = detailFixture(async path => response(isGroupDetail(path) ? { ...current, raw: fail ? null : 'Recovered source', ...(fail ? { rawError: { code: 'RAW_UNAVAILABLE', message: 'Source could not be read' } } : {}) } : defaultRead(path)), { detail: 'technical' });
+  await f.controller.open(current, { rows: [current], listKnown: true });
+  assert.equal(f.controller.state.row.sessionGroup, 'a');
+  assert.equal(f.controller.state.error, null, 'an optional source failure does not fail the detail request');
+  assert.equal(f.controller.state.raw.status, 'error');
+  const fold = () => allNodes(f.root).find(node => node.classList?.contains('wb-now-raw'));
+  fold().open = true; await fold().dispatch('toggle'); await tick();
+  assert.match(fold().textContent, /wb.detail.rawUnavailable.*RAW_UNAVAILABLE.*Source could not be read/);
+  fold().open = false; await fold().dispatch('toggle');
+  fail = false; fold().open = true; await fold().dispatch('toggle'); await tick();
+  assert.equal(f.controller.state.raw.status, 'ok'); assert.match(fold().textContent, /Recovered source/);
+  assert.doesNotMatch(fold().textContent, /RAW_UNAVAILABLE/);
+  f.controller.destroy();
+});
+
+
+test('drawer actions wait for canonical detail and preserve stopped Origin scope after hydration', async () => {
+  for (const sessionGroup of [null, 'origin']) {
+    const pending = deferred(), sent = [];
+    const f = detailFixture(async (path, options) => {
+      if (options?.method === 'POST') { sent.push(JSON.parse(options.body)); return response({ result: 'accepted' }); }
+      if (isGroupDetail(path)) return pending.promise;
+      return response(defaultRead(path));
+    }, { confirm: () => true });
+    const compact = { sessionGroup: 'origin', id: 'origin', displayName: 'Origin', channel: null, runtime: 'claude', model: 'actual', state: { kind: 'working' }, duration: 1, flags: {}, mainAgent: 'busy', contextPct: 42, lastActivityAt: null };
+    const opened = f.controller.open(compact, { rows: [compact], listKnown: true });
+    assert.equal(allNodes(f.root).filter(node => node.dataset?.wbAction).every(node => node.disabled), true);
+    await f.controller.act('restart'); assert.equal(sent.length, 0, 'an unhydrated list row cannot issue an unbound restart');
+    pending.resolve(response(row(sessionGroup, { presence: 'not_running', live: null, state: { kind: 'offline' } })));
+    await opened;
+    assert.equal(f.controller.state.detailKnown, true);
+    assert.equal(allNodes(f.root).find(node => node.dataset?.wbAction === 'restart').disabled, false, 'confirmed stopped Origin keeps its established restart action');
+    await f.controller.act('restart'); assert.equal(sent.length, 1); assert.equal(sent[0].sessionGroup, sessionGroup);
+    f.controller.destroy();
+  }
 });

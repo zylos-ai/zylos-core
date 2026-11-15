@@ -414,7 +414,7 @@ export class Store {
   }
 
   queryEvents({ since, until, types, sessionId, sessionGroup, runId, runtime, afterSeq,
-    limit = 100, offset = 0, order = 'asc', sourceTime = false, agentScope, latestPerAgent = false } = {}) {
+    limit = 100, offset = 0, order = 'asc', sourceTime = false, agentScope, latestPerAgent = false, includeLegacyOrigin = false } = {}) {
     const clauses = sourceTime
       ? ['julianday(timestamp) >= julianday(@since)', 'julianday(timestamp) <= julianday(@until)']
       : ['timestamp >= @since', 'timestamp <= @until'];
@@ -423,6 +423,11 @@ export class Store {
       offset: Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0 };
     for (const [column, value] of Object.entries({ session_id: sessionId, session_group: sessionGroup,
       run_id: runId, runtime })) {
+      // Single-session hooks write origin; older single-session records use null.
+      if (column === 'session_group' && includeLegacyOrigin && (value === null || value === 'origin')) {
+        clauses.push("(session_group = 'origin' OR session_group IS NULL)");
+        continue;
+      }
       if (value === undefined) continue;
       if (value === null) clauses.push(`${column} IS NULL`);
       else { clauses.push(`${column} = @${column}`); params[column] = value; }

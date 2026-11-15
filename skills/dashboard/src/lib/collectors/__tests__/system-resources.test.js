@@ -115,7 +115,7 @@ test('explicitly unlimited container limits preserve host capacity and usage gau
   assert.equal(data.resource_scope, 'host'); assert.equal(data.cgroup_version, 'v2');
   assert.ok(Math.abs(data.cpu_pct - 20) < 1e-9); assert.equal(data.cpu_count, 8);
   assert.equal(data.mem_pct, 50); assert.equal(data.mem_total_bytes, 16_000_000_000); assert.equal(data.mem_used_bytes, 8_000_000_000);
-  assert.equal(metrics.at(-1).dimensions.cpu_pct, 20); assert.equal(metrics.at(-1).dimensions.mem_used_pct, 50);
+  assert.ok(Math.abs(metrics.at(-1).dimensions.cpu_pct - 20) < 1e-9); assert.equal(metrics.at(-1).dimensions.mem_used_pct, 50);
 });
 
 test('unreadable container limits do not masquerade as an unlimited host fallback', async () => {
@@ -147,3 +147,21 @@ for (const v1 of [false, true]) {
     assert.equal(metrics[1].dimensions.cgroup_version, 'none');
   });
 }
+
+for (const limited of ['cpu', 'memory']) test(`independent ${limited} quota uses container while the other controller uses host`, async t => {
+  let user = 100, idle = 100;
+  t.mock.method(os, 'cpus', () => Array.from({ length: 8 }, () => ({ times: { user, idle, nice: 0, sys: 0, irq: 0 } })));
+  const { collector, metrics, files, tick } = fixture();
+  files[limited === 'cpu' ? '/fixture/memory.max' : '/fixture/cpu.max'] = limited === 'cpu' ? 'max' : 'max 100000';
+  tick(); await collector.collect();
+  user += 20; idle += 80; tick(); await collector.collect();
+  const data = collector.getLatestSystemData(), dims = metrics.at(-1).dimensions;
+  assert.equal(data.resource_scope, 'mixed');
+  assert.equal(data.cpu_source, limited === 'cpu' ? 'container' : 'host');
+  assert.equal(data.mem_source, limited === 'memory' ? 'container' : 'host');
+  assert.equal(data.cpu_count, limited === 'cpu' ? 1.5 : 8);
+  assert.ok(Math.abs(data.cpu_pct - 20) < 1e-9);
+  assert.equal(data.mem_total_bytes, limited === 'memory' ? 800000000 : 16000000000);
+  assert.equal(data.mem_pct, limited === 'memory' ? 37.5 : 50);
+  assert.equal(dims.cpu_source, data.cpu_source); assert.equal(dims.mem_source, data.mem_source);
+});

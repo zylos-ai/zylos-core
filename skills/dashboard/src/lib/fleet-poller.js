@@ -155,47 +155,6 @@ function hasUpgrade(runtimeInfo) {
   );
 }
 
-function hasSubagent(state) {
-  return subagentCount(state) > 0;
-}
-
-function subagentCount(state) {
-  return Number.isSafeInteger(state?.subagent_count) && state.subagent_count >= 0 ? state.subagent_count : Array.isArray(state?.active_subagents) ? state.active_subagents.length : 0;
-}
-
-function deriveActivity(state) {
-  if (state?.running_tools?.length > 0) return state.running_tools[0].tool_detail || state.running_tools[0].tool_name || 'Running tool';
-  if (state?.active_subagents?.length > 0) return state.active_subagents[0].last_activity || state.active_subagents[0].description || 'Subagent active';
-  // The single-agent view shows the prompt line only transiently; its Current
-  // Activity body is the last assistant message. The producer clears
-  // last_message on each new prompt, so preferring it here reproduces those
-  // semantics: the prompt summary shows only while the turn is still open.
-  const msg = state?.last_message;
-  const msgText = typeof msg === 'string' ? msg : msg?.text;
-  return msgText || state?.last_prompt?.summary || state?.reason || null;
-}
-
-// Mirror of the single-agent Current Activity feed (renderToolFeed): running
-// tools first, a synthetic "thinking" entry when busy with no visible tool.
-// Falls back to [] so consumers can degrade to the single-line `activity`.
-function deriveActivityFeed(state) {
-  const feed = [];
-  const tools = Array.isArray(state?.running_tools) ? state.running_tools : [];
-  for (const tool of tools.slice(0, 3)) {
-    feed.push({
-      kind: 'tool',
-      label: tool.tool_detail
-        ? `${tool.tool_name || 'tool'}: ${tool.tool_detail}`
-        : (tool.tool_name || 'Running tool'),
-      started_at: tool.started_at || null
-    });
-  }
-  if (feed.length === 0 && String(state?.state || '').toUpperCase() === 'BUSY') {
-    feed.push({ kind: 'thinking', label: null, started_at: null });
-  }
-  return feed;
-}
-
 function percentile95(values) {
   const sorted = (Array.isArray(values) ? values : []).filter(Number.isFinite).sort((a, b) => a - b);
   if (!sorted.length) return null;
@@ -286,14 +245,10 @@ function sanitizeRecord(record) {
     rate_limit_7d_pct: record.rate_limit_7d_pct ?? null,
     rate_limit_7d_recorded_at: record.rate_limit_7d_recorded_at ?? null,
     rate_limit_7d_live: record.rate_limit_7d_live ?? null,
-    context_pct: record.context_pct,
     cost: record.cost,
     session_cost: record.session_cost,
     daily_cost: record.daily_cost,
     weekly_cost: record.weekly_cost,
-    model: record.model,
-    effort: record.effort,
-    new_session_threshold: record.new_session_threshold,
     cpu_pct: record.cpu_pct,
     mem_pct: record.mem_pct,
     disk_pct: record.disk_pct,
@@ -342,26 +297,22 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     supervisor_paused: statePayload?.supervisor_paused,
     session_mode: statePayload?.session_mode,
     group_summary: statePayload?.group_summary,
-    activity: deriveActivity(statePayload),
-    activity_feed: deriveActivityFeed(statePayload),
+    activity: null,
+    activity_feed: liveState === 'BUSY' ? [{ kind: 'thinking', label: null, started_at: null }] : [],
     rate_limit_pct: statePayload?.rate_limit_pct ?? null,
     rate_limit_7d_pct: statePayload?.rate_limit_7d_pct ?? null,
     rate_limit_7d_recorded_at: statePayload?.rate_limit_7d_recorded_at ?? null,
     rate_limit_7d_live: statePayload?.rate_limit_7d_live ?? null,
-    context_pct: statePayload?.context_pct ?? metricValue(statePayload, 'context_pct'),
     cost: statePayload?.session_cost ?? metricValue(statePayload, 'session_cost'),
     session_cost: statePayload?.session_cost ?? metricValue(statePayload, 'session_cost'),
     daily_cost: statePayload?.daily_cost ?? metricValue(statePayload, 'daily_cost'),
     weekly_cost: statePayload?.weekly_cost ?? null,
-    model: runtimeInfo?.model || runtimeInfo?.model_id || null,
-    effort: runtimeInfo?.effort || null,
-    new_session_threshold: statePayload?.new_session_threshold ?? null,
     cpu_pct: numberOrNull(systemMetrics?.cpu_pct),
     mem_pct: memPct(systemMetrics),
     disk_pct: numberOrNull(systemMetrics?.disk_pct ?? systemMetrics?.disk_used_pct),
     has_upgrade: hasUpgrade(runtimeInfo),
-    has_subagent: hasSubagent(statePayload),
-    subagent_count: subagentCount(statePayload),
+    has_subagent: false,
+    subagent_count: 0,
     last_seen: nowIso(nowMs),
     pulse_rate: 1,
     health_reason: healthReason,
@@ -377,25 +328,35 @@ export function fleetStateFromObjects(instance, counts, usage, running) {
   const stateKeys = ['working', 'idle', 'starting', 'stopping', 'unknown'];
   const count = value => Number.isSafeInteger(value) && value >= 0;
   const cost = value => value === null || typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  if (!instance || ![null, 'single', 'multi'].includes(instance.session_mode) ||
+  const mode = instance?.session_mode?.sessionMode;
+  if (!instance || ![null, 'single', 'multi'].includes(mode) ||
       typeof counts?.listKnown !== 'boolean' || !counts?.running?.states || !count(counts.running.total) ||
       stateKeys.some(key => !count(counts.running.states[key])) ||
       stateKeys.reduce((sum, key) => sum + counts.running.states[key], 0) !== counts.running.total ||
       !cost(usage?.today?.cost) || !cost(usage?.sevenDay?.cost) || !Array.isArray(running?.rows)) throw reasonError('bad_payload');
   const states = counts.running.states;
-  const origin = running.rows.find(row => row.id === 'origin' || row.sessionGroup === 'origin' || row.sessionGroup === null);
-  const account = instance.accounts?.[instance.default_runtime];
-  return { agent: instance.agent, session_mode: instance.session_mode,
-    state: instance.session_mode === null || counts.listKnown === false ? 'UNKNOWN' : states.working > 0 ? 'BUSY' : states.unknown > 0 ? 'UNKNOWN' : 'IDLE',
-    supervisor_paused: instance.supervisorPaused, runtime_info: instance.runtime_info,
+  const runtime = instance.default_runtime;
+  const account = instance.accounts?.[runtime];
+  // Compact catalog rows carry state and flags, never raw process observations.
+  // The established summary helper still owns precedence and bounded problems.
+  const summaryRows = running.rows.map(row => ({
+    sessionGroup: row.id, presence: 'running',
+    name: row.displayName ? { displayName: row.displayName } : null,
+    state: { kind: ({ working: 'busy', starting: 'waiting', stopping: 'waiting' }[row.state?.kind] ?? row.state?.kind) },
+    noResponse: row.flags?.noResponse && Number.isFinite(Date.parse(row.flags.noResponse.since)) ? { since: Date.parse(row.flags.noResponse.since) } : null,
+    attention: row.flags?.blocked?.reason === 'auth_failed' ? [{ kind: 'auth_failed' }]
+      : row.flags?.startFailed ? [{ kind: 'start_failed' }] : [],
+  }));
+  return { agent: instance.agent, session_mode: mode,
+    state: mode === null || counts.listKnown === false ? 'UNKNOWN' : states.working > 0 ? 'BUSY' : states.unknown > 0 ? 'UNKNOWN' : 'IDLE',
+    supervisor_paused: instance.supervisorPaused,
+    runtime_info: {
+      zylos_update: instance.versions?.zylos?.update ?? null,
+      cc_update: instance.versions?.claude?.update ?? null,
+      codex_update: instance.versions?.codex?.update ?? null },
     system_metrics: instance.resources,
-    group_summary: fleetGroupSummary({ mode: instance.session_mode, readAt: counts.readAt, listKnown: counts.listKnown,
-      rows: running.rows.map(row => ({ ...row, state: { kind: ({ working: 'busy', starting: 'waiting', stopping: 'waiting' }[row.state?.kind] ?? row.state?.kind) } })),
-      instance: { pool: counts.pool, autoRestarts: instance.autoRestarts } }),
-    context_pct: origin?.contextPct ?? null,
-    running_tools: (origin?.tools ?? []).map(tool => ({ tool_name: tool.name, tool_detail: tool.detail, started_at: tool.startedAt })),
-    subagent_count: origin?.working?.subagents?.count ?? 0,
-    new_session_threshold: origin?.rotationThreshold ?? null,
+    group_summary: fleetGroupSummary({ mode, readAt: counts.readAt, listKnown: counts.listKnown,
+      rows: summaryRows, groupCounts: counts, instance: { pool: counts.pool, autoRestarts: instance.autoRestarts } }),
     rate_limit_7d_pct: account?.used_percentage ?? account?.usedPercentage ?? null,
     rate_limit_7d_live: account?.live ?? null, rate_limit_7d_recorded_at: account?.recordedAt ?? null,
     daily_cost: usage.today.cost, weekly_cost: usage.sevenDay.cost };
@@ -440,14 +401,10 @@ export class FleetPoller {
         hue: color.hue,
         state: 'UNKNOWN',
         activity: null,
-        context_pct: null,
         cost: null,
         session_cost: null,
         daily_cost: null,
         weekly_cost: null,
-        model: null,
-        effort: null,
-        new_session_threshold: null,
         cpu_pct: null,
         mem_pct: null,
         disk_pct: null,
@@ -510,14 +467,10 @@ export class FleetPoller {
       hue: color.hue,
       state: 'UNKNOWN',
       activity: null,
-      context_pct: null,
       cost: null,
       session_cost: null,
       daily_cost: null,
       weekly_cost: null,
-      model: null,
-      effort: null,
-      new_session_threshold: null,
       cpu_pct: null,
       mem_pct: null,
       disk_pct: null,
@@ -1107,21 +1060,17 @@ export class FleetPoller {
       color: color.color,
       hue: color.hue,
       state: reason === 'version_unsupported' ? 'UNKNOWN' : 'OFFLINE',
-      activity: existing.activity || null,
-      context_pct: existing.context_pct ?? null,
+      activity: null,
       cost: existing.cost ?? null,
       session_cost: existing.session_cost ?? null,
       daily_cost: existing.daily_cost ?? null,
       weekly_cost: existing.weekly_cost ?? null,
-      model: existing.model ?? null,
-      effort: existing.effort ?? null,
-      new_session_threshold: existing.new_session_threshold ?? null,
       cpu_pct: existing.cpu_pct ?? null,
       mem_pct: existing.mem_pct ?? null,
       disk_pct: existing.disk_pct ?? null,
       has_upgrade: existing.has_upgrade === true,
-      has_subagent: existing.has_subagent === true,
-      subagent_count: Number.isFinite(existing.subagent_count) ? existing.subagent_count : 0,
+      has_subagent: false,
+      subagent_count: 0,
       last_seen: existing.last_seen || null,
       pulse_rate: 0,
       health_reason: reason,

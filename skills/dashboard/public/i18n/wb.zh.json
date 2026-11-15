@@ -1194,5 +1194,12 @@
   "wb.groupUsage.title": "用量",
   "wb.groupUsage.summary": "{tokens} tokens · {cost} · 缓存 {cache}",
   "wb.usage.cacheRate": "缓存命中率",
-  "wb.groups.more": "加载更多离线组"
+  "wb.groups.more": "加载更多离线组",
+  "wb.inst.resourceSource.host": "宿主机数据",
+  "wb.inst.resourceSource.container": "容器数据",
+  "wb.detail.runningCli": "运行中的 CLI {version}",
+  "wb.detail.installedCli": "已安装的 CLI {version}",
+  "wb.detail.cliUpdate": "可更新至 {version}",
+  "wb.detail.pendingRestart": "重启后应用更改",
+  "wb.flags.noResponse": "无响应"
 }

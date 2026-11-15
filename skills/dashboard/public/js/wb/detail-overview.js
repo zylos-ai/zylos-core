@@ -1,7 +1,7 @@
 import { countLabel } from '../count-label.js?v=1';
 import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
-import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=157';
+import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=158';
 import { toolLabel, waitText } from './view-mode.js?v=153';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=93';
 import { recentRows } from './timeline-rows.js?v=112';
@@ -247,7 +247,7 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
       summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t('wb.detail.rawMessage')));
       raw.append(summary);
       if (stored?.open) raw.append(stored.status === 'ok' && stored.text != null ? element(document, 'pre', stored.text, 'wb-mono')
-        : element(document, 'p', t(stored.status === 'loading' ? 'wb.detail.rawLoading' : 'wb.detail.rawUnavailable'), 'wb-now-raw-note'));
+        : element(document, 'p', [t(stored.status === 'loading' ? 'wb.detail.rawLoading' : 'wb.detail.rawUnavailable'), stored.status === 'error' ? stored.error : null].filter(Boolean).join(' · '), 'wb-now-raw-note'));
       listen(raw, 'toggle', event => onRaw(event.currentTarget.open));
       card.append(raw);
     }

@@ -29,7 +29,7 @@ for (const width of [1280, 390]) test(`one click opens an unnamed draft at ${wid
     let body;
     if (options?.method === 'POST') {
       writes.push(JSON.parse(options.body)); await pending; created = true; body = { conversation: draft };
-    } else body = url === '/api/instance' ? { session_mode: 'multi' }
+    } else body = url === '/api/instance' ? { session_mode: { sessionMode: 'multi' } }
       : url.startsWith('/api/chat/conversations?') ? { items: created ? [draft] : [], nextCursor: null }
       : /\/conversations\/[^/?]+$/.test(url) ? { conversation: draft }
       : { items: [], nextCursor: null };

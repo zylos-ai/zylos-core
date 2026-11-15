@@ -1,19 +1,19 @@
-import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js?v=2';
+import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js?v=4';
 import { waitUntilDeadline } from './request-timeout.js?v=2';
 import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=103';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=118';
-import { createPricingPanel } from './wb/settings-pricing.js?v=202';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=120';
+import { createPricingPanel } from './wb/settings-pricing.js?v=204';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=177';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=179';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=203';
+import { mountConversationPage } from './wb/conversation-page.js?v=205';
 import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
-import { mountTimezoneSettings } from './wb/settings-timezone.js?v=8';
-import { mountWorkbench } from './wb/shell.js?v=212';
+import { mountTimezoneSettings } from './wb/settings-timezone.js?v=10';
+import { mountWorkbench } from './wb/shell.js?v=214';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=112';
 import { createRemoteAccess } from './wb/remote-access.js?v=2';
@@ -21,12 +21,12 @@ import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, obse
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js?v=120';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=148';
-import { createUsagePage } from './wb/usage.js?v=203';
+import { createUsagePage } from './wb/usage.js?v=205';
 import { ObserverHistory } from './observer-history.js?v=6';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=90';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=204';
-import { createFleetSounds } from './fleet-sounds.js?v=204';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=206';
+import { createFleetSounds } from './fleet-sounds.js?v=206';
 import { refreshDashboardState } from './state-refresh.js?v=101';
 import { formatActionResult } from './action-result.js';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
@@ -240,8 +240,6 @@ function agentFleetLabels() {
       stale: t('agent_fleet.stale_data')
     },
     noActivity: t('agent_fleet.no_activity'),
-    context: t('label.context'),
-    model: t('agent_fleet.model'),
     dailyCost: t('cost.today'),
     weeklyCost: t('cost.7d'),
     subagent: t('label.subagents')
@@ -2545,7 +2543,7 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
       if (!resp.ok) throw observerRequestError(data, resp.status);
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
       state.observer.status = data;
-      if (state.observer.group !== undefined && groups && !groups.rows?.some(row => row.sessionGroup === state.observer.group)) {
+      if (state.observer.group !== undefined && groups && !groups.rows?.some(row => (row.id ?? row.sessionGroup) === state.observer.group)) {
         const selected = await fetch(observerEndpoint('/api/groups/' + encodeURIComponent(state.observer.group) + '?include='), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
         if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
         if (selected) groups.rows = [...(groups.rows ?? []), selected];
@@ -2779,7 +2777,7 @@ async function refreshModeStatus() {
     const status = data.session_mode;
     const mode = ['single', 'multi'].includes(status?.sessionMode) ? status.sessionMode : null;
     if (mode) { const select = actionsModal.querySelector('#action-mode'); select.value = mode; select._current = mode; syncModeSegment(); }
-    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: status.blocked.since }) : ''].filter(Boolean).join(' · ');
+    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: status.blocked.since }) : '', status?.error ? [t('wb.readFailed'), status.error.message].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · ');
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {
@@ -2866,7 +2864,7 @@ function pageActions() {
   return pageActions.value ??= createPageActions({
     t, send: sendAction, confirm: showConfirm, effortLabel,
     readOnly: () => Boolean(remoteIsReadOnly()), remoteTarget: viewedRemoteTarget,
-    shownSession: () => ({ sessionGroup: 'origin', runId: state.originGroup?.live?.runId, sessionId: state.originGroup?.live?.sessionId }), runtime: () => state.dashboardState?.default_runtime,
+    shownSession: () => ({ sessionGroup: state.originGroup?.sessionGroup, runId: state.originGroup?.live?.runId, sessionId: state.originGroup?.live?.sessionId }), runtime: () => state.dashboardState?.default_runtime,
   });
 }
 
@@ -2877,13 +2875,7 @@ function execAction(action, body) {
 
 // Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
 async function sendAction(action, body) {
-  if (action === 'restart-session' && !body?.runId) {
-    const origin = await fetchJson('/api/groups/origin');
-    body = { ...body, sessionGroup: 'origin', runId: origin.live?.runId, sessionId: origin.live?.sessionId };
-  }
-  const request = instanceActionRequest(action, body);
-  const actionPath = agentPath(request.path);
-  const healthPath = agentPath('/api/health');
+  const targetKey = observerTargetKey();
   const statusEl = actionsModal?.querySelector('#action-status');
   if (statusEl) {
     statusEl.hidden = false;
@@ -2892,6 +2884,15 @@ async function sendAction(action, body) {
   }
 
   try {
+    if (action === 'restart-session' && !body?.runId) {
+      const origin = await fetchJson('/api/groups/origin');
+      if (observerTargetKey() !== targetKey) return false;
+      if (!origin.live?.runId) throw new Error(t('wb.actions.targetRequired'));
+      body = { ...body, sessionGroup: origin.sessionGroup, runId: origin.live.runId, sessionId: origin.live?.sessionId };
+    }
+    const request = instanceActionRequest(action, body);
+    const actionPath = agentPath(request.path);
+    const healthPath = agentPath('/api/health');
     const r = await fetch(api(actionPath), {
       method: request.method,
       headers: { 'Content-Type': 'application/json' },

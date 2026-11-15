@@ -15,7 +15,7 @@ async function fixture(t, sendResult = { stored: true }, initial = []) {
   const calls = []; let read = 0;
   const state = createConversationState({ setTimeout: () => 1, clearTimeout() {}, request: async (path, options) => {
     calls.push({ path, options });
-    if (path === '/api/instance') return { session_mode: 'multi' };
+    if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' } };
     if (path.endsWith('/send')) return typeof sendResult === 'function' ? sendResult(options) : sendResult;
     if (path.includes('/messages?')) return { items: read++ ? [] : initial, nextCursor: null, afterCursor: 'after',
       attachmentUpdates: read > 1 ? [{ id: 1, attachments: [{ id: 'file', name: 'note.txt', kind: 'file', available: true }] }] : [] };
@@ -61,7 +61,7 @@ test('bounded attachment rechecks rotate across all loaded missing rows and retr
     attachments: [{ name: `file-${i + 1}`, kind: 'file', available: false }] }));
   const batches = []; let fail = true;
   const state = createConversationState({ setTimeout: () => 1, clearTimeout() {}, request: async path => {
-    if (path === '/api/instance') return { session_mode: 'multi' };
+    if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' } };
     if (path.includes('/messages?')) {
       const params = new URL(path, 'http://fixture').searchParams;
       if (params.get('direction') === 'after') {

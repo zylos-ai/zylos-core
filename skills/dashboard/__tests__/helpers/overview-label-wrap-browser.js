@@ -94,6 +94,10 @@ function measureLabels({ labels, nowrap }) {
     mode: items[0] && { text: items[0].textContent, shown: shownText(items[0]), title: items[0].querySelector('span')?.title ?? null },
     attentionShown: attention.children.length > 0 || getComputedStyle(attention).display !== 'none',
     pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+    overflow: document.documentElement.scrollWidth > window.innerWidth ? [...document.querySelectorAll('body *')]
+      .filter(el => el.getBoundingClientRect().right > window.innerWidth + 1)
+      .slice(0, 10).map(el => ({ tag: el.tagName, id: el.id, class: el.className,
+        right: el.getBoundingClientRect().right, width: el.getBoundingClientRect().width })) : [],
     order: items.map(item => item.classList.contains('wb-pool') ? 'pool' : item.classList.contains('wb-sys')
       ? [...item.classList].find(name => name.startsWith('wb-sys-')).slice(7) : item === cost ? 'cost' : 'other'),
     system: [...strip.querySelectorAll('.wb-sys')].map(item => ({ amount: item.querySelector('b').textContent,
@@ -199,6 +203,8 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     await page.goto(base + '/');
     await page.locator('#wb-board .wb-row').first().waitFor();
     await page.locator('#wb-dist .wb-dist-item').first().waitFor();
+    // ResizeObserver label fitting settles after the first visible board paint.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     return { page, context };
   }
   const openDetail = async page => {
@@ -246,7 +252,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     // CPU, memory and disk sit between the pool and the cost as icon and number, inside the strip at every width; their
     // names are read out but not shown, and the details are on hover.
     assert.deepEqual(result.order.filter(name => name !== 'other'), ['pool', 'cpu', 'memory', 'disk', 'cost']);
-    assert.equal(result.pageOverflow, false, 'the page does not scroll sideways');
+    assert.equal(result.pageOverflow, false, `the page does not scroll sideways: ${JSON.stringify(result.overflow)}`);
     assert.deepEqual(result.system.map(item => item.amount), ['23%', '13%', '62%']);
     for (const item of result.system) {
       assert.equal(item.amountShown, true, `the percentage is shown: ${item.title}`);

@@ -3,7 +3,7 @@ import { workingNowText } from './working-display.js?v=5';
 import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { endReasonLabel, timeValue } from './event-labels.js?v=93';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=174';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=176';
 import { eventTypesFor, mergeRepeats, newestFirst, restartEffect, restartRows, showsEvent } from './timeline-rows.js?v=112';
 
 export { timeValue };

@@ -27,7 +27,7 @@ function fixture(t) {
     request: async path => {
       assert.ok(reads.length < 300, 'request capture is bounded'); reads.push({ path, at: time });
       const u = new URL(path, 'http://fixture');
-      if (path === '/api/instance') return { session_mode: 'multi', runtimeHealth: { claude: { health: 'ok' } } };
+      if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' }, runtimeHealth: { claude: { health: 'ok' } } };
       if (u.pathname === '/api/groups/dashboard%3Aa') {
         if (fail) throw new Error('offline');
         return conversationDetail({ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, working }, { readAt: time });

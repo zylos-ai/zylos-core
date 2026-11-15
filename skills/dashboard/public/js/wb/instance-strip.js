@@ -120,18 +120,18 @@ export function systemItems(document, system, { t = key => key, readAt } = {}) {
   const stale = system != null && !(readAt - system.sampledAt <= SYSTEM_STALE_MS);
   const memory = system && system.mem_total_bytes > 0 && system.mem_used_bytes != null ? system.mem_used_bytes / system.mem_total_bytes * 100 : null;
   const specs = [
-    ['cpu', 'cpu', system?.cpu_pct, system?.cpu_count > 0 ? countLabel(t, 'wb.inst.cpuCores', system.cpu_count) : ''],
+    ['cpu', 'cpu', system?.cpu_pct, system?.cpu_count > 0 ? countLabel(t, 'wb.inst.cpuCores', system.cpu_count) : '', system?.cpu_source],
     ['memory', 'memory', memory, memory == null ? ''
-      : t('wb.inst.memoryUsed', { used: oneDecimal(system.mem_used_bytes), total: oneDecimal(system.mem_total_bytes) })],
+      : t('wb.inst.memoryUsed', { used: oneDecimal(system.mem_used_bytes), total: oneDecimal(system.mem_total_bytes) }), system?.mem_source],
     ['disk', 'disk', system?.disk_pct, system?.disk_free_bytes != null ? t('wb.inst.diskFree', { free: oneDecimal(system.disk_free_bytes) }) : ''],
   ];
-  return specs.map(([glyph, name, value, detail]) => {
+  return specs.map(([glyph, name, value, detail, source]) => {
     const label = t('wb.host.' + name), known = !stale && typeof value === 'number' && Number.isFinite(value);
     const amount = known ? Math.round(Math.max(0, Math.min(100, value))) + '%' : '—';
     const node = item(document, icon(document, glyph, 'xs'), element(document, 'span', label, 'wb-sys-word wb-vh'), element(document, 'b', amount));
     node.classList.add('wb-sys', 'wb-sys-' + name);
     if (stale) node.classList.add('wb-stale');
-    node.title = [label + ' ' + amount, known ? detail : '',
+    node.title = [label + ' ' + amount, ['host', 'container'].includes(source) ? t('wb.inst.resourceSource.' + source) : '', known ? detail : '',
       system == null ? t('wb.inst.systemUnknown') : stale ? t('wb.inst.systemStale', { time: clock(system.sampledAt) }) : ''].filter(Boolean).join(' · ');
     return node;
   });
@@ -182,7 +182,7 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
     root.append(box);
   }
   const pool = instance.pool ?? {}, multi = snapshot.mode === 'multi';
-  const used = multi ? pool.used : pool.ready == null ? null : pool.ready + pool.starting;
+  const used = multi ? pool.used : snapshot.groupCounts?.listKnown === false ? null : snapshot.groupCounts?.running?.total ?? null;
   const capacity = multi ? pool.capacity ?? null : null;
   const full = used != null && capacity != null && used >= capacity;
   // Pool, cost and services: icon and number on screen; the title starts with the item's name, then the details.

@@ -253,7 +253,7 @@ test('full mounted page posts an answer, then exposes an enabled explicit retry 
     } else if (path.includes('/questions?')) data = { items: [q], nextCursor: null };
     else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
     else if (path.includes('/status?')) data = { items: [] };
-    else if (path.includes('/api/instance')) data = { session_mode: 'multi' };
+    else if (path.includes('/api/instance')) data = { session_mode: { sessionMode: 'multi' } };
     else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { id: 'g:AA', state: 'active', displayName: 'Original group' }, stored: false };
     else data = { items: [{ id: 'g:AA', display_name: 'Original group' }], nextCursor: null };
     return { ok: true, status: 200, json: async () => data };
@@ -287,7 +287,7 @@ test('unknown answer restores normal same-action submission after manual refresh
     } else if (path.includes('/questions?')) { questionReads++; data = { items: [{ ...base.question, status: 'paused', answerId: null }], nextCursor: null }; }
     else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
     else if (path.includes('/status?')) data = { items: [] };
-    else if (path.includes('/api/instance')) data = { session_mode: 'multi' };
+    else if (path.includes('/api/instance')) data = { session_mode: { sessionMode: 'multi' } };
     else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { id: 'g:AA', state: 'active', displayName: 'Original group' }, stored: false };
     else data = { items: [{ id: 'g:AA', display_name: 'Original group' }], nextCursor: null };
     return { ok: true, status: 200, json: async () => data };
@@ -357,7 +357,7 @@ test('opening an answered question hydrates its stored action and retries exactl
       delivery: { accepted: true, stored: false, deliveryState: null, retryAllowed: true } }], nextCursor: null };
     else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
     else if (path.includes('/status?')) data = { items: [] };
-    else if (path.includes('/api/instance')) data = { session_mode: 'multi' };
+    else if (path.includes('/api/instance')) data = { session_mode: { sessionMode: 'multi' } };
     else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { id: 'g:AA', state: 'active', displayName: 'Original group' }, stored: false };
     else data = { items: [{ id: 'g:AA', display_name: 'Original group' }], nextCursor: null };
     return { ok: true, status: 200, json: async () => data };
@@ -413,7 +413,7 @@ test('mounted later-page question stays read-only until its authority page is lo
         : { items: [], nextCursor: 'later-question-page' };
     } else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered',
       content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' };
-    else if (path.includes('/api/instance')) data = { session_mode: 'multi' };
+    else if (path.includes('/api/instance')) data = { session_mode: { sessionMode: 'multi' } };
     else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { id: 'g:AA', state: 'active' }, stored: false };
     else data = { items: [{ id: 'g:AA' }], nextCursor: null };
     return { ok: true, status: 200, json: async () => data };
@@ -448,7 +448,7 @@ test('a mounted paused question preserves a definite invalid-data rejection afte
     if (path.endsWith('/answers')) { posts++; return { ok: false, status: 409, json: async () => ({ error: 'chat_question_unavailable' }) }; }
     const data = path.includes('/questions?') ? (reads++, { items: [base.question], nextCursor: null })
       : path.includes('/messages?') ? { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }], nextCursor: null, afterCursor: 'after' }
-        : path.includes('/api/instance') ? { session_mode: 'multi' }
+        : path.includes('/api/instance') ? { session_mode: { sessionMode: 'multi' } }
           : /conversations\/g%3AAA$/.test(path) ? { conversation: { id: 'g:AA', state: 'active' }, stored: false }
             : { items: [{ id: 'g:AA' }], nextCursor: null };
     return { ok: true, status: 200, json: async () => data };
@@ -491,7 +491,7 @@ async function mountedQuestions(testContext, { mode = 'multi', saved = false, re
         delivery: { stored: false, retryAllowed } } : {}) }], nextCursor: null };
     } else if (path.includes('/messages?')) data = { items: [{ id: 12, direction: 'out', status: 'delivered', content: CONTENT_PREFIX + JSON.stringify(base.envelope) }, ...(queryFailed ? [{ id: 13, direction: 'out', status: 'delivered', content: 'A newly read message' }] : [])], nextCursor: null, afterCursor: 'after' };
     else if (path.includes('/status?')) data = { items: [] };
-    else if (path.includes('/api/instance')) data = { session_mode: mode };
+    else if (path.includes('/api/instance')) data = { session_mode: { sessionMode: mode } };
     else if (/conversations\/g%3AAA$/.test(path)) data = { conversation: { id: 'g:AA', state: 'active', displayName: 'Original group' }, stored: false };
     else data = { items: [{ id: 'g:AA', display_name: 'Original group' }], nextCursor: null };
     return { ok: true, status: 200, json: async () => data };

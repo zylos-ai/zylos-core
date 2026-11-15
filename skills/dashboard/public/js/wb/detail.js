@@ -1,12 +1,12 @@
 import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=86';
-import { channelIcon, platformLabel, statePill } from './board.js?v=157';
-import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=174';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=178';
+import { channelIcon, platformLabel, statePill } from './board.js?v=158';
+import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=176';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=180';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=112';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=116';
-import { renderNameEditor } from './name-edit.js?v=116';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=118';
+import { renderNameEditor } from './name-edit.js?v=118';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 
 export function resolveDetailRow(selection, snapshot = {}) {
@@ -82,18 +82,29 @@ export function formatStartedAt(value, locale) {
 
 /** The plain header line: the engine and when this run started (the time alone today, with the date otherwise). */
 export function plainMeta(row, t = key => key, { now = Date.now(), locale } = {}) {
-  const runtime = row.launchConfig?.runtime ?? row.target?.runtime;
+  const runtime = row.runtimeInfo?.runtime ?? row.launchConfig?.runtime ?? row.target?.runtime;
   const date = row.createdAt == null ? null : new Date(row.createdAt * 1000);
   const started = date && Number.isFinite(date.getTime()) ? t('wb.detail.startedAt', { time: formatZoned(date, locale,
     zonedDay(date) === zonedDay(now) ? { hour: '2-digit', minute: '2-digit' } : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }) : null;
   return [runtime ? runtimeName(runtime) : null, started].filter(Boolean).join(' · ');
 }
 
+/** Canonical detail metadata; CLI evidence never comes from overview list rows. */
+export function runtimeInfoText(info, t = key => key, { technical = false } = {}) {
+  if (!info) return '';
+  const parts = [info.model, info.effort];
+  if (info.runningVersion) parts.push(t('wb.detail.runningCli', { version: info.runningVersion }));
+  if (technical && info.installedVersion) parts.push(t('wb.detail.installedCli', { version: info.installedVersion }));
+  if (technical && info.update) parts.push(t('wb.detail.cliUpdate', { version: info.update }));
+  if (info.pendingRestart === true) parts.push(t('wb.detail.pendingRestart'));
+  return parts.filter(Boolean).join(' · ');
+}
+
 export function createGroupDetail({ root, document = root.ownerDocument, fetch = globalThis.fetch,
   t = key => key, writable = () => true, detail = () => 'plain', identity = () => '', showLastReceived = true,
   onClose = () => {}, onMemory = () => {}, onRename = () => {}, onConversation, conversationAvailable = () => true, confirm, observable = () => false, onObserve = () => {},
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
-  const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
+  const state = { row: null, detailKnown: false, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
     totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null, level: null,
     usage: null, configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
@@ -157,11 +168,12 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     }
     for (const item of groupActionButtons(row, getWritable())) {
       const button = element(document, 'button', undefined, 'wb-icon-btn wb-act'); button.type = 'button';
-      button.disabled = item.disabled || state.actionBusy;
+      button.disabled = !state.detailKnown || item.disabled || state.actionBusy;
       button.dataset.wbAction = item.action;
       button.setAttribute('aria-label', t('wb.actions.' + item.action));
       // Unavailable actions stay visible and say why in their tooltip; narrow screens also show the label.
-      button.title = t('wb.actions.' + item.action) + (item.reason ? ' · ' + t(item.reason) : '');
+      const unavailable = state.detailKnown ? item.reason : 'wb.actions.targetRequired';
+      button.title = t('wb.actions.' + item.action) + (unavailable ? ' · ' + t(unavailable) : '');
       button.append(icon(document, actionIcons[item.action]), element(document, 'span', t('wb.actions.' + item.action), 'wb-act-label'));
       listen(button, 'click', () => act(item.action)); actions.append(button);
     }
@@ -175,10 +187,12 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const meta = element(document, 'p', undefined, 'wb-detail-meta');
     if (getLevel() === 'technical') {
       meta.append(element(document, 'span', row.sessionGroup ?? 'origin', 'wb-mono'));
-      const rest = [row.live?.runId, formatStartedAt(row.createdAt, document.documentElement?.lang), ...(row.launchConfig ? [runtimeName(row.launchConfig.runtime), row.launchConfig.model, row.launchConfig.effort]
+      const rest = [row.live?.runId, formatStartedAt(row.createdAt, document.documentElement?.lang), ...(row.runtimeInfo ? [runtimeName(row.runtimeInfo.runtime)] : row.launchConfig ? [runtimeName(row.launchConfig.runtime), row.launchConfig.model, row.launchConfig.effort]
         : row.target?.reason === 'launch_config_unreadable' ? [runtimeName(row.target.runtime), t('wb.detail.launchConfigUnreadable')] : [])].filter(value => value != null);
       if (rest.length) meta.append(element(document, 'span', ' · ' + rest.join(' · ')));
     } else meta.textContent = plainMeta(row, t, { now: now(), locale: document.documentElement?.lang }) || platform;
+    const runtimeMeta = runtimeInfoText(row.runtimeInfo, t, { technical: getLevel() === 'technical' });
+    if (runtimeMeta) meta.append(element(document, 'span', ' · ' + runtimeMeta));
     const tabs = element(document, 'nav', undefined, 'wb-detail-tabs');
     tabs.setAttribute('role', 'tablist');
     for (const tab of ['overview', 'timeline']) {
@@ -198,7 +212,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
           state.configOpen = true; draw();
           try {
             const value = await config.load();
-            await config.loadMeta(value?.runtime?.data?.resolved?.runtime ?? 'claude');
+            if (value) await config.loadMeta(value.runtime?.data?.resolved?.runtime ?? 'claude');
           } catch (error) { if (error.name !== 'AbortError') { config.state.error = error.message; draw(); } }
         },
       });
@@ -262,15 +276,16 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     try {
       const value = await request(`/api/groups/${encodeURIComponent(row.sessionGroup ?? 'origin')}`);
       if (state.raw !== raw) return;
-      raw.status = 'ok'; raw.text = typeof value?.raw === 'string' ? value.raw : null;
+      raw.status = value?.rawError ? 'error' : 'ok'; raw.error = value?.rawError ? responseError({ error: value.rawError }) : null;
+      raw.text = typeof value?.raw === 'string' ? value.raw : null;
     } catch (error) {
       if (error.name === 'AbortError' || state.raw !== raw) return;
-      raw.status = 'error';
+      raw.status = 'error'; raw.error = error.message;
     }
     draw();
   }
   async function act(action) {
-    if (!state.row || state.actionBusy || groupActionButtons(state.row, getWritable()).find(item => item.action === action)?.disabled) return;
+    if (!state.row || !state.detailKnown || state.actionBusy || groupActionButtons(state.row, getWritable()).find(item => item.action === action)?.disabled) return;
     const confirmation = state.row.sessionGroup == null || state.row.sessionGroup === 'origin'
       ? 'confirm.restart' : 'wb.actions.restartConfirm';
     if (action === 'restart' && !await (confirm ? confirm(t(confirmation)) : confirmDialog(document, { title: t('wb.actions.restartTitle'),
@@ -370,10 +385,17 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (!active(gen) || state.row.live?.runId !== runId || readLevel() !== level) return;
       if (values[4].status === 'fulfilled') {
         const detail = values[4].value;
-        if (detail?.state?.kind && (detail.id ?? detail.sessionGroup ?? 'origin') === key) { state.row = detail; state.historical = false; }
+        if (detail?.state?.kind && (detail.id ?? detail.sessionGroup ?? 'origin') === key) {
+          state.row = detail; state.detailKnown = true; state.historical = false;
+          if (runId !== detail.live?.runId) {
+            resetSubagents(); timeline.close();
+            [values[3]] = await Promise.allSettled([loadSubagents()]);
+            if (!active(gen) || state.row.live?.runId !== detail.live?.runId || readLevel() !== level) return;
+          }
+        }
         if (detail && Object.hasOwn(detail, 'raw')) {
           const key = rawKey(state.row), previous = state.raw;
-          state.raw = { key, open: previous?.key === key && previous.open, status: 'ok', text: typeof detail.raw === 'string' ? detail.raw : null };
+          state.raw = { key, open: previous?.key === key && previous.open, status: detail.rawError ? 'error' : 'ok', error: detail.rawError ? responseError({ error: detail.rawError }) : null, text: typeof detail.raw === 'string' ? detail.raw : null };
         }
       }
       if (values[5].status === 'fulfilled') state.usage = values[5].value;
@@ -406,7 +428,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     resetSubagents();
     refreshTask = null;
     renderedLevel = null;
-    state.row = null; state.tab = 'overview'; state.recent = []; state.currentEvents = [];
+    state.row = null; state.detailKnown = false; state.tab = 'overview'; state.recent = []; state.currentEvents = [];
     state.totalEvents = state.totalRuns = state.unattributed = 0; state.usage = null; state.backlog = null; state.error = null; state.level = null;
     state.configOpen = state.nameOpen = false;
     state.actionResult = ''; state.actionBusy = false;

@@ -1,11 +1,15 @@
 import { validKey, fallbackName } from './display-names.js';
 import { Sanitizer } from '../sanitizer.js';
+import { redactQuerySecrets } from './group-merge.js';
 import { STALE_STATUS_DISPLAY_MS } from './group-state.js';
 
 const STATES = ['working', 'idle', 'starting', 'stopping', 'unknown'];
-const FLAGS = ['queued', 'blocked', 'waitingSlot', 'startFailed', 'unreadable'];
+const FLAGS = ['queued', 'blocked', 'waitingSlot', 'startFailed', 'unreadable', 'noResponse'];
 const atMillis = value => typeof value === 'number' ? value : Date.parse(value);
-const iso = value => Number.isFinite(atMillis(value)) ? new Date(atMillis(value)).toISOString() : null;
+const iso = value => {
+  const timestamp = atMillis(value);
+  return Number.isFinite(timestamp) && Math.abs(timestamp) <= 8.64e15 ? new Date(timestamp).toISOString() : null;
+};
 const failure = (code, message, statusCode = 400) => Object.assign(new Error(message), { code, statusCode });
 const sanitizer = new Sanitizer('');
 
@@ -46,7 +50,7 @@ export function projectGroup(row, snapshot) {
   if (kind === 'working' || flags.queued) {
     if (['auth_failed', 'rate_limited', 'recovering'].includes(health?.health)) flags.blocked = {
       reason: health.health === 'auth_failed' ? 'auth_failed' : 'rate_limited', runtime,
-      recoveryAt: iso(health.cooldownUntil),
+      recoveryAt: Number.isFinite(health.cooldownUntil) && health.cooldownUntil > 0 ? iso(health.cooldownUntil * 1000) : null,
     };
     else if (health?.source === 'unreadable' || (runtime !== null && health && health.health == null)) errors.push('runtime_health_unreadable');
   }
@@ -63,6 +67,7 @@ export function projectGroup(row, snapshot) {
   else if (row.wait?.kind === 'start_failed') flags.startFailed = {
     count: row.wait.count30m, lastAt: iso(row.wait.lastAt), reason: row.wait.reasonCode ?? null,
   };
+  if (Number.isFinite(row.noResponse?.since)) flags.noResponse = { since: iso(row.noResponse.since) };
   if (errors.length) flags.unreadable = { reasons: [...new Set(errors)] };
   const since = kind === 'working' ? row.working?.since
     : kind === 'starting' ? row.createdAt == null ? null : row.createdAt * 1000
@@ -84,6 +89,12 @@ export function projectGroup(row, snapshot) {
     ...(kind === 'offline' ? {} : { mainAgent: row.presence === 'running' && ['busy', 'idle'].includes(activity) ? activity : 'unknown' }) };
 }
 
+/** Compact action uses already collected safe observations, never tool arguments or raw messages. */
+export function projectCurrentAction(row) {
+  const summary = value => typeof value === 'string' ? sanitizer.safeSummary(redactQuerySecrets(value), 120) : null;
+  return { tool: summary(row.tools?.[0]?.name), message: summary(row.preview?.text), receivedAt: iso(row.preview?.timestamp) };
+}
+
 /** List resources expose presentation observations only. Raw evidence belongs
  * to detail, even when a caller already has the complete collected snapshot. */
 export function projectListRow(row) {
@@ -91,7 +102,7 @@ export function projectListRow(row) {
     lastActivityAt: row.lastActivityAt, flags: row.flags };
   return row.side === 'offline' ? common : { ...common,
     runtime: row.runtime ?? null, model: row.model ?? null, state: row.state,
-    duration: row.duration ?? null, mainAgent: row.mainAgent ?? 'unknown', contextPct: row.contextPct ?? null };
+    duration: row.duration ?? null, currentAction: projectCurrentAction(row), mainAgent: row.mainAgent ?? 'unknown', contextPct: row.contextPct ?? null };
 }
 
 function rowsOf(snapshot) { return snapshot.rows.map(row => projectGroup(row, snapshot)); }
@@ -133,7 +144,7 @@ export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () =>
       const limit = Number(limitText), q = (params.get('q') ?? '').trim().toLowerCase();
       if (q.length > 64) throw failure('INVALID_QUERY', 'Query must contain at most 64 characters');
       const flag = params.get('flag');
-      if (flag !== null && !FLAGS.includes(flag)) throw failure('INVALID_FLAG', 'Flag must be queued, blocked, waitingSlot, startFailed or unreadable');
+      if (flag !== null && !FLAGS.includes(flag)) throw failure('INVALID_FLAG', 'Flag must be queued, blocked, waitingSlot, startFailed, unreadable or noResponse');
       const cursor = params.get('cursor');
       let after = null;
       if (cursor) {

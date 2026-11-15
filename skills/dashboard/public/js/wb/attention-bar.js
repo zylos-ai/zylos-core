@@ -26,7 +26,7 @@ export function renderAttention(root, snapshot, { error, lastSuccess, now = Date
   const items = [...(snapshot?.attention?.problems ?? []).map(item => [item, 'problem']),
     ...(snapshot?.attention?.reminders ?? []).map(item => [item, 'reminder'])];
   const nameOf = key => {
-    const row = snapshot?.rows?.find(value => value.sessionGroup === key) ?? { sessionGroup: key };
+    const row = [...(snapshot?.rows ?? []), ...(snapshot?.failedRows ?? [])].find(value => value.sessionGroup === key) ?? { sessionGroup: key };
     return row.name?.displayName ?? fallbackName(row, t);
   };
   for (const [item, severity] of items) {

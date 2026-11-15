@@ -24,7 +24,7 @@ function fixture(testContext, { mode = 'multi', tab = 'mine', denied = false, ro
     if (listFailed && path.startsWith('/api/chat/conversations?')) return { ok: false, status: 502, json: async () => ({ error: 'chat_history_unavailable' }) };
     if (pendingMessage && path.includes('/messages')) { const pending = pendingMessage; pendingMessage = null; return pending.promise; }
     if (path.endsWith('/send') && malformedStatus) return { ok: malformedStatus < 400, status: malformedStatus, json: async () => { throw new SyntaxError('invalid JSON'); } };
-    let body = path.includes('/api/instance') ? { session_mode: mode }
+    let body = path.includes('/api/instance') ? { session_mode: { sessionMode: mode } }
       : path.includes('/messages') ? { items: rows, nextCursor: olderCursor, afterCursor: 'after' }
       : path.includes('/status') ? { items: rows }
       : /conversations\/[^/]+$/.test(path) ? { draft, stored: false, deliveryState: null, retryAllowed: true, preserveInput: false, pendingContent: null, error: null, ...receipt, conversation: { id: draft ? 'd:local' : 'g:AA', state: draft ? 'draft' : 'active', displayName: 'Example', pendingContent: receipt.pendingContent ?? null } }

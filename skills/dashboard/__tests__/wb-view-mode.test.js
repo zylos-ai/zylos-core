@@ -63,7 +63,7 @@ test('conversation navigation maps direct and fleet URLs without changing existi
 });
 test('instance status names Origin in plain words and keeps raw values for technical detail', () => {
   const t = (key, values) => key + (values ? ' ' + JSON.stringify(values) : '');
-  const data = { view: 'multi', session_mode: 'multi', origin: { presence: 'not_running' } };
+  const data = { view: 'multi', session_mode: { sessionMode: 'multi' }, origin: { presence: 'not_running' } };
   assert.equal(instanceStatusText(data, 'plain', t), 'wb.term.origin · wb.state.not_running');
   assert.equal(instanceStatusText({ origin: { state: { kind: 'working' }, mainAgent: 'busy', presence: 'running' } }, 'plain', t), 'wb.term.origin · wb.state.working');
   assert.equal(instanceStatusText({ origin: { presence: 'mystery_state' } }, 'plain', t), 'wb.term.origin · wb.state.unknown');

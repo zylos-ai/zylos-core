@@ -39,7 +39,7 @@ function originPage(t, { locale = 'en', mode = 'multi', row = originRow(mode), h
   const translate = (key, params = {}) => Object.entries(params).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value ?? ''), translations[key] ?? key);
   const page = mountConversationPage({ root, document, groupLinks: {}, t: translate, fetch: async (path, options = {}) => {
     requests.push(path);
-    const body = path === '/api/instance' ? { session_mode: mode, runtimeHealth: { claude: { health } } }
+    const body = path === '/api/instance' ? { session_mode: { sessionMode: mode }, runtimeHealth: { claude: { health } } }
       : path.split('?')[0] === '/api/groups/origin' ? conversationDetail(row)
       : path.startsWith('/api/chat/conversations?') ? { items: [otherItem, originItem], nextCursor: null }
       : path.endsWith('/send') ? (sends.push({ path, body: options.body }), { stored: true, conversationId: ORIGIN })
@@ -161,4 +161,13 @@ test('opening group origin selects the Origin conversation in "mine"', { timeout
   assert.ok(f.requests.some(path => path.startsWith('/api/chat/conversations?') && path.includes('tab=mine')));
   assert.equal(f.requests.some(path => path.includes('tab=external')), false);
   assert.equal(f.root.querySelector('h2').textContent, 'Origin');
+});
+
+
+test('canonical conversation detail preserves explicit single-session null scope', () => {
+  const single = conversationDetail({ sessionGroup: null, presence: 'running', working: { on: false } });
+  assert.equal(single.id, 'origin', 'the public resource identity still addresses Origin');
+  assert.equal(single.sessionGroup, null, 'null is the canonical Core single-session scope');
+  assert.equal(conversationDetail({ presence: 'running' }).sessionGroup, 'origin', 'an omitted scope keeps the fixture default');
+  assert.equal(conversationDetail({ sessionGroup: 'origin', presence: 'running' }).sessionGroup, 'origin');
 });

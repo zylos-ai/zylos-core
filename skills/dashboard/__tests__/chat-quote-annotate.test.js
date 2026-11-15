@@ -225,7 +225,7 @@ function stateFixture({ storage = new Storage(), send = () => ({ stored: true, c
     request: async (path, options) => {
       calls.push({ path, options });
       const u = new URL(path, 'http://fixture');
-      if (path === '/api/instance') return { session_mode: 'multi' };
+      if (path === '/api/instance') return { session_mode: { sessionMode: 'multi' } };
       if (u.pathname === '/api/chat/conversations') return { items: [{ id: 'g:A' }, { id: 'g:B' }], nextCursor: null, tz: TZ };
       if (u.pathname.endsWith('/send')) return send(options.body);
       if (u.pathname.endsWith('/messages')) return { items: [], nextCursor: null, afterCursor: 'a', tz: TZ };
@@ -584,7 +584,7 @@ test('the conversation page keeps the composer text read-only while a send outco
     if (path.endsWith('/send')) opened = { ...opened, stored: null };
     const body = path.endsWith('/send') ? sendAnswer
       : path.endsWith('/uploads/config') ? { maxUploadBytes: 1024, maxAttachments: 1 }
-      : path.includes('/api/instance') ? { session_mode: 'multi' }
+      : path.includes('/api/instance') ? { session_mode: { sessionMode: 'multi' } }
       : path.includes('/messages') ? { items: [], nextCursor: null, afterCursor: 'after' }
       : path.includes('/status') || path.includes('/questions') ? { items: [], nextCursor: null }
       : /conversations\/[^/?]+$/.test(path) ? opened
@@ -624,7 +624,7 @@ test('a quote block whose original never loads says so, and a later successful j
   ];
   const fetch = async path => {
     const body = path.endsWith('/uploads/config') ? { maxUploadBytes: 1024, maxAttachments: 1 }
-      : path.includes('/api/instance') ? { session_mode: 'multi' }
+      : path.includes('/api/instance') ? { session_mode: { sessionMode: 'multi' } }
       : path.includes('/messages') ? { items: rows, nextCursor: null, afterCursor: 'after' }
       : path.includes('/status') || path.includes('/questions') ? { items: [], nextCursor: null }
       : /conversations\/[^/?]+$/.test(path) ? { draft: false, stored: false, conversation: { id: 'g:AA', state: 'active', displayName: 'Example' } }

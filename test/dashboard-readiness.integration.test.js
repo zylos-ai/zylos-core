@@ -116,12 +116,17 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal(expected.ok, true);
     assert.equal(expected.service, 'zylos-dashboard');
     assert.match(expected.bootId, /^[a-f0-9-]{36}$/);
-    for (const route of ['/api/health', '/api/health?probe=other']) {
+    for (const route of ['/api/health']) {
       assert.deepEqual(await request(route), { status: 200, body: expected });
       assert.deepEqual(await request(route, { Authorization: 'Bearer invalid' }), { status: 200, body: expected });
       assert.deepEqual(await request(route, { Cookie: '__Secure-zylos_dashboard_session=invalid' }), { status: 200, body: expected });
     }
-    assert.equal(identityReads, 0);
+    for (const probe of ['ready', 'other']) {
+      for (const headers of [{}, { Authorization: 'Bearer invalid' }, { Cookie: '__Secure-zylos_dashboard_session=invalid' }]) {
+        assert.deepEqual(await request(`/api/health?probe=${probe}`, headers), { status: 404, body: { error: 'not_found' } });
+      }
+    }
+    assert.equal(identityReads, 0, 'retired query probes never enter the readiness reader');
   });
   // Extends the same real HTTP/auth boundary to cookie and API-session detail
   // admission. Run for health/auth changes; UI-only changes may skip this case.

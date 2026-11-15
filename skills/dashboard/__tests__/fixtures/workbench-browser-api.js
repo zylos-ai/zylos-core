@@ -2,7 +2,7 @@
 // a memory tree with a long file, and settings. Shapes follow the dashboard's own routes; values are invented.
 // Every answer is computed from `now`, so the page's relative times stay stable within one run.
 
-import { projectListRow } from '../../src/lib/workbench/groups-api.js';
+import { projectGroup, projectListRow } from '../../src/lib/workbench/groups-api.js';
 import { runRestartEffect } from '../../public/js/wb/timeline-rows.js';
 
 const iso = ms => new Date(ms).toISOString();
@@ -33,7 +33,8 @@ function rows(now) {
 function detailRow(row) {
   const id = row.id ?? row.sessionGroup;
   const offline = row.state?.kind === 'offline' || row.presence === 'not_running';
-  return { ...row, id, side: offline ? 'offline' : 'running', flags: row.flags ?? {},
+  const noResponse = row.noResponse ? projectGroup(row, { readAt: 0 }).flags.noResponse : null;
+  return { ...row, id, side: offline ? 'offline' : 'running', flags: { ...row.flags, ...(noResponse ? { noResponse } : {}) },
     displayName: row.displayName ?? row.name?.displayName ?? (id === 'origin' ? 'Origin' : id),
     channel: row.channel ?? row.c4?.componentName ?? (id === 'origin' ? null : id.split(':')[0]),
     runtime: row.runtime ?? row.target?.runtime ?? null, model: row.model ?? row.target?.model ?? null,
@@ -60,13 +61,13 @@ export function workbenchInstanceAnswer(value, now) {
     mem_pct: system.memTotalBytes ? system.memUsedBytes / system.memTotalBytes * 100 : null,
     mem_used_bytes: system.memUsedBytes ?? null, mem_total_bytes: system.memTotalBytes ?? null, mem_source: 'host',
     disk_pct: system.diskUsedPct ?? null, disk_free_bytes: system.diskFreeBytes ?? null, disk_total_bytes: null,
-    sampledAt: system.sampledAt == null ? null : iso(system.sampledAt),
+    sampledAt: system.sampledAt ?? null,
   };
   return { agent: { name: 'browser-case' }, color: null, tz: 'UTC', default_runtime: value.baselineRuntime ?? 'claude',
     session_mode: { sessionMode: value.mode === 'unreadable' ? null : value.mode, transition: null, globalGate: null, blocked: null,
       supervisor: 'reachable', lastCompleted: null, lastEvents: [] },
     versions: { zylos: { installed: '0.9.4', latest: null, update: null }, claude: { installed: '2.1.80', latest: null, update: null }, codex: { installed: null, latest: null, update: null } },
-    defaults: { claude: { model: 'opus', effort: 'high', threshold: 70 }, codex: { model: 'gpt-5.5', effort: 'high', threshold: 70 } },
+    defaults: { claude: { model: 'opus', effort: 'high', threshold: 70, model_thresholds: null, session_hot_ttl: null }, codex: { model: 'gpt-5.5', effort: 'high', threshold: 70, model_thresholds: null, session_hot_ttl: null } },
     runtimeHealth: raw.runtimeHealth, accounts: raw.accounts, supervisorPaused: raw.supervisorPaused ?? false,
     autoRestarts: raw.autoRestarts ?? 0, resources, services: { ...raw.services, channels: raw.services?.channels ?? [] },
     poolCapacityRecord: raw.pool?.capacityRecord ?? null };
@@ -178,7 +179,7 @@ export function workbenchAnswer(url, now) {
     if (url.searchParams.has('flag')) return { readAt: now, listKnown: true, rows: row.flags?.[url.searchParams.get('flag')] ? [listRow(row)] : [], nextCursor: null };
     return { readAt: now, listKnown: true, rows: (url.searchParams.has('cursor') ? [{ ...row, sessionGroup: 'lark:archived', name: { displayName: 'Archived room' } }] : [row]).map(listRow), nextCursor: url.searchParams.has('cursor') ? null : 'second' };
   }
-  if (p === '/api/groups/counts') return { readAt: now, listKnown: true, running: { total: 2, states: { working: 1, idle: 1 }, flags: { queued: 1, blocked: 1 } }, offline: { total: 2, waitingSlot: 0, startFailed: 0 }, pool: { used: 2, capacity: 4 } };
+  if (p === '/api/groups/counts') return { readAt: now, listKnown: true, running: { total: 2, states: { working: 1, idle: 1, starting: 0, stopping: 0, unknown: 0 }, flags: { queued: 1, blocked: 1, waitingSlot: 0, startFailed: 0, unreadable: 0, noResponse: 0 } }, offline: { total: 2, waitingSlot: 0, startFailed: 0 }, pool: { used: 2, capacity: 4 } };
   if (/^\/api\/groups\/[^/]+$/.test(p) && !['search','activity','runtime-overrides','naming-prompt'].includes(p.split('/').at(-1))) {
     const group = decodeURIComponent(p.split('/').at(-1));
     const row = rows(now).find(row => row.sessionGroup === group);
@@ -235,7 +236,7 @@ export function workbenchSnapshotAnswer(url, value, now) {
   if (p === '/api/groups/running') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'running').map(listRow) };
   if (p === '/api/groups/offline') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'offline' && (!url.searchParams.has('flag') || row.flags?.[url.searchParams.get('flag')])).map(listRow), nextCursor: null };
   if (p === '/api/groups/counts') {
-    const active = value.rows.filter(row => detailRow(row).side === 'running'), states = {}, flags = {};
+    const active = value.rows.map(detailRow).filter(row => row.side === 'running'), states = Object.fromEntries(['working', 'idle', 'starting', 'stopping', 'unknown'].map(key => [key, 0])), flags = Object.fromEntries(['queued', 'blocked', 'waitingSlot', 'startFailed', 'unreadable', 'noResponse'].map(key => [key, 0]));
     for (const row of active) { states[row.state.kind] = (states[row.state.kind] ?? 0) + 1; for (const flag of Object.keys(row.flags ?? {})) flags[flag] = (flags[flag] ?? 0) + 1; }
     return { readAt: value.readAt, listKnown: value.listKnown, running: { total: active.length, states, flags }, offline: { total: value.rows.length - active.length, waitingSlot: value.instance.pool?.waiting ?? 0, startFailed: value.rows.filter(row => detailRow(row).side === 'offline' && row.flags?.startFailed).length }, pool: value.instance.pool ? { used: value.instance.pool.used ?? null, capacity: value.instance.pool.capacity ?? null } : null };
   }

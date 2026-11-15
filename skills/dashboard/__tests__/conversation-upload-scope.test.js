@@ -43,7 +43,7 @@ async function fixture(t, sourceId, { failed = true } = {}) {
         if (body.httpStatus) return { ok: false, status: body.httpStatus, json: async () => body.body };
       }
       else if (path.endsWith('/uploads/config')) body = { maxUploadBytes: 20 * 1024 * 1024, maxAttachments: 20 };
-      else if (path === '/api/instance') body = { session_mode: 'multi' };
+      else if (path === '/api/instance') body = { session_mode: { sessionMode: 'multi' } };
       else if (path.includes('/messages?')) body = { items: [], nextCursor: null, afterCursor: 'after' };
       else if (path.includes('/questions?') || path.includes('/status?')) body = { items: [], nextCursor: null };
       else if (/\/conversations\/[^/]+$/.test(path)) {

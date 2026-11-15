@@ -374,7 +374,7 @@ test('Machines page renders one card per machine with state, quota, cost and hos
   assert.match(html, /class="wb-pill wb-busy" data-mood="busy"/);
   assert.match(html, /class="wb-pill wb-waiting" data-mood="stuck"/);
   assert.match(html, /class="wb-btn agent-open" href="\/dash\/fleet\/zylos01\/" data-agent="zylos01"/);
-  assert.match(html, /GPT-5 \/ medium/);
+  assert.doesNotMatch(html, /GPT-5 \/ medium|Opus 4.6 \/ high|Sonnet \/ low/, 'Fleet does not show Origin model or effort');
   assert.match(html, /Today \/ 7 days/);
   assert.match(html, /CPU · Memory · Disk/);
   assert.match(html, /21 · 43 · 65%/);
@@ -710,13 +710,14 @@ test('fleet tile thinking feed never overrides stuck/offline moods', () => {
   assert.equal(view.tiles[0].mood, 'stuck');
 });
 
-test('machine context stays a percentage and weekly quota shows the remaining percentage', () => {
+test('Fleet omits Origin session metadata while weekly quota keeps the remaining percentage', () => {
   const view = buildAgentFleetView({ agents: [{ name: 'a', state: 'IDLE', context_pct: 60 }] });
-  assert.equal(view.tiles[0].contextLevel, 'warning');
+  assert.equal(Object.hasOwn(view.tiles[0], 'contextPct'), false);
+  assert.equal(Object.hasOwn(view.tiles[0], 'contextLevel'), false);
   // #251: values are 0-100 percentages — never fraction-inferred. A genuine
   // 1% weekly usage must render 99% remaining, not a full red bar.
   const tiny = buildAgentFleetView({ agents: [{ name: 'a', state: 'IDLE', context_pct: 0.6, rate_limit_7d_pct: 1 }] });
-  assert.equal(tiny.tiles[0].contextLevel, 'ok');
+  assert.equal(Object.hasOwn(tiny.tiles[0], 'contextPct'), false);
   assert.equal(tiny.tiles[0].rate7dPct, 1);
   const bar = pct => renderAgentFleetHtml({ agents: [{ name: 'a', state: 'IDLE', rate_limit_7d_pct: pct }] });
   assert.match(bar(1), /7-day quota remaining 99%/);
@@ -724,7 +725,13 @@ test('machine context stays a percentage and weekly quota shows the remaining pe
   assert.match(bar(80), /style="width:20%"/);
   assert.match(bar(100), /style="width:0%"/);
   assert.match(bar(null), /<b>No data<\/b>/);
-  assert.match(renderAgentFleetHtml({ agents: [{ name: 'a', state: 'IDLE', context_pct: 79, new_session_threshold: 70 }] }), /<b class="wb-txt-warn">79%<\/b>/);
+  for (const self of [false, true]) for (const session_mode of ['single', 'multi']) {
+    const agent = { name: 'a', self, session_mode, state: 'IDLE', context_pct: 79, new_session_threshold: 70, model: 'observed-private-model', effort: 'observed-private-effort' };
+    const tile = buildAgentFleetView({ agents: [agent] }).tiles[0];
+    for (const key of ['model', 'effort', 'contextPct', 'contextLevel', 'threshold', 'overThreshold']) assert.equal(Object.hasOwn(tile, key), false, key);
+    const html = renderAgentFleetHtml({ agents: [agent] });
+    assert.doesNotMatch(html, /observed-private-model|observed-private-effort|79%|70%|Context/);
+  }
   // Static guard: the fraction heuristic must not creep back into any percent-typed frontend file.
   for (const f of ['public/js/app.js', 'public/js/agent-fleet.js']) {
     const src = fs.readFileSync(new URL('../' + f, import.meta.url).pathname, 'utf8');

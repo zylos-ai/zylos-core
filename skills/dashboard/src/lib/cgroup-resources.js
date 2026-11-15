@@ -90,7 +90,7 @@ export function createCgroupCollector({
       // from an unlimited host root reliably.
       const cpu = readCpuLimitCores();
       const memory = readMemLimitBytes();
-      if (cpu.limitCores > 0 || memory.limitBytes > 0) return 'v1';
+      if (cpu.limitCores > 0 || memory.limitBytes > 0 || !cpu.found || !memory.found) return 'v1';
     }
     return 'none';
   }

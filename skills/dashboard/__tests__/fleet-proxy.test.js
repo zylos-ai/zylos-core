@@ -1742,3 +1742,32 @@ test('fleet timezone writes retain local admin and cookie origin proof', async (
     }
   }
 });
+
+// Auth-disabled hubs have no local principal. Keep object actions usable while
+// retaining the explicit write allowlist and the cookie same-origin boundary.
+test('fleet object writes support auth-disabled hubs without widening admission', async () => {
+  const agent = { name: 'Remote', base_url: 'https://remote.invalid' };
+  let calls = 0;
+  const proxy = new FleetProxy({ config: { fleet: { agents: [agent] } }, authGate: { enabled: false },
+    poller: { getSessionToken: async () => 'remote-fixture' },
+    fetch: async () => { calls++; return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }); },
+  });
+  for (const [method, suffix, context, status] of [
+    ['PUT', '/api/instance/defaults', undefined, 200],
+    ['POST', '/api/instance/actions/switch-mode', undefined, 200],
+    ['PUT', '/api/groups/dashboard%3Aa/config', undefined, 200],
+    ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', undefined, 200],
+    ['POST', '/api/groups/dashboard%3Aa/actions/unregistered', undefined, 403],
+    ['DELETE', '/api/groups/dashboard%3Aa', undefined, 403],
+    ['POST', '/api/groups/dashboard%3Aa/actions/interrupt', { scope: 'admin', kind: 'cookie' }, 403],
+  ]) {
+    const req = Readable.from([Buffer.from('{"confirmed":true}')]);
+    req.method = method; req.headers = { 'content-type': 'application/json' }; req._authContext = context;
+    const res = Object.assign(new EventEmitter(), { status: null,
+      writeHead(code) { this.status = code; }, end() { this.writableFinished = true; } });
+    const before = calls;
+    await proxy.proxyApi(req, res, agent, suffix, '');
+    assert.equal(res.status, status, `${method} ${suffix}`);
+    assert.equal(calls - before, status === 200 ? 1 : 0, 'rejected requests do not reach the producer');
+  }
+});
