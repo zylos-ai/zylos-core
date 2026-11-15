@@ -36,6 +36,7 @@ function fixture(t, config = {}) {
   });
   const deps = {
     finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
+    ensureLogRotation:()=>({state:'present'}),
     ensureMemoryMigration: () => { calls.push('ensure'); },
     verifyPublicationForServices: () => {},
     protectedSuccess: () => {},

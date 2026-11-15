@@ -4,6 +4,7 @@ import { applyDashboardRoute } from '../lib/dashboard-install.js';
 import { printDashboardInfo, dashboardAccessAddress } from '../lib/dashboard-access.js';
 import { provisionDashboardAuth } from '../../skills/dashboard/src/lib/auth-provision.js';
 import { savePm2ProcessList } from '../lib/pm2-save.js';
+import { ensurePm2LogRotate, describeLogRotateDefaults, logRotateFailureWarning } from '../lib/pm2-logrotate.js';
 import { finalizeWebConsoleRemoval } from '../lib/web-console-finalize.js';
 import { systemSendEnvironment } from '../../skills/comm-bridge/scripts/c4-system-send-env.js';
 import { deployUpgradeBootstrap } from '../lib/upgrade-protection.js';
@@ -905,6 +906,25 @@ export async function startServicesWithDashboard(opts, startServices = startCore
     (deps.log || console.log)(`  ${warn('Could not save the PM2 startup list; run pm2 save after cleanup.')}`);
   }
   return { dashboardAccess, servicesStarted };
+}
+
+/**
+ * Makes sure pm2-logrotate rotates PM2 logs. An existing module keeps its
+ * settings; a failed install only warns and never changes the init result.
+ */
+export async function ensureInitLogRotation({ quiet = false } = {}, deps = {}) {
+  let result;
+  try { result = await (deps.ensure || ensurePm2LogRotate)(); }
+  catch (failure) { result = { state: 'failed', warning: logRotateFailureWarning(failure.message) }; }
+  const log = deps.log || console.log;
+  if (result.state === 'installed') {
+    if (!quiet) log(`  ${success(`PM2 log rotation installed (pm2-logrotate: ${describeLogRotateDefaults()})`)}`);
+  } else if (result.state === 'present') {
+    if (!quiet) log(`  ${success('PM2 log rotation present (pm2-logrotate settings kept)')}`);
+  } else {
+    (deps.warn || console.warn)(`  ${warn(result.warning)}`);
+  }
+  return result;
 }
 
 /**
@@ -2328,6 +2348,7 @@ export async function initCommand(args) {
       } else {
         if (!quiet) console.log(`\n${dim('No services to start.')}`);
       }
+      await ensureInitLogRotation({ quiet });
 
       if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {
         await guideBypassAcceptance();
@@ -2409,6 +2430,7 @@ export async function initCommand(args) {
     if (servicesStarted > 0) {
       setupPm2Startup();
     }
+    await ensureInitLogRotation({ quiet });
 
     // First-time Claude bypass acceptance (only if Claude runtime and authenticated)
     if (selectedRuntime === 'claude' && claudeAuthenticated && !skipConfirm && needsBypassAcceptance()) {

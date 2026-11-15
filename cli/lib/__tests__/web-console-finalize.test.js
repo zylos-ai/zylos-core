@@ -143,6 +143,7 @@ function finalizationDeps(calls, extras = {}) {
     startServices:ctx => { calls.push('start'); assert.deepEqual(ctx.servicesWereRunning, ['scheduler']); },
     verifyServices:ctx => { calls.push('verify'); assert.deepEqual(ctx.servicesWereRunning, ['scheduler']); },
     finalizeWebConsoleRemoval:() => { calls.push('remove'); return {warnings:['removal explanation'],pm2Changed:true}; },
+    ensureLogRotation:()=>({state:'present'}),
     dashboardOwner:{verifyDashboard:() => {calls.push('dashboard'); return {state:'ready'};}},
     readModeStatus:()=>({sessionMode:'single', transition:null}), readMode:()=>({mode:'single'}), readTransition:()=>null,
     restart:()=>({ok:true,data:{result:'exit_enqueued'}}), audit:()=>[],

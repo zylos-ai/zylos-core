@@ -24,6 +24,7 @@ for(const item of ['dbCopy','registration','route','dashboard']) {
     else owner[item==='registration'?'applyDashboardRegistration':'applyDashboardRoute']=fail;
     const result=await completeUpgradeFinalization(ctx,{
       finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
+      ensureLogRotation:()=>({state:'present'}),
       dashboardOwner:owner,updateConfig:()=>{},ensureMemoryMigration:()=>{},commitBaselines:()=>{},
       verifyPublicationForServices:()=>{},protectedSuccess:()=>{},
       startServices:()=>({status:'done'}),verifyServices:()=>({status:'done'}),

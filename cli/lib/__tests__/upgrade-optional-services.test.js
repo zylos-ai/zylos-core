@@ -187,7 +187,7 @@ for (const fails of [false, true]) test(`forward finalization and status retain 
   const {root,dir,read,m}=forwardFixture(f);
   let finalized;
   const result=await resumeFinalize(root,{}, {maintenance:m,quiesce:()=>{},finalize:async ctx=>(finalized=await resumeUpgradeFinalization(ctx,{
-    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),
+    finalizeWebConsoleRemoval:()=>({warnings:[],pm2Changed:false}),ensureLogRotation:()=>({state:'present'}),
     publish:()=>({ok:true}),updateConfig:()=>{},ensureMemoryMigration:()=>{},verifyPublicationForServices:()=>{},
     startServices:ctx=>step11_startCoreServices(ctx,{zylosDir:root,ecosystemPath:f.file}),
     verifyServices:ctx=>step12_verifyServices(ctx,{execSync:poll(f)}),

@@ -19,6 +19,7 @@ import { copyTree } from './fs-utils.js';
 import { smartSync, formatMergeResult } from './smart-merge.js';
 import { getAllowedTmpRoots } from './upgrade.js';
 import { getCoreEcosystemPath, createPm2Helpers } from './pm2.js';
+import { ensurePm2LogRotate, describeLogRotateDefaults, logRotateFailureWarning } from './pm2-logrotate.js';
 import { assertDashboardUninstalled as assertIndependentDashboardUninstalled, probeCoreDbVersions, inspectCoreManagesDashboardDb } from './core-db-backup.js';
 import { recovery, protectedDataReady, protectedSuccess, maintenance, maintenanceFor } from './upgrade-protection.js';
 import { loadSnapshotManifest } from './upgrade-snapshot-manifest.js';
@@ -1108,6 +1109,14 @@ export async function completeUpgradeFinalization(ctx, deps = {}) {
   dashboard={...dashboard,state:dashboardErrors.length?'degraded':dashboard?.state || 'degraded',errors:[...(dashboard?.errors || []),...dashboardErrors]};
   completion.dashboard=dashboard.state;
   ctx.dashboard=dashboard;
+  // Log rotation is optional: a failure becomes a warning and the upgrade continues.
+  let rotation;
+  try { rotation=await (deps.ensureLogRotation || ensurePm2LogRotate)(); }
+  catch(error) { rotation={state:'failed',warning:logRotateFailureWarning(error.message)}; }
+  steps.push({step:7,name:'pm2_log_rotation',status:rotation.state==='installed' ? 'done' : 'skipped',
+    message:rotation.state==='installed' ? `pm2-logrotate installed (${describeLogRotateDefaults()})`
+      : rotation.state==='present' ? 'pm2-logrotate already present; settings kept' : 'pm2-logrotate not installed; see the upgrade warning'});
+  if (rotation.state==='failed') (ctx.runtimeWarnings ||= []).push(rotation.warning);
   try {
     const status=await (deps.readModeStatus || (()=>readUpgradeModeStatus(root)))();
     const data=status?.ok===true ? status.data : status;

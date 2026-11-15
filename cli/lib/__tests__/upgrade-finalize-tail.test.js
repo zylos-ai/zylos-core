@@ -66,6 +66,7 @@ function deps(calls, extras={}) {
     audit:()=>{calls.push('audit');return [];},
     verifyPublicationForServices(){},protectedSuccess(){},
     finalizeWebConsoleRemoval:async()=>({warnings:[]}),
+    ensureLogRotation:()=>({state:'present'}),
     savePm2ProcessList:()=>true,
     ...extras,
   };
