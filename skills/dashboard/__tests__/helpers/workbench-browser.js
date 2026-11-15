@@ -836,12 +836,17 @@ export async function runWorkbenchBrowser(t, sandbox) {
     } finally { await context.close(); }
   });
 
-  for (const limited of [false, true]) await step(limited
+  // Admission errors are ordinary reconnects; only an explicit connection limit permits fallback.
+  for (const status of [200, 500, 401, 502, 429]) await step(status === 429
     ? 'confirmed chat connection limits keep ordinary updates and periodically retry chat'
-    : 'a temporary chat stream failure reconnects the chat subscription', async () => {
+    : `a chat admission probe returning ${status} reconnects the chat subscription`, async () => {
+    const limited = status === 429;
     const { page, context, errors } = await open(390, 844, '/');
     try {
-      await page.clock.install();
+      const clockStart = new Date('2026-01-01T00:00:00Z');
+      await page.clock.install({ time: clockStart });
+      // Freeze elapsed time before asynchronous browser/API waits: those waits must not consume retry time.
+      await page.clock.pauseAt(new Date(clockStart.getTime() + 1000));
       await context.addInitScript(() => {
         window.__streamSources = [];
         window.EventSource = class extends EventTarget {
@@ -858,12 +863,13 @@ export async function runWorkbenchBrowser(t, sandbox) {
       let probes = 0;
       await page.route(url => url.pathname === '/api/stream', route => {
         probes++;
-        return route.fulfill({ status: limited ? 429 : 200, contentType: 'text/event-stream', body: '' });
+        return route.fulfill({ status, contentType: 'text/event-stream', body: '' });
       });
       await page.reload();
       await openDashboardTab(page, 'chat');
       await page.waitForFunction(() => window.__streamSources.at(-1)?.url.includes('chat=1'));
-      const count = await page.evaluate(() => window.__streamSources.length);
+      probes = 0; // Ignore the old native EventSource's requests during reload; only the induced failure is under test.
+      const count = await page.evaluate(() => { window.__streamFailureStart = window.__streamSources.length; return window.__streamFailureStart; });
       await page.evaluate(async () => {
         await window.__streamSources.at(-1).onerror();
         window.__streamFailureHandled = true;
@@ -882,8 +888,112 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const expected = count + (limited ? 2 : 1);
       await page.waitForFunction(expected => window.__streamSources.length === expected
         && window.__streamSources.at(-1)?.url.includes('chat=1'), expected);
+      assert.equal(probes, 1, 'reconnecting creates an EventSource without another admission probe');
+      assert.deepEqual(await page.evaluate(() => window.__streamSources.slice(window.__streamFailureStart).map(source => source.url.includes('chat=1'))), limited ? [false, true] : [true], 'only confirmed limits create an ordinary stream');
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
+  });
+
+  // Loading older pages must not carry their read depth across fleet problem navigation.
+  // Both locates use the actual rendered fleet controls; side-tab clicks would reset depth themselves.
+  await step('locating groups across list sides resets previously loaded offline pages', async () => {
+    const { page, context, errors } = await open(1280, 800, '/');
+    const offline = 'lark:oc_product', offlineReads = [];
+    let target = GROUP;
+    await answerFleet(page, { spark: '1.0.0' });
+    await page.route(url => url.pathname === '/api/fleet', route => route.fulfill({ json: {
+      agents: [{ name: 'browser-case', self: true, state: 'IDLE', access: 'admin',
+        group_summary: { listKnown: true, running: 2, counts: { busy: 1, idle: 1 }, problemCount: 3,
+          problems: [{ sessionGroup: target, displayName: 'Locate target', reason: 'auth_failed' }] } },
+        { name: 'spark', state: 'IDLE', access: 'admin' }], updated_at: new Date().toISOString(),
+    } }));
+    await page.route(url => url.pathname === '/api/groups/offline', route => {
+      const url = new URL(route.request().url());
+      offlineReads.push(url.search);
+      const index = url.searchParams.has('cursor') ? Number(url.searchParams.get('cursor')) : 0;
+      const original = workbenchAnswer(new URL('http://fixture/api/groups/offline'), Date.now());
+      return route.fulfill({ json: { ...original,
+        rows: original.rows.map(row => index === 0 ? row : { ...row, id: `archived-${index}`, displayName: `Archived ${index}` }),
+        nextCursor: index < 2 ? String(index + 1) : null,
+      } });
+    });
+    try {
+      await page.reload();
+      await page.locator('#agent-fleet-root .agent-open[data-self="true"]').click();
+      await page.locator('.wb-group-sides > button').nth(1).click();
+      await page.locator(`#wb-board .wb-row[data-group="${offline}"]`).waitFor();
+      for (const index of [1, 2]) {
+        await page.locator('#wb-board .wb-older').click();
+        await page.locator(`#wb-board .wb-row[data-group="archived-${index}"]`).waitFor();
+      }
+      assert.equal(await page.locator('#wb-board .wb-row').count(), 3, 'three offline pages were loaded');
+      const locate = async group => {
+        target = group;
+        const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/fleet');
+        await page.locator('#fleet-manage-btn').click();
+        await refreshed;
+        const control = page.locator('#agent-fleet-root [data-self="true"] [data-fleet-problems]').first();
+        await page.waitForFunction(group => document.querySelector('#agent-fleet-root [data-self="true"] [data-fleet-problems]')?.dataset.group === group, group);
+        await control.click();
+        await page.waitForFunction(group => !document.querySelector('#agent-detail').hidden
+          && document.querySelector('#wb-board .wb-row[aria-current="true"]')?.dataset.group === group, group);
+      };
+      await locate(GROUP);
+      const before = offlineReads.length;
+      await locate(offline);
+      assert.deepEqual(offlineReads.slice(before), [''], 'returning to offline reads only its first page, not the previous three');
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  });
+
+  // A pending fetch deliberately receives no headers. Real browser time leaves the native
+  // AbortSignal.timeout intact; a host deadline bounds the case if the admission timeout disappears.
+  await step('a chat admission probe with pending headers times out before reconnect backoff', async () => {
+    const { page, context, errors } = await open(390, 844, '/');
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let probes = 0;
+    try {
+      await context.addInitScript(() => {
+        window.__streamSources = [];
+        window.EventSource = class extends EventTarget {
+          static OPEN = 1;
+          constructor(url) {
+            super(); this.url = String(url); this.readyState = 1;
+            if (window.__streamSources.length >= 50) throw new Error('stream source bound exceeded');
+            window.__streamSources.push(this);
+            queueMicrotask(() => this.onopen?.());
+          }
+          close() { this.readyState = 2; }
+        };
+      });
+      await page.route(url => url.pathname === '/api/stream', async route => {
+        probes++;
+        await held;
+        await route.abort().catch(() => {});
+      });
+      await page.reload();
+      await openDashboardTab(page, 'chat');
+      await page.waitForFunction(() => window.__streamSources.at(-1)?.url.includes('chat=1'));
+      probes = 0;
+      const count = await page.evaluate(() => window.__streamSources.length);
+      const started = performance.now();
+      let deadline;
+      try {
+        await Promise.race([
+          page.evaluate(async () => { await window.__streamSources.at(-1).onerror(); }),
+          new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('pending admission probe did not time out within seven seconds')), 7000); }),
+        ]);
+      } finally { clearTimeout(deadline); }
+      const elapsed = performance.now() - started;
+      assert.ok(elapsed >= 4500 && elapsed < 7000, `native admission timeout completes around five seconds (${elapsed}ms)`);
+      assert.equal(probes, 1, 'exactly one request was held without response headers');
+      assert.equal(await page.evaluate(() => window.__streamSources.length), count, 'timeout schedules backoff before reconnecting');
+      await page.waitForTimeout(500);
+      assert.equal(await page.evaluate(() => window.__streamSources.length), count, 'timeout retains reconnect backoff for the next half second');
+      await page.waitForFunction(expected => window.__streamSources.length === expected && window.__streamSources.at(-1).url.includes('chat=1'), count + 1);
+      assert.deepEqual(errors, []);
+    } finally { release(); await context.close(); }
   });
 
   // Viewing other machines: the header version and the machine panel's meta line show the viewed machine's own

@@ -342,6 +342,9 @@ test('single Origin diagnostics include its hook stream and legacy streams befor
   for (const [name, stream] of [['a-origin', 'events:origin'], ['b-legacy', 'router'], ['c-other', 'events:other'], ['d-receive', 'receive']]) {
     f.store.upsertSourceHealth(name, 'history', 'warning', { stream, reason: 'file_missing' });
   }
+  // Keep the primary sort key tied so these scope/pagination checks use name
+  // order regardless of how long the individual fixture writes take.
+  f.store.db.prepare("UPDATE source_health SET updated_at = ? WHERE signal_type = 'history'").run('2026-01-01 00:00:00');
   const names = filter => f.store.getHistoryDiagnostics(filter).map(row => row.name);
   assert.deepEqual(names({ sessionGroup: null }), ['b-legacy', 'd-receive']);
   assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true }), ['a-origin', 'b-legacy', 'd-receive']);

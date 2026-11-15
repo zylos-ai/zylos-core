@@ -34,23 +34,49 @@ test('unchanged diagnostics avoid log reads while append, replacement, rotation 
   assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4]);
   fs.renameSync(file, path.join(directory, 'supervisor-events.100.jsonl'));
   fs.writeFileSync(file, event(5));
+  fs.utimesSync(file, 1_700_000_000, 1_700_000_000);
   assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 5]);
-  fs.writeFileSync(file, event(6));
-  // Force a distinct metadata timestamp even on coarse-resolution filesystems.
-  fs.utimesSync(file, new Date(0), new Date(2000));
-  assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 6]);
+  const beforeRewrite = fs.statSync(file);
+  fs.writeFileSync(file, event(600));
+  fs.utimesSync(file, beforeRewrite.atime, beforeRewrite.mtime);
+  const afterRewrite = fs.statSync(file);
+  assert.notEqual(afterRewrite.size, beforeRewrite.size);
+  assert.equal(afterRewrite.mtimeMs, beforeRewrite.mtimeMs);
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 600]);
   fs.appendFileSync(file, event(61));
   assert.equal((await readSessionModeStatus(input)).lastEvents.at(-1).ts, 61);
   fs.writeFileSync(file, event(6));
   assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 6], 'truncation invalidates the cached view');
   fs.unlinkSync(path.join(directory, 'supervisor-events.100.jsonl'));
+  fs.utimesSync(file, 1_700_000_000, 1_700_000_000);
   assert.equal((await readSessionModeStatus(input)).blocked.since, 6);
-  fs.renameSync(file, `${file}.old`); fs.writeFileSync(file, event(7));
+  const beforeReplacement = fs.statSync(file, { bigint: true });
+  const replacement = `${file}.replacement`;
+  fs.writeFileSync(replacement, event(7));
+  fs.utimesSync(replacement, 1_700_000_000, 1_700_000_000);
+  fs.renameSync(replacement, file);
+  const afterReplacement = fs.statSync(file, { bigint: true });
+  assert.equal(afterReplacement.size, beforeReplacement.size);
+  assert.equal(afterReplacement.mtimeNs, beforeReplacement.mtimeNs);
+  assert.notEqual(afterReplacement.ino, beforeReplacement.ino);
+  const replacementReads = reads;
   assert.equal((await readSessionModeStatus(input)).blocked.since, 7);
-  input.db.getModeTransition = () => ({ ...row, run_id: 'switch-b' });
-  assert.deepEqual((await readSessionModeStatus(input)).lastEvents, []);
+  assert.ok(reads > replacementReads, 'same-size replacement with restored mtime is read again');
+  // Populate the next run before warming the current run cache. Nothing is
+  // written between switching runs and observing its already-existing events.
   fs.appendFileSync(file, event(8, 'switch-b'));
-  assert.equal((await readSessionModeStatus(input)).blocked.since, 8);
+  assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [7]);
+  const beforeSwitch = fs.statSync(file, { bigint: true });
+  const switchReads = reads;
+  input.db.getModeTransition = () => ({ ...row, run_id: 'switch-b' });
+  const switched = await readSessionModeStatus(input);
+  assert.equal(switched.blocked.since, 8);
+  assert.deepEqual(switched.lastEvents.map(item => item.ts), [8]);
+  assert.ok(reads > switchReads, 'run-key change rereads an unchanged file');
+  const afterSwitch = fs.statSync(file, { bigint: true });
+  for (const key of ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs']) {
+    assert.equal(afterSwitch[key], beforeSwitch[key], `${key} stays unchanged across the run switch`);
+  }
   fs.unlinkSync(file);
   assert.deepEqual((await readSessionModeStatus(input)).lastEvents, []);
   fs.writeFileSync(file, event(9, 'switch-b'));
