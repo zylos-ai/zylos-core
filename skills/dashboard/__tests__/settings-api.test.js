@@ -16,6 +16,13 @@ import { C4Reader } from '../src/lib/c4-reader.js';
 import { hashApiKey, exchangeApiKeyForToken } from '../src/lib/auth.js';
 
 const fetch = (url, options = {}) => globalThis.fetch(url, { ...options, signal: AbortSignal.timeout(3000) });
+
+async function readSettings(server) {
+  const response = await fetch(server.origin + '/api/settings?all=1');
+  assert.equal(response.status, 200);
+  const all = await response.json();
+  return all.runtimes[all.active];
+}
 import { CodexRolloutCollector } from '../src/lib/collectors/codex-rollout-collector.js';
 import { StatuslineCollector } from '../src/lib/collectors/statusline-collector.js';
 import {
@@ -132,6 +139,12 @@ async function makeSettingsServer(t, runtime = 'claude', configBody = {}, runCli
   const configPath = path.join(dashboardDir, 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({ auth: { enabled: false }, ...configBody }));
   process.env.ZYLOS_DIR = dir;
+  assert.notEqual(process.env.HOME, os.userInfo().homedir);
+  assert.ok(process.env.PM2_HOME.startsWith(path.dirname(process.env.HOME) + path.sep));
+  assert.ok(dir.startsWith(os.tmpdir() + path.sep));
+  console.log(JSON.stringify({ settingsFixture: { HOME: process.env.HOME, ZYLOS_DIR: process.env.ZYLOS_DIR,
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, db: path.join(dashboardDir, 'dashboard.db'),
+    transport: 'loopback-only', cli: 'injected; no tmux or PM2 process' } }));
   const { createServer } = await import(`../src/index.js?settings=${Date.now()}-${Math.random()}`);
   server = createServer();
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -317,12 +330,13 @@ test('loadConfig migrates legacy modelPrices into Claude prices only', () => {
 // HTTP integration via makeSettingsServer: actual route/config persistence;
 // run when this behavior changes, skip presentation-only changes. Private
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
-test('GET /api/settings exposes Codex fast mode as priority service tier', async t => {
+test('all-runtime settings expose Codex fast mode as priority service tier', async t => {
   const server = await makeSettingsServer(t, 'codex');
   try {
-    const resp = await fetch(`${server.origin}/api/settings`);
+    const resp = await fetch(`${server.origin}/api/settings?all=1`);
     assert.equal(resp.status, 200);
-    const body = await resp.json();
+    const all = await resp.json();
+    const body = all.runtimes[all.active];
     assert.equal(body.runtime, 'codex');
     assert.equal(body.fastMode.available, true);
     assert.equal(body.fastMode.mode, 'service_tier');
@@ -342,7 +356,7 @@ test('GET /api/settings exposes Codex fast mode as priority service tier', async
 test('PUT /api/settings stores Codex priority model prices', async t => {
   const server = await makeSettingsServer(t, 'codex');
   try {
-    const current = await (await fetch(`${server.origin}/api/settings`)).json();
+    const current = await readSettings(server);
     const priorityModelPrices = {
       ...current.priorityModelPrices,
       'gpt-5.5': { ...current.priorityModelPrices['gpt-5.5'], input: 13 }
@@ -368,7 +382,7 @@ test('PUT /api/settings stores Codex priority model prices', async t => {
 test('PUT /api/settings rejects fast mode multiplier for Codex runtime', async t => {
   const server = await makeSettingsServer(t, 'codex');
   try {
-    const current = await (await fetch(`${server.origin}/api/settings`)).json();
+    const current = await readSettings(server);
     const resp = await fetch(`${server.origin}/api/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -388,7 +402,7 @@ test('PUT /api/settings rejects fast mode multiplier for Codex runtime', async t
 test('PUT /api/settings stores fast mode multiplier under Claude runtime', async t => {
   const server = await makeSettingsServer(t, 'claude');
   try {
-    const current = await (await fetch(`${server.origin}/api/settings`)).json();
+    const current = await readSettings(server);
     const resp = await fetch(`${server.origin}/api/settings`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -453,22 +467,22 @@ function validateFastMultiplier(fm) {
 test('settings roundtrip preserves current tariff metadata and marks only explicit Fast overrides', async t => {
   const server = await makeSettingsServer(t, 'claude');
   try {
-    const current = await (await fetch(`${server.origin}/api/settings`)).json();
+    const current = await readSettings(server);
     assert.equal(current.fastMode.configuredMultiplier, null);
     assert.equal(current.modelPrices['claude-opus-5'].fastModeMultiplier, 2);
     const put = body => fetch(`${server.origin}/api/settings`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     assert.equal((await put({ modelPrices: current.modelPrices })).status, 200);
-    const unchanged = await (await fetch(`${server.origin}/api/settings`)).json();
+    const unchanged = await readSettings(server);
     assert.equal(unchanged.fastMode.configuredMultiplier, null);
     assert.equal(parseConfigFile(server.configPath).fastModeMultiplier, undefined);
     assert.equal((await put({ fastModeMultiplier: 6 })).status, 200);
-    const changed = await (await fetch(`${server.origin}/api/settings`)).json();
+    const changed = await readSettings(server);
     assert.equal(changed.fastMode.configuredMultiplier, 6); // same running instance
     assert.equal(parseConfigFile(server.configPath).runtimeFastModeMultipliers.claude, 6);
     assert.equal((await put({ fastModeMultiplier: null })).status, 200);
-    const reset = await (await fetch(`${server.origin}/api/settings`)).json();
+    const reset = await readSettings(server);
     assert.equal(reset.fastMode.configuredMultiplier, null);
     assert.equal(reset.fastMode.multiplier, 6);
     const persisted = parseConfigFile(server.configPath);
@@ -483,14 +497,14 @@ test('settings roundtrip preserves current tariff metadata and marks only explic
 test('settings preserves long-context rates and rejects invalid tariff metadata', async t => {
   const server = await makeSettingsServer(t, 'codex');
   try {
-    const current = await (await fetch(`${server.origin}/api/settings`)).json();
+    const current = await readSettings(server);
     const put = body => fetch(`${server.origin}/api/settings`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     const body = { modelPrices: current.modelPrices, priorityModelPrices: current.priorityModelPrices };
     assert.ok(Buffer.byteLength(JSON.stringify(body)) < 16 * 1024);
     assert.equal((await put(body)).status, 200);
-    const roundtrip = await (await fetch(`${server.origin}/api/settings`)).json();
+    const roundtrip = await readSettings(server);
     assert.deepEqual(roundtrip.modelPrices, current.modelPrices);
     assert.deepEqual(roundtrip.priorityModelPrices, current.priorityModelPrices);
     const persisted = parseConfigFile(server.configPath);
@@ -537,13 +551,13 @@ test('ordinary Settings save preserves custom prefixes without broadening built-
   }
   try {
     verify(reload());
-    const current = await (await fetch(`${server.origin}/api/settings`)).json();
+    const current = await readSettings(server);
     const response = await fetch(`${server.origin}/api/settings`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ modelPrices: current.modelPrices, priorityModelPrices: current.priorityModelPrices })
     });
     assert.equal(response.status, 200);
-    const saved = await (await fetch(`${server.origin}/api/settings`)).json();
+    const saved = await readSettings(server);
     verify({ runtimeModelPrices: { codex: saved.modelPrices }, runtimeServiceTierModelPrices: { codex: { priority: saved.priorityModelPrices } } });
     assert.ok(parseConfigFile(server.configPath).runtimeModelPrices.codex['gpt-5']);
     verify(reload());
@@ -554,13 +568,14 @@ test('ordinary Settings save preserves custom prefixes without broadening built-
 // HTTP integration via makeSettingsServer: actual route/config persistence;
 // run when this behavior changes, skip presentation-only changes. Private
 // runner roots + mock-before-import CLI, bounded fetch, owned cleanup as above.
-test('all-runtime settings keep legacy payload and atomically save both price tables', async t => {
+test('all-runtime settings retire the single-runtime read and atomically save both price tables', async t => {
   const server = await makeSettingsServer(t);
   const get = async suffix => (await fetch(server.origin + '/api/settings' + suffix)).json();
-  const original = await get(''), all = await get('?all=1');
+  assert.equal((await fetch(server.origin + '/api/settings')).status, 404);
+  const all = await get('?all=1');
   assert.deepEqual(Object.keys(all).sort(), ['active', 'runtimes']);
   assert.equal(all.active, 'claude');
-  assert.deepEqual(all.runtimes.claude, original);
+  assert.equal(all.runtimes.claude.runtime, 'claude');
   assert.deepEqual(all.runtimes.claude.builtInModels.sort(), Object.keys(DEFAULT_RUNTIME_MODEL_PRICES.claude).sort());
   assert.deepEqual(all.runtimes.codex.builtInModels.sort(), Object.keys(DEFAULT_RUNTIME_MODEL_PRICES.codex).sort());
   const claude = structuredClone(all.runtimes.claude.modelPrices);
@@ -629,15 +644,15 @@ test('explicit runtime metadata reads saved defaults for active and inactive run
   await server.statusline.collect();
   assert.equal(server.statusline.getRuntimeInfo().effort, 'high');
   for (const [runtime, effort] of [['claude', 'low'], ['codex', 'high']]) {
-    const response = await fetch(server.origin + '/api/actions/meta?runtime=' + runtime);
+    const response = await fetch(server.origin + '/api/instance/runtime-options?runtime=' + runtime);
     assert.equal(response.status, 200);
     const meta = await response.json();
     assert.equal(meta.runtime, runtime);
     assert.equal(meta.current_effort, effort);
     assert.equal(meta.runtime_cli, runtime);
   }
-  assert.equal((await fetch(server.origin + '/api/actions/meta?runtime=foo')).status, 400);
-  const legacy = await fetch(server.origin + '/api/actions/meta');
+  assert.equal((await fetch(server.origin + '/api/instance/runtime-options?runtime=foo')).status, 400);
+  const legacy = await fetch(server.origin + '/api/instance/runtime-options');
   assert.equal(legacy.status, 200);
   assert.equal((await legacy.json()).current_effort, 'high');
 });
@@ -657,9 +672,9 @@ test('override pages support read credentials and preserve bounded CLI arguments
   process.env.ZYLOS_SESSION_GROUP = 'fixture:unrelated-group';
   const token = exchangeApiKeyForToken('zylos_ak_fixture').token;
   const headers = { Authorization: `Bearer ${token}` };
-  assert.equal((await fetch(server.origin + '/api/workbench/runtime-overrides')).status, 401);
+  assert.equal((await fetch(server.origin + '/api/groups/runtime-overrides')).status, 401);
   assert.equal(calls.length, 0);
-  const response = await fetch(server.origin + '/api/workbench/runtime-overrides', { headers });
+  const response = await fetch(server.origin + '/api/groups/runtime-overrides', { headers });
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(data.runtimeTotal, 100000);
@@ -673,16 +688,16 @@ test('override pages support read credentials and preserve bounded CLI arguments
   assert.equal(calls[0].options.maxBuffer, 1024 * 1024);
   for (const q of [' ', 'x'.repeat(65), '竞品', '--b', '--upstream-x']) {
     const prior = calls.length;
-    const result = await fetch(server.origin + '/api/workbench/runtime-overrides?q=' + encodeURIComponent(q), { headers });
+    const result = await fetch(server.origin + '/api/groups/runtime-overrides?q=' + encodeURIComponent(q), { headers });
     assert.equal(result.status, 200);
     assert.equal((await result.json()).runtime.length, 0);
     assert.equal(calls.length, prior);
   }
   for (const q of ['a--b', 'AbC']) {
-    await fetch(server.origin + '/api/workbench/runtime-overrides?q=' + q + '&after=chat%3Acursor', { headers });
+    await fetch(server.origin + '/api/groups/runtime-overrides?q=' + q + '&after=chat%3Acursor', { headers });
     assert.deepEqual(calls.at(-1).args, ['group', 'overrides', '--match', q, '--after', 'chat:cursor', '--json']);
   }
-  assert.equal((await fetch(server.origin + '/api/workbench/pricing', { headers })).status, 200);
+  assert.equal((await fetch(server.origin + '/api/usage/pricing', { headers })).status, 200);
 });
 
 // HTTP integration via makeSettingsServer: actual route/config persistence;
@@ -701,16 +716,16 @@ test('override search puts display-name matches first and removes them from ever
   server.store.writeGroupDisplayName('chat:oc_named', '竞品调研 oc_', 'human');
   server.store.writeGroupDisplayName('chat:no_override', '竞品分析', 'human');
   server.store.writeGroupDisplayName('chat:oc_key', 'Saved title', 'human');
-  const chinese = await (await fetch(server.origin + '/api/workbench/runtime-overrides?q=' + encodeURIComponent('竞品'))).json();
+  const chinese = await (await fetch(server.origin + '/api/groups/runtime-overrides?q=' + encodeURIComponent('竞品'))).json();
   assert.equal(chinese.runtime.length, 1);
   assert.equal(chinese.runtime[0].name.displayName, '竞品调研 oc_');
   assert.ok(calls[0].includes('chat:no_override'));
   assert.equal(calls.some(args => args.includes('--match')), false);
   calls.length = 0;
-  const first = await (await fetch(server.origin + '/api/workbench/runtime-overrides?q=oc_')).json();
+  const first = await (await fetch(server.origin + '/api/groups/runtime-overrides?q=oc_')).json();
   assert.deepEqual(first.runtime.map(row => row.sessionGroup), ['chat:oc_named', 'chat:oc_key']);
   assert.equal(first.runtime[1].name.displayName, 'Saved title');
-  const second = await (await fetch(server.origin + '/api/workbench/runtime-overrides?q=oc_&after=' + encodeURIComponent(first.nextAfter))).json();
+  const second = await (await fetch(server.origin + '/api/groups/runtime-overrides?q=oc_&after=' + encodeURIComponent(first.nextAfter))).json();
   assert.equal(second.runtime.length, 1);
   assert.equal(second.runtime[0].sessionGroup, 'chat:oc_tail');
   assert.equal(calls.filter(args => args.includes('--group')).length, 1);
@@ -729,16 +744,16 @@ test('override source failures and malformed envelopes return one failure code',
   for (const bad of [new Error('Core failed'), '{', { ok: false }, { ok: true, data: { runtime: [{}] } },
     { ok: true, data: { runtime: [], runtimeTotal: 'invalid' } }]) {
     output = bad;
-    const response = await fetch(server.origin + '/api/workbench/runtime-overrides');
+    const response = await fetch(server.origin + '/api/groups/runtime-overrides');
     assert.equal(response.status, 502);
     assert.deepEqual(await response.json(), { error: 'override_list_failed' });
   }
   server.store.writeGroupDisplayName('chat:named', '竞品', 'human');
   output = new Error('named lookup failed');
-  const response = await fetch(server.origin + '/api/workbench/runtime-overrides?q=' + encodeURIComponent('竞品'));
+  const response = await fetch(server.origin + '/api/groups/runtime-overrides?q=' + encodeURIComponent('竞品'));
   assert.equal(response.status, 502);
   t.mock.method(server.store, 'searchGroupDisplayNames', () => { throw new Error('names unreadable'); });
-  assert.equal((await fetch(server.origin + '/api/workbench/runtime-overrides?q=abc')).status, 502);
+  assert.equal((await fetch(server.origin + '/api/groups/runtime-overrides?q=abc')).status, 502);
 });
 
 // HTTP integration via makeSettingsServer: actual route/config persistence;
@@ -756,7 +771,7 @@ test('pricing usage aggregates dimension tokens and preserves old costs after pr
     ['codex', { model: 'gpt-6-astra', cost: 5, total_input: 900, output: 100 }],
     ['codex', { model: 'empty' }],
   ]) insert.run(timestamp, runtime, JSON.stringify(dimensions));
-  const usage = await (await fetch(server.origin + '/api/workbench/pricing')).json();
+  const usage = await (await fetch(server.origin + '/api/usage/pricing')).json();
   assert.equal(usage.unmatched.length, 1);
   assert.deepEqual(usage.unmatched[0], { runtime: 'codex', model: 'gpt-reserve', tokens: 1400000 });
   assert.equal(usage.models.find(row => row.model === 'claude-opus-4').cost, 3);

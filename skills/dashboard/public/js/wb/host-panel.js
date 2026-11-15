@@ -1,6 +1,6 @@
 import { element, icon, runtimeName } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
-import { poolExplanation, poolSource, poolDecision, poolBuckets, poolAlgorithm, accountRuntimes, accountUsedPercent, remainingQuotaPercent, quotaReset, quotaRecordedTime } from './instance-strip.js?v=202';
+import { poolExplanation, poolSource, poolDecision, poolBuckets, poolAlgorithm, accountRuntimes, accountUsedPercent, remainingQuotaPercent, quotaReset, quotaRecordedTime } from './instance-strip.js?v=203';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
@@ -307,7 +307,7 @@ export function createHostPanel({ root, read, identity = () => '', detail = () =
     owner = target; failure = null;
     if (reset || data == null) { data = null; draw({ reset }); }
     try {
-      const value = await read('/api/workbench/host?range=' + range);
+      const value = await read('/api/instance/resources?range=' + range);
       if (!active || current !== generation || target !== identity()) return;
       data = value; draw();
     } catch (error) {

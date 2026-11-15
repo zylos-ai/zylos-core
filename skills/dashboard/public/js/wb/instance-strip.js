@@ -206,13 +206,13 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   poolItem.title = [poolName, occupancy == null ? t('wb.unknown') : technical || multi ? t('wb.inst.inUse') + ' ' + occupancy : occupancy,
     source, queued, ...details, t('wb.inst.poolHint')].filter(Boolean).join(' · ');
   root.append(poolItem, ...systemItems(document, instance.system ?? null, { t, readAt: snapshot.readAt }));
-  cost = costSummary?.today?.total ?? cost;
+  cost = costSummary?.today?.cost ?? cost;
   const costName = t(technical ? 'wb.inst.costTech' : 'wb.cost'), today = money(cost);
   const expense = item(document, icon(document, 'dollar', 'xs'), spoken(document, costName), element(document, 'b', today));
   expense.classList.add('wb-cost');
   // The title names the scope, so the cost never reads as one group's.
   if (technical) {
-    const week = costSummary == null ? '—' : money(costSummary.sevenDay?.total);
+    const week = costSummary == null ? '—' : money(costSummary.sevenDay?.cost);
     expense.append(element(document, 'span', '·'), element(document, 'b', week));
     expense.title = [costName, t('wb.inst.today') + ' ' + today, t('wb.usage.range.7d') + ' ' + week, t('wb.usage.allGroups')].join(' · ');
   } else expense.title = [costName, today, t('wb.usage.allGroups')].join(' · ');

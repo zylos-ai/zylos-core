@@ -1,10 +1,10 @@
 import { element, icon } from './plain-text.js?v=106';
-import { money } from './instance-strip.js?v=202';
+import { money } from './instance-strip.js?v=203';
 import { dateField } from './date-field.js?v=106';
 import { instantFromInput } from './instance-zone.js?v=100';
 
 const colors = ['#0d9488', '#6366f1', '#d97706'];
-export const usageRanges = ['24h', '7d', 'month', '30d', 'custom'];
+export const usageRanges = ['24h', '7d', '30d', 'custom'];
 const numeric = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 export const formatCost = value => value == null ? '—' : '$' + Number(value).toFixed(4);
 export const formatUsageCount = (value, t = key => key) => value == null ? t('wb.unknown') : Number(value).toLocaleString();
@@ -148,15 +148,10 @@ export function barList(root, { title, rows = [], valueLabel, iconName = null, s
   return { node: card, destroy() {} };
 }
 
-/** The cache hit rate over the period the usage reply covers. */
-export function cachePath({ since, until }) {
-  return '/api/metrics/series?' + new URLSearchParams({ metric: 'cache', since, until, bucket: '86400' });
-}
-
 export function usagePath({ range = '7d', since = '', until = '' } = {}) {
   const params = new URLSearchParams({ range });
   if (range === 'custom') { params.set('since', since); params.set('until', until); }
-  return '/api/workbench/usage?' + params;
+  return '/api/usage/series?' + params;
 }
 
 const sum = rows => rows.reduce((total, value) => total + numeric(value), 0);
@@ -189,7 +184,7 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
   addTotal(t('wb.usage.received'), formatUsageCount(totals.messages?.in, t),
     `${t('wb.usage.sent')} ${formatUsageCount(totals.messages?.out, t)}`);
   if (level === 'technical') {
-    // The cache hit rate comes from the metrics endpoint: all engines together over the same period.
+    // The usage response supplies the all-engine cache rate for this period.
     addTotal(t('wb.usage.tokens'), compactCount(totals.tokens, t),
       cacheRate == null ? '' : t('wb.usage.cacheHit', { pct: Math.round(cacheRate * 100) }), totals.tokens);
     addTotal(t('wb.usage.rotations'), totals.rotations == null ? t('wb.unknown') : t('wb.usage.times', { count: totals.rotations }),
@@ -234,6 +229,10 @@ export function renderUsage(root, value, { document = root.ownerDocument, t = ke
       { label: t('wb.usage.sent'), data: buckets.map(at => -numeric(messages.get(at)?.out)) },
     ], stacked: true });
   if (level === 'technical') {
+    const cached = new Map((value.cache ?? []).map(row => [row.at, row.value]));
+    add({ title: t('wb.usage.cacheRate'), iconName: 'layers', labels, type: 'line',
+      datasets: [{ label: t('wb.usage.cacheRate'), data: buckets.map(at => cached.get(at) == null ? null : cached.get(at) * 100) }],
+      yFormat: amount => amount + '%' });
     const tokens = runtimeSeries('tokensByRuntime');
     const tokenChart = add({ title: t('wb.usage.tokens'), iconName: 'layers', labels, datasets: tokens, stacked: true, yFormat: amount => compactCount(amount, t),
       subtitle: `${per} · ${t('wb.usage.total')} ${compactCount(totals.tokens ?? sum(tokens.flatMap(row => row.data)), t)}` });
@@ -318,23 +317,13 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
     try {
       const value = await read(usagePath({ range, since: custom ? new Date(start).toISOString() : '', until: custom ? new Date(end).toISOString() : '' }));
       if (!active || current !== generation || target !== identity()) return;
-      data = value; status.textContent = ''; draw();
+      data = value; cacheRate = value.totals?.cacheHitRate ?? null; status.textContent = ''; draw();
     } catch (error) {
       if (!active || current !== generation || target !== identity()) return;
       status.textContent = t('wb.readFailed') + (detail() === 'technical' ? ' · ' + error.message : '');
       return;
     }
-    await readCache(current, target);
-  }
-  // The hit rate is an extra line under the technical token total; when it cannot be read the line is left out.
-  async function readCache(current = generation, target = identity()) {
-    if (detail() !== 'technical' || cacheRate != null || !data?.since || !data?.until) return;
-    try {
-      const cache = await read(cachePath(data));
-      if (!active || current !== generation || target !== identity()) return;
-      cacheRate = Number.isFinite(cache?.total) ? cache.total : null;
-      if (cacheRate != null) draw();
-    } catch {}
+
   }
   function choose(name) {
     if (range === name) return;
@@ -345,7 +334,7 @@ export function createUsagePage({ root, read, identity = () => '', detail = () =
   return {
     open() { active = true; return refresh(); }, refresh,
     close() { active = false; generation++; clear(); status.textContent = ''; },
-    setViewDetail() { if (active && owner === identity()) { draw(); void readCache(); } },
+    setViewDetail() { if (active && owner === identity()) { draw(); } },
     destroy() { active = false; generation++; rendered?.destroy(); apply.removeEventListener('click', applyCustom); root.replaceChildren(); },
   };
 }

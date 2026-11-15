@@ -108,7 +108,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     assert.equal(response.headers.get('cache-control'), 'no-store');
     return { status: response.status, body: await response.json() };
   };
-  const ready = () => request('/api/health?probe=ready');
+  const ready = () => request('/api/health/ready');
 
   await t.test('ordinary public health exposes only liveness and a stable boot identity', async () => {
     const { body: expected } = await request('/api/health');
@@ -152,7 +152,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     }
     assert.equal(database.getSession(sessionHash).last_activity_at, activityBefore,
       'authenticated health polling must not extend the cookie idle lifetime');
-    assert.equal((await request('/api/state', { Cookie: cookie })).status, 200);
+    assert.equal((await request('/api/usage/summary', { Cookie: cookie })).status, 200);
     assert.equal(database.getSession(sessionHash).last_activity_at, activityBefore + 1000,
       'ordinary authenticated activity still updates the cookie idle lifetime');
     assert.equal(identityReads, 0);
@@ -198,7 +198,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     let release, received = 0;
     identityGate = new Promise(resolve => { release = resolve; });
     const onRequest = req => {
-      if (req.url === '/api/health?probe=ready' && ++received === count) dashboard.emit('probe-batch-arrived');
+      if (req.url === '/api/health/ready' && ++received === count) dashboard.emit('probe-batch-arrived');
     };
     dashboard.on('request', onRequest);
     const arrived = once(dashboard, 'probe-batch-arrived', { signal: AbortSignal.timeout(3000) });
@@ -282,7 +282,7 @@ test('Dashboard readiness uses public HTTP and the existing supervisor reply', {
     }
   });
   await t.test('health query exemption does not open other API paths', async () => {
-    for (const route of ['/api/state?probe=ready', '/api/instance-status?probe=ready', '/api/health/extra?probe=ready']) {
+    for (const route of ['/api/instance?probe=ready', '/api/groups/counts?probe=ready', '/api/health/extra?probe=ready']) {
       assert.equal((await request(route)).status, 401);
     }
   });

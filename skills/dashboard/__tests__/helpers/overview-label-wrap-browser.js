@@ -121,10 +121,10 @@ const RICH_POOL = { used: 2, capacity: 4, waiting: 2, capacityRecord: { valid: t
 const QUEUE = { zh: { plain: '· 2 个在排队', technical: '· 2 排队' }, en: { plain: '· 2 queued', technical: '· 2 queued' } };
 const SOURCE = { zh: '手动设定 4（按内存建议 3）', en: 'Manually set to 4 (memory recommendation: 3)' };
 const EXPLANATIONS = {
-  zh: ['未设内存上限，按整机内存 · 内存上限 16 GiB · 已用 9.5 GiB · 保底 2 GiB', '每会话约 1.2 GiB · 固定开销约 0.8 GiB · 近 7 天',
+  zh: ['未设内存上限，按整机内存 · 内存上限 16 GiB · 已用 9.5 GiB（不含文件缓存和交换区） · 保底 2 GiB', '每会话约 1.2 GiB · 固定开销约 0.8 GiB（各档的中间值） · 近 7 天',
     '内存只够 Origin，同时运行上限为 1'],
-  en: ['No memory limit set; using host memory · Memory limit 16 GiB · used 9.5 GiB · reserve 2 GiB',
-    'about 1.2 GiB per session · fixed overhead about 0.8 GiB · over the last 7 days', 'Memory fits only Origin; running with a limit of 1'],
+  en: ['No memory limit set; using host memory · Memory limit 16 GiB · used 9.5 GiB (excluding file cache and swap) · reserve 2 GiB',
+    'about 1.2 GiB per session · fixed overhead about 0.8 GiB (median across buckets) · over the last 7 days', 'Memory fits only Origin; running with a limit of 1'],
 };
 const HOST_POOL = { zh: { title: '会话池', slots: '名额', source: '来源' }, en: { title: 'Session pool', slots: 'Slots', source: 'Source' } };
 const POOL_NAME = { zh: '池', en: 'Pool' }, POOL_PLAIN = { zh: '同时运行', en: 'Running together' };
@@ -156,7 +156,7 @@ const ITEMS = {
       ['$1.50', 'Cost today · $1.50 · All groups combined'], ['6 / 6', 'Background services · 6 / 6 online']],
   },
 };
-const WORDS = { zh: ['1 忙碌', '1 空闲', '1 未运行'], en: ['1 Busy', '1 Idle', '1 Not running'] };
+const WORDS = { zh: ['1 工作中', '1 空闲', '2 离线'], en: ['1 Working', '1 Idle', '2 Offline'] };
 
 export async function runOverviewLabelWrapBrowser(t, sandbox) {
   const modulePath = process.env.ZYLOS_CHAT_BROWSER_MODULE, executablePath = process.env.ZYLOS_CHAT_BROWSER_BIN;
@@ -181,11 +181,11 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       try { localStorage.setItem('zylos-dashboard-locale', locale); localStorage.setItem('zylos-dashboard-detail-level', detail); } catch {}
     }, [language, level]);
     // A pool answer (and run mode) of its own, from the first load on: the fixture's other answers stay as they are.
-    if (pool || mode) await context.route(url => url.pathname === '/api/workbench/groups', async route => {
+    if (pool || mode) await context.route(url => ['/api/instance', '/api/groups/counts'].includes(url.pathname), async route => {
       const response = await route.fetch();
       const body = await response.json();
-      if (pool) body.instance.pool = { ...body.instance.pool, ...pool };
-      if (mode) body.mode = mode;
+      if (pool) body.pool = { ...body.pool, ...pool };
+      if (mode) { body.mode = mode; body.session_mode = mode; }
       await route.fulfill({ response, json: body });
     });
     // narrowTo(box, items): each item's min-content width (its widest piece that may not break) and max-content
@@ -221,6 +221,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     return { page, context };
   }
   const openDetail = async page => {
+    await page.locator('.wb-group-sides > button').nth(1).click();
     await page.locator('#wb-board .wb-row', { hasText: 'Product weekly' }).click();
     await page.locator('#wb-side .wb-d-top').waitFor();
   };
@@ -244,7 +245,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     // Each count always reads as number and state word, also when the word is not shown.
     assert.deepEqual(result.counts.map(count => count.text), WORDS[language]);
     assert.equal(result.counts.every(count => count.wordRead), true, 'the state word stays in the accessibility tree');
-    assert.deepEqual(result.counts.map(count => count.title), WORDS[language].map(text => `${text.slice(text.indexOf(' ') + 1)} 1`));
+    assert.deepEqual(result.counts.map(count => count.title), WORDS[language].map(text => `${text.slice(text.indexOf(' ') + 1)} ${text.slice(0, text.indexOf(' '))}`));
     // The technical view shows numbers only; the plain view shows the words unless the counts are compact.
     assert.equal(result.counts.every(count => count.wordShown), !technical && !result.distCompact);
     assert.equal(result.counts.some(count => count.wordShown), !technical && !result.distCompact);
@@ -296,7 +297,18 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       } finally { await context.close(); }
     });
   }
-  // The checks above hold either way; these widths have to reach both forms of the count row for them to mean something.
+  // Current state labels fit at both normal widths. Narrow the count box explicitly so the same
+  // browser checks still cover the compact form without depending on older, longer translations.
+  await t.test('current state labels compact when their full form does not fit', async () => {
+    const { page, context } = await open(390, 'en');
+    try {
+      await page.locator('#wb-dist').evaluate(row => { row.style.maxWidth = '160px'; });
+      await page.waitForFunction(() => document.querySelector('#wb-dist').classList.contains('wb-compact'));
+      const result = await measureOn(page);
+      checkLabels(result, 'en');
+      seen.counts.add(result.distCompact);
+    } finally { await context.close(); }
+  });
   assert.deepEqual([...seen.counts].sort(), [false, true], 'the counts were seen in their full and their compact form');
 
   // No test width makes the cell narrower than the Chinese label, but a larger font can. The button is given half
@@ -417,12 +429,12 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
   await t.test('the host panel pool section follows the board polls', async () => {
     const { page, context } = await open(1280, 'zh', 'plain', { pool: RICH_POOL });
     let next = null;
-    await context.route(url => url.pathname === '/api/workbench/groups', async route => {
+    await context.route(url => ['/api/instance', '/api/groups/counts'].includes(url.pathname), async route => {
       const response = await route.fetch();
       const body = await response.json();
       const { mode, ...pool } = next ?? {};
-      body.instance.pool = { ...body.instance.pool, ...RICH_POOL, ...pool };
-      if (mode) body.mode = mode;
+      body.pool = { ...body.pool, ...RICH_POOL, ...pool };
+      if (mode) { body.mode = mode; body.session_mode = mode; }
       await route.fulfill({ response, json: body });
     });
     try {
@@ -496,11 +508,12 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     const { page, context } = await open(1280, 'zh');
     try {
       await openDetail(page);
+      await page.locator('#wb-dist').evaluate(row => { row.style.maxWidth = 'calc(100vw - 750px)'; });
       checkLabels(await measureOn(page), 'zh');
       // The widths are chosen so that only a refit gives each row the expected form; a poll (every 5s, which also
       // refits) could land in the same 2s, so the resize path itself is pinned down by wb-label-fit's unit tests.
-      // With the 480px drawer open, 2000px leaves the list 1520px, room for the full form in any font, and 800px
-      // leaves 320px, room for it in none.
+      // Constrain the count box relative to the viewport: the current shorter labels fit at 2000px
+      // and require compact form at 800px, while the actual resize observer performs the refit.
       await page.setViewportSize({ width: 2000, height: 800 });
       await page.waitForFunction(() => !document.querySelector('#wb-dist').classList.contains('wb-compact'), null, { timeout: 2000 });
       checkLabels(await measureOn(page), 'zh');
@@ -514,10 +527,10 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
   await t.test('a strip that grows on a poll keeps whole items without compacting', async () => {
     const { page, context } = await open(800, 'zh');
     let longer = false;
-    await context.route(url => url.pathname === '/api/workbench/groups', async route => {
+    await context.route(url => ['/api/instance', '/api/groups/counts'].includes(url.pathname), async route => {
       const response = await route.fetch();
       const body = await response.json();
-      if (longer) Object.assign(body.instance, { pool: { ...body.instance.pool, waiting: 12 }, services: { online: 3, total: 6 } });
+      if (longer) Object.assign(body, { pool: { ...body.pool, waiting: 12 }, services: { online: 3, total: 6 } });
       await route.fulfill({ response, json: body });
     });
     try {
@@ -543,6 +556,7 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       const { page, context } = await open(1280, language, 'plain', { listenErrors: true });
       try {
         await openDetail(page);
+        await page.locator('#wb-dist').evaluate(row => { row.style.maxWidth = 'calc(100vw - 750px)'; });
         let width = 1280;
         await nextFrames(page);
         while (!await page.evaluate(anyCompact) && width > 901) {

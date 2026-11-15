@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
-import { GROUP as SAMPLE_GROUP, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { GROUP as SAMPLE_GROUP, workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const GROUP = 'dashboard:live-timing';
@@ -26,7 +26,7 @@ async function startApi(sandbox) {
       { id: 2, direction: 'out', channel: 'dashboard', content: '起好了。', timestamp: iso(NOW - 540000), status: 'delivered' }] };
   const counts = { activity: 0, groups: 0, sends: 0 }, missing = new Set(), streams = new Set();
   const snapshot = url => {
-    const value = workbenchAnswer(url, NOW);
+    const value = workbenchSnapshot(NOW);
     const row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
     Object.assign(row, { sessionGroup: GROUP, origin: false, presence: state.presence, processing: null, name: { displayName: '计时示例' },
       state: { kind: 'idle' }, duration: 75, tools: [], queue: { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null },
@@ -40,7 +40,7 @@ async function startApi(sandbox) {
   const conversation = { id: ID, localId: 'live-timing', sessionGroup: GROUP, channel: 'dashboard', state: 'active', origin: false, displayName: '计时示例' };
   const answer = url => {
     const p = url.pathname;
-    if (p === '/api/workbench/groups') { counts.groups++; return snapshot(url); }
+    if (['/api/groups/running', '/api/groups/offline', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') { counts.groups++; return workbenchSnapshotAnswer(url, snapshot(url), NOW); }
     if (p === '/api/chat/conversations') {
       if (url.searchParams.get('tab') === 'external') return { items: [], nextCursor: null, tz: 'UTC' };
       return { items: [{ ...conversation, session_group: GROUP, display_name: '计时示例' }], nextCursor: null, tz: 'UTC' };

@@ -61,10 +61,10 @@ test('override search appends one batch and reports read failures without replac
 test('settings loader reads one group snapshot and one first batch on each open and invalidates stale opens', async () => {
   const paths = [], loads = [], pending = [];
   const loader = createSettingsLoader({ read: path => { paths.push(path); const item = deferred(); pending.push(item); return item.promise; }, onLoad: value => loads.push(value) });
-  const first = loader.open(); assert.equal(paths.filter(path => path === '/api/workbench/groups').length, 1); assert.equal(paths.filter(path => path === '/api/workbench/runtime-overrides').length, 1);
+  const first = loader.open(); assert.equal(paths.filter(path => path === '/api/groups/running').length, 1); assert.equal(paths.filter(path => path === '/api/groups/runtime-overrides').length, 1);
   loader.invalidate(); pending.forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await first; assert.equal(loads.length, 0);
-  const second = loader.open(); pending.slice(6).forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await second;
-  assert.equal(loads.length, 1); assert.equal(paths.length, 12); assert.equal(paths.some(path => path.includes('after=')), false);
+  const second = loader.open(); pending.slice(8).forEach(item => item.resolve({ runtimeTotal: 100000, runtime: [], nextAfter: 'next' })); await second;
+  assert.equal(loads.length, 1); assert.equal(paths.length, 16); assert.equal(paths.some(path => path.includes('after=')), false);
 });
 
 test('idle reclaim minutes reject invalid drafts and save one confirmed global action', async () => {
@@ -814,7 +814,7 @@ test('a custom model requests its own threshold instead of showing the current m
   custom.value = 'large-custom'; await custom.dispatch('input');
   assert.equal(requests.length, 1);
   const requested = new URL(requests[0], 'http://fixture.invalid');
-  assert.equal(requested.pathname, '/api/actions/meta');
+  assert.equal(requested.pathname, '/api/instance/runtime-options');
   assert.equal(requested.searchParams.get('runtime'), 'codex');
   assert.equal(requested.searchParams.get('model'), 'large-custom');
   assert.equal(threshold.value, '', 'a different model must not inherit the current model threshold');

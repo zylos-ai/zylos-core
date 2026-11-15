@@ -1180,5 +1180,20 @@
   "wb.fleet.state.no_response": "无响应",
   "wb.fleet.reason.auth_failed": "认证失败",
   "wb.fleet.reason.start_failed": "启动失败",
-  "wb.fleet.reason.no_response": "无响应"
+  "wb.fleet.reason.no_response": "无响应",
+  "wb.state.working": "工作中",
+  "wb.state.offline": "离线",
+  "wb.state.stopping": "停止中",
+  "wb.groups.running": "运行中",
+  "wb.groups.offline": "离线",
+  "wb.board.groupsLabel": "会话组",
+  "wb.flags.queued": "排队 {count}",
+  "wb.flags.blocked": "被卡住",
+  "wb.flags.waitingSlot": "等空位 #{position}",
+  "wb.flags.startFailed": "启动失败",
+  "wb.flags.unreadable": "状态读不到",
+  "wb.groupUsage.title": "用量",
+  "wb.groupUsage.summary": "{tokens} tokens · {cost} · 缓存 {cache}",
+  "wb.usage.cacheRate": "缓存命中率",
+  "wb.groups.more": "加载更多离线组"
 }

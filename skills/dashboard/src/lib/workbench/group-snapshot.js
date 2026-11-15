@@ -11,7 +11,6 @@ import { activityBuckets } from './activity-buckets.js';
 import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES, MAIN_ACTION_TYPES, MAIN_INPUT_TYPES, STOP_HOOK_LAG_MS } from './working.js';
 const { resolveSessionHotTtl } = await defaultLoadCoreModule('session-hot-ttl.js');
 import { searchGroups } from './group-search.js';
-import { validKey } from './display-names.js';
 import { readPool, poolPositions } from './pool-capacity.js';
 
 const emptyNames = { listAll: () => new Map(), search: () => [] };
@@ -55,15 +54,15 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
     if (!ids.length) return new Map();
     try { return await readTaskNames(ids); } catch { return new Map(); }
   }
-  async function getSnapshot(at = now(), { fresh = false, maxAgeMs = 2000 } = {}) {
+  async function getSnapshot(at = now(), { fresh = false } = {}) {
     if (inflight) {
       if (!fresh) return inflight;
       // A lifecycle-triggered reader needs observations made after the pending
       // read, rather than reusing an old generation's in-flight snapshot.
       await inflight;
-      return getSnapshot(at, { fresh, maxAgeMs });
+      return getSnapshot(at, { fresh });
     }
-    if (!fresh && cache && at - cache.builtAt < maxAgeMs) return cache.value;
+    if (!fresh && cache && at - cache.builtAt < 2000) return cache.value;
     inflight = buildGroupSnapshot(at);
     try {
       const value = await inflight;
@@ -74,7 +73,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
   async function buildGroupSnapshot(at) {
     const captured = new Map(), sources = {};
     let mode = 'unreadable', status = null, statusError = null, reader;
-    try { mode = (await loadCoreModule('config.js')).readSessionMode().mode; }
+    try { mode = (await loadCoreModule('config.js')).readSessionMode().mode ?? 'single'; }
     catch { mode = 'unreadable'; }
     try {
       reader = await loadCoreModule('session-state-reader.js');
@@ -92,9 +91,12 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       sources.status = { ok: false, reason: statusError, readAt: now() };
     }
     const [c4, q] = await Promise.all([
-      cli.runC4Db(['groups', '--active-since', String(at - 7 * 86400000), '--json']),
+      cli.runC4Db(['groups', '--json']),
       cli.runC4Db(['group-queues', '--json']),
     ]);
+    // Counts and the offline page include the complete catalog, including groups
+    // older than the activity window. The public APIs select their own rows.
+    if (c4.ok && Array.isArray(c4.data)) c4.data = { groups: c4.data, hasOlder: false };
     sources.c4 = source(c4); sources.q = source(q);
     const taskNames = c4.ok ? await namesOfTasks(c4.data.groups) : new Map();
     const { rows, hasOlder } = mergeGroups({ status, c4, q, names: await displayNames.listAll(), taskNames, statusError }, sanitizer);
@@ -149,6 +151,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
         : ov.ok ? { runtime: selectedRuntime, model: selectedModel ? { model: selectedModel.model, effort: selectedModel.effort } : 'default' }
           : { runtime: null, reason: 'override_list_failed' };
       if (status?.view === 'single') row.target.onlyMulti = true;
+      row.model = usage?.valid ? (row.target.runtime === 'claude' ? usage.value.model?.id : usage.value.model) ?? null
+        : row.launchConfig?.mode === 'override' ? row.launchConfig.model ?? null : null;
+      row.effort = usage?.valid ? usage.value.effort?.level ?? usage.value.reasoningEffort ?? usage.value.reasoning_effort ?? null : row.launchConfig?.effort ?? null;
       row.desired = status?.view === 'single' || !ov.ok ? null : selectedModel
         ? { runtime: selectedRuntime, mode: 'override', model: selectedModel.model, effort: selectedModel.effort }
         : { runtime: selectedRuntime, mode: 'default' };
@@ -211,6 +216,9 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       instance: { runtimeHealth: status?.runtimeHealth ?? null, supervisorPaused: status?.supervisorPaused ?? null, accounts: accountsCache.accounts,
         pool, services, system, autoRestarts: { count: restarts } },
       overrides: ov.ok ? ov.data : null, sources };
+    // Projection evidence is shared with the object APIs, but is not an extra
+    // public copy of the event catalog or slot owners.
+    Object.defineProperty(value, 'groupEvidence', { value: { activations, positions, owners } });
     value.attention = buildAttention(value, { channelDownCounter, pm2Data });
     for (const row of rows) row.attention = value.attention.problems.filter(problem =>
       problem.group === row.sessionGroup || problem.groups?.includes(row.sessionGroup));
@@ -261,24 +269,3 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
 }
 
 function source({ ok, reason, detail, readAt }) { return { ok, ...(reason ? { reason } : {}), ...(detail ? { detail } : {}), readAt }; }
-
-const WORKBENCH_RAW = /^\/api\/workbench\/groups\/([^/]+)\/raw$/;
-
-/** Shared by the HTTP routes; authentication is owned by the existing API gate. */
-export async function workbenchResponse(service, pathname, searchParams) {
-  if (pathname === '/api/workbench/groups') {
-    const snapshot = await service.getSnapshot();
-    return searchParams.get('view') === 'summary' ? { readAt: snapshot.readAt, mode: snapshot.mode,
-      view: snapshot.view, counts: snapshot.counts, pool: { used: snapshot.instance.pool.used, capacity: snapshot.instance.pool.capacity }, hasOlder: snapshot.hasOlder } : snapshot;
-  }
-  if (pathname === '/api/workbench/groups/search') return service.search(searchParams.get('q'));
-  if (pathname === '/api/workbench/activity') return service.activity(searchParams.get('range'));
-  const raw = pathname.match(WORKBENCH_RAW);
-  if (raw) {
-    let key;
-    try { key = decodeURIComponent(raw[1]); } catch {}
-    if (key !== 'origin' && !validKey(key)) throw Object.assign(new Error('Invalid session group'), { statusCode: 400, code: 'SESSION_GROUP_INVALID' });
-    return service.raw(key);
-  }
-  return null;
-}

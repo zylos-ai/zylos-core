@@ -6,6 +6,7 @@ import test from 'node:test';
 import { Store } from '../src/lib/store.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
+import { createGroupSnapshot, systemSample } from '../src/lib/workbench/group-snapshot.js';
 import { scheduleEnv } from './fixtures/schedule-env.js';
 
 // HTTP/SQLite integration for CoreState API wiring: run for state refresh, fleet,
@@ -45,6 +46,19 @@ test('state APIs await a fresh observation before answering idle requests', { ti
     };
     return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
   } } });
+  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
+    systemSample,
+    createGroupSnapshot: options => createGroupSnapshot({ ...options,
+      cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
+        readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'codex' }, runtime: [], model: [] } }) },
+      loadCoreModule: async name => {
+        if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
+        if (name === 'session-state-reader.js') return { readAccountUsageSnapshot: async () => ({ live: null, recorded: null }) };
+        if (name === 'status-view.js') return { collectStatus: async () => ({ view: 'single',
+          origin: { presence: 'running', runtime: 'codex', status: { valid: true, state: 'idle' } }, groupListError: null, runtimeHealth: {} }) };
+        return import(new URL(`../../../cli/lib/${name}`, import.meta.url));
+      } }),
+  } });
   t.mock.method(VersionChecker.prototype, 'start', () => {});
   t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
   const stores = new Set(), timers = new Set();
@@ -70,7 +84,7 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   await login.text();
   assert.equal(login.status, 302);
   const cookie = login.headers.getSetCookie().find(value => value.startsWith('__Secure-zylos_dashboard_session=')).split(';')[0];
-  for (const route of ['/api/fleet', '/api/metrics/aggregate?metric=cost&period=session', '/api/actions/meta', '/api/stream']) {
+  for (const route of ['/api/fleet', '/api/instance', '/api/instance/runtime-options', '/api/stream']) {
     const before = sample;
     let entered, release;
     const began = new Promise(resolve => { entered = resolve; });
@@ -91,19 +105,20 @@ test('state APIs await a fresh observation before answering idle requests', { ti
       if (route === '/api/stream') {
         const reader = response.body.getReader();
         let frames = '';
-        for (let i = 0; i < 8 && !frames.includes('event: fleet_state'); i++) {
+        for (let i = 0; i < 8 && !frames.includes('event: instance'); i++) {
           const { value, done } = await reader.read();
           assert.equal(done, false);
           frames += new TextDecoder().decode(value);
           assert.ok(frames.length < 65536);
         }
-        assert.match(frames, new RegExp(`"runId":"run-${expected}"`));
+        assert.match(frames, /event: instance/);
+        assert.match(frames, new RegExp(`"model_id":"model-${expected}"`));
         await reader.cancel();
       } else {
         const body = await response.json();
-        if (route === '/api/fleet') assert.equal(body.agents[0].context_pct, expected);
-        else if (route === '/api/actions/meta') assert.equal(body.running_model, `model-${expected}`);
-        else assert.equal(body.sessionId, `session-${expected}`);
+        if (route === '/api/fleet') assert.equal(body.agents[0].model, `model-${expected}`);
+        else if (route === '/api/instance/runtime-options') assert.equal(body.running_model, `model-${expected}`);
+        else assert.equal(body.runtime_info.model_id, `model-${expected}`);
       }
     } finally { release(); controller.abort(); streams.delete(controller); nextRead = null; releaseRead = null; releaseActive = null; }
   }

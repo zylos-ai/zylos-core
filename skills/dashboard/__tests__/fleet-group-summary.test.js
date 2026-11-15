@@ -3,7 +3,8 @@ import test from 'node:test';
 import { fleetGroupSummary, sanitizeFleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
 import { buildAttention } from '../src/lib/workbench/attention.js';
 import { classify } from '../src/lib/workbench/group-state.js';
-import { FleetPoller, stateToFleetRecord } from '../src/lib/fleet-poller.js';
+import { objectResponse, flushObjectReads } from './fixtures/fleet-object-api.js';
+import { FleetPoller, stateToFleetRecord, fleetStateFromObjects } from '../src/lib/fleet-poller.js';
 
 function row(sessionGroup, kind = 'idle', extra = {}) {
   return { sessionGroup, presence: 'running', state: { kind }, ...extra };
@@ -140,16 +141,21 @@ test('fleet remote mode is explicit and legacy/malformed summaries degrade to nu
   assert.equal(stateToFleetRecord({}, { state: 'IDLE', session_mode: 'multi', group_summary: {} }).group_summary, null);
 });
 
-test('HTTP and SSE remote ingestion carry the same summary and clear it after a failed read', async () => {
-  const group_summary = fleetGroupSummary(snapshot([row('x', 'error')]));
+test('HTTP and SSE object reads carry the same running summary and clear it after a failed read', async () => {
   const agent = { name: 'Remote', base_url: 'https://remote.example.test', read_api_key: 'fixture' };
-  const payload = { state: 'BUSY', session_mode: 'multi', group_summary };
+  let working = 1;
   const poller = new FleetPoller({ fleet: { agents: [agent] } }, { fetch: async url =>
-    new Response(JSON.stringify(url.endsWith('/api/auth/token') ? { token: 'fixture' } : payload)), now: () => 0 });
+    url.endsWith('/api/auth/token') ? new Response(JSON.stringify({ token: 'fixture' }))
+      : objectResponse(url, { working, idle: 1, unknown: 1, instance: { session_mode: 'multi' } }), now: () => 0 });
+  const expected = busy => ({ running: busy + 2, counts: { busy, idle: 1, waiting: 0, unknown: 1, error: 0, no_response: 0 },
+    problems: [], problemCount: 0, listKnown: true, pool: { used: busy + 1, capacity: 12 },
+    noResponse: { count: 0 }, autoRestarts: { count: 0 } });
   await poller.pollOnce();
-  assert.deepEqual(poller.getFleet().agents[0].group_summary, group_summary);
-  poller._handleSseEvent(agent, { event: 'fleet_state', data: JSON.stringify(payload) });
-  assert.deepEqual(poller.getFleet().agents[0].group_summary, group_summary);
+  assert.deepEqual(poller.getFleet().agents[0].group_summary, expected(1));
+  working = 2;
+  poller._handleSseEvent(agent, { event: 'groups', data: '{}' });
+  await flushObjectReads();
+  assert.deepEqual(poller.getFleet().agents[0].group_summary, expected(2));
   poller._setFailure(agent, 'timeout');
   const failed = poller.getFleet().agents[0];
   assert.equal(failed.session_mode, null);
@@ -179,4 +185,26 @@ test('Workbench auth attention takes precedence over its busy/waiting classifica
   assert.equal(result.counts.error, 2);
   assert.equal(result.problemCount, 2);
   assert.deepEqual(result.problems.map(problem => problem.sessionGroup), ['busy', 'starting']);
+});
+
+
+test('object fleet projection preserves the existing auth and unanswered-work summary', () => {
+  const rows = [row('busy', 'busy'), row('auth', 'busy', { attention: [{ kind: 'auth_failed' }] }),
+    row('silent', 'idle', { noResponse: { since: 1000 } })];
+  const old = snapshot(rows, { readAt: 10000 });
+  const expected = fleetGroupSummary(old);
+  const mapped = fleetStateFromObjects({ session_mode: 'multi' },
+    { readAt: 10000, listKnown: true, running: {total: 3, states: {working: 2, idle: 1, starting: 0, stopping: 0, unknown: 0}}, pool: old.instance.pool },
+    { today: {cost: 0}, sevenDay: {cost: 0} },
+    {rows: rows.map(item => ({...item,state:{kind:item.state.kind === 'busy' ? 'working' : item.state.kind}}))});
+  assert.deepEqual(mapped.group_summary, expected);
+});
+
+
+test('an explicitly unreadable instance mode remains unknown instead of an offline transport failure', () => {
+  const value = fleetStateFromObjects({session_mode:null},
+    {listKnown:false,running:{total:0,states:{working:0,idle:0,starting:0,stopping:0,unknown:0}}},
+    {today:{cost:null},sevenDay:{cost:null}}, {rows:[]});
+  assert.equal(value.state,'UNKNOWN');
+  assert.equal(stateToFleetRecord({},value).session_mode,null);
 });

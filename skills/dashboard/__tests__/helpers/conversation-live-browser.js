@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
 import { subtaskKey } from '../../src/lib/chat/activity.js';
-import { GROUP as SAMPLE_GROUP, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { GROUP as SAMPLE_GROUP, workbenchAnswer, workbenchSnapshot, workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const GROUP = 'dashboard:live-browser';
@@ -113,7 +113,7 @@ async function startApi(sandbox) {
   // A scene of the prototype by its index, or one more scene given as is (the long step).
   const scene = () => typeof index === 'number' ? SCENES[index] : index;
   const snapshot = url => {
-    const value = workbenchAnswer(url, scene().now);
+    const value = workbenchSnapshot(scene().now);
     const row = value.rows.find(item => item.sessionGroup === SAMPLE_GROUP);
     Object.assign(row, { sessionGroup: GROUP, origin: false, presence: scene().presence ?? 'running', processing: null, name: { displayName: '起名示例' },
       state: { kind: 'idle' }, duration: 75, tools: [], queue: { known: true, pending: { count: 0 }, running: { count: 0 }, fence: null },
@@ -125,7 +125,7 @@ async function startApi(sandbox) {
   const conversation = { id: ID, localId: 'live-browser', sessionGroup: GROUP, channel: 'dashboard', state: 'active', origin: false, displayName: '起名示例' };
   const answer = url => {
     const p = url.pathname;
-    if (p === '/api/workbench/groups') return snapshot(url);
+    if (['/api/groups/running', '/api/groups/offline', '/api/groups/counts'].includes(p) || /^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'counts', 'offline'].includes(p.split('/').at(-1)) || p === '/api/instance') return workbenchSnapshotAnswer(url, snapshot(url), scene().now);
     if (p === '/api/chat/conversations') {
       if (url.searchParams.get('tab') === 'external') return { items: [], nextCursor: null, tz: 'UTC' };
       return { items: [{ ...conversation, session_group: GROUP, display_name: '起名示例' }], nextCursor: null, tz: 'UTC' };

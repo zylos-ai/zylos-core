@@ -1,3 +1,4 @@
+import { isolateInstanceObservations } from './fixtures/object-instance-observations.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -11,13 +12,14 @@ import path from 'node:path';
 // HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; the server and the installation are removed in teardown.
 // The state and its push report only the switch, so other Dashboards can hide the conversation and observer
 // tabs; the refusals themselves are covered by chat-access and observer-service tests.
-// State pushes leave by two paths: the settings route (and Core state changes) send /api/state's payload; the state
+// State pushes leave by two paths: the settings route (and Core state changes) send /api/instance's payload; the state
 // engine, the release check and the installed-version refresh send the state engine's own state. This case reads
 // one push of each and requires the switch in every push it reads. Outbound HTTPS is held (no network): the release
 // check, started when the Dashboard module loads, fails once the case releases it, then pushes the state.
 
-test('/api/state and the state push report the remote access switch and follow the settings route without a restart', { timeout: 30_000 }, async t => {
+test('/api/instance and the state push report the remote access switch and follow the settings route without a restart', { timeout: 30_000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-access-state-'));
+  isolateInstanceObservations(t, root);
   const data = path.join(root, 'components/dashboard');
   fs.mkdirSync(data, { recursive: true });
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' } }));
@@ -48,7 +50,7 @@ test('/api/state and the state push report the remote access switch and follow t
   assert.equal(login.status, 302);
   const cookie = login.headers.get('set-cookie');
   const state = async () => {
-    const response = await fetch(`${origin}/api/state`, { headers: { Cookie: cookie } });
+    const response = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie } });
     assert.equal(response.status, 200);
     return response.json();
   };
@@ -57,7 +59,7 @@ test('/api/state and the state push report the remote access switch and follow t
       headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ allowRemote }) });
     assert.equal(response.status, 200);
   };
-  // The push stream other Dashboards follow: each state_change it carries must report the switch, or a remote view
+  // The push stream other Dashboards follow: each instance it carries must report the switch, or a remote view
   // would show the tabs again on that push. Every push read is checked; reading stops at the first push reporting
   // the awaited value, bounded by time.
   const abort = new AbortController();
@@ -72,16 +74,16 @@ test('/api/state and the state push report the remote access switch and follow t
       const end = buffered.indexOf('\n\n');
       if (end >= 0) {
         const block = buffered.slice(0, end); buffered = buffered.slice(end + 2);
-        if (!/^event: state_change$/m.test(block)) continue;
+        if (!/^event: instance$/m.test(block)) continue;
         const pushed = JSON.parse(block.match(/^data: (.*)$/m)[1]);
-        assert.equal(typeof pushed.chat_allow_remote, 'boolean', `every state_change push reports the switch: ${block.slice(0, 80)}`);
+        assert.equal(typeof pushed.chat_allow_remote, 'boolean', `every instance push reports the switch: ${block.slice(0, 80)}`);
         if (pushed.chat_allow_remote === allowRemote) return true;
         continue;
       }
-      assert.ok(Date.now() < deadline, `a state_change push reporting chat_allow_remote: ${allowRemote} within 5 s`);
+      assert.ok(Date.now() < deadline, `a instance push reporting chat_allow_remote: ${allowRemote} within 5 s`);
       let timer;
       const { value, done } = await Promise.race([reader.read(), new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`no state_change push reporting chat_allow_remote: ${allowRemote} within 5 s`)), Math.max(1, deadline - Date.now()));
+        timer = setTimeout(() => reject(new Error(`no instance push reporting chat_allow_remote: ${allowRemote} within 5 s`)), Math.max(1, deadline - Date.now()));
       })]).finally(() => clearTimeout(timer));
       assert.equal(done, false, 'the push stream stays open');
       buffered += decoder.decode(value, { stream: true });

@@ -23,10 +23,9 @@ export async function runConversationVisual(t, sandbox) {
     if (!url.pathname.startsWith('/api/')) return false;
     if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
     const values = {
-      '/api/session-mode': { data: { sessionMode: f.readMode() } },
-      '/api/state': { state: 'idle', runtime: 'claude', session_mode: f.readMode(), agent: { id: 'test', name: 'Isolated browser' }, runtime_info: {} },
-      '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' }, '/api/communication': {}, '/api/summary': {},
-      '/api/timeline': { items: [] }, '/api/instance-status': { status: 'ok' }, '/api/actions/meta': { actions: [] },
+
+      '/api/instance': { state: 'idle', runtime: 'claude', session_mode: f.readMode(), agent: { id: 'test', name: 'Isolated browser' }, runtime_info: {} },
+      '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
     };
     sendJson(res, 200, values[url.pathname] || {}); return true;
   } });
@@ -442,7 +441,7 @@ export async function runConversationVisual(t, sandbox) {
   let releaseGroup, observeGroup;
   const groupObserved = new Promise(resolve => { observeGroup = resolve; });
   const heldGroup = new Promise(resolve => { releaseGroup = resolve; });
-  const groupPattern = '**/api/workbench/groups';
+  const groupPattern = '**/api/groups/' + encodeURIComponent(first.receipt.namespace + ':' + localId);
   await context.route(groupPattern, async route => { observeGroup(); await heldGroup; await route.continue().catch(() => {}); });
   sandbox.addCleanup(() => releaseGroup());
   await select();

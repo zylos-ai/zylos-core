@@ -38,6 +38,8 @@ http_routes:
 
 Observability dashboard for a local Zylos agent, with a Dashboard conversation channel.
 
+HTTP consumers: see the [Dashboard API reference](docs/api.md) for health, instance, session-group, usage and push endpoints. API changes must update that reference in the same PR.
+
 ## Conversation channel
 
 Before replying, consult [Available structured components](#available-structured-components)
@@ -284,8 +286,6 @@ renderer to that list.
 
 ## Dashboard service
 
-For the authoritative whole-agent status contract, see [Agent status API](docs/agent-status-api.md) (`GET /api/agent-status`).
-
 ```bash
 npm start
 ```
@@ -350,7 +350,7 @@ instance's admin API key: read and send in conversations (including the Origin
 conversation) and use the terminal observer. While it is off, those requests are
 refused with `403 remote_chat_disabled`, and turning it off closes remote
 observer connections and their leases at once. Local browser sessions are never
-affected. `/api/state` reports the switch as `chat_allow_remote` so remote views
+affected. `/api/instance` reports the switch as `chat_allow_remote` so remote views
 hide the Conversations and Observer tabs; a fleet Dashboard too old to read it
 still shows the tabs, and their requests are refused.
 
@@ -358,7 +358,7 @@ still shows the tabs, and their requests are refused.
 
 ### Kubernetes readiness
 
-`GET /api/health?probe=ready` is unauthenticated and returns HTTP 503 only
+`GET /api/health/ready` is unauthenticated and returns HTTP 503 only
 when the supervisor is absent or does not respond, or when single-session
 mode has no running session. In multi-session mode, zero running sessions
 is normal and does not prevent readiness. All other cases return HTTP 200.
@@ -374,9 +374,7 @@ supervisor IPC, not the whole HTTP request. Single-session observation also
 runs the existing bounded tmux commands (and may inspect the process tree),
 so its slow path can exceed 10 seconds; the default 1-second Kubernetes timeout
 is too short for that path. This recommendation does not add a server timeout.
-Without `probe=ready`, `/api/health` returns HTTP 200 and the liveness response
-described below, without a `ready` field. Other query values use that same
-liveness response. The platform can use the presence of the top-level boolean `ready`
+`/api/health` returns HTTP 200 and the liveness response described below, without a `ready` field. The retired `probe` query returns HTTP 404. The platform can use the presence of the top-level boolean `ready`
 to distinguish this readiness contract from older Dashboards.
 
 The readiness response contains only these public facts:

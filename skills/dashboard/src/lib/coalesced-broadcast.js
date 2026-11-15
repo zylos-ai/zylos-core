@@ -20,22 +20,3 @@ export function createCoalescedBroadcast(broadcast, intervalMs = 1000) {
     timer.unref?.();
   };
 }
-
-export function createSessionCache(read, ttlMs = 15_000) {
-  let cached;
-  return sessionId => {
-    const now = Date.now();
-    if (sessionId !== null && sessionId !== undefined && cached && cached.sessionId === sessionId && now - cached.at < ttlMs) return cached.value;
-    const value = read();
-    cached = { sessionId, value, at: Date.now() };
-    return value;
-  };
-}
-
-// Share the same snapshot between the local state event and fleet self tile.
-export function broadcastFleetSnapshot(sse, buildState, broadcastFleet) {
-  if (sse.clients.size === 0) return;
-  const state = buildState();
-  sse.broadcast('fleet_state', state);
-  broadcastFleet(state);
-}

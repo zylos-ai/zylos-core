@@ -24,7 +24,7 @@ function fixture(options = {}) {
 test('conversation deletion previews counts and confirms before one operation-bound delete', async () => {
   const f = fixture(); await f.controller.remove(item);
   assert.equal(f.calls.length, 2);
-  assert.equal(f.calls[0].path, '/api/workbench/groups/dashboard%3Aexample/deletion');
+  assert.equal(f.calls[0].path, '/api/groups/dashboard%3Aexample/deletion-preview');
   assert.equal(f.confirmations.length, 1);
   assert.deepEqual(JSON.parse(f.confirmations[0][0]), { key: 'chat.delete.confirm', messages: 4, attachments: 2,
     messagesLabel: '4 messages', attachmentsLabel: '2 removable attachments' });
@@ -51,7 +51,7 @@ test('Origin, unavailable and invalid targets do not even preview', async () => 
   await f.controller.remove({ id: 'origin', sessionGroup: 'origin' });
   await f.controller.remove({ id: 'invalid' });
   assert.equal(f.calls.length, 0);
-  assert.equal(deletionPath({ id: 'g:X', session_group: 'telegram:group' }), '/api/workbench/groups/telegram%3Agroup');
+  assert.equal(deletionPath({ id: 'g:X', session_group: 'telegram:group' }), '/api/groups/telegram%3Agroup');
   const unavailable = fixture({ available: () => false }); await unavailable.controller.remove(item);
   assert.equal(unavailable.calls.length, 0);
 });

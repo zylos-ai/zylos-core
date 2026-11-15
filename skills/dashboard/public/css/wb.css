@@ -380,7 +380,7 @@ html[data-detail=plain] .wb-tech-col { display: none; }
   #tab-overview.wb-has-side .wb-c-ctx, #tab-overview.wb-has-side .wb-c-model, #tab-overview.wb-has-side .wb-row > .wb-context, #tab-overview.wb-has-side .wb-row > .wb-model { display: none; }
 }
 /* Drawer open on a medium screen: what is left of the board uses the stacked phone row. */
-@media (min-width: 901px) and (max-width: 1279px) {
+@media (min-width: 901px) and (max-width: 1399px) {
   #tab-overview.wb-has-side .wb-bh { display: flex; flex-wrap: wrap; gap: 8px 12px; }
   #tab-overview.wb-has-side .wb-bh > .wb-bh-state, #tab-overview.wb-has-side .wb-bh > .wb-tech-col, #tab-overview.wb-has-side .wb-bh-now > span, #tab-overview.wb-has-side .wb-bh-right { display: none !important; }
   #tab-overview.wb-has-side .wb-bh-name { flex: 1 1 100%; }
@@ -1680,4 +1680,15 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 :is(.conversation-tabs, .wb-seg, .wb-seg2, .wb-seg-sm) > :is(button, .wb-btn):focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: -2px;
+}
+
+/* State flags stack below the mutually exclusive primary status without crossing into the next cell. */
+.wb-group-sides { margin: 8px 16px; }
+.wb-state-stack { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; max-width: 100%; }
+.wb-state-stack > .wb-pill { flex: none; max-width: 100%; }
+.wb-state-flags { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; max-width: 100%; }
+.wb-state-flags .wb-tag { white-space: normal; overflow-wrap: anywhere; line-height: 18px; }
+@media (max-width: 760px) {
+  .wb-group-sides { margin: 8px 12px; }
+  .wb-row > .wb-state-stack { grid-column: 2; justify-self: end; max-width: 140px; }
 }

@@ -1,4 +1,4 @@
-import { costRows, summarizeCosts, usageIntervals, usageBounds, usageBucketSql } from './cost-query.js';
+import { costRows, summarizeCosts, usageIntervals, usageBounds, usageBucketSql, usageTokenRows } from './cost-query.js';
 
 export { usageBounds } from './cost-query.js';
 
@@ -9,12 +9,18 @@ export function usageSeries(store, c4Reader, options = {}) {
   const intervals = usageIntervals(bounds), groups = usageBucketSql(intervals);
   const parameters = { since, until, ...groups.params };
   const costs = costRows(store, { ...bounds, intervals });
-  const tokens = store.db.prepare(`
-    SELECT runtime, ${groups.sql} AS at,
-      SUM(COALESCE(json_extract(dimensions, '$.total_input'), 0) + COALESCE(json_extract(dimensions, '$.output'), 0)) AS value
-    FROM metric_points WHERE metric_name = 'usage_event' AND timestamp BETWEEN @since AND @until
-    GROUP BY runtime, at ORDER BY at, runtime
-  `).all(parameters);
+  const tokenRows = usageTokenRows(store, { ...bounds, intervals });
+  const tokens = tokenRows.map(row => ({ runtime: row.runtime, at: row.at, value: row.inputTokens + row.outputTokens }));
+  const cacheBuckets = new Map(intervals.map(({ at }) => [at, { at, inputTokens: 0, cacheReadTokens: 0 }]));
+  for (const row of tokenRows) {
+    const value = cacheBuckets.get(row.at);
+    value.inputTokens += row.inputTokens;
+    value.cacheReadTokens += row.cacheReadTokens;
+  }
+  const cache = [...cacheBuckets.values()].map(row => ({ ...row,
+    value: row.inputTokens > 0 ? row.cacheReadTokens / row.inputTokens : null }));
+  const inputTokens = tokenRows.reduce((total, row) => total + row.inputTokens, 0);
+  const cacheReadTokens = tokenRows.reduce((total, row) => total + row.cacheReadTokens, 0);
   // Runtime events are retained for seven rolling days. A wider selection
   // cannot prove zero rotations/tools, so report the whole item as unknown.
   const runtimeEventsUnknown = new Date(since).getTime() < now.getTime() - 7 * 86400000;
@@ -35,7 +41,8 @@ export function usageSeries(store, c4Reader, options = {}) {
   const messageTotal = messageSeries.total;
   const costTotals = summarizeCosts(costs);
   return { ...bounds, buckets: intervals.map(({ at }) => at), scope: 'all_groups',
-    totals: { tokens: tokens.reduce((total, row) => total + row.value, 0), cost: costTotals.total,
+    cache,
+    totals: { inputTokens, cacheReadTokens, cacheHitRate: inputTokens > 0 ? cacheReadTokens / inputTokens : null, tokens: tokens.reduce((total, row) => total + row.value, 0), cost: costTotals.total,
       costByRuntime: costTotals.byRuntime, messages: messageTotal,
       rotations: rotations === null ? null : rotations.reduce((total, row) => total + row.value, 0), tools: toolTotal },
     costByRuntime: costs, tokensByRuntime: tokens, messages,

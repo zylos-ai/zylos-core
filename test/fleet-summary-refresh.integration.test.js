@@ -1,3 +1,4 @@
+import { CoreLogImporter } from '../skills/dashboard/src/lib/core-log-importer.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -5,8 +6,11 @@ import fs from 'node:fs';
 import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
-import { createGroupSnapshot, workbenchResponse, systemSample } from '../skills/dashboard/src/lib/workbench/group-snapshot.js';
-import { FleetPoller, stateToFleetRecord } from '../skills/dashboard/src/lib/fleet-poller.js';
+import { createGroupSnapshot, systemSample } from '../skills/dashboard/src/lib/workbench/group-snapshot.js';
+import { Store } from '../skills/dashboard/src/lib/store.js';
+import { EventLoopMonitor } from '../skills/dashboard/src/lib/event-loop-monitor.js';
+import { VersionChecker } from '../skills/dashboard/src/lib/version-checker.js';
+import { FleetPoller } from '../skills/dashboard/src/lib/fleet-poller.js';
 
 // Actual Dashboard HTTP + SSE entry and actual Workbench snapshot/cache, with deterministic
 // Core/C4 observations. Run when Fleet publication, mode reporting or snapshot refresh changes;
@@ -26,14 +30,23 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
   writeMode({});
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' },
     fleet: { agents: [{ name: 'remote-fixture', base_url: 'http://127.0.0.1:1', read_api_key: 'fixture' }] } }));
-  const previous = process.env.ZYLOS_DIR;
+  const previous = process.env.ZYLOS_DIR, previousTmux = process.env.TMUX_TMPDIR;
   process.env.ZYLOS_DIR = root;
+  process.env.TMUX_TMPDIR = path.join(root, 'tmux'); fs.mkdirSync(process.env.TMUX_TMPDIR);
+  const stores = new Set(), timers = new Set();
+  const schemaCheck = Store.prototype.checkSchema, interval = globalThis.setInterval;
+  t.mock.method(Store.prototype, 'checkSchema', function (...args) { stores.add(this); return schemaCheck.apply(this, args); });
+  t.mock.method(globalThis, 'setInterval', (...args) => { const timer = interval(...args); timers.add(timer); return timer; });
+  t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
+  t.mock.method(VersionChecker.prototype, 'start', () => {});
   const realGet = https.get;
   https.get = () => {
     const request = Object.assign(new EventEmitter(), { destroy() {}, end() {} });
     setImmediate(() => request.emit('error', new Error('offline fixture')));
     return request;
   };
+  let importer;
+  t.mock.module('../skills/dashboard/src/lib/core-log-importer.js', {namedExports:{CoreLogImporter: class extends CoreLogImporter { constructor(options) {super(options);importer=this;} }}});
   let now = Date.now(), count = 1, statusReads = 0, supervisorPaused = false;
   const coreModules = async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'multi' }) };
@@ -48,7 +61,7 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     throw new Error(`Unexpected Core module ${name}`);
   };
   t.mock.module('../skills/dashboard/src/lib/workbench/group-snapshot.js', { namedExports: {
-    workbenchResponse, systemSample,
+    systemSample,
     createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => now, loadCoreModule: coreModules,
       c4Reader: { listSlotOccupancy: () => [] },
       cli: { runC4Db: async () => ({ ok: true, data: { groups: [], hasOlder: false } }),
@@ -66,36 +79,39 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     releasePoll();
     abort?.abort();
     https.get = realGet;
-    if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    for (const timer of timers) clearInterval(timer);
+    if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await server.closeAttachments?.(); }
+    for (const store of stores) if (store.db.open) store.close();
+    if (previousTmux === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = previousTmux;
     if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
   console.log('Fleet refresh isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root,
-    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, tmux: 'not used', network: 'loopback HTTP only; HTTPS blocked; remote polling held' }));
+    PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, TMUX_TMPDIR: process.env.TMUX_TMPDIR, tmux: 'private namespace; observations injected', network: 'loopback HTTP only; HTTPS blocked; remote polling held' }));
   const { createServer } = await import('../skills/dashboard/src/index.js');
   server = createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const login = await fetch(`${origin}/login`, { method: 'POST', redirect: 'manual',
+  const login = await fetch(`${origin}/login`, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(3000),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ password: 'fixture-password' }) });
   assert.equal(login.status, 302);
   const cookie = login.headers.get('set-cookie');
-  const readState = async () => {
-    const response = await fetch(`${origin}/api/state`, { headers: { Cookie: cookie } });
+  const readInstance = async () => {
+    const response = await fetch(`${origin}/api/instance`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
     assert.equal(response.status, 200);
     return response.json();
   };
-  await t.test('state endpoint reports effective default and preserves invalid or unreadable mode uncertainty', async () => {
-    assert.equal((await readState()).session_mode, 'single');
+  await t.test('instance endpoint reports effective default and preserves invalid or unreadable mode uncertainty', async () => {
+    assert.equal((await readInstance()).session_mode, 'single');
     writeMode({ session_mode: 'invalid' });
-    assert.equal((await readState()).session_mode, null);
+    assert.equal((await readInstance()).session_mode, null);
     fs.writeFileSync(coreConfig, '{ unreadable JSON');
-    assert.equal((await readState()).session_mode, null);
+    assert.equal((await readInstance()).session_mode, null);
   });
   // API -> real snapshot/cache -> remote Fleet projection in both modes. Run
   // when pause publication or snapshot refresh changes; isolated resources and
   // cleanup are owned by this case's parent, with no real runtime or remote poll.
-  await t.test('state endpoint publishes pause and recovery for single and multi session modes', async () => {
+  await t.test('instance endpoint publishes pause and recovery for single and multi session modes', async () => {
     for (const mode of ['single', 'multi']) {
       writeMode({ session_mode: mode });
       for (const paused of [false, true, false]) {
@@ -103,18 +119,15 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
         fs.writeFileSync(requestsFile, paused ? '{ broken' : '[]');
         now += 3000;
         const readsBefore = statusReads;
-        const value = await readState();
-        assert.equal(value.supervisor_paused, paused);
-        assert.equal(stateToFleetRecord({ name: 'remote' }, value).supervisor_paused, paused);
-        if (mode === 'single') {
-          assert.equal(value.group_summary, null);
-          assert.equal(statusReads, readsBefore, 'single session publication never collects a full snapshot');
-          const fleetResponse = await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie } });
-          assert.equal(fleetResponse.status, 200);
-          const self = (await fleetResponse.json()).agents.find(agent => agent.self);
-          assert.equal(self.supervisor_paused, paused);
-          assert.equal(statusReads, readsBefore, 'single session Fleet polling also skips the snapshot');
-        }
+        const value = await readInstance();
+        assert.equal(value.supervisorPaused, paused);
+        assert.equal(Object.hasOwn(value, 'group_summary'), false, 'group counts have their own API');
+        assert.equal(statusReads, readsBefore + 1, 'one fresh snapshot after the instance cache expires');
+        const fleetResponse = await fetch(`${origin}/api/fleet`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+        assert.equal(fleetResponse.status, 200);
+        const self = (await fleetResponse.json()).agents.find(agent => agent.self);
+        assert.equal(self.supervisor_paused, paused);
+        assert.equal(statusReads, readsBefore + 1, 'Fleet projection reuses the instance snapshot');
       }
     }
   });
@@ -130,16 +143,22 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     assert.equal(pollCalls, 0, 'Fleet reads use the existing remote cache/stream, without request-owned polling');
   });
   releasePoll();
-  await t.test('two later snapshots reach both fleet_state and fleet events using SSE alone', async () => {
-    // Begin with one cached group. After this state read, no /api/state or /api/fleet
-    // reads occur: only a settings change schedules each existing publication cycle.
-    assert.equal((await readState()).group_summary.running, 1);
+  await t.test('two later snapshots reach group and fleet events and refresh a remote consumer', async () => {
+    // Settings changes drive publication. The remote consumer follows each group
+    // invalidation with the new object reads; they reuse the just-published snapshot.
+    await readInstance();
+    const counts = await (await fetch(`${origin}/api/groups/counts`, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) })).json();
+    assert.equal(counts.running.total, 1);
     const initialReads = statusReads;
     abort = new AbortController();
     const stream = await fetch(`${origin}/api/stream`, { headers: { Cookie: cookie }, signal: abort.signal });
     const reader = stream.body.getReader(), decoder = new TextDecoder();
     const source = { name: 'stream-source', base_url: origin, read_api_key: 'fixture' };
-    const consumer = new FleetPoller({ fleet: { agents: [source] } });
+    const consumer = new FleetPoller({ fleet: { agents: [source] } }, { fetch: async url => {
+      if (url.endsWith('/api/auth/token')) return new Response(JSON.stringify({ token: 'fixture-session' }));
+      return fetch(url, { headers: { Cookie: cookie }, signal: AbortSignal.timeout(3000) });
+    } });
+    t.after(() => consumer.stop());
     let buffered = '';
     const waitForSummary = async expected => {
       const seen = new Set(), deadline = Date.now() + 5000;
@@ -148,13 +167,18 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
         if (end >= 0) {
           const block = buffered.slice(0, end); buffered = buffered.slice(end + 2);
           const event = block.match(/^event: (.*)$/m)?.[1];
-          if (!['fleet_state', 'fleet'].includes(event)) continue;
+          if (!['groups', 'fleet'].includes(event)) continue;
           const value = JSON.parse(block.match(/^data: (.*)$/m)[1]);
-          const summary = event === 'fleet_state' ? value.group_summary : value.agents.find(agent => agent.self).group_summary;
-          if (summary?.running === expected) {
-            if (event === 'fleet_state') {
+          const running = event === 'groups' ? value.running.total : value.agents.find(agent => agent.self).group_summary?.running;
+          if (running === expected) {
+            if (event === 'groups') {
+              let received;
+              const updated = new Promise(resolve => { received = resolve; });
+              consumer.onPoll = () => received();
               consumer._handleSseEvent(source, { event, data: JSON.stringify(value) });
-              assert.equal(consumer.getFleet().agents[0].group_summary.running, expected, 'remote SSE ingestion receives the new summary');
+              let timer;
+              await Promise.race([updated, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Consumer did not refresh object APIs')), 4000); })]).finally(() => clearTimeout(timer));
+              assert.equal(consumer.getFleet().agents[0].group_summary.running, expected, 'remote SSE invalidation reads the new summary');
             }
             seen.add(event);
           }
@@ -170,13 +194,19 @@ test('Fleet HTTP and SSE keep summaries current without waiting for remote polls
     };
     for (const expected of [2, 3]) {
       count = expected;
-      now += 3000; // Expire the real Workbench 2 s cache without a timer loop or a slow test.
-      const changed = await fetch(`${origin}/api/chat/settings`, { method: 'PUT',
-        headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ allowRemote: expected === 2 }) });
-      assert.equal(changed.status, 200);
+      if (expected === 2) {
+        now += 3000;
+        const changed = await fetch(`${origin}/api/chat/settings`, { method: 'PUT',
+          headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ allowRemote: true }) });
+        assert.equal(changed.status, 200);
+      } else {
+        // A non-Origin imported activity change must publish while the regular
+        // two-second page snapshot is still reusable, without an HTTP page read.
+        importer.onImport({ types: ['subagent_start'], stream: 'hook', inserted: 1 });
+      }
       await waitForSummary(expected);
     }
-    assert.equal(statusReads, initialReads + 2, 'one rebuild in each expired SSE cycle');
+    assert.equal(statusReads, initialReads + 2, 'one fresh rebuild in each SSE cycle, including a cached non-Origin activity change');
     abort.abort();
   });
 });

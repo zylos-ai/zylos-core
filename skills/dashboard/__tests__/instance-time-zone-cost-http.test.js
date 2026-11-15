@@ -1,3 +1,5 @@
+import { VersionChecker } from '../src/lib/version-checker.js';
+import { isolateInstanceObservations } from './fixtures/object-instance-observations.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -6,7 +8,7 @@ import path from 'node:path';
 import { Store } from '../src/lib/store.js';
 import { INSTANCE_TEST_ZONE } from './helpers/instance-test-zone.js';
 
-// Actual HTTP entry with a temporary installation whose .env sets TZ. Covers the overview cost tiers in /api/state
+// Actual HTTP entry with a temporary installation whose .env sets TZ. Covers the overview cost tiers in /api/usage/summary
 // (today and 7 days, from the metric resolver the server wires to the instance zone) and the pricing page's 7-day
 // window. Run for changes to the server's zone wiring, the metric resolver, cost tiers or the pricing route; unrelated
 // UI may skip. A file of its own: the scheduler's tz.js fixes its .env path on first import and the cost tiers are
@@ -20,6 +22,8 @@ const dayOf = (at, timeZone) => new Intl.DateTimeFormat('en-CA', { timeZone, yea
 
 test('overview cost tiers and the pricing week are counted in the .env time zone', { timeout: 30_000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'instance-tz-cost-'));
+  isolateInstanceObservations(t, root);
+  t.mock.method(VersionChecker.prototype, 'start', () => {});
   const data = path.join(root, 'components/dashboard');
   fs.mkdirSync(data, { recursive: true });
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ auth: { enabled: true, password: 'fixture-password' } }));
@@ -62,13 +66,13 @@ test('overview cost tiers and the pricing week are counted in the .env time zone
     return response.json();
   };
 
-  const state = await get('/api/state');
+  const state = await get('/api/usage/summary');
   assert.equal(state.tz, ZONE);
-  assert.equal(state.daily_cost, expectedToday, 'today counts from midnight in the instance zone');
-  assert.equal(state.weekly_cost, spent.length, 'the last 30 hours are inside the 7 days');
+  assert.equal(state.today.cost, expectedToday, 'today counts from midnight in the instance zone');
+  assert.equal(state.sevenDay.cost, spent.length, 'the last 30 hours are inside the 7 days');
 
   // The pricing page lists the models that cost something in the week the usage page shows.
-  const week = await get('/api/workbench/usage?range=7d');
+  const week = await get('/api/usage/series?range=7d');
   assert.equal(week.tz, ZONE);
   const since = Date.parse(week.since);
   const edge = new Store(path.join(data, 'dashboard.db'));
@@ -78,7 +82,7 @@ test('overview cost tiers and the pricing week are counted in the .env time zone
     edge.insertMetric({ timestamp: new Date(since - 60_000).toISOString(), runtime: 'claude', metric_name: 'api_request_cost',
       metric_value: 3, dimensions: { model: 'before-week' }, source: 'fixture', confidence: 'actual' });
   } finally { edge.close(); }
-  const models = (await get('/api/workbench/pricing')).models.map(row => row.model);
+  const models = (await get('/api/usage/pricing')).models.map(row => row.model);
   assert.ok(models.includes('inside-week'), 'a cost a minute after the week starts in the instance zone is listed');
   assert.ok(!models.includes('before-week'), 'a cost a minute before it is not');
 });

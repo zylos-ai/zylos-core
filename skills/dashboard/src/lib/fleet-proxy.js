@@ -75,13 +75,15 @@ function isSseResponse(resp) {
 }
 
 function isAllowedProxyWrite(method, suffix) {
-  return method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
+  return method === 'POST' && suffix === '/api/actions/restart-timezone-services' || method === 'PATCH' && /^\/api\/chat\/conversations\/[^/]+$/.test(suffix) ||
     method === 'POST' && (suffix === '/api/chat/drafts' || /^\/api\/chat\/conversations\/[^/]+\/(?:send|answers|uploads)$/.test(suffix)) ||
-    ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/groups\/[^/]+\/name$/.test(suffix) ||
-    method === 'POST' && /^\/api\/workbench\/groups\/[^/]+\/(?:config|actions\/(?:interrupt|chop-chop|restart))$/.test(suffix) ||
+    ['PUT', 'DELETE'].includes(method) && /^\/api\/groups\/[^/]+\/name$/.test(suffix) ||
+    method === 'PUT' && /^\/api\/groups\/[^/]+\/config$/.test(suffix) ||
+    method === 'POST' && /^\/api\/groups\/[^/]+\/actions\/(?:interrupt|chop-chop|restart)$/.test(suffix) ||
     method === 'POST' && /^\/api\/workbench\/schedule(?:\/[^/]+\/(?:pause|resume))?$/.test(suffix) ||
     ['PUT', 'DELETE'].includes(method) && /^\/api\/workbench\/schedule\/[^/]+$/.test(suffix) ||
-    method === 'POST' && /^\/api\/actions\/[^/]+$/.test(suffix) ||
+    method === 'POST' && /^\/api\/instance\/actions\/(?:switch-mode|switch-runtime|upgrade|upgrade-runtime)$/.test(suffix) ||
+    method === 'PUT' && suffix === '/api/instance/defaults' ||
     method === 'PUT' && (suffix === '/api/settings' || suffix === '/api/settings/timezone' || suffix === '/api/memory/file') ||
     method === 'POST' && (
       /^\/api\/observer\/(?:install|enable|disable|leases|agent-size)$/.test(suffix) ||
@@ -111,7 +113,7 @@ function observerLeaseId(req, suffix) {
 function isLocalOnlyEndpoint(suffix) {
   return suffix === CHAT_SETTINGS_PATH || suffix === '/api/fleet/agents' ||
     suffix.startsWith('/api/fleet/agents/') ||
-    suffix === '/api/agent/name' ||
+    suffix === '/api/instance/name' ||
     suffix === '/api/keys' ||
     suffix.startsWith('/api/keys/');
 }
@@ -356,7 +358,7 @@ export class FleetProxy {
   }
 
   async proxyApi(req, res, agent, suffix, search) {
-    if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || suffix.endsWith('/deletion'))) {
+    if (isGroupDeletionRoute(suffix) && (req.method === 'DELETE' || (suffix.endsWith('/deletion') || suffix.endsWith('/deletion-preview')))) {
       sendJson(res, 403, { error: 'remote_deletion_forbidden' }); return;
     }
     if (req.method === 'PUT' && suffix === '/api/settings/timezone' ||
@@ -366,6 +368,11 @@ export class FleetProxy {
       if (context.kind === 'cookie' && !isSameOriginRequest(req)) {
         sendJson(res, 403, { error: 'same_origin_required' }); return;
       }
+    }
+    if ((suffix.startsWith('/api/instance/') || suffix.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(req.method)) {
+      const context = req._authContext;
+      if (context?.scope !== 'admin') { sendJson(res, 403, { error: 'admin_required' }); return; }
+      if (context.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
     }
     const chatStream = suffix === '/api/stream' && new URLSearchParams(search).has('chat');
     if (suffix.startsWith('/api/chat/') || chatStream) {

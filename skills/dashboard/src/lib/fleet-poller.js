@@ -1,5 +1,5 @@
 import { agentColor } from './agent-color.js';
-import { sanitizeFleetGroupSummary } from './workbench/fleet-summary.js';
+import { sanitizeFleetGroupSummary, fleetGroupSummary } from './workbench/fleet-summary.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_TIMEOUT_MS = 2500;
@@ -156,11 +156,11 @@ function hasUpgrade(runtimeInfo) {
 }
 
 function hasSubagent(state) {
-  return Array.isArray(state?.active_subagents) && state.active_subagents.length > 0;
+  return subagentCount(state) > 0;
 }
 
 function subagentCount(state) {
-  return Array.isArray(state?.active_subagents) ? state.active_subagents.length : 0;
+  return Number.isSafeInteger(state?.subagent_count) && state.subagent_count >= 0 ? state.subagent_count : Array.isArray(state?.active_subagents) ? state.active_subagents.length : 0;
 }
 
 function deriveActivity(state) {
@@ -370,6 +370,35 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     self,
     access: opts.access
   });
+}
+
+// Assemble fleet presentation from the same object APIs used by the local UI.
+export function fleetStateFromObjects(instance, counts, usage, running) {
+  const stateKeys = ['working', 'idle', 'starting', 'stopping', 'unknown'];
+  const count = value => Number.isSafeInteger(value) && value >= 0;
+  const cost = value => value === null || typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  if (!instance || ![null, 'single', 'multi'].includes(instance.session_mode) ||
+      typeof counts?.listKnown !== 'boolean' || !counts?.running?.states || !count(counts.running.total) ||
+      stateKeys.some(key => !count(counts.running.states[key])) ||
+      stateKeys.reduce((sum, key) => sum + counts.running.states[key], 0) !== counts.running.total ||
+      !cost(usage?.today?.cost) || !cost(usage?.sevenDay?.cost) || !Array.isArray(running?.rows)) throw reasonError('bad_payload');
+  const states = counts.running.states;
+  const origin = running.rows.find(row => row.id === 'origin' || row.sessionGroup === 'origin' || row.sessionGroup === null);
+  const account = instance.accounts?.[instance.default_runtime];
+  return { agent: instance.agent, session_mode: instance.session_mode,
+    state: instance.session_mode === null || counts.listKnown === false ? 'UNKNOWN' : states.working > 0 ? 'BUSY' : states.unknown > 0 ? 'UNKNOWN' : 'IDLE',
+    supervisor_paused: instance.supervisorPaused, runtime_info: instance.runtime_info,
+    system_metrics: instance.resources,
+    group_summary: fleetGroupSummary({ mode: instance.session_mode, readAt: counts.readAt, listKnown: counts.listKnown,
+      rows: running.rows.map(row => ({ ...row, state: { kind: ({ working: 'busy', starting: 'waiting', stopping: 'waiting' }[row.state?.kind] ?? row.state?.kind) } })),
+      instance: { pool: counts.pool, autoRestarts: instance.autoRestarts } }),
+    context_pct: origin?.contextPct ?? null,
+    running_tools: (origin?.tools ?? []).map(tool => ({ tool_name: tool.name, tool_detail: tool.detail, started_at: tool.startedAt })),
+    subagent_count: origin?.working?.subagents?.count ?? 0,
+    new_session_threshold: origin?.rotationThreshold ?? null,
+    rate_limit_7d_pct: account?.used_percentage ?? account?.usedPercentage ?? null,
+    rate_limit_7d_live: account?.live ?? null, rate_limit_7d_recorded_at: account?.recordedAt ?? null,
+    daily_cost: usage.today.cost, weekly_cost: usage.sevenDay.cost };
 }
 
 export class FleetPoller {
@@ -790,11 +819,16 @@ export class FleetPoller {
     this.onPoll?.(this.getFleet());
   }
 
-  _fetchState(agent, token) {
-    return fetchWithTimeout(this.fetch, joinUrl(agent.base_url, '/api/state'), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}` }
-    }, this.timeoutMs);
+  async _fetchState(agent, token) {
+    const responses = await Promise.all(['/api/instance', '/api/groups/counts', '/api/usage/summary', '/api/groups/running'].map(apiPath =>
+      fetchWithTimeout(this.fetch, joinUrl(agent.base_url, apiPath), {
+        method: 'GET', headers: { Authorization: `Bearer ${token}` }
+      }, this.timeoutMs)));
+    const failed = responses.find(response => !response.ok);
+    if (failed) return failed;
+    const [instance, counts, usage, running] = await Promise.all(responses.map(response => readJsonOrBadPayload(response)));
+    const state = fleetStateFromObjects(instance, counts, usage, running);
+    return { ok: true, status: 200, json: async () => state };
   }
 
   _fetchHealth(agent, authorization) {
@@ -999,29 +1033,18 @@ export class FleetPoller {
       err.reason = 'auth_expired';
       throw err;
     }
-    if (event.event !== 'fleet_state') return;
+    if (!['instance', 'groups'].includes(event.event)) return;
     const stream = this.streams.get(agent.name);
     if (stream) {
       stream.seenFleetState = true;
-      if (stream.compatibilityTimer) {
-        this.clearTimeout(stream.compatibilityTimer);
-        stream.compatibilityTimer = null;
-      }
+      if (stream.compatibilityTimer) { this.clearTimeout(stream.compatibilityTimer); stream.compatibilityTimer = null; }
+      if (stream.objectReadPending) return;
+      stream.objectReadPending = true;
     }
-    let state;
-    try {
-      state = JSON.parse(event.data || '{}');
-    } catch {
-      return;
-    }
-    try {
-      validateStatePayload(state);
-    } catch {
-      return;
-    }
-    this._setSuccess(agent, state);
+    this._pollAgentAndNotify(agent).finally(() => {
+      if (stream) stream.objectReadPending = false;
+    });
     this._stopFallbackPolling(agent, 'sse-takeover');
-    this.onPoll?.(this.getFleet());
   }
 
   _startFallbackPolling(agent, trigger = 'unknown') {

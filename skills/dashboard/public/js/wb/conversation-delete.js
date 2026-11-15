@@ -4,7 +4,7 @@ export function deletionPath(item) {
   if (item?.id?.startsWith('d:')) return `/api/chat/drafts/${encodeURIComponent(item.id.slice(2))}`;
   const group = item?.sessionGroup ?? item?.session_group;
   return typeof group === 'string' && group && group !== 'origin'
-    ? `/api/workbench/groups/${encodeURIComponent(group)}` : null;
+    ? `/api/groups/${encodeURIComponent(group)}` : null;
 }
 
 export function createConversationDeletion({ request, confirm, t = key => key,
@@ -25,7 +25,7 @@ export function createConversationDeletion({ request, confirm, t = key => key,
       let operationId = previous?.operationId;
       let cutoffId = previous?.cutoffId;
       if (!operationId) {
-        const preview = await request(`${path}/deletion`);
+        const preview = await request(`${path}/${item.id?.startsWith('d:') ? 'deletion' : 'deletion-preview'}`);
         if (!valid()) return;
         if (preview.ok === false) throw { payload: preview };
         if (typeof preview.operationId !== 'string' || !preview.operationId ||

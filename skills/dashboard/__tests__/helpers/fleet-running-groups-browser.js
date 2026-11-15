@@ -4,7 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { stateToFleetRecord } from '../../src/lib/fleet-poller.js';
 import { fleetGroupSummary } from '../../src/lib/workbench/fleet-summary.js';
-import { workbenchAnswer, GROUP } from '../fixtures/workbench-browser-api.js';
+import { workbenchSnapshot, workbenchSnapshotAnswer, GROUP } from '../fixtures/workbench-browser-api.js';
 import { startPage } from './workbench-browser.js';
 
 const LONG_NAME = '多 session #56 — 需要完整显示名称的非常长的运维会话与工作任务';
@@ -46,15 +46,15 @@ const CASES = [
 // nine running groups). A card derived from that snapshot instead of /api/fleet must fail this case.
 function fixtureAnswer(url, now, scenario, fleet) {
   if (url.pathname === '/api/fleet') return fleet;
-  const value = workbenchAnswer(url, now);
-  if (url.pathname === '/api/state') return { ...value, session_mode: 'multi', group_summary: fleet.agents[0].group_summary };
-  if (url.pathname !== '/api/workbench/groups') return value;
-  const rows = value.rows.map(row => {
+  const snapshot = workbenchSnapshot(now);
+  snapshot.rows = snapshot.rows.map(row => {
     const issue = scenario.summary?.problems.find(item => item.sessionGroup === row.sessionGroup);
     return issue ? { ...row, presence: 'running', name: { displayName: issue.displayName },
-      state: issue.reason === 'no_response' ? { kind: 'busy' } : { kind: 'error', error: issue.reason } } : row;
+      state: { kind: issue.reason === 'no_response' ? 'working' : 'unknown' },
+      attention: issue.reason === 'no_response' ? [] : [{ kind: issue.reason }],
+      noResponse: issue.reason === 'no_response' ? { since: now - issue.durationSeconds * 1000 } : null } : row;
   });
-  return { ...value, rows };
+  return workbenchSnapshotAnswer(url, snapshot, now);
 }
 
 async function assertProblemLayout(card, scenario) {
@@ -153,7 +153,7 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
           if (url.pathname.startsWith('/fleet/remote-case/api/')) {
             remoteReads.push(url.pathname);
             url.pathname = url.pathname.slice('/fleet/remote-case'.length);
-            if (url.pathname === '/api/workbench/groups' && scenario.remote && !scenario.legacy) {
+            if (url.pathname === '/api/groups/running' && scenario.remote && !scenario.legacy) {
               // Delayed transport stresses the actual remote-click route. The shell's
               // deferred-promise tests provide deterministic ordering/cancellation proof.
               await new Promise(resolve => setTimeout(resolve, 500));
@@ -246,7 +246,7 @@ export async function runFleetRunningGroupsBrowser(t, sandbox) {
           await page.locator('#wb-side .wb-d-top').waitFor({ state: 'visible' });
           assert.match(new URL(page.url()).pathname, /^\/fleet\/remote-case\//, 'remote problem enters the selected remote machine');
           assert.match(await page.locator('#wb-side .wb-d-title').innerText(), /Lark 运维群/, 'remote detail resolves the actual named problem');
-          assert.ok(remoteReads.some(url => url === '/fleet/remote-case/api/workbench/groups'), 'remote group list uses the remote API prefix');
+          assert.ok(remoteReads.some(url => url === '/fleet/remote-case/api/groups/running'), 'remote group list uses the remote API prefix');
         }
         assert.deepEqual(errors, [], 'no browser errors');
         assert.deepEqual(external, [], 'no unexpected external requests');

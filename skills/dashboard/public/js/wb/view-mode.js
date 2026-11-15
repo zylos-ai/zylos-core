@@ -90,11 +90,11 @@ export function observerNavEntry(status, level, t) {
 // Every group can open the observer page; sleeping groups offer its history branch.
 export const groupObservable = (entry, row) => entry?.target === 'observer' && Boolean(row);
 export const wbWritable = remoteIsReadOnly => !remoteIsReadOnly();
-const originStates = new Set(['running', 'starting', 'not_running', 'busy', 'idle', 'waiting', 'stopped', 'error']);
+const originStates = new Set(['running', 'starting', 'not_running', 'busy', 'idle', 'waiting', 'stopped', 'error', 'working', 'offline', 'stopping', 'unknown']);
 export function instanceStatusText(data = {}, level = 'plain', t = key => key) {
-  const state = data.origin?.status?.state || data.origin?.presence;
+  const state = data.origin?.state?.kind || data.origin?.presence;
   if (level === 'technical') return t('actions.instance_status', { view: data.view || t('value.unknown'),
-    mode: data.sessionMode || t('value.unknown'), origin: state || t('value.unknown') });
+    mode: data.session_mode || t('value.unknown'), origin: state || t('value.unknown') });
   return t('wb.term.origin') + ' · ' + t('wb.state.' + (originStates.has(state) ? state : 'unknown'));
 }
 export function waitText(wait, level = 'plain', t, now = Date.now()) {

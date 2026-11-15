@@ -325,6 +325,7 @@ function isScheduleWrite(method, pathname) {
 function needsAdminApiAccess(pathname, method) {
   // Classify repeated-slash aliases under the same memory access policy.
   pathname = pathname.replace(/\/{2,}/g, '/');
+  if ((pathname.startsWith('/api/instance/') || pathname.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(method)) return true;
   if (pathname === '/api/observer' || pathname.startsWith('/api/observer/')) return true;
   if (pathname.startsWith('/api/actions')) return true;
   if ((method === 'GET' && /^\/api\/workbench\/groups\/[^/]+\/deletion$/.test(pathname)) ||
@@ -342,6 +343,7 @@ function needsAdminApiAccess(pathname, method) {
   const proxiedWrite = pathname.match(/^\/fleet\/[^/]+\/api\/(.+)$/);
   if (!proxiedWrite) return false;
   const remotePath = `/api/${proxiedWrite[1]}`;
+  if ((remotePath.startsWith('/api/groups/') || remotePath.startsWith('/api/instance/')) && !['GET', 'HEAD'].includes(method)) return true;
   if (remotePath.startsWith('/api/chat/')) return true;
   if (remotePath === '/api/memory' || remotePath.startsWith('/api/memory/')) return true;
   if (remotePath === '/api/workbench/memory' || remotePath.startsWith('/api/workbench/memory/')) return true;
@@ -466,7 +468,7 @@ export class AuthGate {
     const pathname = url.pathname;
     retireLegacySessionCookie(req, res);
 
-    if (pathname === '/api/health' || (req.method === 'GET' && pathname.startsWith('/_assets/'))) {
+    if (['/api/health', '/api/health/ready'].includes(pathname) || (req.method === 'GET' && pathname.startsWith('/_assets/'))) {
       return false;
     }
 

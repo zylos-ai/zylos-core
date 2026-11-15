@@ -3,7 +3,7 @@ export function olderRow(sessionGroup, { meta = null, preview = null, name = nul
   const reason = listKnown ? null : 'group_list_failed';
   return { sessionGroup, presence: listKnown ? 'not_running' : 'unknown', reason, c4: meta, preview, name,
     origin: sessionGroup === 'origin', live: null,
-    state: { kind: listKnown ? 'not_running' : 'unknown', ...(reason ? { reason } : {}) }, duration: null,
+    state: { kind: listKnown ? 'offline' : 'unknown', ...(reason ? { reason } : {}) }, duration: null,
     tools: [], wait: null, queue: null, fence: null, target: null, desired: null, contextPct: null,
     launchConfig: null, createdAt: null };
 }

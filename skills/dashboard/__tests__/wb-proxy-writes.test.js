@@ -21,9 +21,10 @@ function fixture(t, remoteScope) {
   const auth = new AuthGate({ auth: { enabled: true, password: 'scrypt:fixture' } }, store);
   t.after(() => clearInterval(auth._cleanupTimer));
   const forwarded = [];
+  let tokenReads = 0;
   const proxy = new FleetProxy({
     config: { fleet: { agents: [{ name: 'Remote', base_url: 'https://remote.invalid/dashboard' }] } },
-    poller: { getSessionToken: async () => remoteScope === 'admin' ? 'remote-admin-fixture' : 'remote-read-fixture' },
+    poller: { getSessionToken: async () => { tokenReads++; return remoteScope === 'admin' ? 'remote-admin-fixture' : 'remote-read-fixture'; } },
     fetch: async (url, options) => {
       let received = '';
       if (options.body && typeof options.body !== 'string' && !Buffer.isBuffer(options.body)) {
@@ -36,12 +37,13 @@ function fixture(t, remoteScope) {
         headers: { 'content-type': 'application/json', 'x-remote-result': 'preserved' } });
     },
   });
-  async function request(route, localScope = 'admin') {
+  async function request(route, localScope = 'admin', requestOrigin = 'http://hub.test') {
     const req = Readable.from(route.body === null ? [] : [Buffer.from(route.body)]);
     req.method = route.method;
     req.url = `/fleet/Remote${route.path}${route.attachment ? '' : '?exact=1'}`;
     req.headers = { host: 'hub.test', origin: 'http://hub.test', 'content-type': route.contentType || 'application/json',
       ...(localScope === 'read' ? { authorization: `Bearer ${localToken}` } : { cookie: `__Secure-zylos_dashboard_session=${cookie}` }) };
+    if (requestOrigin === null) delete req.headers.origin; else req.headers.origin = requestOrigin;
     const response = Object.assign(new EventEmitter(), { status: null, headers: {}, body: '',
       setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
       writeHead(status, headers = {}) { this.status = status; Object.assign(this.headers, headers); },
@@ -51,7 +53,7 @@ function fixture(t, remoteScope) {
     if (!await auth.handle(req, response, url)) await proxy.handle(req, response, url);
     return response;
   }
-  return { request, forwarded };
+  return { request, forwarded, tokenReads: () => tokenReads };
 }
 
 // Cross-module permission integration: actual AuthGate and FleetProxy, in-memory
@@ -92,12 +94,32 @@ for (const route of workbenchWriteRoutes) {
 test('workbench proxy rejects writes outside the registered table before upstream', { timeout: 5000 }, async t => {
   const f = fixture(t, 'admin');
   for (const route of [
-    { method: 'POST', path: '/api/workbench/groups/telegram%3Ateam/name', body: '{}' },
-    { method: 'PUT', path: '/api/workbench/groups/telegram%3Ateam/unregistered', body: '{}' },
+    { method: 'POST', path: '/api/groups/telegram%3Ateam/name', body: '{}' },
+    { method: 'PUT', path: '/api/groups/telegram%3Ateam/unregistered', body: '{}' },
   ]) {
     const response = await f.request(route);
     assert.equal(response.status, 403);
     assert.deepEqual(JSON.parse(response.body), { error: 'read_only_proxy' });
     assert.equal(f.forwarded.length, 0);
+  }
+});
+
+
+// The first-step proxy must enforce browser origin before exchanging a remote
+// credential; all transports and sessions here are in memory, no network starts.
+test('object proxy writes reject missing or cross-site browser origins before remote access', async t => {
+  const f = fixture(t, 'admin');
+  for (const route of workbenchWriteRoutes.filter(route => route.path.startsWith('/api/groups/')).concat([
+    {method:'PUT',path:'/api/instance/defaults',body:'{"kind":"effort","effort":"high"}'},
+    {method:'POST',path:'/api/instance/actions/upgrade',body:'{}'},
+    {method:'POST',path:'/api/instance/actions/switch-runtime',body:'{"runtime":"codex"}'},
+  ])) {
+    for (const origin of [null,'https://another-site.invalid']) {
+      const response = await f.request(route, 'admin', origin);
+      assert.equal(response.status,403);
+      assert.deepEqual(JSON.parse(response.body),{error:'same_origin_required'});
+      assert.equal(f.forwarded.length,0);
+      assert.equal(f.tokenReads(),0);
+    }
   }
 });

@@ -164,18 +164,20 @@ export function notifyAuthCompleted(runtime, {
   });
 }
 
-export async function lookupRestartRequest(requestId, { deadlineAt, now = Date.now, readRequests, readCompleted } = {}) {
+export async function lookupRestartRequest(requestId, { deadlineAt, now = Date.now, readRequests, readCompleted, sessionGroup } = {}) {
   if (now() >= deadlineAt) return 'deadline_exceeded';
   if (!readRequests) {
     const { RestartRequestStore } = await import('../../skills/activity-monitor/scripts/restart-request-store.js');
     readRequests = () => new RestartRequestStore().read();
   }
   if (now() >= deadlineAt) return 'deadline_exceeded';
-  if ((await readRequests()).some(row => row.requestId === requestId)) return 'accepted';
+  if ((await readRequests()).some(row => row.requestId === requestId && (sessionGroup === undefined ||
+      row.reason === 'manual_restart' && (row.sessionGroup ?? 'origin') === (sessionGroup ?? 'origin')))) return 'accepted';
   if (now() >= deadlineAt) return 'deadline_exceeded';
   if (!readCompleted) readCompleted = id => {
     const reader = new EventLogReader(supervisorDiagnosticPath());
-    try { return reader.read().some(row => row.requestId === id && ['restart_done', 'manual_restart_done'].includes(row.event)); }
+    try { return reader.read().some(row => row.requestId === id && ['restart_done', 'manual_restart_done'].includes(row.event) && (sessionGroup === undefined ||
+        row.event === 'manual_restart_done' && (row.session_group ?? 'origin') === (sessionGroup ?? 'origin'))); }
     finally { reader.close(); }
   };
   return await readCompleted(requestId) ? 'done' : 'unknown';

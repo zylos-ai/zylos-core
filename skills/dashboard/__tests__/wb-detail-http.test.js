@@ -107,7 +107,6 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       getCachedSnapshot: () => cachedSnapshot,
       channelDownCounter: { update() {} },
     }),
-    workbenchResponse: () => assert.fail('detail requests must not dispatch another workbench read route'),
   } });
   t.mock.module('../src/lib/core-modules.js', { namedExports: {
     loadCoreModule: async name => {
@@ -121,6 +120,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     },
   } });
   process.env.ZYLOS_DIR = root;
+  console.log('Detail HTTP isolation:', JSON.stringify({ HOME: process.env.HOME, ZYLOS_DIR: root, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, database: path.join(dashboardDir, 'dashboard.db'), transport: 'loopback; all children injected' }));
   const { createServer } = await import(`../src/index.js?group-detail-http=${clock}`);
   if (previous === undefined) delete process.env.ZYLOS_DIR; else process.env.ZYLOS_DIR = previous;
   server = createServer();
@@ -135,7 +135,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   }
   const request = (route, scope = 'read', body) => fetch(origin + route, {
     signal: AbortSignal.timeout(3000),
-    method: body === undefined ? 'GET' : 'POST',
+    method: body === undefined ? 'GET' : route.endsWith('/config') ? 'PUT' : 'POST',
     headers: { Authorization: `Bearer ${tokens[scope]}`, 'Content-Type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
@@ -147,7 +147,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   await t.test('local read keys cannot submit configuration or any group action', async () => {
     const before = calls.length;
     for (const { route, body } of writes) {
-      const response = await request('/api/workbench/groups/telegram%3Aa' + route, 'read', body);
+      const response = await request('/api/groups/telegram%3Aa' + route, 'read', body);
       assert.equal(response.status, 403, route);
       assert.deepEqual(await response.json(), { error: 'insufficient_scope', required: 'admin' });
     }
@@ -157,7 +157,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
 
   await t.test('local admin keys reach each configuration and group action handler', async () => {
     for (const { route, body } of writes) {
-      const response = await request('/api/workbench/groups/telegram%3Aa' + route, 'admin', body);
+      const response = await request('/api/groups/telegram%3Aa' + route, 'admin', body);
       assert.equal(response.status, 200, route);
       const value = await response.json();
       assert.equal(value.ok, true, route);
@@ -174,7 +174,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
 
   await t.test('automatic naming reads only unnamed groups active in the last three days', async () => {
     assert.equal(engine.store.writeGroupDisplayName('telegram:named', 'Already named', 'human'), true);
-    const response = await request('/api/workbench/name-prompt');
+    const response = await request('/api/groups/naming-prompt');
     assert.equal(response.status, 200);
     const value = await response.json();
     assert.deepEqual(value.todo, ['Telegram · recent']);
@@ -186,7 +186,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   await t.test('single message HTTP reads NULL attribution without exposing bodies or Origin rows', async () => {
     view = 'single'; cachedSnapshot = snapshot();
     const range = '?since=2026-10-01T00%3A00%3A00Z&until=2026-10-02T00%3A00%3A00Z';
-    const response = await request('/api/workbench/groups/origin/messages' + range);
+    const response = await request('/api/groups/origin/messages' + range);
     assert.equal(response.status, 200);
     const value = await response.json();
     assert.deepEqual(value.messages.map(row => row.id), [1]);
@@ -194,7 +194,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     assert.doesNotMatch(JSON.stringify(value), /private|content/);
     assert.equal(snapshotReads, 0, 'message reads reuse the cached single view without rebuilding');
     view = 'multi'; cachedSnapshot = snapshot();
-    const originResponse = await request('/api/workbench/groups/origin/messages' + range);
+    const originResponse = await request('/api/groups/origin/messages' + range);
     assert.deepEqual((await originResponse.json()).messages.map(row => row.id), [2]);
   });
 
@@ -211,7 +211,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     const before = snapshotReads, childBefore = calls.length;
     for (const [mode, expectedRun] of [['single', 'single-run'], ['multi', 'origin-run']]) {
       view = mode; cachedSnapshot = snapshot();
-      const response = await request('/api/workbench/groups/origin/runs?limit=3');
+      const response = await request('/api/groups/origin/runs?limit=3');
       assert.equal(response.status, 200);
       const value = await response.json();
       assert.deepEqual(value.runs.map(run => [run.runId, run.endReason]), [[expectedRun, 'running']]);
@@ -219,7 +219,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
       assert.equal(value.totalEvents, 1);
       assert.equal(value.unattributed, 0);
       assert.equal(snapshotReads, before, 'run reads must not invoke the rebuilding snapshot getter');
-      const counted = await (await request('/api/workbench/groups/origin/runs?limit=3&types=stop,idle')).json();
+      const counted = await (await request('/api/groups/origin/runs?limit=3&types=stop,idle')).json();
       assert.deepEqual(counted.runs.map(run => [run.runId, run.n]), [[expectedRun, 0]], 'types narrow the counts, not the runs listed');
       assert.equal(counted.totalRuns, 1);
       assert.equal(counted.totalEvents, 0);
@@ -233,7 +233,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     for (const [mode, count, syncing] of [['single', 3, true], ['multi', 7, true]]) {
       view = mode; cachedSnapshot = snapshot();
       for (let round = 0; round < 2; round++) {
-        const response = await request('/api/workbench/groups/origin/backlog');
+        const response = await request('/api/groups/origin/backlog');
         assert.equal(response.status, 200);
         assert.deepEqual(await response.json(), { count, firstAt: 100, syncing });
         assert.equal(snapshotReads, before, 'backlog must not invoke the rebuilding getter with a cached view');
@@ -252,7 +252,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   await t.test('cold detail scopes build one snapshot and subsequent reads reuse it while unreadable views keep Origin', async () => {
     const range = '?since=2026-10-01T00%3A00%3A00Z&until=2026-10-02T00%3A00%3A00Z';
     const assertSingle = async route => {
-      const response = await request('/api/workbench/groups/origin/' + route);
+      const response = await request('/api/groups/origin/' + route);
       assert.equal(response.status, 200, route);
       const value = await response.json();
       if (route === 'runs') {
@@ -274,7 +274,7 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
     cachedSnapshot = { view: null, rows: [], instance: {} };
     clock += 30001;
     const before = snapshotReads;
-    const response = await request('/api/workbench/groups/origin/backlog');
+    const response = await request('/api/groups/origin/backlog');
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { count: 7, firstAt: 100, syncing: true }, 'Origin reads its group sync lock, not the Origin Sync lock');
     assert.deepEqual(calls.at(-2).args.slice(1), ['unsummarized', '--group', 'origin', '--json']);
@@ -285,8 +285,8 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   await t.test('invalid group keys are rejected before any child command or restart submission', async () => {
     const before = calls.length, restartBefore = restarts.length;
     for (const key of ['--json', 'a%2Fb']) {
-      const base = '/api/workbench/groups/' + key;
-      for (const suffix of ['/runs', '/messages', '/backlog', '/config']) {
+      const base = '/api/groups/' + key;
+      for (const suffix of ['/runs', '/messages', '/backlog', '']) {
         const response = await request(base + suffix, 'admin');
         assert.equal(response.status, 400, key + suffix);
         assert.equal((await response.json()).error.code, 'SESSION_GROUP_INVALID');

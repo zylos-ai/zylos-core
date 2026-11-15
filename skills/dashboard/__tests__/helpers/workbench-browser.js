@@ -18,21 +18,24 @@ const MEMORY_SHARE = 0.81;
 // (fixtures/workbench-browser-api.js). Dashboard actions are recorded and answered as done; nothing runs.
 export async function startPage(sandbox) {
   const actions = [], unserved = new Set(), reads = new Map();
+  let offlineHold = null;
   const now = Date.now();
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
-      if (url.pathname.startsWith('/api/actions/') && req.method === 'POST') {
+      if (url.pathname.startsWith('/api/instance/actions/') && req.method === 'POST') {
         let body = '';
         req.on('data', chunk => { body += chunk; if (body.length > 4096) req.destroy(); });
         req.on('end', () => {
-          actions.push({ action: url.pathname.slice('/api/actions/'.length), body: body ? JSON.parse(body) : null });
+          const action = url.pathname.slice('/api/instance/actions/'.length);
+          actions.push({ action: action === 'upgrade-runtime' ? 'upgrade-cc' : action, body: body ? JSON.parse(body) : null });
           sendJson(res, 200, { ok: true });
         });
         return;
       }
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
       if (url.pathname.startsWith('/api/')) {
+        if (offlineHold && url.pathname === '/api/groups/offline' && !url.searchParams.has('cursor')) { offlineHold.started(); await offlineHold.promise; }
         if (req.method === 'GET') reads.set(url.pathname, (reads.get(url.pathname) ?? 0) + 1);
         const value = req.method === 'GET' ? workbenchAnswer(url, now) : undefined;
         if (value === undefined) unserved.add(`${req.method} ${url.pathname}`);
@@ -47,7 +50,12 @@ export async function startPage(sandbox) {
     } catch (error) { sendJson(res, 500, { error: error.message }); }
   });
   const base = await sandbox.startHttp(server);
-  return { base, actions, unserved, reads };
+  return { base, actions, unserved, reads, holdOffline() {
+    let release, started; const promise = new Promise(resolve => { release = resolve; });
+    const waiting = new Promise(resolve => { started = resolve; });
+    offlineHold = { promise, started };
+    return { waiting, release() { offlineHold = null; release(); } };
+  } };
 }
 
 // Tappable controls narrower or shorter than 36px, the document width, and where the
@@ -329,7 +337,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await english.page.keyboard.press('Escape');
     await section(english.page, 'trends');
     await english.page.locator('#wb-usage-range > button').first().waitFor();
-    assert.equal((await english.page.locator('#wb-usage-range > button').allTextContents()).length, 5, 'four ranges and the custom dates');
+    assert.equal((await english.page.locator('#wb-usage-range > button').allTextContents()).length, 4, 'three ranges and the custom dates');
     await checkEnglish('usage-english');
     await section(english.page, 'memory');
     await english.page.locator('#memory-tree .memory-file').first().waitFor();
@@ -614,6 +622,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const name = `${language} ${width} ${theme}`, text = words[language];
       const { page, context, errors, shot } = await open(width, height, '/', {}, language);
       if (theme === 'dark') { await page.evaluate(() => localStorage.setItem('zylos-dashboard-theme', 'dark')); await page.reload(); }
+      await page.locator('.wb-group-sides > button').nth(1).click();
       await page.locator('#wb-board .wb-row', { hasText: 'Product weekly' }).click();
       await page.locator('.wb-detail-recent .wb-ev').first().waitFor();
       const recent = await page.locator('.wb-detail-recent .wb-ev').evaluateAll(rowsOf);
@@ -731,7 +740,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const [name, apiPath] = [decodeURIComponent(remote[1]), remote[2]];
       if (apiPath === '/api/stream') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
       let value = workbenchAnswer(new URL(apiPath + url.search, 'http://fixture'), Date.now());
-      if (apiPath === '/api/state' && value) {
+      if (apiPath === '/api/instance' && value) {
         const { zylos_version: _local, ...info } = value.runtime_info;
         value = { ...value, agent: { name }, runtime_info: remotes[name] === undefined ? info : { ...info, zylos_version: remotes[name] } };
       }
@@ -775,7 +784,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     assert.match(own.meta, /· core 0\.9\.4$/, 'the machine panel names this machine\'s Core version');
     for (const [name, version] of Object.entries(remotes)) {
       await page.locator('#fleet-manage-btn').click();
-      const stateRead = page.waitForResponse(response => new URL(response.url()).pathname === `/fleet/${name}/api/state`);
+      const stateRead = page.waitForResponse(response => new URL(response.url()).pathname === `/fleet/${name}/api/instance`);
       await page.locator(`#agent-fleet-root .agent-open[data-agent="${name}"]`).click();
       await stateRead;
       const seen = await machinePanel(name);

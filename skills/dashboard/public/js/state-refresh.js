@@ -4,7 +4,7 @@ import { setInstanceZone } from './wb/instance-zone.js?v=100';
 export async function refreshDashboardState(state, fetchState) {
   const target = state.remoteAgent;
   const request = beginStateRequest(state);
-  const data = await fetchState('/api/state');
+  const data = await fetchState('/api/instance');
   if (!data || typeof data !== 'object') return null;
   // Instance metadata survives a newer same-target SSE snapshot. Keep the
   // target guard so another instance's late reply cannot change it.

@@ -12,7 +12,7 @@ import { AuthGate, hashApiKey } from '../src/lib/auth.js';
 import { StateEngine } from '../src/lib/state-engine.js';
 import { EventLoopMonitor } from '../src/lib/event-loop-monitor.js';
 import { VersionChecker } from '../src/lib/version-checker.js';
-import { createGroupSnapshot, workbenchResponse } from '../src/lib/workbench/group-snapshot.js';
+import { createGroupSnapshot } from '../src/lib/workbench/group-snapshot.js';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'display-name-'));
@@ -96,7 +96,7 @@ test('local name routes require admin and publish human-owned names in group sna
   t.mock.module('node:child_process', { namedExports: { ...childProcess, execFileSync: () => '1.0.0', execFile: () => assert.fail('Core child forbidden') } });
   t.mock.module('../src/lib/state-engine.js', { namedExports: { StateEngine: class extends StateEngine { constructor(...args) { super(...args); engine = this; } } } });
   t.mock.module('../src/lib/auth.js', { namedExports: { ...await import('../src/lib/auth.js'), AuthGate: class extends AuthGate { constructor(...args) { super(...args); auth = this; } } } });
-  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: { workbenchResponse,
+  t.mock.module('../src/lib/workbench/group-snapshot.js', { namedExports: {
     createGroupSnapshot: options => createGroupSnapshot({ ...options, now: () => clock,
       cli: { runC4Db: async args => ({ ok: true, data: args[0] === 'groups' ? { groups: [{ sessionGroup: 'telegram:a', componentName: 'telegram' }], hasOlder: false } : { groups: [], globalFence: null } }),
         readOverrides: async () => ({ ok: true, data: { baseline: { runtime: 'claude' }, runtime: [], model: [] } }) },

@@ -1216,5 +1216,20 @@
   "wb.schedule.lastNOne": "Last {n} run",
   "wb.inst.poolBucketOne": "Session count {count}: typical peak {amount} GiB ({hours} h, {samples} sample)",
   "wb.inst.cpuCoresOne": "{count} core",
-  "wb.observer.enabledRunningOne": "Enabled · {count} running group available to observe"
+  "wb.observer.enabledRunningOne": "Enabled · {count} running group available to observe",
+  "wb.state.working": "Working",
+  "wb.state.offline": "Offline",
+  "wb.state.stopping": "Stopping",
+  "wb.groups.running": "Running",
+  "wb.groups.offline": "Offline",
+  "wb.board.groupsLabel": "Session groups",
+  "wb.flags.queued": "Queued {count}",
+  "wb.flags.blocked": "Blocked",
+  "wb.flags.waitingSlot": "Waiting for a slot #{position}",
+  "wb.flags.startFailed": "Start failed",
+  "wb.flags.unreadable": "Status unavailable",
+  "wb.groupUsage.title": "Usage",
+  "wb.groupUsage.summary": "{tokens} tokens · {cost} · Cache {cache}",
+  "wb.usage.cacheRate": "Cache hit rate",
+  "wb.groups.more": "Load more offline groups"
 }

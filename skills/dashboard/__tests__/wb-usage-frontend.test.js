@@ -2,7 +2,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { createDocument, allNodes, deferred, tick, Node } from './fixtures/workbench-dom.js';
-import { cachePath, renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
+import { renderUsage, createUsagePage, usagePath, formatUsageCount, bucketLabels, compactCount } from '../public/js/wb/usage.js';
 import { renderHost, createHostPanel } from '../public/js/wb/host-panel.js';
 import { instanceStrip, quotaReset } from '../public/js/wb/instance-strip.js';
 import { setInstanceZone } from '../public/js/wb/instance-zone.js?v=100';
@@ -111,7 +111,7 @@ test('usage plain view shows costs and signed messages with runtime stacks and t
 test('technical usage adds tokens rotations tools and output token projects without quotas', () => {
   const f=fixture(); renderUsage(f.root,value,{...f,level:'technical'});
   // Tools and projects are ranked bar lists, so only cost, messages, tokens and rotations are charts.
-  assert.equal(f.configs.length,4);
+  assert.equal(f.configs.length,5);
   const bars=allNodes(f.root).filter(n=>n.classList.contains('wb-usage-bar-row')).map(n=>n.textContent);
   assert.deepEqual(bars,['Read8','example91']);
   assert.equal(f.root.textContent.includes('quota'),false);
@@ -123,7 +123,7 @@ test('count charts use whole-number ticks, and a period without session changes 
   assert.equal(byTitle('wb.usage.received').options.scales.y.ticks.precision, 0, 'messages are counted');
   assert.equal(f.configs[0].options.scales.y.ticks.precision, undefined, 'amounts keep their decimals');
   const quiet=fixture(); renderUsage(quiet.root,{ ...value, rotations: [{ at: value.buckets[0], value: 0 }] },{...quiet,level:'technical'});
-  assert.equal(quiet.configs.length,3,'no chart is drawn for all-zero session changes');
+  assert.equal(quiet.configs.length,4,'no chart is drawn for all-zero session changes');
   assert.ok(quiet.root.textContent.includes('wb.usage.noRotations'));
   assert.equal(allNodes(quiet.root).filter(n=>n.classList.contains('wb-usage-empty')).length,1);
 });
@@ -198,14 +198,14 @@ test('host close callback Escape and late reads preserve lifecycle', async () =>
   const opening=panel.open();assert.equal(opened,1);f.document.dispatch('keydown',{key:'Escape'});pending.resolve({});await opening;assert.equal(panel.active,false);assert.equal(f.root.hidden,true);panel.destroy();
 });
 test('instance strip uses shared today summary and technical daily bars and host callback', () => {
-  const f=fixture();let opened=0;const summary={today:{total:5},sevenDay:{total:9},daily:[{at:'day',total:9}]};
+  const f=fixture();let opened=0;const summary={today:{cost:5},sevenDay:{cost:9},daily:[{at:'day',total:9}]};
   instanceStrip(f.root,{instance:{},rows:[]},{...f,costSummary:summary,onHost:()=>opened++,level:'technical'});
   assert.ok(f.root.textContent.includes('$5.00'));assert.ok(f.root.textContent.includes('$9.00'));allNodes(f.root).find(n=>n.id==='wb-host-open').dispatch('click');assert.equal(opened,1);
-  instanceStrip(f.root,{instance:{},rows:[]},{...f,costSummary:{today:{total:0.0819},sevenDay:{total:0.5},daily:[]}});assert.ok(f.root.textContent.includes('$0.0819'),'small costs keep their precision');
+  instanceStrip(f.root,{instance:{},rows:[]},{...f,costSummary:{today:{cost:0.0819},sevenDay:{cost:0.5},daily:[]}});assert.ok(f.root.textContent.includes('$0.0819'),'small costs keep their precision');
 });
 test('view detail changes redraw existing usage without another read', async () => {
   const f=fixture();let reads=0,level='plain'; const page=createUsagePage({...f,detail:()=>level,read:async()=>{reads++;return value;}});
-  await page.open();assert.equal(f.configs.length,2);level='technical';page.setViewDetail();assert.equal(reads,1);assert.equal(f.configs.length,6);assert.equal(f.destroyed(),2);page.destroy();assert.equal(f.destroyed(),6);
+  await page.open();assert.equal(f.configs.length,2);level='technical';page.setViewDetail();assert.equal(reads,1);assert.equal(f.configs.length,7);assert.equal(f.destroyed(),2);page.destroy();assert.equal(f.destroyed(),7);
 });
 test('failed usage read clears earlier values and hides raw errors in plain view', async () => {
   const f=fixture();let fail=false;const page=createUsagePage({...f,read:async()=>{if(fail)throw Error('private failure');return value;}});
@@ -233,7 +233,7 @@ test('host range changes keep the newer range when an older response arrives lat
   const opening = panel.open();
   const range = allNodes(f.root).find(node => node.id === 'wb-host-range');
   range.children.find(button => button.dataset.range === '24h').dispatch('click');
-  assert.deepEqual(paths, ['/api/workbench/host?range=6h', '/api/workbench/host?range=24h']);
+  assert.deepEqual(paths, ['/api/instance/resources?range=6h', '/api/instance/resources?range=24h']);
   newer.resolve({ current: { cpu_pct: 24 }, series: [{ at: '2026-11-01T00:00:00Z', cpu: { avg: 24, max: 24 } }] });
   await tick();
   assert.ok(f.root.textContent.includes('24.0%'));
@@ -262,7 +262,7 @@ test('technical usage renders unavailable runtime history as unknown instead of 
   const unknown = { ...value, runtimeEventsUnknown: true, rotations: null, tools: null,
     totals: { ...value.totals, rotations: null, tools: null } };
   const view = renderUsage(f.root, unknown, { ...f, level: 'technical' });
-  assert.equal(f.configs.length, 3);
+  assert.equal(f.configs.length, 4);
   const unavailable = allNodes(f.root).filter(node => node.tagName === 'SECTION' &&
     ['wb.usage.rotations', 'wb.usage.tools'].includes(node.children[0]?.textContent));
   assert.equal(unavailable.length, 2);
@@ -272,7 +272,7 @@ test('technical usage renders unavailable runtime history as unknown instead of 
     const total = totals.children.find(node => node.children[0].textContent === title);
     assert.equal(total.children[1].textContent, 'wb.unknown');
   }
-  view.destroy(); assert.equal(f.destroyed(), 3);
+  view.destroy(); assert.equal(f.destroyed(), 4);
 });
 
 
@@ -294,7 +294,7 @@ test('message counts distinguish unreadable and zero in both locales and detail 
       assert.equal(box.children[2].textContent, `${t('wb.usage.sent')} ${t('wb.unknown')}`);
       assert.equal(f.root.textContent.includes('messages_unreadable'), level === 'technical');
       assert.equal(f.root.textContent.includes(sampledAt), level === 'technical');
-      assert.equal(f.configs.length, level === 'technical' ? 3 : 1);
+      assert.equal(f.configs.length, level === 'technical' ? 4 : 1);
       assert.equal(f.root.textContent.includes('$5.00'), true);
       view.destroy();
       const empty = fixture();
@@ -377,21 +377,14 @@ test('axis labels are short dates with today named, or clock hours', () => {
   assert.equal(compactCount(215000000), '215M'); assert.equal(compactCount(8400), '8,400'); assert.equal(compactCount(84000), '84K');
 });
 
-test('technical usage reads the cache hit rate for the same period and shows it under tokens', async () => {
-  const f = fixture(), paths = []; let level = 'plain', cache = { total: 0.623 };
-  const reply = { ...value, since: '2026-11-01T00:00:00.000Z', until: '2026-11-08T00:00:00.000Z' };
+test('technical usage uses the cache rate included in the usage response without another request', async () => {
+  const f = fixture(), paths = []; let level = 'plain';
+  const reply = { ...value, totals: { ...value.totals, cacheHitRate: 0.623 }, cache: [{ at: value.buckets[0], value: 0.623 }] };
   const page = createUsagePage({ ...f, detail: () => level, t: (key, params) => key + (params ? ' ' + JSON.stringify(params) : ''),
-    read: async path => { paths.push(path); if (path.startsWith('/api/metrics/series')) { if (!cache) throw Error('read_failed'); return cache; } return reply; } });
-  await page.open();
-  assert.deepEqual(paths, ['/api/workbench/usage?range=7d'], 'plain view has no token total and reads no hit rate');
-  level = 'technical'; page.setViewDetail(); await tick();
-  assert.equal(paths[1], cachePath(reply));
-  assert.match(paths[1], /metric=cache&since=2026-11-01T00%3A00%3A00\.000Z&until=2026-11-08T00%3A00%3A00\.000Z/);
+    read: async path => { paths.push(path); return reply; } });
+  await page.open(); level = 'technical'; page.setViewDetail(); await tick();
+  assert.deepEqual(paths, ['/api/usage/series?range=7d']);
   assert.match(f.root.textContent, /wb\.usage\.cacheHit \{"pct":62\}/);
-  page.setViewDetail(); await tick();
-  assert.equal(paths.length, 2, 'a known rate is not read again');
-  cache = null; await page.refresh(); await tick();
-  assert.equal(f.root.textContent.includes('wb.usage.cacheHit'), false, 'an unreadable rate leaves the line out');
   page.destroy();
 });
 test('beyond the seven days of runtime events the unknown cards take full rows and tokens fills its row', () => {

@@ -1,12 +1,12 @@
 import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
-import { olderRow } from './older-row.js?v=85';
-import { channelIcon, platformLabel, statePill } from './board.js?v=156';
-import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=171';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=175';
+import { olderRow } from './older-row.js?v=86';
+import { channelIcon, platformLabel, statePill } from './board.js?v=157';
+import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=173';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=177';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=112';
-import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=115';
-import { renderNameEditor } from './name-edit.js?v=115';
+import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=116';
+import { renderNameEditor } from './name-edit.js?v=116';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 
 export function resolveDetailRow(selection, snapshot = {}) {
@@ -16,7 +16,7 @@ export function resolveDetailRow(selection, snapshot = {}) {
   if (found) return { row: found, historical: false };
   if (item.state && Object.hasOwn(item, 'live')) return { row: item, historical: true };
   const name = typeof item.name === 'string' ? { displayName: item.name } : item.name;
-  return { row: olderRow(key, { name, listKnown: snapshot.listKnown }), historical: true };
+  return { row: olderRow(key, { name, listKnown: false }), historical: true };
 }
 
 export function groupActionButtons(row, writable = true) {
@@ -95,7 +95,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
   isVisible = () => document.visibilityState !== 'hidden', now = Date.now } = {}) {
   const state = { row: null, snapshot: null, historical: false, tab: 'overview', recent: [], backlog: null,
     totalEvents: 0, totalRuns: 0, unattributed: 0, currentEvents: [], error: null, lastSuccess: null, level: null,
-    configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
+    usage: null, configOpen: false, nameOpen: false, nameDraft: '', actionResult: '', actionBusy: false };
   let generation = 0, controller = null, owner = null, config = null, stopped = false, refreshTask = null;
   let renderedLevel = null, configRevision = 0;
   let subagentRun = null, subagentCursor = 0, subagentReady = false, subagentController = null;
@@ -210,6 +210,18 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
         const form = [...sections.config.children].find(node => node.classList.contains('wb-cfg-edit'));
         if (form) form.dataset.updateKey = `config:${configRevision}:${getWritable()}:${row.rotationThreshold}`;
       }
+      const usage = element(document, 'section', undefined, 'wb-ip-card');
+      usage.append(element(document, 'h3', t('wb.groupUsage.title')));
+      for (const [period, label] of [['today', 'wb.inst.today'], ['sevenDay', 'wb.usage.range.7d']]) {
+        const values = state.usage?.[period];
+        const line = element(document, 'p', undefined, 'wb-note');
+        line.append(element(document, 'b', t(label) + ' · '), element(document, 'span', values == null ? t('wb.unknown') :
+          t('wb.groupUsage.summary', { tokens: values.tokens == null ? '—' : Number(values.tokens).toLocaleString(),
+            cost: values.cost == null ? '—' : '$' + Number(values.cost).toFixed(4),
+            cache: values.cacheHitRate == null ? '—' : Math.round(values.cacheHitRate * 100) + '%' })));
+        usage.append(line);
+      }
+      body.append(usage);
     } else {
       body.classList.add('wb-detail-timeline');
       renderTimeline(body, timeline, { document, t, level: getLevel(), onObserve: observe, working: row.working });
@@ -248,7 +260,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (raw.status !== 'error' && raw.status !== 'idle') { draw(); return; }
     raw.status = 'loading'; draw();
     try {
-      const value = await request(`/api/workbench/groups/${encodeURIComponent(row.sessionGroup ?? 'origin')}/raw`);
+      const value = await request(`/api/groups/${encodeURIComponent(row.sessionGroup ?? 'origin')}`);
       if (state.raw !== raw) return;
       raw.status = 'ok'; raw.text = typeof value?.raw === 'string' ? value.raw : null;
     } catch (error) {
@@ -267,7 +279,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     const row = state.row;
     state.actionBusy = true; draw();
     try {
-      const value = await request(`/api/workbench/groups/${encodeURIComponent(row.sessionGroup ?? 'origin')}/actions/${action}`, {
+      const value = await request(`/api/groups/${encodeURIComponent(row.sessionGroup ?? 'origin')}/actions/${action}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionGroup: row.sessionGroup, runId: row.live?.runId, sessionId: row.live?.sessionId ?? null }),
       });
@@ -313,7 +325,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       const query = new URLSearchParams({ session_group: state.row.sessionGroup ?? '', run_id: runId,
         types: 'subagent_start,subagent_stop', order: 'asc', limit: '1000' });
       if (subagentCursor || !initial) query.set('after_seq', String(subagentCursor));
-      const value = await request('/api/timeline?' + query, { signal });
+      const value = await request(`/api/groups/${encodeURIComponent(state.row.sessionGroup ?? 'origin')}/events?` + query, { signal });
       if (signal.aborted || state.row?.live?.runId !== runId) return;
       const events = value.events ?? [];
       rememberSubagents(events);
@@ -348,12 +360,23 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     if (types?.length) { query.set('types', types.join(',')); runsQuery.set('types', types.join(',')); }
     const task = (async () => {
       const values = await Promise.allSettled([
-        request('/api/timeline?' + query),
-        request(`/api/workbench/groups/${encodeURIComponent(key)}/backlog`),
-        request(`/api/workbench/groups/${encodeURIComponent(key)}/runs?` + runsQuery),
+        request(`/api/groups/${encodeURIComponent(key)}/events?` + query),
+        request(`/api/groups/${encodeURIComponent(key)}/backlog`),
+        request(`/api/groups/${encodeURIComponent(key)}/runs?` + runsQuery),
         loadSubagents(),
+        request(`/api/groups/${encodeURIComponent(key)}`),
+        request(`/api/groups/${encodeURIComponent(key)}/usage`),
       ]);
       if (!active(gen) || state.row.live?.runId !== runId || readLevel() !== level) return;
+      if (values[4].status === 'fulfilled') {
+        const detail = values[4].value;
+        if (detail?.state?.kind && (detail.id ?? detail.sessionGroup ?? 'origin') === key) { state.row = detail; state.historical = false; }
+        if (detail && Object.hasOwn(detail, 'raw')) {
+          const key = rawKey(state.row), previous = state.raw;
+          state.raw = { key, open: previous?.key === key && previous.open, status: 'ok', text: typeof detail.raw === 'string' ? detail.raw : null };
+        }
+      }
+      if (values[5].status === 'fulfilled') state.usage = values[5].value;
       if (values[0].status === 'fulfilled') {
         state.recent = values[0].value.events ?? [];
       }
@@ -384,7 +407,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
     refreshTask = null;
     renderedLevel = null;
     state.row = null; state.tab = 'overview'; state.recent = []; state.currentEvents = [];
-    state.totalEvents = state.totalRuns = state.unattributed = 0; state.backlog = null; state.error = null; state.level = null;
+    state.totalEvents = state.totalRuns = state.unattributed = 0; state.usage = null; state.backlog = null; state.error = null; state.level = null;
     state.configOpen = state.nameOpen = false;
     state.actionResult = ''; state.actionBusy = false;
     root.hidden = true; root.replaceChildren(); onClose();
@@ -414,8 +437,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (!controller) return;
       state.snapshot = snapshot;
       const previousRun = state.row.live?.runId;
-      if (!state.historical) state.row = snapshot.rows?.find(row => row.sessionGroup === state.row.sessionGroup) ??
-        olderRow(state.row.sessionGroup, { name: state.row.name, listKnown: snapshot.listKnown });
+      if (!state.historical) state.row = snapshot.rows?.find(row => row.sessionGroup === state.row.sessionGroup) ?? state.row;
       if (previousRun !== state.row.live?.runId) {
         resetSubagents();
         timeline.close();

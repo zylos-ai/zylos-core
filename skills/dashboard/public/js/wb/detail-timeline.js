@@ -3,7 +3,7 @@ import { workingNowText } from './working-display.js?v=5';
 import { listen } from './detail-update.js?v=158';
 import { element, icon } from './plain-text.js?v=106';
 import { endReasonLabel, timeValue } from './event-labels.js?v=93';
-import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=171';
+import { eventRow, eventTime, repeatRow } from './detail-overview.js?v=173';
 import { eventTypesFor, mergeRepeats, newestFirst, restartEffect, restartRows, showsEvent } from './timeline-rows.js?v=112';
 
 export { timeValue };
@@ -36,7 +36,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
   let generation = 0, filterGeneration = 0, controller = null, pendingOperations = 0;
   const current = gen => gen === generation && active() && !controller?.signal.aborted;
   const publish = () => { if (active()) onChange(state); };
-  const path = suffix => `/api/workbench/groups/${encodeURIComponent(state.key ?? 'origin')}/${suffix}`;
+  const path = suffix => `/api/groups/${encodeURIComponent(state.key ?? 'origin')}/${suffix}`;
   async function read(pathname, gen) {
     const value = await request(pathname, { signal: controller.signal });
     if (!current(gen)) throw Object.assign(new Error('view_changed'), { name: 'AbortError' });
@@ -51,7 +51,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       const types = eventTypesFor(filter, state.level);
       if (types?.length) query.set('types', types.join(','));
       if (afterSeq != null) query.set('after_seq', String(afterSeq));
-      const value = await read('/api/timeline?' + query, gen);
+      const value = await read(path('events') + '?' + query, gen);
       if (filterGen !== filterGeneration) throw Object.assign(new Error('filter_changed'), { name: 'AbortError' });
       const events = value.events ?? [];
       output.push(...events);
@@ -114,7 +114,7 @@ export function createTimelineLoader({ request, onChange = () => {}, onError = (
       order: 'asc', limit: '1000', after_seq: String(afterSeq) });
     const types = eventTypesFor(state.filter, state.level);
     if (types?.length) query.set('types', types.join(','));
-    const value = await read('/api/timeline?' + query, gen);
+    const value = await read(path('events') + '?' + query, gen);
     if (filterGen !== filterGeneration) return;
     // A snapshot refresh reads one page only. If over 1000 new events arrive,
     // the following board snapshot continues from this page's final sequence.

@@ -1,5 +1,5 @@
 import nodeTest from 'node:test';
-const test = (name, fn) => nodeTest(name, { timeout: 2000 }, fn);
+const test = (name, options, fn) => typeof options === 'function' ? nodeTest(name, { timeout: 2000 }, options) : nodeTest(name, { timeout: 2000, ...options }, fn);
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import path from 'node:path';
@@ -76,6 +76,7 @@ function clock() {
   };
 }
 function fixture(extra = () => undefined, t = key => key) {
+  let fixtureInstance = null;
   const calls = [],
     timer = clock(),
     listeners = new Set();
@@ -103,13 +104,9 @@ function fixture(extra = () => undefined, t = key => key) {
         options,
         time: timer.now()
       });
-      const value = extra(u, options);
-      if (value !== undefined) return value;
-      if (p === '/api/session-mode') return {
-        data: {
-          sessionMode: 'multi'
-        }
-      };
+      const value = await extra(u, options);
+      if (value !== undefined) { if (u.pathname.startsWith('/api/groups/')) { fixtureInstance = value.fixtureInstance; const { fixtureInstance: ignored, ...detail } = value; return detail; } return value; }
+      if (p === '/api/instance') return { session_mode: 'multi', ...fixtureInstance };
       if (u.pathname === '/api/chat/conversations') return {
         items: [{
           id: 'g:A',
@@ -166,7 +163,7 @@ function fixture(extra = () => undefined, t = key => key) {
 async function selected(extra) {
   const f = fixture(extra);
   await f.state.open();
-  await f.state.select('g:A');
+  await f.state.select('g:A'); await flush();
   return f;
 }
 test('visible polling waits five seconds and leaves quiet controls loaded', async () => {
@@ -440,7 +437,7 @@ test('remote closure clears lists and cached drafts before a fresh selection', a
   assert.equal(f.calls.length, n);
   disabled = false;
   await f.state.refresh();
-  await f.state.select('g:A');
+  await f.state.select('g:A'); await flush();
   assert.equal(f.state.snapshot().input, '');
   assert.notEqual(f.state.snapshot().questionForms, previousForms);
   assert.equal(f.state.snapshot().questionForms.size, 0);
@@ -1166,7 +1163,7 @@ test('unparseable incremental previews use the injected locale fallback', async 
     afterCursor: 'a11'
   } : undefined, key => key === 'chat.invalidContent' ? 'Localized unavailable message' : key);
   await f.state.open();
-  await f.state.select('g:A');
+  await f.state.select('g:A'); await flush();
   await f.timer.advance(5000);
   assert.equal(f.state.snapshot().items.find(item => item.id === 'g:A').preview, 'Localized unavailable message');
   f.state.destroy();
@@ -1179,7 +1176,7 @@ test('invalid incremental previews preserve qualified fallback as literal text',
   } : undefined);
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     await f.timer.advance(5000);
     assert.equal(f.state.snapshot().items.find(item => item.id === 'g:A').preview, fallbackText);
   } finally { f.state.destroy(); }
@@ -1196,25 +1193,20 @@ function groupFixture(readGroup, extra = () => undefined) {
       },
       stored: false
     };
-    if (u.pathname === '/api/workbench/groups') return readGroup(options);
+    if (u.pathname.startsWith('/api/groups/')) return readGroup(options);
   });
 }
-const groupSnapshot = (presence, extra = {}) => ({
-  listKnown: true,
-  rows: [{
-    sessionGroup: 'dashboard:a',
-    presence
-  }],
-  sources: {
-    status: {
-      ok: true,
-      readAt: 1000
-    }
-  },
-  ...extra
-});
+const groupSnapshot = (presence, extra = {}) => {
+  const rows = extra.rows ?? [{ sessionGroup: 'dashboard:a', presence }];
+  const row = rows.find(item => item.sessionGroup === 'dashboard:a') ?? rows[0];
+  const known = extra.listKnown !== false && extra.sources?.status?.ok !== false && row;
+  const health = extra.instance?.runtimeHealth?.[row?.target?.runtime]?.health;
+  return { ...row, fixtureInstance: extra.instance, state: { kind: known ? presence === 'running' ? 'idle' : presence === 'not_running' ? 'offline' : 'unknown' : 'unknown' },
+    readAt: extra.sources?.status?.readAt ?? 1000,
+    flags: { ...(health && health !== 'ok' ? { blocked: { reason: health } } : {}) } };
+};
 for (const health of ['rate_limited', 'recovering']) {
-  test(`sending into an empty ${health} queue refreshes wait before the polling interval`, { timeout: 2000 }, async t => {
+  test(`sending into an empty ${health} queue refreshes wait within two seconds`, { timeout: 2000 }, async t => {
     let stored = false;
     const wait = { kind: 'rate_wait', runtime: 'claude' };
     const f = groupFixture(() => groupSnapshot('running', {
@@ -1224,14 +1216,16 @@ for (const health of ['rate_limited', 'recovering']) {
       if (u.pathname.endsWith('/send')) { stored = true; return { stored: true, conversationId: 'g:A' }; }
     });
     t.after(() => f.state.destroy());
-    await f.state.open(); await f.state.select('g:A');
+    await f.state.open(); await f.state.select('g:A'); await flush();
     assert.equal(f.state.snapshot().groupWait, null);
     const before = f.timer.now();
     f.state.setInput('new message'); await f.state.send(); await flush();
     assert.equal(f.state.snapshot().receipt.stored, true);
+    assert.equal(f.state.snapshot().groupWait, null, 'the stored-message refresh waits two seconds');
+    await f.timer.advance(2000);
     assert.equal(f.state.snapshot().groupWait, wait);
-    assert.equal(f.timer.now(), before, 'no poll or timeout was needed');
-    assert.equal(f.calls.filter(call => call.path === '/api/workbench/groups').length, 2);
+    assert.equal(f.timer.now(), before + 2000, 'the refresh runs before the normal thirty-second cadence');
+    assert.equal(f.calls.filter(call => call.path.startsWith('/api/groups/')).length, 2);
   });
 }
 test('a stored message replaces an older pending group read', { timeout: 2000 }, async t => {
@@ -1245,9 +1239,10 @@ test('a stored message replaces an older pending group read', { timeout: 2000 },
   const f = groupFixture(() => ++reads === 1 ? pending.promise : response(wait), u =>
     u.pathname.endsWith('/send') ? { stored: true, conversationId: 'g:A' } : undefined);
   t.after(() => f.state.destroy());
-  await f.state.open(); await f.state.select('g:A');
-  const oldRead = f.calls.find(call => call.path === '/api/workbench/groups');
+  await f.state.open(); await f.state.select('g:A'); await flush();
+  const oldRead = f.calls.find(call => call.path.startsWith('/api/groups/'));
   f.state.setInput('new message'); await f.state.send(); await flush();
+  await f.timer.advance(2000);
   assert.equal(reads, 2);
   assert.equal(oldRead.options.signal.aborted, true);
   assert.equal(f.state.snapshot().groupWait, wait);
@@ -1264,10 +1259,10 @@ test('a send completed after navigation preserves the selected group read', { ti
     };
   });
   t.after(() => f.state.destroy());
-  await f.state.open(); await f.state.select('g:A');
+  await f.state.open(); await f.state.select('g:A'); await flush();
   f.state.setInput('new message'); const sending = f.state.send();
   await f.state.select('g:B');
-  const selectedRead = f.calls.filter(call => call.path === '/api/workbench/groups').at(-1);
+  const selectedRead = f.calls.filter(call => call.path.startsWith('/api/groups/')).at(-1);
   send.resolve({ stored: true, conversationId: 'g:A' }); await sending; await flush();
   assert.equal(reads, 2);
   assert.equal(selectedRead.options.signal.aborted, false);
@@ -1283,9 +1278,9 @@ for (const stored of [false, null]) {
     const f = groupFixture(() => groupSnapshot('running'), u =>
       u.pathname.endsWith('/send') ? { stored, conversationId: 'g:A' } : undefined);
     t.after(() => f.state.destroy());
-    await f.state.open(); await f.state.select('g:A');
+    await f.state.open(); await f.state.select('g:A'); await flush();
     f.state.setInput('new message'); await f.state.send(); await flush();
-    assert.equal(f.calls.filter(call => call.path === '/api/workbench/groups').length, 1);
+    assert.equal(f.calls.filter(call => call.path.startsWith('/api/groups/')).length, 1);
   });
 }
 test('returning to a conversation clears its previous wait before metadata arrives', { timeout: 2000 }, async t => {
@@ -1297,7 +1292,7 @@ test('returning to a conversation clears its previous wait before metadata arriv
     instance: { runtimeHealth: { claude: { health: 'recovering' } } }
   }), u => returning && u.pathname === '/api/chat/conversations/g%3AA' ? metadata.promise : undefined);
   t.after(() => f.state.destroy());
-  await f.state.open(); await f.state.select('g:A');
+  await f.state.open(); await f.state.select('g:A'); await flush();
   assert.equal(f.state.snapshot().groupWait, wait);
   await f.state.select('g:B');
   returning = true;
@@ -1324,7 +1319,7 @@ for (const failure of ['unreadable source', 'request failure']) test(`conversati
   });
   t.after(() => f.state.destroy());
   await f.state.open();
-  await f.state.select('g:A');
+  await f.state.select('g:A'); await flush();
   assert.equal(f.state.snapshot().groupHealth, 'rate_limited');
   assert.equal(f.state.snapshot().groupWait, wait);
   readable = false;
@@ -1348,7 +1343,7 @@ for (const runtime of ['claude', 'codex']) {
         instance: { runtimeHealth: { claude: { health: 'auth_failed' }, codex: { health: 'down' }, [runtime]: { health } } }
       }));
       t.after(() => f.state.destroy());
-      await f.state.open(); await f.state.select('g:A');
+      await f.state.open(); await f.state.select('g:A'); await flush();
       assert.equal(f.state.snapshot().groupHealth, health);
       assert.equal(f.state.snapshot().groupWait, wait, 'the matching row wait remains the server authority');
     });
@@ -1360,7 +1355,7 @@ for (const runtime of ['claude', 'codex']) {
         [runtime]: { source: 'missing', health: 'ok', publicHealth: 'ok', cooldownUntil: null, updatedAt: null } } }
     }));
     t.after(() => f.state.destroy());
-    await f.state.open(); await f.state.select('g:A');
+    await f.state.open(); await f.state.select('g:A'); await flush();
     assert.equal(f.state.snapshot().groupHealth, 'ok');
     assert.equal(f.state.snapshot().groupWait, null);
   });
@@ -1376,7 +1371,7 @@ test('conversation state clears wait when navigating to a group without a target
     conversation: { id: 'g:B', sessionGroup: 'dashboard:b', state: 'active' }, stored: false
   } : undefined);
   t.after(() => f.state.destroy());
-  await f.state.open(); await f.state.select('g:A');
+  await f.state.open(); await f.state.select('g:A'); await flush();
   assert.equal(f.state.snapshot().groupWait, wait);
   await f.state.select('g:B');
   assert.equal(f.state.snapshot().groupWait, null);
@@ -1393,7 +1388,7 @@ test('a late wait response cannot restore restriction after navigation', { timeo
   });
   const f = groupFixture(() => ++reads === 1 ? response() : pending.promise);
   t.after(() => f.state.destroy());
-  await f.state.open(); await f.state.select('g:A');
+  await f.state.open(); await f.state.select('g:A'); await flush();
   assert.equal(f.state.snapshot().groupWait, wait);
   await f.timer.advance(30000);
   await f.state.select('g:B');
@@ -1415,7 +1410,7 @@ for (const failure of ['unknown list', 'missing row']) {
       ], instance: { runtimeHealth: { claude: { health: 'recovering' } } }
     }));
     t.after(() => f.state.destroy());
-    await f.state.open(); await f.state.select('g:A');
+    await f.state.open(); await f.state.select('g:A'); await flush();
     assert.equal(f.state.snapshot().groupWait, wait);
     readable = false; await f.timer.advance(30000);
     assert.equal(f.state.snapshot().groupWait, null);
@@ -1431,7 +1426,7 @@ test('running marker uses the exact group and clears after an unreadable workben
     return groupSnapshot('running');
   });
   await f.state.open();
-  await f.state.select('g:A');
+  await f.state.select('g:A'); await flush();
   assert.equal(f.state.snapshot().groupPresence, true);
   assert.equal(f.state.snapshot().groupPresenceReadAt, 1000);
   fail = true;
@@ -1459,7 +1454,7 @@ test('running marker fails closed for unknown lists, failed sources, different g
   }), groupSnapshot('starting'), groupSnapshot('unknown')]) {
     const f = groupFixture(() => response);
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     assert.equal(f.state.snapshot().groupPresence, null);
     f.state.destroy();
   }
@@ -1469,7 +1464,7 @@ test('non-running group status is authoritative and stale identity responses can
   let reads = 0;
   const f = groupFixture(() => ++reads === 1 ? groupSnapshot('not_running') : pending.promise);
   await f.state.open();
-  await f.state.select('g:A');
+  await f.state.select('g:A'); await flush();
   assert.equal(f.state.snapshot().groupPresence, false);
   await f.timer.advance(30000);
   f.state.close();
@@ -1489,7 +1484,7 @@ test('a hanging group status request cannot block selection or five-second messa
   const pending = deferred();
   const f = fixture((u, options) => {
     if (u.pathname === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
-    if (u.pathname === '/api/workbench/groups') {
+    if (u.pathname.startsWith('/api/groups/')) {
       signal = options.signal;
       signal.addEventListener('abort', () => pending.reject({ code: 'aborted' }), { once: true });
       return pending.promise;
@@ -1500,7 +1495,7 @@ test('a hanging group status request cannot block selection or five-second messa
   });
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     assert.equal(f.state.snapshot().messages.length, 1);
     assert.equal(f.state.snapshot().groupPresence, null);
     await f.timer.advance(4999);
@@ -1508,7 +1503,7 @@ test('a hanging group status request cannot block selection or five-second messa
     await f.timer.advance(1);
     assert.equal(f.reads().length, 1);
     assert.equal(f.state.snapshot().messages.at(-1).id, 11);
-    assert.equal(f.calls.filter(c => c.path === '/api/workbench/groups').length, 1);
+    assert.equal(f.calls.filter(c => c.path.startsWith('/api/groups/')).length, 1);
   } finally {
     f.state.destroy();
     assert.equal(signal.aborted, true);
@@ -1520,7 +1515,7 @@ test('a hanging group status request cannot block selection or five-second messa
 for (const health of ['ok', 'rate_limited']) test(`sending with ${health} health preserves the group refresh cadence`, { timeout: 2000 }, async () => {
   const f = fixture(u => {
     if (u.pathname === '/api/chat/conversations/g%3AA') return { conversation: { id: 'g:A', sessionGroup: 'dashboard:a', state: 'active' }, stored: false };
-    if (u.pathname === '/api/workbench/groups') return groupSnapshot('running', {
+    if (u.pathname.startsWith('/api/groups/')) return groupSnapshot('running', {
       rows: [{ sessionGroup: 'dashboard:a', presence: 'running', target: { runtime: 'claude' }, wait: null }],
       instance: { runtimeHealth: { claude: { health } } }
     });
@@ -1528,22 +1523,24 @@ for (const health of ['ok', 'rate_limited']) test(`sending with ${health} health
   });
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     assert.equal(f.state.snapshot().groupHealth, health);
-    const groupReads = () => f.calls.filter(c => c.path === '/api/workbench/groups').length;
+    const groupReads = () => f.calls.filter(c => c.path.startsWith('/api/groups/')).length;
     assert.equal(groupReads(), 1);
     f.state.setInput('hello');
     await f.state.send();
-    const afterSendReads = health === 'ok' ? 1 : 2;
+    const afterSendReads = 1;
     assert.equal(groupReads(), afterSendReads);
     const initialReads = f.reads().length;
     await f.timer.advance(12000);
     assert.equal(f.reads().length, initialReads + 6);
-    assert.equal(groupReads(), afterSendReads);
+    assert.equal(groupReads(), afterSendReads + 1, 'stored-message replacement runs after two seconds');
     await f.timer.advance(18000);
     assert.equal(groupReads(), afterSendReads + 1);
-    await f.timer.advance(30000);
+    await f.timer.advance(2000);
     assert.equal(groupReads(), afterSendReads + 2);
+    await f.timer.advance(30000);
+    assert.equal(groupReads(), afterSendReads + 3);
   } finally {
     f.state.destroy();
   }
@@ -1555,7 +1552,7 @@ test('thirty-second list refresh deduplicates a pending optional group status re
   const f = groupFixture(() => ++reads === 1 ? pending.promise : groupSnapshot('running'));
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     await f.timer.advance(60000);
     assert.equal(reads, 1);
     assert.equal(f.reads().length, 12);
@@ -1577,7 +1574,7 @@ test('a running marker remains visible throughout a pending group status refresh
   const observed = [];
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     assert.equal(f.state.snapshot().groupPresence, true);
     const unsubscribe = f.state.subscribe(snapshot => observed.push(snapshot.groupPresence));
     await f.timer.advance(30000);
@@ -1607,7 +1604,7 @@ test('switching conversations aborts a pending group read and reads the new grou
       const id = decodeURIComponent(u.pathname.split('/').at(-1));
       return { conversation: { id, sessionGroup: id === 'g:A' ? 'dashboard:a' : 'dashboard:b', state: 'active' }, stored: false };
     }
-    if (u.pathname === '/api/workbench/groups') {
+    if (u.pathname.startsWith('/api/groups/')) {
       reads++;
       if (reads === 1) {
         oldSignal = options.signal;
@@ -1620,7 +1617,7 @@ test('switching conversations aborts a pending group read and reads the new grou
   });
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     assert.equal(reads, 1);
     assert.equal(oldSignal.aborted, false);
     await f.state.select('g:B');
@@ -1650,7 +1647,7 @@ test('closing the page aborts its pending optional group request', async () => {
   });
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     assert.equal(signal.aborted, false);
     f.state.close();
     assert.equal(signal.aborted, true);
@@ -1674,7 +1671,7 @@ test('opening another identity aborts the old identity group request', async () 
   });
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     assert.equal(signal.aborted, false);
     f.setIdentity('another');
     await f.state.open();
@@ -1700,7 +1697,7 @@ test('remote chat closure aborts the pending optional group request', async () =
     ? Promise.reject({ code: 'remote_chat_disabled' }) : undefined);
   try {
     await f.state.open();
-    await f.state.select('g:A');
+    await f.state.select('g:A'); await flush();
     assert.equal(signal.aborted, false);
     await f.timer.advance(5000);
     assert.equal(signal.aborted, true);
@@ -1736,7 +1733,7 @@ test('external selection outside the first page preserves supplied group metadat
 test('conversation list and incremental reads request previews in the current page language', async () => {
   const f = fixture();
   f.document.documentElement = { lang: 'en' };
-  await f.state.open(); await f.state.select('g:A');
+  await f.state.open(); await f.state.select('g:A'); await flush();
   await f.timer.advance(5000);
   const reads = f.calls.filter(call => /^\/api\/chat\/conversations(?:\?|\/[^/]+\/messages\?)/.test(call.path));
   assert.ok(reads.length >= 3);
@@ -1755,7 +1752,7 @@ test('a group-list reading older than the one the header shows leaves the header
     working: { on: true, main: { since: 0, lastActivityAt: 900 }, tools: 0, subagents: null },
     header: { readAt: 2000, presence: 'running', wait: null, health: 'ok' }, steps: [], subtasks: [], awaiting: null, seenId: 0 } : undefined);
   t.after(() => f.state.destroy());
-  await f.state.open(); await f.state.select('g:A'); await flush();
+  await f.state.open(); await f.state.select('g:A'); await flush(); await flush();
   assert.equal(f.state.snapshot().groupPresenceReadAt, 2000, 'the activity read brought the newer reading first');
   late.resolve(groupSnapshot('not_running', { rows: [{ sessionGroup: 'dashboard:a', presence: 'not_running' }] })); await flush();
   const shown = f.state.snapshot();
@@ -1771,7 +1768,7 @@ test('an activity answer without the header reading leaves the header as the gro
   }), u => u.pathname.endsWith('/activity') ? { now: 1000, working: { on: false, main: null, tools: 0, subagents: null },
     steps: [], subtasks: [], awaiting: null, seenId: 0 } : undefined);
   t.after(() => f.state.destroy());
-  await f.state.open(); await f.state.select('g:A');
+  await f.state.open(); await f.state.select('g:A'); await flush();
   const activityReads = () => f.calls.filter(call => call.path.includes('/activity?')).length;
   const before = activityReads();
   await f.timer.advance(5000);
@@ -2110,7 +2107,7 @@ test('polling refreshes the selected name when its row is outside the first page
     if (decodeURIComponent(u.pathname) === '/api/chat/conversations/g:A') return { conversation: { id: 'g:A', state: 'active', displayName: name } };
   });
   t.after(() => f.state.destroy());
-  await f.state.open(); await f.state.select('g:A');
+  await f.state.open(); await f.state.select('g:A'); await flush();
   f.state.setInput('retain my draft');
   const receipt = f.state.snapshot().receipt;
   name = 'New name from another page';
@@ -2182,3 +2179,11 @@ for (const malformed of ['same cursor', 'empty continuation']) {
     assert.equal(f.state.snapshot().messages[0].content, 'retried oldest');
   });
 }
+
+for (const session_mode of [null, undefined, 'unreadable']) test('unreadable instance mode stays unavailable: ' + String(session_mode), async t => {
+  const f = fixture(url => url.pathname === '/api/instance' ? { session_mode } : undefined);
+  t.after(() => f.state.destroy());
+  await f.state.open();
+  assert.equal(f.state.snapshot().mode, null);
+  assert.equal(f.state.snapshot().canCreate, false);
+});

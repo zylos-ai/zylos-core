@@ -1,8 +1,8 @@
 import { countLabel } from '../count-label.js?v=1';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=98';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
-import { annotateStatus } from './board.js?v=156';
-import { settingsCard } from './settings.js?v=116';
+import { annotateStatus } from './board.js?v=157';
+import { settingsCard } from './settings.js?v=117';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {
@@ -37,7 +37,7 @@ export function createOverrideSearch({ read, onChange, setTimer = setTimeout, cl
     const suffix = new URLSearchParams({ q: currentQuery });
     if (append && nextAfter != null) suffix.set('after', nextAfter);
     try {
-      const result = await read('/api/workbench/runtime-overrides?' + suffix);
+      const result = await read('/api/groups/runtime-overrides?' + suffix);
       if (destroyed || captured !== sequence) return;
       rows = append ? [...rows, ...(result.runtime ?? [])] : result.runtime ?? [];
       nextAfter = result.nextAfter ?? null;
@@ -270,7 +270,7 @@ export function renderDefaults(root, { snapshot, page, metadata = {}, sessionRoo
       renderThreshold();
       if (!selected || modelThresholdValue(rows[runtime]?.meta ?? meta, selected) != null || !read) return;
       try {
-        const next = await read('/api/actions/meta?' + new URLSearchParams({ runtime, model: selected }));
+        const next = await read('/api/instance/runtime-options?' + new URLSearchParams({ runtime, model: selected }));
         if (destroyed || sequence !== thresholdSequence || selected !== modelValue()) return;
         if (next?.runtime === runtime && next.model_thresholds) {
           meta = { ...meta, ...next };

@@ -241,3 +241,33 @@ test('default completion lookup reads retained events only after authoritative a
   fs.rmSync(file);fs.rmSync(rotated);
   assert.equal(await lookupRestartRequest('upgrade',{readRequests:()=>[]}), 'unknown');
 });
+
+// Group progress uses the same authoritative request/completion readers. Run
+// for restart correlation changes; unrelated transport/UI changes may skip.
+// The Node runner supplies private HOME/ZYLOS_DIR/PM2_HOME/TMPDIR before imports;
+// this test writes only that root's diagnostic file and starts no process/socket.
+test('group restart progress never adopts another group or an instance upgrade', async t => {
+  const { supervisorDiagnosticPath } = await import('../session-group-paths.js');
+  const file = supervisorDiagnosticPath();
+  assert.ok(file.startsWith(process.env.ZYLOS_DIR + path.sep));
+  console.log('Restart correlation isolation:', JSON.stringify({ HOME: process.env.HOME,
+    ZYLOS_DIR: process.env.ZYLOS_DIR, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, file, tmux: 'not used' }));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  t.after(() => { if (previous) fs.writeFileSync(file, previous); else fs.rmSync(file, { force: true }); });
+  const pending = {requestId:'group-request',reason:'manual_restart',sessionGroup:'telegram:a'};
+  assert.equal(await lookupRestartRequest('group-request',{sessionGroup:'telegram:a',readRequests:()=>[pending]}),'accepted');
+  assert.equal(await lookupRestartRequest('group-request',{sessionGroup:'telegram:b',readRequests:()=>[pending],readCompleted:()=>false}),'unknown');
+  fs.writeFileSync(file, [
+    {v:1,event:'manual_restart_done',requestId:'group-done',session_group:'telegram:a'},
+    {v:1,event:'manual_restart_done',requestId:'origin-done',session_group:null},
+    {v:1,event:'restart_done',requestId:'upgrade-done'},
+  ].map(row=>JSON.stringify(row)).join('\n')+'\n');
+  const lookup = (id,sessionGroup) => lookupRestartRequest(id,{sessionGroup,readRequests:()=>[]});
+  assert.equal(await lookup('group-done','telegram:a'),'done');
+  assert.equal(await lookup('group-done','telegram:b'),'unknown');
+  assert.equal(await lookup('origin-done','origin'),'done');
+  assert.equal(await lookup('origin-done','telegram:a'),'unknown');
+  assert.equal(await lookup('upgrade-done','origin'),'unknown');
+  assert.equal(await lookupRestartRequest('upgrade-done',{readRequests:()=>[]}),'done');
+});

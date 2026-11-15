@@ -1,4 +1,4 @@
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=202';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=203';
 import { counted } from './count-label.js?v=1';
 
 import { fallbackName, platformOf } from './wb/plain-text.js?v=106';

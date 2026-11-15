@@ -1,14 +1,10 @@
 #!/usr/bin/env node
-import { buildAgentStatus } from './lib/agent-status.js';
-import { agentReadiness } from './lib/agent-readiness.js';
-import { readThresholdPolicy, sessionThreshold } from './lib/session-threshold.js';
 import { createInstalledVersionReader } from './lib/installed-versions.js';
 import { CoreState } from './lib/core-state.js';
 import { loadCoreModule } from './lib/core-modules.js';
-import { RestartRequestStore } from '../../activity-monitor/scripts/restart-request-store.js';
 import { createReadinessCheck } from './lib/readiness.js';
 import { bootId, publishHealthProcess } from './lib/health-process.js';
-import { createCoalescedBroadcast, createSessionCache, broadcastFleetSnapshot } from './lib/coalesced-broadcast.js';
+import { createCoalescedBroadcast } from './lib/coalesced-broadcast.js';
 import http from 'node:http';
 import { promisify } from 'node:util';
 import { execFile, execFileSync } from 'node:child_process';
@@ -57,12 +53,10 @@ import { UsageTranscripts } from './lib/collectors/usage-transcripts.js';
 import { CodexRolloutCollector } from './lib/collectors/codex-rollout-collector.js';
 import { StateEngine } from './lib/state-engine.js';
 import { MetricResolver } from './lib/metric-resolver.js';
-import { resolveAggregateValue } from './lib/metric-aggregate.js';
 import { runMetricMaintenance } from './lib/metric-maintenance.js';
 import { EventLoopMonitor } from './lib/event-loop-monitor.js';
-import { buildSystemPayload } from './lib/system-api.js';
 import { SseHub } from './lib/sse.js';
-import { FleetPoller, stateToFleetRecord } from './lib/fleet-poller.js';
+import { FleetPoller, stateToFleetRecord, fleetStateFromObjects } from './lib/fleet-poller.js';
 import { buildSafeFleetPayload } from './lib/fleet-payload.js';
 import { FleetProxy } from './lib/fleet-proxy.js';
 import { createObserverContainment } from './lib/observer-containment.js';
@@ -87,25 +81,24 @@ import { createMemoryBacklog } from './lib/workbench/memory-backlog.js';
 import { createOriginBacklog } from './lib/workbench/origin-backlog.js';
 import { createGroupActions } from './lib/workbench/group-actions.js';
 import { createGroupDeletionRoutes } from './lib/workbench/group-deletion.js';
+import { createGroupsApi, groupCounts, projectGroup } from './lib/workbench/groups-api.js';
+import { usageSummary, usagePricing } from './lib/workbench/usage-api.js';
+import { isSameOriginRequest } from './lib/request-origin.js';
 import { usageSeries } from './lib/workbench/usage-series.js';
 import { hostSeries } from './lib/workbench/host-series.js';
-import { costRows, costSummary, usageBounds } from './lib/workbench/cost-query.js';
 import { NAME_PROMPT, ORIGINAL_GROUP_NAME_PATH, namePromptText } from '../public/js/wb/auto-name.js';
 import { searchTerm } from './lib/workbench/group-search.js';
-import { createGroupSnapshot, workbenchResponse } from './lib/workbench/group-snapshot.js';
-import { fleetGroupSummary } from './lib/workbench/fleet-summary.js';
+import { createGroupSnapshot } from './lib/workbench/group-snapshot.js';
 import { createScheduleRead, scheduleReadResponse } from './lib/workbench/schedule-read.js';
 import { createScheduleWrite } from './lib/workbench/schedule-write.js';
 import { createScheduleTz } from './lib/workbench/schedule-tz.js';
 import { createInstanceTimezone, handleInstanceTimezone, handleInstanceTimezoneRestart } from './lib/instance-timezone.js';
 import { handleAction, getActionsMeta, readCodexRootString } from './lib/actions.js';
-import { buildRestartStatus } from './lib/core-actions.js';
-import { createCoreStateChangePublisher } from './lib/core-state-publisher.js';
 import { VersionChecker } from './lib/version-checker.js';
 import { isNewerVersion } from './lib/version-utils.js';
 import { applyVersionUpdateFields, codexRuntimeFields } from './lib/runtime-info.js';
-import Database from '../../comm-bridge/scripts/sqlite-driver.js';
 
+const { readConfigStrict } = await loadCoreModule('config-store.js');
 const startedAt = new Date();
 const MEMORY_WRITE_BODY_MAX_BYTES = 2 * 1024 * 1024 + 64 * 1024;
 
@@ -124,7 +117,6 @@ await readInstalledVersions();
 async function refreshInstalledVersions() {
   await readInstalledVersions();
   if (coreState?.getState()) {
-    sse.broadcast('state_change', currentState());
     scheduleFleetStateBroadcast();
   }
 }
@@ -199,7 +191,7 @@ observerService.ensureCoordinatorOwnership = async () => {
 // 3. Sanitizer
 const sanitizer = new Sanitizer(config.zylosDir);
 const coreLogImporter = new CoreLogImporter({ store, zylosDir: config.zylosDir, sanitizer,
-  onImport: event => { scheduleHistoryBroadcast(); conversationCollector?.afterImport(event); },
+  onImport: event => { scheduleHistoryBroadcast(); scheduleFleetStateBroadcast(); conversationCollector?.afterImport(event); },
 });
 
 // Event-loop delay observability (#260)
@@ -247,23 +239,21 @@ let fleetPollerReady = false; // fleetPoller is declared later (TDZ guard)
 async function broadcastFleetState() {
   if (sse.clients.size === 0) return;
   try {
-    await refreshFleetGroupSummary();
-    broadcastFleetSnapshot(sse, buildApiStatePayload, statePayload => {
-      if (fleetPollerReady) broadcastFleet(fleetPoller.getFleet(), statePayload);
-    });
+    await Promise.all([coreState.refresh(), workbench.getSnapshot(undefined, { fresh: true })]);
+    sse.broadcast('instance', buildInstancePayload());
+    sse.broadcast('groups', await groupsApi.counts());
+    if (fleetPollerReady) broadcastFleet(fleetPoller.getFleet());
   } catch (err) {
-    process.stderr.write(`[fleet] fleet_state SSE broadcast skipped: ${err.message}\n`);
+    process.stderr.write(`[fleet] instance/groups SSE broadcast skipped: ${err.message}\n`);
   }
 }
-
 const scheduleFleetStateBroadcast = createCoalescedBroadcast(() => eventLoopMonitor.runTask('fleet.broadcast', broadcastFleetState));
-publishCoreStateChange = createCoreStateChangePublisher({ sse, buildStatePayload: buildApiStatePayload, scheduleFleetStateBroadcast });
+publishCoreStateChange = () => scheduleFleetStateBroadcast();
 
 // 6b. Version checker (polls GitHub + npm registry every 12h)
 const versionChecker = new VersionChecker({
   onUpdate: () => {
     if (stateEngine) {
-      sse.broadcast('state_change', currentState());
       scheduleFleetStateBroadcast();
     }
   },
@@ -336,13 +326,6 @@ function buildRuntimeInfo() {
   });
 }
 
-function getNewSessionThreshold() {
-  const live = coreState.getState();
-  const observation = coreState.getUsageObservation();
-  return sessionThreshold(readThresholdPolicy(config.zylosDir), { runtime: live.runtime,
-    usage: observation.valid ? observation.value : null, launchConfig: coreState.getLaunchConfig() });
-}
-
 function getSystemMetrics() {
   const data = systemCollector.getLatestSystemData();
   const memUsed = data?.mem_used_bytes;
@@ -358,23 +341,9 @@ function getSystemMetrics() {
   };
 }
 
-// SQLite aggregation is synchronous on the Store connection; attributing it
-// here includes the real query time without pretending a Promise offloads it.
-const getCachedCostAggregate = createSessionCache(() => eventLoopMonitor.runTask('cost.aggregate', () => metricResolver.resolveAggregated('cost') || {}));
-
-function getCostTiers() {
-  const aggregate = getCachedCostAggregate(coreState.costKey);
-  return {
-    session_cost: aggregate.session ?? null,
-    daily_cost: aggregate.today ?? metricResolver.resolve('daily_cost').value ?? null,
-    weekly_cost: aggregate.seven_day ?? null
-  };
-}
-
 // 7. State engine
 const stateEngine = new StateEngine(store, collectors, config, {
   onStateChange: (st) => {
-    sse.broadcast('state_change', currentState());
     scheduleFleetStateBroadcast();
   }
 });
@@ -488,56 +457,39 @@ function workbenchFailure(res, error) {
   sendJson(res, status, { ok: false, error: { code: status === 500 ? 'internal_error' : error.code,
     message: status === 500 ? 'Request failed' : error.message } });
 }
+const groupsApi = createGroupsApi({ workbench, groupConfig });
 const scheduleReader = createScheduleRead({ zylosDir: config.zylosDir, scheduleTz, displayNames,
   getSnapshot: () => workbench.getSnapshot() });
 const scheduleWriter = createScheduleWrite({ zylosDir: config.zylosDir, scheduleTz });
 
-// The state every push and /api/state read starts from: runtime info, and whether remote Dashboards may open this
-// instance's conversations and terminal observer (only the switch state; no conversation or terminal data).
-function currentState() {
-  const current = coreState.getState();
-  current.runtime_info = buildRuntimeInfo();
-  current.chat_allow_remote = config.chat?.allowRemote === true;
-  return current;
-}
-
-function buildApiStatePayload() {
-  const stateData = currentState();
-  stateData.session_mode = readFleetSessionMode();
+function buildInstancePayload() {
   const snapshot = workbench.getCachedSnapshot();
-  if (stateData.session_mode === 'multi') {
-    stateData.supervisor_paused = snapshot?.instance?.supervisorPaused ?? null;
-  } else {
-    try {
-      new RestartRequestStore({ file: path.join(config.zylosDir, 'activity-monitor', 'restart-requests.json') }).read();
-      stateData.supervisor_paused = false;
-    } catch { stateData.supervisor_paused = true; }
-  }
-  stateData.group_summary = stateData.session_mode === 'multi' ? fleetGroupSummary(snapshot) : null;
-  // Include the agent's deterministic identity color/hue; machines that read this
-  // instance's state (including older dashboards) still colour it by them.
-  stateData.agent = { ...config.agent, ...agentColor(config.agent?.name) };
-  stateData.new_session_threshold = getNewSessionThreshold();
-  stateData.system_metrics = getSystemMetrics();
-  const usageObservation = coreState.getUsageObservation();
-  const usage = usageObservation.valid ? usageObservation.value : null;
-  stateData.context_pct = usage?.context_window?.used_percentage ?? (usage?.contextUsage?.ceiling > 0 ? usage.contextUsage.used / usage.contextUsage.ceiling * 100 : null);
-  stateData.rate_limit_7d_pct = coreState.accountUsage?.seven_day?.used_percentage ?? coreState.accountUsage?.sevenDay?.usedPercentage ?? null;
-  stateData.rate_limit_7d_recorded_at = coreState.accountUsageRecord?.recordedAt ?? null;
-  stateData.rate_limit_7d_live = coreState.accountUsageRecord?.live ?? null;
-  Object.assign(stateData, getCostTiers());
-  return stateData;
+  const observed = snapshot?.instance ?? {};
+  const zylosConfig = { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir };
+  const defaults = Object.fromEntries(['claude', 'codex'].map(runtime => {
+    const meta = getActionsMeta({ ...zylosConfig, runtime }, null);
+    return [runtime, { model: meta.current_model, effort: meta.current_effort,
+      threshold: meta.new_session_threshold, model_thresholds: meta.model_thresholds,
+      session_hot_ttl: meta.session_hot_ttl }];
+  }));
+  const resources = getSystemMetrics();
+  return { agent: { ...config.agent, ...agentColor(config.agent?.name) }, tz: instanceTz(),
+    session_mode: readFleetSessionMode(), default_runtime: zylosConfig.runtime ?? activeRuntime, defaults,
+    runtime_info: buildRuntimeInfo(), versions: { zylos: zylosVersion, claude: ccInstalledVersion, codex: codexInstalledVersion },
+    runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
+    supervisorPaused: observed.supervisorPaused ?? null, autoRestarts: observed.autoRestarts ?? null,
+    resources, system: observed.system ?? null, services: observed.services ?? null,
+    chat_allow_remote: config.chat?.allowRemote === true };
 }
 
 // HTTP reads and existing coalesced SSE publications share Workbench
 // collection, including its 2 s cache and in-flight read. No extra timer is needed.
 function readFleetSessionMode() {
-  const value = loadZylosConfig(config.zylosDir, null);
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  // Core reports an unset mode as effective single; an explicit invalid value
-  // or an unreadable configuration must stay unknown.
-  if (!Object.hasOwn(value, 'session_mode')) return 'single';
-  return ['single', 'multi'].includes(value.session_mode) ? value.session_mode : null;
+  const result = readConfigStrict(path.join(config.zylosDir, '.zylos', 'config.json'));
+  if (result.state === 'missing') return 'single';
+  if (result.state !== 'ok') return null;
+  if (!Object.hasOwn(result.config, 'session_mode')) return 'single';
+  return ['single', 'multi'].includes(result.config.session_mode) ? result.config.session_mode : null;
 }
 
 async function refreshFleetGroupSummary(options) {
@@ -545,7 +497,7 @@ async function refreshFleetGroupSummary(options) {
   try { await workbench.getSnapshot(undefined, options); } catch { /* Optional observations cannot break the existing state API. */ }
 }
 
-function buildSelfFleetRecord(statePayload = buildApiStatePayload()) {
+function buildSelfFleetRecord(statePayload = fleetStateFromObjects(buildInstancePayload(), groupCounts(workbench.getCachedSnapshot() ?? { rows: [], readAt: Date.now(), listKnown: false }), usageSummary(store, { tz: instanceTz() }), { rows: (workbench.getCachedSnapshot()?.rows ?? []).map(row => projectGroup(row, workbench.getCachedSnapshot())) })) {
   return stateToFleetRecord({
     name: config.agent?.name,
     color: agentColor(config.agent?.name)
@@ -719,7 +671,7 @@ async function probeFleetAgent(baseUrl, readApiKey) {
     const tokenBody = await tokenResp.json();
     if (!tokenBody?.token) return { reachable: false, error: 'auth_failed' };
     const scope = tokenBody.scope === 'admin' ? 'admin' : 'read';
-    const stateResp = await fetch(`${baseUrl}/api/state`, {
+    const stateResp = await fetch(`${baseUrl}/api/instance`, {
       headers: { Authorization: `Bearer ${tokenBody.token}` },
       signal: controller.signal
     });
@@ -1057,102 +1009,12 @@ function loadZylosConfig(zylosDir, fallback = {}) {
   }
 }
 
-function extractFilePath(summary) {
-  if (!summary) return null;
-  const m = summary.match(/^(?:Read|Edit|Write):\s+(\S+)/);
-  return m ? m[1] : null;
-}
-
-function extractProject(filePath) {
-  if (!filePath) return null;
-  const parts = filePath.replace(/^\/+/, '').split('/');
-  const wsIdx = parts.indexOf('workspace');
-  if (wsIdx >= 0 && parts[wsIdx + 1]) return parts[wsIdx + 1];
-  const skillsIdx = parts.indexOf('skills');
-  if (skillsIdx >= 0 && parts[skillsIdx + 1]) return parts[skillsIdx + 1];
-  return null;
-}
-
-function readSchedulerTodayCount(zylosDir) {
-  const dbFile = path.join(zylosDir, 'scheduler', 'scheduler.db');
-  if (!fs.existsSync(dbFile)) return 0;
-  try {
-    const db = new Database(dbFile, { readonly: true });
-    db.pragma('busy_timeout = 3000');
-    const todayStart = Math.floor(new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00Z').getTime() / 1000);
-    const row = db.prepare('SELECT COUNT(*) as count FROM task_history WHERE executed_at >= ?').get(todayStart);
-    db.close();
-    return row?.count || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function readSchedulerStatus(zylosDir) {
-  const dbFile = path.join(zylosDir, 'scheduler', 'scheduler.db');
-  if (!fs.existsSync(dbFile)) return null;
-  try {
-    const db = new Database(dbFile, { readonly: true });
-    db.pragma('busy_timeout = 3000');
-    const counts = db.prepare(
-      `SELECT status, COUNT(*) as count FROM tasks WHERE status IN ('pending','paused','running') GROUP BY status`
-    ).all();
-    const upcoming = db.prepare(
-      `SELECT id, name, next_run_at FROM tasks WHERE status = 'pending' ORDER BY next_run_at ASC LIMIT 5`
-    ).all();
-    db.close();
-    const result = { pending: 0, paused: 0, running: 0 };
-    for (const r of counts) result[r.status] = r.count;
-    result.upcoming = upcoming.map((t) => ({ id: t.id, name: t.name, run_at: new Date(t.next_run_at * 1000).toISOString() }));
-    return result;
-  } catch {
-    return null;
-  }
-}
-
-function dayBoundariesUTC(tz, daysBack = 0) {
-  const now = new Date();
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, year: 'numeric', month: 'numeric', day: 'numeric',
-    hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false
-  });
-  const p = {};
-  for (const { type, value } of fmt.formatToParts(now)) {
-    if (type !== 'literal') p[type] = parseInt(value);
-  }
-  const asIfUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-  const offsetMs = asIfUTC - now.getTime();
-  const midnightUTC = Date.UTC(p.year, p.month - 1, p.day) - offsetMs;
-  const since = new Date(midnightUTC - daysBack * 86400000);
-  return { since: since.toISOString(), until: now.toISOString() };
-}
-
-function periodBounds(period, tz, stateEngine) {
-  const now = new Date().toISOString();
-  if (period === 'session') {
-    const sessionId = stateEngine.getCurrentSessionId();
-    return sessionId ? { sessionId, until: now } : null;
-  }
-  if (period === 'today') return dayBoundariesUTC(tz);
-  if (period === '7d') return usageBounds({ range: '7d', tz });
-  if (period === '30d') return usageBounds({ range: '30d', tz });
-  return undefined;
-}
-
-function latestMetricRow(metricName, source) {
-  const rows = store.queryMetrics({
-    name: metricName,
-    since: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    until: new Date().toISOString()
-  }).filter(r => !source || r.source === source);
-  return rows.length > 0 ? rows[rows.length - 1] : null;
-}
-
 const checkReadiness = createReadinessCheck();
 
 async function handleApi(req, res, pathname, url) {
-  if (pathname === '/api/health') {
-    if (url.searchParams.get('probe') === 'ready') {
+  if (pathname === '/api/health' || pathname === '/api/health/ready') {
+    if (pathname === '/api/health' && url.searchParams.has('probe')) { sendJson(res, 404, { error: 'not_found' }); return true; }
+    if (pathname === '/api/health/ready') {
       const readiness = await checkReadiness();
       sendJson(res, readiness.ready ? 200 : 503, readiness);
       return true;
@@ -1173,43 +1035,41 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/restart-status') {
-    const requestId = url.searchParams.get('requestId');
-    if (!/^[a-f0-9-]{36}$/i.test(requestId || '')) { sendJson(res, 400, { error: 'INVALID_REQUEST_ID' }); return true; }
-    let completion = 'unknown';
-    try { const { lookupRestartRequest } = await loadCoreModule('am-sock-client.js'); completion = await lookupRestartRequest(requestId, { deadlineAt: Date.now() + 10000 }); } catch {}
-    const current = await coreState.refresh();
-    sendJson(res, 200, buildRestartStatus(requestId, completion, current));
+  if (pathname === '/api/instance') {
+    await Promise.all([coreState.refresh(), workbench.getSnapshot(), scheduleTz()]);
+    sendJson(res, 200, buildInstancePayload());
     return true;
   }
-  if (pathname === '/api/session-mode' || pathname === '/api/instance-status') {
+  if (pathname === '/api/groups/counts' || pathname === '/api/groups/running' || pathname === '/api/groups/offline' || pathname === '/api/groups/search' || pathname === '/api/groups/activity') {
     try {
-      const args = pathname === '/api/session-mode' ? ['session-mode', 'status', '--json'] : ['status', '--json'];
-      const { stdout } = await promisify(execFile)('zylos', args, { timeout: 10000, maxBuffer: 1024 * 1024 });
-      sendJson(res, 200, JSON.parse(stdout));
-    } catch (error) {
-      try {
-        const envelope = JSON.parse(String(error.stdout || '').trim());
-        if (typeof envelope?.ok === 'boolean') { sendJson(res, 400, envelope); return true; }
-      } catch {}
-      sendJson(res, 503, { ok: false, error: { code: 'STATUS_UNAVAILABLE', message: error.message } });
-    }
+      const operation = pathname.split('/').at(-1);
+      sendJson(res, 200, await groupsApi[operation](url.searchParams));
+    } catch (error) { workbenchFailure(res, error); }
     return true;
   }
-  if (pathname === '/api/agent-status' && req.method === 'GET') {
-    const [sampled] = await Promise.all([coreState.refresh({ readiness: true }), refreshFleetGroupSummary({ maxAgeMs: 30000 })]);
-    const state = buildApiStatePayload();
-    const readiness = agentReadiness(sampled.readinessObservation, { sessionMode: sampled.sessionMode });
-    sendJson(res, 200, buildAgentStatus({ state, readiness }));
+  const usageRoute = pathname.match(/^\/api\/groups\/([^/]+)\/usage$/);
+  if (pathname === '/api/usage/summary' || usageRoute) {
+    try { sendJson(res, 200, usageSummary(store, { tz: (await scheduleTz()).tz,
+      ...(usageRoute ? { group: workbenchGroupKey(usageRoute[1]) } : {}) })); }
+    catch (error) { workbenchFailure(res, error); }
     return true;
   }
-
-  if (pathname === '/api/state') {
-    await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
-    sendJson(res, 200, { ...buildApiStatePayload(), tz: (await scheduleTz()).tz });
+  const restartRoute = pathname.match(/^\/api\/groups\/([^/]+)\/restarts\/([^/]+)$/);
+  if (restartRoute) {
+    try {
+      const key = workbenchGroupKey(restartRoute[1]);
+      const requestId = restartRoute[2];
+      if (!/^[a-f0-9-]{36}$/i.test(requestId)) throw Object.assign(new Error('Invalid request ID'), { code: 'INVALID_REQUEST_ID', statusCode: 400 });
+      const { lookupRestartRequest } = await loadCoreModule('am-sock-client.js');
+      const completion = await lookupRestartRequest(requestId, { deadlineAt: Date.now() + 10000, sessionGroup: key });
+      await workbench.getSnapshot(undefined, { fresh: true });
+      const row = await groupsApi.detail(key);
+      sendJson(res, 200, { requestId, completion: completion === 'deadline_exceeded' ? 'unknown' : completion,
+        group: { id: key, runId: row.runId ?? row.run?.runId ?? null, sessionId: row.sessionId ?? row.run?.sessionId ?? null,
+          ready: row.presence === 'running' && row.live?.status?.valid === true, state: row.state } });
+    } catch (error) { workbenchFailure(res, error); }
     return true;
   }
-
   if (pathname === '/api/fleet') {
     try {
       // Remote records arrive through the existing poller/SSE lifecycle. A slow
@@ -1222,7 +1082,8 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/timeline') {
+  const groupEvents = pathname.match(/^\/api\/groups\/([^/]+)\/events$/);
+  if (groupEvents) {
     const since = url.searchParams.get('since') || undefined;
     const until = url.searchParams.get('until') || undefined;
     const types = url.searchParams.get('types')?.split(',').filter(Boolean) || undefined;
@@ -1230,7 +1091,8 @@ async function handleApi(req, res, pathname, url) {
     const limit = parseInt(url.searchParams.get('limit') || '100', 10);
     const offset = parseInt(url.searchParams.get('offset') || '0', 10);
     const order = url.searchParams.get('order') === 'desc' ? 'desc' : 'asc';
-    const sessionGroup = url.searchParams.has('session_group') ? (url.searchParams.get('session_group') || null) : undefined;
+    const key = workbenchGroupKey(groupEvents[1]);
+    const sessionGroup = key === 'origin' && readFleetSessionMode() === 'single' ? null : key;
     const runId = url.searchParams.get('run_id') || undefined;
     const runtime = url.searchParams.get('runtime') || undefined;
     const afterSeq = Number(url.searchParams.get('after_seq'));
@@ -1251,14 +1113,12 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/workbench/usage' || pathname === '/api/workbench/host') {
+  if (pathname === '/api/usage/series' || pathname === '/api/instance/resources') {
     try {
       const range = url.searchParams.get('range') || undefined;
-      const tz = pathname.endsWith('/usage') ? (await scheduleTz()).tz : null;
-      const data = pathname.endsWith('/usage')
-        ? url.searchParams.get('summary') === 'cost'
-          ? { costSummary: costSummary(store, { tz }) }
-          : usageSeries(store, c4Reader, { range, tz,
+      const tz = pathname === '/api/usage/series' ? (await scheduleTz()).tz : null;
+      const data = pathname === '/api/usage/series'
+        ? usageSeries(store, c4Reader, { range, tz,
             since: url.searchParams.get('since'), until: url.searchParams.get('until') })
         : hostSeries(store, { range, pm2Data: pm2Collector.getLatestPM2Data() });
       sendJson(res, 200, data);
@@ -1266,7 +1126,7 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/workbench/name-prompt') {
+  if (pathname === '/api/groups/naming-prompt') {
     try {
       const todo = await displayNames.listNames({ unnamed: true, activeSinceMs: 3 * 86400000 });
       const script = path.join(config.zylosDir, '.claude', 'skills', 'dashboard', 'scripts', 'group-name.js');
@@ -1276,29 +1136,26 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (pathname === '/api/workbench/runtime-overrides') {
+  if (pathname === '/api/groups/runtime-overrides') {
     try { sendJson(res, 200, await runtimeOverridesPage(url.searchParams)); }
     catch { sendJson(res, 502, { error: 'override_list_failed' }); }
     return true;
   }
 
-  if (pathname === '/api/workbench/pricing') {
-    try {
-      const bounds = usageBounds({ range: '7d', tz: (await scheduleTz()).tz });
-      const models = costRows(store, { ...bounds, bucket: 'total', byModel: true })
-        .map(({ runtime, model, value }) => ({ runtime, model, cost: value }));
-      const unmatched = store.db.prepare(`SELECT runtime, json_extract(dimensions, '$.model') AS model,
-        SUM(COALESCE(json_extract(dimensions, '$.total_input'), 0) + COALESCE(json_extract(dimensions, '$.output'), 0)) AS tokens
-        FROM metric_points WHERE metric_name='usage_event' AND timestamp BETWEEN ? AND ?
-        AND json_extract(dimensions, '$.cost') IS NULL
-        AND (COALESCE(json_extract(dimensions, '$.total_input'), 0) > 0 OR COALESCE(json_extract(dimensions, '$.output'), 0) > 0)
-        GROUP BY runtime, model`).all(bounds.since, bounds.until);
-      sendJson(res, 200, { models, unmatched });
-    } catch { sendJson(res, 500, { error: 'pricing_unreadable' }); }
+  if (pathname === '/api/usage/pricing') {
+    try { sendJson(res, 200, usagePricing(store, { tz: (await scheduleTz()).tz })); }
+    catch (error) { workbenchFailure(res, error); }
     return true;
   }
 
-  const detailRead = pathname.match(/^\/api\/workbench\/groups\/([^/]+)\/(runs|messages|backlog|config)$/);
+  const groupDetail = pathname.match(/^\/api\/groups\/([^/]+)$/);
+  if (groupDetail) {
+    try { sendJson(res, 200, await groupsApi.detail(workbenchGroupKey(groupDetail[1]))); }
+    catch (error) { workbenchFailure(res, error); }
+    return true;
+  }
+
+  const detailRead = pathname.match(/^\/api\/groups\/([^/]+)\/(runs|messages|backlog)$/);
   if (detailRead) {
     try {
       const key = workbenchGroupKey(detailRead[1]);
@@ -1319,7 +1176,6 @@ async function handleApi(req, res, pathname, url) {
           }) };
           break;
         case 'backlog': data = await groupBacklog(key); break;
-        case 'config': data = await groupConfig.get(key); break;
       }
       sendJson(res, 200, data);
     } catch (error) { workbenchFailure(res, error); }
@@ -1337,169 +1193,7 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
 
-  if (['/api/workbench/groups', '/api/workbench/groups/search', '/api/workbench/activity'].includes(pathname) || /^\/api\/workbench\/groups\/[^/]+\/raw$/.test(pathname)) {
-    try { sendJson(res, 200, await workbenchResponse(workbench, pathname, url.searchParams)); }
-    catch (error) {
-      sendJson(res, error.statusCode ?? 500, { error: error.statusCode ? error.code : 'internal_error',
-        ...(error.reason ? { reason: error.reason } : {}) });
-    }
-    return true;
-  }
-
-  if (pathname === '/api/system') {
-    const pm2Data = pm2Collector.getLatestPM2Data();
-    const sysData = systemCollector.getLatestSystemData();
-    const pm2State = store.getAllPm2State?.() || [];
-    const systemSummary = sysData ? null : latestMetricRow('system_summary', 'system');
-    const scheduler = readSchedulerStatus(config.zylosDir);
-    sendJson(res, 200, buildSystemPayload({ pm2Data, sysData, pm2State, systemSummary, scheduler }));
-    return true;
-  }
-
-  if (pathname.startsWith('/api/metrics/history/')) {
-    const metricName = pathname.slice('/api/metrics/history/'.length);
-    if (!metricName) {
-      sendJson(res, 400, { error: 'missing metric name' });
-      return true;
-    }
-    const since = url.searchParams.get('since') || new Date(Date.now() - 6 * 3600_000).toISOString();
-    const until = url.searchParams.get('until') || new Date().toISOString();
-    const rows = store.queryMetrics({ name: metricName, since, until });
-    const points = rows.map(r => ({
-      timestamp: r.timestamp,
-      value: r.metric_value,
-      source: r.source,
-      confidence: r.confidence,
-      dimensions: r.dimensions
-    }));
-    sendJson(res, 200, { metric: metricName, since, until, points, count: points.length });
-    return true;
-  }
-
-  if (pathname === '/api/metrics/aggregate') {
-    const metric = url.searchParams.get('metric');
-    const period = url.searchParams.get('period') || 'session';
-    const tz = url.searchParams.get('tz') || (await scheduleTz()).tz || 'UTC';
-    if (!metric || !['cost', 'cache', 'tokens'].includes(metric)) {
-      sendJson(res, 400, { error: 'metric must be "cost", "cache", or "tokens"' });
-      return true;
-    }
-    if (period === 'session') await coreState.refresh();
-    let bounds = periodBounds(period, tz, coreState);
-    if (bounds === undefined) { sendJson(res, 400, { error: `invalid period: ${period}` }); return true; }
-    const resolved = resolveAggregateValue(store, metric, bounds, { runtime: activeRuntime, period });
-    const value = resolved.value;
-    bounds = resolved.bounds;
-    if (bounds === null) {
-      sendJson(res, 200, { metric, period, value: null, since: null, until: null, sessionId: null });
-      return true;
-    }
-    sendJson(res, 200, { metric, period, value, since: bounds.since, until: bounds.until, sessionId: bounds.sessionId || null });
-    return true;
-  }
-
-  if (pathname === '/api/metrics/series') {
-    const metric = url.searchParams.get('metric');
-    const since = url.searchParams.get('since');
-    const until = url.searchParams.get('until') || new Date().toISOString();
-    const bucket = parseInt(url.searchParams.get('bucket') || '3600', 10);
-    if (!metric || !['cost', 'cache', 'tokens', 'messages', 'projects'].includes(metric)) {
-      sendJson(res, 400, { error: 'metric must be "cost", "cache", "tokens", "messages", or "projects"' });
-      return true;
-    }
-    if (metric === 'projects') {
-      const s = since || new Date(Date.now() - 7 * 86400_000).toISOString();
-      const result = store.getProjectDistribution({ since: s, until });
-      sendJson(res, 200, { metric, since: s, until, items: result.items, totalTokens: result.totalTokens, totalCost: result.totalCost });
-      return true;
-    }
-    if (!since) { sendJson(res, 400, { error: 'since is required' }); return true; }
-    let points, total;
-    if (metric === 'messages') {
-      const result = c4Reader.getMessageSeries({ since, until, bucketSeconds: bucket });
-      sendJson(res, 200, { metric, since, until, bucket, points: result.points, total: result.total });
-      return true;
-    }
-    if (metric === 'cost') { points = store.aggregateCostSeries({ since, until, bucketSeconds: bucket }); total = store.aggregateCost({ since, until }); }
-    else if (metric === 'cache') { points = store.aggregateCacheRateSeries({ since, until, bucketSeconds: bucket }); total = store.aggregateCacheRate({ since, until }); }
-    else { points = store.aggregateTokenSeries({ since, until, bucketSeconds: bucket }); total = store.aggregateTokens({ since, until }); }
-    sendJson(res, 200, { metric, since, until, bucket, points, total });
-    return true;
-  }
-
-  if (pathname.startsWith('/api/metrics/')) {
-    const metricName = pathname.slice('/api/metrics/'.length);
-    if (!metricName) {
-      sendJson(res, 400, { error: 'missing metric name' });
-      return true;
-    }
-    let result;
-    if (metricName === 'rate_limit') {
-      sendJson(res, 404, { error: 'unknown_metric' });
-      return true;
-    }
-    if (['context_pct', 'rate_limit_7d'].includes(metricName)) {
-      await coreState.refresh();
-      const current = buildApiStatePayload();
-      const usage = coreState.getUsageObservation();
-      // Metric samples remain live-only; recorded account values belong to state/Fleet.
-      const recordedQuota = metricName === 'rate_limit_7d' && coreState.accountUsageRecord?.live === false;
-      const value = recordedQuota ? null : current[{ context_pct: 'context_pct', rate_limit_7d: 'rate_limit_7d_pct' }[metricName]];
-      result = { value, selected_source: 'core-session-reader', freshness: usage.sampledAt ? (Date.now() - usage.sampledAt) / 1000 : null, confidence: value === null ? 'none' : 'actual', alternatives: [], fallback_reason: value === null ? usage.reason || 'missing' : null };
-    } else result = metricResolver.resolve(metricName);
-    sendJson(res, 200, result);
-    return true;
-  }
-
-  if (pathname === '/api/summary') {
-    const today = new Date().toISOString().slice(0, 10);
-    const todayStart = `${today}T00:00:00.000Z`;
-    const events = store.queryEvents({ since: todayStart, types: ['post_tool_use'], limit: 10000 });
-    const toolCalls = events.length;
-    const stopEvents = store.queryEvents({ since: todayStart, types: ['stop'], limit: 10000 });
-    const sessions = stopEvents.length;
-
-    const projectBreakdown = {};
-    for (const e of events) {
-      const fp = extractFilePath(e.summary);
-      const project = extractProject(fp);
-      if (project) projectBreakdown[project] = (projectBreakdown[project] || 0) + 1;
-    }
-    const topProject = Object.entries(projectBreakdown).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-
-    const c4Stats = c4Reader.getTodayStats();
-    const messagesProcessed = c4Stats ? c4Stats.total_in + c4Stats.total_out : 0;
-
-    sendJson(res, 200, {
-      date: today,
-      tool_calls: toolCalls,
-      sessions,
-      top_project: topProject,
-      project_breakdown: projectBreakdown,
-      messages_processed: messagesProcessed
-    });
-    return true;
-  }
-
-  if (pathname === '/api/communication') {
-    const stats = c4Reader.getTodayStats();
-    const pending = c4Reader.getPendingQueue();
-    const lastOutbound = c4Reader.getLastOutbound();
-    const avgResponse = c4Reader.getAvgResponseTime();
-
-    sendJson(res, 200, {
-      channels: stats?.channels || {},
-      total_in: stats?.total_in || 0,
-      total_out: stats?.total_out || 0,
-      pending_depth: pending.depth,
-      pending_oldest_age_s: pending.oldest_age_s,
-      last_outbound: lastOutbound,
-      avg_response_s: avgResponse
-    });
-    return true;
-  }
-
-  if (pathname === '/api/actions/meta') {
+  if (pathname === '/api/instance/runtime-options') {
     await coreState.refresh();
     const selectedRuntime = url.searchParams.get('runtime') ?? activeRuntime;
     if (!['claude', 'codex'].includes(selectedRuntime)) {
@@ -1524,10 +1218,13 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/stream') {
     await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
+    const initialCounts = await groupsApi.counts();
+    const initialInstance = buildInstancePayload();
     const apiToken = req._apiToken;
     const validator = apiToken ? () => !!validateApiSession(apiToken) : null;
     sse.addClient(res, validator);
-    res.write(`event: fleet_state\ndata: ${JSON.stringify(buildApiStatePayload())}\n\n`);
+    res.write(`event: instance\ndata: ${JSON.stringify(initialInstance)}\n\n`);
+    res.write(`event: groups\ndata: ${JSON.stringify(initialCounts)}\n\n`);
     return true;
   }
 
@@ -1809,6 +1506,15 @@ export function createServer() {
       return;
     }
 
+    const retired = /^\/api\/(?:state|agent-status|restart-status|session-mode|instance-status|system|summary|communication|timeline|metrics(?:\/.*)?|actions(?:\/.*)?|agent\/name)$/.test(pathname) ||
+      /^\/api\/workbench\/(?:groups(?:\/.*)?|activity|usage|host|name-prompt|runtime-overrides|pricing)$/.test(pathname);
+    if (retired && pathname !== '/api/actions/restart-timezone-services') { sendJson(res, 404, { error: 'not_found' }); return; }
+    if ((pathname.startsWith('/api/instance/') || pathname.startsWith('/api/groups/')) && !['GET', 'HEAD'].includes(req.method)) {
+      const context = auth.resolveAuthContext(req);
+      if (auth.enabled && context?.scope !== 'admin') { sendJson(res, 403, { error: 'insufficient_scope', required: 'admin' }); return; }
+      if (context?.kind === 'cookie' && !isSameOriginRequest(req)) { sendJson(res, 403, { error: 'same_origin_required' }); return; }
+    }
+
     if (pathname === '/api/auth/token' && req.method === 'POST') {
       const bearer = req.headers.authorization;
       if (!bearer || !bearer.startsWith('Bearer zylos_ak_')) {
@@ -1851,7 +1557,8 @@ export function createServer() {
 
     if (pathname === '/api/stream') {
       if (handleChatStream(req, res, url, { auth, config, hub: sse, observer: chatObserver })) return;
-      await handleApi(req, res, pathname, url);
+      try { await handleApi(req, res, pathname, url); }
+      catch (error) { workbenchFailure(res, error); }
       return;
     }
 
@@ -1859,25 +1566,24 @@ export function createServer() {
     if (await handleInstanceTimezoneRestart(req, res, url, { auth, timezone: instanceTimezone,
       runAction: body => handleAction('restart-timezone-services', body, { zylosDir: config.zylosDir }, { timezone: instanceTimezone }) })) return;
 
-    if (pathname.startsWith('/api/actions/') && req.method === 'POST') {
-      const action = pathname.slice('/api/actions/'.length);
-      if (action && action !== 'meta') {
-        let body = {};
-        try { body = await readJsonBody(req, 4096); } catch { /* no body is ok for some actions */ }
-        const zylosConfig = loadZylosConfig(config.zylosDir);
-        zylosConfig.zylosDir = config.zylosDir;
-        const result = await handleAction(action, body, zylosConfig);
-        if (result.ok && (action === 'upgrade-cc' || action === 'upgrade-zylos')) {
-          eventLoopMonitor.runTask('installed-versions.refresh', refreshInstalledVersions);
-        }
-        sendJson(res, result.ok ? 200 : 400, result);
-        return;
-      }
+    const instanceAction = pathname.match(/^\/api\/instance\/actions\/(switch-mode|switch-runtime|upgrade|upgrade-runtime)$/);
+    if ((instanceAction && req.method === 'POST') || (pathname === '/api/instance/defaults' && req.method === 'PUT')) {
+      try {
+        const body = await readJsonBody(req, 4096);
+        const action = instanceAction ? ({ upgrade: 'upgrade-zylos', 'upgrade-runtime': 'upgrade-cc' }[instanceAction[1]] ?? instanceAction[1])
+          : ({ model: 'switch-model', effort: 'switch-effort', threshold: 'set-threshold', 'session-hot-ttl': 'set-session-hot-ttl' }[body?.kind]);
+        if (!action) { sendJson(res, 400, { ok: false, error: { code: 'INVALID_DEFAULT', message: 'Choose model, effort, threshold or session-hot-ttl' } }); return; }
+        const result = await handleAction(action, body, { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir });
+        if (result.ok && ['upgrade-cc', 'upgrade-zylos'].includes(action)) eventLoopMonitor.runTask('installed-versions.refresh', refreshInstalledVersions);
+        sendJson(res, result.ok ? 200 : result.status ?? 400, result);
+        if (result.ok) scheduleFleetStateBroadcast();
+      } catch (error) { workbenchFailure(res, error); }
+      return;
     }
 
     if (pathname === '/api/settings' && req.method === 'GET') {
-      const priceRuntime = activeRuntime === 'codex' ? 'codex' : 'claude';
-      sendJson(res, 200, url.searchParams.get('all') === '1' ? allSettingsPayload() : settingsPayload(priceRuntime));
+      if (url.searchParams.get('all') !== '1') { sendJson(res, 404, { error: 'not_found' }); return; }
+      sendJson(res, 200, allSettingsPayload());
       return;
     }
 
@@ -1901,8 +1607,8 @@ export function createServer() {
       return;
     }
 
-    const detailWrite = pathname.match(/^\/api\/workbench\/groups\/([^/]+)\/(config|actions\/(interrupt|chop-chop|restart))$/);
-    if (detailWrite && req.method === 'POST') {
+    const detailWrite = pathname.match(/^\/api\/groups\/([^/]+)\/(config|actions\/(interrupt|chop-chop|restart))$/);
+    if (detailWrite && req.method === (detailWrite[2] === 'config' ? 'PUT' : 'POST')) {
       try {
         const key = workbenchGroupKey(detailWrite[1]);
         const body = await readJsonBody(req, 4096);
@@ -1910,11 +1616,12 @@ export function createServer() {
           ? await groupConfig.submit(key, body)
           : await groupAction(key, detailWrite[3], body);
         sendJson(res, 200, result);
+        if (result.ok) scheduleFleetStateBroadcast();
       } catch (error) { workbenchFailure(res, error); }
       return;
     }
 
-    const groupNameRoute = pathname.match(/^\/api\/workbench\/groups\/([^/]+)\/name$/);
+    const groupNameRoute = pathname.match(/^\/api\/groups\/([^/]+)\/name$/);
     if (groupNameRoute && ['PUT', 'DELETE'].includes(req.method)) {
       try {
         let key;
@@ -1924,6 +1631,7 @@ export function createServer() {
           ? displayNames.setName(key, (await readJsonBody(req, 4096))?.name, 'human')
           : displayNames.clearName(key, 'human');
         sendJson(res, 200, { ok: true, data });
+        scheduleFleetStateBroadcast();
       } catch (error) {
         if (['KEY_INVALID', 'NAME_INVALID', 'NAME_SET_BY_HUMAN'].includes(error.code)) {
           sendJson(res, 400, { ok: false, error: { code: error.code, message: error.message } });
@@ -1954,7 +1662,7 @@ export function createServer() {
       return;
     }
 
-    if (pathname === '/api/agent/name') {
+    if (pathname === '/api/instance/name') {
       await handleAgentRename(req, res);
       return;
     }
@@ -1990,8 +1698,10 @@ export function createServer() {
     }
 
     if (pathname.startsWith('/api/')) {
-      const handled = await handleApi(req, res, pathname, url);
-      if (!handled && !res.headersSent) sendJson(res, 404, { error: 'not_found' });
+      try {
+        const handled = await handleApi(req, res, pathname, url);
+        if (!handled && !res.headersSent) sendJson(res, 404, { error: 'not_found' });
+      } catch (error) { workbenchFailure(res, error); }
       return;
     }
 

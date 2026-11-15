@@ -5,7 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendHtml, sendJson, serveStatic } from '../../src/lib/http.js';
-import { GROUP, workbenchAnswer } from '../fixtures/workbench-browser-api.js';
+import { GROUP, workbenchSnapshot, workbenchSnapshotAnswer } from '../fixtures/workbench-browser-api.js';
 
 const publicDir = path.resolve(fileURLToPath(new URL('../../public/', import.meta.url)));
 const OTHER = 'lark:team.topic';
@@ -66,16 +66,13 @@ export async function runObserverBrowser(t, sandbox, signal) {
     if (chat && p.endsWith('/messages')) return { items: [{ id: 1, direction: 'in', channel: chat.row.channel, status: 'delivered', content: 'Fixture message', timestamp: new Date(now).toISOString() }], nextCursor: null, afterCursor: null, tz: 'UTC' };
     if (chat && /\/(?:questions|activity|status)$/.test(p)) return { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'UTC' };
     if (chat) return { conversation: chat.detail, stored: true, conversationId: chat.row.id };
-    const value = workbenchAnswer(url, now) ?? {};
-    if (p === '/api/state') { value.state = mode === 'multi' ? 'SLEEPING' : 'IDLE'; value.runId = mode === 'multi' ? null : 'origin-run'; value.sessionId = null; }
-    if (p === '/api/instance-status') value.data.origin = { presence: mode === 'multi' ? 'not_running' : 'running' };
-    if (p === '/api/workbench/groups') {
-      value.mode = mode === 'single' ? 'single' : 'multi';
-      value.rows[0] = { ...value.rows[0], presence: mode === 'multi' ? 'not_running' : 'running', state: { kind: mode === 'multi' ? 'not_running' : 'idle' }, live: mode === 'multi' ? null : { runId: 'origin-run', sessionId: 's0' } };
-      value.rows[2] = { ...value.rows[2], sessionGroup: OTHER, name: null, presence: 'running', state: { kind: 'idle' }, live: { runId: 'run-lark', sessionId: 's2' }, launchConfig: { runtime: 'claude', mode: 'default' } };
-      if (!groupCount) for (const row of value.rows) { row.presence = 'not_running'; row.live = null; row.state = { kind: 'not_running' }; }
-    }
-    return value;
+    const value = workbenchSnapshot(now);
+    value.mode = mode === 'single' ? 'single' : 'multi';
+    value.rows[0] = { ...value.rows[0], presence: mode === 'multi' ? 'not_running' : 'running', state: { kind: mode === 'multi' ? 'offline' : 'idle' }, live: mode === 'multi' ? null : { runId: 'origin-run', sessionId: 's0' } };
+    value.rows[2] = { ...value.rows[2], sessionGroup: OTHER, name: null, presence: 'running', state: { kind: 'idle' }, live: { runId: 'run-lark', sessionId: 's2' }, launchConfig: { runtime: 'claude', mode: 'default' } };
+    if (!groupCount) for (const row of value.rows) { row.presence = 'not_running'; row.live = null; row.state = { kind: 'offline' }; }
+
+    return workbenchSnapshotAnswer(url, value, now);
   }
   const server = http.createServer((req, res) => {
     try {
@@ -179,10 +176,10 @@ export async function runObserverBrowser(t, sandbox, signal) {
     await page.locator(`[data-group="${GROUP}"]`).click();
     const button = page.locator(`button[data-observer-group="${GROUP}"]`); await button.waitFor({ state: 'visible' });
     await page.evaluate(() => { document.querySelector('#observer-tab').click = () => { throw new Error('Observer entry must activate the page directly'); }; });
-    const before = writes.length, groupReads = reads.filter(row => row.path === '/api/workbench/groups').length;
+    const before = writes.length, groupReads = reads.filter(row => row.path === '/api/groups/running').length;
     await button.click(); await page.waitForFunction(() => window.__observerSockets.length > 0);
     assert.equal(leaseWrites(before)[0].body.sessionGroup, GROUP);
-    assert.ok(reads.filter(row => row.path === '/api/workbench/groups').length > groupReads);
+    assert.ok(reads.filter(row => row.path === '/api/groups/running').length > groupReads);
     assert.equal(await page.locator('#observer-group-picker').isVisible(), false);
   });
   await step('top observer entry clears a previously observed group after its detail closes', async page => {

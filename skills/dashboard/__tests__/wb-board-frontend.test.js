@@ -50,7 +50,7 @@ test('single view uses only-session name and historical groups have unknown live
   const document = createDocument(), root = document.createElement('div');
   renderBoard(root, { view: 'single', rows: [row('origin')] }, { document, t, level: 'technical' });
   assert.equal(nameOf(root.children[0]), 'wb.single');
-  const old = renderRow({ sessionGroup: 'old', state: { kind: 'not_running' }, queue: null, target: null }, { document, t, level: 'technical' });
+  const old = renderRow({ sessionGroup: 'old', state: { kind: 'offline' }, queue: null, target: null }, { document, t, level: 'technical' });
   assert.equal(old.children[4].textContent, '—'); assert.equal(old.children[6].textContent, '—');
 });
 test('older hint appears only for strict true without an active query and focuses search', () => {
@@ -224,15 +224,15 @@ test('first read failure never invents a last-success timestamp', () => {
 });
 test('board header counts listed groups by state; plain view names each state', () => {
   const document = createDocument(), root = document.createElement('div');
-  renderDistribution(root, { rows: [row('a'), row('b'), row('c')], counts: { busy: 2, idle: 1, waiting: 0 } }, { document, t });
+  renderDistribution(root, { rows: [row('a'), row('b'), row('c')], counts: { working: 2, idle: 1, waiting: 0 } }, { document, t });
   assert.equal(root.children[0].textContent, 'wb.board.groups3');
-  assert.deepEqual(root.children.slice(1).map(node => node.textContent), ['2 wb.state.busy', '1 wb.state.idle']);
+  assert.deepEqual(root.children.slice(1).map(node => node.textContent), ['2 wb.state.working', '1 wb.state.idle']);
   // The state word is its own node: shown in the plain view unless the row is compact, never shown in the
   // technical view, and always part of the label's text so screen readers read it.
   const words = () => root.children.slice(1).map(node => node.children.find(child => child.classList.contains('wb-dist-word')));
   assert.deepEqual(words().map(word => word.className), ['wb-dist-word', 'wb-dist-word']);
-  renderDistribution(root, { rows: [row('a')], counts: { busy: 1 } }, { document, t, level: 'technical' });
-  assert.equal(root.children[1].textContent, '1 wb.state.busy'); assert.equal(root.children[1].title, 'wb.state.busy 1');
+  renderDistribution(root, { rows: [row('a')], counts: { working: 1 } }, { document, t, level: 'technical' });
+  assert.equal(root.children[1].textContent, '1 wb.state.working'); assert.equal(root.children[1].title, 'wb.state.working 1');
   assert.deepEqual(words().map(word => word.className), ['wb-dist-word wb-vh']);
 });
 test('attention with nothing to report stays empty in both views', () => {
@@ -250,7 +250,7 @@ test('instance strip shows CPU, memory and disk between the pool and the cost, w
   const system = { sampledAt: 100_000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2 * GiB, memTotalBytes: 16 * GiB, diskUsedPct: 61.6, diskFreeBytes: 40.25 * GiB };
   const snapshot = { mode: 'multi', readAt: 130_000, instance: { pool: { used: 1, capacity: 4 }, system } };
   for (const level of ['plain', 'technical']) {
-    instanceStrip(root, snapshot, { document, t, level, costSummary: { today: { total: 1.5 }, sevenDay: { total: 9 } } });
+    instanceStrip(root, snapshot, { document, t, level, costSummary: { today: { cost: 1.5 }, sevenDay: { cost: 9 } } });
     const items = root.children.filter(node => node.classList.contains('wb-inst-item'));
     const at = name => items.findIndex(node => node.classList.contains(name));
     assert.equal(items[0].textContent, level === 'technical' ? 'multi' : 'wb.inst.modeMulti', `${level}: the run mode stays first`);
@@ -309,7 +309,7 @@ test('selected rows are marked and the origin row keeps its own style', () => {
 test('plain names say direct or group chat from the key, model names are capitalised and idle groups stand by', () => {
   const document = createDocument(), root = document.createElement('div');
   const plainName = key => ({ ...row(key), name: null, c4: { componentName: 'telegram' } });
-  const standby = { ...row('lark:team', 'not_running'), presence: 'not_running', launchConfig: null };
+  const standby = { ...row('lark:team', 'offline'), presence: 'not_running', launchConfig: null };
   renderBoard(root, { rows: [plainName('telegram:dm-1001'), plainName('telegram:team-7'), standby] }, { document, t });
   const subs = allNodes(root).filter(node => node.classList.contains('wb-key')).map(node => node.textContent);
   assert.deepEqual(subs.slice(0, 2), ['wb.platform.telegram · wb.chat.dm', 'wb.platform.telegram · wb.chat.group']);
@@ -446,7 +446,7 @@ test('instance strip shows icons and values; every title starts with the item, i
   };
   for (const locale of ['zh', 'en']) for (const level of ['technical', 'plain']) {
     const document = createDocument(), root = document.createElement('div');
-    instanceStrip(root, snapshot, { document, t: poolTranslator(locale), level, costSummary: { today: { total: 1.5 }, sevenDay: { total: 9.2 } } });
+    instanceStrip(root, snapshot, { document, t: poolTranslator(locale), level, costSummary: { today: { cost: 1.5 }, sevenDay: { cost: 9.2 } } });
     const items = root.children.filter(node => node.classList.contains('wb-inst-item'));
     // The run mode's title is on its label; every other item carries its own.
     assert.deepEqual(items.map(node => [shown(node), node.title || node.children[0].title]), expected[locale][level], `${locale}/${level}`);
@@ -727,19 +727,19 @@ test('board and detail share snapshot queue positions while the pool reminder us
 
 test('status pills distinguish stale sample age, last-status tooltip and fresh display', () => {
   const document = createDocument(), now = 1800000000000;
-  const value = { ...row('a', 'busy'), state: { kind: 'busy', stale: true, sampledAt: now - 20_000 },
-    live: { status: { valid: false, reason: 'stale', lastState: 'busy', sampledAt: now - 20_000 } } };
+  const value = { ...row('a', 'working'), state: { kind: 'working', stale: true, sampledAt: now - 20_000 },
+    live: { status: { valid: false, reason: 'stale', lastState: 'working', sampledAt: now - 20_000 } } };
   const stale = statePill(document, value, { t, now });
   assert.equal(allNodes(stale).find(node => node.classList.contains('wb-status-age')).textContent, 'wb.detail.agoSeconds20');
   assert.equal(allNodes(stale).some(node => node.classList.contains('wb-dur')), false);
   value.state = { kind: 'unknown', sampledAt: now - 180_000 };
   value.live.status.sampledAt = now - 180_000;
   const unknown = statePill(document, value, { t, now });
-  assert.equal(unknown.title, 'wb.state.lastStatuswb.state.busy:wb.detail.agowb.schedule.span.minutes3');
+  assert.equal(unknown.title, 'wb.state.lastStatuswb.state.working:wb.detail.agowb.schedule.span.minutes3');
   assert.equal(allNodes(unknown).some(node => node.classList.contains('wb-status-age')), false);
   value.live.status.lastState = null;
   assert.equal(statusAnnotation(value, { t, now }).title, '');
-  value.state = { kind: 'busy' }; value.live.status = { valid: true, state: 'busy', sampledAt: now };
+  value.state = { kind: 'working' }; value.live.status = { valid: true, state: 'working', sampledAt: now };
   const fresh = statePill(document, value, { t, now });
   assert.equal(allNodes(fresh).some(node => node.classList.contains('wb-status-age')), false);
   assert.equal(allNodes(fresh).find(node => node.classList.contains('wb-dur')).textContent, '32s');

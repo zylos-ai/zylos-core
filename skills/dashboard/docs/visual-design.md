@@ -172,6 +172,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Cards and tables distinguish hierarchy through heading rows, borders, and whitespace. Empty states, errors, and loading hints belong in their page's content area; see section 7 for copy and section 3 for loading appearance.
 
+[Current] Overview separates running and offline groups with the existing segmented-control family. The mutually exclusive primary status and independent queue, blocking, capacity, start-failure and unreadable flags share the row's status area; flags stack or wrap within that cell. Loading more offline rows preserves the loaded depth on refresh. Group details show today and seven-day usage; the Usage page includes the weighted cache-hit curve alongside the existing charts.
+
 ## 6. Responsive Layout: Tasks Remain Usable on 390 px Mobile Screens
 
 [Approved] The 390 px mobile interface must not have unintended overflow, clipped text, or obscured actions. Check touch targets separately from visible graphics; wrapped toolbars must still satisfy same-row height and centerline requirements.
@@ -181,6 +183,10 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 [Approved → decisions 3,4,13] Ordinary mobile single-line controls (buttons, inputs, search, dropdowns, dates, segmented outer tracks, interactive chips, and icon actions) have a minimum interaction frame of 36 px and are standardized on 36 px; large fields and same-row submit buttons are also 36 px. Navigation elements such as settings navigation and top-bar icons remain 44 px. Mobile composer is the decision 04 exception (msg 736): retain the 44 px-high message input, 40 × 44 px attachment button, and circular 44 × 44 px send button. Do not compress multiline options; textareas continue growing with content. Retain negative margins that enlarge mobile hit areas; preserve existing page behavior for wrapping and grouping entry points.
 
 [Current] Dedicated layout references: [mobile navigation](../public/js/wb/mobile-navigation.js), [workbench media queries](../public/css/wb.css), [conversation media queries](../public/css/conversation.css). For fixed input areas, also check safe areas, visible height, back actions, and keyboard opening. Intentional internal scrolling in charts or tables must stay within their containers.
+
+[Current] With a detail drawer open, the remaining Overview board uses stacked rows through 1399 px so search and range controls do not overlap the drawer. At 390 px, primary status and flags wrap inside the existing grid cell without widening the page. The running/offline selector retains the approved segmented-control dimensions and focus states.
+
+[Current] Technical group detail retains its folded diagnostic evidence for starting, stopping and unknown states, and for blocked, waiting-slot, start-failed or unreadable flags. A diagnostic flag can coexist with an idle or working primary state; it does not replace that state.
 
 ## 7. Copy: Preserve Factual Distinctions Without Exposing Development Processes
 

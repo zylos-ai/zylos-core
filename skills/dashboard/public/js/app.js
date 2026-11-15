@@ -1,32 +1,33 @@
+import { readGroupSnapshot, instanceActionRequest } from './wb/group-data.js?v=1';
 import { waitUntilDeadline } from './request-timeout.js?v=2';
 import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=103';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=116';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=117';
 import { createPricingPanel } from './wb/settings-pricing.js?v=202';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=175';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=176';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=201';
+import { mountConversationPage } from './wb/conversation-page.js?v=202';
 import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
-import { mountWorkbench } from './wb/shell.js?v=209';
+import { mountWorkbench } from './wb/shell.js?v=211';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=112';
-import { createRemoteAccess } from './wb/remote-access.js?v=1';
-import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=152';
+import { createRemoteAccess } from './wb/remote-access.js?v=2';
+import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, observerNavEntry, tabForPath, wbWritable } from './wb/view-mode.js?v=153';
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js?v=120';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=148';
-import { createUsagePage } from './wb/usage.js?v=202';
+import { createUsagePage } from './wb/usage.js?v=203';
 import { ObserverHistory } from './observer-history.js?v=6';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=90';
 import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=203';
 import { createFleetSounds } from './fleet-sounds.js?v=203';
-import { refreshDashboardState } from './state-refresh.js?v=100';
+import { refreshDashboardState } from './state-refresh.js?v=101';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
@@ -335,7 +336,7 @@ function renderFleet() {
 // Account quota metadata for this machine; group statistics are supplied by the Fleet API.
 async function refreshFleetSelf() {
   try {
-    state.fleetSelf = fleetSelfFromSnapshot(await fetchJson('/api/workbench/groups'));
+    state.fleetSelf = fleetSelfFromSnapshot(await readGroupSnapshot(fetchJson));
   } catch { state.fleetSelf = null; }
 }
 
@@ -1615,18 +1616,21 @@ function applySse(name, data) {
   if (!data || typeof data !== 'object') return;
   // A remote agent's stream describes its own fleet; never let it clobber ours.
   if (name === 'fleet' && state.remoteAgent) return;
-  if (name === 'state_change') {
+  if (name === 'instance') {
     const previousState = state.dashboardState;
     const nextRuntimeInfo = mergeRuntimeInfo(previousState, data);
-    // The SSE state payload carries only raw state; /api/state adds the agent identity. Keep it across updates.
+    // Preserve the separately read Origin details while applying instance metadata.
     const prevAgent = state.dashboardState?.agent;
-    state.dashboardState = data;
+    state.dashboardState = { ...previousState, ...data };
     remoteAccess.noteState(data);
     if (nextRuntimeInfo) state.dashboardState.runtime_info = nextRuntimeInfo;
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     if (Object.hasOwn(data, 'new_session_threshold')) state.newSessionThreshold = data.new_session_threshold;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
     renderInfoBar(); renderObserverAvailability(); renderObserverPage();
+  } else if (name === 'groups') {
+    void refreshState().catch(() => {});
+    void workbench?.refresh?.();
   } else if (name === 'fleet') {
     setFleet(data);
     clearFleetFallback();
@@ -1665,7 +1669,7 @@ function connectSse() {
   };
 
   chatPush.attach(source);
-  for (const ev of ['state_change', 'metric_update', 'system_update', 'health_update', 'fleet', 'history_changed']) {
+  for (const ev of ['instance', 'groups', 'metric_update', 'fleet', 'history_changed']) {
     state.eventSource.addEventListener(ev, (e) => {
       if (state.eventSource !== source) return;
       try { applySse(ev, JSON.parse(e.data)); renderConnection('live'); }
@@ -1681,7 +1685,7 @@ function scheduleSseReconnect() {
   state.sseReconnectTimer = setTimeout(async () => {
     if (generation !== sseGeneration) return;
     try {
-      const r = await fetch(api(agentPath('/api/state')), { cache: 'no-store' });
+      const r = await fetch(api(agentPath('/api/instance')), { cache: 'no-store' });
       if (generation !== sseGeneration) return;
       if (r.status === 401) {
         window.location.href = api('/login');
@@ -2364,7 +2368,7 @@ async function saveFleetSelfName() {
   const name = fleetManageModal.querySelector('#fleet-self-name').value.trim();
   fleetManageStatus(t('fleet_manage.saving'), 'running');
   try {
-    const resp = await fetch(api('/api/agent/name'), {
+    const resp = await fetch(api('/api/instance/name'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
@@ -2538,7 +2542,7 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
     try {
       const [resp, groups] = await Promise.all([
         fetch(endpoint, { cache: 'no-store', signal }),
-        fetch(observerEndpoint('/api/workbench/groups'), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null)
+        fetch(observerEndpoint('/api/groups/running'), { cache: 'no-store', signal }).then(response => { if (!response.ok) throw Error('read_failed'); return response.json(); }).catch(() => null)
       ]);
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw observerRequestError(data, resp.status);
@@ -2756,30 +2760,31 @@ async function refreshModeStatus() {
   const targetKey = observerTargetKey();
   if (pendingManualRestart) {
     try {
-      const result = await fetchJson(`/api/restart-status?requestId=${encodeURIComponent(pendingManualRestart.requestId)}`);
+      const result = await fetchJson(`/api/groups/origin/restarts/${encodeURIComponent(pendingManualRestart.requestId)}`);
       if (observerTargetKey() !== targetKey) return;
       const text = actionsModal?.querySelector('#action-restart-status');
-      const ready = result.origin?.ready && result.origin.runId !== pendingManualRestart.runId;
+      const ready = result.group?.ready && result.group.runId !== pendingManualRestart.runId;
       if (text) text.textContent = t('actions.restart_progress', { submission: pendingManualRestart.submission, completion: result.completion === 'deadline_exceeded' ? 'unknown' : result.completion, ready: ready ? t('actions.ready') : t('value.unknown') });
       if (result.completion === 'done' || ready) pendingManualRestart = null;
     } catch { if (observerTargetKey() !== targetKey) return; }
   }
   const text = actionsModal?.querySelector('#action-mode-status');
   try {
-    const result = await fetchJson('/api/session-mode');
+    const result = await fetchJson('/api/instance');
     if (observerTargetKey() !== targetKey) return;
-    if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
-    const data = result.data;
-    const mode = ['single', 'multi'].includes(data.sessionMode) ? data.sessionMode : null;
+    const data = result;
+    const mode = ['single', 'multi'].includes(data.session_mode) ? data.session_mode : null;
     if (mode) { const select = actionsModal.querySelector('#action-mode'); select.value = mode; select._current = mode; syncModeSegment(); }
     text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), data.transition?.phase, data.transition?.reason, data.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', data.blocked?.since ? t('actions.blocked_since', { time: data.blocked.since }) : ''].filter(Boolean).join(' · ');
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {
-    const result = await fetchJson('/api/instance-status');
+    const result = await fetchJson('/api/instance');
     if (observerTargetKey() !== targetKey) return;
-    if (!result?.ok) throw new Error(result?.error?.message || 'Unknown');
-    const data = result.data || {};
+    const origin = await fetchJson('/api/groups/origin');
+    const data = { ...result, origin };
+    state.originGroup = origin;
+    if (observerTargetKey() !== targetKey) return;
     if (instanceText) instanceText.textContent = instanceStatusText(data, document.documentElement.dataset.detail === 'technical' ? 'technical' : 'plain', t);
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (instanceText) instanceText.textContent = error.message; }
 }
@@ -2857,7 +2862,7 @@ function pageActions() {
   return pageActions.value ??= createPageActions({
     t, send: sendAction, confirm: showConfirm, effortLabel,
     readOnly: () => Boolean(remoteIsReadOnly()), remoteTarget: viewedRemoteTarget,
-    shownSession: () => state.dashboardState, runtime: () => state.dashboardState?.runtime_info?.runtime,
+    shownSession: () => ({ ...state.dashboardState, runId: state.originGroup?.live?.runId, sessionId: state.originGroup?.live?.sessionId }), runtime: () => state.dashboardState?.runtime_info?.runtime,
   });
 }
 
@@ -2868,7 +2873,8 @@ function execAction(action, body) {
 
 // Sends a dashboard action. Only the page actions call this, after they have checked access and asked when needed.
 async function sendAction(action, body) {
-  const actionPath = agentPath(`/api/actions/${action}`);
+  const request = instanceActionRequest(action, body);
+  const actionPath = agentPath(request.path);
   const healthPath = agentPath('/api/health');
   const statusEl = actionsModal?.querySelector('#action-status');
   if (statusEl) {
@@ -2879,9 +2885,9 @@ async function sendAction(action, body) {
 
   try {
     const r = await fetch(api(actionPath), {
-      method: 'POST',
+      method: request.method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {})
+      body: JSON.stringify(request.body)
     });
     const result = await r.json();
     if (action === 'restart-session' && result.requestId) {

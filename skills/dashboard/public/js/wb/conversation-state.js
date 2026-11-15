@@ -872,16 +872,16 @@ export function createConversationState({
     const stillCurrent = () => valid(e) && navigation === selectedVersion && version === current.groupPresenceVersion;
     record.promise = (async () => {
       try {
-        const data = await request('/api/workbench/groups', { signal: record.controller.signal });
+        const data = await request('/api/groups/' + encodeURIComponent(sessionGroup), { signal: record.controller.signal });
         if (!stillCurrent()) return;
-        // Origin's row is keyed `origin` in multi and has no group in single; both are marked `origin`.
         const origin = sessionGroup === 'origin';
-        const group = Array.isArray(data?.rows) ? data.rows.find(row => origin ? row.origin === true : row.sessionGroup === sessionGroup) : null;
-        const trusted = data?.listKnown === true && data?.sources?.status?.ok === true;
-        // Only Origin's row carries what was last handed to it, and only when that is a scheduled task.
+        const group = data;
+        const instance = await request('/api/instance', { signal: record.controller.signal });
+        if (!stillCurrent()) return;
+        const trusted = (group?.sessionGroup ?? group?.id) === sessionGroup && group?.state && group.state.kind !== 'unknown' && Number.isFinite(data.readAt);
         current.groupProcessing = trusted && origin && group?.processing === 'scheduled_task' ? 'scheduled_task' : null;
-        applyGroupReading(current, trusted ? { readAt: data.sources.status.readAt, presence: group?.presence ?? null,
-          wait: group?.wait ?? null, health: data.instance?.runtimeHealth?.[group?.target?.runtime]?.health ?? null,
+        applyGroupReading(current, trusted ? { readAt: data.readAt, presence: group?.presence ?? null,
+          wait: group?.wait ?? null, health: instance?.runtimeHealth?.[group?.target?.runtime]?.health ?? null,
           working: group?.working ?? null } : null);
       } catch {
         if (!stillCurrent()) return;
@@ -1126,10 +1126,10 @@ export function createConversationState({
     listDepth = 1;
     nextCursor = null;
     emit();
-    await Promise.all([list(), run(() => request('/api/session-mode'), data => {
+    await Promise.all([list(), run(() => request('/api/instance'), data => {
       if (version === refreshVersion) {
-        const actual = data.data?.sessionMode;
-        mode = actual === null ? 'single' : ['single', 'multi'].includes(actual) ? actual : null;
+        const actual = data.session_mode;
+        mode = ['single', 'multi'].includes(actual) ? actual : null;
         if (mode === null) error = 'chat_mode_unavailable';
         emit();
       }

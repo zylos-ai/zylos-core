@@ -27,7 +27,7 @@ async function startPage(sandbox) {
         // Deliberately true for a Fleet response too: the app's local-view guard must still hide deletion.
         sendJson(res, 200, { items, nextCursor: null, tz: 'Asia/Singapore', deletionAllowed: state.deletionAllowed }); return;
       }
-      if ((route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/')) && route.endsWith('/deletion')) {
+      if ((route.startsWith('/api/groups/') || route.startsWith('/api/chat/drafts/')) && (route.endsWith('/deletion-preview') || route.endsWith('/deletion'))) {
         if (state.previewFailure) {
           sendJson(res, 409, { ok: false, error: { code: 'group_delete_path_unavailable', message: '/private/do-not-render' } }); return;
         }
@@ -36,7 +36,7 @@ async function startPage(sandbox) {
         sendJson(res, 200, { ok: true, operationId: 'browser-operation', cutoffId: draftTarget ? 0 : 8,
           messages: 8, attachments: 2, draft: draftTarget }); return;
       }
-      if (req.method === 'DELETE' && (route.startsWith('/api/workbench/groups/') || route.startsWith('/api/chat/drafts/'))) {
+      if (req.method === 'DELETE' && (route.startsWith('/api/groups/') || route.startsWith('/api/chat/drafts/'))) {
         const body = await readJsonBody(req, 4096); writes.push({ route, body });
         if (state.deleteFailure) sendJson(res, 500, { ok: false, error: { code: 'cleanup_unavailable' } });
         else if (state.stale) sendJson(res, 409, { ok: false, error: { code: 'DELETION_PREVIEW_STALE' } });
@@ -58,7 +58,7 @@ async function startPage(sandbox) {
         sendJson(res, 200, { items: [], rounds: [], nextCursor: null, afterCursor: null, tz: 'Asia/Singapore' }); return;
       }
       if (route === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return; }
-      if (route === '/api/workbench/usage') {
+      if (route === '/api/usage/series') {
         sendJson(res, 200, { tz: 'Asia/Singapore', buckets: [], bucket: 'day', totals: { cost: 0, costByRuntime: {}, messages: { in: 0, out: 0 } },
           costByRuntime: [], tokensByRuntime: [], messages: [], rotations: [], tools: [], projects: { items: [] } }); return;
       }
@@ -112,7 +112,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     const style = (locator, property) => locator.evaluate((node, property) => getComputedStyle(node)[property], property);
     // Real touch input through the browser's input pipeline, including its scrolling and fling decisions:
     // one move per frame and the finger lifts while still moving, as a quick swipe does.
-    const swipe = async (item, dx, dy = 0) => {
+    const swipe = async (item, dx, dy = 0, nextTap = null) => {
       const box = await row(item).locator('.conversation-list-item').boundingBox();
       const x = box.x + box.width * 0.7, y = box.y + box.height / 2;
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
@@ -120,7 +120,13 @@ export async function runConversationDeleteBrowser(t, sandbox) {
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + dx * step / 8, y: y + dy * step / 8 }] });
         await pause(16);
       }
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      const lift = cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      if (nextTap) {
+        // Submit the next real input on the same ordered CDP session before waiting for the lift acknowledgment.
+        const tap = cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [nextTap] });
+        await Promise.all([lift, tap]);
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      } else await lift;
     };
     // Phone: whether the open conversation's menu offers delete.
     const menuOffersDelete = async name => {
@@ -151,9 +157,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
         };
         addEventListener('touchend', end, true); addEventListener('touchstart', start, true);
       });
-      await swipe(item, -160);
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await swipe(item, -160, 0, at);
       const gap = await page.evaluate(() => window.__tapGap);
       assert.ok(gap !== null && gap < 100, `the tap follows the lift within 100 ms (${gap} ms)`);
       tapGaps.push(gap);
@@ -276,7 +280,7 @@ export async function runConversationDeleteBrowser(t, sandbox) {
     await stale.waitFor();
     assert.equal(api.writes.length, 1, 'confirming sends exactly one DELETE');
     assert.equal(api.state.previews, previews + 1);
-    assert.match(api.writes[0].route, /^\/api\/workbench\/groups\//);
+    assert.match(api.writes[0].route, /^\/api\/groups\//);
     assert.deepEqual(api.writes[0].body, { confirmed: true, operationId: 'browser-operation', cutoffId: 8 });
     assert.equal(await remove(active).isVisible(), true, 'the row keeps its delete button shown with the status');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
