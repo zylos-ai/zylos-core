@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { element, fallbackName, icon } from './plain-text.js?v=106';
 import { recoveryTime } from './cooldown.js?v=89';
 import { formatZoned } from './instance-zone.js?v=100';
@@ -36,10 +37,11 @@ export function renderAttention(root, snapshot, { error, lastSuccess, now = Date
     const group = item.group !== undefined ? item.group : item.groups?.length === 1 ? item.groups[0] : undefined;
     const subs = [];
     if (item.group !== undefined) subs.push(nameOf(item.group));
-    if (item.kind === 'auth_failed' && item.extraUnknown) subs.push(t('wb.extraUnknown', { count: item.extraUnknown }).replace(/^\s*·\s*/, ''));
+    if (item.kind === 'auth_failed' && item.extraUnknown) subs.push(countLabel(t, 'wb.extraUnknown', item.extraUnknown).replace(/^\s*·\s*/, ''));
     const details = [item.reasonCode, item.source, item.pm2Status].filter(Boolean).join(' · ');
     if (level === 'technical' && details) subs.push(details);
-    root.append(entry(document, { severity, glyph: severity === 'reminder' ? 'clock' : 'alert', text: t(key, values),
+    root.append(entry(document, { severity, glyph: severity === 'reminder' ? 'clock' : 'alert', text: ['auth_failed', 'start_failed', 'pool_full'].includes(item.kind)
+      ? countLabel(t, key, item.kind === 'pool_full' ? values.waiting : values.count, values) : t(key, values),
       sub: subs.join(' · '), group, onSelect, t }));
   }
 }

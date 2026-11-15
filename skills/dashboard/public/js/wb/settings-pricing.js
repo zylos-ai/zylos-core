@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { element, icon, runtimeName } from './plain-text.js?v=106';
 import { money } from './instance-strip.js?v=201';
 import { priceWithEditedBaseRates } from '../pricing-form.js';
@@ -143,7 +144,7 @@ export function createPricingPanel({ root, host, snapshot, data, usage = {}, doc
       const users = snapshot == null ? t('wb.unknown') : priceUsers(snapshot, value).length;
       const sw = element(document, 'i', undefined, 'wb-sw wb-sw-' + value);
       const label = element(document, 'span', t('wb.settings.priceTable', { runtime: runtimeName(value) }));
-      const use = element(document, 'small', t('wb.settings.priceUsers', { count: users }));
+      const use = element(document, 'small', countLabel(t, 'wb.settings.priceUsers', users));
       button.replaceChildren(sw, label, use);
       if (counts[value]) button.append(element(document, 'span', t('wb.settings.changedN', { count: counts[value] }), 'wb-dirty'));
     }

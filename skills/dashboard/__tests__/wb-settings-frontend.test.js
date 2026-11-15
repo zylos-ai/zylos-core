@@ -507,7 +507,12 @@ test('removed header entry selectors have no startup bindings and account contro
   assert.equal(html.includes('id="locale-toggle"'), false, 'the language choice is built inside the settings page');
   assert.match(app, /initSettingsPage\(\);\s*initTabs\(\)/); assert.match(html, /app\.js\?v=\d+/); assert.match(html, /style\.css\?v=64/);
   const zh = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.zh.json', import.meta.url))), en = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
-  assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());
+  const englishFragments = new Set(['chat.delete.messages', 'chat.delete.attachments']);
+  for (const key of Object.keys(en)) {
+    if (key.endsWith('One')) assert.ok(Object.hasOwn(en, key.slice(0, -3)), key);
+    assert.ok(Object.hasOwn(zh, key) || englishFragments.has(key) || key.endsWith('One') && (Object.hasOwn(zh, key.slice(0, -3)) || englishFragments.has(key.slice(0, -3))), key);
+  }
+  for (const key of Object.keys(zh)) assert.ok(Object.hasOwn(en, key), key);
 });
 
 
@@ -835,4 +840,15 @@ test('settings group status labels include sample age and last-known status tool
   const labels = root.querySelectorAll('small');
   assert.ok(labels.some(label => label.title?.startsWith('wb.state.lastStatus:')));
   assert.equal(root.querySelector('.wb-status-age'), null);
+});
+
+test('pricing tabs render English for one and two running groups', () => {
+  const labels = JSON.parse(fs.readFileSync(new URL('../public/i18n/wb.en.json', import.meta.url)));
+  const en = (key, values = {}) => (labels[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? `{${name}}`));
+  for (const count of [1, 2]) {
+    const fixture = priceFixture();
+    const panel = createPricingPanel({ ...fixture, snapshot: { rows: Array.from({ length: count }, () => ({ presence: 'running', target: { runtime: 'claude' } })) }, usage: { models: [] }, t: en, write: async () => {} });
+    assert.ok(fixture.root.textContent.includes(count === 1 ? '1 running group uses these prices' : '2 running groups use these prices'));
+    panel.destroy();
+  }
 });

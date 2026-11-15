@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { listen } from './detail-update.js?v=158';
 import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106';
 import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=155';
@@ -50,10 +51,11 @@ export function detailEvidence(row, snapshot = {}) {
 }
 
 export function detailNumbers(row, { backlog, now = Date.now() } = {}, t = key => key) {
+  const minutes = Math.max(0, Math.floor((now - row.createdAt * 1000) / 60000));
   return [
     { key: 'wb.detail.queue', value: row.queue == null ? '—' : row.queue.known === false ? t('wb.unknown') : `${row.queue.pending?.count ?? 0} · ${row.queue.running?.count ?? 0}`, note: 'wb.detail.queueNote' },
     { key: 'wb.detail.context', value: row.contextPct == null ? t('wb.unknown') : `${Math.round(row.contextPct)}%`, pct: row.contextPct, note: row.contextPct == null ? null : 'wb.detail.contextNote' },
-    { key: 'wb.detail.thisRun', value: row.createdAt == null ? t('wb.unknown') : t('wb.detail.runDuration', { minutes: Math.max(0, Math.floor((now - row.createdAt * 1000) / 60000)) }) },
+    { key: 'wb.detail.thisRun', value: row.createdAt == null ? t('wb.unknown') : countLabel(t, 'wb.detail.runDuration', minutes, { minutes }) },
     { key: 'wb.term.unsummarized', value: backlog?.count == null ? t('wb.unknown') : backlog.count, memory: true },
   ];
 }
@@ -206,7 +208,7 @@ function nowCard(document, row, data, { level, t, snapshot, onRaw, showLastRecei
     const waiting = row.wait && ['waiting', 'unknown', 'error'].includes(kind);
     const status = waiting ? waitText({ ...row.wait, pendingCount: row.queue?.pending?.count }, 'plain', t)
       : kind === 'busy' ? [tools.length ? tools.map(tool => toolLabel(tool.name, 'plain', t)).join(t('wb.detail.toolSeparator')) : t('wb.state.busy'),
-        agents.length ? t('wb.detail.backgroundAgents', { count: agents.length }) : null].filter(Boolean).join(' · ')
+        agents.length ? countLabel(t, 'wb.detail.backgroundAgents', agents.length) : null].filter(Boolean).join(' · ')
         : kind === 'not_running' ? t('wb.detail.standby') : t('wb.state.' + kind);
     title.append(icon(document, kind === 'busy' ? 'tool' : kind === 'error' ? 'alert' : kind === 'unknown' ? 'help' : 'clock'), element(document, 'span', status));
     if (kind === 'idle' && row.duration != null) title.append(element(document, 'span', ' · ' + t('wb.detail.idleElapsed', { duration: idleDuration(row.duration, t) }), 'wb-dur'));
@@ -330,7 +332,7 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   const memory = section('wb.detail.memory', 'wb-detail-memory', 'book');
   const line = element(document, 'div', undefined, 'wb-mem-line');
   const count = data.backlog?.count;
-  line.append(element(document, 'span', count == null ? t('wb.detail.memoryUnknown') : count ? t('wb.detail.memoryPending', { count }) : t('wb.detail.memorySaved')));
+  line.append(element(document, 'span', count == null ? t('wb.detail.memoryUnknown') : count ? countLabel(t, 'wb.detail.memoryPending', count) : t('wb.detail.memorySaved')));
   if (data.backlog?.syncing === true) line.append(element(document, 'span', ' · ' + t('wb.detail.syncing'), 'wb-sub'));
   const link = element(document, 'button', t('wb.detail.memoryLink', { count: count == null ? t('wb.unknown') : count }), 'wb-link-btn wb-chev');
   link.type = 'button'; listen(link, 'click', onMemory); line.append(link);

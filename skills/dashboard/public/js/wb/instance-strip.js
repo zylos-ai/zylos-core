@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { element, icon, runtimeName } from './plain-text.js?v=106';
 import { recoveryTime } from './cooldown.js?v=89';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
@@ -77,9 +78,9 @@ export function poolBuckets(record, t) {
   return record.model.buckets.filter(bucket => bucket != null && Number.isInteger(bucket.n) && bucket.n >= 0 &&
     finite(bucket.highBytes) && bucket.highBytes >= 0 && Number.isInteger(bucket.hours) && bucket.hours >= 0 &&
     Number.isInteger(bucket.samples) && bucket.samples >= 0)
-    .slice().sort((a, b) => a.n - b.n).map(bucket => t('wb.inst.poolBucket', {
+    .slice().sort((a, b) => a.n - b.n).map(bucket => countLabel(t, 'wb.inst.poolBucket', bucket.samples, {
       count: bucket.n, amount: (bucket.highBytes / 1073741824).toFixed(2), hours: bucket.hours, samples: bucket.samples,
-    }).replace(/(\d) (?=个|GiB\b|h\b|samples\b)/g, '$1\u00a0'));
+    }).replace(/(\d) (?=个|GiB\b|h\b|samples?\b)/g, '$1\u00a0'));
 }
 export function poolAlgorithm(record, t) {
   if (record?.valid !== true || record.fresh !== true || record.source !== 'auto') return '';
@@ -119,7 +120,7 @@ export function systemItems(document, system, { t = key => key, readAt } = {}) {
   const stale = system != null && !(readAt - system.sampledAt <= SYSTEM_STALE_MS);
   const memory = system && system.memTotalBytes > 0 && system.memUsedBytes != null ? system.memUsedBytes / system.memTotalBytes * 100 : null;
   const specs = [
-    ['cpu', 'cpu', system?.cpuPct, system?.cpuCount > 0 ? t('wb.inst.cpuCores', { count: system.cpuCount }) : ''],
+    ['cpu', 'cpu', system?.cpuPct, system?.cpuCount > 0 ? countLabel(t, 'wb.inst.cpuCores', system.cpuCount) : ''],
     ['memory', 'memory', memory, memory == null ? ''
       : t('wb.inst.memoryUsed', { used: oneDecimal(system.memUsedBytes), total: oneDecimal(system.memTotalBytes) })],
     ['disk', 'disk', system?.diskUsedPct, system?.diskFreeBytes != null ? t('wb.inst.diskFree', { free: oneDecimal(system.diskFreeBytes) }) : ''],

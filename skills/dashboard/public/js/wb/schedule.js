@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { element, fallbackName, icon } from './plain-text.js?v=106';
 import { createFetchGuard } from './fetch-guard.js?v=85';
 import { cronText } from './cron-text.js?v=94';
@@ -836,7 +837,7 @@ export function mountSchedule({ document = globalThis.document, window = globalT
     const numbers = element(document, 'div', undefined, 'wb-detail-numbers');
     for (const [key, value, sub, extra] of [
       ['next', upcoming == null ? '—' : untilText(upcoming, now(), t), upcoming == null ? '' : day(upcoming)],
-      ['rate', rate, finished.length ? t('wb.schedule.lastN', { n: finished.length }) : ''],
+      ['rate', rate, finished.length ? countLabel(t, 'wb.schedule.lastN', finished.length, { n: finished.length }) : ''],
       ['median', typical == null ? '—' : durationText(typical), t('wb.schedule.successRuns')],
       ['last', last ? t(resultKey(last.status)) : '—', day(task.lastRunAt), last && last.status !== 'success' ? 'wb-hi' : ''],
     ]) {

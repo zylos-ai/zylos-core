@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 /** UI state only. The server resolves target ownership and Core owns the deletion. */
 export function deletionPath(item) {
   if (item?.id?.startsWith('d:')) return `/api/chat/drafts/${encodeURIComponent(item.id.slice(2))}`;
@@ -31,7 +32,9 @@ export function createConversationDeletion({ request, confirm, t = key => key,
           !Number.isSafeInteger(preview.cutoffId) || preview.cutoffId < 0) throw { code: 'invalid_deletion_preview' };
         const draft = preview.draft === true;
         const message = draft ? t('chat.delete.draftConfirm') :
-          t('chat.delete.confirm', { messages: preview.messages ?? 0, attachments: preview.attachments ?? 0 });
+          t('chat.delete.confirm', { messages: preview.messages ?? 0, attachments: preview.attachments ?? 0,
+            messagesLabel: countLabel(t, 'chat.delete.messages', preview.messages ?? 0),
+            attachmentsLabel: countLabel(t, 'chat.delete.attachments', preview.attachments ?? 0) });
         if (!(await confirm(message, { ok: t('chat.delete.button'), danger: true })) || !valid()) {
           update({ busy: false }); return;
         }

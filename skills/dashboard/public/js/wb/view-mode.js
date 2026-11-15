@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { recoveryTime } from './cooldown.js?v=89';
 import { formatZoned } from './instance-zone.js?v=100';
 const CLOCK_SECONDS = { hour: 'numeric', minute: '2-digit', second: '2-digit' };
@@ -109,7 +110,9 @@ export function waitText(wait, level = 'plain', t, now = Date.now()) {
   if (level === 'technical') return [reason, wait.reasonCode ?? wait.reason, until].filter(Boolean).join(' · ');
   if (t) {
     const key = ['rate_wait', 'auth_wait', 'queued', 'starting', 'fenced', 'start_failed'].includes(reason) ? reason : 'unknown';
-    return t('wb.wait.' + key + (key === 'rate_wait' && !until ? '_unknown' : ''), { time: until, count: wait.pendingCount ?? '—' });
+    const label = 'wb.wait.' + key + (key === 'rate_wait' && !until ? '_unknown' : '');
+    const values = { time: until, count: wait.pendingCount ?? '—' };
+    return key === 'rate_wait' ? countLabel(t, label, values.count, values) : t(label, values);
   }
   return reason === 'rate_wait'
     ? `额度已用完，${until ? until + ' 恢复' : '恢复时间未知'}。消息会自动处理，不需要操作。`

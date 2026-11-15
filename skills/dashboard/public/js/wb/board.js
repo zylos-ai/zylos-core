@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { chatKind, element, fallbackName, icon, lastReceived, platformOf, runtimeName } from './plain-text.js?v=106';
 import { toolLabel, waitText } from './view-mode.js?v=151';
 import { activityStrip } from './activity-strip.js?v=106';
@@ -148,7 +149,7 @@ export function renderDistribution(root, snapshot, { document = root.ownerDocume
   if (!snapshot) return;
   const counts = snapshot.counts ?? {};
   const total = (snapshot.rows ?? []).length;
-  root.append(element(document, 'span', t('wb.board.groups', { count: total }), 'wb-dist-total'));
+  root.append(element(document, 'span', countLabel(t, 'wb.board.groups', total), 'wb-dist-total'));
   for (const kind of distOrder) {
     const count = counts[kind] ?? 0;
     if (!count) continue;

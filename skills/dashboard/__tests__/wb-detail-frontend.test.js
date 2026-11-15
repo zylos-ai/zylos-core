@@ -89,7 +89,7 @@ test('overview keeps safe text, section order, technical-only numbers and curren
   assert.match(root.textContent, /wb.config.running/);
   assert.equal(allNodes(root).find(node => node.tagName === 'DETAILS').open, false);
   assert.equal(allNodes(root).some(node => ['SCRIPT', 'IMG'].includes(node.tagName)), false);
-  assert.equal(detailNumbers(current, { now: 1060000 }, t)[2].value, 'wb.detail.runDuration {"minutes":1}');
+  assert.equal(detailNumbers(current, { now: 1060000 }, t)[2].value, 'wb.detail.runDurationOne {"minutes":1}');
   renderOverview(root, current, {}, { document, t, level: 'plain' });
   assert.equal(allNodes(root).some(node => node.className === 'wb-detail-numbers'), false);
 });
@@ -715,7 +715,7 @@ test('overview restores a current subagent whose start predates the five recent 
     return response(defaultRead(path));
   });
   await f.controller.open(current, { rows: [current], listKnown: true });
-  assert.match(f.root.textContent, /wb\.detail\.backgroundAgents \{"count":1\}/);
+  assert.match(f.root.textContent, /wb\.detail\.backgroundAgentsOne \{"count":1\}/);
   assert.deepEqual(activeSubagents(f.controller.state.currentEvents, 'run-a').map(agent => agent.id), ['worker']);
   const subagentRead = new URL(calls.find(path => path.includes('types=subagent_start')), 'http://fixture');
   assert.equal(subagentRead.searchParams.get('run_id'), 'run-a');
@@ -741,7 +741,7 @@ test('overview consumes a subagent stop followed by more than five unrelated eve
   });
   const snapshot = { rows: [current], listKnown: true };
   await f.controller.open(current, snapshot);
-  assert.match(f.root.textContent, /wb\.detail\.backgroundAgents \{"count":1\}/);
+  assert.match(f.root.textContent, /wb\.detail\.backgroundAgentsOne \{"count":1\}/);
   assert.deepEqual(activeSubagents(f.controller.state.currentEvents, 'run-a').map(agent => agent.id), ['worker']);
   await f.controller.selectTab('timeline');
   await f.controller.timeline.setFilter('tools');

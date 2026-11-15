@@ -1,3 +1,4 @@
+import { countLabel } from '../count-label.js';
 import { element, fallbackName, icon, platformOf } from './plain-text.js?v=106';
 
 // Scope metadata is validated by Core's parseSessionGroup on the server.
@@ -401,8 +402,8 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       element(document, 'b', t(!loaded ? 'memory.loading' : late ? 'wb.memory.summaryLate' : crossLate ? 'wb.memory.summaryOriginLate'
         : unknown ? 'wb.memory.summaryUnknown' : 'wb.memory.summaryOk')));
     if (cross?.syncing === true) summaryRoot.append(element(document, 'span', t('wb.memory.summaryOriginSyncing')));
-    if (syncing) summaryRoot.append(element(document, 'span', t('wb.memory.summarySyncing', { count: syncing })));
-    if (waiting) summaryRoot.append(element(document, 'span', t('wb.memory.summaryWaiting', { count: waiting })));
+    if (syncing) summaryRoot.append(element(document, 'span', countLabel(t, 'wb.memory.summarySyncing', syncing)));
+    if (waiting) summaryRoot.append(element(document, 'span', countLabel(t, 'wb.memory.summaryWaiting', waiting)));
     summaryRoot.append(element(document, 'span', t('wb.memory.summaryTech'), 'wb-sub'));
   }
   function chartCard(className, iconName, title, hint) {
@@ -439,7 +440,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       if (isNumber(row.threshold)) {
         const line = element(document, 'span', undefined, 'wb-memory-threshold'); line.style.left = `${100 * row.threshold / max}%`;
         line.title = t(cross ? 'wb.memory.originThreshold' : 'wb.memory.threshold', { count: row.threshold }); track.append(line);
-        track.setAttribute('aria-label', t('wb.memory.countThreshold', { count: row.count, threshold: row.threshold }));
+        track.setAttribute('aria-label', countLabel(t, 'wb.memory.countThreshold', row.count, { count: row.count, threshold: row.threshold }));
       } else track.setAttribute('aria-label', value);
     }
     const flags = element(document, 'span', undefined, 'wb-memory-flags');
@@ -450,7 +451,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
     // Over the threshold is said in words too, not only by the bar's colour.
     if (over) flags.append(element(document, 'span', t('wb.memory.overThreshold'), 'wb-memory-bl-tag warn'));
     if (cross && isNumber(row.pendingSummaries) && row.pendingSummaries > 0) {
-      flags.append(element(document, 'span', t('wb.memory.pendingSummaries', { count: row.pendingSummaries }), 'wb-memory-bl-tag'));
+      flags.append(element(document, 'span', countLabel(t, 'wb.memory.pendingSummaries', row.pendingSummaries), 'wb-memory-bl-tag'));
     }
     if (row.syncing === true) flags.append(element(document, 'span', t(cross ? 'wb.memory.originSyncing' : 'wb.memory.syncing'), 'wb-memory-bl-tag'));
     else if (row.syncing === null) flags.append(element(document, 'span', t(cross ? 'wb.memory.originSyncUnknown' : 'wb.memory.syncUnknown'), 'wb-memory-bl-tag'));
@@ -481,7 +482,7 @@ export function createMemoryScope({ document = globalThis.document, root, charts
       rest.open = restOpen;
       rest.addEventListener('toggle', () => { restOpen = rest.open; });
       const summary = element(document, 'summary', undefined, 'wb-memory-rest-h');
-      summary.append(icon(document, 'chev', 'xs'), element(document, 'span', t(active.length ? 'wb.memory.restQuiet' : 'wb.memory.allQuiet', { count: quiet.length })));
+      summary.append(icon(document, 'chev', 'xs'), element(document, 'span', countLabel(t, active.length ? 'wb.memory.restQuiet' : 'wb.memory.allQuiet', quiet.length)));
       rest.append(summary);
       for (const row of quiet) rest.append(backlogItem(row));
       backlogRows.append(rest);

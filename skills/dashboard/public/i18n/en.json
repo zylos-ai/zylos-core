@@ -420,5 +420,8 @@
   "result.mode_switch_unchanged": "Session mode is already {value}.",
   "result.mode_switch_rejected": "Mode switch rejected ({code}).",
   "result.mode_switch_unknown": "Mode switch result is unknown. Check the current mode before retrying.",
-  "memory.conflict_later": "Not now"
+  "memory.conflict_later": "Not now",
+  "memory.diff_truncatedOne": "+{count} more line not shown",
+  "fleet_manage.purge_revoked_statusOne": "Purged {count} revoked key",
+  "observer.history.redactedOne": "{count} redaction"
 }
