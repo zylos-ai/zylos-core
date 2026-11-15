@@ -137,8 +137,8 @@ export function createRouter(dependencies, configuration = {}) {
       else await observation;
     } catch (error) {
       state.sceneObservable = false;
-      // Failed observations never turn existing sessions into free capacity.
-      state.live.clear();
+      // A failed listing retains known identities for guarded delivery, while
+      // unobservable capacity prevents admitting an unseen session.
       diagnostic('scene_unobservable', { reason: error.code ?? error.message });
     }
   };
