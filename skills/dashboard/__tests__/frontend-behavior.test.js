@@ -94,7 +94,6 @@ function observerUiHarness(app = fs.readFileSync(new URL('../public/js/app.js', 
       createElement: () => ({}),
       visibilityState: 'visible'
     },
-    originSessionUnavailable: () => false,
     runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget,
     observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide,
     renderConnection() {}, isSseOpen: () => false,

@@ -200,7 +200,7 @@ for (const capacity of [2, 256]) {
   const { body } = message('pool-' + capacity);
   const strip = document.createElement('div'); strip.className = 'wb-instance-strip'; body.append(strip);
   instanceStrip(strip, { mode: 'multi', baselineRuntime: 'claude', rows: [], instance: {
-    pool: { used: 1, capacity, waiting: 0, capacityRecord: { valid: true, fresh: true, source: 'auto' } },
+    pool: { used: 1, capacity, waiting: 0 },
     accounts: { claude: { used_percentage: 30 } } } }, { document, t, level: 'technical' });
 }
 appendContent('answer-card', { id: 999, direction: 'in', content: CONTENT_PREFIX + JSON.stringify({

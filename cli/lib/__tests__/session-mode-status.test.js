@@ -36,6 +36,8 @@ test('unchanged diagnostics avoid log reads while append, replacement, rotation 
   fs.writeFileSync(file, event(5));
   assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 5]);
   fs.writeFileSync(file, event(6));
+  // Force a distinct metadata timestamp even on coarse-resolution filesystems.
+  fs.utimesSync(file, new Date(0), new Date(2000));
   assert.deepEqual((await readSessionModeStatus(input)).lastEvents.map(item => item.ts), [3, 4, 6]);
   fs.appendFileSync(file, event(61));
   assert.equal((await readSessionModeStatus(input)).lastEvents.at(-1).ts, 61);

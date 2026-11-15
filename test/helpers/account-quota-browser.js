@@ -133,7 +133,7 @@ export async function runAccountQuotaBrowser(sandbox) {
         if (url.pathname !== '/api/instance') return route.fallback();
         // Overlap startup and SSE-open instance reads without losing timezone metadata.
         if (initial) await page.waitForTimeout(300);
-        const answer = { ...workbenchAnswer(url, now), tz: zone, poolCapacityRecord: { valid: true, fresh: true, source: 'fixed' } };
+        const answer = { ...workbenchAnswer(url, now), tz: zone };
         const stale = phase === 'stale';
         const accounts = {
           claude: { used_percentage: 21, resets_at: stale ? Math.floor(later / 1000) : new Date(future).toISOString(), live: !stale, recordedAt },

@@ -762,9 +762,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
   const settled = (page, machinesPage) => page.waitForFunction(machinesPage => document.querySelector('#agent-detail').hidden === machinesPage
     && document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getComputedTiming().iterations === Infinity), machinesPage);
 
-  for (const changedMachine of [false, true]) await step(changedMachine
-    ? 'restart fallback cannot submit to another machine after its Origin read settles'
-    : 'restart fallback with no current run shows the target error without submitting', async () => {
+  await step('an automatic restart cannot cross machines after its Origin read settles', async () => {
     const { page, context } = await open(1280, 800, '/settings');
     await answerFleet(page, { spark: '1.0.0-beta.7' });
     const restartPosts = [];
@@ -776,9 +774,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
     let started;
     const waiting = new Promise(resolve => { started = resolve; });
     await page.route(url => url.pathname === '/api/groups/origin', async route => {
-      if (hold) { started(); if (changedMachine) await delayed; }
+      if (hold) { started(); await delayed; }
       const row = workbenchAnswer(new URL('http://fixture/api/groups/origin'), Date.now());
-      await route.fulfill({ json: { ...row, live: hold && changedMachine ? { runId: 'resolved-old-machine-run', sessionId: 'old-session' } : null } });
+      await route.fulfill({ json: { ...row, live: { runId: 'resolved-old-machine-run', sessionId: 'old-session' } } });
     });
     await page.route('**/api/instance/actions/upgrade-runtime', route => route.fulfill({ json: { ok: true, requires_restart: true } }));
     try {
@@ -789,28 +787,20 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await page.locator(`[data-settings-section="${section}"]`).click();
       await upgrade.click();
       const dialog = page.locator('.wb-modal[role="alertdialog"]');
-      await dialog.locator('.wb-modal-acts button').last().click();
-      await dialog.waitFor({ state: 'detached' });
-      // The upgrade response opens the normal restart question after1.5s.
-      await dialog.waitFor({ state: 'visible' });
       hold = true;
       await dialog.locator('.wb-modal-acts button').last().click();
-      await Promise.race([waiting, page.waitForTimeout(5000).then(() => { throw new Error('restart fallback did not read canonical Origin'); })]);
-      if (changedMachine) {
-        await page.locator('#fleet-manage-btn').click();
-        await page.locator('#agent-fleet-root .agent-open[data-agent="spark"]').click();
-        await page.waitForFunction(() => document.querySelector('#tab-bar-agent-name').textContent === 'spark');
-        release();
-        await page.waitForTimeout(300);
-      } else {
-        const copy = JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n/wb.zh.json'), 'utf8'));
-        await page.locator('#action-status').filter({ hasText: copy['wb.actions.targetRequired'] }).waitFor({ state: 'visible' });
-      }
+      await dialog.waitFor({ state: 'detached' });
+      await Promise.race([waiting, page.waitForTimeout(5000).then(() => { throw new Error('automatic restart did not read canonical Origin'); })]);
+      await page.locator('#fleet-manage-btn').click();
+      await page.locator('#agent-fleet-root .agent-open[data-agent="spark"]').click();
+      await page.waitForFunction(() => document.querySelector('#tab-bar-agent-name').textContent === 'spark');
+      release();
+      await page.waitForTimeout(300);
       assert.deepEqual(restartPosts, [], 'a restart is never submitted without a current run on the original machine');
     } finally { release(); await context.close(); }
   });
 
-  await step('saving a CLI change while Origin is stopped succeeds without a restart request', async () => {
+  for (const presence of ['not_running', 'unknown', 'starting', 'running', 'read_failed']) await step(`saving a CLI change with ${presence} Origin and no readable run succeeds without restarting`, async () => {
     const { page, context, errors } = await open(390, 844, '/settings');
     const reads = [], restartPosts = [];
     page.on('request', request => {
@@ -818,9 +808,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
       if (request.method() === 'POST' && /\/actions\/restart$/.test(url.pathname)) restartPosts.push(url.pathname);
       if (url.pathname === '/api/groups/origin') reads.push(url.search);
     });
-    await page.route(url => url.pathname === '/api/groups/origin', route => route.fulfill({ json: {
-      ...workbenchAnswer(new URL('http://fixture/api/groups/origin'), Date.now()), presence: 'not_running', live: null,
-    } }));
+    await page.route(url => url.pathname === '/api/groups/origin', route => presence === 'read_failed'
+      ? route.fulfill({ status: 503, json: { error: 'fixture_detail_unavailable' } })
+      : route.fulfill({ json: {
+        ...workbenchAnswer(new URL('http://fixture/api/groups/origin'), Date.now()), presence, live: null,
+      } }));
     await page.route('**/api/instance/actions/upgrade-runtime', route => route.fulfill({ json: { ok: true, requires_restart: true } }));
     try {
       await page.reload();
@@ -833,10 +825,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
       const dialog = page.locator('.wb-modal[role="alertdialog"]');
       await dialog.locator('.wb-modal-acts button').last().click();
       await dialog.waitFor({ state: 'detached' });
-      const copy = JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n/wb.zh.json'), 'utf8'));
+      const copy = JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n/zh.json'), 'utf8'));
+      assert.equal(typeof copy['actions.next_start'], 'string');
       await page.locator('#action-status.modal-status.success').filter({ hasText: copy['actions.next_start'] }).waitFor({ state: 'visible' });
       await page.waitForTimeout(1700);
-      assert.equal(await dialog.count(), 0, 'stopped Origin does not ask for a restart');
+      assert.equal(await dialog.count(), 0, 'an absent or uncertain Origin does not ask for a restart');
       assert.deepEqual(restartPosts, []);
       assert.ok(reads.length > 0 && reads.every(query => query === '?include='), 'state-only Origin reads omit raw/config extras');
       assert.deepEqual(errors, []);
@@ -871,7 +864,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
       await openDashboardTab(page, 'chat');
       await page.waitForFunction(() => window.__streamSources.at(-1)?.url.includes('chat=1'));
       const count = await page.evaluate(() => window.__streamSources.length);
-      await page.evaluate(() => window.__streamSources.at(-1).onerror());
+      await page.evaluate(async () => {
+        await window.__streamSources.at(-1).onerror();
+        window.__streamFailureHandled = true;
+      });
+      await page.waitForFunction(() => window.__streamFailureHandled === true);
       assert.equal(probes, 1, 'one bounded HTTP admission probe identifies the hidden EventSource status');
       if (limited) {
         await page.waitForFunction(() => !window.__streamSources.at(-1)?.url.includes('chat=1'));
@@ -882,8 +879,9 @@ export async function runWorkbenchBrowser(t, sandbox) {
         assert.equal(await page.evaluate(() => window.__streamSources.length), count, 'generic errors retain reconnect backoff');
         await page.clock.runFor(1000);
       }
-      await page.waitForFunction(() => window.__streamSources.at(-1)?.url.includes('chat=1'));
-      assert.equal(await page.evaluate(() => window.__streamSources.length), count + (limited ? 2 : 1));
+      const expected = count + (limited ? 2 : 1);
+      await page.waitForFunction(expected => window.__streamSources.length === expected
+        && window.__streamSources.at(-1)?.url.includes('chat=1'), expected);
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   });

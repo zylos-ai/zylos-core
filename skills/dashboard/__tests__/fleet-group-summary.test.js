@@ -208,7 +208,7 @@ test('object fleet projection maps compact auth and start flags and retains unkn
   assert.deepEqual(stateToFleetRecord({}, mapped).group_summary, mapped.group_summary);
 });
 
-test('object fleet preserves starting authentication failures without guessing health for unknown groups', () => {
+test('object fleet counts authentication failures for starting and unknown running-list rows', () => {
   const instance = { session_mode: { sessionMode: 'multi' }, runtimeHealth: { codex: { health: 'auth_failed' } } };
   const counts = { readAt: 10000, listKnown: true, running: { total: 2,
     states: { working: 0, idle: 0, starting: 1, stopping: 0, unknown: 1 } } };
@@ -218,8 +218,8 @@ test('object fleet preserves starting authentication failures without guessing h
   ] };
   const usage = { today: { cost: 0 }, sevenDay: { cost: 0 } };
   const value = fleetStateFromObjects(instance, counts, usage, running).group_summary;
-  assert.deepEqual(value.counts, { busy: 0, idle: 0, waiting: 0, unknown: 1, error: 1, no_response: 0 });
-  assert.deepEqual(value.problems.map(row => [row.sessionGroup, row.reason]), [['starting', 'auth_failed']]);
+  assert.deepEqual(value.counts, { busy: 0, idle: 0, waiting: 0, unknown: 0, error: 2, no_response: 0 });
+  assert.deepEqual(value.problems.map(row => [row.sessionGroup, row.reason]), [['starting', 'auth_failed'], ['unknown', 'auth_failed']]);
   instance.runtimeHealth = { codex: { source: 'unreadable' } };
   const unreadable = fleetStateFromObjects(instance, counts, usage, running).group_summary;
   assert.equal(unreadable.counts.error, 0); assert.equal(unreadable.counts.waiting, 1); assert.equal(unreadable.counts.unknown, 1);

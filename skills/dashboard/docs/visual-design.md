@@ -219,7 +219,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Ordinary conversation push failures reconnect the conversation subscription with backoff. Only an explicit HTTP 429 admission response opens the ordinary stream while conversation polling continues; the page periodically retries the conversation subscription. Reconnect timers, admission probes and subscription changes retain their lifecycle ownership.
 
-[Current] Saving Origin model, effort or CLI settings while Origin is stopped succeeds with a next-start notice and does not submit a restart. A running Origin retains the canonical run-bound restart. Default settings show configured model and effort rather than Origin's current observations. Pool displays contain only used and capacity values, without source or capacity-calculation explanations.
+[Current] After Origin model, effort or CLI settings are saved, a stopped or uncertain Origin, an unreadable detail response, or a missing run ID produces a successful next-start notice without submitting a restart. A running Origin retains the canonical run-bound restart. Default settings show configured model and effort rather than Origin's current observations. Pool displays contain only used and capacity values, without source or capacity-calculation explanations.
 
 [Current] Runtime, connection, login, and delivery use distinct business copy; preserve the distinctions above.
 

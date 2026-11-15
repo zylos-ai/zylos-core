@@ -58,13 +58,15 @@ test('refreshing an offline list rereads the loaded page depth and retains later
 
 test('pushed counts and the current instance refresh only the group rows', async () => {
   const paths = [], counts = { running: { total: 1 }, offline: { total: 500 }, pool: { used: 1, capacity: 4 } };
-  const instance = { default_runtime: 'codex', poolCapacityRecord: { source: 'configured' } };
+  const instance = { default_runtime: 'codex' };
   const row = { id: 'a', displayName: 'A', channel: 'telegram', runtime: 'codex', model: 'example', duration: 100, mainAgent: 'working', contextPct: 25, lastActivityAt: 123, state: { kind: 'working' } };
   const snapshot = await readGroupSnapshot(async path => { paths.push(path); return { rows: [row] }; }, { counts, instance });
   assert.deepEqual(paths, ['/api/groups/running']);
   assert.equal(snapshot.groupCounts, counts);
   assert.equal(snapshot.rows[0].sessionGroup, row.id ?? row.sessionGroup);
-  assert.equal(snapshot.instance.pool.capacityRecord, instance.poolCapacityRecord);
+  assert.equal(snapshot.instance.pool, counts.pool);
+  assert.equal(Object.hasOwn(snapshot.instance, 'poolCapacityRecord'), false);
+  assert.equal(Object.hasOwn(snapshot.instance.pool, 'capacityRecord'), false);
 });
 
 const compactRunning = (id, flags = {}, runtime = 'codex') => ({ id, displayName: 'Name ' + id, channel: 'telegram', runtime, model: 'model', state: { kind: 'working' }, duration: 5, flags, mainAgent: 'working', contextPct: 20, lastActivityAt: 1 });

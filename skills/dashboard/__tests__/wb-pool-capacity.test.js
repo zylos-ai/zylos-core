@@ -79,7 +79,7 @@ function fixture(t, { record = freshRecord(), slots = [], groups = [], queues = 
 }
 
 // Integration boundary: Core's real capacity reader, a private SQLite occupancy
-// table, and real snapshot/wait/attention reducers. Run for capacity, occupancy,
+// table, and real snapshot and wait reducers. Run for capacity, occupancy,
 // queue-order or snapshot wiring changes; skip unrelated UI-only changes. The
 // official runner isolates HOME/ZYLOS_DIR; each fixture adds its own files/DB.
 // Core observations/CLI are injected; no sockets, PM2, tmux or child processes.
@@ -100,7 +100,7 @@ for (const mode of ['single', 'unreadable']) for (const hasSample of [true, fals
     assert.deepEqual(snapshot.instance.pool, hasSample
       ? { ...sample, capacity: null, used: 30 }
       : { ready: null, starting: null, reclaiming: null, waiting: null, capacity: null, used: null });
-    assert.equal(snapshot.attention.reminders.some(reminder => reminder.kind === 'pool_full'), false);
+    assert.equal(Object.hasOwn(snapshot, 'attention'), false);
     const waiting = snapshot.rows.find(row => row.sessionGroup === waitingGroup);
     assert.equal(waiting.presence, 'not_running');
     assert.equal(waiting.queue.pending.count, 1);
@@ -108,7 +108,7 @@ for (const mode of ['single', 'unreadable']) for (const hasSample of [true, fals
   });
 }
 
-test('snapshot joins real capacity and occupancy into inbound positions and one full reminder without writes', async t => {
+test('snapshot joins real capacity and occupancy into inbound positions without writes or reminder lists', async t => {
   const f = fixture(t, { slots: [{ group: 'used-a' }, { group: 'used-b' }, { group: 'used-c' }],
     queues: [pending('c', 2, 2), pending('origin', 0, 1), pending('b', 1, 9)] });
   const observer = new Database(path.join(f.root, 'comm-bridge/c4.db'), { readonly: true });
@@ -124,7 +124,7 @@ test('snapshot joins real capacity and occupancy into inbound positions and one 
   assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'b').wait, { kind: 'pool_wait', position: 1 });
   assert.deepEqual(snapshot.rows.find(row => row.sessionGroup === 'c').wait, { kind: 'pool_wait', position: 2 });
   assert.notEqual(snapshot.rows.find(row => row.sessionGroup === 'origin').wait?.kind, 'pool_wait');
-  assert.deepEqual(snapshot.attention.reminders, [{ kind: 'pool_full', waiting: 2 }]);
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
   assert.equal(observer.pragma('data_version', { simple: true }), beforeVersion);
   assert.equal(fs.readFileSync(f.file).equals(beforeFile), true);
   assert.equal(f.calls(), 1);
@@ -153,14 +153,14 @@ test('unexpired owners, present and activating groups do not consume inbound pos
   assert.equal(get('continuation').wait, null);
 });
 
-// Integration: queue fence joins snapshot waiting and attention. Run for fence
+// Integration: queue fence joins snapshot waiting observations. Run for fence
 // or pool-wait wiring changes; skip UI-only work. No external resources.
-test('global fence prevents all pool waits and full reminder even with full occupancy', async t => {
+test('global fence prevents all pool waits even with full occupancy', async t => {
   const f = fixture(t, { slots: [{ group: 'a' }, { group: 'b' }, { group: 'c' }], queues: [pending('waiting', 1, 2)],
     globalFence: { reason: 'mode_switch', createdAt: NOW / 1000 } });
   const snapshot = await f.service.getSnapshot();
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'waiting').wait.kind, 'fenced');
-  assert.equal(snapshot.attention.reminders.length, 0);
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
 });
 
 // Integration: real readonly SQL and snapshot cover expiry boundaries. Run for
@@ -173,7 +173,7 @@ test('occupancy counts running and only held rows strictly beyond the current se
   const snapshot = await f.service.getSnapshot();
   assert.equal(snapshot.instance.pool.used, 2);
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'waiting').wait.reason, 'no_rule');
-  assert.equal(snapshot.attention.reminders.length, 0);
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
 });
 
 // Integration: Core rereads fixture publication without a Dashboard cache. Run
@@ -253,9 +253,9 @@ test('capacity is reevaluated for freshness without a Dashboard cache', async t 
 });
 
 // Integration: missing private table fails through real reader to snapshot and
-// attention, preserving startup-failure priority. Run for occupancy error paths;
+// waiting observations, preserving startup-failure priority. Run for occupancy error paths;
 // skip UI-only work. The DROP affects only this test-owned database.
-test('unreadable occupancy is unknown and startup failure still wins without full reminder', async t => {
+test('unreadable occupancy is unknown and startup failure still wins without backend reminders', async t => {
   const f = fixture(t, { queues: [pending('waiting', 1, 1), pending('failed', 1, 2)],
     events: [{ session_group: 'failed', event_type: 'activate_failed', timestamp: NOW, metadata: { reason: 'ready_timeout' } }] });
   f.db.exec('DROP TABLE slot_occupancy');
@@ -264,7 +264,7 @@ test('unreadable occupancy is unknown and startup failure still wins without ful
   assert.equal(snapshot.instance.pool.reason, 'pool_occupancy_unreadable');
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'waiting').wait.reason, 'pool_occupancy_unreadable');
   assert.equal(snapshot.rows.find(row => row.sessionGroup === 'failed').wait.kind, 'start_failed');
-  assert.equal(snapshot.attention.reminders.length, 0);
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
 });
 
 test('snapshot ranking uses priority before id and excludes only observed queue ineligibility', () => {

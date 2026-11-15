@@ -5,7 +5,7 @@ import { renderAttention } from '../public/js/wb/attention-bar.js';
 import { waitText } from '../public/js/wb/view-mode.js';
 import { detailNumbers, renderOverview } from '../public/js/wb/detail-overview.js';
 import { renderDistribution } from '../public/js/wb/board.js';
-import { poolBuckets, systemItems } from '../public/js/wb/instance-strip.js';
+import { systemItems } from '../public/js/wb/instance-strip.js';
 import { createMemoryScope } from '../public/js/wb/memory-scope.js';
 import { renderDefaults, runtimeConfirmation } from '../public/js/wb/settings-defaults.js';
 import { mountSchedule } from '../public/js/wb/schedule.js';
@@ -35,7 +35,6 @@ for (const count of [1, 2]) {
     assert.ok(root.textContent.includes(`${count} background subtask${noun}`), root.textContent);
     assert.ok(root.textContent.includes(`Memory: ${count} new conversation${noun} to save`));
     assert.ok(systemItems(document, { cpu_count: count, cpu_pct: 10, sampledAt: 100 }, { t, readAt: 100 }).some(item => item.title.includes(`${count} core${noun}`)));
-    assert.equal(poolBuckets({ model: { buckets: [{ n: 7, highBytes: 1073741824, hours: 3, samples: count }] } }, t)[0], `Session count 7: typical peak 1.00\u00a0GiB (3\u00a0h, ${count}\u00a0sample${noun})`);
   });
   test(`Workbench defaults render English count ${count}`, () => {
     const document = documentFixture(), root = document.createElement('div');

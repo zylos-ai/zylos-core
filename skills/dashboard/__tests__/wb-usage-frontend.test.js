@@ -178,14 +178,18 @@ test('host plain current values and technical curves preserve null gaps and peak
 });
 test('host panel shows the board snapshot pool in both views and follows a new snapshot on redraw', async () => {
   const f = fixture(), data = { current: {}, pm2: { online: 1, total: 1 }, series: [] }; let level = 'plain';
-  let view = { mode: 'multi', pool: { used: 2, capacity: 3, capacityRecord: { valid: true, fresh: true, source: 'auto', reason: 'floor' } } };
+  let view = { mode: 'multi', pool: { used: 2, capacity: 3 } };
+  Object.defineProperty(view.pool, 'capacityRecord', { get() { throw Error('capacity provenance must not be read'); } });
   const panel = createHostPanel({ ...f, read: async () => data, detail: () => level, pool: () => view });
   const section = () => allNodes(f.root).find(node => node.classList.contains('wb-host-pool'));
   await panel.open();
   assert.equal(section().hidden, false); assert.ok(section().textContent.includes('2 / 3'));
-  assert.ok(section().textContent.includes('wb.inst.poolAuto')); assert.ok(section().textContent.includes('wb.inst.poolFloor'));
+  assert.doesNotMatch(section().textContent, /wb\.inst\.pool(?:Auto|Floor)/);
+  assert.equal(allNodes(section()).some(node => ['UL', 'LI'].includes(node.tagName)), false);
   level = 'technical'; panel.setViewDetail(); assert.equal(f.configs.length, 3);
-  assert.equal(section().hidden, false); assert.ok(section().textContent.includes('wb.inst.poolFloor'));
+  assert.equal(section().hidden, false); assert.ok(section().textContent.includes('2 / 3'));
+  assert.doesNotMatch(section().textContent, /wb\.inst\.pool(?:Auto|Floor)/);
+  assert.equal(allNodes(section()).some(node => ['UL', 'LI'].includes(node.tagName)), false);
   // The shell redraws the open panel on every board snapshot (setViewDetail); the section reads the pool then.
   view = { mode: 'multi', pool: { ...view.pool, used: 3 } }; panel.setViewDetail();
   assert.ok(section().textContent.includes('3 / 3'));

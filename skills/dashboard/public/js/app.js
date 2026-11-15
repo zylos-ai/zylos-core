@@ -2943,10 +2943,11 @@ async function sendAction(action, body) {
     }
     if (result.refreshState) await refreshState();
     if (result.ok && result.requires_restart) {
-      const origin = await fetchJson('/api/groups/origin?include=');
+      let origin;
+      try { origin = await fetchJson('/api/groups/origin?include='); }
+      catch { /* The configuration was saved even if its current session cannot be read. */ }
       if (observerTargetKey() !== targetKey) return false;
-      state.originGroup = origin;
-      if (origin.presence === 'not_running') {
+      if (origin?.presence !== 'running' || !origin.live?.runId) {
         if (statusEl) {
           statusEl.hidden = false;
           statusEl.className = 'modal-status success';
@@ -2954,6 +2955,7 @@ async function sendAction(action, body) {
         }
         return true;
       }
+      state.originGroup = origin;
       await new Promise(r => setTimeout(r, 1500));
       if (observerTargetKey() !== targetKey) return false;
       if (statusEl) statusEl.hidden = true;

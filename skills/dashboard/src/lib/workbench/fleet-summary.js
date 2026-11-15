@@ -8,8 +8,9 @@ export function fleetGroupSummary(snapshot) {
     // Compact flags carry the existing error observations. Queue waits, stale
     // samples and read failures are not themselves runtime errors.
     const runtime = row.runtime ?? row.target?.runtime ?? row.live?.runtime;
+    // Unknown activity does not erase an independently observed authentication failure.
     const authFailed = row.flags?.blocked?.reason === 'auth_failed' ||
-      ['running', 'starting'].includes(row.presence) && snapshot.instance?.runtimeHealth?.[runtime]?.health === 'auth_failed';
+      ['running', 'starting', 'unknown'].includes(row.presence) && snapshot.instance?.runtimeHealth?.[runtime]?.health === 'auth_failed';
     const error = authFailed ? 'auth_failed'
       : row.flags?.startFailed || row.state?.kind === 'error' ? 'start_failed' : null;
     // A group the supervisor reminded and that has not responded since; an error outranks it.
