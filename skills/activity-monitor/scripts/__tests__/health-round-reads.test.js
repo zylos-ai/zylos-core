@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createSupervisor } from '../supervisor.js';
@@ -39,7 +40,7 @@ function fixture(t) {
     listSlotOccupancy: () => [], pruneSlots: () => ({ deletedHeld: 0, deletedOrphans: [] }),
     listPendingContinuations: () => [], listRunEndings: () => [], getLastCompletedModeTransition: () => null,
     listPendingSessionGroups: () => [], getControlById: () => null,
-    getLastActivity: () => now / 1000,
+    getLastActivity: () => now,
     getUnsummarizedRange: () => ({ count: 0, firstAt: null }),
     getOriginSyncBacklog: () => ({ total: 0, groups: [] }),
     resolveSessionLaunchConfig: ({ sessionGroup }) => current.find(scene => scene.sessionGroup === sessionGroup).launchConfig,
@@ -152,4 +153,55 @@ test('real round maintenance prunes deleted group history and protects queued an
   assert.equal(Object.hasOwn(after.groups, deleted), false);
   for (const group of [live, pending, continuation]) assert.deepEqual(after.groups[group], evidence);
   assert.deepEqual(errors, []);
+});
+
+
+// Boundary: real maintenance error handling, the next runtime and log rotation.
+// Run when health cleanup or maintenance ordering changes; unrelated UI/dispatch
+// changes may skip it. The official runner isolates HOME/ZYLOS_DIR/PM2_HOME and
+// short TMPDIR; this fixture owns all files, injects DB/scenes/timers and uses no
+// tmux, service or network. Its cleanup and supervisor stop are bound to t.after.
+test('directory permission failure retains evidence and lets other runtime cleanup and log rotation finish',async t=>{
+  const {root,errors,supervisor,now}=fixture(t);
+  assert.notEqual(process.env.HOME,os.userInfo().homedir);
+  assert.ok(path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep));
+  t.diagnostic(JSON.stringify({HOME:process.env.HOME,ZYLOS_DIR:process.env.ZYLOS_DIR,
+    PM2_HOME:process.env.PM2_HOME,TMPDIR:process.env.TMPDIR,root,tmux:'unused',database:'injected'}));
+  const unreadable='chat:unreadable',deleted='chat:deleted-codex';
+  const env={ZYLOS_DIR:root},unreadableDir=groupRunDir(unreadable,env);
+  fs.mkdirSync(unreadableDir,{recursive:true});
+  const evidence={last_processed:{received_at:now(),event_id:'recent-terminal'},
+    last_notice_outcome:{event_id:'recent-terminal',status:'sent',observed_at:now()}};
+  for(const [runtime,group] of [['claude',unreadable],['codex',deleted]]) {
+    const store=supervisor.health.store(runtime),state=store.read();
+    state.groups[group]=structuredClone(evidence);store.write(state);
+    assert.deepEqual(store.read().groups[group],evidence);
+  }
+  const claudeFile=supervisor.health.store('claude').file;
+  const before=fs.readFileSync(claudeFile,'utf8');
+  const logDir=groupRunDir('chat:log-maintenance',env),logFile=path.join(logDir,'events.jsonl');
+  fs.mkdirSync(logDir,{recursive:true});
+  const fd=fs.openSync(logFile,'w');
+  try {fs.ftruncateSync(fd,10*1024*1024+1);}finally{fs.closeSync(fd);}
+  let denied=0;
+  const stat=fsPromises.stat;
+  t.mock.method(fsPromises,'stat',async function(file,...args){
+    if(String(file)===unreadableDir) {
+      denied++;
+      throw Object.assign(new Error('Fixture directory access denied'),{code:'EACCES'});
+    }
+    return Reflect.apply(stat,this,[file,...args]);
+  });
+  await supervisor.loop.runRound();
+  await supervisor.drainHealthWrites();
+  assert.equal(denied,1,'real cleanup checked the protected directory');
+  assert.deepEqual(supervisor.health.store('claude').read().groups[unreadable],evidence);
+  assert.equal(fs.readFileSync(claudeFile,'utf8'),before);
+  assert.deepEqual(errors.map(({error,phase,runtime})=>({error,phase,runtime})),
+    [{error:'EACCES',phase:'health-maintenance',runtime:'claude'}]);
+  const codex=supervisor.health.store('codex');
+  assert.equal(Object.hasOwn(codex.read().groups,deleted),false);
+  assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(codex.file,'utf8')).hook.groups,deleted),false);
+  assert.equal(fs.existsSync(logFile),false);
+  assert.equal(fs.statSync(path.join(logDir,`events.${now()}.jsonl`)).size,10*1024*1024+1);
 });
