@@ -245,8 +245,6 @@ function sanitizeRecord(record) {
     rate_limit_7d_pct: record.rate_limit_7d_pct ?? null,
     rate_limit_7d_recorded_at: record.rate_limit_7d_recorded_at ?? null,
     rate_limit_7d_live: record.rate_limit_7d_live ?? null,
-    cost: record.cost,
-    session_cost: record.session_cost,
     daily_cost: record.daily_cost,
     weekly_cost: record.weekly_cost,
     cpu_pct: record.cpu_pct,
@@ -303,8 +301,6 @@ export function stateToFleetRecord(agentConfig = {}, statePayload = {}, opts = {
     rate_limit_7d_pct: statePayload?.rate_limit_7d_pct ?? null,
     rate_limit_7d_recorded_at: statePayload?.rate_limit_7d_recorded_at ?? null,
     rate_limit_7d_live: statePayload?.rate_limit_7d_live ?? null,
-    cost: statePayload?.session_cost ?? metricValue(statePayload, 'session_cost'),
-    session_cost: statePayload?.session_cost ?? metricValue(statePayload, 'session_cost'),
     daily_cost: statePayload?.daily_cost ?? metricValue(statePayload, 'daily_cost'),
     weekly_cost: statePayload?.weekly_cost ?? null,
     cpu_pct: numberOrNull(systemMetrics?.cpu_pct),
@@ -340,12 +336,11 @@ export function fleetStateFromObjects(instance, counts, usage, running) {
   // Compact catalog rows carry state and flags, never raw process observations.
   // The established summary helper still owns precedence and bounded problems.
   const summaryRows = running.rows.map(row => ({
-    sessionGroup: row.id, presence: 'running',
+    sessionGroup: row.id, presence: row.state?.kind === 'unknown' ? 'unknown' : row.state?.kind === 'starting' ? 'starting' : 'running', runtime: row.runtime,
     name: row.displayName ? { displayName: row.displayName } : null,
     state: { kind: ({ working: 'busy', starting: 'waiting', stopping: 'waiting' }[row.state?.kind] ?? row.state?.kind) },
     noResponse: row.flags?.noResponse && Number.isFinite(Date.parse(row.flags.noResponse.since)) ? { since: Date.parse(row.flags.noResponse.since) } : null,
-    attention: row.flags?.blocked?.reason === 'auth_failed' ? [{ kind: 'auth_failed' }]
-      : row.flags?.startFailed ? [{ kind: 'start_failed' }] : [],
+    flags: row.flags,
   }));
   return { agent: instance.agent, session_mode: mode,
     state: mode === null || counts.listKnown === false ? 'UNKNOWN' : states.working > 0 ? 'BUSY' : states.unknown > 0 ? 'UNKNOWN' : 'IDLE',
@@ -356,7 +351,7 @@ export function fleetStateFromObjects(instance, counts, usage, running) {
       codex_update: instance.versions?.codex?.update ?? null },
     system_metrics: instance.resources,
     group_summary: fleetGroupSummary({ mode, readAt: counts.readAt, listKnown: counts.listKnown,
-      rows: summaryRows, groupCounts: counts, instance: { pool: counts.pool, autoRestarts: instance.autoRestarts } }),
+      rows: summaryRows, groupCounts: counts, instance: { pool: counts.pool, autoRestarts: instance.autoRestarts, runtimeHealth: instance.runtimeHealth } }),
     rate_limit_7d_pct: account?.used_percentage ?? account?.usedPercentage ?? null,
     rate_limit_7d_live: account?.live ?? null, rate_limit_7d_recorded_at: account?.recordedAt ?? null,
     daily_cost: usage.today.cost, weekly_cost: usage.sevenDay.cost };
@@ -401,8 +396,6 @@ export class FleetPoller {
         hue: color.hue,
         state: 'UNKNOWN',
         activity: null,
-        cost: null,
-        session_cost: null,
         daily_cost: null,
         weekly_cost: null,
         cpu_pct: null,
@@ -467,8 +460,6 @@ export class FleetPoller {
       hue: color.hue,
       state: 'UNKNOWN',
       activity: null,
-      cost: null,
-      session_cost: null,
       daily_cost: null,
       weekly_cost: null,
       cpu_pct: null,
@@ -1061,8 +1052,6 @@ export class FleetPoller {
       hue: color.hue,
       state: reason === 'version_unsupported' ? 'UNKNOWN' : 'OFFLINE',
       activity: null,
-      cost: existing.cost ?? null,
-      session_cost: existing.session_cost ?? null,
       daily_cost: existing.daily_cost ?? null,
       weekly_cost: existing.weekly_cost ?? null,
       cpu_pct: existing.cpu_pct ?? null,

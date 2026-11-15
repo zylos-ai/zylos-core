@@ -80,7 +80,9 @@ test('group events HTTP preserves scoped pagination, unassigned Origin history, 
     assert.deepEqual((await get('session_group=origin&limit=2')).events.map(row => row.id), ['event-1', 'event-3']);
     assert.deepEqual((await get('session_group=&run_id=run-a&session_id=session-a&runtime=codex&types=x&limit=2&offset=2')).events.map(row => row.id), ['event-5', 'event-7']);
     assert.deepEqual((await get('session_group=&until=2025-12-31T23:59:59Z')).events, []);
-    assert.equal(unassigned.gaps.length, 0);
+    assert.equal(unassigned.gaps.length, 1);
+    assert.equal(unassigned.gaps[0].extra.stream, 'events:origin');
+    assert.equal(JSON.stringify(unassigned.gaps).includes(secret), false);
     assert.equal((await get('run_id=nonexistent')).count, 0);
     const after = await get('after_seq=1002');
     const unassignedAfter = await get('session_group=&after_seq=1002');

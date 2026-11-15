@@ -35,7 +35,7 @@ export function groupSnapshot(instance, counts, page) {
     readAt: counts.readAt, listKnown: counts.listKnown !== false && page.listKnown !== false, rows,
     counts: { ...counts.running?.states, offline: counts.offline?.total ?? 0 },
     groupCounts: counts, nextCursor: page.nextCursor ?? null, hasOlder: page.nextCursor != null, overrides: null,
-    instance: { ...instance, pool: instance.poolCapacityRecord == null ? counts.pool : { ...counts.pool, capacityRecord: instance.poolCapacityRecord } },
+    instance: { ...instance, pool: counts.pool },
     failedRows, attentionFailures: page.attentionFailures ?? [],
     sources: { status: { ok: counts.listKnown !== false && page.listKnown !== false, readAt: page.readAt ?? counts.readAt } },
     attention: groupAttention(instance, counts, rows, failedRows, [...(page.attentionFailures ?? []), ...(page.listKnown === false ? ['groups'] : [])]) };
@@ -81,7 +81,7 @@ export function instanceActionRequest(action, body = {}) {
   if (groups[action]) return { method: 'POST', path: '/api/groups/origin/actions/' + groups[action], body };
   const actions = { 'switch-mode': 'switch-mode', 'switch-runtime': 'switch-runtime', 'upgrade-zylos': 'upgrade', 'upgrade-cc': 'upgrade-runtime' };
   if (actions[action]) return { method: 'POST', path: '/api/instance/actions/' + actions[action], body };
-  // Timezone service restart remains in the settings migration's later step.
+  // Timezone service restart remains in the existing settings API.
   if (action === 'restart-timezone-services') return { method: 'POST', path: '/api/actions/restart-timezone-services', body };
   throw Error('unknown_action');
 }

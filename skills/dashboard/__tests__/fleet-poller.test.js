@@ -87,8 +87,8 @@ test('fleet poller exchanges token and derives safe agent records', async () => 
   assert.equal(fleet.agents[0].rate_limit_7d_recorded_at, 1000);
   assert.equal(fleet.agents[0].activity, null, 'compact rows do not expose tool details');
   assert.equal(Object.hasOwn(fleet.agents[0], 'context_pct'), false);
-  assert.equal(fleet.agents[0].cost, null, 'object APIs do not provide a session cost');
-  assert.equal(fleet.agents[0].session_cost, null);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'cost'), false);
+  assert.equal(Object.hasOwn(fleet.agents[0], 'session_cost'), false);
   assert.equal(fleet.agents[0].daily_cost, 4.56);
   assert.equal(fleet.agents[0].weekly_cost, 7.89);
   assert.equal(Object.hasOwn(fleet.agents[0], 'model'), false);
@@ -663,8 +663,8 @@ test('stateToFleetRecord produces a secret-free self record from local API state
   assert.equal(record.state, 'BUSY');
   assert.equal(record.activity, null, 'Fleet ignores Origin tool details');
   assert.equal(Object.hasOwn(record, 'context_pct'), false);
-  assert.equal(record.cost, 1.23);
-  assert.equal(record.session_cost, 1.23);
+  assert.equal(Object.hasOwn(record, 'cost'), false);
+  assert.equal(Object.hasOwn(record, 'session_cost'), false);
   assert.equal(record.daily_cost, 4.56);
   assert.equal(record.weekly_cost, 7.89);
   assert.equal(Object.hasOwn(record, 'model'), false);
@@ -683,7 +683,7 @@ test('stateToFleetRecord produces a secret-free self record from local API state
   assert.equal(JSON.stringify(record).includes('zylos_st_'), false);
 });
 
-test('stateToFleetRecord consumes API snake_case cost tiers directly (#174)', () => {
+test('stateToFleetRecord consumes daily and weekly costs without exposing a session cost', () => {
   const record = stateToFleetRecord({
     name: 'test',
     color: agentColor('test')
@@ -696,7 +696,7 @@ test('stateToFleetRecord consumes API snake_case cost tiers directly (#174)', ()
     self: true,
     nowMs: 0
   });
-  assert.equal(record.session_cost, 1.23);
+  assert.equal(Object.hasOwn(record, 'session_cost'), false);
   assert.equal(record.daily_cost, 4.56);
   assert.equal(record.weekly_cost, 7.89);
 });
@@ -871,7 +871,7 @@ test('fleet poller SSE uses Bearer auth and groups updates records', async () =>
   const record = poller.getFleet().agents[0];
   assert.equal(record.state, 'BUSY');
   assert.equal(Object.hasOwn(record, 'context_pct'), false);
-  assert.equal(record.session_cost, null);
+  assert.equal(Object.hasOwn(record, 'session_cost'), false);
   assert.ok(calls.some(c => c.url.endsWith('/api/stream') && c.authorization === 'Bearer zylos_st_stream'));
 });
 

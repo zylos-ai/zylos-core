@@ -682,14 +682,14 @@ test('fleet tile activity feed falls back to legacy single-line activity', () =>
   assert.match(html, /Prompt from lark/);
 });
 
-test('a thinking feed entry counts the machine as working and labels it thinking', () => {
+test('Fleet aggregate busy keeps Working without inferring a thinking observation', () => {
   const fleet = { agents: [{ name: 'a', state: 'BUSY', activity: 'Prompt from lark', activity_feed: [{ kind: 'thinking', label: null, started_at: null }] }] };
   const view = buildAgentFleetView(fleet);
-  assert.equal(view.tiles[0].mood, 'thinking');
-  assert.equal(view.tiles[0].stateLabel, 'Thinking');
+  assert.equal(view.tiles[0].mood, 'busy');
+  assert.equal(view.tiles[0].stateLabel, 'Working');
   const html = renderAgentFleetHtml(fleet);
-  assert.match(html, /data-state="thinking"/);
-  assert.match(html, /<span class="wb-pill wb-busy" data-mood="thinking"><span class="wb-dot"><\/span>Thinking<\/span>/);
+  assert.match(html, /data-state="busy"/);
+  assert.match(html, /<span class="wb-pill wb-busy" data-mood="busy"><span class="wb-dot"><\/span>Working<\/span>/);
   assert.match(html, /1 Working/);
 });
 
@@ -2163,6 +2163,7 @@ function workbenchHarness(context, read, options = {}) {
   const document = wbDocument(), listeners = new Map(), windowListeners = new Map();
   const selectors = ['#wb-board', '#wb-search', '#wb-range', '#wb-detail-toggle', '#observer-tab', '#wb-instance', '#wb-attention', '#wb-side', '#wb-auto-name', '#wb-auto-name-dialog', '#tab-overview', '#agent-detail'];
   const nodes = new Map(selectors.map(selector => [selector, document.createElement('div')]));
+  nodes.get('#tab-overview').append(nodes.get('#wb-board'));
   nodes.get('#wb-side').hidden = true;
   nodes.get('#tab-overview').className = 'active'; document.visibilityState = options.hidden ? 'hidden' : 'visible';
   document.querySelector = selector => nodes.get(selector);
@@ -2799,8 +2800,8 @@ test('group count pushes refresh rows without reading instance or counts again',
 test('locating an offline group finds its row beyond the first offline page', async context => {
   const selected = { sessionGroup: 'telegram:later', name: { displayName: 'Later conversation' }, state: { kind: 'offline' } };
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path === '/api/groups/telegram%3Alater') return selected;
-    if (path === '/api/groups/offline') return { rows: [], nextCursor: 'second' };
+    if (path === '/api/groups/telegram%3Alater?include=') return selected;
+    if (path === '/api/groups/offline') return { rows: [{ id: 'telegram:first', displayName: 'First conversation', channel: 'telegram', flags: {}, lastActivityAt: null }], nextCursor: 'second' };
     return fallback(path);
   });
   await wbTick(); await wbTick();
@@ -2813,13 +2814,18 @@ test('locating an offline group finds its row beyond the first offline page', as
   assert.equal(h.document.activeElement, board.children[0]);
   assert.equal(scrolled[0].element, board.children[0]);
   assert.deepEqual(scrolled[0].options, { block: 'center' });
+  const sides = h.nodes.get('#tab-overview').querySelectorAll('.wb-group-sides')[0];
+  sides.children[1].dispatch('click'); await wbTick(); await wbTick();
+  assert.equal(board.children[0].dataset.group, 'telegram:first', 'clicking the current offline side clears the located one-row view');
+  assert.equal(wbName(board.children[0]), 'First conversation');
+  assert.ok(h.calls.includes('/api/groups/telegram%3Alater?include='), 'locating a group does not request raw/config extras');
 });
 
 test('a late offline locate cannot switch the side after a newer group selection', async context => {
   const late = wbDeferred();
   const h = workbenchHarness(context, (path, fallback) => {
-    if (path === '/api/groups/telegram%3Aold') return late.promise;
-    if (path === '/api/groups/a') return workbenchSnapshot().rows[0];
+    if (path === '/api/groups/telegram%3Aold?include=') return late.promise;
+    if (path === '/api/groups/a?include=') return workbenchSnapshot().rows[0];
     return fallback(path);
   });
   await wbTick(); await wbTick();

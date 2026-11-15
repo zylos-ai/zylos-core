@@ -376,42 +376,15 @@ const poolTranslations = Object.fromEntries(['zh', 'en'].map(locale => [locale,
 const poolTranslator = locale => (key, values = {}) => (poolTranslations[locale][key] ?? key)
   .replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(values, name) ? String(values[name]) : match);
 
-test('pool source distinguishes fresh, expired, missing, invalid and fallback records in both views and languages', () => {
-  const cases = [
-    { capacityRecord: { valid: true, fresh: true, source: 'auto' }, capacity: 3,
-      zh: '按内存自动', en: 'Automatic, based on memory' },
-    { capacityRecord: { valid: true, fresh: false, source: 'auto' }, capacity: 2,
-      zh: '上限数据已过期，按 2 运行', en: 'Capacity data expired; running with a limit of 2' },
-    { capacityRecord: null, capacity: 5,
-      zh: '上限数据不可用，按 5 运行', en: 'Capacity data unavailable; running with a limit of 5' },
-    { capacityRecord: { valid: false, fresh: false, source: 'fallback' }, capacity: 4,
-      zh: '上限数据不可用，按 4 运行', en: 'Capacity data unavailable; running with a limit of 4' },
-    { capacityRecord: { valid: true, fresh: true, source: 'fallback' }, capacity: 1,
-      zh: '内存读数不可用，按 1 运行', en: 'Memory reading unavailable; running with a limit of 1' },
-    { capacityRecord: { valid: true, fresh: true, source: 'fixed', kMemory: 3 }, capacity: 6,
-      zh: '手动设定 6（按内存建议 3）', en: 'Manually set to 6 (memory recommendation: 3)' },
-    { capacityRecord: { valid: true, fresh: true, source: 'fixed', kMemory: 3 }, capacity: 3,
-      zh: '手动设定', en: 'Manually set' },
-    { capacityRecord: { valid: true, fresh: false, source: 'fallback' }, capacity: 2,
-      zh: '上限数据已过期，按 2 运行', en: 'Capacity data expired; running with a limit of 2' },
-  ];
-  for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) for (const sample of cases) {
+test('pool occupancy ignores retired capacity provenance in both languages and views', () => {
+  for (const locale of ['zh', 'en']) for (const level of ['plain', 'technical']) {
     const document = createDocument(), root = document.createElement('div');
-    instanceStrip(root, { mode: 'multi', instance: { pool: { used: sample.capacity, capacity: sample.capacity,
-      capacityRecord: sample.capacityRecord } } }, { document, t: poolTranslator(locale), level });
-    // On screen the occupancy only; the title names the pool, what is in use and where the limit comes from.
-    const pool = root.children.find(node => node.classList.contains('wb-pool'));
-    const name = poolTranslations[locale][level === 'technical' ? 'wb.inst.pool' : 'wb.pool'];
-    assert.equal(shown(pool), `${sample.capacity} / ${sample.capacity}`, `${locale}/${level}`);
-    assert.equal(pool.title, [name, `${locale === 'zh' ? '在用' : 'in use'} ${sample.capacity} / ${sample.capacity}`, sample[locale],
-      level === 'technical' && sample.capacityRecord?.fresh === true && sample.capacityRecord?.source === 'fixed'
-        ? poolTranslations[locale]['wb.inst.poolDecisionFixed'] : '',
-      poolTranslations[locale]['wb.inst.poolHint']].filter(Boolean).join(' · '), `${locale}/${level}: ${sample[locale]}`);
-    if (sample.capacity !== 1) assert.ok(!pool.title.includes(poolTranslations[locale]['wb.inst.poolFallback']));
-    if (sample.capacityRecord?.source === 'fixed' && sample.capacity === sample.capacityRecord.kMemory) {
-      assert.doesNotMatch(pool.title, /按内存建议|memory recommendation/);
-    }
-    assert.doesNotMatch(root.textContent + pool.title, /wb\.inst\.pool(?:Auto|Fixed|Fallback|Expired|Unavailable)/);
+    const pool = { used: 2, capacity: 4 };
+    Object.defineProperty(pool, 'capacityRecord', { get() { throw Error('retired capacity provenance must not be read'); } });
+    instanceStrip(root, { mode: 'multi', instance: { pool } }, { document, t: poolTranslator(locale), level });
+    const item = allNodes(root).find(node => node.classList.contains('wb-pool'));
+    assert.equal(shown(item), '2 / 4');
+    assert.doesNotMatch(item.title, /memory recommendation|按内存|上限数据|capacity data/i);
   }
 });
 
@@ -425,21 +398,21 @@ test('instance strip shows icons and values; every title starts with the item, i
   const expected = {
     zh: {
       technical: [['multi', '模式'], ['Claude58%', 'Claude · 正常 · 7 天额度剩余 58%'],
-        ['2 / 4', '池 · 在用 2 / 4 · 上限数据不可用，按 4 运行 · Origin 常驻，不占这里的名额'],
+        ['2 / 4', '池 · 在用 2 / 4 · Origin 常驻，不占这里的名额'],
         ['23%', 'CPU 23% · 8 核'], ['13%', '内存 13% · 已用 2.0 / 16.0 GiB'], ['62%', '磁盘 62% · 剩余 40.3 GiB'],
         ['$1.50·$9.20', '费用 · 今日 $1.50 · 近 7 天 $9.20 · 全部组合计'], ['6 / 6', '服务 · 6 / 6 在线']],
       plain: [['多组并行', '模式'], ['Claude58%', 'Claude · 正常 · 7 天额度剩余 58%'],
-        ['2 / 4', '同时运行 · 在用 2 / 4 · 上限数据不可用，按 4 运行 · Origin 常驻，不占这里的名额'],
+        ['2 / 4', '同时运行 · 在用 2 / 4 · Origin 常驻，不占这里的名额'],
         ['23%', 'CPU 23% · 8 核'], ['13%', '内存 13% · 已用 2.0 / 16.0 GiB'], ['62%', '磁盘 62% · 剩余 40.3 GiB'],
         ['$1.50', '今日费用 · $1.50 · 全部组合计'], ['6 / 6', '后台服务 · 6 / 6 在线']],
     },
     en: {
       technical: [['multi', 'Mode'], ['Claude58%', 'Claude · OK · 7-day quota remaining 58%'],
-        ['2 / 4', 'Pool · in use 2 / 4 · Capacity data unavailable; running with a limit of 4 · Origin is resident and does not take a slot here'],
+        ['2 / 4', 'Pool · in use 2 / 4 · Origin is resident and does not take a slot here'],
         ['23%', 'CPU 23% · 8 cores'], ['13%', 'Memory 13% · 2.0 / 16.0 GiB used'], ['62%', 'Disk 62% · 40.3 GiB free'],
         ['$1.50·$9.20', 'Cost · today $1.50 · 7 days $9.20 · All groups combined'], ['6 / 6', 'Services · 6 / 6 online']],
       plain: [['Multiple groups', 'Mode'], ['Claude58%', 'Claude · OK · 7-day quota remaining 58%'],
-        ['2 / 4', 'Running together · in use 2 / 4 · Capacity data unavailable; running with a limit of 4 · Origin is resident and does not take a slot here'],
+        ['2 / 4', 'Running together · in use 2 / 4 · Origin is resident and does not take a slot here'],
         ['23%', 'CPU 23% · 8 cores'], ['13%', 'Memory 13% · 2.0 / 16.0 GiB used'], ['62%', 'Disk 62% · 40.3 GiB free'],
         ['$1.50', 'Cost today · $1.50 · All groups combined'], ['6 / 6', 'Background services · 6 / 6 online']],
     },
@@ -496,12 +469,12 @@ test('pool renders actual occupancy above capacity and preserves sampled waiting
   assert.equal(meter.classList.contains('wb-warn'), true);
   const pool = root.children.find(node => node.classList.contains('wb-pool'));
   assert.equal(allNodes(pool).find(node => node.tagName === 'B').classList.contains('wb-txt-warn'), true, 'a full pool is a warning');
-  assert.equal(pool.title, '池 · 在用 4 / 3 · 按内存自动 · 7 排队 · Origin 常驻，不占这里的名额');
+  assert.equal(pool.title, '池 · 在用 4 / 3 · 7 排队 · Origin 常驻，不占这里的名额');
   instanceStrip(root, { mode: 'multi', instance: { pool: { used: null, capacity: 3,
     capacityRecord: { valid: true, fresh: true, source: 'auto' } } } }, { document, t: poolTranslator('zh'), level: 'technical' });
   const unknownPool = root.children.find(node => node.classList.contains('wb-pool'));
   assert.equal(shown(unknownPool), '—');
-  assert.equal(unknownPool.title, '池 · 未知 · 按内存自动 · Origin 常驻，不占这里的名额');
+  assert.equal(unknownPool.title, '池 · 未知 · Origin 常驻，不占这里的名额');
   assert.equal(allNodes(root).some(node => node.classList.contains('wb-pool-meter')), false);
 });
 
@@ -531,163 +504,26 @@ for (const capacity of [2, 256]) for (const used of [0, 1, capacity]) {
   });
 }
 
-test('pool explanations show only usable published values in the host panel, not in the strip', () => {
-  const document = createDocument(), root = document.createElement('div'), GiB = 1073741824;
-  const section = document.createElement('section');
-  const capacityRecord = { valid: true, fresh: true, source: 'fixed', kMemory: 0, reason: 'floor',
-    memory: { source: 'host', limitBytes: 4 * GiB, usedBytes: 3.7 * GiB, reserveBytes: 0.5 * GiB },
-    model: { state: 'fitted', slopeBytes: 0.5 * GiB, interceptBytes: 1.3 * GiB, windowDays: 7 } };
-  const snapshot = { mode: 'multi', instance: { pool: { used: 2, capacity: 6, capacityRecord } } };
-  const view = { mode: snapshot.mode, pool: snapshot.instance.pool };
-  const phrases = ['未设内存上限，按整机内存', '内存上限 4 GiB', '已用 3.7 GiB', '保底 0.5 GiB',
-    '每会话约 0.5 GiB', '固定开销约 1.3 GiB', '近 7 天', '内存只够 Origin'];
-  // The strip shows the occupancy only; the plain title names the source, the technical title every explanation too.
-  instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'plain' });
-  let poolNode = root.children.find(node => node.classList.contains('wb-pool'));
-  assert.equal(shown(poolNode), '2 / 6');
-  assert.equal(poolNode.title, '同时运行 · 在用 2 / 6 · 手动设定 6（按内存建议 0） · Origin 常驻，不占这里的名额');
-  instanceStrip(root, snapshot, { document, t: poolTranslator('zh'), level: 'technical' });
-  poolNode = root.children.find(node => node.classList.contains('wb-pool'));
-  assert.equal(shown(poolNode), '2 / 6');
-  assert.doesNotMatch(root.textContent, /手动设定|内存上限|固定开销|内存只够/);
-  assert.ok(poolNode.title.startsWith('池 · 在用 2 / 6 · 手动设定 6（按内存建议 0） · '), poolNode.title);
-  assert.ok(poolNode.title.endsWith(' · Origin 常驻，不占这里的名额'), poolNode.title);
-  for (const phrase of phrases) assert.ok(poolNode.title.includes(phrase), phrase);
-  // The host panel's pool section shows slots, source and every explanation as a whole sentence.
-  renderHostPool(section, view, { document, t: poolTranslator('zh') });
-  assert.equal(section.hidden, false);
-  assert.ok(section.textContent.includes('会话池'));
-  assert.ok(section.textContent.includes('名额2 / 6'));
-  assert.ok(section.textContent.includes('来源手动设定 6（按内存建议 0）'));
-  const items = allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent);
-  assert.deepEqual(items, ['未设内存上限，按整机内存 · 内存上限 4 GiB · 已用 3.7 GiB（不含文件缓存和交换区） · 保底 0.5 GiB',
-    '每会话约 0.5 GiB · 固定开销约 1.3 GiB（各档的中间值） · 近 7 天', '内存只够 Origin，同时运行上限为 1']);
-  capacityRecord.kMemory = -2; capacityRecord.reason = null;
-  capacityRecord.memory = { source: 'darwin', limitBytes: '4', usedBytes: null, reserveBytes: NaN };
-  capacityRecord.model = { state: 'default', slopeBytes: 0.5 * GiB, interceptBytes: 'bad', windowDays: undefined };
-  renderHostPool(section, view, { document, t: poolTranslator('en') });
-  assert.match(section.textContent, /memory recommendation: -2/);
-  assert.match(section.textContent, /Using host memory \(macOS\)/);
-  assert.match(section.textContent, /Still gathering data/);
-  assert.match(section.textContent, /about 0.5 GiB per session/);
-  assert.doesNotMatch(section.textContent, /Memory limit|fixed overhead|NaN|undefined|last .* days|Memory fits/);
-});
-
-// Real product renderers and translation packs; no source rewriting or evaluation.
-test('host pool explains published buckets and distinct algorithms while the technical tooltip stays concise', () => {
-  const document = createDocument(), section = document.createElement('section'), root = document.createElement('div');
-  const GiB = 1073741824, t = poolTranslator('zh');
-  const buckets = Array.from({ length: 7 }, (_, i) => ({ n: 7 - i, highBytes: 7.46 * GiB, hours: 7, samples: 2511 }));
-  const record = { valid: true, fresh: true, source: 'auto', limitedBy: 'model',
-    memory: { limitBytes: 16 * GiB, usedBytes: 8 * GiB, reserveBytes: GiB },
-    model: { state: 'fitted', slopeBytes: 0.25 * GiB, interceptBytes: 5.72 * GiB, windowDays: 7, buckets } };
-  const pool = { used: 2, capacity: 29, capacityRecord: record }, view = { mode: 'multi', pool };
-  const notes = () => allNodes(section).filter(node => node.tagName === 'LI').map(node => node.textContent.replaceAll('\u00a0', ' '));
-  const rendered = renderHostPool(section, view, { document, t });
-  assert.deepEqual(notes(), [
-    '内存上限 16 GiB · 已用 8 GiB（不含文件缓存和交换区） · 保底 1 GiB',
-    '每会话约 0.25 GiB · 固定开销约 5.72 GiB（各档的中间值） · 近 7 天',
-    Array.from({ length: 7 }, (_, i) => `${i + 1} 个会话时一般最高 7.46 GiB（7 个小时、2511 个样本）`).join(''),
-    '上限 = 内存能放下的会话数 − 1（给 Origin 留一位），至少 1；能放下的会话数取「按近 7 天的档」与「按眼下剩余内存」中较小的',
-    '由近 7 天各档的用量决定',
-  ]);
-  assert.deepEqual(record.model.buckets.map(bucket => bucket.n), [7, 6, 5, 4, 3, 2, 1], 'sorting does not mutate publication');
-  const englishSection = document.createElement('section');
-  renderHostPool(englishSection, view, { document, t: poolTranslator('en') });
-  const englishBuckets = allNodes(englishSection).filter(node => node.tagName === 'LI')[2].textContent.replaceAll('\u00a0', ' ');
-  assert.equal(englishBuckets, Array.from({ length: 7 }, (_, i) =>
-    `Session count ${i + 1}: typical peak 7.46 GiB (7 h, 2511 samples)`).join(''));
-  assert.doesNotMatch(englishBuckets, /；|1 sessions/);
-  for (const level of ['plain', 'technical']) {
-    instanceStrip(root, { mode: 'multi', instance: { pool } }, { document, t, level });
-    const title = allNodes(root).find(node => node.classList.contains('wb-pool')).title;
-    assert.equal(title.includes('由近 7 天各档的用量决定'), level === 'technical');
-    assert.doesNotMatch(title, /个样本|一般最高|上限 =/);
-  }
-  record.model = { state: 'default', slopeBytes: 0.5 * GiB, windowDays: 7,
-    buckets: [{ n: 1, highBytes: 8 * GiB, hours: 5, samples: 300 }] };
-  record.limitedBy = 'live'; rendered.update(view);
-  assert.deepEqual(notes().slice(1), [
-    '数据积累中 · 每会话约 0.5 GiB · 近 7 天',
-    '1 个会话时一般最高 8.00 GiB（5 个小时、300 个样本）',
-    '上限 = 按眼下剩余内存能放下的会话数 − 1（给 Origin 留一位），至少 1；数据积累中，每会话先按 0.5 GiB 算',
-    '由眼下剩余的内存决定',
-  ]);
-  assert.doesNotMatch(section.textContent, /较小的|固定开销/);
-  for (const empty of [[], null, 0, [{ n: 1, highBytes: NaN, hours: 5, samples: 300 }],
-    [{ n: '1', highBytes: GiB, hours: 5, samples: 300 }], [{ n: 1, highBytes: GiB, samples: 300 }]]) {
-    record.model.buckets = empty; rendered.update(view);
-    assert.equal(notes().length, 4);
-    assert.ok(notes().every(Boolean));
-    assert.doesNotMatch(section.textContent, /个样本|NaN|undefined/);
-  }
-});
-
-test('pool decision priority and freshness gate new explanations while preserving stale evidence and floor notice', () => {
-  const document = createDocument(), section = document.createElement('section'), root = document.createElement('div');
-  const t = poolTranslator('zh'), GiB = 1073741824;
-  const cases = [
-    [{ source: 'auto', limitedBy: 'live' }, '由眼下剩余的内存决定', true],
-    [{ source: 'auto', limitedBy: 'model' }, '由近 7 天各档的用量决定', true],
-    [{ source: 'auto', limitedBy: 'live', reason: 'floor' }, '', true],
-    [{ source: 'auto', limitedBy: 'model', reason: 'floor' }, '', true],
-    [{ source: 'fixed', limitedBy: 'model' }, '由手动设定决定', false],
-    [{ source: 'fixed', limitedBy: 'model', reason: 'floor' }, '', false],
-    [{ source: 'fallback', limitedBy: 'model', reason: 'floor' }, '', false],
-    [{ source: 'auto', limitedBy: 'model', fresh: false, reason: 'floor' }, '', false],
-    [{ source: 'auto', limitedBy: 'live', valid: false, reason: 'floor' }, '', false],
-    [{ source: 'auto', limitedBy: 'unknown' }, '', true],
-  ];
-  for (const [patch, decision, algorithm] of cases) {
-    const record = { valid: true, fresh: true, memory: { usedBytes: GiB },
-      model: { state: 'default', slopeBytes: 0.5 * GiB, windowDays: 7, buckets: [] }, ...patch };
-    const pool = { used: 1, capacity: 3, capacityRecord: record };
-    renderHostPool(section, { mode: 'multi', pool }, { document, t });
-    instanceStrip(root, { mode: 'multi', instance: { pool } }, { document, t, level: 'technical' });
-    const title = allNodes(root).find(node => node.classList.contains('wb-pool')).title;
-    const decisions = ['由眼下剩余的内存决定', '由近 7 天各档的用量决定', '按内存算不够 1 个，由下限托在 1', '由手动设定决定'];
-    for (const text of decisions) {
-      assert.equal(section.textContent.includes(text), text === decision, JSON.stringify(patch));
-      assert.equal(title.includes(text), text === decision, JSON.stringify(patch));
-    }
-    assert.equal(section.textContent.includes('上限 ='), algorithm);
-    for (const text of [section.textContent, title]) {
-      assert.ok(text.includes('已用 1 GiB（不含文件缓存和交换区）'));
-      assert.ok(text.includes('数据积累中'));
-      assert.equal(text.split('内存只够 Origin，同时运行上限为 1').length - 1, patch.reason === 'floor' ? 1 : 0);
-      assert.doesNotMatch(text, /由下限托在 1|wb\.inst\.poolDecisionFloor/);
-    }
-  }
-});
-
-test('the host panel pool section shows slots and source only for the record a missing record file gives', () => {
-  // In multi mode the server always sends a record; a missing or invalid record file gives { valid: false, fresh: false }.
-  const document = createDocument(), section = document.createElement('section');
-  for (const [capacity, slots, source] of [[3, '1 / 3', '上限数据不可用，按 3 运行'], [null, '1', null]]) {
-    renderHostPool(section, { mode: 'multi', pool: { used: 1, capacity, capacityRecord: { valid: false, fresh: false } } },
-      { document, t: poolTranslator('zh') });
-    assert.equal(section.hidden, false, `capacity ${capacity}`);
-    const values = allNodes(section).filter(node => node.tagName === 'B' || node.tagName === 'SPAN').map(node => node.textContent);
-    assert.ok(section.textContent.includes('名额' + slots), section.textContent);
-    if (capacity == null) assert.equal(values.includes('1 / 3'), false);
-    if (source) assert.ok(section.textContent.includes('来源' + source), section.textContent);
-    else assert.equal(section.textContent.includes('来源'), false, section.textContent);
-    assert.equal(allNodes(section).some(node => node.tagName === 'UL' || node.tagName === 'LI'), false, 'no explanation list');
-  }
-});
-
-test('the host panel pool section stays hidden outside multi mode and without a record', () => {
-  const document = createDocument(), section = document.createElement('section'), t = poolTranslator('zh');
-  const record = { valid: true, fresh: true, source: 'auto' };
-  for (const view of [null, { mode: 'single', pool: { used: 1, capacity: 3, capacityRecord: record } },
-    { mode: 'unreadable', pool: { used: 1, capacity: 3, capacityRecord: record } },
-    { mode: 'multi', pool: { used: 1, capacity: 3 } }, { mode: 'multi', pool: { used: 1, capacity: 3, capacityRecord: null } },
-    { mode: 'multi', pool: { used: 1, capacity: 3, capacityRecord: {} } }, { mode: 'multi' }]) {
-    renderHostPool(section, { mode: 'multi', pool: { used: 1, capacity: 3, capacityRecord: record } }, { document, t });
+test('host pool shows numeric observations without reading capacity provenance', () => {
+  for (const locale of ['zh', 'en']) {
+    const document = createDocument(), section = document.createElement('section');
+    const pool = { used: 2, capacity: 6 };
+    Object.defineProperty(pool, 'capacityRecord', { get() { throw Error('retired capacity provenance must not be read'); } });
+    const rendered = renderHostPool(section, { mode: 'multi', pool }, { document, t: poolTranslator(locale) });
     assert.equal(section.hidden, false);
-    renderHostPool(section, view, { document, t });
-    assert.equal(section.hidden, true, JSON.stringify(view));
-    assert.equal(section.children.length, 0);
+    assert.equal(section.querySelectorAll('.wb-kvs')[0].children[1].textContent, '2 / 6');
+    assert.equal(allNodes(section).some(node => ['UL', 'LI'].includes(node.tagName)), false);
+    assert.doesNotMatch(section.textContent, /来源|Source|memory|内存|样本|samples|上限 =|Limit =/);
+    rendered.update({ mode: 'multi', pool: { used: 3, capacity: 6 } });
+    assert.equal(section.querySelectorAll('.wb-kvs')[0].children[1].textContent, '3 / 6');
+    rendered.update({ mode: 'multi', pool: { used: 1, capacity: null } });
+    assert.equal(section.querySelectorAll('.wb-kvs')[0].children[1].textContent, '1');
+    rendered.update({ mode: 'multi', pool: { used: null, capacity: 6 } });
+    assert.equal(section.querySelectorAll('.wb-kvs')[0].children[1].textContent, poolTranslator(locale)('wb.unknown'));
+    for (const view of [null, { mode: 'single', pool }, { mode: 'unreadable', pool }, { mode: 'multi' }]) {
+      rendered.update(view);
+      assert.equal(section.hidden, true); assert.equal(section.children.length, 0);
+    }
   }
 });
 
@@ -727,19 +563,17 @@ test('board and detail share snapshot queue positions while the pool reminder us
 
 test('status pills distinguish stale sample age, last-status tooltip and fresh display', () => {
   const document = createDocument(), now = 1800000000000;
-  const value = { ...row('a', 'working'), state: { kind: 'working', stale: true, sampledAt: now - 20_000 },
-    live: { status: { valid: false, reason: 'stale', lastState: 'working', sampledAt: now - 20_000 } } };
+  const value = { ...row('a', 'working'), state: { kind: 'working', stale: true, sampledAt: now - 20_000 } };
   const stale = statePill(document, value, { t, now });
   assert.equal(allNodes(stale).find(node => node.classList.contains('wb-status-age')).textContent, 'wb.detail.agoSeconds20');
   assert.equal(allNodes(stale).some(node => node.classList.contains('wb-dur')), false);
-  value.state = { kind: 'unknown', sampledAt: now - 180_000 };
-  value.live.status.sampledAt = now - 180_000;
+  value.state = { kind: 'unknown', lastState: 'busy', sampledAt: now - 180_000 };
   const unknown = statePill(document, value, { t, now });
   assert.equal(unknown.title, 'wb.state.lastStatuswb.state.working:wb.detail.agowb.schedule.span.minutes3');
   assert.equal(allNodes(unknown).some(node => node.classList.contains('wb-status-age')), false);
-  value.live.status.lastState = null;
+  value.state.lastState = null;
   assert.equal(statusAnnotation(value, { t, now }).title, '');
-  value.state = { kind: 'working' }; value.live.status = { valid: true, state: 'working', sampledAt: now };
+  value.state = { kind: 'working', sampledAt: now };
   const fresh = statePill(document, value, { t, now });
   assert.equal(allNodes(fresh).some(node => node.classList.contains('wb-status-age')), false);
   assert.equal(allNodes(fresh).find(node => node.classList.contains('wb-dur')).textContent, '32s');

@@ -51,66 +51,6 @@ function item(document, ...children) {
 }
 /** An item's name for screen readers: on screen its icon stands for it, and its title starts with it. */
 const spoken = (document, text) => element(document, 'span', text, 'wb-inst-word wb-vh');
-const finite = value => typeof value === 'number' && Number.isFinite(value);
-const gib = bytes => Number((bytes / 1073741824).toFixed(2));
-export function poolSource(pool, t) {
-  if (pool.capacity == null) return '';
-  const record = pool.capacityRecord;
-  if (record?.valid !== true) return t('wb.inst.poolUnavailable', { capacity: pool.capacity });
-  if (record.fresh !== true) return t('wb.inst.poolExpired', { capacity: pool.capacity });
-  if (record.source === 'fixed') return finite(record.kMemory) && pool.capacity > record.kMemory
-    ? t('wb.inst.poolFixedAdvice', { capacity: pool.capacity, recommended: record.kMemory }) : t('wb.inst.poolFixed');
-  if (record.source === 'auto') return t('wb.inst.poolAuto');
-  if (record.source === 'fallback') return t('wb.inst.poolFallback');
-  return '';
-}
-export function poolDecision(record, t) {
-  if (record?.valid !== true || record.fresh !== true) return '';
-  if (record.reason === 'floor') return '';
-  if (record.source === 'fixed') return t('wb.inst.poolDecisionFixed');
-  if (record.source === 'fallback') return '';
-  if (record.limitedBy === 'model') return t('wb.inst.poolDecisionModel');
-  if (record.limitedBy === 'live') return t('wb.inst.poolDecisionLive');
-  return '';
-}
-export function poolBuckets(record, t) {
-  if (!Array.isArray(record?.model?.buckets)) return [];
-  return record.model.buckets.filter(bucket => bucket != null && Number.isInteger(bucket.n) && bucket.n >= 0 &&
-    finite(bucket.highBytes) && bucket.highBytes >= 0 && Number.isInteger(bucket.hours) && bucket.hours >= 0 &&
-    Number.isInteger(bucket.samples) && bucket.samples >= 0)
-    .slice().sort((a, b) => a.n - b.n).map(bucket => countLabel(t, 'wb.inst.poolBucket', bucket.samples, {
-      count: bucket.n, amount: (bucket.highBytes / 1073741824).toFixed(2), hours: bucket.hours, samples: bucket.samples,
-    }).replace(/(\d) (?=个|GiB\b|h\b|samples?\b)/g, '$1\u00a0'));
-}
-export function poolAlgorithm(record, t) {
-  if (record?.valid !== true || record.fresh !== true || record.source !== 'auto') return '';
-  return ['fitted', 'default'].includes(record.model?.state) ? t('wb.inst.poolAlgorithm' +
-    (record.model.state === 'fitted' ? 'Fitted' : 'Default')) : '';
-}
-export function poolExplanation(record, t) {
-  const parts = [], memory = record?.memory, model = record?.model;
-  if (memory && typeof memory === 'object') {
-    const fields = [];
-    if (memory.source === 'host') fields.push(t('wb.inst.poolMemoryHost'));
-    if (memory.source === 'darwin') fields.push(t('wb.inst.poolMemoryDarwin'));
-    for (const [field, key] of [['limitBytes', 'poolMemoryLimit'], ['usedBytes', 'poolMemoryUsed'], ['reserveBytes', 'poolMemoryReserve']]) {
-      if (finite(memory[field]) && memory[field] >= 0) fields.push(t('wb.inst.' + key, { amount: gib(memory[field]) }));
-    }
-    if (fields.length) parts.push(fields.join(' · '));
-  }
-  if (model && typeof model === 'object' && ['default', 'fitted'].includes(model.state)) {
-    const fields = [];
-    if (model.state === 'default') fields.push(t('wb.inst.poolModelDefault'));
-    if (finite(model.slopeBytes) && model.slopeBytes > 0) fields.push(t('wb.inst.poolModelSession', { amount: gib(model.slopeBytes) }));
-    if (model.state === 'fitted' && finite(model.interceptBytes)) fields.push(t('wb.inst.poolModelFixed', { amount: gib(model.interceptBytes) }));
-    if (finite(model.windowDays) && model.windowDays > 0) fields.push(t('wb.inst.poolModelWindow', { days: model.windowDays }));
-    if (fields.length) parts.push(fields.join(' · '));
-  }
-  const decision = poolDecision(record, t);
-  if (decision) parts.push(decision);
-  if (record?.reason === 'floor') parts.push(t('wb.inst.poolFloor'));
-  return parts;
-}
 // The collector samples every 30 seconds; three missed rounds make the numbers stale rather than current.
 export const SYSTEM_STALE_MS = 90_000;
 const oneDecimal = bytes => (bytes / 1073741824).toFixed(1);
@@ -202,10 +142,8 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   const waiting = snapshot.groupCounts?.offline?.waitingSlot ?? 0;
   const queued = waiting ? t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: waiting }) : '';
   if (queued) poolItem.append(element(document, 'span', '· ' + queued, 'wb-txt-warn'));
-  const source = multi ? poolSource(pool, t) : '';
-  const details = technical && multi ? poolExplanation(pool.capacityRecord, t) : [];
   poolItem.title = [poolName, occupancy == null ? t('wb.unknown') : technical || multi ? t('wb.inst.inUse') + ' ' + occupancy : occupancy,
-    source, queued, ...details, t('wb.inst.poolHint')].filter(Boolean).join(' · ');
+    queued, t('wb.inst.poolHint')].filter(Boolean).join(' · ');
   root.append(poolItem, ...systemItems(document, instance.resources ?? null, { t, readAt: snapshot.readAt }));
   cost = costSummary?.today?.cost ?? cost;
   const costName = t(technical ? 'wb.inst.costTech' : 'wb.cost'), today = money(cost);

@@ -1,6 +1,6 @@
-import { readGroupSnapshot } from './group-data.js?v=4';
-import { createGroupDetail } from './detail.js?v=180';
-import { boardController } from './board.js?v=158';
+import { readGroupSnapshot } from './group-data.js?v=5';
+import { createGroupDetail } from './detail.js?v=181';
+import { boardController } from './board.js?v=159';
 import { element, icon } from './plain-text.js?v=106';
 
 /**

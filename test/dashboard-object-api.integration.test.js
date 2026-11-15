@@ -197,7 +197,7 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     ...['interrupt', 'chop-chop', 'restart'].map(action => [`/api/groups/telegram%3Aworking/actions/${action}`, 'POST', { runId: 'fixture-run' }]),
     ['/api/groups/telegram%3Aworking', 'DELETE', { confirmed: true, operationId: 'fixture-operation', cutoffId: 1 }],
   ];
-  await t.test('every first-step write requires admin and every browser write requires same origin', async () => {
+  await t.test('every object API write requires admin and every browser write requires same origin', async () => {
     const initial = actionCalls.length;
     for (const [route, method, body] of writes) {
       await request(route, { method, body, expected: 403 });
@@ -205,18 +205,21 @@ test('dashboard object APIs expose both modes and reject retired routes and unau
     }
     assert.equal(actionCalls.length, initial, 'denied writes never reach action adapters');
   });
-  for (const next of ['single', 'multi']) await t.test(`${next} mode calls each first-step endpoint over HTTP`, async () => {
+  for (const next of ['single', 'multi']) await t.test(`${next} mode calls each object endpoint over HTTP`, async () => {
     writeMode(next);
     const key = 'origin', encoded = encodeURIComponent(key);
     for (const route of ['/api/health', '/api/health/ready']) await request(route, { identity: 'none' });
     const instance = await request('/api/instance'); assert.equal(instance.session_mode.sessionMode, next); assert.equal(instance.resources.scope, 'container');
     assert.equal(Object.hasOwn(instance, 'system'), false); assert.equal(Object.hasOwn(instance, 'runtime_info'), false);
+    assert.equal(Object.hasOwn(instance, 'poolCapacityRecord'), false);
     assert.equal(instance.resources.cpu_source, 'container'); assert.equal(instance.resources.mem_source, 'container');
     assert.equal(instance.versions.claude.installed, '1.0.0');
     assert.equal(instance.session_mode.transition.phase, 'draining'); assert.equal(instance.session_mode.blocked.reason, 'fixture-block');
     assert.equal(instance.session_mode.blocked.since, clock - 1000); assert.equal(instance.session_mode.supervisor, 'unreachable');
     assert.equal(Object.hasOwn(instance, 'context_pct'), false); assert.equal(Object.hasOwn(instance, 'cost'), false);
-    await request('/api/instance/resources?range=6h'); await request('/api/instance/runtime-options?runtime=claude');
+    await request('/api/instance/resources?range=6h');
+    const options = await request('/api/instance/runtime-options?runtime=claude');
+    for (const field of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(options, field), false);
     const counts = await request('/api/groups/counts'), running = await request('/api/groups/running');
     assert.equal(running.rows.some(row => row.state.kind === 'offline'), false);
     assert.equal(JSON.stringify(counts).includes('offline-'), false);

@@ -1,8 +1,8 @@
 import { countLabel } from '../count-label.js?v=1';
 import { effortOptionState, modelOptionState } from '../runtime-ui.js?v=100';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
-import { annotateStatus } from './board.js?v=158';
-import { settingsCard } from './settings.js?v=120';
+import { annotateStatus } from './board.js?v=159';
+import { settingsCard } from './settings.js?v=121';
 
 const running = row => ['running', 'starting'].includes(row.presence);
 export function defaultGroups(snapshot, page) {

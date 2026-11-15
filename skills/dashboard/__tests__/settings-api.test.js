@@ -650,11 +650,14 @@ test('explicit runtime metadata reads saved defaults for active and inactive run
     assert.equal(meta.runtime, runtime);
     assert.equal(meta.current_effort, effort);
     assert.equal(meta.runtime_cli, runtime);
+    for (const key of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(meta, key), false);
   }
   assert.equal((await fetch(server.origin + '/api/instance/runtime-options?runtime=foo')).status, 400);
   const legacy = await fetch(server.origin + '/api/instance/runtime-options');
   assert.equal(legacy.status, 200);
-  assert.equal((await legacy.json()).current_effort, 'high');
+  const meta = await legacy.json();
+  assert.equal(meta.current_effort, 'low', 'implicit runtime reads configured effort, not running Origin effort');
+  for (const key of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(meta, key), false);
 });
 
 // HTTP integration via makeSettingsServer: actual route/config persistence;

@@ -1,4 +1,4 @@
-import { readGroupSnapshot } from './group-data.js?v=4';
+import { readGroupSnapshot } from './group-data.js?v=5';
 import { element, icon } from './plain-text.js?v=106';
 import { createSettingsDrawer } from './settings-drawer.js?v=104';
 

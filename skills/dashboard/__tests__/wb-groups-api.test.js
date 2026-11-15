@@ -78,7 +78,7 @@ function fixture(t, { count = 1, statusError = false, modeError = false, overrid
     failUnexpected: value => { unexpected = value; }, now: () => clock };
 }
 
-// Real Core status -> Workbench projection/attention, isolated store and fake
+// Real Core status -> Workbench observations, isolated store and fake
 // clock/CLI/scenes. Run for request-pause wiring; skip unrelated UI work. No
 // daemon, runtime, database or network; fixture removes its own files.
 test('request file pause crosses the status snapshot and clears after repair', async t => {
@@ -88,8 +88,8 @@ test('request file pause crosses the status snapshot and clears after repair', a
     const value = await f.service.getSnapshot(f.now(), { fresh: true });
     const paused = content !== '[]';
     assert.equal(value.instance.supervisorPaused, paused);
-    assert.equal(value.attention.reminders.some(item => item.kind === 'supervisor_paused'), paused);
-    assert.equal(value.attention.problems.some(item => item.kind === 'supervisor_paused'), false);
+    assert.equal(Object.hasOwn(value, 'attention'), false);
+    assert.ok(value.rows.every(row => !Object.hasOwn(row, 'attention')));
   }
 });
 
@@ -273,7 +273,7 @@ test('service totals and channel attention share exactly one PM2 sample per snap
   assert.equal(reads, 1);
   assert.deepEqual(snapshot.instance.services, { online: 1, total: 3,
     channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'stopped', down: true }] });
-  assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down' && item.service === 'zylos-telegram').pm2Status, 'stopped');
+  assert.equal(Object.hasOwn(snapshot, 'attention'), false);
   const summary = await createGroupsApi({ workbench: f.service }).counts();
   assert.equal(reads, 1, 'summary uses the existing snapshot cache');
   assert.equal(Object.hasOwn(summary, 'services'), false);
@@ -284,7 +284,7 @@ test('service totals and channel attention share exactly one PM2 sample per snap
   assert.equal(reads, 2);
   assert.deepEqual(next.instance.services, { online: 2, total: 3,
     channels: [{ channel: 'telegram', service: 'zylos-telegram', status: 'online', down: true }] });
-  assert.equal(next.attention.problems.find(item => item.kind === 'channel_down' && item.service === 'zylos-telegram').pm2Status, 'online');
+  assert.equal(next.instance.services.channels[0].status, 'online');
 });
 
 // Integration: unknown PM2 samples cannot fabricate counts or break attention.
@@ -298,7 +298,7 @@ test('unreadable and malformed PM2 samples keep service counts unknown', async t
     const snapshot = await f.service.getSnapshot();
     assert.equal(calls, 1);
     assert.equal(snapshot.instance.services, null);
-    assert.equal(snapshot.attention.problems.find(item => item.kind === 'channel_down').pm2Status, null);
+    assert.equal(Object.hasOwn(snapshot, 'attention'), false);
   }
   const empty = fixture(t, { readPm2: () => ({ processes: [] }) });
   assert.deepEqual((await empty.service.getSnapshot()).instance.services, { online: 0, total: 0,
@@ -345,7 +345,9 @@ for (const failure of ['statusError', 'modeError', 'c4Error', 'queueError', 'ove
     if (failure === 'modeError') assert.equal(value.mode, 'unreadable');
     if (failure === 'statusError') {
       assert.ok(value.rows.every(row => row.state.kind === 'unknown'));
-      assert.ok(value.attention.problems.some(item => item.source === 'status_unreadable'));
+      assert.equal(value.sources.status.reason, 'status_unreadable');
+      const running = await createGroupsApi({ workbench: f.service }).running();
+      assert.ok(running.rows.every(row => row.flags.unreadable.reasons.includes('status_unreadable')));
     }
     if (failure === 'c4Error') { assert.equal(value.hasOlder, null); assert.equal(value.sources.c4.reason, 'c4_groups_failed'); }
     if (failure === 'queueError') assert.ok(value.rows.every(row => row.queue.known === false));
@@ -609,7 +611,7 @@ test('full snapshot and activity cycle leaves C4 and Dashboard event storage unc
 // Integration: source-envelope and row-enrichment boundaries. Run for Core input,
 // privacy or snapshot changes; skip rendering-only changes. Owned temporary roots,
 // injected CLI/reader adapters, no live tmux/PM2/network/children; fixture cleanup.
-test('snapshot keeps global fences and runtime authentication attention on affected rows', async t => {
+test('snapshot keeps global fences and instance authentication observations without reminder lists', async t => {
   const f = fixture(t), normal = f.cli.runC4Db;
   const globalFence = { reason: null, createdAt: f.now() / 1000 - 20 };
   f.cli.runC4Db = async args => args[0] === 'group-queues'
@@ -618,8 +620,11 @@ test('snapshot keeps global fences and runtime authentication attention on affec
   const snapshot = await f.service.getSnapshot(), row = snapshot.rows.find(item => item.sessionGroup === 'telegram:g0');
   assert.deepEqual(row.fence, globalFence);
   assert.equal(row.wait.kind, 'fenced'); assert.equal(row.wait.fenceReason, 'mode_switch');
-  assert.ok(row.attention.some(item => item.kind === 'auth_failed' && item.runtime === 'claude'));
-  assert.ok(row.attention.find(item => item.kind === 'auth_failed').groups.includes(row.sessionGroup));
+  assert.equal(snapshot.instance.runtimeHealth.claude.health, 'auth_failed');
+  const projected = (await createGroupsApi({ workbench: f.service }).running()).rows.find(item => item.id === row.sessionGroup);
+  assert.equal(projected.state.kind, 'stopping');
+  const detail = await createGroupsApi({ workbench: f.service }).detail(row.sessionGroup, { include: [] });
+  assert.equal(Object.hasOwn(detail, 'attention'), false);
 });
 
 // Integration: malformed tool input and live-error privacy boundaries. Run when
@@ -1052,6 +1057,34 @@ function workingFixture(t, options = {}) {
   };
   return { f, store, add, read, queries };
 }
+
+// Real private Store and snapshot duration fallback. Run for current-run event
+// aliases or duration changes; skip UI-only edits. Injected Core/CLI observations,
+// no live tmux/PM2/network; fixture closes the DB and removes its owned root.
+test('single Origin duration fallback reads hook attribution without widening the current run', async t => {
+  const f = fixture(t), store = new Store(path.join(f.root, 'duration.db'));
+  f.addCleanup(() => store.close()); f.setMode('single');
+  const observation = structuredClone(f.live.get('telegram:g0'));
+  observation.identity.runId = 'single-run';
+  f.live.set(null, observation);
+  f.store.queryEvents = filter => store.queryEvents(filter);
+  const add = (id, group, run, event, ago) => store.insertEvent({ id, ingest_id: id, runtime: 'claude',
+    session_group: group, run_id: run, event_type: event, timestamp: new Date(f.now() - ago).toISOString(), category: 'activity' });
+  add('legacy-stop', null, 'single-run', 'stop', 7200000);
+  add('hook-prompt', 'origin', 'single-run', 'user_prompt_submit', 3600000);
+  add('other-group', 'telegram:other', 'single-run', 'stop', 1000);
+  add('other-run', 'origin', 'old-run', 'stop', 1000);
+  add('future-stop', 'origin', 'single-run', 'stop', -60000);
+  const value = await f.service.getSnapshot(), origin = value.rows[0];
+  assert.equal(origin.sessionGroup, null); assert.equal(origin.working.on, true);
+  assert.equal(origin.working.since, null, 'only the current command keeps work active');
+  assert.equal(origin.duration, 3600);
+  const detail = await createGroupsApi({ workbench: f.service }).detail('origin', { include: [] });
+  assert.equal(detail.state.kind, 'working'); assert.equal(detail.duration, 3600);
+  add('hook-stop', 'origin', 'single-run', 'stop', 100);
+  f.advance(2100);
+  assert.equal((await f.service.getSnapshot()).rows[0].duration, null, 'a current-run stop closes the fallback duration');
+});
 
 for (const kind of ['main', 'children', 'stale child']) test(`working API projects ${kind} events without changing Core board state`, async t => {
   const { f, add, read } = workingFixture(t), minute = 60000;

@@ -1,4 +1,5 @@
 {
+  "actions.next_start": "Saved. Takes effect the next time the session starts.",
   "app.title": "Zylos Dashboard",
   "tab.overview": "Overview",
   "tab.memory": "Memory",
@@ -170,7 +171,6 @@
   "status.executing": "Executing...",
   "status.done": "Done",
   "status.failed": "Failed: {error}",
-  "cost.session": "session",
   "cost.today": "today",
   "cost.7d": "7 days",
   "cost.lifetime": "lifetime",
@@ -185,7 +185,6 @@
   "effort.ultra": "Ultra",
   "effort.max": "Max",
   "agent_fleet.busy": "Working",
-  "agent_fleet.thinking": "Thinking",
   "agent_fleet.idle": "Idle",
   "agent_fleet.stuck": "Possible Stuck",
   "agent_fleet.offline": "Offline",

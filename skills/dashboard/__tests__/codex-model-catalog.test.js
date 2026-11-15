@@ -58,8 +58,8 @@ test('unknown or unset configured model rejects effort mutation without writing'
       const meta = getActionsMeta({ runtime: 'codex', zylosDir: dir }, { model_id: 'runtime-custom', effort: 'ultra' });
       assert.equal(meta.current_model, model);
       assert.equal(meta.current_effort, null);
-      assert.equal(meta.running_effort, 'ultra');
-      assert.deepEqual(meta.efforts_by_model['runtime-custom'], []);
+      for (const key of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(meta, key), false);
+      assert.equal(Object.hasOwn(meta.efforts_by_model, 'runtime-custom'), false, 'Origin observations do not expand configuration options');
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -1,19 +1,19 @@
-import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js?v=4';
+import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js?v=5';
 import { waitUntilDeadline } from './request-timeout.js?v=2';
 import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=103';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=120';
-import { createPricingPanel } from './wb/settings-pricing.js?v=204';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=121';
+import { createPricingPanel } from './wb/settings-pricing.js?v=205';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=179';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=180';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=205';
+import { mountConversationPage } from './wb/conversation-page.js?v=206';
 import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
-import { mountTimezoneSettings } from './wb/settings-timezone.js?v=10';
-import { mountWorkbench } from './wb/shell.js?v=214';
+import { mountTimezoneSettings } from './wb/settings-timezone.js?v=11';
+import { mountWorkbench } from './wb/shell.js?v=215';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=112';
 import { createRemoteAccess } from './wb/remote-access.js?v=2';
@@ -21,12 +21,12 @@ import { groupObservable, instanceStatusText, markCurrentTab, observeTheme, obse
 import { observerPageUsable, observerRecoveryReason, viewedAccess, runningObserverGroups, observerGroupRow, observerGroupName, observerLeaseTarget, observerLeaseMatches, observerFrameVisible, switchObserverTarget, observerTitleKey, observerNoticeHidden, observerSizeLabel, observerFrameWide, observerReturnPage } from './wb/observer-page.js?v=120';
 import { bindActionControls, createPageActions } from './wb/page-actions.js?v=112';
 import { mountSchedule } from './wb/schedule.js?v=148';
-import { createUsagePage } from './wb/usage.js?v=205';
+import { createUsagePage } from './wb/usage.js?v=206';
 import { ObserverHistory } from './observer-history.js?v=6';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=90';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=206';
-import { createFleetSounds } from './fleet-sounds.js?v=206';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=207';
+import { createFleetSounds } from './fleet-sounds.js?v=207';
 import { refreshDashboardState } from './state-refresh.js?v=101';
 import { formatActionResult } from './action-result.js';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
@@ -219,7 +219,6 @@ function agentFleetLabels() {
     groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'unknown', 'no_response'].map(key => [key, fleet('state.' + key)])),
     problemReasons: Object.fromEntries(['auth_failed', 'start_failed', 'no_response'].map(key => [key, fleet('reason.' + key)])),
     busy: t('agent_fleet.busy'),
-    thinking: t('agent_fleet.thinking'),
     idle: t('agent_fleet.idle'),
     unknown: t('value.unknown'),
     ...Object.fromEntries(['sleeping', 'waking', 'wake_overdue', 'auth_wait', 'rate_wait', 'reclaiming', 'switching'].map(key => [key, t(`agent_fleet.${key}`)])),
@@ -1593,7 +1592,7 @@ async function refreshAll() {
 }
 
 // ─── SSE ───
-let chatReconnectQueued = false, sseGeneration = 0;
+let chatReconnectQueued = false, sseGeneration = 0, sseAdmissionController = null;
 const chatPush = createConversationPush({
   onSubscriptionChange() {
     if (chatReconnectQueued) return;
@@ -1636,6 +1635,8 @@ function connectSse({ ordinary = false } = {}) {
     state.eventSource = null;
   }
   clearTimeout(state.sseReconnectTimer);
+  sseAdmissionController?.abort();
+  sseAdmissionController = null;
 
   const streamPath = api(agentPath('/api/stream'));
   const source = new EventSource(ordinary ? streamPath : chatPush.streamUrl(streamPath));
@@ -1648,16 +1649,36 @@ function connectSse({ ordinary = false } = {}) {
     refreshState().catch(() => {});
   };
 
-  source.onerror = () => {
+  source.onerror = async () => {
     if (state.eventSource !== source) return;
     chatPage?.streamStatus('disconnected');
     chatPush.detach();
     source.close();
     state.eventSource = null;
+    clearTimeout(state.sseReconnectTimer);
     renderConnection('reconnecting');
     if (!ordinary && chatPush.streamUrl(streamPath) !== streamPath) {
-      connectSse({ ordinary: true });
-      return;
+      // EventSource does not expose the HTTP status. Only an explicit 429
+      // admission response proves the chat connection limit was reached.
+      const generation = sseGeneration;
+      const control = new AbortController();
+      sseAdmissionController = control;
+      let limited = false;
+      try {
+        const response = await fetch(chatPush.streamUrl(streamPath), {
+          cache: 'no-store', signal: AbortSignal.any([control.signal, AbortSignal.timeout(5000)]),
+        });
+        limited = response.status === 429;
+        await response.body?.cancel();
+      } catch { /* A network error is not proof of a connection limit. */ }
+      if (generation !== sseGeneration) return;
+      sseAdmissionController = null;
+      if (limited) {
+        connectSse({ ordinary: true });
+        // Keep ordinary updates live, but retry the desired chat subscription.
+        state.sseReconnectTimer = setTimeout(() => connectSse(), 30_000);
+        return;
+      }
     }
     scheduleSseReconnect();
   };
@@ -2783,7 +2804,7 @@ async function refreshModeStatus() {
   try {
     const result = await fetchJson('/api/instance');
     if (observerTargetKey() !== targetKey) return;
-    const origin = await fetchJson('/api/groups/origin');
+    const origin = await fetchJson('/api/groups/origin?include=');
     const data = { ...result, origin };
     if (observerTargetKey() !== targetKey) return;
     state.originGroup = origin;
@@ -2885,7 +2906,7 @@ async function sendAction(action, body) {
 
   try {
     if (action === 'restart-session' && !body?.runId) {
-      const origin = await fetchJson('/api/groups/origin');
+      const origin = await fetchJson('/api/groups/origin?include=');
       if (observerTargetKey() !== targetKey) return false;
       if (!origin.live?.runId) throw new Error(t('wb.actions.targetRequired'));
       body = { ...body, sessionGroup: origin.sessionGroup, runId: origin.live.runId, sessionId: origin.live?.sessionId };
@@ -2922,7 +2943,19 @@ async function sendAction(action, body) {
     }
     if (result.refreshState) await refreshState();
     if (result.ok && result.requires_restart) {
+      const origin = await fetchJson('/api/groups/origin?include=');
+      if (observerTargetKey() !== targetKey) return false;
+      state.originGroup = origin;
+      if (origin.presence === 'not_running') {
+        if (statusEl) {
+          statusEl.hidden = false;
+          statusEl.className = 'modal-status success';
+          statusEl.textContent = t('actions.next_start');
+        }
+        return true;
+      }
       await new Promise(r => setTimeout(r, 1500));
+      if (observerTargetKey() !== targetKey) return false;
       if (statusEl) statusEl.hidden = true;
       await execAction('restart-session');
     }
@@ -2988,6 +3021,7 @@ function startTimers() {
 }
 
 window.addEventListener('beforeunload', () => {
+  sseAdmissionController?.abort();
   clearInterval(state.pollTimer);
   clearFleetFallback();
   clearTimeout(state.sseReconnectTimer);

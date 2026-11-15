@@ -374,7 +374,7 @@ async function setSessionHotTtl(reqId, body, zylosDir) {
   }
 }
 
-export function getActionsMeta(config, runtimeInfo) {
+export function getActionsMeta(config) {
   const runtime = config.runtime || process.env.ZYLOS_RUNTIME || 'claude';
   const codexModels = runtime === 'codex' ? getCodexModels() : [];
 
@@ -422,7 +422,7 @@ export function getActionsMeta(config, runtimeInfo) {
     ? codexModel || null
     : null;
   if (runtime === 'codex') {
-    for (const id of [codexModel, runtimeInfo?.model_id]) {
+    for (const id of [codexModel]) {
       if (id && !models.some(model => model.id === id)) {
         models.push({ id, display_name: id });
         efforts_by_model[id] = [];
@@ -442,10 +442,8 @@ export function getActionsMeta(config, runtimeInfo) {
     runtime,
     current_model: currentModel,
     current_effort: runtime === 'claude'
-      ? runtimeInfo?.effort || settings.effortLevel || null
+      ? settings.effortLevel || null
       : codexEffort || null,
-    running_model: runtime === 'codex' ? runtimeInfo?.model_id || null : null,
-    running_effort: runtime === 'codex' ? runtimeInfo?.effort || null : null,
     models,
     efforts_by_model,
     model_thresholds,

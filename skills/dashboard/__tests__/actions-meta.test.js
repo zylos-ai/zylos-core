@@ -86,8 +86,8 @@ test('getActionsMeta keeps runtime evidence separate from unset configuration', 
 
   assert.equal(meta.current_model, null);
   assert.equal(meta.current_effort, null);
-  assert.equal(meta.running_model, 'gpt-5.5');
-  assert.deepEqual(meta.efforts_by_model['gpt-5.5'], []);
+  for (const key of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(meta, key), false);
+  assert.equal(Object.hasOwn(meta.efforts_by_model, 'gpt-5.5'), false, 'a running-only model is not a configured option');
 }));
 
 test('getActionsMeta keeps Claude model and effort controls for Claude runtime', () => {
@@ -99,7 +99,7 @@ test('getActionsMeta keeps Claude model and effort controls for Claude runtime',
   assert.equal(meta.runtime, 'claude');
   assert.ok(meta.models.length > 0);
   assert.ok(Object.keys(meta.efforts_by_model).length > 0);
-  assert.equal(meta.current_effort, 'medium');
+  assert.equal(meta.current_effort, null, 'session effort does not replace an unset configured default');
   assert.equal(meta.new_session_threshold, 70, 'without a configured model the legacy value has no model identity');
 });
 test('Claude model list includes defaults with display names and specific versions', () => {

@@ -13,7 +13,7 @@ Paths are relative to the Dashboard base URL. For example, with the default HTTP
 - **Admin**: an authenticated administrator. Browser-cookie writes also require a same-origin request. Read-scope API sessions cannot write.
 - **Local owner**: an administrator logged in with the local password cookie. API keys do not grant deletion or deletion-preview access, even with admin scope.
 
-The existing auth gate may return HTTP 401 (unauthenticated) or 403 (`insufficient_scope`). Browser writes can return 403 `same_origin_required`. Invalid JSON returns 400 `invalid_json`, and oversized JSON bodies return 413 `payload_too_large`; the write APIs below use a 4096-byte body limit. Unknown routes return 404 `not_found`.
+The existing auth gate may return HTTP 401 (unauthenticated) or 403 (`insufficient_scope`). Browser writes can return 403 `same_origin_required`. Invalid JSON returns 400 `invalid_json`, and oversized JSON bodies return 413 `payload_too_large`; the write APIs below use a 4096-byte body limit. Unknown GET routes return 404 `not_found`; unknown non-GET `/api/*` routes return 405 plain text `method not allowed`.
 
 Read APIs normally return their data object directly. Group and usage handler failures use `{ok:false,error:{code:string,message:string}}`. Some inherited actions and access gates still return `{error:string}` or `{ok:false,error:string,...}`; callers must inspect `ok` and the returned error, including on HTTP 200 group-action responses. A successful submission is not proof that a session restarted or that an instruction was delivered. Do not automatically repeat a write whose result is unknown.
 
@@ -63,7 +63,6 @@ Example: `GET /api/health/ready` → `{"ready":false,"reason":"supervisor_unavai
 | `autoRestarts` | object / null | `{count:number}` automatic restarts recorded during the past hour |
 | `resources` | object | One current resource sample: `scope:"host"\|"container"\|"mixed"`, `sampledAt:number\|null` (Unix milliseconds), `cpu_pct:number\|null`, `cpu_count:number\|null`, `cpu_source:"container"\|"host"`, `mem_pct:number\|null`, `mem_used_bytes:number\|null`, `mem_total_bytes:number\|null`, `mem_source:"container"\|"host"`, `disk_pct:number\|null`, `disk_free_bytes:number\|null`, `disk_total_bytes:number\|null` |
 | `services` | object / null | PM2 counts `online:number`, `total:number`, plus `channels:Array<{channel:string,service:string,status:string\|null,down:boolean}>`; `down` becomes true after two observed non-online PM2 samples and resets on an online sample; it supports the overview reminder |
-| `poolCapacityRecord` | object / null | Pool-capacity provenance; numeric capacity/occupancy belong to group counts |
 | `chat_allow_remote` | boolean | Whether remote chat is enabled |
 
 Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `threshold:number`, `model_thresholds:Record<string,number>` and `session_hot_ttl:object` (effective mode, keepalive seconds and configuration/environment provenance). CPU and memory limits are resolved independently: a limited resource uses its container quota, while an explicitly unlimited resource uses host values and labels that resource’s source `host`. `scope` is `mixed` when the two sources differ, otherwise it is their common source; each resource’s source remains authoritative. An unreadable container limit keeps that resource’s source `container` with unknown measurements rather than implying unlimited host fallback. CPU percentages use the selected CPU capacity (which can be fractional); memory percentages use the selected total bytes. Disk describes the filesystem visible at the instance data directory and is independent of the CPU/memory scope. Unreadable observations remain null. There is no duplicate `system` sample or `runtime_info` object. Origin’s current model, effort, running CLI version and restart-to-apply status belong to group detail; instance versions and defaults describe installed software and configuration. Session context, cost and pool counts belong to the group and usage APIs.
@@ -104,7 +103,7 @@ Example: `GET /api/instance/resources?range=24h`.
 
 **Access:** Read. **Parameters:** `runtime=claude|codex` (default active runtime), optional `model` to include its threshold metadata.
 
-Returns `runtime:string`, `current_model:string|null`, `current_effort:string|null`, `running_model:string|null`, `running_effort:string|null`, `models:Array<{id:string,display_name?:string}>`, `efforts_by_model:Record<string,string[]>`, `model_thresholds:Record<string,number>`, `model_threshold_max:Record<string,number>`, `new_session_threshold:number`, `session_hot_ttl:object`, `zylos_version:string`, `runtime_cli:string`, and `cc_version:string|null`. Empty effort options mean capabilities are unknown or the model does not expose effort selection. Threshold values and maxima are percentages.
+Returns `runtime:string`, `current_model:string|null`, `current_effort:string|null`, `models:Array<{id:string,display_name?:string}>`, `efforts_by_model:Record<string,string[]>`, `model_thresholds:Record<string,number>`, `model_threshold_max:Record<string,number>`, `new_session_threshold:number`, `session_hot_ttl:object`, `zylos_version:string`, `runtime_cli:string`, and `cc_version:string|null`. Empty effort options mean capabilities are unknown or the model does not expose effort selection. Threshold values and maxima are percentages. These are configured defaults and available choices, not Origin runtime observations; the response never includes running_model or running_effort and does not collect Origin session evidence.
 
 **Errors:** 400 `INVALID_RUNTIME`; common read errors.
 
@@ -189,7 +188,7 @@ Lists contain presentation observations only. Running rows have exactly these fi
 | `displayName` | string | Effective human-readable name or fallback |
 | `channel` | string / null | Channel namespace; Origin has no channel |
 | `runtime`, `model` | string / null | Current runtime and model observations |
-| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:number}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds |
+| `state` | `{kind:string,since:string\|null,stale?:boolean,sampledAt?:number,lastState?:"busy"\|"idle"}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds. Older samples become unknown while retaining sampledAt/lastState for an explicitly historical hint |
 | `duration` | number / null | State duration in seconds; a tolerated stale idle sample retains its last recorded idle duration |
 | `flags` | object | Independent conditions, below |
 | `mainAgent` | `busy` / `idle` / `unknown` | Main Agent observation for instruction callers; UI does not display it |
@@ -225,9 +224,9 @@ Flags are independent: a working row can carry both `queued` and `blocked`. Miss
 
 **Access:** Read. **Parameters:** none.
 
-Returns `readAt:number`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. `running.flags.noResponse` counts the independent no-response flag, including a row also flagged with an error. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`; capacity provenance is `instance.poolCapacityRecord`.
+Returns `readAt:number`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. `running.flags.noResponse` counts the independent no-response flag, including a row also flagged with an error. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`. Pool capacity provenance is not exposed by instance or counts.
 
-**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by `listKnown` and nullable observations.
+**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by nullable observations. In counts, `listKnown` additionally requires a readable C4 catalog; running and offline responses expose the snapshot’s live-list availability directly. Offline and search still reject an unreadable C4 catalog even when the live list is known.
 
 Example: `GET /api/groups/counts`.
 
@@ -319,7 +318,7 @@ Example: `GET /api/groups/origin/messages?since=2026-11-01T00%3A00%3A00Z`.
 
 ### GET /api/groups/:id/events
 
-Single-session Origin reads current hook records stored as `session_group:"origin"` together with historical null-group records, within the same run, ordering and pagination filters. Other groups and multi-session Origin retain their own group scope. The same single-session alias applies to current working and duration observations.
+Single-session Origin reads current hook records stored as `session_group:"origin"` together with historical null-group records, within the same run, ordering and pagination filters. Other groups and multi-session Origin retain their own group scope. The same single-session alias applies to current working and duration observations and history diagnostics: single Origin includes events:origin plus legacy unassigned diagnostics; another group and multi Origin remain scoped.
 
 **Access:** Read. **Parameters:** encoded ID; optional `since`, `until`, `types` (comma-separated), `session_id`, `run_id`, `runtime`, `after_seq`, `limit` (default 100, maximum 1000), `offset` (default 0), `order=asc|desc` (default asc); diagnostic-gap filters `stream`, `gap_limit` (default 100), `gap_offset` (default 0).
 
@@ -542,7 +541,7 @@ Example: `GET /api/stream` with `Accept: text/event-stream`.
 
 ## Implementation Navigation
 
-- HTTP dispatch, instance projection and first-step action routing: [src/index.js](../src/index.js).
+- HTTP dispatch, instance projection and object action routing: [src/index.js](../src/index.js).
 - Group states, flags, membership and pagination: [groups-api.js](../src/lib/workbench/groups-api.js).
 - Group config/actions/runs/backlog/deletion: adjacent Workbench modules.
 - Usage windows, attribution and pricing: [usage-api.js](../src/lib/workbench/usage-api.js), [cost-query.js](../src/lib/workbench/cost-query.js), [usage-series.js](../src/lib/workbench/usage-series.js).

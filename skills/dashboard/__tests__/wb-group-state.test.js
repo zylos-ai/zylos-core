@@ -36,11 +36,26 @@ test('durations use current-run prompt, idle seconds, and correctly scaled wait 
   assert.equal(durationOf(row({ state: { kind: 'waiting' }, wait: { kind: 'starting' }, createdAt: null }), { now }), null);
   for (const kind of ['not_running', 'unknown', 'error']) assert.equal(durationOf(row({ state: { kind } }), { now }), null);
 });
-test('sorting keeps Origin first, then attention, state order and latest activity with null last', () => {
-  const make = (sessionGroup, kind, lastActivityAt, attention = [], origin = false) => ({ sessionGroup, state: { kind }, c4: { lastActivityAt }, attention, origin });
+test('single Origin duration shares current hook and legacy attribution only when requested', () => {
+  const origin = row({ sessionGroup: null, state: { kind: 'busy' } });
+  const prompt = (session_group, age, run_id = 'run') => ({ session_group, run_id,
+    event_type: 'user_prompt_submit', timestamp: now - age });
+  const events = [prompt(null, 8000), prompt('origin', 5000), prompt('other', 1000),
+    prompt('origin', 1000, 'old-run'), prompt('origin', -1000)];
+  assert.equal(durationOf(origin, { now, events }), 8, 'legacy-only callers retain null scope');
+  assert.equal(durationOf(origin, { now, events, includeLegacyOrigin: true }), 5);
+  const stopped = [...events, { session_group: 'origin', run_id: 'run', event_type: 'stop', timestamp: now - 100 }];
+  assert.equal(durationOf(origin, { now, events: stopped, includeLegacyOrigin: true }), null);
+  assert.equal(durationOf(row({ sessionGroup: 'origin', state: { kind: 'busy' } }), {
+    now, events: [prompt('origin', 6000), prompt(null, 1000)] }), 6, 'multi Origin never reads null attribution');
+  assert.equal(durationOf(row({ sessionGroup: 'other', state: { kind: 'busy' } }), {
+    now, events, includeLegacyOrigin: true }), 1, 'the alias cannot widen another group');
+});
+test('sorting keeps Origin first, then state order and latest activity with null last', () => {
+  const make = (sessionGroup, kind, lastActivityAt, origin = false) => ({ sessionGroup, state: { kind }, c4: { lastActivityAt }, origin });
   const rows = [make('absent', 'not_running', 99), make('busy-old', 'busy', null), make('idle', 'idle', 100),
-    make('busy-new', 'busy', 10), make('alert', 'not_running', null, [{}]), make('origin', 'not_running', null, [], true), make('unknown', 'unknown', 90), make('waiting', 'waiting', 4), make('error', 'error', 5)];
-  assert.deepEqual(sortRows(rows).map(row => row.sessionGroup), ['origin', 'alert', 'busy-new', 'busy-old', 'error', 'waiting', 'unknown', 'idle', 'absent']);
+    make('busy-new', 'busy', 10), make('empty', 'not_running', null), make('origin', 'not_running', null, true), make('unknown', 'unknown', 90), make('waiting', 'waiting', 4), make('error', 'error', 5)];
+  assert.deepEqual(sortRows(rows).map(row => row.sessionGroup), ['origin', 'busy-new', 'busy-old', 'error', 'waiting', 'unknown', 'idle', 'absent', 'empty']);
   assert.deepEqual(countRows(rows), { busy: 2, waiting: 1, error: 1, unknown: 1, idle: 1, not_running: 3 });
   assert.equal(rows[0].sessionGroup, 'absent');
 });

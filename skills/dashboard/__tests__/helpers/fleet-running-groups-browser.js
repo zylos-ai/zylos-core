@@ -15,7 +15,7 @@ const READ_AT = Date.parse('2026-11-14T10:00:00Z');
 // A running group as the snapshot reports it; the card summary is computed by the product's own fleetGroupSummary.
 function running(sessionGroup, displayName, { error, silentSeconds } = {}) {
   return { sessionGroup, presence: 'running', name: displayName ? { displayName } : null, createdAt: 1, c4: null,
-    state: { kind: error ? 'error' : 'busy' }, attention: error ? [{ kind: error }] : [],
+    state: { kind: error ? 'error' : 'busy' }, flags: error === 'auth_failed' ? { blocked: { reason: error } } : error ? { startFailed: { count: 1 } } : {},
     noResponse: Number.isFinite(silentSeconds) ? { since: READ_AT - silentSeconds * 1000 } : null };
 }
 // Nine running groups: two busy, the listed problem groups, and idle groups for the rest.
@@ -51,7 +51,7 @@ function fixtureAnswer(url, now, scenario, fleet) {
     const issue = scenario.summary?.problems.find(item => item.sessionGroup === row.sessionGroup);
     return issue ? { ...row, presence: 'running', name: { displayName: issue.displayName },
       state: { kind: issue.reason === 'no_response' ? 'working' : 'unknown' },
-      attention: issue.reason === 'no_response' ? [] : [{ kind: issue.reason }],
+      flags: issue.reason === 'auth_failed' ? { blocked: { reason: issue.reason } } : issue.reason === 'start_failed' ? { startFailed: { count: 1 } } : {},
       noResponse: issue.reason === 'no_response' ? { since: now - issue.durationSeconds * 1000 } : null } : row;
   });
   return workbenchSnapshotAnswer(url, snapshot, now);

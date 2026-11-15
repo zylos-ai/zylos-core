@@ -1,13 +1,13 @@
-import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js?v=4';
+import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js?v=5';
 import { withRequestTimeout } from '../request-timeout.js?v=2';
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=153';
-import { boardController, renderBoard, renderDistribution } from './board.js?v=158';
+import { boardController, renderBoard, renderDistribution } from './board.js?v=159';
 import { createBoardSearch } from './board-search.js?v=87';
-import { instanceStrip, accountRuntimes } from './instance-strip.js?v=205';
+import { instanceStrip, accountRuntimes } from './instance-strip.js?v=206';
 import { renderAttention } from './attention-bar.js?v=196';
-import { createGroupDetail } from './detail.js?v=180';
+import { createGroupDetail } from './detail.js?v=181';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=107';
-import { createHostPanel } from './host-panel.js?v=205';
+import { createHostPanel } from './host-panel.js?v=206';
 import { element, icon } from './plain-text.js?v=106';
 import { watchRows } from './label-fit.js?v=2';
 
@@ -117,7 +117,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
       const count = snapshot?.groupCounts?.[side]?.total;
       const button = element(document, 'button', t('wb.groups.' + side) + (count == null ? '' : ' · ' + count));
       button.type = 'button'; button.setAttribute('aria-pressed', String(groupSide === side));
-      button.addEventListener('click', () => { if (groupSide === side) return; groupSide = side; offlineDepth = 1; snapshot = null; searchRows = null; controller.invalidate(); redraw(); void controller.refresh(); });
+      button.addEventListener('click', () => { if (groupSide === side && searchRows === null) return; search.input(''); searchInput.value = ''; groupSide = side; offlineDepth = 1; snapshot = null; searchRows = null; controller.invalidate(); redraw(); void controller.refresh(); });
       sides.append(button);
     }
     const dist = document.querySelector('#wb-dist');
@@ -432,7 +432,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
       let groups;
       try {
         if (key) {
-          const selected = displayGroupRow(await read('/api/groups/' + encodeURIComponent(key)));
+          const selected = displayGroupRow(await read('/api/groups/' + encodeURIComponent(key) + '?include='));
           if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
           const side = selected.state?.kind === 'offline' ? 'offline' : 'running';
           if (side !== groupSide) offlineDepth = 1;
@@ -445,7 +445,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
       if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
       snapshot = groups;
       groupDetail.updateSnapshot(snapshot);
-      locatedGroup = key || snapshot?.rows.find(row => row.flags?.startFailed || row.attention?.some(item => ['auth_failed', 'start_failed'].includes(item.kind)))?.sessionGroup;
+      locatedGroup = key || snapshot?.rows.find(row => row.flags?.startFailed || row.flags?.blocked?.reason === 'auth_failed')?.sessionGroup;
       redraw();
       const row = [...board.querySelectorAll('.wb-row')].find(node => node.dataset.group === locatedGroup);
       row?.focus();

@@ -1,86 +1,82 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAttention, createChannelDownCounter } from '../src/lib/workbench/attention.js';
-const row = (sessionGroup, runtime, presence, queue = { pending: { count: 0 } }) => ({ sessionGroup, target: { runtime }, presence, queue });
-const snapshot = (rows = [], runtimeHealth = {}) => ({ readAt: 10, rows, instance: { runtimeHealth }, sources: {} });
-test('request pause is instance attention and disappears on recovery', () => {
-  const snap = snapshot();
+import { createChannelDownCounter } from '../src/lib/workbench/attention.js';
+import { groupAttention } from '../public/js/wb/group-data.js';
+const row = (sessionGroup, runtime, flags = {}) => ({ sessionGroup, runtime, flags });
+
+test('request pause is a page reminder and disappears on recovery', () => {
   for (const supervisorPaused of [true, false, null, undefined, 'true']) {
-    snap.instance.supervisorPaused = supervisorPaused;
-    const result = buildAttention(snap);
+    const result = groupAttention({ supervisorPaused }, {}, []);
     assert.deepEqual(result.problems, [], 'pause does not classify running sessions as failed');
     assert.deepEqual(result.reminders, supervisorPaused === true ? [{ kind: 'supervisor_paused' }] : []);
-    assert.equal(result.ok, supervisorPaused !== true);
   }
 });
-test('authentication attention distinguishes affected running groups from unknown targets or queues', () => {
-  const result = buildAttention(snapshot([row('running', 'codex', 'running'), row('unknown-target', null, 'not_running', { pending: { count: 1 } }), row('unknown-queue', 'codex', 'not_running', { known: false })], { codex: { health: 'auth_failed' } }));
-  assert.equal(result.problems.length, 1);assert.deepEqual(result.problems[0].groups, ['running']);assert.equal(result.problems[0].extraUnknown, 2);
+test('page authentication attention includes affected groups without guessing unknown targets', () => {
+  const rows = [row('running', 'codex', { blocked: { reason: 'auth_failed' } }),
+    row('unknown-target', null, { queued: { count: 1 } }),
+    row('unknown-queue', 'codex', { unreadable: { reasons: ['queue_summary_failed'] } })];
+  const result = groupAttention({ runtimeHealth: { codex: { health: 'auth_failed' } } }, {}, rows);
+  const auth = result.problems.filter(problem => problem.kind === 'auth_failed');
+  assert.equal(auth.length, 1); assert.deepEqual(auth[0].groups, ['running']);
+  assert.deepEqual(result.problems.filter(problem => problem.kind === 'data_unreadable'),
+    [{ kind: 'data_unreadable', source: 'queue_summary_failed' }]);
 });
-test('authentication includes pending and starting groups but not absent empty queues', () => {
-  const result = buildAttention(snapshot([row('pending', 'claude', 'not_running', { pending: { count: 2 } }), row('starting', 'claude', 'starting'), row('quiet', 'claude', 'not_running')], { claude: { health: 'auth_failed' } }));
-  assert.deepEqual(result.problems[0].groups, ['pending', 'starting']);assert.equal(result.problems[0].extraUnknown, 0);
+test('page authentication includes blocked pending and starting rows but not quiet rows', () => {
+  const result = groupAttention({ runtimeHealth: { claude: { health: 'auth_failed' } } }, {}, [
+    row('pending', 'claude', { blocked: { reason: 'auth_failed' }, queued: { count: 2 } }),
+    row('starting', 'claude', { blocked: { reason: 'auth_failed' } }), row('quiet', 'claude')]);
+  assert.deepEqual(result.problems[0].groups, ['pending', 'starting']);
 });
-test('rate recovery is a reminder only and a clean sample reports ok without a sample time', () => {
+test('rate recovery is a page reminder and a clean sample has no reminder', () => {
   for (const health of ['rate_limited', 'recovering']) {
-    const result = buildAttention(snapshot([], { claude: { health, cooldownUntil: 42 } }));
-    assert.equal(result.problems.length, 0);assert.deepEqual(result.reminders, [{ kind: 'rate_limited', runtime: 'claude', until: 42 }]);assert.equal(result.ok, false);
+    const result = groupAttention({ runtimeHealth: { claude: { health, cooldownUntil: 42 } } }, {}, []);
+    assert.deepEqual(result.problems, []);
+    assert.deepEqual(result.reminders, [{ kind: 'rate_limited', runtime: 'claude', until: 42 }]);
   }
-  assert.equal(buildAttention(snapshot()).ok, true);assert.equal(Object.hasOwn(buildAttention(snapshot()), 'sampledAt'), false);
+  assert.deepEqual(groupAttention({}, {}, []), { problems: [], reminders: [] });
 });
-test('channel service needs two PM2 samples and resets after online without snapshot-driven increments', () => {
-  const counter = createChannelDownCounter(), snap = snapshot([{ ...row('a', 'claude', 'not_running'), c4: { componentName: 'telegram' } }]);
+test('channel service needs two PM2 samples and resets after online without page-driven increments', () => {
+  const counter = createChannelDownCounter();
   const data = status => ({ processes: [{ name: 'zylos-telegram', pm2_env: { status } }], collectedAt: 1 });
+  const instance = () => ({ services: { channels: [{ service: 'zylos-telegram', status: 'errored', down: counter.get('zylos-telegram') >= 2 }] } });
   counter.update(data('errored'));
-  for (let i = 0; i < 3; i++) assert.equal(buildAttention(snap, { channelDownCounter: counter, pm2Data: data('errored') }).problems.length, 0);
-  counter.update(data('errored'));const result = buildAttention(snap, { channelDownCounter: counter, pm2Data: data('errored') });
-  assert.equal(result.problems[0].kind, 'channel_down');assert.equal(result.problems[0].service, 'zylos-telegram');assert.equal(result.problems[0].pm2Status, 'errored');
-  counter.update(data('online'));assert.equal(counter.get('zylos-telegram'), 0);assert.equal(buildAttention(snap, { channelDownCounter: counter }).ok, true);
+  for (let i = 0; i < 3; i++) assert.deepEqual(groupAttention(instance(), {}, []).problems, []);
+  counter.update(data('errored'));
+  assert.deepEqual(groupAttention(instance(), {}, []).problems,
+    [{ kind: 'channel_down', service: 'zylos-telegram', pm2Status: 'errored' }]);
+  counter.update(data('online')); assert.equal(counter.get('zylos-telegram'), 0);
+  assert.deepEqual(groupAttention(instance(), {}, []).problems, []);
 });
-test('start failures and every failed source become problems', () => {
-  const snap = snapshot([{ ...row('a', 'claude', 'not_running'), wait: { kind: 'start_failed', count30m: 3, lastAt: 5 } }]);
-  for (const [source, reason] of [['status', 'status_unreadable'], ['c4', 'c4_groups_failed'], ['q', 'queue_summary_failed'], ['ov', 'override_list_failed']]) snap.sources[source] = { ok: false, reason };
-  const result = buildAttention(snap);assert.equal(result.problems.length, 5);assert.equal(result.problems[0].count30m, 3);
+test('page attention retains start failures and every distinct failed source', () => {
+  const rows = [row('a', 'claude', { startFailed: { count: 3, lastAt: 5 }, unreadable: {
+    reasons: ['status_unreadable', 'c4_groups_failed', 'queue_summary_failed', 'override_list_failed'] } })];
+  const result = groupAttention({}, {}, rows);
+  assert.equal(result.problems.length, 5); assert.equal(result.problems[0].count30m, 3);
   assert.equal(result.problems.filter(problem => problem.kind === 'data_unreadable').length, 4);
 });
 test('a service never observed in PM2 does not become a channel failure', () => {
   const counter = createChannelDownCounter();
   const online = { processes: [{ name: 'web-console', pm2_env: { status: 'online' } }] };
-  const snap = snapshot([{ ...row('a', 'claude', 'not_running'), c4: { componentName: 'web-console' } }]);
   counter.update(online); counter.update(online);
   assert.equal(counter.get('zylos-web-console'), 0);
-  assert.equal(buildAttention(snap, { channelDownCounter: counter, pm2Data: online }).ok, true);
 });
 test('an observed service disappearing from PM2 counts consecutive offline samples', () => {
   const counter = createChannelDownCounter(), missing = { processes: [] };
-  const snap = snapshot([{ ...row('a', 'claude', 'not_running'), c4: { componentName: 'telegram' } }]);
-  const attention = () => buildAttention(snap, { channelDownCounter: counter, pm2Data: missing });
   counter.update({ processes: [{ name: 'zylos-telegram', pm2_env: { status: 'online' } }] });
-  counter.update(missing); assert.equal(attention().ok, true);
-  counter.update(missing);
-  assert.deepEqual(attention().problems, [{ kind: 'channel_down', service: 'zylos-telegram', pm2Status: null }]);
+  counter.update(missing); assert.equal(counter.get('zylos-telegram'), 1);
+  counter.update(missing); assert.equal(counter.get('zylos-telegram'), 2);
   counter.update({ processes: [{ name: 'zylos-telegram', pm2_env: { status: 'online' } }] });
-  assert.equal(attention().ok, true);
-  counter.update(missing); assert.equal(attention().ok, true);
-  counter.update(missing); assert.equal(attention().problems[0].kind, 'channel_down');
+  assert.equal(counter.get('zylos-telegram'), 0);
+  counter.update(missing); assert.equal(counter.get('zylos-telegram'), 1);
+  counter.update(missing); assert.equal(counter.get('zylos-telegram'), 2);
 });
-
-test('full pool produces one reminder counting current pool waits rather than sampled waiting', () => {
-  const snap = snapshot([
-    { ...row('b', 'claude', 'not_running'), wait: { kind: 'pool_wait', position: 1 } },
-    { ...row('c', 'claude', 'not_running'), wait: { kind: 'pool_wait', position: 2 } },
-    { ...row('auth', 'claude', 'not_running'), wait: { kind: 'auth_wait' } },
-  ]);
-  snap.instance.pool = { used: 4, capacity: 3, waiting: 99 };
-  const result = buildAttention(snap);
-  assert.equal(result.problems.length, 0);
+test('page full-pool reminder counts current offline waits rather than a sampled wait count', () => {
+  const counts = { pool: { used: 4, capacity: 3, waiting: 99 }, offline: { waitingSlot: 2 } };
+  const result = groupAttention({}, counts, []);
+  assert.deepEqual(result.problems, []);
   assert.deepEqual(result.reminders, [{ kind: 'pool_full', waiting: 2 }]);
-  assert.equal(result.ok, false);
   for (const pool of [{ used: null, capacity: 3 }, { used: 2, capacity: 3 }, { used: 3, capacity: null }]) {
-    snap.instance.pool = pool;
-    assert.equal(buildAttention(snap).reminders.length, 0);
+    assert.deepEqual(groupAttention({}, { ...counts, pool }, []).reminders, []);
   }
-  snap.instance.pool = { used: 3, capacity: 3, waiting: 99 };
-  snap.rows = snap.rows.slice(2);
-  assert.equal(buildAttention(snap).reminders.length, 0);
+  assert.deepEqual(groupAttention({}, { ...counts, offline: { waitingSlot: 0 } }, []).reminders, []);
 });

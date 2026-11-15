@@ -134,7 +134,7 @@ test('Origin restart identity is cleared on machine changes and accepted only af
   const reset = app.slice(app.indexOf('function resetAgentData()'), app.indexOf('function enterRemoteAgent('));
   assert.match(reset, /^function resetAgentData\(\) \{\s*state\.originGroup = null;/);
   const mode = app.slice(app.indexOf('async function refreshModeStatus()'), app.indexOf('function closeActionsModal()'));
-  const read = mode.indexOf("const origin = await fetchJson('/api/groups/origin');");
+  const read = mode.indexOf("const origin = await fetchJson('/api/groups/origin?include=');");
   const accept = mode.indexOf('state.originGroup = origin;', read);
   const guard = mode.indexOf('if (observerTargetKey() !== targetKey) return;', read);
   assert.ok(read >= 0 && guard > read && accept > guard, 'a late Origin read cannot become the next machine’s restart target');
@@ -156,7 +156,7 @@ test('manual restarts preserve canonical single and multi Origin scope with run 
 test('restart fallback binds only a readable run on the same viewed machine', () => {
   const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
   const send = app.slice(app.indexOf('async function sendAction('), app.indexOf('// zylos-core upgrades'));
-  const read = send.indexOf("const origin = await fetchJson('/api/groups/origin');");
+  const read = send.indexOf("const origin = await fetchJson('/api/groups/origin?include=');");
   const target = send.indexOf('if (observerTargetKey() !== targetKey) return false;', read);
   const run = send.indexOf("if (!origin.live?.runId) throw new Error(t('wb.actions.targetRequired'));", read);
   const submit = send.indexOf('const r = await fetch(api(actionPath)');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fleetGroupSummary, sanitizeFleetGroupSummary } from '../src/lib/workbench/fleet-summary.js';
-import { buildAttention } from '../src/lib/workbench/attention.js';
+import { projectGroup } from '../src/lib/workbench/groups-api.js';
 import { classify } from '../src/lib/workbench/group-state.js';
 import { objectResponse, flushObjectReads } from './fixtures/fleet-object-api.js';
 import { FleetPoller, stateToFleetRecord, fleetStateFromObjects } from '../src/lib/fleet-poller.js';
@@ -29,9 +29,9 @@ test('running summary includes unknown-presence groups, with each in exactly one
 
 test('existing runtime errors override busy and idle; full problem count survives the two-row limit', () => {
   const result = fleetGroupSummary(snapshot([
-    row('auth', 'busy', { attention: [{ kind: 'auth_failed' }], name: { displayName: 'Saved <运维> name' },
+    row('auth', 'busy', { flags: { blocked: { reason: 'auth_failed' } }, name: { displayName: 'Saved <运维> name' },
       createdAt: 123, c4: { componentName: 'lark', sessionGroupName: 'raw address' } }),
-    row('start', 'idle', { attention: [{ kind: 'start_failed' }] }),
+    row('start', 'idle', { flags: { startFailed: { count: 1 } } }),
     row('third', 'error'),
   ]));
   assert.equal(result.counts.error, 3);
@@ -49,8 +49,8 @@ test('sample age, long durations, queue waits and read errors never create runti
   const result = fleetGroupSummary(snapshot([
     row('long-busy', 'busy', { duration: 864000, live: { status: { sampledAt: 0 } } }),
     row('long-idle', 'idle', { duration: 864000 }),
-    row('pool', 'waiting', { wait: { kind: 'pool_wait' }, attention: [{ kind: 'pool_full' }] }),
-    row('stale', 'unknown', { attention: [{ kind: 'data_unreadable' }] }),
+    row('pool', 'waiting', { wait: { kind: 'pool_wait' }, flags: { waitingSlot: { position: 1 } } }),
+    row('stale', 'unknown', { flags: { unreadable: { reasons: ['status'] } } }),
   ]));
   assert.deepEqual(result.counts, { busy: 1, idle: 1, waiting: 1, unknown: 1, error: 0, no_response: 0 });
   assert.deepEqual(result.problems, []);
@@ -93,7 +93,7 @@ test('a reminded group without a response since is counted as no response, after
   const readAt = Date.parse('2026-11-14T10:00:00Z');
   const result = fleetGroupSummary(snapshot([
     row('silent', 'busy', { noResponse: { since: readAt - 125_000 }, name: { displayName: 'Ops' } }),
-    row('failed-and-silent', 'busy', { attention: [{ kind: 'auth_failed' }], noResponse: { since: readAt - 5000 } }),
+    row('failed-and-silent', 'busy', { flags: { blocked: { reason: 'auth_failed' } }, noResponse: { since: readAt - 5000 } }),
     row('busy', 'busy', { noResponse: null }),
   ], { readAt, instance: { pool: { used: 3, capacity: 12 }, autoRestarts: { count: 2 } } }));
   assert.deepEqual(result.counts, { busy: 1, idle: 0, waiting: 0, unknown: 0, error: 1, no_response: 1 });
@@ -163,7 +163,7 @@ test('HTTP and SSE object reads carry the same running summary and clear it afte
 });
 
 
-test('Workbench auth attention takes precedence over its busy/waiting classification in Fleet', () => {
+test('instance authentication health takes precedence over group busy and starting state in Fleet', () => {
   const rows = [
     row('busy', 'busy', { target: { runtime: 'codex' }, queue: { pending: { count: 0 } },
       live: { status: { valid: true, state: 'busy' } } }),
@@ -173,10 +173,10 @@ test('Workbench auth attention takes precedence over its busy/waiting classifica
       queue: { pending: { count: 1 } }, wait: { kind: 'auth_wait' } }),
   ];
   const value = snapshot(rows, { sources: {}, instance: { pool: {}, runtimeHealth: { codex: { health: 'auth_failed' } } } });
-  const attention = buildAttention(value);
+  value.readAt = 1800000000000;
   for (const item of rows) {
     item.state = classify(item);
-    item.attention = attention.problems.filter(problem => problem.groups?.includes(item.sessionGroup));
+    item.flags = projectGroup(item, value).flags;
   }
   assert.equal(rows[0].state.kind, 'busy');
   assert.equal(rows[1].state.kind, 'waiting');
@@ -206,6 +206,23 @@ test('object fleet projection maps compact auth and start flags and retains unkn
     [['auth', 'Auth', 'auth_failed'], ['failed', 'Failed', 'start_failed']]);
   assert.equal(mapped.group_summary.problemCount, 2);
   assert.deepEqual(stateToFleetRecord({}, mapped).group_summary, mapped.group_summary);
+});
+
+test('object fleet preserves starting authentication failures without guessing health for unknown groups', () => {
+  const instance = { session_mode: { sessionMode: 'multi' }, runtimeHealth: { codex: { health: 'auth_failed' } } };
+  const counts = { readAt: 10000, listKnown: true, running: { total: 2,
+    states: { working: 0, idle: 0, starting: 1, stopping: 0, unknown: 1 } } };
+  const running = { rows: [
+    { id: 'starting', runtime: 'codex', state: { kind: 'starting' }, flags: {} },
+    { id: 'unknown', runtime: 'codex', state: { kind: 'unknown' }, flags: {} },
+  ] };
+  const usage = { today: { cost: 0 }, sevenDay: { cost: 0 } };
+  const value = fleetStateFromObjects(instance, counts, usage, running).group_summary;
+  assert.deepEqual(value.counts, { busy: 0, idle: 0, waiting: 0, unknown: 1, error: 1, no_response: 0 });
+  assert.deepEqual(value.problems.map(row => [row.sessionGroup, row.reason]), [['starting', 'auth_failed']]);
+  instance.runtimeHealth = { codex: { source: 'unreadable' } };
+  const unreadable = fleetStateFromObjects(instance, counts, usage, running).group_summary;
+  assert.equal(unreadable.counts.error, 0); assert.equal(unreadable.counts.waiting, 1); assert.equal(unreadable.counts.unknown, 1);
 });
 
 test('an explicitly unreadable instance mode remains unknown instead of an offline transport failure', () => {

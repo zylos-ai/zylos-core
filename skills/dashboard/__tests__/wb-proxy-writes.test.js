@@ -105,7 +105,7 @@ test('workbench proxy rejects writes outside the registered table before upstrea
 });
 
 
-// The first-step proxy must enforce browser origin before exchanging a remote
+// The object API proxy must enforce browser origin before exchanging a remote
 // credential; all transports and sessions here are in memory, no network starts.
 test('object proxy writes reject missing or cross-site browser origins before remote access', async t => {
   const f = fixture(t, 'admin');

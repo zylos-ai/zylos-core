@@ -24,14 +24,15 @@ export function classify(row, { statusError, now = Date.now() } = {}) {
   return unknown('no_rule');
 }
 
-export function durationOf(row, { now = Date.now(), events = [] } = {}) {
+export function durationOf(row, { now = Date.now(), events = [], includeLegacyOrigin = false } = {}) {
   if (row.state.kind === 'idle') return (row.state.stale ? row.live.status.lastIdleSeconds : row.live.status.idleSeconds) ?? null;
   if (row.state.kind === 'waiting') {
     const start = row.wait.kind === 'starting' ? (row.createdAt == null ? null : row.createdAt * 1000) : row.wait.kind === 'fenced' ? (row.fence.createdAt == null ? null : row.fence.createdAt * 1000) : row.queue.pending.oldestAt;
     return start == null || !Number.isFinite(start) ? null : Math.max(0, (now - start) / 1000);
   }
   if (row.state.kind !== 'busy') return null;
-  const turns = events.filter(event => event.session_group === row.sessionGroup && event.run_id === row.live.runId && ['user_prompt_submit', 'stop'].includes(event.event_type) && timestamp(event.timestamp) <= now)
+  const sameGroup = event => event.session_group === row.sessionGroup || includeLegacyOrigin && row.sessionGroup === null && event.session_group === 'origin';
+  const turns = events.filter(event => sameGroup(event) && event.run_id === row.live.runId && ['user_prompt_submit', 'stop'].includes(event.event_type) && timestamp(event.timestamp) <= now)
     .sort((a, b) => timestamp(b.timestamp) - timestamp(a.timestamp) || (b.event_seq ?? 0) - (a.event_seq ?? 0));
   return turns[0]?.event_type === 'user_prompt_submit' ? Math.max(0, (now - timestamp(turns[0].timestamp)) / 1000) : null;
 }
@@ -39,7 +40,7 @@ export function durationOf(row, { now = Date.now(), events = [] } = {}) {
 const order = { busy: 1, waiting: 2, error: 2, unknown: 3, idle: 4, not_running: 5 };
 export function sortRows(rows) {
   return [...rows].sort((a, b) => Number(b.origin) - Number(a.origin) ||
-    Number(Boolean(b.attention?.length)) - Number(Boolean(a.attention?.length)) || order[a.state.kind] - order[b.state.kind] ||
+    order[a.state.kind] - order[b.state.kind] ||
     (b.c4?.lastActivityAt ?? -Infinity) - (a.c4?.lastActivityAt ?? -Infinity));
 }
 

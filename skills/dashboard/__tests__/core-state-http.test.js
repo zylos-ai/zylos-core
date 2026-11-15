@@ -87,7 +87,13 @@ test('state APIs await a fresh observation before answering idle requests', { ti
   await login.text();
   assert.equal(login.status, 302);
   const cookie = login.headers.getSetCookie().find(value => value.startsWith('__Secure-zylos_dashboard_session=')).split(';')[0];
-  for (const route of ['/api/fleet', '/api/instance', '/api/instance/runtime-options', '/api/stream']) {
+  const beforeOptions = sample;
+  const runtimeOptions = await fetch(origin + '/api/instance/runtime-options', { headers: { cookie }, signal: t.signal });
+  assert.equal(runtimeOptions.status, 200);
+  const options = await runtimeOptions.json();
+  for (const key of ['running_model', 'running_effort']) assert.equal(Object.hasOwn(options, key), false);
+  assert.equal(sample, beforeOptions, 'runtime options do not collect Origin observations');
+  for (const route of ['/api/fleet', '/api/instance', '/api/stream']) {
     const before = sample; snapshotClock += 2100;
     let entered, release;
     const began = new Promise(resolve => { entered = resolve; });
@@ -119,15 +125,16 @@ test('state APIs await a fresh observation before answering idle requests', { ti
         const instance = JSON.parse(instanceFrame);
         assert.equal(instance.session_mode.sessionMode, 'single');
         assert.equal(Object.hasOwn(instance, 'runtime_info'), false, 'observed model belongs to group detail');
+        assert.equal(Object.hasOwn(instance, 'poolCapacityRecord'), false);
         assert.deepEqual(Object.keys(instance.versions).sort(), ['claude', 'codex', 'zylos']);
         await reader.cancel();
       } else {
         const body = await response.json();
         if (route === '/api/fleet') for (const field of ['model', 'effort', 'context_pct', 'new_session_threshold']) assert.equal(Object.hasOwn(body.agents[0], field), false, 'Fleet omits Origin session metadata');
-        else if (route === '/api/instance/runtime-options') assert.equal(body.running_model, `model-${expected}`);
         else {
           assert.equal(body.session_mode.sessionMode, 'single');
           assert.equal(Object.hasOwn(body, 'runtime_info'), false);
+          assert.equal(Object.hasOwn(body, 'poolCapacityRecord'), false);
           assert.deepEqual(Object.keys(body.versions).sort(), ['claude', 'codex', 'zylos']);
         }
       }

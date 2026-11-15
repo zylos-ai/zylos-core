@@ -1,6 +1,6 @@
 import { element, icon, runtimeName } from './plain-text.js?v=106';
 import { formatZoned } from './instance-zone.js?v=100';
-import { poolExplanation, poolSource, poolDecision, poolBuckets, poolAlgorithm, accountRuntimes, accountUsedPercent, remainingQuotaPercent, quotaReset, quotaRecordedTime } from './instance-strip.js?v=205';
+import { accountRuntimes, accountUsedPercent, remainingQuotaPercent, quotaReset, quotaRecordedTime } from './instance-strip.js?v=206';
 
 const percent = value => value == null ? '—' : Number(value).toFixed(1) + '%';
 const defaultChart = (canvas, config) => new globalThis.Chart(canvas, config);
@@ -108,55 +108,19 @@ function keyedRows(container, entries, previous, create, update) {
   return next;
 }
 
-// The pool section owns its rows independently of the host metric response.
+// Numeric pool observations come from the group counts, without capacity provenance.
 export function renderHostPool(section, view, { document = section.ownerDocument, t = key => key } = {}) {
-  section.replaceChildren();
-  let parts = null, notes = new Map();
   const update = value => {
-    const pool = value?.mode === 'multi' ? value.pool ?? null : null, record = pool?.capacityRecord;
-    section.hidden = !(record && typeof record === 'object' && Object.keys(record).length);
-    if (section.hidden) {
-      if (parts) for (const node of [parts.title, parts.grid, parts.list]) if (node.parentNode === section) section.removeChild(node);
-      parts = null; notes = new Map(); return;
-    }
-    if (!parts) {
-      const title = element(document, 'h4'); title.append(icon(document, 'layers', 'xs'), element(document, 'span', t('wb.host.pool')));
-      const grid = element(document, 'div', undefined, 'wb-kvs');
-      const slotsLabel = element(document, 'span', t('wb.host.poolSlots')), slots = element(document, 'b');
-      const sourceLabel = element(document, 'span', t('wb.host.poolSource')), source = element(document, 'span');
-      const list = element(document, 'ul', undefined, 'wb-host-pool-notes');
-      grid.append(slotsLabel, slots); section.append(title, grid);
-      parts = { title, grid, slotsLabel, slots, sourceLabel, source, list };
-    }
+    section.replaceChildren();
+    const pool = value?.mode === 'multi' ? value.pool ?? null : null;
+    section.hidden = pool == null;
+    if (!pool) return;
+    const title = element(document, 'h4'); title.append(icon(document, 'layers', 'xs'), element(document, 'span', t('wb.host.pool')));
+    const grid = element(document, 'div', undefined, 'wb-kvs');
     const used = pool.used ?? null, capacity = pool.capacity ?? null;
-    setText(parts.slotsLabel, t('wb.host.poolSlots'));
-    setText(parts.slots, used == null ? t('wb.unknown') : capacity == null ? String(used) : `${used} / ${capacity}`);
-    const source = poolSource(pool, t);
-    if (source) {
-      setText(parts.sourceLabel, t('wb.host.poolSource')); setText(parts.source, source);
-      if (parts.source.parentNode !== parts.grid) parts.grid.append(parts.sourceLabel, parts.source);
-    } else if (parts.source.parentNode === parts.grid) {
-      parts.grid.removeChild(parts.sourceLabel); parts.grid.removeChild(parts.source);
-    }
-    const entries = [['memory', poolExplanation({ memory: record.memory }, t)[0]],
-      ['model', poolExplanation({ model: record.model }, t)[0]], ['buckets', poolBuckets(record, t)],
-      ['algorithm', poolAlgorithm(record, t)], ['decision', poolDecision(record, t)],
-      ['floor', poolExplanation({ reason: record.reason }, t)[0]]].filter(([, text]) => text?.length);
-    notes = keyedRows(parts.list, entries, notes, () => ({ node: element(document, 'li'), rows: new Map() }), (item, text) => {
-      if (Array.isArray(text)) {
-        item.rows = keyedRows(item.node, text.map((line, index) => [index, line]), item.rows,
-          () => ({ node: element(document, 'div', undefined, 'wb-host-pool-bucket') }), (row, line) => {
-            if (row.text === line) return;
-            row.text = line;
-            row.node.textContent = '';
-            const pieces = line.split(/(\d+(?:\.\d+)?\u00a0(?:个(?:会话|小时|样本)|GiB|h\b|samples\b)[）)]?)/g);
-            pieces.forEach((piece, index) => row.node.append(element(document, 'span', piece,
-              index % 2 ? 'wb-host-pool-bucket-unit' : undefined)));
-          });
-      } else setText(item.node, text);
-    });
-    if (entries.length && parts.list.parentNode !== section) section.append(parts.list);
-    if (!entries.length && parts.list.parentNode === section) section.removeChild(parts.list);
+    grid.append(element(document, 'span', t('wb.host.poolSlots')),
+      element(document, 'b', used == null ? t('wb.unknown') : capacity == null ? String(used) : used + ' / ' + capacity));
+    section.append(title, grid);
   };
   update(view);
   return { update };

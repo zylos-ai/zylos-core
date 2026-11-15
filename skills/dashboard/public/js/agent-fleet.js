@@ -1,4 +1,4 @@
-import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=205';
+import { accountUsedPercent, accountRuntimes, remainingQuotaPercent, quotaColor, quotaFillColor, quotaRecordedTime } from './wb/instance-strip.js?v=206';
 import { counted } from './count-label.js?v=1';
 
 import { fallbackName, platformOf } from './wb/plain-text.js?v=106';
@@ -50,12 +50,9 @@ function reasonLabel(reason, labels) {
 export function stateMood(agent) {
   const state = String(agent?.state || 'UNKNOWN').toUpperCase();
   const reason = String(agent?.health_reason || '').toLowerCase();
-  const activity = String(agent?.activity || '').toLowerCase();
   if (state === 'OFFLINE' || reason === 'offline' || reason === 'unreachable' || reason === 'version_unsupported' || reason === 'auth_failed') return 'offline';
   if (state === 'AUTH_WAIT' || state === 'WAKE_OVERDUE') return 'stuck';
   if (state === 'IDLE') return 'idle';
-  if (state === 'BUSY' && (activity.includes('thinking') || activity.includes('思考'))) return 'thinking';
-  if (state === 'THINKING') return 'thinking';
   if (state === 'BUSY') return 'busy';
   if (state === 'UNKNOWN') return 'unknown';
   return 'idle';
@@ -74,7 +71,6 @@ function stateLabel(agent, labels, mood = stateMood(agent)) {
   const state = String(agent?.state || 'UNKNOWN').toUpperCase();
   if (['SLEEPING', 'WAKING', 'WAKE_OVERDUE', 'AUTH_WAIT', 'RATE_WAIT', 'RECLAIMING', 'SWITCHING'].includes(state)) return labels[state.toLowerCase()];
   if (mood === 'busy') return labels.busy;
-  if (mood === 'thinking') return labels.thinking;
   if (mood === 'stuck') return labels.stuck;
   if (mood === 'offline') return labels.offline;
   if (mood === 'unknown') return labels.unknown;
@@ -125,7 +121,6 @@ export function defaultAgentFleetLabels() {
     subtitle: 'Every machine you can view; the ones with a problem come first.',
     manage: 'Manage',
     busy: 'Working',
-    thinking: 'Thinking',
     idle: 'Idle',
     unknown: 'Unknown',
     sleeping: 'Sleeping', waking: 'Waking up', wake_overdue: 'Wake unsuccessful',
@@ -225,15 +220,10 @@ export function buildAgentFleetView(fleet, options = {}) {
   const ageText = options.ageText || ageLabel;
   const tiles = sortAgents(fleet?.agents).map((agent) => {
     const activityFeed = Array.isArray(agent.activity_feed) ? agent.activity_feed : [];
-    const baseMood = stateMood(agent);
-    // The legacy `activity` string never says "thinking" (it falls back to the
-    // last prompt summary), so use the structured feed signal for the state.
-    const mood = baseMood === 'busy' && activityFeed.some((entry) => entry?.kind === 'thinking')
-      ? 'thinking'
-      : baseMood;
+    const mood = stateMood(agent);
     const offline = isOffline(agent);
     const isSelf = agent.self === true;
-    const running = activityFeed.find((entry) => entry?.kind !== 'thinking' && entry?.label)?.label;
+    const running = activityFeed.find((entry) => entry?.label)?.label;
     const activity = compactText(running || agent.activity, labels.noActivity);
     const link = agent.link && typeof agent.link === 'object' ? agent.link : null;
     const linkChip = buildLinkChip(link, labels);
@@ -277,9 +267,9 @@ export function buildAgentFleetView(fleet, options = {}) {
   const counts = tiles.reduce((acc, tile) => {
     acc[tile.mood] = (acc[tile.mood] || 0) + 1;
     return acc;
-  }, { busy: 0, thinking: 0, idle: 0, stuck: 0, offline: 0 });
+  }, { busy: 0, idle: 0, stuck: 0, offline: 0 });
 
-  // Fleet-wide totals of the same three cost tiers shown on each card.
+  // Fleet-wide totals of the same two cost tiers shown on each card.
   // null (rendered '--') when no agent reports that tier at all.
   const agents = Array.isArray(fleet?.agents) ? fleet.agents : [];
   const sumTier = (pick) => {
@@ -323,7 +313,7 @@ export function fleetSelfFromSnapshot(snapshot) {
 }
 
 // Card state pills share the board's colours: working, idle, waiting.
-const pillKind = { busy: 'busy', thinking: 'busy', idle: 'idle', stuck: 'waiting' };
+const pillKind = { busy: 'busy', idle: 'idle', stuck: 'waiting' };
 const pctText = (value) => value == null ? '--' : `${Number(value).toFixed(0)}%`;
 // Both views use remaining quota; remote rate_limit_7d_pct is still a used percentage.
 function quotaBar(label, value, labels, record) {
@@ -420,7 +410,7 @@ function renderTile(tile, labels, t) {
 
 function renderAgentFleetViewHtml(view) {
   const { labels, t } = view;
-  const working = view.counts.busy + view.counts.thinking;
+  const working = view.counts.busy;
   const seg = (count, label, dot) =>
     `<span class="sum-seg${count === 0 ? ' is-zero' : ''}"><i class="sum-dot ${dot}"></i>${count} ${escapeHtml(label)}</span>`;
   const costCell = (label, value) => `<span><small>${escapeHtml(label)}</small> <strong>${escapeHtml(value)}</strong></span>`;

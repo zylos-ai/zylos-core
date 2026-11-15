@@ -28,16 +28,16 @@ export function shortDuration(seconds) {
 }
 /** Shared sampled-status annotation for the board, detail and settings. */
 export function statusAnnotation(row, { t = key => key, now = Date.now() } = {}) {
-  const status = row.live?.status;
-  const at = row.state?.sampledAt ?? status?.sampledAt;
+  const state = row.state ?? {};
+  const at = state.sampledAt;
   if (!Number.isFinite(at)) return { age: '', title: '' };
   const seconds = Math.max(0, Math.floor((now - at) / 1000));
   const unit = seconds < 3600 ? 'minutes' : seconds < 86400 ? 'hours' : 'days';
   const span = t('wb.schedule.span.' + unit, { n: Math.floor(seconds / (unit === 'minutes' ? 60 : unit === 'hours' ? 3600 : 86400)) });
   const age = seconds < 60 ? t('wb.detail.agoSeconds', { n: seconds }) : t('wb.detail.ago', { span });
   return { age: row.state?.stale ? age : '',
-    title: row.state?.kind === 'unknown' && status?.reason === 'stale' && status.lastState
-      ? t('wb.state.lastStatus', { state: t('wb.state.' + status.lastState), age }) : '' };
+    title: state.kind === 'unknown' && state.lastState
+      ? t('wb.state.lastStatus', { state: t('wb.state.' + (state.lastState === 'busy' ? 'working' : state.lastState)), age }) : '' };
 }
 export function annotateStatus(document, target, row, options = {}) {
   const annotation = statusAnnotation(row, options);

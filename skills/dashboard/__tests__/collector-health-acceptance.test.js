@@ -28,13 +28,14 @@ const RUN_ID = 'acceptance-run';
 const SESSION_ID = 'acceptance-session';
 const HOOK_SCRIPT = path.resolve(new URL('../src/lib/hook-ingest.cjs', import.meta.url).pathname);
 const SERVER_ENTRY = path.resolve(new URL('../src/index.js', import.meta.url).pathname);
+const SERVER_PRELOAD = path.resolve(new URL('./fixtures/acceptance-server.js', import.meta.url).pathname);
 const PACKAGE_ROOT = path.resolve(new URL('../../..', import.meta.url).pathname);
 
 let PORT = null;
 let BASE = null;
 let server = null;
 let serverLog = '';
-let statuslineTimer = null;
+let statuslineTimer = null, cookie = null;
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -77,6 +78,10 @@ function freePort() {
   });
 }
 
+// Boundary: real sandbox server/collectors/hooks and SQLite, authenticated health.
+// Run when health/collector routing changes; skip for unrelated UI edits. Official
+// runner isolates outer paths; every child uses this private HOME/ZYLOS/PM2/TMP
+// and tmux socket, the server fixture blocks external network and teardown reaps it.
 before(async () => {
   PORT = await freePort();
   BASE = `http://127.0.0.1:${PORT}`;
@@ -85,7 +90,7 @@ before(async () => {
   }
   fs.writeFileSync(path.join(DATA_DIR, 'config.json'), JSON.stringify({
     port: PORT,
-    auth: { enabled: false }
+    auth: { enabled: true, password: 'acceptance-private-password' }
   }, null, 2));
   fs.writeFileSync(path.join(SANDBOX_ZYLOS_DIR, '.zylos', 'config.json'), JSON.stringify({
     runtime: 'claude',
@@ -117,7 +122,8 @@ before(async () => {
     '-e', 'ZYLOS_MODEL_CONFIG={"runtime":"claude","mode":"default"}',
     'sleep', '120');
 
-  server = spawn('node', [SERVER_ENTRY], {
+  console.log('Acceptance parent isolation:', JSON.stringify({ HOME: SANDBOX_HOME, ZYLOS_DIR: SANDBOX_ZYLOS_DIR, PM2_HOME: SANDBOX_PM2_HOME, TMPDIR: SANDBOX_TMPDIR, socket: TMUX_SOCKET, db: DB_PATH }));
+  server = spawn('node', ['--import', SERVER_PRELOAD, SERVER_ENTRY], {
     env: {
       ...process.env,
       HOME: SANDBOX_HOME,
@@ -130,14 +136,16 @@ before(async () => {
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
-  server.stdout.on('data', (d) => { serverLog += d; });
-  server.stderr.on('data', (d) => { serverLog += d; });
+  server.stdout.on('data', d => { serverLog = (serverLog + d).slice(-32_768); });
+  server.stderr.on('data', d => { serverLog = (serverLog + d).slice(-32_768); });
 
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     try {
       const resp = await fetch(`${BASE}/api/health`);
       if (resp.ok) {
+        const login = await fetch(BASE + '/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ password: 'acceptance-private-password' }) });
+        assert.equal(login.status, 302); cookie = login.headers.get('set-cookie'); assert.ok(cookie);
         await waitFor('initial statusline health check',
           () => sql("SELECT status FROM source_health WHERE name = 'statusline' AND signal_type = 'collector_liveness'"),
           value => value === 'stale');
@@ -151,9 +159,11 @@ before(async () => {
   throw new Error(`sandbox dashboard did not become healthy on :${PORT}\n${serverLog.slice(-2000)}`);
 });
 
-after(() => {
+after(async () => {
   clearInterval(statuslineTimer);
-  server?.kill();
+  if (server && server.exitCode == null) {
+    await new Promise(resolve => { const timeout = setTimeout(() => server.kill('SIGKILL'), 3000); server.once('close', () => { clearTimeout(timeout); resolve(); }); server.kill(); });
+  }
   try { tmux('kill-server'); } catch {}
   fs.rmSync(SANDBOX_ZYLOS_DIR, { recursive: true, force: true });
 });
@@ -162,20 +172,20 @@ function sql(query) {
   return execSync(`sqlite3 "${DB_PATH}" "${query}"`, { encoding: 'utf8' }).trim();
 }
 
-function api(endpoint) {
-  return JSON.parse(execSync(`curl -sf ${BASE}${endpoint}`, { encoding: 'utf8' }));
+function api(endpoint, authenticated = true) {
+  return JSON.parse(execFileSync('curl', ['-sf', ...(authenticated ? ['-H', 'Cookie: ' + cookie] : []), BASE + endpoint], { encoding: 'utf8', timeout: 5000 }));
 }
 
 function injectRawStdin(raw) {
   const child = spawn('node', [HOOK_SCRIPT], {
-    env: { ...process.env, ZYLOS_DIR: SANDBOX_ZYLOS_DIR },
+    env: { ...process.env, HOME: SANDBOX_HOME, ZYLOS_DIR: SANDBOX_ZYLOS_DIR, PM2_HOME: SANDBOX_PM2_HOME, TMPDIR: SANDBOX_TMPDIR, TMUX_TMPDIR: SANDBOX_TMPDIR, TMUX: `${TMUX_SOCKET},0,0` },
     stdio: ['pipe', 'pipe', 'pipe']
   });
   if (raw !== '') child.stdin.write(raw);
   child.stdin.end();
   return new Promise((resolve) => {
-    child.on('close', (code) => resolve(code));
-    setTimeout(() => resolve(-1), 3000);
+    const timeout = setTimeout(() => child.kill('SIGKILL'), 3000);
+    child.on('close', code => { clearTimeout(timeout); resolve(code); });
   });
 }
 
@@ -183,9 +193,9 @@ function injectHookEvent(payload) {
   return injectRawStdin(JSON.stringify(payload));
 }
 
-// --- AC-5: Hook latency + exit behavior ---
+// --- Hook latency + exit behavior ---
 
-test('AC-5: hook-ingest.cjs always exits 0', async (t) => {
+test('hook-ingest.cjs always exits 0', async (t) => {
   for (const payload of [
     { hook_event_name: 'PreToolUse', session_id: 'test-ac5', tool_name: 'Bash', tool_use_id: 'toolu_ac5_01' },
     { hook_event_name: 'PostToolUse', session_id: 'test-ac5', tool_name: 'Bash', tool_use_id: 'toolu_ac5_01' },
@@ -206,7 +216,7 @@ test('AC-5: hook-ingest.cjs always exits 0', async (t) => {
   });
 });
 
-test('AC-5: hook-ingest.cjs latency under 50ms (p95)', async () => {
+test('hook-ingest.cjs latency under 50ms (p95)', async () => {
   const times = [];
   for (let i = 0; i < 20; i++) {
     const start = performance.now();
@@ -223,22 +233,22 @@ test('AC-5: hook-ingest.cjs latency under 50ms (p95)', async () => {
   assert.ok(p95 < 500, `p95 latency ${p95.toFixed(0)}ms exceeds 500ms`);
 });
 
-// --- AC-5: Ingest dedup ---
+// --- Ingest dedup ---
 
-test('AC-5: no duplicate ingest_ids', async () => {
+test('no duplicate ingest_ids', async () => {
   const uniqueIds = sql("SELECT COUNT(DISTINCT ingest_id) FROM runtime_events");
   const total = sql("SELECT COUNT(*) FROM runtime_events");
   assert.equal(uniqueIds, total, 'no duplicate ingest_ids');
 });
 
-// --- AC-1: State engine restart recovery ---
+// --- State engine restart recovery ---
 
-test('AC-1: state snapshots exist', () => {
+test('state snapshots exist', () => {
   const count = parseInt(sql('SELECT COUNT(*) FROM state_snapshots'), 10);
   assert.ok(count >= 0, 'state_snapshots table exists and is queryable');
 });
 
-test('AC-1: state snapshot schema has recovery fields', () => {
+test('state snapshot schema has recovery fields', () => {
   const schema = sql("PRAGMA table_info(state_snapshots)");
   const columns = schema.split('\n').map(row => row.split('|')[1]);
   for (const col of ['runtime', 'session_id', 'running_tool', 'open_turn', 'pending_permission']) {
@@ -246,23 +256,23 @@ test('AC-1: state snapshot schema has recovery fields', () => {
   }
 });
 
-// --- AC-2: Metric resolver ---
+// --- Metric resolver ---
 
 test('public health contains only liveness and boot identity', () => {
-  const health = api('/api/health');
+  const health = api('/api/health', false);
   assert.deepEqual(Object.keys(health).sort(), ['bootId', 'ok', 'service']);
   assert.equal(health.ok, true);
 });
 
 test('state source health structure', () => {
-  const health = api('/api/state');
+  const health = api('/api/health');
   assert.ok(health.source, 'missing source block');
   assert.ok(health.source.runtime_progress, 'missing runtime_progress');
   assert.ok(health.source.collector_liveness, 'missing collector_liveness');
 });
 
 test('source health freshness fields', () => {
-  const health = api('/api/state');
+  const health = api('/api/health');
   for (const group of Object.values(health.source)) {
     for (const entry of Object.values(group)) {
       assert.ok('fresh' in entry, 'missing fresh field');
@@ -323,7 +333,7 @@ test('StatusLine: running service stores Core usage and reports fresh health', a
     context_pct: 42.5,
     session_cost: 0.1234
   });
-  const health = api('/api/state');
+  const health = api('/api/health');
   for (const entry of [health.source.platform.statusline, health.source.runtime_progress.statusline]) {
     assert.equal(entry.status, 'healthy');
     assert.equal(entry.fresh, true);

@@ -5,10 +5,8 @@ import { chatEnabled, createChatSandbox } from './helpers/chat-integration-harne
 // 1280 and 390 px, zh and en, plain and technical view, with the group drawer closed and open: no short label breaks
 // inside, icon and value on screen with the details on hover (the item's name first in its title), the run mode
 // first, and each icon's spoken name; the auto-name button in a box narrower than its label; the strip's pool item
-// with a full pool record (capacity, queue, source and capacity explanations in its title only) at 3840, 1280 and
-// 390 px; the host panel's pool section (slots, source, the three explanations whole) at 1280 and 390 px in both
-// views and in a box narrower than they are, a pool section in multi mode only (slots and source only for a missing
-// record file), none in single or unreadable mode, and the section following the board's polls; refits on a window
+// with numeric capacity and queue only at 3840, 1280 and390 px; the host panel has numeric slots without source,
+// bucket or algorithm explanations, and follows group-count polls; absent outside multi mode. Refits on a window
 // resize with the drawer open (to a width where the full form fits in any font and to one where it fits in none), on
 // whole strip items after content grows on a poll without any compact measurement, and on coming back to the
 // overview from another page without a window error. Product wording is read from the Dashboard's translation

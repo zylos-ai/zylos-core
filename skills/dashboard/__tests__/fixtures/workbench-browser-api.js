@@ -69,8 +69,7 @@ export function workbenchInstanceAnswer(value, now) {
     versions: { zylos: { installed: '0.9.4', latest: null, update: null }, claude: { installed: '2.1.80', latest: null, update: null }, codex: { installed: null, latest: null, update: null } },
     defaults: { claude: { model: 'opus', effort: 'high', threshold: 70, model_thresholds: null, session_hot_ttl: null }, codex: { model: 'gpt-5.5', effort: 'high', threshold: 70, model_thresholds: null, session_hot_ttl: null } },
     runtimeHealth: raw.runtimeHealth, accounts: raw.accounts, supervisorPaused: raw.supervisorPaused ?? false,
-    autoRestarts: raw.autoRestarts ?? 0, resources, services: { ...raw.services, channels: raw.services?.channels ?? [] },
-    poolCapacityRecord: raw.pool?.capacityRecord ?? null };
+    autoRestarts: raw.autoRestarts ?? 0, resources, services: { ...raw.services, channels: raw.services?.channels ?? [] } };
 }
 
 function schedule(now) {

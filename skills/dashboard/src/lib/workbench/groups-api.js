@@ -50,7 +50,7 @@ export function projectGroup(row, snapshot) {
   if (kind === 'working' || flags.queued) {
     if (['auth_failed', 'rate_limited', 'recovering'].includes(health?.health)) flags.blocked = {
       reason: health.health === 'auth_failed' ? 'auth_failed' : 'rate_limited', runtime,
-      recoveryAt: Number.isFinite(health.cooldownUntil) && health.cooldownUntil > 0 ? iso(health.cooldownUntil * 1000) : null,
+      recoveryAt: Number.isFinite(health.cooldownUntil) && health.cooldownUntil * 1000 > now ? iso(health.cooldownUntil * 1000) : null,
     };
     else if (health?.source === 'unreadable' || (runtime !== null && health && health.health == null)) errors.push('runtime_health_unreadable');
   }
@@ -84,7 +84,9 @@ export function projectGroup(row, snapshot) {
   return { ...row, id, channel: row.c4?.componentName ?? (id === 'origin' ? null : id.split(':')[0]),
     displayName: row.name?.displayName ?? row.name?.effectiveName ?? fallbackName(id, row.c4?.componentName),
     runtime, model: row.model ?? (typeof row.target?.model === 'object' ? row.target.model?.model : null),
-    state: { kind, since: iso(since), ...(stale ? { stale: true, sampledAt: status.sampledAt } : {}) }, duration, flags, side: kind === 'offline' ? 'offline' : 'running', runtimeOverridden, modelOverridden,
+    state: { kind, since: iso(since), ...(stale ? { stale: true, sampledAt: status.sampledAt } : {}),
+      ...(kind === 'unknown' && status?.reason === 'stale' && Number.isFinite(status.sampledAt) && ['busy', 'idle'].includes(status.lastState)
+        ? { sampledAt: status.sampledAt, lastState: status.lastState } : {}) }, duration, flags, side: kind === 'offline' ? 'offline' : 'running', runtimeOverridden, modelOverridden,
     lastActivityAt: iso(row.c4?.lastActivityAt),
     ...(kind === 'offline' ? {} : { mainAgent: row.presence === 'running' && ['busy', 'idle'].includes(activity) ? activity : 'unknown' }) };
 }

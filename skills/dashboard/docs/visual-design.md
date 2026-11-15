@@ -217,7 +217,9 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] When the initial Overview request fails and no data is available, show “数据读取失败” (data read failed) only in the list area, reusing the `wb-attention-item wb-attention-problem` error card and `alert` warning icon, with a text contrast ratio of at least 4.5:1 in both themes. The error card and search-toolbar content share horizontal margins: 16 px on desktop and 12 px on mobile; preserve loading and successful empty states. If a refresh fails after data has been loaded, retain the previous data in the list and report the failure in the top bar. A successful request with no groups shows “暂无活跃组” (no active groups), not a read failure; other issues remain visible in the bar.
 
-[Current] If a conversation push connection fails, the page opens the ordinary event stream so instance and group updates remain live while conversation polling continues. Existing reconnect backoff and subscription changes retain their lifecycle ownership.
+[Current] Ordinary conversation push failures reconnect the conversation subscription with backoff. Only an explicit HTTP 429 admission response opens the ordinary stream while conversation polling continues; the page periodically retries the conversation subscription. Reconnect timers, admission probes and subscription changes retain their lifecycle ownership.
+
+[Current] Saving Origin model, effort or CLI settings while Origin is stopped succeeds with a next-start notice and does not submit a restart. A running Origin retains the canonical run-bound restart. Default settings show configured model and effort rather than Origin's current observations. Pool displays contain only used and capacity values, without source or capacity-calculation explanations.
 
 [Current] Runtime, connection, login, and delivery use distinct business copy; preserve the distinctions above.
 

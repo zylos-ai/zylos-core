@@ -1,4 +1,5 @@
 {
+  "actions.next_start": "已保存，下次会话启动时生效。",
   "app.title": "Zylos Dashboard",
   "tab.overview": "总览",
   "tab.memory": "记忆",
@@ -170,7 +171,6 @@
   "status.executing": "执行中...",
   "status.done": "完成",
   "status.failed": "失败：{error}",
-  "cost.session": "会话",
   "cost.today": "今日",
   "cost.7d": "7 天",
   "cost.lifetime": "累计",
@@ -185,7 +185,6 @@
   "effort.ultra": "极高",
   "effort.max": "最高",
   "agent_fleet.busy": "工作中",
-  "agent_fleet.thinking": "思考中",
   "agent_fleet.idle": "空闲",
   "agent_fleet.stuck": "可能卡住",
   "agent_fleet.offline": "离线",

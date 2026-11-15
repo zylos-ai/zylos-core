@@ -5,10 +5,13 @@ export function fleetGroupSummary(snapshot) {
   const counts = { busy: 0, idle: 0, waiting: 0, unknown: 0, error: 0, no_response: 0 };
   const errors = [], silent = [];
   for (const row of rows) {
-    // Attention already applies runtime health to the groups it affects. Queue waits,
-    // stale samples and read failures are not themselves runtime errors.
-    const problem = row.attention?.find(item => ['auth_failed', 'start_failed'].includes(item?.kind));
-    const error = problem?.kind ?? (row.state?.kind === 'error' ? 'start_failed' : null);
+    // Compact flags carry the existing error observations. Queue waits, stale
+    // samples and read failures are not themselves runtime errors.
+    const runtime = row.runtime ?? row.target?.runtime ?? row.live?.runtime;
+    const authFailed = row.flags?.blocked?.reason === 'auth_failed' ||
+      ['running', 'starting'].includes(row.presence) && snapshot.instance?.runtimeHealth?.[runtime]?.health === 'auth_failed';
+    const error = authFailed ? 'auth_failed'
+      : row.flags?.startFailed || row.state?.kind === 'error' ? 'start_failed' : null;
     // A group the supervisor reminded and that has not responded since; an error outranks it.
     const since = !error && Number.isFinite(row.noResponse?.since) ? row.noResponse.since : null;
     const reason = error ?? (since === null ? null : 'no_response');

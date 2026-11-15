@@ -23,7 +23,7 @@ test('main work, queued messages and throttling remain independent facts', () =>
   assert.equal(actual.state.kind, 'working'); assert.equal(actual.mainAgent, 'busy');
   assert.equal(actual.flags.queued.count, 3); assert.equal(actual.flags.queued.waitSeconds, 2);
   assert.equal(actual.flags.blocked.reason, 'rate_limited'); assert.equal(actual.flags.blocked.recoveryAt, new Date(now + 60000).toISOString());
-  for (const cooldownUntil of [0, -1, NaN, Infinity, 1e15, 'invalid']) {
+  for (const cooldownUntil of [0, -1, now / 1000 - 1, now / 1000, NaN, Infinity, 1e15, 'invalid']) {
     value.instance.runtimeHealth.claude.cooldownUntil = cooldownUntil;
     assert.equal(projectGroup(row, value).flags.blocked.recoveryAt, null);
   }
@@ -35,6 +35,16 @@ test('a subagent or command keeps the group working while its main agent is idle
     const value = projectGroup(row, snapshot([row]));
     assert.equal(value.state.kind, 'working'); assert.equal(value.mainAgent, 'idle');
   }
+});
+test('expired status remains unknown while retaining its last observation for the list hint', async () => {
+  const row = base(); row.live.status = { valid: false, reason: 'stale', sampledAt: now - 61000, lastState: 'busy' };
+  const value = snapshot([row]), service = createGroupsApi({ workbench: { getSnapshot: async () => value } });
+  const actual = (await service.running()).rows[0];
+  assert.equal(actual.state.kind, 'unknown'); assert.equal(actual.mainAgent, 'unknown');
+  assert.equal(actual.state.sampledAt, now - 61000); assert.equal(actual.state.lastState, 'busy');
+  assert.equal(Object.hasOwn(actual, 'live'), false); assert.equal(Object.keys(actual).length, 12);
+  row.live.status.reason = 'identity_mismatch';
+  assert.equal(Object.hasOwn((await service.running()).rows[0].state, 'lastState'), false);
 });
 
 test('lifecycle primary states never turn queue or start failures into primary states', () => {
@@ -195,7 +205,7 @@ test('stream and self-fleet counts can retain known rows when only the catalog i
 const RUNNING_FIELDS = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt', 'currentAction'].sort();
 const OFFLINE_FIELDS = ['id', 'displayName', 'channel', 'lastActivityAt', 'flags'].sort();
 
-test('list resources expose only their approved fields while detail retains source observations', async () => {
+test('list resources expose only their compact fields while detail retains source observations', async () => {
   const active = { ...base(), contextPct: 35, tools: [{ name: 'Bash' }], launchConfig: { runtime: 'claude', mode: 'default' },
     secretObservation: { source: 'not a list field' } };
   const sleeping = { ...base('not_running'), sessionGroup: 'telegram:offline', working: null, live: null };

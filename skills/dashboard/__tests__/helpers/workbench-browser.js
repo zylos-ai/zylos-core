@@ -810,6 +810,84 @@ export async function runWorkbenchBrowser(t, sandbox) {
     } finally { release(); await context.close(); }
   });
 
+  await step('saving a CLI change while Origin is stopped succeeds without a restart request', async () => {
+    const { page, context, errors } = await open(390, 844, '/settings');
+    const reads = [], restartPosts = [];
+    page.on('request', request => {
+      const url = new URL(request.url());
+      if (request.method() === 'POST' && /\/actions\/restart$/.test(url.pathname)) restartPosts.push(url.pathname);
+      if (url.pathname === '/api/groups/origin') reads.push(url.search);
+    });
+    await page.route(url => url.pathname === '/api/groups/origin', route => route.fulfill({ json: {
+      ...workbenchAnswer(new URL('http://fixture/api/groups/origin'), Date.now()), presence: 'not_running', live: null,
+    } }));
+    await page.route('**/api/instance/actions/upgrade-runtime', route => route.fulfill({ json: { ok: true, requires_restart: true } }));
+    try {
+      await page.reload();
+      const upgrade = page.locator('#tab-settings [data-action="upgrade-cc"]');
+      await upgrade.waitFor({ state: 'attached' });
+      await openDrawer(page);
+      const section = await upgrade.evaluate(node => node.closest('section.wb-set-sec').id.replace('settings-section-', ''));
+      await page.locator(`[data-settings-section="${section}"]`).click();
+      await upgrade.click();
+      const dialog = page.locator('.wb-modal[role="alertdialog"]');
+      await dialog.locator('.wb-modal-acts button').last().click();
+      await dialog.waitFor({ state: 'detached' });
+      const copy = JSON.parse(fs.readFileSync(path.join(publicDir, 'i18n/wb.zh.json'), 'utf8'));
+      await page.locator('#action-status.modal-status.success').filter({ hasText: copy['actions.next_start'] }).waitFor({ state: 'visible' });
+      await page.waitForTimeout(1700);
+      assert.equal(await dialog.count(), 0, 'stopped Origin does not ask for a restart');
+      assert.deepEqual(restartPosts, []);
+      assert.ok(reads.length > 0 && reads.every(query => query === '?include='), 'state-only Origin reads omit raw/config extras');
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  });
+
+  for (const limited of [false, true]) await step(limited
+    ? 'confirmed chat connection limits keep ordinary updates and periodically retry chat'
+    : 'a temporary chat stream failure reconnects the chat subscription', async () => {
+    const { page, context, errors } = await open(390, 844, '/');
+    try {
+      await page.clock.install();
+      await context.addInitScript(() => {
+        window.__streamSources = [];
+        window.EventSource = class extends EventTarget {
+          static OPEN = 1;
+          constructor(url) {
+            super(); this.url = String(url); this.readyState = 1;
+            if (window.__streamSources.length >= 50) throw new Error('stream source bound exceeded');
+            window.__streamSources.push(this);
+            queueMicrotask(() => this.onopen?.());
+          }
+          close() { this.readyState = 2; }
+        };
+      });
+      let probes = 0;
+      await page.route(url => url.pathname === '/api/stream', route => {
+        probes++;
+        return route.fulfill({ status: limited ? 429 : 200, contentType: 'text/event-stream', body: '' });
+      });
+      await page.reload();
+      await openDashboardTab(page, 'chat');
+      await page.waitForFunction(() => window.__streamSources.at(-1)?.url.includes('chat=1'));
+      const count = await page.evaluate(() => window.__streamSources.length);
+      await page.evaluate(() => window.__streamSources.at(-1).onerror());
+      assert.equal(probes, 1, 'one bounded HTTP admission probe identifies the hidden EventSource status');
+      if (limited) {
+        await page.waitForFunction(() => !window.__streamSources.at(-1)?.url.includes('chat=1'));
+        await page.clock.runFor(29_000);
+        assert.equal(await page.evaluate(() => window.__streamSources.length), count + 1, 'ordinary stream stays live before retry');
+        await page.clock.runFor(1000);
+      } else {
+        assert.equal(await page.evaluate(() => window.__streamSources.length), count, 'generic errors retain reconnect backoff');
+        await page.clock.runFor(1000);
+      }
+      await page.waitForFunction(() => window.__streamSources.at(-1)?.url.includes('chat=1'));
+      assert.equal(await page.evaluate(() => window.__streamSources.length), count + (limited ? 2 : 1));
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  });
+
   // Viewing other machines: the header version and the machine panel's meta line show the viewed machine's own
   // Core version, and nothing when that machine reports none or "unknown"; never this machine's 0.9.4. This step's
   // page sees three remotes through answerFleet.

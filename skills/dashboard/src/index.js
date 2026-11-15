@@ -505,7 +505,7 @@ function buildInstancePayload() {
   const observed = snapshot?.instance ?? {};
   const zylosConfig = { ...loadZylosConfig(config.zylosDir), zylosDir: config.zylosDir };
   const defaults = Object.fromEntries(['claude', 'codex'].map(runtime => {
-    const meta = getActionsMeta({ ...zylosConfig, runtime }, null);
+    const meta = getActionsMeta({ ...zylosConfig, runtime });
     return [runtime, { model: meta.current_model, effort: meta.current_effort,
       threshold: meta.new_session_threshold, model_thresholds: meta.model_thresholds,
       session_hot_ttl: meta.session_hot_ttl }];
@@ -517,7 +517,6 @@ function buildInstancePayload() {
     runtimeHealth: observed.runtimeHealth ?? null, accounts: observed.accounts ?? null,
     supervisorPaused: observed.supervisorPaused ?? null, autoRestarts: observed.autoRestarts ?? null,
     resources, services: observed.services ?? null,
-    poolCapacityRecord: observed.pool?.capacityRecord ?? null,
     chat_allow_remote: config.chat?.allowRemote === true };
 }
 
@@ -1140,7 +1139,7 @@ async function handleApi(req, res, pathname, url) {
     const gapLimit = parseInt(url.searchParams.get('gap_limit') || '100', 10);
     const gapOffset = parseInt(url.searchParams.get('gap_offset') || '0', 10);
     const gaps = await coreLogImporter.sanitizeEvents(store.getHistoryDiagnostics({
-      sessionGroup, stream, limit: gapLimit, offset: gapOffset }));
+      sessionGroup, includeLegacyOrigin: key === 'origin' && readFleetSessionMode() === 'single', stream, limit: gapLimit, offset: gapOffset }));
     sendJson(res, 200, { events, count: events.length, gaps });
     return true;
   }
@@ -1232,7 +1231,6 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/instance/runtime-options') {
-    await coreState.refresh();
     const selectedRuntime = url.searchParams.get('runtime') ?? activeRuntime;
     if (!['claude', 'codex'].includes(selectedRuntime)) {
       sendJson(res, 400, { error: 'INVALID_RUNTIME' }); return true;
@@ -1241,15 +1239,12 @@ async function handleApi(req, res, pathname, url) {
     zylosConfig.zylosDir = config.zylosDir;
     zylosConfig.runtime = selectedRuntime;
     zylosConfig.thresholdModel = url.searchParams.get('model');
-    const runtimeMeta = !url.searchParams.has('runtime') && selectedRuntime === activeRuntime
-      ? (activeRuntime === 'codex' ? buildRuntimeInfo() : statuslineCollector?.getRuntimeInfo())
-      : null;
-    const meta = getActionsMeta(zylosConfig, runtimeMeta);
+    const meta = getActionsMeta(zylosConfig);
     meta.zylos_version = zylosVersion;
     meta.runtime_cli = selectedRuntime;
     meta.cc_version = selectedRuntime === 'codex'
-      ? runtimeMeta?.codex_running || runtimeMeta?.codex_version || codexInstalledVersion || null
-      : ccInstalledVersion || runtimeMeta?.cc_version || null;
+      ? codexInstalledVersion || null
+      : ccInstalledVersion || null;
     sendJson(res, 200, meta);
     return true;
   }

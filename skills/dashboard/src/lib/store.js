@@ -704,12 +704,14 @@ export class Store {
     }));
   }
 
-  getHistoryDiagnostics({ sessionGroup, stream, limit = 100, offset = 0 } = {}) {
+  getHistoryDiagnostics({ sessionGroup, stream, limit = 100, offset = 0, includeLegacyOrigin = false } = {}) {
     const conditions = ["signal_type='history'", "status!='healthy'"];
     const params = [];
     if (stream !== undefined) { conditions.push("json_extract(extra,'$.stream')=?"); params.push(stream); }
     if (sessionGroup !== undefined) {
-      if (sessionGroup === null) conditions.push("COALESCE(json_extract(extra,'$.stream'),'') NOT LIKE 'events:%'");
+      if (includeLegacyOrigin && (sessionGroup === null || sessionGroup === 'origin')) {
+        conditions.push("(json_extract(extra,'$.stream')='events:origin' OR COALESCE(json_extract(extra,'$.stream'),'') NOT LIKE 'events:%')");
+      } else if (sessionGroup === null) conditions.push("COALESCE(json_extract(extra,'$.stream'),'') NOT LIKE 'events:%'");
       else { conditions.push("json_extract(extra,'$.stream')=?"); params.push(`events:${sessionGroup}`); }
     }
     const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 100;

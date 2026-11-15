@@ -255,6 +255,30 @@ test('changing the default engine is a draft until saved and the undo restores t
 });
 
 const effortMeta = runtime => ({ runtime, current_model: 'one', current_effort: 'high', models: [{ id: 'one' }, { id: 'two' }], efforts_by_model: { one: ['high'], two: ['low', 'minimal'] } });
+
+test('the mounted default effort uses configured metadata and only saves a user change', async () => {
+  const document = documentFixture(), root = document.createElement('div'), calls = [], questions = [];
+  const data = snapshot();
+  data.rows[0] = { ...data.rows[0], runtimeInfo: { effort: 'high', model: 'one' }, effective: { runtime: 'claude', effort: 'high' } };
+  const meta = { runtime: 'claude', current_model: 'one', current_effort: 'low', models: [{ id: 'one' }], efforts_by_model: { one: ['low', 'high'] } };
+  const panel = renderDefaults(root, { snapshot: data, page: { runtimeTotal: 1 }, metadata: { claude: meta }, document, t,
+    confirm: async question => { questions.push(question); return true; }, read: async () => ({}),
+    execute: async (action, body) => { calls.push({ action, body }); return true; } });
+  try {
+    const effort = root.querySelector('#settings-effort-claude'), save = root.querySelector('#settings-save-models');
+    assert.equal(effort.value, 'low', 'the running Origin high effort is not the configured default');
+    assert.equal(save.hidden, true); assert.equal(save.disabled, true);
+    await save.dispatch('click');
+    assert.deepEqual(calls, []); assert.deepEqual(questions, []);
+    effort.value = 'low'; await effort.dispatch('change'); await save.dispatch('click');
+    assert.deepEqual(calls, [], 'reselecting the configured value is not a change');
+    effort.value = 'high'; await effort.dispatch('change');
+    assert.equal(save.hidden, false); assert.equal(save.disabled, false);
+    await save.dispatch('click');
+    assert.deepEqual(calls, [{ action: 'switch-effort', body: { runtime: 'claude', effort: 'high' } }]);
+    assert.equal(questions.length, 1); assert.equal(save.hidden, true);
+  } finally { panel.destroy(); }
+});
 async function draftBothEngines(root) {
   for (const runtime of ['claude', 'codex']) {
     const model = root.querySelector('#settings-model-' + runtime); model.value = 'two'; await model.dispatch('change');
@@ -830,12 +854,11 @@ test('a custom model requests its own threshold instead of showing the current m
 test('settings group status labels include sample age and last-known status tooltip', () => {
   const document = documentFixture(), root = node(document, 'div');
   const data = snapshot(), sampledAt = Date.now() - 20000;
-  data.rows[0] = { ...data.rows[0], state: { kind: 'idle', stale: true, sampledAt },
-    live: { status: { valid: false, reason: 'stale', sampledAt, lastState: 'idle' } } };
+  data.rows[0] = { ...data.rows[0], state: { kind: 'idle', stale: true, sampledAt } };
   const options = { snapshot: data, page: { runtime: [], runtimeTotal: 1 }, document, t, metadata: {} };
   renderDefaults(root, options);
   assert.ok(root.querySelector('.wb-status-age'));
-  data.rows[0].state = { kind: 'unknown', sampledAt };
+  data.rows[0].state = { kind: 'unknown', reason: 'stale', sampledAt, lastState: 'idle' };
   renderDefaults(root, options);
   const labels = root.querySelectorAll('small');
   assert.ok(labels.some(label => label.title?.startsWith('wb.state.lastStatus:')));

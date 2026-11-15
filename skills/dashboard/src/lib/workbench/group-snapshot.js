@@ -6,7 +6,7 @@ import { mergeGroups, previewTaskIds, safeRaw } from './group-merge.js';
 import { readTaskNames as defaultReadTaskNames } from './schedule-read.js';
 import { waitingReason } from './waiting-reason.js';
 import { classify, durationOf, sortRows, countRows } from './group-state.js';
-import { buildAttention, createChannelDownCounter } from './attention.js';
+import { createChannelDownCounter } from './attention.js';
 import { activityBuckets } from './activity-buckets.js';
 import { workingHistory, END_TYPES, TOOL_TYPES, CHILD_TYPES, MAIN_ACTION_TYPES, MAIN_INPUT_TYPES, STOP_HOOK_LAG_MS } from './working.js';
 const { resolveSessionHotTtl } = await defaultLoadCoreModule('session-hot-ttl.js');
@@ -208,7 +208,7 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       const events = row.state.kind === 'busy' && row.live?.runId ? queryAllEvents(store, {
         sessionGroup: row.sessionGroup, includeLegacyOrigin: mode === 'single' && row.sessionGroup === null, runId: row.live.runId, types: ['user_prompt_submit', 'stop'], until: new Date(at).toISOString(),
       }) : [];
-      row.duration = durationOf(row, { now: at, events });
+      row.duration = durationOf(row, { now: at, events, includeLegacyOrigin: mode === 'single' && row.sessionGroup === null });
     }
     let pm2Data = null;
     try {
@@ -236,9 +236,6 @@ export function createGroupSnapshot({ zylosDir, store, c4Reader, loadCoreModule 
       return { channel, service, status: pm2Data.processes.find(process => process.name === service)?.pm2_env?.status ?? null,
         down: channelDownCounter.get(service) >= 2 };
     });
-    value.attention = buildAttention(value, { channelDownCounter, pm2Data });
-    for (const row of rows) row.attention = value.attention.problems.filter(problem =>
-      problem.group === row.sessionGroup || problem.groups?.includes(row.sessionGroup));
     value.rows = sortRows(rows);
     return value;
   }

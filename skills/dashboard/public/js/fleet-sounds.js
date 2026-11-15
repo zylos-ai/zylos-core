@@ -1,7 +1,7 @@
-import { stateMood } from './agent-fleet.js?v=206';
+import { stateMood } from './agent-fleet.js?v=207';
 
 const STORAGE_KEY = 'fleet-sounds-muted';
-const WORKING_MOODS = new Set(['busy', 'thinking']);
+const WORKING_MOODS = new Set(['busy']);
 
 // Line-style bell icons (Feather, MIT) — stroke follows the button's
 // currentColor so CSS owns the on/off tinting.
@@ -20,8 +20,8 @@ export function isWorkingMood(mood) {
 
 // Diffs the previous per-agent mood map against a fresh fleet payload.
 // Agents seen for the first time seed the map silently, so a page load (or an
-// agent joining the fleet) never fires a burst of cues. busy<->thinking is not
-// a transition, and working->stuck/offline deliberately skips the finish cue —
+// agent joining the fleet) never fires a burst of cues. working->stuck/offline
+// deliberately skips the finish cue —
 // that state gets surfaced visually, a "done" chime would be misleading.
 export function computeFleetTransitions(prevMoods, agents) {
   const moods = new Map();

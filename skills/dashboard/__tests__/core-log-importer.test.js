@@ -334,6 +334,24 @@ test('single-stream failures affect health and recover without erasing historica
   assert.equal(f.store.getHistoryDiagnostics().length, 0);
 });
 
+// Real private Store diagnostics. Run for event-scope or diagnostic-pagination
+// changes; skip UI-only changes. The fixture owns its files/importer and closes
+// them through test teardown; no network, tmux, PM2 or live database is opened.
+test('single Origin diagnostics include its hook stream and legacy streams before pagination', t => {
+  const f = fixture(t);
+  for (const [name, stream] of [['a-origin', 'events:origin'], ['b-legacy', 'router'], ['c-other', 'events:other'], ['d-receive', 'receive']]) {
+    f.store.upsertSourceHealth(name, 'history', 'warning', { stream, reason: 'file_missing' });
+  }
+  const names = filter => f.store.getHistoryDiagnostics(filter).map(row => row.name);
+  assert.deepEqual(names({ sessionGroup: null }), ['b-legacy', 'd-receive']);
+  assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true }), ['a-origin', 'b-legacy', 'd-receive']);
+  assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true, limit: 1, offset: 1 }), ['b-legacy']);
+  assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true, stream: 'events:origin' }), ['a-origin']);
+  assert.deepEqual(names({ sessionGroup: null, includeLegacyOrigin: true, stream: 'events:other' }), []);
+  assert.deepEqual(names({ sessionGroup: 'origin' }), ['a-origin']);
+  assert.deepEqual(names({ sessionGroup: 'other', includeLegacyOrigin: true }), ['c-other']);
+});
+
 test('scan descriptors survive rename before consumption; old tail precedes next current', async t => {
   const f = fixture(t); f.write(line('e1')); await f.read(); f.append(line('e2'));
   let renamed = false;
