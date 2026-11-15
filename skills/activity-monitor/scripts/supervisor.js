@@ -213,6 +213,16 @@ export function createSupervisor(deps) {
         catch(error) { reportError(error,{phase:'pool-metrics'}); }
       }
       if(now()-lastMaintenance>=60000) {
+        const activeGroups=new Set([...current.map(scene=>scene.sessionGroup ?? 'origin'),
+          ...pendingGroups.map(group=>group.sessionGroup),...continuationGroups.map(group=>group.sessionGroup)]);
+        for (const runtime of ['claude','codex']) {
+          try {
+            await health.serial(runtime,()=>health.store(runtime).pruneGroups({activeGroups,isDeleted:async group=>{
+              try { await fs.stat(groupRunDir(group,deps.env));return false; }
+              catch(error) { if(error.code==='ENOENT')return true;throw error; }
+            }}));
+          } catch(error) { reportError(error,{phase:'health-maintenance',runtime}); }
+        }
         const files=new Set([supervisorDiagnosticPath(deps.env),poolMetricsPath(deps.env),...current.map(s=>path.join(s.runDir,'events.jsonl'))]);
         try {
           const entries=await fs.readdir(sessionGroupRunRoot(deps.env),{withFileTypes:true});

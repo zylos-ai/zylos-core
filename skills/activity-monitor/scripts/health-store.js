@@ -5,6 +5,8 @@ import { initialHealthEvidence, reduceHealthEvidence, sanitizeHealthEvent, safeH
 import { durableJson, runtimeRoot, syncDirectory } from './runtime-generation.js';
 import { currentOutageNotice } from './outage-notice.js';
 
+export const HEALTH_GROUP_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
+
 export const ENGINE_DEFAULTS = Object.freeze({ cooldownUntil:0, rateLimitResetTime:'', unavailableSince:0,
   recoveringStartedAt:0, restartFailureCount:0, lastRecoveryAt:0, lastDownCheckAt:0, lastUserMessageRecoveryAt:0 });
 const STATES = new Set(['ok','rate_limited','auth_failed','unavailable','recovering','down']);
@@ -96,7 +98,21 @@ export class HealthStore {
     this.file = path.join(zylosDir, 'activity-monitor', 'runtime-health', `${runtime}.json`);
     this.initial = {...initialHealthEvidence(),rateLimitActive:false,groups:{},scheduling:{...ENGINE_DEFAULTS}};
   }
+  signature() {
+    try {
+      const stat = fs.statSync(this.file, {bigint:true});
+      return [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(':');
+    } catch (error) { if (error.code === 'ENOENT') return 'missing'; throw error; }
+  }
+  select(state, sessionGroup) {
+    const selected = structuredClone(state);
+    for (const key of GROUP_FIELDS) delete selected[key];
+    Object.assign(selected, selected.groups[sessionGroup]);
+    return selected;
+  }
   read(sessionGroup = 'origin') {
+    const signature = this.signature();
+    if (this.cached && signature === this.cachedSignature) return this.select(this.cached,sessionGroup);
     try {
       const record = JSON.parse(fs.readFileSync(this.file, 'utf8'));
       const state = fromFile(record,this.runtime,sessionGroup);
@@ -111,6 +127,7 @@ export class HealthStore {
       Object.assign(state,state.groups[sessionGroup]);
       if (changed) this.write(state,sessionGroup);
       this.loaded=true;
+      this.cached=structuredClone(state);this.cachedSignature=changed ? this.signature() : signature;
       return state;
     } catch (error) {
       if (error.code !== 'ENOENT') {
@@ -123,10 +140,30 @@ export class HealthStore {
         this.log(`Warning: invalid ${this.runtime} health file quarantined; starting from ok`);
       }
       this.loaded=true;
+      this.cached=structuredClone(this.initial);this.cachedSignature='missing';
       return structuredClone(this.initial);
     }
   }
-  write(state, sessionGroup = 'origin') { durableJson(this.file, toFile(state,this.runtime,this.now(),sessionGroup)); this.loaded=true; }
+  write(state, sessionGroup = 'origin') {
+    const record=toFile(state,this.runtime,this.now(),sessionGroup);
+    durableJson(this.file,record);
+    this.cached=fromFile(record,this.runtime,'origin');this.cachedSignature=this.signature();this.loaded=true;
+  }
+  async pruneGroups({activeGroups = new Set(), isDeleted = async () => false} = {}) {
+    const state=this.read();
+    let removed=0;
+    for (const [group, evidence] of Object.entries(state.groups)) {
+      // Keep the replay marker until all notifications finish. Active and queued
+      // groups are protected even if they have emitted no recent terminal hook.
+      if (group === 'origin' || activeGroups.has(group) || evidence.pending_notice) continue;
+      const last=Math.max(evidence.last_processed?.received_at ?? 0,evidence.last_notice_outcome?.observed_at ?? 0);
+      const expired=last > 0 && this.now()-last >= HEALTH_GROUP_IDLE_MS;
+      if (!expired && !await isDeleted(group)) continue;
+      delete state.groups[group];removed++;
+    }
+    if (removed) this.write(state);
+    return removed;
+  }
   currentNotice({ identity, quota } = {}) {
     const state = this.read();
     const result = currentOutageNotice(state, identity, quota, this.now());
