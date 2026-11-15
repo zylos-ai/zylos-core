@@ -12,7 +12,7 @@ const hints = ['Check: pm2 logs worker-a', 'Check: pm2 logs worker-b'];
 const cleanup = [];
 afterEach(() => { for (const clean of cleanup.splice(0)) clean(); });
 
-function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity, web = '', coreConfig = {}, dashboardConfig } = {}) {
+function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', origin = 'sleeping', group = 'origin', runtime = 'claude', alertTarget, sender = false, sessionMode, capacity, web = '', coreConfig = {}, dashboardConfig, inheritedEnv = {} } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'doc-')));
   cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
@@ -51,7 +51,7 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
     DOCTOR_TEST_ROOT: root, DOCTOR_TEST_STATE: state, DOCTOR_TEST_NETWORK: network,
     DOCTOR_TEST_MODE: sessionMode ?? mode, DOCTOR_TEST_ORIGIN: origin, ZYLOS_SESSION_GROUP: group, DOCTOR_TEST_RUNTIME: runtime,
     DOCTOR_TEST_TMUX_SOCKET: path.join(dirs.TMPDIR, 'tmux.sock'), DOCTOR_TEST_WEB: web, NO_COLOR: '1',
-    ZYLOS_GH_RETRY_DELAY_MS: '' };
+    ZYLOS_GH_RETRY_DELAY_MS: '', ...inheritedEnv };
   for (const [key, dir] of Object.entries(dirs)) assert.equal(fs.realpathSync(env[key]), dir);
   assert.ok(Buffer.byteLength(env.DOCTOR_TEST_TMUX_SOCKET) < 100, 'Use a short temporary parent');
   const result = spawnSync(process.execPath, [child, ...args], {
@@ -72,6 +72,12 @@ function runDoctor(args, { state = 'fail', network = 'up', mode = 'single', orig
   const databaseCreated = fs.existsSync(path.join(dirs.ZYLOS_DIR, 'comm-bridge', 'c4.db'));
   return { ...result, calls, probes, repairs, versions, databaseCreated };
 }
+
+test('doctor fixture rejects unrelated inherited variables', () => {
+  assert.throws(() => runDoctor(['--check'], {
+    inheritedEnv: { DOCTOR_UNRELATED_VARIABLE: 'fixture-only' },
+  }), /Unexpected inherited variable: DOCTOR_UNRELATED_VARIABLE/);
+});
 
 // Boundary: real doctor text uses the shared capacity reader, without adding a
 // failed check. Run for capacity notice or reader changes; skip unrelated repair

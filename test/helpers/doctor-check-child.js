@@ -22,13 +22,15 @@ assert.ok(Buffer.byteLength(process.env.DOCTOR_TEST_TMUX_SOCKET) < 100);
 const allowed = new Set(['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR', 'PATH', 'CLAUDE_BIN',
   'DOCTOR_TEST_ROOT', 'DOCTOR_TEST_STATE', 'DOCTOR_TEST_NETWORK', 'DOCTOR_TEST_TMUX_SOCKET',
   'NO_COLOR', 'ZYLOS_GH_RETRY_DELAY_MS', 'DOCTOR_TEST_MODE', 'DOCTOR_TEST_ORIGIN', 'DOCTOR_TEST_RUNTIME', 'ZYLOS_SESSION_GROUP', 'DOCTOR_TEST_WEB']);
-// The repository test runner adds only its child-process guard preload.
+// The repository guard adds its preload and an explicit test marker.
 const guardPreload = `--import=${JSON.stringify(new URL('../../scripts/test-child-preload.js', import.meta.url).href)}`;
 if (process.env.NODE_OPTIONS !== undefined) assert.equal(process.env.NODE_OPTIONS, guardPreload);
+const guardMarker = process.env.NODE_OPTIONS === guardPreload && process.env.ZYLOS_TEST_RUN === '1';
 for (const key of Object.keys(process.env)) {
   // macOS may add this locale marker even to an explicitly constructed env.
   const systemLocale = process.platform === 'darwin' && key === '__CF_USER_TEXT_ENCODING';
-  assert.ok(allowed.has(key) || key === 'NODE_OPTIONS' || systemLocale, `Unexpected inherited variable: ${key}`);
+  assert.ok(allowed.has(key) || key === 'NODE_OPTIONS' || (key === 'ZYLOS_TEST_RUN' && guardMarker) || systemLocale,
+    `Unexpected inherited variable: ${key}`);
 }
 
 // Replace only OS/network boundaries; import the product normally below.
