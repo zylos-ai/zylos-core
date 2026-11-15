@@ -135,14 +135,33 @@ test('startup hook bounds long diagnostic fields and renders command-like text o
   assert.equal(fs.existsSync(path.join(f.root, marker)), false);
 });
 
-test('recovery documentation recommends resume and retains only the fixed read-only bootstrap command', () => {
-  const document = fs.readFileSync(new URL('../../../../docs/self-upgrade-recovery.md', import.meta.url), 'utf8');
+function assertRecoveryDocumentation(document) {
   assert.match(document, /zylos recovery resume/);
   assert.match(document, /bootstrap\.cjs.*--status/);
-  assert.doesNotMatch(document, /bootstrap\.cjs[^\n]*--once/);
+  const fallback = /An upgrade interrupted while npm is replacing the package can leave no `zylos`\ncommand at all\.[^\n]*\n\n```sh\n([^\n]+)\n```\n\nIt resumes [^\n]+(?:\n[^\n]+)*/g;
+  const passages = [...document.matchAll(fallback)];
+  assert.equal(passages.length, 1, 'one fallback passage explains the missing zylos command');
+  assert.equal(passages[0][1], 'node "$HOME/zylos/.zylos/upgrade/bootstrap.cjs" --root "$HOME/zylos" --once');
+  assert.equal((passages[0][0].match(/--once\b/g) || []).length, 1, 'only the fixed fallback command executes bootstrap');
+  assert.ok(document.indexOf('zylos recovery resume') < passages[0].index, 'normal recovery is recommended first');
+  assert.doesNotMatch(document.replace(fallback, ''), /--once\b/,
+    'bootstrap execution is confined to the missing-command fallback');
   assert.match(document, /zylos upgrade --resume-finalize/);
   assert.match(document, /subsequent upgrade deploys the new stable bootstrap/);
   assert.match(document, /frozen recovery files and hashes/);
+}
+
+test('recovery documentation recommends resume and confines bootstrap execution to the missing-command fallback', () => {
+  const document = fs.readFileSync(new URL('../../../../docs/self-upgrade-recovery.md', import.meta.url), 'utf8');
+  assertRecoveryDocumentation(document);
+});
+
+test('recovery documentation rejects bootstrap execution in another paragraph', () => {
+  const document = fs.readFileSync(new URL('../../../../docs/self-upgrade-recovery.md', import.meta.url), 'utf8');
+  const misplaced = document + '\n## Routine recovery\n\n```sh\n'
+    + 'node "$HOME/zylos/.zylos/upgrade/bootstrap.cjs" --root "$HOME/zylos" --once\n```\n';
+  assert.throws(() => assertRecoveryDocumentation(misplaced),
+    { code: 'ERR_ASSERTION', message: /confined to the missing-command fallback/ });
 });
 
 // Parent-path discovery fails closed at validation after a dangling metadata link
