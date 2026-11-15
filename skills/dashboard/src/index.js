@@ -540,9 +540,9 @@ function readFleetSessionMode() {
   return ['single', 'multi'].includes(value.session_mode) ? value.session_mode : null;
 }
 
-async function refreshFleetGroupSummary() {
+async function refreshFleetGroupSummary(options) {
   if (readFleetSessionMode() !== 'multi') return;
-  try { await workbench.getSnapshot(); } catch { /* Optional observations cannot break the existing state API. */ }
+  try { await workbench.getSnapshot(undefined, options); } catch { /* Optional observations cannot break the existing state API. */ }
 }
 
 function buildSelfFleetRecord(statePayload = buildApiStatePayload()) {
@@ -1197,7 +1197,7 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
   if (pathname === '/api/agent-status' && req.method === 'GET') {
-    const [sampled] = await Promise.all([coreState.refresh({ readiness: true }), refreshFleetGroupSummary()]);
+    const [sampled] = await Promise.all([coreState.refresh({ readiness: true }), refreshFleetGroupSummary({ maxAgeMs: 30000 })]);
     const state = buildApiStatePayload();
     const readiness = agentReadiness(sampled.readinessObservation, { sessionMode: sampled.sessionMode });
     sendJson(res, 200, buildAgentStatus({ state, readiness }));

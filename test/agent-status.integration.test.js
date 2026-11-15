@@ -26,7 +26,7 @@ test('agent-status HTTP preserves authentication and single/multi observation se
   fs.writeFileSync(path.join(root, 'activity-monitor/restart-requests.json'), '[]');
   const coreConfig = path.join(root, '.zylos/config.json');
   let mode = 'single', now = Date.now(), groupState = 'busy', listKnown = true;
-  let originActivity = 'idle', useRealCore = false;
+  let originActivity = 'idle', originHealth = null, useRealCore = false;
   let statusReads = 0, nullQuotas = false, cgroupConstructions = 0;
   const writeMode = value => {
     mode = value;
@@ -62,7 +62,7 @@ test('agent-status HTTP preserves authentication and single/multi observation se
     .map(name => [name, CoreState.prototype[name]]));
   const readinessObservation = () => ({
     observation: { identity: { present: true, ready: true, sessionId: 'fixture-session' },
-      status: { valid: true, value: { state: originActivity } } }, view: null, runtimeHealth: null,
+      status: { valid: true, value: { state: originActivity } } }, view: null, runtimeHealth: originHealth,
   });
   t.mock.method(CoreState.prototype, 'refresh', async function (options = {}) {
     if (useRealCore) return realCore.refresh.call(this, options);
@@ -194,12 +194,12 @@ test('agent-status HTTP preserves authentication and single/multi observation se
     writeMode('multi');
     for (const state of ['busy', 'idle', 'unknown']) {
       groupState = state;
-      now += 3000;
+      now += 30_001;
       const value = await read('/api/agent-status');
       const collected = statusReads;
       assert.ok(collected > 0);
       const repeated = await read('/api/agent-status');
-      assert.equal(statusReads, collected, 'consecutive HTTP reads reuse the Workbench 2s cache');
+      assert.equal(statusReads, collected, 'consecutive machine-status reads reuse the Workbench snapshot');
       assert.deepEqual(repeated.groups, value.groups);
       assert.equal(value.schema_version, 1);
       assert.equal(value.session_mode, 'multi');
@@ -210,11 +210,62 @@ test('agent-status HTTP preserves authentication and single/multi observation se
       assert.deepEqual(value.cost, { session: null, daily: 4.5, weekly: 12.75 });
     }
     listKnown = false;
-    now += 3000;
+    now += 30_001;
     const unavailable = await read('/api/agent-status');
     assert.equal(unavailable.state, 'UNKNOWN');
     assert.equal(unavailable.context_pct, null);
     assert.equal(unavailable.cost.session, null);
+  });
+
+  // Actual HTTP -> request cache age -> Workbench builder; only source inputs
+  // and the clock are fixtures. Run for cache policy or readiness route changes;
+  // unrelated presentation changes may skip. Same private environment as above.
+  await t.test('machine status reuses groups for thirty seconds while readiness stays current', async () => {
+    writeMode('multi');
+    listKnown = true;
+    groupState = 'busy';
+    now += 30_001;
+    const before = statusReads;
+    const first = await read('/api/agent-status');
+    assert.equal(statusReads, before + 1, 'an expired snapshot invokes the real builder');
+    assert.equal(first.state, 'BUSY');
+    assert.equal(first.groups.busy, 1);
+    assert.equal(first.readiness.ready, true);
+    const builtAt = now;
+    groupState = 'idle';
+    for (const age of [2001, 10_000, 29_999]) {
+      now = builtAt + age;
+      const cached = await read('/api/agent-status');
+      assert.equal(statusReads, before + 1, `no rebuild at age ${age}`);
+      assert.equal(cached.state, 'BUSY');
+      assert.equal(cached.groups.busy, 1);
+    }
+    originHealth = { health: 'auth_failed' };
+    const blocked = await read('/api/agent-status');
+    assert.equal(statusReads, before + 1, 'readiness change does not rebuild groups');
+    assert.equal(blocked.state, 'BUSY');
+    assert.equal(blocked.readiness.reason, 'health_auth_failed');
+    assert.equal(blocked.readiness.ready, false);
+    originHealth = null;
+    assert.equal((await read('/api/agent-status')).readiness.ready, true);
+    assert.equal(statusReads, before + 1);
+
+    now = builtAt + 30_001;
+    const rebuilt = await read('/api/agent-status');
+    assert.equal(statusReads, before + 2, 'a request past thirty seconds rebuilds');
+    assert.equal(rebuilt.state, 'IDLE');
+    assert.equal(rebuilt.groups.idle, 1);
+
+    // The page retains its independent two-second read policy on the same cache.
+    groupState = 'busy';
+    now += 2001;
+    const page = await read('/api/workbench/groups');
+    assert.equal(statusReads, before + 3, 'the page still rebuilds after two seconds');
+    assert.equal(page.counts.busy, 1);
+    const reusedPage = await read('/api/agent-status');
+    assert.equal(statusReads, before + 3, 'machine status reuses the newer page snapshot');
+    assert.equal(reusedPage.state, 'BUSY');
+    assert.equal(reusedPage.groups.busy, 1);
   });
 
   // Unlimited/unreadable container quotas remain null through both HTTP

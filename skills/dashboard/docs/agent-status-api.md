@@ -39,9 +39,9 @@ Other existing Dashboard authorization rules apply unchanged.
 | --- | --- |
 | `schema_version` | Integer contract version, currently `1`. Adding fields does not increment it. Removing fields or changing their meaning does. Consumers must tolerate unknown fields. |
 | `session_mode` | `single` or `multi`. If mode configuration cannot be read, the response structure uses `single`; CoreState clears session observations, so `state` is `UNKNOWN`, `context_pct` is `null`, and readiness is `runtime_down` / `status_missing`. |
-| `sampled_at` | ISO timestamp when this response was assembled. The contributing cached observations can be older; this is not a promise of simultaneous measurement. |
-| `state` | In single mode, the existing `/api/state.state`. In multi mode, any Workbench summary `busy > 0` means `BUSY`; otherwise a readable list (`listKnown === true`) means `IDLE`; otherwise `UNKNOWN`. A readable list containing waiting, error or unknown groups still means `IDLE` when no group is busy. |
-| `groups` | `null` in single mode. In multi mode, `running` and the six state counts from `fleetGroupSummary`; running includes starting sessions. If the list is unavailable counts can be zero; `state: UNKNOWN` distinguishes this from a known empty list. |
+| `sampled_at` | ISO timestamp when this response was assembled. Multi-session `state`/`groups` can lag by up to 30 seconds; readiness uses the current CoreState refresh on every request. Other contributing cached observations can be older; this is not a promise of simultaneous measurement. |
+| `state` | In single mode, the existing `/api/state.state`. In multi mode, using a Workbench summary up to 30 seconds old, any summary `busy > 0` means `BUSY`; otherwise a readable list (`listKnown === true`) means `IDLE`; otherwise `UNKNOWN`. A readable list containing waiting, error or unknown groups still means `IDLE` when no group is busy. |
+| `groups` | `null` in single mode. In multi mode, `running` and the six state counts from `fleetGroupSummary`, potentially up to 30 seconds old; running includes starting sessions. If the list is unavailable counts can be zero; `state: UNKNOWN` distinguishes this from a known empty list. |
 | `readiness` | `{ ready, observable, stage, reason }`, as defined below. `observable` is true at `session_ready` or `ready`, false at the lower stages. |
 | `runtime` | The existing Dashboard runtime information projected to `runtime`, `model`, `model_id`, `effort`. In multi mode it describes Origin. Unavailable fields are `null`. |
 | `context_pct` | Current session context percentage in single mode; `null` in multi mode because there is no whole-agent context window. |
@@ -98,12 +98,16 @@ A ready idle session reports `ready: true`, `reason: ready`, `stage: ready`.
 ## Sampling and cost
 
 No new timer is started. Requests reuse the existing CoreState refresh and its
-in-flight coalescing, Workbench's two-second snapshot cache, account usage cache,
+in-flight coalescing, the existing Workbench snapshot, account usage cache,
 cost aggregation cache and SystemCollector's sampling cadence. CoreState
-provides readiness observations in both modes. Single-session runtime health is
+provides current readiness observations on every request in both modes; readiness
+is never delayed by the group-summary cache. In multi mode this endpoint reuses
+Workbench's existing group snapshot for up to 30 seconds and rebuilds it only
+when absent or expired. Reads by the Workbench page keep their default two-second
+cache policy and can refresh that same snapshot sooner. Single-session runtime health is
 read only for an agent-status request and returned with its captured readiness observation, outside the one-second background refresh; there
 is no separate readiness file reader or readiness timer. `/api/agent-status` does not sample system
-resources or scan the full fleet again inside the Workbench cache window.
+resources or rebuild group statistics within its 30-second reuse window.
 
 The endpoint reports readiness only. OpenMax retains ownership of onboarding
 wait loops and online reporting. Its legacy file/session readiness rules remain
