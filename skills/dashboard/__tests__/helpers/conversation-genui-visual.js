@@ -241,9 +241,18 @@ export async function runConversationGenuiVisual(t, sandbox) {
     assert.equal(await field(root, 'notes').evaluate(el => el.tagName), 'TEXTAREA', 'multiline field uses a real textarea');
     await field(root, 'employee_count').fill('8'); await field(root, 'start_date').fill('2026-11-08');
     await field(root, 'region').selectOption('east');
-    const controlSizes = await root.locator('[data-field-key] input:visible,[data-field-key] select:visible,[data-field-key] textarea:visible,.chat-form-segment:visible').evaluateAll(nodes => nodes.map(el => ({tag:el.tagName,type:el.type,height:el.getBoundingClientRect().height,width:el.getBoundingClientRect().width})));
+    const controlSizes = await root.locator('[data-field-key] input:visible,[data-field-key] select:visible,[data-field-key] textarea:visible,.chat-form-segments:visible,.chat-form-segment:visible').evaluateAll(nodes => nodes.map(el => ({tag:el.tagName,type:el.type,segmentedTrack:el.matches('.chat-form-segments'),segment:el.matches('.chat-form-segment'),height:el.getBoundingClientRect().height,width:el.getBoundingClientRect().width})));
     if(output)fs.writeFileSync(path.join(output,'latest-control-dimensions.json'),JSON.stringify({width,theme,controlSizes},null,2));
-    if(width===390) assert.ok(controlSizes.every(box=>box.height>=40&&box.width>=40),'text,select,number,date,multiline and segmented controls have40px phone targets: '+JSON.stringify(controlSizes));
+    // This scene mounts text, integer, date, select and multiline fields, plus
+    // one two-option segmented track; no checkbox or radio graphic is a field frame.
+    assert.equal(controlSizes.filter(box => box.segmentedTrack).length, 1, 'measure the real segmented outer track');
+    assert.equal(controlSizes.filter(box => box.segment).length, 2, 'measure both inset options separately');
+    assert.equal(controlSizes.filter(box => !box.segmentedTrack && !box.segment).length, 7, 'all scene field frames are measured');
+    for (const box of controlSizes) {
+      if (box.tag === 'TEXTAREA') assert.ok(box.height >= 88, 'multiline field retains its natural minimum: ' + JSON.stringify(box));
+      else assert.equal(box.height, box.segment ? 28 : 36, 'approved field/outer-track height and inset option height: ' + JSON.stringify(box));
+      if (width === 390) assert.ok(box.width >= 40, 'phone controls retain their minimum width: ' + JSON.stringify(box));
+    }
     measurements.push({ width, theme, controlSizes });
     await field(root, 'notes').scrollIntoViewIfNeeded(); await capture(`controls-${width}-${theme}`);
     const user = page.locator(`[data-message-id="${scenes.controls.receipt.messageId}"]`);
