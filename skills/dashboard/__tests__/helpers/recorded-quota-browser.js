@@ -63,7 +63,7 @@ export async function runRecordedQuotaBrowser(sandbox) {
     } catch (error) { serverError ??= error.message; sendJson(res, 500, { error: 'fixture_failed' }); }
   });
   const base = await sandbox.startHttp(server);
-  const scratchParent = sandbox.paths.tmp;
+  const scratchParent = process.env.ZYLOS_CHAT_BROWSER_TMP_PARENT;
   assert.ok(scratchParent && path.isAbsolute(scratchParent));
   const scratch = fs.mkdtempSync(path.join(scratchParent, 'recorded-quota-'));
   sandbox.addCleanup(() => fs.rmSync(scratch, { recursive: true, force: true }));

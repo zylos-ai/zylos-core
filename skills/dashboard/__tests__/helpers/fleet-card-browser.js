@@ -69,7 +69,7 @@ export async function runFleetCardBrowser(t, sandbox) {
         assert.deepEqual(errors, []);
         // Inspect actual loaded resource entries, proving cache-busted import paths reach the browser.
         const assets = await page.evaluate(() => performance.getEntriesByType('resource').map(entry => new URL(entry.name).pathname + new URL(entry.name).search));
-        for (const asset of ['/js/app.js?v=227', '/js/agent-fleet.js?v=208', '/js/fleet-sounds.js?v=208', '/css/style.css?v=65', '/css/wb.css?v=71']) {
+        for (const asset of ['/js/app.js?v=228', '/js/agent-fleet.js?v=208', '/js/fleet-sounds.js?v=208', '/css/style.css?v=65', '/css/wb.css?v=71']) {
           assert.ok(assets.includes('/_assets' + asset), `loaded ${asset}`);
         }
         console.log('Fleet card geometry:', JSON.stringify({ width, theme, ...geometry }));

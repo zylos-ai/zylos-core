@@ -1639,10 +1639,12 @@ function connectSse({ ordinary = false } = {}) {
 
   const streamPath = api(agentPath('/api/stream'));
   const source = new EventSource(ordinary ? streamPath : chatPush.streamUrl(streamPath));
+  let opened = false;
   state.eventSource = source;
 
   source.onopen = () => {
     if (state.eventSource !== source) return;
+    opened = true;
     state.sseRetries = 0;
     renderConnection('live');
     refreshState().catch(() => {});
@@ -1656,9 +1658,10 @@ function connectSse({ ordinary = false } = {}) {
     state.eventSource = null;
     clearTimeout(state.sseReconnectTimer);
     renderConnection('reconnecting');
-    if (!ordinary && chatPush.streamUrl(streamPath) !== streamPath) {
+    if (!opened && !ordinary && chatPush.streamUrl(streamPath) !== streamPath) {
       // EventSource does not expose the HTTP status. Only an explicit 429
       // admission response proves the chat connection limit was reached.
+      // An established stream already passed admission; reconnect it directly.
       const generation = sseGeneration;
       const control = new AbortController();
       sseAdmissionController = control;

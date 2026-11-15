@@ -852,10 +852,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
         window.EventSource = class extends EventTarget {
           static OPEN = 1;
           constructor(url) {
-            super(); this.url = String(url); this.readyState = 1;
+            super(); this.url = String(url); this.readyState = 0;
             if (window.__streamSources.length >= 50) throw new Error('stream source bound exceeded');
             window.__streamSources.push(this);
-            queueMicrotask(() => this.onopen?.());
+            // Refused chat requests never open; ordinary fallback is admitted.
+            if (!this.url.includes('chat=1')) queueMicrotask(() => { this.readyState = 1; this.onopen?.(); });
           }
           close() { this.readyState = 2; }
         };
@@ -890,6 +891,47 @@ export async function runWorkbenchBrowser(t, sandbox) {
         && window.__streamSources.at(-1)?.url.includes('chat=1'), expected);
       assert.equal(probes, 1, 'reconnecting creates an EventSource without another admission probe');
       assert.deepEqual(await page.evaluate(() => window.__streamSources.slice(window.__streamFailureStart).map(source => source.url.includes('chat=1'))), limited ? [false, true] : [true], 'only confirmed limits create an ordinary stream');
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  });
+
+  await step('an established chat stream reconnects without an admission probe', async () => {
+    const { page, context, errors } = await open(390, 844, '/');
+    try {
+      await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+      await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
+      await context.addInitScript(() => {
+        window.__streamSources = [];
+        window.EventSource = class extends EventTarget {
+          static OPEN = 1;
+          constructor(url) {
+            super(); this.url = String(url); this.readyState = 1;
+            if (window.__streamSources.length >= 50) throw new Error('stream source bound exceeded');
+            window.__streamSources.push(this);
+            queueMicrotask(() => this.onopen?.());
+          }
+          close() { this.readyState = 2; }
+        };
+      });
+      let probes = 0;
+      await page.route(url => url.pathname === '/api/stream', route => {
+        probes++;
+        return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
+      });
+      await page.reload();
+      await openDashboardTab(page, 'chat');
+      await page.waitForFunction(() => window.__streamSources.at(-1)?.url.includes('chat=1'));
+      probes = 0;
+      const count = await page.evaluate(() => window.__streamSources.length);
+      await page.evaluate(async () => { await window.__streamSources.at(-1).onerror(); });
+      assert.equal(probes, 0, 'an opened stream already passed admission');
+      assert.equal(await page.evaluate(() => window.__streamSources.length), count, 'established errors retain reconnect backoff');
+      await page.clock.runFor(1000);
+      await page.waitForFunction(expected => window.__streamSources.length === expected
+        && window.__streamSources.at(-1).url.includes('chat=1'), count + 1);
+      await page.clock.runFor(1100);
+      assert.equal(await page.evaluate(() => window.__streamSources.length), count + 1, 'established disconnect reconnects once');
+      assert.equal(probes, 0, 'recovery does not create a second stream through a fetch probe');
       assert.deepEqual(errors, []);
     } finally { await context.close(); }
   });
@@ -959,10 +1001,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
         window.EventSource = class extends EventTarget {
           static OPEN = 1;
           constructor(url) {
-            super(); this.url = String(url); this.readyState = 1;
+            super(); this.url = String(url); this.readyState = 0;
             if (window.__streamSources.length >= 50) throw new Error('stream source bound exceeded');
             window.__streamSources.push(this);
-            queueMicrotask(() => this.onopen?.());
+            // Pending chat response headers have not established a stream.
+            if (!this.url.includes('chat=1')) queueMicrotask(() => { this.readyState = 1; this.onopen?.(); });
           }
           close() { this.readyState = 2; }
         };
