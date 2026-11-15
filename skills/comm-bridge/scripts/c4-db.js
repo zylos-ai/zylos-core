@@ -26,6 +26,7 @@ import { validateChannel } from './c4-validate.js';
 import { loadCoreConfig, resolveCoreConfigModule } from './core-config-loader.js';
 import { pathToFileURL } from 'node:url';
 import { observeCoreTarget } from './c4-runtime-observer.js';
+import { assertTestDatabasePath } from './c4-database-path.js';
 const coreConfig = await loadCoreConfig();
 const runtimeCommand = await import(pathToFileURL(path.join(path.dirname(resolveCoreConfigModule()), 'runtime/session-command.js')).href);
 export { composeSessionGroup, parseSessionGroup } from './c4-session-group.js';
@@ -52,6 +53,7 @@ const store = createStore(getDb, {
  * Get database connection, initializing if needed
  */
 export function getDb() {
+  assertTestDatabasePath(DB_PATH);
   assertCoreDatabaseAvailable(path.dirname(DATA_DIR));
   if (!db) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -311,8 +313,7 @@ export function cleanupControlQueue(cutoff) {
  * @param {number} endId - end conversation id
  * @returns {array} - conversation records in chronological order
  */
-export function getConversationsByRange(beginId, endId) {
-  const db = getDb();
+export function getConversationsByRange(beginId, endId, db = getDb()) {
   return db.prepare(
     'SELECT * FROM conversations WHERE id >= ? AND id <= ? ORDER BY id ASC'
   ).all(beginId, endId);
@@ -335,8 +336,7 @@ export function getConversationsSince(since) {
  * @param {number} limit - max records to return
  * @returns {array} - latest N conversation records in chronological order
  */
-export function getRecentConversations(limit = 20) {
-  const db = getDb();
+export function getRecentConversations(limit = 20, db = getDb()) {
   return db.prepare(
     'SELECT * FROM (SELECT * FROM conversations ORDER BY timestamp DESC, id DESC LIMIT ?) ORDER BY timestamp ASC, id ASC'
   ).all(limit);

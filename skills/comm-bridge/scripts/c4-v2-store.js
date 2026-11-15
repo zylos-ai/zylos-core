@@ -164,7 +164,13 @@ export function createStore(database, dependencies = {}) {
     if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) throw dataError('INVALID_ARGS', 'limit must be positive');
     if (raw !== undefined && typeof raw !== 'boolean') throw dataError('INVALID_ARGS', 'raw must be a boolean');
     return snapshot(c => {
-      const millis = value => Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
+      const millis = value => {
+        // Legacy numeric timestamps are Unix seconds; malformed values have no known time.
+        if (typeof value === 'number') return Number.isFinite(value * 1000) ? value * 1000 : null;
+        if (typeof value !== 'string') return null;
+        const parsed = Date.parse(value.includes('T') ? value : value.replace(' ', 'T') + 'Z');
+        return Number.isFinite(parsed) ? parsed : null;
+      };
       function row(head) {
         const preview = get(c, "SELECT id,timestamp,channel,endpoint_id,content FROM conversations WHERE session_group=? AND direction='in' AND channel<>'internal' ORDER BY id DESC LIMIT 1", head.session_group);
         const projection = preview ? projectC4Content(preview.content, { c4Id: preview.id }) : null;
