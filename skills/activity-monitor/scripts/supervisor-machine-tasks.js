@@ -21,7 +21,7 @@ function runScript(script, timeoutMs) {
     reject(detail?new Error(`${error.killed?'timed out: ':''}${detail}`):error);
   }));
 }
-const healthPrompt = 'System health check. Use the health-check skill sanitized helper for PM2 services; never run or print raw pm2 jlist output. Check disk space (df -h) and memory (free -m). If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with. Log results to ~/zylos/logs/health.log.';
+const healthPrompt = 'System health check. Use the health-check skill sanitized helper for PM2 services; never run or print raw pm2 jlist output. Check disk space (df -h) and memory (free -m). Check that C4 can list session groups with the health-check skill c4-groups-check.js helper; a non-zero exit is an issue. If any issues found, use your judgment to notify whoever is most likely to help — check your memory for a designated owner or ops person, otherwise pick the person you normally work with. Log results to ~/zylos/logs/health.log.';
 
 /** Machine maintenance never owns lifecycle state and never blocks the loop on a child. */
 export class SupervisorMachineTasks {
