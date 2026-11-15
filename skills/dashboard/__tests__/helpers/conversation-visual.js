@@ -404,7 +404,7 @@ export async function runConversationVisual(t, sandbox) {
   assert.equal(await page.locator('#wb-chat .conversation-sidebar').isVisible(), true, 'with the list remembered as collapsed, a phone still goes back to the list');
   assert.equal(await page.locator(`#wb-chat [data-conversation-id="${first.receipt.conversationId}"]`).isVisible(), true);
   await select();
-  // On phones the group detail covers the screen. Its secondary actions are 40x40 icons named by their
+  // On phones the group detail covers the screen. Its secondary actions are 40px-wide, 36px-high icons named by their
   // aria-label, as on desktop, so no English label is cut; "View conversation" keeps its words elsewhere.
   // The phone header opens it from the conversation menu.
   assert.equal(await groupInfo.isVisible(), false);
@@ -424,7 +424,8 @@ export async function runConversationVisual(t, sandbox) {
   assert.deepEqual(sideTargets.actions.map(action => action.name), ['Interrupt', 'Nudge', 'Restart']);
   for (const action of sideTargets.actions) {
     assert.equal(action.labelWidth, 0, `${action.name}: the group detail action is an icon on a phone`);
-    assert.ok(action.width >= 40 && action.height >= 40, `${action.name}: the group detail action is a 40x40 phone target (${action.width}x${action.height})`);
+    assert.equal(action.height, 36, `${action.name}: the group detail action uses the ordinary phone height`);
+    assert.ok(action.width >= 40, `${action.name}: the group detail action retains its 40px minimum width (${action.width})`);
   }
   // A phone group detail has only its top back button; the close action is desktop-only.
   for (const { selector, box } of sideTargets.controls) {
