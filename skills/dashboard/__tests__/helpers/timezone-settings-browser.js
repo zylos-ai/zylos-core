@@ -108,7 +108,10 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
     assert.equal(layout.aligned, true, 'Input and save share a row and height');
     if (width >= 761) assert.ok(layout.boxes.find(box => box.id === 'settings-timezone-value').width <= 280, 'Desktop input stays bounded');
     if (prefix.endsWith('/reader')) { assert.equal(layout.inputStyle.borderStyle, 'dashed'); assert.equal(layout.inputStyle.cursor, 'not-allowed'); }
-    for (const box of layout.boxes) { assert.ok(box.height >= 40 && box.width >= 40, JSON.stringify(box)); }
+    for (const box of layout.boxes) {
+      assert.equal(box.height, width < 761 ? 36 : 30, 'Time zone controls use the approved ordinary size tier: ' + JSON.stringify(box));
+      assert.ok(box.width >= 40, 'Time zone controls retain their minimum width: ' + JSON.stringify(box));
+    }
     metrics.push({ width, locale, prefix, ...layout });
     const shot = async kind => { if (evidence) {
       await page.locator('#settings-timezone').scrollIntoViewIfNeeded();
@@ -160,7 +163,10 @@ export async function runTimezoneSettingsBrowser(t, sandbox) {
       await dialog(page).waitFor();
       if (width < 761) {
         const controls = await dialog(page).locator('button').evaluateAll(nodes => nodes.map(node => { const b = node.getBoundingClientRect(); return { width: b.width, height: b.height }; }));
-        for (const box of controls) assert.ok(box.height >= 40 && box.width >= 40, JSON.stringify(box));
+        for (const box of controls) {
+          assert.equal(box.height, 36, 'Phone confirmation buttons use the ordinary size tier: ' + JSON.stringify(box));
+          assert.ok(box.width >= 40, JSON.stringify(box));
+        }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width);
       }
       await shot('confirmation');

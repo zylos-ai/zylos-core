@@ -15,10 +15,34 @@ export function measureControlRows() {
   const selector = '.wb-date,.wb-seg,.wb-seg2,.wb-seg-sm,.conversation-tabs,.wb-search,button,input:not([type=hidden]),select,textarea,summary,a[href]';
   const controls = [...document.querySelectorAll(selector)].filter(el => visible(el) && !el.parentElement.closest('.wb-seg,.wb-seg2,.wb-seg-sm,.conversation-tabs,.wb-search,.wb-date') && !el.matches('input[type=checkbox],input[type=radio]'));
   const identify = el => el.id ? '#' + el.id : el.tagName.toLowerCase() + (el.classList.length ? '.' + [...el.classList].join('.') : '') + ':' + (el.getAttribute('aria-label') || el.textContent || el.getAttribute('placeholder') || '').trim().replace(/\s+/g, ' ').slice(0, 48);
+  // Literal contract values deliberately do not read CSS variables: an entire row
+  // can agree with itself while drifting to the wrong size tier.
+  const contract = el => {
+    const mobile = innerWidth <= 760;
+    if (el.matches('.wb-seg-engine') || (!mobile && el.matches('#settings-save-runtime,#settings-undo-runtime'))) return { heightException: 'natural two-line engine row' };
+    if (el.matches('.conversation-running')) return { expectedHeight: mobile ? 22 : 30, heightException: mobile ? 'activity visible 22px / transparent hit target 44px' : undefined };
+    if (el.closest('.conversation-compose-box')) return { heightException: 'composer retains its dedicated input/attachment/send dimensions' };
+    if (el.closest('.q-card,.question-card,.chat-question')) return { heightException: 'question family has dedicated fields, chips and multiline options; question browser gate covers it' };
+    if (el.matches('textarea')) return { heightException: 'multiline field grows with content' };
+    if (mobile && el.matches('.wb-mobile-icon-button,.header-icon-btn,.wb-set-nav-btn,.wb-set-drawer-btn,.conversation-back,.conversation-menu-toggle,.wb-group-side-back')) return { expectedHeight: 44 };
+    if (el.matches('.wb-sched-field .wb-input')) return { expectedHeight: 36 };
+    if (el.matches('.wb-name-editor :is(input,select,button),.wb-cfg-controls :is(input,select,button),.wb-cfg-more :is(input,select,button)')) return { expectedHeight: mobile ? 36 : 26 };
+    if (el.matches('.wb-group-head .wb-d-acts > *')) return { expectedHeight: mobile ? 36 : 30 };
+    if (el.matches('.conversation-rename :is(input,button),.wb-timezone-controls :is(select,button),.wb-timezone-pending button')) return { expectedHeight: mobile ? 36 : 30 };
+    if (el.matches('.wb-d-title-wrap > .wb-icon-btn-sm,.wb-set-body :is(.wb-btn,.wb-input,.wb-select),.wb-memory-search')) return { expectedHeight: mobile ? 36 : 30 };
+    if (el.matches('.wb-btn-sm,.wb-icon-btn-sm,.wb-chip,.wb-seg-sm,#wb-auto-name') || el.matches('.wb-search:not(.wb-sched-filters .wb-search)')) return { expectedHeight: mobile ? 36 : 26 };
+    if (el.matches('.wb-btn,.wb-icon-btn,.wb-input,.wb-select,.wb-date,.wb-seg,.wb-seg2,.conversation-tabs,.conversation-reload,.header-icon-btn,.wb-tech-btn,.wb-sched-filters .wb-search,.memory-refresh')) return { expectedHeight: mobile ? 36 : 30 };
+    if (el.matches('.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete,.memory-file,.wb-memory-group-h,.wb-memory-section-h,.wb-attention-item')) return { heightException: 'named content selection target retains its content or graphic geometry' };
+    if (el.matches('.wb-switch-btn,input[type=range]')) return { heightException: 'switch or range retains its dedicated graphic and touch frame' };
+    if (el.matches('.wb-mobile-tab,.wb-mobile-sheet-item,.wb-mobile-scrim,.wb-set-scrim,.conversation-menu-item,.conversation-menu-scrim,.wb-rt-tab,.wb-set-nav-btn,.wb-detail-tabs button,.app-header .tab')) return { heightException: 'dedicated navigation row or backdrop retains its own dimensions' };
+    if (el.matches('summary,.wb-link-btn,a[href]')) return mobile && el.matches('summary,.wb-link-btn') ? { expectedHeight: 36 } : { heightException: 'inline disclosure or text link follows its content' };
+    return {};
+
+  };
   const all = controls.map((el, index) => { const b = el.getBoundingClientRect(); let owner = el.parentElement; while (owner.parentElement && owner !== root && !/flex|grid/.test(getComputedStyle(owner).display)) owner = owner.parentElement;
     owner = el.closest('#wb-board-head,.wb-usage-controls,.wb-sched-filters,.conversation-list-toolbar,.wb-timezone-controls,.wb-config-fields,.wb-pref-controls,.wb-d-top,.conversation-header,.wb-cfg-controls,.wb-cfg-more,.wb-name-editor,.wb-sched-pair') || owner;
     const contentTarget = el.matches('.wb-sched-dot,.wb-sched-select,.wb-sched-target,.conversation-list-item,.conversation-delete');
-    return { control: identify(el), owner: identify(owner) + (contentTarget ? ` / content target ${index}` : ''), height: b.height, center: b.y + b.height / 2,
+    return { ...contract(el), control: identify(el), owner: identify(owner) + (contentTarget ? ` / content target ${index}` : ''), height: b.height, center: b.y + b.height / 2,
       ...(() => {
         if (innerWidth > 760 || !el.matches('.conversation-running:is([data-state=busy], [data-state=idle])')) return {};
         const pseudo = getComputedStyle(el, '::after');
@@ -80,6 +104,10 @@ export async function runControlRows(t, sandbox) {
         if (width === 390) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name}: no horizontal overflow`);
         const rows = await page.evaluate(measureControlRows);
         for (const row of rows) {
+          if (survey) for (const control of row.controls) {
+            if (control.expectedHeight !== undefined) assert.equal(control.height, control.expectedHeight, `${name}: approved size tier for ${control.control}`);
+            else assert.ok(control.heightException, `${name}: control has an explicit height exception`);
+          }
           for (const control of row.controls.filter(c => c.hitHeight !== undefined)) {
             assert.equal(control.height, 22, `${name}: activity visible frame remains 22px`);
             assert.equal(control.hitHeight, 44, `${name}: activity transparent target is 44px`);
@@ -133,6 +161,13 @@ export async function runControlRows(t, sandbox) {
         }
         if (survey && route === '/chat') {
           await page.locator('[data-conversation-id]').last().click(); await page.locator('.conversation-header').waitFor(); await capture('conversation');
+          if (width === 390) {
+            await page.locator('.conversation-menu-toggle').click();
+            await page.locator('.conversation-menu-rename').click();
+          } else await page.locator('.conversation-title-line > .wb-icon-btn').click();
+          await page.locator('.conversation-rename input').waitFor();
+          await capture('conversation-rename');
+          await page.locator('.conversation-rename button').last().click();
           if (width === 390) { await page.locator('.conversation-menu-toggle').click(); await capture('conversation-menu'); await page.keyboard.press('Escape'); }
           fixture.setScene('running'); await page.reload();
           await page.locator('[data-conversation-id]').last().click();

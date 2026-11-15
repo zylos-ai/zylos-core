@@ -164,7 +164,7 @@
 /* Pseudo-element icons take their shape from wb-icons.css (same set and stroke as .wb-ico). */
 .wb-chev::after, .wb-inst-more::after { content: ""; width: 12px; height: 12px; background: currentColor; -webkit-mask: var(--wb-ico) center/contain no-repeat; mask: var(--wb-ico) center/contain no-repeat; }
 .wb-bot::before { content: ""; width: 13px; height: 13px; background: currentColor; -webkit-mask: var(--wb-ico) center/contain no-repeat; mask: var(--wb-ico) center/contain no-repeat; }
-.wb-input, .wb-cfg-edit input, .wb-cfg-edit select { height: var(--wb-h); min-width: 0; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 12.5px; }
+.wb-input, .wb-cfg-edit input, .wb-cfg-edit select { height: 28px; min-width: 0; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font: inherit; font-size: 12.5px; }
 .wb-input:focus, .wb-cfg-edit input:focus, .wb-cfg-edit select:focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
 #settings-hot-ttl-source { white-space: pre-line; }
 #settings-hot-ttl-minutes:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
@@ -1506,12 +1506,24 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-page-h.agent-fleet-head { align-items: flex-start; }
 }
 
+/* Same-row controls share a size tier; segmented sizes always describe the rail,
+   leaving its existing 2px inset for the selected surface. */
+:is(.wb-seg, .wb-seg2, .wb-seg-sm) { align-items: stretch; }
+:is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > button { height: 100%; min-height: 0; }
+.wb-bh { align-items: center; }
+:is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-compact); align-items: center; }
+:is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) :is(.wb-input, input, select, .wb-btn-sm, .wb-link-btn) { height: var(--wb-h); }
+.wb-d-title-wrap > .wb-icon-btn-sm { height: var(--wb-h); }
+.wb-timezone-controls .wb-select, .wb-timezone-controls .wb-btn, .wb-timezone-pending .wb-btn { min-height: var(--wb-h); }
+#wb-auto-name { height: var(--wb-control-compact); }
+#settings-price-show-all { height: var(--wb-h); }
+
 /* ─── Phones: ordinary single-line interaction frames use 36px ───
    (The settings drawer's section rows and its opening button set their own 44px minimum.) */
 .memory-back { display: none; }
 @media (max-width: 760px) {
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
-    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: var(--wb-control-touch); }
+    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden], .wb-search input)):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: var(--wb-control-touch); }
   /* A short label ("Edit" in English) must not leave a labelled button narrower than a fingertip either. */
   :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh, .wb-btn) { min-width: 40px; }
   .wb-switch-l { min-height: 40px; }
@@ -1519,6 +1531,14 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-search { min-height: var(--wb-control-touch); }
   /* Multiline engine options retain their content-driven height. */
   :is(.wb-seg, .wb-seg2) { height: auto; }
+  :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) { height: var(--wb-control-touch); }
+  :is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-touch); }
+  :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
+    :is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > :is(button, .wb-btn) { height: 100%; min-height: 0; }
+  .wb-date-native { min-height: 0; }
+  #wb-auto-name { height: var(--wb-control-touch); }
+  .app-header .header-icon-btn { min-height: 44px; }
+  .wb-group-head .wb-d-acts > * { height: var(--wb-control-touch); }
   /* Switch-style buttons keep their 36×20 look inside a transparent 40px frame. */
   .fleet-sound-toggle.wb-switch-btn { box-sizing: content-box; border: 10px solid transparent; background-clip: padding-box; }
   .fleet-sound-toggle.wb-switch-btn:hover { border: 10px solid transparent; }
@@ -1658,39 +1678,4 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
 :is(.conversation-tabs, .wb-seg, .wb-seg2, .wb-seg-sm) > :is(button, .wb-btn):focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: -2px;
-}
-
-/* Same-row controls share a size tier; segmented sizes always describe the rail,
-   leaving its existing 2px inset for the selected surface. */
-:is(.wb-seg, .wb-seg2, .wb-seg-sm) { align-items: stretch; }
-:is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > button { height: 100%; min-height: 0; }
-.wb-bh { align-items: center; }
-:is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-compact); align-items: center; }
-:is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) :is(.wb-input, input, select, .wb-btn-sm, .wb-link-btn) { height: var(--wb-h); }
-.wb-d-title-wrap > .wb-icon-btn-sm { height: var(--wb-h); }
-.wb-timezone-controls .wb-select, .wb-timezone-controls .wb-btn, .wb-timezone-pending .wb-btn { min-height: var(--wb-h); }
-@media (max-width: 760px) {
-  :root { --wb-h: var(--wb-control-touch); }
-  :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-chip, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) { height: var(--wb-control-touch); }
-  :is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-touch); }
-  :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
-    :is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > :is(button, .wb-btn) { height: 100%; min-height: 0; }
-  :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
-    .wb-search input { height: 100%; min-height: 0; }
-  .wb-date-native { min-height: 0; }
-  .wb-sched-field textarea.wb-input { height: auto; }
-}
-
-#wb-auto-name { height: var(--wb-control-compact); }
-#settings-price-show-all { height: var(--wb-h); }
-@media (max-width: 760px) {
-  #wb-auto-name { height: var(--wb-control-touch); }
-}
-
-@media (max-width: 760px) {
-  .app-header .header-icon-btn { height: 44px; min-height: 44px; }
-}
-
-@media (max-width: 760px) {
-  .wb-group-head .wb-d-acts > * { height: var(--wb-control-touch); }
 }
