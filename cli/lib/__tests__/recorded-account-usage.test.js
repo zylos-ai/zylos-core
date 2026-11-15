@@ -22,12 +22,12 @@ function fixture(t) {
     rate_limits: { seven_day: { used_percentage: percent, resets_at: resets } },
   });
   const identity = { present: true, ready: true, runtime: 'claude', runId: 'run', sessionId: 'session' };
-  let live = [], observed = identity, connections = 0, closes = 0;
+  let live = [], observed = identity, connections = 0, closes = 0, observations = 0;
   const reader = createSessionReader({ env: { ZYLOS_DIR: root }, now: () => now,
-    observeAll: async () => new Map(live.map(group => [group, observed])),
+    observeAll: async () => { observations++; return new Map(live.map(group => [group, observed])); },
     open: async () => { connections++; return { close: async () => { closes++; } }; }, observe: async () => observed });
   return { root, write, status, reader, identity, setLive: value => { live = value; },
-    setIdentity: value => { observed = value; }, counts: () => [connections, closes] };
+    setIdentity: value => { observed = value; }, counts: () => [connections, closes, observations] };
 }
 
 test('default live account values keep mtime selection while recorded reads compare sample times', async t => {
@@ -39,7 +39,7 @@ test('default live account values keep mtime selection while recorded reads comp
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1).toISOString(), weeklyAll: { percent: 99, resets: reset } });
   assert.deepEqual(await f.reader.readAccountUsage('claude', { allowRecorded: true }), {
     value: { seven_day: { used_percentage: 7, resets_at: reset } }, recordedAt: now - 5000, live: true });
-  assert.deepEqual(f.counts(), [3, 3]);
+  assert.deepEqual(f.counts(), [3, 3, 6], 'each account read with candidates observes before and after sampling and closes its executor');
 });
 
 test('reclaimed groups prefer their latest quota over a later sampler copy', async t => {
@@ -47,15 +47,28 @@ test('reclaimed groups prefer their latest quota over a later sampler copy', asy
   fs.utimesSync(file, now / 1000, now / 1000);
   f.status('other', 7, now - 3600000);
   assert.equal(await f.reader.readAccountUsage('claude'), null);
+  assert.deepEqual(f.counts(), [1, 1, 1]);
   const record = await f.reader.readAccountUsage('claude', { allowRecorded: true });
   assert.equal(record.value.seven_day.used_percentage, 7); assert.equal(record.recordedAt, now - 3600000); assert.equal(record.live, false);
+  assert.deepEqual(f.counts(), [2, 2, 2]);
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1000).toISOString(), weeklyAll: { percent: 9, resets: new Date(reset * 1000).toISOString() } });
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 7);
+  assert.deepEqual(f.counts(), [3, 3, 3]);
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).recordedAt, now - 3600000);
+  assert.deepEqual(f.counts(), [4, 4, 4]);
   f.status('newest', 11, now - 500);
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 11);
-  assert.deepEqual(f.counts(), [5, 5], 'each account read closes its batch executor even without live sessions');
+  assert.deepEqual(f.counts(), [5, 5, 5], 'each account read without candidates observes once and closes its executor');
 });
+
+for (const identity of [{ ready:false }, { runtime:'codex' }]) {
+  test(`account reads skip final observation when live sessions are ${identity.ready === false ? 'not ready' : 'another runtime'}`, async t => {
+    const f = fixture(t); f.setLive(['origin']);
+    f.setIdentity({ ...f.identity, ...identity });
+    assert.equal(await f.reader.readAccountUsage('claude'), null);
+    assert.deepEqual(f.counts(), [1, 1, 1]);
+  });
+}
 
 test('the account sampler is used only without conclusive group samples', async t => {
   const f = fixture(t);
@@ -286,7 +299,7 @@ test('a live proxy response without quota blocks older subscription groups and s
   completedClaude(f, 'origin', now - 1000); f.setLive(['origin']);
   assert.equal(await f.reader.readAccountUsage('claude', { allowRecorded: true }), null);
   assert.equal(await f.reader.readAccountUsage('claude'), null);
-  assert.deepEqual(f.counts(), [2, 2]);
+  assert.deepEqual(f.counts(), [2, 2, 4]);
 });
 
 test('a recorded proxy response without quota also blocks older subscription records', async t => {
@@ -423,7 +436,7 @@ test('account snapshot shares a single live scan while preserving both selection
   fs.utimesSync(a, 100, 100); fs.utimesSync(b, 200, 200);
   f.setLive(['origin', 'other']);
   const snapshot = await f.reader.readAccountUsageSnapshot('claude');
-  assert.deepEqual(f.counts(), [1, 1]);
+  assert.deepEqual(f.counts(), [1, 1, 2]);
   assert.equal(snapshot.live.seven_day.used_percentage, 12);
   assert.deepEqual(snapshot.recorded, {
     value: { seven_day: { used_percentage: 7, resets_at: reset } },

@@ -141,6 +141,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
           readCodexSampleForIdentity({ sessionGroup, identity, env, account:true });
         candidates.push({ sessionGroup, identity, sample });
       }
+      if (!candidates.length) return samples;
       const last = await read();
       for (const { sessionGroup, identity, sample } of candidates) {
         if (!sameIdentity(identity, last.get(sessionGroup))) continue;
