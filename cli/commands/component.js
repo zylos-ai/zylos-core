@@ -9,7 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { ZYLOS_DIR, SKILLS_DIR, COMPONENTS_DIR, readZylosConfigOrThrow } from '../lib/config.js';
 import { bold, dim, green, red, yellow, cyan, success, error, warn, heading } from '../lib/colors.js';
 import { loadRegistry } from '../lib/registry.js';
-import { loadComponents, saveComponents } from '../lib/components.js';
+import { loadComponents, recordedSource, saveComponents } from '../lib/components.js';
 import { checkForUpdates, getLocalSourceUpgradeError, getRepo, runUpgrade, downloadToTemp, readChangelog, filterChangelog, cleanupTemp } from '../lib/upgrade.js';
 import {
   checkForCoreUpdates,
@@ -829,6 +829,16 @@ async function handleUpgradeFlow(component, { jsonOutput, skipConfirm, skipEval,
       if (components[component]) {
         components[component].version = result.to || components[component].version;
         components[component].upgradedAt = new Date().toISOString();
+        components[component].source = recordedSource({ type: 'github-release', repo }, dlResult.source);
+        // `branch` names the branch the installed code came from, so it follows the recorded source: kept in step
+        // after a branch upgrade (including the main-branch fallback), removed once a release is installed.
+        if (components[component].source.refType === 'branch') {
+          components[component].branch = components[component].source.ref;
+        } else {
+          delete components[component].branch;
+        }
+        // The code now comes from GitHub, so a file delivery no longer describes it.
+        delete components[component].deliveredVia;
 
         // Update bin symlinks (remove old, create new)
         const oldBin = components[component].bin;

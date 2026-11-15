@@ -169,8 +169,10 @@ exec "${process.execPath}" "$(dirname "$0")/curl.mjs" "$@"
     assert.deepEqual(components['github-fixture'].source, {
       type: 'github-release',
       repo: 'example/zylos-github-fixture',
-      ref: '1.0.0',
+      ref: 'v1.0.0',
       refType: 'tag',
+      // A plain `tar` archive does not say which commit it was made from.
+      commit: null,
     });
     assert.equal(fs.readFileSync(path.join(skillDir, 'payload.txt'), 'utf8'), 'github-fixture payload\n');
   });

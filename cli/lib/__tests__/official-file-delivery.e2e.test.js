@@ -123,8 +123,10 @@ describe('zylos add --file official delivery E2E', () => {
     assert.deepEqual(entry.source, {
       type: 'github-release',
       repo: REPO,
-      ref: '1.0.0',
+      ref: 'v1.0.0',
       refType: 'tag',
+      // A plain `tar` archive does not say which commit it was made from.
+      commit: null,
     });
     assert.equal(entry.deliveredVia.type, 'file');
     assert.equal(entry.deliveredVia.path, tarball);

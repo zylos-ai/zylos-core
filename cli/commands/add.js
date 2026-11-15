@@ -21,7 +21,7 @@ import { removeOwnedTree } from '../../skills/comm-bridge/scripts/remove-owned-t
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { SKILLS_DIR, COMPONENTS_DIR, BIN_DIR } from '../lib/config.js';
-import { loadComponents, saveComponents, resolveTarget, loadTargetRegistryInfo, outputTask } from '../lib/components.js';
+import { loadComponents, saveComponents, recordedSource, resolveTarget, loadTargetRegistryInfo, outputTask } from '../lib/components.js';
 import { acquireSource, resolveLocalPath } from '../lib/download.js';
 import { sha256File, isValidSha256Hex } from '../lib/checksum.js';
 import { generateManifest, saveMergeBaseline } from '../lib/manifest.js';
@@ -433,9 +433,9 @@ export async function addComponent(args) {
   const componentType = detectComponentType(skillDir);
 
   if (componentType === 'declarative') {
-    await installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, branch);
+    await installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, branch, downloadResult);
   } else {
-    installAI(resolved, skillDir, branch);
+    installAI(resolved, skillDir, branch, downloadResult);
   }
 }
 
@@ -444,7 +444,7 @@ export async function addComponent(args) {
  * Terminal mode: full interactive setup (config → hooks → service start).
  * JSON mode: mechanical install only, outputs metadata for Claude.
  */
-async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, branch) {
+async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, branch, acquired) {
   if (!jsonOutput) console.log(`\n${heading('Installing (declarative)...')}`);
 
   const skill = parseSkillMd(skillDir);
@@ -512,7 +512,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
     installedAt: new Date().toISOString(),
     skillDir,
     dataDir,
-    source: resolved.source,
+    source: recordedSource(resolved.source, acquired),
   };
   if (branch) componentEntry.branch = branch;
   if (resolved.deliveredVia) componentEntry.deliveredVia = resolved.deliveredVia;
@@ -705,7 +705,7 @@ async function installDeclarative(resolved, skillDir, skipConfirm, jsonOutput, b
 /**
  * Install an AI component (no SKILL.md — needs Claude to finish setup).
  */
-function installAI(resolved, skillDir, branch) {
+function installAI(resolved, skillDir, branch, acquired) {
   console.log(`\n${heading('Installing (AI mode — Claude will complete setup)...')}`);
 
   // Resolve version from SKILL.md or package.json when not from a tag
@@ -736,7 +736,7 @@ function installAI(resolved, skillDir, branch) {
     installedAt: new Date().toISOString(),
     skillDir,
     setupComplete: false,
-    source: resolved.source,
+    source: recordedSource(resolved.source, acquired),
   };
   if (branch) aiEntry.branch = branch;
   if (resolved.deliveredVia) aiEntry.deliveredVia = resolved.deliveredVia;
