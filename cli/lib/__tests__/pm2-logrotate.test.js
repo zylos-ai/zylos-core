@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   LOG_ROTATE_DEFAULTS, ensurePm2LogRotate, logRotateInstallCommand, isLogRotateInstalled, resolvePm2Home,
@@ -63,7 +64,7 @@ test('install failure returns one warning with the reason and the install comman
   const result = await ensurePm2LogRotate({ env: f.env });
   assert.equal(result.state, 'failed');
   assert.equal(result.warning.includes('\n'), false);
-  assert.match(result.warning, /pm2 install exited with 1: npm error network request failed/);
+  assert.match(result.warning, /pm2 install exited with 1: npm error code ENOTFOUND.*npm error network request failed.*Installation failed via NPM/);
   assert.match(result.warning, /will not be rotated automatically/);
   assert.ok(result.warning.endsWith(`Install it later with: ${logRotateInstallCommand()}`));
   assert.deepEqual(f.calls(), DEFAULT_CALLS);
@@ -121,11 +122,14 @@ test('unreadable PM2 module records leave PM2 untouched', async t => {
 });
 
 test('the printed install command runs as written in a POSIX shell', async t => {
-  const f = fakePm2(t);
-  assert.equal(logRotateInstallCommand(),
-    "pm2 set pm2-logrotate:max_size 10M && pm2 set pm2-logrotate:retain 7 && pm2 set pm2-logrotate:compress true"
-    + " && pm2 set pm2-logrotate:workerInterval 30 && pm2 set pm2-logrotate:rotateInterval '0 0 * * *' && pm2 install pm2-logrotate");
-  const shell = spawnSync('/bin/sh', ['-c', logRotateInstallCommand()], { env: f.env, encoding: 'utf8', timeout: 20_000 });
+  const f = fakePm2(t, { mode: 'fail' });
+  f.enablePackageManager();
+  const failed = await ensurePm2LogRotate({ env: f.env });
+  assert.equal(failed.state, 'failed');
+  const command = failed.warning.split('Install it later with: ')[1];
+  f.env.FAKE_PM2_MODE = 'success';
+  fs.writeFileSync(`${f.root}/calls.jsonl`, '');
+  const shell = spawnSync('/bin/sh', ['-c', command], { env: f.env, encoding: 'utf8', timeout: 20_000 });
   assert.equal(shell.status, 0, shell.stderr);
   assert.deepEqual(f.calls(), DEFAULT_CALLS);
   assert.equal(isLogRotateInstalled(f.pm2Home), true);
@@ -134,4 +138,57 @@ test('the printed install command runs as written in a POSIX shell', async t => 
 test('PM2_HOME follows the PM2 default', () => {
   assert.equal(resolvePm2Home({ PM2_HOME: '/custom/pm2' }), '/custom/pm2');
   assert.equal(resolvePm2Home({ HOME: '/home/someone' }), '/home/someone/.pm2');
+});
+
+
+test('install selects npm when failing bun shares the PM2 and Node directory', async t => {
+  const f = fakePm2(t);
+  f.enablePackageManager();
+  const originalPath = f.env.PATH;
+  assert.equal((await ensurePm2LogRotate({ env: f.env })).state, 'installed');
+  assert.equal(f.env.PATH, originalPath);
+  assert.deepEqual(f.calls(), DEFAULT_CALLS);
+  const installedPath = fs.readFileSync(`${f.root}/install-path.txt`, 'utf8');
+  const mirror = installedPath.split(':')[0];
+  assert.ok(mirror.startsWith(`${f.pm2Home}/modules/pm2-logrotate/.zylos-npm-path/`));
+  assert.equal(fs.existsSync(`${mirror}/bun`), false);
+  for (const tool of ['node', 'npm', 'pm2']) fs.accessSync(`${mirror}/${tool}`, fs.constants.X_OK);
+  const later = spawnSync('npm', ['--version'], { env: { ...f.env, PATH: installedPath }, encoding: 'utf8', timeout: 5_000 });
+  assert.equal(later.status, 0, later.stderr);
+  assert.match(later.stdout, /npm selected/);
+});
+
+test('warning keeps real stdout and stderr errors before generic PM2 failure', async t => {
+  const f = fakePm2(t);
+  f.enablePackageManager();
+  fs.writeFileSync(`${f.bin}/npm`, '#!/bin/sh\necho "npm error stdout cause"\necho "npm error stderr cause" >&2\nexit 1\n');
+  const result = await ensurePm2LogRotate({ env: f.env });
+  assert.equal(result.state, 'failed');
+  assert.match(result.warning, /npm error stdout cause/);
+  assert.match(result.warning, /npm error stderr cause/);
+  assert.ok(result.warning.endsWith(logRotateInstallCommand()));
+});
+
+test('failure details remain bounded when npm prints many error lines', async t => {
+  const f = fakePm2(t);
+  const result = await ensurePm2LogRotate({ env: f.env, run: async () => ({
+    ok: false, code: 1, stderr: 'npm error real cause\n' + 'npm error '.repeat(1000) + '\n'.repeat(1000),
+  }) });
+  assert.match(result.warning, /npm error real cause/);
+  assert.ok(result.warning.length < 3000);
+  assert.equal(result.warning.includes('\n'), false);
+});
+
+
+test('npm PATH remains absolute when PM2_HOME is relative and the module changes directory', async t => {
+  const f = fakePm2(t);
+  f.enablePackageManager();
+  f.env.PM2_HOME = path.relative(process.cwd(), f.pm2Home);
+  assert.equal((await ensurePm2LogRotate({ env: f.env })).state, 'installed');
+  const installedPath = fs.readFileSync(`${f.root}/install-path.txt`, 'utf8');
+  assert.equal(path.isAbsolute(installedPath.split(path.delimiter)[0]), true);
+  const later = spawnSync('npm', [], { env: { ...f.env, PATH: installedPath }, cwd: f.root,
+    encoding: 'utf8', timeout: 5_000 });
+  assert.equal(later.status, 0, later.stderr);
+  assert.match(later.stdout, /npm selected/);
 });

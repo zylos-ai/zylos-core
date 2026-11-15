@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 export const LOG_ROTATE_MODULE = 'pm2-logrotate';
 
@@ -37,9 +39,8 @@ function setArguments([key, value]) {
 
 /** Copyable command that applies the defaults and installs the module. */
 export function logRotateInstallCommand() {
-  return [...LOG_ROTATE_DEFAULTS.map(setArguments), ['install', LOG_ROTATE_MODULE]]
-    .map(args => ['pm2', ...args].map(shellArgument).join(' '))
-    .join(' && ');
+  return [process.execPath, fileURLToPath(new URL('./pm2-logrotate-install.js', import.meta.url))]
+    .map(shellArgument).join(' ');
 }
 
 /** Same PM2 home the spawned `pm2` resolves: PM2_HOME, else its home's .pm2. */
@@ -65,15 +66,44 @@ export function isLogRotateInstalled(pm2Home) {
     .some(db => db && typeof db === 'object' && Object.hasOwn(db, LOG_ROTATE_MODULE));
 }
 
+// PM2 selects bun whenever it is executable on PATH. Mirror only affected
+// directories so npm, node and other tools beside bun remain available.
+// PM2 also gives this PATH to the module: keep mirrors inside its install
+// directory, where they remain valid across restarts and uninstall removes them.
+function npmInstallEnvironment(env) {
+  const entries = (env.PATH ?? '').split(path.delimiter).map(entry => {
+    const directory = path.resolve(entry || '.');
+    try {
+      fs.accessSync(path.join(directory, 'bun'), fs.constants.X_OK);
+      if (!fs.statSync(path.join(directory, 'bun')).isFile()) return entry;
+    } catch { return entry; }
+    const key = createHash('sha256').update(directory).digest('hex').slice(0, 16);
+    const mirror = path.resolve(resolvePm2Home(env), 'modules', LOG_ROTATE_MODULE, '.zylos-npm-path', key);
+    fs.mkdirSync(mirror, { recursive: true, mode: 0o700 });
+    for (const name of fs.readdirSync(directory)) {
+      if (name === 'bun') continue;
+      const target = path.join(directory, name);
+      const link = path.join(mirror, name);
+      try { fs.symlinkSync(target, link); }
+      catch (error) {
+        if (error.code !== 'EEXIST' || !fs.lstatSync(link).isSymbolicLink() || fs.readlinkSync(link) !== target) throw error;
+      }
+    }
+    return mirror;
+  });
+  return { ...env, PATH: entries.join(path.delimiter) };
+}
+
 /**
  * Runs `pm2 <args>` in its own process group so a timeout also stops npm
- * started by `pm2 install`. Resolves {ok, code, signal, timedOut, stderr}.
+ * started by `pm2 install`. Resolves {ok, code, signal, timedOut, stdout, stderr}.
  */
 export function runPm2(args, { timeoutMs, env = process.env, command = 'pm2' } = {}) {
   return new Promise(resolve => {
     let child;
     let settled = false;
     let stderr = '';
+    let stdout = '';
     let timer;
     const finish = result => {
       if (settled) return;
@@ -81,15 +111,19 @@ export function runPm2(args, { timeoutMs, env = process.env, command = 'pm2' } =
       clearTimeout(timer);
       child?.stdout?.destroy();
       child?.stderr?.destroy();
-      resolve({ stderr: stderr.trim(), ...result });
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), ...result });
     };
     try {
+      if (args[0] === 'install') {
+        env = npmInstallEnvironment(env);
+      }
       child = spawn(command, args, { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (error) {
       finish({ ok: false, code: null, signal: null, timedOut: false, error: error.message });
       return;
     }
-    child.stdout.resume();
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-OUTPUT_LIMIT); });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-OUTPUT_LIMIT); });
     child.on('error', error => finish({ ok: false, code: null, signal: null, timedOut: false, error: error.message }));
@@ -111,7 +145,12 @@ function failureReason(args, result, timeoutMs) {
   const command = `pm2 ${args[0]}`;
   if (result.timedOut) return `${command} did not finish within ${Math.round(timeoutMs / 1000)} s`;
   if (result.error) return `${command} could not run: ${result.error}`;
-  const detail = result.stderr ? `: ${result.stderr.split('\n').filter(Boolean).at(-1)}` : '';
+  const lines = [result.stdout, result.stderr].filter(Boolean).join('\n')
+    .replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const errors = lines.filter(line => /error|err!|denied|failed|enoent|eacces|enotfound/i.test(line));
+  const detailLines = (errors.length ? errors : lines).slice(0, 8);
+  const summary = detailLines.join(' | ').slice(0, 2000);
+  const detail = summary ? `: ${summary}` : '';
   return `${command} exited with ${result.code ?? result.signal}${detail}`;
 }
 

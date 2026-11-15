@@ -8,7 +8,7 @@ import path from 'node:path';
 const SOURCE = `
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.FAKE_PM2_LOG, JSON.stringify(args) + '\\n');
 const file = path.join(process.env.PM2_HOME, 'module_conf.json');
@@ -23,7 +23,17 @@ if (args[0] === 'set') {
   process.exit(0);
 }
 if (args[0] === 'install') {
-  if (mode === 'fail') { process.stderr.write('npm error code ENOTFOUND\\nnpm error network request failed\\n'); process.exit(1); }
+  if (process.env.FAKE_PM2_PACKAGE_MANAGER) {
+    fs.writeFileSync(path.join(process.env.HOME, 'install-path.txt'), process.env.PATH);
+    const hasBun = process.env.PATH.split(path.delimiter).some(dir => {
+      try { fs.accessSync(path.join(dir || '.', 'bun'), fs.constants.X_OK); return true; } catch { return false; }
+    });
+    const installed = spawnSync(hasBun ? 'bun' : 'npm', ['install', args[1]], { env: process.env, encoding: 'utf8' });
+    process.stdout.write(installed.stdout || '');
+    process.stderr.write(installed.stderr || '');
+    if (installed.status !== 0) { process.stderr.write('Installation failed via NPM\\n'); process.exit(1); }
+  }
+  if (mode === 'fail') { process.stderr.write('npm error code ENOTFOUND\\nnpm error network request failed\\nInstallation failed via NPM\\n'); process.exit(1); }
   if (mode === 'timeout') {
     const child = spawn('sleep', ['600'], { stdio: 'ignore' });
     fs.writeFileSync(process.env.FAKE_PM2_CHILD, String(child.pid));
@@ -52,10 +62,16 @@ export function fakePm2(t, { mode = 'success', installPm2 = true } = {}) {
   fs.mkdirSync(bin);
   if (installPm2) fs.writeFileSync(path.join(bin, 'pm2'), `#!${process.execPath}\n${SOURCE}`, { mode: 0o755 });
   // The fake directory is the only PM2 on PATH; /usr/bin and /bin supply sleep and sh.
-  const env = { HOME: root, PM2_HOME: pm2Home, PATH: [bin, '/usr/bin', '/bin'].join(path.delimiter),
+  const env = { HOME: root, ZYLOS_DIR: path.join(root, 'zylos'), TMPDIR: root, PM2_HOME: pm2Home, PATH: [bin, '/usr/bin', '/bin'].join(path.delimiter),
     FAKE_PM2_MODE: mode, FAKE_PM2_LOG: log, FAKE_PM2_CHILD: childPid };
   return {
     root, bin, pm2Home, env,
+    enablePackageManager() {
+      env.FAKE_PM2_PACKAGE_MANAGER = '1';
+      fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+      fs.writeFileSync(path.join(bin, 'npm'), '#!/usr/bin/env node\nprocess.stdout.write("npm selected\\n");', { mode: 0o755 });
+      fs.writeFileSync(path.join(bin, 'bun'), '#!/bin/sh\necho "error: AccessDenied create package.json" >&2\nexit 1\n', { mode: 0o755 });
+    },
     calls: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [],
     conf: () => JSON.parse(fs.readFileSync(path.join(pm2Home, 'module_conf.json'), 'utf8')),
     confFile: path.join(pm2Home, 'module_conf.json'),

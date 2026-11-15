@@ -14,7 +14,7 @@ files themselves.
 (`$PM2_HOME`, default `~/.pm2`) after the services have started:
 
 - **Module missing**: Zylos writes the default settings below, then runs
-  `pm2 install pm2-logrotate`.
+  `pm2 install pm2-logrotate` using npm, even when bun is on PATH (including snap-packaged bun).
 - **Module already present** (recorded by PM2 in `module_conf.json`): Zylos
   leaves it and all of its settings unchanged, including values you changed.
 
@@ -61,11 +61,18 @@ or `zylos upgrade --self` installs it again with the defaults.
 Installing the module needs npm access to the registry. Without network
 access, or when npm or PM2 fails, init and upgrade still finish and report
 success. They print one warning that names the cause and the command to run
-later, for example:
+later. The warning preserves up to eight error lines from stdout and stderr
+(up to 2,000 characters), including the underlying npm error before PM2's
+generic failure message.
 
-```text
-Upgrade warning: PM2 log rotation is not installed (pm2 install exited with 1: npm error network request failed). PM2 logs of Zylos services and components will not be rotated automatically. Install it later with: pm2 set pm2-logrotate:max_size 10M && pm2 set pm2-logrotate:retain 7 && pm2 set pm2-logrotate:compress true && pm2 set pm2-logrotate:workerInterval 30 && pm2 set pm2-logrotate:rotateInterval '0 0 * * *' && pm2 install pm2-logrotate
-```
+The printed command runs `pm2-logrotate-install.js` with the current Node
+executable. This uses the same defaults, npm selection and deadlines as init
+and upgrade; it leaves an already installed module unchanged. It does not
+change the user's global PATH or uninstall bun. PATH directories containing bun
+are replaced for the install process by symlink directories containing the other
+tools. These live under the module's own `.zylos-npm-path` directory, because PM2
+passes PATH to the running module; they remain usable after installation and
+are removed together with the module on uninstall.
 
 Until that command succeeds, PM2 logs grow without rotation. Each `pm2 set`
 step may take at most 20 seconds and `pm2 install` at most 180 seconds; a step
@@ -125,12 +132,7 @@ To avoid the wait, use one of the following:
 
   ```dockerfile
   FROM ghcr.io/zylos-ai/zylos-core:latest
-  RUN pm2 set pm2-logrotate:max_size 10M \
-   && pm2 set pm2-logrotate:retain 7 \
-   && pm2 set pm2-logrotate:compress true \
-   && pm2 set pm2-logrotate:workerInterval 30 \
-   && pm2 set pm2-logrotate:rotateInterval '0 0 * * *' \
-   && pm2 install pm2-logrotate \
+  RUN node "$(npm root -g)/zylos/cli/lib/pm2-logrotate-install.js" \
    && pm2 kill
   ```
 
