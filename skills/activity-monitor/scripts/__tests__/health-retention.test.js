@@ -25,7 +25,7 @@ function fixture(t) {
 
 test('idle cleanup protects live, queued, recent and unfinished notification groups',async t=>{
   const f=fixture(t),s=f.store.read(),old=f.now()-HEALTH_GROUP_IDLE_MS;
-  for(const group of ['idle','active','queued','pending','sending','recent','outcome','origin'])
+  for(const group of ['idle','active','queued','pending','sending','recent','outcome'])
     s.groups[group]={last_processed:{received_at:old,event_id:group}};
   s.groups.pending.pending_notice={event_id:'pending',status:'pending'};
   s.groups.sending.pending_notice={event_id:'sending',status:'sending'};
@@ -35,7 +35,7 @@ test('idle cleanup protects live, queued, recent and unfinished notification gro
   assert.equal(await f.store.pruneGroups({activeGroups:new Set(['active','queued'])}),1);
   const groups=f.store.read().groups;
   assert.equal(Object.hasOwn(groups,'idle'),false);
-  for(const group of ['active','queued','pending','sending','recent','outcome','origin'])assert.ok(groups[group],group);
+  for(const group of ['active','queued','pending','sending','recent','outcome'])assert.ok(groups[group],group);
   assert.equal(groups.sending.pending_notice.status,'sending');
 });
 
@@ -124,4 +124,39 @@ test('cache preserves durable publication and does not adopt a failed write',t=>
   assert.throws(()=>f.store.write({...state,revision:3}),/fixture rename failed/);
   assert.equal(f.store.read().revision,2);
   assert.equal(JSON.parse(fs.readFileSync(f.store.file,'utf8')).hook.revision,2);
+});
+
+
+test('inactive Origin retains terminal evidence at and beyond the idle limit',async t=>{
+  const f=fixture(t),state=f.store.read();
+  const evidence={last_processed:{received_at:f.now()-HEALTH_GROUP_IDLE_MS,event_id:'origin-terminal'},
+    last_notice_outcome:{event_id:'origin-terminal',status:'sent',observed_at:f.now()-HEALTH_GROUP_IDLE_MS}};
+  Object.assign(state,evidence);
+  f.store.write(state);
+  assert.deepEqual(f.store.read().groups.origin,evidence,'Origin evidence exists before cleanup');
+  const options={activeGroups:new Set(),isDeleted:async()=>true};
+  assert.equal(await f.store.pruneGroups(options),0);
+  f.advance(1);
+  assert.equal(await f.store.pruneGroups(options),0);
+  assert.deepEqual(f.store.read().groups.origin,evidence);
+});
+
+test('no-op cleanup neither republishes an existing file nor creates a missing runtime file',async t=>{
+  const f=fixture(t),state=f.store.read();
+  state.groups['chat:active']={last_processed:{received_at:f.now(),event_id:'active'}};
+  f.store.write(state);
+  const before=fs.readFileSync(f.store.file,'utf8');
+  const existingWrite=t.mock.method(f.store,'write');
+  const absent=new HealthStore({runtime:'codex',zylosDir:f.root,now:f.now});
+  assert.equal(fs.existsSync(absent.file),false);
+  const absentWrite=t.mock.method(absent,'write');
+  const sync=t.mock.method(fs,'fsyncSync');
+  f.advance(60000);
+  assert.equal(await f.store.pruneGroups({activeGroups:new Set(['chat:active'])}),0);
+  assert.equal(await absent.pruneGroups(),0);
+  assert.equal(existingWrite.mock.callCount(),0);
+  assert.equal(absentWrite.mock.callCount(),0);
+  assert.equal(sync.mock.callCount(),0);
+  assert.equal(fs.readFileSync(f.store.file,'utf8'),before);
+  assert.equal(fs.existsSync(absent.file),false);
 });
