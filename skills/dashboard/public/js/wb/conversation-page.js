@@ -1265,7 +1265,7 @@ export function mountConversationPage({
   /** What the AI is doing now sits right below the latest message, a user message or a reply. */
   function placeActivity(s, ordered) {
     const shown = s.messages.filter(row => row.channel !== 'internal')
-      .map(row => ({ id: row.id, direction: row.direction, at: asDate(row.timestamp)?.getTime() ?? null }));
+      .map(row => ({ id: row.id, direction: row.direction, at: asDate(row.timestamp ?? row.created_at ?? row.createdAt)?.getTime() ?? null }));
     const presentation = s.tab === 'mine' && s.activity && !s.activity.unsupported
       ? livePresentation(shown, s.activity.data, { presence: s.activity.data?.presence ?? null }) : null;
     const anchor = presentation ? messages.get(String(presentation.anchor))?.node : null;
@@ -1291,10 +1291,12 @@ export function mountConversationPage({
         liveItem.append(avatar, body);
       }
       const data = s.activity.data;
-      // Reuse the API's work start; queued/handled input and child-only work have their own recorded starts.
+      // Keep the recorded start, but never place an earlier time below the anchor message.
       const started = data.working?.main?.since ?? data.working?.since ?? presentation.since
         ?? presentation.subtasks[0]?.start ?? data.awaiting?.since;
-      const date = asDate(started);
+      let date = asDate(started);
+      const anchorTime = shown.find(row => String(row.id) === String(presentation.anchor))?.at ?? null;
+      if (anchorTime !== null && (!date || date.getTime() < anchorTime)) date = new Date(anchorTime);
       const time = liveItem.querySelector('.conversation-message-meta time');
       time.hidden = !date;
       if (date) { text(time, clockText(date)); time.dateTime = date.toISOString(); }

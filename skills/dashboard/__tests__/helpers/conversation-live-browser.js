@@ -37,7 +37,8 @@ const subtask = steps => ({ id: KEY, label: { key: 'memorySync' }, start: at(22,
 const detail = [tool({ key: 'read', arg: 'zylos-memory/SKILL.md' }, at(22, 58, 11), at(22, 58, 11) + 300),
   tool(described('读取同步步骤说明'), at(22, 58, 12), at(22, 58, 12) + 500), tool(described('获取记忆整理锁'), at(22, 58, 13), at(22, 58, 14)),
   tool(described('导出本组新对话'), at(22, 58, 15))];
-const main = since => ({ on: true, since, main: { since, lastActivityAt: since }, tools: 0, subagents: null });
+// Distinct aggregate/main starts make the main-start priority observable before the anchor floor applies.
+const main = since => ({ on: true, since: since - 5000, main: { since, lastActivityAt: since }, tools: 0, subagents: null });
 const LONG_TEXT = '查 Telegram 群名并核对每个群最近 3 天的消息、成员和置顶说明，确认它不是测试群也不是已归档的群，再按对方习惯的叫法起一个不超过十个字的名字：'
   + '-1004376886243-1003921047710-1002210984321';
 const withSubtask = working => ({ ...working, subagents: { count: 1, since: at(22, 58, 10), lastActivityAt: at(22, 58, 15) } });
@@ -217,7 +218,8 @@ async function measure(page) {
     const clipped = area ? [...area.querySelectorAll('.conversation-activity-head, .conversation-activity-step, .conversation-activity-mark, .conversation-activity-subtask-row, .conversation-activity-handled')]
       .filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.className) : [];
     return { overflow: document.documentElement.scrollWidth > innerWidth, inside: !area || !outer || (box.left >= outer.left - 1 && box.right <= outer.right + 1),
-      clipped, width: box ? Math.round(box.width) : null, under: area?.dataset.under ?? null, live: rect(live), bubble: rect(bubble),
+      clipped, anchorIso: area?.previousElementSibling?.querySelector('.conversation-message-meta time')?.dateTime ?? null,
+      width: box ? Math.round(box.width) : null, under: area?.dataset.under ?? null, live: rect(live), bubble: rect(bubble),
       reply: rect(replies[replies.length - 1]),
       avatar: rect(avatar), replyAvatar: rect(replies[replies.length - 1]?.previousElementSibling),
       author: rect(author), replyAuthor: rect(replyMeta?.querySelector('.chat-message-author')),
@@ -315,9 +317,13 @@ export async function runConversationLiveBrowser(t, sandbox) {
         assert.equal(layout.identity.bot, true, `${name}: activity uses the AI avatar`);
         assert.equal(layout.identity.author, 'AI', `${name}: activity uses the AI author`);
         assert.equal(layout.identity.timeVisible, true, `${name}: recorded time is visible`);
-        const expectedStart = scene.name === 'waking' ? at(22, 57) : scene.name === 'handled' ? at(23, 5)
-          : scene.name === 'subtask-only' ? at(22, 58, 10) : at(22, 57, 13);
-        assert.equal(layout.identity.iso, iso(expectedStart), `${name}: header shows the recorded work/input start`);
+        const expectedTime = { waking: at(22, 57), thinking: at(22, 57, 13), steps: at(22, 57, 13),
+          'second-message': at(22, 58), subtask: at(22, 58), 'subtask-open': at(22, 58),
+          reply: at(22, 58, 40), 'subtask-only': at(22, 59, 30), handled: at(23, 5) }[scene.name];
+        assert.equal(layout.identity.iso, iso(expectedTime), `${name}: header shows the expected recorded time`);
+        const anchorTime = Date.parse(layout.anchorIso), headerTime = Date.parse(layout.identity.iso);
+        assert.ok(Number.isFinite(anchorTime) && Number.isFinite(headerTime), `${name}: both datetime attributes are valid`);
+        assert.ok(headerTime >= anchorTime, `${name}: header time never precedes its anchor message`);
         assert.match(layout.identity.time, /\d{2}:\d{2}/, `${name}: header formats the time`);
         assert.equal(layout.identity.actions, 0, `${name}: activity has no quote button`);
         if (layout.replyAvatar) {
