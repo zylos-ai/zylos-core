@@ -42,6 +42,64 @@ function replacement(f, old, reason, count = 2) {
   assert.equal(gaps.length, 1); assert.equal(gaps[0].reason, reason);
 }
 
+test('unchanged active polls do not open files, but append and same-size rewrites do', async t => {
+  const f = fixture(t);
+  const open = fs.promises.open.bind(fs.promises);
+  const opens = [];
+  t.mock.method(fs.promises, 'open', async (...args) => { opens.push(args[0]); return open(...args); });
+  f.write(line('a')); await f.read();
+  const initial = opens.length;
+  assert.equal(initial, 1);
+  const cursor = f.rows()[0];
+  const writes = f.store.db.prepare('SELECT total_changes() AS n').get().n;
+  await f.read(); await f.read();
+  assert.equal(opens.length, initial);
+  assert.deepEqual(f.rows(), [cursor]);
+  assert.equal(f.store.db.prepare('SELECT total_changes() AS n').get().n, writes);
+  assert.ok(!f.diagnostics().some(row => row.reason === 'source_missing'));
+
+  f.append(line('b')); await f.read();
+  assert.equal(opens.length, initial + 1);
+  assert.deepEqual(f.events().map(row => row.event_type), ['a', 'b']);
+  const before = fs.statSync(f.file);
+  f.write(line('c') + line('d'));
+  fs.utimesSync(f.file, before.atime, new Date(before.mtimeMs + 2000));
+  await f.read();
+  assert.equal(opens.length, initial + 2);
+  assert.deepEqual(f.events().map(row => row.event_type), ['a', 'b', 'c', 'd']);
+  assert.equal(f.rows()[1].generation, 2);
+});
+
+test('done rotations are never reopened and active replacement with identical size and mtime is imported', async t => {
+  const f = fixture(t);
+  const open = fs.promises.open.bind(fs.promises);
+  const opens = [];
+  t.mock.method(fs.promises, 'open', async (...args) => { opens.push(args[0]); return open(...args); });
+  f.write(line('old')); await f.read();
+  const rotated = path.join(f.root, 'events.100.jsonl');
+  fs.renameSync(f.file, rotated); f.write(line('current'));
+  fs.utimesSync(f.file, 1_700_000_000, 1_700_000_000); await f.read();
+  assert.equal(f.rows().find(row => row.file_name === path.basename(rotated)).status, 'done');
+  const initial = opens.length;
+  await f.read(); await f.read();
+  assert.equal(opens.length, initial);
+
+  const before = fs.statSync(f.file);
+  const replacement = path.join(f.root, 'replacement.jsonl');
+  fs.writeFileSync(replacement, line('new'));
+  fs.utimesSync(replacement, before.atime, before.mtime);
+  fs.renameSync(replacement, f.file);
+  const after = fs.statSync(f.file);
+  assert.equal(after.size, before.size); assert.equal(after.mtimeMs, before.mtimeMs);
+  assert.notEqual(after.ino, before.ino);
+  await f.read();
+  assert.ok(opens.length > initial);
+  assert.ok(opens.slice(initial).every(file => file === f.file));
+  assert.deepEqual(f.events().map(row => row.event_type), ['old', 'current', 'new']);
+  assert.equal(f.rows().find(row => row.file_ino === before.ino).status, 'gap');
+  assert.equal(f.diagnostics().filter(row => row.reason === 'file_missing').length, 1);
+});
+
 test('empty and half line stay g1; first16-byte anchor remains fixed across multi-batch growth', async t => {
   const f = fixture(t); f.write(''); await f.read();
   assert.equal(f.rows()[0].anchor_len, 0); assert.equal(f.rows()[0].byte_offset, 0);

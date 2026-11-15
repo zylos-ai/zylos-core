@@ -172,7 +172,10 @@ test('shared rounds cap both runtimes at fifty and rotate unchanged files', asyn
       thisRound.push(row.transcript_path); return { written: 0, byteOffset: fs.statSync(row.transcript_path).size };
     });
     assert.equal(thisRound.length, 50); seen.push(thisRound);
-    for (const file of thisRound) assert.equal(f.store.getUsageTranscript(file).updated_at, new Date(f.now()).toISOString());
+    for (const file of thisRound) {
+      assert.equal(f.store.getUsageTranscript(file).updated_at,
+        file === growing ? new Date(f.now()).toISOString() : new Date(f.now() - 1 - round * 5000).toISOString());
+    }
     f.advance(5000);
   }
   for (let i = 0; i < seen.length - 1; i++) assert.equal(new Set([...seen[i], ...seen[i + 1]]).size, 60);
@@ -967,10 +970,12 @@ test('rotated legacy sessions finish after idle EOF while the current legacy rem
   await f.inventory.collect('claude', read);
   assert.equal(f.store.getUsageTranscript(first).status, 'active');
   f.advance(5 * 3600000);
+  fs.utimesSync(status, new Date(f.now()), new Date(f.now()));
   await f.inventory.collect('claude', read);
   assert.equal(f.store.getUsageTranscript(first).status, 'finished');
   assert.equal(f.store.getUsageTranscript(next).status, 'active');
   f.advance(9 * DAY);
+  fs.utimesSync(status, new Date(f.now()), new Date(f.now()));
   await f.inventory.collect('claude', read);
   assert.equal(f.store.getUsageTranscript(first), null);
   assert.equal(f.store.getUsageTranscript(next).status, 'active');
