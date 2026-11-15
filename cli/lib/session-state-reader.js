@@ -6,7 +6,7 @@ import { safeHealthReason } from '../../skills/activity-monitor/scripts/health-e
 
 // Public readers retain one asynchronous tmux connection per observation.
 export const { readLiveIdentity, readSessionState, resolveTargetRuntime,
-  readCodexUsageSample, readAccountUsage } = createSessionReader();
+  readCodexUsageSample, readAccountUsage, readAccountUsageSnapshot } = createSessionReader();
 
 export function readRuntimeHealth(runtime) {
   if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');

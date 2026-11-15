@@ -7,6 +7,7 @@ import { createTestEnvironment } from './test-environment.js';
 
 const ROOT = process.cwd();
 const ROOT_NODE_TESTS = [
+  'test/account-usage-cache.integration.test.js',
   'test/account-quota-browser.test.js',
   'test/dashboard-initial-timezone.integration.test.js',
   'test/skill-command-arguments.test.js',
@@ -41,6 +42,7 @@ const ROOT_NODE_TESTS = [
 ];
 const TEST_ROOTS = [
   path.join(ROOT, 'skills', 'dashboard', '__tests__'),
+  path.join(ROOT, 'skills', 'dashboard', 'src', 'lib'),
   path.join(ROOT, 'cli', 'lib', '__tests__'),
   path.join(ROOT, 'cli', 'lib', 'runtime', '__tests__'),
   path.join(ROOT, 'skills', 'activity-monitor', 'scripts', '__tests__'),
@@ -70,6 +72,7 @@ function isNodeTest(file) {
   if (rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-admission.integration.test.js'
       || rel === 'skills/activity-monitor/scripts/__tests__/mode-switch-followup.integration.test.js') return false;
   if (rel.startsWith('skills/dashboard/__tests__/')) return true;
+  if (rel.startsWith('skills/dashboard/src/lib/') && rel.includes('/__tests__/')) return true;
   if (rel.startsWith('cli/lib/__tests__/')) return true;
   if (rel.startsWith('cli/lib/runtime/__tests__/')) return true;
   if (rel.startsWith('skills/activity-monitor/scripts/__tests__/')) return true;

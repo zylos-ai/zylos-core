@@ -1,3 +1,4 @@
+import { accountUsageCache as sharedAccountUsageCache } from './account-usage-cache.js';
 import { loadCoreModule } from './core-modules.js';
 import { Sanitizer } from './sanitizer.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -52,7 +53,8 @@ export function projectOrigin(sessionGroup, observation, sanitizer = new Sanitiz
 }
 
 export class CoreState {
-  constructor({ onChange = () => {}, zylosDir = process.env.ZYLOS_DIR || process.cwd() } = {}) {
+  constructor({ onChange = () => {}, zylosDir = process.env.ZYLOS_DIR || process.cwd(), accountUsageCache = sharedAccountUsageCache } = {}) {
+    this.accountUsageCache = accountUsageCache;
     this.onChange = onChange;
     this.zylosDir = zylosDir;
     this.sanitizer = new Sanitizer(zylosDir);
@@ -102,7 +104,7 @@ export class CoreState {
         try { targetRuntime = await reader.resolveTargetRuntime(null); } catch { targetRuntime = null; }
       }
       const accountRecord = ['claude', 'codex'].includes(targetRuntime)
-        ? await reader.readAccountUsage(targetRuntime, { allowRecorded: true }).catch(() => null) : null;
+        ? await this.accountUsageCache.read(targetRuntime, { allowRecorded: true }, reader).catch(() => null) : null;
       const accountUsage = accountRecord?.value ?? null;
       const projected = projectOrigin(group, observation, this.sanitizer, facts, view);
       const source = businessSource(projected, observation, accountUsage, accountRecord);

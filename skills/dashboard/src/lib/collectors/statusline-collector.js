@@ -1,3 +1,4 @@
+import { accountUsageCache as sharedAccountUsageCache } from '../account-usage-cache.js';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { resolveCoreConfigModule } from '../../../../comm-bridge/scripts/core-config-loader.js';
@@ -18,27 +19,29 @@ function loadCoreModules() {
   }
   return coreModules;
 }
-async function readCoreUsage() {
-  const [{ readSessionMode }, { readSessionState, readAccountUsage, resolveTargetRuntime }] = await loadCoreModules();
+async function readCoreUsage(accountUsageCache) {
+  const [{ readSessionMode }, reader] = await loadCoreModules();
+  const { readSessionState, resolveTargetRuntime } = reader;
   const mode = readSessionMode().mode;
   const observation = await readSessionState(mode === 'multi' ? 'origin' : null, { freshnessMs: 5000 });
   let runtime = observation.identity.runtime;
   if (mode === 'multi') { try { runtime = await resolveTargetRuntime('origin'); } catch { runtime = null; } }
   let accountUsage = null;
   if (['claude', 'codex'].includes(runtime)) {
-    try { accountUsage = { runtime, value: await readAccountUsage(runtime) }; }
+    try { accountUsage = { runtime, value: await accountUsageCache.read(runtime, undefined, reader) }; }
     catch { /* Missing account evidence never falls back to Origin's sample. */ }
   }
   return { ...observation, accountUsage };
 }
 
 export class StatuslineCollector {
-  constructor(store, config, { read = readCoreUsage } = {}) {
+  constructor(store, config, { read, accountUsageCache = sharedAccountUsageCache } = {}) {
     this.store = store;
     this.config = config;
     this._watcher = null;
     this._lastHash = null;
-    this._read = read;
+    this._read = read ?? (() => readCoreUsage(accountUsageCache));
+    this._health = new Map();
     this._pending = null;
     this._runtimeInfo = null;
     this._accountUsage = null;
@@ -58,7 +61,7 @@ export class StatuslineCollector {
     this._accountUsage = observation.accountUsage ?? null;
     if (!usage?.valid) {
       this._runtimeInfo = null;
-      this.store.upsertSourceHealth('statusline', 'collector_liveness', 'stale', {
+      this._upsertHealth('collector_liveness', 'stale', {
         reason: usage?.reason || 'identity_missing', last_check: now
       });
       return { written: 0 };
@@ -72,9 +75,9 @@ export class StatuslineCollector {
     } : null;
     const hash = JSON.stringify([identity.runtime, identity.runId, identity.sessionId, usage.sampledAt, data]);
     if (hash === this._lastHash) {
-      this.store.upsertSourceHealth('statusline', 'collector_liveness', 'healthy', {
+      this._upsertHealth('collector_liveness', 'healthy', {
         last_success: now, metrics_written: 0
-      });
+      }, hash);
       return { written: 0 };
     }
     this._lastHash = hash;
@@ -121,16 +124,25 @@ export class StatuslineCollector {
     }
 
     if (written > 0) {
-      this.store.upsertSourceHealth('statusline', 'collector_liveness', 'healthy', {
+      this._upsertHealth('collector_liveness', 'healthy', {
         last_success: now, metrics_written: written
-      });
-      this.store.upsertSourceHealth('statusline', 'runtime_progress', 'healthy', {
+      }, hash);
+      this._upsertHealth('runtime_progress', 'healthy', {
         last_success: now,
         runtime: identity.runtime
-      });
+      }, hash);
     }
 
     return { written, data };
+  }
+
+  _upsertHealth(signal, status, extra, evidence = null) {
+    // Clock ticks and metric counters do not change the source's health.
+    const { last_check, last_success, metrics_written, ...details } = extra;
+    const signature = JSON.stringify([status, details, evidence]);
+    if (this._health.get(signal) === signature) return;
+    this.store.upsertSourceHealth('statusline', signal, status, extra);
+    this._health.set(signal, signature);
   }
 
   start() {

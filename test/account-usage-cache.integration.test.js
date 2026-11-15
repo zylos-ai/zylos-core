@@ -1,0 +1,94 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { AccountUsageCache } from '../skills/dashboard/src/lib/account-usage-cache.js';
+
+// Boundary: real Core account reader → shared cache → CoreState + collector.
+// Run when changing account selection, cache TTL/coalescing, or either consumer;
+// unrelated UI-only changes may skip this case. No optional tools/dependencies.
+// Isolation: runner-provided HOME/ZYLOS_DIR/PM2_HOME/TMPDIR are checked below;
+// all sample files use a nested fixture. Identity/tmux connections are injected,
+// so no real tmux process is exercised and a private tmux socket is N/A.
+test('CoreState and collector share real account scan until 30s expiry, preserving quota policies and provenance', async t => {
+  const runnerHome = fs.realpathSync(process.env.HOME);
+  const realHome = fs.realpathSync(os.userInfo().homedir);
+  assert.notEqual(runnerHome, realHome);
+  assert.equal(process.env.ZYLOS_DIR, path.join(runnerHome, 'zylos'));
+  assert.equal(process.env.PM2_HOME, path.join(runnerHome, '.pm2'));
+  assert.equal(fs.realpathSync(process.env.TMPDIR), path.join(path.dirname(runnerHome), 'tmp'));
+  assert.equal(os.homedir(), runnerHome);
+  t.diagnostic(JSON.stringify({ isolation: Object.fromEntries(
+    ['HOME', 'ZYLOS_DIR', 'PM2_HOME', 'TMPDIR'].map(key => [key, process.env[key]])
+  ), tmux: 'identity/connection mocks; real tmux not exercised; private socket N/A' }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'account-cache-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lib = path.join(root, 'package/cli/lib');
+  fs.mkdirSync(lib, { recursive: true });
+  fs.writeFileSync(path.join(root, 'package/package.json'), '{"type":"module"}');
+  fs.writeFileSync(path.join(lib, 'config.js'), 'export function readSessionMode(){return {mode:"single"}}');
+  const createReaderUrl = new URL('../cli/lib/session-state-reader-async.js', import.meta.url).href;
+  fs.writeFileSync(path.join(lib, 'session-state-reader.js'), `
+    import { createSessionReader } from ${JSON.stringify(createReaderUrl)};
+    export const counters = { scans: 0 };
+    const reader = createSessionReader({ env: { ZYLOS_DIR: ${JSON.stringify(root)} },
+      open: async () => ({close: async () => {}}),
+      observe: async () => ({present:true,ready:true,runtime:'claude',runId:'run',sessionId:'session'}),
+      listSessions: async () => { counters.scans++; return [{sessionGroup:'origin'}]; }
+    });
+    export const {readSessionState,readAccountUsageSnapshot} = reader;
+  `);
+  const write = (group, percent, capturedAt) => {
+    const dir = path.join(root, 'activity-monitor/session-groups', group);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'statusline.json');
+    fs.writeFileSync(file, JSON.stringify({ session_id: 'session', zylos: {v:1,runId:'run',capturedAt},
+      context_window: {used_percentage:35},
+      rate_limits: {seven_day:{used_percentage:percent,resets_at:Date.now()/1000+86400}} }));
+    return file;
+  };
+  const capturedAt = Date.now() - 1000;
+  write('origin', 7, capturedAt);
+  write('sleeping', 12, capturedAt + 500);
+  const prior = process.env.ZYLOS_PACKAGE_ROOT;
+  process.env.ZYLOS_PACKAGE_ROOT = path.join(root, 'package');
+  t.after(() => { if (prior === undefined) delete process.env.ZYLOS_PACKAGE_ROOT; else process.env.ZYLOS_PACKAGE_ROOT = prior; });
+  const reader = await import(pathToFileURL(path.join(lib, 'session-state-reader.js')).href);
+  t.mock.module('../skills/dashboard/src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
+    if (name === 'config.js') return {readSessionMode: () => ({mode:'single'})};
+    if (name === 'session-state-reader.js') return reader;
+    if (name === 'session-group-paths.js') return {};
+    assert.fail(name);
+  } } });
+  const { CoreState } = await import('../skills/dashboard/src/lib/core-state.js');
+  const { StatuslineCollector } = await import('../skills/dashboard/src/lib/collectors/statusline-collector.js');
+  let clock = 0;
+  const cache = new AccountUsageCache({now: () => clock});
+  const core = new CoreState({zylosDir:root,accountUsageCache:cache});
+  const collector = new StatuslineCollector({insertMetric(){},upsertSourceHealth(){}}, {zylosDir:root}, {accountUsageCache:cache});
+  await Promise.all([core.refresh(), collector.collect()]);
+  assert.equal(reader.counters.scans, 1, 'concurrent readers coalesce');
+  assert.equal(core.accountUsage.seven_day.used_percentage, 12, 'Core keeps recorded selection');
+  assert.equal(core.accountUsageRecord.live, false);
+  assert.equal(core.accountUsageRecord.recordedAt, capturedAt + 500);
+  assert.equal(collector.getAccountUsage().value.seven_day.used_percentage, 7, 'collector keeps live-only selection');
+  for (let i = 1; i < 20; i++) { clock = i * 1000; await core.refresh(); if (i % 2 === 0) await collector.collect(); }
+  assert.equal(reader.counters.scans, 1, 'unchanged polling does not enumerate all sessions');
+  write('sleeping', 23, capturedAt + 750);
+  clock = 29999;
+  await core.refresh();
+  assert.equal(core.accountUsage.seven_day.used_percentage, 12);
+  clock = 30000;
+  await Promise.all([core.refresh(), collector.collect()]);
+  assert.equal(reader.counters.scans, 2);
+  assert.equal(core.accountUsage.seven_day.used_percentage, 23);
+  assert.equal(core.accountUsageRecord.recordedAt, capturedAt + 750);
+  assert.equal(core.accountUsageRecord.live, false);
+  assert.equal(collector.getAccountUsage().value.seven_day.used_percentage, 7);
+  const codex = await cache.read('codex', {allowRecorded:true}, reader);
+  assert.equal(reader.counters.scans, 3, 'runtime cache entries stay separate');
+  assert.equal(codex, null);
+  await core.stop(); await collector.stop();
+});
