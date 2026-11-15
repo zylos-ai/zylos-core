@@ -244,10 +244,10 @@ test('a first message: waking the session, thinking, its steps, a reply that cle
   assert.equal(liveOf(f).length, 1); assert.ok(placedAfter(f, 1), 'right below the message');
   const live = liveOf(f)[0];
   assert.equal(live.dataset.messageId, undefined, 'the live area is not a message');
-  assert.match(visibleText(live), /^正在唤醒会话 · \d+ 秒会话启动中$/);
+  assert.match(visibleText(live.querySelector('.conversation-activity')), /^正在唤醒会话 · \d+ 秒会话启动中$/);
   answer = body({ now: s(8), awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(6) } });
   await refresh(f);
-  assert.match(visibleText(liveOf(f)[0]), /^正在工作 · \d+ 秒正在思考$/);
+  assert.match(visibleText(liveOf(f)[0].querySelector('.conversation-activity')), /^正在工作 · \d+ 秒正在思考$/);
   answer = body({ now: s(12), steps: [tool(9, 10), tool(11, null, 'running')], awaiting: { id: 1, state: 'thinking', since: s(0), delivered: s(6) } });
   await refresh(f);
   assert.equal(liveOf(f)[0], live, 'one area all along');
@@ -283,6 +283,11 @@ test('a message sent mid-work moves the same area under it with the steps so far
   assert.ok(placedAfter(f, 2));
   assert.equal(live.querySelectorAll('.conversation-activity-step').length, 3, 'earlier steps stay');
   assert.equal(live.querySelectorAll('.conversation-activity-mark').length, 1);
+  assert.equal(visibleText(live.querySelector('.conversation-message-meta .chat-message-author')), 'AI');
+  const time = live.querySelector('.conversation-message-meta time');
+  assert.equal(time.hidden, false);
+  assert.ok(visibleText(time), 'the activity header displays its recorded time');
+  assert.equal(time.dateTime, rows[1].timestamp, 'the earlier work start is bounded by the newer anchor message');
   assert.match(live.querySelector('.conversation-activity-head').textContent, /^正在工作 · 30 秒$/, 'timed from the first unanswered message');
 });
 
@@ -315,7 +320,7 @@ test('work done without a reply leaves one line under the message and stops tick
     awaiting: { id: 1, state: 'handled', since: s(0), delivered: s(1) } }) });
   await f.open();
   assert.ok(placedAfter(f, 1));
-  assert.equal(visibleText(liveOf(f)[0]), '已处理，没有回复');
+  assert.equal(visibleText(liveOf(f)[0].querySelector('.conversation-activity')), '已处理，没有回复');
   assert.equal(f.intervals.filter(timer => timer.fn).length, 0, 'nothing ticks under the handled line');
 });
 
