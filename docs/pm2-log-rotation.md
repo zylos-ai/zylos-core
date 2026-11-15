@@ -87,7 +87,53 @@ disk space for the compressed copy.
 
 ## Docker
 
-In the official Docker image the PM2 home (`/home/zylos/.pm2`) is not part of
-the `zylos-data` volume, so `zylos init` installs the module again at each
-container start. Without network access, each start prints the warning above
-and logs are not rotated in that container.
+The official Docker image runs `zylos init` at every container start (see
+[Docker](docker.md)), so every start checks for the module. The PM2 home
+(`/home/zylos/.pm2`) is not part of the `zylos-data` volume: a restarted
+container keeps a module it already installed, but a newly created container,
+for example after `docker compose pull && docker compose up -d`, starts without
+it and installs it again.
+
+### Startup wait without network access
+
+With network access the install usually finishes within a few seconds. Once
+the module is installed, later starts of the same container find it and do not
+wait.
+
+Without network access, the start waits for `pm2 install pm2-logrotate` until
+npm gives up or the 180-second install timeout is reached, whichever comes
+first. When npm is configured to use a proxy that never responds, npm does not
+give up by itself and the start waits the full 180 seconds; Zylos then stops
+the install and prints the warning above. The `pm2 set` steps before the
+install do not use the network and finish quickly. The wait happens in the
+entrypoint's "Initializing workspace" step, after `zylos init` has started the
+PM2 services and before the agent runtime session starts, so the container
+becomes ready correspondingly later. Logs are not rotated in that container,
+and the wait repeats at every start until the module is installed.
+
+To avoid the wait, use one of the following:
+
+- **Give npm a working route to the registry.** `pm2 install` runs npm with
+  the environment of the container, so npm's standard settings apply. In the
+  `environment` section of `docker-compose.yml`, set `HTTPS_PROXY` and
+  `HTTP_PROXY` to a proxy that responds, or set `NPM_CONFIG_REGISTRY` to a
+  registry mirror the container can reach. Remove proxy settings that point to
+  an unreachable proxy.
+- **Install the module in your own image.** Build an image on top of the
+  official one that installs the module with the default settings while the
+  build still has network access:
+
+  ```dockerfile
+  FROM ghcr.io/zylos-ai/zylos-core:latest
+  RUN pm2 set pm2-logrotate:max_size 10M \
+   && pm2 set pm2-logrotate:retain 7 \
+   && pm2 set pm2-logrotate:compress true \
+   && pm2 set pm2-logrotate:workerInterval 30 \
+   && pm2 set pm2-logrotate:rotateInterval '0 0 * * *' \
+   && pm2 install pm2-logrotate \
+   && pm2 kill
+  ```
+
+  The module and its settings are then part of the image's PM2 home. At each
+  start `zylos init` finds the module record, leaves the module unchanged and
+  runs no npm command, and PM2 starts the module together with the services.
