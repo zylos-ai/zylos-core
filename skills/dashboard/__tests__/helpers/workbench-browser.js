@@ -595,19 +595,32 @@ export async function runWorkbenchBrowser(t, sandbox) {
 
   // The stopped group's two runs that the supervisor restarted (fixtures/workbench-browser-api.js), both opened: each
   // ends as an automatic restart, lists its reminder and restart, and not the crash report the restart itself caused.
+  // The tool call each restart cut off reads as interrupted, in the neutral style, in the run and in recent activity;
+  // run D's earlier failure of the same tool stays an error. Run, tab and link counts equal the rows shown.
   // A run header's event count stays on one line, also in English on a phone.
   await step('runs ended by an automatic restart show the reminder and restart, not a crash, and keep their header on one line', async () => {
     const words = {
       zh: { tab: '时间线', ends: ['自动重启 · 无响应', '自动重启 · 工具超时'], crash: '会话意外退出',
-        runs: [['无响应，已自动重启', '无响应，已提醒'], ['工具超时，已自动重启', '工具超时，已提醒']] },
+        runs: [['运行命令 · 因自动重启中断', '无响应，已自动重启', '无响应，已提醒'], ['打开网页 · 因自动重启中断', '工具超时，已自动重启', '工具超时，已提醒']],
+        failed: '打开网页 · 出错', count: /^(\d+) 条$/, link: total => `完整时间线（${total} 条，2 段运行）` },
       en: { tab: 'Timeline', ends: ['Auto-restart · no response', 'Auto-restart · tool timeout'], crash: 'Session exited unexpectedly',
-        runs: [['No response, restarted automatically', 'No response, reminded'], ['Tool timed out, restarted automatically', 'Tool timeout, nudged']] },
+        runs: [['Run command · interrupted by automatic restart', 'No response, restarted automatically', 'No response, reminded'],
+          ['Open webpage · interrupted by automatic restart', 'Tool timed out, restarted automatically', 'Tool timeout, nudged']],
+        failed: 'Open webpage · failed', count: /^(\d+) events?$/, link: total => `Full timeline (${total} events, 2 runs)` },
     };
+    const rowsOf = nodes => nodes.map(node => ({ text: node.querySelector('.wb-ev-t').firstChild?.textContent ?? '', bad: node.classList.contains('wb-ev-bad') }));
     for (const language of ['zh', 'en']) for (const [width, height] of [[390, 844], [1280, 800]]) for (const theme of ['light', 'dark']) {
       const name = `${language} ${width} ${theme}`, text = words[language];
       const { page, context, errors, shot } = await open(width, height, '/', {}, language);
       if (theme === 'dark') { await page.evaluate(() => localStorage.setItem('zylos-dashboard-theme', 'dark')); await page.reload(); }
       await page.locator('#wb-board .wb-row', { hasText: 'Product weekly' }).click();
+      await page.locator('.wb-detail-recent .wb-ev').first().waitFor();
+      const recent = await page.locator('.wb-detail-recent .wb-ev').evaluateAll(rowsOf);
+      assert.deepEqual(recent[0], { text: text.runs[0][0], bad: false }, `${name}: recent activity shows the cut-off call as interrupted, not as an error`);
+      assert.ok(!recent.some(row => row.text === text.crash), `${name}: recent activity does not show the restart's own exit`);
+      const overview = await page.evaluate(() => ({ link: document.querySelector('.wb-detail-recent .wb-chev').textContent,
+        tab: [...document.querySelectorAll('#wb-side [role="tab"]')].map(node => node.querySelector('.wb-n')?.textContent.trim()).find(Boolean) }));
+      await shot(`restarted-recent-${language}-${theme}`);
       await page.locator('#wb-side [role="tab"]', { hasText: text.tab }).click();
       const headers = page.locator('.wb-timeline-run .wb-run-h');
       await headers.nth(1).waitFor();
@@ -618,16 +631,23 @@ export async function runWorkbenchBrowser(t, sandbox) {
         const lines = node => { const range = document.createRange(); range.selectNodeContents(node);
           return new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size; };
         const header = section.querySelector('.wb-run-h'), count = header.querySelector('.wb-sub');
-        return { end: header.querySelector('.wb-end').textContent, countLines: lines(count), countFits: count.getBoundingClientRect().right <= header.getBoundingClientRect().right + 0.5,
-          events: [...section.querySelectorAll('.wb-timeline-event .wb-ev-t')].map(node => node.firstChild?.textContent ?? node.textContent) };
+        return { end: header.querySelector('.wb-end').textContent, count: count.textContent, countLines: lines(count),
+          countFits: count.getBoundingClientRect().right <= header.getBoundingClientRect().right + 0.5,
+          events: [...section.querySelectorAll('.wb-timeline-event')].map(node => ({ text: node.querySelector('.wb-ev-t').firstChild?.textContent ?? '', bad: node.classList.contains('wb-ev-bad') })) };
       }));
       assert.deepEqual(runs.map(run => run.end), text.ends, `${name}: each run ends as its automatic restart`);
       runs.forEach((run, index) => {
-        assert.deepEqual(run.events.slice(0, 2), text.runs[index], `${name}: run ${index} shows the restart over its reminder, newest first`);
-        assert.ok(!run.events.includes(text.crash), `${name}: run ${index} does not show the restart's own exit as a crash`);
+        assert.deepEqual(run.events.slice(0, 3).map(row => row.text), text.runs[index], `${name}: run ${index} shows the cut-off call, the restart and its reminder, newest first`);
+        assert.equal(run.events[0].bad, false, `${name}: run ${index}'s cut-off call is not shown as an error`);
+        assert.ok(!run.events.some(row => row.text === text.crash), `${name}: run ${index} does not show the restart's own exit as a crash`);
+        assert.equal(Number(run.count.match(text.count)?.[1]), run.events.length, `${name}: run ${index}'s count (${run.count}) is the rows it shows`);
         assert.equal(run.countLines, 1, `${name}: run ${index}'s event count stays on one line`);
         assert.ok(run.countFits, `${name}: run ${index}'s event count stays inside its header`);
       });
+      assert.deepEqual(runs[1].events.filter(row => row.text === text.failed), [{ text: text.failed, bad: true }], `${name}: run D's own earlier failure stays an error`);
+      const total = runs.reduce((sum, run) => sum + run.events.length, 0);
+      assert.equal(overview.link, text.link(total), `${name}: the full-timeline link counts the rows the runs show`);
+      assert.equal(overview.tab, String(total), `${name}: the timeline tab counts the rows the runs show`);
       const layout = await page.evaluate(measure);
       assert.equal(layout.documentWidth, width, `${name}: no sideways scrolling`);
       // One picture per run, its header in the middle of the detail: run A, then run D.

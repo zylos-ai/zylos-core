@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { END_TYPES, MAIN_ACTION_TYPES, STOP_HOOK_LAG_MS, inputAfterStop } from '../workbench/working.js';
+import { RESTART_EXIT_MS, runRestartEffect } from '../../../public/js/wb/timeline-rows.js';
 
 /**
  * What the agent is doing right now, for a Dashboard conversation page.
@@ -151,9 +152,10 @@ export function opensStep(event) {
  * when `agent` is null, otherwise that subtask's. `ends` are the times that agent stopped ({ at, stopped }, stopped
  * when it was interrupted); a step still open at a stop that is at least SETTLE_MS old was left unfinished there, or
  * stopped by the interrupt (a yielded code-mode command no `wait` saw finish is taken to have ended there), otherwise
- * it is still running. When there are more steps than can be shown, the newest are kept.
+ * it is still running. A failure an automatic restart caused (`restartCut`, the timeline's rule) ends its step as
+ * interrupted, not failed. When there are more steps than can be shown, the newest are kept.
  */
-export function buildSteps(events, { agent = null, ends = [], now }) {
+export function buildSteps(events, { agent = null, ends = [], now, restartCut = () => false }) {
   let steps = [], truncated = false;
   const open = new Map(), cells = new Map();
   for (const event of events) {
@@ -186,7 +188,8 @@ export function buildSteps(events, { agent = null, ends = [], now }) {
       // An `exec` that yielded while its script still runs goes on until a `wait` on its cell sees it finish.
       if (event.type === 'tool_result' && meta.cell_running && typeof meta.cell_id === 'string') { cells.set(meta.cell_id, step); continue; }
       step.end = event.at;
-      step.status = event.type === 'post_tool_failure' || meta.outcome === 'failed' ? 'failed' : 'done';
+      step.status = event.type === 'post_tool_failure' && restartCut(event) ? 'interrupted'
+        : event.type === 'post_tool_failure' || meta.outcome === 'failed' ? 'failed' : 'done';
     }
   }
   if (steps.length > STEPS_SHOWN) { steps = steps.slice(-STEPS_SHOWN); truncated = true; }
@@ -251,7 +254,21 @@ export class ChatActivity {
   _row(row) {
     const meta = parse(row.metadata);
     return { type: row.event_type, at: ms(row.timestamp), session: row.session_id ?? null, runtime: row.runtime,
-      summary: row.summary, meta, seq: row.event_seq };
+      summary: row.summary, meta, seq: row.event_seq, run: row.run_id ?? null };
+  }
+
+  /**
+   * Which tool failures from `from` on an automatic restart caused: the timeline's rule (`runRestartEffect`), judged
+   * run by run against the group's automatic restarts recorded up to RESTART_EXIT_MS before then.
+   */
+  _restartCut(group, from, now) {
+    const restarts = this._events(`SELECT run_id, event_type, timestamp FROM runtime_events WHERE session_group=@group
+      AND event_type IN ('no_response_restart','tool_timeout_restart') AND run_id IS NOT NULL AND timestamp >= @from
+      AND timestamp <= @now ORDER BY timestamp DESC, event_seq DESC LIMIT ${QUIET_LOOKBACK}`,
+    { group, from: iso(from - RESTART_EXIT_MS), now: iso(now) });
+    if (!restarts.length) return () => false;
+    const effect = runRestartEffect(restarts);
+    return event => effect({ event_type: event.type, timestamp: event.at, run_id: event.run }) === 'interrupted';
   }
 
   /**
@@ -496,7 +513,7 @@ export class ChatActivity {
     // its wait on the page from the window's start, which stays at the reply.
     const resumed = busy && reply?.at != null && stops[0]?.at > reply.at + 1000 ? stops[0].at : -Infinity;
     const from = Math.max(reply?.at != null ? reply.at + 1000 : -Infinity, quiet ?? -Infinity, resumed, now - 24 * 3600_000);
-    const read = this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata
+    const read = this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata
       FROM runtime_events WHERE session_group=@group AND event_type IN (${STEP_TYPES.map(type => `'${type}'`).join(',')})
       AND timestamp >= @from AND timestamp <= @now
       AND NOT (event_type IN ('pre_tool_use','post_tool_use','post_tool_failure') AND (CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.agent_id') END) IS NOT NULL)
@@ -509,7 +526,7 @@ export class ChatActivity {
       .filter(event => event.at >= from).sort((a, b) => a.at - b.at || (a.seq ?? 0) - (b.seq ?? 0));
     const ends = stops.filter(stop => stop.at >= from).map(stop => ({ at: stop.at, stopped: stop.type === 'dashboard_interrupt' }))
       .sort((a, b) => a.at - b.at);
-    const built = buildSteps(events, { ends, now });
+    const built = buildSteps(events, { ends, now, restartCut: this._restartCut(group, from, now + 60_000) });
     // A message the runtime held while it worked is marked where it took it: at the first queued message taken.
     const taken = events.find(event => event.type === 'input_dequeue' && !agentOf(event));
     const held = taken ? this._held(group, taken, from, stops).map(event => ({ ...event, at: taken.at })) : [];
@@ -537,12 +554,14 @@ export class ChatActivity {
       WHERE session_group=@group AND event_type='subagent_start' AND json_extract(metadata, '$.agent_id') = @id
       ORDER BY timestamp DESC, event_seq DESC LIMIT 1`, { group, id }).map(row => this._row(row))[0];
     if (!start) return { subtask: null, steps: [] };
-    const events = this._events(`SELECT event_seq, timestamp, runtime, session_id, event_type, summary, metadata FROM runtime_events
+    const events = this._events(`SELECT event_seq, timestamp, runtime, session_id, run_id, event_type, summary, metadata FROM runtime_events
       WHERE session_group=@group AND json_extract(metadata, '$.agent_id') = @id AND timestamp >= @from
       AND event_type IN ('pre_tool_use','post_tool_use','post_tool_failure','tool_call','tool_result','assistant_message','subagent_stop')
       ORDER BY timestamp DESC, event_seq DESC LIMIT ${STEP_LIMIT}`, { group, id, from: iso(start.at) }).reverse().map(row => this._row(row));
     const stop = events.find(event => event.type === 'subagent_stop');
-    const built = buildSteps(events, { agent: id, ends: stop ? [{ at: stop.at, stopped: stop.meta.status === 'interrupted' }] : [], now });
+    // The automatic restart stops the whole session, the subtask's tools with it: the same rule holds for them.
+    const built = buildSteps(events, { agent: id, ends: stop ? [{ at: stop.at, stopped: stop.meta.status === 'interrupted' }] : [], now,
+      restartCut: this._restartCut(group, start.at, now + 60_000) });
     return { subtask: { id: key, start: start.at, end: stop?.at ?? null }, steps: built.steps,
       ...(built.truncated || events.length >= STEP_LIMIT ? { truncated: true } : {}) };
   }

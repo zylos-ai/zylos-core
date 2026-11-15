@@ -96,11 +96,12 @@ export async function runAccountQuotaBrowser(sandbox) {
     const duration = language === 'en' ? '3d\u00a04h' : '3 天\u00a04 小时';
     const laterDuration = language === 'en' ? '4d\u00a05h\u00a08m' : '4 天\u00a05 小时\u00a08 分钟';
     const recordedAt = now - 3600000;
-    let phase = 'live';
+    let phase = 'live', initial = true;
     const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 },
       locale: language === 'zh' ? 'zh-CN' : 'en-GB', timezoneId: 'America/Los_Angeles',
       ...(width === 390 ? { isMobile: true, hasTouch: true } : {}) });
     sandbox.addCleanup(() => context.close());
+    let page;
     try {
       await context.route('**/*', route => route.request().url().startsWith(base + '/') ? route.continue() : route.abort());
       await context.route('**/_assets/vendor/chart.umd.js', route => route.fulfill({ path: chartAsset, contentType: 'text/javascript' }));
@@ -110,14 +111,31 @@ export async function runAccountQuotaBrowser(sandbox) {
           localStorage.setItem('zylos-dashboard-theme', theme);
           localStorage.setItem('zylos-dashboard-locale', language);
         } catch {}
+        const first = window.__firstQuotaTitles = {};
+        const observer = new MutationObserver(() => {
+          for (const item of document.querySelectorAll('.wb-account')) {
+            if (!item.getClientRects().length || item.closest('[hidden]')) continue;
+            const name = item.textContent.includes('Claude') ? 'Claude' : item.textContent.includes('Codex') ? 'Codex' : null;
+            if (name && !Object.hasOwn(first, name)) first[name] = item.title;
+          }
+          if (Object.keys(first).length === 2) observer.disconnect();
+        });
+        observer.observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['title', 'hidden'] });
+        window.addEventListener('pagehide', () => observer.disconnect(), { once: true });
       }, { theme, language });
-      const page = await context.newPage(), errors = [];
+      page = await context.newPage();
+      const errors = [];
       await page.clock.setFixedTime(now);
       page.setDefaultTimeout(10000);
       page.on('pageerror', error => { if (errors.length < 3) errors.push(error.message); });
-      await page.route('**/api/**', route => {
+      await page.route('**/api/**', async route => {
         const url = new URL(route.request().url());
-        if (url.pathname === '/api/state') return route.fulfill({ json: { ...workbenchAnswer(url, now), tz: zone } });
+        if (url.pathname === '/api/state') {
+          // Overlap startup and SSE-open state reads, exposing timezone metadata lost with a stale reply.
+          // Only startup reads are delayed; page teardown cancels any unfinished wait.
+          if (initial) await page.waitForTimeout(300);
+          return route.fulfill({ json: { ...workbenchAnswer(url, now), tz: zone } });
+        }
         if (url.pathname !== '/api/workbench/groups') return route.fallback();
         const answer = workbenchAnswer(url, now);
         const stale = phase === 'stale';
@@ -138,9 +156,7 @@ export async function runAccountQuotaBrowser(sandbox) {
         answer.instance.pool.capacityRecord = { valid: true, fresh: true, source: 'fixed' };
         return route.fulfill({ json: answer });
       });
-      const stateReady = page.waitForResponse(response => new URL(response.url()).pathname === '/api/state');
       await page.goto(base + '/');
-      await stateReady;
       await openDashboardTab(page, 'overview');
       assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
       const strip = page.locator('.wb-account');
@@ -179,8 +195,14 @@ export async function runAccountQuotaBrowser(sandbox) {
         }
         assert.fail(`desired ${next} quota snapshot did not render within 10000ms`);
       }
-      // State and overview load independently; verify quota after the instance zone has arrived.
-      await refresh('live');
+      // Read the first DOM tooltip, even if a later render has already corrected it.
+      const firstTitles = await page.evaluate(() => window.__firstQuotaTitles);
+      initial = false;
+      for (const name of ['Claude', 'Codex']) {
+        const expectedTime = await dateText(future);
+        assert.ok(firstTitles[name]?.includes(expectedTime),
+          `first ${name} tooltip uses instance zone: ${firstTitles[name]}; expected ${expectedTime}`);
+      }
       for (const name of ['Claude', 'Codex']) {
         const item = strip.filter({ hasText: name });
         original.set(name, await item.innerText());
@@ -251,7 +273,9 @@ export async function runAccountQuotaBrowser(sandbox) {
       await page.locator('#wb-side').waitFor({ state: 'hidden' });
       assert.equal(errors.length, 0, errors.join('\n'));
       console.info(`Account quota browser: ${width}px ${theme} ${language}; live, stale, omitted both runtimes, refresh, close/reopen/Escape`);
-    } finally { await context.close(); }
+    } finally {
+      try { await page?.unrouteAll({ behavior: 'ignoreErrors' }); } finally { await context.close(); }
+    }
   }
   assert.equal(actions.length, 0, 'viewing account reset details submits no actions');
 }

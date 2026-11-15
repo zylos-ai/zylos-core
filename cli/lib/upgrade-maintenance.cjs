@@ -1242,6 +1242,69 @@ function restoreOriginalPackage(dir, j) {
   if (!j.originalPackageRestored) update(dir, j, {originalPackageRestored:true});
   if (hash(j.initialIdentity.packageJson) !== j.initialIdentity.packageHash || treeHash(j.initialIdentity.cliRoot) !== j.initialIdentity.cliHash) throw Error('restored installed package identity mismatch');
 }
+// npm moves the installed package aside to one fixed sibling before replacing
+// it and deletes that copy after a successful install (@npmcli/arborist
+// retire-path.js). An installer killed in between leaves the copy behind, and
+// the next install fails with ENOTEMPTY when it moves the package aside again.
+function npmRetiredPath(packageRoot) {
+  const hash = crypto.createHash('sha1').update(packageRoot).digest('base64').replace(/[^a-zA-Z0-9]+/g, '').slice(0, 8);
+  return path.join(path.dirname(packageRoot), '.' + path.basename(packageRoot) + '-' + hash);
+}
+// Returns the first entry of `candidate` that is not identical in `reference`
+// (same type, file bytes or link text), or null when every entry matches.
+function firstDifference(candidate, reference) {
+  const pending = [''];
+  while (pending.length) {
+    const rel = pending.pop(), name = rel || '.';
+    const a = path.join(candidate, rel), b = path.join(reference, rel);
+    const left = fs.lstatSync(a);
+    let right;
+    try { right = fs.lstatSync(b); } catch (error) { if (error.code === 'ENOENT') return name; throw error; }
+    if (left.isSymbolicLink()) {
+      if (!right.isSymbolicLink() || fs.readlinkSync(a) !== fs.readlinkSync(b)) return name;
+    } else if (left.isDirectory()) {
+      if (!right.isDirectory() || right.isSymbolicLink()) return name;
+      for (const child of fs.readdirSync(a)) pending.push(path.join(rel, child));
+    } else if (left.isFile()) {
+      if (!right.isFile() || left.size !== right.size || !fs.readFileSync(a).equals(fs.readFileSync(b))) return name;
+    } else return name;
+  }
+  return null;
+}
+// Runs after the original package has been restored, so the installer exit is
+// confirmed. Only npm's fixed sibling for this transaction's recorded install
+// target is examined, and it is removed only when every entry in it is
+// identical to this transaction's saved original package. Failure never fails
+// recovery: the directory stays and the caller reports the warning.
+function removeInterruptedInstallStaging(dir, j) {
+  if (j.installationIntent !== true) return {};
+  const original = j.originalPackage;
+  let sourceRoot, candidate;
+  try {
+    sourceRoot = globalPackageLayout(original.sourceRoot).sourceRoot;
+    if (sourceRoot !== original.sourceRoot) return {};
+    candidate = npmRetiredPath(sourceRoot);
+  } catch { return {}; }
+  try {
+    let stat;
+    try { stat = fs.lstatSync(candidate); } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+    if (!stat.isDirectory()) throw Error('it is not a directory');
+    const snapshot = path.join(path.resolve(dir), 'code', 'original-package');
+    if (original.path !== snapshot || sourceRoot !== path.dirname(j.initialIdentity?.packageJson || '') ||
+        typeof original.treeHash !== 'string' || !/^[a-f0-9]{64}$/.test(original.treeHash)) throw Error('the saved original package is not recorded');
+    privatePath(snapshot, {directory:true});
+    if (treeHash(snapshot, {excludeNodeModules:false, includeModes:true}) !== original.treeHash) throw Error('the saved original package changed');
+    const different = firstDifference(candidate, snapshot);
+    if (different !== null) throw Error(different + ' is not identical to the saved original package');
+    const parent = fs.realpathSync(path.dirname(sourceRoot));
+    removeOwnedTree(parent, path.join(parent, path.basename(candidate)));
+    fsyncDir(parent);
+    return {removed:candidate};
+  } catch (error) {
+    return {warning:`npm staging directory ${candidate} was left in place: ${error.message}. ` +
+      'The next upgrade fails with ENOTEMPTY until it is removed; confirm that no npm process is running, inspect it, then remove it manually.'};
+  }
+}
 function verifyFinalizerExit(dir, j) {
   // Legacy detached-finalizer records require manual recovery; new transactions
   // never launch a finalizer child and cannot safely interpret its ownership.
@@ -1329,6 +1392,8 @@ module.exports = {
   validateRecoveryFiles,
   runInstaller,
   restoreOriginalPackage,
+  removeInterruptedInstallStaging,
+  npmRetiredPath,
   validateSupportedGlobalLayout,
   copyTreePreservingModes,
   verifyFinalizerExit,

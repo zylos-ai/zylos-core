@@ -207,6 +207,11 @@ async function measure(page) {
     const bubble = area?.previousElementSibling?.querySelector('.conversation-message-body');
     // Where the AI's bubbles start, from the latest AI message on the page (none before the first reply).
     const replies = document.querySelectorAll('#wb-chat article.conversation-message.chat-out .conversation-message-body');
+    const meta = area?.querySelector('.conversation-message-meta');
+    const avatar = area?.querySelector(':scope > .conversation-avatar');
+    const author = meta?.querySelector('.chat-message-author');
+    const time = meta?.querySelector('time');
+    const replyMeta = replies[replies.length - 1]?.querySelector('.conversation-message-meta');
     const stream = area?.closest('.conversation-stream') ?? document.querySelector('#wb-chat .conversation-stream');
     const box = area?.getBoundingClientRect(), outer = stream?.getBoundingClientRect();
     const clipped = area ? [...area.querySelectorAll('.conversation-activity-head, .conversation-activity-step, .conversation-activity-mark, .conversation-activity-subtask-row, .conversation-activity-handled')]
@@ -214,6 +219,14 @@ async function measure(page) {
     return { overflow: document.documentElement.scrollWidth > innerWidth, inside: !area || !outer || (box.left >= outer.left - 1 && box.right <= outer.right + 1),
       clipped, width: box ? Math.round(box.width) : null, under: area?.dataset.under ?? null, live: rect(live), bubble: rect(bubble),
       reply: rect(replies[replies.length - 1]),
+      avatar: rect(avatar), replyAvatar: rect(replies[replies.length - 1]?.previousElementSibling),
+      author: rect(author), replyAuthor: rect(replyMeta?.querySelector('.chat-message-author')),
+      identity: area ? { bot: !!avatar?.querySelector('.wb-ico-bot'), author: author?.textContent,
+        time: time?.textContent, iso: time?.dateTime, timeVisible: !!time && !time.hidden,
+        actions: meta.querySelectorAll('button').length,
+        authorFont: getComputedStyle(author).font, timeFont: getComputedStyle(time).font,
+        replyAuthorFont: replyMeta ? getComputedStyle(replyMeta.querySelector('.chat-message-author')).font : null,
+        replyTimeFont: replyMeta ? getComputedStyle(replyMeta.querySelector('time')).font : null } : null,
       times: live ? [...live.querySelectorAll(':scope > .conversation-activity-steps > .conversation-activity-step > .conversation-activity-time')].map(rect) : [],
       labels: live ? [...live.querySelectorAll(':scope > .conversation-activity-steps > .conversation-activity-step > .conversation-activity-label')].map(rect) : [] };
   });
@@ -298,6 +311,23 @@ export async function runConversationLiveBrowser(t, sandbox) {
       if (want.children && width === 1280) assert.equal(seen.children, ' · ' + want.children, `${name}: header names the subtask`);
       assert.equal(seen.articles, scene.messages.length, `${name}: the area never adds an empty AI message`);
       const layout = await measure(page);
+      if (want.anchor !== null) {
+        assert.equal(layout.identity.bot, true, `${name}: activity uses the AI avatar`);
+        assert.equal(layout.identity.author, 'AI', `${name}: activity uses the AI author`);
+        assert.equal(layout.identity.timeVisible, true, `${name}: recorded time is visible`);
+        const expectedStart = scene.name === 'waking' ? at(22, 57) : scene.name === 'handled' ? at(23, 5)
+          : scene.name === 'subtask-only' ? at(22, 58, 10) : at(22, 57, 13);
+        assert.equal(layout.identity.iso, iso(expectedStart), `${name}: header shows the recorded work/input start`);
+        assert.match(layout.identity.time, /\d{2}:\d{2}/, `${name}: header formats the time`);
+        assert.equal(layout.identity.actions, 0, `${name}: activity has no quote button`);
+        if (layout.replyAvatar) {
+          assert.ok(Math.abs(layout.avatar.left - layout.replyAvatar.left) <= 1, `${name}: AI avatar columns align`);
+          assert.ok(Math.abs(layout.author.left - layout.replyAuthor.left) <= 1, `${name}: AI name columns align`);
+          assert.equal(layout.avatar.width, layout.replyAvatar.width, `${name}: avatar size matches`);
+          assert.equal(layout.identity.authorFont, layout.identity.replyAuthorFont, `${name}: author styling matches`);
+          assert.equal(layout.identity.timeFont, layout.identity.replyTimeFont, `${name}: time styling matches`);
+        }
+      } else assert.equal(layout.identity, null, `${name}: no orphan activity header remains`);
       assert.equal(layout.overflow, false, `${name}: no horizontal page scroll`);
       assert.equal(layout.inside, true, `${name}: the area stays inside the message column`);
       assert.deepEqual(layout.clipped, [], `${name}: no row is cut off sideways`);
@@ -316,9 +346,11 @@ export async function runConversationLiveBrowser(t, sandbox) {
   // Under a user message as under a reply, the area starts where the AI's bubbles start, at either width. The bubbles
   // start at the same place in every scene of a page, so scenes before the first reply use the place a later one shows.
   const replyLeft = new Map(results.filter(row => row.reply).map(row => [row.page, row.reply.left]));
+  const avatarLeft = new Map(results.filter(row => row.replyAvatar).map(row => [row.page, row.replyAvatar.left]));
   for (const { width, theme } of pages) assert.ok(replyLeft.has(`${width}-${theme}`), `${width}-${theme}: a scene shows a reply`);
   for (const row of results.filter(row => row.live)) {
     const left = replyLeft.get(row.page);
+    assert.ok(Math.abs(row.avatar.left - avatarLeft.get(row.page)) <= 1, `${row.name}: activity and AI avatars share a left edge`);
     assert.ok(Math.abs(row.live.left - left) <= 1, `${row.name}: the area under ${row.under === 'in' ? 'a user message' : 'a reply'} starts where the AI's bubbles start (${row.live.left} / ${left})`);
   }
   assert.ok(results.some(row => row.live && row.under === 'in') && results.some(row => row.live && row.under === 'out'), 'the area shows under both kinds of message');
@@ -393,5 +425,10 @@ export async function runConversationLiveBrowser(t, sandbox) {
   await new Promise(resolve => setTimeout(resolve, 500));
   assert.equal(api.counts.subtask, reads, 'a closed subtask row is not read');
   assert.deepEqual([...api.missing], [], 'the page asks only for routes the fixture answers');
+  console.info('Activity header layout:', JSON.stringify(results.filter(row => row.name.includes('-reply-')).map(row => ({
+    name: row.name, avatarOffset: row.avatar.left - row.replyAvatar.left,
+    authorOffset: row.author.left - row.replyAuthor.left, avatarWidth: row.avatar.width,
+    time: row.identity.iso, overflow: row.overflow,
+  }))));
   console.info('Live activity browser scenes:', JSON.stringify({ scenes: SCENES.length, pages: pages.length, checks: results.length, widths: results.filter(row => row.width).map(row => row.width).slice(0, 4) }));
 }

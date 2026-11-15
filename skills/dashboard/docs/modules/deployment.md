@@ -1,19 +1,19 @@
-# 部署与安全
+# Deployment and Security
 
-## 生命周期归属
+## Lifecycle Ownership
 
-Dashboard 是 Zylos Core 的内置能力，不是可独立安装或升级的组件。
+Dashboard is built into Zylos Core, rather than a component that can be installed or upgraded independently.
 
-- 代码随 Core 发布，位于 `~/zylos/.claude/skills/dashboard/`。
-- 运行数据位于 `~/zylos/components/dashboard/`，Core 升级时保留 `config.json`、`dashboard.db`、`spool/` 和 `backups/`。
-- 初始化由 `zylos init` 完成；升级使用 `zylos upgrade --self`。
-- 独立 `upgrade` 仍返回 `core_managed`；1.0 上的 `uninstall` 在残留单独 Dashboard 登记时只删除登记（保留数据和内置 Dashboard），无残留时返回 `core_managed`。
+- Code ships with Core at `~/zylos/.claude/skills/dashboard/`.
+- Runtime data lives in `~/zylos/components/dashboard/`; Core upgrades preserve `config.json`, `dashboard.db`, `spool/`, and `backups/`.
+- `zylos init` handles initialization; use `zylos upgrade --self` for upgrades.
+- Standalone `upgrade` still returns `core_managed`; on 1.0, `uninstall` removes only a leftover standalone Dashboard registration (preserving data and the built-in Dashboard), or returns `core_managed` if no such registration remains.
 
-Core finalizer 负责组件注册、Caddy 路由、PM2 服务、数据库迁移/备份恢复，以及 runtime hook 的发布和旧 Dashboard hook 的清理。Dashboard 的 `hooks/post-install.js` 只负责创建缺失的数据目录和默认配置，不接管 runtime hook。
+The Core finalizer handles component registration, Caddy routes, PM2 services, database migration/backup restoration, runtime hook publication, and old Dashboard hook cleanup. Dashboard's `hooks/post-install.js` only creates missing data directories and default configuration; it does not take ownership of runtime hooks.
 
-## 运行结构
+## Runtime Structure
 
-关键路径：
+Key paths:
 
 ```text
 ~/zylos/.claude/skills/dashboard/
@@ -34,56 +34,56 @@ Core finalizer 负责组件注册、Caddy 路由、PM2 服务、数据库迁移/
 └── logs/
 ```
 
-数据库保留、压缩和恢复说明见 [数据库维护](db-maintenance.md)。
+For database retention, compaction, and recovery, see [Database Maintenance](db-maintenance.md).
 
-## 服务与路由
+## Services and Routing
 
-- PM2 服务名：`zylos-dashboard`；条目来自 Core 的 `~/zylos/pm2/ecosystem.config.cjs`。
-- 默认监听：`127.0.0.1:3470`。
-- Caddy 对外路径：`/dashboard/*`，转发前剥离 `/dashboard`，并设置 `X-Forwarded-Prefix: /dashboard`。
-- 无前缀直接访问时，页面 URL 退化为根相对路径。
+- PM2 service name: `zylos-dashboard`; its entry comes from Core's `~/zylos/pm2/ecosystem.config.cjs`.
+- Default listener: `127.0.0.1:3470`.
+- Caddy's external path: `/dashboard/*`; it strips `/dashboard` before forwarding and sets `X-Forwarded-Prefix: /dashboard`.
+- When accessed directly without a prefix, page URLs fall back to root-relative paths.
 
-Core 安装流程负责写入路由和启动/校验 PM2；不要手工把 Dashboard 添加到 Core 之外的第二套生命周期配置。
+The Core installation process writes routes and starts/verifies PM2; do not manually add Dashboard to a second lifecycle configuration outside Core.
 
-## 运行依赖
+## Runtime Dependencies
 
-- Node.js 20 或更高版本。
-- 原生 Node HTTP 服务和零构建前端。
-- SQLite 驱动 `better-sqlite3` 由 comm-bridge 技能安装，Dashboard 自有存储及只读数据查询都经 `skills/comm-bridge/scripts/sqlite-driver.js` 加载这一份驱动；Dashboard 的 `package.json` 不再列出它。
-- Chart.js、date-fns 等依赖以 `package.json` 和 lockfile 为准。
+- Node.js 20 or later.
+- A native Node HTTP server and a frontend requiring no build step.
+- The comm-bridge skill installs the SQLite driver `better-sqlite3`. Dashboard's own storage and read-only queries both load this same driver through `skills/comm-bridge/scripts/sqlite-driver.js`; Dashboard's `package.json` no longer lists it.
+- `package.json` and the lockfile define dependencies such as Chart.js and date-fns.
 
-Dashboard 当前不运行 OTLP collector，也不要求 OpenTelemetry SDK。
+Dashboard currently runs no OTLP collector and does not require an OpenTelemetry SDK.
 
-## 配置与升级
+## Configuration and Upgrades
 
-`config.json` 是实例配置的来源；首次安装只在文件不存在时生成默认配置和独立随机密码 hash。已有配置不会被 post-install 覆盖。
+`config.json` is the source of instance configuration; initial installation generates default configuration and a separate random password hash only if the file does not exist. Post-install does not overwrite existing configuration.
 
-Core 自升级负责：
+Core self-upgrades handle:
 
-1. 保留实例数据并在需要时创建备份；
-2. 更新随 Core 分发的 Dashboard 代码和依赖；
-3. 执行数据库迁移与恢复保护；
-4. 更新 Caddy、PM2 和 Core-owned hooks；
-5. 验证健康端点和服务状态。
+1. Preserving instance data and creating backups when needed;
+2. Updating Dashboard code and dependencies distributed with Core;
+3. Running database migrations and recovery safeguards;
+4. Updating Caddy, PM2, and Core-owned hooks;
+5. Verifying health endpoints and service state.
 
-Dashboard 的备份、迁移和升级结论应以 Core 当前实现为准，不再维护 standalone repo 的 pre-upgrade/post-upgrade 合同。
+Dashboard backup, migration, and upgrade behavior is governed by Core's current implementation; the standalone repository's pre-upgrade/post-upgrade contracts are no longer maintained.
 
-## 访问控制
+## Access Control
 
-- 服务仅监听 loopback，外部访问经 Caddy。
-- 浏览器登录使用独立的 scrypt password hash 和 HttpOnly、Secure、SameSite=Strict cookie。
-- REST API 与 SSE 使用同源 session；CLI/内部调用可使用 Bearer token。
-- 不支持 URL token 登录。
-- 登录失败具有 per-IP lockout 和全局限速。
-- logout、Observer unsafe requests 与 WebSocket handshake 执行 Origin/Fetch Metadata 校验；Observer ticket 仅作为受限的一次性代理兼容机制。
+- The service listens only on loopback; external access goes through Caddy.
+- Browser login uses a separate scrypt password hash and an HttpOnly, Secure, SameSite=Strict cookie.
+- REST APIs and SSE use same-origin sessions; CLI/internal calls may use a Bearer token.
+- URL token login is not supported.
+- Login failures have per-IP lockout and global rate limiting.
+- Logout, Observer unsafe requests, and WebSocket handshakes validate Origin/Fetch Metadata; Observer tickets serve only as a restricted, one-time proxy compatibility mechanism.
 
-## Base path
+## Base Path
 
-外部前缀由可信代理写入 `X-Forwarded-Prefix`。`browser-base.js` 校验前缀并为登录、静态资源、重定向和浏览器 API URL 生成正确路径。含控制字符、查询/片段、协议、点段、百分号编码或 HTML 元字符的前缀必须拒绝。
+A trusted proxy sets the external prefix in `X-Forwarded-Prefix`. `browser-base.js` validates the prefix and generates correct paths for login, static assets, redirects, and browser API URLs. Prefixes containing control characters, queries/fragments, schemes, dot segments, percent encoding, or HTML metacharacters must be rejected.
 
-## 数据保护
+## Data Protection
 
-- Dashboard 对 C4、scheduler 等上游数据库只读访问，不持有写事务。
-- API 仅返回状态、聚合和脱敏事件，不返回 prompt、消息正文、环境变量或原始工具输入。
-- Dashboard 自有数据留在 `components/dashboard`，不会上传到外部 telemetry 服务。
-- Observer 的执行、租约和清理安全边界见 [Observer](../observer.md)。
+- Dashboard accesses upstream databases such as C4 and scheduler read-only and holds no write transactions.
+- APIs return only state, aggregates, and sanitized events, never prompts, message bodies, environment variables, or raw tool inputs.
+- Dashboard's own data stays in `components/dashboard` and is not uploaded to external telemetry services.
+- For Observer execution, lease, and cleanup security boundaries, see [Observer](../observer.md).

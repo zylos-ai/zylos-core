@@ -3,7 +3,7 @@ import { element, icon, lastReceived, runtimeName } from './plain-text.js?v=106'
 import { annotateStatus, modelCell, pendingModel, shortDuration } from './board.js?v=155';
 import { toolLabel, waitText } from './view-mode.js?v=151';
 import { displayTime, eventLabel, timeValue } from './event-labels.js?v=93';
-import { recentRows } from './timeline-rows.js?v=111';
+import { recentRows } from './timeline-rows.js?v=112';
 import { formatZoned, zonedDay } from './instance-zone.js?v=100';
 
 export function activeSubagents(events, runId) {
@@ -92,12 +92,16 @@ export function eventKind(event) {
   return 'power';
 }
 const toolSuffix = { post_tool_use: 'wb.event.toolDone', post_tool_failure: 'wb.event.toolFailed' };
-/** Tool events name the tool: "运行命令" in plain view; the tool name and its monospace argument when technical. */
-export function toolEventLabel(document, event, { level = 'plain', t = key => key } = {}) {
+/**
+ * Tool events name the tool: "运行命令" in plain view; the tool name and its monospace argument when technical.
+ * A failure an automatic restart caused (`interrupted`) says so instead of "failed".
+ */
+export function toolEventLabel(document, event, { level = 'plain', t = key => key, interrupted = false } = {}) {
   const type = event.event_type, name = event.metadata?.tool_name;
   if (!toolEvents.has(type) || !name) return null;
   const node = element(document, 'span', undefined, 'wb-ev-t');
-  const suffix = toolSuffix[type] ? ' · ' + t(toolSuffix[type]) : '';
+  const key = interrupted ? 'wb.event.toolInterrupted' : toolSuffix[type];
+  const suffix = key ? ' · ' + t(key) : '';
   if (level === 'technical') {
     node.append(element(document, 'span', name, 'wb-tool'));
     if (event.metadata.tool_detail) node.append(element(document, 'span', event.metadata.tool_detail, 'wb-ev-args wb-mono'));
@@ -111,19 +115,20 @@ export function toolEventLabel(document, event, { level = 'plain', t = key => ke
 }
 /**
  * One timeline line: time | round icon | label. Shared by recent activity and the full timeline.
- * `after` (a repeat count, for one) follows the label on the same line.
+ * `after` (a repeat count, for one) follows the label on the same line. A tool call an automatic restart cut off
+ * (`interrupted`) is no error: it reads in the neutral style and says it was interrupted.
  */
-export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev', now = null, after = null } = {}) {
+export function eventRow(document, event, { level = 'plain', t = key => key, label, className = 'wb-ev', now = null, after = null, interrupted = false } = {}) {
   const kind = eventKind(event);
-  const node = element(document, 'div', undefined, `${className} wb-ev-${kind}${badEvents.has(event.event_type) ? ' wb-ev-bad' : ''}`);
+  const node = element(document, 'div', undefined, `${className} wb-ev-${kind}${badEvents.has(event.event_type) && !interrupted ? ' wb-ev-bad' : ''}`);
   const domain = event.event_type ? 'event' : 'message';
   node.dataset.updateKey = `${domain}:${event.id ?? event.event_seq ?? `${event.timestamp}:${event.event_type ?? event.direction}:${event.agent_id ?? ''}`}`;
   const time = eventTime(event.timestamp, level, document.documentElement?.lang, now);
   const stamp = element(document, 'time', time.text); stamp.title = time.title;
   const mark = element(document, 'span', undefined, 'wb-ev-k');
   mark.append(icon(document, kind === 'bot' ? 'bot' : kind, 'xs'));
-  const tool = label == null ? toolEventLabel(document, event, { level, t }) : null;
-  const text = tool ?? element(document, 'span', label ?? eventLabel(event, 'plain', t), 'wb-ev-t');
+  const tool = label == null ? toolEventLabel(document, event, { level, t, interrupted }) : null;
+  const text = tool ?? element(document, 'span', label ?? (interrupted ? t('wb.event.toolInterruptedPlain') : eventLabel(event, 'plain', t)), 'wb-ev-t');
   // Technical view keeps the readable label and adds the recorded event code after it.
   if (!tool && label == null && level === 'technical' && event.event_type) text.append(element(document, 'span', eventLabel(event, level, t), 'wb-ev-code'));
   if (after) text.append(after);
@@ -137,7 +142,8 @@ export function eventRow(document, event, { level = 'plain', t = key => key, lab
  * group may continue before what was read: "100+ 次 · 至 10:08". Full or raw times stay in the tooltip.
  */
 export function repeatRow(document, group, { level = 'plain', t = key => key, className = 'wb-ev', now = null } = {}) {
-  if (group.count < 2 && !group.open) return eventRow(document, group.newest.event, { level, t, className, now });
+  const interrupted = group.newest.interrupted === true;
+  if (group.count < 2 && !group.open) return eventRow(document, group.newest.event, { level, t, className, now, interrupted });
   const lang = document.documentElement?.lang;
   const from = eventTime(group.oldest.event.timestamp, level, lang, now), to = eventTime(group.newest.event.timestamp, level, lang, now);
   const text = group.open ? t('wb.timeline.repeatedUntil', { count: group.count, to: to.text })
@@ -145,7 +151,7 @@ export function repeatRow(document, group, { level = 'plain', t = key => key, cl
       : t('wb.timeline.repeated', { count: group.count, from: from.text, to: to.text });
   const repeat = element(document, 'span', text, 'wb-ev-rep');
   repeat.title = group.open ? to.title : from.title === to.title ? to.title : `${from.title} – ${to.title}`;
-  const node = eventRow(document, group.newest.event, { level, t, className, now, after: repeat });
+  const node = eventRow(document, group.newest.event, { level, t, className, now, after: repeat, interrupted });
   node.classList.add('wb-ev-merged');
   return node;
 }
@@ -317,7 +323,9 @@ export function renderOverview(root, row, data = {}, { document = root.ownerDocu
   // Newest first, dated when not from today. The count covers the same events: those in runs and those in none.
   const recent = section('wb.detail.recent', 'wb-detail-recent', 'clock');
   for (const group of recentRows(data.recent ?? [])) recent.append(repeatRow(document, group, { level, t, now: currentTime }));
-  const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: groupEventCount(data), runs: data.totalRuns ?? 0 }), 'wb-link-btn wb-chev');
+  const events = groupEventCount(data), runs = data.totalRuns ?? 0;
+  const timeline = element(document, 'button', t('wb.detail.fullTimeline', { events: t(events === 1 ? 'wb.detail.timelineEvent' : 'wb.detail.timelineEvents', { count: events }),
+    runs: t(runs === 1 ? 'wb.detail.timelineRun' : 'wb.detail.timelineRuns', { count: runs }) }), 'wb-link-btn wb-chev');
   timeline.type = 'button'; listen(timeline, 'click', onTimeline); recent.append(timeline);
   const memory = section('wb.detail.memory', 'wb-detail-memory', 'book');
   const line = element(document, 'div', undefined, 'wb-mem-line');

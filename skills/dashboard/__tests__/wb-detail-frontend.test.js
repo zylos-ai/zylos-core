@@ -214,6 +214,98 @@ test('recent activity leaves out the crash an automatic restart causes and keeps
   }
 });
 
+// A run restarted at 10:20:00 whose tool calls failed at the given seconds from the restart, with the crash report the
+// restart causes 1.1 s after it and a stop at 5 s, and a second run whose own tool call failed 0.5 s after that restart.
+function interruptedRuns(type, failures) {
+  const at = seconds => new Date(Date.parse('2026-11-14T10:20:00.000Z') + seconds * 1000).toISOString();
+  const failure = (seconds, run_id) => ({ timestamp: at(seconds), event_type: 'post_tool_failure', run_id, metadata: { tool_name: 'WebFetch' } });
+  const own = [{ timestamp: at(-600), event_type: 'session_start', run_id: 'run-a' }, { timestamp: at(0), event_type: type, run_id: 'run-a' },
+    { timestamp: at(1.1), event_type: 'crash_detected', run_id: 'run-a' }, { timestamp: at(5), event_type: 'stop', run_id: 'run-a' },
+    ...failures.map(seconds => failure(seconds, 'run-a'))];
+  const order = list => list.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).map((event, index) => ({ ...event, event_seq: index + 1 }));
+  return { at, a: order(own), b: order([failure(0.5, 'run-b')]).map(event => ({ ...event, event_seq: event.event_seq + 100 })) };
+}
+
+test('a tool call an automatic restart cut off reads as interrupted, not failed, for 10 s after the restart', () => {
+  for (const type of ['no_response_restart', 'tool_timeout_restart']) {
+    // 5 s before the restart, 10.5 s after it: failures of their own. 0.189 s (as recorded) and exactly 10 s after: cut off.
+    const { at, a, b } = interruptedRuns(type, [-5, 0.189, 10, 10.5]);
+    const expected = [['wb.event.toolFailed', true], ['wb.event.toolInterrupted', false], ['wb.event.toolInterrupted', false], ['wb.event.toolFailed', true]];
+    const loader = { state: { runs: [{ runId: 'run-b', startAt: at(0.5), endAt: at(0.5), endReason: 'unknown', n: 1 },
+      { runId: 'run-a', startAt: at(-600), endAt: at(10.5), endReason: 'auto_restart_no_response', n: a.length - 1 }],
+    expanded: new Set(['run-a', 'run-b']), events: new Map([['run-a', a], ['run-b', b]]), messages: new Map(), between: [], filter: 'all', totalRuns: 2 },
+    setFilter() {}, collapse() {} };
+    for (const level of ['plain', 'technical']) {
+      const document = createDocument(), root = document.createElement('div');
+      renderTimeline(root, loader, { document, t, level });
+      const [runB, runA] = allNodes(root).filter(node => node.classList.contains('wb-timeline-run'))
+        .map(section => allNodes(section).filter(node => node.classList.contains('wb-timeline-event')));
+      const tools = nodes => nodes.filter(node => /toolFailed|toolInterrupted/.test(node.textContent))
+        .map(node => [node.textContent.match(/wb\.event\.tool(Failed|Interrupted)/)[0], node.classList.contains('wb-ev-bad')]);
+      // Newest first: 10.5, 10, 0.189, -5.
+      assert.deepEqual(tools(runA), [...expected].reverse(), `${type} ${level}: run A`);
+      assert.deepEqual(tools(runB), [['wb.event.toolFailed', true]], `${type} ${level}: a restart in another run cuts nothing off here`);
+      assert.equal(runA.some(node => /crash_detected/.test(node.textContent)), false, `${type} ${level}: the restart's own exit stays hidden`);
+      if (level === 'plain') {
+        const interrupted = runA.find(node => /toolInterrupted/.test(node.textContent));
+        assert.match(interrupted.textContent, / · wb\.event\.toolInterrupted$/, 'plain view: "<tool> · interrupted by automatic restart"');
+      }
+    }
+    // Recent activity across both runs reads the same; the server sends the newest recorded first. It shows five rows,
+    // so it is read twice: from the restart on (without the stop), and up to the first cut-off call.
+    const when = seconds => new Date(at(seconds)).toLocaleString(undefined, { timeZone: ZONE });
+    const recentTools = keep => {
+      const recent = [...a, ...b].filter(keep).sort((x, y) => y.event_seq - x.event_seq);
+      const document = createDocument(), root = document.createElement('div');
+      renderOverview(root, row('a', { state: { kind: 'idle' } }), { recent, totalEvents: recent.length, totalRuns: 2, unattributed: 0 },
+        { document, t, level: 'plain', currentTime: Date.parse(at(60)) });
+      return allNodes(root.children[1]).filter(node => node.classList.contains('wb-ev'))
+        .map(node => [allNodes(node).find(child => child.tagName === 'TIME').title, node.textContent.match(/wb\.event\.\w+/)?.[0], node.classList.contains('wb-ev-bad')])
+        .filter(([, label]) => /^wb\.event\.tool[A-Z]/.test(label));
+    };
+    assert.deepEqual(recentTools(event => Date.parse(event.timestamp) >= Date.parse(at(0)) && event.event_type !== 'stop'), [
+      [when(10.5), 'wb.event.toolFailed', true], [when(10), 'wb.event.toolInterrupted', false], [when(0.5), 'wb.event.toolFailed', true],
+      [when(0.189), 'wb.event.toolInterrupted', false]], `${type}: recent activity after the restart`);
+    assert.deepEqual(recentTools(event => Date.parse(event.timestamp) <= Date.parse(at(0.189))), [
+      [when(0.189), 'wb.event.toolInterrupted', false], [when(-5), 'wb.event.toolFailed', true]], `${type}: recent activity before the restart`);
+  }
+});
+
+test('a tool failure with no automatic restart before it, and a real crash, stay errors', () => {
+  const at = seconds => new Date(Date.parse('2026-11-14T10:20:00.000Z') + seconds * 1000).toISOString();
+  // A session that exited on its own: the tool failure 0.2 s before its crash report is an error, and so is the crash.
+  const events = [{ timestamp: at(-600), event_type: 'session_start' }, { timestamp: at(0), event_type: 'post_tool_failure', metadata: { tool_name: 'Bash' } },
+    { timestamp: at(0.2), event_type: 'crash_detected' }].map((event, index) => ({ ...event, run_id: 'run-c', event_seq: index + 1 }));
+  const loader = { state: { runs: [{ runId: 'run-c', startAt: at(-600), endAt: at(0.2), endReason: 'crash', n: 3 }], expanded: new Set(['run-c']),
+    events: new Map([['run-c', events]]), messages: new Map(), between: [], filter: 'all', totalRuns: 1 }, setFilter() {}, collapse() {} };
+  const document = createDocument(), root = document.createElement('div');
+  renderTimeline(root, loader, { document, t, level: 'plain' });
+  const rows = allNodes(root).filter(node => node.classList.contains('wb-timeline-event'));
+  assert.deepEqual(rows.map(node => [node.textContent.match(/wb\.event\.\w+/)[0], node.classList.contains('wb-ev-bad')]),
+    [['wb.event.crash_detected', true], ['wb.event.toolFailed', true], ['wb.event.session_start', false]]);
+  const overview = createDocument(), side = overview.createElement('div');
+  renderOverview(side, row('a', { state: { kind: 'idle' } }), { recent: [...events].reverse(), totalEvents: 3, totalRuns: 1, unattributed: 0 },
+    { document: overview, t, level: 'plain', currentTime: Date.parse(at(60)) });
+  assert.deepEqual(allNodes(side.children[1]).filter(node => node.classList.contains('wb-ev'))
+    .map(node => [node.textContent.match(/wb\.event\.\w+/)[0], node.classList.contains('wb-ev-bad')]),
+  [['wb.event.crash_detected', true], ['wb.event.toolFailed', true], ['wb.event.session_start', false]]);
+});
+
+test('an interrupted tool call is not merged with a failed one, and one without a tool name still says it was interrupted', () => {
+  const at = seconds => new Date(Date.parse('2026-11-14T10:20:00.000Z') + seconds * 1000).toISOString();
+  // Newest first: a failure of its own 10.5 s after the restart, right after two calls the restart cut off.
+  const events = [[0, 'tool_timeout_restart'], [0.1, 'post_tool_failure'], [0.2, 'post_tool_failure', 'WebFetch'], [0.3, 'post_tool_failure', 'WebFetch'],
+    [10.5, 'post_tool_failure', 'WebFetch']].map(([seconds, event_type, tool_name], index) => ({ timestamp: at(seconds), event_type, run_id: 'run-a', event_seq: index + 1,
+    ...(tool_name ? { metadata: { tool_name } } : {}) }));
+  const document = createDocument(), root = document.createElement('div');
+  renderOverview(root, row('a', { state: { kind: 'idle' } }), { recent: [...events].reverse(), totalEvents: 5, totalRuns: 1, unattributed: 0 },
+    { document, t, level: 'plain', currentTime: Date.parse(at(60)) });
+  const rows = allNodes(root.children[1]).filter(node => node.classList.contains('wb-ev'));
+  const label = node => node.textContent.match(/wb\.event\.(?:toolInterruptedPlain|toolInterrupted|toolFailed|[a-z_]+)/)[0];
+  assert.deepEqual(rows.map(node => [label(node), /wb\.timeline\.repeated/.test(node.textContent), node.classList.contains('wb-ev-bad')]), [
+    ['wb.event.toolFailed', false, true], ['wb.event.toolInterrupted', true, false], ['wb.event.toolInterruptedPlain', false, false], ['wb.event.tool_timeout_restart', false, false]]);
+});
+
 test('event, end reason and time labels are plain words in plain view and raw values in technical detail', () => {
   assert.equal(eventLabel({ event_type: 'reclaim_done' }, 'plain', t), 'wb.event.reclaim_done');
   assert.equal(eventLabel({ event_type: 'wait_health' }, 'plain', t), 'wb.event.wait_health');
@@ -353,7 +445,8 @@ test('recent activity lists newest first, dates events from another day, and cou
   assert.deepEqual(times.map(node => node.title), [at(1), at(2), at(30)].map(value => new Date(value).toLocaleString(undefined, { timeZone: ZONE })), 'newest first');
   assert.equal(times[0].textContent, new Date(at(1)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: ZONE }), 'today shows the time');
   assert.equal(times[2].textContent, new Date(at(30)).toLocaleString(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: ZONE }), 'another day shows the date too');
-  assert.match(root.children[1].textContent, /wb\.detail\.fullTimeline \{"events":3,"runs":1\}/, 'the count includes events outside a run');
+  assert.ok(root.children[1].textContent.includes(t('wb.detail.fullTimeline', { events: t('wb.detail.timelineEvents', { count: 3 }), runs: t('wb.detail.timelineRun', { count: 1 }) })),
+    'the count includes events outside a run');
   assert.equal(groupEventCount({ totalEvents: 17, unattributed: 4 }), 21);
   assert.equal(groupEventCount({}), 0);
 });
@@ -364,8 +457,33 @@ test('the timeline tab counts events outside a run too, like the full-timeline l
   await f.controller.open(row('telegram:a'), { rows: [row('telegram:a')], listKnown: true });
   const tab = allNodes(f.root).find(node => node.attributes?.role === 'tab' && /wb\.detail\.timeline/.test(node.textContent));
   assert.match(tab.textContent, / 21$/);
-  assert.match(f.root.textContent, /wb\.detail\.fullTimeline \{"events":21,"runs":5\}/);
+  assert.ok(f.root.textContent.includes(t('wb.detail.fullTimeline', { events: t('wb.detail.timelineEvents', { count: 21 }), runs: t('wb.detail.timelineRuns', { count: 5 }) })));
   f.controller.destroy();
+});
+
+test('timeline counts of one read in the singular in English, with the same words in Chinese', () => {
+  const translator = lang => {
+    const strings = JSON.parse(readFileSync(new URL(`../public/i18n/wb.${lang}.json`, import.meta.url), 'utf8'));
+    return (key, params = {}) => Object.entries(params).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, value), strings[key] ?? key);
+  };
+  const read = (lang, count) => {
+    const tr = translator(lang), start = '2026-11-06T10:00:00.000Z', end = '2026-11-06T11:00:00.000Z';
+    const document = createDocument(), root = document.createElement('div');
+    renderTimeline(root, { state: { runs: [{ runId: 'run-a', startAt: start, endAt: end, endReason: 'crash', n: count }], expanded: new Set(), events: new Map(),
+      messages: new Map(), between: [], filter: 'all', totalRuns: 1, unattributed: count }, setFilter() {}, collapse() {} }, { document, t: tr, level: 'plain' });
+    const side = document.createElement('div');
+    renderOverview(side, row('a', { state: { kind: 'idle' } }), { recent: [], totalEvents: count, totalRuns: count, unattributed: 0 }, { document, t: tr, level: 'plain' });
+    return { run: allNodes(root).find(node => node.classList.contains('wb-sub'))?.textContent, note: allNodes(root).filter(node => node.classList.contains('wb-note') && !node.classList.contains('wb-end-note')).at(-1)?.textContent,
+      link: allNodes(side).find(node => node.classList.contains('wb-chev'))?.textContent };
+  };
+  assert.deepEqual(read('en', 1), { run: '1 event', note: '1 unattributed event', link: 'Full timeline (1 event, 1 run)' });
+  assert.deepEqual(read('en', 2), { run: '2 events', note: '2 unattributed events', link: 'Full timeline (2 events, 2 runs)' });
+  const zh = translator('zh');
+  for (const count of [1, 2]) {
+    assert.deepEqual(read('zh', count), { run: zh('wb.timeline.count', { count }), note: zh('wb.timeline.unattributed', { count }),
+      link: zh('wb.detail.fullTimeline', { events: zh('wb.detail.timelineEvents', { count }), runs: zh('wb.detail.timelineRuns', { count }) }) });
+  }
+  assert.equal(zh('wb.timeline.countOne', { count: 1 }), zh('wb.timeline.count', { count: 1 }), 'Chinese has no singular form');
 });
 
 test('timeline run rows, events and messages hide run ids and raw codes in plain view', () => {
@@ -970,7 +1088,7 @@ test('a failed tools reload discards the old unfiltered array and recovers only 
   reads.length = 0; await loader.refresh();
   assert.equal(reads.length, 1);
   assert.equal(reads[0].searchParams.get('after_seq'), '0');
-  assert.equal(reads[0].searchParams.get('types'), 'pre_tool_use,post_tool_use,post_tool_failure');
+  assert.equal(reads[0].searchParams.get('types'), 'pre_tool_use,post_tool_use,post_tool_failure,no_response_restart,tool_timeout_restart');
   assert.equal(loader.state.events.get('r').length, tools.length);
   assert.equal(loader.state.events.get('r').every(event => event.event_type === 'post_tool_use'), true);
   assert.equal(loader.state.error, null);

@@ -57,7 +57,7 @@ function fixture(t, { now = at(600), presence = 'running', tools = 0 } = {}) {
     channel: 'dashboard', endpoint_id: 'a', session_group: GROUP, content: `message ${id}`, status: 'delivered', ...extra });
   const event = (type, seconds, fields = {}) => store.insertEvent({ id: crypto.randomUUID(), ingest_id: crypto.randomUUID(),
     timestamp: new Date(at(seconds)).toISOString(), runtime: fields.runtime ?? 'claude', session_id: fields.session ?? 's1',
-    session_group: fields.group ?? GROUP, run_id: 'r1', event_type: type, category: 'test', summary: fields.summary ?? null,
+    session_group: fields.group ?? GROUP, run_id: fields.run ?? 'r1', event_type: type, category: 'test', summary: fields.summary ?? null,
     metadata: fields.meta ?? {}, source: 'test' });
   const deliver = (id, seconds, meta = {}) => event('deliver', seconds, { meta: { conversation_id: id, ...meta }, session: null });
   // A message typed into the session as real hosts record it: the runtime reports its prompt, and the router records
@@ -65,9 +65,9 @@ function fixture(t, { now = at(600), presence = 'running', tools = 0 } = {}) {
   const typed = (seconds, meta, session = 's1') => {
     event('user_prompt_submit', seconds, { session }); event('deliver', seconds + 0.48, { meta, session: null });
   };
-  const tool = (useId, start, end, meta = {}, outcome = 'post_tool_use') => {
-    event('pre_tool_use', start, { meta: { tool_use_id: useId, ...meta } });
-    if (end !== null) event(outcome, end, { meta: { tool_use_id: useId, ...meta } });
+  const tool = (useId, start, end, meta = {}, outcome = 'post_tool_use', run = 'r1') => {
+    event('pre_tool_use', start, { meta: { tool_use_id: useId, ...meta }, run });
+    if (end !== null) event(outcome, end, { meta: { tool_use_id: useId, ...meta }, run });
   };
   // A C4 control row as the router leaves it: `done` once delivered, at that second.
   const control = (id, status, seconds) => db.prepare(`INSERT INTO control_queue (id,raw_content,content,status,created_at,updated_at)
@@ -138,6 +138,41 @@ test('steps carry plain labels only: never a summarized command line or the word
   assert.doesNotMatch(text, /Found/);
   for (const secret of ['df -h', 'mcp__secret', 'raw input']) assert.ok(!text.includes(secret), secret);
   assert.equal(result.steps[0].end - result.steps[0].start, 1000);
+});
+
+test('a tool call an automatic restart cut off is interrupted, not failed: same run, from the restart to 10 s after it', async t => {
+  const f = fixture(t, { now: at(40) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  const read1 = { tool_name: 'Read' };
+  f.tool('before', 1, 4.75, { ...read1, tool_detail: 'before' }, 'post_tool_failure');
+  f.event('no_response_restart', 5);
+  f.tool('cut', 2, 5.25, { ...read1, tool_detail: 'cut' }, 'post_tool_failure');
+  f.tool('edge', 3, 15, { ...read1, tool_detail: 'edge' }, 'post_tool_failure');
+  f.tool('past', 3.5, 15.25, { ...read1, tool_detail: 'past' }, 'post_tool_failure');
+  f.tool('other', 4, 6, { ...read1, tool_detail: 'other' }, 'post_tool_failure', 'r2');
+  f.tool('fine', 4.5, 5.5, { ...read1, tool_detail: 'fine' });
+  assert.deepEqual(shown(await read(f)), ['read:before:failed', 'read:cut:interrupted', 'read:edge:interrupted',
+    'read:past:failed', 'read:other:failed', 'read:fine:done'],
+  'before the restart, more than 10 s after it or in another run the failure stands; a finished call stays done');
+  // A restart from before the window still decides the failures it caused inside it.
+  f.message(2, 20, 'out');
+  f.event('tool_timeout_restart', 20.5);
+  f.tool('next', 21.5, 22, { ...read1, tool_detail: 'next' }, 'post_tool_failure');
+  f.tool('late', 21.75, 31, { ...read1, tool_detail: 'late' }, 'post_tool_failure');
+  const result = await read(f);
+  assert.equal(result.from, at(21));
+  assert.deepEqual(shown(result), ['read:next:interrupted', 'read:late:failed']);
+});
+
+test('a subtask\'s tool call the automatic restart cut off is interrupted too; its earlier failure stands', async t => {
+  const f = fixture(t, { now: at(20) });
+  f.message(1, 0); f.deliver(1, 0.2); f.event('user_prompt_submit', 0.4);
+  f.event('subagent_start', 1, { meta: { agent_id: 'sub-1', agent_type: 'general-purpose' } });
+  f.tool('s1', 2, 3, { tool_name: 'Read', tool_detail: 'real', agent_id: 'sub-1' }, 'post_tool_failure');
+  f.tool('s2', 4, 6.5, { tool_name: 'Read', tool_detail: 'cut', agent_id: 'sub-1' }, 'post_tool_failure');
+  f.event('tool_timeout_restart', 6);
+  const open = await read(f, { subtask: subtaskKey('sub-1') });
+  assert.deepEqual(shown(open), ['read:real:failed', 'read:cut:interrupted']);
 });
 
 test('labels never fall back to tool names or raw input', () => {

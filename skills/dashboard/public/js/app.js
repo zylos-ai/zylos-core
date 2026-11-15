@@ -6,13 +6,13 @@ import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb
 import { createPricingPanel } from './wb/settings-pricing.js?v=201';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=173';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=174';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=197';
+import { mountConversationPage } from './wb/conversation-page.js?v=199';
 import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
 import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
-import { mountWorkbench } from './wb/shell.js?v=207';
+import { mountWorkbench } from './wb/shell.js?v=208';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=111';
 import { createRemoteAccess } from './wb/remote-access.js?v=1';
@@ -24,8 +24,8 @@ import { createUsagePage } from './wb/usage.js?v=201';
 import { ObserverHistory } from './observer-history.js?v=5';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=90';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=201';
-import { createFleetSounds } from './fleet-sounds.js?v=201';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=202';
+import { createFleetSounds } from './fleet-sounds.js?v=202';
 import { refreshDashboardState } from './state-refresh.js?v=100';
 import { formatActionResult } from './action-result.js';
 import { originSessionUnavailable } from './state-presentation.js?v=98';
@@ -215,7 +215,7 @@ function agentFleetLabels() {
   return {
     ...Object.fromEntries(['title', 'subtitle', 'manage', 'shortAuth', 'shortDown', 'shortVersion', 'fixAuth', 'fixDown', 'fixVersion', 'lastSeen',
       'todayWeek', 'groups', 'host', 'rate7d', 'quotaRemaining', 'quotaUnknown', 'self', 'modeMulti', 'modeSingle', 'modeUnknown', 'open', 'toSettings', 'refresh', 'readOnly', 'admin',
-      'pool', 'empty', 'runningGroups', 'allNormal', 'summaryUnavailable', 'moreProblems', 'autoRestarts', 'groupDuration'].map(key => [key, fleet(key)])),
+      'pool', 'empty', 'runningGroups', 'runningGroupsOne', 'allNormal', 'summaryUnavailable', 'moreProblems', 'moreProblemsOne', 'autoRestarts', 'autoRestartsOne', 'groupDuration'].map(key => [key, fleet(key)])),
     groupStates: Object.fromEntries(['busy', 'waiting', 'error', 'idle', 'unknown', 'no_response'].map(key => [key, fleet('state.' + key)])),
     problemReasons: Object.fromEntries(['auth_failed', 'start_failed', 'no_response'].map(key => [key, fleet('reason.' + key)])),
     busy: t('agent_fleet.busy'),

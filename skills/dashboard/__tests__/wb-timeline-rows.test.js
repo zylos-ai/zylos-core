@@ -35,7 +35,8 @@ test('the server is asked for plain events in plain view and for every type in t
   assert.deepEqual(eventTypesFor('all', 'plain'), plainEventTypes);
   assert.equal(eventTypesFor('all', 'technical'), null);
   for (const level of ['plain', 'technical']) {
-    assert.deepEqual(eventTypesFor('tools', level), toolEventTypes);
+    // The tools chip also reads automatic restarts, which it does not show, to tell the tool calls they cut off.
+    assert.deepEqual(eventTypesFor('tools', level), [...toolEventTypes, 'no_response_restart', 'tool_timeout_restart']);
     assert.deepEqual(eventTypesFor('lifecycle', level), lifecycleEventTypes);
     assert.deepEqual(eventTypesFor('messages', level), []);
   }

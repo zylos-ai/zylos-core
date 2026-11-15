@@ -178,6 +178,25 @@ for(const installedSkill of [false,true]) test(`current original deployment chec
  }
 });
 
+// Real worker/SQLite boundary: fixture(t) owns and cleans all data; the official
+// runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR. No services or tmux are used.
+// Run for legacy snapshot/preflight selection changes; skip for unrelated work.
+for(const formatVersion of [1,2]) test(`legacy format ${formatVersion} snapshot preflight retains Web Console presence checks`, {skip:!Database},t=>{
+ const dir=fixture(t);skills(dir);
+ const sources=['comm-bridge/c4.db','scheduler/scheduler.db','web-console/web-console.db'];
+ if(formatVersion===2)sources.push('components/dashboard/dashboard.db');
+ const manifest={function:'core-self-upgrade-db',status:'complete',id:'legacy-snapshot',formatVersion,
+  databases:sources.map(source=>({source,status:'missing',file:null,bytes:0,sha256:null,userVersion:null,integrityCheck:null}))};
+ const request={action:'offline-preflight',zylosDir:dir,schemaRoot:path.resolve('skills'),manifest};
+ const result=runCoreDbWorker(request);
+ assert.equal(result.databases.length,sources.length);
+ assert.equal(result.databases.find(row=>row.source==='web-console/web-console.db')?.status,'missing');
+ const restoredManifest={...manifest,databases:manifest.databases.map(row=>row.source==='web-console/web-console.db'
+  ? {...row,status:'backed_up',file:'web-console.db',bytes:4096,sha256:'a'.repeat(64),userVersion:1,integrityCheck:'ok'} : row)};
+ assert.throws(()=>runCoreDbWorker({...request,manifest:restoredManifest}),/Expected database absent/);
+ assert.equal(fs.existsSync(path.join(dir,'web-console/web-console.db')),false);
+});
+
 // Integration boundary: real SQLite/worker with temporary databases and copied
 // dependencies only; run for backup/driver-path changes, skip if unrelated.
 // Official runner isolates HOME/ZYLOS_DIR/PM2_HOME/TMPDIR; fixture(t) cleans.

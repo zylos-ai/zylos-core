@@ -4,11 +4,11 @@ import test from 'node:test';
 import { chatEnabled, createChatSandbox } from '../skills/dashboard/__tests__/helpers/chat-integration-harness.js';
 
 // Boundary: real Dashboard HTML, modules, styles and host-panel lifecycle with fixture API answers.
-// Run for account reset presentation, snapshot-to-host wiring, or affected responsive layout changes;
+// Run for initial instance timezone, account reset presentation, snapshot-to-host wiring, or affected responsive layout changes;
 // unrelated pages may skip. Gate off by default. No live config, PM2, tmux or database is opened.
 // Before browser startup the harness proves private HOME/ZYLOS_DIR/PM2_HOME, short TMPDIR,
 // socket and database paths. HTTP, browser and contexts are reclaimed on failure and timeout.
-test('account reset tooltips and host details update at phone and desktop widths',
+test('account reset tooltips use the instance timezone on first render and host details update at phone and desktop widths',
   { skip: !chatEnabled(), timeout: 180_000 }, async t => {
     const sandbox = createChatSandbox(t);
     await sandbox.runCase(async () => {

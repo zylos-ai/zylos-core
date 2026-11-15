@@ -2,6 +2,8 @@
 // a memory tree with a long file, and settings. Shapes follow the dashboard's own routes; values are invented.
 // Every answer is computed from `now`, so the page's relative times stay stable within one run.
 
+import { runRestartEffect } from '../../public/js/wb/timeline-rows.js';
+
 const iso = ms => new Date(ms).toISOString();
 const queue = (pending = 0, running = 0) => ({ pending: { count: pending, oldestAt: null, head: null }, running: { count: running }, fence: null });
 
@@ -85,29 +87,33 @@ function runEvents(now) {
 }
 // The stopped group's two earlier runs, newest first, each ended by the supervisor's automatic restart: run A after a
 // reminder the main agent never answered, run D after a tool ran too long. Each restart is followed a second later by
-// the crash report the exit it caused leaves in the same run.
+// the crash report the exit it caused leaves in the same run, and a moment after it by the failure of the tool call it
+// cut off (as recorded: 0.19 s after a tool-timeout restart). Run D's same tool also failed on its own, long before.
 export const STOPPED_GROUP = 'lark:oc_product';
 function restartedRuns(now) {
   let seq = 1000;
   const run = (runId, endReason, endAgo, steps) => {
-    const end = now - endAgo, events = steps.map(([type, before, category]) => ({ id: `e${++seq}`, event_seq: seq,
-      timestamp: iso(end - before), event_type: type, category, run_id: runId, session_group: STOPPED_GROUP, runtime: 'claude', metadata: {} }));
+    const end = now - endAgo, events = steps.map(([type, before, category, metadata = {}]) => ({ id: `e${++seq}`, event_seq: seq,
+      timestamp: iso(end - before), event_type: type, category, run_id: runId, session_group: STOPPED_GROUP, runtime: 'claude', metadata }));
     return { runId, endReason, startAt: events[0].timestamp, endAt: events.at(-1).timestamp, events };
   };
   const work = (from, count) => Array.from({ length: count }, (_, i) => [i % 2 ? 'post_tool_use' : 'pre_tool_use', from - i * 20e3, 'tool']);
   return [
     run('run-a', 'auto_restart_no_response', 2 * 3600e3, [['session_start', 3600e3, 'session'], ['user_prompt_submit', 3500e3, 'turn'],
       ...work(3400e3, 12), ['stop', 1500e3, 'turn'], ['user_prompt_submit', 1400e3, 'turn'], ['no_response_nudge', 600e3, 'diagnostic'],
-      ['no_response_restart', 1100, 'diagnostic'], ['crash_detected', 0, 'session']]),
+      ['no_response_restart', 1100, 'diagnostic'], ['post_tool_failure', 600, 'tool', { tool_name: 'Bash' }], ['crash_detected', 0, 'session']]),
     run('run-d', 'auto_restart_tool_timeout', 5 * 3600e3, [['session_start', 1800e3, 'session'], ['user_prompt_submit', 1700e3, 'turn'],
-      ['pre_tool_use', 1600e3, 'tool'], ['tool_timeout_nudge', 900e3, 'diagnostic'], ['tool_timeout_restart', 1000, 'diagnostic'],
-      ['crash_detected', 0, 'session']]),
+      ['pre_tool_use', 1600e3, 'tool'], ['post_tool_failure', 1590e3, 'tool', { tool_name: 'WebFetch' }], ['tool_timeout_nudge', 900e3, 'diagnostic'],
+      ['tool_timeout_restart', 1000, 'diagnostic'], ['post_tool_failure', 810, 'tool', { tool_name: 'WebFetch' }], ['crash_detected', 0, 'session']]),
   ];
 }
 function timeline(url, now) {
   const params = url.searchParams, types = params.get('types')?.split(',').filter(Boolean);
   const after = Number(params.get('after_seq') ?? 0), limit = Math.min(1000, Number(params.get('limit') ?? 100));
-  const restarted = restartedRuns(now).find(run => run.runId === params.get('run_id'));
+  // The stopped group's recent activity is read across its runs, by group; one run's events by run.
+  const stopped = !params.get('run_id') && params.get('session_group') === STOPPED_GROUP ? restartedRuns(now).flatMap(run => run.events)
+    .sort((a, b) => a.event_seq - b.event_seq) : null;
+  const restarted = stopped ? { events: stopped } : restartedRuns(now).find(run => run.runId === params.get('run_id'));
   if (!restarted && (params.get('run_id') ? params.get('run_id') !== 'run-tg' : params.get('session_group') !== GROUP)) return { events: [] };
   const events = (restarted?.events ?? runEvents(now)).filter(event => (!types || types.includes(event.event_type)) && event.event_seq > after);
   if (params.get('order') === 'desc') events.reverse();
@@ -115,7 +121,8 @@ function timeline(url, now) {
 }
 function runs(url, now) {
   const group = decodeURIComponent(url.pathname.split('/')[4] ?? ''), types = url.searchParams.get('types')?.split(',').filter(Boolean);
-  const count = events => events.filter(event => !types || types.includes(event.event_type)).length;
+  // As the server counts: the crash report an automatic restart causes is not shown, so it is not counted.
+  const count = events => { const effect = runRestartEffect(events); return events.filter(event => (!types || types.includes(event.event_type)) && effect(event) !== 'exit').length; };
   if (group === STOPPED_GROUP) {
     const list = restartedRuns(now).map(({ events, ...run }) => ({ ...run, n: count(events) }));
     return { runs: list, totalEvents: list.reduce((sum, run) => sum + run.n, 0), totalRuns: list.length, unattributed: 0 };

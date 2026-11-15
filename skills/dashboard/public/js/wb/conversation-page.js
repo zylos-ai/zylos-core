@@ -9,8 +9,8 @@ import { createConversationState, isOriginConversation } from './conversation-st
 import { messageState, receiptState } from './chat-delivery-state.js?v=100';
 import { renderQuestion } from './chat-questions.js?v=158';
 import { conversationErrorKey, renderConversationContent } from './conversation-content.js?v=164';
-import { createGroupSide } from './group-side.js?v=174';
-import { createLiveArea, livePresentation } from './conversation-activity.js?v=158';
+import { createGroupSide } from './group-side.js?v=175';
+import { createLiveArea, livePresentation } from './conversation-activity.js?v=159';
 import { createScrollGesture } from './scroll-gesture.js?v=102';
 import { createConversationDeletion, deletionPath } from './conversation-delete.js?v=5';
 import { createRowSwipe } from './conversation-swipe.js?v=1';
@@ -1280,8 +1280,23 @@ export function mountConversationPage({
         } : null });
       if (!liveItem) {
         liveItem = node('div', undefined, 'conversation-activity-message');
-        liveItem.append(liveArea.node);
+        const row = { direction: 'out' };
+        const avatar = node('span', undefined, 'conversation-avatar');
+        avatar.append(icon(document, messageAvatar(row, s)));
+        const body = node('div', undefined, 'conversation-message-body');
+        const meta = node('div', undefined, 'conversation-message-meta');
+        meta.append(node('span', messageAuthor(row, s), 'chat-message-author'), node('time'));
+        body.append(meta, liveArea.node);
+        liveItem.append(avatar, body);
       }
+      const data = s.activity.data;
+      // Reuse the API's work start; queued/handled input and child-only work have their own recorded starts.
+      const started = data.working?.main?.since ?? data.working?.since ?? presentation.since
+        ?? presentation.subtasks[0]?.start ?? data.awaiting?.since;
+      const date = asDate(started);
+      const time = liveItem.querySelector('.conversation-message-meta time');
+      time.hidden = !date;
+      if (date) { text(time, clockText(date)); time.dateTime = date.toISOString(); }
       liveItem.dataset.under = presentation.under;
       liveArea.update(presentation, liveOptions(s));
       ordered.splice(at + 1, 0, liveItem);

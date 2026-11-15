@@ -110,7 +110,7 @@ principal, expire after 30 seconds and work once; renewal mints a fresh one,
 and only the newest few per lease stay valid. Bearer-token handshakes ignore
 tickets. A Fleet target's relay replaces the ticket with its own for the
 browser-facing hop. See
-[Observer request origins](modules/deployment.md#observer-request-origins).
+[Access Control](modules/deployment.md#access-control).
 
 ## Automatic viewing recovery
 

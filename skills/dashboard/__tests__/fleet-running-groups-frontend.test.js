@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
 import { buildAgentFleetView, fleetSelfFromSnapshot, handleFleetClick, renderAgentFleetHtml } from '../public/js/agent-fleet.js';
 
 // Exercise the real renderer with API-shaped inputs; no server or live state.
@@ -106,6 +107,29 @@ test('no-response duration and last-hour restarts render on the machine card', (
   assert.match(html, /No response 4 min/);
   assert.match(html, /2 automatic restarts in the last hour →/);
   assert.doesNotMatch(html, /All normal/);
+});
+
+test('machine card counts of one read in the singular in English and the same in Chinese', () => {
+  const pack = lang => JSON.parse(fs.readFileSync(new URL(`../public/i18n/wb.${lang}.json`, import.meta.url), 'utf8'));
+  // The labels the page builds from its language pack (app.js agentFleetLabels), and the built-in English defaults.
+  const fromPack = lang => { const strings = pack(lang); return Object.fromEntries(['runningGroups', 'runningGroupsOne', 'moreProblems', 'moreProblemsOne',
+    'autoRestarts', 'autoRestartsOne'].map(key => [key, strings['wb.fleet.' + key]])); };
+  const card = (count, labels) => {
+    const problems = Array.from({ length: 2 + count }, (_, i) => ({ sessionGroup: `telegram:g${i}`, displayName: `G${i}`, reason: 'start_failed' }));
+    return render(machine({ group_summary: summary({ running: count, counts: { idle: count }, problemCount: problems.length, problems,
+      autoRestarts: { count } }) }), labels ? { labels } : undefined);
+  };
+  for (const labels of [undefined, fromPack('en')]) {
+    const one = card(1, labels), two = card(2, labels);
+    for (const text of ['Running 1 group ·', '1 more problem →', '1 automatic restart in the last hour →']) assert.ok(one.includes(text), text);
+    assert.doesNotMatch(one, /Running 1 groups|1 more problems|1 automatic restarts/);
+    for (const text of ['Running 2 groups ·', '2 more problems →', '2 automatic restarts in the last hour →']) assert.ok(two.includes(text), text);
+  }
+  const zh = fromPack('zh');
+  for (const count of [1, 2]) {
+    const html = card(count, zh);
+    for (const text of [`运行中 ${count} 组`, `另 ${count} 个异常 →`, `近 1 小时自动重启 ${count} 次 →`]) assert.ok(html.includes(text), text);
+  }
 });
 
 test('problem and more clicks carry their machine and group without opening the generic machine link', () => {

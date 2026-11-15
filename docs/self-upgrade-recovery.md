@@ -96,10 +96,37 @@ file-only entry remains available for read-only diagnosis:
 node "$HOME/zylos/.zylos/upgrade/bootstrap.cjs" --root "$HOME/zylos" --status
 ```
 
-Substitute the actual deployment root. A live controller prevents another from
-taking over. Data-ready transactions resume validation and preserve subsequent
+Substitute the actual deployment root.
+
+An upgrade interrupted while npm is replacing the package can leave no `zylos`
+command at all. The same stable entry then continues recovery:
+
+```sh
+node "$HOME/zylos/.zylos/upgrade/bootstrap.cjs" --root "$HOME/zylos" --once
+```
+
+It resumes the single interrupted transaction like `zylos recovery resume` and
+prints the JSON result; `"stage":"restored_complete"` means the original package,
+code and data are back and services are running. Check `zylos --version`
+afterwards.
+
+A live controller prevents another from taking over. Data-ready transactions resume validation and preserve subsequent
 business writes; verified terminal transactions retry only cleanup. Failed
 validation after restored data-ready never replaces databases again.
+
+Before replacing the package, npm moves the installed copy aside to a fixed
+sibling of the package directory (`.zylos-` followed by eight characters derived
+from that directory's path) and deletes it once the install succeeds. When the
+installer is interrupted, the copy stays, and the next install fails with npm
+`ENOTEMPTY`. After restoring the original package, recovery checks only that one
+name for the package directory recorded in the transaction. It removes the
+directory only when every entry in it is identical to the original package
+saved by this transaction, so names of other packages, other installation
+prefixes or similar names are never touched. Otherwise it leaves the directory
+in place, finishes recovery and reports a warning with the path. Remove that
+directory manually after checking it before upgrading again. The cleanup is
+part of the recovery material frozen from the version being installed, so an
+interrupted upgrade to a version without it still needs that manual removal.
 
 Recovery steps run in a child process, followed by a fresh check of the recovery
 materials. A failed child, incomplete cleanup or remaining active marker is a

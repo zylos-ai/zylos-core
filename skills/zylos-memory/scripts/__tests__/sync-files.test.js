@@ -414,7 +414,7 @@ test('checkpoint accepts a verified batch and rejects hash, end, and coverage mi
   const database = { getCoverageEnd: scope => { assert.equal(scope, f.scope); return 0; }, getConversationsByRange: (begin, end) => { assert.equal(begin, 1); assert.equal(end, 1); return [row]; }, createCheckpoint: (...args) => { calls.push(args); return 42; } };
   assert.equal(await checkpoint({ ...f.settings, end: 1, summary: 'summary', batch }, { database }), 42);
   assert.deepEqual(calls, [[f.scope, 1, 'summary', { noContent: false }]]);
-  for (const [end, receipt, code] of [[1, { ...batch, sha256: '0'.repeat(64) }, 'INVALID_INPUT'], [2, batch, 'INVALID_INPUT'], [1, { ...batch, after: 1 }, 'INPUT_CHANGED']]) {
+  for (const [end, receipt, code] of [[1, { ...batch, sha256: '0'.repeat(64) }, 'INPUT_CHANGED'], [2, batch, 'INVALID_INPUT'], [1, { ...batch, after: 1 }, 'INPUT_CHANGED']]) {
     await assert.rejects(checkpoint({ ...f.settings, end, summary: 'rejected', batch: receipt }, { database }), { code });
     assert.equal(calls.length, 1);
   }
@@ -430,7 +430,7 @@ test('commit rejects a changed batch, wrong end, or missing completed checkpoint
       if (mutation === 'hash') batch.sha256 = '0'.repeat(64);
       if (mutation === 'end') batch.end = 1;
       const database = { ...f.deps.database, getLatestContentCheckpoint: () => mutation === 'checkpoint' ? null : { end_conversation_id: 0 } };
-      await assert.rejects(guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs: await list(f.settings), batch } }, { ...f.deps, database }), { code: mutation === 'checkpoint' ? 'INPUT_CHANGED' : 'INVALID_INPUT' });
+      await assert.rejects(guardedCommit({ ...f.settings, input: { followedUpIds: [], inputs: await list(f.settings), batch } }, { ...f.deps, database }), { code: mutation === 'end' ? 'INVALID_INPUT' : 'INPUT_CHANGED' });
       assert.equal(fs.readFileSync(f.state, 'utf8'), original);
       assert.equal(fs.readFileSync(path.join(f.memoryDir, `inbox.${segment}.md`), 'utf8'), 'absorbed');
       assert.equal(fs.existsSync(f.temporary), true);
