@@ -56,7 +56,7 @@ for (const [name, summary, expected] of [
   assert.equal(value.groups.busy, summary?.counts.busy ?? 0);
   assert.equal(value.groups.unknown, summary?.counts.unknown ?? 0);
 });
-test('unknown session mode falls back to single', () => {
+test('projection with null session mode selects the single response structure', () => {
   assert.equal(buildAgentStatus({ state: { ...state, session_mode: null }, readiness: {} }).session_mode, 'single');
 });
 for (const [name, input, expected] of [
@@ -69,7 +69,7 @@ for (const [name, input, expected] of [
 ]) test(`single-session readiness: ${name}`, () => {
   assert.deepEqual(agentReadiness(input, { sessionMode: 'single' }), expected);
 });
-test('unreadable mode retains single-session busy semantics', () => {
+test('readiness mapper with null mode uses the single-session busy rule', () => {
   assert.equal(agentReadiness({ observation }, { sessionMode: null }).ready, false);
   assert.equal(agentReadiness({ observation }, { sessionMode: null }).stage, 'session_ready');
 });

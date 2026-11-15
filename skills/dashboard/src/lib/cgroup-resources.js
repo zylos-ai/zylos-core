@@ -6,8 +6,8 @@
  * (pkg/opsdaemon) — the reference implementation for container-correct
  * resource collection.
  *
- * WHY this exists: `os.cpus()` / `os.totalmem()` (what the zylos-dashboard
- * reports) are NODE-level inside a container — they are not cgroup-aware, so
+ * WHY this exists: `os.cpus()` / `os.totalmem()` (the host sampler's
+ * defaults) are NODE-level inside a container — they are not cgroup-aware, so
  * in a limited container they report the host node's cores/RAM and host-wide
  * utilization, not this container's quota and actual consumption. These
  * readers see the container's real limits and usage instead:
@@ -31,7 +31,7 @@ import path from 'node:path';
 // missing file. Anything >= 2^62 is treated as unlimited (mirrors v2's "max").
 const V1_NO_LIMIT_SENTINEL = 2 ** 62;
 
-const DEFAULT_CGROUP_ROOT = process.env.OPS_CGROUP_ROOT || '/sys/fs/cgroup';
+const DEFAULT_CGROUP_ROOT = '/sys/fs/cgroup';
 
 function defaultReadFile(absPath) {
   return fs.readFileSync(absPath, 'utf8');
@@ -81,8 +81,17 @@ export function createCgroupCollector({
   function cgroupVersion() {
     if (readRaw('cpu.max') !== null) return 'v2';
     if (readRaw('memory.max') !== null) return 'v2';
-    if (readRaw('cpu', 'cpu.cfs_quota_us') !== null) return 'v1';
-    if (readRaw('memory', 'memory.limit_in_bytes') !== null) return 'v1';
+    if (readRaw('cpu', 'cpu.cfs_quota_us') !== null
+        || readRaw('memory', 'memory.limit_in_bytes') !== null) {
+      // v1 controller files also exist at a bare host's hierarchy root. Their
+      // presence alone does not establish container scope. Require a finite
+      // quota or memory limit; an entirely unlimited v1 container deliberately
+      // falls back to host metrics too, since these files cannot distinguish it
+      // from an unlimited host root reliably.
+      const cpu = readCpuLimitCores();
+      const memory = readMemLimitBytes();
+      if (cpu.limitCores > 0 || memory.limitBytes > 0) return 'v1';
+    }
     return 'none';
   }
 
@@ -184,7 +193,13 @@ export function createCgroupCollector({
   // percentage needs two samples — this keeps the previous one for the delta.
   function sample() {
     const u = readCpuUsageUsec();
-    if (!u.ok) return;
+    if (!u.ok) {
+      // Never publish the previous window as this tick's measurement. Start a
+      // fresh two-sample window once the cumulative counter becomes readable.
+      haveCur = false;
+      haveTwo = false;
+      return;
+    }
     const t = now();
     if (haveCur) {
       prevUsage = curUsage;
@@ -228,7 +243,7 @@ export function createCgroupCollector({
     if (cur.ok) {
       let workingSet = cur.bytes;
       const inactive = readInactiveFileBytes();
-      if (inactive.ok && inactive.bytes < cur.bytes) {
+      if (inactive.ok && inactive.bytes <= cur.bytes) {
         workingSet = cur.bytes - inactive.bytes;
       }
       memUsed = workingSet;

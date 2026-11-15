@@ -68,19 +68,21 @@ export class CoreState {
   }
   refresh({ readiness = false } = {}) {
     if (!this.pending) this.pending = this._read().finally(() => { this.pending = null; });
-    if (!readiness) return this.pending;
-    return this.pending.then(async snapshot => {
-      // Single-session health is needed by the public readiness read only.
-      // Keep it out of the existing one-second background refresh.
-      if (this.lastSessionMode !== 'multi' && this.observation) {
+    if (!readiness) return this.pending.then(result => result.snapshot);
+    return this.pending.then(async sampled => {
+      const result = structuredClone(sampled);
+      // Capture all readiness evidence from this read before any later refresh.
+      // Single-session health is request-local and never part of the one-second poll.
+      const { readinessObservation, sessionMode } = result;
+      if (sessionMode !== 'multi' && readinessObservation.observation) {
         try {
           const reader = await loadCoreModule('session-state-reader.js');
-          const runtime = this.observation.identity.runtime;
+          const runtime = readinessObservation.observation.identity.runtime;
           const target = ['claude', 'codex'].includes(runtime) ? runtime : await reader.resolveTargetRuntime(null);
-          this.runtimeHealth = target ? await reader.readRuntimeHealth(target) : null;
-        } catch { this.runtimeHealth = null; }
+          readinessObservation.runtimeHealth = target ? await reader.readRuntimeHealth(target) : null;
+        } catch { readinessObservation.runtimeHealth = null; }
       }
-      return snapshot;
+      return result;
     });
   }
   async _read() {
@@ -144,7 +146,7 @@ export class CoreState {
         this.onChange(this.snapshot);
       }
     }
-    return this.snapshot;
+    return { snapshot: structuredClone(this.snapshot), readinessObservation: this.getReadinessObservation(), sessionMode: this.lastSessionMode };
   }
   getReadinessObservation() { return structuredClone({ observation: this.observation, view: this.originView, runtimeHealth: this.runtimeHealth }); }
   getCurrentSessionId() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' ? this.observation.identity.sessionId : null; }

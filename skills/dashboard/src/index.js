@@ -1197,9 +1197,9 @@ async function handleApi(req, res, pathname, url) {
     return true;
   }
   if (pathname === '/api/agent-status' && req.method === 'GET') {
-    await Promise.all([coreState.refresh({ readiness: true }), refreshFleetGroupSummary()]);
+    const [sampled] = await Promise.all([coreState.refresh({ readiness: true }), refreshFleetGroupSummary()]);
     const state = buildApiStatePayload();
-    const readiness = agentReadiness(coreState.getReadinessObservation(), { sessionMode: state.session_mode });
+    const readiness = agentReadiness(sampled.readinessObservation, { sessionMode: sampled.sessionMode });
     sendJson(res, 200, buildAgentStatus({ state, readiness }));
     return true;
   }

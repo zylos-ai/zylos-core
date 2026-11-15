@@ -26,7 +26,7 @@ test('agent-status HTTP preserves authentication and single/multi observation se
   fs.writeFileSync(path.join(root, 'activity-monitor/restart-requests.json'), '[]');
   const coreConfig = path.join(root, '.zylos/config.json');
   let mode = 'single', now = Date.now(), groupState = 'busy', listKnown = true;
-  let originActivity = 'idle';
+  let originActivity = 'idle', useRealCore = false;
   let statusReads = 0, nullQuotas = false, cgroupConstructions = 0;
   const writeMode = value => {
     mode = value;
@@ -58,15 +58,24 @@ test('agent-status HTTP preserves authentication and single/multi observation se
   const originState = () => ({ state: originActivity.toUpperCase(), runtime: 'claude', ready: true, sampledAt: now,
     reason: null, sessionId: 'fixture-session', runId: 'fixture-run', running_tools: [],
     active_subagents: [], subagent_tools: [], source: {}, updated_at: new Date(now).toISOString() });
-  t.mock.method(CoreState.prototype, 'refresh', async () => originState());
-  t.mock.method(CoreState.prototype, 'getState', originState);
-  t.mock.method(CoreState.prototype, 'getReadinessObservation', () => ({
+  const realCore = Object.fromEntries(['refresh', 'getState', 'getUsageObservation']
+    .map(name => [name, CoreState.prototype[name]]));
+  const readinessObservation = () => ({
     observation: { identity: { present: true, ready: true, sessionId: 'fixture-session' },
       status: { valid: true, value: { state: originActivity } } }, view: null, runtimeHealth: null,
-  }));
-  t.mock.method(CoreState.prototype, 'getUsageObservation', () => ({ valid: true, value: {
-    model: { id: 'fixture-model', display_name: 'Fixture model' }, context_window: { used_percentage: 37 },
-  } }));
+  });
+  t.mock.method(CoreState.prototype, 'refresh', async function (options = {}) {
+    if (useRealCore) return realCore.refresh.call(this, options);
+    return options.readiness ? { snapshot: originState(), readinessObservation: readinessObservation(), sessionMode: mode } : originState();
+  });
+  t.mock.method(CoreState.prototype, 'getState', function () {
+    return useRealCore ? realCore.getState.call(this) : originState();
+  });
+  t.mock.method(CoreState.prototype, 'getUsageObservation', function () {
+    return useRealCore ? realCore.getUsageObservation.call(this) : { valid: true, value: {
+      model: { id: 'fixture-model', display_name: 'Fixture model' }, context_window: { used_percentage: 37 },
+    } };
+  });
   t.mock.method(MetricResolver.prototype, 'resolveAggregated', metric =>
     ['cost', 'session_cost'].includes(metric) ? { session: 1.25, today: 4.5, seven_day: 12.75 } : null);
   // Install before importing SystemCollector: its constructor eagerly seeds the
@@ -156,13 +165,25 @@ test('agent-status HTTP preserves authentication and single/multi observation se
     originActivity = 'idle';
   });
 
-  await t.test('unreadable mode uses the single-session response contract', async () => {
+  // Malformed config crosses HTTP -> real CoreState.refresh/_read -> the real
+  // strict config reader. No session reader or tmux call is reached after rejection.
+  // Run for config failure or readiness changes; presentation-only changes may skip.
+  await t.test('unreadable mode returns single structure with unavailable Core observations', async () => {
+    const { CONFIG_FILE } = await import('../cli/lib/config.js');
+    assert.equal(CONFIG_FILE, coreConfig, 'the strict reader targets only the isolated config');
     fs.writeFileSync(coreConfig, '{ unreadable JSON');
-    const value = await read('/api/agent-status');
-    assert.equal(value.session_mode, 'single');
-    assert.equal(value.context_pct, 37);
-    assert.equal(value.cost.session, 1.25);
-    assert.deepEqual(value.readiness, { ready: true, observable: true, stage: 'ready', reason: 'ready' });
+    useRealCore = true;
+    try {
+      const value = await read('/api/agent-status');
+      assert.equal(value.session_mode, 'single');
+      assert.equal(value.groups, null);
+      assert.equal(value.state, 'UNKNOWN');
+      assert.equal(value.context_pct, null);
+      assert.deepEqual(value.readiness, { ready: false, observable: false, stage: 'runtime_down', reason: 'status_missing' });
+    } finally {
+      useRealCore = false;
+      writeMode('single');
+    }
   });
 
   // This exercises API -> actual Workbench classification/cache -> instance

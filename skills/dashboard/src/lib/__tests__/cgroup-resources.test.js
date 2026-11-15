@@ -110,7 +110,7 @@ test('cgroup v1 fallback: CPU (cpuacct ns) + memory working set', () => {
   assert.deepEqual(r.errors, []);
 });
 
-test('cgroup v1: unlimited sentinels (-1 quota, PAGE_COUNTER_MAX limit)', () => {
+test('cgroup v1 host root: unlimited sentinels do not establish container scope', () => {
   const files = {
     '/cg1/cpu/cpu.cfs_quota_us': '-1',
     '/cg1/cpu/cpuacct.usage': '5000000000',
@@ -120,7 +120,7 @@ test('cgroup v1: unlimited sentinels (-1 quota, PAGE_COUNTER_MAX limit)', () => 
   };
   const c = createCgroupCollector({ cgroupRoot: '/cg1', readFile: fakeReadFile(files), now: () => 0 });
   const r = c.read();
-  assert.equal(r.cgroup_version, 'v1');
+  assert.equal(r.cgroup_version, 'none');
   assert.equal(r.cpu_limit_cores, null);
   assert.equal(r.cpu_pct, null);
   assert.equal(r.mem_total_bytes, null);  // sentinel → unlimited
@@ -128,6 +128,26 @@ test('cgroup v1: unlimited sentinels (-1 quota, PAGE_COUNTER_MAX limit)', () => 
   assert.equal(r.mem_used_bytes, 300000000);
   assert.deepEqual(r.errors, []);
 });
+
+for (const limited of ['cpu', 'memory']) {
+  test(`cgroup v1: finite ${limited} limit retains container scope with the other unlimited`, () => {
+    const files = {
+      '/cg1/cpu/cpu.cfs_quota_us': limited === 'cpu' ? '150000' : '-1',
+      '/cg1/cpu/cpu.cfs_period_us': '100000',
+      '/cg1/cpu/cpuacct.usage': '5000000000',
+      '/cg1/memory/memory.limit_in_bytes': limited === 'memory' ? '800000000' : '9223372036854771712',
+      '/cg1/memory/memory.usage_in_bytes': '300000000',
+      '/cg1/memory/memory.stat': 'total_inactive_file 0',
+    };
+    const c = createCgroupCollector({ cgroupRoot: '/cg1', readFile: fakeReadFile(files), now: () => 0 });
+    const r = c.read();
+    assert.equal(r.cgroup_version, 'v1');
+    assert.equal(r.cpu_limit_cores, limited === 'cpu' ? 1.5 : null);
+    assert.equal(r.mem_total_bytes, limited === 'memory' ? 800000000 : null);
+    assert.equal(r.mem_pct, limited === 'memory' ? 37.5 : null);
+    assert.deepEqual(r.errors, []);
+  });
+}
 
 test('no cgroup at all: version "none", nulls, collection errors', () => {
   const c = createCgroupCollector({ cgroupRoot: '/empty', readFile: fakeReadFile({}), now: () => 0 });
