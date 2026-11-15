@@ -66,10 +66,22 @@ export class CoreState {
     this.costKey = null; this.pending = null;
     this.watched = false; this.started = false;
   }
-  refresh() {
-    if (this.pending) return this.pending;
-    this.pending = this._read().finally(() => { this.pending = null; });
-    return this.pending;
+  refresh({ readiness = false } = {}) {
+    if (!this.pending) this.pending = this._read().finally(() => { this.pending = null; });
+    if (!readiness) return this.pending;
+    return this.pending.then(async snapshot => {
+      // Single-session health is needed by the public readiness read only.
+      // Keep it out of the existing one-second background refresh.
+      if (this.lastSessionMode !== 'multi' && this.observation) {
+        try {
+          const reader = await loadCoreModule('session-state-reader.js');
+          const runtime = this.observation.identity.runtime;
+          const target = ['claude', 'codex'].includes(runtime) ? runtime : await reader.resolveTargetRuntime(null);
+          this.runtimeHealth = target ? await reader.readRuntimeHealth(target) : null;
+        } catch { this.runtimeHealth = null; }
+      }
+      return snapshot;
+    });
   }
   async _read() {
     try {
@@ -89,10 +101,9 @@ export class CoreState {
           });
         this.costKey = JSON.stringify(identities.sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
       } catch { this.costKey = null; }
-      let targetRuntime = observation.identity.runtime, facts = null, view = null;
+      let targetRuntime = observation.identity.runtime, facts = null, view = null, health = null;
       if (mode === 'multi') {
         try { targetRuntime = await reader.resolveTargetRuntime('origin'); } catch { targetRuntime = null; }
-        let health = null;
         try { health = targetRuntime ? await reader.readRuntimeHealth(targetRuntime) : null; } catch { /* Unreadable health is not an authentication block. */ }
         if (!observation.identity.present || health?.health === 'auth_failed') {
           const { readOriginFacts, describeOrigin } = await loadCoreModule('origin-presence.js');
@@ -111,6 +122,8 @@ export class CoreState {
       const projected = projectOrigin(group, observation, this.sanitizer, facts, view);
       const source = businessSource(projected, observation, accountUsage, accountRecord);
       this.observation = observation;
+      this.originView = view;
+      this.runtimeHealth = health;
       this.accountUsage = accountUsage;
       this.accountUsageRecord = accountRecord;
       const changed = !isDeepStrictEqual(source, this.lastSource);
@@ -122,6 +135,8 @@ export class CoreState {
       this.accountUsage = null;
       this.accountUsageRecord = null;
       this.observation = null;
+      this.originView = null;
+      this.runtimeHealth = null;
       const source = { error: { code: error.code || 'read_failed', message: error.message } };
       if (!isDeepStrictEqual(source, this.lastSource)) {
         this.lastSource = source;
@@ -131,6 +146,7 @@ export class CoreState {
     }
     return this.snapshot;
   }
+  getReadinessObservation() { return structuredClone({ observation: this.observation, view: this.originView, runtimeHealth: this.runtimeHealth }); }
   getCurrentSessionId() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' ? this.observation.identity.sessionId : null; }
   getState() { return structuredClone(this.snapshot); }
   getLaunchConfig() { return this.observation?.identity?.present && this.observation?.status?.reason !== 'identity_changed' && this.observation.identity.launchConfig ? structuredClone(this.observation.identity.launchConfig) : null; }

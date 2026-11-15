@@ -1,3 +1,4 @@
+import { createCgroupCollector } from '../src/lib/cgroup-resources.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,6 +11,8 @@ import { MetricResolver } from '../src/lib/metric-resolver.js';
 import { runMetricMaintenance } from '../src/lib/metric-maintenance.js';
 import { Store } from '../src/lib/store.js';
 import { buildSystemPayload } from '../src/lib/system-api.js';
+
+const cgroupCollector = createCgroupCollector({ readFile: () => { throw new Error('fixture: no cgroup'); } });
 
 function tmpDir(prefix = 'metric-aggregation-phase5-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -63,7 +66,7 @@ test('PM2Collector writes one summary row and upserts per-process latest state',
 
 test('SystemCollector writes a single system_summary row', async () => {
   await withStore(async (store, dir) => {
-    const collector = new SystemCollector(store, { zylosDir: dir, runtime: 'codex' });
+    const collector = new SystemCollector(store, { zylosDir: dir, runtime: 'codex' }, { cgroupCollector });
     await collector.collect();
 
     const rows = store.queryMetrics({ name: 'system_summary' });

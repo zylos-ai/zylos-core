@@ -1,6 +1,7 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createCgroupCollector } from '../cgroup-resources.js';
 
 export function parseVmStatFreeMem(vmStatOutput) {
   const pageSizeMatch = vmStatOutput.match(/page size of (\d+) bytes/);
@@ -42,10 +43,11 @@ export function readMemory({ platform = process.platform, readFile = fs.readFile
 }
 
 export class SystemCollector {
-  constructor(store, config, { readMemory: readMemoryNow = readMemory } = {}) {
+  constructor(store, config, { readMemory: readMemoryNow = readMemory, cgroupCollector = createCgroupCollector() } = {}) {
     this.store = store;
     this.config = config;
     this._readMemory = readMemoryNow;
+    this._cgroup = cgroupCollector;
     this._cache = null;
     this._timer = null;
     this._onUpdate = null;
@@ -91,6 +93,23 @@ export class SystemCollector {
       process.stderr.write(`[system-collector] Memory error: ${err.message}\n`);
     }
 
+    // Use the existing sampler's cadence for CPU deltas. A detected cgroup
+    // remains container-scoped even when its CPU or memory limit is unlimited.
+    this._cgroup.sample();
+    const cgroup = this._cgroup.read();
+    data.cgroup_version = cgroup.cgroup_version;
+    data.resource_scope = cgroup.cgroup_version === 'none' ? 'host' : 'container';
+    if (data.resource_scope === 'container') {
+      data.cpu_pct = cgroup.cpu_pct;
+      data.cpu_count = cgroup.cpu_limit_cores;
+      data.cpu_usage_cores = cgroup.cpu_usage_cores;
+      data.mem_used_bytes = cgroup.mem_used_bytes;
+      data.mem_total_bytes = cgroup.mem_total_bytes;
+      data.mem_pct = cgroup.mem_pct;
+    } else {
+      data.mem_pct = data.mem_total_bytes > 0 ? +((data.mem_used_bytes / data.mem_total_bytes) * 100).toFixed(2) : null;
+    }
+
     try {
       const stats = fs.statfsSync(this.config.zylosDir);
       const totalBytes = stats.blocks * stats.bsize;
@@ -103,13 +122,16 @@ export class SystemCollector {
     }
 
     const dims = {
-      cpu_pct: data.cpu_pct ?? 0,
-      cpu_count: data.cpu_count ?? (os.cpus().length || 1),
+      resource_scope: data.resource_scope,
+      cgroup_version: data.cgroup_version,
+      cpu_pct: data.resource_scope === 'container' ? data.cpu_pct : (data.cpu_pct ?? 0),
+      cpu_count: data.resource_scope === 'container' ? data.cpu_count : (data.cpu_count ?? (os.cpus().length || 1)),
+      cpu_usage_cores: data.cpu_usage_cores ?? null,
       mem_used_bytes: data.mem_used_bytes ?? null,
       mem_total_bytes: data.mem_total_bytes ?? null,
       mem_used_mb: data.mem_used_bytes != null ? +(data.mem_used_bytes / 1024 / 1024).toFixed(2) : null,
       mem_total_mb: data.mem_total_bytes != null ? +(data.mem_total_bytes / 1024 / 1024).toFixed(2) : null,
-      mem_used_pct: data.mem_total_bytes > 0 ? +((data.mem_used_bytes / data.mem_total_bytes) * 100).toFixed(2) : null,
+      mem_used_pct: data.mem_pct,
       disk_used_pct: data.disk_used_pct ?? null,
       disk_free_bytes: data.disk_free_bytes ?? null,
       disk_free_gb: data.disk_free_bytes != null ? +(data.disk_free_bytes / 1024 / 1024 / 1024).toFixed(2) : null,
@@ -119,7 +141,9 @@ export class SystemCollector {
       timestamp: now,
       runtime,
       metric_name: 'system_summary',
-      metric_value: dims.cpu_pct,
+      // The summary row requires a numeric value; nullable gauges and scope
+      // remain in dimensions and the live cache.
+      metric_value: dims.cpu_pct ?? 0,
       dimensions: dims,
       source: 'system',
       confidence: 'actual'

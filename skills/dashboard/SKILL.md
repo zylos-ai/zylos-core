@@ -284,6 +284,8 @@ renderer to that list.
 
 ## Dashboard service
 
+For the authoritative whole-agent status contract, see [Agent status API](docs/agent-status-api.md) (`GET /api/agent-status`).
+
 ```bash
 npm start
 ```
