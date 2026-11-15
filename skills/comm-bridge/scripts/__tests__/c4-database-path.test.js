@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { assertTestDatabasePath } from '../c4-database-path.js';
 
@@ -46,3 +46,27 @@ test('C4 opens its isolated database with the real schema', t => {
   assert.equal(opened.configured, opened.path);
   assert.ok(fs.existsSync(opened.path));
 });
+
+for (const liveTarget of [true, false]) {
+  test(`plain Node test entry ${liveTarget ? 'rejects a live' : 'opens an isolated'} database without test markers`, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'c4-entry-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const accountHome = path.join(root, 'account');
+    const live = path.join(accountHome, 'zylos');
+    fs.mkdirSync(live, { recursive: true });
+    const target = liveTarget ? live : path.join(root, 'isolated');
+    const entry = path.join(root, 'database.test.js');
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }));
+    // The runner preload marks children; remove those markers before loading product modules.
+    fs.writeFileSync(entry, `for (const key of ['NODE_TEST_CONTEXT','JEST_WORKER_ID','ZYLOS_TEST_RUN']) delete process.env[key];\nawait import(${JSON.stringify(pathToFileURL(opener).href)});\n`);
+    t.diagnostic(JSON.stringify({ entry, target, accountHome, databaseBoundary: liveTarget ? 'rejected' : 'isolated' }));
+    const result = spawnSync(process.execPath, [entry, target, '', accountHome], { encoding: 'utf8', timeout: 15000 });
+    assert.equal(result.status, liveTarget ? 1 : 0, result.stdout + result.stderr);
+    if (liveTarget) {
+      assert.equal(JSON.parse(result.stderr).code, 'TEST_DATABASE_PATH_UNSAFE');
+    } else {
+      assert.equal(JSON.parse(result.stdout).path, path.join(target, 'comm-bridge/c4.db'));
+    }
+    assert.equal(fs.existsSync(path.join(live, 'comm-bridge')), false);
+  });
+}

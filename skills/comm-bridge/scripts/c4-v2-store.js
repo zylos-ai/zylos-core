@@ -209,7 +209,10 @@ export function createStore(database, dependencies = {}) {
         let hasOlder = false;
         try {
           for (const head of cursor) {
-            if (millis(head.timestamp) < activeSince || groups.length === limit) { hasOlder = true; break; }
+            const timestamp = millis(head.timestamp);
+            // Unknown times cannot establish the cutoff or consume the result limit.
+            if (timestamp === null) continue;
+            if (timestamp < activeSince || groups.length === limit) { hasOlder = true; break; }
             groups.push(row(head));
           }
         } finally { cursor.return(); }

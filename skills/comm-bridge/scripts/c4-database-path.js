@@ -15,7 +15,8 @@ function canonicalPath(target) {
 }
 
 export function assertTestDatabasePath(databasePath) {
-  if (!process.env.NODE_TEST_CONTEXT && !process.env.JEST_WORKER_ID && process.env.ZYLOS_TEST_RUN !== '1') return;
+  const testEntry = path.basename(process.argv[1] || '').endsWith('.test.js');
+  if (!testEntry && !process.env.NODE_TEST_CONTEXT && !process.env.JEST_WORKER_ID && process.env.ZYLOS_TEST_RUN !== '1') return;
   // HOME is overridden by fixtures; the account home identifies the live instance.
   const live = canonicalPath(path.join(os.userInfo().homedir, 'zylos'));
   const relative = path.relative(live, canonicalPath(databasePath));
