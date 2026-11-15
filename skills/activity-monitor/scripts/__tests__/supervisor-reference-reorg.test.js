@@ -58,7 +58,7 @@ function fixture(mode = 'multi', kind = 'origin') {
   f.advance = milliseconds => { now += milliseconds; };
   f.expectedSync = { content: kind === 'origin' ? 'origin sync' : 'group sync',
     sessionGroup: group, priority: 2, appendAckSuffix: false,
-    ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + 300_000) / 1000) }) };
+    ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + 300_000) / 1000), createdAt: Math.floor(now / 1000) }) };
   return f;
 }
 

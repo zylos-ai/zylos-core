@@ -526,9 +526,10 @@ export class SupervisorLifecycle {
       if (!await this.beforeWrite(group, context, scene)) return;
       const targetBinding = await this.bindCurrentRun(scene);
       if (!targetBinding) return;
+      const now = this.now();
       const control = await this.d.db.insertControl(this.prompt(prompt), {
         sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
-        ackDeadlineAt: Math.floor((this.now() + this.ackTimeoutMs) / 1000),
+        ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000),
       });
       intent.controlIds.push(control.id);
     }
@@ -613,6 +614,7 @@ export class SupervisorLifecycle {
       if (!targetBinding) { partial = controlIds.length > 0; break; }
       const control = await this.d.db.insertControl(this.prompt(prompt), {
         sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000),
+        createdAt: Math.floor(now / 1000),
       });
       controlIds.push(control.id);
     }
@@ -692,7 +694,7 @@ export class SupervisorLifecycle {
     const now = this.now();
     const control = await this.d.db.insertControl(this.prompt('PRE_RECLAIM_CHECK_PROMPT'), {
       sessionGroup: group, targetBinding, requireIdle: true, appendAckSuffix: true,
-      ackDeadlineAt: Math.floor((now + this.evictionAckTimeoutMs) / 1000),
+      ackDeadlineAt: Math.floor((now + this.evictionAckTimeoutMs) / 1000), createdAt: Math.floor(now / 1000),
     });
     this.evictionPreparation.set(group, { controlId: control.id, runId: scene.runId, at: now, deadline: now + this.evictionAckTimeoutMs, subreason });
     return 'waiting';
@@ -758,7 +760,8 @@ export class SupervisorLifecycle {
       if (!await this.beforeWrite(scene.sessionGroup, context)) return;
       const targetBinding = await this.d.bindTarget(scene);
       await this.d.db.insertControl(this.prompt('CONFIG_RECLAIM_PROMPT', scene, expected), { sessionGroup: scene.sessionGroup, targetBinding,
-        priority: 1, bypassState: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000) });
+        priority: 1, bypassState: true, appendAckSuffix: true, ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000),
+        createdAt: Math.floor(now / 1000) });
       this.configurationSent.set(scene.runId, now);
     });
   }
@@ -873,7 +876,7 @@ export class SupervisorLifecycle {
     if (!await this.beforeWrite(modeOf(context) === 'single' ? null : scene.sessionGroup, context, kind === 'origin' ? undefined : scene)) return;
     await this.d.db.insertControl(this.prompt(kind === 'origin' ? 'ORIGIN_SYNC_PROMPT' : 'GROUP_SYNC_PROMPT'), {
       sessionGroup: modeOf(context) === 'single' ? null : scene.sessionGroup, priority: 2, appendAckSuffix: false,
-      ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000) }),
+      ...(kind === 'origin' ? {} : { ackDeadlineAt: Math.floor((now + this.ackTimeoutMs) / 1000), createdAt: Math.floor(now / 1000) }),
     });
     this.syncSent.set(key, now);
     this.syncRuns.set(key, scene.runId);
@@ -924,7 +927,7 @@ export class SupervisorLifecycle {
     const now = this.now();
     const control = await this.d.db.insertControl(this.prompt('UPGRADE_RESTART_CHECK_PROMPT'), {
       sessionGroup: scene.sessionGroup, targetBinding, requireIdle: true, appendAckSuffix: true,
-      ackDeadlineAt: Math.floor((now + this.upgradeAckTimeoutMs) / 1000),
+      ackDeadlineAt: Math.floor((now + this.upgradeAckTimeoutMs) / 1000), createdAt: Math.floor(now / 1000),
     });
     this.upgradePreparation.set(scene.runId, { controlId: control.id, at: now, deadline: now + this.upgradeAckTimeoutMs });
     return false;

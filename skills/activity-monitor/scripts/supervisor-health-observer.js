@@ -148,7 +148,7 @@ export class SupervisorHealthObserver {
       const deadline = sentAt + (probe.phase === 'recovery' ? this.recoveryDeadlineMs : 300000);
       const control = await this.insertControl(`Heartbeat check. [phase=${probe.phase}]`, {
         sessionGroup:mode === 'single' ? null : scene.sessionGroup, targetBinding:binding,
-        priority:0,bypassState:true,ackDeadlineAt:Math.floor(deadline/1000),
+        priority:0,bypassState:true,ackDeadlineAt:Math.floor(deadline/1000),createdAt:Math.floor(sentAt/1000),
       });
       const controlId = control?.id;
       if (!Number.isInteger(controlId) || controlId <= 0) throw new Error('Recovery control was not inserted');
