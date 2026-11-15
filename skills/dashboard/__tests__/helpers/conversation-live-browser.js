@@ -20,6 +20,7 @@ const followUp = message(2, 'in', at(22, 58), '私聊的组用对方的名字就
 const firstReply = message(3, 'out', at(22, 58, 40), '收到，私聊组直接用对方名字。目前已经找到 8 个没有名字的组，正在逐个查群名。');
 const finalReply = message(4, 'out', at(22, 59, 30), '起好了，共 8 个：产品周会、Zylos-Core多session、Eva、Jinglever……完整列表见下。');
 const noReplyNeeded = message(5, 'in', at(23, 5), '刚才那个列表收到了，不用回。');
+const laterReply = message(6, 'out', at(23, 6), '继续整理后台记录。');
 
 const tool = (label, start, end = null) => ({ kind: 'tool', label, status: end === null ? 'running' : 'done', start, end });
 const described = arg => ({ key: 'described', arg });
@@ -45,7 +46,7 @@ const withSubtask = working => ({ ...working, subagents: { count: 1, since: at(2
 const idle = { on: false, since: null, main: null, tools: 0, subagents: null };
 
 /**
- * The prototype's ten scenes in order: what the API answers (messages, the header's group row, the activity read) and
+ * The prototype's ten scenes and two recorded-time fallback variants: API answers and
  * what the page must show (anchor message, header, area head, step rows, subtask row, handled line).
  */
 export const SCENES = [
@@ -93,6 +94,17 @@ export const SCENES = [
   { name: 'handled', now: at(23, 5, 40), messages: [ask, followUp, firstReply, finalReply, noReplyNeeded], working: idle,
     activity: { steps: [], subtasks: [], awaiting: { id: 5, state: 'handled', since: at(23, 5), delivered: at(23, 5, 1) } },
     expect: { anchor: 5, header: '空闲', handled: '已处理，没有回复·在组详情查看过程' } },
+  // No start candidate exists after a reply: only the anchor's recorded timestamp can supply the header time.
+  { name: 'missing-start', now: at(23, 6, 5), messages: [ask, followUp, firstReply, finalReply, noReplyNeeded, laterReply],
+    working: { on: true, since: null, main: { since: null, lastActivityAt: at(23, 6, 2) }, tools: 0, subagents: null },
+    activity: { steps: [tool(described('整理后台记录'), at(23, 6, 1))], subtasks: [], awaiting: null },
+    expect: { anchor: 6, header: '正在工作', head: '正在工作', rows: [['running', '整理后台记录', '进行中']] } },
+  // The child starts after the anchor, so its start fallback is distinguishable from the anchor bound.
+  { name: 'subtask-missing-start', now: at(23, 6, 30), messages: [ask, followUp, firstReply, finalReply, noReplyNeeded, laterReply],
+    working: { on: true, since: null, main: null, tools: 0,
+      subagents: { count: 1, since: at(23, 6, 10), lastActivityAt: at(23, 6, 25) } },
+    activity: { steps: [], subtasks: [{ ...subtask(9), start: at(23, 6, 10) }], awaiting: null },
+    expect: { anchor: 6, header: '后台子任务 1 个', head: null, rows: [], subtask: '后台：记忆整理 · 进行中 20 秒 · 已 9 步' } },
 ];
 
 async function startApi(sandbox) {
@@ -319,7 +331,8 @@ export async function runConversationLiveBrowser(t, sandbox) {
         assert.equal(layout.identity.timeVisible, true, `${name}: recorded time is visible`);
         const expectedTime = { waking: at(22, 57), thinking: at(22, 57, 13), steps: at(22, 57, 13),
           'second-message': at(22, 58), subtask: at(22, 58), 'subtask-open': at(22, 58),
-          reply: at(22, 58, 40), 'subtask-only': at(22, 59, 30), handled: at(23, 5) }[scene.name];
+          reply: at(22, 58, 40), 'subtask-only': at(22, 59, 30), handled: at(23, 5),
+          'missing-start': at(23, 6), 'subtask-missing-start': at(23, 6, 10) }[scene.name];
         assert.equal(layout.identity.iso, iso(expectedTime), `${name}: header shows the expected recorded time`);
         const anchorTime = Date.parse(layout.anchorIso), headerTime = Date.parse(layout.identity.iso);
         assert.ok(Number.isFinite(anchorTime) && Number.isFinite(headerTime), `${name}: both datetime attributes are valid`);
@@ -362,7 +375,7 @@ export async function runConversationLiveBrowser(t, sandbox) {
   assert.ok(results.some(row => row.live && row.under === 'in') && results.some(row => row.live && row.under === 'out'), 'the area shows under both kinds of message');
   // A step whose text is longer than the area wraps within 560px: the area stays at most that wide, starts where the AI's
   // bubbles start, and keeps the time column at its right edge.
-  const steps = SCENES.find(scene => scene.name === 'steps');
+  const steps = { ...SCENES.find(scene => scene.name === 'steps'), messages: SCENES.at(-1).messages };
   // All mark kinds share the step columns; a long subtask name must truncate inside the pill.
   api.set({ ...steps, activity: { ...steps.activity, steps: [step.a(),
     ...['message', 'control', 'scheduled', 'other', 'subtask'].map(mark => ({
@@ -435,6 +448,9 @@ export async function runConversationLiveBrowser(t, sandbox) {
     name: row.name, avatarOffset: row.avatar.left - row.replyAvatar.left,
     authorOffset: row.author.left - row.replyAuthor.left, avatarWidth: row.avatar.width,
     time: row.identity.iso, overflow: row.overflow,
+  }))));
+  console.info('Activity fallback times:', JSON.stringify(results.filter(row => row.name.includes('missing-start')).map(row => ({
+    name: row.name, anchor: row.anchorIso, time: row.identity.iso,
   }))));
   console.info('Live activity browser scenes:', JSON.stringify({ scenes: SCENES.length, pages: pages.length, checks: results.length, widths: results.filter(row => row.width).map(row => row.width).slice(0, 4) }));
 }
