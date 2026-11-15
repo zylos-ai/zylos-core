@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -9,11 +10,25 @@ export async function runInitialTimezoneBrowser(sandbox, scenario) {
   }
   const proof = sandbox.assertIsolation();
   console.info('Initial timezone isolation:', JSON.stringify(proof));
-  const args = ['--experimental-test-module-mocks', fileURLToPath(new URL('./dashboard-initial-timezone-server.js', import.meta.url))];
+  // The real version checker starts with the Dashboard. Node's env proxy support
+  // sends its GitHub and npm requests to this local proxy, which refuses every
+  // tunnel, so no request leaves the machine. Fail closed on a Node without it.
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  assert.ok(major >= 24 || (major === 22 && minor >= 21), 'Node must honor NODE_USE_ENV_PROXY to keep the version check offline');
+  const refused = [];
+  const proxy = http.createServer((req, res) => { if (refused.length < 10) refused.push(`${req.method} ${req.url}`); res.writeHead(403).end(); });
+  proxy.on('connect', (req, socket) => {
+    if (refused.length < 10) refused.push(`CONNECT ${req.url}`);
+    socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+  });
+  const proxyUrl = await sandbox.startHttp(proxy);
+  const offline = { NODE_USE_ENV_PROXY: '1', NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
+  for (const key of ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'https_proxy', 'http_proxy', 'all_proxy']) offline[key] = proxyUrl;
+  const args = [fileURLToPath(new URL('./dashboard-initial-timezone-server.js', import.meta.url))];
   // No live commands on PATH: index probes version CLIs at import, but collectors
   // are never started. Private socket and DB paths were verified before spawn.
-  console.info('Initial timezone child:', JSON.stringify({ executable: process.execPath, args, cwd: sandbox.paths.zylos, PATH: '/usr/bin:/bin' }));
-  const child = sandbox.startChild(process.execPath, args, { env: { PATH: '/usr/bin:/bin' }, timeoutMs: 35000 });
+  console.info('Initial timezone child:', JSON.stringify({ executable: process.execPath, args, cwd: sandbox.paths.zylos, PATH: '/usr/bin:/bin', proxy: proxyUrl }));
+  const child = sandbox.startChild(process.execPath, args, { env: { PATH: '/usr/bin:/bin', ...offline }, timeoutMs: 35000 });
   const listener = path.join(sandbox.paths.zylos, 'listener.json');
   const deadline = Date.now() + 15000;
   while (!fs.existsSync(listener)) {
@@ -106,4 +121,5 @@ export async function runInitialTimezoneBrowser(sandbox, scenario) {
     } finally { release(); await context.close(); }
   }
   assert.ok(performance.now() - started < 30000, 'all fresh loads finish before the normal state poll');
+  console.info('Initial timezone version check refused offline:', JSON.stringify(refused));
 }

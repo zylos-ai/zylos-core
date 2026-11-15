@@ -1,14 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { mock } from 'node:test';
 import { sendJson } from '../../skills/dashboard/src/lib/http.js';
 import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 
-// Suppress only the unrelated external package-version poller. The HTML route,
-// .env timezone reader, modules, formatters and DOM rendering remain real.
-mock.module(new URL('../../skills/dashboard/src/lib/version-checker.js', import.meta.url).href, {
-  namedExports: { VersionChecker: class { start() {} getLatest() { return {}; } } },
-});
+// Every Dashboard module is real, including the version checker. The parent
+// routes this process's outbound HTTPS through a local proxy that refuses every
+// tunnel, so the real check() fails offline and its errors are swallowed.
 const root = process.env.ZYLOS_DIR;
 fs.writeFileSync(path.join(root, '.env'), 'TZ=Asia/Singapore\n');
 fs.writeFileSync(path.join(root, 'components/dashboard/config.json'), JSON.stringify({ auth: { enabled: false } }));
