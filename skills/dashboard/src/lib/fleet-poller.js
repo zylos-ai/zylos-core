@@ -17,6 +17,7 @@ const DEFAULT_SLOW_THRESHOLD_MS = 1500;
 const DEFAULT_LATENCY_PROBE_INTERVAL_MS = 30_000;
 const LATENCY_SAMPLE_LIMIT = 20;
 const DEGRADED_PROBE_FAILURES = 2;
+const CONNECTION_LOG_WINDOW_MS = 60_000;
 const CONNECTION_ERROR_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH']);
 const FAILURE_REASONS = new Set(['timeout', 'conn_refused', 'bad_payload', 'auth_failed', 'version_unsupported', 'unreachable']);
 const LINK_QUALITIES = new Set(['ok', 'slow', 'degraded', 'stale', 'down']);
@@ -388,6 +389,10 @@ export class FleetPoller {
     this.setTimeout = options.setTimeout || setTimeout;
     this.clearTimeout = options.clearTimeout || clearTimeout;
     this.onPoll = typeof options.onPoll === 'function' ? options.onPoll : null;
+    this.log = options.log || ((level, line) => console[level](line));
+    // One fixed-size summary per configured agent, shared by failures and
+    // fallback transitions. Never retain a growing set of failure reasons.
+    this.connectionLogs = new Map();
     this.records = new Map();
     this.tokens = new Map();
     this.streams = new Map();
@@ -459,6 +464,7 @@ export class FleetPoller {
       stream.controller?.abort();
     }
     this.streams.clear();
+    for (const name of this.connectionLogs.keys()) this._flushConnectionLog(name, true);
   }
 
   addAgent(agent) {
@@ -506,6 +512,7 @@ export class FleetPoller {
   }
 
   removeAgent(name) {
+    this._flushConnectionLog(name, true);
     this.agents = this.agents.filter(a => a.name !== name);
     this.agentGenerations.set(name, (this.agentGenerations.get(name) || 0) + 1);
     const stream = this.streams.get(name);
@@ -532,6 +539,51 @@ export class FleetPoller {
       count: agents.length,
       updated_at: nowIso(this.now())
     };
+  }
+
+  _logConnectionEvent(agent, kind, line, reason = null) {
+    if (!this._isCurrentAgent(agent)) return;
+    let state = this.connectionLogs.get(agent.name);
+    if (!state) {
+      state = { started: null, timer: null, failureSeen: false, fallbackSeen: false,
+        lastReason: null, failures: 0, starts: 0, stops: 0 };
+      this.connectionLogs.set(agent.name, state);
+    }
+    if (state.started !== null && this.now() - state.started >= CONNECTION_LOG_WINDOW_MS) {
+      this._flushConnectionLog(agent.name);
+    }
+    if (state.started === null) {
+      state.started = this.now();
+      state.timer = this.setTimeout(() => this._flushConnectionLog(agent.name), CONNECTION_LOG_WINDOW_MS);
+      state.timer.unref?.();
+    }
+    if (kind === 'failure') {
+      if (!state.failureSeen || state.lastReason !== reason) this.log('warn', line);
+      else state.failures++;
+      state.failureSeen = true;
+      state.lastReason = reason;
+    } else {
+      if (!state.fallbackSeen) this.log('log', line);
+      else if (kind === 'fallback-start') state.starts++;
+      else state.stops++;
+      state.fallbackSeen = true;
+    }
+  }
+
+  _flushConnectionLog(name, remove = false) {
+    const state = this.connectionLogs.get(name);
+    if (!state) return;
+    if (state.timer) this.clearTimeout(state.timer);
+    if (state.failures + state.starts + state.stops > 0) {
+      this.log('log', `[fleet] repeated connection events agent=${name} window_ms=${Math.max(0, this.now() - state.started)} sse_failure_repeats=${state.failures} fallback_started=${state.starts} fallback_stopped=${state.stops}`);
+    }
+    state.started = null;
+    state.timer = null;
+    state.failureSeen = false;
+    state.fallbackSeen = false;
+    state.lastReason = null;
+    state.failures = state.starts = state.stops = 0;
+    if (remove) this.connectionLogs.delete(name);
   }
 
   async getSessionToken(agentName, options = {}) {
@@ -859,7 +911,7 @@ export class FleetPoller {
         const reason = classifyError(err);
         this._startFallbackPolling(agent, 'sse-failure');
         const retryInMs = this._scheduleReconnect(agent);
-        console.warn(`[fleet] sse connect failed agent=${agent.name} reason=${reason} retry_in_ms=${retryInMs ?? 'none'}`);
+        this._logConnectionEvent(agent, 'failure', `[fleet] sse connect failed agent=${agent.name} reason=${reason} retry_in_ms=${retryInMs ?? 'none'}`, reason);
       })
       .finally(() => {
         if (this._isCurrentAgent(agent, generation, stream)) {
@@ -978,7 +1030,7 @@ export class FleetPoller {
     if (!this._isCurrentAgent(agent, generation)) return;
     const stream = this._streamState(agent);
     if (stream.pollTimer) return;
-    console.log(`[fleet] fallback polling started agent=${agent.name} trigger=${trigger}`);
+    this._logConnectionEvent(agent, 'fallback-start', `[fleet] fallback polling started agent=${agent.name} trigger=${trigger}`);
     const run = () => {
       if (!this.running || !this._isCurrentAgent(agent, generation, stream)) return;
       this._pollAgentAndNotify(agent).finally(() => {
@@ -997,7 +1049,7 @@ export class FleetPoller {
     if (!stream?.pollTimer) return;
     this.clearTimeout(stream.pollTimer);
     stream.pollTimer = null;
-    console.log(`[fleet] fallback polling stopped agent=${agent.name} trigger=${trigger}`);
+    this._logConnectionEvent(agent, 'fallback-stop', `[fleet] fallback polling stopped agent=${agent.name} trigger=${trigger}`);
   }
 
   _scheduleReconnect(agent) {

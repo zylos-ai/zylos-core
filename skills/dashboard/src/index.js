@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readThresholdPolicy, sessionThreshold } from './lib/session-threshold.js';
+import { createInstalledVersionReader } from './lib/installed-versions.js';
 import { CoreState } from './lib/core-state.js';
 import { loadCoreModule } from './lib/core-modules.js';
 import { RestartRequestStore } from '../../activity-monitor/scripts/restart-request-store.js';
@@ -109,34 +110,17 @@ const MEMORY_WRITE_BODY_MAX_BYTES = 2 * 1024 * 1024 + 64 * 1024;
 let zylosVersion = null;
 let ccInstalledVersion = null;
 let codexInstalledVersion = null;
-try {
-  zylosVersion = execFileSync('zylos', ['--version'], { timeout: 5000 }).toString().trim();
-} catch { /* zylos CLI not available */ }
-try {
-  const raw = execFileSync('claude', ['--version'], { timeout: 5000 }).toString().trim();
-  ccInstalledVersion = raw.replace(/\s.*$/, '');
-} catch { /* claude CLI not available */ }
-try {
-  const raw = execFileSync('codex', ['--version'], { timeout: 5000 }).toString().trim();
-  codexInstalledVersion = raw.replace(/^codex-cli\s+/, '').replace(/\s.*$/, '');
-} catch { /* codex CLI not available */ }
-
-function readInstalledVersions() {
-  try {
-    zylosVersion = execFileSync('zylos', ['--version'], { timeout: 5000 }).toString().trim();
-  } catch { /* ignore */ }
-  try {
-    const raw = execFileSync('claude', ['--version'], { timeout: 5000 }).toString().trim();
-    ccInstalledVersion = raw.replace(/\s.*$/, '');
-  } catch { /* ignore */ }
-  try {
-    const raw = execFileSync('codex', ['--version'], { timeout: 5000 }).toString().trim();
-    codexInstalledVersion = raw.replace(/^codex-cli\s+/, '').replace(/\s.*$/, '');
-  } catch { /* ignore */ }
+const installedVersionReader = createInstalledVersionReader();
+async function readInstalledVersions() {
+  const versions = await installedVersionReader();
+  zylosVersion = versions.zylos;
+  ccInstalledVersion = versions.claude;
+  codexInstalledVersion = versions.codex;
 }
+await readInstalledVersions();
 
-function refreshInstalledVersions() {
-  readInstalledVersions();
+async function refreshInstalledVersions() {
+  await readInstalledVersions();
   if (coreState?.getState()) {
     sse.broadcast('state_change', currentState());
     scheduleFleetStateBroadcast();
@@ -235,6 +219,19 @@ const usageTranscripts = new UsageTranscripts(store, config, {
 const conversationCollector = new ConversationCollector(store, config, { transcripts: usageTranscripts });
 const codexRolloutCollector = new CodexRolloutCollector(store, config, { transcripts: usageTranscripts });
 
+// Wrap the instance entry points, so timer and initial reads have the same
+// attribution, including synchronous continuations after async I/O.
+function timeMethod(target, method, name) {
+  const original = target[method].bind(target);
+  target[method] = (...args) => eventLoopMonitor.runTask(name, () => original(...args));
+}
+for (const [name, collector] of Object.entries({ pm2: pm2Collector, system: systemCollector,
+  statusline: statuslineCollector, conversation: conversationCollector, codexRollout: codexRolloutCollector })) {
+  timeMethod(collector, 'collect', `collector.${name}`);
+}
+timeMethod(coreState, 'refresh', 'core-state.refresh');
+timeMethod(coreLogImporter, 'poll', 'core-log.import');
+
 const collectors = { pm2: pm2Collector, system: systemCollector };
 if (statuslineCollector) collectors.statusline = statuslineCollector;
 if (conversationCollector) collectors.conversation = conversationCollector;
@@ -242,7 +239,7 @@ if (codexRolloutCollector) collectors.codexRollout = codexRolloutCollector;
 
 // SSE hub
 const sse = new SseHub(15_000);
-const scheduleHistoryBroadcast = createCoalescedBroadcast(() => sse.broadcast('history_changed', {}));
+const scheduleHistoryBroadcast = createCoalescedBroadcast(() => eventLoopMonitor.runTask('history.broadcast', () => sse.broadcast('history_changed', {})));
 let fleetPollerReady = false; // fleetPoller is declared later (TDZ guard)
 
 async function broadcastFleetState() {
@@ -257,7 +254,7 @@ async function broadcastFleetState() {
   }
 }
 
-const scheduleFleetStateBroadcast = createCoalescedBroadcast(broadcastFleetState);
+const scheduleFleetStateBroadcast = createCoalescedBroadcast(() => eventLoopMonitor.runTask('fleet.broadcast', broadcastFleetState));
 publishCoreStateChange = createCoreStateChangePublisher({ sse, buildStatePayload: buildApiStatePayload, scheduleFleetStateBroadcast });
 
 // 6b. Version checker (polls GitHub + npm registry every 12h)
@@ -269,6 +266,7 @@ const versionChecker = new VersionChecker({
     }
   },
 });
+timeMethod(versionChecker, 'check', 'versions.check-latest');
 versionChecker.start();
 
 function readClaudeSettings() {
@@ -277,13 +275,10 @@ function readClaudeSettings() {
   } catch { return {}; }
 }
 
-// Installed versions are cached at module load, refreshed by the periodic
-// timer below and after upgrade actions. They must NOT be re-read here:
-// buildRuntimeInfo runs on every state broadcast (i.e. every ingested hook
-// event), and the three `--version` execFileSync spawns cost ~200ms+ — the
-// dominant per-event hotspot behind the #260 event-loop wedge.
+// Installed versions are cached and refreshed asynchronously by the timer
+// and upgrade actions, never by the state broadcast path.
 const INSTALLED_VERSIONS_REFRESH_MS = 10 * 60 * 1000;
-setInterval(readInstalledVersions, INSTALLED_VERSIONS_REFRESH_MS).unref();
+setInterval(() => eventLoopMonitor.runTask('installed-versions.refresh', readInstalledVersions), INSTALLED_VERSIONS_REFRESH_MS).unref();
 
 function buildRuntimeInfo() {
   const live = coreState.getState();
@@ -360,7 +355,9 @@ function getSystemMetrics() {
   };
 }
 
-const getCachedCostAggregate = createSessionCache(() => metricResolver.resolveAggregated('cost') || {});
+// SQLite aggregation is synchronous on the Store connection; attributing it
+// here includes the real query time without pretending a Promise offloads it.
+const getCachedCostAggregate = createSessionCache(() => eventLoopMonitor.runTask('cost.aggregate', () => metricResolver.resolveAggregated('cost') || {}));
 
 function getCostTiers() {
   const aggregate = getCachedCostAggregate(coreState.costKey);
@@ -378,6 +375,9 @@ const stateEngine = new StateEngine(store, collectors, config, {
     scheduleFleetStateBroadcast();
   }
 });
+
+timeMethod(stateEngine, '_periodicSnapshot', 'state.snapshot');
+timeMethod(stateEngine, '_readAMHeartbeat', 'state.heartbeat');
 
 observerService.historyService = new HistoryService({ config, store, stateEngine });
 
@@ -576,6 +576,11 @@ function broadcastFleet(remoteFleet, statePayload) {
 }
 
 const fleetPoller = new FleetPoller(config, { onPoll: broadcastFleet });
+for (const [method, name] of [
+  ['pollOnce', 'fleet.poll'], ['_pollAgentAndNotify', 'fleet.fallback-poll'],
+  ['_probeAgentLatency', 'fleet.latency-probe'], ['_connectSse', 'fleet.sse-connect'],
+  ['_checkSelfHeal', 'fleet.watchdog'],
+]) timeMethod(fleetPoller, method, name);
 fleetPollerReady = true;
 const RESERVED_FLEET_AGENT_NAMES = new Set(['test']);
 
@@ -1749,6 +1754,7 @@ export function createServer() {
   // The conversation page's live area reads the same group row as its header, so both agree on whether it works.
   const chatActivity = new ChatActivity({ history, store, working: snapshotWorking(workbench, { origin: ORIGIN }) });
   const chatObserver = new ChatChangeObserver({ c4Reader, history });
+  timeMethod(chatObserver, '_sample', 'chat.observe');
   const rootDir = publicDir();
   const fleetProxy = new FleetProxy({ config, rootDir, poller: fleetPoller, authGate: auth });
 
@@ -1848,7 +1854,7 @@ export function createServer() {
         zylosConfig.zylosDir = config.zylosDir;
         const result = await handleAction(action, body, zylosConfig);
         if (result.ok && (action === 'upgrade-cc' || action === 'upgrade-zylos')) {
-          refreshInstalledVersions();
+          eventLoopMonitor.runTask('installed-versions.refresh', refreshInstalledVersions);
         }
         sendJson(res, result.ok ? 200 : 400, result);
         return;
@@ -1990,14 +1996,14 @@ export function createServer() {
     });
   };
   collect();
-  const attachmentTimer = setInterval(collect, 5 * 60 * 1000);
+  const attachmentTimer = setInterval(() => eventLoopMonitor.runTask('attachments.gc', collect), 5 * 60 * 1000);
   attachmentTimer.unref();
   const reconcileNames = () => {
     try { reconcileConversationNames({ store, c4Reader }); }
     catch { console.error('[chat] Conversation naming reconciliation remains pending.'); }
   };
   reconcileNames();
-  const namingTimer = setInterval(reconcileNames, 30000);
+  const namingTimer = setInterval(() => eventLoopMonitor.runTask('conversation.naming', reconcileNames), 30000);
   namingTimer.unref();
   let attachmentClose = null;
   server.closeAttachments = () => {
@@ -2096,9 +2102,9 @@ if (isMain && process.argv.includes('--smoke')) {
         let lastConversionDate = null;
         retentionTimer = setInterval(() => {
           if (retentionRun || retentionAbort.signal.aborted) return;
-          retentionRun = runMetricMaintenance(store, {
+          retentionRun = eventLoopMonitor.runTask('metrics.retention', () => runMetricMaintenance(store, {
             lastConversionDate, signal: retentionAbort.signal,
-          }).then((result) => {
+          })).then((result) => {
             lastConversionDate = result.lastConversionDate;
           }).catch((err) => {
             process.stderr.write(`[retention] Error: ${err.message}\n`);
@@ -2146,6 +2152,7 @@ if (isMain && process.argv.includes('--smoke')) {
       }
       await coreLogImporter.stop();
       await server.closeAttachments();
+      eventLoopMonitor.stop();
       c4Reader.close();
       store.close();
       process.exit(exitCode);

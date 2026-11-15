@@ -1,4 +1,5 @@
-import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
+import { TaskTiming } from './task-timing.js';
 
 const DEFAULT_SAMPLE_INTERVAL_MS = 5_000;
 const DEFAULT_BLOCK_WARN_MS = 1_000;
@@ -9,17 +10,24 @@ const WINDOW_SAMPLES = 12; // rolling worst-of ~1 minute at the default interval
 // that state measurable from /api/health and loggable as it happens, instead
 // of being diagnosed blind after a restart.
 export class EventLoopMonitor {
-  constructor({ sampleIntervalMs, blockWarnMs, log } = {}) {
+  constructor({ sampleIntervalMs, blockWarnMs, log, now = () => performance.now(), histogram, taskTiming } = {}) {
     this.sampleIntervalMs = sampleIntervalMs ?? DEFAULT_SAMPLE_INTERVAL_MS;
     this.blockWarnMs = blockWarnMs ?? DEFAULT_BLOCK_WARN_MS;
     this.log = log || ((line) => process.stderr.write(line));
-    this.histogram = monitorEventLoopDelay({ resolution: 20 });
+    this.now = now;
+    this.histogram = histogram ?? monitorEventLoopDelay({ resolution: 20 });
+    this.taskTiming = taskTiming ?? new TaskTiming({ now });
+    this.windowStarted = this.now();
     this.last = null;
     this.recentMax = [];
     this.timer = null;
   }
 
   start() {
+    if (this.timer) return this;
+    this.windowStarted = this.now();
+    this.taskTiming.drain(this.windowStarted);
+    this.taskTiming.start();
     this.histogram.enable();
     this.timer = setInterval(() => this.sample(), this.sampleIntervalMs);
     this.timer.unref();
@@ -30,22 +38,32 @@ export class EventLoopMonitor {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.histogram.disable();
+    this.taskTiming.stop();
+  }
+
+  runTask(name, fn) {
+    return this.taskTiming.run(name, fn);
   }
 
   sample() {
+    const sampledAt = this.now();
     const toMs = (ns) => Math.round(ns / 1e6 * 10) / 10;
     const snapshot = {
       p50_ms: toMs(this.histogram.percentile(50)),
       p99_ms: toMs(this.histogram.percentile(99)),
       max_ms: toMs(this.histogram.max),
-      sampled_at: new Date().toISOString()
+      sampled_at: new Date().toISOString(),
+      window_ms: Math.round((sampledAt - this.windowStarted) * 10) / 10,
+      longest_tasks: this.taskTiming.drain(sampledAt)
     };
+    this.windowStarted = sampledAt;
     this.histogram.reset();
     this.last = snapshot;
     this.recentMax.push(snapshot.max_ms);
     if (this.recentMax.length > WINDOW_SAMPLES) this.recentMax.shift();
     if (snapshot.max_ms >= this.blockWarnMs) {
-      this.log(`[event-loop] blocked ~${snapshot.max_ms}ms in the last ${this.sampleIntervalMs}ms window (p99 ${snapshot.p99_ms}ms)\n`);
+      const tasks = snapshot.longest_tasks.map(task => `${task.name} ${task.max_ms}ms sync (${task.total_ms}ms total)`).join(', ');
+      this.log(`[event-loop] blocked ~${snapshot.max_ms}ms in the last ${snapshot.window_ms}ms window (p99 ${snapshot.p99_ms}ms); longest tasks: ${tasks || 'none attributed'}\n`);
     }
     return snapshot;
   }

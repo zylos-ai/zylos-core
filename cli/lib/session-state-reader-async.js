@@ -70,8 +70,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
     if (typeof resolve !== 'function') throw Object.assign(new Error('Session launch configuration resolver is unavailable'), { code: 'DEPENDENCY_UNAVAILABLE' });
     return (await resolve({ sessionGroup, sessionMode: sessionGroup === null ? 'single' : 'multi' })).runtime;
   }
-  async function readAccountUsage(runtime, options) {
-    const { allowRecorded = false } = options ?? {};
+  async function readAccountSamples(runtime) {
     if (!['claude','codex'].includes(runtime)) throw new TypeError('Unknown runtime');
     const samples = [];
     for (const { sessionGroup } of await listSessions(connectionOptions)) {
@@ -89,8 +88,18 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
       if (candidate) samples.push(candidate);
     }
     samples.sort((a, b) => b.mtime - a.mtime);
-    if (!allowRecorded) return samples[0]?.value ?? null;
+    return samples;
+  }
+  async function readAccountUsage(runtime, options) {
+    const samples = await readAccountSamples(runtime);
+    if (!options?.allowRecorded) return samples[0]?.value ?? null;
     return readRecordedAccountUsage(runtime, env, now(), samples);
   }
-  return { readLiveIdentity, readSessionState, resolveTargetRuntime, readCodexUsageSample, readAccountUsage };
+  /** Dashboard shares one identity-validated scan for both selection policies. */
+  async function readAccountUsageSnapshot(runtime) {
+    const samples = await readAccountSamples(runtime);
+    return { live: samples[0]?.value ?? null,
+      recorded: readRecordedAccountUsage(runtime, env, now(), samples) };
+  }
+  return { readLiveIdentity, readSessionState, resolveTargetRuntime, readCodexUsageSample, readAccountUsage, readAccountUsageSnapshot };
 }

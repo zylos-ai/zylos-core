@@ -78,7 +78,7 @@ test('default loader follows Core mode for single and multi observations rather 
   fs.mkdirSync(path.join(pkg, 'cli/lib'), { recursive: true });
   fs.writeFileSync(path.join(pkg, 'package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(pkg, 'cli/lib/config.js'), 'export const state={mode:"single"};export function readSessionMode(){return state;}');
-  fs.writeFileSync(path.join(pkg, 'cli/lib/session-state-reader.js'), `export const calls=[],accountCalls=[];export const state={runtime:'claude',targetRuntime:'codex'};export function resolveTargetRuntime(){return state.targetRuntime;}export async function readSessionState(group, options){calls.push({group,options});return {identity:{present:true,runtime:state.runtime},usage:{valid:false,reason:'missing'}};}export async function readAccountUsage(runtime){accountCalls.push(runtime);return {sample:runtime};}`);
+  fs.writeFileSync(path.join(pkg, 'cli/lib/session-state-reader.js'), `export const calls=[],accountCalls=[];export const state={runtime:'claude',targetRuntime:'codex'};export function resolveTargetRuntime(){return state.targetRuntime;}export async function readSessionState(group, options){calls.push({group,options});return {identity:{present:true,runtime:state.runtime},usage:{valid:false,reason:'missing'}};}export async function readAccountUsageSnapshot(runtime){accountCalls.push(runtime);return {live:{sample:runtime}};}`);
   const prior = process.env.ZYLOS_PACKAGE_ROOT;
   process.env.ZYLOS_PACKAGE_ROOT = pkg;
   t.after(() => { if (prior === undefined) delete process.env.ZYLOS_PACKAGE_ROOT; else process.env.ZYLOS_PACKAGE_ROOT = prior; });
@@ -168,7 +168,7 @@ for (const failure of [false, true]) test(`Core package resolution ${failure ? '
   fs.mkdirSync(lib, { recursive: true });
   fs.writeFileSync(path.join(f.root, 'core', 'package.json'), '{"type":"module"}');
   fs.writeFileSync(path.join(lib, 'config.js'), 'export function readSessionMode(){return {mode:"multi"}}');
-  fs.writeFileSync(path.join(lib, 'session-state-reader.js'), `export function resolveTargetRuntime(){return 'claude';} export async function readSessionState(){return {identity:{runtime:'claude'},usage:{valid:false,reason:'missing'}}} export async function readAccountUsage(){return {five_hour:{used_percentage:42}}}`);
+  fs.writeFileSync(path.join(lib, 'session-state-reader.js'), `export function resolveTargetRuntime(){return 'claude';} export async function readSessionState(){return {identity:{runtime:'claude'},usage:{valid:false,reason:'missing'}}} export async function readAccountUsageSnapshot(){return {live:{five_hour:{used_percentage:42}}}}`);
   let calls = 0, unavailable = failure;
   t.mock.module('../../comm-bridge/scripts/core-config-loader.js', { namedExports: {
     resolveCoreConfigModule() { calls++; if (unavailable) throw new Error('unavailable'); return path.join(lib, 'config.js'); }
@@ -265,4 +265,26 @@ test('sleeping Origin retains target Codex account samples from another ready gr
   ready = false;
   await collector.collect();
   assert.deepEqual(collector.getAccountUsage(), { runtime: 'codex', value: null });
+});
+
+
+test('unchanged healthy and stale samples do not rewrite source health, transitions still write', async t => {
+  const f = fixture(t); f.write();
+  await f.collector.collect();
+  const firstWrites = f.health.length;
+  for (let i = 0; i < 10; i++) await f.collector.collect();
+  assert.equal(f.health.length, firstWrites);
+  f.identity.present = false;
+  await f.collector.collect();
+  assert.equal(f.health.length, firstWrites + 1);
+  for (let i = 0; i < 10; i++) await f.collector.collect();
+  assert.equal(f.health.length, firstWrites + 1);
+  f.identity.present = true;
+  await f.collector.collect();
+  assert.equal(f.health.length, firstWrites + 2);
+  assert.equal(f.health.at(-1)[2], 'healthy');
+  f.sample.zylos.capturedAt += 1;
+  f.write();
+  await f.collector.collect();
+  assert.equal(f.health.length, firstWrites + 4, 'a new sample advances liveness and progress evidence');
 });

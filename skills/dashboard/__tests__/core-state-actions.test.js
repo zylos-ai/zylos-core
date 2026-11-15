@@ -77,10 +77,9 @@ test('Core state enforces readiness, freshness and runtime-specific account usag
     readLiveIdentity: async () => structuredClone(observation.identity),
     resolveTargetRuntime: async () => 'codex',
     readRuntimeHealth: () => ({ health: 'ok' }),
-    readAccountUsage: async (runtime, options) => {
-      assert.deepEqual(options, { allowRecorded: true });
+    readAccountUsageSnapshot: async runtime => {
       calls.push({ type: 'account', runtime });
-      return { value: runtime === 'codex' ? { five_hour: { used_percentage: 23 } } : { five_hour: { used_percentage: 91 } }, live: true, recordedAt: Date.now() };
+      return { recorded: { value: runtime === 'codex' ? { five_hour: { used_percentage: 23 } } : { five_hour: { used_percentage: 91 } }, live: true, recordedAt: Date.now() } };
     },
   };
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {

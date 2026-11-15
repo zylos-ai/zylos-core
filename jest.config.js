@@ -1,6 +1,7 @@
 export default {
   transform: {},
   testPathIgnorePatterns: [
+    '<rootDir>/test/account-usage-cache.integration.test.js',
     '<rootDir>/test/account-quota-browser.test.js',
     '<rootDir>/test/dashboard-initial-timezone.integration.test.js',
     '<rootDir>/test/skill-command-arguments.test.js',

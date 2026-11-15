@@ -1,3 +1,4 @@
+import { AccountUsageCache } from '../src/lib/account-usage-cache.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -51,8 +52,8 @@ test('Core state reads Origin facts only for absence or authentication and reads
     readLiveIdentity: async () => ({ present: true, ready: true, runtime: 'codex', runId: 'other-run', sessionId: 'other-session' }),
     resolveTargetRuntime: async group => { assert.equal(group, mode === 'multi' ? 'origin' : null); return targetRuntime; },
     readRuntimeHealth: async runtime => { assert.equal(runtime, targetRuntime); return health; },
-    readAccountUsage: async (runtime, options) => { assert.deepEqual(options, { allowRecorded: true }); accountCalls.push(runtime); return accountAvailable && runtime === 'codex'
-      ? { value: { fiveHour: { usedPercentage: 37 }, sevenDay: { usedPercentage: 61 } }, live: accountLive, recordedAt: 1000 } : null; },
+    readAccountUsageSnapshot: async runtime => { accountCalls.push(runtime); return { recorded: accountAvailable && runtime === 'codex'
+      ? { value: { fiveHour: { usedPercentage: 37 }, sevenDay: { usedPercentage: 61 } }, live: accountLive, recordedAt: 1000 } : null }; },
   };
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode }) };
@@ -64,7 +65,7 @@ test('Core state reads Origin facts only for absence or authentication and reads
     assert.fail(`Unexpected core module ${name}`);
   } } });
   const { CoreState } = await import(`../src/lib/core-state.js?origin-facts=${Date.now()}`);
-  const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
+  const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }), zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
   assert.equal((await core.refresh()).state, 'SLEEPING');
   assert.deepEqual(accountCalls, ['codex']);
   assert.equal(core.accountUsage.fiveHour.usedPercentage, 37);
@@ -129,13 +130,13 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
     if (name === 'session-state-reader.js') return {
       readSessionState: async () => live(),
-      readAccountUsage: async () => structuredClone(record),
+      readAccountUsageSnapshot: async () => ({ recorded: structuredClone(record) }),
     };
     if (name === 'session-group-paths.js') return {};
     assert.fail(`Unexpected core module ${name}`);
   } } });
   const { CoreState } = await import(`../src/lib/core-state.js?quota-notifications=${Date.now()}`);
-  const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
+  const core = new CoreState({ accountUsageCache: new AccountUsageCache({ ttlMs: 0 }), zylosDir: process.env.ZYLOS_DIR, onChange: () => { changes++; } });
   await core.refresh();
   assert.equal(changes, 1);
   record.recordedAt = 2000;

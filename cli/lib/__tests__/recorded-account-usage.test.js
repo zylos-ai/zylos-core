@@ -415,3 +415,23 @@ test('the supplied proxy sample shape supersedes its sleeping subscription recor
     listSessions: async () => [{ sessionGroup: 'origin' }], open: async () => ({ close: async () => {} }), observe: async () => f.identity });
   assert.equal(await reader.readAccountUsage('claude', { allowRecorded: true }), null);
 });
+
+
+test('account snapshot shares a single live scan while preserving both selection policies', async t => {
+  const f = fixture(t);
+  const a = f.status('origin', 7, now - 5000), b = f.status('other', 12, now - 10000);
+  fs.utimesSync(a, 100, 100); fs.utimesSync(b, 200, 200);
+  f.setLive(['origin', 'other']);
+  const snapshot = await f.reader.readAccountUsageSnapshot('claude');
+  assert.deepEqual(f.counts(), [2, 2]);
+  assert.equal(snapshot.live.seven_day.used_percentage, 12);
+  assert.deepEqual(snapshot.recorded, {
+    value: { seven_day: { used_percentage: 7, resets_at: reset } },
+    recordedAt: now - 5000, live: true,
+  });
+  f.setLive([]);
+  const reclaimed = await f.reader.readAccountUsageSnapshot('claude');
+  assert.equal(reclaimed.live, null);
+  assert.equal(reclaimed.recorded.live, false);
+  assert.equal(reclaimed.recorded.recordedAt, now - 5000);
+});
