@@ -17,7 +17,11 @@
   --wb-quota-fill-lightness: 45%;
   --wb-quota-outline: inset 0 0 0 1px var(--text);
   --wb-off: color-mix(in srgb, var(--text) 14%, transparent);
-  --wb-h: 32px;
+  --wb-control-compact: 26px;
+  --wb-control-regular: 30px;
+  --wb-control-touch: 36px;
+  --wb-control-large: 36px;
+  --wb-h: var(--wb-control-regular);
   --wb-r: 8px;
   /* Set from the measured header (wb/header-fit.js); 48px until the first measurement. */
   --wb-header-h: var(--wb-header-measured, 48px);
@@ -138,21 +142,21 @@
 .wb-txt-err { color: var(--wb-err); }
 
 /* ─── Controls ─── */
-.wb-btn { height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font-size: 12.5px; font-weight: 550; white-space: nowrap; cursor: pointer; transition: background .14s, border-color .14s; }
+.wb-btn { height: var(--wb-h); display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text); font-size: 12.5px; font-weight: 550; white-space: nowrap; cursor: pointer; transition: background .14s, border-color .14s; }
 .wb-btn:hover:not(:disabled) { background: var(--wb-hover); }
 .wb-btn:disabled { opacity: .5; cursor: not-allowed; }
 .wb-btn[hidden], .wb-icon-btn[hidden] { display: none; }
-.wb-btn-sm { height: 26px; padding: 0 9px; font-size: 12px; }
+.wb-btn-sm { height: var(--wb-control-compact); padding: 0 9px; font-size: 12px; }
 .wb-btn-primary { background: var(--c-primary); border-color: var(--c-primary); color: var(--c-on-fill); }
 .wb-btn-primary:hover:not(:disabled) { background: var(--c-primary-hover); border-color: var(--c-primary-hover); }
 .wb-btn-primary:active:not(:disabled) { background: var(--c-primary-press); border-color: var(--c-primary-press); }
 .wb-btn-danger { background: var(--c-danger); border-color: var(--c-danger); color: var(--c-on-fill); }
 .wb-btn-danger:hover:not(:disabled) { background: var(--c-danger-hover); border-color: var(--c-danger-hover); }
 .wb-btn-danger:active:not(:disabled) { background: var(--c-danger-press); border-color: var(--c-danger-press); }
-.wb-icon-btn { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); cursor: pointer; transition: background .14s, color .14s; }
+.wb-icon-btn { width: var(--wb-h); height: var(--wb-h); flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid transparent; border-radius: var(--wb-r); background: transparent; color: var(--text-dim); cursor: pointer; transition: background .14s, color .14s; }
 .wb-icon-btn:hover:not(:disabled) { background: var(--wb-hover); color: var(--text); }
 .wb-icon-btn:disabled { opacity: .38; cursor: not-allowed; }
-.wb-icon-btn-sm { width: 24px; height: 24px; }
+.wb-icon-btn-sm { width: var(--wb-control-compact); height: var(--wb-control-compact); }
 .wb-act-label { display: none; }
 .wb-link-btn { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12.5px; cursor: pointer; }
 .wb-link-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -164,7 +168,7 @@
 .wb-input:focus, .wb-cfg-edit input:focus, .wb-cfg-edit select:focus { outline: 2px solid var(--wb-accent-line); border-color: var(--accent); }
 #settings-hot-ttl-source { white-space: pre-line; }
 #settings-hot-ttl-minutes:disabled { background: var(--wb-hover); color: var(--text-muted); -webkit-text-fill-color: var(--text-muted); border-style: dashed; cursor: not-allowed; opacity: 1; }
-.wb-seg-sm { display: inline-flex; vertical-align: middle; }
+.wb-seg-sm { display: inline-flex; height: var(--wb-control-compact); vertical-align: middle; }
 .wb-seg-sm button { font-size: 11px; line-height: 18px; padding: 0 8px; cursor: pointer; white-space: nowrap; }
 .wb-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; color: var(--text-dim); border: 1px solid var(--wb-line-strong); border-radius: 5px; padding: 0 6px; line-height: 18px; white-space: nowrap; }
 /* Text in every button, segment, tab, tag and pill sits in the middle of its box: flex centring and one line
@@ -195,11 +199,11 @@
 .app-header .tab[hidden] { display: none; }
 body:has(#agent-detail[hidden]) .app-header .tab-bar { visibility: hidden; }
 .app-header .header-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
-.app-header .header-icon-btn { width: 32px; min-width: 32px; height: 32px; padding: 0; border-color: transparent; background: transparent; color: var(--text-dim); }
+.app-header .header-icon-btn { width: var(--wb-h); min-width: var(--wb-h); height: var(--wb-h); padding: 0; border-color: transparent; background: transparent; color: var(--text-dim); }
 .app-header .header-icon-btn:hover { background: var(--wb-hover); border-color: transparent; color: var(--text); }
 #wb-theme-toggle .wb-theme-sun, :root[data-theme="dark"] #wb-theme-toggle .wb-theme-moon { display: none; }
 :root[data-theme="dark"] #wb-theme-toggle .wb-theme-sun { display: inline-block; }
-.wb-tech-btn { height: 28px; display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: 999px; background: var(--wb-panel); color: var(--text-dim); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.wb-tech-btn { height: var(--wb-h); display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: 999px; background: var(--wb-panel); color: var(--text-dim); font-size: 12px; white-space: nowrap; cursor: pointer; }
 .wb-tech-btn i { position: relative; width: 22px; height: 12px; border-radius: 999px; background: var(--wb-line-strong); transition: background .15s; }
 .wb-tech-btn i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%; background: var(--wb-panel); transition: left .15s; }
 html[data-detail=technical] .wb-tech-btn { color: var(--text); }
@@ -297,9 +301,9 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-bh-now { justify-content: space-between; }
 .wb-bh-now > span, .wb-bh-state { white-space: nowrap; }
 .wb-bh-strip { justify-content: space-between; }
-.wb-search { height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text-muted); cursor: text; }
+.wb-search { height: var(--wb-control-compact); display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--wb-line-strong); border-radius: var(--wb-r); background: var(--wb-panel); color: var(--text-muted); cursor: text; }
 .wb-search:focus-within { border-color: var(--accent); outline: 2px solid var(--wb-accent-line); }
-.wb-search input { width: 130px; min-width: 0; border: 0; outline: 0; padding: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; letter-spacing: 0; }
+.wb-search input { height: 100%; min-height: 0; width: 130px; min-width: 0; border: 0; outline: 0; padding: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; letter-spacing: 0; }
 /* The auto-name button may wrap, but only between words: keep-all keeps "自动起名" whole, English breaks at spaces. */
 #wb-auto-name { font-size: 12px; letter-spacing: 0; word-break: keep-all; }
 .wb-row { position: relative; width: 100%; min-height: 58px; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--wb-line); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background .14s; }
@@ -395,8 +399,8 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 .wb-d-title { margin: 0; min-width: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wb-d-acts { display: flex; gap: 2px; }
 .wb-d-sub { display: contents; }
-.wb-d-acts .wb-icon-btn { width: 28px; height: 28px; }
-.wb-d-acts .wb-d-conv { height: 28px; margin-right: 4px; padding: 0 10px; }
+.wb-d-acts .wb-icon-btn { width: var(--wb-h); height: var(--wb-h); }
+.wb-d-acts .wb-d-conv { height: var(--wb-h); margin-right: 4px; padding: 0 10px; }
 /* Group detail: row one is icon, name, state and close; row two is the actions, starting at the icon's left edge. */
 .wb-group-head .wb-d-top:has(> .wb-d-sub) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 8px; }
 .wb-group-head .wb-d-top:has(> .wb-d-sub) > :last-child { grid-column: 4; grid-row: 1; }
@@ -485,8 +489,8 @@ html[data-detail=plain] .wb-tech-col { display: none; }
 /* Timeline */
 .wb-timeline-filters { position: sticky; top: 0; z-index: 2; padding: 10px 18px 8px; border-bottom: 1px solid var(--wb-line); background: var(--wb-side); }
 .wb-timeline-filters .wb-note { margin: 6px 0 0; }
-.wb-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.wb-chip { height: 26px; padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: 13px; background: var(--wb-panel); color: var(--text-dim); font-size: 12px; cursor: pointer; }
+.wb-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wb-chip { height: var(--wb-control-compact); padding: 0 10px; border: 1px solid var(--wb-line-strong); border-radius: 13px; background: var(--wb-panel); color: var(--text-dim); font-size: 12px; cursor: pointer; }
 .wb-chip[aria-pressed="true"] { border-color: var(--wb-accent-line); background: var(--wb-accent-soft); color: var(--accent); }
 .wb-timeline-run { padding: 6px 18px; }
 .wb-run-h { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 0; border: 0; border-bottom: 1px solid var(--wb-line); background: transparent; color: var(--text-dim); font-size: 12px; text-align: left; cursor: pointer; }
@@ -610,7 +614,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-d-top > .wb-d-sub { grid-column: 2 / -1; grid-row: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
   .wb-d-sub > .wb-d-acts { flex-wrap: wrap; gap: 6px; }
   /* Phones: the group's name has the first row beside the close button and may take two lines. The second row
-     holds the state, the conversation button (the main action, with its label) and the other actions as 40px
+     holds the state, the conversation button (the main action, with its label) and the other actions as 36px
      icons, named for screen readers as on desktop, so no label is cut in either language. */
   .wb-group-head .wb-d-top:has(> .wb-d-sub) { grid-template-columns: auto minmax(0, 1fr) auto; }
   .wb-group-head .wb-d-top:has(> .wb-d-sub) > :last-child { grid-column: 3; }
@@ -621,7 +625,7 @@ html[data-detail=plain] #observer-tab { display: none!important; }
   .wb-group-head .wb-d-sub > .wb-d-acts { flex: 1 1 auto; flex-wrap: nowrap; gap: 6px; min-width: 0; }
   .wb-group-head .wb-d-acts > * { height: 40px; }
   .wb-group-head .wb-d-acts > .wb-d-conv { flex: 1 1 auto; min-width: 0; padding: 0 10px; }
-  .wb-group-head .wb-d-acts > .wb-act { flex: none; width: 40px; padding: 0; }
+  .wb-group-head .wb-d-acts > .wb-act { flex: none; width: var(--wb-control-touch); padding: 0; }
   .wb-group-head .wb-d-acts .wb-act-label { display: none; }
   .wb-group-head .wb-d-acts .wb-conv-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wb-detail-meta .wb-mono { overflow-wrap: anywhere; }
@@ -770,7 +774,7 @@ button.wb-sched-target:hover { text-decoration: underline; text-underline-offset
 .wb-sched-form { display: grid; gap: 14px; padding: 16px 18px 24px; }
 .wb-sched-field { display: grid; gap: 6px; min-width: 0; }
 .wb-sched-label { color: var(--text-dim); font-size: 12.5px; font-weight: 550; }
-.wb-sched-field .wb-input { width: 100%; height: 34px; font-size: 13px; }
+.wb-sched-field .wb-input { width: 100%; height: var(--wb-control-large); font-size: 13px; }
 .wb-sched-field .wb-select-wrap { width: 100%; }
 .wb-sched-field textarea.wb-input { height: auto; min-height: 120px; padding: 8px 10px; line-height: 1.55; resize: vertical; }
 .wb-sched-kind { width: max-content; }
@@ -1169,7 +1173,7 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-set-card-h h4 .wb-ico { color: var(--text-dim); }
 .wb-set-card-sub { color: var(--text-muted); font-size: 12px; }
 .wb-set-card-sub[hidden] { display: none; }
-.wb-set-card-acts { display: inline-flex; gap: 6px; margin-left: auto; }
+.wb-set-card-acts { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .wb-set-card-acts:empty { display: none; }
 .wb-set-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13px; }
 .wb-set-inline[hidden] { display: none; }
@@ -1204,6 +1208,10 @@ main:has(> #tab-settings.active) { padding: 0; }
 .wb-seg2.wb-seg-engine { height: auto; }
 .wb-seg-engine button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; min-height: var(--wb-h); padding: 7px 16px; line-height: 1.2; text-align: left; }
 .wb-seg-engine .wb-login { font-size: 11.5px; font-weight: 400; line-height: 1.2; }
+@media (min-width: 761px) {
+  #settings-current-runtime .wb-set-inline:has(> .wb-seg-engine) { align-items: stretch; }
+  #settings-current-runtime :is(#settings-save-runtime, #settings-undo-runtime) { height: auto; }
+}
 .wb-login-unavailable { color: var(--wb-err); }
 .wb-login-unavailable .wb-hdot { background: var(--wb-err); }
 .wb-login-unknown .wb-hdot { background: var(--wb-off); }
@@ -1498,20 +1506,41 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   .wb-page-h.agent-fleet-head { align-items: flex-start; }
 }
 
-/* ─── Phones: everything a finger taps is at least 40px; icon-only buttons are 40px square ───
+/* Same-row controls share a size tier; segmented sizes always describe the rail,
+   leaving its existing 2px inset for the selected surface. */
+:is(.wb-seg, .wb-seg2, .wb-seg-sm) { align-items: stretch; }
+:is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > button { height: 100%; min-height: 0; }
+.wb-bh { align-items: center; }
+:is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-compact); align-items: center; }
+:is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) :is(.wb-input, input, select, .wb-btn-sm, .wb-link-btn) { height: var(--wb-h); }
+.wb-d-title-wrap > .wb-icon-btn-sm { width: var(--wb-h); height: var(--wb-h); }
+.wb-timezone-controls .wb-select, .wb-timezone-controls .wb-btn, .wb-timezone-pending .wb-btn { min-height: var(--wb-h); }
+#wb-auto-name { height: var(--wb-control-compact); }
+#settings-price-show-all { height: var(--wb-h); }
+
+/* ─── Phones: ordinary single-line interaction frames use 36px ───
    (The settings drawer's section rows and its opening button set their own 44px minimum.) */
 .memory-back { display: none; }
 @media (max-width: 760px) {
   :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
-    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden])):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: 40px; }
+    :is(button, select, summary, a.wb-btn, input:not([type=checkbox], [type=radio], [type=range], [type=hidden], .wb-search input)):not(.wb-vh, .wb-switch-btn, .wb-sched-dot, .wb-set-nav-btn, .wb-set-drawer-btn) { min-height: var(--wb-control-touch); }
   /* A short label ("Edit" in English) must not leave a labelled button narrower than a fingertip either. */
-  :is(.app-header .header-icon-btn, .wb-icon-btn, .memory-head .memory-refresh, .wb-btn) { min-width: 40px; }
+  .wb-btn { min-width: 40px; }
+  :where(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side) .wb-icon-btn { width: var(--wb-control-touch); min-width: var(--wb-control-touch); }
+  .memory-head .memory-refresh { width: var(--wb-control-touch); }
   .wb-switch-l { min-height: 40px; }
-  /* A search box is the control a finger sees: it grows to hold its 40px input and its own 1px border rather than
-     letting the input stick out. */
-  .wb-search { min-height: 42px; }
-  /* Segmented controls grow with their 40px buttons instead of clipping them. */
+  /* Measure the search outer frame once; its input fits inside the border. */
+  .wb-search { min-height: var(--wb-control-touch); }
+  /* Multiline engine options retain their content-driven height. */
   :is(.wb-seg, .wb-seg2) { height: auto; }
+  :is(.wb-btn-sm, .wb-icon-btn-sm, .wb-search, .wb-input, .wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) { height: var(--wb-control-touch); }
+  :is(.wb-name-editor, .wb-cfg-controls, .wb-cfg-more) { --wb-h: var(--wb-control-touch); }
+  :is(.app-header, #fleet-view, #tab-overview, #tab-memory, #tab-observer, #tab-trends, #tab-schedule, #tab-settings, .wb-modal, .wb-group-side)
+    :is(.wb-seg, .wb-seg2, .wb-seg-sm):not(.wb-seg-engine) > :is(button, .wb-btn) { height: 100%; min-height: 0; }
+  .wb-date-native { min-height: 0; }
+  #wb-auto-name { height: var(--wb-control-touch); }
+  .app-header .header-icon-btn { width: 44px; min-width: 44px; min-height: 44px; }
+  .wb-group-head .wb-d-acts > * { height: var(--wb-control-touch); }
   /* Switch-style buttons keep their 36×20 look inside a transparent 40px frame. */
   .fleet-sound-toggle.wb-switch-btn { box-sizing: content-box; border: 10px solid transparent; background-clip: padding-box; }
   .fleet-sound-toggle.wb-switch-btn:hover { border: 10px solid transparent; }
@@ -1537,7 +1566,7 @@ html[data-detail=plain] .wb-tech, html[data-detail=technical] .wb-plain { displa
   #tab-memory.memory-file-open .memory-content { padding: 12px 12px 24px; }
   /* The open file's header stays compact: back, path and scope on one row; view mode and editing on the next. */
   #tab-memory.memory-file-open .memory-viewer-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; padding: 8px 12px 10px; }
-  #tab-memory.memory-file-open .memory-back { grid-column: 1; grid-row: 1; align-self: center; width: 40px; padding: 0; justify-content: center; }
+  #tab-memory.memory-file-open .memory-back { grid-column: 1; grid-row: 1; align-self: center; width: var(--wb-control-touch); min-width: var(--wb-control-touch); padding: 0; justify-content: center; }
   .memory-back > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   #tab-memory.memory-file-open .memory-viewer-title { grid-column: 2; grid-row: 1; }
   #tab-memory.memory-file-open .memory-viewer-actions { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: wrap; justify-content: flex-end; }

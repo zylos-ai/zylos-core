@@ -50,7 +50,7 @@ export async function startPage(sandbox) {
   return { base, actions, unserved, reads };
 }
 
-// Tappable controls narrower or shorter than 40px, the document width, and where the
+// Tappable controls narrower or shorter than 36px, the document width, and where the
 // rows this case checks sit on the screen. A checkbox or radio is measured by its label.
 function measure() {
   const visible = node => {
@@ -61,11 +61,12 @@ function measure() {
   };
   const small = [], seen = new Set();
   for (const control of document.querySelectorAll('button, a[href], summary, select, input:not([type=hidden]), textarea, [role=button], [role=tab]')) {
-    const target = control.matches('input[type=checkbox], input[type=radio]') ? control.closest('label') ?? control : control;
+    const target = control.closest('.wb-seg,.wb-seg2,.wb-seg-sm,.wb-search,.wb-date') ?? (control.matches('input[type=checkbox], input[type=radio]') ? control.closest('label') ?? control : control);
     if (seen.has(target) || target.matches('textarea, .wb-vh') || target.closest('[aria-hidden=true], #tab-chat')) continue;
     seen.add(target);
     const box = visible(target);
-    if (box && (box.width < 40 || box.height < 40) && small.length < 10) {
+    const minimumWidth = target.matches('.wb-btn:not(.memory-back)') ? 40 : 36;
+    if (box && (box.width < minimumWidth || box.height < 36) && small.length < 10) {
       small.push(`${target.tagName.toLowerCase()}.${String(target.className).trim().split(/\s+/).join('.')} "${(target.getAttribute('aria-label') ?? target.textContent).trim().slice(0, 24)}" ${Math.round(box.width)}x${Math.round(box.height)}`);
     }
   }
@@ -225,7 +226,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await confirmFlow(page, single, 'switch-mode', { mode: 'single' });
     if (width < 761) {
       const layout = await page.evaluate(measure);
-      assert.deepEqual(layout.small, [], `settings at ${width}: no control under 40px`);
+      assert.deepEqual(layout.small, [], `settings at ${width}: no control under 36px`);
       assert.equal(layout.documentWidth, width, `settings at ${width}: no sideways scrolling`);
     } else {
       // Wider screens keep the section list as a sidebar; the drawer's button, title and backdrop do not show.
@@ -246,11 +247,11 @@ export async function runWorkbenchBrowser(t, sandbox) {
     await settings(1280, 800);
   });
 
-  await step('phone pages: 40px controls, no sideways scrolling, two-row detail header, memory list and file screens, schedule numbers 3+3', async () => {
+  await step('phone pages: 36px controls, no sideways scrolling, two-row detail header, memory list and file screens, schedule numbers 3+3', async () => {
     const { page, context, errors, shot } = await open(390, 844, '/memory');
     const check = async name => {
       const layout = await page.evaluate(measure);
-      assert.deepEqual(layout.small, [], `${name}: no control under 40px`);
+      assert.deepEqual(layout.small, [], `${name}: no control under 36px`);
       assert.equal(layout.documentWidth, 390, `${name}: no sideways scrolling`);
       await shot(name);
       return layout;
@@ -316,7 +317,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
     const checkEnglish = async name => {
       const layout = await english.page.evaluate(measure);
       assert.equal(await english.page.evaluate(() => document.documentElement.lang), 'en', `${name}: the page is in English`);
-      assert.deepEqual(layout.small, [], `${name}: no control under 40px`);
+      assert.deepEqual(layout.small, [], `${name}: no control under 36px`);
       assert.equal(layout.documentWidth, 390, `${name}: no sideways scrolling`);
       assert.deepEqual(layout.clippedSegments, [], `${name}: no segmented option is cut`);
       await english.shot(name);
@@ -382,13 +383,13 @@ export async function runWorkbenchBrowser(t, sandbox) {
     state = await drawerState(page);
     assert.deepEqual([state.open, state.expanded, state.left, state.visible, state.focus, state.current], [true, 'true', 0, true, 'section:defaults', 'defaults']);
     assert.equal(state.height, 844, 'the drawer runs the full height of the screen');
-    // The prototype's sizes: 300px drawer, 44px section rows and opening button, 40×40 close button.
+    // The prototype's sizes: 300px drawer, 44px section rows and opening button, 36×36 close button.
     const sizes = await page.evaluate(() => Object.fromEntries([['drawer', '.wb-set-nav'], ['section', '[data-settings-section="defaults"]'], ['button', '.wb-set-drawer-btn'], ['close', '.wb-set-drawer-x']]
       .map(([name, selector]) => { const box = document.querySelector(selector).getBoundingClientRect(); return [name, [Math.round(box.width), Math.round(box.height)]]; })));
-    assert.deepEqual([sizes.drawer[0], sizes.section[1], sizes.button[1], sizes.close], [300, 44, 44, [40, 40]], JSON.stringify(sizes));
+    assert.deepEqual([sizes.drawer[0], sizes.section[1], sizes.button[1], sizes.close], [300, 44, 44, [36, 36]], JSON.stringify(sizes));
     assert.ok(state.entry && state.bodyInert && state.headerInert, 'one history entry; the page behind the drawer is inert');
     const layout = await page.evaluate(measure);
-    assert.deepEqual(layout.small, [], 'drawer: no control under 40px');
+    assert.deepEqual(layout.small, [], 'drawer: no control under 36px');
     assert.equal(layout.documentWidth, 390, 'drawer: no sideways scrolling');
     await shot('settings-drawer-open');
     // Keyboard focus cannot reach the page behind the backdrop, either way round.
@@ -572,7 +573,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       assert.doesNotMatch(await page.locator('#wb-side').textContent(), /后台记录|release/);
       let layout = await page.evaluate(measure);
       assert.equal(layout.documentWidth, width, `${width}: no sideways scrolling`);
-      if (width < 761) assert.deepEqual(layout.small, [], 'no control under 40px');
+      if (width < 761) assert.deepEqual(layout.small, [], 'no control under 36px');
       await shot('timeline-plain');
 
       // The phone detail covers the header, so the technical detail switch is pressed from the page.

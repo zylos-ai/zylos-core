@@ -9,7 +9,7 @@ const schema = fileURLToPath(new URL('../../../comm-bridge/scripts/c4-content-sc
 const fixture = fileURLToPath(new URL('./chat-component-appearance-fixture.js', import.meta.url));
 // Resolve the already provisioned dependency; never install or access a live service.
 const chart = fileURLToPath(new URL('./chart.umd.js', import.meta.resolve('chart.js')));
-export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
+export async function runComponentAppearanceBrowser(sandbox, { width, theme, fixturePath = fixture, check } = {}) {
   assert.ok([1280, 390].includes(width)); assert.ok(['light', 'dark'].includes(theme));
   const isolation = sandbox.assertIsolation();
   console.info('component browser isolation', JSON.stringify({ ...isolation,
@@ -28,9 +28,9 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     if (url.pathname === '/api/chat/conversations/fixture/attachments/image') {
       res.writeHead(200, { 'content-type': 'image/svg+xml' }); return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#0f766e"/></svg>');
     }
-    const file = url.pathname === '/chat-schema.js' ? schema : url.pathname === '/fixture.js' ? fixture
+    const file = url.pathname === '/chat-schema.js' ? schema : url.pathname === '/fixture.js' ? fixturePath
       : url.pathname === '/vendor/chart.umd.js' ? chart : path.resolve(publicDir, '.' + decodeURIComponent(url.pathname));
-    if ((!file.startsWith(publicDir + path.sep) && ![schema, fixture, chart].includes(file)) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    if ((!file.startsWith(publicDir + path.sep) && ![schema, fixturePath, chart].includes(file)) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       if (missing.length < 5) missing.push(url.pathname); res.writeHead(404); return res.end();
     }
     const types = { '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.woff2': 'font/woff2' };
@@ -68,6 +68,15 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
     await page.goto(origin);
     try { await page.waitForFunction(() => window.componentFixtureReady === true); }
     catch (error) { throw new Error(error.message + '; errors=' + errors.join('; ') + '; missing=' + missing.join('; ')); }
+    if (check) {
+      await page.evaluate(() => document.fonts.ready);
+      await check(page, { width, theme });
+      assert.equal(errors.length, 0, errors.join('; '));
+      assert.equal(outside.length, 0, outside.join('; '));
+      assert.equal(missing.length, 0, missing.join('; '));
+      await context.close();
+      return;
+    }
     await page.locator('#image .chat-attachment-image-content').scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.querySelector('#image .chat-attachment-image-content').naturalWidth === 160 && document.querySelector('#tray .chat-attachment-image-content').naturalWidth === 160);
     await page.waitForFunction(() => document.querySelectorAll('.conversation-chart-enhanced').length === 14);
@@ -164,7 +173,7 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       const handoffSteps = [...document.querySelectorAll('#handoff-status .conversation-activity-step')].map(node => ({ status: node.dataset.status, text: node.textContent }));
       const dangerProbe = document.createElement('span'); dangerProbe.style.color = 'var(--c-danger-ink)'; document.querySelector('main').append(dangerProbe);
       const dangerInk = getComputedStyle(dangerProbe).color, dangerRgb = rgba(dangerInk); dangerProbe.remove();
-      return { poolGeometry, handoffSteps, answerCardText: answerCard?.textContent, categoryGeometry, columns, spacing, sectionSpacing, nestedSpacing, errorStyles, dangerInk, dangerRgb, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
+      return { poolGeometry, handoffSteps, answerCardText: answerCard?.textContent, categoryGeometry, columns, spacing, sectionSpacing, nestedSpacing, errorStyles, dangerInk, dangerRgb, segmentTrackHeight: document.querySelector('#segmented .chat-form-segments').getBoundingClientRect().height, segmentHeights: [...document.querySelectorAll('#segmented .chat-form-segment')].map(node => node.getBoundingClientRect().height), answerText: answer.textContent, answerTop: answer.getBoundingClientRect().top, choicesTop: list.getBoundingClientRect().top,
         dotAnimation: dot.animationName, dotWidth: dot.width, categoryAxis: chart('category').options.scales.x.display,
         breakdownAxis: chart('breakdown').options.scales.x.display, categoryColor: chart('category').data.datasets[0].backgroundColor[0],
         imageRatio: document.querySelector('.chat-attachment-image-frame').style.aspectRatio,
@@ -285,7 +294,8 @@ export async function runComponentAppearanceBrowser(sandbox, { width, theme }) {
       assert.ok(actual.columns.every(column => Math.abs(column.top - actual.columns[0].top) <= 1), 'wide comparison stays side by side');
       assert.ok(actual.columns[1].left > actual.columns[0].left && actual.columns[2].left > actual.columns[1].left, 'wide columns retain source order');
     } else {
-      assert.ok(actual.segmentHeights.every(height => height >= 40), 'phone segments keep 40px touch targets');
+      assert.equal(actual.segmentTrackHeight, 36, 'phone segmented outer track follows the approved height');
+      assert.ok(actual.segmentHeights.every(height => height === 28), 'phone selected segments fit the existing track inset');
       for (let i = 1; i < actual.columns.length; i++) assert.ok(Math.abs(actual.columns[i].top - actual.columns[i - 1].bottom - 12) <= 1, 'phone comparison keeps the shared 12px column gap');
     }
     for (const state of ['failed', 'expired']) {
