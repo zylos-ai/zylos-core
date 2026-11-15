@@ -56,7 +56,7 @@ if (role === 'm4') {
   };
 } else {
   router = createRouter({ db, now: () => clock, readSessionMode: readMode,
-    readLiveIdentity: reader.readLiveIdentity, readCurrentSession: readReadyIdentity,
+    readLiveIdentity: reader.readLiveIdentity, readLiveIdentities: reader.readLiveIdentities, readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux), readRuntimeHealth,
     getSessionAdapter: runtime => {
       const adapter = getSessionAdapter(runtime, { root, env, tmux, runtimeExecutable: () => path.join(root, runtime) });

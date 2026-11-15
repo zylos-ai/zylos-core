@@ -734,3 +734,27 @@ test('publication batches both identity boundaries and rejects replacement durin
   assert.equal(batches,4);assert.equal(fs.readFileSync(file,'utf8'),'prior state');
   assert.equal(JSON.parse(fs.readFileSync(path.join(samples[1].runDir,'agent-status.json'))).runId,'r');
 });
+
+// Publication boundaries use the actual assembly with private filesystem data;
+// no runtime or daemon is contacted. Run for identity/activity guard changes.
+test('publication skips activity and health consumption when the first identity changed', async t=>{
+  let consumed=0, activityReads=0;
+  const f=fixture(t,{batchIdentities:async groups=>new Map(groups.map(group=>[group,{present:true,ready:true,runId:'replacement',sessionId:'s',runtime:'claude'}])),consumeHealthEvents:()=>{consumed++;}});
+  const scene={sessionGroup:'a',runDir:f.root,present:true,ready:true,processRunning:true,runtime:'claude',runId:'r',sessionId:'s',createdAt:100};
+  Object.defineProperty(scene,'currentSessionTs',{get(){activityReads++;return 100;}});
+  const context={scenes:[scene]};
+  await f.supervisor.loop.deps.preparePublication(context);
+  await f.supervisor.loop.deps.probeAndPublish(scene,context);
+  assert.equal(activityReads,0);assert.equal(consumed,0);
+  assert.equal(context.publicationActivities.size,0);
+  assert.equal(fs.existsSync(path.join(f.root,'agent-status.json')),false);
+});
+
+test('publication requires activity sampled for the current round even with a matching final identity', async t=>{
+  const scene={sessionGroup:'a',present:true,ready:true,processRunning:true,runtime:'claude',runId:'r',sessionId:'s',createdAt:100};
+  const f=fixture(t);scene.runDir=f.root;
+  const file=path.join(f.root,'agent-status.json');fs.writeFileSync(file,'prior state');
+  const context={scenes:[scene],publicationIdentities:new Map([['a',scene]]),publicationActivities:new Map()};
+  await f.supervisor.loop.deps.probeAndPublish(scene,context);
+  assert.equal(fs.readFileSync(file,'utf8'),'prior state');
+});

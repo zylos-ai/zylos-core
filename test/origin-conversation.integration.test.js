@@ -100,7 +100,7 @@ setInterval(()=>{},1000);
     expireTimedOutControls: () => 0, cleanupControlQueue: () => 0 };
   const deps = { db, now: () => clock,
     readSessionMode: () => ({ mode: readMode(), keyPresent: true }),
-    readLiveIdentity: sessions.readLiveIdentity,
+    readLiveIdentity: sessions.readLiveIdentity, readLiveIdentities: sessions.readLiveIdentities,
     readCurrentSession: readReadyIdentity,
     listGroupTmuxSessions: () => listGroupTmuxSessions(tmux),
     readRuntimeHealth: () => ({ health: 'ok', publicHealth: 'ok' }),

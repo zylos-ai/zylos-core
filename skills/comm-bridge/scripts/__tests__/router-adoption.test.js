@@ -40,9 +40,9 @@ test('ready sessions are adopted before an observed waiting group receives newly
   ready(f, 'arrived', 'late-run');
   f.router.tick(); await pump();
   assert.equal(f.router.state.live.get('arrived').ready, true);
-  assert.deepEqual(adoptions, [['arrived', 'late-run']], 'the successful batch adopts readiness before capacity is freed');
+  assert.equal(adoptions.length, 0, 'this round observed readiness after synchronous scheduling');
   assert.deepEqual(f.db.releaseSlot('blocker', { runId: 'blocker-run', prior: null }), { released: true });
-  assert.equal(f.db.listSlotOccupancy().length, 1);
+  assert.equal(f.db.listSlotOccupancy().length, 0);
   f.router.tick();
   assert.deepEqual(adoptions, [['arrived', 'late-run']]);
   assert.equal(f.db.listSlotOccupancy().length, 1);
@@ -70,7 +70,7 @@ test('a late session is adopted only after its scene becomes ready', async t => 
   await start(f);
   assert.equal(adoptions.length, 0);
   assert.equal(f.db.listSlotOccupancy().length, 0);
-  ready(f, 'a', 'late-run'); f.add('a'); await f.rounds(2);
+  ready(f, 'a', 'late-run'); await f.rounds(2);
   assert.deepEqual(adoptions, [['a', 'late-run']]);
   assert.equal(f.db.listSlotOccupancy()[0].runId, 'late-run');
 });
@@ -121,10 +121,9 @@ test('one adoption error leaves delivery available and the next round repairs th
     if (++attempts === 1) throw Object.assign(new Error('busy'), { code: 'DB_BUSY' });
     return adopt(...args);
   };
-  f.put('origin', { runtime: 'codex' });
-  await f.create().initialize();
+  await start(f, 1);
   assert.equal(attempts, 1);
-  assert.equal(f.row(message.id).status, 'pending');
+  assert.equal(f.row(message.id).status, 'delivered');
   assert.equal(f.db.listSlotOccupancy().length, 0);
   assert.ok(f.events.some(row => row.event === 'slot_adoption_failed' && row.session_group === 'a' && row.reason === 'DB_BUSY'));
   await f.rounds(1);
@@ -263,8 +262,6 @@ test('an unready late session timing out leaves no occupancy or ending record', 
   ready(f, 'a', 'unready-run', { ready: false });
   await start(f);
   assert.equal(f.db.listSlotOccupancy().length, 0);
-  f.db.insertControl('keep observing', { sessionGroup: 'origin', appendAckSuffix: false });
-  f.deps.canAttemptDelivery = () => false;
   f.advance(1000); await f.rounds(3);
   assert.equal(f.scene.has('a'), false);
   assert.equal(f.calls.filter(row => row[0] === 'stop').length, 1);
@@ -350,5 +347,5 @@ test('idle cached scene cannot restore a released slot', async t => {
   assert.equal(f.db.listSlotOccupancy().length, 0);
   await f.rounds(3);
   assert.equal(f.db.listSlotOccupancy().length, 0);
-  assert.equal(f.router.state.live.get('a').runId, 'run-a');
+  assert.equal(f.router.state.live.get('a')?.present ?? false, false);
 });

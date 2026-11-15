@@ -128,6 +128,7 @@ test('packed global CLI starts without installed skill dependencies', async t =>
         readSessionMode: () => ({ mode: 'multi' }),
         listGroupTmuxSessions: async () => [],
         readLiveIdentity: async () => ({ present: false }),
+        readLiveIdentities: async groups => new Map(groups.map(group => [group, { present: false }])),
         readRuntimeHealth: () => ({ health: 'unavailable' }),
         diagnostics: { diagnostic: (event, fields) => events.push({ event, ...fields }), maintain() {} },
         log() {},

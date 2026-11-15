@@ -116,21 +116,25 @@ export function createRouter(dependencies, configuration = {}) {
       } else state.resident.readySince = null;
     }
   }
-  context.refreshScene = async (requested = []) => {
+  context.refreshScene = async (requested = [], { startup = false } = {}) => {
     try {
       const sessions = state.mode === 'single' ? [] : await deps.listGroupTmuxSessions();
       const groups = state.mode === 'single' ? new Set([null]) :
         new Set(sessions.filter(row => groupFromTmuxName(row.tmuxName) === row.sessionGroup).map(row => row.sessionGroup));
       state.listed = groups;
       const wanted = new Set([...groups, ...state.live.keys(), ...requested, state.mode === 'single' ? null : 'origin']);
-      const identities = await deps.readLiveIdentities([...wanted]);
-      for (const group of wanted) {
-        const live = identities.get(group);
-        if (!live) throw new Error('Batch identity observation is incomplete');
-        acceptObservation(group, live);
-      }
-      state.sceneObservable = true;
-      if (state.mode === 'multi') { context.refreshSlots(); adoptReadySlots(); }
+      const observation = Promise.resolve().then(() => deps.readLiveIdentities([...wanted])).then(identities => {
+        for (const group of wanted) {
+          if (!identities.get(group)) throw new Error('Batch identity observation is incomplete');
+        }
+        for (const group of wanted) acceptObservation(group, identities.get(group));
+        state.sceneObservable = true;
+      }).catch(error => {
+        state.sceneObservable = false; state.live.clear();
+        diagnostic('scene_unobservable', { reason: error.code ?? error.message });
+      });
+      if (startup) track(observation);
+      else await observation;
     } catch (error) {
       state.sceneObservable = false;
       // Failed observations never turn existing sessions into free capacity.
@@ -204,23 +208,14 @@ export function createRouter(dependencies, configuration = {}) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
-    if (state.mode === 'multi') context.refreshSlots();
+    if (state.mode === 'multi') { context.refreshSlots(); adoptReadySlots(); }
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
     const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
     state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
     context.capacityWaits.sweep(new Set([...pending, ...continuations].map(row => row.sessionGroup)));
-    const controls = deps.db.countNonTerminalControls(state.mode === 'multi' ? { allSessionGroups: true } : { machine: true });
-    const originContinuation = state.mode === 'multi' && deps.db.getOriginNeed(seconds).continuation?.pending;
-    const hasWork = pending.length || continuations.length || originContinuation || state.activations.size || controls.pending ||
-      (state.mode === 'single' && deps.db.getNextPending());
-    if (!hasWork) {
-      // Supplementary Enter retries belong to an already-started delivery and
-      // retain their existing guarded action path; idle scenes need no polling.
-      for (const group of state.lanes.keys()) {
-        if (deps.maybePeriodicEnter) track(Promise.resolve().then(() => deps.maybePeriodicEnter(group)));
-      }
-      return;
-    }
+    // Lifecycle reconciliation also runs without queued work: resident restart,
+    // stable READY backoff reset, absence timing, unowned starts and slot adoption
+    // require observation. Each round uses one batch, never per-session polling.
     if (!sceneTask) sceneTask = track(context.refreshScene([...pending, ...continuations].map(row => row.sessionGroup))
       .finally(() => { sceneTask = null; }));
     const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
@@ -249,5 +244,6 @@ export function createRouter(dependencies, configuration = {}) {
     await Promise.allSettled([...tasks]);
   }
   return { initialize, start, tick, stop, state, availableCapacity: context.availableCapacity,
-    async idle() { while (tasks.size) await Promise.allSettled([...tasks]); } };
+    // Wait for the current round only; follow-up lanes may wait on external I/O.
+    async idle() { await Promise.allSettled([...tasks]); } };
 }

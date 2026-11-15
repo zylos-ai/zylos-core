@@ -3,7 +3,7 @@ import { openReadStore } from './c4-read-store.js';
 import { zylosRoot } from './session-group-paths.js';
 import { groupRunDir, tmuxNameForGroup } from './session-group-paths.js';
 import { openTmuxConnection } from './runtime/tmux-connection.js';
-import { isIdentityError } from './runtime/tmux-protocol.js';
+import { isIdentityError, tmuxError } from './runtime/tmux-protocol.js';
 import { observeSessionTarget } from './runtime/session-target.js';
 import { observeSessionTargets } from './runtime/session-batch-observation.js';
 import { readJsonSample, readCodexSampleForIdentity, sampleResult, sameIdentity } from './session-usage-reader.js';
@@ -33,7 +33,9 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
   async function readLiveIdentities(groups) {
     return new Map([...await readSessionTargets(groups)].map(([group, target]) => [group, publicIdentity(target)]));
   }
-  async function readSessionStates(groups = [], { freshnessMs, usageFreshnessMs = freshnessMs, includeAllLive = false } = {}) {
+  // Optional caller sampling is awaited between the two shared observations;
+  // observationError invalidates its result when the captured target changes.
+  async function readSessionStates(groups = [], { freshnessMs, usageFreshnessMs = freshnessMs, includeAllLive = false, sampleTarget } = {}) {
     if (!Number.isFinite(freshnessMs) || freshnessMs < 0) throw new TypeError('freshnessMs must be a nonnegative number');
     if (typeof usageFreshnessMs !== 'number' || Number.isNaN(usageFreshnessMs) || usageFreshnessMs < 0) {
       throw new TypeError('usageFreshnessMs must be a nonnegative number');
@@ -43,7 +45,7 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
       const read = () => observeAll({ connection, readReady:batchReady, readProcessTree });
       const first = await read();
       const wanted = new Set([...groups, ...(includeAllLive ? first.keys() : [])]);
-      const samples = new Map([...wanted].map(group => {
+      const samples = new Map(await Promise.all([...wanted].map(async group => {
         const target = first.get(group ?? 'origin') ?? absent(group);
         const dir = groupRunDir(group ?? 'origin', env);
         const status = readJsonSample(path.join(dir, 'agent-status.json'), 'status');
@@ -53,8 +55,8 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
           const found = readCodexSampleForIdentity({ sessionGroup:group, identity:target, env });
           if (found) usage = { value:found.sample, sampledAt:found.sample.capturedAt, identity:found.sample.identity };
         }
-        return [group, { target, status, usage }];
-      }));
+        return [group, { target, status, usage, sampled:await sampleTarget?.(group, target) }];
+      })));
       let last;
       try { last = await read(); }
       catch (error) { if (!isIdentityError(error) && error.code !== 'TMUX_NO_SERVER') throw error; last = new Map(); }
@@ -64,6 +66,8 @@ export function createSessionReader({ open = openTmuxConnection, observe = obser
         const stable = target.present && final.present && ['runId','serverGeneration','tmuxSessionId','paneId','runtime','createdAt','sessionId'].every(key => target[key] === final[key]);
         return [group, { identity:publicIdentity(target),
           target:stable ? target : { ...target, ready:false, runtime:'unknown', runtimeObservation:'unavailable', runtimePid:undefined },
+          ...(sampleTarget ? { sampled:sample.sampled } : {}),
+          ...(target.present && !stable ? { observationError:tmuxError('TARGET_GONE', 'Batch target changed during observation') } : {}),
           status:sampleResult(status, target, final, freshnessMs, now()),
           usage:sampleResult(usage, target, final, usageFreshnessMs, now()) }];
       }));

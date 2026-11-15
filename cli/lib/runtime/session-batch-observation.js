@@ -1,6 +1,6 @@
 import { groupFromTmuxName } from '../session-group-paths.js';
 import { readReadyIdentity, readTargetRuntime, readProcessTree } from './session-target.js';
-import { parseTargetObservation, tmuxError, unavailableCommand } from './tmux-protocol.js';
+import { parseTargetObservation, parseTmuxEnvironment, tmuxError, unavailableCommand, quoteTmux, tmuxGuardCondition } from './tmux-protocol.js';
 
 const environmentKeys = ['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GROUP'];
 // Escape the marker, backslash and dollar before tmux's print layer. In 3.4
@@ -8,6 +8,8 @@ const environmentKeys = ['ZYLOS_RUN_ID', 'ZYLOS_MODEL_CONFIG', 'ZYLOS_SESSION_GR
 // backslash remains, so its control escapes can be decoded without ambiguity.
 const encode = key => `#{s|[$]|@d|:#{s|[\\\\]|@b|:#{s|@|@@|:${key}}}}`;
 const field = key => `#{n:${encode(key)}}:${encode(key)}`;
+// Format environment lookup falls back to the global environment when a session
+// entry is absent. Read back colliding session entries explicitly below.
 export const batchObservationFormat = [
   '#{pid}:#{start_time}', '#{session_id}', '#{pane_id}', '#{session_created}', '#{pane_pid}',
   '#{window_active}', '#{pane_active}', field('session_name'), ...environmentKeys.map(field),
@@ -53,16 +55,45 @@ export function parseBatchObservations(output) {
 /** Read-only snapshot. It never binds targets or grants permission for actions. */
 export async function observeSessionTargets({ connection, readReady = readReadyIdentity,
   readProcessTree: getTree = readProcessTree } = {}) {
-  let output;
-  try { output = await connection.command(['list-panes', '-a', '-F', batchObservationFormat]); }
-  catch (error) { if (error.code === 'TMUX_NO_SERVER') return new Map(); throw unavailableCommand(error); }
+  let rows;
+  try {
+    const marker = 'ZYLOS_BATCH_GLOBAL';
+    const output = await connection.command(['list-panes', '-a', '-F', batchObservationFormat,
+      ';', 'display-message', '-p', marker, ';', 'show-environment', '-gs']);
+    const boundary = output.indexOf(`\n${marker}\n`);
+    if (boundary < 0) throw tmuxError('TMUX_RESPONSE_INVALID', 'Missing batch environment boundary');
+    rows = parseBatchObservations(output.slice(0, boundary));
+    const global = parseTmuxEnvironment(output.slice(boundary + marker.length + 2));
+    const collisions = rows.filter(row => environmentKeys.some(key => global[key] !== undefined && row.rawF2[key] === global[key]));
+    if (collisions.length) {
+      // Exceptional global collisions still use one client for all sessions. The
+      // server checks each captured object before returning its session environment.
+      const commands = collisions.flatMap((row, index) => [
+        ['display-message', '-p', `ZYLOS_BATCH_SESSION_${index}`],
+        ['if-shell', '-F', '-t', row.paneId, tmuxGuardCondition({ serverGeneration:row.generation,
+          tmuxSessionId:row.tmuxSessionId, paneId:row.paneId }, 'pane'),
+        ['show-environment', '-s', '-t', row.tmuxSessionId].map(quoteTmux).join(' '),
+        'display-message -p ZYLOS_BATCH_STALE'],
+      ]);
+      const text = await connection.command(['if-shell', '-F', '1', commands.map(argv => argv.map(quoteTmux).join(' ')).join(' ; ')]);
+      const sections = text.split(/^ZYLOS_BATCH_SESSION_(\d+)\n/gm);
+      if (sections[0] !== '' || sections.length !== collisions.length * 2 + 1) throw tmuxError('TMUX_RESPONSE_INVALID', 'Missing batch session environment');
+      collisions.forEach((row, index) => {
+        if (sections[index * 2 + 1] !== String(index)) throw tmuxError('TMUX_RESPONSE_INVALID', 'Invalid batch session environment order');
+        const section = sections[index * 2 + 2];
+        if (section.trim() === 'ZYLOS_BATCH_STALE') throw tmuxError('TARGET_GONE', 'Batch target disappeared during observation');
+        const local = parseTmuxEnvironment(section.trimEnd());
+        row.rawF2 = Object.fromEntries(environmentKeys.map(key => [key, local[key] ?? '']));
+      });
+    }
+  } catch (error) { if (error.code === 'TMUX_NO_SERVER') return new Map(); throw unavailableCommand(error); }
   let tree;
   const sharedTree = () => tree ??= getTree();
-  return new Map(await Promise.all(parseBatchObservations(output).map(async row => {
+  return new Map(await Promise.all(rows.map(async row => {
     const { sessionGroup, tmuxName, generation, tmuxSessionId, paneId, panePid, created, rawF2 } = row;
     const runId = rawF2.ZYLOS_RUN_ID || null;
     const runtime = await readTargetRuntime({ connection, paneId, panePid, rawF2, readProcessTree: sharedTree });
-    const f3 = await readReady(sessionGroup === 'origin' && !rawF2.ZYLOS_SESSION_GROUP ? null : sessionGroup);
+    const f3 = await readReady(sessionGroup);
     const ready = Boolean(runId && f3?.runId === runId && typeof f3.sessionId === 'string' && f3.sessionId &&
       Number.isInteger(f3.ts) && Array.isArray(f3.startupControlIds) && f3.startupControlIds.every(Number.isInteger));
     return [sessionGroup, { present:true, tmuxName, runId, createdAt:Number(created), ...runtime, panePid,

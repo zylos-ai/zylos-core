@@ -42,22 +42,41 @@ export class SupervisorScenes {
   async observe(context = {}) {
     const mode = (context.configuration ?? await this.readMode?.())?.mode;
     if (!['single', 'multi'].includes(mode)) throw fail('CONFIG_UNREADABLE', 'Session mode is unavailable');
-    const samples = await this.reader.readSessionStates([], { freshnessMs: 5000, includeAllLive: true });
-    // Preserve source groups during a transition, even after its F1 cutover.
-    return Promise.all([...samples].map(async ([scope, sample]) => {
+    const samples = await this.reader.readSessionStates([], { freshnessMs: 5000, includeAllLive: true,
+      sampleTarget: async (scope, target) => {
+        const group = scope === null ? 'origin' : scope;
+        // The source identity determines semantic scope across an F1 cutover.
+        const sourceScope = group === 'origin' && !target.rawF2?.ZYLOS_SESSION_GROUP ? null : scope;
+        try { return await this.observeGroup(group, { sample: { target }, scope: sourceScope, deferUsage: true }); }
+        catch (error) { return this.failedObservation(group, error); }
+      } });
+    return [...samples].map(([scope, sample]) => {
       const group = scope === null ? 'origin' : scope;
-      try { return await this.observeGroup(group, { sample, scope: group === 'origin' && mode === 'single' ? null : scope }); }
-      catch (error) {
-        this.reportError(error, { phase: 'observe', sessionGroup: group });
-        return { ...absent(group, this.env), present: true, processRunning: undefined, observationError: error };
-      }
-    }));
+      if (sample.observationError) return this.failedObservation(group, sample.observationError);
+      const scene = sample.sampled;
+      if (scene?.ready && !this.readUsage) this.applyUsage(scene, sample);
+      return scene ?? absent(group, this.env);
+    });
+  }
+
+  failedObservation(group, error) {
+    this.reportError(error, { phase: 'observe', sessionGroup: group });
+    return { ...absent(group, this.env), present: true, processRunning: undefined, observationError: error };
+  }
+
+  applyUsage(scene, sampled) {
+    if (sampled.identity.runId !== scene.runId || sampled.identity.sessionId !== scene.sessionId || !sampled.usage.valid) return;
+    const value = sampled.usage.value;
+    Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig));
+    const percent = scene.runtime === 'claude' ? value.context_window?.used_percentage :
+      value.contextUsage?.ceiling > 0 ? 100 * value.contextUsage.used / value.contextUsage.ceiling : null;
+    scene.usagePercent = Number.isFinite(percent) ? percent : null;
   }
 
   async observeGroup(group, batch = null) {
     let connection;
     try {
-      const mode = group === 'origin' ? (await this.readMode?.())?.mode : null;
+      const mode = !batch && group === 'origin' ? (await this.readMode?.())?.mode : null;
       const scope = batch ? batch.scope : group === 'origin' && mode === 'single' ? null : group;
       let treePromise;
       const getTree = () => treePromise ??= this.readProcessTree();
@@ -90,15 +109,9 @@ export class SupervisorScenes {
         if (this.readUsage) {
           const usage = await this.readUsage(scene);
           scene.usagePercent = Number.isFinite(usage) ? usage : null;
-        } else {
+        } else if (!batch?.deferUsage) {
           const sampled = batch?.sample ?? await this.reader.readSessionState(scope, { freshnessMs: 5000 });
-          if (sampled.identity.runId === scene.runId && sampled.identity.sessionId === scene.sessionId && sampled.usage.valid) {
-            const value = sampled.usage.value;
-            Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig));
-            const percent = target.runtime === 'claude' ? value.context_window?.used_percentage :
-              value.contextUsage?.ceiling > 0 ? 100 * value.contextUsage.used / value.contextUsage.ceiling : null;
-            scene.usagePercent = Number.isFinite(percent) ? percent : null;
-          }
+          this.applyUsage(scene, sampled);
         }
       }
       if (!batch) await revalidateSessionTarget({ connection, target });

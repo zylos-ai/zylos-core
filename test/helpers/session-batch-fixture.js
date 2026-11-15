@@ -21,14 +21,15 @@ export function batchFixture(t) {
     PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR, socketPath: f.socketPath, binary: f.binary }));
   const connectionOptions = { socketPath: f.socketPath, binary: f.binary };
   const commands = [];
-  let beforeCommand;
+  let beforeCommand, afterCommand;
   const open = async options => {
     const connection = await openTmuxConnection(options);
     const command = connection.command.bind(connection);
     connection.command = async (argv, opts) => {
       commands.push(argv);
       await beforeCommand?.(argv);
-      return command(argv, opts);
+      const output = await command(argv, opts);
+      return afterCommand ? afterCommand(argv, output) : output;
     };
     return connection;
   };
@@ -50,5 +51,6 @@ export function batchFixture(t) {
     if (!paneOnly) ready(group, runId);
   }
   return { ...f, root, reader, commands, write, ready, add, connectionOptions,
-    setBeforeCommand(fn) { beforeCommand = fn; } };
+    setBeforeCommand(fn) { beforeCommand = fn; },
+    setAfterCommand(fn) { afterCommand = fn; } };
 }

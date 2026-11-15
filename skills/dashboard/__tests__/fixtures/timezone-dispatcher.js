@@ -22,7 +22,7 @@ const adapter = {
 };
 await main({ create: () => createDispatcher({
   readSessionMode: () => ({ mode: 'single', keyPresent: true }),
-  readLiveIdentity: async () => target, readCurrentSession: async () => current,
+  readLiveIdentity: async () => target, readLiveIdentities: async groups => new Map(groups.map(group => [group, target])), readCurrentSession: async () => current,
   readSessionState: async () => ({ identity: target, status: { valid: true,
     value: { state: 'idle', idle_seconds: 60, health: 'ok', proc: { alive: true } } } }),
   listGroupTmuxSessions: async () => [{ sessionGroup: 'origin', tmuxName: target.tmuxName }],

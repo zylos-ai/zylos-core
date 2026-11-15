@@ -182,7 +182,6 @@ test('just-ready crashes back off while a stable runtime resets pacing', async t
   assert.equal(calls(f, 'launch').length, 1);
   f.advance(1); await f.rounds(5); assert.equal(calls(f, 'launch').length, 2);
   const second = f.scene.get('a').runId;
-  f.db.insertControl('observe stable run', { sessionGroup: 'a', appendAckSuffix: false });
   f.advance(60000); await f.rounds(2);
   f.scene.delete('a'); await f.rounds(2);
   f.db.recordRunEnd('a', { runId: second, reason: 'unexpected' });
@@ -453,12 +452,6 @@ test('a ready marker clears with empty startup ids and a later TTL ending stays 
   f.scene.delete('a'); f.db.recordRunEnd('a', { runId: 'new-run', reason: 'ttl' });
   f.advance(60000); await f.rounds(5);
   assert.equal(calls(f, 'launch').length, 0);
-  const deliver = f.deps.deliverConversation;
-  f.deps.deliverConversation = async (row, live) => {
-    // The real delivery boundary requeues when its pinned runtime disappeared.
-    if (!f.scene.get(row.session_group)?.present) { f.db.requeueConversation(row.id); return { blocked: true }; }
-    return deliver(row, live);
-  };
   const incoming = f.add('a'); await f.rounds(5);
   assert.equal(calls(f, 'launch').length, 1); assert.equal(f.row(incoming.id).status, 'delivered');
 });
