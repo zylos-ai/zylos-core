@@ -297,10 +297,12 @@ export function createActivationManager(context) {
       return;
     }
     try {
-      // One fresh observation after launch settles, including at the timeout boundary.
-      const live = await deps.readLiveIdentity(group);
-      state.live.set(group, live);
-      if (live.present && live.runId === activation.runId && live.ready) {
+      // Periodic readiness follows the shared scene snapshot. Cleanup reacquires
+      // a fresh identity immediately before the existing guarded stop action.
+      const converging = Boolean(activation.launchError) || now() - activation.startedAt >= options.readyTimeoutMs;
+      const live = converging ? await deps.readLiveIdentity(group) : state.live.get(group);
+      if (converging) state.live.set(group, live);
+      if (live?.present && live.runId === activation.runId && live.ready) {
         context.continuationRestarts.ready(group);
         return;
       }

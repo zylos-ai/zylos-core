@@ -64,6 +64,7 @@ export class CoreState {
     this.lastSessionMode = undefined;
     this.lastSessionGroup = null;
     this.costKey = null; this.pending = null;
+    this.watched = false; this.started = false;
   }
   refresh() {
     if (this.pending) return this.pending;
@@ -72,20 +73,21 @@ export class CoreState {
   }
   async _read() {
     try {
-      const [{ readSessionMode }, reader, paths] = await Promise.all([loadCoreModule('config.js'), loadCoreModule('session-state-reader.js'), loadCoreModule('session-group-paths.js')]);
+      const [{ readSessionMode }, reader] = await Promise.all([loadCoreModule('config.js'), loadCoreModule('session-state-reader.js')]);
       const mode = readSessionMode().mode ?? 'single';
       const group = mode === 'multi' ? 'origin' : null;
       this.lastSessionMode = mode;
       this.lastSessionGroup = group;
-      const observation = await reader.readSessionState(group, { freshnessMs: 5000 });
+      const observations = await reader.readSessionStates([group], { freshnessMs: 5000, includeAllLive: mode === 'multi' });
+      const observation = observations.get(group);
       try {
-      const groups = mode === 'multi' ? await paths.listGroupTmuxSessions() : [{ sessionGroup: null }];
-      const identities = await Promise.all(groups.map(async ({ sessionGroup }) => {
-        const live = sessionGroup === group ? observation.identity : await reader.readLiveIdentity(sessionGroup);
-        if (!live.present || !live.runId || live.runtime === 'unknown') throw new Error('Unknown running identity');
-        return [sessionGroup, live.runId, live.sessionId];
-      }));
-      this.costKey = observation.status.reason === 'identity_changed' || observation.identity.runtime === 'unknown' ? null : JSON.stringify(identities.sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
+        const identities = [...observations].filter(([sessionGroup, item]) => sessionGroup === group || item.identity.present)
+          .map(([sessionGroup, item]) => {
+            const live = item.identity;
+            if (!live.present || !live.runId || live.runtime === 'unknown' || item.status.reason === 'identity_changed') throw new Error('Unknown running identity');
+            return [sessionGroup, live.runId, live.sessionId];
+          });
+        this.costKey = JSON.stringify(identities.sort((a,b) => String(a[0]).localeCompare(String(b[0]))));
       } catch { this.costKey = null; }
       let targetRuntime = observation.identity.runtime, facts = null, view = null;
       if (mode === 'multi') {
@@ -139,6 +141,21 @@ export class CoreState {
     if (!identity?.present || !identity.ready || !identity.runId || this.observation?.status?.reason === 'identity_changed') throw Object.assign(new Error('Current Origin identity is unavailable'), { code: 'target_unavailable' });
     return { ...publicIdentity(identity), sessionGroup: this.snapshot.sessionGroup };
   }
-  start() { this.timer = setInterval(() => this.refresh(), 1000); this.timer.unref?.(); return this.refresh(); }
-  async stop() { clearInterval(this.timer); await this.pending; }
+  setWatched(watched) {
+    if (this.watched === watched) return;
+    this.watched = watched;
+    if (this.started) this._schedule();
+  }
+  _schedule() {
+    clearTimeout(this.timer);
+    if (!this.started) return;
+    this.timer = setTimeout(() => {
+      // Schedule from the observation start, retaining the one-second watched cadence.
+      this._schedule();
+      this.refresh();
+    }, this.watched ? 1000 : 30000);
+    this.timer.unref?.();
+  }
+  start() { this.started = true; this._schedule(); return this.refresh(); }
+  async stop() { this.started = false; clearTimeout(this.timer); await this.pending; }
 }

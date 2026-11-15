@@ -36,12 +36,14 @@ test('dispatcher default pool size honors the configuration file', { timeout: 20
   const options = { readyTimeoutMs: 1000, delivery: { periodicEnabled: false } };
   assert.equal(Object.hasOwn(options, 'poolSize'), false);
   let dispatcher;
+  let clock = Date.now();
   try {
     // Two fixed values prevent the hardware fallback from passing by coincidence.
     for (const fixed of [3, 4]) {
+      clock += 1001;
       fs.writeFileSync(CONFIG_FILE, JSON.stringify({ runtime: 'claude', session_mode: 'multi', session_pool_size: fixed }));
       assert.equal(readZylosConfigStrict().config.session_pool_size, fixed);
-      dispatcher = createDispatcher({ ...f.deps,
+      dispatcher = createDispatcher({ ...f.deps, now: () => clock,
         env: { ...process.env, ZYLOS_SESSION_POOL_SIZE: '' },
         diagnostics: { diagnostic() {}, maintain() {} }, sendStatusNotice: async () => {},
       }, options);
@@ -103,6 +105,8 @@ test('initial unobservable scene cannot become empty capacity', async t => {
 
 test('unowned startup waits from tmux creation; boundary READY avoids stop', async t => {
   const f = routerFixture(t); f.put('origin'); f.put('a', { ready: false });
+  f.add('waiting'); // Reconciliation runs while queued work needs the scene.
+  f.deps.canAttemptDelivery = () => false;
   const router = f.create(); await router.initialize(); await f.rounds(2);
   assert.equal(f.calls.some(x => x[0] === 'stop'), false);
   f.advance(1000); f.put('a', { ready: true }); await f.rounds(2);
@@ -121,11 +125,12 @@ test('Origin demand retry is seconds not rounds, excludes pool capacity, never r
   assert.equal(f.calls.find(x => x[0] === 'launch')[1].sessionGroup, 'origin');
   assert.equal(f.calls.some(x => x[0] === 'submit'), false);
   assert.equal(router.availableCapacity(), 0);
+  f.db.insertControl('more Origin work', { sessionGroup: 'origin', appendAckSuffix: false });
   f.advance(60000); await f.rounds(2); assert.equal(router.state.resident.failures, 0);
 });
 
 test('single uses null semantic scope and origin target; global fence prevents launch', async t => {
-  const f = routerFixture(t, { mode: 'single' }); f.deps.readSessionMode = () => ({ mode: null, keyPresent: false });
+  const f = routerFixture(t, { mode: 'single' }); f.db.insertControl('single work', { appendAckSuffix: false }); f.deps.readSessionMode = () => ({ mode: null, keyPresent: false });
   f.db.setDrainFence('*'); const router = f.create(); await router.initialize(); await f.rounds(2);
   f.advance(9000); await f.rounds(2); assert.equal(f.calls.some(x => x[0] === 'launch'), false);
   // Read failure also holds the resident lane; no fallback launch.
@@ -175,6 +180,7 @@ test('diagnostics maintenance runs every minute independently and remains single
 // dispatcher: missing identity does not wait for the READY deadline.
 test('missing runId stops immediately with null binding and alerts; known run waits', async t => {
   const f = routerFixture(t); f.put('origin');
+  f.add('waiting'); f.deps.canAttemptDelivery = () => false;
   const missing = f.put('missing', { runId: null, ready: false });
   f.put('starting', { ready: false });
   const router = f.create(); await router.initialize(); await f.rounds(2);
@@ -213,7 +219,8 @@ test('startup prompt missing is reported once per adopted identity, not with a p
   const missing = () => f.events.filter(x => x.event === 'startup_prompt_missing');
   assert.equal(missing().filter(x => x.session_group === 'a').length, 1);
   assert.equal(missing().some(x => x.session_group === 'with-prompt'), false);
-  f.put('a', { sessionId: 'after-clear' }); await f.rounds(3);
+  f.put('a', { sessionId: 'after-clear' }); f.add('a');
+  f.deps.canAttemptDelivery = () => false; await f.rounds(3);
   assert.equal(missing().filter(x => x.session_group === 'a').length, 2);
   assert.equal(missing().find(x => x.session_id === 'after-clear').session_group, 'a');
 });
@@ -242,6 +249,7 @@ test('listed session with unreadable identity cannot supply shared capacity to a
  const f=routerFixture(t,{poolSize:1});f.add('a');f.put('origin');const read=f.deps.readLiveIdentity;
  f.deps.listGroupTmuxSessions=async()=>[{sessionGroup:'x',tmuxName:f.identity('x').tmuxName},{sessionGroup:'origin',tmuxName:f.identity('origin').tmuxName}];
  f.deps.readLiveIdentity=async group=>{if(group==='x')throw new Error('identity unavailable');return read(group);};
+ f.deps.readLiveIdentities=async()=>{throw new Error('identity batch unavailable');};
  let takes=0;const take=f.db.takeSlot;f.db.takeSlot=(...args)=>{takes++;return take(...args);};
  await f.create().initialize();await f.rounds(3);
  assert.equal(f.router.availableCapacity(),0);assert.equal(takes,0);assert.equal(f.calls.some(row=>row[0]==='launch'),false);

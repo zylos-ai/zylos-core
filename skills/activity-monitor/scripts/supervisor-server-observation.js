@@ -71,6 +71,7 @@ export class SupervisorServerObservation {
     try { return await this.scenes[method](...args); }
     catch (error) { this.failure(error); throw error; }
   }
+  readIdentities(...args) { return this.forward('readIdentities', args); }
   bindTarget(...args) { return this.forward('bindTarget', args); }
   readScreen(...args) { return this.forward('readScreen', args); }
   stop(...args) { return this.forward('stop', args); }

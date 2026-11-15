@@ -40,9 +40,9 @@ test('ready sessions are adopted before an observed waiting group receives newly
   ready(f, 'arrived', 'late-run');
   f.router.tick(); await pump();
   assert.equal(f.router.state.live.get('arrived').ready, true);
-  assert.equal(adoptions.length, 0, 'this round observed readiness after synchronous scheduling');
+  assert.deepEqual(adoptions, [['arrived', 'late-run']], 'the successful batch adopts readiness before capacity is freed');
   assert.deepEqual(f.db.releaseSlot('blocker', { runId: 'blocker-run', prior: null }), { released: true });
-  assert.equal(f.db.listSlotOccupancy().length, 0);
+  assert.equal(f.db.listSlotOccupancy().length, 1);
   f.router.tick();
   assert.deepEqual(adoptions, [['arrived', 'late-run']]);
   assert.equal(f.db.listSlotOccupancy().length, 1);
@@ -70,7 +70,7 @@ test('a late session is adopted only after its scene becomes ready', async t => 
   await start(f);
   assert.equal(adoptions.length, 0);
   assert.equal(f.db.listSlotOccupancy().length, 0);
-  ready(f, 'a', 'late-run'); await f.rounds(2);
+  ready(f, 'a', 'late-run'); f.add('a'); await f.rounds(2);
   assert.deepEqual(adoptions, [['a', 'late-run']]);
   assert.equal(f.db.listSlotOccupancy()[0].runId, 'late-run');
 });
@@ -121,9 +121,10 @@ test('one adoption error leaves delivery available and the next round repairs th
     if (++attempts === 1) throw Object.assign(new Error('busy'), { code: 'DB_BUSY' });
     return adopt(...args);
   };
-  await start(f, 1);
+  f.put('origin', { runtime: 'codex' });
+  await f.create().initialize();
   assert.equal(attempts, 1);
-  assert.equal(f.row(message.id).status, 'delivered');
+  assert.equal(f.row(message.id).status, 'pending');
   assert.equal(f.db.listSlotOccupancy().length, 0);
   assert.ok(f.events.some(row => row.event === 'slot_adoption_failed' && row.session_group === 'a' && row.reason === 'DB_BUSY'));
   await f.rounds(1);
@@ -262,6 +263,8 @@ test('an unready late session timing out leaves no occupancy or ending record', 
   ready(f, 'a', 'unready-run', { ready: false });
   await start(f);
   assert.equal(f.db.listSlotOccupancy().length, 0);
+  f.db.insertControl('keep observing', { sessionGroup: 'origin', appendAckSuffix: false });
+  f.deps.canAttemptDelivery = () => false;
   f.advance(1000); await f.rounds(3);
   assert.equal(f.scene.has('a'), false);
   assert.equal(f.calls.filter(row => row[0] === 'stop').length, 1);
@@ -302,52 +305,50 @@ test('a late run after held rollback clears the retained marker only once', asyn
   assert.equal(f.calls.filter(row => row[0] === 'launch').length, 0);
 });
 
-for (const blocked of ['known group identity', 'session listing', 'new group identity']) {
-  test(`a pending ${blocked} read does not block another active delivery or new activation`, async t => {
+for (const blocked of ['identity batch', 'session listing']) {
+  test(`a pending ${blocked} permits cached delivery while unseen activation waits`, { timeout: 5000 }, async t => {
     const f = routerFixture(t, { poolSize: 2 }); f.put('a');
     await start(f);
     const hold = deferred();
-    const read = f.deps.readLiveIdentity;
-    let blockedReads = 0;
-    if (blocked === 'session listing') {
-      f.deps.listGroupTmuxSessions = async () => { blockedReads++; await hold.promise; return []; };
-    } else {
-      if (blocked === 'known group identity') f.router.state.live.set('x', { present: false });
-      else f.add('x', { priority: 3 });
-      f.deps.readLiveIdentity = async group => {
-        if (group === 'x') { blockedReads++; await hold.promise; }
-        return read(group);
-      };
-    }
+    const key = blocked === 'identity batch' ? 'readLiveIdentities' : 'listGroupTmuxSessions';
+    const read = f.deps[key];
+    let reads = 0;
+    f.deps[key] = async (...args) => { reads++; await hold.promise; return read(...args); };
     const active = f.add('a'), fresh = f.add('b', { priority: 1 });
     try {
-      for (let round = 0; round < 6; round++) { f.router.tick(); await pump(); }
-      assert.ok(blockedReads > 0, 'the unrelated read must actually remain pending');
+      for (let round = 0; round < 3; round++) { f.router.tick(); await pump(); }
+      assert.equal(reads, 1);
       assert.equal(f.row(active.id).status, 'delivered');
+      assert.equal(f.row(fresh.id).status, 'pending');
+      assert.equal(f.calls.filter(row => row[0] === 'launch').length, 0);
+      hold.resolve(); await f.router.idle(); await f.rounds(5);
       assert.equal(f.row(fresh.id).status, 'delivered');
       assert.equal(f.calls.filter(row => row[0] === 'launch' && row[1].sessionGroup === 'b').length, 1);
-    } finally {
-      hold.resolve();
-      await f.router.stop();
-    }
+    } finally { hold.resolve(); await f.router.stop(); }
   });
 }
 
-test('a slow group observation does not delay active delivery for even one round', async t => {
+test('a pending identity batch does not delay active delivery for even one round', { timeout: 5000 }, async t => {
   const f = routerFixture(t); f.put('a'); await start(f);
-  f.router.state.live.set('x', { present: false });
-  const hold = deferred(), read = f.deps.readLiveIdentity;
+  const hold = deferred(), read = f.deps.readLiveIdentities;
   let reads = 0;
-  f.deps.readLiveIdentity = async group => { if (group === 'x') { reads++; await hold.promise; } return read(group); };
+  f.deps.readLiveIdentities = async groups => { reads++; await hold.promise; return read(groups); };
   const message = f.add('a');
   try {
     f.router.tick(); await pump();
-    assert.equal(reads, 1);
-    assert.equal(f.row(message.id).status, 'delivered');
+    assert.equal(reads, 1); assert.equal(f.row(message.id).status, 'delivered');
     for (let round = 0; round < 7; round++) { f.router.tick(); await pump(); }
     assert.equal(f.calls.filter(row => row[0] === 'conversation' && row[1] === message.id).length, 1);
-  } finally {
-    hold.resolve();
-    await f.router.stop();
-  }
+  } finally { hold.resolve(); await f.router.stop(); }
+});
+
+// A no-work tick must never turn a cached, already-ended scene into occupancy.
+test('idle cached scene cannot restore a released slot', async t => {
+  const f = routerFixture(t); f.put('a'); await start(f);
+  f.scene.delete('a');
+  f.db.recordRunEnd('a', { runId: 'run-a', reason: 'ttl' });
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  await f.rounds(3);
+  assert.equal(f.db.listSlotOccupancy().length, 0);
+  assert.equal(f.router.state.live.get('a').runId, 'run-a');
 });

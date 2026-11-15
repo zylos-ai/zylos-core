@@ -48,7 +48,7 @@ test('Core state reads Origin facts only for absence or authentication and reads
   const accountCalls = [];
   let accountAvailable = true, accountLive = true, changes = 0;
   const reader = {
-    readSessionState: async () => structuredClone(observation),
+    readSessionStates: async groups => new Map(groups.map(group => [group, structuredClone(observation)])),
     readLiveIdentity: async () => ({ present: true, ready: true, runtime: 'codex', runId: 'other-run', sessionId: 'other-session' }),
     resolveTargetRuntime: async group => { assert.equal(group, mode === 'multi' ? 'origin' : null); return targetRuntime; },
     readRuntimeHealth: async runtime => { assert.equal(runtime, targetRuntime); return health; },
@@ -129,7 +129,7 @@ test('Core state ignores live sample timestamps and notifies recorded provenance
   t.mock.module('../src/lib/core-modules.js', { namedExports: { loadCoreModule: async name => {
     if (name === 'config.js') return { readSessionMode: () => ({ mode: 'single' }) };
     if (name === 'session-state-reader.js') return {
-      readSessionState: async () => live(),
+      readSessionStates: async groups => new Map(groups.map(group => [group, live()])),
       readAccountUsageSnapshot: async () => ({ recorded: structuredClone(record) }),
     };
     if (name === 'session-group-paths.js') return {};

@@ -36,9 +36,13 @@ test('CoreState and collector share real account scan until 30s expiry, preservi
     const reader = createSessionReader({ env: { ZYLOS_DIR: ${JSON.stringify(root)} },
       open: async () => ({close: async () => {}}),
       observe: async () => ({present:true,ready:true,runtime:'claude',runId:'run',sessionId:'session'}),
-      listSessions: async () => { counters.scans++; return [{sessionGroup:'origin'}]; }
+      observeAll: async () => new Map([['origin', {present:true,ready:true,runtime:'claude',runId:'run',sessionId:'session'}]])
     });
-    export const {readSessionState,readAccountUsageSnapshot} = reader;
+    export const {readSessionState,readSessionStates} = reader;
+    export async function readAccountUsageSnapshot(runtime) {
+      counters.scans++;
+      return reader.readAccountUsageSnapshot(runtime);
+    }
   `);
   const write = (group, percent, capturedAt) => {
     const dir = path.join(root, 'activity-monitor/session-groups', group);
@@ -75,7 +79,7 @@ test('CoreState and collector share real account scan until 30s expiry, preservi
   assert.equal(core.accountUsageRecord.recordedAt, capturedAt + 500);
   assert.equal(collector.getAccountUsage().value.seven_day.used_percentage, 7, 'collector keeps live-only selection');
   for (let i = 1; i < 20; i++) { clock = i * 1000; await core.refresh(); if (i % 2 === 0) await collector.collect(); }
-  assert.equal(reader.counters.scans, 1, 'unchanged polling does not enumerate all sessions');
+  assert.equal(reader.counters.scans, 1, 'unchanged polling reuses the account snapshot');
   write('sleeping', 23, capturedAt + 750);
   clock = 29999;
   await core.refresh();

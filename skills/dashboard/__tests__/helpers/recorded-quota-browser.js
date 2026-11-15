@@ -23,7 +23,7 @@ export async function runRecordedQuotaBrowser(sandbox) {
     const identity = { present: state === 'live', ready: state === 'live', runtime: 'claude', runId: 'saved-run', sessionId: 'saved' };
     const reader = createSessionReader({ env: { ZYLOS_DIR: root }, now: () => now,
       open: async () => ({ close: async () => {} }), observe: async () => identity,
-      listSessions: async () => state === 'live' ? [{ sessionGroup: 'origin' }] : [] });
+      observeAll: async () => new Map(state === 'live' ? [['origin', identity]] : []) });
     const snapshot = createGroupSnapshot({ zylosDir: root, now: () => now,
       store: { latestEventByType: () => ({ metadata: { ready: state === 'live' ? 1 : 0, starting: 0, reclaiming: 0, waiting: 0 } }), queryEvents: () => [] },
       c4Reader: { getInboundTimes: () => [], listSlotOccupancy: () => [] }, readPm2: () => ({ processes: [] }),

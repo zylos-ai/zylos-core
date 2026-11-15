@@ -13,7 +13,7 @@ import { PENDING_MAX_AGE_SECONDS, RECOVER_MAX_AGE_SECONDS, MAX_RETRIES,
  * functions, which settle their claimed row only after all callbacks finish.
  * The shared READY default can be overridden by isolated tests. */
 export function createRouter(dependencies, configuration = {}) {
-  const required = ['readSessionMode','readLiveIdentity','readCurrentSession','listGroupTmuxSessions','readRuntimeHealth',
+  const required = ['readSessionMode','readLiveIdentities','readLiveIdentity','readCurrentSession','listGroupTmuxSessions','readRuntimeHealth',
     'getSessionAdapter','submit','deliverControl','deliverConversation','handleExpired','prepareSingle','findLegacySessions','advanceLegacy'];
   for (const name of required) if (typeof dependencies[name] !== 'function') throw new TypeError(`Router dependency ${name} is required`);
   if (!dependencies.db) throw new TypeError('Router database is required');
@@ -30,7 +30,6 @@ export function createRouter(dependencies, configuration = {}) {
     slots: new Map(), live: new Map(), continuations: new Map(), activations: new Map(), lanes: new Map(), listed: new Set(), legacy: [],
     resident: { failures: 0, absentSince: null, readySince: null, fenced: false } };
   const tasks = new Set();
-  const observations = new Map();
   const opportunities = new Set();
   const attemptedRound = new Map();
   let sceneTask = null, legacyTask = null, maintenanceTask = null, timer = null, initialization = null;
@@ -93,38 +92,49 @@ export function createRouter(dependencies, configuration = {}) {
     });
   };
   context.deferOpportunity = group => { attemptedRound.set(group, state.round); context.releaseOpportunity(group); };
-  function observe(group) {
-    if (observations.has(group)) return observations.get(group);
-    const task = Promise.resolve().then(() => deps.readLiveIdentity(group)).then(live => {
-      state.live.set(group, live);
-      context.continuationRestarts.observe(group, live);
-      if (group === null || group === 'origin') {
-        if (live.present) state.resident.absentSince = null;
-        if (live.ready) {
-          state.resident.readySince ??= now();
-          if (now() - state.resident.readySince >= 60000) state.resident.failures = 0;
-        } else state.resident.readySince = null;
-      }
-    }).catch(error => {
-      state.live.delete(group);
-      diagnostic('scene_unobservable', { session_group: group, reason: error.code ?? error.message });
-    }).finally(() => observations.delete(group));
-    observations.set(group, task); return track(task);
-  }
-  context.refreshScene = async () => {
+  context.clearContinuation = (group, live) => {
+    if (state.mode !== 'multi' || !live?.present || !live.ready || !live.runId) return;
     try {
-      if (state.mode === 'single') {
-        state.listed = new Set([null]); state.sceneObservable = true;
-        observe(null); return;
+      const pending = deps.db.listRunEndings([group]).some(row => row.continuationPending);
+      if (pending && deps.db.clearContinuation(group, { runId: live.runId }).cleared) {
+        diagnostic('continuation_cleared', { session_group: group, runId: live.runId });
       }
-      const sessions = await deps.listGroupTmuxSessions();
-      const groups = new Set(sessions.filter(row => groupFromTmuxName(row.tmuxName) === row.sessionGroup).map(row => row.sessionGroup));
-      // Retain last known identities until an explicit per-group observation;
-      // a failed listing never turns existing sessions into free capacity.
-      state.listed = groups; state.sceneObservable = true;
-      for (const group of new Set([...groups, ...state.live.keys(), 'origin'])) observe(group);
+    } catch (error) {
+      diagnostic('continuation_clear_failed', { session_group: group, runId: live.runId, reason: error.code ?? error.message });
+    }
+  };
+  function acceptObservation(group, live) {
+    state.live.set(group, live);
+    context.continuationRestarts.observe(group, live);
+    context.clearContinuation(group, live);
+    if (group === null || group === 'origin') {
+      if (live.present) state.resident.absentSince = null;
+      else state.resident.absentSince ??= now();
+      if (live.ready) {
+        state.resident.readySince ??= now();
+        if (now() - state.resident.readySince >= 60000) state.resident.failures = 0;
+      } else state.resident.readySince = null;
+    }
+  }
+  context.refreshScene = async (requested = []) => {
+    try {
+      const sessions = state.mode === 'single' ? [] : await deps.listGroupTmuxSessions();
+      const groups = state.mode === 'single' ? new Set([null]) :
+        new Set(sessions.filter(row => groupFromTmuxName(row.tmuxName) === row.sessionGroup).map(row => row.sessionGroup));
+      state.listed = groups;
+      const wanted = new Set([...groups, ...state.live.keys(), ...requested, state.mode === 'single' ? null : 'origin']);
+      const identities = await deps.readLiveIdentities([...wanted]);
+      for (const group of wanted) {
+        const live = identities.get(group);
+        if (!live) throw new Error('Batch identity observation is incomplete');
+        acceptObservation(group, live);
+      }
+      state.sceneObservable = true;
+      if (state.mode === 'multi') { context.refreshSlots(); adoptReadySlots(); }
     } catch (error) {
       state.sceneObservable = false;
+      // Failed observations never turn existing sessions into free capacity.
+      state.live.clear();
       diagnostic('scene_unobservable', { reason: error.code ?? error.message });
     }
   };
@@ -190,24 +200,33 @@ export function createRouter(dependencies, configuration = {}) {
       if (counts.pending) { diagnostic('mode_mismatch', { count: counts.pending, mode: state.mode }); deps.alert?.('mode_mismatch', counts); }
       lastMismatch = now();
     }
-    if (!sceneTask) sceneTask = track(context.refreshScene().finally(() => { sceneTask = null; }));
     if (state.mode === 'single' && !legacyTask) {
       legacyTask = track(Promise.resolve().then(() => deps.advanceLegacy(state.legacy))
         .catch(error => diagnostic('legacy_error', { reason: error.message })).finally(() => { legacyTask = null; }));
     }
-    if (state.mode === 'multi') {
-      context.refreshSlots();
-      adoptReadySlots();
-    }
+    if (state.mode === 'multi') context.refreshSlots();
     const pending = state.mode === 'multi' ? deps.db.listPendingSessionGroups() : [];
     const continuations = state.mode === 'multi' ? deps.db.listPendingContinuations() : [];
     state.continuations = new Map(continuations.map(row => [row.sessionGroup, row]));
     context.capacityWaits.sweep(new Set([...pending, ...continuations].map(row => row.sessionGroup)));
+    const controls = deps.db.countNonTerminalControls(state.mode === 'multi' ? { allSessionGroups: true } : { machine: true });
+    const originContinuation = state.mode === 'multi' && deps.db.getOriginNeed(seconds).continuation?.pending;
+    const hasWork = pending.length || continuations.length || originContinuation || state.activations.size || controls.pending ||
+      (state.mode === 'single' && deps.db.getNextPending());
+    if (!hasWork) {
+      // Supplementary Enter retries belong to an already-started delivery and
+      // retain their existing guarded action path; idle scenes need no polling.
+      for (const group of state.lanes.keys()) {
+        if (deps.maybePeriodicEnter) track(Promise.resolve().then(() => deps.maybePeriodicEnter(group)));
+      }
+      return;
+    }
+    if (!sceneTask) sceneTask = track(context.refreshScene([...pending, ...continuations].map(row => row.sessionGroup))
+      .finally(() => { sceneTask = null; }));
     const wanted = new Set(state.mode === 'single' ? [null] : ['origin', ...state.listed,
       ...pending.map(row => row.sessionGroup), ...continuations.map(row => row.sessionGroup), ...state.activations.keys()]);
     const ordered = state.mode === 'single' ? [null] : ['origin', ...pending.sort((a,b) => a.headPriority-b.headPriority || a.headId-b.headId).map(row => row.sessionGroup), ...continuations.sort((a,b) => a.endedAt-b.endedAt || (a.sessionGroup < b.sessionGroup ? -1 : a.sessionGroup > b.sessionGroup ? 1 : 0)).map(row => row.sessionGroup), ...wanted];
     for (const group of new Set(ordered)) {
-      if (!state.live.has(group)) observe(group);
       const active = state.activations.get(group);
       if (active && !active.launchSettled && now() - active.startedAt >= options.readyTimeoutMs && !active.warned) {
         active.warned = true; diagnostic('stop_unconfirmed', { session_group: group, runId: active.runId, reason: 'launch_pending' });
@@ -230,5 +249,5 @@ export function createRouter(dependencies, configuration = {}) {
     await Promise.allSettled([...tasks]);
   }
   return { initialize, start, tick, stop, state, availableCapacity: context.availableCapacity,
-    async idle() { await Promise.allSettled([...tasks]); } };
+    async idle() { while (tasks.size) await Promise.allSettled([...tasks]); } };
 }

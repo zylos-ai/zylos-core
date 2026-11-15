@@ -24,7 +24,7 @@ function fixture(t) {
   const identity = { present: true, ready: true, runtime: 'claude', runId: 'run', sessionId: 'session' };
   let live = [], observed = identity, connections = 0, closes = 0;
   const reader = createSessionReader({ env: { ZYLOS_DIR: root }, now: () => now,
-    listSessions: async () => live.map(sessionGroup => ({ sessionGroup })),
+    observeAll: async () => new Map(live.map(group => [group, observed])),
     open: async () => { connections++; return { close: async () => { closes++; } }; }, observe: async () => observed });
   return { root, write, status, reader, identity, setLive: value => { live = value; },
     setIdentity: value => { observed = value; }, counts: () => [connections, closes] };
@@ -39,7 +39,7 @@ test('default live account values keep mtime selection while recorded reads comp
   f.write('activity-monitor/usage.json', { lastCheck: new Date(now - 1).toISOString(), weeklyAll: { percent: 99, resets: reset } });
   assert.deepEqual(await f.reader.readAccountUsage('claude', { allowRecorded: true }), {
     value: { seven_day: { used_percentage: 7, resets_at: reset } }, recordedAt: now - 5000, live: true });
-  assert.deepEqual(f.counts(), [6, 6]);
+  assert.deepEqual(f.counts(), [3, 3]);
 });
 
 test('reclaimed groups prefer their latest quota over a later sampler copy', async t => {
@@ -54,7 +54,7 @@ test('reclaimed groups prefer their latest quota over a later sampler copy', asy
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).recordedAt, now - 3600000);
   f.status('newest', 11, now - 500);
   assert.equal((await f.reader.readAccountUsage('claude', { allowRecorded: true })).value.seven_day.used_percentage, 11);
-  assert.deepEqual(f.counts(), [0, 0], 'history does not open a tmux connection');
+  assert.deepEqual(f.counts(), [5, 5], 'each account read closes its batch executor even without live sessions');
 });
 
 test('the account sampler is used only without conclusive group samples', async t => {
@@ -412,7 +412,7 @@ test('the supplied proxy sample shape supersedes its sleeping subscription recor
     context_window: { total_input_tokens: 30527, current_usage: { input_tokens: 2, output_tokens: 231,
       cache_creation_input_tokens: 300, cache_read_input_tokens: 30225 } } });
   const reader = createSessionReader({ env: { ZYLOS_DIR: f.root }, now: () => frozenNow,
-    listSessions: async () => [{ sessionGroup: 'origin' }], open: async () => ({ close: async () => {} }), observe: async () => f.identity });
+    observeAll: async () => new Map([['origin', f.identity]]), open: async () => ({ close: async () => {} }), observe: async () => f.identity });
   assert.equal(await reader.readAccountUsage('claude', { allowRecorded: true }), null);
 });
 
@@ -423,7 +423,7 @@ test('account snapshot shares a single live scan while preserving both selection
   fs.utimesSync(a, 100, 100); fs.utimesSync(b, 200, 200);
   f.setLive(['origin', 'other']);
   const snapshot = await f.reader.readAccountUsageSnapshot('claude');
-  assert.deepEqual(f.counts(), [2, 2]);
+  assert.deepEqual(f.counts(), [1, 1]);
   assert.equal(snapshot.live.seven_day.used_percentage, 12);
   assert.deepEqual(snapshot.recorded, {
     value: { seven_day: { used_percentage: 7, resets_at: reset } },

@@ -35,35 +35,34 @@ export class SupervisorScenes {
       try { return JSON.parse(await fs.readFile(path.join(groupRunDir(group ?? 'origin', env), 'current-session.json'), 'utf8')); }
       catch { return null; }
     };
-    this.reader = createSessionReader({ env, connectionOptions, now, open,
+    this.reader = createSessionReader({ env, connectionOptions, now, open, readReady: this.readReady, readProcessTree,
       observe: args => observeTarget({ ...args, readReady: this.readReady, readProcessTree }) });
   }
 
   async observe(context = {}) {
     const mode = (context.configuration ?? await this.readMode?.())?.mode;
     if (!['single', 'multi'].includes(mode)) throw fail('CONFIG_UNREADABLE', 'Session mode is unavailable');
-    const rows = await this.listSessions(this.connectionOptions);
+    const samples = await this.reader.readSessionStates([], { freshnessMs: 5000, includeAllLive: true });
     // Preserve source groups during a transition, even after its F1 cutover.
-    return Promise.all(rows.map(async row => {
-      try { return await this.observeGroup(row.sessionGroup); }
+    return Promise.all([...samples].map(async ([scope, sample]) => {
+      const group = scope === null ? 'origin' : scope;
+      try { return await this.observeGroup(group, { sample, scope: group === 'origin' && mode === 'single' ? null : scope }); }
       catch (error) {
-        this.reportError(error, { phase: 'observe', sessionGroup: row.sessionGroup });
-        // The successful listing proves occupancy but not a usable identity.
-        // Keeping that unknown entry prevents false capacity or restart completion.
-        return { ...absent(row.sessionGroup, this.env), present: true, processRunning: undefined, observationError: error };
+        this.reportError(error, { phase: 'observe', sessionGroup: group });
+        return { ...absent(group, this.env), present: true, processRunning: undefined, observationError: error };
       }
     }));
   }
 
-  async observeGroup(group) {
+  async observeGroup(group, batch = null) {
     let connection;
     try {
       const mode = group === 'origin' ? (await this.readMode?.())?.mode : null;
-      const scope = group === 'origin' && mode === 'single' ? null : group;
+      const scope = batch ? batch.scope : group === 'origin' && mode === 'single' ? null : group;
       let treePromise;
       const getTree = () => treePromise ??= this.readProcessTree();
-      connection = await this.open(this.connectionOptions);
-      const target = await this.observeTarget({ sessionGroup: scope, connection, readReady: this.readReady, readProcessTree: getTree });
+      if (!batch) connection = await this.open(this.connectionOptions);
+      const target = batch ? batch.sample.target : await this.observeTarget({ sessionGroup: scope, connection, readReady: this.readReady, readProcessTree: getTree });
       if (!target.present) return absent(group, this.env);
       const scene = { sessionGroup: group, present: true, tmuxName: target.tmuxName,
         runDir: groupRunDir(group ?? 'origin', this.env), runId: target.runId, runtime: target.runtime,
@@ -92,7 +91,7 @@ export class SupervisorScenes {
           const usage = await this.readUsage(scene);
           scene.usagePercent = Number.isFinite(usage) ? usage : null;
         } else {
-          const sampled = await this.reader.readSessionState(scope, { freshnessMs: 5000 });
+          const sampled = batch?.sample ?? await this.reader.readSessionState(scope, { freshnessMs: 5000 });
           if (sampled.identity.runId === scene.runId && sampled.identity.sessionId === scene.sessionId && sampled.usage.valid) {
             const value = sampled.usage.value;
             Object.assign(scene, usageModelFacts(value, scene.runtime, scene.launchConfig));
@@ -102,9 +101,18 @@ export class SupervisorScenes {
           }
         }
       }
-      await revalidateSessionTarget({ connection, target });
+      if (!batch) await revalidateSessionTarget({ connection, target });
       return scene;
     } finally { connection?.close(); }
+  }
+
+  // Publication checks observe all identities together, never authorizing actions.
+  async readIdentities(groups) {
+    if (!groups.length) return new Map();
+    const mode = (await this.readMode?.())?.mode;
+    const scopes = groups.map(group => group === 'origin' && mode === 'single' ? null : group);
+    const identities = await this.reader.readLiveIdentities(scopes);
+    return new Map(groups.map((group, index) => [group, identities.get(scopes[index])]));
   }
 
   // Run/F2/F3 identity only: no process, activity, context or usage sampling.

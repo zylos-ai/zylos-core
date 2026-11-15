@@ -157,3 +157,25 @@ test('repeated multi READY observations and adapter liveness use pane PID withou
   assert.equal(treeCalls,0);
   assert.equal(spawned.includes('ps'),false,`unexpected process snapshot: ${spawned.join(', ')}`);
 });
+
+// Boundary: batch scene sampling on a real private tmux socket; the fixture and
+// official runner isolate all runtime paths and reclaim processes on failure.
+// Run for polling/scene projection changes; unrelated lifecycle actions may skip.
+for (const size of [6, 12]) test(`scene polling uses bounded tmux processes for ${size} groups and detects disappearance next round`, { timeout: 20000 }, async t => {
+  const f = readyTmuxTarget(t, { prefix: 'scene-batch-', mode: 'multi' });
+  for (let i = 1; i < size; i++) f.tmux('new-session', '-d', '-s', `zylos-group-extra${i}`, 'sleep', '120');
+  const scenes = service(f);
+  const spawn = ChildProcess.prototype.spawn;
+  let spawned = 0;
+  t.mock.method(ChildProcess.prototype, 'spawn', function(options) {
+    if (options.file === f.binary || options.args?.includes(f.socketPath)) spawned++;
+    return spawn.call(this, options);
+  });
+  const observed = await scenes.observe({ configuration: { mode: 'multi' } });
+  assert.equal(observed.length, size);
+  assert.equal(observed.find(scene => scene.sessionGroup === 'origin').ready, true);
+  assert.ok(spawned <= 3, `scene polling spawned ${spawned} tmux processes for ${size} groups`);
+  f.tmux('kill-session', '-t', '=zylos-group-origin');
+  const next = await scenes.observe({ configuration: { mode: 'multi' } });
+  assert.equal(next.some(scene => scene.sessionGroup === 'origin' && scene.present), false);
+});

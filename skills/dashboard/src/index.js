@@ -238,7 +238,7 @@ if (conversationCollector) collectors.conversation = conversationCollector;
 if (codexRolloutCollector) collectors.codexRollout = codexRolloutCollector;
 
 // SSE hub
-const sse = new SseHub(15_000);
+const sse = new SseHub(15_000, { onClientCountChange: count => coreState.setWatched(count > 0) });
 const scheduleHistoryBroadcast = createCoalescedBroadcast(() => eventLoopMonitor.runTask('history.broadcast', () => sse.broadcast('history_changed', {})));
 let fleetPollerReady = false; // fleetPoller is declared later (TDZ guard)
 
@@ -1203,7 +1203,7 @@ async function handleApi(req, res, pathname, url) {
     try {
       // Remote records arrive through the existing poller/SSE lifecycle. A slow
       // or unreachable remote must not delay a local Fleet response.
-      await refreshFleetGroupSummary();
+      await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
       sendJson(res, 200, buildFullFleetPayload().payload);
     } catch (err) {
       sendJson(res, 500, { error: err.code || err.message });
@@ -1373,6 +1373,7 @@ async function handleApi(req, res, pathname, url) {
       sendJson(res, 400, { error: 'metric must be "cost", "cache", or "tokens"' });
       return true;
     }
+    if (period === 'session') await coreState.refresh();
     let bounds = periodBounds(period, tz, coreState);
     if (bounds === undefined) { sendJson(res, 400, { error: `invalid period: ${period}` }); return true; }
     const resolved = resolveAggregateValue(store, metric, bounds, { runtime: activeRuntime, period });
@@ -1488,6 +1489,7 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/actions/meta') {
+    await coreState.refresh();
     const selectedRuntime = url.searchParams.get('runtime') ?? activeRuntime;
     if (!['claude', 'codex'].includes(selectedRuntime)) {
       sendJson(res, 400, { error: 'INVALID_RUNTIME' }); return true;
@@ -1510,6 +1512,7 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/stream') {
+    await Promise.all([coreState.refresh(), refreshFleetGroupSummary()]);
     const apiToken = req._apiToken;
     const validator = apiToken ? () => !!validateApiSession(apiToken) : null;
     sse.addClient(res, validator);

@@ -41,6 +41,7 @@ function persistedRouter(t) {
     generation++;
     router = createRouter({ db: api(), now: () => now,
       readSessionMode: () => ({ mode: 'multi', keyPresent: true }),
+      readLiveIdentities: async groups => new Map(groups.map(group => [group, scene.get(group) ?? { present: false, ready: false }])),
       readLiveIdentity: async group => scene.get(group) ?? { present: false, ready: false },
       listGroupTmuxSessions: async () => [...scene].map(([sessionGroup, live]) => ({ sessionGroup, tmuxName: live.tmuxName })),
       readCurrentSession: async group => current.get(group), readRuntimeHealth: () => ({ health: 'ok' }),

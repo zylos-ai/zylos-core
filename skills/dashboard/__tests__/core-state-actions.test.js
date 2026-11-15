@@ -73,8 +73,7 @@ test('Core state enforces readiness, freshness and runtime-specific account usag
     usage: { valid: false, reason: 'missing' },
   };
   const reader = {
-    readSessionState: async (group, options) => { calls.push({ type: 'state', group, options }); return structuredClone(observation); },
-    readLiveIdentity: async () => structuredClone(observation.identity),
+    readSessionStates: async (groups, options) => { calls.push({ type: 'state', groups, options }); return new Map(groups.map(group => [group, structuredClone(observation)])); },
     resolveTargetRuntime: async () => 'codex',
     readRuntimeHealth: () => ({ health: 'ok' }),
     readAccountUsageSnapshot: async runtime => {
@@ -91,7 +90,7 @@ test('Core state enforces readiness, freshness and runtime-specific account usag
   const { CoreState } = await import(`../src/lib/core-state.js?contracts=${Date.now()}`);
   const core = new CoreState({ zylosDir: process.env.ZYLOS_DIR });
   const state = await core.refresh();
-  assert.deepEqual(calls.find(call => call.type === 'state'), { type: 'state', group: 'origin', options: { freshnessMs: 5000 } });
+  assert.deepEqual(calls.find(call => call.type === 'state'), { type: 'state', groups: ['origin'], options: { freshnessMs: 5000, includeAllLive: true } });
   assert.deepEqual(calls.find(call => call.type === 'account'), { type: 'account', runtime: 'codex' });
   assert.equal(core.accountUsage.five_hour.used_percentage, 23);
   assert.equal(state.state, 'IDLE');

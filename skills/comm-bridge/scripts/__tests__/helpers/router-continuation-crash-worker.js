@@ -38,6 +38,7 @@ const db = { ...store,
 };
 router = createRouter({ db, now: () => clock,
   readSessionMode: () => ({ mode: 'multi' }),
+  readLiveIdentities: async groups => new Map(groups.map(group => [group, readScene()[group] ?? { present: false, ready: false }])),
   readLiveIdentity: async group => readScene()[group] ?? { present: false, ready: false },
   listGroupTmuxSessions: async () => Object.entries(readScene()).map(([sessionGroup, live]) => ({ sessionGroup, tmuxName: live.tmuxName })),
   readCurrentSession: async group => readScene()[group]?.current,

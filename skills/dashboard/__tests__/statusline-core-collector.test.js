@@ -140,7 +140,7 @@ test('real Core reader selects newest other-session account sample without attri
   const reader = createSessionReader({ env: { ZYLOS_DIR: f.root },
     open: async () => ({ close: async () => {} }),
     observe: async ({ sessionGroup }) => ({ ...f.identity, ...(sessionGroup === 'other' ? { runId: 'run-other', sessionId: 'session-other' } : {}) }),
-    listSessions: async () => [{ sessionGroup: 'origin' }, { sessionGroup: 'other' }]
+    observeAll: async () => new Map(['origin', 'other'].map(group => [group, { ...f.identity, ...(group === 'other' ? { runId: 'run-other', sessionId: 'session-other' } : {}) }]))
   });
   const collector = new StatuslineCollector({ insertMetric: row => f.rows.push(row), upsertSourceHealth() {} }, {}, {
     read: async () => ({ ...await reader.readSessionState('origin', { freshnessMs: 5000 }), accountUsage: { runtime: 'claude', value: await reader.readAccountUsage('claude') } })
@@ -253,7 +253,7 @@ test('sleeping Origin retains target Codex account samples from another ready gr
     open: async () => ({ close: async () => {} }),
     observe: async ({ sessionGroup }) => sessionGroup === 'origin' ? { present: false, ready: false, runtime: 'unknown' }
       : { ...f.identity, runtime: 'codex', ready, runId: 'run-other', sessionId: 'session-other' },
-    listSessions: async () => [{ sessionGroup: 'other' }],
+    observeAll: async () => new Map([['other', { ...f.identity, runtime: 'codex', ready, runId: 'run-other', sessionId: 'session-other' }]]),
   });
   const collector = new StatuslineCollector({ insertMetric: () => assert.fail('absent Origin has no session sample'), upsertSourceHealth() {} }, {}, {
     read: async () => ({ ...await reader.readSessionState('origin', { freshnessMs: 5000 }), accountUsage: { runtime: 'codex', value: await reader.readAccountUsage('codex') } }),
