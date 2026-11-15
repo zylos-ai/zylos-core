@@ -476,3 +476,20 @@ Config key: `auto_approve_permission` in `~/.zylos/config.json` (default: `true`
 Activity log: `~/zylos/activity-monitor/activity.log`
 - Auto-truncates to 500 lines daily
 - Logs state changes and guardian actions
+
+## Runtime health evidence retention
+
+Runtime health files keep group replay markers and notification outcomes for seven
+idle days, measured from the newer terminal hook or notification outcome. Running
+scenes, queued messages/continuations, Origin and every pending notification
+(including `sending`) are protected. Once a deleted group's run directory is gone,
+its terminal evidence can be removed at the next minute maintenance pass. Pending
+notifications remain until their normal terminal outcome, even after deletion.
+Old events from an idle-pruned group exceed the five-minute health-event validity
+window, so replay cannot resend their first-failure notice. Fresh failures in a
+revived group follow the existing notice flow.
+
+The sole health writer caches the decoded file, invalidating it on inode, size,
+mtime or ctime changes. Reads return independent snapshots; every successful
+write still performs its original durable publication and immediately refreshes
+the cache. Cleanup publishes only when it removes entries, without changing v1.
