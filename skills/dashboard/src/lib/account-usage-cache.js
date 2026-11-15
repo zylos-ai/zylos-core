@@ -18,6 +18,11 @@ export class AccountUsageCache {
     if (!cached || (!cached.pending && now - cached.sampledAt >= this.ttlMs)) {
       entry = { sampledAt: now, pending: true };
       entry.result = Promise.resolve().then(() => read(runtime))
+        .catch(error => {
+          // A transient failure must not suppress the next polling attempt.
+          if (entries.get(key) === entry) entries.delete(key);
+          throw error;
+        })
         .finally(() => { entry.pending = false; });
       entries.set(key, entry);
     }

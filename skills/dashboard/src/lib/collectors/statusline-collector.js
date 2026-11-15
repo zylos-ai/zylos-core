@@ -140,6 +140,8 @@ export class StatuslineCollector {
     // Clock ticks and metric counters do not change the source's health.
     const { last_check, last_success, metrics_written, ...details } = extra;
     const signature = JSON.stringify([status, details, evidence]);
+    // Skipping last_success writes relies on usage freshness <= the platform's
+    // 30s health expiry: the current 5s sample window turns stale and writes first.
     if (this._health.get(signal) === signature) return;
     this.store.upsertSourceHealth('statusline', signal, status, extra);
     this._health.set(signal, signature);

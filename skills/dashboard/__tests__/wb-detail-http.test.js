@@ -50,6 +50,11 @@ test('group detail HTTP dispatch enforces local scopes and preserves group bound
   t.mock.method(Date, 'now', () => clock);
   t.mock.method(EventLoopMonitor.prototype, 'start', function () { return this; });
   t.mock.method(VersionChecker.prototype, 'start', () => {});
+  // Version discovery is a startup dependency, outside the action transport
+  // boundary whose exact child count and authorization this fixture proves.
+  t.mock.module('../src/lib/installed-versions.js', { namedExports: {
+    createInstalledVersionReader: () => async () => ({ zylos: '1.0.0', claude: '1.0.0', codex: '1.0.0' }),
+  } });
   const groups = [
     { sessionGroup: 'telegram:recent', componentName: 'telegram', lastActivityAt: clock - 2 * 86400000 },
     { sessionGroup: 'telegram:old', componentName: 'telegram', lastActivityAt: clock - 5 * 86400000 },
