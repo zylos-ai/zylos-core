@@ -145,8 +145,23 @@ test('Core state reads Origin facts only for absence or authentication and reads
   assert.equal(agentReadiness(core.getReadinessObservation()).stage, 'runtime_down');
 });
 
+// Real Core file/health evidence across concurrent reads. Run for readiness
+// capture changes; skip unrelated UI edits. Own a private root beneath the
+// runner's short TMPDIR and restore the environment on success or failure.
+// The tmux transport is injected; no process, database or network starts.
 test('readiness returns real Core file evidence that survives a concurrent background refresh', async t => {
-  const root = process.env.ZYLOS_DIR;
+  const previousRoot = process.env.ZYLOS_DIR;
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR, 'core-readiness-'));
+  t.after(() => {
+    process.env.ZYLOS_DIR = previousRoot;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  process.env.ZYLOS_DIR = root;
+  assert.notEqual(root, previousRoot);
+  assert.ok(root.startsWith(process.env.TMPDIR + path.sep));
+  console.log('Core readiness isolation:', JSON.stringify({ HOME: process.env.HOME,
+    ZYLOS_DIR: root, previousRoot, PM2_HOME: process.env.PM2_HOME, TMPDIR: process.env.TMPDIR,
+    tmux: 'injected', network: 'none', database: 'none' }));
   const runDir = path.join(root, 'activity-monitor', 'session-groups', 'origin');
   const healthDir = path.join(root, 'activity-monitor', 'runtime-health');
   fs.mkdirSync(runDir, { recursive: true });
