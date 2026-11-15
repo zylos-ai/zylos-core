@@ -105,23 +105,25 @@ for (const v1 of [false, true]) {
   });
 }
 
-test('unlimited v2 limits retain container scope, actual working set and unknown percentages', async () => {
+test('explicitly unlimited container limits preserve host capacity and usage gauges', async t => {
+  let user = 100, idle = 100;
+  t.mock.method(os, 'cpus', () => Array.from({ length: 8 }, () => ({ times: { user, idle, nice: 0, sys: 0, irq: 0 } })));
   const { collector, metrics, tick } = fixture({ unlimited: true });
-  tick();
-  await collector.collect();
+  tick(); await collector.collect();
+  user += 20; idle += 80; tick(); await collector.collect();
   const data = collector.getLatestSystemData();
-  assert.equal(data.resource_scope, 'container');
-  assert.equal(data.cgroup_version, 'v2');
-  assert.equal(data.cpu_pct, null);
-  assert.equal(data.cpu_count, null);
-  assert.equal(data.cpu_usage_cores, 0.3);
-  assert.equal(data.mem_pct, null);
-  assert.equal(data.mem_total_bytes, null);
-  assert.equal(data.mem_used_bytes, 300_000_000);
-  assert.equal(metrics[0].dimensions.cpu_pct, null);
-  assert.equal(metrics[0].dimensions.cpu_count, null);
-  assert.equal(metrics[0].dimensions.mem_used_pct, null);
-  assert.equal(metrics[0].metric_value, 0, 'summary row remains compatible with its non-null numeric schema');
+  assert.equal(data.resource_scope, 'host'); assert.equal(data.cgroup_version, 'v2');
+  assert.ok(Math.abs(data.cpu_pct - 20) < 1e-9); assert.equal(data.cpu_count, 8);
+  assert.equal(data.mem_pct, 50); assert.equal(data.mem_total_bytes, 16_000_000_000); assert.equal(data.mem_used_bytes, 8_000_000_000);
+  assert.equal(metrics.at(-1).dimensions.cpu_pct, 20); assert.equal(metrics.at(-1).dimensions.mem_used_pct, 50);
+});
+
+test('unreadable container limits do not masquerade as an unlimited host fallback', async () => {
+  const { collector, files, tick } = fixture({ unlimited: true });
+  files['/fixture/cpu.max'] = 'invalid'; files['/fixture/memory.max'] = 'invalid';
+  tick(); await collector.collect();
+  const data = collector.getLatestSystemData();
+  assert.equal(data.resource_scope, 'container'); assert.equal(data.cpu_pct, null); assert.equal(data.mem_total_bytes, null);
 });
 
 for (const v1 of [false, true]) {

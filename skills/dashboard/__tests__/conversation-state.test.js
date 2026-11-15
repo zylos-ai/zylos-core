@@ -106,7 +106,7 @@ function fixture(extra = () => undefined, t = key => key) {
       });
       const value = await extra(u, options);
       if (value !== undefined) { if (u.pathname.startsWith('/api/groups/')) { fixtureInstance = value.fixtureInstance; const { fixtureInstance: ignored, ...detail } = value; return detail; } return value; }
-      if (p === '/api/instance') return { session_mode: 'multi', ...fixtureInstance };
+      if (p === '/api/instance') return { session_mode: { sessionMode: 'multi' }, ...fixtureInstance };
       if (u.pathname === '/api/chat/conversations') return {
         items: [{
           id: 'g:A',

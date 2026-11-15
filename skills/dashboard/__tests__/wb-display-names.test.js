@@ -71,11 +71,11 @@ test('display-name search feeds both historical and snapshot rows through the ex
   let calls = 0;
   const api = createGroupsApi({ workbench: { getSnapshot: async () => { calls++; return { readAt: 1000, rows, listKnown: true, sources: {} }; } } });
   const result = await api.search('周');
-  assert.deepEqual(new Set(result.rows.map(row => row.sessionGroup)), new Set(['telegram:a', 'telegram:b']));
-  assert.equal(result.rows.find(row => row.sessionGroup === 'telegram:a').displayName, '产品周会');
-  assert.equal(result.rows.find(row => row.sessionGroup === 'telegram:a').state.kind, 'idle');
-  assert.equal(result.rows.find(row => row.sessionGroup === 'telegram:b').displayName, '周报');
-  assert.equal(result.rows.find(row => row.sessionGroup === 'telegram:b').state.kind, 'offline');
+  assert.deepEqual(new Set(result.rows.map(row => row.id)), new Set(['telegram:a', 'telegram:b']));
+  assert.equal(result.rows.find(row => row.id === 'telegram:a').displayName, '产品周会');
+  assert.equal(result.rows.find(row => row.id === 'telegram:a').state.kind, 'idle');
+  assert.equal(result.rows.find(row => row.id === 'telegram:b').displayName, '周报');
+  assert.equal(result.rows.find(row => row.id === 'telegram:b').side, 'offline');
   assert.equal(calls, 1);
   f.names.setName('telegram:c', 'Ascii', 'agent'); assert.equal(f.names.search('ASCII', 50)[0].displayName, 'Ascii');
 });
@@ -128,7 +128,8 @@ test('local name routes require admin and publish human-owned names in group sna
   let response = await request(route, 'PUT', { name: '<script>' }); assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { ok: true, data: { sessionGroup: 'telegram:a', displayName: '<script>', source: 'human' } });
   response = await request('/api/groups/offline'); assert.equal(response.status, 200);
-  assert.deepEqual((await response.json()).rows.find(row => row.sessionGroup === 'telegram:a').name, { sessionGroup: 'telegram:a', displayName: '<script>', source: 'human' });
+  assert.equal((await response.json()).rows.find(row => row.id === 'telegram:a').displayName, '<script>');
+  assert.deepEqual((await (await request('/api/groups/telegram%3Aa?include=')).json()).name, { sessionGroup: 'telegram:a', displayName: '<script>', source: 'human' });
   const names = createDisplayNames({ store: engine.store });
   assert.throws(() => names.setName('telegram:a', 'agent', 'agent'), { code: 'NAME_SET_BY_HUMAN' });
   assert.equal((await request('/api/groups/origin/name', 'PUT', { name: 'bad' })).status, 400);
@@ -154,7 +155,8 @@ test('local name routes require admin and publish human-owned names in group sna
     } finally { write.mock.restore(); }
   });
   response = await request(route, 'DELETE'); assert.equal(response.status, 200); assert.equal((await response.json()).data.displayName, null);
-  clock += 2100; response = await request('/api/groups/offline'); assert.equal((await response.json()).rows.find(row => row.sessionGroup === 'telegram:a').name, null);
+  clock += 2100; response = await request('/api/groups/offline'); assert.equal((await response.json()).rows.find(row => row.id === 'telegram:a').displayName, 'Telegram · a');
+  assert.equal((await (await request('/api/groups/telegram%3Aa?include=')).json()).name, null);
 });
 
 test('naming candidates carry only the redacted preview text, never the reader message', async t => {

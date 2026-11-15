@@ -741,8 +741,7 @@ export async function runWorkbenchBrowser(t, sandbox) {
       if (apiPath === '/api/stream') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
       let value = workbenchAnswer(new URL(apiPath + url.search, 'http://fixture'), Date.now());
       if (apiPath === '/api/instance' && value) {
-        const { zylos_version: _local, ...info } = value.runtime_info;
-        value = { ...value, agent: { name }, runtime_info: remotes[name] === undefined ? info : { ...info, zylos_version: remotes[name] } };
+        value = { ...value, agent: { name }, versions: { ...value.versions, zylos: { ...value.versions.zylos, installed: remotes[name] ?? null } } };
       }
       return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });
     });

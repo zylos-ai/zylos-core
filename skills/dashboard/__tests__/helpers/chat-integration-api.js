@@ -12,6 +12,7 @@ import { C4Reader } from '../../src/lib/c4-reader.js';
 import { FleetProxy } from '../../src/lib/fleet-proxy.js';
 import { sendJson, sendHtml, serveStatic } from '../../src/lib/http.js';
 import { createGroupSnapshot } from '../../src/lib/workbench/group-snapshot.js';
+import { workbenchInstanceAnswer } from '../fixtures/workbench-browser-api.js';
 import { createGroupsApi } from '../../src/lib/workbench/groups-api.js';
 import { createDisplayNames } from '../../src/lib/workbench/display-names.js';
 import { createQueryHandlers } from '../../../comm-bridge/scripts/c4-v2-cli.js';
@@ -165,7 +166,7 @@ export async function createChatApiFixture(t, sandbox, { name = 'instance', extr
       }
       if (req.method === 'GET' && url.pathname === '/api/instance') {
         const snapshot = await workbench.getSnapshot();
-        sendJson(res, 200, { agent: { name: 'Fixture' }, tz: 'UTC', session_mode: readMode(), default_runtime: 'claude', ...snapshot.instance }); return;
+        sendJson(res, 200, { ...workbenchInstanceAnswer({ ...snapshot, mode: readMode() }, Date.now()), agent: { name: 'Fixture' } }); return;
       }
       if (await extraHandler?.(req, res, url, fixture)) return;
       if (['/', '/index.html', '/chat'].includes(url.pathname)) {

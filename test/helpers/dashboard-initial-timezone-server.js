@@ -18,7 +18,7 @@ server.on('request', (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   if (url.pathname === '/api/stream') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-    res.write(`event: instance\ndata: ${JSON.stringify({ session_mode: 'multi', agent: { name: 'browser-case' }, updated_at: '2026-11-15T02:00:00Z' })}\n\n`);
+    res.write(`event: instance\ndata: ${JSON.stringify({ session_mode: { sessionMode: 'multi', transition: null, globalGate: null, blocked: null, supervisor: 'reachable', lastCompleted: null, lastEvents: [] }, agent: { name: 'browser-case' }, updated_at: '2026-11-15T02:00:00Z' })}\n\n`);
     streams.add(res); res.on('close', () => streams.delete(res)); return;
   }
   if (url.pathname.startsWith('/api/')) {

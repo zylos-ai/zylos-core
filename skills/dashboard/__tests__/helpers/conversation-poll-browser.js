@@ -52,7 +52,7 @@ await window.page.open();window.ready=true;</script></html>`;
     if (url.pathname.startsWith('/api/')) {
       assert.ok(calls.length < 100, 'bounded API request log');
       calls.push({ path: url.pathname, query: url.search, method: req.method, at: Date.now() - started });
-      if (url.pathname === '/api/instance') return json(res, { session_mode: 'multi', runtimeHealth: {} });
+      if (url.pathname === '/api/instance') return json(res, { session_mode: { sessionMode: 'multi' }, runtimeHealth: {} });
       if (url.pathname === '/api/chat/conversations') return json(res, { items: [conversation()], nextCursor: null });
       if (url.pathname.endsWith('/send')) {
         sendCount++; sendAt = Date.now();

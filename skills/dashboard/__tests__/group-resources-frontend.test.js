@@ -6,12 +6,12 @@ import { createDocument } from './fixtures/workbench-dom.js';
 
 // Pure page modules and injected reads/DOM: no process, database, network or source evaluation.
 test('group page requests running rows and counts separately without fetching offline rows', async () => {
-  const paths = [], instance = { default_runtime: 'codex', accounts: {}, system: {} };
+  const paths = [], instance = { default_runtime: 'codex', session_mode: { sessionMode: 'multi' }, accounts: {}, resources: {} };
   const counts = { readAt: 123, mode: 'multi', running: { total: 1, states: { working: 1 } }, offline: { total: 50 }, pool: { used: 1, capacity: 3 } };
   const row = { sessionGroup: 'example', state: { kind: 'working' }, flags: { queued: { count: 3 } } };
   const snapshot = await readGroupSnapshot(async path => { paths.push(path); return path === '/api/instance' ? instance : path === '/api/groups/counts' ? counts : { readAt: 123, rows: [row] }; });
   assert.deepEqual(paths.sort(), ['/api/groups/counts', '/api/groups/running', '/api/instance']);
-  assert.equal(snapshot.rows.length, 1); assert.equal(snapshot.rows[0], row);
+  assert.equal(snapshot.rows.length, 1); assert.equal(snapshot.rows[0].sessionGroup, row.id ?? row.sessionGroup);
   assert.equal(snapshot.groupCounts.offline.total, 50); assert.equal(snapshot.instance.pool, counts.pool);
 });
 test('offline page keeps its returned cursor and does not request running rows', async () => {
@@ -61,6 +61,6 @@ test('pushed counts and the current instance refresh only the group rows', async
   const snapshot = await readGroupSnapshot(async path => { paths.push(path); return { rows: [row] }; }, { counts, instance });
   assert.deepEqual(paths, ['/api/groups/running']);
   assert.equal(snapshot.groupCounts, counts);
-  assert.equal(snapshot.rows[0], row);
+  assert.equal(snapshot.rows[0].sessionGroup, row.id ?? row.sessionGroup);
   assert.equal(snapshot.instance.pool.capacityRecord, instance.poolCapacityRecord);
 });

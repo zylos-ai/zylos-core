@@ -84,6 +84,16 @@ export function projectGroup(row, snapshot) {
     ...(kind === 'offline' ? {} : { mainAgent: row.presence === 'running' && ['busy', 'idle'].includes(activity) ? activity : 'unknown' }) };
 }
 
+/** List resources expose presentation observations only. Raw evidence belongs
+ * to detail, even when a caller already has the complete collected snapshot. */
+export function projectListRow(row) {
+  const common = { id: row.id, displayName: row.displayName, channel: row.channel,
+    lastActivityAt: row.lastActivityAt, flags: row.flags };
+  return row.side === 'offline' ? common : { ...common,
+    runtime: row.runtime ?? null, model: row.model ?? null, state: row.state,
+    duration: row.duration ?? null, mainAgent: row.mainAgent ?? 'unknown', contextPct: row.contextPct ?? null };
+}
+
 function rowsOf(snapshot) { return snapshot.rows.map(row => projectGroup(row, snapshot)); }
 function requireCatalog(snapshot) {
   if (snapshot.sources?.c4?.ok === false) throw failure('GROUP_CATALOG_UNREADABLE', 'Session group catalog could not be read', 502);
@@ -104,24 +114,26 @@ export function groupCounts(snapshot, { allowUnreadable = false } = {}) {
       for (const key of FLAGS) if (row.flags[key]) flags[key]++;
     }
   }
-  return { readAt: snapshot.readAt, mode: snapshot.mode, listKnown: snapshot.listKnown === true && snapshot.sources?.c4?.ok !== false,
+  return { readAt: snapshot.readAt, listKnown: snapshot.listKnown === true && snapshot.sources?.c4?.ok !== false,
     running: { total: Object.values(states).reduce((sum, count) => sum + count, 0), states, flags }, offline,
     pool: snapshot.instance?.pool ? { used: snapshot.instance.pool.used ?? null, capacity: snapshot.instance.pool.capacity ?? null } : null };
 }
 
 /** Object APIs reuse the existing request snapshot; no second poller or cache. */
-export function createGroupsApi({ workbench, groupConfig } = {}) {
+export function createGroupsApi({ workbench, groupConfig, getRuntimeInfo = () => null } = {}) {
   return {
     counts: async () => groupCounts(await workbench.getSnapshot()),
     async running() {
       const snapshot = await workbench.getSnapshot();
-      return { readAt: snapshot.readAt, listKnown: snapshot.listKnown, rows: rowsOf(snapshot).filter(row => row.side === 'running') };
+      return { readAt: snapshot.readAt, listKnown: snapshot.listKnown, rows: rowsOf(snapshot).filter(row => row.side === 'running').map(projectListRow) };
     },
     async offline(params = new URLSearchParams()) {
       const limitText = params.get('limit') ?? '50';
       if (!/^\d+$/.test(limitText) || Number(limitText) < 1 || Number(limitText) > 200) throw failure('INVALID_LIMIT', 'Limit must be between 1 and 200');
       const limit = Number(limitText), q = (params.get('q') ?? '').trim().toLowerCase();
       if (q.length > 64) throw failure('INVALID_QUERY', 'Query must contain at most 64 characters');
+      const flag = params.get('flag');
+      if (flag !== null && !FLAGS.includes(flag)) throw failure('INVALID_FLAG', 'Flag must be queued, blocked, waitingSlot, startFailed or unreadable');
       const cursor = params.get('cursor');
       let after = null;
       if (cursor) {
@@ -131,12 +143,12 @@ export function createGroupsApi({ workbench, groupConfig } = {}) {
       const snapshot = await workbench.getSnapshot();
       requireCatalog(snapshot);
       const rank = row => atMillis(row.lastActivityAt) || 0;
-      const rows = rowsOf(snapshot).filter(row => row.side === 'offline' && (!q ||
+      const rows = rowsOf(snapshot).filter(row => row.side === 'offline' && (!flag || Object.hasOwn(row.flags, flag)) && (!q ||
         `${row.id}\n${row.displayName}`.toLowerCase().includes(q)))
         .sort((a, b) => rank(b) - rank(a) || a.id.localeCompare(b.id));
       const remaining = after ? rows.filter(row => rank(row) < after[0] || (rank(row) === after[0] && row.id.localeCompare(after[1]) > 0)) : rows;
       const page = remaining.slice(0, limit), last = page.at(-1);
-      return { readAt: snapshot.readAt, listKnown: snapshot.listKnown, rows: page,
+      return { readAt: snapshot.readAt, listKnown: snapshot.listKnown, rows: page.map(projectListRow),
         nextCursor: remaining.length > limit ? Buffer.from(JSON.stringify([rank(last), last.id])).toString('base64url') : null };
     },
     async search(q) {
@@ -146,7 +158,7 @@ export function createGroupsApi({ workbench, groupConfig } = {}) {
       const snapshot = await workbench.getSnapshot();
       requireCatalog(snapshot);
       const matches = rowsOf(snapshot).filter(row => `${row.id}\n${row.displayName}`.toLowerCase().includes(term));
-      return { rows: matches.slice(0, 50), truncated: matches.length > 50 };
+      return { rows: matches.slice(0, 50).map(row => ({ ...projectListRow(row), side: row.side })), truncated: matches.length > 50 };
     },
     activity: range => workbench.activity((range instanceof URLSearchParams ? range.get('range') : range) || '6h'),
     async detail(id, { include = ['raw', 'config'] } = {}) {
@@ -166,7 +178,7 @@ export function createGroupsApi({ workbench, groupConfig } = {}) {
         readExtra('config', async () => groupConfig ? groupConfig.get(id) : null),
       ]);
       const selected = ['running', 'starting'].includes(row.presence) ? row.launchConfig : row.target;
-      return { ...row, readAt: snapshot.readAt, ...raw, ...config,
+      return { ...row, readAt: snapshot.readAt, ...raw, ...config, runtimeInfo: getRuntimeInfo(row),
         effective: { runtime: row.runtime, model: row.model ?? selected?.model?.model ?? (typeof selected?.model === 'string' && selected.model !== 'default' ? selected.model : null),
           effort: row.effort ?? selected?.effort ?? selected?.model?.effort ?? null,
           runtimeOverridden: row.runtimeOverridden, modelOverridden: row.modelOverridden },

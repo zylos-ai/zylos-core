@@ -2,8 +2,8 @@ import { listen, reconcileChildren } from './detail-update.js?v=158';
 import { element, fallbackName, icon, runtimeName } from './plain-text.js?v=106';
 import { olderRow } from './older-row.js?v=86';
 import { channelIcon, platformLabel, statePill } from './board.js?v=157';
-import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=173';
-import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=177';
+import { detailDisplayRow, groupEventCount, rawKey, renderOverview } from './detail-overview.js?v=174';
+import { createTimelineLoader, renderTimeline } from './detail-timeline.js?v=178';
 import { eventTypesFor, recentWindow } from './timeline-rows.js?v=112';
 import { createGroupConfig, fetchJson, renderGroupConfig, responseError } from './group-config.js?v=116';
 import { renderNameEditor } from './name-edit.js?v=116';
@@ -437,7 +437,7 @@ export function createGroupDetail({ root, document = root.ownerDocument, fetch =
       if (!controller) return;
       state.snapshot = snapshot;
       const previousRun = state.row.live?.runId;
-      if (!state.historical) state.row = snapshot.rows?.find(row => row.sessionGroup === state.row.sessionGroup) ?? state.row;
+      if (!state.historical) state.row = { ...state.row, ...(snapshot.rows?.find(row => row.sessionGroup === state.row.sessionGroup) ?? {}) };
       if (previousRun !== state.row.live?.runId) {
         resetSubagents();
         timeline.close();

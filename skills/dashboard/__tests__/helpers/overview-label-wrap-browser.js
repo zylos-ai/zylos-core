@@ -158,15 +158,15 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     if (pool || mode) await context.route(url => ['/api/instance', '/api/groups/counts'].includes(url.pathname), async route => {
       const response = await route.fetch();
       const body = await response.json();
+      const instance = new URL(route.request().url()).pathname === '/api/instance';
       if (pool) {
-        const { capacityRecord, ...numbers } = pool;
-        if (new URL(route.request().url()).pathname === '/api/instance') body.poolCapacityRecord = capacityRecord;
-        else body.pool = { ...body.pool, ...numbers };
+        if (instance) body.poolCapacityRecord = pool.capacityRecord ?? null;
+        else {
+          body.pool = { used: pool.used ?? body.pool?.used ?? null, capacity: pool.capacity ?? body.pool?.capacity ?? null };
+          body.offline = { ...body.offline, waitingSlot: pool.waiting ?? body.offline?.waitingSlot ?? 0 };
+        }
       }
-      if (mode) {
-        if (new URL(route.request().url()).pathname === '/api/instance') body.session_mode = mode;
-        else body.mode = mode;
-      }
+      if (mode && instance) body.session_mode = { ...body.session_mode, sessionMode: mode === 'unreadable' ? null : mode };
       await route.fulfill({ response, json: body });
     });
     // narrowTo(box, items): each item's min-content width (its widest piece that may not break) and max-content
@@ -418,11 +418,12 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       const response = await route.fetch();
       const body = await response.json();
       const { mode, ...pool } = next ?? {};
-      if (new URL(route.request().url()).pathname === '/api/instance') body.poolCapacityRecord = RICH_POOL.capacityRecord;
-      else { const { capacityRecord, ...numbers } = RICH_POOL; body.pool = { ...body.pool, ...numbers, ...pool }; }
-      if (mode) {
-        if (new URL(route.request().url()).pathname === '/api/instance') body.session_mode = mode;
-        else body.mode = mode;
+      if (new URL(route.request().url()).pathname === '/api/instance') {
+        body.poolCapacityRecord = RICH_POOL.capacityRecord;
+        if (mode) body.session_mode = { ...body.session_mode, sessionMode: mode };
+      } else {
+        body.pool = { used: pool.used ?? RICH_POOL.used, capacity: pool.capacity ?? RICH_POOL.capacity };
+        body.offline = { ...body.offline, waitingSlot: pool.waiting ?? RICH_POOL.waiting };
       }
       await route.fulfill({ response, json: body });
     });
@@ -433,6 +434,8 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
       // The board polls every 5s.
       await page.locator('#wb-side .wb-host-pool', { hasText: copy('zh', 'wb.host.poolSlots') + '3 / 4' }).waitFor({ timeout: 8000 });
       next = { mode: 'single' };
+      // Mode is instance-owned; a foreground refresh reads that independent resource.
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await page.locator('#wb-side .wb-host-pool').waitFor({ state: 'hidden', timeout: 8000 });
       assert.equal((await measureHostPool(page)).shown, false, 'single mode, no section');
       assert.equal(await page.locator('#wb-side .wb-host-svc, #wb-side .wb-kvs').first().isVisible(), true, 'the host panel stays open');
@@ -520,7 +523,10 @@ export async function runOverviewLabelWrapBrowser(t, sandbox) {
     await context.route(url => ['/api/instance', '/api/groups/counts'].includes(url.pathname), async route => {
       const response = await route.fetch();
       const body = await response.json();
-      if (longer) Object.assign(body, { pool: { ...body.pool, waiting: 12 }, services: { online: 3, total: 6 } });
+      if (longer) {
+        if (new URL(route.request().url()).pathname === '/api/groups/counts') body.offline = { ...body.offline, waitingSlot: 12 };
+        else body.services = { ...body.services, online: 3, total: 6 };
+      }
       await route.fulfill({ response, json: body });
     });
     try {

@@ -1,16 +1,44 @@
+/** Page-owned names adapt the compact object rows; evidence stays in group detail. */
+export function displayGroupRow(row, side) {
+  return { ...row, sessionGroup: row.id ?? row.sessionGroup,
+    ...(row.displayName != null ? { name: { displayName: row.displayName } } : {}),
+    ...(!row.state && (side === 'offline' || row.id != null) ? { state: { kind: 'offline' } } : {}) };
+}
+
+export function groupAttention(instance, counts, rows, failedRows = [], failures = []) {
+  const problems = [], reminders = [];
+  if (instance.supervisorPaused === true) reminders.push({ kind: 'supervisor_paused' });
+  for (const [runtime, record] of Object.entries(instance.runtimeHealth ?? {})) {
+    if (record?.health === 'auth_failed') problems.push({ kind: 'auth_failed', runtime,
+      groups: rows.filter(row => row.runtime === runtime && row.flags?.blocked?.reason === 'auth_failed').map(row => row.sessionGroup) });
+    if (['rate_limited', 'recovering'].includes(record?.health)) reminders.push({ kind: 'rate_limited', runtime, until: record.cooldownUntil });
+  }
+  const waiting = counts.offline?.waitingSlot ?? 0;
+  if (waiting > 0 && counts.pool?.used != null && counts.pool.capacity != null && counts.pool.used >= counts.pool.capacity) reminders.push({ kind: 'pool_full', waiting });
+  for (const channel of instance.services?.channels ?? []) if (channel.down) problems.push({ kind: 'channel_down', service: channel.service, pm2Status: channel.status });
+  const failed = new Map([...rows, ...failedRows].filter(row => row.flags?.startFailed).map(row => [row.sessionGroup, row]));
+  for (const row of failed.values()) problems.push({ kind: 'start_failed', group: row.sessionGroup, count30m: row.flags.startFailed.count, lastAt: row.flags.startFailed.lastAt });
+  const unreadable = new Set(failures);
+  if (counts.listKnown === false) unreadable.add('groups');
+  for (const row of rows) for (const reason of row.flags?.unreadable?.reasons ?? []) unreadable.add(reason);
+  for (const source of unreadable) problems.push({ kind: 'data_unreadable', source });
+  return { problems, reminders };
+}
+
 /** Assemble page-owned view data from the separate instance and group resources. */
 export function groupSnapshot(instance, counts, page) {
-  const rows = page?.rows ?? [];
-  const overrides = rows.some(row => row.runtimeOverridden === null || row.modelOverridden === null) ? null : { runtime: rows.filter(row => row.runtimeOverridden === true),
-    model: rows.filter(row => row.modelOverridden === true) };
-  return { mode: counts.mode, view: counts.mode === 'single' ? 'single' : counts.mode === 'multi' ? 'multi' : 'unreadable',
-    baselineRuntime: instance.default_runtime ?? instance.runtime_info?.runtime,
-    readAt: counts.readAt, listKnown: counts.listKnown !== false && page.listKnown !== false, rows, counts: { ...counts.running?.states, offline: counts.offline?.total ?? 0 },
-    groupCounts: counts, nextCursor: page.nextCursor ?? null, hasOlder: page.nextCursor != null, overrides,
+  const rows = (page?.rows ?? []).map(row => displayGroupRow(row, page.side));
+  const mode = instance.session_mode?.sessionMode ?? null;
+  const failedRows = (page.failedRows ?? []).map(row => displayGroupRow(row, 'offline'));
+  return { mode, view: ['single', 'multi'].includes(mode) ? mode : 'unreadable',
+    baselineRuntime: instance.default_runtime,
+    readAt: counts.readAt, listKnown: counts.listKnown !== false && page.listKnown !== false, rows,
+    counts: { ...counts.running?.states, offline: counts.offline?.total ?? 0 },
+    groupCounts: counts, nextCursor: page.nextCursor ?? null, hasOlder: page.nextCursor != null, overrides: null,
     instance: { ...instance, pool: instance.poolCapacityRecord == null ? counts.pool : { ...counts.pool, capacityRecord: instance.poolCapacityRecord } },
+    failedRows, attentionFailures: page.attentionFailures ?? [],
     sources: { status: { ok: counts.listKnown !== false && page.listKnown !== false, readAt: page.readAt ?? counts.readAt } },
-    attention: { problems: rows.flatMap(row => row.attention ?? []).filter(item => item.severity !== 'reminder'),
-      reminders: rows.flatMap(row => row.attention ?? []).filter(item => item.severity === 'reminder') } };
+    attention: groupAttention(instance, counts, rows, failedRows, page.attentionFailures) };
 }
 
 export async function readGroupSnapshot(read, { signal, side = 'running', cursor = null, pages = 1, instance, counts } = {}) {
@@ -20,15 +48,27 @@ export async function readGroupSnapshot(read, { signal, side = 'running', cursor
   const [instanceData, countsData, page] = await Promise.all([
     instance ?? read('/api/instance', { signal }), counts ?? read('/api/groups/counts', { signal }), read(path, { signal }),
   ]);
-  const combined = { ...page, rows: [...(page.rows ?? [])] };
+  const combined = { ...page, side, rows: [...(page.rows ?? [])] };
   const visited = new Set();
   for (let index = 1; side === 'offline' && index < pages && combined.nextCursor != null; index++) {
     if (visited.has(combined.nextCursor)) throw Error('offline_cursor_repeated');
     visited.add(combined.nextCursor);
     const next = await read('/api/groups/offline?cursor=' + encodeURIComponent(combined.nextCursor), { signal });
-    const known = new Set(combined.rows.map(row => row.sessionGroup));
-    combined.rows.push(...(next.rows ?? []).filter(row => !known.has(row.sessionGroup)));
+    const known = new Set(combined.rows.map(row => row.id ?? row.sessionGroup));
+    combined.rows.push(...(next.rows ?? []).filter(row => !known.has(row.id ?? row.sessionGroup)));
     combined.nextCursor = next.nextCursor ?? null;
+  }
+  if ((countsData.offline?.startFailed ?? 0) > 0) {
+    try {
+      const failedRows = [], visited = new Set(); let cursor = null;
+      do {
+        const result = await read('/api/groups/offline?flag=startFailed' + (cursor == null ? '' : '&cursor=' + encodeURIComponent(cursor)), { signal });
+        failedRows.push(...(result.rows ?? [])); cursor = result.nextCursor ?? null;
+        if (cursor != null && visited.has(cursor)) throw Error('offline_cursor_repeated');
+        if (cursor != null) visited.add(cursor);
+      } while (cursor != null);
+      combined.failedRows = failedRows;
+    } catch { combined.attentionFailures = ['offline_start_failed']; }
   }
   return groupSnapshot(instanceData, countsData, combined);
 }

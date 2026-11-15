@@ -473,9 +473,9 @@ test('settings relabel updates navigation without replacing controls or changing
 
 test('version panel reuses upgrade control, labels Codex and retains readonly reason and non-action core hint', async () => {
   const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button'); upgrade.append(node(document, 'span', 'action-cli-label'), node(document, 'span', 'action-cc-ver')); let called = 0, hints = 0; upgrade.addEventListener('click', () => called++);
-  renderVersion(root, { configured_runtime: 'codex', runtime: 'unknown', codex_running: '1', codex_update: '2', zylos_version: '3', zylos_update: '4' }, { document, upgrade, t, readOnly: true, onHint: () => hints++ });
+  renderVersion(root, { codex: { installed: '1', update: '2' }, zylos: { installed: '3', update: '4' } }, { document, upgrade, t, runtime: 'codex', readOnly: true, onHint: () => hints++ });
   assert.equal(upgrade.disabled, true); assert.equal(upgrade.title, 'remote.actions_read_only_tooltip'); assert.match(root.textContent, /Codex.*v1.*↑2/); await root.querySelector('#settings-zylos-update').dispatch('click'); assert.equal(hints, 1); assert.equal(called, 0);
-  renderVersion(root, { runtime: 'codex', codex_version: '1' }, { document, upgrade, t, readOnly: false }); await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
+  renderVersion(root, { codex: { installed: '1' } }, { document, upgrade, t, runtime: 'codex', readOnly: false }); await upgrade.dispatch('click'); assert.equal(called, 1); assert.equal(upgrade.disabled, false);
 });
 
 test('theme and language are segmented choices that forward the pressed value', async () => {
@@ -575,12 +575,12 @@ test('default controls retain the restart lock after an accepted runtime change'
 
 test('the version row shows the Core version with its update hint and the engine CLI in both views, and no Dashboard version', () => {
   const document = documentFixture(), root = document.createElement('div'), upgrade = node(document, 'button');
-  renderVersion(root, { zylos_version: '1.0.0-beta.7', zylos_update: '1.0.0', cc_version: '2' }, { document, upgrade, t });
+  renderVersion(root, { zylos: { installed: '1.0.0-beta.7', update: '1.0.0' }, claude: { installed: '2' } }, { document, upgrade, t });
   assert.match(root.textContent, /zylos · v1\.0\.0-beta\.7/); assert.match(root.textContent, /CC · v2/);
   assert.doesNotMatch(root.textContent, /Dashboard/, 'Dashboard ships inside Core and has no version of its own');
   assert.ok(root.querySelector('#settings-zylos-update')); assert.equal(root.querySelector('button'), root.querySelector('#settings-zylos-update'));
   for (const zylos_version of [undefined, null, '', ' ', 'unknown']) {
-    renderVersion(root, { zylos_version, cc_version: '2' }, { document, upgrade, t });
+    renderVersion(root, { zylos: { installed: zylos_version }, claude: { installed: '2' } }, { document, upgrade, t });
     assert.match(root.textContent, /zylos · wb\.unknown/, JSON.stringify(zylos_version));
     assert.doesNotMatch(root.textContent, /zylos · v/, JSON.stringify(zylos_version));
   }
@@ -588,22 +588,22 @@ test('the version row shows the Core version with its update hint and the engine
 
 test('the header version follows the viewed instance and never falls back to an earlier one', () => {
   const document = documentFixture(), el = node(document, 'span'); el.hidden = true;
-  renderBrandVersion(el, { zylos_version: '1.0.0-beta.7' });
+  renderBrandVersion(el, { zylos: { installed: '1.0.0-beta.7' } });
   assert.equal(el.textContent, 'v1.0.0-beta.7'); assert.equal(el.hidden, false);
   // Switching to another instance: its state is cleared first, then arrives without a readable version.
-  for (const info of [undefined, { zylos_version: 'unknown' }, { runtime: 'claude' }]) {
+  for (const info of [undefined, { zylos: { installed: 'unknown' } }, { runtime: 'claude' }]) {
     renderBrandVersion(el, info);
     assert.equal(el.textContent, '', JSON.stringify(info)); assert.equal(el.hidden, true, JSON.stringify(info));
   }
-  renderBrandVersion(el, { zylos_version: '0.9.6' });
+  renderBrandVersion(el, { zylos: { installed: '0.9.6' } });
   assert.equal(el.textContent, 'v0.9.6', 'another instance shows its own version'); assert.equal(el.hidden, false);
-  assert.doesNotThrow(() => renderBrandVersion(null, { zylos_version: '1' }), 'a page without the header element is left alone');
+  assert.doesNotThrow(() => renderBrandVersion(null, { zylos: { installed: '1' } }), 'a page without the header element is left alone');
 });
 
-test('the Core version is read only from the instance\'s own runtime info', () => {
-  assert.equal(coreVersion({ zylos_version: '1.0.0-beta.7' }), '1.0.0-beta.7');
-  assert.equal(coreVersion({ zylos_version: ' 0.9.6\n' }), '0.9.6');
-  for (const info of [undefined, null, {}, { zylos_version: null }, { zylos_version: '' }, { zylos_version: 'unknown' }, { zylos_version: 7 }, { version: '1.0.0' }]) {
+test('the Core version is read only from the instance\'s own version record', () => {
+  assert.equal(coreVersion({ zylos: { installed: '1.0.0-beta.7' } }), '1.0.0-beta.7');
+  assert.equal(coreVersion({ zylos: { installed: ' 0.9.6\n' } }), '0.9.6');
+  for (const info of [undefined, null, {}, { zylos: { installed: null } }, { zylos: { installed: '' } }, { zylos: { installed: 'unknown' } }, { zylos: { installed: 7 } }, { version: '1.0.0' }]) {
     assert.equal(coreVersion(info), null, JSON.stringify(info));
   }
 });

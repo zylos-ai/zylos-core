@@ -172,7 +172,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Cards and tables distinguish hierarchy through heading rows, borders, and whitespace. Empty states, errors, and loading hints belong in their page's content area; see section 7 for copy and section 3 for loading appearance.
 
-[Current] Overview separates running and offline groups with the existing segmented-control family. The mutually exclusive primary status and independent queue, blocking, capacity, start-failure and unreadable flags share the row's status area; flags stack or wrap within that cell. Loading more offline rows preserves the loaded depth on refresh. Group details show today and seven-day usage; the Usage page includes the weighted cache-hit curve alongside the existing charts.
+[Current] Overview separates running and offline groups with the existing segmented-control family. The mutually exclusive primary status and independent queue, blocking, capacity, start-failure and unreadable flags share the row's status area; flags stack or wrap within that cell. Loading more offline rows preserves the loaded depth on refresh. Fleet cost summaries and cards show today and seven-day costs; they have no session-cost cell or tooltip. Offline groups waiting for capacity keep the readable waiting-slot explanation in plain detail. Group details show today and seven-day usage; the Usage page includes the weighted cache-hit curve alongside the existing charts.
 
 ## 6. Responsive Layout: Tasks Remain Usable on 390 px Mobile Screens
 
@@ -184,7 +184,7 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 
 [Current] Dedicated layout references: [mobile navigation](../public/js/wb/mobile-navigation.js), [workbench media queries](../public/css/wb.css), [conversation media queries](../public/css/conversation.css). For fixed input areas, also check safe areas, visible height, back actions, and keyboard opening. Intentional internal scrolling in charts or tables must stay within their containers.
 
-[Current] With a detail drawer open, the remaining Overview board uses stacked rows through 1399 px so search and range controls do not overlap the drawer. At 390 px, primary status and flags wrap inside the existing grid cell without widening the page. The running/offline selector retains the approved segmented-control dimensions and focus states.
+[Current] With a detail drawer open, the remaining Overview board uses stacked rows through 1399 px so search and range controls do not overlap the drawer. At 390 px, primary status and flags wrap inside the existing grid cell without widening the page. The running/offline selector retains the approved segmented-control dimensions and focus states. Status pills wrap long labels and duration within their existing width, including untranslated keys while a language pack is unavailable.
 
 [Current] Technical group detail retains its folded diagnostic evidence for starting, stopping and unknown states, and for blocked, waiting-slot, start-failed or unreadable flags. A diagnostic flag can coexist with an idle or working primary state; it does not replace that state.
 
@@ -210,6 +210,8 @@ Scope: Dashboard pages, detail drawers, rich conversation content, light and dar
 | Actions | “刷新”“核对投递状态”“刷新状态”“刷新记忆目录”“应用” describe different actions; do not replace them with one word to achieve equal widths |
 
 [Current] When the initial Overview request fails and no data is available, show “数据读取失败” (data read failed) only in the list area, reusing the `wb-attention-item wb-attention-problem` error card and `alert` warning icon, with a text contrast ratio of at least 4.5:1 in both themes. The error card and search-toolbar content share horizontal margins: 16 px on desktop and 12 px on mobile; preserve loading and successful empty states. If a refresh fails after data has been loaded, retain the previous data in the list and report the failure in the top bar. A successful request with no groups shows “暂无活跃组” (no active groups), not a read failure; other issues remain visible in the bar.
+
+[Current] If a conversation push connection fails, the page opens the ordinary event stream so instance and group updates remain live while conversation polling continues. Existing reconnect backoff and subscription changes retain their lifecycle ownership.
 
 [Current] Runtime, connection, login, and delivery use distinct business copy; preserve the distinctions above.
 

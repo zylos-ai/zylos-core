@@ -93,12 +93,14 @@ export class SystemCollector {
       process.stderr.write(`[system-collector] Memory error: ${err.message}\n`);
     }
 
-    // Use the existing sampler's cadence for CPU deltas. A detected cgroup
-    // remains container-scoped even when its CPU or memory limit is unlimited.
+    // Finite limits use cgroup gauges. With both limits explicitly unlimited,
+    // retain the host capacity and usage gauges; unreadable limits stay unknown.
     this._cgroup.sample();
     const cgroup = this._cgroup.read();
     data.cgroup_version = cgroup.cgroup_version;
-    data.resource_scope = cgroup.cgroup_version === 'none' ? 'host' : 'container';
+    const unlimited = cgroup.cpu_limit_cores === null && cgroup.mem_total_bytes === null &&
+      !cgroup.errors?.some(code => ['cpu_limit_unreadable', 'memory_limit_unreadable'].includes(code));
+    data.resource_scope = cgroup.cgroup_version === 'none' || unlimited ? 'host' : 'container';
     if (data.resource_scope === 'container') {
       data.cpu_pct = cgroup.cpu_pct;
       data.cpu_count = cgroup.cpu_limit_cores;

@@ -93,8 +93,8 @@ export const wbWritable = remoteIsReadOnly => !remoteIsReadOnly();
 const originStates = new Set(['running', 'starting', 'not_running', 'busy', 'idle', 'waiting', 'stopped', 'error', 'working', 'offline', 'stopping', 'unknown']);
 export function instanceStatusText(data = {}, level = 'plain', t = key => key) {
   const state = data.origin?.state?.kind || data.origin?.presence;
-  if (level === 'technical') return t('actions.instance_status', { view: data.view || t('value.unknown'),
-    mode: data.session_mode || t('value.unknown'), origin: state || t('value.unknown') });
+  if (level === 'technical') return t('actions.instance_status', { view: data.session_mode?.sessionMode || t('value.unknown'),
+    mode: data.session_mode?.sessionMode || t('value.unknown'), origin: state || t('value.unknown') });
   return t('wb.term.origin') + ' · ' + t('wb.state.' + (originStates.has(state) ? state : 'unknown'));
 }
 export function waitText(wait, level = 'plain', t, now = Date.now()) {

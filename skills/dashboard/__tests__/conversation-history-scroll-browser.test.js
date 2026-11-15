@@ -20,7 +20,7 @@ test('conversation history loads older messages while preserving the reading pos
       if (!url.pathname.startsWith('/api/')) return false;
       if (url.pathname === '/api/stream') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(); return true; }
       const values = {
-        '/api/instance': { default_runtime: 'claude', session_mode: f.readMode(), agent: { id: 'test', name: 'Private browser' }, runtime_info: {} },
+        '/api/instance': { default_runtime: 'claude', session_mode: { sessionMode: f.readMode() }, agent: { id: 'test', name: 'Private browser' } },
         '/api/fleet': { agents: [] }, '/api/health': { status: 'ok' },
         '/api/groups/counts': { mode: f.readMode(), running: { total: 0, states: {}, flags: {} }, offline: { total: 0 }, pool: {} },
         '/api/groups/running': { rows: [], listKnown: true }, '/api/instance/runtime-options': { actions: [] },

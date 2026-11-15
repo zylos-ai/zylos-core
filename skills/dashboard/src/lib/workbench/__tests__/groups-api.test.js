@@ -90,12 +90,12 @@ test('offline pagination and search select names and keys across both sides', as
     const params = new URLSearchParams({ limit: '13', ...(cursor ? { cursor } : {}) });
     const page = await service.offline(params);
     assert.ok(page.rows.length <= 13);
-    for (const row of page.rows) { assert.equal(row.state.kind, 'offline'); assert.equal(seen.has(row.id), false); seen.add(row.id); }
+    for (const row of page.rows) { assert.equal(Object.hasOwn(row, 'state'), false); assert.equal(seen.has(row.id), false); seen.add(row.id); }
     cursor = page.nextCursor;
   } while (cursor);
   assert.equal(seen.size, 57); assert.equal((await service.running()).rows.length, 1);
   assert.equal((await service.search(new URLSearchParams({ q: 'Named project' }))).rows[0].id, 'telegram:old-01');
-  assert.equal((await service.search('work')).rows[0].side, 'running');
+  assert.equal((await service.search('work')).rows[0].state.kind, 'idle');
   await assert.rejects(service.offline(new URLSearchParams({ cursor: 'broken' })), { code: 'INVALID_CURSOR' });
   await assert.rejects(service.offline(new URLSearchParams({ limit: '0' })), { code: 'INVALID_LIMIT' });
 });
@@ -148,8 +148,9 @@ test('real snapshot projects child-only work and an old offline catalog in both 
     const api = createGroupsApi({ workbench: service });
     const running = await api.running(), child = running.rows.find(row => row.id === (key ?? 'origin'));
     assert.equal(child.state.kind, 'working'); assert.equal(child.mainAgent, 'idle');
-    assert.equal(child.working.subagents.count, 1);
-    const counts = await api.counts(); assert.equal(counts.mode, mode ?? 'single'); assert.equal(counts.offline.total, mode === 'multi' ? 58 : 0);
+    assert.equal((await api.detail(child.id, { include: [] })).working.subagents.count, 1);
+    assert.equal(Object.hasOwn(child, 'working'), false);
+    const counts = await api.counts(); assert.equal(Object.hasOwn(counts, 'mode'), false); assert.equal(counts.offline.total, mode === 'multi' ? 58 : 0);
     assert.equal(running.rows.some(row => row.state.kind === 'offline'), false);
   }
 });
@@ -185,4 +186,45 @@ test('stream and self-fleet counts can retain known rows when only the catalog i
   assert.throws(() => groupCounts(value), { code: 'GROUP_CATALOG_UNREADABLE' });
   const counts = groupCounts(value, { allowUnreadable: true });
   assert.equal(counts.listKnown, false); assert.equal(counts.running.total, 1); assert.deepEqual(counts.pool, { used: 1, capacity: 1 });
+});
+
+const RUNNING_FIELDS = ['id', 'displayName', 'channel', 'runtime', 'model', 'state', 'duration', 'flags', 'mainAgent', 'contextPct', 'lastActivityAt'].sort();
+const OFFLINE_FIELDS = ['id', 'displayName', 'channel', 'lastActivityAt', 'flags'].sort();
+
+test('list resources expose only their approved fields while detail retains source observations', async () => {
+  const active = { ...base(), contextPct: 35, tools: [{ name: 'Bash' }], launchConfig: { runtime: 'claude', mode: 'default' },
+    secretObservation: { source: 'not a list field' } };
+  const sleeping = { ...base('not_running'), sessionGroup: 'telegram:offline', working: null, live: null };
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot([active, sleeping]) } });
+  const running = (await api.running()).rows[0];
+  assert.deepEqual(Object.keys(running).sort(), RUNNING_FIELDS);
+  assert.equal(running.contextPct, 35);
+  const offline = (await api.offline()).rows[0];
+  assert.deepEqual(Object.keys(offline).sort(), OFFLINE_FIELDS);
+  const search = await api.search('telegram:');
+  assert.equal(search.rows.length, 2);
+  for (const row of search.rows) assert.deepEqual(Object.keys(row).sort(), [...(row.id === active.sessionGroup ? RUNNING_FIELDS : OFFLINE_FIELDS), 'side'].sort());
+  const detail = await api.detail(active.sessionGroup, { include: [] });
+  for (const field of ['presence', 'live', 'working', 'queue', 'target', 'launchConfig', 'c4', 'tools', 'secretObservation']) assert.deepEqual(detail[field], active[field]);
+  const counts = await api.counts();
+  assert.equal(Object.hasOwn(counts, 'mode'), false);
+  assert.deepEqual(Object.keys(counts.pool).sort(), ['capacity', 'used']);
+});
+
+test('offline flag filtering combines with text search before stable pagination', async () => {
+  const rows = Array.from({ length: 6 }, (_, index) => ({ ...base('not_running'), live: null,
+    sessionGroup: `telegram:failed-${index}`, name: { displayName: index === 5 ? 'Other' : 'Target' },
+    wait: index === 0 ? null : { kind: 'start_failed', count30m: index, lastAt: now - 100, reasonCode: 'launch_failed' },
+    c4: { lastActivityAt: now - index * 1000 } }));
+  const api = createGroupsApi({ workbench: { getSnapshot: async () => snapshot(rows) } });
+  const query = { flag: 'startFailed', q: 'target', limit: '2' };
+  const first = await api.offline(new URLSearchParams(query));
+  assert.deepEqual(first.rows.map(row => row.id), ['telegram:failed-1', 'telegram:failed-2']);
+  assert.ok(first.nextCursor);
+  const second = await api.offline(new URLSearchParams({ ...query, cursor: first.nextCursor }));
+  assert.deepEqual(second.rows.map(row => row.id), ['telegram:failed-3', 'telegram:failed-4']);
+  assert.equal(second.nextCursor, null);
+  assert.equal((await api.offline(new URLSearchParams({ flag: 'queued' }))).rows.length, 0);
+  for (const flag of ['', 'start_failed', 'startFailed,queued']) await assert.rejects(api.offline(new URLSearchParams({ flag })), { code: 'INVALID_FLAG', statusCode: 400 });
+  assert.equal((await api.offline(new URLSearchParams({ flag: 'startFailed' }))).rows.length, 5);
 });

@@ -2,6 +2,7 @@
 // a memory tree with a long file, and settings. Shapes follow the dashboard's own routes; values are invented.
 // Every answer is computed from `now`, so the page's relative times stay stable within one run.
 
+import { projectListRow } from '../../src/lib/workbench/groups-api.js';
 import { runRestartEffect } from '../../public/js/wb/timeline-rows.js';
 
 const iso = ms => new Date(ms).toISOString();
@@ -27,6 +28,20 @@ function rows(now) {
   ];
 }
 
+// Scenario rows may carry raw observations for detail cases. List answers always
+// pass through the real contract projection, so raw fixture fields cannot leak.
+function detailRow(row) {
+  const id = row.id ?? row.sessionGroup;
+  const offline = row.state?.kind === 'offline' || row.presence === 'not_running';
+  return { ...row, id, side: offline ? 'offline' : 'running', flags: row.flags ?? {},
+    displayName: row.displayName ?? row.name?.displayName ?? (id === 'origin' ? 'Origin' : id),
+    channel: row.channel ?? row.c4?.componentName ?? (id === 'origin' ? null : id.split(':')[0]),
+    runtime: row.runtime ?? row.target?.runtime ?? null, model: row.model ?? row.target?.model ?? null,
+    lastActivityAt: row.lastActivityAt ?? (row.c4?.lastActivityAt == null ? null : iso(row.c4.lastActivityAt)),
+    ...(offline ? {} : { mainAgent: row.mainAgent ?? (row.state?.kind === 'working' ? 'busy' : 'idle') }) };
+}
+const listRow = row => projectListRow(detailRow(row));
+
 export function workbenchSnapshot(now) {
   const list = rows(now);
   const counts = { working: 0, starting: 0, stopping: 0, unknown: 0, idle: 0, offline: 0 };
@@ -37,6 +52,24 @@ export function workbenchSnapshot(now) {
       pool: { ready: 2, starting: 0, reclaiming: 0, waiting: 0, capacity: 4, used: 2 }, services: { online: 6, total: 6 },
       system: { sampledAt: now - 12000, cpuPct: 23.4, cpuCount: 8, memUsedBytes: 2147483648, memTotalBytes: 17179869184, diskUsedPct: 61.6, diskFreeBytes: 43218108416 } },
     sources: { status: { ok: true, readAt: now }, c4: { ok: true, readAt: now } }, attention: { ok: true, problems: [], reminders: [] } };
+}
+
+export function workbenchInstanceAnswer(value, now) {
+  const raw = value.instance, system = raw.system ?? {}, resources = raw.resources ?? {
+    scope: 'host', cpu_pct: system.cpuPct ?? null, cpu_count: system.cpuCount ?? null, cpu_source: 'host',
+    mem_pct: system.memTotalBytes ? system.memUsedBytes / system.memTotalBytes * 100 : null,
+    mem_used_bytes: system.memUsedBytes ?? null, mem_total_bytes: system.memTotalBytes ?? null, mem_source: 'host',
+    disk_pct: system.diskUsedPct ?? null, disk_free_bytes: system.diskFreeBytes ?? null, disk_total_bytes: null,
+    sampledAt: system.sampledAt == null ? null : iso(system.sampledAt),
+  };
+  return { agent: { name: 'browser-case' }, color: null, tz: 'UTC', default_runtime: value.baselineRuntime ?? 'claude',
+    session_mode: { sessionMode: value.mode === 'unreadable' ? null : value.mode, transition: null, globalGate: null, blocked: null,
+      supervisor: 'reachable', lastCompleted: null, lastEvents: [] },
+    versions: { zylos: { installed: '0.9.4', latest: null, update: null }, claude: { installed: '2.1.80', latest: null, update: null }, codex: { installed: null, latest: null, update: null } },
+    defaults: { claude: { model: 'opus', effort: 'high', threshold: 70 }, codex: { model: 'gpt-5.5', effort: 'high', threshold: 70 } },
+    runtimeHealth: raw.runtimeHealth, accounts: raw.accounts, supervisorPaused: raw.supervisorPaused ?? false,
+    autoRestarts: raw.autoRestarts ?? 0, resources, services: { ...raw.services, channels: raw.services?.channels ?? [] },
+    poolCapacityRecord: raw.pool?.capacityRecord ?? null };
 }
 
 function schedule(now) {
@@ -139,14 +172,18 @@ const meta = { runtime: 'claude', current_model: 'opus', current_effort: 'high',
 /** The JSON answer for a GET, or undefined when the case does not serve that path. */
 export function workbenchAnswer(url, now) {
   const p = url.pathname;
-  if (p === '/api/groups/running') return { readAt: now, listKnown: true, rows: rows(now).filter(row => row.state.kind !== 'offline') };
-  if (p === '/api/groups/offline') { const row = rows(now).find(row => row.state.kind === 'offline'); return { readAt: now, listKnown: true, rows: url.searchParams.has('cursor') ? [{ ...row, sessionGroup: 'lark:archived', name: { displayName: 'Archived room' } }] : [row], nextCursor: url.searchParams.has('cursor') ? null : 'second' }; }
-  if (p === '/api/groups/counts') return { readAt: now, mode: 'multi', running: { total: 2, states: { working: 1, idle: 1 }, flags: { queued: 1, blocked: 1 } }, offline: { total: 2 }, pool: workbenchSnapshot(now).instance.pool };
+  if (p === '/api/groups/running') return { readAt: now, listKnown: true, rows: rows(now).filter(row => row.state.kind !== 'offline').map(listRow) };
+  if (p === '/api/groups/offline') {
+    const row = rows(now).find(row => row.state.kind === 'offline');
+    if (url.searchParams.has('flag')) return { readAt: now, listKnown: true, rows: row.flags?.[url.searchParams.get('flag')] ? [listRow(row)] : [], nextCursor: null };
+    return { readAt: now, listKnown: true, rows: (url.searchParams.has('cursor') ? [{ ...row, sessionGroup: 'lark:archived', name: { displayName: 'Archived room' } }] : [row]).map(listRow), nextCursor: url.searchParams.has('cursor') ? null : 'second' };
+  }
+  if (p === '/api/groups/counts') return { readAt: now, listKnown: true, running: { total: 2, states: { working: 1, idle: 1 }, flags: { queued: 1, blocked: 1 } }, offline: { total: 2, waitingSlot: 0, startFailed: 0 }, pool: { used: 2, capacity: 4 } };
   if (/^\/api\/groups\/[^/]+$/.test(p) && !['search','activity','runtime-overrides','naming-prompt'].includes(p.split('/').at(-1))) {
     const group = decodeURIComponent(p.split('/').at(-1));
     const row = rows(now).find(row => row.sessionGroup === group);
     if (!row) return undefined;
-    return { readAt: now, ...row, raw: row.preview?.text ?? null, config: workbenchAnswer(new URL('http://fixture/api/groups/' + encodeURIComponent(group) + '/config'), now), effective: row.target };
+    return { readAt: now, ...detailRow(row), raw: row.preview?.text ?? null, config: workbenchAnswer(new URL('http://fixture/api/groups/' + encodeURIComponent(group) + '/config'), now), effective: row.target };
   }
   if (p === '/api/groups/search') return { rows: [] };
   if (p === '/api/groups/activity') return { start: now - 59 * 60e3, cellSeconds: 60, groups: {} };
@@ -169,7 +206,7 @@ export function workbenchAnswer(url, now) {
     return { runtime: { ok: true, data: { desired: { mode: 'inherit' }, resolved: pair, running: { status: 'applied', launchConfig: pair } } },
       model: { ok: true, data: { runtime: 'claude', desired: pair, resolved: pair, running: { status: 'applied', launchConfig: pair } } } };
   }
-  if (p === '/api/instance') return { ...workbenchSnapshot(now).instance, session_mode: 'multi', default_runtime: 'claude', tz: 'UTC', agent: { name: 'browser-case' }, runtime_info: { runtime: 'claude', zylos_version: '0.9.4', cc_version: '2.1.80' } };
+  if (p === '/api/instance') return workbenchInstanceAnswer(workbenchSnapshot(now), now);
   if (p.endsWith('/events')) { const query = new URL(url); query.searchParams.set('session_group', decodeURIComponent(p.split('/')[3])); return timeline(query, now); }
   if (p === '/api/instance/runtime-options') return meta;
   if (p === '/api/settings') return { active: 'claude', runtimes: { claude: { builtInModels: ['opus'], modelPrices: { opus: { input: 15, output: 75, cacheRead: 1.5, cacheCreation: 18.75 } },
@@ -195,17 +232,17 @@ export function workbenchAnswer(url, now) {
 // Project a scenario snapshot onto the independent object resources requested by the UI.
 export function workbenchSnapshotAnswer(url, value, now) {
   const p = url.pathname;
-  if (p === '/api/groups/running') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => row.presence !== 'not_running'), sources: value.sources };
-  if (p === '/api/groups/offline') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => row.presence === 'not_running'), nextCursor: null };
+  if (p === '/api/groups/running') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'running').map(listRow) };
+  if (p === '/api/groups/offline') return { readAt: value.readAt, listKnown: value.listKnown, rows: value.rows.filter(row => detailRow(row).side === 'offline' && (!url.searchParams.has('flag') || row.flags?.[url.searchParams.get('flag')])).map(listRow), nextCursor: null };
   if (p === '/api/groups/counts') {
-    const active = value.rows.filter(row => row.presence !== 'not_running'), states = {}, flags = {};
+    const active = value.rows.filter(row => detailRow(row).side === 'running'), states = {}, flags = {};
     for (const row of active) { states[row.state.kind] = (states[row.state.kind] ?? 0) + 1; for (const flag of Object.keys(row.flags ?? {})) flags[flag] = (flags[flag] ?? 0) + 1; }
-    return { readAt: value.readAt, listKnown: value.listKnown, mode: value.mode, running: { total: active.length, states, flags }, offline: { total: value.rows.length - active.length }, pool: value.instance.pool };
+    return { readAt: value.readAt, listKnown: value.listKnown, running: { total: active.length, states, flags }, offline: { total: value.rows.length - active.length, waitingSlot: value.instance.pool?.waiting ?? 0, startFailed: value.rows.filter(row => detailRow(row).side === 'offline' && row.flags?.startFailed).length }, pool: value.instance.pool ? { used: value.instance.pool.used ?? null, capacity: value.instance.pool.capacity ?? null } : null };
   }
-  if (p === '/api/instance') return { ...workbenchAnswer(url, now), ...value.instance, session_mode: value.mode };
+  if (p === '/api/instance') return workbenchInstanceAnswer(value, now);
   if (/^\/api\/groups\/[^/]+$/.test(p) && !['search', 'activity', 'runtime-overrides', 'naming-prompt'].includes(p.split('/').at(-1))) {
     const row = value.rows.find(row => row.sessionGroup === decodeURIComponent(p.split('/').at(-1)));
-    return row ? { ...workbenchAnswer(url, now), readAt: value.readAt, ...row, raw: row.preview?.text ?? null, effective: row.target } : undefined;
+    return row ? { ...workbenchAnswer(url, now), readAt: value.readAt, ...detailRow(row), raw: row.preview?.text ?? null, effective: row.target } : undefined;
   }
   return workbenchAnswer(url, now);
 }

@@ -128,3 +128,14 @@ test('page script text: the observer page and read-only state use the same viewe
   assert.match(app, /function remoteIsReadOnly\(\) \{\s*const viewed = viewedMachine\(\);\s*return viewed\.viewingRemote && viewed\.access !== 'admin';\s*\}/);
   assert.doesNotMatch(app, /access: '(?:admin|read)'/, 'no access level is written into the page');
 });
+
+test('Origin restart identity is cleared on machine changes and accepted only after the target guard', () => {
+  const app = fs.readFileSync(new URL('../public/js/app.js', import.meta.url), 'utf8');
+  const reset = app.slice(app.indexOf('function resetAgentData()'), app.indexOf('function enterRemoteAgent('));
+  assert.match(reset, /^function resetAgentData\(\) \{\s*state\.originGroup = null;/);
+  const mode = app.slice(app.indexOf('async function refreshModeStatus()'), app.indexOf('function closeActionsModal()'));
+  const read = mode.indexOf("const origin = await fetchJson('/api/groups/origin');");
+  const accept = mode.indexOf('state.originGroup = origin;', read);
+  const guard = mode.indexOf('if (observerTargetKey() !== targetKey) return;', read);
+  assert.ok(read >= 0 && guard > read && accept > guard, 'a late Origin read cannot become the next machine’s restart target');
+});

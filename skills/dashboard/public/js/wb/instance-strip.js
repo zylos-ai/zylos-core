@@ -118,12 +118,12 @@ const oneDecimal = bytes => (bytes / 1073741824).toFixed(1);
 export function systemItems(document, system, { t = key => key, readAt } = {}) {
   // Group snapshots carry readAt; freshness uses the same snapshot clock as the sample.
   const stale = system != null && !(readAt - system.sampledAt <= SYSTEM_STALE_MS);
-  const memory = system && system.memTotalBytes > 0 && system.memUsedBytes != null ? system.memUsedBytes / system.memTotalBytes * 100 : null;
+  const memory = system && system.mem_total_bytes > 0 && system.mem_used_bytes != null ? system.mem_used_bytes / system.mem_total_bytes * 100 : null;
   const specs = [
-    ['cpu', 'cpu', system?.cpuPct, system?.cpuCount > 0 ? countLabel(t, 'wb.inst.cpuCores', system.cpuCount) : ''],
+    ['cpu', 'cpu', system?.cpu_pct, system?.cpu_count > 0 ? countLabel(t, 'wb.inst.cpuCores', system.cpu_count) : ''],
     ['memory', 'memory', memory, memory == null ? ''
-      : t('wb.inst.memoryUsed', { used: oneDecimal(system.memUsedBytes), total: oneDecimal(system.memTotalBytes) })],
-    ['disk', 'disk', system?.diskUsedPct, system?.diskFreeBytes != null ? t('wb.inst.diskFree', { free: oneDecimal(system.diskFreeBytes) }) : ''],
+      : t('wb.inst.memoryUsed', { used: oneDecimal(system.mem_used_bytes), total: oneDecimal(system.mem_total_bytes) })],
+    ['disk', 'disk', system?.disk_pct, system?.disk_free_bytes != null ? t('wb.inst.diskFree', { free: oneDecimal(system.disk_free_bytes) }) : ''],
   ];
   return specs.map(([glyph, name, value, detail]) => {
     const label = t('wb.host.' + name), known = !stale && typeof value === 'number' && Number.isFinite(value);
@@ -199,13 +199,14 @@ export function instanceStrip(root, snapshot, { document = root.ownerDocument, t
   const occupancy = used == null ? null : capacity == null ? String(used) : `${used} / ${capacity}`;
   poolItem.append(element(document, 'b', occupancy ?? '—', full ? 'wb-txt-warn' : undefined));
   // A queue is a wait, so it stays on screen.
-  const queued = pool.waiting ? t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: pool.waiting }) : '';
+  const waiting = snapshot.groupCounts?.offline?.waitingSlot ?? 0;
+  const queued = waiting ? t(technical ? 'wb.inst.queuedTech' : 'wb.inst.queued', { count: waiting }) : '';
   if (queued) poolItem.append(element(document, 'span', '· ' + queued, 'wb-txt-warn'));
   const source = multi ? poolSource(pool, t) : '';
   const details = technical && multi ? poolExplanation(pool.capacityRecord, t) : [];
   poolItem.title = [poolName, occupancy == null ? t('wb.unknown') : technical || multi ? t('wb.inst.inUse') + ' ' + occupancy : occupancy,
     source, queued, ...details, t('wb.inst.poolHint')].filter(Boolean).join(' · ');
-  root.append(poolItem, ...systemItems(document, instance.system ?? null, { t, readAt: snapshot.readAt }));
+  root.append(poolItem, ...systemItems(document, instance.resources ?? null, { t, readAt: snapshot.readAt }));
   cost = costSummary?.today?.cost ?? cost;
   const costName = t(technical ? 'wb.inst.costTech' : 'wb.cost'), today = money(cost);
   const expense = item(document, icon(document, 'dollar', 'xs'), spoken(document, costName), element(document, 'b', today));

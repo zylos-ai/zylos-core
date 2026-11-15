@@ -29,7 +29,7 @@ export function observerPageUsable(status, { viewingRemote = true, access = 'rea
 
 /** Running targets from the same workbench snapshot used to select groups. */
 export function runningObserverGroups(snapshot) {
-  return (snapshot?.rows ?? []).filter(row => row.presence === 'running' && Boolean(row.live?.runId));
+  return (snapshot?.rows ?? []).filter(row => ['working', 'idle'].includes(row.state?.kind) || row.presence === 'running' && Boolean(row.live?.runId));
 }
 
 export function observerGroupRow(snapshot, sessionGroup) {

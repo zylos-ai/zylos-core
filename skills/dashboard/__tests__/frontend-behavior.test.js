@@ -229,8 +229,8 @@ test('runtime info upgrade badges use semver-aware comparison', () => {
 
 test('Codex runtime renders CLI update badge in settings', () => {
   const version = fs.readFileSync(new URL('../public/js/wb/settings-version.js', import.meta.url), 'utf8');
-  assert.match(version, /ri\.codex_running \|\| ri\.codex_version \|\| ri\.codex_installed/);
-  assert.match(version, /ri\.codex_restart \|\| ri\.codex_update/);
+  assert.match(version, /ri\[runtime\]\?\.installed/);
+  assert.match(version, /ri\[runtime\]\?\.update/);
   assert.match(version, /badge\.classList\.toggle\('action-ver-dot', !!update\)/);
 });
 
@@ -2174,7 +2174,7 @@ function workbenchHarness(context, read, options = {}) {
   context.mock.method(globalThis, 'setTimeout', (handler, delay) => { const id = ++nextTimer; timeouts.set(id, { handler, delay }); return id; });
   context.mock.method(globalThis, 'clearTimeout', id => timeouts.delete(id));
   const makeSnapshot = workbenchSnapshot;
-  const fallback = path => path.includes('/api/groups/running') ? makeSnapshot() :
+  const fallback = path => path.endsWith('/api/instance') ? { session_mode: { sessionMode: 'multi' } } : path.includes('/api/groups/running') ? makeSnapshot() :
     path.includes('/api/groups/activity') ? { start: 0, cellSeconds: 60, groups: { a: { cells: Array(60).fill('none'), inbound: [] } } } : {};
   const mounted = mountWorkbench({ document, window, storage: saved, t: key => key,
     identity: () => owner, endpoint: path => owner === 'local' ? path : '/fleet/' + owner + path,
@@ -2402,7 +2402,7 @@ test('workbench shell removes the transition hint after a session mode read fail
     if (path === '/api/instance') {
       modeReads++;
       if (failed) throw Error('offline');
-      return { session_mode: 'multi', transition: { phase: 'draining' } };
+      return { session_mode: { sessionMode: 'multi', transition: { phase: 'draining' } } };
     }
     return fallback(path);
   });
@@ -2806,4 +2806,22 @@ test('locating an offline group finds its row beyond the first offline page', as
   assert.equal(h.document.activeElement, board.children[0]);
   assert.equal(scrolled[0].element, board.children[0]);
   assert.deepEqual(scrolled[0].options, { block: 'center' });
+});
+
+test('a late offline locate cannot switch the side after a newer group selection', async context => {
+  const late = wbDeferred();
+  const h = workbenchHarness(context, (path, fallback) => {
+    if (path === '/api/groups/telegram%3Aold') return late.promise;
+    if (path === '/api/groups/a') return workbenchSnapshot().rows[0];
+    return fallback(path);
+  });
+  await wbTick(); await wbTick();
+  const first = h.locateGroup('telegram:old'); await wbTick();
+  const createElement = h.document.createElement.bind(h.document);
+  h.document.createElement = tag => { const element = createElement(tag); element.scrollIntoView = () => {}; return element; };
+  await h.locateGroup('a');
+  late.resolve({ sessionGroup: 'telegram:old', state: { kind: 'offline' } });
+  await first; await wbTick();
+  assert.equal(h.calls.some(path => path === '/api/groups/offline'), false);
+  assert.equal(h.nodes.get('#wb-board').children[0].dataset.group, 'a');
 });

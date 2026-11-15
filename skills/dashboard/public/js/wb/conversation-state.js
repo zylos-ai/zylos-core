@@ -1128,7 +1128,7 @@ export function createConversationState({
     emit();
     await Promise.all([list(), run(() => request('/api/instance'), data => {
       if (version === refreshVersion) {
-        const actual = data.session_mode;
+        const actual = data.session_mode?.sessionMode;
         mode = ['single', 'multi'].includes(actual) ? actual : null;
         if (mode === null) error = 'chat_mode_unavailable';
         emit();

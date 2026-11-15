@@ -6,6 +6,7 @@ import { createFetchGuard } from './fetch-guard.js?v=85';
 const same = (a, b) => a.runtime === b.runtime && a.mode === b.mode &&
   (a.mode === 'default' || (a.model === b.model && a.effort === b.effort));
 export function modelCell(row, t = key => key) {
+  if (row.runtime) return [runtimeName(row.runtime), row.model].filter(Boolean).join(' · ');
   if (['running', 'starting'].includes(row.presence) && !row.launchConfig && row.target?.reason === 'launch_config_unreadable') {
     return [runtimeName(row.target.runtime), t('wb.unknown')].filter(Boolean).join(' · ');
   }
@@ -127,7 +128,7 @@ export function renderRow(row, { document, level = 'plain', activity, single = f
     nowCell(document, row, { level, t }), activityStrip(document, activity, { inboundUnknown: activity?.inboundUnknown, t }));
   if (level === 'technical') {
     const queue = element(document, 'span', undefined, 'wb-queue');
-    if (!row.queue) queue.textContent = '—';
+    if (!row.queue) queue.textContent = row.flags?.queued?.count ?? '—';
     else if (row.queue.known === false) queue.textContent = t('wb.unknown');
     else queue.append(element(document, 'b', row.queue.pending?.count ?? 0), element(document, 'span', ` · ${row.queue.running?.count ?? 0}`));
     queue.title = t('wb.board.queueHint');

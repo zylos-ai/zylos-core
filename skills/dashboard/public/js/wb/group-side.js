@@ -1,5 +1,5 @@
-import { readGroupSnapshot } from './group-data.js?v=1';
-import { createGroupDetail } from './detail.js?v=177';
+import { readGroupSnapshot } from './group-data.js?v=2';
+import { createGroupDetail } from './detail.js?v=178';
 import { boardController } from './board.js?v=157';
 import { element, icon } from './plain-text.js?v=106';
 

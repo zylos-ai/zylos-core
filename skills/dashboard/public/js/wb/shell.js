@@ -1,11 +1,11 @@
-import { readGroupSnapshot, groupSnapshot } from './group-data.js?v=1';
+import { readGroupSnapshot, groupSnapshot, displayGroupRow } from './group-data.js?v=2';
 import { withRequestTimeout } from '../request-timeout.js?v=2';
 import { createViewMode, groupObservable, observerNavEntry } from './view-mode.js?v=153';
 import { boardController, renderBoard, renderDistribution } from './board.js?v=157';
 import { createBoardSearch } from './board-search.js?v=87';
 import { instanceStrip, accountRuntimes } from './instance-strip.js?v=203';
 import { renderAttention } from './attention-bar.js?v=194';
-import { createGroupDetail } from './detail.js?v=177';
+import { createGroupDetail } from './detail.js?v=178';
 import { loadNamePrompt, renderAutoName } from './auto-name.js?v=107';
 import { createHostPanel } from './host-panel.js?v=203';
 import { element, icon } from './plain-text.js?v=106';
@@ -173,7 +173,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     overview?.classList.toggle('wb-has-side', Boolean(side && !side.hidden));
   }
   const search = createBoardSearch({
-    fetchRows: q => read('/api/groups/search?q=' + encodeURIComponent(q)),
+    fetchRows: async q => { const result = await read('/api/groups/search?q=' + encodeURIComponent(q)); return { ...result, rows: (result.rows ?? []).map(row => displayGroupRow(row)) }; },
     onRows: rows => {
       searchRows = rows;
       redraw();
@@ -289,6 +289,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     const cursor = snapshot.nextCursor, captured = identity();
     try {
       const value = await read('/api/groups/offline?cursor=' + encodeURIComponent(cursor));
+      value.rows = (value.rows ?? []).map(row => displayGroupRow(row, 'offline'));
       if (stopped || captured !== identity() || groupSide !== 'offline' || snapshot?.nextCursor !== cursor) return;
       const known = new Set(snapshot.rows.map(row => row.sessionGroup));
       controller.invalidate();
@@ -301,7 +302,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     if (!visible()) return;
     try {
       const value = await read('/api/instance');
-      transition = value?.transition ?? null;
+      transition = value?.session_mode?.transition ?? null;
     } catch {
       transition = null;
     }
@@ -409,7 +410,7 @@ export function mountWorkbench({ document = globalThis.document, window = global
     setViewDetail: redraw,
     applyInstance(instance) {
       instanceRead = { owner: identity(), promise: Promise.resolve(instance) };
-      transition = instance.transition ?? null;
+      transition = instance.session_mode?.transition ?? null;
       if (snapshot) snapshot = groupSnapshot(instance, snapshot.groupCounts, snapshot);
       redraw();
     },
@@ -431,8 +432,12 @@ export function mountWorkbench({ document = globalThis.document, window = global
       let groups;
       try {
         if (key) {
-          const selected = await read('/api/groups/' + encodeURIComponent(key));
-          groupSide = selected.state?.kind === 'offline' ? 'offline' : 'running';
+          const selected = displayGroupRow(await read('/api/groups/' + encodeURIComponent(key)));
+          if (stopped || captured !== identity() || generation !== locateGeneration || !pageActive()) return;
+          const side = selected.state?.kind === 'offline' ? 'offline' : 'running';
+          if (side !== groupSide) offlineDepth = 1;
+          controller.invalidate();
+          groupSide = side;
           if (groupSide === 'offline') { searchRows = [selected]; }
         }
         groups = await readGroupSnapshot(read, { side: groupSide, pages: offlineDepth });

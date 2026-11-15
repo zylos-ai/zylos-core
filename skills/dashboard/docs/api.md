@@ -53,21 +53,24 @@ Example: `GET /api/health/ready` → `{"ready":false,"reason":"supervisor_unavai
 |---|---|---|
 | `agent` | object | Configured instance identity, including `name:string` and generated color fields |
 | `tz` | string | Instance time zone used for display and usage calendar windows |
-| `session_mode` | `single` / `multi` / null | Effective session mode; null when unreadable |
+| `session_mode` | object | Core mode and transition state, described below |
 | `default_runtime` | string | Configured default runtime |
 | `defaults` | object | Runtime-keyed default objects described below |
-| `runtime_info` | object | Current runtime and CLI metadata |
-| `versions` | object | `zylos`, `claude`, `codex` version strings, nullable when unavailable |
+| `versions` | object | Runtime-keyed `zylos`, `claude`, `codex` objects: `{installed:string|null,latest:string|null,update:string|null}`; `update` identifies an available newer version |
 | `runtimeHealth` | object / null | Runtime-keyed health observations, including health and cooldown evidence |
 | `accounts` | object / null | Runtime-keyed weekly account quota objects or null; observations include used percentage, reset time, `recordedAt` and `live` |
 | `supervisorPaused` | boolean / null | Whether new supervisor actions are paused |
 | `autoRestarts` | object / null | `{count:number}` automatic restarts recorded during the past hour |
-| `resources` | object | `scope:"host"|"container"`, nullable numbers `cpu_pct`, `mem_pct`, `mem_used_bytes`, `mem_total_bytes`, `disk_pct`, `disk_free_bytes` |
-| `system` | object / null | Host/container sample, including CPU count and memory/disk capacity |
-| `services` | object / null | PM2 counts: `online:number` and `total:number` |
+| `resources` | object | One current resource sample: `scope:"host"|"container"`, `sampledAt:number|null`, `cpu_pct:number|null`, `cpu_count:number|null`, `cpu_source:"container"|"host"`, `mem_pct:number|null`, `mem_used_bytes:number|null`, `mem_total_bytes:number|null`, `mem_source:"container"|"host"`, `disk_pct:number|null`, `disk_free_bytes:number|null`, `disk_total_bytes:number|null` |
+| `services` | object / null | PM2 counts `online:number`, `total:number`, plus `channels:Array<{channel:string,service:string,status:string|null,down:boolean}>`; channel failure observations support the overview reminder |
+| `poolCapacityRecord` | object / null | Pool-capacity provenance; numeric capacity/occupancy belong to group counts |
 | `chat_allow_remote` | boolean | Whether remote chat is enabled |
 
-Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `threshold:number`, `model_thresholds:Record<string,number>` and `session_hot_ttl:object` (effective mode, keepalive seconds and configuration/environment provenance). Container resource samples use detected container limits; unlimited or unreadable limits can remain null. Session context, cost and pool counts belong to the group and usage APIs.
+Each `defaults[runtime]` contains `model:string|null`, `effort:string|null`, `threshold:number`, `model_thresholds:Record<string,number>` and `session_hot_ttl:object` (effective mode, keepalive seconds and configuration/environment provenance). CPU and memory limits are resolved independently: a limited resource uses its container quota, while an unlimited resource uses host values and labels that resource’s source `host`. Unreadable observations remain null. There is no duplicate `system` sample or `runtime_info` object. Origin’s current model, effort, running CLI version and restart-to-apply status belong to group detail; instance versions and defaults describe installed software and configuration. Session context, cost and pool counts belong to the group and usage APIs.
+
+`session_mode` carries Core’s existing `sessionMode:"single"|"multi"|null`, `transition:object|null`, `globalGate:object|null`, `blocked:object|null`, `supervisor:"reachable"|"unreachable"|"unknown"`, `lastCompleted:object|null` and `lastEvents:array`. Optional `supervisorPm2` and `error` retain Core’s status envelope. `transition` preserves phase/reason and progress; `blocked` preserves the recorded blocking start. These observations share the same object in GET and instance push; no separate transition endpoint exists.
+
+The overview composes reminders from `supervisorPaused`, runtime health/account limits, `services.channels`, group counts/pool, offline `flag=startFailed`, row `flags.unreadable`, `counts.listKnown` and request failures. It does not receive a second instance-level attention list.
 
 **Errors:** common authentication errors; an unavailable request dependency produces a server error. Individual missing observations can be represented by null fields.
 
@@ -162,32 +165,24 @@ Example: `POST /api/instance/actions/upgrade-runtime` with `{}`.
 
 ## Session Groups
 
-### Shared Group Row
+### List Row Fields
 
-Running, offline, search and detail responses project the same observations. Important fields are:
+Lists contain presentation observations only. Running rows have exactly these fields:
 
 | Field | Type | Meaning |
 |---|---|---|
 | `id` | string | Stable API identity; `origin` represents the single session |
-| `sessionGroup` | string / null | Underlying Core attribution; legacy single-session evidence can use null |
 | `displayName` | string | Effective human-readable name or fallback |
-| `name` | object / null | Stored/effective display-name metadata |
 | `channel` | string / null | Channel namespace; Origin has no channel |
-| `runtime`, `model` | string / null | Target/effective runtime and model observations |
-| `state` | `{kind:string,since:string|null}` | Mutually exclusive primary state and known state start |
-| `duration` | number / null | State duration in seconds |
-| `flags` | object | Zero or more independently applicable flags, below |
-| `side` | `running` / `offline` | List membership; unknown belongs to running |
-| `mainAgent` | `busy` / `idle` / `unknown` | Running rows only; main Agent observation for instruction callers; UI does not display it |
-| `lastActivityAt` | string / null | Latest recorded C4 activity |
+| `runtime`, `model` | string / null | Current runtime and model observations |
+| `state` | `{kind:string,since:string|null,stale?:boolean,sampledAt?:number}` | Mutually exclusive primary state and its known start; stale observations retain the last busy/idle classification for less than 60 seconds |
+| `duration` | number / null | State duration in seconds; a tolerated stale idle sample retains its last recorded idle duration |
+| `flags` | object | Independent conditions, below |
+| `mainAgent` | `busy` / `idle` / `unknown` | Main Agent observation for instruction callers; UI does not display it |
 | `contextPct` | number / null | Current session context percentage |
-| `contextReason` | string, optional | Why current context is unreadable |
-| `presence`, `live`, `fence` | string / object / null | Source process/identity observation and stop fence |
-| `working`, `queue`, `wait` | object / null | Activity, pending-message statistics and underlying wait evidence |
-| `target`, `launchConfig`, `createdAt` | object / number / null | Effective target configuration and current launch evidence |
-| `c4`, `tools` | object / array / null | Read-only communication summary and active-tool observations |
+| `lastActivityAt` | string / null | Latest recorded C4 activity |
 
-Other source-observation fields are retained by the row projection; clients should ignore fields they do not use. `mainAgent` and primary state answer different questions: a child-only workload is `working` with `mainAgent:"idle"`.
+Offline rows have exactly `id`, `displayName`, `channel`, `lastActivityAt` and `flags`. The ID remains necessary to open detail or perform a group action. Lists do not include `sessionGroup`, stored `name` metadata, `side`, `presence`, `live`, `working`, `wait`, `queue`, `target`, `launchConfig`, `c4`, `tools` or any other raw observations. Search adds `side` to distinguish running and offline results.
 
 | Primary state | Meaning |
 |---|---|
@@ -195,8 +190,10 @@ Other source-observation fields are retained by the row projection; clients shou
 | `idle` | Process is present with none of those activities |
 | `starting` | Process launch is in progress |
 | `stopping` | Present process has a stop/restart/reclaim fence |
-| `offline` | Confirmed no process |
-| `unknown` | Process/activity state cannot be established |
+| `offline` | Confirmed no process; represented by offline-list membership |
+| `unknown` | Process/activity state cannot be established; belongs to the running side |
+
+`mainAgent` and primary state answer different questions: a child-only workload is `working` with `mainAgent:"idle"`.
 
 | Flag key | Value fields and types | Meaning |
 |---|---|---|
@@ -206,15 +203,15 @@ Other source-observation fields are retained by the row projection; clients shou
 | `startFailed` | `count:number`, `lastAt:string|null`, `reason:string|null` | Launch failed within the past 30 minutes |
 | `unreadable` | `reasons:string[]` | One or more source observations could not be read |
 
-Flags are independent: a working row can carry both `queued` and `blocked`. Missing flag keys mean that condition was not established.
+Flags are independent: a working row can carry both `queued` and `blocked`. Missing keys mean that condition was not established. Historical group names and flags remain available through the offline list.
 
 ### GET /api/groups/counts
 
 **Access:** Read. **Parameters:** none.
 
-Returns `readAt:number`, `mode:string|null`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:object|null` (used/capacity and capacity provenance). Running state counts include working, idle, starting, stopping and unknown. Counts contain no group rows, including offline rows.
+Returns `readAt:number`, `listKnown:boolean`, `running:{total:number,states:Record<PrimaryState,number>,flags:Record<Flag,number>}`, `offline:{total:number,waitingSlot:number,startFailed:number}`, and `pool:{used:number|null,capacity:number|null}|null`. Running state counts include working, idle, starting, stopping and unknown. All count/pool observations are numeric or null; there are no rows, mode or capacity-provenance records. Session mode comes only from `/api/instance`; capacity provenance is `instance.poolCapacityRecord`.
 
-**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other unknown source availability is represented by `listKnown` and nullable observations.
+**Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors. Other source availability is represented by `listKnown` and nullable observations.
 
 Example: `GET /api/groups/counts`.
 
@@ -222,7 +219,7 @@ Example: `GET /api/groups/counts`.
 
 **Access:** Read. **Parameters:** none; this list is not paginated.
 
-Returns `{readAt:number,listKnown:boolean,rows:GroupRow[]}`. Every row has `side:"running"`; the list never includes confirmed offline rows. Its practical size follows the session pool.
+Returns `{readAt:number,listKnown:boolean,rows:RunningRow[]}` with only the running fields listed above. Confirmed offline rows are excluded. Its practical size follows the session pool.
 
 **Errors:** common read errors.
 
@@ -230,19 +227,19 @@ Example: `GET /api/groups/running`.
 
 ### GET /api/groups/offline
 
-**Access:** Read. **Parameters:** optional `q:string` (trimmed, at most 64 characters), `cursor:string` (opaque cursor from the previous page), `limit:integer` (1–200, default 50).
+**Access:** Read. **Parameters:** optional `q:string` (trimmed, at most 64 characters), `flag:queued|blocked|waitingSlot|startFailed|unreadable` (one flag), `cursor:string` (opaque cursor from the previous page), `limit:integer` (1–200, default 50).
 
-Returns `{readAt:number,listKnown:boolean,rows:GroupRow[],nextCursor:string|null}`. Rows have `side:"offline"`, ordered by descending last activity and then ID. Search matches group ID/address and display name. Pass the cursor unchanged to continue.
+Returns `{readAt:number,listKnown:boolean,rows:OfflineRow[],nextCursor:string|null}` with only the five offline fields above. Rows are ordered by descending last activity and then ID. Text matches group ID/address and display name. A flag matches only when that key exists in the row’s flags; text and flag filters combine with AND before pagination. Pass the cursor unchanged with the same filters to continue.
 
-**Errors:** 400 `INVALID_LIMIT`, `INVALID_QUERY`, `INVALID_CURSOR`; 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
+**Errors:** 400 `INVALID_LIMIT`, `INVALID_QUERY`, `INVALID_FLAG`, `INVALID_CURSOR`; 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
 
-Example: `GET /api/groups/offline?q=team&limit=20`.
+Example: `GET /api/groups/offline?flag=startFailed&q=team&limit=20`.
 
 ### GET /api/groups/search
 
 **Access:** Read. **Parameters:** `q:string`, matched against ID/address and name; empty or more than 64 characters returns no results.
 
-Returns `{rows:GroupRow[],truncated:boolean}`, at most 50 results, across both sides. Each row identifies its `side`.
+Returns `{rows:Array<RunningRow|OfflineRow>,truncated:boolean}`, at most 50 results across both sides. Search alone adds `side:"running"|"offline"` to each result; all other fields follow its side’s list schema.
 
 **Errors:** 502 `GROUP_CATALOG_UNREADABLE`; common read errors.
 
@@ -260,13 +257,19 @@ Example: `GET /api/groups/activity?range=6h`.
 
 ### GET /api/groups/:id
 
-**Access:** Read. **Parameters:** encoded group ID.
+**Access:** Read. **Parameters:** encoded group ID; optional `include=raw,config` (default both). An empty `include=` requests neither extra; either name can be selected independently.
 
-Returns one `GroupRow` plus `readAt:number` (snapshot Unix milliseconds), `raw:string|null` (sanitized first-message content), `config:object|null` (Core runtime/model read envelopes), `effective:{runtime:string|null,model:string|null,effort:string|null,runtimeOverridden:boolean|null,modelOverridden:boolean|null}`, and `run:{runId:string|null,sessionId:string|null,createdAt:string|null}|null`. `side` identifies current membership; callers use this same address before and after a lifecycle change.
+Returns the complete group observation, including the applicable list fields plus `sessionGroup:string|null`, `name:object|null`, `side:"running"|"offline"`, `presence:string`, `live:object|null`, `fence:object|null`, `working:object|null`, `queue:object|null`, `wait:object|null`, `target:object|null`, `launchConfig:object|null`, `createdAt:number|null`, `c4:object|null`, `tools:array`, and other source observations. `readAt:number` is the snapshot’s Unix milliseconds. `runtimeInfo:object|null` holds the group’s runtime/model/effort, running CLI version and pending configuration/restart observations; these do not appear in `/api/instance`.
 
-**Errors:** 400 `SESSION_GROUP_INVALID`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` / `group_raw_failed`; common read errors. Individual configuration reads can return a failure envelope inside `config`.
+`effective` contains `{runtime:string|null,model:string|null,effort:string|null,runtimeOverridden:boolean|null,modelOverridden:boolean|null}`. For a running or starting process, effective values and override flags describe the actual launch; runtime override compares that runtime with the current baseline and model override reads the launch’s override mode. Offline flags/values describe current desired configuration. Top-level override fields and `effective` use the same observations. Unknown evidence yields null. `run` is `{runId:string|null,sessionId:string|null,createdAt:string|null}|null`.
 
-Example: `GET /api/groups/telegram%3Aexample`.
+When requested, `raw:string|null` contains sanitized first-message content and `config:object|null` contains Core runtime/model read envelopes. An optional read failure returns its field as null and `rawError` or `configError` as `{code:string,message:string}`; it does not fail the whole detail request. Unrequested extras and their error fields are omitted. The address remains stable across lifecycle changes.
+
+Bare keys `counts`, `running`, `offline`, `search`, `activity`, `naming-prompt` and `runtime-overrides` are reserved API namespace segments and cannot address a group detail. Use namespaced group keys rather than those bare names.
+
+**Errors:** 400 `SESSION_GROUP_INVALID`, `INVALID_INCLUDE`; 404 `GROUP_NOT_FOUND`; 502 `GROUP_CATALOG_UNREADABLE` when an unknown group cannot be checked against the catalog; common read errors. Known detail remains readable when unrelated catalog collection fails. Individual Core configuration errors can also appear inside their configuration envelopes.
+
+Example: `GET /api/groups/telegram%3Aexample?include=`.
 
 ### GET /api/groups/:id/usage
 
@@ -436,7 +439,7 @@ Example: `DELETE /api/groups/telegram%3Aexample` with `{"confirmed":true,"operat
 
 ### Usage Summary Fields
 
-Instance and group summaries share the following schema. Tokens include input and output; input includes cached input. Cache rate is weighted by input volume, not an average of request percentages. Historical records without a group belong to Origin. Costs sum stored priced requests; consult pricing results for models whose cost could not be priced.
+Instance and group summaries share the following schema. Tokens include input and output; input includes cached input. Cache rate is weighted by input volume, not an average of request percentages. Historical records without a group belong to Origin. Costs sum stored priced requests; consult pricing results for models whose cost could not be priced. After a switch from multi-session to single-session mode, historical usage belonging to other groups remains in the instance summary and is not reassigned to Origin; Origin usage can therefore be smaller than the instance summary.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -509,9 +512,11 @@ Example: `GET /api/usage/pricing`.
 | `chat_*` | Existing chat subscription event payloads | Conversation data/activity invalidation |
 | `auth_expired` | Existing expiry payload | Authorization expired; reconnect after authentication |
 
+If the group catalog cannot be read, ordinary stream and Fleet retain known rows and publish counts with `listKnown:false`; they do not drop unrelated updates. Direct counts, offline and search reads retain their explicit catalog errors.
+
 The ordinary stream does not emit `state_change` or `fleet_state`. Chat connection-limit exhaustion returns an explicit HTTP 429; it does not silently fall back to the ordinary stream.
 
-**Errors:** 400 `invalid_chat_subscription`, `invalid_chat_tab` or `invalid_chat_conversation`; 403 chat-access refusal; 429 `chat_connection_limit`; 502 `GROUP_CATALOG_UNREADABLE` when the initial ordinary-stream group counts cannot be read; common read errors. After headers are sent, authentication failure is delivered through stream lifecycle/events rather than a new JSON response.
+**Errors:** 400 `invalid_chat_subscription`, `invalid_chat_tab` or `invalid_chat_conversation`; 403 chat-access refusal; 429 `chat_connection_limit`; common read errors. After headers are sent, authentication failure is delivered through stream lifecycle/events rather than a new JSON response.
 
 Example: `GET /api/stream` with `Accept: text/event-stream`.
 

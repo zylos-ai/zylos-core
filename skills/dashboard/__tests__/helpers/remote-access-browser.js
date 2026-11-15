@@ -56,8 +56,8 @@ export async function runRemoteAccessBrowser(t, sandbox) {
       if (kind && kind === refuse.now) { refusals.push(apiPath); return route.fulfill({ status: 403, json: REFUSAL }); }
       if (apiPath === '/api/observer/status') return route.fulfill({ json: OBSERVER_STATUS });
       let value = workbenchAnswer(new URL(apiPath + url.search, 'http://fixture'), Date.now());
-      if (apiPath === '/api/groups/running' && value) value = { ...value, rows: value.rows.map(row => row.sessionGroup === GROUP
-        ? { ...row, state: { kind: 'idle' }, flags: {}, tools: [], working: { on: false, since: null, main: null, tools: 0, subagents: null } } : row) };
+      if (apiPath === '/api/groups/running' && value) value = { ...value, rows: value.rows.map(row => row.id === GROUP
+        ? { ...row, state: { kind: 'idle', since: null }, flags: {} } : row) };
       if (value?.sessionGroup === GROUP) value = { ...value, state: { kind: 'idle' }, flags: {}, tools: [], working: { on: false, since: null, main: null, tools: 0, subagents: null } };
       if (apiPath === '/api/instance' && value) value = { ...value, agent: { name: REMOTE }, chat_allow_remote: refuse.allow !== false };
       return value === undefined ? route.fulfill({ status: 404, json: { error: 'not_found' } }) : route.fulfill({ json: value });

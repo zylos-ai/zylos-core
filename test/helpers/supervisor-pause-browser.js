@@ -3,7 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { stateToFleetRecord } from '../../skills/dashboard/src/lib/fleet-poller.js';
-import { buildAttention } from '../../skills/dashboard/src/lib/workbench/attention.js';
 import { workbenchAnswer } from '../../skills/dashboard/__tests__/fixtures/workbench-browser-api.js';
 import { startPage } from '../../skills/dashboard/__tests__/helpers/workbench-browser.js';
 import { openDashboardTab } from '../../skills/dashboard/__tests__/helpers/browser-navigation.js';
@@ -79,10 +78,9 @@ export async function runSupervisorPauseBrowser(sandbox) {
           return route.fulfill({ json: { agents: [record('browser-case', true, false),
             record('remote-case', false, paused)], updated_at: new Date(now).toISOString() } });
         }
-        if (url.pathname === '/api/workbench/groups') {
+        if (url.pathname === '/api/instance') {
           const snapshot = workbenchAnswer(url, now);
-          snapshot.instance.supervisorPaused = paused;
-          snapshot.attention = buildAttention(snapshot);
+          snapshot.supervisorPaused = paused;
           return route.fulfill({ json: snapshot });
         }
         return route.fallback();
@@ -95,7 +93,7 @@ export async function runSupervisorPauseBrowser(sandbox) {
       await remote.waitFor();
       for (const [phase, value] of [['healthy', false], ['paused', true], ['recovered', false]]) {
         paused = value;
-        const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/workbench/groups');
+        const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/instance');
         await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
         await refreshed;
         for (const [card, selector] of [[own, '.wb-f-card[data-self="true"]'], [remote, '.wb-f-card[data-agent="remote-case"]']]) {
@@ -120,7 +118,7 @@ export async function runSupervisorPauseBrowser(sandbox) {
       const attention = page.locator('#wb-attention .wb-attention-item').filter({ hasText: pauseText });
       for (const [phase, value] of [['healthy', false], ['paused', true], ['recovered', false]]) {
         paused = value;
-        const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/workbench/groups');
+        const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/instance');
         // Exercise the production foreground refresh handler rather than injecting DOM or calling a renderer.
         await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
         await refreshed;

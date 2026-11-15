@@ -1,19 +1,19 @@
-import { readGroupSnapshot, instanceActionRequest } from './wb/group-data.js?v=1';
+import { readGroupSnapshot, displayGroupRow, instanceActionRequest } from './wb/group-data.js?v=2';
 import { waitUntilDeadline } from './request-timeout.js?v=2';
 import { createConversationPush } from './wb/conversation-push.js?v=1';
 import { consumeDraftReset, createDraftRestoreStore, createComposeRestoreStore, createDraftAuth, draftAuthRoot, draftInstance } from './wb/chat-drafts.js?v=103';
 import { createMarkdownRenderer, markdownHtml } from './markdown-config.js?v=3';
-import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=117';
+import { composeSettings, createSettingsLoader, resetSettingsDrafts } from './wb/settings.js?v=118';
 import { createPricingPanel } from './wb/settings-pricing.js?v=202';
 import { mountLanguageControl, mountThemeControl, renderLatency } from './wb/settings-ui.js?v=106';
 import { keyCounts, renderCreatedKey, renderRemoteAgents } from './wb/settings-access.js?v=106';
-import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=176';
+import { wireSettingsConfirmations } from './wb/settings-wiring.js?v=177';
 import { coreVersion, renderBrandVersion, renderVersion } from './wb/settings-version.js?v=107';
-import { mountConversationPage } from './wb/conversation-page.js?v=202';
+import { mountConversationPage } from './wb/conversation-page.js?v=203';
 import { mountMobileNavigation } from './wb/mobile-navigation.js?v=3';
 import { mountChatSettings } from './wb/chat-settings.js?v=115';
-import { mountTimezoneSettings } from './wb/settings-timezone.js?v=7';
-import { mountWorkbench } from './wb/shell.js?v=211';
+import { mountTimezoneSettings } from './wb/settings-timezone.js?v=8';
+import { mountWorkbench } from './wb/shell.js?v=212';
 import { watchHeader } from './wb/header-fit.js?v=96';
 import { createMemoryScope, leaveMemoryConflict, memoryFileScope, memoryGroupLabel, memoryUpkeepNotice, memoryWriteMessage, saveMemoryOnce, captureMemorySave, memorySaveCurrent, memorySaveOwnerCurrent, memorySaveAppliedCurrent, applyMemorySave, applyMemoryWriteAccess, renderMemoryPreservingEditor } from './wb/memory-scope.js?v=112';
 import { createRemoteAccess } from './wb/remote-access.js?v=2';
@@ -25,12 +25,11 @@ import { createUsagePage } from './wb/usage.js?v=203';
 import { ObserverHistory } from './observer-history.js?v=6';
 import { validAgentSize, validObserverSize } from './observer-size.js?v=2';
 import { setAssetRoot, getLocale, initI18n, t, renderI18n } from './i18n.js?v=90';
-import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=203';
-import { createFleetSounds } from './fleet-sounds.js?v=203';
+import { fleetIconAction, fleetSelfFromSnapshot, handleFleetClick, renderFleetPage } from './agent-fleet.js?v=204';
+import { createFleetSounds } from './fleet-sounds.js?v=204';
 import { refreshDashboardState } from './state-refresh.js?v=101';
 import { formatActionResult } from './action-result.js';
 import { OBSERVER_ACCESS_SELECTOR, lockObserverButtons } from './origin-lock.js?v=114';
-import { mergeRuntimeInfo } from './runtime-ui.js?v=98';
 import { countLabel } from './count-label.js?v=1';
 
 const BASE_PATH = document.documentElement.dataset.basePath || '';
@@ -260,7 +259,7 @@ function renderIdentityChrome() {
     nameEl.hidden = !name;
   }
   // dashboardState is the viewed instance's own state (cleared while switching), like the name above.
-  renderBrandVersion($('#tab-bar-core-version'), state.dashboardState?.runtime_info);
+  renderBrandVersion($('#tab-bar-core-version'), state.dashboardState?.versions);
   mobileNavigation?.sync();
 }
 
@@ -1613,12 +1612,10 @@ function applySse(name, data) {
   if (name === 'fleet' && state.remoteAgent) return;
   if (name === 'instance') {
     const previousState = state.dashboardState;
-    const nextRuntimeInfo = mergeRuntimeInfo(previousState, data);
     // Preserve the separately read Origin details while applying instance metadata.
     const prevAgent = state.dashboardState?.agent;
     state.dashboardState = { ...previousState, ...data };
     remoteAccess.noteState(data);
-    if (nextRuntimeInfo) state.dashboardState.runtime_info = nextRuntimeInfo;
     if (!data.agent && prevAgent) state.dashboardState.agent = prevAgent;
     state.sourceUpdatedAt = data.updated_at || new Date().toISOString();
     workbench?.applyInstance?.(data);
@@ -2549,10 +2546,11 @@ async function refreshObserverStatus({ quiet = false, signal } = {}) {
       if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
       state.observer.status = data;
       if (state.observer.group !== undefined && groups && !groups.rows?.some(row => row.sessionGroup === state.observer.group)) {
-        const selected = await fetch(observerEndpoint('/api/groups/' + encodeURIComponent(state.observer.group)), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
+        const selected = await fetch(observerEndpoint('/api/groups/' + encodeURIComponent(state.observer.group) + '?include='), { cache: 'no-store', signal }).then(response => response.ok ? response.json() : null).catch(() => null);
         if (state.observer.statusGeneration !== requestGeneration || observerTargetKey() !== targetKey) return null;
         if (selected) groups.rows = [...(groups.rows ?? []), selected];
       }
+      if (groups) groups.rows = (groups.rows ?? []).map(row => displayGroupRow(row));
       state.observer.groups = groups;
       renderObserverStatus(data);
       if (data && state.observer.intent && (data.desired?.enabled !== true || observerRecoveryReason(data))) {
@@ -2677,7 +2675,7 @@ function initSettingsPage() {
 
 function refreshSettingsVersion() {
   if (!settingsVersionRoot) return;
-  renderVersion(settingsVersionRoot, state.dashboardState?.runtime_info, { upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
+  renderVersion(settingsVersionRoot, state.dashboardState?.versions, { runtime: state.dashboardState?.default_runtime, upgrade: settingsUpgrade, t, readOnly: remoteIsReadOnly(), onHint: toggleZylosUpdateHint });
 }
 function refreshSettingsLocks() {
   if (!settingsPage) return;
@@ -2778,9 +2776,10 @@ async function refreshModeStatus() {
     const result = await fetchJson('/api/instance');
     if (observerTargetKey() !== targetKey) return;
     const data = result;
-    const mode = ['single', 'multi'].includes(data.session_mode) ? data.session_mode : null;
+    const status = data.session_mode;
+    const mode = ['single', 'multi'].includes(status?.sessionMode) ? status.sessionMode : null;
     if (mode) { const select = actionsModal.querySelector('#action-mode'); select.value = mode; select._current = mode; syncModeSegment(); }
-    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), data.transition?.phase, data.transition?.reason, data.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', data.blocked?.since ? t('actions.blocked_since', { time: data.blocked.since }) : ''].filter(Boolean).join(' · ');
+    text.textContent = [mode ? t('wb.settings.session.' + mode) : t('value.unknown'), status?.transition?.phase, status?.transition?.reason, status?.supervisor === 'unreachable' ? t('actions.supervisor_unreachable') : '', status?.blocked?.since ? t('actions.blocked_since', { time: status.blocked.since }) : ''].filter(Boolean).join(' · ');
   } catch (error) { if (observerTargetKey() !== targetKey) return; if (text) text.textContent = error.message; }
   const instanceText = actionsModal?.querySelector('#action-instance-status');
   try {
@@ -2867,7 +2866,7 @@ function pageActions() {
   return pageActions.value ??= createPageActions({
     t, send: sendAction, confirm: showConfirm, effortLabel,
     readOnly: () => Boolean(remoteIsReadOnly()), remoteTarget: viewedRemoteTarget,
-    shownSession: () => ({ sessionGroup: 'origin', runId: state.originGroup?.live?.runId, sessionId: state.originGroup?.live?.sessionId }), runtime: () => state.dashboardState?.runtime_info?.runtime,
+    shownSession: () => ({ sessionGroup: 'origin', runId: state.originGroup?.live?.runId, sessionId: state.originGroup?.live?.sessionId }), runtime: () => state.dashboardState?.default_runtime,
   });
 }
 
@@ -3056,7 +3055,7 @@ workbench = mountWorkbench({
   onObserve: openObserverFor,
   // The viewed instance's own Core version (a remote's comes from its state); none when it cannot be read.
   instanceInfo: () => {
-    const core = coreVersion(state.dashboardState?.runtime_info);
+    const core = coreVersion(state.dashboardState?.versions);
     return { name: viewedAgentName(), core: core ? 'core ' + core : null };
   },
 });
